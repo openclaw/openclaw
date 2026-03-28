@@ -23,6 +23,13 @@ function buildTelegramTypingParams(
   };
 }
 
+function expectTelegramPulseCount(
+  pulse: ReturnType<typeof vi.fn<() => Promise<unknown>>>,
+  expected: number,
+) {
+  expect(pulse).toHaveBeenCalledTimes(expected);
+}
+
 describe("createTelegramTypingLease", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -65,11 +72,11 @@ describe("createTelegramTypingLease", () => {
       pulse,
     });
 
-    expect(pulse).toHaveBeenCalledTimes(1);
+    expectTelegramPulseCount(pulse, 1);
     await vi.advanceTimersByTimeAsync(TELEGRAM_TYPING_DEFAULT_INTERVAL_MS - 1);
-    expect(pulse).toHaveBeenCalledTimes(1);
+    expectTelegramPulseCount(pulse, 1);
     await vi.advanceTimersByTimeAsync(1);
-    expect(pulse).toHaveBeenCalledTimes(2);
+    expectTelegramPulseCount(pulse, 2);
 
     lease.stop();
   });

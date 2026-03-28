@@ -53,6 +53,47 @@ function expectPairedCatalogProviders(
   });
 }
 
+function createSingleCatalogProvider(overrides: Partial<ModelProviderConfig> & { apiKey: string }) {
+  return {
+    provider: {
+      ...createProviderConfig(overrides),
+      apiKey: overrides.apiKey,
+    },
+  };
+}
+
+async function expectSingleCatalogResult(params: {
+  ctx: ProviderCatalogContext;
+  allowExplicitBaseUrl?: boolean;
+  buildProvider?: () => ModelProviderConfig;
+  expected: Awaited<ReturnType<typeof buildSingleProviderApiKeyCatalog>>;
+}) {
+  const result = await buildSingleProviderApiKeyCatalog({
+    ctx: params.ctx,
+    providerId: "test-provider",
+    buildProvider: params.buildProvider ?? (() => createProviderConfig()),
+    allowExplicitBaseUrl: params.allowExplicitBaseUrl,
+  });
+
+  expect(result).toEqual(params.expected);
+}
+
+async function expectPairedCatalogResult(params: {
+  ctx: ProviderCatalogContext;
+  expected: Record<string, ModelProviderConfig & { apiKey: string }>;
+}) {
+  const result = await buildPairedProviderApiKeyCatalog({
+    ctx: params.ctx,
+    providerId: "test-provider",
+    buildProviders: async () => ({
+      alpha: createProviderConfig(),
+      beta: createProviderConfig(),
+    }),
+  });
+
+  expectPairedCatalogProviders(result, params.expected);
+}
+
 describe("buildSingleProviderApiKeyCatalog", () => {
   it.each([
     {
@@ -92,14 +133,9 @@ describe("buildSingleProviderApiKeyCatalog", () => {
         apiKeys: { "test-provider": "secret-key" },
       }),
       undefined,
-      {
-        provider: {
-          api: "openai-completions",
-          baseUrl: "https://default.example/v1",
-          models: [],
-          apiKey: "secret-key",
-        },
-      },
+      createSingleCatalogProvider({
+        apiKey: "secret-key",
+      }),
     ],
     [
       "prefers explicit base url when allowed",
@@ -117,24 +153,17 @@ describe("buildSingleProviderApiKeyCatalog", () => {
         },
       }),
       true,
-      {
-        provider: {
-          api: "openai-completions",
-          baseUrl: "https://override.example/v1/",
-          models: [],
-          apiKey: "secret-key",
-        },
-      },
+      createSingleCatalogProvider({
+        baseUrl: "https://override.example/v1/",
+        apiKey: "secret-key",
+      }),
     ],
   ] as const)("%s", async (_name, ctx, allowExplicitBaseUrl, expected) => {
-    const result = await buildSingleProviderApiKeyCatalog({
+    await expectSingleCatalogResult({
       ctx,
-      providerId: "test-provider",
-      buildProvider: () => createProviderConfig(),
       allowExplicitBaseUrl,
+      expected,
     });
-
-    expect(result).toEqual(expected);
   });
 
   it("matches explicit base url config across canonical provider aliases", async () => {
@@ -166,29 +195,23 @@ describe("buildSingleProviderApiKeyCatalog", () => {
   });
 
   it("adds api key to each paired provider", async () => {
-    const result = await buildPairedProviderApiKeyCatalog({
+    await expectPairedCatalogResult({
       ctx: createCatalogContext({
         apiKeys: { "test-provider": "secret-key" },
       }),
-      providerId: "test-provider",
-      buildProviders: async () => ({
-        alpha: createProviderConfig(),
-        beta: createProviderConfig(),
-      }),
-    });
-
-    expectPairedCatalogProviders(result, {
-      alpha: {
-        api: "openai-completions",
-        baseUrl: "https://default.example/v1",
-        models: [],
-        apiKey: "secret-key",
-      },
-      beta: {
-        api: "openai-completions",
-        baseUrl: "https://default.example/v1",
-        models: [],
-        apiKey: "secret-key",
+      expected: {
+        alpha: {
+          api: "openai-completions",
+          baseUrl: "https://default.example/v1",
+          models: [],
+          apiKey: "secret-key",
+        },
+        beta: {
+          api: "openai-completions",
+          baseUrl: "https://default.example/v1",
+          models: [],
+          apiKey: "secret-key",
+        },
       },
     });
   });

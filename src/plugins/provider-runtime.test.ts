@@ -60,6 +60,7 @@ const MODEL: ProviderRuntimeModel = {
   maxTokens: 8_192,
 };
 const DEMO_PROVIDER_ID = "demo";
+const EMPTY_MODEL_REGISTRY = { find: () => null } as never;
 
 function createOpenAiCatalogProviderPlugin(
   overrides: Partial<ProviderPlugin> = {},
@@ -132,6 +133,12 @@ function createDemoResolvedModelContext<TContext extends Record<string, unknown>
     model: MODEL,
     ...overrides,
   });
+}
+
+function expectCalledOnce(...mocks: Array<{ mock: { calls: unknown[] } }>) {
+  for (const mockFn of mocks) {
+    expect(mockFn).toHaveBeenCalledTimes(1);
+  }
 }
 
 describe("provider-runtime", () => {
@@ -307,7 +314,7 @@ describe("provider-runtime", () => {
       runProviderDynamicModel({
         provider: DEMO_PROVIDER_ID,
         context: createDemoRuntimeContext({
-          modelRegistry: { find: () => null } as never,
+          modelRegistry: EMPTY_MODEL_REGISTRY,
         }),
       }),
     ).toMatchObject(MODEL);
@@ -315,7 +322,7 @@ describe("provider-runtime", () => {
     await prepareProviderDynamicModel({
       provider: DEMO_PROVIDER_ID,
       context: createDemoRuntimeContext({
-        modelRegistry: { find: () => null } as never,
+        modelRegistry: EMPTY_MODEL_REGISTRY,
       }),
     });
 
@@ -555,13 +562,15 @@ describe("provider-runtime", () => {
     expectCodexBuiltInSuppression(resolveProviderBuiltInModelSuppression);
     await expectAugmentedCodexCatalog(augmentModelCatalogWithProviderPlugins);
 
-    expect(prepareDynamicModel).toHaveBeenCalledTimes(1);
-    expect(refreshOAuth).toHaveBeenCalledTimes(1);
-    expect(resolveSyntheticAuth).toHaveBeenCalledTimes(1);
-    expect(buildUnknownModelHint).toHaveBeenCalledTimes(1);
-    expect(prepareRuntimeAuth).toHaveBeenCalledTimes(1);
-    expect(resolveUsageAuth).toHaveBeenCalledTimes(1);
-    expect(fetchUsageSnapshot).toHaveBeenCalledTimes(1);
+    expectCalledOnce(
+      prepareDynamicModel,
+      refreshOAuth,
+      resolveSyntheticAuth,
+      buildUnknownModelHint,
+      prepareRuntimeAuth,
+      resolveUsageAuth,
+      fetchUsageSnapshot,
+    );
   });
 
   it("resolves bundled catalog hooks through provider plugins", async () => {

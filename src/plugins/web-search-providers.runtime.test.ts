@@ -179,6 +179,27 @@ function expectScopedWebSearchCandidates(pluginIds: readonly string[]) {
   );
 }
 
+function expectSnapshotMemoization(params: {
+  config: { plugins?: Record<string, unknown> };
+  env: NodeJS.ProcessEnv;
+  expectedLoaderCalls: number;
+}) {
+  const runtimeParams = createSnapshotParams({
+    config: params.config,
+    env: params.env,
+  });
+
+  const first = resolvePluginWebSearchProviders(runtimeParams);
+  const second = resolvePluginWebSearchProviders(runtimeParams);
+
+  if (params.expectedLoaderCalls === 1) {
+    expect(second).toBe(first);
+  } else {
+    expect(second).not.toBe(first);
+  }
+  expectLoaderCallCount(params.expectedLoaderCalls);
+}
+
 describe("resolvePluginWebSearchProviders", () => {
   beforeAll(async () => {
     ({ createEmptyPluginRegistry } = await import("./registry.js"));
@@ -270,15 +291,11 @@ describe("resolvePluginWebSearchProviders", () => {
   });
 
   it("memoizes snapshot provider resolution for the same config and env", () => {
-    const config = createBraveAllowConfig();
-    const env = createWebSearchEnv();
-    const runtimeParams = createSnapshotParams({ config, env });
-
-    const first = resolvePluginWebSearchProviders(runtimeParams);
-    const second = resolvePluginWebSearchProviders(runtimeParams);
-
-    expect(second).toBe(first);
-    expectLoaderCallCount(1);
+    expectSnapshotMemoization({
+      config: createBraveAllowConfig(),
+      env: createWebSearchEnv(),
+      expectedLoaderCalls: 1,
+    });
   });
 
   it("invalidates the snapshot cache when config or env contents change in place", () => {
@@ -307,12 +324,11 @@ describe("resolvePluginWebSearchProviders", () => {
       },
     },
   ])("$title", ({ env }) => {
-    const config = createBraveAllowConfig();
-
-    resolvePluginWebSearchProviders(createSnapshotParams({ config, env: createWebSearchEnv(env) }));
-    resolvePluginWebSearchProviders(createSnapshotParams({ config, env: createWebSearchEnv(env) }));
-
-    expectLoaderCallCount(2);
+    expectSnapshotMemoization({
+      config: createBraveAllowConfig(),
+      env: createWebSearchEnv(env),
+      expectedLoaderCalls: 2,
+    });
   });
 
   it("does not leak host Vitest env into an explicit non-Vitest cache key", () => {

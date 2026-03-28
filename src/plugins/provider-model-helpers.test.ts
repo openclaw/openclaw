@@ -30,6 +30,18 @@ function createTemplateModel(
   } as ProviderRuntimeModel;
 }
 
+function expectClonedTemplateModel(
+  params: Parameters<typeof cloneFirstTemplateModel>[0],
+  expected: Record<string, unknown> | undefined,
+) {
+  const model = cloneFirstTemplateModel(params);
+  if (expected == null) {
+    expect(model).toBeUndefined();
+    return;
+  }
+  expect(model).toMatchObject(expected);
+}
+
 describe("cloneFirstTemplateModel", () => {
   it.each([
     {
@@ -60,12 +72,7 @@ describe("cloneFirstTemplateModel", () => {
       expected: undefined,
     },
   ] as const)("$name", ({ params, expected }) => {
-    const model = cloneFirstTemplateModel(params);
-    if (expected == null) {
-      expect(model).toBeUndefined();
-      return;
-    }
-    expect(model).toMatchObject(expected);
+    expectClonedTemplateModel(params, expected);
   });
 });
 

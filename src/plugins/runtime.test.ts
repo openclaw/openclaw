@@ -31,6 +31,11 @@ function createRuntimeRegistryPair() {
   };
 }
 
+function expectRegistryVersions(params: { active: number; routes: number }) {
+  expect(getActivePluginRegistryVersion()).toBe(params.active);
+  expect(getActivePluginHttpRouteRegistryVersion()).toBe(params.routes);
+}
+
 function expectActiveRouteRegistryResolution(params: {
   pinnedRegistry: ReturnType<typeof createEmptyPluginRegistry>;
   explicitRegistry: ReturnType<typeof createEmptyPluginRegistry>;
@@ -78,8 +83,10 @@ describe("plugin runtime route registry", () => {
 
     pinActivePluginHttpRouteRegistry(repinnedRegistry);
 
-    expect(getActivePluginRegistryVersion()).toBe(activeVersionBeforeRepin);
-    expect(getActivePluginHttpRouteRegistryVersion()).toBe(routeVersionBeforeRepin + 1);
+    expectRegistryVersions({
+      active: activeVersionBeforeRepin,
+      routes: routeVersionBeforeRepin + 1,
+    });
   });
 
   it.each([

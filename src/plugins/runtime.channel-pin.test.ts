@@ -34,6 +34,10 @@ function createRegistrySet() {
   };
 }
 
+function expectActiveChannelRegistry(registry: ReturnType<typeof createEmptyPluginRegistry>) {
+  expect(getActivePluginChannelRegistry()).toBe(registry);
+}
+
 describe("channel registry pinning", () => {
   afterEach(() => {
     resetPluginRuntimeStateForTest();
@@ -42,7 +46,7 @@ describe("channel registry pinning", () => {
   it("returns the active registry when not pinned", () => {
     const registry = createEmptyPluginRegistry();
     setActivePluginRegistry(registry);
-    expect(getActivePluginChannelRegistry()).toBe(registry);
+    expectActiveChannelRegistry(registry);
   });
 
   it("preserves pinned channel registry across setActivePluginRegistry calls", () => {
@@ -54,7 +58,7 @@ describe("channel registry pinning", () => {
     const replacement = createEmptyPluginRegistry();
     setActivePluginRegistry(replacement);
 
-    expect(getActivePluginChannelRegistry()).toBe(startup);
+    expectActiveChannelRegistry(startup);
     expect(getActivePluginChannelRegistry()!.channels).toHaveLength(1);
   });
 
@@ -110,15 +114,13 @@ describe("channel registry pinning", () => {
     }
 
     setActivePluginRegistry(replacement);
-    expect(getActivePluginChannelRegistry()).toBe(expectDuringPin ? startup : replacement);
+    expectActiveChannelRegistry(expectDuringPin ? startup : replacement);
 
     if (pin) {
       releasePinnedPluginChannelRegistry(releasePinnedRegistry ? startup : unrelated);
     }
 
-    expect(getActivePluginChannelRegistry()).toBe(
-      expectAfterSwap === "second" ? replacement : startup,
-    );
+    expectActiveChannelRegistry(expectAfterSwap === "second" ? replacement : startup);
   });
 
   it("requireActivePluginChannelRegistry creates a registry when none exists", () => {
@@ -136,6 +138,6 @@ describe("channel registry pinning", () => {
     resetPluginRuntimeStateForTest();
 
     setActivePluginRegistry(fresh);
-    expect(getActivePluginChannelRegistry()).toBe(fresh);
+    expectActiveChannelRegistry(fresh);
   });
 });

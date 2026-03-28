@@ -48,6 +48,25 @@ function normalizeProviderFixture(provider: ProviderPlugin) {
   };
 }
 
+function expectNormalizedProviderFixture(params: {
+  provider: ProviderPlugin;
+  expectedProvider?: Record<string, unknown>;
+  expectedDiagnostics?: ReadonlyArray<{ level: PluginDiagnostic["level"]; message: string }>;
+  expectedDiagnosticText?: readonly string[];
+}) {
+  const result = normalizeProviderFixture(params.provider);
+  if (params.expectedProvider) {
+    expect(result.provider).toMatchObject(params.expectedProvider);
+  }
+  if (params.expectedDiagnostics) {
+    expectDiagnosticMessages(result.diagnostics, params.expectedDiagnostics);
+  }
+  if (params.expectedDiagnosticText) {
+    expectDiagnosticText(result.diagnostics, params.expectedDiagnosticText);
+  }
+  return result;
+}
+
 describe("normalizeRegisteredProvider", () => {
   it.each([
     {
@@ -168,21 +187,22 @@ describe("normalizeRegisteredProvider", () => {
   ] as const)(
     "$name",
     ({ provider: inputProvider, expectedProvider, expectedDiagnostics, assert }) => {
-      const { diagnostics, provider } = normalizeProviderFixture(inputProvider);
+      const { diagnostics, provider } = expectNormalizedProviderFixture({
+        provider: inputProvider,
+        ...(expectedProvider ? { expectedProvider } : {}),
+        ...(expectedDiagnostics ? { expectedDiagnostics } : {}),
+      });
 
       if (assert) {
         assert(provider, diagnostics);
         return;
       }
-
-      expect(provider).toMatchObject(expectedProvider);
-      expectDiagnosticMessages(diagnostics, expectedDiagnostics);
     },
   );
 
   it("prefers catalog when a provider registers both catalog and discovery", () => {
-    const { diagnostics, provider } = normalizeProviderFixture(
-      makeProvider({
+    const { provider } = expectNormalizedProviderFixture({
+      provider: makeProvider({
         catalog: {
           run: async () => null,
         },
@@ -195,12 +215,12 @@ describe("normalizeRegisteredProvider", () => {
           }),
         },
       }),
-    );
+      expectedDiagnosticText: [
+        'provider "demo" registered both catalog and discovery; using catalog',
+      ],
+    });
 
     expect(provider?.catalog).toBeDefined();
     expect(provider?.discovery).toBeUndefined();
-    expectDiagnosticText(diagnostics, [
-      'provider "demo" registered both catalog and discovery; using catalog',
-    ]);
   });
 });
