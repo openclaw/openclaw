@@ -216,7 +216,10 @@ function isSameDeliveryTarget(
   delivery: CronDelivery,
   failurePlan: CronFailureDeliveryPlan,
 ): boolean {
-  const primaryMode = delivery.mode ?? "announce";
+  // Match the default in resolveCronDeliveryPlan to ensure consistency.
+  // When mode is not explicitly set, treat as "none" to avoid incorrectly
+  // suppressing failure notifications.
+  const primaryMode = delivery.mode ?? "none";
   if (primaryMode === "none") {
     return false;
   }
