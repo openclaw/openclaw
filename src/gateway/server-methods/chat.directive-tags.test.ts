@@ -1209,6 +1209,85 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
   });
 
+  it("chat.send accepts admin-scoped synthetic originating routes without external delivery", async () => {
+    createTranscriptFixture("openclaw-chat-send-synthetic-origin-admin-");
+    mockState.finalText = "ok";
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-synthetic-origin-admin",
+      client: {
+        connect: {
+          scopes: ["operator.admin"],
+          client: {
+            id: "openclaw-cli",
+            mode: "cli",
+            displayName: "openclaw-cli",
+            version: "1.0.0",
+          },
+        },
+      },
+      requestParams: {
+        originatingChannel: "slack",
+        originatingTo: "D123",
+        originatingAccountId: "default",
+        originatingThreadId: "thread-42",
+      },
+      deliver: false,
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastDispatchCtx).toEqual(
+      expect.objectContaining({
+        OriginatingChannel: "slack",
+        OriginatingTo: "D123",
+        ExplicitDeliverRoute: false,
+        AccountId: "default",
+        MessageThreadId: "thread-42",
+      }),
+    );
+  });
+
+  it("rejects synthetic originating routes when the caller lacks admin scope", async () => {
+    createTranscriptFixture("openclaw-chat-send-synthetic-origin-reject-");
+    mockState.finalText = "ok";
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-synthetic-origin-reject",
+      client: {
+        connect: {
+          scopes: ["operator.write"],
+          client: {
+            id: "openclaw-cli",
+            mode: "cli",
+            displayName: "openclaw-cli",
+            version: "1.0.0",
+          },
+        },
+      },
+      requestParams: {
+        originatingChannel: "slack",
+        originatingTo: "D123",
+      },
+      expectBroadcast: false,
+      waitForCompletion: false,
+    });
+
+    const [ok, _payload, error] = respond.mock.calls.at(-1) ?? [];
+    expect(ok).toBe(false);
+    expect(error).toMatchObject({
+      message: "originating route fields require admin scope",
+    });
+    expect(mockState.lastDispatchCtx).toBeUndefined();
+  });
+
   it("rejects reserved system provenance fields for non-ACP clients", async () => {
     createTranscriptFixture("openclaw-chat-send-system-provenance-reject-");
     mockState.finalText = "ok";
