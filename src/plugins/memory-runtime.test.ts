@@ -18,6 +18,7 @@ vi.mock("./memory-state.js", () => ({
 
 let getActiveMemorySearchManager: typeof import("./memory-runtime.js").getActiveMemorySearchManager;
 let resolveActiveMemoryBackendConfig: typeof import("./memory-runtime.js").resolveActiveMemoryBackendConfig;
+let closeActiveMemorySearchManagers: typeof import("./memory-runtime.js").closeActiveMemorySearchManagers;
 
 describe("memory runtime auto-enable loading", () => {
   beforeEach(async () => {
@@ -29,8 +30,11 @@ describe("memory runtime auto-enable loading", () => {
       config: params.config,
       changes: [],
     }));
-    ({ getActiveMemorySearchManager, resolveActiveMemoryBackendConfig } =
-      await import("./memory-runtime.js"));
+    ({
+      getActiveMemorySearchManager,
+      resolveActiveMemoryBackendConfig,
+      closeActiveMemorySearchManagers,
+    } = await import("./memory-runtime.js"));
   });
 
   it("loads memory runtime from the auto-enabled config snapshot", async () => {
@@ -96,5 +100,30 @@ describe("memory runtime auto-enable loading", () => {
     expect(loadOpenClawPluginsMock).toHaveBeenCalledWith({
       config: autoEnabledConfig,
     });
+  });
+
+  it("does not bootstrap the memory runtime just to close managers", async () => {
+    const rawConfig = {
+      plugins: {},
+      channels: { memory: { enabled: true } },
+    };
+    getMemoryRuntimeMock.mockReturnValue(undefined);
+
+    await closeActiveMemorySearchManagers(rawConfig as never);
+
+    expect(applyPluginAutoEnableMock).not.toHaveBeenCalled();
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+  });
+
+  it("closes an already-registered memory runtime without reloading plugins", async () => {
+    const runtime = {
+      closeAllMemorySearchManagers: vi.fn(async () => {}),
+    };
+    getMemoryRuntimeMock.mockReturnValue(runtime);
+
+    await closeActiveMemorySearchManagers({} as never);
+
+    expect(runtime.closeAllMemorySearchManagers).toHaveBeenCalledTimes(1);
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 });
