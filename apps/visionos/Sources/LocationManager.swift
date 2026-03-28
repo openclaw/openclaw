@@ -25,7 +25,11 @@ final class LocationManager: NSObject, CLLocationManagerDelegate {
 
     /// Request a one-shot location fix.
     /// Returns a CLLocation or throws if authorization denied or location unavailable.
+    /// Concurrent calls are rejected — only one in-flight request allowed at a time.
     func requestLocation() async throws -> CLLocation {
+        guard continuation == nil else {
+            throw LocationError.unavailable
+        }
         return try await withCheckedThrowingContinuation { cont in
             self.continuation = cont
             let status = self.clManager.authorizationStatus
