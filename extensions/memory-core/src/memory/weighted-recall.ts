@@ -100,6 +100,18 @@ export class WeightedRecallStore {
   }
 
   /**
+   * Clear the in-memory cache so the next read reloads from disk.
+   * Call this in long-lived processes (e.g. the gateway) before each
+   * search so that CLI feedback writes are immediately visible without
+   * requiring a process restart.
+   */
+  invalidate(): void {
+    if (!this.dirty) {
+      this.data = null;
+    }
+  }
+
+  /**
    * Persist any pending changes to disk. Safe to call frequently —
    * no-ops when nothing changed.
    */

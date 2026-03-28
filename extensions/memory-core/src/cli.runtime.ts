@@ -30,7 +30,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import type { MemoryCommandOptions, MemorySearchCommandOptions } from "./cli.types.js";
 import { getMemorySearchManager } from "./memory/index.js";
-import { WeightedRecallStore } from "./memory/weighted-recall.js";
+import { WeightedRecallStore, WEIGHT_CORRECTION_ORIGINAL } from "./memory/weighted-recall.js";
 
 type MemoryManager = NonNullable<Awaited<ReturnType<typeof getMemorySearchManager>>["manager"]>;
 type MemoryManagerPurpose = Parameters<typeof getMemorySearchManager>[0]["purpose"];
@@ -819,7 +819,7 @@ export async function runMemoryFeedbackCorrect(
   const rich = isRich();
   defaultRuntime.log(
     `${colorize(rich, theme.warn, "⚠")} Correction recorded for ${colorize(rich, theme.accent, chunkId)}: ` +
-      `weight ${colorize(rich, theme.muted, prevWeight.toFixed(2))} → ${colorize(rich, theme.warn, "0.30")} (demoted)`,
+      `weight ${colorize(rich, theme.muted, prevWeight.toFixed(2))} → ${colorize(rich, theme.warn, WEIGHT_CORRECTION_ORIGINAL.toFixed(2))} (demoted)`,
   );
   defaultRuntime.log(
     colorize(
