@@ -530,6 +530,19 @@ describe("buildGatewayConnectionDetails", () => {
     }
   });
 
+  it("falls back to the default config loader when test deps drift", () => {
+    loadConfig.mockReturnValue({ gateway: { mode: "local", bind: "loopback" } });
+    resolveGatewayPort.mockReturnValue(18800);
+    __testing.setDepsForTests({
+      loadConfig: {} as never,
+    });
+
+    const details = buildGatewayConnectionDetails();
+
+    expect(details.url).toBe("ws://127.0.0.1:18789");
+    expect(details.urlSource).toBe("local loopback");
+  });
+
   it("throws for insecure ws:// remote URLs (CWE-319)", () => {
     loadConfig.mockReturnValue({
       gateway: {
