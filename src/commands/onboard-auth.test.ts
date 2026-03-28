@@ -257,6 +257,32 @@ describe("applyAuthProfileConfig", () => {
     });
   });
 
+  it("merges split canonical and aliased auth.order entries for the same provider", () => {
+    const next = applyAuthProfileConfig(
+      {
+        auth: {
+          profiles: {
+            "zai:default": { provider: "z.ai", mode: "api_key" },
+            "zai:backup": { provider: "z-ai", mode: "token" },
+          },
+          order: {
+            zai: ["zai:default"],
+            "z.ai": ["zai:backup"],
+          },
+        },
+      },
+      {
+        profileId: "zai:work",
+        provider: "z-ai",
+        mode: "oauth",
+      },
+    );
+
+    expect(next.auth?.order).toEqual({
+      zai: ["zai:work", "zai:default", "zai:backup"],
+    });
+  });
+
   it("keeps implicit round-robin when no mixed provider modes are present", () => {
     const next = applyAuthProfileConfig(
       {
