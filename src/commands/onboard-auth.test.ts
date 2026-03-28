@@ -12,6 +12,7 @@ import { buildMistralModelDefinition as buildBundledMistralModelDefinition } fro
 import {
   applyMistralConfig,
   applyMistralProviderConfig,
+  MISTRAL_DEFAULT_MODEL_REF,
 } from "../../extensions/mistral/onboard.js";
 import {
   applyOpencodeGoConfig,
@@ -24,6 +25,7 @@ import {
 import {
   applyOpenrouterConfig,
   applyOpenrouterProviderConfig,
+  OPENROUTER_DEFAULT_MODEL_REF,
 } from "../../extensions/openrouter/onboard.js";
 import {
   applySyntheticConfig,
@@ -36,14 +38,22 @@ import {
   XAI_DEFAULT_MODEL_REF,
 } from "../../extensions/xai/onboard.js";
 import { applyXiaomiConfig, applyXiaomiProviderConfig } from "../../extensions/xiaomi/onboard.js";
+import {
+  ZAI_CODING_CN_BASE_URL,
+  ZAI_GLOBAL_BASE_URL,
+} from "../../extensions/zai/model-definitions.js";
 import { applyZaiConfig, applyZaiProviderConfig } from "../../extensions/zai/onboard.js";
+import {
+  createConfigWithFallbacks,
+  createLegacyProviderConfig,
+  EXPECTED_FALLBACKS,
+} from "../../test/helpers/extensions/onboard-config.js";
 import { SYNTHETIC_DEFAULT_MODEL_ID } from "../agents/synthetic-models.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
-import type { ModelApi } from "../config/types.models.js";
 import { applyAuthProfileConfig } from "../plugins/provider-auth-helpers.js";
 import { setMinimaxApiKey, writeOAuthCredentials } from "../plugins/provider-auth-storage.js";
 import {
@@ -51,6 +61,26 @@ import {
   readAuthProfilesForAgent,
   setupAuthTestEnv,
 } from "./test-wizard-helpers.js";
+
+function expectPrimaryModelPreserved(cfg: OpenClawConfig): void {
+  expect(resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model)).toBe(
+    "anthropic/claude-opus-4-5",
+  );
+}
+
+function expectFallbacksPreserved(cfg: OpenClawConfig): void {
+  expect(resolveAgentModelFallbackValues(cfg.agents?.defaults?.model)).toEqual([
+    ...EXPECTED_FALLBACKS,
+  ]);
+}
+
+function expectAllowlistContains(cfg: OpenClawConfig, modelRef: string): void {
+  expect(Object.keys(cfg.agents?.defaults?.models ?? {})).toContain(modelRef);
+}
+
+function expectAliasPreserved(cfg: OpenClawConfig, modelRef: string, alias: string): void {
+  expect(cfg.agents?.defaults?.models?.[modelRef]?.alias).toBe(alias);
+}
 
 describe("writeOAuthCredentials", () => {
   const lifecycle = createAuthTestLifecycle([
@@ -650,9 +680,12 @@ describe("applyMistralProviderConfig", () => {
 
   it("keeps the core and bundled mistral defaults aligned", () => {
     const bundled = buildBundledMistralModelDefinition();
-    const core = buildCoreMistralModelDefinition();
+    const cfg = applyMistralProviderConfig({});
+    const defaultModel = cfg.models?.providers?.mistral?.models.find(
+      (model) => model.id === bundled.id,
+    );
 
-    expect(core).toMatchObject({
+    expect(defaultModel).toMatchObject({
       id: bundled.id,
       contextWindow: bundled.contextWindow,
       maxTokens: bundled.maxTokens,
