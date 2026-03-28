@@ -20,6 +20,7 @@ import {
   type SessionEntry,
 } from "../../config/sessions.js";
 import { validateSessionStore } from "../../config/sessions/store-validation.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../../sessions/session-id-resolution.js";
 import { listAgentIds } from "../agent-scope.js";
@@ -140,8 +141,8 @@ export function resolveSession(opts: {
   // (e.g., openrouter) from causing runtime errors.
   const modifiedCount = validateSessionStore(sessionStore, opts.cfg);
   if (modifiedCount > 0) {
-    // Note: We don't persist the changes here to avoid write amplification.
-    // The session will be naturally updated on next run with correct values.
+    const log = createSubsystemLogger("session");
+    log.info(`Sanitized ${modifiedCount} session entries with stale provider/model references`);
   }
 
   const now = Date.now();

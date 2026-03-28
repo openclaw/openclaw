@@ -218,6 +218,11 @@ export function loadSessionStore(
       sizeBytes: currentFileStat?.sizeBytes,
     });
     if (cached) {
+      // Apply validation when cfg is provided, even on cache hits.
+      // This ensures stale provider references are always sanitized.
+      if (opts.cfg) {
+        validateSessionStore(cached, opts.cfg);
+      }
       return cached;
     }
   }
