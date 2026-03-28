@@ -766,6 +766,93 @@ describe("preflightDiscordMessage", () => {
     expect(result).not.toBeNull();
     expect(result?.wasMentioned).toBe(true);
   });
+
+  it("drops guild message without mention when channel has configuredBinding and requireMention: true", async () => {
+    const conversationRuntime = await import("openclaw/plugin-sdk/conversation-runtime");
+    const channelId = "ch-binding-1";
+    const bindingRoute = {
+      bindingResolution: {
+        record: {
+          targetSessionKey: "agent:main:acp:binding:discord:default:abc",
+          targetKind: "session",
+        },
+      } as never,
+      route: { agentId: "main", matchedBy: "binding.channel" } as never,
+      boundSessionKey: "agent:main:acp:binding:discord:default:abc",
+      boundAgentId: "main",
+    };
+    const routeSpy = vi
+      .spyOn(conversationRuntime, "resolveConfiguredBindingRoute")
+      .mockReturnValue(bindingRoute);
+    const ensureSpy = vi
+      .spyOn(conversationRuntime, "ensureConfiguredBindingRouteReady")
+      .mockResolvedValue({ ok: true });
+
+    try {
+      const result = await runGuildPreflight({
+        channelId,
+        guildId: "guild-1",
+        message: createDiscordMessage({
+          id: "m-binding-1",
+          channelId,
+          content: "hello without mention",
+          author: { id: "user-1", bot: false, username: "alice" },
+        }),
+        discordConfig: {} as DiscordConfig,
+        guildEntries: {
+          "guild-1": { channels: { [channelId]: { allow: true, requireMention: true } } },
+        },
+      });
+      expect(result).toBeNull();
+    } finally {
+      routeSpy.mockRestore();
+      ensureSpy.mockRestore();
+    }
+  });
+
+  it("allows guild message with mention when channel has configuredBinding and requireMention: true", async () => {
+    const conversationRuntime = await import("openclaw/plugin-sdk/conversation-runtime");
+    const channelId = "ch-binding-2";
+    const bindingRoute = {
+      bindingResolution: {
+        record: {
+          targetSessionKey: "agent:main:acp:binding:discord:default:def",
+          targetKind: "session",
+        },
+      } as never,
+      route: { agentId: "main", matchedBy: "binding.channel" } as never,
+      boundSessionKey: "agent:main:acp:binding:discord:default:def",
+      boundAgentId: "main",
+    };
+    const routeSpy = vi
+      .spyOn(conversationRuntime, "resolveConfiguredBindingRoute")
+      .mockReturnValue(bindingRoute);
+    const ensureSpy = vi
+      .spyOn(conversationRuntime, "ensureConfiguredBindingRouteReady")
+      .mockResolvedValue({ ok: true });
+
+    try {
+      const result = await runGuildPreflight({
+        channelId,
+        guildId: "guild-1",
+        message: createDiscordMessage({
+          id: "m-binding-2",
+          channelId,
+          content: "hello <@openclaw-bot>",
+          author: { id: "user-1", bot: false, username: "alice" },
+          mentionedUsers: [{ id: "openclaw-bot" }],
+        }),
+        discordConfig: {} as DiscordConfig,
+        guildEntries: {
+          "guild-1": { channels: { [channelId]: { allow: true, requireMention: true } } },
+        },
+      });
+      expect(result).not.toBeNull();
+    } finally {
+      routeSpy.mockRestore();
+      ensureSpy.mockRestore();
+    }
+  });
 });
 
 describe("shouldIgnoreBoundThreadWebhookMessage", () => {

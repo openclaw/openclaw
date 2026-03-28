@@ -305,7 +305,7 @@ describe("preflightDiscordMessage configured ACP bindings", () => {
           author: message.author,
           message,
         }),
-        guildEntries: createAllowedGuildEntries(true),
+        guildEntries: createAllowedGuildEntries(false),
       }),
     );
 
