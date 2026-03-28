@@ -28,6 +28,7 @@ Docs: https://docs.openclaw.ai
 - OpenAI/apply_patch: enable `apply_patch` by default for OpenAI and OpenAI Codex models, and align its sandbox policy access with `write` permissions.
 - Docs: add `pnpm docs:check-links:anchors` for Mintlify anchor validation while keeping `scripts/docs-link-audit.mjs` as the stable link-audit entrypoint. (#55912) Thanks @velvet-shark.
 - Plugins/hooks: add async `requireApproval` to `before_tool_call` hooks, letting plugins pause tool execution and prompt the user for approval via the exec approval overlay, Telegram buttons, Discord interactions, or the `/approve` command on any channel. The `/approve` command now handles both exec and plugin approvals with automatic fallback. (#55339) Thanks @vaclavbelak and @joshavant.
+- ACP/channels: add current-conversation ACP binds for Discord, BlueBubbles, and iMessage so `/acp spawn codex --bind here` can turn the current chat into a Codex-backed workspace without creating a child thread, and document the distinction between chat surface, ACP session, and runtime workspace.
 
 ### Fixes
 
@@ -103,6 +104,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/diffs: load bundled Pierre themes without JSON module imports so diff rendering keeps working on newer Node builds. (#45869) thanks @NickHood1984.
 - Plugins/uninstall: remove owned `channels.<id>` config when uninstalling channel plugins, and keep the uninstall preview aligned with explicit channel ownership so built-in channels and shared keys stay intact. (#35915) Thanks @wbxl2000.
 - Plugins/Matrix: prefer explicit DM signals when choosing outbound direct rooms and routing unmapped verification summaries, so strict 2-person fallback rooms do not outrank the real DM. (#56076) thanks @gumadeiras
+- Microsoft Teams/proactive DMs: prefer the freshest personal conversation reference for `user:<aadObjectId>` sends when multiple stored references exist, so replies stop targeting stale DM threads. (#54702) Thanks @gumclaw.
 
 ## 2026.3.24
 

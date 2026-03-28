@@ -14,6 +14,16 @@ vi.mock("./manifest-registry.js", () => ({
 
 import { resolveGatewayStartupPluginIds } from "./channel-plugin-ids.js";
 
+function expectStartupPluginIds(config: OpenClawConfig, expected: readonly string[]) {
+  expect(
+    resolveGatewayStartupPluginIds({
+      config,
+      workspaceDir: "/tmp",
+      env: process.env,
+    }),
+  ).toEqual(expected);
+}
+
 describe("resolveGatewayStartupPluginIds", () => {
   beforeEach(() => {
     listPotentialConfiguredChannelIds.mockReset().mockReturnValue(["demo-channel"]);
@@ -64,67 +74,46 @@ describe("resolveGatewayStartupPluginIds", () => {
     });
   });
 
-  it("includes configured channels, explicit bundled sidecars, and enabled non-bundled sidecars", () => {
-    const config = {
-      plugins: {
-        entries: {
-          "demo-bundled-sidecar": { enabled: true },
-        },
-      },
-      agents: {
-        defaults: {
-          model: { primary: "demo-cli/demo-model" },
-          models: {
-            "demo-cli/demo-model": {},
+  it.each([
+    [
+      "includes configured channels, explicit bundled sidecars, and enabled non-bundled sidecars",
+      {
+        plugins: {
+          entries: {
+            "demo-bundled-sidecar": { enabled: true },
           },
         },
-      },
-    } as OpenClawConfig;
-
-    expect(
-      resolveGatewayStartupPluginIds({
-        config,
-        workspaceDir: "/tmp",
-        env: process.env,
-      }),
-    ).toEqual([
-      "demo-channel",
-      "demo-provider-plugin",
-      "demo-bundled-sidecar",
-      "demo-global-sidecar",
-    ]);
-  });
-
-  it("does not pull default-on bundled non-channel plugins into startup", () => {
-    const config = {} as OpenClawConfig;
-
-    expect(
-      resolveGatewayStartupPluginIds({
-        config,
-        workspaceDir: "/tmp",
-        env: process.env,
-      }),
-    ).toEqual(["demo-channel", "demo-global-sidecar"]);
-  });
-
-  it("auto-loads bundled plugins referenced by configured provider ids", () => {
-    const config = {
-      models: {
-        providers: {
-          "demo-provider": {
-            baseUrl: "https://example.com",
-            models: [],
+        agents: {
+          defaults: {
+            model: { primary: "demo-cli/demo-model" },
+            models: {
+              "demo-cli/demo-model": {},
+            },
           },
         },
-      },
-    } as OpenClawConfig;
-
-    expect(
-      resolveGatewayStartupPluginIds({
-        config,
-        workspaceDir: "/tmp",
-        env: process.env,
-      }),
-    ).toEqual(["demo-channel", "demo-provider-plugin", "demo-global-sidecar"]);
+      } as OpenClawConfig,
+      ["demo-channel", "demo-provider-plugin", "demo-bundled-sidecar", "demo-global-sidecar"],
+    ],
+    [
+      "does not pull default-on bundled non-channel plugins into startup",
+      {} as OpenClawConfig,
+      ["demo-channel", "demo-global-sidecar"],
+    ],
+    [
+      "auto-loads bundled plugins referenced by configured provider ids",
+      {
+        models: {
+          providers: {
+            "demo-provider": {
+              baseUrl: "https://example.com",
+              models: [],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      ["demo-channel", "demo-provider-plugin", "demo-global-sidecar"],
+    ],
+  ] as const)("%s", (_name, config, expected) => {
+    expectStartupPluginIds(config, expected);
   });
 });

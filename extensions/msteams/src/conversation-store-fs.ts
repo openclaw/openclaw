@@ -1,3 +1,7 @@
+import {
+  findPreferredConversationByUserId,
+  parseStoredConversationTimestamp,
+} from "./conversation-store-selection.js";
 import type {
   MSTeamsConversationStore,
   MSTeamsConversationStoreEntry,
@@ -8,35 +12,22 @@ import { readJsonFile, withFileLock, writeJsonFile } from "./store-fs.js";
 
 type ConversationStoreData = {
   version: 1;
-  conversations: Record<string, StoredConversationReference & { lastSeenAt?: string }>;
+  conversations: Record<string, StoredConversationReference>;
 };
 
 const STORE_FILENAME = "msteams-conversations.json";
 const MAX_CONVERSATIONS = 1000;
 const CONVERSATION_TTL_MS = 365 * 24 * 60 * 60 * 1000;
 
-function parseTimestamp(value: string | undefined): number | null {
-  if (!value) {
-    return null;
-  }
-  const parsed = Date.parse(value);
-  if (!Number.isFinite(parsed)) {
-    return null;
-  }
-  return parsed;
-}
-
-function pruneToLimit(
-  conversations: Record<string, StoredConversationReference & { lastSeenAt?: string }>,
-) {
+function pruneToLimit(conversations: Record<string, StoredConversationReference>) {
   const entries = Object.entries(conversations);
   if (entries.length <= MAX_CONVERSATIONS) {
     return conversations;
   }
 
   entries.sort((a, b) => {
-    const aTs = parseTimestamp(a[1].lastSeenAt) ?? 0;
-    const bTs = parseTimestamp(b[1].lastSeenAt) ?? 0;
+    const aTs = parseStoredConversationTimestamp(a[1].lastSeenAt) ?? 0;
+    const bTs = parseStoredConversationTimestamp(b[1].lastSeenAt) ?? 0;
     return aTs - bTs;
   });
 
@@ -45,14 +36,14 @@ function pruneToLimit(
 }
 
 function pruneExpired(
-  conversations: Record<string, StoredConversationReference & { lastSeenAt?: string }>,
+  conversations: Record<string, StoredConversationReference>,
   nowMs: number,
   ttlMs: number,
 ) {
   let removed = false;
   const kept: typeof conversations = {};
   for (const [conversationId, reference] of Object.entries(conversations)) {
-    const lastSeenAt = parseTimestamp(reference.lastSeenAt);
+    const lastSeenAt = parseStoredConversationTimestamp(reference.lastSeenAt);
     // Preserve legacy entries that have no lastSeenAt until they're seen again.
     if (lastSeenAt != null && nowMs - lastSeenAt > ttlMs) {
       removed = true;
@@ -114,20 +105,7 @@ export function createMSTeamsConversationStoreFs(params?: {
   };
 
   const findByUserId = async (id: string): Promise<MSTeamsConversationStoreEntry | null> => {
-    const target = id.trim();
-    if (!target) {
-      return null;
-    }
-    for (const entry of await list()) {
-      const { conversationId, reference } = entry;
-      if (reference.user?.aadObjectId === target) {
-        return { conversationId, reference };
-      }
-      if (reference.user?.id === target) {
-        return { conversationId, reference };
-      }
-    }
-    return null;
+    return findPreferredConversationByUserId(await list(), id);
   };
 
   const upsert = async (

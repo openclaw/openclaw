@@ -1,4 +1,4 @@
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/infra-runtime";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { z } from "openclaw/plugin-sdk/zod";
 
 export type MattermostFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;

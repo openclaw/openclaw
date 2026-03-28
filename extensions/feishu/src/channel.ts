@@ -26,6 +26,7 @@ import type { ChannelMeta, ChannelPlugin, ClawdbotConfig } from "../runtime-api.
 import {
   buildChannelConfigSchema,
   buildProbeChannelStatusSummary,
+  chunkTextForOutbound,
   createActionGate,
   createDefaultChannelRuntimeState,
   DEFAULT_ACCOUNT_ID,
@@ -1053,7 +1054,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
     },
     outbound: {
       deliveryMode: "direct",
-      chunker: (text, limit) => getFeishuRuntime().channel.text.chunkMarkdownText(text, limit),
+      chunker: chunkTextForOutbound,
       chunkerMode: "markdown",
       textChunkLimit: 4000,
       ...createRuntimeOutboundDelegates({

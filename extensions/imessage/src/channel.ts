@@ -9,6 +9,7 @@ import {
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 import {
+  chunkTextForOutbound,
   collectStatusIssuesFromLastError,
   DEFAULT_ACCOUNT_ID,
   formatTrimmedAllowFromEntries,
@@ -16,12 +17,16 @@ import {
   type ChannelPlugin,
 } from "../runtime-api.js";
 import { resolveIMessageAccount, type ResolvedIMessageAccount } from "./accounts.js";
+import { createIMessageConversationBindingManager } from "./conversation-bindings.js";
+import {
+  matchIMessageAcpConversation,
+  normalizeIMessageAcpConversationId,
+} from "./conversation-id.js";
 import {
   resolveIMessageGroupRequireMention,
   resolveIMessageGroupToolPolicy,
 } from "./group-policy.js";
 import type { IMessageProbe } from "./probe.js";
-import { getIMessageRuntime } from "./runtime.js";
 import { imessageSetupAdapter } from "./setup-core.js";
 import {
   createIMessagePluginBase,
@@ -128,6 +133,15 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
         resolveRequireMention: resolveIMessageGroupRequireMention,
         resolveToolPolicy: resolveIMessageGroupToolPolicy,
       },
+      bindings: {
+        compileConfiguredBinding: ({ conversationId }) =>
+          normalizeIMessageAcpConversationId(conversationId),
+        matchInboundConversation: ({ compiledBinding, conversationId }) =>
+          matchIMessageAcpConversation({
+            bindingConversationId: compiledBinding.conversationId,
+            conversationId,
+          }),
+      },
       messaging: {
         normalizeTarget: normalizeIMessageMessagingTarget,
         inferTargetChatType: ({ to }) => inferIMessageTargetChatType(to),
@@ -178,8 +192,17 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
         resolveAccountState: ({ enabled }) => (enabled ? "enabled" : "disabled"),
       }),
       gateway: {
-        startAccount: async (ctx) =>
-          await (await loadIMessageChannelRuntime()).startIMessageGatewayAccount(ctx),
+        startAccount: async (ctx) => {
+          const conversationBindings = createIMessageConversationBindingManager({
+            cfg: ctx.cfg,
+            accountId: ctx.accountId,
+          });
+          try {
+            return await (await loadIMessageChannelRuntime()).startIMessageGatewayAccount(ctx);
+          } finally {
+            conversationBindings.stop();
+          }
+        },
       },
     },
     pairing: {
@@ -194,7 +217,7 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
     outbound: {
       base: {
         deliveryMode: "direct",
-        chunker: (text, limit) => getIMessageRuntime().channel.text.chunkText(text, limit),
+        chunker: chunkTextForOutbound,
         chunkerMode: "text",
         textChunkLimit: 4000,
       },

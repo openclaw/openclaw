@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createSyntheticSourceInfo } from "@mariozechner/pi-coding-agent";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { installDownloadSpec } from "./skills-install-download.js";
 import { setTempStateDir } from "./skills-install.download-test-utils.js";
@@ -55,11 +54,12 @@ const TAR_GZ_TRAVERSAL_BUFFER = Buffer.from(
 
 function buildEntry(name: string): SkillEntry {
   const skillDir = path.join(workspaceDir, "skills", name);
+  const filePath = path.join(skillDir, "SKILL.md");
   return {
     skill: createFixtureSkill({
       name,
       description: `${name} test skill`,
-      filePath: path.join(skillDir, "SKILL.md"),
+      filePath,
       baseDir: skillDir,
       source: "openclaw-workspace",
     }),
@@ -79,7 +79,13 @@ function createFixtureSkill(params: {
     description: params.description,
     filePath: params.filePath,
     baseDir: params.baseDir,
-    sourceInfo: createSyntheticSourceInfo(params.filePath, { source: params.source }),
+    sourceInfo: {
+      path: params.filePath,
+      source: params.source,
+      scope: "project",
+      origin: "top-level",
+      baseDir: params.baseDir,
+    },
     disableModelInvocation: false,
   };
 }

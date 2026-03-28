@@ -655,6 +655,21 @@ describe("agent event handler", () => {
       resolveSessionKeyForRun: () => "session-1",
     });
 
+    vi.mocked(loadGatewaySessionRow).mockReturnValue({
+      key: "session-1",
+      kind: "direct",
+      spawnedBy: "agent:main:main",
+      spawnedWorkspaceDir: "/tmp/subagent",
+      forkedFromParent: true,
+      spawnDepth: 2,
+      subagentRole: "orchestrator",
+      subagentControlScope: "children",
+      lastThreadId: 42,
+      fastMode: true,
+      verboseLevel: "on",
+      updatedAt: 1_200,
+    });
+
     registerAgentRunContext("run-session-tool", { sessionKey: "session-1", verboseLevel: "off" });
     sessionEventSubscribers.subscribe("conn-session");
 
@@ -677,6 +692,15 @@ describe("agent event handler", () => {
       expect.objectContaining({
         runId: "run-session-tool",
         sessionKey: "session-1",
+        spawnedBy: "agent:main:main",
+        spawnedWorkspaceDir: "/tmp/subagent",
+        forkedFromParent: true,
+        spawnDepth: 2,
+        subagentRole: "orchestrator",
+        subagentControlScope: "children",
+        lastThreadId: 42,
+        fastMode: true,
+        verboseLevel: "on",
         stream: "tool",
         ts: 1_234,
         data: expect.objectContaining({
@@ -688,6 +712,134 @@ describe("agent event handler", () => {
       }),
       new Set(["conn-session"]),
       { dropIfSlow: true },
+    );
+    resetAgentRunContextForTest();
+  });
+
+  it("hydrates run-scoped tool events with session ownership metadata", () => {
+    const { broadcastToConnIds, toolEventRecipients, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-1",
+    });
+
+    vi.mocked(loadGatewaySessionRow).mockReturnValue({
+      key: "session-1",
+      kind: "direct",
+      spawnedBy: "agent:main:main",
+      spawnedWorkspaceDir: "/tmp/subagent",
+      forkedFromParent: true,
+      spawnDepth: 2,
+      subagentRole: "orchestrator",
+      subagentControlScope: "children",
+      lastThreadId: 42,
+      fastMode: true,
+      verboseLevel: "on",
+      updatedAt: 1_200,
+    });
+
+    registerAgentRunContext("run-tool-owner", { sessionKey: "session-1", verboseLevel: "off" });
+    toolEventRecipients.add("run-tool-owner", "conn-run");
+
+    handler({
+      runId: "run-tool-owner",
+      seq: 1,
+      stream: "tool",
+      ts: 1_234,
+      data: {
+        phase: "start",
+        name: "exec",
+        toolCallId: "tool-run-1",
+        args: { command: "echo hi" },
+      },
+    });
+
+    expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "agent",
+      expect.objectContaining({
+        runId: "run-tool-owner",
+        sessionKey: "session-1",
+        spawnedBy: "agent:main:main",
+        spawnedWorkspaceDir: "/tmp/subagent",
+        forkedFromParent: true,
+        spawnDepth: 2,
+        subagentRole: "orchestrator",
+        subagentControlScope: "children",
+        lastThreadId: 42,
+        fastMode: true,
+        verboseLevel: "on",
+        stream: "tool",
+        ts: 1_234,
+        data: expect.objectContaining({
+          phase: "start",
+          name: "exec",
+          toolCallId: "tool-run-1",
+          args: { command: "echo hi" },
+        }),
+      }),
+      new Set(["conn-run"]),
+    );
+    resetAgentRunContextForTest();
+  });
+
+  it("hydrates node session tool events with session ownership metadata", () => {
+    const { nodeSendToSession, handler } = createHarness({
+      resolveSessionKeyForRun: () => "session-1",
+    });
+
+    vi.mocked(loadGatewaySessionRow).mockReturnValue({
+      key: "session-1",
+      kind: "direct",
+      spawnedBy: "agent:main:main",
+      spawnedWorkspaceDir: "/tmp/subagent",
+      forkedFromParent: true,
+      spawnDepth: 2,
+      subagentRole: "orchestrator",
+      subagentControlScope: "children",
+      lastThreadId: 42,
+      fastMode: true,
+      verboseLevel: "on",
+      updatedAt: 1_200,
+    });
+
+    registerAgentRunContext("run-tool-node", { sessionKey: "session-1", verboseLevel: "on" });
+
+    handler({
+      runId: "run-tool-node",
+      seq: 1,
+      stream: "tool",
+      ts: 1_234,
+      data: {
+        phase: "start",
+        name: "exec",
+        toolCallId: "tool-node-1",
+        args: { command: "echo hi" },
+      },
+    });
+
+    expect(nodeSendToSession).toHaveBeenCalledWith(
+      "session-1",
+      "agent",
+      expect.objectContaining({
+        runId: "run-tool-node",
+        sessionKey: "session-1",
+        spawnedBy: "agent:main:main",
+        spawnedWorkspaceDir: "/tmp/subagent",
+        forkedFromParent: true,
+        spawnDepth: 2,
+        subagentRole: "orchestrator",
+        subagentControlScope: "children",
+        lastThreadId: 42,
+        fastMode: true,
+        verboseLevel: "on",
+        stream: "tool",
+        ts: 1_234,
+        data: expect.objectContaining({
+          phase: "start",
+          name: "exec",
+          toolCallId: "tool-node-1",
+          args: { command: "echo hi" },
+        }),
+      }),
     );
     resetAgentRunContextForTest();
   });
@@ -756,6 +908,12 @@ describe("agent event handler", () => {
       key: "session-finished",
       kind: "direct",
       updatedAt: 1_650,
+      spawnedBy: "agent:main:main",
+      spawnedWorkspaceDir: "/tmp/subagent",
+      forkedFromParent: true,
+      spawnDepth: 2,
+      subagentRole: "orchestrator",
+      subagentControlScope: "children",
       fastMode: true,
       sendPolicy: "deny",
       verboseLevel: "on",
@@ -798,6 +956,12 @@ describe("agent event handler", () => {
       expect.objectContaining({
         sessionKey: "session-finished",
         phase: "end",
+        spawnedBy: "agent:main:main",
+        spawnedWorkspaceDir: "/tmp/subagent",
+        forkedFromParent: true,
+        spawnDepth: 2,
+        subagentRole: "orchestrator",
+        subagentControlScope: "children",
         fastMode: true,
         sendPolicy: "deny",
         verboseLevel: "on",

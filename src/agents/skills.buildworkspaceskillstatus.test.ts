@@ -30,12 +30,14 @@ function makeEntry(params: {
     label?: string;
   }>;
 }): SkillEntry {
+  const filePath = `/tmp/${params.name}/SKILL.md`;
+  const baseDir = `/tmp/${params.name}`;
   return {
     skill: createFixtureSkill({
       name: params.name,
       description: `desc:${params.name}`,
-      filePath: `/tmp/${params.name}/SKILL.md`,
-      baseDir: `/tmp/${params.name}`,
+      filePath,
+      baseDir,
       source: params.source ?? "openclaw-workspace",
     }),
     frontmatter: {},
@@ -60,7 +62,13 @@ function createFixtureSkill(params: {
     description: params.description,
     filePath: params.filePath,
     baseDir: params.baseDir,
-    sourceInfo: { source: params.source } as never,
+    sourceInfo: {
+      path: params.filePath,
+      source: params.source,
+      scope: "project",
+      origin: "top-level",
+      baseDir: params.baseDir,
+    },
     disableModelInvocation: false,
   } as SkillEntry["skill"];
 }

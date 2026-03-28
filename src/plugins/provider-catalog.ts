@@ -1,3 +1,4 @@
+import { normalizeProviderId } from "../agents/provider-id.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { ProviderCatalogContext, ProviderCatalogResult } from "./types.js";
 
@@ -10,7 +11,7 @@ export function findCatalogTemplate(params: {
     .map((templateId) =>
       params.entries.find(
         (entry) =>
-          entry.provider.toLowerCase() === params.providerId.toLowerCase() &&
+          normalizeProviderId(entry.provider) === normalizeProviderId(params.providerId) &&
           entry.id.toLowerCase() === templateId.toLowerCase(),
       ),
     )
@@ -23,14 +24,18 @@ export async function buildSingleProviderApiKeyCatalog(params: {
   buildProvider: () => ModelProviderConfig | Promise<ModelProviderConfig>;
   allowExplicitBaseUrl?: boolean;
 }): Promise<ProviderCatalogResult> {
-  const apiKey = params.ctx.resolveProviderApiKey(params.providerId).apiKey;
+  const providerId = normalizeProviderId(params.providerId);
+  const apiKey = params.ctx.resolveProviderApiKey(providerId).apiKey;
   if (!apiKey) {
     return null;
   }
 
-  const explicitProvider = params.allowExplicitBaseUrl
-    ? params.ctx.config.models?.providers?.[params.providerId]
-    : undefined;
+  const explicitProvider =
+    params.allowExplicitBaseUrl && params.ctx.config.models?.providers
+      ? Object.entries(params.ctx.config.models.providers).find(
+          ([configuredProviderId]) => normalizeProviderId(configuredProviderId) === providerId,
+        )?.[1]
+      : undefined;
   const explicitBaseUrl =
     typeof explicitProvider?.baseUrl === "string" ? explicitProvider.baseUrl.trim() : "";
 
@@ -50,7 +55,7 @@ export async function buildPairedProviderApiKeyCatalog(params: {
     | Record<string, ModelProviderConfig>
     | Promise<Record<string, ModelProviderConfig>>;
 }): Promise<ProviderCatalogResult> {
-  const apiKey = params.ctx.resolveProviderApiKey(params.providerId).apiKey;
+  const apiKey = params.ctx.resolveProviderApiKey(normalizeProviderId(params.providerId)).apiKey;
   if (!apiKey) {
     return null;
   }

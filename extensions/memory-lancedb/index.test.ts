@@ -221,7 +221,7 @@ describe("memory plugin e2e", () => {
     }));
 
     vi.resetModules();
-    vi.doMock("openclaw/plugin-sdk/infra-runtime", () => ({
+    vi.doMock("openclaw/plugin-sdk/runtime-env", () => ({
       ensureGlobalUndiciEnvProxyDispatcher,
     }));
     vi.doMock("openai", () => ({

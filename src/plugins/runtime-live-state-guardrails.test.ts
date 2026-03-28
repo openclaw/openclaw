@@ -23,11 +23,25 @@ describe("runtime live state guardrails", () => {
     for (const [relativePath, guard] of Object.entries(LIVE_RUNTIME_STATE_GUARDS)) {
       const source = readFileSync(resolve(repoRoot, relativePath), "utf8");
 
-      for (const required of guard.required) {
-        expect(source, `${relativePath} missing ${required}`).toContain(required);
-      }
-      for (const forbidden of guard.forbidden) {
-        expect(source, `${relativePath} must not contain ${forbidden}`).not.toContain(forbidden);
+      const assertions = [
+        ...guard.required.map((needle) => ({
+          type: "required" as const,
+          needle,
+          message: `${relativePath} missing ${needle}`,
+        })),
+        ...guard.forbidden.map((needle) => ({
+          type: "forbidden" as const,
+          needle,
+          message: `${relativePath} must not contain ${needle}`,
+        })),
+      ];
+
+      for (const assertion of assertions) {
+        if (assertion.type === "required") {
+          expect(source, assertion.message).toContain(assertion.needle);
+        } else {
+          expect(source, assertion.message).not.toContain(assertion.needle);
+        }
       }
     }
   });
