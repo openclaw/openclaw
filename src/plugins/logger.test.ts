@@ -2,7 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 import { createPluginLoaderLogger } from "./logger.js";
 
 describe("plugins/logger", () => {
-  it("forwards logger methods", () => {
+  it.each([
+    ["info", "i"],
+    ["warn", "w"],
+    ["error", "e"],
+    ["debug", "d"],
+  ] as const)("forwards %s", (method, value) => {
     const methods = {
       info: vi.fn(),
       warn: vi.fn(),
@@ -11,14 +16,7 @@ describe("plugins/logger", () => {
     };
     const logger = createPluginLoaderLogger(methods);
 
-    for (const [method, value] of [
-      ["info", "i"],
-      ["warn", "w"],
-      ["error", "e"],
-      ["debug", "d"],
-    ] as const) {
-      logger[method]?.(value);
-      expect(methods[method]).toHaveBeenCalledWith(value);
-    }
+    logger[method]?.(value);
+    expect(methods[method]).toHaveBeenCalledWith(value);
   });
 });

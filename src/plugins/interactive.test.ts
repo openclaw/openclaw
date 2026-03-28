@@ -173,18 +173,8 @@ async function expectDedupedInteractiveDispatch(params: {
   handler: ReturnType<typeof vi.fn>;
   expectedCall: unknown;
 }) {
-  const dispatch = async (baseParams: InteractiveDispatchParams) => {
-    if (baseParams.channel === "telegram") {
-      return await dispatchPluginInteractiveHandler(baseParams);
-    }
-    if (baseParams.channel === "discord") {
-      return await dispatchPluginInteractiveHandler(baseParams);
-    }
-    return await dispatchPluginInteractiveHandler(baseParams);
-  };
-
-  const first = await dispatch(params.baseParams);
-  const duplicate = await dispatch(params.baseParams);
+  const first = await dispatchInteractive(params.baseParams);
+  const duplicate = await dispatchInteractive(params.baseParams);
 
   expect(first).toEqual({ matched: true, handled: true, duplicate: false });
   expect(duplicate).toEqual({ matched: true, handled: true, duplicate: true });
@@ -202,18 +192,16 @@ async function dispatchInteractive(params: InteractiveDispatchParams) {
   return await dispatchPluginInteractiveHandler(params);
 }
 
-function expectRegisteredInteractiveHandler(params: {
+function registerInteractiveHandler(params: {
   channel: "telegram" | "discord" | "slack";
   namespace: string;
   handler: ReturnType<typeof vi.fn>;
 }) {
-  expect(
-    registerPluginInteractiveHandler("codex-plugin", {
-      channel: params.channel,
-      namespace: params.namespace,
-      handler: params.handler as never,
-    }),
-  ).toEqual({ ok: true });
+  return registerPluginInteractiveHandler("codex-plugin", {
+    channel: params.channel,
+    namespace: params.namespace,
+    handler: params.handler as never,
+  });
 }
 
 type BindingHelperCase = {
@@ -402,10 +390,8 @@ describe("plugin interactive handlers", () => {
     },
   ] as const)("$name", async ({ channel, baseParams, expectedCall }) => {
     const handler = vi.fn(async () => ({ handled: true }));
-    expectRegisteredInteractiveHandler({
-      channel,
-      namespace: "codex",
-      handler,
+    expect(registerInteractiveHandler({ channel, namespace: "codex", handler })).toEqual({
+      ok: true,
     });
 
     await expectDedupedInteractiveDispatch({

@@ -34,6 +34,19 @@ function resolveBindingConversationFromCommand(
   return __testing.resolveBindingConversationFromCommand(params);
 }
 
+function expectCommandMatch(
+  commandBody: string,
+  params: { name: string; pluginId: string; args: string },
+) {
+  expect(matchPluginCommand(commandBody)).toMatchObject({
+    command: expect.objectContaining({
+      name: params.name,
+      pluginId: params.pluginId,
+    }),
+    args: params.args,
+  });
+}
+
 beforeEach(() => {
   setActivePluginRegistry(createTestRegistry([]));
 });
@@ -181,14 +194,13 @@ describe("registerPluginCommand", () => {
     );
 
     expect(result).toEqual({ ok: true });
-    expect(matchPluginCommand("/talkvoice now")).toMatchObject({
-      command: expect.objectContaining({ name: "voice", pluginId: "demo-plugin" }),
-      args: "now",
-    });
-    expect(matchPluginCommand("/discordvoice now")).toMatchObject({
-      command: expect.objectContaining({ name: "voice", pluginId: "demo-plugin" }),
-      args: "now",
-    });
+    for (const commandBody of ["/talkvoice now", "/discordvoice now"]) {
+      expectCommandMatch(commandBody, {
+        name: "voice",
+        pluginId: "demo-plugin",
+        args: "now",
+      });
+    }
   });
 
   it.each([
