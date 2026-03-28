@@ -18,10 +18,6 @@ function normalizeMediaRootPath(root: LocalMediaRoot): string {
   return normalizeHostPath(typeof root === "string" ? root : root.path);
 }
 
-function asMediaRoots(roots: readonly string[]): readonly LocalMediaRoot[] {
-  return roots as unknown as readonly LocalMediaRoot[];
-}
-
 describe("local media roots", () => {
   function withStateDir<T>(stateDir: string, run: () => T): T {
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
@@ -29,31 +25,31 @@ describe("local media roots", () => {
   }
 
   function expectNormalizedRootsContain(
-    roots: readonly string[],
+    roots: readonly LocalMediaRoot[],
     expectedRoots: readonly string[],
   ) {
-    const normalizedRoots = roots.map(normalizeHostPath);
+    const normalizedRoots = roots.map(normalizeMediaRootPath);
     expectedRoots.forEach((expectedRoot) => {
       expect(normalizedRoots).toContain(normalizeHostPath(expectedRoot));
     });
   }
 
   function expectNormalizedRootsExclude(
-    roots: readonly string[],
+    roots: readonly LocalMediaRoot[],
     excludedRoots: readonly string[],
   ) {
-    const normalizedRoots = roots.map(normalizeHostPath);
+    const normalizedRoots = roots.map(normalizeMediaRootPath);
     excludedRoots.forEach((excludedRoot) => {
       expect(normalizedRoots).not.toContain(normalizeHostPath(excludedRoot));
     });
   }
 
   function expectPicturesRootPresence(params: {
-    roots: readonly string[];
+    roots: readonly LocalMediaRoot[];
     shouldContainPictures: boolean;
     picturesRoot?: string;
   }) {
-    const normalizedRoots = params.roots.map(normalizeHostPath);
+    const normalizedRoots = params.roots.map(normalizeMediaRootPath);
     const picturesRoot = normalizeHostPath(params.picturesRoot ?? "/Users/peter/Pictures");
     if (params.shouldContainPictures) {
       expect(normalizedRoots).toContain(picturesRoot);
@@ -64,7 +60,7 @@ describe("local media roots", () => {
 
   function expectAgentMediaRootsCase(params: {
     stateDir: string;
-    getRoots: () => readonly string[];
+    getRoots: () => readonly LocalMediaRoot[];
     expectedContained?: readonly string[];
     expectedExcluded?: readonly string[];
     minLength?: number;
@@ -109,6 +105,36 @@ describe("local media roots", () => {
       expectedExcluded: expectedExcluded.map((suffix) => path.join(stateDir, suffix)),
       minLength,
     });
+  });
+
+  it("uses configured fs roots for direct agent-scoped media roots", () => {
+    const roots = getAgentScopedMediaLocalRoots(
+      {
+        tools: {
+          fs: {
+            roots: [{ path: "/packs/shared/manual.pdf", kind: "file", access: "ro" }],
+          },
+        },
+      },
+      "ops",
+    );
+
+    expect(roots.map(normalizeHostPath)).toEqual([normalizeHostPath("/packs/shared/manual.pdf")]);
+  });
+
+  it("preserves empty configured fs roots as direct deny-all media roots", () => {
+    const roots = getAgentScopedMediaLocalRoots(
+      {
+        tools: {
+          fs: {
+            roots: [],
+          },
+        },
+      },
+      "ops",
+    );
+
+    expect(roots).toEqual([]);
   });
 
   it("adds concrete parent roots for local media sources without widening to filesystem root", () => {
@@ -184,6 +210,35 @@ describe("local media roots", () => {
     expectPicturesRootPresence({ roots, shouldContainPictures });
   });
 
+  it("adds parent roots for file URLs and skips top-level paths", () => {
+    const stateDir = path.join("/tmp", "openclaw-file-url-media-roots-state");
+    const picturesDir =
+      process.platform === "win32" ? "C:\\Users\\peter\\Pictures" : "/Users/peter/Pictures";
+    const moviesDir =
+      process.platform === "win32" ? "C:\\Users\\peter\\Movies" : "/Users/peter/Movies";
+
+    const roots = withStateDir(stateDir, () =>
+      getAgentScopedMediaLocalRootsForSources({
+        cfg: {},
+        agentId: "ops",
+        mediaSources: [
+          path.join(picturesDir, "photo.png"),
+          pathToFileURL(path.join(moviesDir, "clip.mp4")).href,
+          "/top-level-file.png",
+        ],
+      }),
+    );
+
+    expectNormalizedRootsContain(roots, [
+      path.join(stateDir, "media"),
+      path.join(stateDir, "workspace"),
+      path.join(stateDir, "workspace-ops"),
+    ]);
+    expectPicturesRootPresence({ roots, shouldContainPictures: true, picturesRoot: picturesDir });
+    expectPicturesRootPresence({ roots, shouldContainPictures: true, picturesRoot: moviesDir });
+    expect(roots.map(normalizeMediaRootPath)).not.toContain(normalizeHostPath("/"));
+  });
+
   it("keeps the config-dir media cache root when state and config paths differ", () => {
     const stateDir = path.join("/tmp", "openclaw-legacy-state");
     const configDir = path.join("/tmp", "openclaw-current-config");
@@ -212,9 +267,7 @@ describe("local media roots", () => {
       mediaSources: ["/Users/peter/Pictures/photo.png"],
     });
 
-    expect(asMediaRoots(strictRoots).map(normalizeMediaRootPath)).not.toContain(
-      normalizeHostPath("/Users/peter/Pictures"),
-    );
+    expectPicturesRootPresence({ roots: strictRoots, shouldContainPictures: false });
   });
 
   it("uses configured fs roots for outbound media sources instead of widening by source parent", () => {
@@ -230,16 +283,8 @@ describe("local media roots", () => {
       mediaSources: ["/Users/peter/Pictures/photo.png"],
     });
 
-    expect(asMediaRoots(roots)).toEqual([
-      {
-        path: normalizeHostPath("/packs/shared/file.txt"),
-        kind: "file",
-        access: "ro",
-      },
-    ]);
-    expect(asMediaRoots(roots).map(normalizeMediaRootPath)).not.toContain(
-      normalizeHostPath("/Users/peter/Pictures"),
-    );
+    expect(roots.map(normalizeHostPath)).toEqual([normalizeHostPath("/packs/shared/file.txt")]);
+    expectPicturesRootPresence({ roots, shouldContainPictures: false });
   });
 
   it("preserves empty fs roots as deny-all for outbound media sources", () => {

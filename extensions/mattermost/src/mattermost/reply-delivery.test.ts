@@ -179,6 +179,50 @@ describe("deliverMattermostReplyPayload", () => {
     }
   });
 
+  it("passes configured fs roots through reply delivery", async () => {
+    const sendMessage = vi.fn(async () => undefined);
+    const core = createReplyDeliveryCore();
+    const cfg = {
+      tools: {
+        fs: {
+          roots: [{ path: "/packs/shared/manual.pdf", kind: "file", access: "ro" }],
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    await deliverMattermostReplyPayload({
+      core,
+      cfg,
+      payload: { text: "caption", mediaUrl: "/packs/shared/manual.pdf" },
+      to: "channel:town-square",
+      accountId: "default",
+      agentId: "agent-1",
+      replyToId: "root-post",
+      textLimit: 4000,
+      tableMode: "off",
+      sendMessage,
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledWith(
+      "channel:town-square",
+      "caption",
+      expect.objectContaining({
+        cfg,
+        accountId: "default",
+        mediaUrl: "/packs/shared/manual.pdf",
+        replyToId: "root-post",
+        mediaLocalRoots: [
+          {
+            path: path.resolve("/packs/shared/manual.pdf"),
+            kind: "file",
+            access: "ro",
+          },
+        ],
+      }),
+    );
+  });
+
   it("forwards replyToId for text-only chunked replies", async () => {
     const sendMessage = vi.fn(async () => undefined);
     const cfg = {} satisfies OpenClawConfig;
