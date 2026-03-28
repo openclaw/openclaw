@@ -145,4 +145,32 @@ describe("ensurePluginRegistryLoaded", () => {
       }),
     );
   });
+
+  it("does not treat a pre-seeded partial registry as all scope", async () => {
+    const config = {
+      plugins: { enabled: true },
+      channels: { "demo-channel-a": { enabled: true } },
+    };
+
+    mocks.loadConfig.mockReturnValue(config);
+    mocks.applyPluginAutoEnable.mockReturnValue({ config, changes: [] });
+    mocks.getActivePluginRegistry.mockReturnValue({
+      plugins: [],
+      channels: [{ plugin: { id: "demo-channel-a" } }],
+      tools: [],
+    });
+
+    const { ensurePluginRegistryLoaded } = await import("./plugin-registry.js");
+
+    ensurePluginRegistryLoaded({ scope: "all" });
+
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledTimes(1);
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config,
+        throwOnLoadError: true,
+        workspaceDir: "/tmp/workspace",
+      }),
+    );
+  });
 });
