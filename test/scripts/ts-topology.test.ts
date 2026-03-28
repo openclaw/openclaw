@@ -31,8 +31,8 @@ describe("ts-topology", () => {
       declarationPath: "src/lib/shared.ts",
       declarationLine: 1,
       productionExtensions: ["alpha", "beta"],
-      productionPackages: ["package:core", "src"],
-      productionOwners: ["extension:alpha", "extension:beta", "package:core", "src"],
+      productionPackages: ["src"],
+      productionOwners: ["extension:alpha", "extension:beta", "src"],
     });
     expect(sharedThing?.publicSpecifiers).toEqual(["fixture-sdk", "fixture-sdk/extra"]);
   });
@@ -146,7 +146,7 @@ describe("ts-topology", () => {
       Records with consumers: 5
       
       Top 2 consumer-topology records:
-      - fixture-sdk:sharedThing prod=4 test=0 internal=0
+      - fixture-sdk:sharedThing prod=3 test=0 internal=0
       - fixture-sdk:SharedType prod=2 test=0 internal=0
       "
     `);
