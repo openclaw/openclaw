@@ -48,15 +48,21 @@ export function writeCache<T>(
     return;
   }
   if (cache.size >= DEFAULT_CACHE_MAX_ENTRIES) {
-    const oldest = cache.keys().next();
-    if (!oldest.done) {
-      cache.delete(oldest.value);
+//  const oldest = cache.keys().next();
+//     if (!oldest.done) {
+//       cache.delete(oldest.value);
+//     }
+    // LRU eviction: delete the first (oldest) key
+    const firstKey = cache.keys().next().value;
+    if (firstKey) {
+      cache.delete(firstKey);
     }
   }
+  const now = Date.now();
   cache.set(key, {
     value,
-    expiresAt: Date.now() + ttlMs,
-    insertedAt: Date.now(),
+    expiresAt: now + ttlMs,
+    insertedAt: now,
   });
 }
 

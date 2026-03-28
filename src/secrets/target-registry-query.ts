@@ -241,18 +241,13 @@ export function resolvePlanTargetAgainstRegistry(candidate: {
 
 export function resolveConfigSecretTargetByPath(pathSegments: string[]): ResolvedPlanTarget | null {
   for (const entry of OPENCLAW_COMPILED_SECRET_TARGETS) {
-    if (!entry.includeInPlan) {
-      continue;
-    }
+    if (!entry.includeInPlan) continue;
+    
     const matched = matchPathTokens(pathSegments, entry.pathTokens);
-    if (!matched) {
-      continue;
-    }
+    if (!matched) continue;
+    
     const resolved = toResolvedPlanTarget(entry, pathSegments, matched.captures);
-    if (!resolved) {
-      continue;
-    }
-    return resolved;
+    if (resolved) return resolved;
   }
   return null;
 }

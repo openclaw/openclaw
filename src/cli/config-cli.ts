@@ -122,7 +122,7 @@ function parsePath(raw: string): PathSegment[] {
     }
     if (ch === ".") {
       if (current) {
-        parts.push(current);
+        parts.push(current.trim());
       }
       current = "";
       i += 1;
@@ -130,7 +130,7 @@ function parsePath(raw: string): PathSegment[] {
     }
     if (ch === "[") {
       if (current) {
-        parts.push(current);
+        parts.push(current.trim());
       }
       current = "";
       const close = trimmed.indexOf("]", i);
@@ -149,9 +149,9 @@ function parsePath(raw: string): PathSegment[] {
     i += 1;
   }
   if (current) {
-    parts.push(current);
+    parts.push(current.trim());
   }
-  return parts.map((part) => part.trim()).filter(Boolean);
+  return parts.filter(Boolean);
 }
 
 function parseValue(raw: string, opts: ConfigSetParseOpts): unknown {
@@ -444,7 +444,7 @@ function parseOptionalPositiveInteger(raw: string | undefined, flag: string): nu
 function parseProviderEnvEntries(
   entries: string[] | undefined,
 ): Record<string, string> | undefined {
-  if (!entries || entries.length === 0) {
+  if (!entries?.length) {
     return undefined;
   }
   const env: Record<string, string> = {};
@@ -459,7 +459,7 @@ function parseProviderEnvEntries(
     }
     env[key] = entry.slice(separator + 1);
   }
-  return Object.keys(env).length > 0 ? env : undefined;
+  return env;
 }
 
 function parseProviderAliasPath(path: PathSegment[]): string {
@@ -636,32 +636,44 @@ function buildValueAssignmentOperation(params: {
   const resolved = resolveConfigSecretTargetByPath(params.requestedPath);
   const providerAlias = parseProviderAliasFromTargetPath(params.requestedPath);
   const coercedRef = coerceSecretRef(params.value);
-  return {
+  
+  const operation: ConfigSetOperation = {
     inputMode: params.inputMode,
     requestedPath: params.requestedPath,
     setPath: params.requestedPath,
     value: params.value,
-    ...(resolved ? { touchedSecretTargetPath: toDotPath(resolved.pathSegments) } : {}),
-    ...(providerAlias ? { touchedProviderAlias: providerAlias } : {}),
-    ...(coercedRef ? { assignedRef: coercedRef } : {}),
   };
+  
+  if (resolved?.pathSegments) {
+    operation.touchedSecretTargetPath = toDotPath(resolved.pathSegments);
+  }
+  if (providerAlias) {
+    operation.touchedProviderAlias = providerAlias;
+  }
+  if (coercedRef) {
+    operation.assignedRef = coercedRef;
+  }
+  
+  return operation;
 }
 
 function parseBatchOperations(entries: ConfigSetBatchEntry[]): ConfigSetOperation[] {
-  const operations: ConfigSetOperation[] = [];
+  const operations: ConfigSetOperation[] = new Array(entries.length);
+  let operationIndex = 0;
+  
   for (const [index, entry] of entries.entries()) {
     const path = parseRequiredPath(entry.path);
+    
     if (entry.ref !== undefined) {
       const ref = parseSecretRefFromUnknown(entry.ref, `batch[${index}].ref`);
-      operations.push(
-        buildRefAssignmentOperation({
-          requestedPath: path,
-          ref,
-          inputMode: "json",
-        }),
-      );
+      operations[operationIndex++] = buildRefAssignmentOperation({
+        requestedPath: path,
+        ref,
+        inputMode: "json",
+      });
       continue;
     }
+    
     if (entry.provider !== undefined) {
       const alias = parseProviderAliasPath(path);
       const validated = SecretProviderSchema.safeParse(entry.provider);
@@ -672,23 +684,24 @@ function parseBatchOperations(entries: ConfigSetBatchEntry[]): ConfigSetOperatio
           `batch[${index}].provider invalid at ${issuePath}: ${issue?.message ?? ""}`,
         );
       }
-      operations.push({
+      operations[operationIndex++] = {
         inputMode: "json",
         requestedPath: path,
         setPath: path,
         value: validated.data,
         touchedProviderAlias: alias,
-      });
+      };
       continue;
     }
-    operations.push(
-      buildValueAssignmentOperation({
-        requestedPath: path,
-        value: entry.value,
-        inputMode: "json",
-      }),
-    );
+    
+    operations[operationIndex++] = buildValueAssignmentOperation({
+      requestedPath: path,
+      value: entry.value,
+      inputMode: "json",
+    });
   }
+  
+  operations.length = operationIndex;
   return operations;
 }
 

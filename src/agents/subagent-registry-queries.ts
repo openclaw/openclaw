@@ -128,8 +128,11 @@ export function countActiveRunsForSessionFromRuns(
 
   const pendingDescendantCache = new Map<string, number>();
   const pendingDescendantCount = (sessionKey: string) => {
-    if (pendingDescendantCache.has(sessionKey)) {
-      return pendingDescendantCache.get(sessionKey) ?? 0;
+  //  if (pendingDescendantCache.has(sessionKey)) {
+  //     return pendingDescendantCache.get(sessionKey) ?? 0;
+    const cached = pendingDescendantCache.get(sessionKey);
+    if (cached !== undefined) {
+      return cached;
     }
     const pending = countPendingDescendantRunsInternal(runs, sessionKey);
     pendingDescendantCache.set(sessionKey, pending);
