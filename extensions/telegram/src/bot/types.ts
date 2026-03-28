@@ -1,7 +1,14 @@
-import type { Message, UserFromGetMe } from "@grammyjs/types";
+import type { ChatFullInfo, Message, UserFromGetMe } from "@grammyjs/types";
 
 /** App-specific stream mode for Telegram stream previews. */
 export type TelegramStreamMode = "off" | "partial" | "block";
+
+export type TelegramGetFile = () => Promise<{ file_path?: string }>;
+export type TelegramChatDetails = {
+  available_reactions?: ChatFullInfo["available_reactions"];
+  is_forum?: boolean;
+};
+export type TelegramGetChat = (chatId: number | string) => Promise<TelegramChatDetails>;
 
 /**
  * Minimal context projection from Grammy's Context class.
@@ -11,7 +18,11 @@ export type TelegramStreamMode = "off" | "partial" | "block";
 export type TelegramContext = {
   message: Message;
   me?: UserFromGetMe;
-  getFile: () => Promise<{ file_path?: string }>;
+  getFile: TelegramGetFile;
+};
+
+export type TelegramSyntheticContextSource = Pick<TelegramContext, "me"> & {
+  getFile?: TelegramGetFile;
 };
 
 /** Telegram sticker metadata for context enrichment and caching. */
