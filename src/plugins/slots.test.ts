@@ -132,7 +132,7 @@ describe("applyExclusiveSlotSelection", () => {
       config,
       selectedId,
       ...(selectedKind ? { selectedKind } : {}),
-      ...(registry ? { registry } : {}),
+      ...(registry ? { registry: { plugins: [...registry.plugins] } } : {}),
     });
   });
 
