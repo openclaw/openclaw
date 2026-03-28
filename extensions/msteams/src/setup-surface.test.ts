@@ -25,6 +25,11 @@ vi.mock("./token.js", () => ({
   resolveMSTeamsCredentials,
 }));
 
+vi.mock("../../../src/channels/plugins/bundled.js", () => ({
+  bundledChannelPlugins: [],
+  bundledChannelSetupPlugins: [],
+}));
+
 describe("msteams setup surface", () => {
   beforeEach(() => {
     resolveMSTeamsUserAllowlist.mockReset();

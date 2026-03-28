@@ -58,6 +58,7 @@ export default defineConfig({
       "vitest.channel-paths.mjs",
       "vitest.channels.config.ts",
       "vitest.config.ts",
+      "vitest.contracts.config.ts",
       "vitest.e2e.config.ts",
       "vitest.extensions.config.ts",
       "vitest.gateway.config.ts",
@@ -73,8 +74,10 @@ export default defineConfig({
     include: [
       "src/**/*.test.ts",
       "extensions/**/*.test.ts",
+      "packages/**/*.test.ts",
       "test/**/*.test.ts",
       "ui/src/ui/app-chat.test.ts",
+      "ui/src/ui/chat/**/*.test.ts",
       "ui/src/ui/views/agents-utils.test.ts",
       "ui/src/ui/views/channels.test.ts",
       "ui/src/ui/views/chat.test.ts",
@@ -89,6 +92,7 @@ export default defineConfig({
     setupFiles: ["test/setup.ts"],
     exclude: [
       "dist/**",
+      "test/fixtures/**",
       "apps/macos/**",
       "apps/macos/.build/**",
       "**/node_modules/**",

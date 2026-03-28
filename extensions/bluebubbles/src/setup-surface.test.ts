@@ -239,6 +239,37 @@ describe("BlueBubblesConfigSchema", () => {
     });
     expect(parsed.success).toBe(true);
   });
+
+  it("defaults enrichGroupParticipantsFromContacts to true", () => {
+    const parsed = BlueBubblesConfigSchema.safeParse({
+      serverUrl: "http://localhost:1234",
+      password: "secret", // pragma: allowlist secret
+    });
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) {
+      return;
+    }
+    expect(parsed.data.enrichGroupParticipantsFromContacts).toBe(true);
+  });
+
+  it("defaults account enrichGroupParticipantsFromContacts to true", () => {
+    const parsed = BlueBubblesConfigSchema.safeParse({
+      accounts: {
+        work: {
+          serverUrl: "http://localhost:1234",
+          password: "secret", // pragma: allowlist secret
+        },
+      },
+    });
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) {
+      return;
+    }
+    const accountConfig = (
+      parsed.data as { accounts?: { work?: { enrichGroupParticipantsFromContacts?: boolean } } }
+    ).accounts?.work;
+    expect(accountConfig?.enrichGroupParticipantsFromContacts).toBe(true);
+  });
 });
 
 describe("bluebubbles group policy", () => {

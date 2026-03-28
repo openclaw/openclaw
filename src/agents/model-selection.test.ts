@@ -111,7 +111,7 @@ describe("model-selection", () => {
       expect(normalizeProviderId("Z.ai")).toBe("zai");
       expect(normalizeProviderId("z-ai")).toBe("zai");
       expect(normalizeProviderId("OpenCode-Zen")).toBe("opencode");
-      expect(normalizeProviderId("qwen")).toBe("qwen-portal");
+      expect(normalizeProviderId("qwen")).toBe("qwen");
       expect(normalizeProviderId("kimi-code")).toBe("kimi");
       expect(normalizeProviderId("kimi-coding")).toBe("kimi");
       expect(normalizeProviderId("bedrock")).toBe("amazon-bedrock");
@@ -690,6 +690,28 @@ describe("model-selection", () => {
       ]);
       const result = resolveConfiguredRefForTest(cfg);
       expect(result).toEqual({ provider: "anthropic", model: "claude-opus-4-6" });
+    });
+
+    it("can skip plugin-backed model normalization for display-only callers", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "google-vertex/gemini-3.1-flash-lite" },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = resolveConfiguredModelRef({
+        cfg,
+        defaultProvider: "anthropic",
+        defaultModel: "claude-opus-4-6",
+        allowPluginNormalization: false,
+      });
+
+      expect(result).toEqual({
+        provider: "google-vertex",
+        model: "gemini-3.1-flash-lite",
+      });
     });
 
     it("should fall back to hardcoded default when no custom providers have models", () => {

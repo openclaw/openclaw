@@ -5,6 +5,7 @@ import { isUnitConfigTestFile } from "../../vitest.unit-paths.mjs";
 import { dedupeFilesPreserveOrder, loadTestRunnerBehavior } from "../test-runner-manifest.mjs";
 
 const baseConfigPrefixes = ["src/agents/", "src/auto-reply/", "src/commands/", "test/", "ui/"];
+const contractTestPrefixes = ["src/channels/plugins/contracts/", "src/plugins/contracts/"];
 
 export const normalizeRepoPath = (value) => value.split(path.sep).join("/");
 
@@ -55,6 +56,7 @@ export function loadTestCatalog() {
     ...new Set([
       ...walkTestFiles("src"),
       ...walkTestFiles("extensions"),
+      ...walkTestFiles("packages"),
       ...walkTestFiles("test"),
       ...walkTestFiles(path.join("ui", "src", "ui")),
     ]),
@@ -95,6 +97,8 @@ export function loadTestCatalog() {
     let surface = "base";
     if (isUnitConfigTestFile(normalizedFile)) {
       surface = "unit";
+    } else if (contractTestPrefixes.some((prefix) => normalizedFile.startsWith(prefix))) {
+      surface = "contracts";
     } else if (normalizedFile.endsWith(".live.test.ts")) {
       surface = "live";
     } else if (normalizedFile.endsWith(".e2e.test.ts")) {
@@ -184,4 +188,13 @@ export function loadTestCatalog() {
   };
 }
 
-export const testSurfaces = ["unit", "extensions", "channels", "gateway", "live", "e2e", "base"];
+export const testSurfaces = [
+  "unit",
+  "extensions",
+  "channels",
+  "contracts",
+  "gateway",
+  "live",
+  "e2e",
+  "base",
+];

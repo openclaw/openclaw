@@ -611,14 +611,16 @@ export default definePluginEntry({
           if (!pending) {
             return { text: "Pairing request not found." };
           }
-          const approved = await approveDevicePairing(pending.requestId, {
-            callerScopes: gatewayClientScopes ?? undefined,
-          });
+          const approved = gatewayClientScopes
+            ? await approveDevicePairing(pending.requestId, {
+                callerScopes: gatewayClientScopes,
+              })
+            : await approveDevicePairing(pending.requestId);
           if (!approved) {
             return { text: "Pairing request not found." };
           }
           if (approved.status === "forbidden") {
-            return { text: `⚠️ missing scope: ${approved.missingScope}` };
+            return { text: `⚠️ Cannot approve a request requiring ${approved.missingScope}.` };
           }
           const label = approved.device.displayName?.trim() || approved.device.deviceId;
           const platform = approved.device.platform?.trim();

@@ -516,7 +516,60 @@ describe("device-pair /pair approve", () => {
     expect(result).toEqual({ text: "✅ Paired Victim Phone (ios)." });
   });
 
-  it("rejects approving pending scopes above the internal caller scope ceiling", async () => {
+  it("does not force an empty caller scope context for external approvals", async () => {
+    vi.mocked(listDevicePairing).mockResolvedValueOnce({
+      pending: [
+        {
+          requestId: "req-1",
+          deviceId: "victim-phone",
+          publicKey: "victim-public-key",
+          displayName: "Victim Phone",
+          platform: "ios",
+          ts: Date.now(),
+        },
+      ],
+      paired: [],
+    });
+    vi.mocked(approveDevicePairing).mockResolvedValueOnce({
+      status: "approved",
+      requestId: "req-1",
+      device: {
+        deviceId: "victim-phone",
+        publicKey: "victim-public-key",
+        displayName: "Victim Phone",
+        platform: "ios",
+        role: "operator",
+        roles: ["operator"],
+        scopes: ["operator.pairing"],
+        approvedScopes: ["operator.pairing"],
+        tokens: {
+          operator: {
+            token: "token-1",
+            role: "operator",
+            scopes: ["operator.pairing"],
+            createdAtMs: Date.now(),
+          },
+        },
+        createdAtMs: Date.now(),
+        approvedAtMs: Date.now(),
+      },
+    });
+
+    const command = registerPairCommand();
+    const result = await command.handler(
+      createCommandContext({
+        channel: "telegram",
+        args: "approve latest",
+        commandBody: "/pair approve latest",
+        gatewayClientScopes: undefined,
+      }),
+    );
+
+    expect(vi.mocked(approveDevicePairing)).toHaveBeenCalledWith("req-1");
+    expect(result).toEqual({ text: "✅ Paired Victim Phone (ios)." });
+  });
+
+  it("rejects approvals above the caller scopes", async () => {
     vi.mocked(listDevicePairing).mockResolvedValueOnce({
       pending: [
         {
@@ -548,6 +601,8 @@ describe("device-pair /pair approve", () => {
     expect(vi.mocked(approveDevicePairing)).toHaveBeenCalledWith("req-1", {
       callerScopes: ["operator.write", "operator.pairing"],
     });
-    expect(result).toEqual({ text: "⚠️ missing scope: operator.admin" });
+    expect(result).toEqual({
+      text: "⚠️ Cannot approve a request requiring operator.admin.",
+    });
   });
 });

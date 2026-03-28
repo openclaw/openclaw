@@ -221,10 +221,6 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/open-prose/**"
-"extensions: qwen-portal-auth":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "extensions/qwen-portal-auth/**"
 "extensions: device-pair":
   - changed-files:
       - any-glob-to-any-file:
