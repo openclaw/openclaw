@@ -3823,8 +3823,10 @@ describe("resolveRuntimePluginRegistry", () => {
       runtimeOptions: { allowGatewaySubagentBinding: true },
     };
     const result = resolveRuntimePluginRegistry(toolOptions);
-    expect(getActivePluginRegistry()).toBeNull();
-    expect(result).not.toBeNull();
+    // loadOpenClawPlugins always activates the registry (shouldActivate defaults to true),
+    // so after falling through, the active registry is set to the freshly-created one.
+    expect(getActivePluginRegistry()).not.toBeNull();
+    expect(getActivePluginRegistry()).toBe(result);
   });
 });
 

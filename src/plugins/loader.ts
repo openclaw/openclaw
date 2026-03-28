@@ -356,6 +356,14 @@ export function resolveRuntimePluginRegistry(
   // set during gateway startup is a safe superset of what the caller needs.
   // Reuse it to avoid a redundant load that may miss already-activated
   // plugin state (tool registrations, hooks, memory providers).
+  //
+  // Safety: this fallback fires when cache keys differ but the caller is not
+  // gateway-scoped. In the single-gateway-per-process model, sub-agent callers
+  // (tools.ts, memory-runtime.ts, channel-resolution.ts) share the same
+  // workspaceDir, config, and env as the gateway — the only fields that produce
+  // a different cache key are the gateway-specific ones that isGatewayScopedLoad
+  // already guards against. If a future multi-workspace model is introduced,
+  // this fallback should be narrowed to also verify workspaceDir/config parity.
   if (!isGatewayScopedLoad(options)) {
     const active = getActivePluginRegistry();
     if (active) {
