@@ -40,6 +40,7 @@ import { resolvePluginCacheInputs } from "./roots.js";
 import {
   getActivePluginRegistry,
   getActivePluginRegistryKey,
+  getActivePluginRegistryKeyParts,
   setActivePluginRegistry,
 } from "./runtime.js";
 import type { CreatePluginRuntimeOptions } from "./runtime/index.js";
@@ -206,6 +207,22 @@ function buildCacheKey(params: {
   pluginSdkResolution?: PluginSdkResolutionPreference;
   coreGatewayMethodNames?: string[];
 }): string {
+  const parts = buildCacheKeyParts(params);
+  return `${parts.pluginInputKey}::${parts.scopeKey}::${parts.setupOnlyKey}::${parts.startupChannelMode}::${parts.runtimeSubagentMode}::${parts.pluginSdkResolution}::${parts.gatewayMethodsKey}`;
+}
+
+function buildCacheKeyParts(params: {
+  workspaceDir?: string;
+  plugins: ReturnType<typeof normalizePluginsConfig>;
+  installs?: Record<string, PluginInstallRecord>;
+  env: NodeJS.ProcessEnv;
+  onlyPluginIds?: string[];
+  includeSetupOnlyChannelPlugins?: boolean;
+  preferSetupRuntimeForChannelPlugins?: boolean;
+  runtimeSubagentMode?: "default" | "explicit" | "gateway-bindable";
+  pluginSdkResolution?: PluginSdkResolutionPreference;
+  coreGatewayMethodNames?: string[];
+}) {
   const { roots, loadPaths } = resolvePluginCacheInputs({
     workspaceDir: params.workspaceDir,
     loadPaths: params.plugins.loadPaths,
@@ -232,11 +249,21 @@ function buildCacheKey(params: {
   const startupChannelMode =
     params.preferSetupRuntimeForChannelPlugins === true ? "prefer-setup" : "full";
   const gatewayMethodsKey = JSON.stringify(params.coreGatewayMethodNames ?? []);
-  return `${roots.workspace ?? ""}::${roots.global ?? ""}::${roots.stock ?? ""}::${JSON.stringify({
-    ...params.plugins,
-    installs,
-    loadPaths,
-  })}::${scopeKey}::${setupOnlyKey}::${startupChannelMode}::${params.runtimeSubagentMode ?? "default"}::${params.pluginSdkResolution ?? "auto"}::${gatewayMethodsKey}`;
+  return {
+    pluginInputKey: `${roots.workspace ?? ""}::${roots.global ?? ""}::${roots.stock ?? ""}::${JSON.stringify(
+      {
+        ...params.plugins,
+        installs,
+        loadPaths,
+      },
+    )}`,
+    scopeKey,
+    setupOnlyKey,
+    startupChannelMode,
+    runtimeSubagentMode: params.runtimeSubagentMode ?? "default",
+    pluginSdkResolution: params.pluginSdkResolution ?? "auto",
+    gatewayMethodsKey,
+  };
 }
 
 function normalizeScopedPluginIds(ids?: string[]): string[] | undefined {
@@ -293,6 +320,18 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     pluginSdkResolution: options.pluginSdkResolution,
     coreGatewayMethodNames,
   });
+  const cacheKeyParts = buildCacheKeyParts({
+    workspaceDir: options.workspaceDir,
+    plugins: normalized,
+    installs: cfg.plugins?.installs,
+    env,
+    onlyPluginIds,
+    includeSetupOnlyChannelPlugins,
+    preferSetupRuntimeForChannelPlugins,
+    runtimeSubagentMode: resolveRuntimeSubagentMode(options.runtimeOptions),
+    pluginSdkResolution: options.pluginSdkResolution,
+    coreGatewayMethodNames,
+  });
   return {
     env,
     cfg,
@@ -302,6 +341,7 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     preferSetupRuntimeForChannelPlugins,
     shouldActivate: options.activate !== false,
     cacheKey,
+    cacheKeyParts,
   };
 }
 
@@ -316,12 +356,27 @@ function getCompatibleActivePluginRegistry(
     return activeRegistry;
   }
   const activeCacheKey = getActivePluginRegistryKey();
+  const activeCacheKeyParts = getActivePluginRegistryKeyParts();
   if (!activeCacheKey) {
     return undefined;
   }
-  return resolvePluginLoadCacheContext(options).cacheKey === activeCacheKey
-    ? activeRegistry
-    : undefined;
+  const { cacheKey: requestCacheKey, cacheKeyParts: requestCacheKeyParts } =
+    resolvePluginLoadCacheContext(options);
+  if (requestCacheKey === activeCacheKey) {
+    return activeRegistry;
+  }
+  if (
+    requestCacheKeyParts.runtimeSubagentMode === "default" &&
+    activeCacheKeyParts?.runtimeSubagentMode === "gateway-bindable" &&
+    requestCacheKeyParts.pluginInputKey === activeCacheKeyParts.pluginInputKey &&
+    requestCacheKeyParts.scopeKey === activeCacheKeyParts.scopeKey &&
+    requestCacheKeyParts.setupOnlyKey === activeCacheKeyParts.setupOnlyKey &&
+    requestCacheKeyParts.startupChannelMode === activeCacheKeyParts.startupChannelMode &&
+    requestCacheKeyParts.pluginSdkResolution === activeCacheKeyParts.pluginSdkResolution
+  ) {
+    return activeRegistry;
+  }
+  return undefined;
 }
 
 export function resolveRuntimePluginRegistry(
@@ -768,8 +823,12 @@ function warnAboutUntrackedLoadedPlugins(params: {
   }
 }
 
-function activatePluginRegistry(registry: PluginRegistry, cacheKey: string): void {
-  setActivePluginRegistry(registry, cacheKey);
+function activatePluginRegistry(
+  registry: PluginRegistry,
+  cacheKey: string,
+  cacheKeyParts: ReturnType<typeof resolvePluginLoadCacheContext>["cacheKeyParts"],
+): void {
+  setActivePluginRegistry(registry, cacheKey, cacheKeyParts);
   initializeGlobalHookRunner(registry);
 }
 
@@ -790,6 +849,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     preferSetupRuntimeForChannelPlugins,
     shouldActivate,
     cacheKey,
+    cacheKeyParts,
   } = resolvePluginLoadCacheContext(options);
   const logger = options.logger ?? defaultLogger();
   const validateOnly = options.mode === "validate";
@@ -805,7 +865,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         runtime: cached.memoryRuntime,
       });
       if (shouldActivate) {
-        activatePluginRegistry(cached.registry, cacheKey);
+        activatePluginRegistry(cached.registry, cacheKey, cacheKeyParts);
       }
       return cached.registry;
     }
@@ -1396,7 +1456,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     });
   }
   if (shouldActivate) {
-    activatePluginRegistry(registry, cacheKey);
+    activatePluginRegistry(registry, cacheKey, cacheKeyParts);
   }
   return registry;
 }

@@ -5,6 +5,7 @@ type MockRegistryToolEntry = {
   optional: boolean;
   source: string;
   factory: (ctx: unknown) => unknown;
+  pluginConfig?: Record<string, unknown>;
 };
 
 const loadOpenClawPluginsMock = vi.fn();
@@ -214,6 +215,31 @@ describe("resolvePluginTools optional tools", () => {
     const tools = resolveOptionalDemoTools();
 
     expect(tools).toHaveLength(0);
+  });
+
+  it("passes pluginConfig through to plugin tool factories", () => {
+    const seenContexts: unknown[] = [];
+    setRegistry([
+      {
+        pluginId: "optional-demo",
+        optional: false,
+        source: "/tmp/optional-demo.js",
+        pluginConfig: { tenant: "workspace-a", token: "masked" },
+        factory: (ctx) => {
+          seenContexts.push(ctx);
+          return makeTool("plugin_config_tool");
+        },
+      },
+    ]);
+
+    const tools = resolvePluginTools(createResolveToolsParams());
+
+    expectResolvedToolNames(tools, ["plugin_config_tool"]);
+    expect(seenContexts[0]).toEqual(
+      expect.objectContaining({
+        pluginConfig: { tenant: "workspace-a", token: "masked" },
+      }),
+    );
   });
 
   it.each([

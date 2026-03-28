@@ -2245,6 +2245,38 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
     expect(loaded?.error).not.toContain("api.registerHttpHandler(...) was removed");
   });
 
+  it("deduplicates repeated tool registration for the same plugin", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "duplicate-tool-registration",
+      filename: "duplicate-tool-registration.cjs",
+      body: `module.exports = { id: "duplicate-tool-registration", register(api) {
+  const tool = {
+    name: "duplicate_tool",
+    description: "duplicate tool",
+    parameters: { type: "object", properties: {} },
+    async execute() {
+      return { content: [], details: {} };
+    },
+  };
+  api.registerTool(tool, { name: "duplicate_tool" });
+  api.registerTool(tool, { name: "duplicate_tool" });
+} };`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["duplicate-tool-registration"],
+      },
+    });
+
+    expect(registry.tools).toHaveLength(1);
+    expect(
+      registry.plugins.find((entry) => entry.id === "duplicate-tool-registration")?.toolNames,
+    ).toEqual(["duplicate_tool"]);
+  });
+
   it("enforces plugin http route validation and conflict rules", () => {
     useNoBundledPlugins();
     const scenarios = [
@@ -3561,8 +3593,8 @@ describe("getCompatibleActivePluginRegistry", () => {
         allowGatewaySubagentBinding: true,
       },
     };
-    const { cacheKey } = __testing.resolvePluginLoadCacheContext(loadOptions);
-    setActivePluginRegistry(registry, cacheKey);
+    const { cacheKey, cacheKeyParts } = __testing.resolvePluginLoadCacheContext(loadOptions);
+    setActivePluginRegistry(registry, cacheKey, cacheKeyParts);
 
     expect(__testing.getCompatibleActivePluginRegistry(loadOptions)).toBe(registry);
     expect(
@@ -3582,7 +3614,55 @@ describe("getCompatibleActivePluginRegistry", () => {
         ...loadOptions,
         runtimeOptions: undefined,
       }),
+    ).toBe(registry);
+    expect(
+      __testing.getCompatibleActivePluginRegistry({
+        ...loadOptions,
+        runtimeOptions: {
+          subagent: {
+            run: async () => ({ runId: "subagent-run" }),
+            waitForRun: async () => ({ status: "ok" }),
+            getSessionMessages: async () => ({ messages: [] }),
+            getSession: async () => ({ messages: [] }),
+            deleteSession: async () => undefined,
+          },
+        },
+      }),
     ).toBeUndefined();
+  });
+
+  it("reuses a gateway-bindable active registry for default runtime requests", () => {
+    const registry = createEmptyPluginRegistry();
+    const startupLoadOptions = {
+      config: {
+        plugins: {
+          allow: ["demo"],
+          load: { paths: ["/tmp/demo.js"] },
+        },
+      },
+      workspaceDir: "/tmp/workspace-a",
+      coreGatewayHandlers: {
+        "plugins.demo": async () => undefined,
+      },
+      runtimeOptions: {
+        allowGatewaySubagentBinding: true,
+      },
+    };
+    const { cacheKey, cacheKeyParts } = __testing.resolvePluginLoadCacheContext(startupLoadOptions);
+    setActivePluginRegistry(registry, cacheKey, cacheKeyParts);
+
+    expect(
+      __testing.getCompatibleActivePluginRegistry({
+        config: startupLoadOptions.config,
+        workspaceDir: startupLoadOptions.workspaceDir,
+      }),
+    ).toBe(registry);
+    expect(
+      resolveRuntimePluginRegistry({
+        config: startupLoadOptions.config,
+        workspaceDir: startupLoadOptions.workspaceDir,
+      }),
+    ).toBe(registry);
   });
 
   it("falls back to the current active runtime when no compatibility-shaping inputs are supplied", () => {
@@ -3606,8 +3686,8 @@ describe("getCompatibleActivePluginRegistry", () => {
         "sessions.get": () => undefined,
       },
     };
-    const { cacheKey } = __testing.resolvePluginLoadCacheContext(loadOptions);
-    setActivePluginRegistry(registry, cacheKey);
+    const { cacheKey, cacheKeyParts } = __testing.resolvePluginLoadCacheContext(loadOptions);
+    setActivePluginRegistry(registry, cacheKey, cacheKeyParts);
 
     expect(__testing.getCompatibleActivePluginRegistry(loadOptions)).toBe(registry);
     expect(
@@ -3633,8 +3713,8 @@ describe("resolveRuntimePluginRegistry", () => {
       },
       workspaceDir: "/tmp/workspace-a",
     };
-    const { cacheKey } = __testing.resolvePluginLoadCacheContext(loadOptions);
-    setActivePluginRegistry(registry, cacheKey);
+    const { cacheKey, cacheKeyParts } = __testing.resolvePluginLoadCacheContext(loadOptions);
+    setActivePluginRegistry(registry, cacheKey, cacheKeyParts);
 
     expect(resolveRuntimePluginRegistry(loadOptions)).toBe(registry);
   });
