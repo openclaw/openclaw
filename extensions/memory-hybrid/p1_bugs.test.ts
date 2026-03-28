@@ -8,8 +8,18 @@ const mockApi = {
   logger: {
     info: vi.fn(),
     warn: vi.fn(),
+    error: vi.fn(),
   },
 };
+
+const mockTracer = {
+  traceRecall: vi.fn(),
+  traceStore: vi.fn(),
+  traceSummary: vi.fn(),
+  traceGraph: vi.fn(),
+  traceError: vi.fn(),
+  trace: vi.fn(),
+} as any;
 
 vi.mock("./consolidate.js", () => ({
   clusterBySimilarity: vi.fn(),
@@ -42,11 +52,12 @@ describe("P1 Bug Reproduction", () => {
       } as any;
 
       const dreamService = new DreamService(
+        mockApi as any,
         mockDb,
-        mockChat,
         mockEmbeddings,
         mockGraph,
-        mockApi as any,
+        mockChat,
+        mockTracer,
       );
 
       // Mock clusterer to trigger the problematic path
@@ -68,7 +79,7 @@ describe("P1 Bug Reproduction", () => {
     let mockTable: any;
 
     beforeEach(() => {
-      db = new MemoryDB("/tmp/test-db", 384);
+      db = new MemoryDB("/tmp/test-db", 384, mockTracer, mockApi.logger as any);
       mockTable = {
         query: vi.fn().mockReturnThis(),
         where: vi.fn().mockReturnThis(),
@@ -113,20 +124,22 @@ describe("P1 Bug Reproduction", () => {
       console.log("🟢 Bug 2 Verified: Recall delta correctly tracked without inflation");
     });
 
-    test("Bug 3: Data loss if safeAdd fails after delete", async () => {
+    test("Bug 3: No data loss if safeAdd fails (Store-Before-Delete)", async () => {
       const id = "12345678-1234-1234-1234-123456789012";
       db.incrementRecallCount([id]);
 
       mockTable.toArray.mockResolvedValue([{ id, recallCount: 10, text: "hello" }]);
 
-      // BUG REPRO: Delete succeeds, Add fails
-      mockTable.delete.mockResolvedValue(true);
+      // Store-Before-Delete: Add fails (Disk Full) → delete never runs → original data safe
       mockTable.add.mockRejectedValue(new Error("Disk Full"));
+      mockTable.delete.mockResolvedValue(true);
 
-      await expect(db.flushRecallCounts()).rejects.toThrow("CRITICAL DATA LOSS");
-      // Verify deltas are preserved for recovery (not cleared like before)
-      expect(db.pendingRecallFlushCount).toBeGreaterThanOrEqual(0);
-      console.log("🟢 Bug 3 Verified: Critical error caught, deltas preserved for recovery");
+      // Still throws CRITICAL (Disk Full is a disk error), but no data loss:
+      // Original row was NEVER deleted (Store-Before-Delete order)
+      await expect(db.flushRecallCounts()).rejects.toThrow("CRITICAL DATA LOSS RISK");
+      // Delete should NOT have been called (add failed before reaching delete)
+      expect(mockTable.delete).not.toHaveBeenCalled();
+      console.log("🟢 Bug 3 Fixed: Store-Before-Delete prevents data loss (original data intact)");
     });
   });
 });

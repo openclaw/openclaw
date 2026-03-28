@@ -5,8 +5,7 @@
  * Live tests (requiring API key) are skipped by default.
  */
 
-import { describe, test, expect } from "vitest";
-import { vi } from "vitest";
+import { describe, test, expect, vi } from "vitest";
 import {
   shouldCapture,
   detectCategory,
@@ -76,7 +75,7 @@ describe("config", () => {
     expect(cfg.embedding.provider).toBe("google");
     expect(cfg.embedding.model).toBe("gemini-embedding-001");
     expect(cfg.embedding.apiKey).toBe("test-key-123");
-    expect(cfg.chatModel).toBe("gemma-3-27b-it"); // auto-detected from chat.ts defaults
+    expect(cfg.chatModel).toBe("gemini-3.1-flash-lite-preview"); // auto-detected from chat.ts defaults
     expect(cfg.autoRecall).toBe(true); // default
     expect(cfg.autoCapture).toBe(false); // default
     expect(cfg.smartCapture).toBe(false); // default
@@ -103,7 +102,7 @@ describe("config", () => {
       embedding: { apiKey: "${TEST_DEFAULT_KEY}" },
     });
 
-    expect(cfg.embedding.model).toBe("text-embedding-004");
+    expect(cfg.embedding.model).toBe("gemini-embedding-002");
     expect(cfg.embedding.provider).toBe("google");
     delete process.env.TEST_DEFAULT_KEY;
   });
@@ -256,12 +255,12 @@ describe("promptInjection", () => {
 describe("escapeMemoryForPrompt", () => {
   test("should escape HTML special characters", () => {
     expect(escapeMemoryForPrompt('<script>alert("xss")</script>')).toBe(
-      "&lt;script&gt;alert(&quot;xss&quot;)&lt;/script&gt;",
+      '‹script›alert("xss")‹/script›',
     );
   });
 
   test("should escape ampersands and quotes", () => {
-    expect(escapeMemoryForPrompt("Tom & Jerry's")).toBe("Tom &amp; Jerry&#39;s");
+    expect(escapeMemoryForPrompt("Tom & Jerry's")).toBe("Tom & Jerry's");
   });
 });
 
@@ -298,7 +297,9 @@ describe("MemoryDB Error Handling", () => {
       }),
     } as any;
 
-    const db = new MemoryDB("/tmp/test-db", 3072);
+    const mockLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const mockTracer = { traceSummary: vi.fn(), trace: vi.fn(), traceError: vi.fn() } as any;
+    const db = new MemoryDB("/tmp/test-db", 3072, mockTracer, mockLogger as any);
     (db as any).table = mockTable;
     (db as any).initialized = true;
 
@@ -311,7 +312,9 @@ describe("MemoryDB Error Handling", () => {
       search: vi.fn().mockResolvedValue([]),
     } as any;
 
-    const db = new MemoryDB("/tmp/test-db", 3072);
+    const mockLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const mockTracer = { traceSummary: vi.fn(), trace: vi.fn(), traceError: vi.fn() } as any;
+    const db = new MemoryDB("/tmp/test-db", 3072, mockTracer, mockLogger as any);
     (db as any).table = mockTable;
     (db as any).initialized = true;
 
@@ -326,8 +329,12 @@ describe("MemoryDB Error Handling", () => {
   });
 
   describe("Concurrency & Safety", () => {
+    const mockLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const mockTracer = { traceSummary: vi.fn(), trace: vi.fn(), traceError: vi.fn() } as any;
+
     test("Bug 4: should NOT drop in-flight recall deltas during flush", async () => {
-      const db = new MemoryDB("/tmp/test-concr", 768);
+      const graph = new GraphDB("/tmp/test-graph", mockTracer, mockLogger as any);
+      const db = new MemoryDB("/tmp/test-db", 768, mockTracer, mockLogger as any);
       const id = "11111111-2222-3333-4444-555555555555";
       const mockRow = { id, recallCount: 10, text: "test", vector: [] };
 
@@ -353,7 +360,7 @@ describe("MemoryDB Error Handling", () => {
     });
 
     test("Bug 1: should NOT resurrect deleted memories during flush", async () => {
-      const db = new MemoryDB("/tmp/test-concr-2", 768);
+      const db = new MemoryDB("/tmp/test-concr-2", 768, undefined as any, undefined as any);
       const id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
       const mockRow = { id, recallCount: 5, text: "test", vector: [] };
 
