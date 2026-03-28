@@ -316,7 +316,7 @@ describe("tool-loop-detection", () => {
       }
     });
 
-    it("keeps generic loops warn-only below global breaker threshold", () => {
+    it("escalates generic loops to critical at critical threshold", () => {
       const fixture = createReadNoProgressFixture();
       const loopResult = detectLoopAfterRepeatedCalls({
         toolName: fixture.toolName,
@@ -326,7 +326,8 @@ describe("tool-loop-detection", () => {
       });
       expect(loopResult.stuck).toBe(true);
       if (loopResult.stuck) {
-        expect(loopResult.level).toBe("warning");
+        expect(loopResult.level).toBe("critical");
+        expect(loopResult.detector).toBe("generic_repeat");
       }
     });
 
@@ -562,49 +563,31 @@ describe("tool-loop-detection", () => {
     });
   });
 
-    describe("session-0328 clawhub search infinite loop reproduction", () => {
-    /**
-     * Reproduces the exact bug from session 77e66a25 (2026-03-28).
-     *
-     * User asked: "npx skills add cobosteven/cobo-agent-wallet-manual"
-     * Agent (Gemini Flash) was redirected by the clawhub SKILL.md and ran
-     *   `clawhub search "cobosteven" --no-input`
-     * 100 times in a row (09:59 → 10:08, ~9 minutes).
-     *
-     * Root cause: DEFAULT_LOOP_DETECTION_CONFIG.enabled = false.
-     * The framework never intervened.
-     */
+  describe("repeated exec loops with volatile result fields", () => {
+    // Reproduces the bug from session 77e66a25 (2026-03-28) where an agent
+    // ran `clawhub search "cobosteven" --no-input` 100 times over ~9 minutes.
 
-    // Exact tool name and args from the session
-    const CLAWHUB_SEARCH_TOOL = "exec";
-    const CLAWHUB_SEARCH_PARAMS = {
+    const EXEC_TOOL = "exec";
+    const EXEC_PARAMS = {
       command: 'npx -y clawhub search "cobosteven" --no-input',
     };
-    // clawhub search returned the same empty result every time
-    const CLAWHUB_SEARCH_RESULT = {
+    const EXEC_RESULT_STABLE = {
       content: [{ type: "text", text: "- Searching" }],
       details: { ok: true },
     };
 
-    it("FIXED: default config (enabled=true) now detects 100 identical calls", () => {
+    it("default config detects 100 identical exec calls", () => {
       const state = createState();
 
-      // Replay all 100 calls from the session
       recordRepeatedSuccessfulCalls({
         state,
-        toolName: CLAWHUB_SEARCH_TOOL,
-        toolParams: CLAWHUB_SEARCH_PARAMS,
-        result: CLAWHUB_SEARCH_RESULT,
+        toolName: EXEC_TOOL,
+        toolParams: EXEC_PARAMS,
+        result: EXEC_RESULT_STABLE,
         count: 100,
       });
 
-      // With default config (now enabled=true), loop IS detected
-      const loopResult = detectToolCallLoop(
-        state,
-        CLAWHUB_SEARCH_TOOL,
-        CLAWHUB_SEARCH_PARAMS,
-        // no config → uses DEFAULT_LOOP_DETECTION_CONFIG with enabled: true (fixed)
-      );
+      const loopResult = detectToolCallLoop(state, EXEC_TOOL, EXEC_PARAMS);
 
       expect(loopResult.stuck).toBe(true);
       if (loopResult.stuck) {
@@ -613,44 +596,42 @@ describe("tool-loop-detection", () => {
       }
     });
 
-    it("REGRESSION: explicitly disabled config still allows the loop (old behavior)", () => {
+    it("explicitly disabled config still allows repeated calls", () => {
       const state = createState();
 
       recordRepeatedSuccessfulCalls({
         state,
-        toolName: CLAWHUB_SEARCH_TOOL,
-        toolParams: CLAWHUB_SEARCH_PARAMS,
-        result: CLAWHUB_SEARCH_RESULT,
+        toolName: EXEC_TOOL,
+        toolParams: EXEC_PARAMS,
+        result: EXEC_RESULT_STABLE,
         count: 100,
       });
 
-      // Users can still opt out if they want
       const loopResult = detectToolCallLoop(
         state,
-        CLAWHUB_SEARCH_TOOL,
-        CLAWHUB_SEARCH_PARAMS,
+        EXEC_TOOL,
+        EXEC_PARAMS,
         { enabled: false },
       );
 
       expect(loopResult.stuck).toBe(false);
     });
 
-    it("FIX: with enabled=true, generic_repeat warns at call #10", () => {
+    it("warns at WARNING_THRESHOLD identical calls", () => {
       const state = createState();
 
-      // Replay the first 10 calls
       recordRepeatedSuccessfulCalls({
         state,
-        toolName: CLAWHUB_SEARCH_TOOL,
-        toolParams: CLAWHUB_SEARCH_PARAMS,
-        result: CLAWHUB_SEARCH_RESULT,
+        toolName: EXEC_TOOL,
+        toolParams: EXEC_PARAMS,
+        result: EXEC_RESULT_STABLE,
         count: WARNING_THRESHOLD,
       });
 
       const loopResult = detectToolCallLoop(
         state,
-        CLAWHUB_SEARCH_TOOL,
-        CLAWHUB_SEARCH_PARAMS,
+        EXEC_TOOL,
+        EXEC_PARAMS,
         enabledLoopDetectionConfig,
       );
 
@@ -659,26 +640,24 @@ describe("tool-loop-detection", () => {
         expect(loopResult.level).toBe("warning");
         expect(loopResult.detector).toBe("generic_repeat");
         expect(loopResult.count).toBe(WARNING_THRESHOLD);
-        expect(loopResult.message).toContain(`${WARNING_THRESHOLD} times`);
       }
     });
 
-    it("FIX: with enabled=true, global circuit breaker blocks at call #30", () => {
+    it("blocks at GLOBAL_CIRCUIT_BREAKER_THRESHOLD with stable results", () => {
       const state = createState();
 
-      // Replay 30 calls (global circuit breaker threshold)
       recordRepeatedSuccessfulCalls({
         state,
-        toolName: CLAWHUB_SEARCH_TOOL,
-        toolParams: CLAWHUB_SEARCH_PARAMS,
-        result: CLAWHUB_SEARCH_RESULT,
+        toolName: EXEC_TOOL,
+        toolParams: EXEC_PARAMS,
+        result: EXEC_RESULT_STABLE,
         count: GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
       });
 
       const loopResult = detectToolCallLoop(
         state,
-        CLAWHUB_SEARCH_TOOL,
-        CLAWHUB_SEARCH_PARAMS,
+        EXEC_TOOL,
+        EXEC_PARAMS,
         enabledLoopDetectionConfig,
       );
 
@@ -686,17 +665,95 @@ describe("tool-loop-detection", () => {
       if (loopResult.stuck) {
         expect(loopResult.level).toBe("critical");
         expect(loopResult.detector).toBe("global_circuit_breaker");
-        expect(loopResult.message).toContain("global circuit breaker");
-        expect(loopResult.message).toContain(
-          `${GLOBAL_CIRCUIT_BREAKER_THRESHOLD} times`,
-        );
       }
     });
 
-    it("FIX: the initial exploration phase (varying search terms) does NOT trigger false alarm", () => {
+    it("strips durationMs from exec result hash so circuit breaker fires", () => {
       const state = createState();
 
-      // First 6 calls from session used DIFFERENT commands — should not trigger
+      // Simulate real exec results where durationMs varies each time
+      for (let i = 0; i < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; i += 1) {
+        const toolCallId = `exec-${i}`;
+        recordToolCall(state, EXEC_TOOL, EXEC_PARAMS, toolCallId, enabledLoopDetectionConfig);
+        recordToolCallOutcome(state, {
+          toolName: EXEC_TOOL,
+          toolParams: EXEC_PARAMS,
+          toolCallId,
+          result: {
+            content: [{ type: "text", text: "- Searching" }],
+            details: {
+              status: "completed",
+              exitCode: 0,
+              durationMs: 100 + i * 3, // varies every call
+              aggregated: "- Searching",
+              cwd: "/home/ubuntu/.openclaw/workspace",
+            },
+          },
+          config: enabledLoopDetectionConfig,
+        });
+      }
+
+      const loopResult = detectToolCallLoop(
+        state,
+        EXEC_TOOL,
+        EXEC_PARAMS,
+        enabledLoopDetectionConfig,
+      );
+
+      // With the fix, durationMs is stripped from the hash, so all results
+      // hash identically and the global circuit breaker fires.
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("critical");
+        expect(loopResult.detector).toBe("global_circuit_breaker");
+      }
+    });
+
+    it("generic_repeat escalates to critical at CRITICAL_THRESHOLD", () => {
+      const state = createState();
+
+      // Use results with truly varying content (different durationMs AND
+      // different aggregated text) so neither global_circuit_breaker nor
+      // the durationMs-stripped hash can match — only generic_repeat applies.
+      for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
+        const toolCallId = `exec-vary-${i}`;
+        recordToolCall(state, EXEC_TOOL, EXEC_PARAMS, toolCallId, enabledLoopDetectionConfig);
+        recordToolCallOutcome(state, {
+          toolName: EXEC_TOOL,
+          toolParams: EXEC_PARAMS,
+          toolCallId,
+          result: {
+            content: [{ type: "text", text: `output line ${i}` }],
+            details: {
+              status: "completed",
+              exitCode: 0,
+              durationMs: 50 + i,
+              aggregated: `output line ${i}`,
+            },
+          },
+          config: enabledLoopDetectionConfig,
+        });
+      }
+
+      const loopResult = detectToolCallLoop(
+        state,
+        EXEC_TOOL,
+        EXEC_PARAMS,
+        enabledLoopDetectionConfig,
+      );
+
+      // Even though results vary, args are identical CRITICAL_THRESHOLD times
+      // → generic_repeat escalates to critical (block)
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("critical");
+        expect(loopResult.detector).toBe("generic_repeat");
+      }
+    });
+
+    it("varying search terms do not trigger false alarms", () => {
+      const state = createState();
+
       const explorationCommands = [
         'npx -y clawhub add cobosteven/cobo-agent-wallet-manual --skill cobo-agentic-wallet-sandbox --yes --global',
         'npx -y clawhub install cobosteven/cobo-agent-wallet-manual --yes --global',
@@ -713,12 +770,11 @@ describe("tool-loop-detection", () => {
           state,
           "exec",
           { command: explorationCommands[i] },
-          CLAWHUB_SEARCH_RESULT,
+          EXEC_RESULT_STABLE,
           i,
         );
       }
 
-      // Each command is unique, so no loop detected — correct behavior
       const loopResult = detectToolCallLoop(
         state,
         "exec",

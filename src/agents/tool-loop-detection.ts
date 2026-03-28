@@ -223,6 +223,19 @@ function hashToolOutcome(
     }
   }
 
+  // For exec-like tools, strip volatile fields (durationMs, cwd) that change
+  // on every invocation even when the command output is identical.
+  // Without this, getNoProgressStreak() sees different hashes each time and
+  // the global circuit breaker never fires for repeated exec calls.
+  if (isPlainObject(details) && "durationMs" in details) {
+    return digestStable({
+      status: details.status,
+      exitCode: details.exitCode ?? null,
+      aggregated: details.aggregated ?? null,
+      text,
+    });
+  }
+
   return digestStable({
     details,
     text,
@@ -470,10 +483,32 @@ export function detectToolCallLoop(
     };
   }
 
-  // Generic detector: warn-only for repeated identical calls.
+  // Generic detector: repeated identical calls (args-only, ignores result).
+  // Escalates to critical at criticalThreshold to hard-block tools whose
+  // result hashes vary due to volatile fields (e.g. exec durationMs) —
+  // the global circuit breaker depends on stable result hashes and may
+  // not fire for those tools, so this is the last line of defense.
   const recentCount = history.filter(
     (h) => h.toolName === toolName && h.argsHash === currentHash,
   ).length;
+
+  if (
+    !knownPollTool &&
+    resolvedConfig.detectors.genericRepeat &&
+    recentCount >= resolvedConfig.criticalThreshold
+  ) {
+    log.error(
+      `Generic repeat critical: ${toolName} called ${recentCount} times with identical arguments`,
+    );
+    return {
+      stuck: true,
+      level: "critical",
+      detector: "generic_repeat",
+      count: recentCount,
+      message: `CRITICAL: ${toolName} has been called ${recentCount} times with identical arguments. Session execution blocked to prevent runaway loops.`,
+      warningKey: `generic:${toolName}:${currentHash}`,
+    };
+  }
 
   if (
     !knownPollTool &&
