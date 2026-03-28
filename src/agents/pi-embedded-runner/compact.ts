@@ -16,6 +16,7 @@ import {
   resolveContextEngine,
 } from "../../context-engine/index.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
+import { listConfiguredMessageChannels } from "../../infra/outbound/channel-selection.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
 import { resolveSignalReactionLevel } from "../../plugin-sdk/signal.js";
 import {
@@ -587,6 +588,9 @@ export async function compactEmbeddedPiSessionDirect(
           accountId: params.agentAccountId,
         })
       : undefined;
+    const configuredChannels = params.config
+      ? await listConfiguredMessageChannels(params.config)
+      : undefined;
 
     const runtimeInfo = {
       host: machineName,
@@ -638,6 +642,7 @@ export async function compactEmbeddedPiSessionDirect(
       reactionGuidance,
       messageToolHints,
       sandboxInfo,
+      configuredChannels,
       tools: effectiveTools,
       modelAliasLines: buildModelAliasLines(params.config),
       userTimezone,

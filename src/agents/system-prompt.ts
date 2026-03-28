@@ -213,6 +213,9 @@ export function buildAgentSystemPrompt(params: {
   };
   messageToolHints?: string[];
   sandboxInfo?: EmbeddedSandboxInfo;
+  /** When set, only these channels appear in the prompt's channel option list.
+   *  When unset, all deliverable channels are listed (backward compatible). */
+  configuredChannels?: string[];
   /** Reaction guidance for the agent (for Telegram minimal/extensive modes). */
   reactionGuidance?: {
     level: "minimal" | "extensive";
@@ -360,7 +363,11 @@ export function buildAgentSystemPrompt(params: {
     .filter(Boolean);
   const runtimeCapabilitiesLower = new Set(runtimeCapabilities.map((cap) => cap.toLowerCase()));
   const inlineButtonsEnabled = runtimeCapabilitiesLower.has("inlinebuttons");
-  const messageChannelOptions = listDeliverableMessageChannels().join("|");
+  const messageChannelOptions = (
+    params.configuredChannels && params.configuredChannels.length > 0
+      ? params.configuredChannels
+      : listDeliverableMessageChannels()
+  ).join("|");
   const promptMode = params.promptMode ?? "full";
   const isMinimal = promptMode === "minimal" || promptMode === "none";
   const sandboxContainerWorkspace = params.sandboxInfo?.containerWorkspaceDir?.trim();

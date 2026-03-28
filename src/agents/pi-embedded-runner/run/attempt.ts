@@ -13,6 +13,7 @@ import {
   ensureGlobalUndiciEnvProxyDispatcher,
   ensureGlobalUndiciStreamTimeouts,
 } from "../../../infra/net/undici-global-dispatcher.js";
+import { listConfiguredMessageChannels } from "../../../infra/outbound/channel-selection.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import {
   isOllamaCompatProvider,
@@ -552,6 +553,9 @@ export async function runEmbeddedAttempt(
           accountId: params.agentAccountId,
         })
       : undefined;
+    const configuredChannels = params.config
+      ? await listConfiguredMessageChannels(params.config)
+      : undefined;
 
     const defaultModelRef = resolveDefaultModelForAgent({
       cfg: params.config ?? {},
@@ -613,6 +617,7 @@ export async function runEmbeddedAttempt(
       runtimeInfo,
       messageToolHints,
       sandboxInfo,
+      configuredChannels,
       tools: effectiveTools,
       modelAliasLines: buildModelAliasLines(params.config),
       userTimezone,
