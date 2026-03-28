@@ -16,8 +16,7 @@ import { performGatewaySessionReset } from "./session-reset-service.js";
 import { resolveGatewaySessionStoreTarget } from "./session-utils.js";
 import {
   clearSessionsListResultCacheForTest,
-  getSessionsListFullComputationForTest,
-  resetSessionsListFullComputationForTest,
+  setSessionsListFullComputationHook,
 } from "./sessions-list-result-cache.js";
 import {
   connectOk,
@@ -195,6 +194,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  setSessionsListFullComputationHook(null);
   await harness.close();
   await fs.rm(sharedSessionStoreDir, { recursive: true, force: true });
 });
@@ -276,6 +276,8 @@ function isInternalHookEvent(value: unknown): value is InternalHookEvent {
   );
 }
 
+let fullComputationCount = 0;
+
 describe("gateway server sessions", () => {
   beforeEach(() => {
     clearRuntimeConfigSnapshot();
@@ -304,7 +306,10 @@ describe("gateway server sessions", () => {
     browserSessionTabMocks.closeTrackedBrowserTabsForSessions.mockClear();
     browserSessionTabMocks.closeTrackedBrowserTabsForSessions.mockResolvedValue(0);
     clearSessionsListResultCacheForTest();
-    resetSessionsListFullComputationForTest();
+    fullComputationCount = 0;
+    setSessionsListFullComputationHook(() => {
+      fullComputationCount += 1;
+    });
   });
 
   test("sessions.create stores dashboard session model and parent linkage, and creates a transcript", async () => {
@@ -638,17 +643,17 @@ describe("gateway server sessions", () => {
     const params = { includeGlobal: true, includeUnknown: true };
     const first = await rpcReq(ws, "sessions.list", params);
     expect(first.ok).toBe(true);
-    expect(getSessionsListFullComputationForTest()).toBe(1);
+    expect(fullComputationCount).toBe(1);
 
     const second = await rpcReq(ws, "sessions.list", params);
     expect(second.ok).toBe(true);
-    expect(getSessionsListFullComputationForTest()).toBe(1);
+    expect(fullComputationCount).toBe(1);
 
     await rpcReq(ws, "sessions.list", {
       ...params,
       lastHash: (first.payload as { hash?: string }).hash,
     });
-    expect(getSessionsListFullComputationForTest()).toBe(1);
+    expect(fullComputationCount).toBe(1);
 
     ws.close();
   });
@@ -670,9 +675,9 @@ describe("gateway server sessions", () => {
       includeLastMessage: true as const,
     };
     await rpcReq(ws, "sessions.list", params);
-    expect(getSessionsListFullComputationForTest()).toBe(1);
+    expect(fullComputationCount).toBe(1);
     await rpcReq(ws, "sessions.list", params);
-    expect(getSessionsListFullComputationForTest()).toBe(2);
+    expect(fullComputationCount).toBe(2);
 
     ws.close();
   });
@@ -728,13 +733,13 @@ describe("gateway server sessions", () => {
     });
     const { ws } = await openClient();
     const params = { includeGlobal: true, includeUnknown: true };
-    resetSessionsListFullComputationForTest();
+    fullComputationCount = 0;
     await rpcReq(ws, "sessions.list", params);
-    expect(getSessionsListFullComputationForTest()).toBe(1);
+    expect(fullComputationCount).toBe(1);
 
     emitSessionTranscriptUpdate("/tmp/sess-txgen-bump.jsonl");
     await rpcReq(ws, "sessions.list", params);
-    expect(getSessionsListFullComputationForTest()).toBe(2);
+    expect(fullComputationCount).toBe(2);
 
     ws.close();
   });

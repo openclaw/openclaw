@@ -2,6 +2,8 @@ export {
   clearConfigCache,
   clearResolvedConfigSourceStatFingerprintSyncCacheForTest,
   collectResolvedConfigSourceStatFingerprintSync,
+  getConfigStatFingerprintAtLastLoad,
+  resetConfigStatFingerprintAtLastLoadForTest,
   ConfigRuntimeRefreshError,
   clearRuntimeConfigSnapshot,
   registerConfigWriteListener,

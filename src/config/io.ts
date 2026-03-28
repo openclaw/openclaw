@@ -2529,16 +2529,14 @@ export function collectResolvedConfigSourceStatFingerprintSync(
       // Stale include resolution can skip or hide include-file updates under a fixed root stat.
       // Recompute to avoid trusting cached include paths from failed parses.
       const computed = computeResolvedConfigSourceStatFingerprint(deps, configPath);
-      if (useMemo) {
-        configSourceStatFingerprintMemo = {
-          configPath,
-          rootMtimeMs: rootParts.mtimeMs,
-          rootSizeBytes: rootParts.sizeBytes,
-          includePaths: computed.includePaths,
-          includesResolved: computed.includesResolved,
-          fingerprint: computed.fingerprint,
-        };
-      }
+      configSourceStatFingerprintMemo = {
+        configPath,
+        rootMtimeMs: rootParts.mtimeMs,
+        rootSizeBytes: rootParts.sizeBytes,
+        includePaths: computed.includePaths,
+        includesResolved: computed.includesResolved,
+        fingerprint: computed.fingerprint,
+      };
       return computed.fingerprint;
     }
     const fpFast = buildSortedConfigStatFingerprint(
@@ -2583,6 +2581,21 @@ function notifyConfigWriteListeners(event: ConfigWriteNotification): void {
       // Best-effort observer path only; successful writes must still complete.
     }
   }
+}
+
+/**
+ * Stat fingerprint captured at the moment `loadConfig()` last parsed from disk.
+ * Compared against the live stat fingerprint to detect when the config cache
+ * is returning a stale object that doesn't match the current on-disk state.
+ */
+let configStatFingerprintAtLastLoad: string | null = null;
+
+export function getConfigStatFingerprintAtLastLoad(): string | null {
+  return configStatFingerprintAtLastLoad;
+}
+
+export function resetConfigStatFingerprintAtLastLoadForTest(): void {
+  configStatFingerprintAtLastLoad = null;
 }
 
 export function clearConfigCache(): void {

@@ -8,6 +8,7 @@ import {
   clearResolvedConfigSourceStatFingerprintSyncCacheForTest,
   collectResolvedConfigSourceStatFingerprintSync,
   loadConfig,
+  resetConfigStatFingerprintAtLastLoadForTest,
 } from "../config/config.js";
 import { buildSessionsListParamsKey } from "../shared/session-types.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -23,6 +24,7 @@ afterEach(() => {
   clearConfigCache();
   clearResolvedConfigSourceStatFingerprintSyncCacheForTest();
   clearSessionsListResultCacheForTest();
+  resetConfigStatFingerprintAtLastLoadForTest();
 });
 
 describe("isSessionsListResultCacheEligible", () => {
@@ -183,6 +185,63 @@ describe("collectResolvedConfigSourceStatFingerprintSync", () => {
 
     expect(recoveredFp).not.toBe(failedFp);
     fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("does not serve stale cached rows after config file changes and loadConfig catches up", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sessions-cache-toctou-"));
+    const configPath = path.join(dir, "openclaw.json");
+    const stateDir = path.join(dir, "state");
+    const sessionsPath = path.join(stateDir, "sessions.json");
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(configPath, "{}\n", "utf-8");
+
+    try {
+      await withEnvAsync(
+        {
+          OPENCLAW_CONFIG_PATH: configPath,
+          OPENCLAW_STATE_DIR: stateDir,
+          // Long config cache so loadConfig returns stale cfg after file edit.
+          OPENCLAW_CONFIG_CACHE_MS: "5000",
+          OPENCLAW_SESSIONS_LIST_RESULT_CACHE_TTL_MS: "10000",
+          OPENCLAW_DISABLE_CONFIG_CACHE: undefined,
+        },
+        async () => {
+          const listParams = { includeGlobal: true, includeUnknown: true };
+
+          // Load config — sets cfgFpAtLastLoad to the current stat fingerprint.
+          const cfg1 = loadConfig();
+
+          // Edit the config file — stat fingerprint advances on disk.
+          fs.writeFileSync(configPath, '{ "gateway": { "port": 9999 } }\n', "utf-8");
+          clearResolvedConfigSourceStatFingerprintSyncCacheForTest();
+
+          // Write a cache entry while loadConfig still returns the OLD cfg1.
+          // The cache key includes cfgAligned="n" because cfgFp advanced past cfgFpAtLastLoad.
+          writeSessionsListResultCache({
+            cfg: cfg1,
+            listParams,
+            hash: "hash-stale",
+            result: {
+              ts: Date.now(),
+              path: sessionsPath,
+              count: 1,
+              defaults: { modelProvider: null, model: null, contextTokens: 1234 },
+              sessions: [],
+            },
+          });
+
+          // Force config reload (simulates cache expiry) — cfgFpAtLastLoad catches up.
+          clearConfigCache();
+          const cfg2 = loadConfig();
+
+          // The stale entry was written under cfgAligned="n"; now cfgAligned="y" — cache miss.
+          const cached = tryReadSessionsListResultCache({ cfg: cfg2, listParams });
+          expect(cached).toBeNull();
+        },
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("reuses the sessions.list result cache after the config cache expires when config sources are unchanged", async () => {

@@ -288,8 +288,8 @@ export class OpenClawApp extends LitElement {
 
   @state() sessionsLoading = false;
   @state() sessionsResult: SessionsListResult | null = null;
-  @state() sessionsListLastHash: string | null = null;
-  @state() sessionsListLastHashParamsKey: string | null = null;
+  sessionsListLastHash: string | null = null;
+  sessionsListLastHashParamsKey: string | null = null;
   @state() sessionsError: string | null = null;
   @state() sessionsFilterActive = "";
   @state() sessionsFilterLimit = "120";

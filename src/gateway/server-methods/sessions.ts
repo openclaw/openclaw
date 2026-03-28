@@ -72,7 +72,7 @@ import {
   readSessionMessages,
 } from "../session-utils.js";
 import {
-  bumpSessionsListFullComputationForTest,
+  notifySessionsListFullComputation,
   tryReadSessionsListResultCache,
   writeSessionsListResultCache,
 } from "../sessions-list-result-cache.js";
@@ -534,9 +534,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
 
     const { storePath, store } = loadCombinedSessionStoreForGateway(cfg);
-    if (process.env.VITEST) {
-      bumpSessionsListFullComputationForTest();
-    }
+    notifySessionsListFullComputation();
     const result = listSessionsFromStore({
       cfg,
       storePath,

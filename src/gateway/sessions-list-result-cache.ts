@@ -6,6 +6,7 @@ import {
 } from "../config/cache-utils.js";
 import {
   collectResolvedConfigSourceStatFingerprintSync,
+  getConfigStatFingerprintAtLastLoad,
   getRuntimeConfigSnapshot,
   type OpenClawConfig,
 } from "../config/config.js";
@@ -70,19 +71,16 @@ export function clearSessionsListResultCacheForTest(): void {
   SESSIONS_LIST_RESULT_CACHE.clear();
 }
 
-let sessionsListFullComputationTallyForTest = 0;
+let sessionsListFullComputationHook: (() => void) | null = null;
 
-/** Test-only: increments once per `sessions.list` path that runs `listSessionsFromStore`. */
-export function bumpSessionsListFullComputationForTest(): void {
-  sessionsListFullComputationTallyForTest += 1;
+/** Register a callback invoked once per `sessions.list` full-computation path. */
+export function setSessionsListFullComputationHook(cb: (() => void) | null): void {
+  sessionsListFullComputationHook = cb;
 }
 
-export function getSessionsListFullComputationForTest(): number {
-  return sessionsListFullComputationTallyForTest;
-}
-
-export function resetSessionsListFullComputationForTest(): void {
-  sessionsListFullComputationTallyForTest = 0;
+/** Notify that `sessions.list` executed a full computation (cache miss). */
+export function notifySessionsListFullComputation(): void {
+  sessionsListFullComputationHook?.();
 }
 
 /**
@@ -122,7 +120,13 @@ function buildSessionsListResultCacheKey(params: {
   const paramsKey = buildSessionsListParamsKey(params.listParams);
   const subagentGen = getSubagentRegistryGeneration();
   const txGen = getTranscriptWriteGeneration();
-  return `${cfgFp}\n${storesFp}\nsagen:${subagentGen}\ntxgen:${txGen}\n${paramsKey}`;
+  // When the config stat fingerprint has advanced past what loadConfig() last
+  // parsed, the cfg object may be stale (loadConfig has a ~200ms cache).
+  // Including a staleness flag ensures entries written from a stale cfg are
+  // not reused after loadConfig catches up to the on-disk state.
+  const cfgFpAtLoad = getConfigStatFingerprintAtLastLoad();
+  const cfgAligned = cfgFp === cfgFpAtLoad ? "y" : "n";
+  return `${cfgFp}\n${storesFp}\nsagen:${subagentGen}\ntxgen:${txGen}\ncfga:${cfgAligned}\n${paramsKey}`;
 }
 
 export function tryReadSessionsListResultCache(params: {
