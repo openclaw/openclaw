@@ -301,8 +301,16 @@ export async function handleTelegramAction(
     }
     const to = readStringParam(params, "to", { required: true });
     const mediaUrl =
-      readStringParam(params, "mediaUrl") ??
       readStringParam(params, "media", {
+        trim: false,
+      }) ??
+      readStringParam(params, "mediaUrl", {
+        trim: false,
+      }) ??
+      readStringParam(params, "filePath", {
+        trim: false,
+      }) ??
+      readStringParam(params, "path", {
         trim: false,
       });
     const buttons = resolveTelegramButtonsFromParams(params);
