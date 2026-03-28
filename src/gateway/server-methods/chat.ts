@@ -1129,18 +1129,25 @@ function isBtwReplyPayload(payload: ReplyPayload | undefined): payload is ReplyP
 }
 
 function broadcastSideResult(params: {
-  context: Pick<GatewayRequestContext, "broadcast" | "nodeSendToSession" | "agentRunSeq">;
+  context: Pick<
+    GatewayRequestContext,
+    | "broadcast"
+    | "broadcastToConnIds"
+    | "nodeSendToSession"
+    | "agentRunSeq"
+    | "sessionMessageSubscribers"
+  >;
   payload: SideResultPayload;
 }) {
   const seq = nextChatSeq({ agentRunSeq: params.context.agentRunSeq }, params.payload.runId);
-  params.context.broadcast("chat.side_result", {
-    ...params.payload,
-    seq,
-  });
-  params.context.nodeSendToSession(params.payload.sessionKey, "chat.side_result", {
-    ...params.payload,
-    seq,
-  });
+  const eventPayload = { ...params.payload, seq };
+  const subscribers = params.context.sessionMessageSubscribers.get(params.payload.sessionKey);
+  if (subscribers.size > 0) {
+    params.context.broadcastToConnIds("chat.side_result", eventPayload, subscribers);
+  } else {
+    params.context.broadcast("chat.side_result", eventPayload);
+  }
+  params.context.nodeSendToSession(params.payload.sessionKey, "chat.side_result", eventPayload);
 }
 
 function broadcastChatError(params: {
