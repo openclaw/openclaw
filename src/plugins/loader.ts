@@ -850,7 +850,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   // Related: https://github.com/openclaw/openclaw/issues/48380
   if (shouldActivate && !options.config && !options.workspaceDir && !options.onlyPluginIds) {
     const activeKey = getActivePluginRegistryKey();
-    if (activeKey) {
+    if (activeKey && activeKey === cacheKey) {
       const activeReg = getActivePluginRegistry();
       if (activeReg && (activeReg.plugins?.length ?? 0) > 0) {
         return activeReg;
