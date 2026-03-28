@@ -672,13 +672,15 @@ export async function createModelSelectionState(params: {
         // Stored override is not an image model, skip it for image requests
         skipForImageSwitch = true;
       }
-    } else if (storedProvider !== imageModelDefaultProvider) {
+    } else if (imageModelDefaultProvider && storedProvider !== imageModelDefaultProvider) {
       // Providerless imageModel entries match by pure name across providers (case 4 in
       // isImageModel), but this can incorrectly keep a stored override from a different
       // provider whose model may not support vision. Force catalog check to verify.
-      // However, if the stored model is an explicitly configured provider-qualified entry
-      // (e.g., imageModel.fallbacks: ["openai/gpt-4.1", "anthropic/claude-3"]), skip the
-      // catalog check since the user explicitly configured this cross-provider fallback.
+      // Only run this cross-provider check when imageModelDefaultProvider was actually
+      // derived (non-empty). If imageModelDefaultProvider is empty, the configured
+      // imageModel is providerless (e.g., imageModel: "gpt-4o" without explicit-provider
+      // fallbacks), and a stored override matching by name should be considered valid
+      // without forcing a catalog check that could fail due to missing/stale metadata.
       const explicitKey = modelKey(storedProvider, storedModel);
       const isExplicitProviderQualified =
         imageModelKeys.has(explicitKey) || imageModelKeys.has(`${storedProvider}/${storedModel}`);
