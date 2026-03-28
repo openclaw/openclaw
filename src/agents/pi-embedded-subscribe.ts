@@ -586,6 +586,11 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       state.lastStreamedReasoning = formatted;
     }
 
+    // Skip if nothing actually changed.
+    if (!rawDelta && !formattedDelta) {
+      return;
+    }
+
     // Single event with both raw and formatted fields. HTTP listeners
     // use rawText; channel-specific consumers use text/delta.
     emitAgentEvent({
@@ -598,7 +603,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       },
     });
 
-    if (state.streamReasoning && formatted) {
+    if (state.streamReasoning && formatted && formattedDelta) {
       void params.onReasoningStream?.({
         text: formatted,
       });

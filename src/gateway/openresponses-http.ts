@@ -885,7 +885,9 @@ export async function handleOpenResponsesHttpRequest(
       item: completedItem,
     });
 
-    const completedOutput: OutputItem[] = [];
+    // Keep assistant at output_index 0 (matching the streamed events) and
+    // append reasoning after so clients reconciling by index stay consistent.
+    const completedOutput: OutputItem[] = [completedItem];
     if (accumulatedThinking) {
       completedOutput.push({
         type: "reasoning",
@@ -893,7 +895,6 @@ export async function handleOpenResponsesHttpRequest(
         content: accumulatedThinking,
       });
     }
-    completedOutput.push(completedItem);
 
     const finalResponse = createResponseResource({
       id: responseId,
