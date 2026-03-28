@@ -171,7 +171,7 @@ By default, sub-agents cannot spawn their own sub-agents (`maxSpawnDepth: 1`). Y
 | 0     | `agent:<id>:main`                            | Main agent                                    | Always                       |
 | 1     | `agent:<id>:subagent:<uuid>`                 | Sub-agent (orchestrator when depth 2 allowed) | Only if `maxSpawnDepth >= 2` |
 | 2     | `agent:<id>:subagent:<uuid>:subagent:<uuid>` | Sub-sub-agent (leaf worker)                   | Never                        |
-| 3-5   | `agent:<id>:subagent:...:subagent:...`        | Deep sub-agents                               | Never (max depth is 2)       |
+| 3-5   | `agent:<id>:subagent:...:subagent:...`        | Deep sub-agents                               | Only if `maxSpawnDepth > current depth` |
 
 Note: `maxSpawnDepth` supports 1-5 per config schema. Spawning is allowed when `maxSpawnDepth > current depth`.
 
@@ -190,7 +190,7 @@ Each level only sees announces from its direct children.
 - Role and control scope are written into session metadata at spawn time. That keeps flat or restored session keys from accidentally regaining orchestrator privileges.
 - **Depth 1 (orchestrator, when `maxSpawnDepth >= 2`)**: Gets `sessions_spawn`, `subagents`, `sessions_list`, `sessions_history` so it can manage its children. Other session/system tools remain denied.
 - **Depth 1 (leaf, when `maxSpawnDepth == 1`)**: No session tools (current default behavior).
-- **Depth 2 (leaf worker)**: No session tools — `sessions_spawn` is always denied at depth 2. Cannot spawn further children.
+- **Depth 2 (leaf worker)**: No session tools — `sessions_spawn` is denied at depth 2 unless `maxSpawnDepth >= 3`. Cannot spawn further children when `maxSpawnDepth == 2`.
 
 ### Per-agent spawn limit
 
@@ -245,7 +245,7 @@ Announce payloads include a stats line at the end (even when wrapped):
 
 ## Tool Policy (sub-agent tools)
 
-By default, sub-agents get **all tools except session tools**. The denied session tools are:
+By default, sub-agents get **all tools except session tools and system tools**. The denied session tools are:
 - `sessions_list`
 - `sessions_history`
 - `sessions_send`
