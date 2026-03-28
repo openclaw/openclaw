@@ -7,6 +7,8 @@ import type {
   PluginConversationBindingRequestParams,
   PluginInteractiveDiscordHandlerContext,
   PluginInteractiveDiscordHandlerRegistration,
+  PluginInteractiveMSTeamsHandlerContext,
+  PluginInteractiveMSTeamsHandlerRegistration,
   PluginInteractiveSlackHandlerContext,
   PluginInteractiveSlackHandlerRegistration,
   PluginInteractiveTelegramHandlerContext,
@@ -65,6 +67,21 @@ export type SlackInteractiveDispatchContext = Omit<
 > & {
   interaction: Omit<
     PluginInteractiveSlackHandlerContext["interaction"],
+    "data" | "namespace" | "payload"
+  >;
+};
+
+export type MSTeamsInteractiveDispatchContext = Omit<
+  PluginInteractiveMSTeamsHandlerContext,
+  | "interaction"
+  | "respond"
+  | "channel"
+  | "requestConversationBinding"
+  | "detachConversationBinding"
+  | "getCurrentConversationBinding"
+> & {
+  interaction: Omit<
+    PluginInteractiveMSTeamsHandlerContext["interaction"],
     "data" | "namespace" | "payload"
   >;
 };
@@ -213,6 +230,39 @@ export function dispatchSlackInteractiveHandler(params: {
         conversationId: handlerContext.conversationId,
         parentConversationId: handlerContext.parentConversationId,
         threadId: handlerContext.threadId,
+      },
+    }),
+  });
+}
+
+export function dispatchMSTeamsInteractiveHandler(params: {
+  registration: PluginInteractiveMSTeamsHandlerRegistration & RegisteredInteractiveMetadata;
+  data: string;
+  namespace: string;
+  payload: string;
+  ctx: MSTeamsInteractiveDispatchContext;
+  respond: PluginInteractiveMSTeamsHandlerContext["respond"];
+}) {
+  const handlerContext = params.ctx;
+
+  return params.registration.handler({
+    ...handlerContext,
+    channel: "msteams",
+    interaction: {
+      ...handlerContext.interaction,
+      data: params.data,
+      namespace: params.namespace,
+      payload: params.payload,
+    },
+    respond: params.respond,
+    ...createConversationBindingHelpers({
+      registration: params.registration,
+      senderId: handlerContext.senderId,
+      conversation: {
+        channel: "msteams",
+        accountId: handlerContext.accountId,
+        conversationId: handlerContext.conversationId,
+        parentConversationId: handlerContext.parentConversationId,
       },
     }),
   });

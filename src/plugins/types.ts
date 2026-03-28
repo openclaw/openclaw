@@ -1370,7 +1370,7 @@ export type OpenClawPluginCommandDefinition = {
   handler: PluginCommandHandler;
 };
 
-export type PluginInteractiveChannel = "telegram" | "discord" | "slack";
+export type PluginInteractiveChannel = "telegram" | "discord" | "slack" | "msteams";
 
 export type PluginInteractiveButtons = Array<
   Array<{ text: string; callback_data: string; style?: "danger" | "success" | "primary" }>
@@ -1505,6 +1505,47 @@ export type PluginInteractiveSlackHandlerContext = {
   getCurrentConversationBinding: () => Promise<PluginConversationBinding | null>;
 };
 
+export type PluginInteractiveMSTeamsHandlerResult = {
+  handled?: boolean;
+} | void;
+
+export type PluginInteractiveMSTeamsHandlerContext = {
+  channel: "msteams";
+  accountId: string;
+  interactionId: string;
+  conversationId: string;
+  parentConversationId?: string;
+  senderId?: string;
+  senderUsername?: string;
+  auth: {
+    isAuthorizedSender: boolean;
+  };
+  conversationType?: "personal" | "groupChat" | "channel";
+  teamId?: string;
+  graphChannelId?: string;
+  interaction: {
+    kind: "submit";
+    data: string;
+    namespace: string;
+    payload: string;
+    messageId?: string;
+    value?: unknown;
+  };
+  respond: {
+    acknowledge: () => Promise<void>;
+    reply: (params: { text?: string; card?: Record<string, unknown> }) => Promise<void>;
+    followUp: (params: { text?: string; card?: Record<string, unknown> }) => Promise<void>;
+    editMessage: (params: { text?: string; card?: Record<string, unknown> }) => Promise<void>;
+    clearActions: (params?: { text?: string }) => Promise<void>;
+    deleteMessage: () => Promise<void>;
+  };
+  requestConversationBinding: (
+    params?: PluginConversationBindingRequestParams,
+  ) => Promise<PluginConversationBindingRequestResult>;
+  detachConversationBinding: () => Promise<{ removed: boolean }>;
+  getCurrentConversationBinding: () => Promise<PluginConversationBinding | null>;
+};
+
 export type PluginInteractiveTelegramHandlerRegistration = {
   channel: "telegram";
   namespace: string;
@@ -1529,10 +1570,19 @@ export type PluginInteractiveSlackHandlerRegistration = {
   ) => Promise<PluginInteractiveSlackHandlerResult> | PluginInteractiveSlackHandlerResult;
 };
 
+export type PluginInteractiveMSTeamsHandlerRegistration = {
+  channel: "msteams";
+  namespace: string;
+  handler: (
+    ctx: PluginInteractiveMSTeamsHandlerContext,
+  ) => Promise<PluginInteractiveMSTeamsHandlerResult> | PluginInteractiveMSTeamsHandlerResult;
+};
+
 export type PluginInteractiveHandlerRegistration =
   | PluginInteractiveTelegramHandlerRegistration
   | PluginInteractiveDiscordHandlerRegistration
-  | PluginInteractiveSlackHandlerRegistration;
+  | PluginInteractiveSlackHandlerRegistration
+  | PluginInteractiveMSTeamsHandlerRegistration;
 
 export type OpenClawPluginHttpRouteAuth = "gateway" | "plugin";
 export type OpenClawPluginHttpRouteMatch = "exact" | "prefix";

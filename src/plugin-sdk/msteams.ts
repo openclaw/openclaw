@@ -109,6 +109,14 @@ export { loadOutboundMediaFromUrl } from "./outbound-media.js";
 export { createChannelPairingController } from "./channel-pairing.js";
 export { resolveInboundSessionEnvelopeContext } from "../channels/session-envelope.js";
 export {
+  deleteMessageMSTeams,
+  editMessageMSTeams,
+  sendAdaptiveCardMSTeams,
+  sendMessageMSTeams,
+  sendTypingMSTeams,
+} from "../../extensions/msteams/src/send.js";
+export { editChannelMSTeams } from "../../extensions/msteams/src/graph.js";
+export {
   buildHostnameAllowlistPolicyFromSuffixAllowlist,
   isHttpsUrlAllowedByHostnameSuffixAllowlist,
   normalizeHostnameSuffixAllowlist,

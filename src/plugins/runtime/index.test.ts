@@ -190,6 +190,21 @@ describe("plugin runtime command execution", () => {
       },
     },
     {
+      name: "exposes runtime.channel.msteams helpers",
+      assert: (runtime: ReturnType<typeof createPluginRuntime>) => {
+        expectFunctionKeys(runtime.channel.msteams as Record<string, unknown>, [
+          "sendMessageMSTeams",
+          "sendAdaptiveCardMSTeams",
+        ]);
+        expectFunctionKeys(runtime.channel.msteams.typing as Record<string, unknown>, ["start"]);
+        expectFunctionKeys(runtime.channel.msteams.conversationActions as Record<string, unknown>, [
+          "editMessage",
+          "deleteMessage",
+          "editChannel",
+        ]);
+      },
+    },
+    {
       name: "exposes runtime.agent host helpers",
       assert: (runtime: ReturnType<typeof createPluginRuntime>) => {
         expect(runtime.agent.defaults).toEqual({

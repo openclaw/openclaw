@@ -146,6 +146,26 @@ export type PluginRuntimeChannel = {
     monitorSlackProvider: typeof import("../../plugin-sdk/slack.js").monitorSlackProvider;
     handleSlackAction: typeof import("../../plugin-sdk/slack.js").handleSlackAction;
   };
+  msteams: {
+    sendMessageMSTeams: typeof import("../../plugin-sdk/msteams.js").sendMessageMSTeams;
+    sendAdaptiveCardMSTeams: typeof import("../../plugin-sdk/msteams.js").sendAdaptiveCardMSTeams;
+    typing: {
+      pulse: typeof import("../../plugin-sdk/msteams.js").sendTypingMSTeams;
+      start: (params: {
+        to: string;
+        cfg: ReturnType<typeof import("../../config/config.js").loadConfig>;
+        intervalMs?: number;
+      }) => Promise<{
+        refresh: () => Promise<void>;
+        stop: () => void;
+      }>;
+    };
+    conversationActions: {
+      editMessage: typeof import("../../plugin-sdk/msteams.js").editMessageMSTeams;
+      deleteMessage: typeof import("../../plugin-sdk/msteams.js").deleteMessageMSTeams;
+      editChannel: typeof import("../../plugin-sdk/msteams.js").editChannelMSTeams;
+    };
+  };
   telegram: {
     auditGroupMembership: typeof import("../../plugin-sdk/telegram.js").auditTelegramGroupMembership;
     collectUnmentionedGroupIds: typeof import("../../plugin-sdk/telegram.js").collectTelegramUnmentionedGroupIds;

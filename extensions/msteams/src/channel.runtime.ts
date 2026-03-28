@@ -12,6 +12,7 @@ import {
   unpinMessageMSTeams as unpinMessageMSTeamsImpl,
   unreactMessageMSTeams as unreactMessageMSTeamsImpl,
 } from "./graph-messages.js";
+import { editChannelMSTeams as editChannelMSTeamsImpl } from "./graph.js";
 import { msteamsOutbound as msteamsOutboundImpl } from "./outbound.js";
 import { probeMSTeams as probeMSTeamsImpl } from "./probe.js";
 import {
@@ -19,9 +20,11 @@ import {
   editMessageMSTeams as editMessageMSTeamsImpl,
   sendAdaptiveCardMSTeams as sendAdaptiveCardMSTeamsImpl,
   sendMessageMSTeams as sendMessageMSTeamsImpl,
+  sendTypingMSTeams as sendTypingMSTeamsImpl,
 } from "./send.js";
 export const msTeamsChannelRuntime = {
   deleteMessageMSTeams: deleteMessageMSTeamsImpl,
+  editChannelMSTeams: editChannelMSTeamsImpl,
   editMessageMSTeams: editMessageMSTeamsImpl,
   getMessageMSTeams: getMessageMSTeamsImpl,
   listPinsMSTeams: listPinsMSTeamsImpl,
@@ -29,6 +32,7 @@ export const msTeamsChannelRuntime = {
   pinMessageMSTeams: pinMessageMSTeamsImpl,
   reactMessageMSTeams: reactMessageMSTeamsImpl,
   searchMessagesMSTeams: searchMessagesMSTeamsImpl,
+  sendTypingMSTeams: sendTypingMSTeamsImpl,
   unpinMessageMSTeams: unpinMessageMSTeamsImpl,
   unreactMessageMSTeams: unreactMessageMSTeamsImpl,
   listMSTeamsDirectoryGroupsLive: listMSTeamsDirectoryGroupsLiveImpl,

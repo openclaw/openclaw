@@ -42,10 +42,15 @@ type MSTeamsProcessContext = MSTeamsSendContext & {
   ) => Promise<unknown[]>;
 };
 
+const TEAMS_APPS_MODULE_ID = "@microsoft/teams" + ".apps";
+const TEAMS_API_MODULE_ID = "@microsoft/teams" + ".api";
+const TEAMS_JWT_VALIDATOR_MODULE_ID =
+  "@microsoft/teams.apps/dist/middleware/auth/" + "jwt-validator.js";
+
 export async function loadMSTeamsSdk(): Promise<MSTeamsTeamsSdk> {
   const [appsModule, apiModule] = await Promise.all([
-    import("@microsoft/teams.apps"),
-    import("@microsoft/teams.api"),
+    import(TEAMS_APPS_MODULE_ID),
+    import(TEAMS_API_MODULE_ID),
   ]);
   return {
     App: appsModule.App,
@@ -410,8 +415,7 @@ export async function loadMSTeamsSdkWithAuth(creds: MSTeamsCredentials) {
 export async function createBotFrameworkJwtValidator(creds: MSTeamsCredentials): Promise<{
   validate: (authHeader: string, serviceUrl?: string) => Promise<boolean>;
 }> {
-  const { createServiceTokenValidator } =
-    await import("@microsoft/teams.apps/dist/middleware/auth/jwt-validator.js");
+  const { createServiceTokenValidator } = await import(TEAMS_JWT_VALIDATOR_MODULE_ID);
   const validator = createServiceTokenValidator(creds.appId, creds.tenantId);
 
   return {

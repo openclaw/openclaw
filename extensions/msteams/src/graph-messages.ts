@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../runtime-api.js";
 import { createMSTeamsConversationStoreFs } from "./conversation-store-fs.js";
+import { looksLikeGraphTeamId, resolveTeamGroupId } from "./graph-thread.js";
 import {
   type GraphResponse,
   deleteGraphRequest,
@@ -36,11 +37,21 @@ type GraphPinnedMessagesResponse = {
   value?: GraphPinnedMessage[];
 };
 
-/**
- * Resolve the Graph API path prefix for a conversation.
- * If `to` contains "/" it's a `teamId/channelId` (channel path),
- * otherwise it's a chat ID.
- */
+type ResolvedGraphConversationTarget =
+  | {
+      kind: "chat";
+      conversationId: string;
+      basePath: string;
+      chatId: string;
+    }
+  | {
+      kind: "channel";
+      conversationId: string;
+      basePath: string;
+      teamId: string;
+      channelId: string;
+    };
+
 /**
  * Strip common target prefixes (`conversation:`, `user:`) so raw
  * conversation IDs can be used directly in Graph paths.
@@ -56,68 +67,108 @@ function stripTargetPrefix(raw: string): string {
   return trimmed;
 }
 
-/**
- * Resolve a target to a Graph-compatible conversation ID.
- * `user:<aadId>` targets are looked up in the conversation store to find the
- * actual `19:xxx@thread.*` chat ID that Graph API requires.
- * Conversation IDs and `teamId/channelId` pairs pass through unchanged.
- */
-async function resolveGraphConversationId(to: string): Promise<string> {
-  const trimmed = to.trim();
-  const isUserTarget = /^user:/i.test(trimmed);
-  const cleaned = stripTargetPrefix(trimmed);
-
-  // teamId/channelId or already a conversation ID (19:xxx) — use directly
-  if (!isUserTarget) {
-    return cleaned;
-  }
-
-  // user:<aadId> — look up the conversation store for the real chat ID
+async function resolveGraphConversationTarget(params: {
+  to: string;
+  token: string;
+}): Promise<ResolvedGraphConversationTarget> {
+  const trimmed = params.to.trim();
   const store = createMSTeamsConversationStoreFs();
-  const found = await store.findPreferredDmByUserId(cleaned);
-  if (!found) {
+
+  if (/^user:/i.test(trimmed)) {
+    const userId = stripTargetPrefix(trimmed);
+    const found = await store.findPreferredDmByUserId(userId);
+    if (!found) {
+      throw new Error(
+        `No conversation found for user:${userId}. ` +
+          "The bot must receive a message from this user before Graph API operations work.",
+      );
+    }
+
+    // Bot Framework DM conversation ids are not always valid Graph chat ids.
+    // Prefer the cached Graph-native id when we have it; only fall back to the
+    // stored conversation id when it already looks like a Graph chat id.
+    if (found.reference.graphChatId) {
+      return {
+        kind: "chat",
+        conversationId: found.conversationId,
+        chatId: found.reference.graphChatId,
+        basePath: `/chats/${encodeURIComponent(found.reference.graphChatId)}`,
+      };
+    }
+    if (found.conversationId.startsWith("19:")) {
+      return {
+        kind: "chat",
+        conversationId: found.conversationId,
+        chatId: found.conversationId,
+        basePath: `/chats/${encodeURIComponent(found.conversationId)}`,
+      };
+    }
     throw new Error(
-      `No conversation found for user:${cleaned}. ` +
-        "The bot must receive a message from this user before Graph API operations work.",
+      `Conversation for user:${userId} uses a Bot Framework ID (${found.conversationId}) ` +
+        "that Graph API does not accept. Send a message to this user first so the Graph chat ID is cached.",
     );
   }
 
-  // Prefer the cached Graph-native chat ID (19:xxx format) over the Bot Framework
-  // conversation ID, which may be in a non-Graph format (a:xxx / 8:orgid:xxx) for
-  // personal DMs. send-context.ts resolves and caches this on first send.
-  if (found.reference.graphChatId) {
-    return found.reference.graphChatId;
-  }
-  if (found.conversationId.startsWith("19:")) {
-    return found.conversationId;
-  }
-  throw new Error(
-    `Conversation for user:${cleaned} uses a Bot Framework ID (${found.conversationId}) ` +
-      "that Graph API does not accept. Send a message to this user first so the Graph chat ID is cached.",
-  );
-}
-
-function resolveConversationPath(to: string): {
-  kind: "chat" | "channel";
-  basePath: string;
-  chatId?: string;
-  teamId?: string;
-  channelId?: string;
-} {
-  const cleaned = stripTargetPrefix(to);
+  const cleaned = stripTargetPrefix(trimmed);
   if (cleaned.includes("/")) {
+    // Keep support for explicit team/channel targets so callers can address a
+    // channel directly without first relying on a stored conversation record.
     const [teamId, channelId] = cleaned.split("/", 2);
+    if (!teamId?.trim() || !channelId?.trim()) {
+      throw new Error(`Invalid Teams channel target: ${params.to}`);
+    }
+    // Channel targets carry the Teams/Bot Framework team key. Resolve it to
+    // the Graph team/group id before building `/teams/{id}/channels/{id}`.
+    const resolvedTeamId = await resolveTeamGroupId(params.token, teamId.trim());
+    if (!looksLikeGraphTeamId(resolvedTeamId)) {
+      throw new Error(`Teams channel target ${params.to} did not resolve to a Graph team id.`);
+    }
     return {
       kind: "channel",
-      basePath: `/teams/${encodeURIComponent(teamId!)}/channels/${encodeURIComponent(channelId!)}`,
-      teamId,
-      channelId,
+      conversationId: cleaned,
+      teamId: resolvedTeamId,
+      channelId: channelId.trim(),
+      basePath: `/teams/${encodeURIComponent(resolvedTeamId)}/channels/${encodeURIComponent(channelId.trim())}`,
     };
   }
+
+  const reference = await store.get(cleaned);
+  const conversationType = reference?.conversation?.conversationType?.toLowerCase();
+  if (conversationType === "channel") {
+    const teamId = reference?.teamId?.trim();
+    const channelId = reference?.graphChannelId?.trim();
+    if (!teamId || !channelId) {
+      throw new Error(
+        `Conversation ${cleaned} is a Teams channel but missing teamId or graphChannelId in the conversation store.`,
+      );
+    }
+
+    // The normalized plugin target for Teams channels stays as
+    // `conversation:<bot-framework-conversation-id>`. When Graph needs a real
+    // channel path later, we must recover it from the stored Teams metadata
+    // captured on inbound traffic rather than guessing from the normalized id.
+    // Stored channel metadata preserves the inbound Teams team key. Graph
+    // channel APIs still need the Graph team/group id, so translate here too.
+    const resolvedTeamId = await resolveTeamGroupId(params.token, teamId);
+    if (!looksLikeGraphTeamId(resolvedTeamId)) {
+      throw new Error(`Conversation ${cleaned} is missing a usable Graph team id.`);
+    }
+    return {
+      kind: "channel",
+      conversationId: cleaned,
+      teamId: resolvedTeamId,
+      channelId,
+      basePath: `/teams/${encodeURIComponent(resolvedTeamId)}/channels/${encodeURIComponent(channelId)}`,
+    };
+  }
+
+  // Non-channel conversations keep using the chat path. For group chats and
+  // cached DM chats, the normalized conversation id is the Graph-addressable id.
   return {
     kind: "chat",
-    basePath: `/chats/${encodeURIComponent(cleaned)}`,
+    conversationId: cleaned,
     chatId: cleaned,
+    basePath: `/chats/${encodeURIComponent(cleaned)}`,
   };
 }
 
@@ -141,9 +192,8 @@ export async function getMessageMSTeams(
   params: GetMessageMSTeamsParams,
 ): Promise<GetMessageMSTeamsResult> {
   const token = await resolveGraphToken(params.cfg);
-  const conversationId = await resolveGraphConversationId(params.to);
-  const { basePath } = resolveConversationPath(conversationId);
-  const path = `${basePath}/messages/${encodeURIComponent(params.messageId)}`;
+  const target = await resolveGraphConversationTarget({ to: params.to, token });
+  const path = `${target.basePath}/messages/${encodeURIComponent(params.messageId)}`;
   const msg = await fetchGraphJson<GraphMessage>({ token, path });
   return {
     id: msg.id ?? params.messageId,
@@ -167,8 +217,7 @@ export async function pinMessageMSTeams(
   params: PinMessageMSTeamsParams,
 ): Promise<{ ok: true; pinnedMessageId?: string }> {
   const token = await resolveGraphToken(params.cfg);
-  const conversationId = await resolveGraphConversationId(params.to);
-  const conv = resolveConversationPath(conversationId);
+  const conv = await resolveGraphConversationTarget({ to: params.to, token });
 
   if (conv.kind === "channel") {
     // Graph v1.0 doesn't have channel pin — use the pinnedMessages pattern on chat
@@ -205,8 +254,7 @@ export async function unpinMessageMSTeams(
   params: UnpinMessageMSTeamsParams,
 ): Promise<{ ok: true }> {
   const token = await resolveGraphToken(params.cfg);
-  const conversationId = await resolveGraphConversationId(params.to);
-  const conv = resolveConversationPath(conversationId);
+  const conv = await resolveGraphConversationTarget({ to: params.to, token });
   const path = `${conv.basePath}/pinnedMessages/${encodeURIComponent(params.pinnedMessageId)}`;
   await deleteGraphRequest({ token, path });
   return { ok: true };
@@ -228,8 +276,7 @@ export async function listPinsMSTeams(
   params: ListPinsMSTeamsParams,
 ): Promise<ListPinsMSTeamsResult> {
   const token = await resolveGraphToken(params.cfg);
-  const conversationId = await resolveGraphConversationId(params.to);
-  const conv = resolveConversationPath(conversationId);
+  const conv = await resolveGraphConversationTarget({ to: params.to, token });
   const path = `${conv.basePath}/pinnedMessages?$expand=message`;
   const res = await fetchGraphJson<GraphPinnedMessagesResponse>({ token, path });
   const pins = (res.value ?? []).map((pin) => ({
@@ -306,8 +353,7 @@ export async function reactMessageMSTeams(
 ): Promise<{ ok: true }> {
   const reactionType = validateReactionType(params.reactionType);
   const token = await resolveGraphToken(params.cfg);
-  const conversationId = await resolveGraphConversationId(params.to);
-  const { basePath } = resolveConversationPath(conversationId);
+  const { basePath } = await resolveGraphConversationTarget({ to: params.to, token });
   const path = `${basePath}/messages/${encodeURIComponent(params.messageId)}/setReaction`;
   await postGraphBetaJson<unknown>({ token, path, body: { reactionType } });
   return { ok: true };
@@ -321,8 +367,7 @@ export async function unreactMessageMSTeams(
 ): Promise<{ ok: true }> {
   const reactionType = validateReactionType(params.reactionType);
   const token = await resolveGraphToken(params.cfg);
-  const conversationId = await resolveGraphConversationId(params.to);
-  const { basePath } = resolveConversationPath(conversationId);
+  const { basePath } = await resolveGraphConversationTarget({ to: params.to, token });
   const path = `${basePath}/messages/${encodeURIComponent(params.messageId)}/unsetReaction`;
   await postGraphBetaJson<unknown>({ token, path, body: { reactionType } });
   return { ok: true };
@@ -336,8 +381,7 @@ export async function listReactionsMSTeams(
   params: ListReactionsMSTeamsParams,
 ): Promise<ListReactionsMSTeamsResult> {
   const token = await resolveGraphToken(params.cfg);
-  const conversationId = await resolveGraphConversationId(params.to);
-  const { basePath } = resolveConversationPath(conversationId);
+  const { basePath } = await resolveGraphConversationTarget({ to: params.to, token });
   const path = `${basePath}/messages/${encodeURIComponent(params.messageId)}`;
   const msg = await fetchGraphJson<GraphMessageWithReactions>({ token, path });
 
@@ -396,8 +440,7 @@ export async function searchMessagesMSTeams(
   params: SearchMessagesMSTeamsParams,
 ): Promise<SearchMessagesMSTeamsResult> {
   const token = await resolveGraphToken(params.cfg);
-  const conversationId = await resolveGraphConversationId(params.to);
-  const { basePath } = resolveConversationPath(conversationId);
+  const { basePath } = await resolveGraphConversationTarget({ to: params.to, token });
 
   const rawLimit = params.limit ?? SEARCH_DEFAULT_LIMIT;
   const top = Number.isFinite(rawLimit)

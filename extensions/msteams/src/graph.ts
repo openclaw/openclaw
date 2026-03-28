@@ -1,5 +1,7 @@
-import type { MSTeamsConfig } from "../runtime-api.js";
+import type { OpenClawConfig, MSTeamsConfig } from "../runtime-api.js";
 import { GRAPH_ROOT } from "./attachments/shared.js";
+import { createMSTeamsConversationStoreFs } from "./conversation-store-fs.js";
+import { looksLikeGraphTeamId, resolveTeamGroupId } from "./graph-thread.js";
 
 const GRAPH_BETA = "https://graph.microsoft.com/beta";
 import { createMSTeamsTokenProvider, loadMSTeamsSdkWithAuth } from "./sdk.js";
@@ -24,6 +26,11 @@ export type GraphChannel = {
   displayName?: string;
 };
 
+export type GraphPrimaryChannel = {
+  id?: string;
+  displayName?: string;
+};
+
 export type GraphResponse<T> = { value?: T[] };
 
 export function normalizeQuery(value?: string | null): string {
@@ -37,7 +44,7 @@ export function escapeOData(value: string): string {
 async function requestGraph(params: {
   token: string;
   path: string;
-  method?: "GET" | "POST" | "DELETE";
+  method?: "GET" | "POST" | "PATCH" | "DELETE";
   root?: string;
   headers?: Record<string, string>;
   body?: unknown;
@@ -139,6 +146,21 @@ export async function postGraphBetaJson<T>(params: {
   return readOptionalGraphJson<T>(res);
 }
 
+export async function patchGraphJson<T>(params: {
+  token: string;
+  path: string;
+  body?: unknown;
+}): Promise<T> {
+  const res = await requestGraph({
+    token: params.token,
+    path: params.path,
+    method: "PATCH",
+    body: params.body,
+    errorPrefix: "Graph PATCH",
+  });
+  return readOptionalGraphJson<T>(res);
+}
+
 export async function deleteGraphRequest(params: { token: string; path: string }): Promise<void> {
   await requestGraph({
     token: params.token,
@@ -148,8 +170,85 @@ export async function deleteGraphRequest(params: { token: string; path: string }
   });
 }
 
+export async function getPrimaryChannelForTeam(
+  token: string,
+  teamId: string,
+): Promise<GraphPrimaryChannel | null> {
+  const path = `/teams/${encodeURIComponent(teamId)}/primaryChannel?$select=id,displayName`;
+  return await fetchGraphJson<GraphPrimaryChannel>({ token, path });
+}
+
 export async function listChannelsForTeam(token: string, teamId: string): Promise<GraphChannel[]> {
   const path = `/teams/${encodeURIComponent(teamId)}/channels?$select=id,displayName`;
   const res = await fetchGraphJson<GraphResponse<GraphChannel>>({ token, path });
   return res.value ?? [];
+}
+
+function normalizeStoredConversationId(raw: string): string {
+  return raw.split(";")[0] ?? raw;
+}
+
+async function resolveStoredChannelTarget(
+  to: string,
+): Promise<{ teamId: string; channelId: string } | null> {
+  // Teams plugin/runtime targets come through in two shapes here:
+  //   1) `conversation:<stored-bot-framework-id>` for known conversations
+  //   2) `conversation:<team-key>/<channel-id>` for explicit channel targets
+  // Normalize both before consulting the conversation store so channel rename
+  // keeps working for bound conversations and explicit one-off targets.
+  const trimmed = to.trim();
+  const cleaned = trimmed.startsWith("conversation:")
+    ? trimmed.slice("conversation:".length).trim()
+    : trimmed;
+  if (cleaned.includes("/")) {
+    const [teamId, channelId] = cleaned.split("/", 2);
+    if (teamId?.trim() && channelId?.trim()) {
+      return { teamId: teamId.trim(), channelId: channelId.trim() };
+    }
+  }
+
+  const conversationId = cleaned;
+  if (!conversationId) {
+    return null;
+  }
+
+  const store = createMSTeamsConversationStoreFs();
+  const reference = await store.get(normalizeStoredConversationId(conversationId));
+  const teamId = reference?.teamId?.trim();
+  const channelId = reference?.graphChannelId?.trim();
+  const conversationType = reference?.conversation?.conversationType?.toLowerCase();
+  if (conversationType !== "channel" || !teamId || !channelId) {
+    return null;
+  }
+
+  return { teamId, channelId };
+}
+
+export async function editChannelMSTeams(params: {
+  cfg: OpenClawConfig;
+  to: string;
+  name: string;
+}): Promise<{ ok: true; teamId: string; channelId: string }> {
+  const target = await resolveStoredChannelTarget(params.to);
+  if (!target) {
+    throw new Error(
+      "msteams channel rename requires a stored channel conversation with teamId and graphChannelId",
+    );
+  }
+  const token = await resolveGraphToken(params.cfg);
+  // The stored/explicit Teams team id may still be the inbound Bot Framework
+  // team key. Graph channel PATCH requires the Azure AD group/team id instead,
+  // so translate before issuing the rename request.
+  const resolvedTeamId = await resolveTeamGroupId(token, target.teamId);
+  if (!looksLikeGraphTeamId(resolvedTeamId)) {
+    throw new Error(
+      "msteams channel rename requires a Graph team id; team lookup did not produce a usable Graph id",
+    );
+  }
+  await patchGraphJson<void>({
+    token,
+    path: `/teams/${encodeURIComponent(resolvedTeamId)}/channels/${encodeURIComponent(target.channelId)}`,
+    body: { displayName: params.name },
+  });
+  return { ok: true, teamId: resolvedTeamId, channelId: target.channelId };
 }

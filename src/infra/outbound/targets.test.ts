@@ -30,7 +30,31 @@ const whatsappMessaging = {
   },
 };
 
-const noopOutbound = (channel: "discord" | "imessage" | "slack"): ChannelOutboundAdapter => ({
+const msteamsMessaging = {
+  parseExplicitTarget: ({ raw }: { raw: string }) => {
+    const trimmed = raw.trim();
+    if (!trimmed) {
+      return null;
+    }
+    if (/^(msteams|teams):user:/i.test(trimmed)) {
+      return {
+        to: trimmed.replace(/^(msteams|teams):/i, ""),
+        chatType: "direct" as const,
+      };
+    }
+    if (/^(msteams|teams):conversation:/i.test(trimmed)) {
+      return {
+        to: trimmed.replace(/^(msteams|teams):/i, ""),
+        chatType: "channel" as const,
+      };
+    }
+    return null;
+  },
+};
+
+const noopOutbound = (
+  channel: "discord" | "imessage" | "slack" | "msteams",
+): ChannelOutboundAdapter => ({
   deliveryMode: "direct",
   sendText: async () => ({ channel, messageId: `${channel}-msg` }),
 });
@@ -68,6 +92,15 @@ beforeEach(() => {
           id: "whatsapp",
           outbound: whatsappOutbound,
           messaging: whatsappMessaging,
+        }),
+        source: "test",
+      },
+      {
+        pluginId: "msteams",
+        plugin: createOutboundTestPlugin({
+          id: "msteams",
+          outbound: noopOutbound("msteams"),
+          messaging: msteamsMessaging,
         }),
         source: "test",
       },
@@ -362,6 +395,39 @@ describe("resolveSessionDeliveryTarget", () => {
     expected: Partial<SessionDeliveryTarget>;
   }>)("$name", ({ request, expected }) => {
     expectResolvedSessionTarget({ request, expected });
+  });
+
+  it("normalizes provider-prefixed Teams explicit targets through plugin parsing", () => {
+    const resolved = resolveSessionDeliveryTarget({
+      entry: {
+        sessionId: "sess-msteams-prefixed",
+        updatedAt: 1,
+        lastChannel: "msteams",
+        lastTo: "conversation:19:last@thread.tacv2",
+      },
+      requestedChannel: "last",
+      explicitTo: "teams:conversation:19:room@thread.tacv2",
+    });
+
+    expect(resolved.channel).toBe("msteams");
+    expect(resolved.to).toBe("conversation:19:room@thread.tacv2");
+    expect(resolved.threadId).toBeUndefined();
+  });
+
+  it("normalizes Teams DM prefixes even when the requested channel is explicit", () => {
+    const resolved = resolveSessionDeliveryTarget({
+      entry: {
+        sessionId: "sess-msteams-dm",
+        updatedAt: 1,
+        lastChannel: "telegram",
+        lastTo: "123",
+      },
+      requestedChannel: "msteams",
+      explicitTo: "msteams:user:29:alice",
+    });
+
+    expect(resolved.channel).toBe("msteams");
+    expect(resolved.to).toBe("user:29:alice");
   });
 
   it("falls back to a provided channel when requested is unsupported", () => {

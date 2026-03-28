@@ -35,6 +35,7 @@ import {
   normalizeMSTeamsMessagingTarget,
   normalizeMSTeamsUserInput,
   parseMSTeamsConversationId,
+  parseMSTeamsExplicitTarget,
   parseMSTeamsTeamChannelInput,
   resolveMSTeamsChannelAllowlist,
   resolveMSTeamsUserAllowlist,
@@ -382,6 +383,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
       setup: msteamsSetupAdapter,
       messaging: {
         normalizeTarget: normalizeMSTeamsMessagingTarget,
+        parseExplicitTarget: ({ raw }) => parseMSTeamsExplicitTarget(raw),
         resolveOutboundSessionRoute: (params) => resolveMSTeamsOutboundSessionRoute(params),
         targetResolver: {
           looksLikeId: (raw) => {

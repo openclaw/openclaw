@@ -2,9 +2,11 @@ import { createDedupeCache, resolveGlobalDedupeCache } from "../infra/dedupe.js"
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   dispatchDiscordInteractiveHandler,
+  dispatchMSTeamsInteractiveHandler,
   dispatchSlackInteractiveHandler,
   dispatchTelegramInteractiveHandler,
   type DiscordInteractiveDispatchContext,
+  type MSTeamsInteractiveDispatchContext,
   type SlackInteractiveDispatchContext,
   type TelegramInteractiveDispatchContext,
 } from "./interactive-dispatch-adapters.js";
@@ -13,6 +15,8 @@ import type {
   PluginInteractiveButtons,
   PluginInteractiveDiscordHandlerRegistration,
   PluginInteractiveHandlerRegistration,
+  PluginInteractiveMSTeamsHandlerContext,
+  PluginInteractiveMSTeamsHandlerRegistration,
   PluginInteractiveSlackHandlerContext,
   PluginInteractiveSlackHandlerRegistration,
   PluginInteractiveTelegramHandlerRegistration,
@@ -136,6 +140,15 @@ export function registerPluginInteractiveHandler(
       pluginName: opts?.pluginName,
       pluginRoot: opts?.pluginRoot,
     });
+  } else if (registration.channel === "msteams") {
+    interactiveHandlers.set(key, {
+      ...registration,
+      namespace,
+      channel: "msteams",
+      pluginId,
+      pluginName: opts?.pluginName,
+      pluginRoot: opts?.pluginRoot,
+    });
   } else {
     interactiveHandlers.set(key, {
       ...registration,
@@ -196,14 +209,23 @@ export async function dispatchPluginInteractiveHandler(params: {
   onMatched?: () => Promise<void> | void;
 }): Promise<InteractiveDispatchResult>;
 export async function dispatchPluginInteractiveHandler(params: {
-  channel: "telegram" | "discord" | "slack";
+  channel: "msteams";
+  data: string;
+  interactionId: string;
+  ctx: MSTeamsInteractiveDispatchContext;
+  respond: PluginInteractiveMSTeamsHandlerContext["respond"];
+  onMatched?: () => Promise<void> | void;
+}): Promise<InteractiveDispatchResult>;
+export async function dispatchPluginInteractiveHandler(params: {
+  channel: "telegram" | "discord" | "slack" | "msteams";
   data: string;
   callbackId?: string;
   interactionId?: string;
   ctx:
     | TelegramInteractiveDispatchContext
     | DiscordInteractiveDispatchContext
-    | SlackInteractiveDispatchContext;
+    | SlackInteractiveDispatchContext
+    | MSTeamsInteractiveDispatchContext;
   respond:
     | {
         reply: (params: { text: string; buttons?: PluginInteractiveButtons }) => Promise<void>;
@@ -216,7 +238,8 @@ export async function dispatchPluginInteractiveHandler(params: {
         deleteMessage: () => Promise<void>;
       }
     | PluginInteractiveDiscordHandlerContext["respond"]
-    | PluginInteractiveSlackHandlerContext["respond"];
+    | PluginInteractiveSlackHandlerContext["respond"]
+    | PluginInteractiveMSTeamsHandlerContext["respond"];
   onMatched?: () => Promise<void> | void;
 }): Promise<InteractiveDispatchResult> {
   const callbackDedupe = getCallbackDedupe();
@@ -236,7 +259,8 @@ export async function dispatchPluginInteractiveHandler(params: {
   let result:
     | ReturnType<PluginInteractiveTelegramHandlerRegistration["handler"]>
     | ReturnType<PluginInteractiveDiscordHandlerRegistration["handler"]>
-    | ReturnType<PluginInteractiveSlackHandlerRegistration["handler"]>;
+    | ReturnType<PluginInteractiveSlackHandlerRegistration["handler"]>
+    | ReturnType<PluginInteractiveMSTeamsHandlerRegistration["handler"]>;
   if (params.channel === "telegram") {
     result = dispatchTelegramInteractiveHandler({
       registration: match.registration as RegisteredInteractiveHandler &
@@ -257,7 +281,7 @@ export async function dispatchPluginInteractiveHandler(params: {
       ctx: params.ctx as DiscordInteractiveDispatchContext,
       respond: params.respond as PluginInteractiveDiscordHandlerContext["respond"],
     });
-  } else {
+  } else if (params.channel === "slack") {
     result = dispatchSlackInteractiveHandler({
       registration: match.registration as RegisteredInteractiveHandler &
         PluginInteractiveSlackHandlerRegistration,
@@ -266,6 +290,16 @@ export async function dispatchPluginInteractiveHandler(params: {
       payload: match.payload,
       ctx: params.ctx as SlackInteractiveDispatchContext,
       respond: params.respond as PluginInteractiveSlackHandlerContext["respond"],
+    });
+  } else {
+    result = dispatchMSTeamsInteractiveHandler({
+      registration: match.registration as RegisteredInteractiveHandler &
+        PluginInteractiveMSTeamsHandlerRegistration,
+      data: params.data,
+      namespace: match.namespace,
+      payload: match.payload,
+      ctx: params.ctx as MSTeamsInteractiveDispatchContext,
+      respond: params.respond as PluginInteractiveMSTeamsHandlerContext["respond"],
     });
   }
   const resolved = await result;

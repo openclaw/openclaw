@@ -285,6 +285,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         tenantId: conversation?.tenantId,
       },
       teamId,
+      graphChannelId: activity.channelData?.channel?.id,
       channelId: activity.channelId,
       serviceUrl: activity.serviceUrl,
       locale: activity.locale,

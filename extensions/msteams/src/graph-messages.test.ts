@@ -17,7 +17,9 @@ const mockState = vi.hoisted(() => ({
   postGraphJson: vi.fn(),
   postGraphBetaJson: vi.fn(),
   deleteGraphRequest: vi.fn(),
+  resolveTeamGroupId: vi.fn(),
   findPreferredDmByUserId: vi.fn(),
+  get: vi.fn(),
 }));
 
 vi.mock("./graph.js", async (importOriginal) => {
@@ -35,12 +37,24 @@ vi.mock("./graph.js", async (importOriginal) => {
 vi.mock("./conversation-store-fs.js", () => ({
   createMSTeamsConversationStoreFs: () => ({
     findPreferredDmByUserId: mockState.findPreferredDmByUserId,
+    get: mockState.get,
   }),
+}));
+
+vi.mock("./graph-thread.js", () => ({
+  resolveTeamGroupId: mockState.resolveTeamGroupId,
+  looksLikeGraphTeamId: (value: string) => /^[0-9a-fA-F-]{16,}$/.test(value.trim()),
 }));
 
 const TOKEN = "test-graph-token";
 const CHAT_ID = "19:abc@thread.tacv2";
 const CHANNEL_TO = "team-id-1/channel-id-1";
+const GRAPH_TEAM_ID = "123e4567-e89b-12d3-a456-426614174000";
+
+beforeEach(() => {
+  mockState.get.mockResolvedValue(null);
+  mockState.resolveTeamGroupId.mockResolvedValue(GRAPH_TEAM_ID);
+});
 
 describe("getMessageMSTeams", () => {
   beforeEach(() => {
@@ -176,6 +190,7 @@ describe("getMessageMSTeams", () => {
       from: { application: { id: "app-1", displayName: "Bot" } },
       createdDateTime: "2026-03-23T11:00:00Z",
     });
+    mockState.resolveTeamGroupId.mockResolvedValue(GRAPH_TEAM_ID);
 
     const result = await getMessageMSTeams({
       cfg: {} as OpenClawConfig,
@@ -189,9 +204,10 @@ describe("getMessageMSTeams", () => {
       from: { application: { id: "app-1", displayName: "Bot" } },
       createdAt: "2026-03-23T11:00:00Z",
     });
+    expect(mockState.resolveTeamGroupId).toHaveBeenCalledWith(TOKEN, "team-id-1");
     expect(mockState.fetchGraphJson).toHaveBeenCalledWith({
       token: TOKEN,
-      path: "/teams/team-id-1/channels/channel-id-1/messages/msg-2",
+      path: `/teams/${GRAPH_TEAM_ID}/channels/channel-id-1/messages/msg-2`,
     });
   });
 });
@@ -221,6 +237,7 @@ describe("pinMessageMSTeams", () => {
 
   it("pins a message in a channel", async () => {
     mockState.postGraphJson.mockResolvedValue({});
+    mockState.resolveTeamGroupId.mockResolvedValue(GRAPH_TEAM_ID);
 
     const result = await pinMessageMSTeams({
       cfg: {} as OpenClawConfig,
@@ -231,7 +248,7 @@ describe("pinMessageMSTeams", () => {
     expect(result).toEqual({ ok: true });
     expect(mockState.postGraphJson).toHaveBeenCalledWith({
       token: TOKEN,
-      path: "/teams/team-id-1/channels/channel-id-1/pinnedMessages",
+      path: `/teams/${GRAPH_TEAM_ID}/channels/channel-id-1/pinnedMessages`,
       body: { message: { id: "msg-2" } },
     });
   });
@@ -271,7 +288,7 @@ describe("unpinMessageMSTeams", () => {
     expect(result).toEqual({ ok: true });
     expect(mockState.deleteGraphRequest).toHaveBeenCalledWith({
       token: TOKEN,
-      path: "/teams/team-id-1/channels/channel-id-1/pinnedMessages/pinned-2",
+      path: `/teams/${GRAPH_TEAM_ID}/channels/channel-id-1/pinnedMessages/pinned-2`,
     });
   });
 });
@@ -360,7 +377,7 @@ describe("reactMessageMSTeams", () => {
     expect(result).toEqual({ ok: true });
     expect(mockState.postGraphBetaJson).toHaveBeenCalledWith({
       token: TOKEN,
-      path: "/teams/team-id-1/channels/channel-id-1/messages/msg-2/setReaction",
+      path: `/teams/${GRAPH_TEAM_ID}/channels/channel-id-1/messages/msg-2/setReaction`,
       body: { reactionType: "heart" },
     });
   });
@@ -453,7 +470,7 @@ describe("unreactMessageMSTeams", () => {
     expect(result).toEqual({ ok: true });
     expect(mockState.postGraphBetaJson).toHaveBeenCalledWith({
       token: TOKEN,
-      path: "/teams/team-id-1/channels/channel-id-1/messages/msg-2/unsetReaction",
+      path: `/teams/${GRAPH_TEAM_ID}/channels/channel-id-1/messages/msg-2/unsetReaction`,
       body: { reactionType: "angry" },
     });
   });
@@ -543,7 +560,7 @@ describe("listReactionsMSTeams", () => {
     ]);
     expect(mockState.fetchGraphJson).toHaveBeenCalledWith({
       token: TOKEN,
-      path: "/teams/team-id-1/channels/channel-id-1/messages/msg-2",
+      path: `/teams/${GRAPH_TEAM_ID}/channels/channel-id-1/messages/msg-2`,
     });
   });
 });
@@ -608,7 +625,7 @@ describe("searchMessagesMSTeams", () => {
 
     expect(result.messages).toHaveLength(1);
     const calledPath = mockState.fetchGraphJson.mock.calls[0][0].path as string;
-    expect(calledPath).toContain("/teams/team-id-1/channels/channel-id-1/messages?");
+    expect(calledPath).toContain(`/teams/${GRAPH_TEAM_ID}/channels/channel-id-1/messages?`);
   });
 
   it("applies limit parameter", async () => {

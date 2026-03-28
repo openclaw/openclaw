@@ -523,7 +523,9 @@ export type EditMSTeamsMessageParams = {
   /** Activity ID of the message to edit */
   activityId: string;
   /** New message text */
-  text: string;
+  text?: string;
+  /** Optional replacement Adaptive Card */
+  card?: Record<string, unknown>;
 };
 
 export type EditMSTeamsMessageResult = {
@@ -552,13 +554,21 @@ export type DeleteMSTeamsMessageResult = {
 export async function editMessageMSTeams(
   params: EditMSTeamsMessageParams,
 ): Promise<EditMSTeamsMessageResult> {
-  const { cfg, to, activityId, text } = params;
+  const { cfg, to, activityId, text, card } = params;
+  if (text === undefined && card === undefined) {
+    throw new Error("msteams edit failed: text or card is required");
+  }
   const { adapter, appId, conversationId, ref, log } = await resolveMSTeamsSendContext({
     cfg,
     to,
   });
 
-  log.debug?.("editing proactive message", { conversationId, activityId, textLength: text.length });
+  log.debug?.("editing proactive message", {
+    conversationId,
+    activityId,
+    textLength: text?.length ?? 0,
+    hasCard: Boolean(card),
+  });
 
   const baseRef = buildConversationReference(ref);
   const proactiveRef = { ...baseRef, activityId: undefined };
@@ -568,7 +578,17 @@ export async function editMessageMSTeams(
       await ctx.updateActivity({
         type: "message",
         id: activityId,
-        text,
+        ...(text !== undefined ? { text } : {}),
+        ...(card
+          ? {
+              attachments: [
+                {
+                  contentType: "application/vnd.microsoft.card.adaptive",
+                  content: card,
+                },
+              ],
+            }
+          : {}),
       });
     });
   } catch (err) {
@@ -623,6 +643,43 @@ export async function deleteMessageMSTeams(
   log.info("deleted proactive message", { conversationId, activityId });
 
   return { conversationId };
+}
+
+export async function sendTypingMSTeams(params: {
+  cfg: OpenClawConfig;
+  to: string;
+}): Promise<{ conversationId: string; supported: boolean }> {
+  const { cfg, to } = params;
+  const { adapter, appId, conversationId, ref, log, conversationType } =
+    await resolveMSTeamsSendContext({
+      cfg,
+      to,
+    });
+
+  if (conversationType === "channel") {
+    return { conversationId, supported: false };
+  }
+
+  const baseRef = buildConversationReference(ref);
+  const proactiveRef = { ...baseRef, activityId: undefined };
+
+  try {
+    await adapter.continueConversation(appId, proactiveRef, async (ctx) => {
+      await ctx.sendActivity({ type: "typing" });
+    });
+  } catch (err) {
+    const classification = classifyMSTeamsSendError(err);
+    const hint = formatMSTeamsSendErrorHint(classification);
+    const status = classification.statusCode ? ` (HTTP ${classification.statusCode})` : "";
+    throw new Error(
+      `msteams typing failed${status}: ${formatUnknownError(err)}${hint ? ` (${hint})` : ""}`,
+      { cause: err },
+    );
+  }
+
+  log.debug?.("sent typing indicator", { conversationId, conversationType });
+
+  return { conversationId, supported: true };
 }
 
 /**

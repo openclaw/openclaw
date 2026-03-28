@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } fr
 import * as conversationBinding from "./conversation-binding.js";
 import type {
   DiscordInteractiveDispatchContext,
+  MSTeamsInteractiveDispatchContext,
   SlackInteractiveDispatchContext,
   TelegramInteractiveDispatchContext,
 } from "./interactive-dispatch-adapters.js";
@@ -12,6 +13,7 @@ import {
 } from "./interactive.js";
 import type {
   PluginInteractiveDiscordHandlerContext,
+  PluginInteractiveMSTeamsHandlerContext,
   PluginInteractiveSlackHandlerContext,
   PluginInteractiveTelegramHandlerContext,
 } from "./types.js";
@@ -47,6 +49,13 @@ type InteractiveDispatchParams =
       interactionId: string;
       ctx: SlackInteractiveDispatchContext;
       respond: PluginInteractiveSlackHandlerContext["respond"];
+    }
+  | {
+      channel: "msteams";
+      data: string;
+      interactionId: string;
+      ctx: MSTeamsInteractiveDispatchContext;
+      respond: PluginInteractiveMSTeamsHandlerContext["respond"];
     };
 
 type InteractiveModule = typeof import("./interactive.js");
@@ -168,6 +177,43 @@ function createSlackDispatchParams(params: {
   };
 }
 
+function createMSTeamsDispatchParams(params: {
+  data: string;
+  interactionId: string;
+  interaction?: Partial<MSTeamsInteractiveDispatchContext["interaction"]>;
+}): Extract<InteractiveDispatchParams, { channel: "msteams" }> {
+  return {
+    channel: "msteams",
+    data: params.data,
+    interactionId: params.interactionId,
+    ctx: {
+      accountId: "default",
+      interactionId: params.interactionId,
+      conversationId: "conversation:19:teams@thread.tacv2",
+      senderId: "user-1",
+      senderUsername: "ada",
+      auth: { isAuthorizedSender: true },
+      conversationType: "channel",
+      teamId: "team-1",
+      graphChannelId: "channel-1",
+      interaction: {
+        kind: "submit",
+        messageId: "message-1",
+        value: { openclawInteractive: { version: 1, data: params.data } },
+        ...params.interaction,
+      },
+    },
+    respond: {
+      acknowledge: vi.fn(async () => {}),
+      reply: vi.fn(async () => {}),
+      followUp: vi.fn(async () => {}),
+      editMessage: vi.fn(async () => {}),
+      clearActions: vi.fn(async () => {}),
+      deleteMessage: vi.fn(async () => {}),
+    },
+  };
+}
+
 async function expectDedupedInteractiveDispatch(params: {
   baseParams: InteractiveDispatchParams;
   handler: ReturnType<typeof vi.fn>;
@@ -189,11 +235,17 @@ async function dispatchInteractive(params: InteractiveDispatchParams) {
   if (params.channel === "discord") {
     return await dispatchPluginInteractiveHandler(params);
   }
+  if (params.channel === "slack") {
+    return await dispatchPluginInteractiveHandler(params);
+  }
+  if (params.channel === "msteams") {
+    return await dispatchPluginInteractiveHandler(params);
+  }
   return await dispatchPluginInteractiveHandler(params);
 }
 
 function registerInteractiveHandler(params: {
-  channel: "telegram" | "discord" | "slack";
+  channel: "telegram" | "discord" | "slack" | "msteams";
   namespace: string;
   handler: ReturnType<typeof vi.fn>;
 }) {
@@ -206,7 +258,7 @@ function registerInteractiveHandler(params: {
 
 type BindingHelperCase = {
   name: string;
-  registerParams: { channel: "telegram" | "discord" | "slack"; namespace: string };
+  registerParams: { channel: "telegram" | "discord" | "slack" | "msteams"; namespace: string };
   dispatchParams: InteractiveDispatchParams;
   requestResult: {
     status: "bound";
@@ -490,6 +542,30 @@ describe("plugin interactive handlers", () => {
     });
   });
 
+  it("routes Teams interactions by namespace and dedupes interaction ids", async () => {
+    const handler = vi.fn(async () => ({ handled: true }));
+    expect(registerInteractiveHandler({ channel: "msteams", namespace: "codex", handler })).toEqual({
+      ok: true,
+    });
+
+    await expectDedupedInteractiveDispatch({
+      baseParams: createMSTeamsDispatchParams({
+        data: "codex:approve:thread-1",
+        interactionId: "teams-ix-1",
+      }),
+      handler,
+      expectedCall: {
+        channel: "msteams",
+        conversationId: "conversation:19:teams@thread.tacv2",
+        interaction: expect.objectContaining({
+          namespace: "codex",
+          payload: "approve:thread-1",
+          messageId: "message-1",
+        }),
+      },
+    });
+  });
+
   it.each([
     {
       name: "wires Telegram conversation binding helpers with topic context",
@@ -587,6 +663,33 @@ describe("plugin interactive handlers", () => {
         conversationId: "C123",
         parentConversationId: "C123",
         threadId: "1710000000.000100",
+      },
+    },
+    {
+      name: "wires Teams conversation binding helpers with channel context",
+      registerParams: { channel: "msteams", namespace: "codex" },
+      dispatchParams: createMSTeamsDispatchParams({
+        data: "codex:bind",
+        interactionId: "teams-bind",
+      }),
+      requestResult: {
+        status: "bound" as const,
+        binding: {
+          bindingId: "binding-teams",
+          pluginId: "codex-plugin",
+          pluginName: "Codex",
+          pluginRoot: "/plugins/codex",
+          channel: "msteams",
+          accountId: "default",
+          conversationId: "conversation:19:teams@thread.tacv2",
+          boundAt: 1,
+        },
+      },
+      requestSummary: "Bind Teams",
+      expectedConversation: {
+        channel: "msteams",
+        accountId: "default",
+        conversationId: "conversation:19:teams@thread.tacv2",
       },
     },
   ] as const)("$name", async (testCase) => {

@@ -21,6 +21,10 @@ describe("parseExplicitTargetForChannel", () => {
     });
   });
 
+  it("returns null instead of throwing for malformed Discord @targets", () => {
+    expect(parseExplicitTargetForChannel("discord", "@alice")).toBeNull();
+  });
+
   it("parses registered non-bundled channel targets via the active plugin contract", () => {
     setActivePluginRegistry(
       createTestRegistry([

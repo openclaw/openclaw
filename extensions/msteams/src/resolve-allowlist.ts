@@ -1,6 +1,7 @@
 import { mapAllowlistResolutionInputs } from "openclaw/plugin-sdk/allow-from";
 import { searchGraphUsers } from "./graph-users.js";
 import {
+  getPrimaryChannelForTeam,
   listChannelsForTeam,
   listTeamsByName,
   normalizeQuery,
@@ -35,8 +36,8 @@ export function normalizeMSTeamsMessagingTarget(raw: string): string | undefined
     return undefined;
   }
   trimmed = stripProviderPrefix(trimmed).trim();
-  if (/^conversation:/i.test(trimmed)) {
-    const id = trimmed.slice("conversation:".length).trim();
+  if (/^(conversation|channel|group):/i.test(trimmed)) {
+    const id = trimmed.replace(/^(conversation|channel|group):/i, "").trim();
     return id ? `conversation:${id}` : undefined;
   }
   if (/^user:/i.test(trimmed)) {
@@ -52,13 +53,38 @@ export function normalizeMSTeamsUserInput(raw: string): string {
     .trim();
 }
 
-export function parseMSTeamsConversationId(raw: string): string | null {
-  const trimmed = stripProviderPrefix(raw).trim();
-  if (!/^conversation:/i.test(trimmed)) {
+export function parseMSTeamsExplicitTarget(raw: string): {
+  to: string;
+  chatType?: "direct" | "channel";
+} | null {
+  const normalized = normalizeMSTeamsMessagingTarget(raw);
+  if (!normalized) {
     return null;
   }
-  const id = trimmed.slice("conversation:".length).trim();
-  return id;
+  if (/^user:/i.test(normalized)) {
+    return {
+      to: normalized,
+      chatType: "direct",
+    };
+  }
+  if (/^conversation:/i.test(normalized)) {
+    return {
+      to: normalized,
+      chatType: "channel",
+    };
+  }
+  return {
+    to: normalized,
+  };
+}
+
+export function parseMSTeamsConversationId(raw: string): string | null {
+  const normalized = normalizeMSTeamsMessagingTarget(raw);
+  if (!normalized || !/^conversation:/i.test(normalized)) {
+    return null;
+  }
+  const id = normalized.slice("conversation:".length).trim();
+  return id || null;
 }
 
 function normalizeMSTeamsTeamKey(raw: string): string | undefined {
@@ -125,21 +151,26 @@ export async function resolveMSTeamsChannelAllowlist(params: {
       if (!graphTeamId) {
         return { input, resolved: false, note: "team id missing" };
       }
-      // Bot Framework sends the General channel's conversation ID as
+
+      // Bot Framework sends the primary channel conversation ID as
       // channelData.team.id at runtime, NOT the Graph API group GUID.
-      // Fetch channels upfront so we can resolve the correct key format for
-      // runtime matching and reuse the list for channel lookups.
-      let teamChannels: Awaited<ReturnType<typeof listChannelsForTeam>> = [];
+      let primaryChannel = null;
       try {
-        teamChannels = await listChannelsForTeam(token, graphTeamId);
+        primaryChannel = await getPrimaryChannelForTeam(token, graphTeamId);
       } catch {
-        // API failure (rate limit, network error) — fall back to Graph GUID as team key
+        primaryChannel = null;
       }
-      const generalChannel = teamChannels.find((ch) => ch.displayName?.toLowerCase() === "general");
-      // Use the General channel's conversation ID as the team key — this
-      // matches what Bot Framework sends at runtime. Fall back to the Graph
-      // GUID if the General channel isn't found (renamed or deleted).
-      const teamId = generalChannel?.id?.trim() || graphTeamId;
+      const teamId = primaryChannel?.id?.trim();
+
+      if (!teamId) {
+        return {
+          input,
+          resolved: false,
+          // Fail closed here. Team display names are not unique, so falling
+          // back to a name-based key can widen access across duplicate teams.
+          note: "primary channel unavailable",
+        };
+      }
       if (!channel) {
         return {
           input,
@@ -149,7 +180,16 @@ export async function resolveMSTeamsChannelAllowlist(params: {
           note: teams.length > 1 ? "multiple teams; chose first" : undefined,
         };
       }
-      // Reuse teamChannels — already fetched above
+
+      let teamChannels: Awaited<ReturnType<typeof listChannelsForTeam>> | null = null;
+      try {
+        teamChannels = await listChannelsForTeam(token, graphTeamId);
+      } catch {
+        teamChannels = null;
+      }
+      if (!teamChannels) {
+        return { input, resolved: false, note: "team channels unavailable" };
+      }
       const channelMatch =
         teamChannels.find((item) => item.id === channel) ??
         teamChannels.find((item) => item.displayName?.toLowerCase() === channel.toLowerCase()) ??

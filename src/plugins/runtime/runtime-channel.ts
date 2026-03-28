@@ -80,6 +80,7 @@ import { defineCachedValue } from "./runtime-cache.js";
 import { createRuntimeDiscord } from "./runtime-discord.js";
 import { createRuntimeIMessage } from "./runtime-imessage.js";
 import { createRuntimeMatrix } from "./runtime-matrix.js";
+import { createRuntimeMSTeams } from "./runtime-msteams.js";
 import { createRuntimeSignal } from "./runtime-signal.js";
 import { createRuntimeSlack } from "./runtime-slack.js";
 import { createRuntimeTelegram } from "./runtime-telegram.js";
@@ -188,17 +189,18 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
     },
   } satisfies Omit<
     PluginRuntime["channel"],
-    "discord" | "slack" | "telegram" | "matrix" | "signal" | "imessage" | "whatsapp"
+    "discord" | "slack" | "msteams" | "telegram" | "matrix" | "signal" | "imessage" | "whatsapp"
   > &
     Partial<
       Pick<
         PluginRuntime["channel"],
-        "discord" | "slack" | "telegram" | "matrix" | "signal" | "imessage" | "whatsapp"
+        "discord" | "slack" | "msteams" | "telegram" | "matrix" | "signal" | "imessage" | "whatsapp"
       >
     >;
 
   defineCachedValue(channelRuntime, "discord", createRuntimeDiscord);
   defineCachedValue(channelRuntime, "slack", createRuntimeSlack);
+  defineCachedValue(channelRuntime, "msteams", createRuntimeMSTeams);
   defineCachedValue(channelRuntime, "telegram", createRuntimeTelegram);
   defineCachedValue(channelRuntime, "matrix", createRuntimeMatrix);
   defineCachedValue(channelRuntime, "signal", createRuntimeSignal);

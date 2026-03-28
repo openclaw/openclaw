@@ -8,6 +8,7 @@ import { resolveMSTeamsSenderAccess } from "./monitor-handler/access.js";
 import { createMSTeamsMessageHandler } from "./monitor-handler/message-handler.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
 import { getPendingUpload, removePendingUpload } from "./pending-uploads.js";
+import { handleMSTeamsPluginInteraction } from "./plugin-interactions.js";
 import type { MSTeamsPollStore } from "./polls.js";
 import { withRevokedProxyFallback } from "./revoked-context.js";
 import { getMSTeamsRuntime } from "./runtime.js";
@@ -377,13 +378,20 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
         return;
       }
 
-      // Handle feedback invokes (thumbs up/down on AI-generated messages).
-      // Just return after handling — the process() handler sends HTTP 200 automatically.
-      // Do NOT call sendActivity with invokeResponse; our custom adapter would POST
-      // a new activity to Bot Framework instead of responding to the HTTP request.
+      // Handle feedback + plugin submit invokes after sdk.process() has already sent
+      // the HTTP 200 for this invoke request. Do NOT call sendActivity with
+      // invokeResponse here; our custom adapter would POST a new activity to Bot
+      // Framework instead of responding to the original HTTP request.
       if (ctx.activity?.type === "invoke" && ctx.activity?.name === "message/submitAction") {
-        const handled = await handleFeedbackInvoke(ctx, deps);
-        if (handled) {
+        const handledFeedback = await handleFeedbackInvoke(ctx, deps);
+        if (handledFeedback) {
+          return;
+        }
+        const handledPluginInteraction = await handleMSTeamsPluginInteraction({
+          context: ctx,
+          deps,
+        });
+        if (handledPluginInteraction) {
           return;
         }
       }
