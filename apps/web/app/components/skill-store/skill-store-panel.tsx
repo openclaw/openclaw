@@ -44,6 +44,7 @@ export function SkillStorePanel() {
   const [browseQuery, setBrowseQuery] = useState("");
   const browseDebounce = useRef<ReturnType<typeof setTimeout>>(undefined);
   const [installingSlug, setInstallingSlug] = useState<string | null>(null);
+  // Keep a fast local lookup so Browse cards can reflect install state immediately.
   const [installedSlugs, setInstalledSlugs] = useState<Set<string>>(new Set());
 
   const fetchInstalled = useCallback(async () => {
@@ -91,6 +92,7 @@ export function SkillStorePanel() {
   const handleBrowseSearch = useCallback((value: string) => {
     setBrowseQuery(value);
     clearTimeout(browseDebounce.current);
+    // Debounce remote search so typing does not hammer the ClawHub proxy route.
     browseDebounce.current = setTimeout(() => {
       void fetchBrowse(value);
     }, 300);
@@ -123,6 +125,7 @@ export function SkillStorePanel() {
       });
       const data = await res.json();
       if (data.ok) {
+        // Update Browse card state immediately, then refresh Installed with full metadata.
         setInstalledSlugs((prev) => new Set(prev).add(slug));
         void fetchInstalled();
       }

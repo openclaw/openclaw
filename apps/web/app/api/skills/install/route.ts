@@ -50,6 +50,7 @@ export async function POST(req: Request) {
 
     const buffer = Buffer.from(await res.arrayBuffer());
 
+    // Write to a temp zip first, then extract into the workspace skill directory.
     const tmpFile = join(tmpdir(), `clawhub-${randomBytes(8).toString("hex")}.zip`);
     writeFileSync(tmpFile, buffer);
 
@@ -64,7 +65,8 @@ export async function POST(req: Request) {
       try { unlinkSync(tmpFile); } catch { /* ignore cleanup errors */ }
     }
 
-    // Update .clawhub/lock.json for ClawHub CLI compatibility
+    // Mirror installs in .clawhub/lock.json so the local workspace stays compatible
+    // with ClawHub's expected metadata format.
     const lockDir = join(workspaceRoot, ".clawhub");
     const lockFile = join(lockDir, "lock.json");
     mkdirSync(lockDir, { recursive: true });

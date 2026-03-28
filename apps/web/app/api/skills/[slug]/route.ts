@@ -13,10 +13,12 @@ export async function DELETE(
 ) {
   const { slug } = await params;
 
+  // Only allow plain skill slugs so a delete cannot escape the workspace/skills dir.
   if (!slug || /[/\\]/.test(slug) || slug === "." || slug === "..") {
     return Response.json({ ok: false, error: "Invalid skill slug" }, { status: 400 });
   }
 
+  // Managed DenchClaw skills are required for core behavior and must stay installed.
   if (PROTECTED_SKILLS.includes(slug)) {
     return Response.json(
       { ok: false, error: "This skill is required by DenchClaw and cannot be removed" },

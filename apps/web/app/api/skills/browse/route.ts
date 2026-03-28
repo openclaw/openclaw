@@ -31,6 +31,7 @@ export type BrowseSkill = {
 function normalizeSkill(raw: ClawHubSkill): BrowseSkill {
   return {
     slug: raw.slug,
+    // ClawHub search/list responses are not identical, so normalize them once here.
     displayName: raw.displayName ?? raw.name ?? raw.slug,
     summary: raw.summary ?? raw.description ?? "",
     version: raw.version ?? "",
