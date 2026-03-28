@@ -47,7 +47,7 @@ export type {
 
 type TelegramMessageContextPayload = Awaited<ReturnType<typeof buildTelegramInboundContextPayload>>;
 type TelegramReactionApi = (
-  chatId: number | string,
+  chatId: BuildTelegramMessageContextParams["primaryCtx"]["message"]["chat"]["id"],
   messageId: number,
   reactions: Array<{ type: "emoji"; emoji: ReactionTypeEmoji["emoji"] }>,
 ) => Promise<unknown>;
@@ -56,7 +56,7 @@ export type TelegramMessageContext = {
   ctxPayload: TelegramMessageContextPayload["ctxPayload"];
   primaryCtx: BuildTelegramMessageContextParams["primaryCtx"];
   msg: BuildTelegramMessageContextParams["primaryCtx"]["message"];
-  chatId: number | string;
+  chatId: BuildTelegramMessageContextParams["primaryCtx"]["message"]["chat"]["id"];
   isGroup: boolean;
   groupConfig?: ReturnType<
     BuildTelegramMessageContextParams["resolveTelegramGroupConfig"]

@@ -29,7 +29,7 @@ function readErrorTextField(value: unknown, key: "description" | "message"): str
   if (!value || typeof value !== "object" || !(key in value)) {
     return undefined;
   }
-  const text = (value as Record<string, unknown>)[key];
+  const text = (value as Record<"description" | "message", unknown>)[key];
   return typeof text === "string" ? text : undefined;
 }
 

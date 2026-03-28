@@ -18,6 +18,8 @@ export function isTelegramForumServiceMessage(msg: unknown): boolean {
   if (!msg || typeof msg !== "object") {
     return false;
   }
-  const record = msg as Record<string, unknown>;
-  return TELEGRAM_FORUM_SERVICE_FIELDS.some((field) => field in record && record[field] != null);
+  const messageRecord = msg as Record<(typeof TELEGRAM_FORUM_SERVICE_FIELDS)[number], unknown>;
+  return TELEGRAM_FORUM_SERVICE_FIELDS.some(
+    (field) => field in messageRecord && messageRecord[field] != null,
+  );
 }
