@@ -207,6 +207,7 @@ export async function monitorWebInbox(options: {
 
   const normalizeInboundMessage = async (
     msg: WAMessage,
+    opts?: { isAppend?: boolean },
   ): Promise<NormalizedInboundMessage | null> => {
     const id = msg.key?.id ?? undefined;
     const remoteJid = msg.key?.remoteJid;
@@ -271,6 +272,7 @@ export async function monitorWebInbox(options: {
       isFromMe: Boolean(msg.key?.fromMe),
       messageTimestampMs,
       connectedAtMs,
+      isAppend: opts?.isAppend,
       sock: { sendMessage: (jid, content) => sendTrackedMessage(jid, content) },
       remoteJid,
     });
@@ -463,21 +465,19 @@ export async function monitorWebInbox(options: {
     if (upsert.type !== "notify" && upsert.type !== "append") {
       return;
     }
+    const isAppend = upsert.type === "append";
     for (const msg of upsert.messages ?? []) {
       recordChannelActivity({
         channel: "whatsapp",
         accountId: options.accountId,
         direction: "inbound",
       });
-      const inbound = await normalizeInboundMessage(msg);
-      if (!inbound) {
-        continue;
-      }
 
-      await maybeMarkInboundAsRead(inbound);
-
-      // If this is history/offline catch-up, mark read above but skip auto-reply.
-      if (upsert.type === "append") {
+      // Skip old history BEFORE access control to prevent pairing challenges
+      // from firing on replayed messages during reconnect cycles (#56448).
+      // Without this guard, 408 reconnect loops cause unsolicited pairing
+      // codes to be sent to the user's contacts.
+      if (isAppend) {
         const APPEND_RECENT_GRACE_MS = 60_000;
         const msgTsRaw = msg.messageTimestamp;
         const msgTsNum = msgTsRaw != null ? Number(msgTsRaw) : NaN;
@@ -486,6 +486,13 @@ export async function monitorWebInbox(options: {
           continue;
         }
       }
+
+      const inbound = await normalizeInboundMessage(msg, { isAppend });
+      if (!inbound) {
+        continue;
+      }
+
+      await maybeMarkInboundAsRead(inbound);
 
       const enriched = await enrichInboundMessage(msg);
       if (!enriched) {
