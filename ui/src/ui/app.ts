@@ -458,6 +458,10 @@ export class OpenClawApp extends LitElement {
   @state() projectsError: string | null = null;
   @state() projectDashboardLoading = false;
   @state() projectDashboardError: string | null = null;
+  @state() projectsSubView: "overview" | "board" = "overview";
+  @state() projectsBoardExpanded: string | null = null;
+  @state() projectsCheckpoint: Record<string, unknown> | null = null;
+  @state() projectsCheckpointLoading = false;
 
   client: GatewayBrowserClient | null = null;
   private chatScrollFrame: number | null = null;

@@ -318,6 +318,11 @@ export type AppViewState = {
     projectsError: string | null;
     projectDashboardLoading: boolean;
     projectDashboardError: string | null;
+    // Projects board view state
+    projectsSubView: "overview" | "board";
+    projectsBoardExpanded: string | null;
+    projectsCheckpoint: Record<string, unknown> | null;
+    projectsCheckpointLoading: boolean;
     updateAvailable: import("./types.js").UpdateAvailable | null;
     attentionItems: AttentionItem[];
     paletteOpen: boolean;
