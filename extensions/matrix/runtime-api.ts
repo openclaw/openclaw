@@ -34,4 +34,3 @@ export type {
   WizardPrompter,
 } from "openclaw/plugin-sdk/matrix";
 export { formatZonedTimestamp } from "openclaw/plugin-sdk/matrix";
-export { chunkTextForOutbound } from "openclaw/plugin-sdk/matrix";
