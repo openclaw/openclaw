@@ -15,6 +15,7 @@ import {
   type SecretRef,
   type SecretRefSource,
 } from "../config/types.secrets.js";
+import { validateConfigPath } from "../config/validate-config-path.js";
 import { validateConfigObjectRaw } from "../config/validation.js";
 import { SecretProviderSchema } from "../config/zod-schema.core.js";
 import { danger, info, success } from "../globals.js";
@@ -378,6 +379,23 @@ function pruneInactiveGatewayAuthCredentials(params: {
 
 function toDotPath(path: PathSegment[]): string {
   return path.join(".");
+}
+
+function formatInvalidConfigPathError(path: PathSegment[], suggestions: string[]): string {
+  const requested = toDotPath(path);
+  if (suggestions.length === 0) {
+    return (
+      `Unknown config path "${requested}". ` +
+      `Check ${formatCliCommand("openclaw config schema")} for valid paths.`
+    );
+  }
+  if (suggestions.length === 1) {
+    return `Unknown config path "${requested}". Did you mean "${suggestions[0]}"?`;
+  }
+  return (
+    `Unknown config path "${requested}". ` +
+    `Did you mean "${suggestions[0]}" or "${suggestions[1]}"?`
+  );
 }
 
 function parseSecretRefSource(raw: string, label: string): SecretRefSource {
@@ -980,6 +998,15 @@ export async function runConfigSet(opts: {
           opts: opts.cliOptions,
         });
     const snapshot = await loadValidConfig(runtime);
+    const runtimeSchema = await readBestEffortRuntimeConfigSchema();
+    for (const operation of operations) {
+      const validation = validateConfigPath(operation.requestedPath, runtimeSchema);
+      if (!validation.valid) {
+        throw new Error(
+          formatInvalidConfigPathError(operation.requestedPath, validation.suggestions),
+        );
+      }
+    }
     // Use snapshot.resolved (config after $include and ${ENV} resolution, but BEFORE runtime defaults)
     // instead of snapshot.config (runtime-merged with defaults).
     // This prevents runtime defaults from leaking into the written config file (issue #6070)

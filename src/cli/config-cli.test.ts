@@ -137,9 +137,88 @@ describe("config cli", () => {
         $schema: "http://json-schema.org/draft-07/schema#",
         type: "object",
         properties: {
+          gateway: {
+            type: "object",
+            properties: {
+              port: { type: "number" },
+              bind: { type: "string" },
+              auth: {
+                type: "object",
+                properties: {
+                  mode: { type: "string" },
+                  token: { type: "string" },
+                  password: { type: "string" },
+                },
+              },
+            },
+          },
+          tools: {
+            type: "object",
+            properties: {
+              alsoAllow: {
+                type: "array",
+                items: { type: "string" },
+              },
+              fs: {
+                type: "object",
+                properties: {
+                  workspaceOnly: { type: "boolean" },
+                },
+              },
+              web: {
+                type: "object",
+                properties: {
+                  search: {
+                    type: "object",
+                    properties: {
+                      apiKey: {
+                        anyOf: [{ type: "string" }, { type: "object" }],
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          agents: {
+            type: "object",
+            properties: {
+              list: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    tools: {
+                      type: "object",
+                      properties: {
+                        fs: {
+                          type: "object",
+                          properties: {
+                            workspaceOnly: { type: "boolean" },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
           channels: {
             type: "object",
             properties: {
+              discord: {
+                type: "object",
+                properties: {
+                  token: { type: "string" },
+                },
+              },
+              googlechat: {
+                type: "object",
+                properties: {
+                  serviceAccount: { type: "string" },
+                },
+              },
               telegram: {
                 type: "object",
                 properties: {
@@ -153,12 +232,47 @@ describe("config cli", () => {
             properties: {
               entries: {
                 type: "object",
+                additionalProperties: true,
+              },
+            },
+          },
+          secrets: {
+            type: "object",
+            properties: {
+              providers: {
+                type: "object",
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    source: { type: "string" },
+                    path: { type: "string" },
+                    mode: { type: "string" },
+                  },
+                },
               },
             },
           },
         },
       },
-      uiHints: {},
+      uiHints: {
+        "gateway.port": {},
+        "gateway.bind": {},
+        "gateway.auth": {},
+        "gateway.auth.mode": {},
+        "gateway.auth.token": {},
+        "gateway.auth.password": {},
+        "tools.alsoAllow": {},
+        "tools.fs.workspaceOnly": {},
+        "tools.web.search.apiKey": {},
+        "agents.list[].tools.fs.workspaceOnly": {},
+        "channels.discord.token": {},
+        "channels.googlechat.serviceAccount": {},
+        "channels.telegram.token": {},
+        "secrets.providers.*": {},
+        "secrets.providers.*.source": {},
+        "secrets.providers.*.path": {},
+        "secrets.providers.*.mode": {},
+      },
       version: "test",
       generatedAt: "2026-03-25T00:00:00.000Z",
     });
@@ -442,25 +556,29 @@ describe("config cli", () => {
         properties?: Record<string, unknown>;
       };
       expect(payload.properties?.$schema).toEqual({ type: "string" });
-      expect(payload.properties?.channels).toEqual({
-        type: "object",
-        properties: {
-          telegram: {
-            type: "object",
-            properties: {
-              token: { type: "string" },
+      expect(payload.properties?.channels).toEqual(
+        expect.objectContaining({
+          type: "object",
+          properties: expect.objectContaining({
+            telegram: {
+              type: "object",
+              properties: {
+                token: { type: "string" },
+              },
             },
+          }),
+        }),
+      );
+      expect(payload.properties?.plugins).toEqual(
+        expect.objectContaining({
+          type: "object",
+          properties: {
+            entries: expect.objectContaining({
+              type: "object",
+            }),
           },
-        },
-      });
-      expect(payload.properties?.plugins).toEqual({
-        type: "object",
-        properties: {
-          entries: {
-            type: "object",
-          },
-        },
-      });
+        }),
+      );
     });
 
     it("falls back cleanly when best-effort schema loading returns channel-only data", async () => {
@@ -494,6 +612,38 @@ describe("config cli", () => {
       expect(payload.properties?.channels).toBeTruthy();
       expect(payload.properties?.plugins).toBeUndefined();
       expect(mockError).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("config set path validation - issue #50012", () => {
+    it("rejects invalid tool paths with the canonical workspaceOnly suggestion", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: { port: 18789 },
+      };
+      setSnapshot(resolved, resolved);
+
+      await expect(
+        runConfigCommand(["config", "set", "agents.defaults.tools.fs.workspaceOnly", "true"]),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      const errorOutput = mockError.mock.calls.map((call) => call.join(" ")).join(" ");
+      expect(errorOutput).toContain('Unknown config path "agents.defaults.tools.fs.workspaceOnly"');
+      expect(errorOutput).toContain('Did you mean "tools.fs.workspaceOnly"');
+      expect(errorOutput).toContain("agents.list[0].tools.fs.workspaceOnly");
+    });
+
+    it("accepts the canonical global workspaceOnly path", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: { port: 18789 },
+      };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand(["config", "set", "tools.fs.workspaceOnly", "true"]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      expect(written.tools?.fs).toEqual({ workspaceOnly: true });
     });
   });
 

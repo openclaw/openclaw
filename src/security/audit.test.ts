@@ -3723,6 +3723,11 @@ description: test skill
               }),
             ]),
           );
+          const finding = res.findings.find(
+            (f) => f.checkId === "security.exposure.open_groups_with_runtime_or_fs",
+          );
+          expect(finding, "expected open_groups_with_runtime_or_fs finding to exist").toBeDefined();
+          expect(finding?.remediation).toContain("openclaw config set tools.fs.workspaceOnly true");
         },
       },
       {
