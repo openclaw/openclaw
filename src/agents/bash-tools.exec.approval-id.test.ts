@@ -449,6 +449,71 @@ describe("exec approvals", () => {
     );
   });
 
+  it("routes exec follow-ups back to webchat without external delivery", async () => {
+    const agentCalls: Array<Record<string, unknown>> = [];
+
+    mockAcceptedApprovalFlow({
+      onAgent: (params) => {
+        agentCalls.push(params);
+      },
+    });
+
+    const tool = createExecTool({
+      host: "gateway",
+      ask: "always",
+      approvalRunningNoticeMs: 0,
+      sessionKey: "agent:main:webchat",
+      messageProvider: "webchat",
+      elevated: { enabled: true, allowed: true, defaultLevel: "ask" },
+    });
+
+    const result = await tool.execute("call-gw-followup-webchat", {
+      command: "echo ok",
+      workdir: process.cwd(),
+      gatewayUrl: undefined,
+      gatewayToken: undefined,
+    });
+
+    expect(result.details.status).toBe("approval-pending");
+    await expect.poll(() => agentCalls.length, { timeout: 3_000, interval: 20 }).toBe(1);
+    expect(agentCalls[0]).toEqual(
+      expect.objectContaining({
+        sessionKey: "agent:main:webchat",
+        deliver: false,
+        channel: "webchat",
+        idempotencyKey: expect.stringContaining("exec-approval-followup:"),
+      }),
+    );
+    expect(agentCalls[0]?.to).toBeUndefined();
+  });
+
+  it("shows Control UI approval guidance for webchat-sourced approvals", async () => {
+    mockPendingApprovalRegistration();
+
+    const tool = createExecTool({
+      host: "gateway",
+      ask: "always",
+      approvalRunningNoticeMs: 0,
+      messageProvider: " Webchat ",
+      elevated: { enabled: true, allowed: true, defaultLevel: "ask" },
+    });
+
+    const result = await tool.execute("call-webchat-pending-copy", {
+      command: "echo ok",
+      elevated: true,
+    });
+
+    expect(result.details.status).toBe("approval-pending");
+    const pendingText = getResultText(result);
+    const details = result.details as { approvalSlug: string };
+    expect(pendingText).toContain(
+      "Use the exec approval buttons (Allow once, Always allow, or Deny) in the Control UI.",
+    );
+    expect(pendingText).toContain(
+      `Alternatively: /approve ${details.approvalSlug} allow-once|allow-always|deny`,
+    );
+  });
+
   it("requires a separate approval for each elevated command after allow-once", async () => {
     const requestCommands: string[] = [];
     const requestIds: string[] = [];

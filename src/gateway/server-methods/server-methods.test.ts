@@ -966,7 +966,48 @@ describe("exec approval handlers", () => {
     }
   });
 
-  it("fast-fails approvals when no approver clients and no forwarding targets", async () => {
+  it("keeps two-phase approvals pending when no approver clients and no forwarding targets", async () => {
+    vi.useFakeTimers();
+    try {
+      const { manager, handlers, forwarder, respond, context } =
+        createForwardingExecApprovalFixture();
+      const expireSpy = vi.spyOn(manager, "expire");
+
+      const requestPromise = requestExecApproval({
+        handlers,
+        respond,
+        context,
+        params: {
+          timeoutMs: 60_000,
+          id: "approval-two-phase-no-clients",
+          host: "gateway",
+          twoPhase: true,
+        },
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(forwarder.handleRequested).toHaveBeenCalledTimes(1);
+      expect(expireSpy).not.toHaveBeenCalled();
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          status: "accepted",
+          id: "approval-two-phase-no-clients",
+        }),
+        undefined,
+      );
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      await requestPromise;
+
+      expect(expireSpy).toHaveBeenCalledWith("approval-two-phase-no-clients");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("fast-fails single-phase approvals when no approver clients and no forwarding targets", async () => {
     const { manager, handlers, forwarder, respond, context } =
       createForwardingExecApprovalFixture();
     const expireSpy = vi.spyOn(manager, "expire");

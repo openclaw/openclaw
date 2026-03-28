@@ -1,3 +1,4 @@
+import { listKnownProviderAuthEnvVarNames } from "../secrets/provider-env-vars.js";
 import HOST_ENV_SECURITY_POLICY_JSON from "./host-env-security-policy.json" with { type: "json" };
 import { markOpenClawExecEnv } from "./openclaw-exec-env.js";
 
@@ -41,6 +42,9 @@ export const HOST_DANGEROUS_OVERRIDE_ENV_KEYS = new Set<string>(
 );
 export const HOST_SHELL_WRAPPER_ALLOWED_OVERRIDE_ENV_KEYS = new Set<string>(
   HOST_SHELL_WRAPPER_ALLOWED_OVERRIDE_ENV_KEY_VALUES,
+);
+const HOST_PROVIDER_AUTH_ENV_KEYS = new Set(
+  listKnownProviderAuthEnvVarNames().map((key) => key.toUpperCase()),
 );
 
 export type HostExecEnvSanitizationResult = {
@@ -188,6 +192,9 @@ export function sanitizeHostExecEnvWithDiagnostics(params?: {
   const merged: Record<string, string> = {};
   for (const [key, value] of listNormalizedEnvEntries(baseEnv)) {
     if (isDangerousHostEnvVarName(key)) {
+      continue;
+    }
+    if (HOST_PROVIDER_AUTH_ENV_KEYS.has(key.toUpperCase())) {
       continue;
     }
     merged[key] = value;

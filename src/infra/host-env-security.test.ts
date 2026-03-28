@@ -250,6 +250,23 @@ describe("sanitizeHostExecEnv", () => {
       "ProgramFiles(x86)": "C:\\Program Files (x86)",
     });
   });
+
+  it("strips provider auth env vars from inherited host env case-insensitively", () => {
+    const env = sanitizeHostExecEnv({
+      baseEnv: {
+        PATH: "/usr/bin:/bin",
+        OPENAI_API_KEY: "openai-secret",
+        anthropic_api_key: "anthropic-secret",
+        SAFE: "1",
+      },
+    });
+
+    expect(env.PATH).toBe("/usr/bin:/bin");
+    expect(env.OPENCLAW_CLI).toBe(OPENCLAW_CLI_ENV_VALUE);
+    expect(env.OPENAI_API_KEY).toBeUndefined();
+    expect(env.anthropic_api_key).toBeUndefined();
+    expect(env.SAFE).toBe("1");
+  });
 });
 
 describe("isDangerousHostEnvOverrideVarName", () => {

@@ -1,3 +1,4 @@
+import { INTERNAL_MESSAGE_CHANNEL, isInternalMessageChannel } from "../utils/message-channel.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 type ExecApprovalFollowupParams = {
@@ -39,6 +40,8 @@ export async function sendExecApprovalFollowup(
     params.turnSourceThreadId != null && params.turnSourceThreadId !== ""
       ? String(params.turnSourceThreadId)
       : undefined;
+  const isInternal = isInternalMessageChannel(channel);
+  const hasExplicitExternalPair = Boolean(channel && to) && !isInternal;
 
   await callGatewayTool(
     "agent",
@@ -46,12 +49,18 @@ export async function sendExecApprovalFollowup(
     {
       sessionKey,
       message: buildExecApprovalFollowupPrompt(resultText),
-      deliver: true,
+      deliver: !isInternal,
       bestEffortDeliver: true,
-      channel: channel && to ? channel : undefined,
-      to: channel && to ? to : undefined,
-      accountId: channel && to ? params.turnSourceAccountId?.trim() || undefined : undefined,
-      threadId: channel && to ? threadId : undefined,
+      channel: hasExplicitExternalPair
+        ? channel
+        : isInternal
+          ? INTERNAL_MESSAGE_CHANNEL
+          : undefined,
+      to: hasExplicitExternalPair ? to : undefined,
+      accountId: hasExplicitExternalPair
+        ? params.turnSourceAccountId?.trim() || undefined
+        : undefined,
+      threadId: hasExplicitExternalPair ? threadId : undefined,
       idempotencyKey: `exec-approval-followup:${params.approvalId}`,
     },
     { expectFinal: true },
