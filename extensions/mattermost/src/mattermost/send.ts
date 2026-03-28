@@ -13,6 +13,7 @@ import {
   fetchMattermostUserTeams,
   normalizeMattermostBaseUrl,
   uploadMattermostFile,
+  type MattermostPost,
   type MattermostUser,
   type CreateDmChannelRetryOptions,
 } from "./client.js";
@@ -452,13 +453,45 @@ export async function sendMessageMattermost(
     throw new Error("Mattermost message is empty");
   }
 
-  const post = await createMattermostPost(client, {
-    channelId,
-    message,
-    rootId: opts.replyToId,
-    fileIds,
-    props,
-  });
+  let post: MattermostPost;
+  if (opts.replyToId) {
+    try {
+      post = await createMattermostPost(client, {
+        channelId,
+        message,
+        rootId: opts.replyToId,
+        fileIds,
+        props,
+      });
+    } catch (firstErr) {
+      // If the API returns "Invalid RootId" (stale thread reference after gateway restart),
+      // retry the post as a regular channel message instead of failing silently.
+      const errMsg = firstErr instanceof Error ? firstErr.message : String(firstErr);
+      if (errMsg.includes("Invalid RootId") || errMsg.includes("400")) {
+        logger.debug?.(
+          `mattermost send: reply to RootId ${opts.replyToId} failed (${errMsg}), ` +
+            "retrying as regular channel message",
+        );
+        post = await createMattermostPost(client, {
+          channelId,
+          message,
+          rootId: undefined,
+          fileIds,
+          props,
+        });
+      } else {
+        throw firstErr;
+      }
+    }
+  } else {
+    post = await createMattermostPost(client, {
+      channelId,
+      message,
+      rootId: undefined,
+      fileIds,
+      props,
+    });
+  }
 
   recordMattermostOutboundActivity(accountId);
 
