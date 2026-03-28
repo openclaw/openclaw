@@ -2,10 +2,7 @@ import { randomUUID } from "node:crypto";
 import { toAcpRuntimeErrorText } from "../../../acp/runtime/error-text.js";
 import type { AcpRuntimeError } from "../../../acp/runtime/errors.js";
 import type { AcpRuntimeSessionMode } from "../../../acp/runtime/types.js";
-import {
-  DISCORD_THREAD_BINDING_CHANNEL,
-  MATRIX_THREAD_BINDING_CHANNEL,
-} from "../../../channels/thread-bindings-policy.js";
+import { supportsAutomaticThreadBindingSpawn } from "../../../channels/thread-bindings-policy.js";
 import type { AcpSessionRuntimeOptions } from "../../../config/sessions/types.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
@@ -174,7 +171,7 @@ function normalizeAcpOptionToken(raw: string): string {
 
 function resolveDefaultSpawnThreadMode(params: HandleCommandsParams): AcpSpawnThreadMode {
   const channel = resolveAcpCommandChannel(params);
-  if (channel !== DISCORD_THREAD_BINDING_CHANNEL && channel !== MATRIX_THREAD_BINDING_CHANNEL) {
+  if (!supportsAutomaticThreadBindingSpawn(channel)) {
     return "off";
   }
   const currentThreadId = resolveAcpCommandThreadId(params);

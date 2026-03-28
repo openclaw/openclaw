@@ -33,6 +33,7 @@ export type {
   ChannelOutboundAdapter,
   ChannelOutboundContext,
   ChannelAllowlistAdapter,
+  ChannelCommandConversationContext,
   ChannelConfiguredBindingConversationRef,
   ChannelConfiguredBindingMatch,
   ChannelConfiguredBindingProvider,
