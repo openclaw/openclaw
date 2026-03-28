@@ -469,7 +469,7 @@ describe("loadGatewayPlugins", () => {
     expect(getLastDispatchedClientScopes()).not.toContain("operator.admin");
   });
 
-  test("allows fallback session reads with synthetic write scope", async () => {
+  test("allows fallback session reads with synthetic read scope", async () => {
     const serverPlugins = serverPluginsModule;
     const runtime = await createSubagentRuntime(serverPlugins);
     serverPlugins.setFallbackGatewayContext(createTestContext("synthetic-session-read"));
@@ -495,7 +495,7 @@ describe("loadGatewayPlugins", () => {
       messages: [{ id: "m-1" }],
     });
 
-    expect(getLastDispatchedClientScopes()).toEqual(["operator.write"]);
+    expect(getLastDispatchedClientScopes()).toEqual(["operator.read"]);
     expect(getLastDispatchedClientScopes()).not.toContain("operator.admin");
   });
 

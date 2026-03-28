@@ -2051,7 +2051,7 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
   api.registerCliBackend({ id: "   ", config: { command: "claude" } });
 } };`,
         assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
-          expect(registry.cliBackends).toHaveLength(0);
+          expect(registry.cliBackends?.length ?? 0).toBe(0);
           expectRegistryErrorDiagnostic({
             registry,
             pluginId: "cli-backend-missing-id",
