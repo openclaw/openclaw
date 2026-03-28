@@ -1,31 +1,45 @@
 {
   "agent": "knuth",
-  "ran_at": "2026-03-24T09:04:00-07:00",
+  "ran_at": "2026-03-27T09:02:00-07:00",
   "timezone": "America/Los_Angeles",
   "mode": "repair",
   "repos_processed": [
     "openclaw/openclaw",
-    "block/goose"
+    "block/goose",
+    "sst/opencode",
+    "microsoft/presidio",
+    "protectai/llm-guard",
+    "meta-llama/llama-stack",
+    "microsoft/autogen",
+    "langchain-ai/langchain",
+    "vllm-project/vllm",
+    "open-webui/open-webui"
   ],
   "quotas": {
-    "openclaw/openclaw": {
-      "commits_today": 0,
-      "daily_max_commits": 10,
-      "open_prs": 0,
-      "max_open_prs": 5
-    },
-    "block/goose": {
-      "commits_today": 0,
-      "daily_max_commits": 3,
-      "open_prs": 2,
-      "max_open_prs": 2
-    }
+    "block/goose": { "commits_today": 0, "daily_max_commits": 3, "open_prs": 0, "max_open_prs": 2 },
+    "sst/opencode": { "commits_today": 0, "daily_max_commits": 3, "open_prs": 0, "max_open_prs": 2 },
+    "microsoft/presidio": { "commits_today": 0, "daily_max_commits": 3, "open_prs": 0, "max_open_prs": 2 },
+    "protectai/llm-guard": { "commits_today": 0, "daily_max_commits": 3, "open_prs": 0, "max_open_prs": 2 },
+    "meta-llama/llama-stack": { "commits_today": 0, "daily_max_commits": 3, "open_prs": 0, "max_open_prs": 2 },
+    "microsoft/autogen": { "commits_today": 0, "daily_max_commits": 3, "open_prs": 0, "max_open_prs": 2 },
+    "langchain-ai/langchain": { "commits_today": 0, "daily_max_commits": 3, "open_prs": 0, "max_open_prs": 2 },
+    "vllm-project/vllm": { "commits_today": 0, "daily_max_commits": 3, "open_prs": 0, "max_open_prs": 2 },
+    "open-webui/open-webui": { "commits_today": 0, "daily_max_commits": 3, "open_prs": 0, "max_open_prs": 2 },
+    "openclaw/openclaw": { "commits_today": 1, "daily_max_commits": 10, "open_prs": 2, "max_open_prs": 5 }
   },
   "ci_status": {
-    "openclaw/openclaw#48455": "all_green",
-    "block/goose#7996": "all_green",
-    "block/goose#7888": "all_green"
+    "openclaw/openclaw#53916": "fixed_pushed_e5368ce",
+    "openclaw/openclaw#48455": "all_green_waiting_approve"
   },
-  "fixes_applied": 0,
-  "notes": "All 3 in-flight PRs have green CI. No failures to repair. No new code work needed this cycle. Supabase credentials not configured — skipped DB updates."
+  "fixes_applied": 1,
+  "fixes_detail": [
+    {
+      "repo": "openclaw/openclaw",
+      "pr": 53916,
+      "branch": "raymond/fix-log-stream-height",
+      "commit": "e5368ce",
+      "action": "Fixed 2 CI failures: (1) SafeOpenError code 'path escapes workspace root' -> 'path-mismatch' in agents-mutate.test.ts; (2) path.resolve -> path.posix.resolve in npm runner test for Windows cross-platform compat"
+    }
+  ],
+  "notes": "All priority-1 repos had 0 open PRs and no dispatches from Raymond. Only actionable CI failures were on openclaw/openclaw#53916. Both failures were caused by upstream main changes that diverged from our PR branch. Fixed and pushed. #48455 remains all-green, waiting for maintainer approval."
 }

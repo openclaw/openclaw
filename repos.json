@@ -36,10 +36,10 @@
       "cooldown_hours": 12,
       "notes": "次要仓库，低频高质量"
     },
-    "openai/codex": {
+    "sst/opencode": {
       "enabled": true,
       "priority": 1,
-      "url": "https://github.com/openai/codex",
+      "url": "https://github.com/sst/opencode",
       "daily_max_commits": 3,
       "daily_max_prs": 1,
       "max_open_prs": 2,
@@ -49,11 +49,46 @@
       "types": [
         "bug-fix",
         "docs",
-        "test",
-        "refactor"
+        "test"
       ],
       "cooldown_hours": 12,
-      "notes": "OpenAI CLI coding agent，TypeScript"
+      "notes": "终端 AI 编码 agent，Go"
+    },
+    "microsoft/presidio": {
+      "enabled": true,
+      "priority": 1,
+      "url": "https://github.com/microsoft/presidio",
+      "daily_max_commits": 3,
+      "daily_max_prs": 1,
+      "max_open_prs": 2,
+      "scan_per_round": 10,
+      "github_user": "extrasmall0",
+      "branch_prefix": "fix",
+      "types": [
+        "bug-fix",
+        "docs",
+        "test"
+      ],
+      "cooldown_hours": 12,
+      "notes": "PII 检测与脱敏框架，Python"
+    },
+    "protectai/llm-guard": {
+      "enabled": true,
+      "priority": 1,
+      "url": "https://github.com/protectai/llm-guard",
+      "daily_max_commits": 3,
+      "daily_max_prs": 1,
+      "max_open_prs": 2,
+      "scan_per_round": 10,
+      "github_user": "extrasmall0",
+      "branch_prefix": "fix",
+      "types": [
+        "bug-fix",
+        "docs",
+        "test"
+      ],
+      "cooldown_hours": 12,
+      "notes": "LLM 安全防护工具，Python"
     },
     "meta-llama/llama-stack": {
       "enabled": true,
@@ -90,6 +125,60 @@
       ],
       "cooldown_hours": 12,
       "notes": "Microsoft 多 agent 框架，Python"
+    },
+    "langchain-ai/langchain": {
+      "enabled": true,
+      "priority": 1,
+      "url": "https://github.com/langchain-ai/langchain",
+      "daily_max_commits": 3,
+      "daily_max_prs": 1,
+      "max_open_prs": 2,
+      "scan_per_round": 10,
+      "github_user": "extrasmall0",
+      "branch_prefix": "fix",
+      "types": [
+        "bug-fix",
+        "docs",
+        "test"
+      ],
+      "cooldown_hours": 12,
+      "notes": "最大 LLM 应用框架，Python，issue 量大"
+    },
+    "vllm-project/vllm": {
+      "enabled": true,
+      "priority": 1,
+      "url": "https://github.com/vllm-project/vllm",
+      "daily_max_commits": 3,
+      "daily_max_prs": 1,
+      "max_open_prs": 2,
+      "scan_per_round": 10,
+      "github_user": "extrasmall0",
+      "branch_prefix": "fix",
+      "types": [
+        "bug-fix",
+        "docs",
+        "test"
+      ],
+      "cooldown_hours": 12,
+      "notes": "高性能 LLM 推理引擎，Python"
+    },
+    "open-webui/open-webui": {
+      "enabled": true,
+      "priority": 1,
+      "url": "https://github.com/open-webui/open-webui",
+      "daily_max_commits": 3,
+      "daily_max_prs": 1,
+      "max_open_prs": 2,
+      "scan_per_round": 10,
+      "github_user": "extrasmall0",
+      "branch_prefix": "fix",
+      "types": [
+        "bug-fix",
+        "docs",
+        "test"
+      ],
+      "cooldown_hours": 12,
+      "notes": "ChatGPT 替代 UI，TypeScript/Python"
     }
   },
   "global": {

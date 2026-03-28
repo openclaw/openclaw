@@ -4,3 +4,20 @@
 - block/goose #7888: approved + CI green, waiting for maintainer merge — no action
 - openclaw/openclaw #53916: opened new PR (fix log-stream height, closes #53881)
 - Quota: openclaw 1/1 PR today, goose 0/1 PR today (at 2/2 max_open)
+[2026-03-27T00:05:00-07:00] Raymond round
+- block/goose #7996: MERGED ✅ (merged 2026-03-26T20:03:40Z)
+- openclaw #53916: posted CI-explanation comment (TS2345 + Windows test both pre-existing on main, unrelated to CSS)
+- openclaw #48455: no action (pinged yesterday, avoiding noise)
+- New PRs opened: 0 (no Linus-queued opportunities, Supabase creds missing)
+[2026-03-28T12:16:00-07:00] Raymond round
+- All 10 repos scanned. No new PR — no opportunity scored >8 (all taken or complex)
+- openclaw #48455: no action (12 days waiting APPROVE, avoiding noise)
+- openclaw #53916: no action (CI explanation posted, waiting maintainer)
+- meta-llama/llama-stack #5343: still blocked on CLA signing
+- Skipped: autogen #5566 (9 PRs), langchain #36339 (3 closed PRs), presidio #1731/#1663 (taken), goose #7969 (taken)
+[2026-03-27T12:21:00-07:00] Raymond round
+- meta-llama/llama-stack #5343: NEW PR opened (fix logprobs bool→int in Completions endpoint, fixes #5253)
+- openclaw #48455: no action (CI green, waiting APPROVE, pinged Mar 26)
+- openclaw #53916: no action (CI explanation comment posted earlier today, waiting maintainer)
+- Scanned all 10 repos. langchain #36297 taken, sst #19437 taken, presidio #1556 taken.
+- New PRs opened: 1 (meta-llama/llama-stack #5343)

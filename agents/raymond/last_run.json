@@ -1,99 +1,67 @@
 {
   "agent": "raymond",
-  "ran_at": "2026-03-25T12:27:00-07:00",
+  "ran_at": "2026-03-28T12:16:00-07:00",
   "timezone": "America/Los_Angeles",
   "mode": "pr-ops",
   "repos_processed": [
     "block/goose",
-    "openai/codex",
+    "sst/opencode",
+    "microsoft/presidio",
+    "protectai/llm-guard",
     "meta-llama/llama-stack",
     "microsoft/autogen",
+    "langchain-ai/langchain",
+    "vllm-project/vllm",
+    "open-webui/open-webui",
     "openclaw/openclaw"
   ],
   "quotas": {
-    "block/goose": {
-      "prs_today": 1,
-      "daily_max_prs": 1,
-      "commits_today": 2,
-      "daily_max_commits": 3,
-      "open_prs": 2,
-      "max_open_prs": 2
-    },
-    "openai/codex": {
-      "prs_today": 0,
-      "daily_max_prs": 1,
-      "commits_today": 0,
-      "daily_max_commits": 3,
-      "open_prs": 0,
-      "max_open_prs": 2
-    },
-    "meta-llama/llama-stack": {
-      "prs_today": 0,
-      "daily_max_prs": 1,
-      "commits_today": 0,
-      "daily_max_commits": 3,
-      "open_prs": 0,
-      "max_open_prs": 2
-    },
-    "microsoft/autogen": {
-      "prs_today": 0,
-      "daily_max_prs": 1,
-      "commits_today": 0,
-      "daily_max_commits": 3,
-      "open_prs": 0,
-      "max_open_prs": 2
-    },
-    "openclaw/openclaw": {
-      "prs_today": 0,
-      "daily_max_prs": 1,
-      "commits_today": 0,
-      "daily_max_commits": 10,
-      "open_prs": 0,
-      "max_open_prs": 5
-    }
+    "all_repos": "0 new PRs today, 0 new commits today across all repos"
   },
   "inflight_prs_advanced": 0,
-  "new_prs_opened": 1,
+  "new_prs_opened": 0,
+  "new_prs": [],
   "inflight_prs": [
     {
       "repo": "openclaw/openclaw",
       "pr_number": 48455,
       "url": "https://github.com/openclaw/openclaw/pull/48455",
-      "status": "ci_green_awaiting_review",
-      "notes": "CI green, waiting 9 days for maintainer review. No action needed yet."
+      "status": "ci_green_waiting_approve",
+      "notes": "CI all green (24 success, 10 skipped). No new reviewer activity. Last ping Mar 26. Avoiding noise — waiting."
     },
     {
-      "repo": "block/goose",
-      "pr_number": 7996,
-      "url": "https://github.com/block/goose/pull/7996",
-      "status": "ci_green_awaiting_rereview",
-      "notes": "Refactored per DOsinga feedback. CI green. Waiting for re-review."
+      "repo": "openclaw/openclaw",
+      "pr_number": 53916,
+      "url": "https://github.com/openclaw/openclaw/pull/53916",
+      "status": "ci_fail_preexisting",
+      "notes": "26 CI failures, all pre-existing on main. Explanation posted Mar 27. Waiting for maintainer response."
     },
     {
-      "repo": "block/goose",
-      "pr_number": 8121,
-      "url": "https://github.com/block/goose/pull/8121",
-      "status": "just_opened",
-      "notes": "New PR for Bedrock null toolUse.input fix. Closes #8050."
+      "repo": "meta-llama/llama-stack",
+      "pr_number": 5343,
+      "url": "https://github.com/meta-llama/llama-stack/pull/5343",
+      "status": "blocked_cla",
+      "notes": "Meta CLA not signed. CI title-check+summary pass, CLA action_required. Need extrasmall0 to sign at https://code.facebook.com/cla"
     }
   ],
-  "merged_this_round": [
-    {
-      "repo": "block/goose",
-      "pr_number": 7888,
-      "url": "https://github.com/block/goose/pull/7888",
-      "title": "fix: prioritize predefined model context_limit over canonical registry"
-    }
+  "skipped_opportunities": [
+    "autogen #5566 — 9+ open PRs, bot graveyard",
+    "langchain #36339 — 3 closed PRs + active competition, skip",
+    "langchain #36312 — already fixed (merged)",
+    "presidio #1731 — has open PR #1735",
+    "presidio #1663 — 3 open PRs already",
+    "goose #7969 — has open PR #8048",
+    "open-webui #23179/#23181 — race condition bugs, complex UI state, low confidence",
+    "openclaw #55642 — feature request (bedrock-invoke API), not a simple fix",
+    "openclaw #56560 — insufficient repro info, model-specific",
+    "vllm good-first-issues — all Transformers v5 migration, deep model knowledge needed",
+    "sst/opencode #19548 — core prompt assembly bug, complex, new today"
   ],
-  "issues_scanned": {
-    "openclaw/openclaw": "10 bugs checked, all had competing PRs",
-    "openai/codex": "10 bugs checked, all complex (sandbox/extension/Windows)",
-    "block/goose": "15 issues checked, #8050 selected (score 9)",
-    "meta-llama/llama-stack": "0 open bugs",
-    "microsoft/autogen": "0 open bugs"
-  },
   "blockers": [
-    "No Supabase creds — cannot sync os_submissions/os_activity_log"
+    "meta-llama/llama-stack #5343 blocked on Meta CLA signing",
+    "openclaw #53916 CI blocked by pre-existing main-branch failures",
+    "openclaw #48455 waiting for maintainer APPROVE (12 days)",
+    "No Supabase creds — cannot sync os_submissions/os_activity_log/os_agents"
   ],
-  "notes": "block/goose #7888 merged! Opened #8121 for Bedrock null input fix (clean 1-file change). openclaw #48455 waiting 9 days — will gentle ping next round if still no review. openai/codex, llama-stack, autogen have quota but no suitable opportunities this round."
+  "notes": "Quiet round. All 10 repos scanned. No opportunity met score>8 threshold — viable issues are either taken or too complex. 3 in-flight PRs all in waiting states. Key action needed: CLA signing for llama-stack."
 }
