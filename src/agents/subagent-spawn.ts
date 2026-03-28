@@ -300,6 +300,7 @@ async function waitForSpawnedSubagentCompletion(params: {
       reply,
     };
   } catch (err) {
+    clearSuppressAutoAnnounce(params.runId);
     return {
       status: "error",
       waitTimeoutMs: Math.max(1, Math.floor(params.waitTimeoutMs)),
