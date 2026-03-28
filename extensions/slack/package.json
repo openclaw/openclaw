@@ -6,7 +6,7 @@
   "type": "module",
   "dependencies": {
     "@slack/bolt": "^4.6.0",
-    "@slack/web-api": "^7.15.0"
+    "@slack/web-api": "^7.13.0"
   },
   "openclaw": {
     "extensions": [

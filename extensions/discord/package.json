@@ -4,10 +4,10 @@
   "description": "OpenClaw Discord channel plugin",
   "type": "module",
   "dependencies": {
-    "@buape/carbon": "0.0.0-beta-20260327000044",
-    "@discordjs/voice": "^0.19.2",
-    "discord-api-types": "^0.38.42",
-    "https-proxy-agent": "^8.0.0",
+    "@buape/carbon": "0.0.0-beta-20260121171511",
+    "@discordjs/voice": "^0.19.0",
+    "discord-api-types": "^0.38.37",
+    "https-proxy-agent": "^7.0.6",
     "opusscript": "^0.1.1"
   },
   "devDependencies": {

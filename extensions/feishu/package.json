@@ -4,9 +4,9 @@
   "description": "OpenClaw Feishu/Lark channel plugin (community maintained by @m1heng)",
   "type": "module",
   "dependencies": {
-    "@larksuiteoapi/node-sdk": "^1.60.0",
-    "@sinclair/typebox": "0.34.48",
-    "https-proxy-agent": "^8.0.0"
+    "@larksuiteoapi/node-sdk": "1.56.1",
+    "@sinclair/typebox": "0.34.47",
+    "https-proxy-agent": "^7.0.6"
   },
   "devDependencies": {
     "openclaw": "workspace:*"

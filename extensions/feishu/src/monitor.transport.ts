@@ -13,6 +13,7 @@ import { createFeishuWSClient } from "./client.js";
 import {
   botNames,
   botOpenIds,
+  closeWsClient,
   FEISHU_WEBHOOK_BODY_TIMEOUT_MS,
   FEISHU_WEBHOOK_MAX_BODY_BYTES,
   feishuWebhookRateLimiter,
@@ -114,7 +115,7 @@ export async function monitorWebSocket({
       cleanedUp = true;
       abortSignal?.removeEventListener("abort", handleAbort);
       try {
-        wsClient.close();
+        closeWsClient(wsClient);
       } catch (err) {
         error(`feishu[${accountId}]: error closing WebSocket client: ${String(err)}`);
       } finally {

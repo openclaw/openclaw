@@ -104,10 +104,18 @@ const feishuWebhookAnomalyTracker = createWebhookAnomalyTracker({
   logEvery: feishuWebhookAnomalyDefaults.logEvery,
 });
 
-function closeWsClient(client: Lark.WSClient | undefined): void {
+type FeishuWsClientWithOptionalClose = Lark.WSClient & {
+  close?: () => void;
+};
+
+export function closeWsClient(client: Lark.WSClient | undefined): void {
   if (!client) return;
+  const maybeClosable = client as FeishuWsClientWithOptionalClose;
+  if (typeof maybeClosable.close !== "function") {
+    return;
+  }
   try {
-    client.close();
+    maybeClosable.close();
   } catch {
     /* Best-effort cleanup */
   }
