@@ -79,6 +79,10 @@ type RawTelegramButton = {
   text?: unknown;
 };
 
+function resolveTelegramForumTopicIconColor(value: number | undefined) {
+  return typeof value === "number" ? value : undefined;
+}
+
 function resolveTelegramPollVisibility(params: {
   pollAnonymous?: boolean;
   pollPublic?: boolean;
@@ -581,7 +585,9 @@ export async function handleTelegramAction(
     }
     const chatId = readTelegramChatId(params);
     const name = readStringParam(params, "name", { required: true });
-    const iconColor = readNumberParam(params, "iconColor", { integer: true });
+    const iconColor = resolveTelegramForumTopicIconColor(
+      readNumberParam(params, "iconColor", { integer: true }) ?? undefined,
+    );
     const iconCustomEmojiId = readStringParam(params, "iconCustomEmojiId");
     if (
       typeof iconColor === "number" &&
