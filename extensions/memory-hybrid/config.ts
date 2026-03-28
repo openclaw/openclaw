@@ -38,7 +38,7 @@ export type MemoryCategory = (typeof MEMORY_CATEGORIES)[number];
 // Defaults
 // ============================================================================
 
-const DEFAULT_MODEL = "text-embedding-004";
+const DEFAULT_MODEL = "gemini-embedding-002";
 export const DEFAULT_CAPTURE_MAX_CHARS = 500;
 
 const DEFAULT_DB_PATH = join(homedir(), ".openclaw", "memory", "lancedb");
@@ -202,7 +202,7 @@ export const memoryConfigSchema = {
     },
     chatModel: {
       label: "Chat Model",
-      placeholder: "auto (gemma-3-27b-it / gpt-4o-mini)",
+      placeholder: "auto (gemma-3-12b-it / gpt-4o-mini)",
       help: "LLM for graph extraction and smart capture. Auto-detected from embedding provider if not set.",
       advanced: true,
     },
