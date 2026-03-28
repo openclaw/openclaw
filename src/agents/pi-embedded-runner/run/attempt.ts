@@ -2899,8 +2899,10 @@ export async function runEmbeddedAttempt(
               if (currentCompactionMode === "warn") {
                 const warnMsg =
                   "🧹 Context limit check failed (estimation error), but mode is 'warn'. Please use /compact to be safe.";
-                assistantTexts = [warnMsg];
-                skipPromptForCompactionGuard = true;
+                if (params.onBlockReply) {
+                  void params.onBlockReply({ text: warnMsg });
+                }
+                assistantTexts.push(warnMsg);
               }
             }
 
@@ -2924,11 +2926,14 @@ export async function runEmbeddedAttempt(
                   log.warn(
                     `[compaction-guard] context near limit (mode=warn): tokens=${totalTokens} limit=${contextWindow} threshold=${threshold} reserve=${reserveTokens}`,
                   );
-                  assistantTexts = [warnMsg];
-                  skipPromptForCompactionGuard = true;
+                  if (params.onBlockReply) {
+                    void params.onBlockReply({ text: warnMsg });
+                  }
+                  assistantTexts.push(warnMsg);
                 } else if (currentCompactionMode === "error") {
                   log.error(
-                    `[compaction-guard] context exceeded (mode=error): tokens=${totalTokens} limit=${contextWindow} threshold=${threshold} reserve=${reserveTokens}`,
+                    `` +
+                      `[compaction-guard] context exceeded (mode=error): tokens=${totalTokens} limit=${contextWindow} threshold=${threshold} reserve=${reserveTokens}`,
                   );
                   throw new Error("Context exceeded, cannot proceed");
                 }
