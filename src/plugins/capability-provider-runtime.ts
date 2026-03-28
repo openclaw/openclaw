@@ -67,6 +67,11 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
   key: K;
   cfg?: OpenClawConfig;
 }): CapabilityProviderForKey<K>[] {
+  const activeRegistry = resolveRuntimePluginRegistry();
+  const activeProviders = activeRegistry?.[params.key] ?? [];
+  if (activeProviders.length > 0) {
+    return activeProviders.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
+  }
   const loadOptions =
     params.cfg === undefined
       ? undefined
