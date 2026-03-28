@@ -28,6 +28,7 @@ from src.research._scraper import (
     enrich_with_full_content,
     apply_token_budget,
 )
+from src.utils.async_utils import taskgroup_gather
 
 logger = structlog.get_logger("DeepResearch")
 
@@ -161,7 +162,7 @@ class DeepResearchPipeline:
                 "DeepResearch", self.model,
                 f"🔎 Параллельный поиск по {len(all_queries)} запросам..."
             )
-        search_results = await asyncio.gather(
+        search_results = await taskgroup_gather(
             *[
                 search_sub_query(
                     self.mcp_client, sq,
@@ -275,7 +276,7 @@ class DeepResearchPipeline:
                 break
 
             gap_queries = [g.strip() for g in gaps.split("\n") if g.strip()][:max_gap_queries]
-            gap_results = await asyncio.gather(
+            gap_results = await taskgroup_gather(
                 *[
                     search_sub_query(
                         self.mcp_client, gq,

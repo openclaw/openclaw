@@ -1,6 +1,6 @@
 import sys
 print(f"Python {sys.version}")
-from src.openrouter_client import call_openrouter, test_openrouter
+from src.openrouter_client import call_openrouter, check_openrouter
 from src.agent_personas import AgentPersonaManager
 from src.pipeline_executor import PipelineExecutor
 from src.bot_commands import cmd_agents, cmd_agent, cmd_openrouter_test

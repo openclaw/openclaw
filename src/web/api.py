@@ -1,11 +1,16 @@
 """Mission Control — FastAPI Observability Dashboard for OpenClaw Bot.
 
 Provides real-time monitoring endpoints:
-  GET  /status         — Bot & pipeline health overview
-  GET  /logs/live      — WebSocket stream of structured logs
-  GET  /memory/stats   — Memory system statistics (SuperMemory, RAG, context bridge)
-  GET  /sandbox/active — Active sandbox sessions and skill library stats
-  GET  /pipeline/tree  — Current pipeline Thought→Action→Observation tree
+  GET  /status           — Bot & pipeline health overview
+  GET  /logs/live        — WebSocket stream of structured logs
+  GET  /memory/stats     — Memory system statistics (SuperMemory, RAG, context bridge)
+  GET  /sandbox/active   — Active sandbox sessions and skill library stats
+  GET  /pipeline/tree    — Current pipeline Thought→Action→Observation tree
+  GET  /dashboard        — Dashboard v2.0 SPA (LATS tree, Graph-RAG, Finance charts)
+  GET  /api/lats/tree    — LATS tree data (D3.js format)
+  GET  /api/graph/data   — Dependency graph (Cytoscape.js format)
+  GET  /api/graph/stats  — Graph summary statistics
+  GET  /api/finance/summary — Token costs by model + monthly forecast
 
 All data flows through structlog and is pushed to WebSocket clients in real-time.
 """
@@ -109,6 +114,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Dashboard v2.0 visual panels
+from src.web.dashboard_views import router as dashboard_router
+app.include_router(dashboard_router)
 
 
 @app.get("/status")

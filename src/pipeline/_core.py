@@ -23,6 +23,7 @@ from src.auto_rollback import AutoRollback
 from src.mcp_client import OpenClawMCPClient
 from src.task_queue import ModelTaskQueue
 from src.ai.inference.metrics import InferenceMetricsCollector
+from src.utils.async_utils import taskgroup_gather
 from src.ai.inference.budget import AdaptiveTokenBudget
 from src.ai.inference.router import SmartModelRouter
 from src.ai.inference._shared import ModelProfile, RoutingTask
@@ -280,7 +281,7 @@ class PipelineExecutor:
                         status_callback=status_callback, task_type=task_type,
                     ))
                     step_index += 1
-                parallel_results = await asyncio.gather(*tasks, return_exceptions=True)
+                parallel_results = await taskgroup_gather(*tasks, return_exceptions=True)
                 for role_name, res in zip(group, parallel_results):
                     if isinstance(res, Exception):
                         logger.error(f"Parallel step {role_name} failed: {res}")

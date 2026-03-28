@@ -4,7 +4,36 @@ Docs: https://docs.openclaw.ai
 
 ## 2026.3.2 (Unreleased)
 
+### [v13.0-STABLE] Zero-Bug Mission Control (Phase 14–15)
+
+#### ЭТАП 1: Операция Чистое Небо — Zero-Bug Policy
+
+- **7 test failures fixed** → 361/361 ALL GREEN:
+  - Sandbox regex: aligned test expected pattern with actual deny-list (`\bsubprocess\b`)
+  - Parsers CORE_MODULES: removed stale `src.parsers.{github,habr,reddit}`, replaced with `src.parsers.universal`
+  - Vision model test: updated assertion to match current model config (nemotron-nano)
+  - ReActStep: added `timestamp` field (auto-filled via `time.time`)
+  - Speculative decoding: updated test assertions to match new vLLM `--speculative-config` JSON API
+  - test_api.py: renamed to `_manual_api_check.py` (module-level asyncio.run + hardcoded key)
+  - test_openrouter fixture error: renamed `test_openrouter()` → `check_openrouter()` across codebase
+- **Pre-push quality gate**: `scripts/pre_push_check.py` + `git-hooks/pre-push` — blocks push on test failure
+
+#### ЭТАП 2: Dashboard v2.0 — Visual Mission Control
+
+- **LATS Live Tree**: D3.js-compatible hierarchical tree visualization with score badges (0.0–1.0), color-coded terminal nodes
+- **Graph-RAG Explorer**: Cytoscape.js force-directed dependency graph with hover tooltips (language, imports, symbols)
+- **Financial Audit Charts**: Chart.js doughnut (tokens by model) + bar (cost breakdown), monthly forecast, Prometheus-ready
+- **New endpoints**: `/dashboard` (SPA), `/api/lats/tree`, `/api/graph/data`, `/api/graph/stats`, `/api/finance/summary`
+
+#### ЭТАП 3: Python 3.14 Optimization
+
+- **`taskgroup_gather`**: Structured concurrency wrapper (asyncio.TaskGroup) replacing `asyncio.gather` in 6 hot-path modules:
+  - `src/research/_core.py`, `src/research/_searcher.py`, `src/research/_scraper.py`
+  - `src/pipeline/_core.py`, `src/parsers/universal.py`, `src/code_validator.py`
+- Automatic cleanup on first failure via TaskGroup semantics, with `return_exceptions=True` backward compat
+
 ### [2026.03.15] vLLM Migration & Model Upgrade
+
 - **Ollama → vLLM migration**: Replaced local Ollama inference with remote vLLM HTTP API (`/v1/chat/completions`). Pipeline, MCP client, and Brigade API now use OpenAI-compatible protocol served by vLLM in WSL2.
 - **Model upgrade (AWQ quantization)**: Upgraded all models to 14B-class AWQ variants:
   - General/Planning roles → `Qwen/Qwen2.5-14B-Instruct-AWQ`
@@ -19,6 +48,7 @@ Docs: https://docs.openclaw.ai
 - **Bug fixes**: Fixed pipe buffer deadlock in `vllm_manager.py` (subprocess stdout); fixed `ContentType` error on health check responses.
 
 ### [2026.03.10] Extensive Restructuring & Factory Pattern
+
 - **Path Separation**: Formalized isolation between OpenClaw Core (`D:\openclaw_bot\openclaw_bot`) and external Bot Products (`D:\Dmarket_bot`).
 - **Hardware Update**: Standardized hardware baseline to NVIDIA RTX 5060 Ti (16GB VRAM) with sequential model loading policy.
 - **Directory Cleanup**: Relocated scripts to `/scripts`, packages to `/packages`, and refined `.memory-bank` protocols.

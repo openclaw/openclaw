@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Pre-push hook: runs the quality gate before allowing push.
+# Install: cp git-hooks/pre-push .git/hooks/pre-push && chmod +x .git/hooks/pre-push
+
+set -euo pipefail
+
+ROOT_DIR="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+SCRIPT="$ROOT_DIR/scripts/pre_push_check.py"
+
+if [[ -f "$ROOT_DIR/.venv/bin/python" ]]; then
+    PYTHON="$ROOT_DIR/.venv/bin/python"
+elif [[ -f "$ROOT_DIR/.venv/Scripts/python.exe" ]]; then
+    PYTHON="$ROOT_DIR/.venv/Scripts/python.exe"
+else
+    PYTHON="python3"
+fi
+
+exec "$PYTHON" "$SCRIPT"

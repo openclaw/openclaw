@@ -546,9 +546,7 @@ class TestModuleImportCoverage(unittest.TestCase):
         # MAS
         "src.mas.orchestrator",
         # Parsers
-        "src.parsers.github",
-        "src.parsers.habr",
-        "src.parsers.reddit",
+        "src.parsers.universal",
         # Utils
         "src.utils.hardware",
     ]

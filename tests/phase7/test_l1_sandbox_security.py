@@ -40,7 +40,7 @@ class TestValidateCode:
         "malicious_code,expected_pattern",
         [
             ('import os; os.system("rm -rf /")', r"os\.system"),
-            ('subprocess.call("ls", shell=True)', r"subprocess\.call"),
+            ('subprocess.call("ls", shell=True)', r"subprocess"),
             ('eval("2+2")', r"eval"),
             ('exec("print(1)")', r"exec"),
             ('__import__("os")', r"__import__"),

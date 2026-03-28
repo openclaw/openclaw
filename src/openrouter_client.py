@@ -367,7 +367,7 @@ async def _execute_tool_calls(tool_calls: list, mcp_client: Any) -> list:
     return results
 
 
-async def test_openrouter(api_key: str, model: str = "arcee-ai/trinity-mini:free") -> Dict[str, Any]:
+async def check_openrouter(api_key: str, model: str = "arcee-ai/trinity-mini:free") -> Dict[str, Any]:
     """Quick connectivity test — sends a ping to OpenRouter and returns status."""
     headers = {
         "Authorization": f"Bearer {api_key.strip()}",

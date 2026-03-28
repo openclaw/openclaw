@@ -11,6 +11,8 @@ from typing import TYPE_CHECKING, List
 
 import structlog
 
+from src.utils.async_utils import taskgroup_gather
+
 if TYPE_CHECKING:
     from src.research._core import EvidencePiece, ResearchState
 
@@ -101,7 +103,7 @@ async def enrich_with_full_content(
         return evidence
 
     fetch_tasks = [fetch_page_content(mcp_client, u, firecrawl_api_key) for u in urls_to_fetch]
-    results = await asyncio.gather(*fetch_tasks, return_exceptions=True)
+    results = await taskgroup_gather(*fetch_tasks, return_exceptions=True)
 
     enriched = list(evidence)
     fetched_count = 0

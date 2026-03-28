@@ -395,7 +395,7 @@ class CodeValidator:
                 if "cargo-audit" in self.enabled_tools:
                     tasks.append(run_cargo_audit(self.workspace_dir))
 
-            results = await asyncio.gather(*tasks, return_exceptions=True)
+            results = await taskgroup_gather(*tasks, return_exceptions=True)
 
             for res in results:
                 if isinstance(res, Exception):
@@ -423,7 +423,7 @@ class CodeValidator:
             return []
 
         tasks = [self.validate_code_block(lang, code) for lang, code in blocks]
-        reports = await asyncio.gather(*tasks, return_exceptions=True)
+        reports = await taskgroup_gather(*tasks, return_exceptions=True)
 
         valid_reports = []
         for r in reports:

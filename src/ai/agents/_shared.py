@@ -18,6 +18,7 @@ class ReActStep:
     action: str
     action_input: str
     observation: str
+    timestamp: float = field(default_factory=time.time)
 
 
 @dataclass

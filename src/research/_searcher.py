@@ -8,6 +8,8 @@ from typing import Any, Dict, List
 
 import structlog
 
+from src.utils.async_utils import taskgroup_gather
+
 logger = structlog.get_logger("DeepResearch")
 
 
@@ -28,7 +30,7 @@ async def search_sub_query(
     if parsers_enabled:
         tasks.append(multi_source_search(query))
 
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+    results = await taskgroup_gather(*tasks, return_exceptions=True)
     web = results[0] if not isinstance(results[0], Exception) else ""
     mem = results[1] if not isinstance(results[1], Exception) else ""
     academic = ""
@@ -104,46 +106,26 @@ def _academic_search_sync(query: str) -> str:
 
 
 async def multi_source_search(query: str) -> str:
-    """Search Habr, Reddit, and GitHub for relevant content.
+    """Search all sources via UniversalParser concurrently.
 
-    All three sources are fetched concurrently via asyncio.gather
-    for ~3x wall-clock speedup over sequential execution.
+    Returns formatted text lines for pipeline context injection.
     """
+    try:
+        from src.parsers.universal import UniversalParser
+        parser = UniversalParser()
+        by_source = await parser.search(
+            query, limit_per_source=5, sources=["habr", "github", "reddit"]
+        )
+    except Exception as e:
+        logger.debug("UniversalParser unavailable", error=str(e))
+        return ""
 
-    async def _habr() -> List[str]:
-        try:
-            from src.parsers.habr import fetch_habr_articles
-            articles = await fetch_habr_articles(query=query, limit=3)
-            return [f"[Habr] {a.title}: {a.summary[:200]}" for a in articles[:3]]
-        except Exception as e:
-            logger.debug("Habr parser skipped", error=str(e))
-            return []
+    lines: List[str] = []
+    for source_name, items in by_source.items():
+        for item in items[:3]:
+            tag = source_name.capitalize()
+            detail = item.summary[:200] if item.summary else item.title
+            score_str = f" (↑{int(item.score)})" if item.score else ""
+            lines.append(f"[{tag}] {item.title}{score_str}: {detail}")
 
-    async def _reddit() -> List[str]:
-        try:
-            from src.parsers.reddit import fetch_reddit_posts
-            posts = await fetch_reddit_posts(
-                subreddit="MachineLearning", query=query, limit=3
-            )
-            return [
-                f"[Reddit r/{p.subreddit}] {p.title} (↑{p.score}): {p.selftext[:200] if p.selftext else p.title}"
-                for p in posts[:3]
-            ]
-        except Exception as e:
-            logger.debug("Reddit parser skipped", error=str(e))
-            return []
-
-    async def _github() -> List[str]:
-        try:
-            from src.parsers.github import fetch_github_trending
-            repos = await fetch_github_trending(query=f"{query} in:name,description", limit=3)
-            return [f"[GitHub] {r.full_name} ★{r.stars}: {r.description[:200]}" for r in repos[:3]]
-        except Exception as e:
-            logger.debug("GitHub parser skipped", error=str(e))
-            return []
-
-    habr_res, reddit_res, github_res = await asyncio.gather(
-        _habr(), _reddit(), _github(),
-    )
-    results = habr_res + reddit_res + github_res
-    return "\n".join(results) if results else ""
+    return "\n".join(lines) if lines else ""

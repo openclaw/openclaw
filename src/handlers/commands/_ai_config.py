@@ -93,9 +93,9 @@ async def cmd_openrouter_test(gateway, message: Message):
 
     status_msg = await message.reply("🔄 Тестирую OpenRouter...")
 
-    from src.openrouter_client import test_openrouter
+    from src.openrouter_client import check_openrouter
 
-    result = await test_openrouter(or_cfg.get("api_key", ""))
+    result = await check_openrouter(or_cfg.get("api_key", ""))
 
     if result["status"] == "ok":
         await status_msg.edit_text(
