@@ -166,19 +166,17 @@ describe("resolveHeartbeatIntervalMs", () => {
 });
 
 describe("resolveHeartbeatPrompt", () => {
-  it("uses default or trimmed override prompts", () => {
-    const cases = [
-      { cfg: {} as OpenClawConfig, expected: HEARTBEAT_PROMPT },
-      {
-        cfg: {
-          agents: { defaults: { heartbeat: { prompt: "  ping  " } } },
-        } as OpenClawConfig,
-        expected: "ping",
-      },
-    ] as const;
-    for (const { cfg, expected } of cases) {
-      expect(resolveHeartbeatPrompt(cfg)).toBe(expected);
-    }
+  it.each([
+    { name: "default prompt", cfg: {} as OpenClawConfig, expected: HEARTBEAT_PROMPT },
+    {
+      name: "trimmed override prompt",
+      cfg: {
+        agents: { defaults: { heartbeat: { prompt: "  ping  " } } },
+      } as OpenClawConfig,
+      expected: "ping",
+    },
+  ])("uses $name", ({ cfg, expected }) => {
+    expect(resolveHeartbeatPrompt(cfg)).toBe(expected);
   });
 });
 
@@ -351,12 +349,12 @@ describe("resolveHeartbeatDeliveryTarget", () => {
     }
   });
 
-  it("parses optional telegram :topic: threadId suffix", () => {
-    const cases = [
-      { to: "-100111:topic:42", expectedTo: "-100111", expectedThreadId: 42 },
-      { to: "-100111", expectedTo: "-100111", expectedThreadId: undefined },
-    ] as const;
-    for (const { to, expectedTo, expectedThreadId } of cases) {
+  it.each([
+    { name: "topic suffix", to: "-100111:topic:42", expectedTo: "-100111", expectedThreadId: 42 },
+    { name: "plain chat id", to: "-100111", expectedTo: "-100111", expectedThreadId: undefined },
+  ])(
+    "parses optional telegram :topic: threadId suffix: $name",
+    ({ to, expectedTo, expectedThreadId }) => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
@@ -368,34 +366,35 @@ describe("resolveHeartbeatDeliveryTarget", () => {
       expect(result.channel).toBe("telegram");
       expect(result.to).toBe(expectedTo);
       expect(result.threadId).toBe(expectedThreadId);
-    }
-  });
+    },
+  );
 
-  it("handles explicit heartbeat accountId allow/deny", () => {
-    const cases = [
-      {
+  it.each([
+    {
+      name: "known account",
+      accountId: "work",
+      expected: {
+        channel: "telegram",
+        to: "-100123",
         accountId: "work",
-        expected: {
-          channel: "telegram",
-          to: "-100123",
-          accountId: "work",
-          lastChannel: undefined,
-          lastAccountId: undefined,
-        },
+        lastChannel: undefined,
+        lastAccountId: undefined,
       },
-      {
+    },
+    {
+      name: "missing account",
+      accountId: "missing",
+      expected: {
+        channel: "none",
+        reason: "unknown-account",
         accountId: "missing",
-        expected: {
-          channel: "none",
-          reason: "unknown-account",
-          accountId: "missing",
-          lastChannel: undefined,
-          lastAccountId: undefined,
-        },
+        lastChannel: undefined,
+        lastAccountId: undefined,
       },
-    ] as const;
-
-    for (const { accountId, expected } of cases) {
+    },
+  ] as const)(
+    "handles explicit heartbeat accountId allow/deny: $name",
+    ({ accountId, expected }) => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
@@ -405,8 +404,8 @@ describe("resolveHeartbeatDeliveryTarget", () => {
         channels: { telegram: { accounts: { work: { botToken: "token" } } } },
       };
       expect(resolveHeartbeatDeliveryTarget({ cfg, entry: baseEntry })).toEqual(expected);
-    }
-  });
+    },
+  );
 
   it("prefers per-agent heartbeat overrides when provided", () => {
     const cfg: OpenClawConfig = {
@@ -738,45 +737,36 @@ describe("runHeartbeatOnce", () => {
     }
   });
 
-  it("resolves configured and forced session key overrides", async () => {
-    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
-    try {
-      const cases = typedCases<{
-        name: string;
-        caseDir: string;
-        peerKind: "group" | "direct";
-        peerId: string;
-        message: string;
-        applyOverride: (params: { cfg: OpenClawConfig; sessionKey: string }) => void;
-        runOptions: (params: { sessionKey: string }) => { sessionKey?: string };
-      }>([
-        {
-          name: "heartbeat.session",
-          caseDir: "hb-explicit-session",
-          peerKind: "group" as const,
-          peerId: "120363401234567890@g.us",
-          message: "Group alert",
-          applyOverride: ({ cfg, sessionKey }: { cfg: OpenClawConfig; sessionKey: string }) => {
-            if (cfg.agents?.defaults?.heartbeat) {
-              cfg.agents.defaults.heartbeat.session = sessionKey;
-            }
-          },
-          runOptions: ({ sessionKey: _sessionKey }: { sessionKey: string }) => ({
-            sessionKey: undefined as string | undefined,
-          }),
-        },
-        {
-          name: "runHeartbeatOnce sessionKey arg",
-          caseDir: "hb-forced-session-override",
-          peerKind: "group" as const,
-          peerId: "120363401234567891@g.us",
-          message: "Forced alert",
-          applyOverride: () => {},
-          runOptions: ({ sessionKey }: { sessionKey: string }) => ({ sessionKey }),
-        },
-      ]);
-
-      for (const { name, caseDir, peerKind, peerId, message, applyOverride, runOptions } of cases) {
+  it.each([
+    {
+      name: "heartbeat.session",
+      caseDir: "hb-explicit-session",
+      peerKind: "group" as const,
+      peerId: "120363401234567890@g.us",
+      message: "Group alert",
+      applyOverride: ({ cfg, sessionKey }: { cfg: OpenClawConfig; sessionKey: string }) => {
+        if (cfg.agents?.defaults?.heartbeat) {
+          cfg.agents.defaults.heartbeat.session = sessionKey;
+        }
+      },
+      runOptions: ({ sessionKey: _sessionKey }: { sessionKey: string }) => ({
+        sessionKey: undefined as string | undefined,
+      }),
+    },
+    {
+      name: "runHeartbeatOnce sessionKey arg",
+      caseDir: "hb-forced-session-override",
+      peerKind: "group" as const,
+      peerId: "120363401234567891@g.us",
+      message: "Forced alert",
+      applyOverride: () => {},
+      runOptions: ({ sessionKey }: { sessionKey: string }) => ({ sessionKey }),
+    },
+  ])(
+    "resolves configured and forced session key overrides: $name",
+    async ({ name, caseDir, peerKind, peerId, message, applyOverride, runOptions }) => {
+      const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+      try {
         const tmpDir = await createCaseDir(caseDir);
         const storePath = path.join(tmpDir, "sessions.json");
         const cfg: OpenClawConfig = {
@@ -850,11 +840,11 @@ describe("runHeartbeatOnce", () => {
           expect.objectContaining({ isHeartbeat: true, suppressToolErrorWarnings: false }),
           cfg,
         );
+      } finally {
+        replySpy.mockRestore();
       }
-    } finally {
-      replySpy.mockRestore();
-    }
-  });
+    },
+  );
 
   it("suppresses duplicate heartbeat payloads within 24h", async () => {
     const tmpDir = await createCaseDir("hb-dup-suppress");
@@ -909,30 +899,31 @@ describe("runHeartbeatOnce", () => {
     }
   });
 
-  it("handles reasoning payload delivery variants", async () => {
-    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
-    try {
-      const cases = typedCases<{
-        name: string;
-        caseDir: string;
-        replies: Array<{ text: string }>;
-        expectedTexts: string[];
-      }>([
-        {
-          name: "reasoning + final payload",
-          caseDir: "hb-reasoning",
-          replies: [{ text: "Reasoning:\n_Because it helps_" }, { text: "Final alert" }],
-          expectedTexts: ["Reasoning:\n_Because it helps_", "Final alert"],
-        },
-        {
-          name: "reasoning + HEARTBEAT_OK",
-          caseDir: "hb-reasoning-heartbeat-ok",
-          replies: [{ text: "Reasoning:\n_Because it helps_" }, { text: "HEARTBEAT_OK" }],
-          expectedTexts: ["Reasoning:\n_Because it helps_"],
-        },
-      ]);
-
-      for (const { name, caseDir, replies, expectedTexts } of cases) {
+  it.each(
+    typedCases<{
+      name: string;
+      caseDir: string;
+      replies: Array<{ text: string }>;
+      expectedTexts: string[];
+    }>([
+      {
+        name: "reasoning + final payload",
+        caseDir: "hb-reasoning",
+        replies: [{ text: "Reasoning:\n_Because it helps_" }, { text: "Final alert" }],
+        expectedTexts: ["Reasoning:\n_Because it helps_", "Final alert"],
+      },
+      {
+        name: "reasoning + HEARTBEAT_OK",
+        caseDir: "hb-reasoning-heartbeat-ok",
+        replies: [{ text: "Reasoning:\n_Because it helps_" }, { text: "HEARTBEAT_OK" }],
+        expectedTexts: ["Reasoning:\n_Because it helps_"],
+      },
+    ]),
+  )(
+    "handles reasoning payload delivery variants: $name",
+    async ({ name, caseDir, replies, expectedTexts }) => {
+      const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+      try {
         const tmpDir = await createCaseDir(caseDir);
         const storePath = path.join(tmpDir, "sessions.json");
         const cfg: OpenClawConfig = {
@@ -990,11 +981,11 @@ describe("runHeartbeatOnce", () => {
             expect.any(Object),
           );
         }
+      } finally {
+        replySpy.mockRestore();
       }
-    } finally {
-      replySpy.mockRestore();
-    }
-  });
+    },
+  );
 
   it("loads the default agent session from templated stores", async () => {
     const tmpDir = await createCaseDir("openclaw-hb");
