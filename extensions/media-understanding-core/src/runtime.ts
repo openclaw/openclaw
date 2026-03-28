@@ -52,11 +52,6 @@ export async function runMediaUnderstandingFile(
   }
   const config = params.cfg.tools?.media?.[params.capability];
   if (config?.enabled === false) {
-    return { text: undefined };
-  }
-
-  const config = params.cfg.tools?.media?.[params.capability];
-  if (config?.enabled === false) {
     // Avoid loading plugin-backed providers when the capability is disabled.
     return {
       text: undefined,
