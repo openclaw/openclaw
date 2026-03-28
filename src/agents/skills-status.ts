@@ -186,7 +186,7 @@ function buildSkillStatus(
       (skillConfig?.apiKey && entry.metadata?.primaryEnv === envName),
     );
   const isConfigSatisfied = (pathStr: string) => isConfigPathTruthy(config, pathStr);
-  const skillSource = entry.skill.source?.trim() || "unknown";
+  const skillSource = entry.skill.sourceInfo?.source?.trim() || "unknown";
   const bundled =
     skillSource === "openclaw-bundled" ||
     (skillSource === "unknown" && bundledNames?.has(entry.skill.name) === true);
