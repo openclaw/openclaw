@@ -14725,7 +14725,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     },
     "hooks.internal.enabled": {
       label: "Internal Hooks Enabled",
-      help: "Enables processing for internal hook handlers and configured entries in the internal hook runtime. Keep disabled unless internal hook handlers are intentionally configured.",
+      help: "Enables processing for internal hook handlers and configured entries in the internal hook runtime. Enabled by default when not explicitly set.",
       tags: ["advanced"],
     },
     "hooks.internal.handlers": {
