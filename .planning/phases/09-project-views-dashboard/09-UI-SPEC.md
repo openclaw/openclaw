@@ -531,7 +531,7 @@ Separator character: `>` (matching existing breadcrumb).
 ```css
 .projects-error {
   /* Reuse .callout.danger pattern */
-  padding: 14px 16px;
+  padding: 12px 16px;
   border-radius: var(--radius-md);
   border: 1px solid rgba(239, 68, 68, 0.25);
   background: linear-gradient(135deg, rgba(239, 68, 68, 0.08) 0%, rgba(239, 68, 68, 0.04) 100%);
