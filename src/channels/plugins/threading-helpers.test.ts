@@ -32,8 +32,8 @@ describe("createTopLevelChannelReplyToModeResolver", () => {
 });
 
 describe("createScopedAccountReplyToModeResolver", () => {
-  it("reads the scoped account reply mode", () => {
-    const resolver = createScopedAccountReplyToModeResolver({
+  function createScopedResolver() {
+    return createScopedAccountReplyToModeResolver({
       resolveAccount: (cfg, accountId) =>
         ((
           cfg.channels as {
@@ -44,7 +44,13 @@ describe("createScopedAccountReplyToModeResolver", () => {
         },
       resolveReplyToMode: (account) => account.replyToMode,
     });
+  }
 
+  it.each([
+    { accountId: "assistant", expected: "all" },
+    { accountId: "default", expected: "off" },
+  ] as const)("resolves scoped reply mode for $accountId", ({ accountId, expected }) => {
+    const resolver = createScopedResolver();
     const cfg = {
       channels: {
         demo: {
@@ -55,8 +61,7 @@ describe("createScopedAccountReplyToModeResolver", () => {
       },
     } as OpenClawConfig;
 
-    expect(resolver({ cfg, accountId: "assistant" })).toBe("all");
-    expect(resolver({ cfg, accountId: "default" })).toBe("off");
+    expect(resolver({ cfg, accountId })).toBe(expected);
   });
 
   it("passes chatType through", () => {

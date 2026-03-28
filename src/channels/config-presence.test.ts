@@ -16,9 +16,22 @@ function makeTempStateDir() {
   return dir;
 }
 
+function expectPotentialConfiguredChannelCase(params: {
+  cfg: unknown;
+  env: NodeJS.ProcessEnv;
+  expectedIds: string[];
+  expectedConfigured: boolean;
+}) {
+  expect(listPotentialConfiguredChannelIds(params.cfg, params.env)).toEqual(params.expectedIds);
+  expect(hasPotentialConfiguredChannels(params.cfg, params.env)).toBe(params.expectedConfigured);
+}
+
 afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
+  while (tempDirs.length > 0) {
+    const dir = tempDirs.pop();
+    if (dir) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   }
 });
 
@@ -35,7 +48,11 @@ describe("config presence", () => {
     const env = { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv;
     const cfg = { channels: { matrix: { enabled: false } } };
 
-    expect(listPotentialConfiguredChannelIds(cfg, env)).toEqual([]);
-    expect(hasPotentialConfiguredChannels(cfg, env)).toBe(false);
+    expectPotentialConfiguredChannelCase({
+      cfg,
+      env,
+      expectedIds: [],
+      expectedConfigured: false,
+    });
   });
 });
