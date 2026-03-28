@@ -277,6 +277,19 @@ describe("describeAccountSnapshot", () => {
 });
 
 describe("mergeAccountConfig", () => {
+  type MergeAccountConfigShape = {
+    enabled?: boolean;
+    defaultAccount?: string;
+    name?: string;
+    accounts?: Record<string, { name: string }>;
+    commands?: {
+      native?: boolean;
+      callbackPath?: string;
+    };
+  };
+
+  type MergeAccountInput = Parameters<typeof mergeAccountConfig<MergeAccountConfigShape>>[0];
+
   it.each([
     {
       name: "drops accounts from the base config before merging",
@@ -335,8 +348,12 @@ describe("mergeAccountConfig", () => {
         },
       },
     },
-  ] as const)("$name", ({ input, expected }) => {
-    expect(mergeAccountConfig(input)).toEqual(expected);
+  ] satisfies Array<{
+    name: string;
+    input: MergeAccountInput;
+    expected: MergeAccountConfigShape;
+  }>)("$name", ({ input, expected }) => {
+    expect(mergeAccountConfig<MergeAccountConfigShape>(input)).toEqual(expected);
   });
 });
 

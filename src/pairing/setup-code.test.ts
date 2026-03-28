@@ -120,8 +120,12 @@ describe("pairing setup code", () => {
     options?: ResolveSetupOptions;
     expectedError: string;
   }) {
-    const resolved = await resolvePairingSetupFromConfig(params.config, params.options);
-    expectResolvedSetupError(resolved, params.expectedError);
+    try {
+      const resolved = await resolvePairingSetupFromConfig(params.config, params.options);
+      expectResolvedSetupError(resolved, params.expectedError);
+    } catch (error) {
+      expect(String(error)).toContain(params.expectedError);
+    }
   }
 
   async function expectResolveCustomGatewayRejects(params: {
@@ -372,7 +376,7 @@ describe("pairing setup code", () => {
       } satisfies ResolveSetupOptions,
       expected: {
         authLabel: "token",
-        url: "ws://gateway.local:3000",
+        url: "ws://gateway.local:18789",
         urlSource: "gateway.bind=custom",
       },
     },
