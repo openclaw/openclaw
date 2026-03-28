@@ -263,6 +263,14 @@ export async function initSessionState(params: {
   let persistedCliSessionBindings: SessionEntry["cliSessionBindings"];
   let persistedClaudeCliSessionId: string | undefined;
   let persistedLabel: string | undefined;
+  let persistedSpawnedBy: SessionEntry["spawnedBy"];
+  let persistedSpawnedWorkspaceDir: SessionEntry["spawnedWorkspaceDir"];
+  let persistedParentSessionKey: SessionEntry["parentSessionKey"];
+  let persistedForkedFromParent: SessionEntry["forkedFromParent"];
+  let persistedSpawnDepth: SessionEntry["spawnDepth"];
+  let persistedSubagentRole: SessionEntry["subagentRole"];
+  let persistedSubagentControlScope: SessionEntry["subagentControlScope"];
+  let persistedDisplayName: SessionEntry["displayName"];
 
   const normalizedChatType = normalizeChatType(ctx.ChatType);
   const isGroup =
@@ -424,6 +432,14 @@ export async function initSessionState(params: {
       persistedCliSessionBindings = entry.cliSessionBindings;
       persistedClaudeCliSessionId = entry.claudeCliSessionId;
       persistedLabel = entry.label;
+      persistedSpawnedBy = entry.spawnedBy;
+      persistedSpawnedWorkspaceDir = entry.spawnedWorkspaceDir;
+      persistedParentSessionKey = entry.parentSessionKey;
+      persistedForkedFromParent = entry.forkedFromParent;
+      persistedSpawnDepth = entry.spawnDepth;
+      persistedSubagentRole = entry.subagentRole;
+      persistedSubagentControlScope = entry.subagentControlScope;
+      persistedDisplayName = entry.displayName;
     }
   }
 
@@ -483,12 +499,19 @@ export async function initSessionState(params: {
     cliSessionBindings: persistedCliSessionBindings ?? baseEntry?.cliSessionBindings,
     claudeCliSessionId: persistedClaudeCliSessionId ?? baseEntry?.claudeCliSessionId,
     label: persistedLabel ?? baseEntry?.label,
+    spawnedBy: persistedSpawnedBy ?? baseEntry?.spawnedBy,
+    spawnedWorkspaceDir: persistedSpawnedWorkspaceDir ?? baseEntry?.spawnedWorkspaceDir,
+    parentSessionKey: persistedParentSessionKey ?? baseEntry?.parentSessionKey,
+    forkedFromParent: persistedForkedFromParent ?? baseEntry?.forkedFromParent,
+    spawnDepth: persistedSpawnDepth ?? baseEntry?.spawnDepth,
+    subagentRole: persistedSubagentRole ?? baseEntry?.subagentRole,
+    subagentControlScope: persistedSubagentControlScope ?? baseEntry?.subagentControlScope,
     sendPolicy: baseEntry?.sendPolicy,
     queueMode: baseEntry?.queueMode,
     queueDebounceMs: baseEntry?.queueDebounceMs,
     queueCap: baseEntry?.queueCap,
     queueDrop: baseEntry?.queueDrop,
-    displayName: baseEntry?.displayName,
+    displayName: persistedDisplayName ?? baseEntry?.displayName,
     chatType: baseEntry?.chatType,
     channel: baseEntry?.channel,
     groupId: baseEntry?.groupId,
