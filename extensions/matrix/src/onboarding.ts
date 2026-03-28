@@ -9,10 +9,10 @@ import {
   resolveMatrixAccountConfig,
 } from "./matrix/accounts.js";
 import {
-  resolveMatrixEnvAuthReadiness,
   resolveValidatedMatrixHomeserverUrl,
   validateMatrixHomeserverUrl,
 } from "./matrix/client.js";
+import { resolveMatrixEnvAuthReadiness } from "./matrix/client/env-auth.js";
 import {
   resolveMatrixConfigFieldPath,
   resolveMatrixConfigPath,
@@ -34,7 +34,6 @@ import {
   type RuntimeEnv,
   type WizardPrompter,
 } from "./runtime-api.js";
-import { runMatrixSetupBootstrapAfterConfigWrite } from "./setup-bootstrap.js";
 import type { CoreConfig } from "./types.js";
 
 const channel = "matrix" as const;
@@ -644,6 +643,7 @@ export const matrixOnboardingAdapter: MatrixOnboardingAdapter = {
     });
   },
   afterConfigWritten: async ({ previousCfg, cfg, accountId, runtime }) => {
+    const { runMatrixSetupBootstrapAfterConfigWrite } = await import("./setup-bootstrap.js");
     await runMatrixSetupBootstrapAfterConfigWrite({
       previousCfg: previousCfg as CoreConfig,
       cfg: cfg as CoreConfig,

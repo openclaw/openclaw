@@ -5,7 +5,6 @@ import {
   type ChannelSetupAdapter,
 } from "openclaw/plugin-sdk/setup";
 import { updateMatrixAccountConfig } from "./matrix/config-update.js";
-import { runMatrixSetupBootstrapAfterConfigWrite } from "./setup-bootstrap.js";
 import { applyMatrixSetupAccountConfig, validateMatrixSetupInput } from "./setup-config.js";
 import type { CoreConfig } from "./types.js";
 
@@ -65,6 +64,7 @@ export const matrixSetupAdapter: ChannelSetupAdapter = {
       input,
     }),
   afterAccountConfigWritten: async ({ previousCfg, cfg, accountId, runtime }) => {
+    const { runMatrixSetupBootstrapAfterConfigWrite } = await import("./setup-bootstrap.js");
     await runMatrixSetupBootstrapAfterConfigWrite({
       previousCfg: previousCfg as CoreConfig,
       cfg: cfg as CoreConfig,
