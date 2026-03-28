@@ -718,4 +718,40 @@ describe("registerTelegramNativeCommands — session metadata", () => {
 
     expectUnauthorizedNewCommandBlocked(sendMessage);
   });
+
+  it("routes /reset in forum topic to topic session, not General session (issue #56315)", async () => {
+    const { handler } = registerAndResolveCommandHandler({
+      commandName: "reset",
+      cfg: {},
+      allowFrom: ["200"],
+      groupAllowFrom: ["200"],
+      useAccessGroups: true,
+    });
+    // Send /reset from topic thread_id=123 (not the General topic id=1)
+    await handler(createTelegramTopicCommandContext({ threadId: 123 }));
+
+    const dispatchCall = (
+      replyMocks.dispatchReplyWithBufferedBlockDispatcher.mock.calls as unknown as Array<
+        [
+          {
+            ctx?: {
+              CommandTargetSessionKey?: string;
+              From?: string;
+              MessageThreadId?: number;
+              IsForum?: boolean;
+            };
+          },
+        ]
+      >
+    )[0]?.[0];
+    // Should route to topic:123, not General (topic:1) or the bare group session
+    expect(dispatchCall?.ctx?.CommandTargetSessionKey).toBe(
+      "agent:main:telegram:group:-1001234567890:topic:123",
+    );
+    // The From field should include the forum topic so announce routing is correct
+    expect(dispatchCall?.ctx?.From).toBe("telegram:group:-1001234567890:topic:123");
+    // Thread ID and forum flag should be set correctly in the context payload
+    expect(dispatchCall?.ctx?.MessageThreadId).toBe(123);
+    expect(dispatchCall?.ctx?.IsForum).toBe(true);
+  });
 });
