@@ -281,7 +281,7 @@ export function registerCronAddCommand(cron: Command) {
                     }
                     const channel =
                       typeof opts.channel === "string" ? opts.channel.trim().toLowerCase() : "";
-                    if (threadId && channel && channel !== "telegram") {
+                    if (threadId && channel && channel !== "telegram" && channel !== "last") {
                       throw new Error("--thread-id is only supported for Telegram channels");
                     }
                     const to = threadId ? toRaw.replace(/:(?:topic:)?\d+$/, "") : toRaw;

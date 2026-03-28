@@ -299,12 +299,15 @@ export function registerCronEditCommand(cron: Command) {
                 }
                 const existingChannel =
                   (existing?.delivery as Record<string, string> | undefined)?.channel ?? "";
-                if (
-                  typeof opts.channel !== "string" &&
-                  existingChannel &&
-                  existingChannel.toLowerCase() !== "telegram"
-                ) {
-                  throw new Error("--thread-id is only supported for Telegram channels");
+                const existingMode =
+                  (existing?.delivery as Record<string, string> | undefined)?.mode ?? "";
+                if (typeof opts.channel !== "string") {
+                  if (existingMode === "webhook") {
+                    throw new Error("--thread-id is not supported for webhook delivery jobs");
+                  }
+                  if (existingChannel && existingChannel.toLowerCase() !== "telegram") {
+                    throw new Error("--thread-id is only supported for Telegram channels");
+                  }
                 }
                 if (!toRaw) {
                   toRaw = (existing?.delivery as Record<string, string> | undefined)?.to ?? "";
