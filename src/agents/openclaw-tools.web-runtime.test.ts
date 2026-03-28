@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import type { RuntimeWebFirecrawlMetadata } from "../secrets/runtime-web-tools.types.js";
+import type { RuntimeWebFetchFirecrawlMetadata } from "../secrets/runtime-web-tools.types.js";
 import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.types.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 
@@ -126,7 +126,7 @@ function requireWebSearchTool(config: OpenClawConfig, runtimeWebSearch?: Runtime
 
 function requireWebFetchTool(
   config: OpenClawConfig,
-  runtimeFirecrawl?: RuntimeWebFirecrawlMetadata,
+  runtimeFirecrawl?: RuntimeWebFetchFirecrawlMetadata,
 ) {
   const tool = createWebFetchTool({
     config,
