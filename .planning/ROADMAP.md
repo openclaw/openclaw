@@ -13,7 +13,7 @@
 - [ ] **Phase 4: Concurrency** - mkdir-based file locking for queue write safety
 - [ ] **Phase 5: Context Injection** - PROJECT.md cwd pickup, bootstrap hook, capability tags
 - [x] **Phase 6: Queue & Heartbeat** - Agent task claiming, checkpoint/resume, dependency resolution (completed 2026-03-27)
-- [ ] **Phase 7: Gateway Service** - ProjectService lifecycle, WebSocket RPC methods, event broadcasting
+- [x] **Phase 7: Gateway Service** - ProjectService lifecycle, WebSocket RPC methods, event broadcasting (completed 2026-03-28)
 - [ ] **Phase 8: CLI Commands** - create, list, status, reindex, validate commands
 - [ ] **Phase 9: Project Views & Dashboard** - Sidebar tab, project list, dashboard widgets, WebSocket live updates, sub-project nav
 - [ ] **Phase 10: Kanban Board & Agent Indicators** - Read-only kanban with live agent badges and session peek
@@ -291,7 +291,7 @@ Phase 1 (Types & Schemas)
 | 4. Concurrency                      | 0/2            | Planned     | -          |
 | 5. Context Injection                | 1/2            | In Progress |            |
 | 6. Queue & Heartbeat                | 3/3            | Complete    | 2026-03-27 |
-| 7. Gateway Service                  | 1/2 | In Progress|  |
+| 7. Gateway Service                  | 2/2            | Complete    | 2026-03-28 |
 | 8. CLI Commands                     | 0/?            | Not started | -          |
 | 9. Project Views & Dashboard        | 0/?            | Not started | -          |
 | 10. Kanban Board & Agent Indicators | 0/?            | Not started | -          |

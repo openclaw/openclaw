@@ -37,7 +37,7 @@ Agents and humans can seamlessly track, claim, and execute project work through 
 - [x] File-level .lock for concurrent queue write prevention
 - [ ] Kanban board state in task frontmatter (configurable columns with defaults)
 - [ ] Task files with checkpoint and log sections for interruption/resume
-- [ ] WebSocket events from file watcher for near-real-time UI updates
+- [x] WebSocket events from file watcher for near-real-time UI updates
 - [ ] Sidebar "Projects" tab in web UI
 - [ ] Project list view (reads .index/project.json per project)
 - [ ] Project dashboard with configurable widgets per project
@@ -118,4 +118,4 @@ This document evolves at phase transitions and milestone boundaries.
 
 ---
 
-_Last updated: 2026-03-27 after Phase 6 (Queue & Heartbeat) completion_
+_Last updated: 2026-03-28 after Phase 7 (Gateway Service) completion_
