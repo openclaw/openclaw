@@ -356,6 +356,9 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
         threads: true,
         media: true,
       },
+      streaming: {
+        blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
+      },
       agentPrompt: {
         messageToolHints: () => [
           "- Adaptive Cards supported. Use `action=send` with `card={type,version,body}` to send rich cards.",
