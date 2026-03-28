@@ -32,6 +32,7 @@ const buildModelsProviderData = vi.hoisted(() =>
     byProvider: new Map<string, Set<string>>(),
     providers: [],
     resolvedDefault: { provider: "openai", model: "gpt-test" },
+    modelNames: new Map<string, string>(),
   })),
 );
 const listSkillCommandsForAgents = vi.hoisted(() => vi.fn(() => []));
