@@ -71,6 +71,20 @@ cost, tokens, errors, and more.
 openclaw plugins install @opik/opik-openclaw
 ```
 
+### OrgX for OpenClaw
+
+Persistent organizational memory and coordinated execution for OpenClaw
+agents. Gives agents shared structure across initiatives, milestones,
+decisions, and tasks so they can build on prior work instead of starting each
+session from zero.
+
+- **npm:** `@useorgx/openclaw-plugin`
+- **repo:** [github.com/useorgx/openclaw-plugin](https://github.com/useorgx/openclaw-plugin)
+
+```bash
+openclaw plugins install @useorgx/openclaw-plugin
+```
+
 ### QQbot
 
 Connect OpenClaw to QQ via the QQ Bot API. Supports private chats, group
