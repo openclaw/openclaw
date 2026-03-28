@@ -5,6 +5,7 @@ const OPENAI_CODEX_BASE_URL = "https://chatgpt.com/backend-api";
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 const ANTHROPIC_BASE_URL = "https://api.anthropic.com";
 const ZAI_BASE_URL = "https://api.z.ai/api/paas/v4";
+const GOOGLE_GENERATIVE_AI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_CONTEXT_WINDOW = 200_000;
 const DEFAULT_MAX_TOKENS = 8192;
 const OPENROUTER_FALLBACK_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
@@ -386,6 +387,16 @@ export function createProviderRuntimeTestMock(options: ProviderRuntimeTestMockOp
             provider: params.provider,
             model: params.context.model as ResolvedModelLike,
           })
+        : undefined,
+    normalizeProviderTransportWithPlugin: (params: {
+      context: { api?: string | null; baseUrl?: string };
+    }) =>
+      params.context.api === "google-generative-ai" &&
+      params.context.baseUrl === "https://generativelanguage.googleapis.com"
+        ? {
+            api: params.context.api,
+            baseUrl: GOOGLE_GENERATIVE_AI_BASE_URL,
+          }
         : undefined,
   };
 }

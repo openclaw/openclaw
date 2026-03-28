@@ -3,6 +3,7 @@ import {
   createMoonshotThinkingWrapper,
   resolveMoonshotThinkingType,
 } from "openclaw/plugin-sdk/provider-moonshot";
+import { applyMoonshotNativeStreamingUsageCompat } from "./api.js";
 import { moonshotMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import {
   applyMoonshotConfig,
@@ -55,6 +56,8 @@ export default defineSingleProviderPluginEntry({
       buildProvider: buildMoonshotProvider,
       allowExplicitBaseUrl: true,
     },
+    applyNativeStreamingUsageCompat: ({ providerConfig }) =>
+      applyMoonshotNativeStreamingUsageCompat(providerConfig),
     wrapStreamFn: (ctx) => {
       const thinkingType = resolveMoonshotThinkingType({
         configuredThinking: ctx.extraParams?.thinking,
