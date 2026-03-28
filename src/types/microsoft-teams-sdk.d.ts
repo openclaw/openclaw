@@ -41,7 +41,7 @@ declare module "@microsoft/teams.apps/dist/middleware/auth/jwt-validator.js" {
       options?: {
         validateServiceUrl?: { expectedServiceUrl: string } | undefined;
       },
-    ): Promise<unknown | null>;
+    ): Promise<object | null>;
   }
 
   export function createServiceTokenValidator(
