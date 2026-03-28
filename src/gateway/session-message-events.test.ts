@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
+import { loadSessionStore } from "../config/sessions.js";
 import { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { testState } from "./test-helpers.mocks.js";
@@ -169,6 +170,141 @@ describe("session.message websocket events", () => {
         ).toMatchObject({
           id: appended.ok ? appended.messageId : undefined,
           seq: 1,
+        });
+      } finally {
+        ws.close();
+      }
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test("streams ACP transcript persistence appends live over websocket", async () => {
+    const storePath = await createSessionStoreFile();
+    const transcriptPath = path.join(path.dirname(storePath), "sess-main.jsonl");
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          sessionFile: transcriptPath,
+          updatedAt: Date.now(),
+        },
+      },
+      storePath,
+    });
+
+    const sessionStore = loadSessionStore(storePath, { skipCache: true });
+    const sessionEntry = sessionStore["agent:main:main"];
+    if (!sessionEntry) {
+      throw new Error("expected session store entry for agent:main:main");
+    }
+
+    const harness = await createGatewaySuiteHarness();
+    try {
+      const ws = await harness.openWs();
+      try {
+        await connectOk(ws, { scopes: ["operator.read"] });
+        await rpcReq(ws, "sessions.subscribe");
+
+        const { __testing } = await import("../agents/agent-command.js");
+        const userEventPromise = onceMessage(
+          ws,
+          (message) =>
+            message.type === "event" &&
+            message.event === "session.message" &&
+            (message.payload as { sessionKey?: string; message?: { role?: string } } | undefined)
+              ?.sessionKey === "agent:main:main" &&
+            (
+              message.payload as {
+                sessionKey?: string;
+                message?: { role?: string };
+              }
+            ).message?.role === "user",
+        );
+        const assistantEventPromise = onceMessage(
+          ws,
+          (message) =>
+            message.type === "event" &&
+            message.event === "session.message" &&
+            (message.payload as { sessionKey?: string; message?: { role?: string } } | undefined)
+              ?.sessionKey === "agent:main:main" &&
+            (
+              message.payload as {
+                sessionKey?: string;
+                message?: { role?: string };
+              }
+            ).message?.role === "assistant",
+        );
+
+        await __testing.persistAcpTurnTranscript({
+          body: "heartbeat please",
+          finalText: "still alive",
+          sessionId: "sess-main",
+          sessionKey: "agent:main:main",
+          sessionEntry,
+          sessionStore,
+          storePath,
+          sessionAgentId: "main",
+          sessionCwd: path.dirname(storePath),
+        });
+
+        const [userEvent, assistantEvent] = await Promise.all([
+          userEventPromise,
+          assistantEventPromise,
+        ]);
+
+        expect(userEvent.payload).toMatchObject({
+          sessionKey: "agent:main:main",
+          messageId: expect.any(String),
+          messageSeq: expect.any(Number),
+          message: {
+            role: "user",
+            content: "heartbeat please",
+            __openclaw: {
+              id: expect.any(String),
+              seq: expect.any(Number),
+            },
+          },
+        });
+        expect(assistantEvent.payload).toMatchObject({
+          sessionKey: "agent:main:main",
+          messageId: expect.any(String),
+          messageSeq: expect.any(Number),
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "still alive" }],
+            __openclaw: {
+              id: expect.any(String),
+              seq: expect.any(Number),
+            },
+          },
+        });
+        expect((userEvent.payload as { messageId?: string }).messageId).toBe(
+          (
+            userEvent.payload as {
+              message?: { __openclaw?: { id?: string; seq?: number } };
+            }
+          ).message?.__openclaw?.id,
+        );
+        expect((assistantEvent.payload as { messageId?: string }).messageId).toBe(
+          (
+            assistantEvent.payload as {
+              message?: { __openclaw?: { id?: string; seq?: number } };
+            }
+          ).message?.__openclaw?.id,
+        );
+
+        await expectNoMessageWithin({
+          watch: () =>
+            onceMessage(
+              ws,
+              (message) =>
+                message.type === "event" &&
+                message.event === "session.message" &&
+                (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
+                  "agent:main:main",
+              300,
+            ),
         });
       } finally {
         ws.close();
