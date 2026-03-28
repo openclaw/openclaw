@@ -3819,6 +3819,84 @@ description: test skill
     );
   });
 
+  it("flags open dmPolicy with elevated tools enabled", async () => {
+    const res = await audit({
+      tools: { elevated: { enabled: true, allowFrom: { whatsapp: ["+1"] } } },
+      channels: { whatsapp: { dmPolicy: "open" } },
+    });
+    expectFinding(res, "security.exposure.open_channels_with_elevated", "critical");
+    expectFinding(res, "security.exposure.open_dms_with_elevated", "critical");
+  });
+
+  it("flags open dmPolicy with runtime/filesystem tools exposed without guards", async () => {
+    const res = await audit({
+      channels: { whatsapp: { dmPolicy: "open" } },
+      tools: { elevated: { enabled: false } },
+    });
+    expectFinding(res, "security.exposure.open_dms_with_runtime_or_fs", "critical");
+  });
+
+  it("does not flag dmPolicy runtime/fs exposure when sandbox mode is all", async () => {
+    const res = await audit({
+      channels: { whatsapp: { dmPolicy: "open" } },
+      tools: {
+        elevated: { enabled: false },
+        profile: "coding",
+      },
+      agents: {
+        defaults: {
+          sandbox: { mode: "all" },
+        },
+      },
+    });
+    expectNoFinding(res, "security.exposure.open_dms_with_runtime_or_fs");
+  });
+
+  it("emits both group and dm findings when both policies are open", async () => {
+    const res = await audit({
+      channels: { whatsapp: { groupPolicy: "open", dmPolicy: "open" } },
+      tools: { elevated: { enabled: true, allowFrom: { whatsapp: ["+1"] } } },
+    });
+    expectFinding(res, "security.exposure.open_groups_with_elevated", "critical");
+    expectFinding(res, "security.exposure.open_dms_with_elevated", "critical");
+    expectFinding(res, "security.exposure.open_channels_with_elevated", "critical");
+  });
+
+  it("flags session.dmScope=main when multi-user signals are detected", async () => {
+    const res = await audit({
+      session: { dmScope: "main" },
+      channels: { whatsapp: { dmPolicy: "open" } },
+      tools: { elevated: { enabled: false } },
+    });
+    expectFinding(res, "security.trust_model.dm_scope_main_multi_user", "critical");
+  });
+
+  it("flags default dmScope (unset) when multi-user signals are detected", async () => {
+    const res = await audit({
+      channels: { whatsapp: { dmPolicy: "open" } },
+      tools: { elevated: { enabled: false } },
+    });
+    expectFinding(res, "security.trust_model.dm_scope_main_multi_user", "critical");
+  });
+
+  it("does not flag dmScope when set to per-channel-peer", async () => {
+    const res = await audit({
+      session: { dmScope: "per-channel-peer" },
+      channels: { whatsapp: { dmPolicy: "open" } },
+      tools: { elevated: { enabled: false } },
+    });
+    expectNoFinding(res, "security.trust_model.dm_scope_main_multi_user");
+  });
+
+  it("does not flag dmScope=main when no multi-user signals exist", async () => {
+    const res = await audit({
+      session: { dmScope: "main" },
+      channels: { whatsapp: {} },
+      tools: { elevated: { enabled: false } },
+    });
+    expectNoFinding(res, "security.trust_model.dm_scope_main_multi_user");
+  });
+
   describe("maybeProbeGateway auth selection", () => {
     const makeProbeCapture = () => {
       let capturedAuth: { token?: string; password?: string } | undefined;
