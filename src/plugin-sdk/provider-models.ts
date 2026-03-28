@@ -1,38 +1,41 @@
 // Public model/catalog helpers for provider plugins.
 
-import type { ModelDefinitionConfig } from "../config/types.models.js";
+export type {
+  BedrockDiscoveryConfig,
+  KilocodeModelCatalogEntry,
+  ModelApi,
+  ModelDefinitionConfig,
+  ModelProviderConfig,
+  ProviderPlugin,
+} from "./provider-model-shared.js";
 
-export type { ModelApi, ModelProviderConfig } from "../config/types.models.js";
-export type { ModelDefinitionConfig } from "../config/types.models.js";
-export type { ProviderPlugin } from "../plugins/types.js";
-export type { KilocodeModelCatalogEntry } from "../plugins/provider-model-kilocode.js";
-
-export { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 export {
-  hasNativeWebSearchTool,
-  HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING,
-  normalizeModelCompat,
-  resolveToolCallArgumentsEncoding,
-  usesXaiToolSchemaProfile,
-  XAI_TOOL_SCHEMA_PROFILE,
-} from "../agents/model-compat.js";
-export { normalizeProviderId } from "../agents/provider-id.js";
-export { applyXaiModelCompat, normalizeXaiModelId } from "./xai.js";
-export {
-  createMoonshotThinkingWrapper,
-  resolveMoonshotThinkingType,
-} from "../agents/pi-embedded-runner/moonshot-thinking-stream-wrappers.js";
-export {
+  DEFAULT_CONTEXT_TOKENS,
+  applyModelCompatPatch,
   cloneFirstTemplateModel,
+  createMoonshotThinkingWrapper,
+  hasToolSchemaProfile,
+  hasNativeWebSearchTool,
   matchesExactOrPrefix,
-} from "../plugins/provider-model-helpers.js";
+  normalizeModelCompat,
+  normalizeProviderId,
+  resolveUnsupportedToolSchemaKeywords,
+  resolveMoonshotThinkingType,
+  resolveToolCallArgumentsEncoding,
+} from "./provider-model-shared.js";
 export {
+  applyXaiModelCompat,
+  HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING,
+  normalizeXaiModelId,
+  XAI_TOOL_SCHEMA_PROFILE,
+} from "./xai.js";
+export {
+  isMiniMaxModernModelId,
   MINIMAX_DEFAULT_MODEL_ID,
   MINIMAX_DEFAULT_MODEL_REF,
   MINIMAX_TEXT_MODEL_CATALOG,
   MINIMAX_TEXT_MODEL_ORDER,
   MINIMAX_TEXT_MODEL_REFS,
-  isMiniMaxModernModelId,
 } from "./minimax.js";
 
 // Deprecated compat aliases. Prefer provider-specific subpaths.
@@ -150,4 +153,4 @@ export {
   MODELSTUDIO_DEFAULT_MODEL_ID,
   MODELSTUDIO_DEFAULT_MODEL_REF,
   MODELSTUDIO_GLOBAL_BASE_URL,
-} from "./modelstudio-definitions.js";
+} from "./modelstudio.js";

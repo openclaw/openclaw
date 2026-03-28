@@ -12,7 +12,14 @@ const GENERIC_WEB_SEARCH_KEYS = new Set([
   "cacheTtlMinutes",
 ]);
 
-const LEGACY_WEB_SEARCH_PROVIDER_PLUGIN_IDS = BUNDLED_WEB_SEARCH_PROVIDER_PLUGIN_IDS;
+// Tavily only ever used the plugin-owned config path, so there is no legacy
+// `tools.web.search.tavily.*` shape to migrate.
+const NON_MIGRATED_LEGACY_WEB_SEARCH_PROVIDER_IDS = new Set(["tavily"]);
+const LEGACY_WEB_SEARCH_PROVIDER_PLUGIN_IDS = Object.fromEntries(
+  Object.entries(BUNDLED_WEB_SEARCH_PROVIDER_PLUGIN_IDS).filter(
+    ([providerId]) => !NON_MIGRATED_LEGACY_WEB_SEARCH_PROVIDER_IDS.has(providerId),
+  ),
+);
 const LEGACY_WEB_SEARCH_PROVIDER_IDS = Object.keys(LEGACY_WEB_SEARCH_PROVIDER_PLUGIN_IDS);
 const LEGACY_WEB_SEARCH_PROVIDER_ID_SET = new Set(LEGACY_WEB_SEARCH_PROVIDER_IDS);
 const LEGACY_GLOBAL_WEB_SEARCH_PROVIDER_ID = "brave";

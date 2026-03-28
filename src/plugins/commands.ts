@@ -148,6 +148,7 @@ function resolveBindingConversationFromCommand(params: {
   to?: string;
   accountId?: string;
   messageThreadId?: string | number;
+  threadParentId?: string;
 }): {
   channel: string;
   accountId: string;
@@ -157,7 +158,12 @@ function resolveBindingConversationFromCommand(params: {
 } | null {
   const accountId = params.accountId?.trim() || "default";
   if (params.channel === "telegram") {
-    const rawTarget = params.to ?? params.from;
+    // Native Telegram slash commands use a synthetic `To: slash:<senderId>` value.
+    // Prefer `from` so binding resolution parses the real chat/topic peer.
+    const rawTarget =
+      params.to && params.to.startsWith("slash:")
+        ? (params.from ?? params.to)
+        : (params.to ?? params.from);
     if (!rawTarget) {
       return null;
     }
@@ -194,6 +200,8 @@ function resolveBindingConversationFromCommand(params: {
         "conversationId" in target
           ? target.conversationId
           : `${target.chatType === "direct" ? "user" : "channel"}:${target.to}`,
+      parentConversationId: params.threadParentId?.trim() || undefined,
+      threadId: params.messageThreadId,
     };
   }
   return null;
@@ -219,6 +227,7 @@ export async function executePluginCommand(params: {
   to?: PluginCommandContext["to"];
   accountId?: PluginCommandContext["accountId"];
   messageThreadId?: PluginCommandContext["messageThreadId"];
+  threadParentId?: PluginCommandContext["threadParentId"];
 }): Promise<PluginCommandResult> {
   const { command, args, senderId, channel, isAuthorizedSender, commandBody, config } = params;
 
@@ -239,6 +248,7 @@ export async function executePluginCommand(params: {
     to: params.to,
     accountId: params.accountId,
     messageThreadId: params.messageThreadId,
+    threadParentId: params.threadParentId,
   });
 
   const ctx: PluginCommandContext = {
@@ -254,6 +264,7 @@ export async function executePluginCommand(params: {
     to: params.to,
     accountId: params.accountId,
     messageThreadId: params.messageThreadId,
+    threadParentId: params.threadParentId,
     requestConversationBinding: async (bindingParams) => {
       if (!command.pluginRoot || !bindingConversation) {
         return {

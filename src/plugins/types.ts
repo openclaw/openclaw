@@ -51,6 +51,7 @@ import type {
   SpeechTelephonySynthesisResult,
   SpeechVoiceOption,
 } from "../tts/provider-types.js";
+import type { DeliveryContext } from "../utils/delivery-context.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { SecretInputMode } from "./provider-auth-types.js";
 import type { createVpsAwareOAuthHandlers } from "./provider-oauth-flow.js";
@@ -125,6 +126,8 @@ export type OpenClawPluginToolContext = {
   };
   messageChannel?: string;
   agentAccountId?: string;
+  /** Trusted ambient delivery route for the active agent/session. */
+  deliveryContext?: DeliveryContext;
   /** Trusted sender id from inbound context (runtime-provided, not tool args). */
   requesterSenderId?: string;
   /** Whether the trusted sender is an owner. */
@@ -358,6 +361,52 @@ export type ProviderNormalizeResolvedModelContext = {
   provider: string;
   modelId: string;
   model: ProviderRuntimeModel;
+};
+
+/**
+ * Provider-owned model-id normalization before config/runtime lookup.
+ *
+ * Use this for provider-specific alias cleanup that should stay with the
+ * plugin rather than in core string tables.
+ */
+export type ProviderNormalizeModelIdContext = {
+  provider: string;
+  modelId: string;
+};
+
+/**
+ * Provider-owned config normalization for `models.providers.<id>` entries.
+ *
+ * Use this for provider-specific config cleanup that should stay with the
+ * plugin rather than in core config-policy tables.
+ */
+export type ProviderNormalizeConfigContext = {
+  provider: string;
+  providerConfig: ModelProviderConfig;
+};
+
+/**
+ * Provider-owned transport normalization for arbitrary provider/model config.
+ *
+ * Use this when transport cleanup depends on API/baseUrl rather than the
+ * owning provider id, for example custom providers that still target a
+ * plugin-owned transport family.
+ */
+export type ProviderNormalizeTransportContext = {
+  provider: string;
+  api?: string | null;
+  baseUrl?: string;
+};
+
+/**
+ * Provider-owned env/config auth marker resolution for `models.providers`.
+ *
+ * Use this when a provider resolves auth from env vars that do not follow the
+ * generic API-key conventions.
+ */
+export type ProviderResolveConfigApiKeyContext = {
+  provider: string;
+  env: NodeJS.ProcessEnv;
 };
 
 /**
@@ -777,6 +826,14 @@ export type ProviderPlugin = {
   docsPath?: string;
   aliases?: string[];
   /**
+   * Internal-only aliases used for runtime/config hook lookup.
+   *
+   * Unlike `aliases`, these values are not treated as user-facing provider ids
+   * for auth/setup surfaces. Use them for legacy config keys or compat-only
+   * hook routing.
+   */
+  hookAliases?: string[];
+  /**
    * Provider-related env vars shown in setup/search/help surfaces.
    *
    * Keep entries in preferred display order. This can include direct auth env
@@ -826,6 +883,46 @@ export type ProviderPlugin = {
   normalizeResolvedModel?: (
     ctx: ProviderNormalizeResolvedModelContext,
   ) => ProviderRuntimeModel | null | undefined;
+  /**
+   * Provider-owned model-id normalization.
+   *
+   * Runs before model lookup/canonicalization. Use this for alias cleanup such
+   * as provider-owned preview/legacy model ids.
+   */
+  normalizeModelId?: (ctx: ProviderNormalizeModelIdContext) => string | null | undefined;
+  /**
+   * Provider-owned transport-family normalization before generic model
+   * assembly.
+   *
+   * Use this for API/baseUrl cleanup that may apply to custom provider ids
+   * which still target the provider's transport family.
+   */
+  normalizeTransport?: (
+    ctx: ProviderNormalizeTransportContext,
+  ) => { api?: string | null; baseUrl?: string } | null | undefined;
+  /**
+   * Provider-owned config normalization for `models.providers.<id>`.
+   *
+   * Use this for provider-specific baseUrl/model-id cleanup that should stay
+   * with the plugin rather than in core config-policy tables.
+   */
+  normalizeConfig?: (ctx: ProviderNormalizeConfigContext) => ModelProviderConfig | null | undefined;
+  /**
+   * Provider-owned final native-streaming compat pass for config providers.
+   *
+   * Use this when a provider opts specific native base URLs into
+   * `supportsUsageInStreaming` or similar transport compatibility flags.
+   */
+  applyNativeStreamingUsageCompat?: (
+    ctx: ProviderNormalizeConfigContext,
+  ) => ModelProviderConfig | null | undefined;
+  /**
+   * Provider-owned config apiKey/env marker resolution.
+   *
+   * Use this when a provider resolves auth from env vars such as AWS/GCP
+   * markers rather than a normal API-key env var.
+   */
+  resolveConfigApiKey?: (ctx: ProviderResolveConfigApiKeyContext) => string | null | undefined;
   /**
    * Static provider capability overrides consumed by shared transcript/tooling
    * logic.
@@ -1175,6 +1272,8 @@ export type PluginCommandContext = {
   accountId?: string;
   /** Thread/topic id if available */
   messageThreadId?: string | number;
+  /** Parent conversation id for thread-capable channels */
+  threadParentId?: string;
   requestConversationBinding: (
     params?: PluginConversationBindingRequestParams,
   ) => Promise<PluginConversationBindingRequestResult>;

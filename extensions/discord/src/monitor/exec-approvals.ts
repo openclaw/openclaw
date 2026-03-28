@@ -10,20 +10,20 @@ import {
   type TopLevelComponents,
 } from "@buape/carbon";
 import { ButtonStyle, Routes } from "discord-api-types/v10";
+import {
+  getExecApprovalApproverDmNoticeText,
+  resolveExecApprovalCommandDisplay,
+  type ExecApprovalDecision,
+  type ExecApprovalRequest,
+  type ExecApprovalResolved,
+  type PluginApprovalRequest,
+  type PluginApprovalResolved,
+} from "openclaw/plugin-sdk/approval-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { loadSessionStore, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
 import type { DiscordExecApprovalConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { EventFrame } from "openclaw/plugin-sdk/gateway-runtime";
 import * as gatewayRuntime from "openclaw/plugin-sdk/gateway-runtime";
-import { resolveExecApprovalCommandDisplay } from "openclaw/plugin-sdk/infra-runtime";
-import { getExecApprovalApproverDmNoticeText } from "openclaw/plugin-sdk/infra-runtime";
-import type {
-  ExecApprovalDecision,
-  ExecApprovalRequest,
-  ExecApprovalResolved,
-  PluginApprovalRequest,
-  PluginApprovalResolved,
-} from "openclaw/plugin-sdk/infra-runtime";
 import {
   normalizeAccountId,
   normalizeMessageChannel,

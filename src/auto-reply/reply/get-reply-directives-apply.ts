@@ -233,6 +233,7 @@ export async function applyInlineDirectiveOverrides(params: {
       currentVerboseLevel,
       currentReasoningLevel,
       currentElevatedLevel,
+      messageProvider: ctx.Provider,
       surface: ctx.Surface,
       gatewayClientScopes: ctx.GatewayClientScopes,
     });
@@ -328,6 +329,7 @@ export async function applyInlineDirectiveOverrides(params: {
     initialModelLabel,
     formatModelSwitchEvent,
     agentCfg,
+    messageProvider: ctx.Provider,
     surface: ctx.Surface,
     gatewayClientScopes: ctx.GatewayClientScopes,
   });

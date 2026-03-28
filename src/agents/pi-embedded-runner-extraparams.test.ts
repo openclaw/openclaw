@@ -39,6 +39,27 @@ import {
 } from "./pi-embedded-runner.js";
 import { log } from "./pi-embedded-runner/logger.js";
 
+function createXaiFastModeWrapper(baseStreamFn: StreamFn | undefined, fastMode: boolean): StreamFn {
+  const fastModelIds = new Map<string, string>([
+    ["grok-3", "grok-3-fast"],
+    ["grok-3-mini", "grok-3-mini-fast"],
+    ["grok-4", "grok-4-fast"],
+    ["grok-4-0709", "grok-4-fast"],
+  ]);
+  return (model, context, options) => {
+    if (!fastMode || model.api !== "openai-completions" || model.provider !== "xai") {
+      return (baseStreamFn as StreamFn)(model, context, options);
+    }
+    const fastModelId =
+      typeof model.id === "string" ? fastModelIds.get(model.id.trim()) : undefined;
+    return (baseStreamFn as StreamFn)(
+      fastModelId ? { ...model, id: fastModelId } : model,
+      context,
+      options,
+    );
+  };
+}
+
 beforeEach(() => {
   extraParamsTesting.setProviderRuntimeDepsForTest({
     prepareProviderExtraParams: (params) => {
@@ -57,6 +78,12 @@ beforeEach(() => {
     wrapProviderStreamFn: (params) => {
       if (params.provider === "ollama") {
         return createConfiguredOllamaCompatNumCtxWrapper(params.context);
+      }
+      if (params.provider === "xai") {
+        return createXaiFastModeWrapper(
+          params.context.streamFn,
+          params.context.extraParams?.fastMode === true,
+        );
       }
       if (params.provider !== "openrouter") {
         return params.context.streamFn;

@@ -4,12 +4,31 @@ import ts from "typescript";
 
 export const GENERATED_PLUGIN_SDK_FACADES = [
   {
+    subpath: "amazon-bedrock",
+    source: "../../extensions/amazon-bedrock/api.js",
+    exports: [
+      "discoverBedrockModels",
+      "mergeImplicitBedrockProvider",
+      "resetBedrockDiscoveryCacheForTest",
+      "resolveBedrockConfigApiKey",
+      "resolveImplicitBedrockProvider",
+    ],
+  },
+  {
     subpath: "anthropic-vertex",
     source: "../../extensions/anthropic-vertex/api.js",
     exports: [
       "ANTHROPIC_VERTEX_DEFAULT_MODEL_ID",
       "buildAnthropicVertexProvider",
+      "hasAnthropicVertexAvailableAuth",
+      "hasAnthropicVertexCredentials",
+      "mergeImplicitAnthropicVertexProvider",
+      "resolveAnthropicVertexClientRegion",
+      "resolveAnthropicVertexConfigApiKey",
+      "resolveImplicitAnthropicVertexProvider",
+      "resolveAnthropicVertexProjectId",
       "resolveAnthropicVertexRegion",
+      "resolveAnthropicVertexRegionFromBaseUrl",
     ],
   },
   {
@@ -99,6 +118,8 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
       "DiscordSendResult",
       "handleDiscordMessageAction",
       "inspectDiscordAccount",
+      "isDiscordExecApprovalApprover",
+      "isDiscordExecApprovalClientEnabled",
       "InspectedDiscordAccount",
       "listDiscordAccountIds",
       "listDiscordDirectoryGroupsFromConfig",
@@ -111,14 +132,17 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
       "resolveDefaultDiscordAccountId",
       "resolveDiscordAccount",
       "resolveDiscordChannelId",
+      "resolveDiscordRuntimeGroupPolicy",
       "resolveDiscordGroupRequireMention",
       "resolveDiscordGroupToolPolicy",
     ],
     typeExports: [
       "DiscordComponentMessageSpec",
+      "DiscordProbe",
       "DiscordSendComponents",
       "DiscordSendEmbeds",
       "DiscordSendResult",
+      "DiscordTokenResolution",
       "InspectedDiscordAccount",
       "ResolvedDiscordAccount",
     ],
@@ -147,12 +171,12 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   },
   {
     subpath: "discord-timeouts",
-    source: "../../extensions/discord/timeouts.js",
+    source: "../../extensions/discord/api.js",
     exports: ["DISCORD_DEFAULT_INBOUND_WORKER_TIMEOUT_MS", "DISCORD_DEFAULT_LISTENER_TIMEOUT_MS"],
   },
   {
     subpath: "anthropic-cli",
-    source: "../../extensions/anthropic/cli-shared.js",
+    source: "../../extensions/anthropic/api.js",
     exports: ["CLAUDE_CLI_BACKEND_ID", "isClaudeCliProvider"],
   },
   {
@@ -177,7 +201,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   },
   {
     subpath: "browser-runtime",
-    source: "../../extensions/browser/browser-runtime-api.js",
+    source: "../../extensions/browser/runtime-api.js",
     exportAll: true,
   },
   {
@@ -239,6 +263,8 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
     exports: [
       "buildFeishuConversationId",
       "createFeishuThreadBindingManager",
+      "feishuSessionBindingAdapterChannels",
+      "feishuThreadBindingTesting",
       "parseFeishuDirectConversationId",
       "parseFeishuConversationId",
       "parseFeishuTargetId",
@@ -249,23 +275,29 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
     source: "../../extensions/google/api.js",
     exports: [
       "applyGoogleGeminiModelDefault",
-      "createGoogleThinkingPayloadWrapper",
       "DEFAULT_GOOGLE_API_BASE_URL",
       "GOOGLE_GEMINI_DEFAULT_MODEL",
+      "isGoogleGenerativeAiApi",
+      "normalizeAntigravityModelId",
       "normalizeGoogleApiBaseUrl",
+      "normalizeGoogleGenerativeAiBaseUrl",
       "normalizeGoogleModelId",
+      "normalizeGoogleProviderConfig",
       "parseGeminiAuth",
-      "sanitizeGoogleThinkingPayload",
+      "resolveGoogleGenerativeAiApiOrigin",
+      "resolveGoogleGenerativeAiTransport",
+      "shouldNormalizeGoogleProviderConfig",
+      "shouldNormalizeGoogleGenerativeAiProviderConfig",
     ],
   },
   {
     subpath: "feishu-setup",
-    source: "../../extensions/feishu/setup-api.js",
+    source: "../../extensions/feishu/api.js",
     exports: ["feishuSetupAdapter", "feishuSetupWizard"],
   },
   {
     subpath: "github-copilot-login",
-    source: "../../extensions/github-copilot/login.js",
+    source: "../../extensions/github-copilot/api.js",
     exports: ["githubCopilotLoginCommand"],
   },
   {
@@ -329,6 +361,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
     source: "../../extensions/imessage/api.js",
     exports: [
       "normalizeIMessageHandle",
+      "resolveIMessageRuntimeGroupPolicy",
       "resolveIMessageGroupRequireMention",
       "resolveIMessageGroupToolPolicy",
     ],
@@ -337,6 +370,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
     subpath: "imessage-runtime",
     source: "../../extensions/imessage/runtime-api.js",
     exports: ["monitorIMessageProvider", "probeIMessage", "sendMessageIMessage"],
+    typeExports: ["IMessageProbe"],
   },
   {
     subpath: "irc-surface",
@@ -443,7 +477,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   },
   {
     subpath: "matrix-helper",
-    source: "../../extensions/matrix/helper-api.js",
+    source: "../../extensions/matrix/api.js",
     exports: [
       "findMatrixAccountEntry",
       "getMatrixScopedEnvVarNames",
@@ -465,11 +499,15 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   {
     subpath: "matrix-surface",
     source: "../../extensions/matrix/api.js",
-    exports: ["createMatrixThreadBindingManager", "resetMatrixThreadBindingsForTests"],
+    exports: [
+      "createMatrixThreadBindingManager",
+      "matrixSessionBindingAdapterChannels",
+      "resetMatrixThreadBindingsForTests",
+    ],
   },
   {
     subpath: "matrix-thread-bindings",
-    source: "../../extensions/matrix/thread-bindings-runtime.js",
+    source: "../../extensions/matrix/api.js",
     exports: [
       "setMatrixThreadBindingIdleTimeoutBySessionKey",
       "setMatrixThreadBindingMaxAgeBySessionKey",
@@ -487,6 +525,8 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
       "buildMinimaxPortalProvider",
       "buildMinimaxProvider",
       "isMiniMaxModernModelId",
+      "MINIMAX_API_BASE_URL",
+      "MINIMAX_CN_API_BASE_URL",
       "MINIMAX_DEFAULT_MODEL_ID",
       "MINIMAX_DEFAULT_MODEL_REF",
       "MINIMAX_TEXT_MODEL_CATALOG",
@@ -497,11 +537,26 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   {
     subpath: "modelstudio",
     source: "../../extensions/modelstudio/api.js",
-    exports: ["MODELSTUDIO_BASE_URL", "MODELSTUDIO_DEFAULT_MODEL_ID", "buildModelStudioProvider"],
+    exports: [
+      "applyModelStudioNativeStreamingUsageCompat",
+      "buildModelStudioDefaultModelDefinition",
+      "buildModelStudioModelDefinition",
+      "MODELSTUDIO_BASE_URL",
+      "MODELSTUDIO_CN_BASE_URL",
+      "MODELSTUDIO_DEFAULT_COST",
+      "MODELSTUDIO_DEFAULT_MODEL_ID",
+      "MODELSTUDIO_DEFAULT_MODEL_REF",
+      "MODELSTUDIO_GLOBAL_BASE_URL",
+      "MODELSTUDIO_STANDARD_CN_BASE_URL",
+      "MODELSTUDIO_STANDARD_GLOBAL_BASE_URL",
+      "MODELSTUDIO_MODEL_CATALOG",
+      "isNativeModelStudioBaseUrl",
+      "buildModelStudioProvider",
+    ],
   },
   {
     subpath: "modelstudio-definitions",
-    source: "../../extensions/modelstudio/model-definitions.js",
+    source: "../../extensions/modelstudio/api.js",
     exports: [
       "buildModelStudioDefaultModelDefinition",
       "buildModelStudioModelDefinition",
@@ -510,12 +565,27 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
       "MODELSTUDIO_DEFAULT_MODEL_ID",
       "MODELSTUDIO_DEFAULT_MODEL_REF",
       "MODELSTUDIO_GLOBAL_BASE_URL",
+      "MODELSTUDIO_STANDARD_CN_BASE_URL",
+      "MODELSTUDIO_STANDARD_GLOBAL_BASE_URL",
     ],
   },
   {
     subpath: "moonshot",
     source: "../../extensions/moonshot/api.js",
-    exports: ["buildMoonshotProvider"],
+    exports: [
+      "applyMoonshotNativeStreamingUsageCompat",
+      "buildMoonshotProvider",
+      "isNativeMoonshotBaseUrl",
+      "MOONSHOT_BASE_URL",
+      "MOONSHOT_CN_BASE_URL",
+      "MOONSHOT_DEFAULT_MODEL_ID",
+      "MOONSHOT_DEFAULT_MODEL_REF",
+    ],
+  },
+  {
+    subpath: "mistral",
+    source: "../../extensions/mistral/api.js",
+    exports: ["buildMistralProvider"],
   },
   {
     subpath: "nvidia",
@@ -618,7 +688,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
       "signalMessageActions",
       "SignalSender",
     ],
-    typeExports: ["ResolvedSignalAccount", "SignalSender"],
+    typeExports: ["ResolvedSignalAccount", "SignalProbe", "SignalSender"],
   },
   {
     subpath: "provider-reasoning",
@@ -634,6 +704,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
     subpath: "sglang",
     source: "../../extensions/sglang/api.js",
     exports: [
+      "buildSglangProvider",
       "SGLANG_DEFAULT_API_KEY_ENV_VAR",
       "SGLANG_DEFAULT_BASE_URL",
       "SGLANG_MODEL_PLACEHOLDER",
@@ -707,6 +778,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
       "resolveDefaultSlackAccountId",
       "resolveSlackAutoThreadId",
       "resolveSlackGroupRequireMention",
+      "resolveSlackRuntimeGroupPolicy",
       "resolveSlackGroupToolPolicy",
       "resolveSlackReplyToMode",
       "ResolvedSlackAccount",
@@ -718,7 +790,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
       "removeSlackReaction",
       "unpinSlackMessage",
     ],
-    typeExports: ["InspectedSlackAccount", "ResolvedSlackAccount"],
+    typeExports: ["InspectedSlackAccount", "ResolvedSlackAccount", "SlackProbe"],
   },
   {
     subpath: "together",
@@ -752,7 +824,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   },
   {
     subpath: "telegram-allow-from",
-    source: "../../extensions/telegram/allow-from.js",
+    source: "../../extensions/telegram/api.js",
     exports: ["isNumericTelegramUserId", "normalizeTelegramAllowFromEntry"],
   },
   {
@@ -773,6 +845,8 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
       "probeTelegram",
       "reactMessageTelegram",
       "renameForumTopicTelegram",
+      "resetTelegramThreadBindingsForTests",
+      "resolveTelegramRuntimeGroupPolicy",
       "resolveTelegramToken",
       "sendMessageTelegram",
       "sendPollTelegram",
@@ -836,6 +910,8 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
       "StickerMetadata",
       "TelegramButtonStyle",
       "TelegramInlineButtons",
+      "TelegramProbe",
+      "TelegramTokenResolution",
     ],
   },
   {
@@ -846,7 +922,12 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
       "discoverVercelAiGatewayModels",
       "getStaticVercelAiGatewayModelCatalog",
       "VERCEL_AI_GATEWAY_BASE_URL",
+      "VERCEL_AI_GATEWAY_DEFAULT_CONTEXT_WINDOW",
+      "VERCEL_AI_GATEWAY_DEFAULT_COST",
+      "VERCEL_AI_GATEWAY_DEFAULT_MAX_TOKENS",
+      "VERCEL_AI_GATEWAY_DEFAULT_MODEL_ID",
       "VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF",
+      "VERCEL_AI_GATEWAY_PROVIDER_ID",
     ],
   },
   {
@@ -866,6 +947,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
     subpath: "vllm",
     source: "../../extensions/vllm/api.js",
     exports: [
+      "buildVllmProvider",
       "VLLM_DEFAULT_API_KEY_ENV_VAR",
       "VLLM_DEFAULT_BASE_URL",
       "VLLM_MODEL_PLACEHOLDER",
@@ -935,6 +1017,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
       "resolveWhatsAppGroupRequireMention",
       "resolveWhatsAppGroupToolPolicy",
       "resolveWhatsAppOutboundTarget",
+      "whatsappAccessControlTesting",
     ],
     typeExports: [
       "WebChannelStatus",
@@ -946,7 +1029,12 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   {
     subpath: "zalo-setup",
     source: "../../extensions/zalo/api.js",
-    exports: ["zaloSetupAdapter", "zaloSetupWizard"],
+    exports: [
+      "evaluateZaloGroupAccess",
+      "resolveZaloRuntimeGroupPolicy",
+      "zaloSetupAdapter",
+      "zaloSetupWizard",
+    ],
   },
 ];
 

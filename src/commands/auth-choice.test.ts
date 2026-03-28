@@ -1,18 +1,18 @@
 import fs from "node:fs/promises";
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MINIMAX_CN_API_BASE_URL } from "../../extensions/minimax/api.js";
-import { ZAI_CODING_CN_BASE_URL, ZAI_CODING_GLOBAL_BASE_URL } from "../../extensions/zai/api.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
+import { GOOGLE_GEMINI_DEFAULT_MODEL } from "../plugin-sdk/google.js";
+import { MINIMAX_CN_API_BASE_URL } from "../plugin-sdk/minimax.js";
+import { ZAI_CODING_CN_BASE_URL, ZAI_CODING_GLOBAL_BASE_URL } from "../plugin-sdk/zai.js";
 import { createProviderApiKeyAuthMethod } from "../plugins/provider-api-key-auth.js";
 import { providerApiKeyAuthRuntime } from "../plugins/provider-api-key-auth.runtime.js";
 import type { ProviderAuthMethod, ProviderPlugin } from "../plugins/types.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-choice.js";
-import { GOOGLE_GEMINI_DEFAULT_MODEL } from "./google-gemini-model-default.js";
 import type { AuthChoice } from "./onboard-types.js";
 import {
   authProfilePathForAgent,

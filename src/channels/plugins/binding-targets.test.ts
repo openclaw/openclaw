@@ -14,17 +14,17 @@ import {
 function createBindingResolution(driverId: string): ConfiguredBindingResolution {
   return {
     conversation: {
-      channel: "discord",
+      channel: "demo-binding",
       accountId: "default",
       conversationId: "123",
     },
     compiledBinding: {
-      channel: "discord",
+      channel: "demo-binding",
       binding: {
         type: "acp" as const,
         agentId: "codex",
         match: {
-          channel: "discord",
+          channel: "demo-binding",
           peer: {
             kind: "channel" as const,
             id: "123",
@@ -55,7 +55,7 @@ function createBindingResolution(driverId: string): ConfiguredBindingResolution 
             targetSessionKey: `agent:codex:${driverId}`,
             targetKind: "session",
             conversation: {
-              channel: "discord",
+              channel: "demo-binding",
               accountId: "default",
               conversationId: "123",
             },
@@ -79,7 +79,7 @@ function createBindingResolution(driverId: string): ConfiguredBindingResolution 
       targetSessionKey: `agent:codex:${driverId}`,
       targetKind: "session",
       conversation: {
-        channel: "discord",
+        channel: "demo-binding",
         accountId: "default",
         conversationId: "123",
       },
