@@ -125,7 +125,8 @@ export function resolveTranscriptPolicy(params: {
     // strictly compatible ones. Session resets can leave orphaned tool_calls in
     // history that violate OpenAI's adjacency requirement. (#55544)
     validateAnthropicTurns:
-      !isOpenAi && (isAnthropic || isStrictOpenAiCompatible || params.modelApi === "openai-completions"),
+      !isOpenAi &&
+      (isAnthropic || isStrictOpenAiCompatible || params.modelApi === "openai-completions"),
     allowSyntheticToolResults: !isOpenAi && (isGoogle || isAnthropic),
   };
 }

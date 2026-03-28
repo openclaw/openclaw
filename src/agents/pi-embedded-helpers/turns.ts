@@ -1,12 +1,38 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 
-type AnthropicContentBlock = {
-  type: "text" | "toolUse" | "toolResult";
+type AnthropicTextBlock = {
+  type: "text";
   text?: string;
+};
+
+type AnthropicImageBlock = {
+  type: "image";
+  url?: string;
+  mediaType?: string;
+  data?: string;
+};
+
+type AnthropicToolUseBlock = {
+  type: "toolUse";
   id?: string;
   name?: string;
-  toolUseId?: string;
+  input?: unknown;
 };
+
+type AnthropicToolResultBlock = {
+  type: "toolResult";
+  toolUseId?: string;
+  content?: unknown;
+  isError?: boolean;
+};
+
+type AnthropicContentBlock =
+  | AnthropicTextBlock
+  | AnthropicImageBlock
+  | AnthropicToolUseBlock
+  | AnthropicToolResultBlock;
+
+type UserAgentMessage = Extract<AgentMessage, { role: "user" }>;
 
 /**
  * Strips dangling tool_use blocks from assistant messages when the immediately
@@ -89,20 +115,23 @@ function stripDanglingAnthropicToolUses(messages: AgentMessage[]): AgentMessage[
   return result;
 }
 
-function validateTurnsWithConsecutiveMerge<TRole extends "assistant" | "user">(params: {
-  messages: AgentMessage[];
+function validateTurnsWithConsecutiveMerge<
+  TMessage extends AgentMessage,
+  TRole extends "assistant" | "user",
+>(params: {
+  messages: TMessage[];
   role: TRole;
   merge: (
-    previous: Extract<AgentMessage, { role: TRole }>,
-    current: Extract<AgentMessage, { role: TRole }>,
-  ) => Extract<AgentMessage, { role: TRole }>;
-}): AgentMessage[] {
+    previous: Extract<TMessage, { role: TRole }>,
+    current: Extract<TMessage, { role: TRole }>,
+  ) => Extract<TMessage, { role: TRole }>;
+}): TMessage[] {
   const { messages, role, merge } = params;
   if (!Array.isArray(messages) || messages.length === 0) {
     return messages;
   }
 
-  const result: AgentMessage[] = [];
+  const result: TMessage[] = [];
   let lastRole: string | undefined;
 
   for (const msg of messages) {
@@ -119,10 +148,10 @@ function validateTurnsWithConsecutiveMerge<TRole extends "assistant" | "user">(p
 
     if (msgRole === lastRole && lastRole === role) {
       const lastMsg = result[result.length - 1];
-      const currentMsg = msg as Extract<AgentMessage, { role: TRole }>;
+      const currentMsg = msg as Extract<TMessage, { role: TRole }>;
 
       if (lastMsg && typeof lastMsg === "object") {
-        const lastTyped = lastMsg as Extract<AgentMessage, { role: TRole }>;
+        const lastTyped = lastMsg as Extract<TMessage, { role: TRole }>;
         result[result.length - 1] = merge(lastTyped, currentMsg);
         continue;
       }
@@ -168,9 +197,9 @@ export function validateGeminiTurns(messages: AgentMessage[]): AgentMessage[] {
 }
 
 export function mergeConsecutiveUserTurns(
-  previous: Extract<AgentMessage, { role: "user" }>,
-  current: Extract<AgentMessage, { role: "user" }>,
-): Extract<AgentMessage, { role: "user" }> {
+  previous: UserAgentMessage,
+  current: UserAgentMessage,
+): UserAgentMessage {
   const toBlocks = (content: unknown): AnthropicContentBlock[] => {
     if (Array.isArray(content)) {
       return content;
@@ -184,7 +213,10 @@ export function mergeConsecutiveUserTurns(
 
   return {
     ...current,
-    content: mergedContent,
+    // validateAnthropicTurns only merges block-form transcripts, but the
+    // shared AgentMessage type still models user content as string/text/image.
+    // Cast back here so the runtime-safe Anthropic block merge remains local.
+    content: mergedContent as UserAgentMessage["content"],
     timestamp: current.timestamp ?? previous.timestamp,
   };
 }
