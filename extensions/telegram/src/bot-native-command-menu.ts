@@ -25,6 +25,14 @@ type TelegramPluginCommandSpec = {
   description: unknown;
 };
 
+function readErrorTextField(value: unknown, key: "description" | "message"): string | undefined {
+  if (!value || typeof value !== "object" || !(key in value)) {
+    return undefined;
+  }
+  const text = value[key];
+  return typeof text === "string" ? text : undefined;
+}
+
 function isBotCommandsTooMuchError(err: unknown): boolean {
   if (!err) {
     return false;
@@ -38,14 +46,13 @@ function isBotCommandsTooMuchError(err: unknown): boolean {
       return true;
     }
   }
-  if (typeof err === "object") {
-    const maybe = err as { description?: unknown; message?: unknown };
-    if (typeof maybe.description === "string" && pattern.test(maybe.description)) {
-      return true;
-    }
-    if (typeof maybe.message === "string" && pattern.test(maybe.message)) {
-      return true;
-    }
+  const description = readErrorTextField(err, "description");
+  if (description && pattern.test(description)) {
+    return true;
+  }
+  const message = readErrorTextField(err, "message");
+  if (message && pattern.test(message)) {
+    return true;
   }
   return false;
 }

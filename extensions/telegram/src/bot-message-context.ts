@@ -74,7 +74,10 @@ export const buildTelegramMessageContext = async ({
     typeof bot.api.setMessageReaction === "function"
       ? bot.api.setMessageReaction.bind(bot.api)
       : null;
-  const getChatApi: TelegramGetChat = bot.api.getChat.bind(bot.api);
+  const getChatApi =
+    typeof bot.api.getChat === "function"
+      ? (bot.api.getChat.bind(bot.api) as TelegramGetChat)
+      : undefined;
   const isForum = await resolveTelegramForumFlag({
     chatId,
     chatType: msg.chat.type,
