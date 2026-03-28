@@ -18,7 +18,7 @@ let defaultWarnState: WarnState = { warned: false };
 
 type AnthropicAuthDefaultsMode = "api_key" | "oauth";
 
-const DEFAULT_MODEL_ALIASES: Readonly<Record<string, string>> = {
+const _MODEL_ALIASES = {
   // Anthropic (pi-ai catalog uses "latest" ids without date suffix)
   opus: "anthropic/claude-opus-4-6",
   sonnet: "anthropic/claude-sonnet-4-6",
@@ -31,7 +31,16 @@ const DEFAULT_MODEL_ALIASES: Readonly<Record<string, string>> = {
   gemini: "google/gemini-3.1-pro-preview",
   "gemini-flash": "google/gemini-3-flash-preview",
   "gemini-flash-lite": "google/gemini-3.1-flash-lite-preview",
-};
+} as const;
+
+/**
+ * Returns the model alias map. Wrapped in a function so call sites
+ * evaluate it after full module initialization, avoiding TDZ from
+ * circular imports that reference this module early.
+ */
+function getModelAliases(): Readonly<Record<string, string>> {
+  return _MODEL_ALIASES;
+}
 
 const DEFAULT_MODEL_COST: ModelDefinitionConfig["cost"] = {
   input: 0,
@@ -145,18 +154,9 @@ function resolvePrimaryModelRef(raw?: string): string | null {
   if (!trimmed) {
     return null;
   }
-  // Inline alias lookup to avoid TDZ issues during early config loading
+  // Use getter to avoid TDZ during early config loading
   const aliasKey = trimmed.toLowerCase();
-  const aliases: Record<string, string> = {
-    opus: "anthropic/claude-opus-4-6",
-    sonnet: "anthropic/claude-sonnet-4-6",
-    gpt: "openai/gpt-5.4",
-    "gpt-mini": "openai/gpt-5-mini",
-    gemini: "google/gemini-3.1-pro-preview",
-    "gemini-flash": "google/gemini-3-flash-preview",
-    "gemini-flash-lite": "google/gemini-3.1-flash-lite-preview",
-  };
-  return aliases[aliasKey] ?? trimmed;
+  return getModelAliases()[aliasKey] ?? trimmed;
 }
 
 export type SessionDefaultsOptions = {
@@ -361,7 +361,7 @@ export function applyModelDefaults(cfg: OpenClawConfig): OpenClawConfig {
     ...existingModels,
   };
 
-  for (const [alias, target] of Object.entries(DEFAULT_MODEL_ALIASES)) {
+  for (const [alias, target] of Object.entries(getModelAliases())) {
     const entry = nextModels[target];
     if (!entry) {
       continue;
