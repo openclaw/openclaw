@@ -11,10 +11,8 @@ import { createHookRunner } from "./hooks.js";
 import {
   __testing,
   clearPluginLoaderCache,
-  getCompatibleActivePluginRegistry,
   loadOpenClawPlugins,
   resolveRuntimePluginRegistry,
-  resolvePluginLoadCacheContext,
 } from "./loader.js";
 import { clearPluginManifestRegistryCache } from "./manifest-registry.js";
 import {
@@ -3563,24 +3561,24 @@ describe("getCompatibleActivePluginRegistry", () => {
         allowGatewaySubagentBinding: true,
       },
     };
-    const { cacheKey } = resolvePluginLoadCacheContext(loadOptions);
+    const { cacheKey } = __testing.resolvePluginLoadCacheContext(loadOptions);
     setActivePluginRegistry(registry, cacheKey);
 
-    expect(getCompatibleActivePluginRegistry(loadOptions)).toBe(registry);
+    expect(__testing.getCompatibleActivePluginRegistry(loadOptions)).toBe(registry);
     expect(
-      getCompatibleActivePluginRegistry({
+      __testing.getCompatibleActivePluginRegistry({
         ...loadOptions,
         workspaceDir: "/tmp/workspace-b",
       }),
     ).toBeUndefined();
     expect(
-      getCompatibleActivePluginRegistry({
+      __testing.getCompatibleActivePluginRegistry({
         ...loadOptions,
         onlyPluginIds: ["demo"],
       }),
     ).toBeUndefined();
     expect(
-      getCompatibleActivePluginRegistry({
+      __testing.getCompatibleActivePluginRegistry({
         ...loadOptions,
         runtimeOptions: undefined,
       }),
@@ -3591,7 +3589,7 @@ describe("getCompatibleActivePluginRegistry", () => {
     const registry = createEmptyPluginRegistry();
     setActivePluginRegistry(registry, "startup-registry");
 
-    expect(getCompatibleActivePluginRegistry()).toBe(registry);
+    expect(__testing.getCompatibleActivePluginRegistry()).toBe(registry);
   });
 
   it("does not reuse the active registry when core gateway method names differ", () => {
@@ -3635,7 +3633,7 @@ describe("resolveRuntimePluginRegistry", () => {
       },
       workspaceDir: "/tmp/workspace-a",
     };
-    const { cacheKey } = resolvePluginLoadCacheContext(loadOptions);
+    const { cacheKey } = __testing.resolvePluginLoadCacheContext(loadOptions);
     setActivePluginRegistry(registry, cacheKey);
 
     expect(resolveRuntimePluginRegistry(loadOptions)).toBe(registry);

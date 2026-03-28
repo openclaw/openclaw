@@ -156,6 +156,8 @@ export const __testing = {
   resolvePluginSdkAliasFile,
   resolvePluginRuntimeModulePath,
   shouldPreferNativeJiti,
+  getCompatibleActivePluginRegistry,
+  resolvePluginLoadCacheContext,
   get maxPluginRegistryCacheEntries() {
     return pluginRegistryCacheEntryCap;
   },
@@ -271,7 +273,7 @@ function hasExplicitCompatibilityInputs(options: PluginLoadOptions): boolean {
   );
 }
 
-export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
+function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
   const env = options.env ?? process.env;
   const cfg = applyTestPluginDefaults(options.config ?? {}, env);
   const normalized = normalizePluginsConfig(cfg.plugins);
@@ -303,7 +305,7 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
   };
 }
 
-export function getCompatibleActivePluginRegistry(
+function getCompatibleActivePluginRegistry(
   options: PluginLoadOptions = {},
 ): PluginRegistry | undefined {
   const activeRegistry = getActivePluginRegistry() ?? undefined;
