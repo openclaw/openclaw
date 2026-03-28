@@ -243,6 +243,24 @@ describe("registerPluginCommand", () => {
     });
   });
 
+  it("resolves Discord thread command bindings with parent channel context intact", () => {
+    expect(
+      __testing.resolveBindingConversationFromCommand({
+        channel: "discord",
+        from: "discord:channel:1480554272859881494",
+        accountId: "default",
+        messageThreadId: "thread-42",
+        threadParentId: "channel-parent-7",
+      }),
+    ).toEqual({
+      channel: "discord",
+      accountId: "default",
+      conversationId: "channel:1480554272859881494",
+      parentConversationId: "channel-parent-7",
+      threadId: "thread-42",
+    });
+  });
+
   it("resolves Telegram topic command bindings without a Telegram registry entry", () => {
     expect(
       __testing.resolveBindingConversationFromCommand({
