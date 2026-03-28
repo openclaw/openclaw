@@ -1,4 +1,8 @@
-import { isRestartEnabled } from "../../config/commands.js";
+﻿import { isRestartEnabled } from "../../config/commands.js";
+import { deferGatewayRestartUntilIdle } from "../../infra/restart";
+import { writeRestartSentinel, type RestartSentinelPayload } from "../../infra/restart-sentinel";
+import { deferGatewayRestartUntilIdle } from "../../infra/restart";
+import { writeRestartSentinel, type RestartSentinelPayload } from "../../infra/restart-sentinel";
 import { readBestEffortConfig, resolveGatewayPort } from "../../config/config.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { probeGateway } from "../../gateway/probe.js";
@@ -120,6 +124,170 @@ export async function runDaemonUninstall(opts: DaemonLifecycleOptions = {}) {
   });
 }
 
+export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promise<boolean> {
+  const json = Boolean(opts.json);
+  const service = resolveGatewayService();
+  let restartedWithoutServiceManager = false;
+  const restartPort = await resolveGatewayLifecyclePort(service).catch(() => resolveGatewayPortFallback());
+  const restartWaitMs = POST_RESTART_HEALTH_ATTEMPTS * POST_RESTART_HEALTH_DELAY_MS;
+  const restartWaitSeconds = Math.round(restartWaitMs / 1000);
+
+  // Windows graceful restart
+  if (process.platform === 'win32') {
+    try {
+      defaultRuntime.log(theme.info("Waiting for active tasks to complete before restart..."));
+      await deferGatewayRestartUntilIdle({
+        getPendingCount: async () => { return 0; },
+        maxWaitMs: 300000,
+        pollMs: 1000
+      });
+
+      defaultRuntime.log(theme.info("Writing restart sentinel for session recovery..."));
+      const sentinelPayload: RestartSentinelPayload = {
+        kind: "restart",
+        status: "ok",
+        ts: Date.now(),
+        reason: "manual restart",
+        sessionKey: opts.sessionKey
+      };
+      await writeRestartSentinel(sentinelPayload);
+
+      defaultRuntime.log(theme.info("Stopping Gateway gracefully..."));
+      await runServiceStop({
+        serviceNoun: "Gateway",
+        service,
+        opts,
+        onNotLoaded: async () => stopGatewayWithoutServiceManager(restartPort)
+      });
+
+      defaultRuntime.log(theme.info("Starting Gateway..."));
+      await runServiceStart({
+        serviceNoun: "Gateway",
+        service,
+        renderStartHints: renderGatewayServiceStartHints,
+        opts
+      });
+
+      defaultRuntime.log(theme.info("Waiting for Gateway to become healthy..."));
+      const health = await waitForGatewayHealthyRestart({
+        service,
+        port: restartPort,
+        attempts: POST_RESTART_HEALTH_ATTEMPTS,
+        delayMs: POST_RESTART_HEALTH_DELAY_MS,
+        includeUnknownListenersAsStale: true
+      });
+
+      if (!health.healthy) {
+        const diagnostics = renderRestartDiagnostics(health);
+        const timeoutLine = `Timed out after ${restartWaitSeconds}s waiting for gateway port ${restartPort} to become healthy.`;
+        if (!json) {
+          defaultRuntime.log(theme.warn(timeoutLine));
+          for (const line of diagnostics) defaultRuntime.log(theme.muted(line));
+        } else {
+          warnings.push(timeoutLine);
+          warnings.push(...diagnostics);
+        }
+        fail(`Gateway restart timed out after ${restartWaitSeconds}s waiting for health checks.`, [
+          formatCliCommand("openclaw gateway status --deep"),
+          formatCliCommand("openclaw doctor")
+        ]);
+      }
+
+      defaultRuntime.log(theme.success("Gateway restarted gracefully with session recovery!"));
+      return true;
+    } catch (err) {
+      defaultRuntime.log(theme.warn(`Graceful restart failed: ${String(err)}. Falling back to standard restart.`));
+    }
+  }
+
+  return await runServiceRestart({
+    serviceNoun: "Gateway",
+    service,
+    renderStartHints: renderGatewayServiceStartHints,
+    opts,
+    checkTokenDrift: true,
+    onNotLoaded: async () => {
+      const handled = await restartGatewayWithoutServiceManager(restartPort);
+      if (handled) restartedWithoutServiceManager = true;
+      return handled;
+    },
+    postRestartCheck: async ({ warnings, fail, stdout }) => {
+      if (restartedWithoutServiceManager) {
+        const health = await waitForGatewayHealthyListener({
+          port: restartPort,
+          attempts: POST_RESTART_HEALTH_ATTEMPTS,
+          delayMs: POST_RESTART_HEALTH_DELAY_MS
+        });
+        if (health.healthy) return;
+
+        const diagnostics = renderGatewayPortHealthDiagnostics(health);
+        const timeoutLine = `Timed out after ${restartWaitSeconds}s waiting for gateway port ${restartPort} to become healthy.`;
+        if (!json) {
+          defaultRuntime.log(theme.warn(timeoutLine));
+          for (const line of diagnostics) defaultRuntime.log(theme.muted(line));
+        } else {
+          warnings.push(timeoutLine);
+          warnings.push(...diagnostics);
+        }
+        fail(`Gateway restart timed out after ${restartWaitSeconds}s waiting for health checks.`, [
+          formatCliCommand("openclaw gateway status --deep"),
+          formatCliCommand("openclaw doctor")
+        ]);
+      }
+
+      let health = await waitForGatewayHealthyRestart({
+        service,
+        port: restartPort,
+        attempts: POST_RESTART_HEALTH_ATTEMPTS,
+        delayMs: POST_RESTART_HEALTH_DELAY_MS,
+        includeUnknownListenersAsStale: process.platform === "win32"
+      });
+
+      if (!health.healthy && health.staleGatewayPids.length > 0) {
+        const staleMsg = `Found stale gateway process(es): ${health.staleGatewayPids.join(", ")}.`;
+        warnings.push(staleMsg);
+        if (!json) {
+          defaultRuntime.log(theme.warn(staleMsg));
+          defaultRuntime.log(theme.muted("Stopping stale process(es) and retrying restart..."));
+        }
+        await terminateStaleGatewayPids(health.staleGatewayPids);
+        const retryRestart = await service.restart({ env: process.env, stdout });
+        if (retryRestart.outcome === "scheduled") return retryRestart;
+        health = await waitForGatewayHealthyRestart({
+          service,
+          port: restartPort,
+          attempts: POST_RESTART_HEALTH_ATTEMPTS,
+          delayMs: POST_RESTART_HEALTH_DELAY_MS,
+          includeUnknownListenersAsStale: process.platform === "win32"
+        });
+      }
+
+      if (health.healthy) return;
+
+      const diagnostics = renderRestartDiagnostics(health);
+      const timeoutLine = `Timed out after ${restartWaitSeconds}s waiting for gateway port ${restartPort} to become healthy.`;
+      const runningNoPortLine = health.runtime.status === "running" && health.portUsage.status === "free"
+        ? `Gateway process is running but port ${restartPort} is still free (startup hang/crash loop or very slow VM startup).`
+        : null;
+      if (!json) {
+        defaultRuntime.log(theme.warn(timeoutLine));
+        if (runningNoPortLine) defaultRuntime.log(theme.warn(runningNoPortLine));
+        for (const line of diagnostics) defaultRuntime.log(theme.muted(line));
+      } else {
+        warnings.push(timeoutLine);
+        if (runningNoPortLine) warnings.push(runningNoPortLine);
+        warnings.push(...diagnostics);
+      }
+
+      fail(`Gateway restart timed out after ${restartWaitSeconds}s waiting for health checks.`, [
+        formatCliCommand("openclaw gateway status --deep"),
+        formatCliCommand("openclaw doctor")
+      ]);
+    }
+  });
+}
+
+
 export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
   return await runServiceStart({
     serviceNoun: "Gateway",
@@ -147,7 +315,12 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
  * @returns `true` if restart succeeded, `false` if the service was not loaded.
  * Throws/exits on check or restart failures.
  */
-export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promise<boolean> {
+;
+}
+
+}
+
+): Promise<boolean> {
   const json = Boolean(opts.json);
   const service = resolveGatewayService();
   let restartedWithoutServiceManager = false;
@@ -262,3 +435,5 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
     },
   });
 }
+
+
