@@ -1233,6 +1233,41 @@ describe("agentCommand", () => {
     expect(callArgs?.agentAccountId).toBe("kev");
   });
 
+  it("forwards disableTools to embedded runs", async () => {
+    await withTempHome(async (home) => {
+      const {
+        agentCommand: freshAgentCommand,
+        configModuleFresh,
+        runEmbeddedPiAgentMock,
+        loadModelCatalogMock,
+        isCliProviderMock,
+      } = await loadFreshAgentCommandModulesForTest();
+      const freshConfigSpy = vi.spyOn(configModuleFresh, "loadConfig");
+      const store = path.join(home, "sessions.json");
+      freshConfigSpy.mockReturnValue({
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-4-5" },
+            models: { "anthropic/claude-opus-4-5": {} },
+            workspace: path.join(home, "openclaw"),
+          },
+        },
+        session: { store, mainKey: "main" },
+      } as OpenClawConfig);
+      loadModelCatalogMock.mockResolvedValue([]);
+      isCliProviderMock.mockReturnValue(false);
+      runEmbeddedPiAgentMock.mockResolvedValue(createDefaultAgentResult());
+
+      await freshAgentCommand({ message: "hi", to: "+1555", disableTools: true }, runtime);
+
+      expect(runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0]).toEqual(
+        expect.objectContaining({
+          disableTools: true,
+        }),
+      );
+    });
+  });
+
   it("logs output when delivery is disabled", async () => {
     await withTempHome(async (home) => {
       await runWithDefaultAgentConfig({
