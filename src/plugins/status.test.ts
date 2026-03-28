@@ -11,6 +11,7 @@ import {
 
 const loadConfigMock = vi.fn();
 const loadOpenClawPluginsMock = vi.fn();
+const applyPluginAutoEnableMock = vi.fn();
 const resolveBundledProviderCompatPluginIdsMock = vi.fn();
 const withBundledPluginAllowlistCompatMock = vi.fn();
 const withBundledPluginEnablementCompatMock = vi.fn();
@@ -24,6 +25,10 @@ let summarizePluginCompatibility: typeof import("./status.js").summarizePluginCo
 
 vi.mock("../config/config.js", () => ({
   loadConfig: () => loadConfigMock(),
+}));
+
+vi.mock("../config/plugin-auto-enable.js", () => ({
+  applyPluginAutoEnable: (...args: unknown[]) => applyPluginAutoEnableMock(...args),
 }));
 
 vi.mock("./loader.js", () => ({
@@ -107,10 +112,15 @@ describe("buildPluginStatusReport", () => {
     vi.resetModules();
     loadConfigMock.mockReset();
     loadOpenClawPluginsMock.mockReset();
+    applyPluginAutoEnableMock.mockReset();
     resolveBundledProviderCompatPluginIdsMock.mockReset();
     withBundledPluginAllowlistCompatMock.mockReset();
     withBundledPluginEnablementCompatMock.mockReset();
     loadConfigMock.mockReturnValue({});
+    applyPluginAutoEnableMock.mockImplementation((params: { config: unknown }) => ({
+      config: params.config,
+      changes: [],
+    }));
     resolveBundledProviderCompatPluginIdsMock.mockReturnValue([]);
     withBundledPluginAllowlistCompatMock.mockImplementation(
       (params: { config: unknown }) => params.config,
@@ -144,6 +154,32 @@ describe("buildPluginStatusReport", () => {
       workspaceDir: "/workspace",
       env,
     });
+  });
+
+  it("loads plugin status from the auto-enabled config snapshot", () => {
+    const rawConfig = {
+      plugins: {},
+      channels: { demo: { enabled: true } },
+    };
+    const autoEnabledConfig = {
+      ...rawConfig,
+      plugins: {
+        entries: {
+          demo: { enabled: true },
+        },
+      },
+    };
+    applyPluginAutoEnableMock.mockReturnValue({ config: autoEnabledConfig, changes: [] });
+
+    buildPluginStatusReport({ config: rawConfig });
+
+    expect(applyPluginAutoEnableMock).toHaveBeenCalledWith({
+      config: rawConfig,
+      env: process.env,
+    });
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ config: autoEnabledConfig }),
+    );
   });
 
   it("applies the full bundled provider compat chain before loading plugins", () => {
