@@ -46,6 +46,18 @@ file messages via any DingTalk client.
 openclaw plugins install @largezhou/ddingtalk
 ```
 
+### ElevenLabs STT
+
+ElevenLabs batch speech-to-text provider for OpenClaw inbound audio
+transcription.
+
+- **npm:** `@mkv21/elevenlabs-stt`
+- **repo:** [github.com/MKV21/openclaw-elevenlabs-stt](https://github.com/MKV21/openclaw-elevenlabs-stt)
+
+```bash
+openclaw plugins install @mkv21/elevenlabs-stt
+```
+
 ### Lossless Claw (LCM)
 
 Lossless Context Management plugin for OpenClaw. DAG-based conversation
