@@ -164,4 +164,96 @@ describe("gateway startup session recovery", () => {
       await fs.rm(stateDir, { recursive: true, force: true });
     }
   });
+
+  it("reconciles running sessions from a configured custom store path", async () => {
+    const { __testing } = await import("./server-startup.js");
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-startup-custom-store-"));
+    const customStorePath = path.join(stateDir, "custom", "sessions.json");
+    const nowMs = 1_700_000_100_000;
+
+    try {
+      await fs.mkdir(path.dirname(customStorePath), { recursive: true });
+      await saveSessionStore(customStorePath, {
+        "session:custom-running": {
+          sessionId: "session-custom-running",
+          updatedAt: nowMs - 10_000,
+          status: "running",
+          startedAt: nowMs - 20_000,
+        },
+      });
+
+      await expect(
+        __testing.reconcilePersistedRunningSessionsOnStartup({
+          stateDir,
+          configuredStore: customStorePath,
+          nowMs,
+          log: { warn: vi.fn() },
+        }),
+      ).resolves.toEqual({
+        storesChecked: 1,
+        sessionsReconciled: 1,
+      });
+
+      const store = loadSessionStore(customStorePath, { skipCache: true });
+      expect(store["session:custom-running"]).toMatchObject({
+        status: "killed",
+        endedAt: nowMs,
+        runtimeMs: 20_000,
+        updatedAt: nowMs,
+      });
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("continues reconciliation when one candidate store cannot be loaded", async () => {
+    const { __testing } = await import("./server-startup.js");
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-startup-partial-store-"));
+    const sessionsDir = path.join(stateDir, "agents", "main", "sessions");
+    const validStorePath = path.join(sessionsDir, "sessions.json");
+    const blockedDir = path.join(stateDir, "blocked-store-dir");
+    const blockedStorePath = path.join(blockedDir, "sessions.json");
+    const nowMs = 1_700_000_200_000;
+    const warn = vi.fn();
+
+    try {
+      await fs.mkdir(sessionsDir, { recursive: true });
+      await saveSessionStore(validStorePath, {
+        "session:running": {
+          sessionId: "session-running",
+          updatedAt: nowMs - 5_000,
+          status: "running",
+          startedAt: nowMs - 30_000,
+        },
+      });
+      await fs.mkdir(blockedDir, { recursive: true });
+      await fs.chmod(blockedDir, 0o000);
+
+      await expect(
+        __testing.reconcilePersistedRunningSessionsOnStartup({
+          stateDir,
+          configuredStore: blockedStorePath,
+          nowMs,
+          log: { warn },
+        }),
+      ).resolves.toEqual({
+        storesChecked: 1,
+        sessionsReconciled: 1,
+      });
+
+      const store = loadSessionStore(validStorePath, { skipCache: true });
+      expect(store["session:running"]).toMatchObject({
+        status: "killed",
+        endedAt: nowMs,
+        runtimeMs: 30_000,
+        updatedAt: nowMs,
+      });
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("skipping session startup recovery"),
+      );
+    } finally {
+      await fs.chmod(blockedDir, 0o700).catch(() => {});
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
 });

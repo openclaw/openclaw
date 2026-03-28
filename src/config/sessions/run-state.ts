@@ -26,7 +26,7 @@ export function applyKilledSessionEntryState(
   if (isFiniteTimestamp(entry.startedAt)) {
     entry.runtimeMs = Math.max(0, endedAt - entry.startedAt);
   }
-  if (params.markAbortedLastRun !== false) {
+  if (params.markAbortedLastRun === true) {
     entry.abortedLastRun = true;
   }
 

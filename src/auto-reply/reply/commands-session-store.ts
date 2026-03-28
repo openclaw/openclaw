@@ -8,6 +8,10 @@ import type { CommandHandler } from "./commands-types.js";
 
 type CommandParams = Parameters<CommandHandler>[0];
 
+function shouldApplyKilledSessionState(entry: SessionEntry): boolean {
+  return entry.status === undefined || entry.status === "running";
+}
+
 export async function persistSessionEntry(params: CommandParams): Promise<boolean> {
   if (!params.sessionEntry || !params.sessionStore || !params.sessionKey) {
     return false;
@@ -36,7 +40,12 @@ export async function persistAbortTargetEntry(params: {
   }
 
   const nowMs = Date.now();
-  applyKilledSessionEntryState(entry, { nowMs, markAbortedLastRun: true });
+  if (shouldApplyKilledSessionState(entry)) {
+    applyKilledSessionEntryState(entry, { nowMs, markAbortedLastRun: true });
+  } else {
+    entry.abortedLastRun = true;
+    entry.updatedAt = nowMs;
+  }
   applyAbortCutoffToSessionEntry(entry, abortCutoff);
   sessionStore[key] = entry;
   for (const legacyKey of legacyKeys ?? []) {
@@ -51,7 +60,12 @@ export async function persistAbortTargetEntry(params: {
       if (!nextEntry) {
         return;
       }
-      applyKilledSessionEntryState(nextEntry, { nowMs, markAbortedLastRun: true });
+      if (shouldApplyKilledSessionState(nextEntry)) {
+        applyKilledSessionEntryState(nextEntry, { nowMs, markAbortedLastRun: true });
+      } else {
+        nextEntry.abortedLastRun = true;
+        nextEntry.updatedAt = nowMs;
+      }
       applyAbortCutoffToSessionEntry(nextEntry, abortCutoff);
       store[key] = nextEntry;
       for (const legacyKey of legacyKeys ?? []) {

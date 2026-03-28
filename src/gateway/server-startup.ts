@@ -21,6 +21,7 @@ import { resolveStateDir } from "../config/paths.js";
 import {
   applyKilledSessionEntryState,
   loadSessionStore,
+  resolveStorePath,
   updateSessionStore,
 } from "../config/sessions.js";
 import { startGmailWatcherWithLogs } from "../hooks/gmail-watcher-lifecycle.js";
@@ -41,6 +42,47 @@ import { startGatewayMemoryBackend } from "./server-startup-memory.js";
 
 const SESSION_LOCK_STALE_MS = 30 * 60 * 1000;
 const SESSION_STORE_FILE_NAME = "sessions.json";
+
+function resolveAgentIdFromSessionsDir(sessionsDir: string): string | undefined {
+  if (path.basename(sessionsDir) !== "sessions") {
+    return undefined;
+  }
+  const agentId = path.basename(path.dirname(sessionsDir)).trim();
+  return agentId || undefined;
+}
+
+async function resolveSessionStorePathsForStartup(params: {
+  stateDir: string;
+  configuredStore?: string;
+}): Promise<string[]> {
+  const storePaths = new Set<string>();
+  const agentIds = new Set<string>();
+  const sessionDirs = await resolveAgentSessionDirs(params.stateDir);
+  for (const sessionsDir of sessionDirs) {
+    storePaths.add(path.join(sessionsDir, SESSION_STORE_FILE_NAME));
+    const agentId = resolveAgentIdFromSessionsDir(sessionsDir);
+    if (agentId) {
+      agentIds.add(agentId);
+    }
+  }
+
+  const configuredStore = params.configuredStore?.trim();
+  if (configuredStore) {
+    if (configuredStore.includes("{agentId}")) {
+      if (agentIds.size === 0) {
+        storePaths.add(resolveStorePath(configuredStore));
+      } else {
+        for (const agentId of agentIds) {
+          storePaths.add(resolveStorePath(configuredStore, { agentId }));
+        }
+      }
+    } else {
+      storePaths.add(resolveStorePath(configuredStore));
+    }
+  }
+
+  return [...storePaths].toSorted((a, b) => a.localeCompare(b));
+}
 
 async function prewarmConfiguredPrimaryModel(params: {
   cfg: ReturnType<typeof loadConfig>;
@@ -71,16 +113,19 @@ async function prewarmConfiguredPrimaryModel(params: {
 
 async function reconcilePersistedRunningSessionsOnStartup(params: {
   stateDir: string;
+  configuredStore?: string;
   nowMs?: number;
   log?: { warn?: (msg: string) => void };
 }): Promise<{ storesChecked: number; sessionsReconciled: number }> {
   const nowMs = params.nowMs ?? Date.now();
-  const sessionDirs = await resolveAgentSessionDirs(params.stateDir);
+  const storePaths = await resolveSessionStorePathsForStartup({
+    stateDir: params.stateDir,
+    configuredStore: params.configuredStore,
+  });
   let storesChecked = 0;
   let sessionsReconciled = 0;
 
-  for (const sessionsDir of sessionDirs) {
-    const storePath = path.join(sessionsDir, SESSION_STORE_FILE_NAME);
+  for (const storePath of storePaths) {
     try {
       await fs.access(storePath);
     } catch (err) {
@@ -88,26 +133,40 @@ async function reconcilePersistedRunningSessionsOnStartup(params: {
       if (code === "ENOENT") {
         continue;
       }
-      throw err;
+      params.log?.warn?.(`skipping session startup recovery for ${storePath}: ${String(err)}`);
+      continue;
+    }
+
+    let store: ReturnType<typeof loadSessionStore>;
+    try {
+      store = loadSessionStore(storePath, { skipCache: true });
+    } catch (err) {
+      params.log?.warn?.(`skipping session startup recovery for ${storePath}: ${String(err)}`);
+      continue;
     }
 
     storesChecked += 1;
-    const store = loadSessionStore(storePath, { skipCache: true });
     if (!Object.values(store).some((entry) => entry?.status === "running")) {
       continue;
     }
 
-    const reconciledInStore = await updateSessionStore(storePath, (nextStore) => {
-      let reconciledCount = 0;
-      for (const entry of Object.values(nextStore)) {
-        if (!entry || entry.status !== "running") {
-          continue;
+    let reconciledInStore = 0;
+    try {
+      reconciledInStore = await updateSessionStore(storePath, (nextStore) => {
+        let reconciledCount = 0;
+        for (const entry of Object.values(nextStore)) {
+          if (!entry || entry.status !== "running") {
+            continue;
+          }
+          applyKilledSessionEntryState(entry, { nowMs, markAbortedLastRun: false });
+          reconciledCount += 1;
         }
-        applyKilledSessionEntryState(entry, { nowMs, markAbortedLastRun: false });
-        reconciledCount += 1;
-      }
-      return reconciledCount;
-    });
+        return reconciledCount;
+      });
+    } catch (err) {
+      params.log?.warn?.(`skipping session startup recovery for ${storePath}: ${String(err)}`);
+      continue;
+    }
 
     if (reconciledInStore > 0) {
       sessionsReconciled += reconciledInStore;
@@ -134,8 +193,8 @@ export async function startGatewaySidecars(params: {
   };
   logChannels: { info: (msg: string) => void; error: (msg: string) => void };
 }) {
+  const stateDir = resolveStateDir(process.env);
   try {
-    const stateDir = resolveStateDir(process.env);
     const sessionDirs = await resolveAgentSessionDirs(stateDir);
     for (const sessionsDir of sessionDirs) {
       await cleanStaleLockFiles({
@@ -145,8 +204,14 @@ export async function startGatewaySidecars(params: {
         log: { warn: (message) => params.log.warn(message) },
       });
     }
+  } catch (err) {
+    params.log.warn(`session lock cleanup failed on startup: ${String(err)}`);
+  }
+
+  try {
     await reconcilePersistedRunningSessionsOnStartup({
       stateDir,
+      configuredStore: params.cfg.session?.store,
       log: params.log,
     });
   } catch (err) {
