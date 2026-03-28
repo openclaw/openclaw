@@ -444,6 +444,21 @@ export class OpenClawApp extends LitElement {
   @state() logsMaxBytes = 250_000;
   @state() logsAtBottom = true;
 
+  // Projects view state
+  @state() projectsView: "list" | "dashboard" = "list";
+  @state() projectsName: string | null = null;
+  @state() projectsSubProject: string | null = null;
+  @state() projectsList: Array<{ name: string } & Record<string, unknown>> | null = null;
+  @state() projectsBoards: Record<string, Record<string, unknown>> = {};
+  @state() projectsQueues: Record<string, Record<string, unknown>> = {};
+  @state() projectData: Record<string, unknown> | null = null;
+  @state() projectBoard: Record<string, unknown> | null = null;
+  @state() projectQueue: Record<string, unknown> | null = null;
+  @state() projectsLoading = false;
+  @state() projectsError: string | null = null;
+  @state() projectDashboardLoading = false;
+  @state() projectDashboardError: string | null = null;
+
   client: GatewayBrowserClient | null = null;
   private chatScrollFrame: number | null = null;
   private chatScrollTimeout: number | null = null;

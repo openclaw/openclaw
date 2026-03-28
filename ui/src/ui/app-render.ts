@@ -138,6 +138,7 @@ const lazyLogs = createLazy(() => import("./views/logs.ts"));
 const lazyNodes = createLazy(() => import("./views/nodes.ts"));
 const lazySessions = createLazy(() => import("./views/sessions.ts"));
 const lazySkills = createLazy(() => import("./views/skills.ts"));
+const lazyProjects = createLazy(() => import("./views/projects.ts"));
 
 function lazyRender<M>(getter: () => M | null, render: (mod: M) => unknown) {
   const mod = getter();
@@ -2036,6 +2037,66 @@ export function renderApp(state: AppViewState) {
                   onRefresh: () => loadLogs(state, { reset: true }),
                   onExport: (lines, label) => state.exportLogs(lines, label),
                   onScroll: (event) => state.handleLogsScroll(event),
+                }),
+              )
+            : nothing
+        }
+
+        ${
+          state.tab === "projects"
+            ? lazyRender(lazyProjects, (m) =>
+                m.renderProjects({
+                  view: state.projectsView,
+                  projectName: state.projectsName,
+                  subProjectName: state.projectsSubProject,
+                  projectsList: state.projectsList as import("./controllers/projects.ts").ProjectListEntry[] | null,
+                  projectsBoards: state.projectsBoards as Record<string, import("./controllers/projects.ts").BoardIndex>,
+                  projectsQueues: state.projectsQueues as Record<string, import("./controllers/projects.ts").QueueIndex>,
+                  projectData: state.projectData as import("./controllers/projects.ts").ProjectListEntry | null,
+                  projectBoard: state.projectBoard as import("./controllers/projects.ts").BoardIndex | null,
+                  projectQueue: state.projectQueue as import("./controllers/projects.ts").QueueIndex | null,
+                  projectsLoading: state.projectsLoading,
+                  projectsError: state.projectsError,
+                  projectDashboardLoading: state.projectDashboardLoading,
+                  projectDashboardError: state.projectDashboardError,
+                  onSelectProject: (name: string) => {
+                    state.projectsView = "dashboard";
+                    const url = new URL(window.location.href);
+                    if (name.includes("/")) {
+                      // Sub-project: name is "parent/child" per D-14
+                      const [parent, ...rest] = name.split("/");
+                      const child = rest.join("/");
+                      state.projectsName = parent;
+                      state.projectsSubProject = child;
+                      url.pathname = `${state.basePath}/projects/${parent}/sub/${child}`;
+                    } else {
+                      state.projectsName = name;
+                      state.projectsSubProject = null;
+                      url.pathname = `${state.basePath}/projects/${name}`;
+                    }
+                    window.history.pushState({}, "", url.toString());
+                    void import("./controllers/projects.ts").then((mod) =>
+                      mod.loadProjectDashboard(
+                        state as unknown as Parameters<typeof mod.loadProjectDashboard>[0],
+                        name,
+                      ),
+                    );
+                  },
+                  onNavigateList: () => {
+                    state.projectsView = "list";
+                    state.projectsName = null;
+                    state.projectsSubProject = null;
+                    const url = new URL(window.location.href);
+                    url.pathname = `${state.basePath}/projects`;
+                    window.history.pushState({}, "", url.toString());
+                  },
+                  onRefresh: () => {
+                    void import("./controllers/projects.ts").then((mod) =>
+                      mod.loadProjects(
+                        state as unknown as Parameters<typeof mod.loadProjects>[0],
+                      ),
+                    );
+                  },
                 }),
               )
             : nothing
