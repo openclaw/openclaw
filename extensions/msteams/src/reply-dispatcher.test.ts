@@ -99,9 +99,12 @@ describe("createMSTeamsReplyDispatcher", () => {
     });
   });
 
-  function createDispatcher(conversationType: string = "personal") {
+  function createDispatcher(
+    conversationType: string = "personal",
+    msteamsConfig: Record<string, unknown> = {},
+  ) {
     return createMSTeamsReplyDispatcher({
-      cfg: { channels: { msteams: {} } } as never,
+      cfg: { channels: { msteams: msteamsConfig } } as never,
       agentId: "agent",
       runtime: { error: vi.fn() } as never,
       log: { debug: vi.fn(), error: vi.fn(), warn: vi.fn() } as never,
@@ -160,6 +163,48 @@ describe("createMSTeamsReplyDispatcher", () => {
     createDispatcher("channel");
 
     expect(streamInstances).toHaveLength(0);
+  });
+
+  it("sets disableBlockStreaming=false when blockStreaming=true", () => {
+    const dispatcher = createDispatcher("personal", { blockStreaming: true });
+
+    expect(dispatcher.replyOptions.disableBlockStreaming).toBe(false);
+  });
+
+  it("sets disableBlockStreaming=true when blockStreaming=false", () => {
+    const dispatcher = createDispatcher("personal", { blockStreaming: false });
+
+    expect(dispatcher.replyOptions.disableBlockStreaming).toBe(true);
+  });
+
+  it("leaves disableBlockStreaming undefined when blockStreaming is not set", () => {
+    const dispatcher = createDispatcher("personal", {});
+
+    expect(dispatcher.replyOptions.disableBlockStreaming).toBeUndefined();
+  });
+
+  it("flushes messages immediately on deliver when blockStreaming is enabled", async () => {
+    renderReplyPayloadsToMessagesMock.mockReturnValue([{ content: "hello" }] as never);
+    sendMSTeamsMessagesMock.mockResolvedValue(["id-1"] as never);
+
+    createDispatcher("personal", { blockStreaming: true });
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+
+    // Call deliver — with blockStreaming enabled it should flush immediately
+    await options.deliver({ text: "block content" });
+
+    expect(sendMSTeamsMessagesMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not flush messages on deliver when blockStreaming is disabled", async () => {
+    renderReplyPayloadsToMessagesMock.mockReturnValue([{ content: "hello" }] as never);
+
+    createDispatcher("personal", { blockStreaming: false });
+    const options = createReplyDispatcherWithTypingMock.mock.calls[0]?.[0];
+
+    await options.deliver({ text: "block content" });
+
+    expect(sendMSTeamsMessagesMock).not.toHaveBeenCalled();
   });
 });
 
