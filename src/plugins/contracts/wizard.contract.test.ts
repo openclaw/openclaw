@@ -102,45 +102,36 @@ const TEST_PROVIDER_IDS = TEST_PROVIDERS.map((provider) => provider.id).toSorted
 );
 
 function resolveExpectedWizardChoiceValues(providers: ProviderPlugin[]) {
-  const values: string[] = [];
-
-  for (const provider of providers) {
-    const methodSetups = provider.auth.filter((method) => method.wizard);
-    if (methodSetups.length > 0) {
-      values.push(
-        ...methodSetups.map(
+  return providers
+    .flatMap((provider) => {
+      const methodSetups = provider.auth.filter((method) => method.wizard);
+      if (methodSetups.length > 0) {
+        return methodSetups.map(
           (method) =>
             method.wizard?.choiceId?.trim() ||
             buildProviderPluginMethodChoice(provider.id, method.id),
-        ),
-      );
-      continue;
-    }
+        );
+      }
 
-    const setup = provider.wizard?.setup;
-    if (!setup) {
-      continue;
-    }
+      const setup = provider.wizard?.setup;
+      if (!setup) {
+        return [];
+      }
 
-    const explicitMethodId = setup.methodId?.trim();
-    if (explicitMethodId && provider.auth.some((method) => method.id === explicitMethodId)) {
-      values.push(
-        setup.choiceId?.trim() || buildProviderPluginMethodChoice(provider.id, explicitMethodId),
-      );
-      continue;
-    }
+      const explicitMethodId = setup.methodId?.trim();
+      if (explicitMethodId && provider.auth.some((method) => method.id === explicitMethodId)) {
+        return [
+          setup.choiceId?.trim() || buildProviderPluginMethodChoice(provider.id, explicitMethodId),
+        ];
+      }
 
-    if (provider.auth.length === 1) {
-      values.push(setup.choiceId?.trim() || provider.id);
-      continue;
-    }
+      if (provider.auth.length === 1) {
+        return [setup.choiceId?.trim() || provider.id];
+      }
 
-    values.push(
-      ...provider.auth.map((method) => buildProviderPluginMethodChoice(provider.id, method.id)),
-    );
-  }
-
-  return values.toSorted((left, right) => left.localeCompare(right));
+      return provider.auth.map((method) => buildProviderPluginMethodChoice(provider.id, method.id));
+    })
+    .toSorted((left, right) => left.localeCompare(right));
 }
 
 function resolveExpectedModelPickerValues(providers: ProviderPlugin[]) {
@@ -193,24 +184,16 @@ describe("provider wizard contract", () => {
   it("round-trips every shared wizard choice back to its provider and auth method", () => {
     const options = resolveProviderWizardOptions({ config: {}, env: process.env });
 
-    expect(options).toEqual(
-      expect.arrayContaining(
-        options.map((option) =>
-          expect.objectContaining({
-            value: option.value,
-          }),
-        ),
-      ),
-    );
-    for (const option of options) {
-      const resolved = resolveProviderPluginChoice({
-        providers: TEST_PROVIDERS,
-        choice: option.value,
-      });
-      expect(resolved, option.value).not.toBeNull();
-      expect(resolved?.provider.id, option.value).toBeTruthy();
-      expect(resolved?.method.id, option.value).toBeTruthy();
-    }
+    expect(
+      options.every((option) => {
+        const resolved = resolveProviderPluginChoice({
+          providers: TEST_PROVIDERS,
+          choice: option.value,
+        });
+        return Boolean(resolved?.provider.id && resolved?.method.id);
+      }),
+      options.map((option) => option.value).join(", "),
+    ).toBe(true);
   });
 
   it("exposes every model-picker entry through the shared wizard layer", () => {
@@ -219,12 +202,16 @@ describe("provider wizard contract", () => {
     expect(
       entries.map((entry) => entry.value).toSorted((left, right) => left.localeCompare(right)),
     ).toEqual(resolveExpectedModelPickerValues(TEST_PROVIDERS));
-    for (const entry of entries) {
-      const resolved = resolveProviderPluginChoice({
-        providers: TEST_PROVIDERS,
-        choice: entry.value,
-      });
-      expect(resolved, entry.value).not.toBeNull();
-    }
+    expect(
+      entries.every((entry) =>
+        Boolean(
+          resolveProviderPluginChoice({
+            providers: TEST_PROVIDERS,
+            choice: entry.value,
+          }),
+        ),
+      ),
+      entries.map((entry) => entry.value).join(", "),
+    ).toBe(true);
   });
 });
