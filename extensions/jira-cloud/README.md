@@ -5,7 +5,7 @@ Adds a Jira Cloud skill bundle for issue triage, planning, and release follow-up
 ## Install
 
 ```bash
-openclaw plugins install @kansodata/jira-cloud
+openclaw plugins install @openclaw/jira-cloud
 ```
 
 ## Enable
