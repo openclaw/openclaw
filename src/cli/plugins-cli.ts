@@ -17,7 +17,11 @@ import {
   buildPluginStatusReport,
   formatPluginCompatibilityNotice,
 } from "../plugins/status.js";
-import { resolveUninstallDirectoryTarget, uninstallPlugin } from "../plugins/uninstall.js";
+import {
+  resolveUninstallChannelConfigKeys,
+  resolveUninstallDirectoryTarget,
+  uninstallPlugin,
+} from "../plugins/uninstall.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
@@ -627,10 +631,9 @@ export function registerPluginsCli(program: Command) {
         preview.push(`memory slot (will reset to "memory-core")`);
       }
       const channelIds = plugin?.status === "loaded" ? plugin.channelIds : undefined;
-      const channelKeysToRemove = channelIds && channelIds.length > 0 ? channelIds : [pluginId];
       const channels = cfg.channels as Record<string, unknown> | undefined;
       if (hasInstall && channels) {
-        for (const key of channelKeysToRemove) {
+        for (const key of resolveUninstallChannelConfigKeys(pluginId, { channelIds })) {
           if (Object.hasOwn(channels, key)) {
             preview.push(`channel config (channels.${key})`);
           }

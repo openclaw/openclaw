@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolvePluginInstallDir } from "./install.js";
 import {
   removePluginFromConfig,
+  resolveUninstallChannelConfigKeys,
   resolveUninstallDirectoryTarget,
   uninstallPlugin,
 } from "./uninstall.js";
@@ -100,6 +101,24 @@ async function createPluginDirFixture(baseDir: string, pluginId = "my-plugin") {
   await fs.writeFile(path.join(pluginDir, "index.js"), "// plugin");
   return pluginDir;
 }
+
+describe("resolveUninstallChannelConfigKeys", () => {
+  it("falls back to pluginId when channelIds are unknown", () => {
+    expect(resolveUninstallChannelConfigKeys("timbot")).toEqual(["timbot"]);
+  });
+
+  it("keeps explicit empty channelIds as remove-nothing", () => {
+    expect(resolveUninstallChannelConfigKeys("telegram", { channelIds: [] })).toEqual([]);
+  });
+
+  it("filters shared keys and duplicate channel ids", () => {
+    expect(
+      resolveUninstallChannelConfigKeys("bad-plugin", {
+        channelIds: ["defaults", "discord", "discord", "modelByChannel", "slack"],
+      }),
+    ).toEqual(["discord", "slack"]);
+  });
+});
 
 describe("removePluginFromConfig", () => {
   it("removes plugin from entries", () => {

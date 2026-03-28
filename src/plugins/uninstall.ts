@@ -59,9 +59,34 @@ export function resolveUninstallDirectoryTarget(params: {
   return defaultPath;
 }
 
+const SHARED_CHANNEL_CONFIG_KEYS = new Set(["defaults", "modelByChannel"]);
+
+/**
+ * Resolve the channel config keys owned by a plugin during uninstall.
+ * - `channelIds === undefined`: fall back to the plugin id for backward compatibility.
+ * - `channelIds === []`: explicit "owns no channels" signal; remove nothing.
+ */
+export function resolveUninstallChannelConfigKeys(
+  pluginId: string,
+  opts?: { channelIds?: string[] },
+): string[] {
+  const rawKeys = opts?.channelIds ?? [pluginId];
+  const seen = new Set<string>();
+  const keys: string[] = [];
+  for (const key of rawKeys) {
+    if (SHARED_CHANNEL_CONFIG_KEYS.has(key) || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    keys.push(key);
+  }
+  return keys;
+}
+
 /**
  * Remove plugin references from config (pure config mutation).
- * Returns a new config with the plugin removed from entries, installs, allow, load.paths, slots, and channels.
+ * Returns a new config with the plugin removed from entries, installs, allow, load.paths, slots,
+ * and owned channel config.
  */
 export function removePluginFromConfig(
   cfg: OpenClawConfig,
@@ -158,27 +183,20 @@ export function removePluginFromConfig(
     delete cleanedPlugins.slots;
   }
 
-  // Remove channel config owned by this plugin.
-  // Only clean up channels explicitly declared by the plugin (via opts.channelIds).
-  // When channelIds is not provided, falls back to [pluginId] for backward compat.
-  // When channelIds is an empty array, the plugin owns no channels — skip cleanup
-  // so an installed plugin whose id collides with a built-in channel key won't
-  // accidentally wipe unrelated channel credentials.
-  // Skip shared config keys that are not channel ids.
-  const CHANNELS_SHARED_KEYS = new Set(["defaults", "modelByChannel"]);
-  const installRecords = cfg.plugins?.installs ?? {};
-  const hasInstallRecord = Object.hasOwn(installRecords, pluginId);
+  // Remove channel config owned by this installed plugin.
+  // Built-in channels have no install record, so keep their config untouched.
+  const hasInstallRecord = Object.hasOwn(cfg.plugins?.installs ?? {}, pluginId);
   let channels = cfg.channels as Record<string, unknown> | undefined;
   if (hasInstallRecord && channels) {
-    const keysToRemove = opts?.channelIds ?? [pluginId];
-    for (const key of keysToRemove) {
-      if (Object.hasOwn(channels, key) && !CHANNELS_SHARED_KEYS.has(key)) {
-        const { [key]: _, ...rest } = channels;
-        channels = Object.keys(rest).length > 0 ? rest : undefined;
-        actions.channelConfig = true;
-        if (!channels) {
-          break;
-        }
+    for (const key of resolveUninstallChannelConfigKeys(pluginId, opts)) {
+      if (!Object.hasOwn(channels, key)) {
+        continue;
+      }
+      const { [key]: _removed, ...rest } = channels;
+      channels = Object.keys(rest).length > 0 ? rest : undefined;
+      actions.channelConfig = true;
+      if (!channels) {
+        break;
       }
     }
   }
