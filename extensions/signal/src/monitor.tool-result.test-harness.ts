@@ -179,6 +179,19 @@ vi.mock("./daemon.js", async () => {
   };
 });
 
+vi.mock("openclaw/plugin-sdk/channel-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-runtime")>(
+    "openclaw/plugin-sdk/channel-runtime",
+  );
+  return {
+    ...actual,
+    enqueueSystemEvent: (...args: Parameters<typeof actual.enqueueSystemEvent>) => {
+      enqueueSystemEventMock(...args);
+      return actual.enqueueSystemEvent(...args);
+    },
+  };
+});
+
 vi.mock("openclaw/plugin-sdk/infra-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/infra-runtime")>(
     "openclaw/plugin-sdk/infra-runtime",
@@ -186,10 +199,6 @@ vi.mock("openclaw/plugin-sdk/infra-runtime", async () => {
   return {
     ...actual,
     waitForTransportReady: (...args: unknown[]) => waitForTransportReadyMock(...args),
-    enqueueSystemEvent: (...args: Parameters<typeof actual.enqueueSystemEvent>) => {
-      enqueueSystemEventMock(...args);
-      return actual.enqueueSystemEvent(...args);
-    },
   };
 });
 
