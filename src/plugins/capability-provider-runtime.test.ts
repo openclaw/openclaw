@@ -105,27 +105,6 @@ function setBundledCapabilityFixture(contractKey: string) {
   });
 }
 
-function setActiveSpeechCapabilityRegistry(providerId: string) {
-  const active = createEmptyPluginRegistry();
-  active.speechProviders.push({
-    pluginId: providerId,
-    pluginName: "OpenAI",
-    source: "test",
-    provider: {
-      id: providerId,
-      label: "OpenAI",
-      isConfigured: () => true,
-      synthesize: async () => ({
-        audioBuffer: Buffer.from("x"),
-        outputFormat: "mp3",
-        voiceCompatible: false,
-        fileExtension: ".mp3",
-      }),
-    },
-  });
-  setActivePluginRegistry(active);
-}
-
 function expectCompatChainApplied(params: {
   key: "speechProviders" | "mediaUnderstandingProviders" | "imageGenerationProviders";
   contractKey: string;
