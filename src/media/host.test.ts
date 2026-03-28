@@ -28,65 +28,119 @@ const { ensureMediaHosted } = await import("./host.js");
 const { PortInUseError } = await import("../infra/ports.js");
 
 describe("ensureMediaHosted", () => {
+  function mockSavedMedia(id: string, size: number) {
+    saveMediaSource.mockResolvedValue({
+      id,
+      path: `/tmp/${id}`,
+      size,
+    });
+  }
+
+  async function expectHostedMediaCase(
+    params:
+      | {
+          filePath: string;
+          savedMedia: { id: string; size: number };
+          tailnetHostname: string;
+          startServer: boolean;
+          expectedError: RegExp;
+          expectedCleanupPath: string;
+        }
+      | {
+          filePath: string;
+          savedMedia: { id: string; size: number };
+          tailnetHostname: string;
+          port: number;
+          startServer: boolean;
+          ensurePortError?: Error;
+          expectedUrl: string;
+          expectServerStart: boolean;
+        },
+  ) {
+    getTailnetHostname.mockResolvedValue(params.tailnetHostname);
+    if ("expectedError" in params) {
+      saveMediaSource.mockResolvedValue({
+        id: params.savedMedia.id,
+        path: params.filePath,
+        size: params.savedMedia.size,
+      });
+      ensurePortAvailable.mockResolvedValue(undefined);
+      const rmSpy = vi.spyOn(fs, "rm").mockResolvedValue(undefined);
+
+      await expect(
+        ensureMediaHosted(params.filePath, { startServer: params.startServer }),
+      ).rejects.toThrow(params.expectedError);
+      expect(rmSpy).toHaveBeenCalledWith(params.expectedCleanupPath);
+      rmSpy.mockRestore();
+      return;
+    }
+
+    mockSavedMedia(params.savedMedia.id, params.savedMedia.size);
+    if (params.ensurePortError) {
+      ensurePortAvailable.mockRejectedValue(params.ensurePortError);
+    } else {
+      ensurePortAvailable.mockResolvedValue(undefined);
+      startMediaServer.mockResolvedValue({ unref: vi.fn() } as unknown as Server);
+    }
+
+    const result = await ensureMediaHosted(params.filePath, {
+      startServer: params.startServer,
+      port: params.port,
+    });
+
+    if (params.expectServerStart) {
+      expect(startMediaServer).toHaveBeenCalledWith(
+        params.port,
+        expect.any(Number),
+        expect.anything(),
+      );
+      expect(logInfo).toHaveBeenCalled();
+    } else {
+      expect(startMediaServer).not.toHaveBeenCalled();
+    }
+    expect(result).toEqual({
+      url: params.expectedUrl,
+      id: params.savedMedia.id,
+      size: params.savedMedia.size,
+    });
+  }
+
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it("throws and cleans up when server not allowed to start", async () => {
-    saveMediaSource.mockResolvedValue({
-      id: "id1",
-      path: "/tmp/file1",
-      size: 5,
-    });
-    getTailnetHostname.mockResolvedValue("tailnet-host");
-    ensurePortAvailable.mockResolvedValue(undefined);
-    const rmSpy = vi.spyOn(fs, "rm").mockResolvedValue(undefined);
-
-    await expect(ensureMediaHosted("/tmp/file1", { startServer: false })).rejects.toThrow(
-      "requires the webhook/Funnel server",
-    );
-    expect(rmSpy).toHaveBeenCalledWith("/tmp/file1");
-    rmSpy.mockRestore();
-  });
-
-  it("starts media server when allowed", async () => {
-    saveMediaSource.mockResolvedValue({
-      id: "id2",
-      path: "/tmp/file2",
-      size: 9,
-    });
-    getTailnetHostname.mockResolvedValue("tail.net");
-    ensurePortAvailable.mockResolvedValue(undefined);
-    const fakeServer = { unref: vi.fn() } as unknown as Server;
-    startMediaServer.mockResolvedValue(fakeServer);
-
-    const result = await ensureMediaHosted("/tmp/file2", {
-      startServer: true,
-      port: 1234,
-    });
-    expect(startMediaServer).toHaveBeenCalledWith(1234, expect.any(Number), expect.anything());
-    expect(logInfo).toHaveBeenCalled();
-    expect(result).toEqual({
-      url: "https://tail.net/media/id2",
-      id: "id2",
-      size: 9,
-    });
-  });
-
-  it("skips server start when port already in use", async () => {
-    saveMediaSource.mockResolvedValue({
-      id: "id3",
-      path: "/tmp/file3",
-      size: 7,
-    });
-    getTailnetHostname.mockResolvedValue("tail.net");
-    ensurePortAvailable.mockRejectedValue(new PortInUseError(3000, "proc"));
-
-    const result = await ensureMediaHosted("/tmp/file3", {
+  it.each([
+    {
+      name: "throws and cleans up when server not allowed to start",
+      filePath: "/tmp/file1",
+      savedMedia: { id: "id1", size: 5 },
+      tailnetHostname: "tailnet-host",
       startServer: false,
+      expectedError: /requires the webhook\/Funnel server/i,
+      expectedCleanupPath: "/tmp/file1",
+    },
+    {
+      name: "starts media server when allowed",
+      filePath: "/tmp/id2",
+      savedMedia: { id: "id2", size: 9 },
+      tailnetHostname: "tail.net",
+      port: 1234,
+      startServer: true,
+      expectedUrl: "https://tail.net/media/id2",
+      expectServerStart: true,
+    },
+    {
+      name: "skips server start when port already in use",
+      filePath: "/tmp/id3",
+      savedMedia: { id: "id3", size: 7 },
+      tailnetHostname: "tail.net",
       port: 3000,
-    });
-    expect(startMediaServer).not.toHaveBeenCalled();
-    expect(result.url).toBe("https://tail.net/media/id3");
+      startServer: false,
+      ensurePortError: new PortInUseError(3000, "proc"),
+      expectedUrl: "https://tail.net/media/id3",
+      expectServerStart: false,
+    },
+  ] as const)("$name", async (testCase) => {
+    await expectHostedMediaCase(testCase);
   });
 });

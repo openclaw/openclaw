@@ -2,11 +2,36 @@ import { describe, expect, it } from "vitest";
 import { splitMediaFromOutput } from "./parse.js";
 
 describe("splitMediaFromOutput", () => {
-  it("detects audio_as_voice tag and strips it", () => {
-    const result = splitMediaFromOutput("Hello [[audio_as_voice]] world");
-    expect(result.audioAsVoice).toBe(true);
-    expect(result.text).toBe("Hello world");
-  });
+  function expectParsedMediaOutputCase(
+    input: string,
+    expected: {
+      mediaUrls?: string[];
+      text?: string;
+      audioAsVoice?: boolean;
+    },
+  ) {
+    expect(splitMediaFromOutput(input)).toEqual(
+      expect.objectContaining({
+        text: "",
+        audioAsVoice: false,
+        ...expected,
+      }),
+    );
+  }
+
+  function expectStableAudioAsVoiceDetectionCase(input: string) {
+    for (const output of [splitMediaFromOutput(input), splitMediaFromOutput(input)]) {
+      expect(output.audioAsVoice).toBe(true);
+    }
+  }
+
+  function expectAcceptedMediaPathCase(expectedPath: string, input: string) {
+    expectParsedMediaOutputCase(input, { mediaUrls: [expectedPath] });
+  }
+
+  function expectRejectedMediaPathCase(input: string) {
+    expectParsedMediaOutputCase(input, { mediaUrls: undefined });
+  }
 
   it.each([
     ["/Users/pete/My File.png", "MEDIA:/Users/pete/My File.png"],
@@ -18,9 +43,7 @@ describe("splitMediaFromOutput", () => {
     ["/tmp/tts-fAJy8C/voice-1770246885083.opus", "MEDIA:/tmp/tts-fAJy8C/voice-1770246885083.opus"],
     ["image.png", "MEDIA:image.png"],
   ] as const)("accepts supported media path variant: %s", (expectedPath, input) => {
-    const result = splitMediaFromOutput(input);
-    expect(result.mediaUrls).toEqual([expectedPath]);
-    expect(result.text).toBe("");
+    expectAcceptedMediaPathCase(expectedPath, input);
   });
 
   it.each([
@@ -30,28 +53,35 @@ describe("splitMediaFromOutput", () => {
     "MEDIA:~/Pictures/My File.png",
     "MEDIA:./foo/../../../etc/shadow",
   ] as const)("rejects traversal and home-dir path: %s", (input) => {
-    const result = splitMediaFromOutput(input);
-    expect(result.mediaUrls).toBeUndefined();
-    expect(result.text).toBe("");
+    expectRejectedMediaPathCase(input);
   });
 
-  it("keeps audio_as_voice detection stable across calls", () => {
-    const input = "Hello [[audio_as_voice]]";
-    const first = splitMediaFromOutput(input);
-    const second = splitMediaFromOutput(input);
-    expect(first.audioAsVoice).toBe(true);
-    expect(second.audioAsVoice).toBe(true);
-  });
-
-  it("keeps MEDIA mentions in prose", () => {
-    const input = "The MEDIA: tag fails to deliver";
-    const result = splitMediaFromOutput(input);
-    expect(result.mediaUrls).toBeUndefined();
-    expect(result.text).toBe(input);
-  });
-
-  it("rejects bare words without file extensions", () => {
-    const result = splitMediaFromOutput("MEDIA:screenshot");
-    expect(result.mediaUrls).toBeUndefined();
+  it.each([
+    {
+      name: "detects audio_as_voice tag and strips it",
+      input: "Hello [[audio_as_voice]] world",
+      expected: { audioAsVoice: true, text: "Hello world" },
+    },
+    {
+      name: "keeps MEDIA mentions in prose",
+      input: "The MEDIA: tag fails to deliver",
+      expected: { mediaUrls: undefined, text: "The MEDIA: tag fails to deliver" },
+    },
+    {
+      name: "rejects bare words without file extensions",
+      input: "MEDIA:screenshot",
+      expected: { mediaUrls: undefined },
+    },
+    {
+      name: "keeps audio_as_voice detection stable across calls",
+      input: "Hello [[audio_as_voice]]",
+      expected: { audioAsVoice: true, text: "Hello" },
+      assertStable: true,
+    },
+  ] as const)("$name", ({ input, expected, assertStable }) => {
+    expectParsedMediaOutputCase(input, expected);
+    if (assertStable) {
+      expectStableAudioAsVoiceDetectionCase(input);
+    }
   });
 });

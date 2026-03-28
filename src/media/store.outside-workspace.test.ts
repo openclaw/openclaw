@@ -21,6 +21,13 @@ type FsSafeModule = typeof import("../infra/fs-safe.js");
 let saveMediaSource: StoreModule["saveMediaSource"];
 let SafeOpenError: FsSafeModule["SafeOpenError"];
 
+async function expectOutsideWorkspaceStoreFailure(sourcePath: string) {
+  await expect(saveMediaSource(sourcePath)).rejects.toMatchObject({
+    code: "invalid-path",
+    message: "Media path is outside workspace root",
+  });
+}
+
 describe("media store outside-workspace mapping", () => {
   let tempHome: TempHomeEnv;
   let home = "";
@@ -47,9 +54,6 @@ describe("media store outside-workspace mapping", () => {
       new SafeOpenError("outside-workspace", "file is outside workspace root"),
     );
 
-    await expect(saveMediaSource(sourcePath)).rejects.toMatchObject({
-      code: "invalid-path",
-      message: "Media path is outside workspace root",
-    });
+    await expectOutsideWorkspaceStoreFailure(sourcePath);
   });
 });
