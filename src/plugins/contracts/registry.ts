@@ -77,6 +77,10 @@ function uniqueStrings(values: readonly string[]): string[] {
 let providerContractRegistryCache: ProviderContractEntry[] | null = null;
 let providerContractRegistryByPluginIdCache: Map<string, ProviderContractEntry[]> | null = null;
 let webSearchProviderContractRegistryCache: WebSearchProviderContractEntry[] | null = null;
+let webSearchProviderContractRegistryByPluginIdCache: Map<
+  string,
+  WebSearchProviderContractEntry[]
+> | null = null;
 let speechProviderContractRegistryCache: SpeechProviderContractEntry[] | null = null;
 let mediaUnderstandingProviderContractRegistryCache:
   | MediaUnderstandingProviderContractEntry[]
@@ -186,6 +190,34 @@ function loadWebSearchProviderContractRegistry(): WebSearchProviderContractEntry
     }));
   }
   return webSearchProviderContractRegistryCache;
+}
+
+export function resolveWebSearchProviderContractEntriesForPluginId(
+  pluginId: string,
+): WebSearchProviderContractEntry[] {
+  if (webSearchProviderContractRegistryCache) {
+    return webSearchProviderContractRegistryCache.filter((entry) => entry.pluginId === pluginId);
+  }
+
+  const cache =
+    webSearchProviderContractRegistryByPluginIdCache ??
+    new Map<string, WebSearchProviderContractEntry[]>();
+  webSearchProviderContractRegistryByPluginIdCache = cache;
+  const cached = cache.get(pluginId);
+  if (cached) {
+    return cached;
+  }
+
+  const entries = loadBundledCapabilityRuntimeRegistry({
+    pluginIds: [pluginId],
+    pluginSdkResolution: "dist",
+  }).webSearchProviders.map((entry) => ({
+    pluginId: entry.pluginId,
+    provider: entry.provider,
+    credentialValue: resolveWebSearchCredentialValue(entry.provider),
+  }));
+  cache.set(pluginId, entries);
+  return entries;
 }
 
 function loadSpeechProviderContractRegistry(): SpeechProviderContractEntry[] {
