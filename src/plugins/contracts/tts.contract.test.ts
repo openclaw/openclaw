@@ -714,6 +714,18 @@ describe("tts", () => {
         });
       },
     );
+
+    it("hydrates provider config lazily when no explicit speech provider is configured", () => {
+      withEnv({ OPENAI_TTS_BASE_URL: "http://localhost:8880/v1" }, () => {
+        const config = resolveTtsConfig(baseCfg);
+        const openaiConfig = getResolvedSpeechProviderConfig(config, "openai", baseCfg) as {
+          baseUrl?: string;
+        };
+
+        expect(config.provider).toBe("");
+        expect(openaiConfig.baseUrl).toBe("http://localhost:8880/v1");
+      });
+    });
   });
 
   describe("textToSpeechTelephony – openai instructions", () => {
