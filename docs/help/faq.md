@@ -266,8 +266,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 
   <Accordion title="Cannot access docs.openclaw.ai (SSL error)">
     Some Comcast/Xfinity connections incorrectly block `docs.openclaw.ai` via Xfinity
-    Advanced Security. Disable it or allowlist `docs.openclaw.ai`, then retry. More
-    detail: [Troubleshooting](/help/faq#cannot-access-docsopenclaw-ai-ssl-error).
+    Advanced Security. Disable it or allowlist `docs.openclaw.ai`, then retry.
     Please help us unblock it by reporting here: [https://spa.xfinity.com/check_url_status](https://spa.xfinity.com/check_url_status).
 
     If you still can't reach the site, the docs are mirrored on GitHub:
