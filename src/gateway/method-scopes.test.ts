@@ -136,3 +136,23 @@ describe("core gateway method classification", () => {
     expect(unclassified).toEqual([]);
   });
 });
+
+describe("CLI default operator scopes", () => {
+  it("includes operator.talk.secrets for node-role device pairing approvals", async () => {
+    const { CLI_DEFAULT_OPERATOR_SCOPES } = await import("./method-scopes.js");
+    expect(CLI_DEFAULT_OPERATOR_SCOPES).toContain("operator.talk.secrets");
+  });
+
+  it("CLI_DEFAULT_OPERATOR_SCOPES enables roleScopesAllow for node-role approvals requesting operator.talk.secrets", async () => {
+    const { CLI_DEFAULT_OPERATOR_SCOPES } = await import("./method-scopes.js");
+    const { roleScopesAllow } = await import("../shared/operator-scope-compat.js");
+    // A node-role device requesting operator.talk.secrets should be approved by CLI defaults
+    expect(
+      roleScopesAllow({
+        role: "node",
+        requestedScopes: ["operator.talk.secrets"],
+        allowedScopes: CLI_DEFAULT_OPERATOR_SCOPES,
+      }),
+    ).toBe(true);
+  });
+});
