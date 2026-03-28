@@ -18,13 +18,14 @@ export type AllowlistMatch<TSource extends string = AllowlistMatchSource> = {
 
 type CachedAllowListSet = {
   size: number;
+  fingerprint: string;
   set: Set<string>;
 };
 
 const ALLOWLIST_SET_CACHE = new WeakMap<string[], CachedAllowListSet>();
 const SIMPLE_ALLOWLIST_CACHE = new WeakMap<
   Array<string | number>,
-  { normalized: string[]; size: number; wildcard: boolean; set: Set<string> }
+  { normalized: string[]; size: number; fingerprint: string; wildcard: boolean; set: Set<string> }
 >();
 
 export function formatAllowlistMatchMeta(
@@ -82,23 +83,26 @@ export function resolveAllowlistMatchSimple(params: {
 }
 
 function resolveAllowListSet(allowList: string[]): Set<string> {
+  const fingerprint = allowList.join("\u001f");
   const cached = ALLOWLIST_SET_CACHE.get(allowList);
-  if (cached && cached.size === allowList.length) {
+  if (cached && cached.size === allowList.length && cached.fingerprint === fingerprint) {
     return cached.set;
   }
   const set = new Set(allowList);
-  ALLOWLIST_SET_CACHE.set(allowList, { size: allowList.length, set });
+  ALLOWLIST_SET_CACHE.set(allowList, { size: allowList.length, fingerprint, set });
   return set;
 }
 
 function resolveSimpleAllowFrom(allowFrom: Array<string | number>): {
   normalized: string[];
   size: number;
+  fingerprint: string;
   wildcard: boolean;
   set: Set<string>;
 } {
+  const fingerprint = allowFrom.map((entry) => String(entry)).join("\u001f");
   const cached = SIMPLE_ALLOWLIST_CACHE.get(allowFrom);
-  if (cached && cached.size === allowFrom.length) {
+  if (cached && cached.size === allowFrom.length && cached.fingerprint === fingerprint) {
     return cached;
   }
 
@@ -107,6 +111,7 @@ function resolveSimpleAllowFrom(allowFrom: Array<string | number>): {
   const built = {
     normalized,
     size: allowFrom.length,
+    fingerprint,
     wildcard: set.has("*"),
     set,
   };
