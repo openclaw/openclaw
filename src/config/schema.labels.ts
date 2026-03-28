@@ -158,6 +158,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.links.timeoutSeconds": "Link Understanding Timeout (sec)",
   "tools.links.models": "Link Understanding Models",
   "tools.links.scope": "Link Understanding Scope",
+  "tools.media.imageGenerate.timeoutSeconds": "Image Generate Timeout (sec)",
   "tools.profile": "Tool Profile",
   "tools.alsoAllow": "Tool Allowlist Additions",
   "agents.list[].tools.profile": "Agent Tool Profile",

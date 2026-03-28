@@ -268,6 +268,18 @@ describe("config schema", () => {
     expect(parsed?.web?.fetch?.maxResponseBytes).toBe(2_000_000);
   });
 
+  it("accepts image_generate timeout config in the runtime zod schema", () => {
+    const parsed = ToolsSchema.parse({
+      media: {
+        imageGenerate: {
+          timeoutSeconds: 210,
+        },
+      },
+    });
+
+    expect(parsed?.media?.imageGenerate?.timeoutSeconds).toBe(210);
+  });
+
   it("rejects unknown keys inside web fetch firecrawl config", () => {
     expect(() =>
       ToolsSchema.parse({

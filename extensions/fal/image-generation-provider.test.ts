@@ -85,6 +85,7 @@ describe("fal image-generation provider", () => {
       cfg: {},
       count: 2,
       size: "1536x1024",
+      timeoutMs: 210_000,
     });
 
     expectFalJsonPost({
@@ -103,6 +104,13 @@ describe("fal image-generation provider", () => {
         url: "https://v3.fal.media/files/example/generated.png",
         auditContext: "fal-image-download",
         policy: undefined,
+        timeoutMs: 210_000,
+      }),
+    );
+    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        timeoutMs: 210_000,
       }),
     );
     expect(releaseRequest).toHaveBeenCalledTimes(1);

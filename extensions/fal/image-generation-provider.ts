@@ -257,6 +257,7 @@ function fileExtensionForMimeType(mimeType: string | undefined): string {
 
 async function fetchImageBuffer(
   url: string,
+  timeoutMs: number | undefined,
   networkPolicy?: FalNetworkPolicy,
 ): Promise<{ buffer: Buffer; mimeType: string }> {
   const downloadPolicy = (() => {
@@ -274,6 +275,7 @@ async function fetchImageBuffer(
   })();
   const { response, release } = await falFetchGuard({
     url,
+    timeoutMs,
     policy: downloadPolicy,
     auditContext: "fal-image-download",
   });
@@ -369,6 +371,7 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
           },
           body: JSON.stringify(requestBody),
         },
+        timeoutMs: req.timeoutMs,
         policy: networkPolicy.apiPolicy,
         auditContext: "fal-image-generate",
       });
@@ -388,7 +391,7 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
           if (!url) {
             continue;
           }
-          const downloaded = await fetchImageBuffer(url, networkPolicy);
+          const downloaded = await fetchImageBuffer(url, req.timeoutMs, networkPolicy);
           imageIndex += 1;
           images.push({
             buffer: downloaded.buffer,

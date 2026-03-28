@@ -25,6 +25,7 @@ export type GenerateImageParams = {
   agentDir?: string;
   authStore?: AuthProfileStore;
   modelOverride?: string;
+  timeoutMs?: number;
   count?: number;
   size?: string;
   aspectRatio?: string;
@@ -148,6 +149,7 @@ export async function generateImage(
         cfg: params.cfg,
         agentDir: params.agentDir,
         authStore: params.authStore,
+        timeoutMs: params.timeoutMs,
         count: params.count,
         size: params.size,
         aspectRatio: params.aspectRatio,

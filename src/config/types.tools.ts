@@ -134,9 +134,16 @@ export type MediaToolsConfig = {
   models?: MediaUnderstandingModelConfig[];
   /** Max concurrent media understanding runs. */
   concurrency?: number;
+  /** Image generation tool settings. */
+  imageGenerate?: ImageGenerateToolConfig;
   image?: MediaUnderstandingConfig;
   audio?: MediaUnderstandingConfig;
   video?: MediaUnderstandingConfig;
+};
+
+export type ImageGenerateToolConfig = {
+  /** Timeout in seconds for image generation requests. */
+  timeoutSeconds?: number;
 };
 
 export type ToolProfileId = "minimal" | "coding" | "messaging" | "full";

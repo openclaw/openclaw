@@ -44,6 +44,7 @@ describe("image-generation runtime helpers", () => {
     const pluginRegistry = createEmptyPluginRegistry();
     const authStore = { version: 1, profiles: {} } as const;
     let seenAuthStore: unknown;
+    let seenTimeoutMs: number | undefined;
     pluginRegistry.imageGenerationProviders.push({
       pluginId: "image-plugin",
       pluginName: "Image Plugin",
@@ -56,6 +57,7 @@ describe("image-generation runtime helpers", () => {
         },
         async generateImage(req) {
           seenAuthStore = req.authStore;
+          seenTimeoutMs = req.timeoutMs;
           return {
             images: [
               {
@@ -87,12 +89,14 @@ describe("image-generation runtime helpers", () => {
       prompt: "draw a cat",
       agentDir: "/tmp/agent",
       authStore,
+      timeoutMs: 123_000,
     });
 
     expect(result.provider).toBe("image-plugin");
     expect(result.model).toBe("img-v1");
     expect(result.attempts).toEqual([]);
     expect(seenAuthStore).toEqual(authStore);
+    expect(seenTimeoutMs).toBe(123_000);
     expect(result.images).toEqual([
       {
         buffer: Buffer.from("png-bytes"),

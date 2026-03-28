@@ -5927,6 +5927,17 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 exclusiveMinimum: 0,
                 maximum: 9007199254740991,
               },
+              imageGenerate: {
+                type: "object",
+                properties: {
+                  timeoutSeconds: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                },
+                additionalProperties: false,
+              },
               image: {
                 type: "object",
                 properties: {
@@ -12530,6 +12541,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       label: "Link Understanding Scope",
       help: "Controls when link understanding runs relative to conversation context and message type. Keep scope conservative to avoid unnecessary fetches on messages where links are not actionable.",
       tags: ["tools"],
+    },
+    "tools.media.imageGenerate.timeoutSeconds": {
+      label: "Image Generate Timeout (sec)",
+      help: "Timeout in seconds for image_generate requests before the provider call is aborted. Increase this for slow image providers and large renders, and lower it when interactive latency matters more than completion.",
+      tags: ["performance", "media", "tools"],
     },
     "tools.profile": {
       label: "Tool Profile",

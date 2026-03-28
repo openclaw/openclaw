@@ -62754,6 +62754,32 @@
       "hasChildren": false
     },
     {
+      "path": "tools.media.imageGenerate",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "tools.media.imageGenerate.timeoutSeconds",
+      "kind": "core",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "media",
+        "performance",
+        "tools"
+      ],
+      "label": "Image Generate Timeout (sec)",
+      "help": "Timeout in seconds for image_generate requests before the provider call is aborted. Increase this for slow image providers and large renders, and lower it when interactive latency matters more than completion.",
+      "hasChildren": false
+    },
+    {
       "path": "tools.media.models",
       "kind": "core",
       "type": "array",

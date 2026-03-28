@@ -42,6 +42,7 @@ const DEFAULT_COUNT = 1;
 const MAX_COUNT = 4;
 const MAX_INPUT_IMAGES = 5;
 const DEFAULT_RESOLUTION: ImageGenerationResolution = "1K";
+const DEFAULT_IMAGE_GENERATE_TIMEOUT_MS = 60_000;
 const SUPPORTED_ASPECT_RATIOS = new Set([
   "1:1",
   "2:3",
@@ -111,6 +112,18 @@ const ImageGenerateToolSchema = Type.Object({
 
 function getImageGenerationProviderAuthEnvVars(providerId: string): string[] {
   return getProviderEnvVars(providerId);
+}
+
+function resolveImageGenerateTimeoutMs(cfg: OpenClawConfig | undefined): number | undefined {
+  const timeoutSeconds = cfg?.tools?.media?.imageGenerate?.timeoutSeconds;
+  if (
+    typeof timeoutSeconds !== "number" ||
+    !Number.isFinite(timeoutSeconds) ||
+    timeoutSeconds <= 0
+  ) {
+    return DEFAULT_IMAGE_GENERATE_TIMEOUT_MS;
+  }
+  return Math.floor(timeoutSeconds * 1000);
 }
 
 function resolveImageGenerationModelCandidates(
@@ -586,6 +599,7 @@ export function createImageGenerateTool(options?: {
         prompt,
         agentDir: options?.agentDir,
         modelOverride: model,
+        timeoutMs: resolveImageGenerateTimeoutMs(effectiveCfg),
         size,
         aspectRatio,
         resolution,
