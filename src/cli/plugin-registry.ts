@@ -37,11 +37,12 @@ export function ensurePluginRegistryLoaded(options?: { scope?: PluginRegistrySco
   // Tests (and callers) can pre-seed a registry (e.g. `test/setup.ts`); avoid
   // doing an expensive load when we already have plugins/channels/tools.
   if (
+    scope !== "all" &&
     pluginRegistryLoaded === "none" &&
     active &&
     (active.plugins.length > 0 || active.channels.length > 0 || active.tools.length > 0)
   ) {
-    pluginRegistryLoaded = "all";
+    pluginRegistryLoaded = scope;
     return;
   }
   const config = loadConfig();
