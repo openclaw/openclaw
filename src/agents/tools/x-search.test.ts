@@ -150,6 +150,32 @@ describe("x_search tool", () => {
     );
   });
 
+  it("reuses the legacy grok web search key for x_search requests", async () => {
+    const mockFetch = installXSearchFetch();
+    const tool = createXSearchTool({
+      config: {
+        tools: {
+          web: {
+            search: {
+              grok: {
+                apiKey: "xai-legacy-key", // pragma: allowlist secret
+              },
+            },
+          },
+        },
+      },
+    });
+
+    await tool?.execute?.("x-search:legacy-key", {
+      query: "latest legacy-key post from huntharo",
+    });
+
+    const request = mockFetch.mock.calls[0]?.[1] as RequestInit | undefined;
+    expect((request?.headers as Record<string, string> | undefined)?.Authorization).toBe(
+      "Bearer xai-legacy-key",
+    );
+  });
+
   it("rejects invalid date ordering before calling xAI", async () => {
     const mockFetch = installXSearchFetch();
     const tool = createXSearchTool({
