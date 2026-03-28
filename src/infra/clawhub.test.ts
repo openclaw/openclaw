@@ -40,6 +40,10 @@ describe("clawhub helpers", () => {
       name: "demo",
       version: "1.2.3",
     });
+    expect(parseClawHubPluginSpec("clawhub:@scope/pkg@1.2.3")).toEqual({
+      name: "@scope/pkg",
+      version: "1.2.3",
+    });
     expect(parseClawHubPluginSpec("clawhub:demo@")).toBeNull();
     expect(parseClawHubPluginSpec("clawhub:@scope/pkg@")).toBeNull();
     expect(parseClawHubPluginSpec("@scope/pkg")).toBeNull();
