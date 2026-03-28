@@ -14,7 +14,7 @@ import {
 import type { TelegramMediaRef } from "./bot-message-context.js";
 import { MEDIA_GROUP_TIMEOUT_MS, type MediaGroupEntry } from "./bot-updates.js";
 import { resolveMedia } from "./bot/delivery.js";
-import type { TelegramContext } from "./bot/types.js";
+import type { TelegramContext, TelegramSyntheticContextSource } from "./bot/types.js";
 import type { TelegramTransport } from "./fetch.js";
 
 export type TelegramDebounceLane = "default" | "forward";
@@ -107,20 +107,7 @@ export function createTelegramInboundBufferRuntime(params: {
   let textFragmentProcessing: Promise<void> = Promise.resolve();
 
   const resolveTelegramDebounceLane = (msg: Message): TelegramDebounceLane => {
-    const forwardMeta = msg as {
-      forward_origin?: unknown;
-      forward_from?: unknown;
-      forward_from_chat?: unknown;
-      forward_sender_name?: unknown;
-      forward_date?: unknown;
-    };
-    return (forwardMeta.forward_origin ??
-      forwardMeta.forward_from ??
-      forwardMeta.forward_from_chat ??
-      forwardMeta.forward_sender_name ??
-      forwardMeta.forward_date)
-      ? "forward"
-      : "default";
+    return msg.forward_origin ? "forward" : "default";
   };
 
   const buildSyntheticTextMessage = (params: {
@@ -139,13 +126,11 @@ export function createTelegramInboundBufferRuntime(params: {
   });
 
   const buildSyntheticContext = (
-    ctx: Pick<TelegramContext, "me"> & { getFile?: unknown },
+    ctx: TelegramSyntheticContextSource,
     message: Message,
   ): TelegramContext => {
     const getFile =
-      typeof ctx.getFile === "function"
-        ? (ctx.getFile as TelegramContext["getFile"]).bind(ctx as object)
-        : async () => ({});
+      typeof ctx.getFile === "function" ? ctx.getFile.bind(ctx as object) : async () => ({});
     return { message, me: ctx.me, getFile };
   };
 
