@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 
 const installPluginFromNpmSpecMock = vi.fn();
 const installPluginFromMarketplaceMock = vi.fn();
@@ -71,6 +72,74 @@ function createNpmInstallConfig(params: {
   };
 }
 
+function createMarketplaceInstallConfig(params: {
+  pluginId: string;
+  installPath: string;
+  marketplaceSource: string;
+  marketplacePlugin: string;
+  marketplaceName?: string;
+}): OpenClawConfig {
+  return {
+    plugins: {
+      installs: {
+        [params.pluginId]: {
+          source: "marketplace" as const,
+          installPath: params.installPath,
+          marketplaceSource: params.marketplaceSource,
+          marketplacePlugin: params.marketplacePlugin,
+          ...(params.marketplaceName ? { marketplaceName: params.marketplaceName } : {}),
+        },
+      },
+    },
+  };
+}
+
+function createClawHubInstallConfig(params: {
+  pluginId: string;
+  installPath: string;
+  clawhubUrl: string;
+  clawhubPackage: string;
+  clawhubFamily: "bundle-plugin" | "code-plugin";
+  clawhubChannel: "community" | "official" | "private";
+}): OpenClawConfig {
+  return {
+    plugins: {
+      installs: {
+        [params.pluginId]: {
+          source: "clawhub" as const,
+          spec: `clawhub:${params.clawhubPackage}`,
+          installPath: params.installPath,
+          clawhubUrl: params.clawhubUrl,
+          clawhubPackage: params.clawhubPackage,
+          clawhubFamily: params.clawhubFamily,
+          clawhubChannel: params.clawhubChannel,
+        },
+      },
+    },
+  };
+}
+
+function createBundledPathInstallConfig(params: {
+  loadPaths: string[];
+  installPath: string;
+  sourcePath?: string;
+  spec?: string;
+}): OpenClawConfig {
+  return {
+    plugins: {
+      load: { paths: params.loadPaths },
+      installs: {
+        feishu: {
+          source: "path",
+          sourcePath: params.sourcePath ?? "/app/extensions/feishu",
+          installPath: params.installPath,
+          ...(params.spec ? { spec: params.spec } : {}),
+        },
+      },
+    },
+  };
+}
+
 function expectNpmUpdateCall(params: {
   spec: string;
   expectedIntegrity?: string;
@@ -83,6 +152,35 @@ function expectNpmUpdateCall(params: {
       ...(params.expectedPluginId ? { expectedPluginId: params.expectedPluginId } : {}),
     }),
   );
+}
+
+function createBundledSource(params?: { pluginId?: string; localPath?: string; npmSpec?: string }) {
+  const pluginId = params?.pluginId ?? "feishu";
+  return {
+    pluginId,
+    localPath: params?.localPath ?? `/app/extensions/${pluginId}`,
+    npmSpec: params?.npmSpec ?? `@openclaw/${pluginId}`,
+  };
+}
+
+function mockBundledSources(...sources: ReturnType<typeof createBundledSource>[]) {
+  resolveBundledPluginSourcesMock.mockReturnValue(
+    new Map(sources.map((source) => [source.pluginId, source])),
+  );
+}
+
+function expectBundledPathInstall(params: {
+  install: Record<string, unknown> | undefined;
+  sourcePath: string;
+  installPath: string;
+  spec?: string;
+}) {
+  expect(params.install).toMatchObject({
+    source: "path",
+    sourcePath: params.sourcePath,
+    installPath: params.installPath,
+    ...(params.spec ? { spec: params.spec } : {}),
+  });
 }
 
 describe("updateNpmInstalledPlugins", () => {
@@ -164,66 +262,51 @@ describe("updateNpmInstalledPlugins", () => {
     },
   );
 
-  it("formats package-not-found updates with a stable message", async () => {
-    installPluginFromNpmSpecMock.mockResolvedValue({
-      ok: false,
-      code: "npm_package_not_found",
-      error: "Package not found on npm: @openclaw/missing.",
-    });
-
-    const result = await updateNpmInstalledPlugins({
-      config: {
-        plugins: {
-          installs: {
-            missing: {
-              source: "npm",
-              spec: "@openclaw/missing",
-              installPath: "/tmp/missing",
-            },
-          },
-        },
+  it.each([
+    {
+      name: "formats package-not-found updates with a stable message",
+      installerResult: {
+        ok: false,
+        code: "npm_package_not_found",
+        error: "Package not found on npm: @openclaw/missing.",
       },
-      pluginIds: ["missing"],
-      dryRun: true,
-    });
-
-    expect(result.outcomes).toEqual([
-      {
+      config: createNpmInstallConfig({
         pluginId: "missing",
-        status: "error",
-        message: "Failed to check missing: npm package not found for @openclaw/missing.",
+        spec: "@openclaw/missing",
+        installPath: "/tmp/missing",
+      }),
+      pluginId: "missing",
+      expectedMessage: "Failed to check missing: npm package not found for @openclaw/missing.",
+    },
+    {
+      name: "falls back to raw installer error for unknown error codes",
+      installerResult: {
+        ok: false,
+        code: "invalid_npm_spec",
+        error: "unsupported npm spec: github:evil/evil",
       },
-    ]);
-  });
-
-  it("falls back to raw installer error for unknown error codes", async () => {
-    installPluginFromNpmSpecMock.mockResolvedValue({
-      ok: false,
-      code: "invalid_npm_spec",
-      error: "unsupported npm spec: github:evil/evil",
-    });
+      config: createNpmInstallConfig({
+        pluginId: "bad",
+        spec: "github:evil/evil",
+        installPath: "/tmp/bad",
+      }),
+      pluginId: "bad",
+      expectedMessage: "Failed to check bad: unsupported npm spec: github:evil/evil",
+    },
+  ] as const)("$name", async ({ installerResult, config, pluginId, expectedMessage }) => {
+    installPluginFromNpmSpecMock.mockResolvedValue(installerResult);
 
     const result = await updateNpmInstalledPlugins({
-      config: {
-        plugins: {
-          installs: {
-            bad: {
-              source: "npm",
-              spec: "github:evil/evil",
-              installPath: "/tmp/bad",
-            },
-          },
-        },
-      },
-      pluginIds: ["bad"],
+      config,
+      pluginIds: [pluginId],
       dryRun: true,
     });
 
     expect(result.outcomes).toEqual([
       {
-        pluginId: "bad",
+        pluginId,
         status: "error",
-        message: "Failed to check bad: unsupported npm spec: github:evil/evil",
+        message: expectedMessage,
       },
     ]);
   });
@@ -333,21 +416,14 @@ describe("updateNpmInstalledPlugins", () => {
     });
 
     const result = await updateNpmInstalledPlugins({
-      config: {
-        plugins: {
-          installs: {
-            demo: {
-              source: "clawhub",
-              spec: "clawhub:demo",
-              installPath: "/tmp/demo",
-              clawhubUrl: "https://clawhub.ai",
-              clawhubPackage: "demo",
-              clawhubFamily: "code-plugin",
-              clawhubChannel: "official",
-            },
-          },
-        },
-      },
+      config: createClawHubInstallConfig({
+        pluginId: "demo",
+        installPath: "/tmp/demo",
+        clawhubUrl: "https://clawhub.ai",
+        clawhubPackage: "demo",
+        clawhubFamily: "code-plugin",
+        clawhubChannel: "official",
+      }),
       pluginIds: ["demo"],
     });
 
@@ -439,18 +515,12 @@ describe("updateNpmInstalledPlugins", () => {
     });
 
     const result = await updateNpmInstalledPlugins({
-      config: {
-        plugins: {
-          installs: {
-            "claude-bundle": {
-              source: "marketplace",
-              marketplaceSource: "vincentkoc/claude-marketplace",
-              marketplacePlugin: "claude-bundle",
-              installPath: "/tmp/claude-bundle",
-            },
-          },
-        },
-      },
+      config: createMarketplaceInstallConfig({
+        pluginId: "claude-bundle",
+        installPath: "/tmp/claude-bundle",
+        marketplaceSource: "vincentkoc/claude-marketplace",
+        marketplacePlugin: "claude-bundle",
+      }),
       pluginIds: ["claude-bundle"],
       dryRun: true,
     });
@@ -487,19 +557,13 @@ describe("updateNpmInstalledPlugins", () => {
     });
 
     const result = await updateNpmInstalledPlugins({
-      config: {
-        plugins: {
-          installs: {
-            "claude-bundle": {
-              source: "marketplace",
-              marketplaceName: "Vincent's Claude Plugins",
-              marketplaceSource: "vincentkoc/claude-marketplace",
-              marketplacePlugin: "claude-bundle",
-              installPath: "/tmp/claude-bundle",
-            },
-          },
-        },
-      },
+      config: createMarketplaceInstallConfig({
+        pluginId: "claude-bundle",
+        installPath: "/tmp/claude-bundle",
+        marketplaceName: "Vincent's Claude Plugins",
+        marketplaceSource: "vincentkoc/claude-marketplace",
+        marketplacePlugin: "claude-bundle",
+      }),
       pluginIds: ["claude-bundle"],
     });
 
@@ -521,85 +585,51 @@ describe("syncPluginsForUpdateChannel", () => {
     resolveBundledPluginSourcesMock.mockReset();
   });
 
-  it("keeps bundled path installs on beta without reinstalling from npm", async () => {
-    resolveBundledPluginSourcesMock.mockReturnValue(
-      new Map([
-        [
-          "feishu",
-          {
-            pluginId: "feishu",
-            localPath: "/app/extensions/feishu",
-            npmSpec: "@openclaw/feishu",
-          },
-        ],
-      ]),
-    );
+  it.each([
+    {
+      name: "keeps bundled path installs on beta without reinstalling from npm",
+      config: createBundledPathInstallConfig({
+        loadPaths: ["/app/extensions/feishu"],
+        installPath: "/app/extensions/feishu",
+        spec: "@openclaw/feishu",
+      }),
+      expectedChanged: false,
+      expectedLoadPaths: ["/app/extensions/feishu"],
+      expectedInstallPath: "/app/extensions/feishu",
+    },
+    {
+      name: "repairs bundled install metadata when the load path is re-added",
+      config: createBundledPathInstallConfig({
+        loadPaths: [],
+        installPath: "/tmp/old-feishu",
+        spec: "@openclaw/feishu",
+      }),
+      expectedChanged: true,
+      expectedLoadPaths: ["/app/extensions/feishu"],
+      expectedInstallPath: "/app/extensions/feishu",
+    },
+  ] as const)(
+    "$name",
+    async ({ config, expectedChanged, expectedLoadPaths, expectedInstallPath }) => {
+      mockBundledSources(createBundledSource());
 
-    const result = await syncPluginsForUpdateChannel({
-      channel: "beta",
-      config: {
-        plugins: {
-          load: { paths: ["/app/extensions/feishu"] },
-          installs: {
-            feishu: {
-              source: "path",
-              sourcePath: "/app/extensions/feishu",
-              installPath: "/app/extensions/feishu",
-              spec: "@openclaw/feishu",
-            },
-          },
-        },
-      },
-    });
+      const result = await syncPluginsForUpdateChannel({
+        channel: "beta",
+        config,
+      });
 
-    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
-    expect(result.changed).toBe(false);
-    expect(result.summary.switchedToNpm).toEqual([]);
-    expect(result.config.plugins?.load?.paths).toEqual(["/app/extensions/feishu"]);
-    expect(result.config.plugins?.installs?.feishu?.source).toBe("path");
-  });
-
-  it("repairs bundled install metadata when the load path is re-added", async () => {
-    resolveBundledPluginSourcesMock.mockReturnValue(
-      new Map([
-        [
-          "feishu",
-          {
-            pluginId: "feishu",
-            localPath: "/app/extensions/feishu",
-            npmSpec: "@openclaw/feishu",
-          },
-        ],
-      ]),
-    );
-
-    const result = await syncPluginsForUpdateChannel({
-      channel: "beta",
-      config: {
-        plugins: {
-          load: { paths: [] },
-          installs: {
-            feishu: {
-              source: "path",
-              sourcePath: "/app/extensions/feishu",
-              installPath: "/tmp/old-feishu",
-              spec: "@openclaw/feishu",
-            },
-          },
-        },
-      },
-    });
-
-    expect(result.changed).toBe(true);
-    expect(result.config.plugins?.load?.paths).toEqual(["/app/extensions/feishu"]);
-    expect(result.config.plugins?.installs?.feishu).toMatchObject({
-      source: "path",
-      sourcePath: "/app/extensions/feishu",
-      installPath: "/app/extensions/feishu",
-      spec: "@openclaw/feishu",
-    });
-    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
-  });
+      expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+      expect(result.changed).toBe(expectedChanged);
+      expect(result.summary.switchedToNpm).toEqual([]);
+      expect(result.config.plugins?.load?.paths).toEqual(expectedLoadPaths);
+      expectBundledPathInstall({
+        install: result.config.plugins?.installs?.feishu,
+        sourcePath: "/app/extensions/feishu",
+        installPath: expectedInstallPath,
+        spec: "@openclaw/feishu",
+      });
+    },
+  );
 
   it("forwards an explicit env to bundled plugin source resolution", async () => {
     resolveBundledPluginSourcesMock.mockReturnValue(new Map());
@@ -620,17 +650,10 @@ describe("syncPluginsForUpdateChannel", () => {
 
   it("uses the provided env when matching bundled load and install paths", async () => {
     const bundledHome = "/tmp/openclaw-home";
-    resolveBundledPluginSourcesMock.mockReturnValue(
-      new Map([
-        [
-          "feishu",
-          {
-            pluginId: "feishu",
-            localPath: `${bundledHome}/plugins/feishu`,
-            npmSpec: "@openclaw/feishu",
-          },
-        ],
-      ]),
+    mockBundledSources(
+      createBundledSource({
+        localPath: `${bundledHome}/plugins/feishu`,
+      }),
     );
 
     const previousHome = process.env.HOME;
@@ -660,8 +683,8 @@ describe("syncPluginsForUpdateChannel", () => {
 
       expect(result.changed).toBe(false);
       expect(result.config.plugins?.load?.paths).toEqual(["~/plugins/feishu"]);
-      expect(result.config.plugins?.installs?.feishu).toMatchObject({
-        source: "path",
+      expectBundledPathInstall({
+        install: result.config.plugins?.installs?.feishu,
         sourcePath: "~/plugins/feishu",
         installPath: "~/plugins/feishu",
       });
