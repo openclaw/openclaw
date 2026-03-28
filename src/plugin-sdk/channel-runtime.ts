@@ -13,6 +13,8 @@ export * from "../channels/plugins/whatsapp-heartbeat.js";
 export * from "../polls.js";
 export { enqueueSystemEvent } from "../infra/system-events.js";
 export { recordChannelActivity } from "../infra/channel-activity.js";
+export * from "../infra/heartbeat-events.ts";
+export * from "../infra/heartbeat-visibility.ts";
 export {
   isWhatsAppGroupJid,
   isWhatsAppUserTarget,
