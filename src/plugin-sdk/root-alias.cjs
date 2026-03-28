@@ -10,10 +10,13 @@ const pluginSdkSubpathsCache = new Map();
 const isDistRootAlias = __filename.includes(
   `${path.sep}dist${path.sep}plugin-sdk${path.sep}root-alias.cjs`,
 );
-const shouldPreferSourceInTests =
+// Source plugin entry loading must stay on the source graph end-to-end. Mixing a
+// source root alias with dist compat/runtime shims can split singleton deps
+// (for example matrix-js-sdk) across two module graphs.
+const shouldPreferSourceGraph =
   !isDistRootAlias &&
-  (Boolean(process.env.VITEST) ||
-    process.env.NODE_ENV === "test" ||
+  (process.env.NODE_ENV !== "production" ||
+    Boolean(process.env.VITEST) ||
     process.env.OPENCLAW_PLUGIN_SDK_SOURCE_IN_TESTS === "1");
 
 function emptyPluginConfigSchema() {
@@ -160,7 +163,7 @@ function loadMonolithicSdk() {
   }
 
   const distCandidate = path.resolve(__dirname, "..", "..", "dist", "plugin-sdk", "compat.js");
-  if (!shouldPreferSourceInTests && fs.existsSync(distCandidate)) {
+  if (!shouldPreferSourceGraph && fs.existsSync(distCandidate)) {
     try {
       monolithicSdk = getJiti(true)(distCandidate);
       return monolithicSdk;
@@ -186,7 +189,7 @@ function loadDiagnosticEventsModule() {
     "infra",
     "diagnostic-events.js",
   );
-  if (!shouldPreferSourceInTests) {
+  if (!shouldPreferSourceGraph) {
     const distCandidate =
       (fs.existsSync(directDistCandidate) && directDistCandidate) ||
       findDistChunkByPrefix("diagnostic-events");
