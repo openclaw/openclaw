@@ -30,8 +30,8 @@ import {
   resolveThreadBindingSpawnPolicy,
 } from "../../../channels/thread-bindings-policy.js";
 import type { OpenClawConfig } from "../../../config/config.js";
+import { updateSessionStore } from "../../../config/sessions.js";
 import type { SessionAcpMeta } from "../../../config/sessions/types.js";
-import { callGateway } from "../../../gateway/call.js";
 import {
   getSessionBindingService,
   type SessionBindingRecord,
@@ -411,6 +411,43 @@ async function cleanupFailedSpawn(params: {
   });
 }
 
+async function persistSpawnedSessionLabel(params: {
+  commandParams: HandleCommandsParams;
+  sessionKey: string;
+  label?: string;
+}): Promise<void> {
+  const label = params.label?.trim();
+  if (!label) {
+    return;
+  }
+
+  const now = Date.now();
+  if (params.commandParams.sessionStore) {
+    const existing = params.commandParams.sessionStore[params.sessionKey];
+    if (existing) {
+      params.commandParams.sessionStore[params.sessionKey] = {
+        ...existing,
+        label,
+        updatedAt: now,
+      };
+    }
+  }
+  if (!params.commandParams.storePath) {
+    return;
+  }
+  await updateSessionStore(params.commandParams.storePath, (store) => {
+    const existing = store[params.sessionKey];
+    if (!existing) {
+      return;
+    }
+    store[params.sessionKey] = {
+      ...existing,
+      label,
+      updatedAt: now,
+    };
+  });
+}
+
 export async function handleAcpSpawnAction(
   params: HandleCommandsParams,
   restTokens: string[],
@@ -515,13 +552,10 @@ export async function handleAcpSpawnAction(
   }
 
   try {
-    await callGateway({
-      method: "sessions.patch",
-      params: {
-        key: sessionKey,
-        ...(spawn.label ? { label: spawn.label } : {}),
-      },
-      timeoutMs: 10_000,
+    await persistSpawnedSessionLabel({
+      commandParams: params,
+      sessionKey,
+      label: spawn.label,
     });
   } catch (err) {
     await cleanupFailedSpawn({
