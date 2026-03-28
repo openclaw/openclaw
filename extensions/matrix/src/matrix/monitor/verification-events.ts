@@ -223,7 +223,21 @@ async function resolveVerificationSummaryForSignal(
     client,
     remoteUserId: params.senderId,
   }).catch(() => null);
-  if (trimMaybeString(inspection?.activeRoomId) !== params.roomId) {
+  const activeRoomId = trimMaybeString(inspection?.activeRoomId);
+  if (activeRoomId) {
+    if (activeRoomId !== params.roomId) {
+      return null;
+    }
+  } else if (
+    !(await isStrictDirectRoom({
+      client,
+      roomId: params.roomId,
+      remoteUserId: params.senderId,
+    }))
+  ) {
+    // If we cannot determine a canonical active DM, preserve the older
+    // strict-room fallback so transient m.direct or joined-room read failures
+    // do not suppress SAS notices for the current DM.
     return null;
   }
 
