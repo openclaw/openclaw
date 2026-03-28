@@ -553,10 +553,12 @@ description: test skill
       },
     ] as const;
 
-    for (const testCase of cases) {
-      const res = await testCase.run();
-      testCase.assert(res);
-    }
+    await Promise.all(
+      cases.map(async (testCase) => {
+        const res = await testCase.run();
+        testCase.assert(res);
+      }),
+    );
   });
 
   it("scores dangerous gateway.tools.allow over HTTP by exposure", async () => {
@@ -2230,23 +2232,25 @@ description: test skill
       },
     ] as const;
 
-    for (const testCase of cases) {
-      await withChannelSecurityStateDir(async () => {
-        const res = await runSecurityAudit({
-          config: testCase.cfg,
-          includeFilesystem: false,
-          includeChannelSecurity: true,
-          plugins: [discordPlugin],
-        });
+    await Promise.all(
+      cases.map(async (testCase) => {
+        await withChannelSecurityStateDir(async () => {
+          const res = await runSecurityAudit({
+            config: testCase.cfg,
+            includeFilesystem: false,
+            includeChannelSecurity: true,
+            plugins: [discordPlugin],
+          });
 
-        expect(
-          res.findings.some(
-            (finding) => finding.checkId === "channels.discord.commands.native.no_allowlists",
-          ),
-          testCase.name,
-        ).toBe(testCase.expectFinding);
-      });
-    }
+          expect(
+            res.findings.some(
+              (finding) => finding.checkId === "channels.discord.commands.native.no_allowlists",
+            ),
+            testCase.name,
+          ).toBe(testCase.expectFinding);
+        });
+      }),
+    );
   });
 
   it("keeps source-configured channel security findings when resolved inspection is incomplete", async () => {
@@ -2440,26 +2444,28 @@ description: test skill
       },
     ] as const;
 
-    for (const testCase of cases) {
-      await withChannelSecurityStateDir(async () => {
-        const res = await runSecurityAudit({
-          config: testCase.resolvedConfig,
-          sourceConfig: testCase.sourceConfig,
-          includeFilesystem: false,
-          includeChannelSecurity: true,
-          plugins: [testCase.plugin(testCase.sourceConfig)],
-        });
+    await Promise.all(
+      cases.map(async (testCase) => {
+        await withChannelSecurityStateDir(async () => {
+          const res = await runSecurityAudit({
+            config: testCase.resolvedConfig,
+            sourceConfig: testCase.sourceConfig,
+            includeFilesystem: false,
+            includeChannelSecurity: true,
+            plugins: [testCase.plugin(testCase.sourceConfig)],
+          });
 
-        expect(res.findings, testCase.name).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              checkId: testCase.expectedCheckId,
-              severity: "warn",
-            }),
-          ]),
-        );
-      });
-    }
+          expect(res.findings, testCase.name).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                checkId: testCase.expectedCheckId,
+                severity: "warn",
+              }),
+            ]),
+          );
+        });
+      }),
+    );
   });
 
   it("adds a read-only resolution warning when channel account resolveAccount throws", async () => {
