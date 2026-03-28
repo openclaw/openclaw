@@ -1,3 +1,4 @@
+import { normalizeProviderId } from "../agents/provider-id.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { ProviderCatalogContext, ProviderCatalogResult } from "./types.js";
 
@@ -10,7 +11,7 @@ export function findCatalogTemplate(params: {
     .map((templateId) =>
       params.entries.find(
         (entry) =>
-          entry.provider.toLowerCase() === params.providerId.toLowerCase() &&
+          normalizeProviderId(entry.provider) === normalizeProviderId(params.providerId) &&
           entry.id.toLowerCase() === templateId.toLowerCase(),
       ),
     )
