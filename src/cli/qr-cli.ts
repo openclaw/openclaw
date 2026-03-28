@@ -1,12 +1,12 @@
 import type { Command } from "commander";
 import qrcode from "qrcode-terminal";
 import { loadConfig } from "../config/config.js";
-import { resolveSecretInputRef } from "../config/types.secrets.js";
+import { hasConfiguredSecretInput } from "../config/types.secrets.js";
+import { readGatewayPasswordEnv, readGatewayTokenEnv } from "../gateway/credentials.js";
+import { resolveRequiredConfiguredSecretRefInputString } from "../gateway/resolve-configured-secret-input-string.js";
 import { resolvePairingSetupFromConfig, encodePairingSetupCode } from "../pairing/setup-code.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
-import { secretRefKey } from "../secrets/ref-contract.js";
-import { resolveSecretRefValues } from "../secrets/resolve.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 import { resolveCommandSecretRefsViaGateway } from "./command-secret-gateway.js";
@@ -40,32 +40,6 @@ function readDevicePairPublicUrlFromConfig(cfg: ReturnType<typeof loadConfig>): 
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function readGatewayTokenEnv(env: NodeJS.ProcessEnv): string | undefined {
-  const primary = typeof env.OPENCLAW_GATEWAY_TOKEN === "string" ? env.OPENCLAW_GATEWAY_TOKEN : "";
-  if (primary.trim().length > 0) {
-    return primary.trim();
-  }
-  const legacy = typeof env.CLAWDBOT_GATEWAY_TOKEN === "string" ? env.CLAWDBOT_GATEWAY_TOKEN : "";
-  if (legacy.trim().length > 0) {
-    return legacy.trim();
-  }
-  return undefined;
-}
-
-function readGatewayPasswordEnv(env: NodeJS.ProcessEnv): string | undefined {
-  const primary =
-    typeof env.OPENCLAW_GATEWAY_PASSWORD === "string" ? env.OPENCLAW_GATEWAY_PASSWORD : "";
-  if (primary.trim().length > 0) {
-    return primary.trim();
-  }
-  const legacy =
-    typeof env.CLAWDBOT_GATEWAY_PASSWORD === "string" ? env.CLAWDBOT_GATEWAY_PASSWORD : "";
-  if (legacy.trim().length > 0) {
-    return legacy.trim();
-  }
-  return undefined;
-}
-
 function shouldResolveLocalGatewayPasswordSecret(
   cfg: ReturnType<typeof loadConfig>,
   env: NodeJS.ProcessEnv,
@@ -81,36 +55,29 @@ function shouldResolveLocalGatewayPasswordSecret(
     return false;
   }
   const envToken = readGatewayTokenEnv(env);
-  const configToken =
-    typeof cfg.gateway?.auth?.token === "string" && cfg.gateway.auth.token.trim().length > 0
-      ? cfg.gateway.auth.token.trim()
-      : undefined;
-  return !envToken && !configToken;
+  const configTokenConfigured = hasConfiguredSecretInput(
+    cfg.gateway?.auth?.token,
+    cfg.secrets?.defaults,
+  );
+  return !envToken && !configTokenConfigured;
 }
 
 async function resolveLocalGatewayPasswordSecretIfNeeded(
   cfg: ReturnType<typeof loadConfig>,
 ): Promise<void> {
-  const authPassword = cfg.gateway?.auth?.password;
-  const { ref } = resolveSecretInputRef({
-    value: authPassword,
-    defaults: cfg.secrets?.defaults,
-  });
-  if (!ref) {
-    return;
-  }
-  const resolved = await resolveSecretRefValues([ref], {
+  const resolvedPassword = await resolveRequiredConfiguredSecretRefInputString({
     config: cfg,
     env: process.env,
+    value: cfg.gateway?.auth?.password,
+    path: "gateway.auth.password",
   });
-  const value = resolved.get(secretRefKey(ref));
-  if (typeof value !== "string" || value.trim().length === 0) {
-    throw new Error("gateway.auth.password resolved to an empty or non-string value.");
+  if (!resolvedPassword) {
+    return;
   }
   if (!cfg.gateway?.auth) {
     return;
   }
-  cfg.gateway.auth.password = value.trim();
+  cfg.gateway.auth.password = resolvedPassword;
 }
 
 function emitQrSecretResolveDiagnostics(diagnostics: string[], opts: QrCliOptions): void {
@@ -258,18 +225,12 @@ export function registerQrCli(program: Command) {
         }
 
         if (opts.json) {
-          defaultRuntime.log(
-            JSON.stringify(
-              {
-                setupCode,
-                gatewayUrl: resolved.payload.url,
-                auth: resolved.authLabel,
-                urlSource: resolved.urlSource,
-              },
-              null,
-              2,
-            ),
-          );
+          defaultRuntime.writeJson({
+            setupCode,
+            gatewayUrl: resolved.payload.url,
+            auth: resolved.authLabel,
+            urlSource: resolved.urlSource,
+          });
           return;
         }
 

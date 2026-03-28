@@ -52,6 +52,40 @@ enum GatewayWebSocketTestSupport {
         return Data(json.utf8)
     }
 
+    static func connectAuthFailureData(
+        id: String,
+        detailCode: String,
+        message: String = "gateway auth rejected",
+        canRetryWithDeviceToken: Bool = false,
+        recommendedNextStep: String? = nil) -> Data
+    {
+        let recommendedNextStepJson: String
+        if let recommendedNextStep {
+            recommendedNextStepJson = """
+            ,
+                          "recommendedNextStep": "\(recommendedNextStep)"
+            """
+        } else {
+            recommendedNextStepJson = ""
+        }
+        let json = """
+        {
+          "type": "res",
+          "id": "\(id)",
+          "ok": false,
+          "error": {
+            "message": "\(message)",
+            "details": {
+              "code": "\(detailCode)",
+              "canRetryWithDeviceToken": \(canRetryWithDeviceToken ? "true" : "false")
+              \(recommendedNextStepJson)
+            }
+          }
+        }
+        """
+        return Data(json.utf8)
+    }
+
     static func requestID(from message: URLSessionWebSocketTask.Message) -> String? {
         guard let obj = self.requestFrameObject(from: message) else { return nil }
         guard (obj["type"] as? String) == "req" else {
@@ -83,9 +117,9 @@ enum GatewayWebSocketTestSupport {
     }
 }
 
-private extension NSLock {
+extension NSLock {
     @inline(__always)
-    func withLock<T>(_ body: () throws -> T) rethrows -> T {
+    fileprivate func withLock<T>(_ body: () throws -> T) rethrows -> T {
         self.lock(); defer { self.unlock() }
         return try body()
     }
@@ -129,7 +163,10 @@ final class GatewayTestWebSocketTask: WebSocketTasking, @unchecked Sendable {
 
     func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
         _ = (closeCode, reason)
-        let handler = self.lock.withLock { () -> (@Sendable (Result<URLSessionWebSocketTask.Message, Error>) -> Void)? in
+        let handler = self.lock.withLock { () -> (@Sendable (Result<
+            URLSessionWebSocketTask.Message,
+            Error,
+        >) -> Void)? in
             self._state = .canceling
             self.cancelCount += 1
             defer { self.pendingReceiveHandler = nil }

@@ -1,6 +1,6 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import type { NormalizedWebhookMessage } from "./monitor-normalize.js";
 import type { BlueBubblesCoreRuntime, WebhookTarget } from "./monitor-shared.js";
+import type { OpenClawConfig } from "./runtime-api.js";
 
 /**
  * Entry type for debouncing inbound messages.

@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
-import { __setModelCatalogImportForTest, loadModelCatalog } from "./model-catalog.js";
+import {
+  __setModelCatalogImportForTest,
+  findModelInCatalog,
+  loadModelCatalog,
+} from "./model-catalog.js";
 import {
   installModelCatalogTestHooks,
   mockCatalogImportFailThenRecover,
@@ -85,10 +89,10 @@ describe("loadModelCatalog", () => {
     }
   });
 
-  it("adds openai-codex/gpt-5.3-codex-spark when base gpt-5.3-codex exists", async () => {
+  it("adds openai-codex/gpt-5.3-codex-spark when base gpt-5.4 exists", async () => {
     mockPiDiscoveryModels([
       {
-        id: "gpt-5.3-codex",
+        id: "gpt-5.4",
         provider: "openai-codex",
         name: "GPT-5.3 Codex",
         reasoning: true,
@@ -112,6 +116,137 @@ describe("loadModelCatalog", () => {
     const spark = result.find((entry) => entry.id === "gpt-5.3-codex-spark");
     expect(spark?.name).toBe("gpt-5.3-codex-spark");
     expect(spark?.reasoning).toBe(true);
+  });
+
+  it("filters stale openai gpt-5.3-codex-spark built-ins from the catalog", async () => {
+    mockPiDiscoveryModels([
+      {
+        id: "gpt-5.3-codex-spark",
+        provider: "openai",
+        name: "GPT-5.3 Codex Spark",
+        reasoning: true,
+        contextWindow: 128000,
+        input: ["text", "image"],
+      },
+      {
+        id: "gpt-5.3-codex-spark",
+        provider: "azure-openai-responses",
+        name: "GPT-5.3 Codex Spark",
+        reasoning: true,
+        contextWindow: 128000,
+        input: ["text", "image"],
+      },
+      {
+        id: "gpt-5.3-codex-spark",
+        provider: "openai-codex",
+        name: "GPT-5.3 Codex Spark",
+        reasoning: true,
+        contextWindow: 128000,
+        input: ["text"],
+      },
+    ]);
+
+    const result = await loadModelCatalog({ config: {} as OpenClawConfig });
+    expect(result).not.toContainEqual(
+      expect.objectContaining({
+        provider: "openai",
+        id: "gpt-5.3-codex-spark",
+      }),
+    );
+    expect(result).not.toContainEqual(
+      expect.objectContaining({
+        provider: "azure-openai-responses",
+        id: "gpt-5.3-codex-spark",
+      }),
+    );
+    expect(result).toContainEqual(
+      expect.objectContaining({
+        provider: "openai-codex",
+        id: "gpt-5.3-codex-spark",
+      }),
+    );
+  });
+
+  it("adds gpt-5.4 forward-compat catalog entries when template models exist", async () => {
+    mockPiDiscoveryModels([
+      {
+        id: "gpt-5.2",
+        provider: "openai",
+        name: "GPT-5.2",
+        reasoning: true,
+        contextWindow: 1_050_000,
+        input: ["text", "image"],
+      },
+      {
+        id: "gpt-5.2-pro",
+        provider: "openai",
+        name: "GPT-5.2 Pro",
+        reasoning: true,
+        contextWindow: 1_050_000,
+        input: ["text", "image"],
+      },
+      {
+        id: "gpt-5-mini",
+        provider: "openai",
+        name: "GPT-5 mini",
+        reasoning: true,
+        contextWindow: 400_000,
+        input: ["text", "image"],
+      },
+      {
+        id: "gpt-5-nano",
+        provider: "openai",
+        name: "GPT-5 nano",
+        reasoning: true,
+        contextWindow: 400_000,
+        input: ["text", "image"],
+      },
+      {
+        id: "gpt-5.4",
+        provider: "openai-codex",
+        name: "GPT-5.3 Codex",
+        reasoning: true,
+        contextWindow: 272000,
+        input: ["text", "image"],
+      },
+    ]);
+
+    const result = await loadModelCatalog({ config: {} as OpenClawConfig });
+
+    expect(result).toContainEqual(
+      expect.objectContaining({
+        provider: "openai",
+        id: "gpt-5.4",
+        name: "gpt-5.4",
+      }),
+    );
+    expect(result).toContainEqual(
+      expect.objectContaining({
+        provider: "openai",
+        id: "gpt-5.4-pro",
+        name: "gpt-5.4-pro",
+      }),
+    );
+    expect(result).toContainEqual(
+      expect.objectContaining({
+        provider: "openai",
+        id: "gpt-5.4-mini",
+        name: "gpt-5.4-mini",
+      }),
+    );
+    expect(result).toContainEqual(
+      expect.objectContaining({
+        provider: "openai",
+        id: "gpt-5.4-nano",
+        name: "gpt-5.4-nano",
+      }),
+    );
+    expect(result).toContainEqual(
+      expect.objectContaining({
+        provider: "openai-codex",
+        id: "gpt-5.4",
+      }),
+    );
   });
 
   it("merges configured models for opted-in non-pi-native providers", async () => {
@@ -185,9 +320,9 @@ describe("loadModelCatalog", () => {
   it("does not duplicate opted-in configured models already present in ModelRegistry", async () => {
     mockPiDiscoveryModels([
       {
-        id: "anthropic/claude-opus-4.6",
+        id: "kilo/auto",
         provider: "kilocode",
-        name: "Claude Opus 4.6",
+        name: "Kilo Auto",
       },
     ]);
 
@@ -200,8 +335,8 @@ describe("loadModelCatalog", () => {
               api: "openai-completions",
               models: [
                 {
-                  id: "anthropic/claude-opus-4.6",
-                  name: "Configured Claude Opus 4.6",
+                  id: "kilo/auto",
+                  name: "Configured Kilo Auto",
                   reasoning: true,
                   input: ["text", "image"],
                   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -216,9 +351,23 @@ describe("loadModelCatalog", () => {
     });
 
     const matches = result.filter(
-      (entry) => entry.provider === "kilocode" && entry.id === "anthropic/claude-opus-4.6",
+      (entry) => entry.provider === "kilocode" && entry.id === "kilo/auto",
     );
     expect(matches).toHaveLength(1);
-    expect(matches[0]?.name).toBe("Claude Opus 4.6");
+    expect(matches[0]?.name).toBe("Kilo Auto");
+  });
+
+  it("matches models across canonical provider aliases", () => {
+    expect(
+      findModelInCatalog(
+        [{ provider: "z.ai", id: "glm-5", name: "GLM-5" }],
+        "z-ai",
+        "glm-5",
+      ),
+    ).toEqual({
+      provider: "z.ai",
+      id: "glm-5",
+      name: "GLM-5",
+    });
   });
 });

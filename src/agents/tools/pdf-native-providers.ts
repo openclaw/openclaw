@@ -3,6 +3,7 @@
  * This bypasses pi-ai's content type system which does not have a "document" type.
  */
 
+import { resolveGoogleGenerativeAiApiOrigin } from "../../plugin-sdk/google.js";
 import { isRecord } from "../../utils.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 
@@ -137,10 +138,7 @@ export async function geminiAnalyzePdf(params: {
   }
   parts.push({ text: params.prompt });
 
-  const baseUrl = (params.baseUrl ?? "https://generativelanguage.googleapis.com").replace(
-    /\/+$/,
-    "",
-  );
+  const baseUrl = resolveGoogleGenerativeAiApiOrigin(params.baseUrl);
   const url = `${baseUrl}/v1beta/models/${encodeURIComponent(params.modelId)}:generateContent?key=${encodeURIComponent(apiKey)}`;
 
   const res = await fetch(url, {

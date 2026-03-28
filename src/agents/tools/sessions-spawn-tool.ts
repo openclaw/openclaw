@@ -1,7 +1,8 @@
 import { Type } from "@sinclair/typebox";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
-import { ACP_SPAWN_MODES, spawnAcpDirect } from "../acp-spawn.js";
+import { ACP_SPAWN_MODES, ACP_SPAWN_STREAM_TARGETS, spawnAcpDirect } from "../acp-spawn.js";
 import { optionalStringEnum } from "../schema/typebox.js";
+import type { SpawnedToolContext } from "../spawned-context.js";
 import { SUBAGENT_SPAWN_MODES, spawnSubagentDirect } from "../subagent-spawn.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam, ToolInputError } from "./common.js";
@@ -24,6 +25,12 @@ const SessionsSpawnToolSchema = Type.Object({
   label: Type.Optional(Type.String()),
   runtime: optionalStringEnum(SESSIONS_SPAWN_RUNTIMES),
   agentId: Type.Optional(Type.String()),
+  resumeSessionId: Type.Optional(
+    Type.String({
+      description:
+        'Resume an existing agent session by its ID (e.g. a Codex session UUID from ~/.codex/sessions/). Requires runtime="acp". The agent replays conversation history via session/load instead of starting fresh.',
+    }),
+  ),
   model: Type.Optional(Type.String()),
   thinking: Type.Optional(Type.String()),
   cwd: Type.Optional(Type.String()),
@@ -34,6 +41,7 @@ const SessionsSpawnToolSchema = Type.Object({
   mode: optionalStringEnum(SUBAGENT_SPAWN_MODES),
   cleanup: optionalStringEnum(["delete", "keep"] as const),
   sandbox: optionalStringEnum(SESSIONS_SPAWN_SANDBOX_MODES),
+  streamTo: optionalStringEnum(ACP_SPAWN_STREAM_TARGETS),
 
   // Inline attachments (snapshot-by-value).
   // NOTE: Attachment contents are redacted from transcript persistence by sanitizeToolCallInputs.
@@ -57,24 +65,23 @@ const SessionsSpawnToolSchema = Type.Object({
   ),
 });
 
-export function createSessionsSpawnTool(opts?: {
-  agentSessionKey?: string;
-  agentChannel?: GatewayMessageChannel;
-  agentAccountId?: string;
-  agentTo?: string;
-  agentThreadId?: string | number;
-  agentGroupId?: string | null;
-  agentGroupChannel?: string | null;
-  agentGroupSpace?: string | null;
-  sandboxed?: boolean;
-  /** Explicit agent ID override for cron/hook sessions where session key parsing may not work. */
-  requesterAgentIdOverride?: string;
-}): AnyAgentTool {
+export function createSessionsSpawnTool(
+  opts?: {
+    agentSessionKey?: string;
+    agentChannel?: GatewayMessageChannel;
+    agentAccountId?: string;
+    agentTo?: string;
+    agentThreadId?: string | number;
+    sandboxed?: boolean;
+    /** Explicit agent ID override for cron/hook sessions where session key parsing may not work. */
+    requesterAgentIdOverride?: string;
+  } & SpawnedToolContext,
+): AnyAgentTool {
   return {
     label: "Sessions",
     name: "sessions_spawn",
     description:
-      'Spawn an isolated session (runtime="subagent" or runtime="acp"). mode="run" is one-shot and mode="session" is persistent/thread-bound.',
+      'Spawn an isolated session (runtime="subagent" or runtime="acp"). mode="run" is one-shot and mode="session" is persistent/thread-bound. Subagents inherit the parent workspace directory automatically.',
     parameters: SessionsSpawnToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -90,6 +97,7 @@ export function createSessionsSpawnTool(opts?: {
       const label = typeof params.label === "string" ? params.label.trim() : "";
       const runtime = params.runtime === "acp" ? "acp" : "subagent";
       const requestedAgentId = readStringParam(params, "agentId");
+      const resumeSessionId = readStringParam(params, "resumeSessionId");
       const modelOverride = readStringParam(params, "model");
       const thinkingOverrideRaw = readStringParam(params, "thinking");
       const cwd = readStringParam(params, "cwd");
@@ -97,6 +105,7 @@ export function createSessionsSpawnTool(opts?: {
       const cleanup =
         params.cleanup === "keep" || params.cleanup === "delete" ? params.cleanup : "keep";
       const sandbox = params.sandbox === "require" ? "require" : "inherit";
+      const streamTo = params.streamTo === "parent" ? "parent" : undefined;
       // Back-compat: older callers used timeoutSeconds for this tool.
       const timeoutSecondsCandidate =
         typeof params.runTimeoutSeconds === "number"
@@ -118,6 +127,20 @@ export function createSessionsSpawnTool(opts?: {
           }>)
         : undefined;
 
+      if (streamTo && runtime !== "acp") {
+        return jsonResult({
+          status: "error",
+          error: `streamTo is only supported for runtime=acp; got runtime=${runtime}`,
+        });
+      }
+
+      if (resumeSessionId && runtime !== "acp") {
+        return jsonResult({
+          status: "error",
+          error: `resumeSessionId is only supported for runtime=acp; got runtime=${runtime}`,
+        });
+      }
+
       if (runtime === "acp") {
         if (Array.isArray(attachments) && attachments.length > 0) {
           return jsonResult({
@@ -131,10 +154,12 @@ export function createSessionsSpawnTool(opts?: {
             task,
             label: label || undefined,
             agentId: requestedAgentId,
+            resumeSessionId,
             cwd,
             mode: mode && ACP_SPAWN_MODES.includes(mode) ? mode : undefined,
             thread,
             sandbox,
+            streamTo,
           },
           {
             agentSessionKey: opts?.agentSessionKey,
@@ -177,6 +202,7 @@ export function createSessionsSpawnTool(opts?: {
           agentGroupChannel: opts?.agentGroupChannel,
           agentGroupSpace: opts?.agentGroupSpace,
           requesterAgentIdOverride: opts?.requesterAgentIdOverride,
+          workspaceDir: opts?.workspaceDir,
         },
       );
 

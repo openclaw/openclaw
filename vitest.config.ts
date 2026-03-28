@@ -1,58 +1,34 @@
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
+import { pluginSdkSubpaths } from "./scripts/lib/plugin-sdk-entries.mjs";
+import { resolveLocalVitestMaxWorkers } from "./scripts/test-planner/runtime-profile.mjs";
+import {
+  behaviorManifestPath,
+  unitMemoryHotspotManifestPath,
+  unitTimingManifestPath,
+} from "./scripts/test-runner-manifest.mjs";
+import { loadVitestExperimentalConfig } from "./vitest.performance-config.ts";
+
+export { resolveLocalVitestMaxWorkers };
 
 const repoRoot = path.dirname(fileURLToPath(import.meta.url));
 const isCI = process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true";
 const isWindows = process.platform === "win32";
-const localWorkers = Math.max(4, Math.min(16, os.cpus().length));
+const localWorkers = resolveLocalVitestMaxWorkers();
 const ciWorkers = isWindows ? 2 : 3;
-
 export default defineConfig({
   resolve: {
     // Keep this ordered: the base `openclaw/plugin-sdk` alias is a prefix match.
     alias: [
       {
-        find: "openclaw/plugin-sdk/account-id",
-        replacement: path.join(repoRoot, "src", "plugin-sdk", "account-id.ts"),
+        find: "openclaw/extension-api",
+        replacement: path.join(repoRoot, "src", "extensionAPI.ts"),
       },
-      {
-        find: "openclaw/plugin-sdk/core",
-        replacement: path.join(repoRoot, "src", "plugin-sdk", "core.ts"),
-      },
-      {
-        find: "openclaw/plugin-sdk/telegram",
-        replacement: path.join(repoRoot, "src", "plugin-sdk", "telegram.ts"),
-      },
-      {
-        find: "openclaw/plugin-sdk/discord",
-        replacement: path.join(repoRoot, "src", "plugin-sdk", "discord.ts"),
-      },
-      {
-        find: "openclaw/plugin-sdk/slack",
-        replacement: path.join(repoRoot, "src", "plugin-sdk", "slack.ts"),
-      },
-      {
-        find: "openclaw/plugin-sdk/signal",
-        replacement: path.join(repoRoot, "src", "plugin-sdk", "signal.ts"),
-      },
-      {
-        find: "openclaw/plugin-sdk/imessage",
-        replacement: path.join(repoRoot, "src", "plugin-sdk", "imessage.ts"),
-      },
-      {
-        find: "openclaw/plugin-sdk/whatsapp",
-        replacement: path.join(repoRoot, "src", "plugin-sdk", "whatsapp.ts"),
-      },
-      {
-        find: "openclaw/plugin-sdk/line",
-        replacement: path.join(repoRoot, "src", "plugin-sdk", "line.ts"),
-      },
-      {
-        find: "openclaw/plugin-sdk/keyed-async-queue",
-        replacement: path.join(repoRoot, "src", "plugin-sdk", "keyed-async-queue.ts"),
-      },
+      ...pluginSdkSubpaths.map((subpath) => ({
+        find: `openclaw/plugin-sdk/${subpath}`,
+        replacement: path.join(repoRoot, "src", "plugin-sdk", `${subpath}.ts`),
+      })),
       {
         find: "openclaw/plugin-sdk",
         replacement: path.join(repoRoot, "src", "plugin-sdk", "index.ts"),
@@ -63,20 +39,55 @@ export default defineConfig({
     testTimeout: 120_000,
     hookTimeout: isWindows ? 180_000 : 120_000,
     // Many suites rely on `vi.stubEnv(...)` and expect it to be scoped to the test.
-    // This is especially important under `pool=vmForks` where env leaks cross-file.
+    // Keep env restoration automatic so shared-worker runs do not leak state.
     unstubEnvs: true,
-    // Same rationale as unstubEnvs: avoid cross-test pollution under vmForks.
+    // Same rationale as unstubEnvs: avoid cross-test pollution from shared globals.
     unstubGlobals: true,
     pool: "forks",
     maxWorkers: isCI ? ciWorkers : localWorkers,
+    forceRerunTriggers: [
+      "package.json",
+      "pnpm-lock.yaml",
+      "test/setup.ts",
+      "scripts/test-parallel.mjs",
+      "scripts/test-planner/catalog.mjs",
+      "scripts/test-planner/executor.mjs",
+      "scripts/test-planner/planner.mjs",
+      "scripts/test-planner/runtime-profile.mjs",
+      "scripts/test-runner-manifest.mjs",
+      "vitest.channel-paths.mjs",
+      "vitest.channels.config.ts",
+      "vitest.config.ts",
+      "vitest.contracts.config.ts",
+      "vitest.e2e.config.ts",
+      "vitest.extensions.config.ts",
+      "vitest.gateway.config.ts",
+      "vitest.live.config.ts",
+      "vitest.performance-config.ts",
+      "vitest.scoped-config.ts",
+      "vitest.unit.config.ts",
+      "vitest.unit-paths.mjs",
+      behaviorManifestPath,
+      unitTimingManifestPath,
+      unitMemoryHotspotManifestPath,
+    ],
     include: [
       "src/**/*.test.ts",
       "extensions/**/*.test.ts",
+      "packages/**/*.test.ts",
       "test/**/*.test.ts",
+      "ui/src/ui/app-chat.test.ts",
+      "ui/src/ui/chat/**/*.test.ts",
       "ui/src/ui/views/agents-utils.test.ts",
+      "ui/src/ui/views/channels.test.ts",
+      "ui/src/ui/views/chat.test.ts",
+      "ui/src/ui/views/nodes.devices.test.ts",
       "ui/src/ui/views/usage-render-details.test.ts",
       "ui/src/ui/controllers/agents.test.ts",
       "ui/src/ui/controllers/chat.test.ts",
+      "ui/src/ui/controllers/sessions.test.ts",
+      "ui/src/ui/views/sessions.test.ts",
+      "ui/src/ui/app-gateway.sessions.node.test.ts",
     ],
     setupFiles: ["test/setup.ts"],
     exclude: [
@@ -116,7 +127,6 @@ export default defineConfig({
         "src/index.ts",
         "src/runtime.ts",
         "src/channel-web.ts",
-        "src/extensionAPI.ts",
         "src/logging.ts",
         "src/cli/**",
         "src/commands/**",
@@ -172,16 +182,8 @@ export default defineConfig({
         "src/tui/**",
         "src/wizard/**",
         // Channel surfaces are largely integration-tested (or manually validated).
-        "src/discord/**",
-        "src/imessage/**",
-        "src/signal/**",
-        "src/slack/**",
         "src/browser/**",
         "src/channels/web/**",
-        "src/telegram/index.ts",
-        "src/telegram/proxy.ts",
-        "src/telegram/webhook-set.ts",
-        "src/telegram/**",
         "src/webchat/**",
         "src/gateway/server.ts",
         "src/gateway/client.ts",
@@ -189,5 +191,6 @@ export default defineConfig({
         "src/infra/tailscale.ts",
       ],
     },
+    ...loadVitestExperimentalConfig(),
   },
 });

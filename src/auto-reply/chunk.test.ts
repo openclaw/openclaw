@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import * as fences from "../markdown/fences.js";
 import { hasBalancedFences } from "../test-utils/chunk-test-helpers.js";
 import {
   chunkByNewline,
@@ -24,10 +25,29 @@ type ChunkCase = {
 };
 
 function runChunkCases(chunker: (text: string, limit: number) => string[], cases: ChunkCase[]) {
-  for (const { name, text, limit, expected } of cases) {
-    it(name, () => {
-      expect(chunker(text, limit)).toEqual(expected);
-    });
+  it.each(cases)("$name", ({ text, limit, expected }) => {
+    expect(chunker(text, limit)).toEqual(expected);
+  });
+}
+
+function expectMarkdownFenceSplitCases(
+  cases: ReadonlyArray<{
+    name: string;
+    text: string;
+    limit: number;
+    expectedPrefix: string;
+    expectedSuffix: string;
+  }>,
+) {
+  for (const { name, text, limit, expectedPrefix, expectedSuffix } of cases) {
+    const chunks = chunkMarkdownText(text, limit);
+    expect(chunks.length, name).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      expect(chunk.length, name).toBeLessThanOrEqual(limit);
+      expect(chunk.startsWith(expectedPrefix), name).toBe(true);
+      expect(chunk.trimEnd().endsWith(expectedSuffix), name).toBe(true);
+    }
+    expectFencesBalanced(chunks);
   }
 }
 
@@ -186,16 +206,7 @@ describe("chunkMarkdownText", () => {
       },
     ] as const;
 
-    for (const testCase of cases) {
-      const chunks = chunkMarkdownText(testCase.text, testCase.limit);
-      expect(chunks.length, testCase.name).toBeGreaterThan(1);
-      for (const chunk of chunks) {
-        expect(chunk.length, testCase.name).toBeLessThanOrEqual(testCase.limit);
-        expect(chunk.startsWith(testCase.expectedPrefix), testCase.name).toBe(true);
-        expect(chunk.trimEnd().endsWith(testCase.expectedSuffix), testCase.name).toBe(true);
-      }
-      expectFencesBalanced(chunks);
-    }
+    expectMarkdownFenceSplitCases(cases);
   });
 
   it("never produces an empty fenced chunk when splitting", () => {
@@ -216,6 +227,17 @@ describe("chunkMarkdownText", () => {
     const chunks = chunkMarkdownText(text, 20);
     expect(chunks[0]?.length).toBe(20);
     expect(chunks.join("")).toBe(text);
+  });
+
+  it("parses fence spans once for long fenced payloads", () => {
+    const parseSpy = vi.spyOn(fences, "parseFenceSpans");
+    const text = `\`\`\`txt\n${"line\n".repeat(600)}\`\`\``;
+
+    const chunks = chunkMarkdownText(text, 80);
+
+    expect(chunks.length).toBeGreaterThan(2);
+    expect(parseSpy).toHaveBeenCalledTimes(1);
+    parseSpy.mockRestore();
   });
 });
 
@@ -261,10 +283,8 @@ describe("chunkByNewline", () => {
     expect(chunks).toEqual([text]);
   });
 
-  it("returns empty array for empty and whitespace-only input", () => {
-    for (const text of ["", "   \n\n   "]) {
-      expect(chunkByNewline(text, 100)).toEqual([]);
-    }
+  it.each(["", "   \n\n   "] as const)("returns empty array for input %j", (text) => {
+    expect(chunkByNewline(text, 100)).toEqual([]);
   });
 
   it("preserves trailing blank lines on the last chunk", () => {
@@ -281,62 +301,55 @@ describe("chunkByNewline", () => {
 });
 
 describe("chunkTextWithMode", () => {
-  it("applies mode-specific chunking behavior", () => {
-    const cases = [
-      {
-        name: "length mode",
-        text: "Line one\nLine two",
-        mode: "length" as const,
-        expected: ["Line one\nLine two"],
-      },
-      {
-        name: "newline mode (single paragraph)",
-        text: "Line one\nLine two",
-        mode: "newline" as const,
-        expected: ["Line one\nLine two"],
-      },
-      {
-        name: "newline mode (blank-line split)",
-        text: "Para one\n\nPara two",
-        mode: "newline" as const,
-        expected: ["Para one", "Para two"],
-      },
-    ] as const;
-
-    for (const testCase of cases) {
-      const chunks = chunkTextWithMode(testCase.text, 1000, testCase.mode);
-      expect(chunks, testCase.name).toEqual(testCase.expected);
-    }
-  });
+  it.each([
+    {
+      name: "length mode",
+      text: "Line one\nLine two",
+      mode: "length" as const,
+      expected: ["Line one\nLine two"],
+    },
+    {
+      name: "newline mode (single paragraph)",
+      text: "Line one\nLine two",
+      mode: "newline" as const,
+      expected: ["Line one\nLine two"],
+    },
+    {
+      name: "newline mode (blank-line split)",
+      text: "Para one\n\nPara two",
+      mode: "newline" as const,
+      expected: ["Para one", "Para two"],
+    },
+  ] as const)(
+    "applies mode-specific chunking behavior: $name",
+    ({ text, mode, expected, name }) => {
+      expect(chunkTextWithMode(text, 1000, mode), name).toEqual(expected);
+    },
+  );
 });
 
 describe("chunkMarkdownTextWithMode", () => {
-  it("applies markdown/newline mode behavior", () => {
-    const cases = [
-      {
-        name: "length mode uses markdown-aware chunker",
-        text: "Line one\nLine two",
-        mode: "length" as const,
-        expected: chunkMarkdownText("Line one\nLine two", 1000),
-      },
-      {
-        name: "newline mode keeps single paragraph",
-        text: "Line one\nLine two",
-        mode: "newline" as const,
-        expected: ["Line one\nLine two"],
-      },
-      {
-        name: "newline mode splits by blank line",
-        text: "Para one\n\nPara two",
-        mode: "newline" as const,
-        expected: ["Para one", "Para two"],
-      },
-    ] as const;
-    for (const testCase of cases) {
-      expect(chunkMarkdownTextWithMode(testCase.text, 1000, testCase.mode), testCase.name).toEqual(
-        testCase.expected,
-      );
-    }
+  it.each([
+    {
+      name: "length mode uses markdown-aware chunker",
+      text: "Line one\nLine two",
+      mode: "length" as const,
+      expected: chunkMarkdownText("Line one\nLine two", 1000),
+    },
+    {
+      name: "newline mode keeps single paragraph",
+      text: "Line one\nLine two",
+      mode: "newline" as const,
+      expected: ["Line one\nLine two"],
+    },
+    {
+      name: "newline mode splits by blank line",
+      text: "Para one\n\nPara two",
+      mode: "newline" as const,
+      expected: ["Para one", "Para two"],
+    },
+  ] as const)("applies markdown/newline mode behavior: $name", ({ text, mode, expected, name }) => {
+    expect(chunkMarkdownTextWithMode(text, 1000, mode), name).toEqual(expected);
   });
 
   it("handles newline mode fence splitting rules", () => {
@@ -369,11 +382,8 @@ describe("chunkMarkdownTextWithMode", () => {
       },
     ] as const;
 
-    for (const testCase of cases) {
-      expect(
-        chunkMarkdownTextWithMode(testCase.text, testCase.limit, "newline"),
-        testCase.name,
-      ).toEqual(testCase.expected);
+    for (const { text, limit, expected, name } of cases) {
+      expect(chunkMarkdownTextWithMode(text, limit, "newline"), name).toEqual(expected);
     }
   });
 });
@@ -402,10 +412,8 @@ describe("resolveChunkMode", () => {
       { cfg: accountCfg, provider: "slack", accountId: "other", expected: "length" },
     ] as const;
 
-    for (const testCase of cases) {
-      expect(resolveChunkMode(testCase.cfg as never, testCase.provider, testCase.accountId)).toBe(
-        testCase.expected,
-      );
+    for (const { cfg, provider, accountId, expected } of cases) {
+      expect(resolveChunkMode(cfg as never, provider, accountId)).toBe(expected);
     }
   });
 });

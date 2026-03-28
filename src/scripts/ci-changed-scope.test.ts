@@ -10,6 +10,8 @@ const { detectChangedScope, listChangedPaths } =
       runMacos: boolean;
       runAndroid: boolean;
       runWindows: boolean;
+      runSkillsPython: boolean;
+      runChangedSmoke: boolean;
     };
     listChangedPaths: (base: string, head?: string) => string[];
   };
@@ -32,6 +34,8 @@ describe("detectChangedScope", () => {
       runMacos: true,
       runAndroid: true,
       runWindows: true,
+      runSkillsPython: true,
+      runChangedSmoke: true,
     });
   });
 
@@ -41,6 +45,8 @@ describe("detectChangedScope", () => {
       runMacos: false,
       runAndroid: false,
       runWindows: false,
+      runSkillsPython: false,
+      runChangedSmoke: false,
     });
   });
 
@@ -50,6 +56,8 @@ describe("detectChangedScope", () => {
       runMacos: false,
       runAndroid: false,
       runWindows: true,
+      runSkillsPython: false,
+      runChangedSmoke: false,
     });
   });
 
@@ -59,12 +67,16 @@ describe("detectChangedScope", () => {
       runMacos: true,
       runAndroid: false,
       runWindows: false,
+      runSkillsPython: false,
+      runChangedSmoke: false,
     });
     expect(detectChangedScope(["apps/shared/OpenClawKit/Sources/Foo.swift"])).toEqual({
       runNode: false,
       runMacos: true,
       runAndroid: true,
       runWindows: false,
+      runSkillsPython: false,
+      runChangedSmoke: false,
     });
   });
 
@@ -75,6 +87,8 @@ describe("detectChangedScope", () => {
         runMacos: false,
         runAndroid: false,
         runWindows: false,
+        runSkillsPython: false,
+        runChangedSmoke: false,
       },
     );
   });
@@ -85,6 +99,8 @@ describe("detectChangedScope", () => {
       runMacos: false,
       runAndroid: false,
       runWindows: false,
+      runSkillsPython: false,
+      runChangedSmoke: false,
     });
 
     expect(detectChangedScope(["assets/icon.png"])).toEqual({
@@ -92,6 +108,8 @@ describe("detectChangedScope", () => {
       runMacos: false,
       runAndroid: false,
       runWindows: false,
+      runSkillsPython: false,
+      runChangedSmoke: false,
     });
   });
 
@@ -101,6 +119,68 @@ describe("detectChangedScope", () => {
       runMacos: false,
       runAndroid: false,
       runWindows: false,
+      runSkillsPython: false,
+      runChangedSmoke: false,
+    });
+  });
+
+  it("runs Python skill tests when skills change", () => {
+    expect(detectChangedScope(["skills/skill-creator/scripts/test_quick_validate.py"])).toEqual({
+      runNode: true,
+      runMacos: false,
+      runAndroid: false,
+      runWindows: false,
+      runSkillsPython: true,
+      runChangedSmoke: false,
+    });
+  });
+
+  it("runs Python skill tests when shared Python config changes", () => {
+    expect(detectChangedScope(["pyproject.toml"])).toEqual({
+      runNode: true,
+      runMacos: false,
+      runAndroid: false,
+      runWindows: false,
+      runSkillsPython: true,
+      runChangedSmoke: false,
+    });
+  });
+
+  it("runs platform lanes when the CI workflow changes", () => {
+    expect(detectChangedScope([".github/workflows/ci.yml"])).toEqual({
+      runNode: true,
+      runMacos: true,
+      runAndroid: true,
+      runWindows: true,
+      runSkillsPython: true,
+      runChangedSmoke: false,
+    });
+  });
+
+  it("runs changed-smoke for install and packaging surfaces", () => {
+    expect(detectChangedScope(["scripts/install.sh"])).toEqual({
+      runNode: true,
+      runMacos: false,
+      runAndroid: false,
+      runWindows: true,
+      runSkillsPython: false,
+      runChangedSmoke: true,
+    });
+    expect(detectChangedScope(["extensions/matrix/package.json"])).toEqual({
+      runNode: true,
+      runMacos: false,
+      runAndroid: false,
+      runWindows: true,
+      runSkillsPython: false,
+      runChangedSmoke: true,
+    });
+    expect(detectChangedScope([".github/workflows/install-smoke.yml"])).toEqual({
+      runNode: true,
+      runMacos: false,
+      runAndroid: false,
+      runWindows: false,
+      runSkillsPython: false,
+      runChangedSmoke: true,
     });
   });
 

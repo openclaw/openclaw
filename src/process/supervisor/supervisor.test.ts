@@ -12,6 +12,10 @@ function createWriteStdoutArgv(output: string): string[] {
   return ["/usr/bin/printf", "%s", output];
 }
 
+function createSilentIdleArgv(): string[] {
+  return [process.execPath, "-e", "setInterval(() => {}, 1_000)"];
+}
+
 async function spawnChild(supervisor: ProcessSupervisor, options: ChildSpawnOptions) {
   return supervisor.spawn({
     ...options,
@@ -39,7 +43,7 @@ describe("process supervisor", () => {
     const supervisor = createProcessSupervisor();
     const run = await spawnChild(supervisor, {
       sessionId: "s1",
-      argv: [process.execPath, "-e", "setTimeout(() => {}, 14)"],
+      argv: createSilentIdleArgv(),
       timeoutMs: 300,
       noOutputTimeoutMs: 5,
       stdinMode: "pipe-closed",
@@ -80,7 +84,7 @@ describe("process supervisor", () => {
     const supervisor = createProcessSupervisor();
     const run = await spawnChild(supervisor, {
       sessionId: "s-timeout",
-      argv: [process.execPath, "-e", "setTimeout(() => {}, 12)"],
+      argv: createSilentIdleArgv(),
       timeoutMs: 1,
       stdinMode: "pipe-closed",
     });

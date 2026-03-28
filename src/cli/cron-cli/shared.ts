@@ -2,14 +2,28 @@ import { listChannelPlugins } from "../../channels/plugins/index.js";
 import { parseAbsoluteTimeMs } from "../../cron/parse.js";
 import { resolveCronStaggerMs } from "../../cron/stagger.js";
 import type { CronJob, CronSchedule } from "../../cron/types.js";
+import { danger } from "../../globals.js";
 import { formatDurationHuman } from "../../infra/format-time/format-duration.ts";
-import { defaultRuntime } from "../../runtime.js";
+import {
+  isOffsetlessIsoDateTime,
+  parseOffsetlessIsoDateTimeInTimeZone,
+} from "../../infra/format-time/parse-offsetless-zoned-datetime.js";
+import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { colorize, isRich, theme } from "../../terminal/theme.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { callGatewayFromCli } from "../gateway-rpc.js";
 
 export const getCronChannelOptions = () =>
   ["last", ...listChannelPlugins().map((plugin) => plugin.id)].join("|");
+
+export function printCronJson(value: unknown) {
+  defaultRuntime.writeJson(value);
+}
+
+export function handleCronCliError(err: unknown) {
+  defaultRuntime.error(danger(String(err)));
+  defaultRuntime.exit(1);
+}
 
 export async function warnIfCronSchedulerDisabled(opts: GatewayRpcOpts) {
   try {
@@ -79,11 +93,25 @@ export function parseCronStaggerMs(params: {
   return parsed;
 }
 
-export function parseAt(input: string): string | null {
+/**
+ * Parse a one-shot `--at` value into an ISO string (UTC).
+ *
+ * When `tz` is provided and the input is an offset-less datetime
+ * (e.g. `2026-03-23T23:00:00`), the datetime is interpreted in
+ * that IANA timezone instead of UTC.
+ */
+export function parseAt(input: string, tz?: string): string | null {
   const raw = input.trim();
   if (!raw) {
     return null;
   }
+
+  // If a timezone is provided and the input looks like an offset-less ISO datetime,
+  // resolve it in the given IANA timezone so users get the time they expect.
+  if (tz && isOffsetlessIsoDateTime(raw)) {
+    return parseOffsetlessIsoDateTimeInTimeZone(raw, tz);
+  }
+
   const absolute = parseAbsoluteTimeMs(raw);
   if (absolute !== null) {
     return new Date(absolute).toISOString();
@@ -174,7 +202,7 @@ const formatStatus = (job: CronJob) => {
   return job.state.lastStatus ?? "idle";
 };
 
-export function printCronList(jobs: CronJob[], runtime = defaultRuntime) {
+export function printCronList(jobs: CronJob[], runtime: RuntimeEnv = defaultRuntime) {
   if (jobs.length === 0) {
     runtime.log("No cron jobs.");
     return;
@@ -237,9 +265,9 @@ export function printCronList(jobs: CronJob[], runtime = defaultRuntime) {
     })();
 
     const coloredTarget =
-      job.sessionTarget === "isolated"
-        ? colorize(rich, theme.accentBright, targetLabel)
-        : colorize(rich, theme.accent, targetLabel);
+      job.sessionTarget === "main"
+        ? colorize(rich, theme.accent, targetLabel)
+        : colorize(rich, theme.accentBright, targetLabel);
     const coloredAgent = job.agentId
       ? colorize(rich, theme.info, agentLabel)
       : colorize(rich, theme.muted, agentLabel);

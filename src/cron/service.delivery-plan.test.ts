@@ -86,7 +86,7 @@ describe("CronService delivery plan consistency", () => {
     });
   });
 
-  it("treats delivery object without mode as announce", async () => {
+  it("treats delivery object without mode as announce without reviving legacy relay fallback", async () => {
     await withCronService({}, async ({ cron, enqueueSystemEvent }) => {
       const job = await addIsolatedAgentTurnJob(cron, {
         name: "partial-delivery",
@@ -96,10 +96,8 @@ describe("CronService delivery plan consistency", () => {
 
       const result = await cron.run(job.id, "force");
       expect(result).toEqual({ ok: true, ran: true });
-      expect(enqueueSystemEvent).toHaveBeenCalledWith(
-        "Cron: done",
-        expect.objectContaining({ agentId: undefined }),
-      );
+      expect(enqueueSystemEvent).not.toHaveBeenCalled();
+      expect(cron.getJob(job.id)?.state.lastDeliveryStatus).toBe("unknown");
     });
   });
 

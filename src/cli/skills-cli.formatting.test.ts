@@ -31,15 +31,16 @@ describe("skills-cli (e2e)", () => {
 
   function createEntries(): SkillEntry[] {
     const baseDir = path.join(tempWorkspaceDir, "peekaboo");
+    const filePath = path.join(baseDir, "SKILL.md");
     return [
       {
-        skill: {
+        skill: createFixtureSkill({
           name: "peekaboo",
           description: "Capture UI screenshots",
-          source: "openclaw-bundled",
-          filePath: path.join(baseDir, "SKILL.md"),
+          filePath,
           baseDir,
-        } as SkillEntry["skill"],
+          source: "openclaw-bundled",
+        }),
         frontmatter: {},
         metadata: { emoji: "📸" },
       },
@@ -83,3 +84,20 @@ describe("skills-cli (e2e)", () => {
     expect(output).toContain("Details:");
   });
 });
+
+function createFixtureSkill(params: {
+  name: string;
+  description: string;
+  filePath: string;
+  baseDir: string;
+  source: string;
+}): SkillEntry["skill"] {
+  return {
+    name: params.name,
+    description: params.description,
+    filePath: params.filePath,
+    baseDir: params.baseDir,
+    source: params.source,
+    disableModelInvocation: false,
+  };
+}

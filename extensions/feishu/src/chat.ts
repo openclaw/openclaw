@@ -1,5 +1,5 @@
 import type * as Lark from "@larksuiteoapi/node-sdk";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import type { OpenClawPluginApi } from "../runtime-api.js";
 import { listEnabledFeishuAccounts } from "./accounts.js";
 import { FeishuChatSchema, type FeishuChatParams } from "./chat-schema.js";
 import { createFeishuClient } from "./client.js";
@@ -12,7 +12,7 @@ function json(data: unknown) {
   };
 }
 
-async function getChatInfo(client: Lark.Client, chatId: string) {
+export async function getChatInfo(client: Lark.Client, chatId: string) {
   const res = await client.im.chat.get({ path: { chat_id: chatId } });
   if (res.code !== 0) {
     throw new Error(res.msg);
@@ -36,7 +36,7 @@ async function getChatInfo(client: Lark.Client, chatId: string) {
   };
 }
 
-async function getChatMembers(
+export async function getChatMembers(
   client: Lark.Client,
   chatId: string,
   pageSize?: number,
@@ -71,6 +71,55 @@ async function getChatMembers(
   };
 }
 
+export async function getFeishuMemberInfo(
+  client: Lark.Client,
+  memberId: string,
+  memberIdType: "open_id" | "user_id" | "union_id" = "open_id",
+) {
+  const res = await client.contact.user.get({
+    path: { user_id: memberId },
+    params: {
+      user_id_type: memberIdType,
+      department_id_type: "open_department_id",
+    },
+  });
+
+  if (res.code !== 0) {
+    throw new Error(res.msg);
+  }
+
+  const user = res.data?.user;
+  return {
+    member_id: memberId,
+    member_id_type: memberIdType,
+    open_id: user?.open_id,
+    user_id: user?.user_id,
+    union_id: user?.union_id,
+    name: user?.name,
+    en_name: user?.en_name,
+    nickname: user?.nickname,
+    email: user?.email,
+    enterprise_email: user?.enterprise_email,
+    mobile: user?.mobile,
+    mobile_visible: user?.mobile_visible,
+    status: user?.status,
+    avatar: user?.avatar,
+    department_ids: user?.department_ids,
+    department_path: user?.department_path,
+    leader_user_id: user?.leader_user_id,
+    city: user?.city,
+    country: user?.country,
+    work_station: user?.work_station,
+    join_time: user?.join_time,
+    is_tenant_manager: user?.is_tenant_manager,
+    employee_no: user?.employee_no,
+    employee_type: user?.employee_type,
+    description: user?.description,
+    job_title: user?.job_title,
+    geo: user?.geo,
+  };
+}
+
 export function registerFeishuChatTools(api: OpenClawPluginApi) {
   if (!api.config) {
     api.logger.debug?.("feishu_chat: No config available, skipping chat tools");
@@ -96,7 +145,7 @@ export function registerFeishuChatTools(api: OpenClawPluginApi) {
     {
       name: "feishu_chat",
       label: "Feishu Chat",
-      description: "Feishu chat operations. Actions: members, info",
+      description: "Feishu chat operations. Actions: members, info, member_info",
       parameters: FeishuChatSchema,
       async execute(_toolCallId, params) {
         const p = params as FeishuChatParams;
@@ -104,6 +153,9 @@ export function registerFeishuChatTools(api: OpenClawPluginApi) {
           const client = getClient();
           switch (p.action) {
             case "members":
+              if (!p.chat_id) {
+                return json({ error: "chat_id is required for action members" });
+              }
               return json(
                 await getChatMembers(
                   client,
@@ -114,7 +166,17 @@ export function registerFeishuChatTools(api: OpenClawPluginApi) {
                 ),
               );
             case "info":
+              if (!p.chat_id) {
+                return json({ error: "chat_id is required for action info" });
+              }
               return json(await getChatInfo(client, p.chat_id));
+            case "member_info":
+              if (!p.member_id) {
+                return json({ error: "member_id is required for action member_info" });
+              }
+              return json(
+                await getFeishuMemberInfo(client, p.member_id, p.member_id_type ?? "open_id"),
+              );
             default:
               return json({ error: `Unknown action: ${String(p.action)}` });
           }

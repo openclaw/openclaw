@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
-import type { OpenClawConfig, RuntimeEnv } from "openclaw/plugin-sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig, RuntimeEnv } from "../runtime-api.js";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
 import type { MSTeamsPollStore } from "./polls.js";
 
@@ -15,7 +15,7 @@ const expressControl = vi.hoisted(() => ({
   mode: { value: "listening" as "listening" | "error" },
 }));
 
-vi.mock("openclaw/plugin-sdk", () => ({
+vi.mock("../runtime-api.js", () => ({
   DEFAULT_WEBHOOK_MAX_BODY_BYTES: 1024 * 1024,
   normalizeSecretInputString: (value: unknown) =>
     typeof value === "string" && value.trim() ? value.trim() : undefined,
@@ -113,6 +113,12 @@ vi.mock("./resolve-allowlist.js", () => ({
 vi.mock("./sdk.js", () => ({
   createMSTeamsAdapter: () => createMSTeamsAdapter(),
   loadMSTeamsSdkWithAuth: () => loadMSTeamsSdkWithAuth(),
+  createMSTeamsTokenProvider: () => ({
+    getAccessToken: vi.fn().mockResolvedValue("mock-token"),
+  }),
+  createBotFrameworkJwtValidator: vi.fn().mockResolvedValue({
+    validate: vi.fn().mockResolvedValue(true),
+  }),
 }));
 
 vi.mock("./runtime.js", () => ({
@@ -140,7 +146,7 @@ function createConfig(port: number): OpenClawConfig {
       msteams: {
         enabled: true,
         appId: "app-id",
-        appPassword: "app-password",
+        appPassword: "app-password", // pragma: allowlist secret
         tenantId: "tenant-id",
         webhook: {
           port,
@@ -192,11 +198,9 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     expect(early).toBe("pending");
 
     abort.abort();
-    await expect(task).resolves.toEqual(
-      expect.objectContaining({
-        shutdown: expect.any(Function),
-      }),
-    );
+    const result = await task;
+    expect(result.app).not.toBeNull();
+    await expect(result.shutdown()).resolves.toBeUndefined();
   });
 
   it("rejects startup when webhook port is already in use", async () => {

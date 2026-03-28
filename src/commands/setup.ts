@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import JSON5 from "json5";
+import { z } from "zod";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../agents/workspace.js";
 import { type OpenClawConfig, createConfigIO, writeConfigFile } from "../config/config.js";
 import { formatConfigPath, logConfigUpdated } from "../config/logging.js";
@@ -7,6 +8,9 @@ import { resolveSessionTranscriptsDir } from "../config/sessions.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
+import { safeParseWithSchema } from "../utils/zod-parse.js";
+
+const JsonRecordSchema = z.record(z.string(), z.unknown());
 
 async function readConfigFileRaw(configPath: string): Promise<{
   exists: boolean;
@@ -14,11 +18,8 @@ async function readConfigFileRaw(configPath: string): Promise<{
 }> {
   try {
     const raw = await fs.readFile(configPath, "utf-8");
-    const parsed = JSON5.parse(raw);
-    if (parsed && typeof parsed === "object") {
-      return { exists: true, parsed: parsed as OpenClawConfig };
-    }
-    return { exists: true, parsed: {} };
+    const parsed = safeParseWithSchema(JsonRecordSchema, JSON5.parse(raw));
+    return { exists: true, parsed: (parsed ?? {}) as OpenClawConfig };
   } catch {
     return { exists: false, parsed: {} };
   }
@@ -50,14 +51,30 @@ export async function setupCommand(
         workspace,
       },
     },
+    gateway: {
+      ...cfg.gateway,
+      mode: cfg.gateway?.mode ?? "local",
+    },
   };
 
-  if (!existingRaw.exists || defaults.workspace !== workspace) {
+  if (
+    !existingRaw.exists ||
+    defaults.workspace !== workspace ||
+    cfg.gateway?.mode !== next.gateway?.mode
+  ) {
     await writeConfigFile(next);
     if (!existingRaw.exists) {
       runtime.log(`Wrote ${formatConfigPath(configPath)}`);
     } else {
-      logConfigUpdated(runtime, { path: configPath, suffix: "(set agents.defaults.workspace)" });
+      const updates: string[] = [];
+      if (defaults.workspace !== workspace) {
+        updates.push("set agents.defaults.workspace");
+      }
+      if (cfg.gateway?.mode !== next.gateway?.mode) {
+        updates.push("set gateway.mode");
+      }
+      const suffix = updates.length > 0 ? `(${updates.join(", ")})` : undefined;
+      logConfigUpdated(runtime, { path: configPath, suffix });
     }
   } else {
     runtime.log(`Config OK: ${formatConfigPath(configPath)}`);

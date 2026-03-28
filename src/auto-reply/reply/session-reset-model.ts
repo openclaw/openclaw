@@ -1,4 +1,4 @@
-import { loadModelCatalog } from "../../agents/model-catalog.js";
+import { loadModelCatalog, type ModelCatalogEntry } from "../../agents/model-catalog.js";
 import {
   buildAllowedModelSet,
   modelKey,
@@ -87,6 +87,7 @@ function applySelectionToSession(params: {
 
 export async function applyResetModelOverride(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   resetTriggered: boolean;
   bodyStripped?: string;
   sessionCtx: TemplateContext;
@@ -98,6 +99,7 @@ export async function applyResetModelOverride(params: {
   defaultProvider: string;
   defaultModel: string;
   aliasIndex: ModelAliasIndex;
+  modelCatalog?: ModelCatalogEntry[];
 }): Promise<ResetModelResult> {
   if (!params.resetTriggered) {
     return {};
@@ -112,12 +114,13 @@ export async function applyResetModelOverride(params: {
     return {};
   }
 
-  const catalog = await loadModelCatalog({ config: params.cfg });
+  const catalog = params.modelCatalog ?? (await loadModelCatalog({ config: params.cfg }));
   const allowed = buildAllowedModelSet({
     cfg: params.cfg,
     catalog,
     defaultProvider: params.defaultProvider,
     defaultModel: params.defaultModel,
+    agentId: params.agentId,
   });
   const allowedModelKeys = allowed.allowedKeys;
   if (allowedModelKeys.size === 0) {

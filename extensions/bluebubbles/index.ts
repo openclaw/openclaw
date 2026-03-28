@@ -1,17 +1,14 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
-import { emptyPluginConfigSchema } from "openclaw/plugin-sdk/core";
+import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
 import { bluebubblesPlugin } from "./src/channel.js";
 import { setBlueBubblesRuntime } from "./src/runtime.js";
 
-const plugin = {
+export { bluebubblesPlugin } from "./src/channel.js";
+export { setBlueBubblesRuntime } from "./src/runtime.js";
+
+export default defineChannelPluginEntry({
   id: "bluebubbles",
   name: "BlueBubbles",
   description: "BlueBubbles channel plugin (macOS app)",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
-    setBlueBubblesRuntime(api.runtime);
-    api.registerChannel({ plugin: bluebubblesPlugin });
-  },
-};
-
-export default plugin;
+  plugin: bluebubblesPlugin,
+  setRuntime: setBlueBubblesRuntime,
+});

@@ -4,10 +4,10 @@ import {
   ensureConfigReady,
   installBaseProgramMocks,
   installSmokeProgramMocks,
-  onboardCommand,
   runTui,
   runtime,
   setupCommand,
+  setupWizardCommand,
 } from "./program.test-mocks.js";
 
 installBaseProgramMocks();
@@ -46,10 +46,9 @@ describe("cli program (smoke)", () => {
     ensureConfigReady.mockResolvedValue(undefined);
   });
 
-  it("registers memory + status commands", () => {
+  it("registers message + status commands", () => {
     const names = program.commands.map((command) => command.name());
     expect(names).toContain("message");
-    expect(names).toContain("memory");
     expect(names).toContain("status");
   });
 
@@ -68,6 +67,6 @@ describe("cli program (smoke)", () => {
     await runProgram(["setup", "--remote-url", "ws://example"]);
 
     expect(setupCommand).not.toHaveBeenCalled();
-    expect(onboardCommand).toHaveBeenCalledTimes(1);
+    expect(setupWizardCommand).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,6 +1,6 @@
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import { Type } from "@sinclair/typebox";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import type { OpenClawPluginApi } from "../runtime-api.js";
 import { listEnabledFeishuAccounts } from "./accounts.js";
 import { createFeishuToolClient } from "./tool-account.js";
 
@@ -14,6 +14,16 @@ function json(data: unknown) {
 }
 
 type LarkResponse<T = unknown> = { code?: number; msg?: string; data?: T };
+type BitableRecordCreatePayload = NonNullable<
+  Parameters<Lark.Client["bitable"]["appTableRecord"]["create"]>[0]
+>;
+type BitableRecordUpdatePayload = NonNullable<
+  Parameters<Lark.Client["bitable"]["appTableRecord"]["update"]>[0]
+>;
+type BitableRecordFields = NonNullable<NonNullable<BitableRecordCreatePayload["data"]>["fields"]>;
+type BitableRecordUpdateFields = NonNullable<
+  NonNullable<BitableRecordUpdatePayload["data"]>["fields"]
+>;
 
 export class LarkApiError extends Error {
   readonly code: number;
@@ -212,12 +222,11 @@ async function createRecord(
   client: Lark.Client,
   appToken: string,
   tableId: string,
-  fields: Record<string, unknown>,
+  fields: BitableRecordFields,
 ) {
   const res = await client.bitable.appTableRecord.create({
     path: { app_token: appToken, table_id: tableId },
-    // oxlint-disable-next-line typescript/no-explicit-any
-    data: { fields: fields as any },
+    data: { fields },
   });
   ensureLarkSuccess(res, "bitable.appTableRecord.create", { appToken, tableId });
 
@@ -424,12 +433,11 @@ async function updateRecord(
   appToken: string,
   tableId: string,
   recordId: string,
-  fields: Record<string, unknown>,
+  fields: NonNullable<NonNullable<BitableRecordUpdatePayload["data"]>["fields"]>,
 ) {
   const res = await client.bitable.appTableRecord.update({
     path: { app_token: appToken, table_id: tableId, record_id: recordId },
-    // oxlint-disable-next-line typescript/no-explicit-any
-    data: { fields: fields as any },
+    data: { fields },
   });
   ensureLarkSuccess(res, "bitable.appTableRecord.update", { appToken, tableId, recordId });
 
@@ -645,7 +653,7 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
   registerBitableTool<{
     app_token: string;
     table_id: string;
-    fields: Record<string, unknown>;
+    fields: BitableRecordFields;
     accountId?: string;
   }>({
     name: "feishu_bitable_create_record",
@@ -666,7 +674,7 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
     app_token: string;
     table_id: string;
     record_id: string;
-    fields: Record<string, unknown>;
+    fields: BitableRecordUpdateFields;
     accountId?: string;
   }>({
     name: "feishu_bitable_update_record",

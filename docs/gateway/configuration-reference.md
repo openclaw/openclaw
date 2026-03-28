@@ -1,6 +1,5 @@
 ---
 title: "Configuration Reference"
-description: "Complete field-by-field reference for ~/.openclaw/openclaw.json"
 summary: "Complete reference for every OpenClaw config key, defaults, and channel settings"
 read_when:
   - You need exact field-level config semantics or defaults
@@ -180,10 +179,10 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
       historyLimit: 50,
       replyToMode: "first", // off | first | all
       linkPreview: true,
-      streaming: "partial", // off | partial | block | progress (default: off)
+      streaming: "partial", // off | partial | block | progress (default: off; opt in explicitly to avoid preview-edit rate limits)
       actions: { reactions: true, sendMessage: true },
       reactionNotifications: "own", // off | own | all
-      mediaMaxMb: 5,
+      mediaMaxMb: 100,
       retry: {
         attempts: 3,
         minDelayMs: 400,
@@ -203,10 +202,11 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 }
 ```
 
-- Bot token: `channels.telegram.botToken` or `channels.telegram.tokenFile`, with `TELEGRAM_BOT_TOKEN` as fallback for the default account.
+- Bot token: `channels.telegram.botToken` or `channels.telegram.tokenFile` (regular file only; symlinks rejected), with `TELEGRAM_BOT_TOKEN` as fallback for the default account.
 - Optional `channels.telegram.defaultAccount` overrides default account selection when it matches a configured account id.
 - In multi-account setups (2+ account ids), set an explicit default (`channels.telegram.defaultAccount` or `channels.telegram.accounts.default`) to avoid fallback routing; `openclaw doctor` warns when this is missing or invalid.
 - `configWrites: false` blocks Telegram-initiated config writes (supergroup ID migrations, `/config set|unset`).
+- Top-level `bindings[]` entries with `type: "acp"` configure persistent ACP bindings for forum topics (use canonical `chatId:topic:topicId` in `match.peer.id`). Field semantics are shared in [ACP Agents](/tools/acp-agents#channel-specific-settings).
 - Telegram stream previews use `sendMessage` + `editMessageText` (works in direct and group chats).
 - Retry policy: see [Retry policy](/concepts/retry).
 
@@ -303,6 +303,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 ```
 
 - Token: `channels.discord.token`, with `DISCORD_BOT_TOKEN` as fallback for the default account.
+- Direct outbound calls that provide an explicit Discord `token` use that token for the call; account retry/policy settings still come from the selected account in the active runtime snapshot.
 - Optional `channels.discord.defaultAccount` overrides default account selection when it matches a configured account id.
 - Use `user:<id>` (DM) or `channel:<id>` (guild channel) for delivery targets; bare numeric IDs are rejected.
 - Guild slugs are lowercase with spaces replaced by `-`; channel keys use the slugged name (no `#`). Prefer guild IDs.
@@ -314,6 +315,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
   - `idleHours`: Discord override for inactivity auto-unfocus in hours (`0` disables)
   - `maxAgeHours`: Discord override for hard max age in hours (`0` disables)
   - `spawnSubagentSessions`: opt-in switch for `sessions_spawn({ thread: true })` auto thread creation/binding
+- Top-level `bindings[]` entries with `type: "acp"` configure persistent ACP bindings for channels and threads (use channel/thread id in `match.peer.id`). Field semantics are shared in [ACP Agents](/tools/acp-agents#channel-specific-settings).
 - `channels.discord.ui.components.accentColor` sets the accent color for Discord components v2 containers.
 - `channels.discord.voice` enables Discord voice channel conversations and optional auto-join + TTS overrides.
 - `channels.discord.voice.daveEncryption` and `channels.discord.voice.decryptionFailureTolerance` pass through to `@discordjs/voice` DAVE options (`true` and `24` by default).
@@ -404,6 +406,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
         sessionPrefix: "slack:slash",
         ephemeral: true,
       },
+      typingReaction: "hourglass_flowing_sand",
       textChunkLimit: 4000,
       chunkMode: "length",
       streaming: "partial", // off | partial | block | progress (preview mode)
@@ -424,6 +427,8 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 **Reaction notification modes:** `off`, `own` (default), `all`, `allowlist` (from `reactionAllowlist`).
 
 **Thread session isolation:** `thread.historyScope` is per-thread (default) or shared across channel. `thread.inheritParent` copies parent channel transcript to new threads.
+
+- `typingReaction` adds a temporary reaction to the inbound Slack message while a reply is running, then removes it on completion. Use a Slack emoji shortcode such as `"hourglass_flowing_sand"`.
 
 | Action group | Default | Notes                  |
 | ------------ | ------- | ---------------------- |
@@ -518,6 +523,7 @@ BlueBubbles is the recommended iMessage path (plugin-backed, configured under `c
 
 - Core key paths covered here: `channels.bluebubbles`, `channels.bluebubbles.dmPolicy`.
 - Optional `channels.bluebubbles.defaultAccount` overrides default account selection when it matches a configured account id.
+- Top-level `bindings[]` entries with `type: "acp"` can bind BlueBubbles conversations to persistent ACP sessions. Use a BlueBubbles handle or target string (`chat_id:*`, `chat_guid:*`, `chat_identifier:*`) in `match.peer.id`. Shared field semantics: [ACP Agents](/tools/acp-agents#channel-specific-settings).
 - Full BlueBubbles channel configuration is documented in [BlueBubbles](/channels/bluebubbles).
 
 ### iMessage
@@ -554,6 +560,7 @@ OpenClaw spawns `imsg rpc` (JSON-RPC over stdio). No daemon or port required.
 - `attachmentRoots` and `remoteAttachmentRoots` restrict inbound attachment paths (default: `/Users/*/Library/Messages/Attachments`).
 - SCP uses strict host-key checking, so ensure the relay host key already exists in `~/.ssh/known_hosts`.
 - `channels.imessage.configWrites`: allow or deny iMessage-initiated config writes.
+- Top-level `bindings[]` entries with `type: "acp"` can bind iMessage conversations to persistent ACP sessions. Use a normalized handle or explicit chat target (`chat_id:*`, `chat_guid:*`, `chat_identifier:*`) in `match.peer.id`. Shared field semantics: [ACP Agents](/tools/acp-agents#channel-specific-settings).
 
 <Accordion title="iMessage SSH wrapper example">
 
@@ -649,12 +656,12 @@ See the full channel index: [Channels](/channels).
 
 ### Group chat mention gating
 
-Group messages default to **require mention** (metadata mention or regex patterns). Applies to WhatsApp, Telegram, Discord, Google Chat, and iMessage group chats.
+Group messages default to **require mention** (metadata mention or safe regex patterns). Applies to WhatsApp, Telegram, Discord, Google Chat, and iMessage group chats.
 
 **Mention types:**
 
 - **Metadata mentions**: Native platform @-mentions. Ignored in WhatsApp self-chat mode.
-- **Text patterns**: Regex patterns in `agents.list[].groupChat.mentionPatterns`. Always checked.
+- **Text patterns**: Safe regex patterns in `agents.list[].groupChat.mentionPatterns`. Invalid patterns and unsafe nested repetition are ignored.
 - Mention gating is enforced only when detection is possible (native mentions or at least one pattern).
 
 ```json5
@@ -740,8 +747,9 @@ Include your own number in `allowFrom` to enable self-chat mode (ignores native 
 - Override per channel: `channels.discord.commands.native` (bool or `"auto"`). `false` clears previously registered commands.
 - `channels.telegram.customCommands` adds extra Telegram bot menu entries.
 - `bash: true` enables `! <cmd>` for host shell. Requires `tools.elevated.enabled` and sender in `tools.elevated.allowFrom.<channel>`.
-- `config: true` enables `/config` (reads/writes `openclaw.json`).
+- `config: true` enables `/config` (reads/writes `openclaw.json`). For gateway `chat.send` clients, persistent `/config set|unset` writes also require `operator.admin`; read-only `/config show` stays available to normal write-scoped operator clients.
 - `channels.<provider>.configWrites` gates config mutations per channel (default: true).
+- For multi-account channels, `channels.<provider>.accounts.<id>.configWrites` also gates writes that target that account (for example `/allowlist --config --account <id>` or `/config set channels.<provider>.accounts.<id>...`).
 - `allowFrom` is per-provider. When set, it is the **only** authorization source (channel allowlists/pairing and `useAccessGroups` are ignored).
 - `useAccessGroups: false` allows commands to bypass access-group policies when `allowFrom` is not set.
 
@@ -858,15 +866,19 @@ Time format in system prompt. Default: `auto` (OS preference).
     defaults: {
       models: {
         "anthropic/claude-opus-4-6": { alias: "opus" },
-        "minimax/MiniMax-M2.5": { alias: "minimax" },
+        "minimax/MiniMax-M2.7": { alias: "minimax" },
       },
       model: {
         primary: "anthropic/claude-opus-4-6",
-        fallbacks: ["minimax/MiniMax-M2.5"],
+        fallbacks: ["minimax/MiniMax-M2.7"],
       },
       imageModel: {
         primary: "openrouter/qwen/qwen-2.5-vl-72b-instruct:free",
         fallbacks: ["openrouter/google/gemini-2.0-flash-vision:free"],
+      },
+      imageGenerationModel: {
+        primary: "openai/gpt-image-1",
+        fallbacks: ["google/gemini-3.1-flash-image-preview"],
       },
       pdfModel: {
         primary: "anthropic/claude-opus-4-6",
@@ -892,6 +904,11 @@ Time format in system prompt. Default: `auto` (OS preference).
 - `imageModel`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
   - Used by the `image` tool path as its vision-model config.
   - Also used as fallback routing when the selected/default model cannot accept image input.
+- `imageGenerationModel`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
+  - Used by the shared image-generation capability and any future tool/plugin surface that generates images.
+  - Typical values: `google/gemini-3-pro-image-preview` for the native Nano Banana-style flow, `fal/fal-ai/flux/dev` for fal, or `openai/gpt-image-1` for OpenAI Images.
+  - If you select a provider/model directly, configure the matching provider auth/API key too (for example `GEMINI_API_KEY` or `GOOGLE_API_KEY` for `google/*`, `OPENAI_API_KEY` for `openai/*`, `FAL_KEY` for `fal/*`).
+  - If omitted, `image_generate` can still infer a best-effort provider default from compatible auth-backed image-generation providers.
 - `pdfModel`: accepts either a string (`"provider/model"`) or an object (`{ primary, fallbacks }`).
   - Used by the `pdf` tool for model routing.
   - If omitted, the PDF tool falls back to `imageModel`, then to best-effort provider defaults.
@@ -905,14 +922,15 @@ Time format in system prompt. Default: `auto` (OS preference).
 
 **Built-in alias shorthands** (only apply when the model is in `agents.defaults.models`):
 
-| Alias          | Model                           |
-| -------------- | ------------------------------- |
-| `opus`         | `anthropic/claude-opus-4-6`     |
-| `sonnet`       | `anthropic/claude-sonnet-4-5`   |
-| `gpt`          | `openai/gpt-5.2`                |
-| `gpt-mini`     | `openai/gpt-5-mini`             |
-| `gemini`       | `google/gemini-3-pro-preview`   |
-| `gemini-flash` | `google/gemini-3-flash-preview` |
+| Alias               | Model                                  |
+| ------------------- | -------------------------------------- |
+| `opus`              | `anthropic/claude-opus-4-6`            |
+| `sonnet`            | `anthropic/claude-sonnet-4-6`          |
+| `gpt`               | `openai/gpt-5.4`                       |
+| `gpt-mini`          | `openai/gpt-5-mini`                    |
+| `gemini`            | `google/gemini-3.1-pro-preview`        |
+| `gemini-flash`      | `google/gemini-3-flash-preview`        |
+| `gemini-flash-lite` | `google/gemini-3.1-flash-lite-preview` |
 
 Your configured aliases always win over defaults.
 
@@ -966,6 +984,8 @@ Periodic heartbeat runs.
         every: "30m", // 0m disables
         model: "openai/gpt-5.2-mini",
         includeReasoning: false,
+        lightContext: false, // default: false; true keeps only HEARTBEAT.md from workspace bootstrap files
+        isolatedSession: false, // default: false; true runs each heartbeat in a fresh session (no conversation history)
         session: "main",
         to: "+15555550123",
         directPolicy: "allow", // allow (default) | block
@@ -982,6 +1002,8 @@ Periodic heartbeat runs.
 - `every`: duration string (ms/s/m/h). Default: `30m`.
 - `suppressToolErrorWarnings`: when true, suppresses tool error warning payloads during heartbeat runs.
 - `directPolicy`: direct/DM delivery policy. `allow` (default) permits direct-target delivery. `block` suppresses direct-target delivery and emits `reason=dm-blocked`.
+- `lightContext`: when true, heartbeat runs use lightweight bootstrap context and keep only `HEARTBEAT.md` from workspace bootstrap files.
+- `isolatedSession`: when true, each heartbeat runs in a fresh session with no prior conversation history. Same isolation pattern as cron `sessionTarget: "isolated"`. Reduces per-heartbeat token cost from ~100K to ~2-5K tokens.
 - Per-agent: set `agents.list[].heartbeat`. When any agent defines `heartbeat`, **only those agents** run heartbeats.
 - Heartbeats run full agent turns — shorter intervals burn more tokens.
 
@@ -993,9 +1015,12 @@ Periodic heartbeat runs.
     defaults: {
       compaction: {
         mode: "safeguard", // default | safeguard
+        timeoutSeconds: 900,
         reserveTokensFloor: 24000,
         identifierPolicy: "strict", // strict | off | custom
         identifierInstructions: "Preserve deployment IDs, ticket IDs, and host:port pairs exactly.", // used when identifierPolicy=custom
+        postCompactionSections: ["Session Startup", "Red Lines"], // [] disables reinjection
+        model: "openrouter/anthropic/claude-sonnet-4-6", // optional compaction-only model override
         memoryFlush: {
           enabled: true,
           softThresholdTokens: 6000,
@@ -1009,8 +1034,11 @@ Periodic heartbeat runs.
 ```
 
 - `mode`: `default` or `safeguard` (chunked summarization for long histories). See [Compaction](/concepts/compaction).
+- `timeoutSeconds`: maximum seconds allowed for a single compaction operation before OpenClaw aborts it. Default: `900`.
 - `identifierPolicy`: `strict` (default), `off`, or `custom`. `strict` prepends built-in opaque identifier retention guidance during compaction summarization.
 - `identifierInstructions`: optional custom identifier-preservation text used when `identifierPolicy=custom`.
+- `postCompactionSections`: optional AGENTS.md H2/H3 section names to re-inject after compaction. Defaults to `["Session Startup", "Red Lines"]`; set `[]` to disable reinjection. When unset or explicitly set to that default pair, older `Every Session`/`Safety` headings are also accepted as a legacy fallback.
+- `model`: optional `provider/model-id` override for compaction summarization only. Use this when the main session should keep one model but compaction summaries should run on another; when unset, compaction uses the session's primary model.
 - `memoryFlush`: silent agentic turn before auto-compaction to store durable memories. Skipped when workspace is read-only.
 
 ### `agents.defaults.contextPruning`
@@ -1099,7 +1127,7 @@ See [Typing Indicators](/concepts/typing-indicators).
 
 ### `agents.defaults.sandbox`
 
-Optional **Docker sandboxing** for the embedded agent. See [Sandboxing](/gateway/sandboxing) for the full guide.
+Optional sandboxing for the embedded agent. See [Sandboxing](/gateway/sandboxing) for the full guide.
 
 ```json5
 {
@@ -1107,6 +1135,7 @@ Optional **Docker sandboxing** for the embedded agent. See [Sandboxing](/gateway
     defaults: {
       sandbox: {
         mode: "non-main", // off | non-main | all
+        backend: "docker", // docker | ssh | openshell
         scope: "agent", // session | agent | shared
         workspaceAccess: "none", // none | ro | rw
         workspaceRoot: "~/.openclaw/sandboxes",
@@ -1134,6 +1163,20 @@ Optional **Docker sandboxing** for the embedded agent. See [Sandboxing](/gateway
           dns: ["1.1.1.1", "8.8.8.8"],
           extraHosts: ["internal.service:10.0.0.5"],
           binds: ["/home/user/source:/source:rw"],
+        },
+        ssh: {
+          target: "user@gateway-host:22",
+          command: "ssh",
+          workspaceRoot: "/tmp/openclaw-sandboxes",
+          strictHostKeyChecking: true,
+          updateHostKeys: true,
+          identityFile: "~/.ssh/id_ed25519",
+          certificateFile: "~/.ssh/id_ed25519-cert.pub",
+          knownHostsFile: "~/.ssh/known_hosts",
+          // SecretRefs / inline contents also supported:
+          // identityData: { source: "env", provider: "default", id: "SSH_IDENTITY" },
+          // certificateData: { source: "env", provider: "default", id: "SSH_CERTIFICATE" },
+          // knownHostsData: { source: "env", provider: "default", id: "SSH_KNOWN_HOSTS" },
         },
         browser: {
           enabled: false,
@@ -1181,6 +1224,39 @@ Optional **Docker sandboxing** for the embedded agent. See [Sandboxing](/gateway
 
 <Accordion title="Sandbox details">
 
+**Backend:**
+
+- `docker`: local Docker runtime (default)
+- `ssh`: generic SSH-backed remote runtime
+- `openshell`: OpenShell runtime
+
+When `backend: "openshell"` is selected, runtime-specific settings move to
+`plugins.entries.openshell.config`.
+
+**SSH backend config:**
+
+- `target`: SSH target in `user@host[:port]` form
+- `command`: SSH client command (default: `ssh`)
+- `workspaceRoot`: absolute remote root used for per-scope workspaces
+- `identityFile` / `certificateFile` / `knownHostsFile`: existing local files passed to OpenSSH
+- `identityData` / `certificateData` / `knownHostsData`: inline contents or SecretRefs that OpenClaw materializes into temp files at runtime
+- `strictHostKeyChecking` / `updateHostKeys`: OpenSSH host-key policy knobs
+
+**SSH auth precedence:**
+
+- `identityData` wins over `identityFile`
+- `certificateData` wins over `certificateFile`
+- `knownHostsData` wins over `knownHostsFile`
+- SecretRef-backed `*Data` values are resolved from the active secrets runtime snapshot before the sandbox session starts
+
+**SSH backend behavior:**
+
+- seeds the remote workspace once after create or recreate
+- then keeps the remote SSH workspace canonical
+- routes `exec`, file tools, and media paths over SSH
+- does not sync remote changes back to the host automatically
+- does not support sandbox browser containers
+
 **Workspace access:**
 
 - `none`: per-scope sandbox workspace under `~/.openclaw/sandboxes`
@@ -1192,6 +1268,40 @@ Optional **Docker sandboxing** for the embedded agent. See [Sandboxing](/gateway
 - `session`: per-session container + workspace
 - `agent`: one container + workspace per agent (default)
 - `shared`: shared container and workspace (no cross-session isolation)
+
+**OpenShell plugin config:**
+
+```json5
+{
+  plugins: {
+    entries: {
+      openshell: {
+        enabled: true,
+        config: {
+          mode: "mirror", // mirror | remote
+          from: "openclaw",
+          remoteWorkspaceDir: "/sandbox",
+          remoteAgentWorkspaceDir: "/agent",
+          gateway: "lab", // optional
+          gatewayEndpoint: "https://lab.example", // optional
+          policy: "strict", // optional OpenShell policy id
+          providers: ["openai"], // optional
+          autoProviders: true,
+          timeoutSeconds: 120,
+        },
+      },
+    },
+  },
+}
+```
+
+**OpenShell mode:**
+
+- `mirror`: seed remote from local before exec, sync back after exec; local workspace stays canonical
+- `remote`: seed remote once when the sandbox is created, then keep the remote workspace canonical
+
+In `remote` mode, host-local edits made outside OpenClaw are not synced into the sandbox automatically after the seed step.
+Transport is SSH into the OpenShell sandbox, but the plugin owns sandbox lifecycle and optional mirror sync.
 
 **`setupCommand`** runs once after container creation (via `sh -lc`). Needs network egress, writable root, root user.
 
@@ -1242,6 +1352,8 @@ noVNC observer access uses VNC auth by default and OpenClaw emits a short-lived 
 
 </Accordion>
 
+Browser sandboxing and `sandbox.docker.binds` are currently Docker-only.
+
 Build images:
 
 ```bash
@@ -1262,6 +1374,9 @@ scripts/sandbox-browser-setup.sh   # optional browser image
         workspace: "~/.openclaw/workspace",
         agentDir: "~/.openclaw/agents/main/agent",
         model: "anthropic/claude-opus-4-6", // or { primary, fallbacks }
+        thinkingDefault: "high", // per-agent thinking level override
+        reasoningDefault: "on", // per-agent reasoning visibility override
+        fastModeDefault: false, // per-agent fast mode override
         params: { cacheRetention: "none" }, // overrides matching defaults.models params by key
         identity: {
           name: "Samantha",
@@ -1271,6 +1386,15 @@ scripts/sandbox-browser-setup.sh   # optional browser image
         },
         groupChat: { mentionPatterns: ["@openclaw"] },
         sandbox: { mode: "off" },
+        runtime: {
+          type: "acp",
+          acp: {
+            agent: "codex",
+            backend: "acpx",
+            mode: "persistent",
+            cwd: "/workspace/openclaw",
+          },
+        },
         subagents: { allowAgents: ["*"] },
         tools: {
           profile: "coding",
@@ -1288,6 +1412,10 @@ scripts/sandbox-browser-setup.sh   # optional browser image
 - `default`: when multiple are set, first wins (warning logged). If none set, first list entry is default.
 - `model`: string form overrides `primary` only; object form `{ primary, fallbacks }` overrides both (`[]` disables global fallbacks). Cron jobs that only override `primary` still inherit default fallbacks unless you set `fallbacks: []`.
 - `params`: per-agent stream params merged over the selected model entry in `agents.defaults.models`. Use this for agent-specific overrides like `cacheRetention`, `temperature`, or `maxTokens` without duplicating the whole model catalog.
+- `thinkingDefault`: optional per-agent default thinking level (`off | minimal | low | medium | high | xhigh | adaptive`). Overrides `agents.defaults.thinkingDefault` for this agent when no per-message or session override is set.
+- `reasoningDefault`: optional per-agent default reasoning visibility (`on | off | stream`). Applies when no per-message or session reasoning override is set.
+- `fastModeDefault`: optional per-agent default for fast mode (`true | false`). Applies when no per-message or session fast-mode override is set.
+- `runtime`: optional per-agent runtime descriptor. Use `type: "acp"` with `runtime.acp` defaults (`agent`, `backend`, `mode`, `cwd`) when the agent should default to ACP harness sessions.
 - `identity.avatar`: workspace-relative path, `http(s)` URL, or `data:` URI.
 - `identity` derives defaults: `ackReaction` from `emoji`, `mentionPatterns` from `name`/`emoji`.
 - `subagents.allowAgents`: allowlist of agent ids for `sessions_spawn` (`["*"]` = any; default: same agent only).
@@ -1316,10 +1444,12 @@ Run multiple isolated agents inside one Gateway. See [Multi-Agent](/concepts/mul
 
 ### Binding match fields
 
+- `type` (optional): `route` for normal routing (missing type defaults to route), `acp` for persistent ACP conversation bindings.
 - `match.channel` (required)
 - `match.accountId` (optional; `*` = any account; omitted = default account)
 - `match.peer` (optional; `{ kind: direct|group|channel, id }`)
 - `match.guildId` / `match.teamId` (optional; channel-specific)
+- `acp` (optional; only for `type: "acp"`): `{ mode, label, cwd, backend }`
 
 **Deterministic match order:**
 
@@ -1331,6 +1461,8 @@ Run multiple isolated agents inside one Gateway. See [Multi-Agent](/concepts/mul
 6. Default agent
 
 Within each tier, the first matching `bindings` entry wins.
+
+For `type: "acp"` entries, OpenClaw resolves by exact conversation identity (`match.channel` + account + `match.peer.id`) and does not use the route binding tier order above.
 
 ### Per-agent access profiles
 
@@ -1602,6 +1734,7 @@ Batches rapid text-only messages from the same sender into a single agent turn. 
       },
       openai: {
         apiKey: "openai_api_key",
+        baseUrl: "https://api.openai.com/v1",
         model: "gpt-4o-mini-tts",
         voice: "alloy",
       },
@@ -1614,6 +1747,8 @@ Batches rapid text-only messages from the same sender into a single agent turn. 
 - `summaryModel` overrides `agents.defaults.model.primary` for auto-summary.
 - `modelOverrides` is enabled by default; `modelOverrides.allowProvider` defaults to `false` (opt-in).
 - API keys fall back to `ELEVENLABS_API_KEY`/`XI_API_KEY` and `OPENAI_API_KEY`.
+- `openai.baseUrl` overrides the OpenAI TTS endpoint. Resolution order is config, then `OPENAI_TTS_BASE_URL`, then `https://api.openai.com/v1`.
+- When `openai.baseUrl` points to a non-OpenAI endpoint, OpenClaw treats it as an OpenAI-compatible TTS server and relaxes model/voice validation.
 
 ---
 
@@ -1632,6 +1767,7 @@ Defaults for Talk mode (macOS/iOS/Android).
     modelId: "eleven_v3",
     outputFormat: "mp3_44100_128",
     apiKey: "elevenlabs_api_key",
+    silenceTimeoutMs: 1500,
     interruptOnSpeech: true,
   },
 }
@@ -1641,6 +1777,7 @@ Defaults for Talk mode (macOS/iOS/Android).
 - `apiKey` and `providers.*.apiKey` accept plaintext strings or SecretRef objects.
 - `ELEVENLABS_API_KEY` fallback applies only when no Talk API key is configured.
 - `voiceAliases` lets Talk directives use friendly names.
+- `silenceTimeoutMs` controls how long Talk mode waits after user silence before it sends the transcript. Unset keeps the platform default pause window (`700 ms on macOS and Android, 900 ms on iOS`).
 
 ---
 
@@ -1650,7 +1787,7 @@ Defaults for Talk mode (macOS/iOS/Android).
 
 `tools.profile` sets a base allowlist before `tools.allow`/`tools.deny`:
 
-Local onboarding defaults new local configs to `tools.profile: "messaging"` when unset (existing explicit profiles are preserved).
+Local onboarding defaults new local configs to `tools.profile: "coding"` when unset (existing explicit profiles are preserved).
 
 | Profile     | Includes                                                                                  |
 | ----------- | ----------------------------------------------------------------------------------------- |
@@ -1929,7 +2066,7 @@ Notes:
   agents: {
     defaults: {
       subagents: {
-        model: "minimax/MiniMax-M2.5",
+        model: "minimax/MiniMax-M2.7",
         maxConcurrent: 1,
         runTimeoutSeconds: 900,
         archiveAfterMinutes: 60,
@@ -1978,10 +2115,14 @@ OpenClaw uses the pi-coding-agent model catalog. Add custom providers via `model
 - Use `authHeader: true` + `headers` for custom auth needs.
 - Override agent config root with `OPENCLAW_AGENT_DIR` (or `PI_CODING_AGENT_DIR`).
 - Merge precedence for matching provider IDs:
-  - Non-empty agent `models.json` `apiKey`/`baseUrl` win.
+  - Non-empty agent `models.json` `baseUrl` values win.
+  - Non-empty agent `apiKey` values win only when that provider is not SecretRef-managed in current config/auth-profile context.
+  - SecretRef-managed provider `apiKey` values are refreshed from source markers (`ENV_VAR_NAME` for env refs, `secretref-managed` for file/exec refs) instead of persisting resolved secrets.
+  - SecretRef-managed provider header values are refreshed from source markers (`secretref-env:ENV_VAR_NAME` for env refs, `secretref-managed` for file/exec refs).
   - Empty or missing agent `apiKey`/`baseUrl` fall back to `models.providers` in config.
   - Matching model `contextWindow`/`maxTokens` use the higher value between explicit config and implicit catalog values.
   - Use `models.mode: "replace"` when you want config to fully rewrite `models.json`.
+  - Marker persistence is source-authoritative: markers are written from the active source config snapshot (pre-resolution), not from resolved runtime secret values.
 
 ### Provider field details
 
@@ -2044,7 +2185,7 @@ Use `cerebras/zai-glm-4.7` for Cerebras; `zai/glm-4.7` for Z.AI direct.
 
 </Accordion>
 
-<Accordion title="OpenCode Zen">
+<Accordion title="OpenCode">
 
 ```json5
 {
@@ -2057,7 +2198,7 @@ Use `cerebras/zai-glm-4.7` for Cerebras; `zai/glm-4.7` for Z.AI direct.
 }
 ```
 
-Set `OPENCODE_API_KEY` (or `OPENCODE_ZEN_API_KEY`). Shortcut: `openclaw onboard --auth-choice opencode-zen`.
+Set `OPENCODE_API_KEY` (or `OPENCODE_ZEN_API_KEY`). Use `opencode/...` refs for the Zen catalog or `opencode-go/...` refs for the Go catalog. Shortcut: `openclaw onboard --auth-choice opencode-zen` or `openclaw onboard --auth-choice opencode-go`.
 
 </Accordion>
 
@@ -2161,7 +2302,7 @@ Anthropic-compatible, built-in provider. Shortcut: `openclaw onboard --auth-choi
           {
             id: "hf:MiniMaxAI/MiniMax-M2.5",
             name: "MiniMax M2.5",
-            reasoning: false,
+            reasoning: true,
             input: ["text"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
             contextWindow: 192000,
@@ -2178,15 +2319,15 @@ Base URL should omit `/v1` (Anthropic client appends it). Shortcut: `openclaw on
 
 </Accordion>
 
-<Accordion title="MiniMax M2.5 (direct)">
+<Accordion title="MiniMax M2.7 (direct)">
 
 ```json5
 {
   agents: {
     defaults: {
-      model: { primary: "minimax/MiniMax-M2.5" },
+      model: { primary: "minimax/MiniMax-M2.7" },
       models: {
-        "minimax/MiniMax-M2.5": { alias: "Minimax" },
+        "minimax/MiniMax-M2.7": { alias: "Minimax" },
       },
     },
   },
@@ -2199,11 +2340,11 @@ Base URL should omit `/v1` (Anthropic client appends it). Shortcut: `openclaw on
         api: "anthropic-messages",
         models: [
           {
-            id: "MiniMax-M2.5",
-            name: "MiniMax M2.5",
-            reasoning: false,
+            id: "MiniMax-M2.7",
+            name: "MiniMax M2.7",
+            reasoning: true,
             input: ["text"],
-            cost: { input: 15, output: 60, cacheRead: 2, cacheWrite: 10 },
+            cost: { input: 0.3, output: 1.2, cacheRead: 0.03, cacheWrite: 0.12 },
             contextWindow: 200000,
             maxTokens: 8192,
           },
@@ -2215,6 +2356,7 @@ Base URL should omit `/v1` (Anthropic client appends it). Shortcut: `openclaw on
 ```
 
 Set `MINIMAX_API_KEY`. Shortcut: `openclaw onboard --auth-choice minimax-api`.
+`MiniMax-M2.5` and `MiniMax-M2.5-highspeed` remain available if you prefer the older text models.
 
 </Accordion>
 
@@ -2240,7 +2382,7 @@ See [Local Models](/gateway/local-models). TL;DR: run MiniMax M2.5 via LM Studio
       nodeManager: "npm", // npm | pnpm | yarn
     },
     entries: {
-      "nano-banana-pro": {
+      "image-lab": {
         apiKey: { source: "env", provider: "default", id: "GEMINI_API_KEY" }, // or plaintext string
         env: { GEMINI_API_KEY: "GEMINI_KEY_HERE" },
       },
@@ -2271,6 +2413,9 @@ See [Local Models](/gateway/local-models). TL;DR: run MiniMax M2.5 via LM Studio
     entries: {
       "voice-call": {
         enabled: true,
+        hooks: {
+          allowPromptInjection: false,
+        },
         config: { provider: "twilio" },
       },
     },
@@ -2279,12 +2424,18 @@ See [Local Models](/gateway/local-models). TL;DR: run MiniMax M2.5 via LM Studio
 ```
 
 - Loaded from `~/.openclaw/extensions`, `<workspace>/.openclaw/extensions`, plus `plugins.load.paths`.
+- Discovery accepts native OpenClaw plugins plus compatible Codex bundles and Claude bundles, including manifestless Claude default-layout bundles.
 - **Config changes require a gateway restart.**
 - `allow`: optional allowlist (only listed plugins load). `deny` wins.
 - `plugins.entries.<id>.apiKey`: plugin-level API key convenience field (when supported by the plugin).
 - `plugins.entries.<id>.env`: plugin-scoped env var map.
-- `plugins.entries.<id>.config`: plugin-defined config object (validated by plugin schema).
+- `plugins.entries.<id>.hooks.allowPromptInjection`: when `false`, core blocks `before_prompt_build` and ignores prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride`. Applies to native plugin hooks and supported bundle-provided hook directories.
+- `plugins.entries.<id>.subagent.allowModelOverride`: explicitly trust this plugin to request per-run `provider` and `model` overrides for background subagent runs.
+- `plugins.entries.<id>.subagent.allowedModels`: optional allowlist of canonical `provider/model` targets for trusted subagent overrides. Use `"*"` only when you intentionally want to allow any model.
+- `plugins.entries.<id>.config`: plugin-defined config object (validated by native OpenClaw plugin schema when available).
+- Enabled Claude bundle plugins can also contribute embedded Pi defaults from `settings.json`; OpenClaw applies those as sanitized agent settings, not as raw OpenClaw config patches.
 - `plugins.slots.memory`: pick the active memory plugin id, or `"none"` to disable memory plugins.
+- `plugins.slots.contextEngine`: pick the active context engine plugin id; defaults to `"legacy"` unless you install and select another engine.
 - `plugins.installs`: CLI-managed install metadata used by `openclaw plugins update`.
   - Includes `source`, `spec`, `sourcePath`, `installPath`, `version`, `resolvedName`, `resolvedVersion`, `resolvedSpec`, `integrity`, `shasum`, `resolvedAt`, `installedAt`.
   - Treat `plugins.installs.*` as managed state; prefer CLI commands over manual edits.
@@ -2300,7 +2451,7 @@ See [Plugins](/tools/plugin).
   browser: {
     enabled: true,
     evaluateEnabled: true,
-    defaultProfile: "chrome",
+    defaultProfile: "user",
     ssrfPolicy: {
       dangerouslyAllowPrivateNetwork: true, // default trusted-network mode
       // allowPrivateNetwork: true, // legacy alias
@@ -2310,6 +2461,13 @@ See [Plugins](/tools/plugin).
     profiles: {
       openclaw: { cdpPort: 18800, color: "#FF4500" },
       work: { cdpPort: 18801, color: "#0066CC" },
+      user: { driver: "existing-session", attachOnly: true, color: "#00AA00" },
+      brave: {
+        driver: "existing-session",
+        attachOnly: true,
+        userDataDir: "~/Library/Application Support/BraveSoftware/Brave-Browser",
+        color: "#FB542B",
+      },
       remote: { cdpUrl: "http://10.0.0.42:9222", color: "#00AA00" },
     },
     color: "#FF4500",
@@ -2325,9 +2483,13 @@ See [Plugins](/tools/plugin).
 - `evaluateEnabled: false` disables `act:evaluate` and `wait --fn`.
 - `ssrfPolicy.dangerouslyAllowPrivateNetwork` defaults to `true` when unset (trusted-network model).
 - Set `ssrfPolicy.dangerouslyAllowPrivateNetwork: false` for strict public-only browser navigation.
+- In strict mode, remote CDP profile endpoints (`profiles.*.cdpUrl`) are subject to the same private-network blocking during reachability/discovery checks.
 - `ssrfPolicy.allowPrivateNetwork` remains supported as a legacy alias.
 - In strict mode, use `ssrfPolicy.hostnameAllowlist` and `ssrfPolicy.allowedHostnames` for explicit exceptions.
 - Remote profiles are attach-only (start/stop/reset disabled).
+- `existing-session` profiles are host-only and use Chrome MCP instead of CDP.
+- `existing-session` profiles can set `userDataDir` to target a specific
+  Chromium-based browser profile such as Brave or Edge.
 - Auto-detect order: default browser if Chromium-based → Chrome → Brave → Edge → Chromium → Chrome Canary.
 - Control service: loopback only (port derived from `gateway.port`, default `18791`).
 - `extraArgs` appends extra launch flags to local Chromium startup (for example
@@ -2403,6 +2565,14 @@ See [Plugins](/tools/plugin).
       // Remove tools from the default HTTP deny list
       allow: ["gateway"],
     },
+    push: {
+      apns: {
+        relay: {
+          baseUrl: "https://relay.example.com",
+          timeoutMs: 10000,
+        },
+      },
+    },
   },
 }
 ```
@@ -2415,6 +2585,7 @@ See [Plugins](/tools/plugin).
 - **Legacy bind aliases**: use bind mode values in `gateway.bind` (`auto`, `loopback`, `lan`, `tailnet`, `custom`), not host aliases (`0.0.0.0`, `127.0.0.1`, `localhost`, `::`, `::1`).
 - **Docker note**: the default `loopback` bind listens on `127.0.0.1` inside the container. With Docker bridge networking (`-p 18789:18789`), traffic arrives on `eth0`, so the gateway is unreachable. Use `--network host`, or set `bind: "lan"` (or `bind: "custom"` with `customBindHost: "0.0.0.0"`) to listen on all interfaces.
 - **Auth**: required by default. Non-loopback binds require a shared token/password. Onboarding wizard generates a token by default.
+- If both `gateway.auth.token` and `gateway.auth.password` are configured (including SecretRefs), set `gateway.auth.mode` explicitly to `token` or `password`. Startup and service install/repair flows fail when both are configured and mode is unset.
 - `gateway.auth.mode: "none"`: explicit no-auth mode. Use only for trusted local loopback setups; this is intentionally not offered by onboarding prompts.
 - `gateway.auth.mode: "trusted-proxy"`: delegate auth to an identity-aware reverse proxy and trust identity headers from `gateway.trustedProxies` (see [Trusted Proxy Auth](/gateway/trusted-proxy-auth)).
 - `gateway.auth.allowTailscale`: when `true`, Tailscale Serve identity headers can satisfy Control UI/WebSocket auth (verified via `tailscale whois`); HTTP API endpoints still require token/password auth. This tokenless flow assumes the gateway host is trusted. Defaults to `true` when `tailscale.mode = "serve"`.
@@ -2427,7 +2598,18 @@ See [Plugins](/tools/plugin).
 - `remote.transport`: `ssh` (default) or `direct` (ws/wss). For `direct`, `remote.url` must be `ws://` or `wss://`.
 - `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1`: client-side break-glass override that allows plaintext `ws://` to trusted private-network IPs; default remains loopback-only for plaintext.
 - `gateway.remote.token` / `.password` are remote-client credential fields. They do not configure gateway auth by themselves.
-- Local gateway call paths can use `gateway.remote.*` as fallback when `gateway.auth.*` is unset.
+- `gateway.push.apns.relay.baseUrl`: base HTTPS URL for the external APNs relay used by official/TestFlight iOS builds after they publish relay-backed registrations to the gateway. This URL must match the relay URL compiled into the iOS build.
+- `gateway.push.apns.relay.timeoutMs`: gateway-to-relay send timeout in milliseconds. Defaults to `10000`.
+- Relay-backed registrations are delegated to a specific gateway identity. The paired iOS app fetches `gateway.identity.get`, includes that identity in the relay registration, and forwards a registration-scoped send grant to the gateway. Another gateway cannot reuse that stored registration.
+- `OPENCLAW_APNS_RELAY_BASE_URL` / `OPENCLAW_APNS_RELAY_TIMEOUT_MS`: temporary env overrides for the relay config above.
+- `OPENCLAW_APNS_RELAY_ALLOW_HTTP=true`: development-only escape hatch for loopback HTTP relay URLs. Production relay URLs should stay on HTTPS.
+- `gateway.channelHealthCheckMinutes`: channel health-monitor interval in minutes. Set `0` to disable health-monitor restarts globally. Default: `5`.
+- `gateway.channelStaleEventThresholdMinutes`: stale-socket threshold in minutes. Keep this greater than or equal to `gateway.channelHealthCheckMinutes`. Default: `30`.
+- `gateway.channelMaxRestartsPerHour`: maximum health-monitor restarts per channel/account in a rolling hour. Default: `10`.
+- `channels.<provider>.healthMonitor.enabled`: per-channel opt-out for health-monitor restarts while keeping the global monitor enabled.
+- `channels.<provider>.accounts.<accountId>.healthMonitor.enabled`: per-account override for multi-account channels. When set, it takes precedence over the channel-level override.
+- Local gateway call paths can use `gateway.remote.*` as fallback only when `gateway.auth.*` is unset.
+- If `gateway.auth.token` / `gateway.auth.password` is explicitly configured via SecretRef and unresolved, resolution fails closed (no remote fallback masking).
 - `trustedProxies`: reverse proxy IPs that terminate TLS. Only list proxies you control.
 - `allowRealIpFallback`: when `true`, the gateway accepts `X-Real-IP` if `X-Forwarded-For` is missing. Default `false` for fail-closed behavior.
 - `gateway.tools.deny`: extra tool names blocked for HTTP `POST /tools/invoke` (extends default deny list).
@@ -2443,6 +2625,8 @@ See [Plugins](/tools/plugin).
   - `gateway.http.endpoints.responses.maxUrlParts`
   - `gateway.http.endpoints.responses.files.urlAllowlist`
   - `gateway.http.endpoints.responses.images.urlAllowlist`
+    Empty allowlists are treated as unset; use `gateway.http.endpoints.responses.files.allowUrl=false`
+    and/or `gateway.http.endpoints.responses.images.allowUrl=false` to disable URL fetching.
 - Optional response hardening header:
   - `gateway.http.securityHeaders.strictTransportSecurity` (set only for HTTPS origins you control; see [Trusted Proxy Auth](/gateway/trusted-proxy-auth#tls-termination-and-hsts))
 
@@ -2671,6 +2855,7 @@ Validation:
 - `source: "env"` id pattern: `^[A-Z][A-Z0-9_]{0,127}$`
 - `source: "file"` id: absolute JSON pointer (for example `"/providers/openai/apiKey"`)
 - `source: "exec"` id pattern: `^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$`
+- `source: "exec"` ids must not contain `.` or `..` slash-delimited path segments (for example `a/../b` is rejected)
 
 ### Supported credential surface
 
@@ -2786,7 +2971,7 @@ Notes:
 
 ## Wizard
 
-Metadata written by CLI wizards (`onboard`, `configure`, `doctor`):
+Metadata written by CLI guided setup flows (`onboard`, `configure`, `doctor`):
 
 ```json5
 {

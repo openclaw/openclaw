@@ -33,16 +33,15 @@ export function isSymlinkOpenError(value: unknown): boolean {
 }
 
 export function isPathInside(root: string, target: string): boolean {
-  const resolvedRoot = path.resolve(root);
-  const resolvedTarget = path.resolve(target);
-
   if (process.platform === "win32") {
-    const rootForCompare = normalizeWindowsPathForComparison(resolvedRoot);
-    const targetForCompare = normalizeWindowsPathForComparison(resolvedTarget);
+    const rootForCompare = normalizeWindowsPathForComparison(path.win32.resolve(root));
+    const targetForCompare = normalizeWindowsPathForComparison(path.win32.resolve(target));
     const relative = path.win32.relative(rootForCompare, targetForCompare);
     return relative === "" || (!relative.startsWith("..") && !path.win32.isAbsolute(relative));
   }
 
+  const resolvedRoot = path.resolve(root);
+  const resolvedTarget = path.resolve(target);
   const relative = path.relative(resolvedRoot, resolvedTarget);
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }

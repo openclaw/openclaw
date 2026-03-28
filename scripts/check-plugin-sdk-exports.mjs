@@ -11,6 +11,7 @@
 import { readFileSync, existsSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { pluginSdkSubpaths } from "./lib/plugin-sdk-entries.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const distFile = resolve(__dirname, "..", "dist", "plugin-sdk", "index.js");
@@ -41,17 +42,7 @@ const exportedNames = exportMatch[1]
 
 const exportSet = new Set(exportedNames);
 
-const requiredSubpathEntries = [
-  "core",
-  "telegram",
-  "discord",
-  "slack",
-  "signal",
-  "imessage",
-  "whatsapp",
-  "line",
-  "account-id",
-];
+const requiredRuntimeShimEntries = ["compat.js", "root-alias.cjs"];
 
 // Critical functions that channel extension plugins import from openclaw/plugin-sdk.
 // If any of these are missing, plugins will fail at runtime with:
@@ -74,6 +65,7 @@ const requiredExports = [
   "resolveChannelMediaMaxBytes",
   "warnMissingProviderGroupPolicyFallbackOnce",
   "emptyPluginConfigSchema",
+  "onDiagnosticEvent",
   "normalizePluginHttpPath",
   "registerPluginHttpRoute",
   "DEFAULT_ACCOUNT_ID",
@@ -88,7 +80,7 @@ for (const name of requiredExports) {
   }
 }
 
-for (const entry of requiredSubpathEntries) {
+for (const entry of pluginSdkSubpaths) {
   const jsPath = resolve(__dirname, "..", "dist", "plugin-sdk", `${entry}.js`);
   const dtsPath = resolve(__dirname, "..", "dist", "plugin-sdk", `${entry}.d.ts`);
   if (!existsSync(jsPath)) {
@@ -97,6 +89,14 @@ for (const entry of requiredSubpathEntries) {
   }
   if (!existsSync(dtsPath)) {
     console.error(`MISSING SUBPATH DTS: dist/plugin-sdk/${entry}.d.ts`);
+    missing += 1;
+  }
+}
+
+for (const entry of requiredRuntimeShimEntries) {
+  const shimPath = resolve(__dirname, "..", "dist", "plugin-sdk", entry);
+  if (!existsSync(shimPath)) {
+    console.error(`MISSING RUNTIME SHIM: dist/plugin-sdk/${entry}`);
     missing += 1;
   }
 }

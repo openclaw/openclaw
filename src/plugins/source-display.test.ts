@@ -1,52 +1,91 @@
+import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { formatPluginSourceForTable } from "./source-display.js";
+import { withPathResolutionEnv } from "../test-utils/env.js";
+import { formatPluginSourceForTable, resolvePluginSourceRoots } from "./source-display.js";
+
+function createPluginSourceRoots() {
+  const stockRoot = path.resolve(
+    path.sep,
+    "opt",
+    "homebrew",
+    "lib",
+    "node_modules",
+    "openclaw",
+    "extensions",
+  );
+  const globalRoot = path.resolve(path.sep, "Users", "x", ".openclaw", "extensions");
+  const workspaceRoot = path.resolve(path.sep, "Users", "x", "ws", ".openclaw", "extensions");
+  return {
+    stock: stockRoot,
+    global: globalRoot,
+    workspace: workspaceRoot,
+  };
+}
 
 describe("formatPluginSourceForTable", () => {
-  it("shortens bundled plugin sources under the stock root", () => {
-    const out = formatPluginSourceForTable(
-      {
-        origin: "bundled",
-        source: "/opt/homebrew/lib/node_modules/openclaw/extensions/bluebubbles/index.ts",
-      },
-      {
-        stock: "/opt/homebrew/lib/node_modules/openclaw/extensions",
-        global: "/Users/x/.openclaw/extensions",
-        workspace: "/Users/x/ws/.openclaw/extensions",
-      },
-    );
-    expect(out.value).toBe("stock:bluebubbles/index.ts");
-    expect(out.rootKey).toBe("stock");
-  });
+  it.each([
+    {
+      name: "bundled plugin sources under the stock root",
+      origin: "bundled" as const,
+      sourceKey: "stock" as const,
+      dirName: "demo-stock",
+      fileName: "index.ts",
+      expectedValue: "stock:demo-stock/index.ts",
+      expectedRootKey: "stock" as const,
+    },
+    {
+      name: "workspace plugin sources under the workspace root",
+      origin: "workspace" as const,
+      sourceKey: "workspace" as const,
+      dirName: "demo-workspace",
+      fileName: "index.ts",
+      expectedValue: "workspace:demo-workspace/index.ts",
+      expectedRootKey: "workspace" as const,
+    },
+    {
+      name: "global plugin sources under the global root",
+      origin: "global" as const,
+      sourceKey: "global" as const,
+      dirName: "demo-global",
+      fileName: "index.js",
+      expectedValue: "global:demo-global/index.js",
+      expectedRootKey: "global" as const,
+    },
+  ])(
+    "shortens $name",
+    ({ origin, sourceKey, dirName, fileName, expectedValue, expectedRootKey }) => {
+      const roots = createPluginSourceRoots();
+      const out = formatPluginSourceForTable(
+        {
+          origin,
+          source: path.join(roots[sourceKey], dirName, fileName),
+        },
+        roots,
+      );
+      expect(out.value).toBe(expectedValue);
+      expect(out.rootKey).toBe(expectedRootKey);
+    },
+  );
 
-  it("shortens workspace plugin sources under the workspace root", () => {
-    const out = formatPluginSourceForTable(
+  it("resolves source roots from an explicit env override", () => {
+    const homeDir = path.resolve(path.sep, "tmp", "openclaw-home");
+    const roots = withPathResolutionEnv(
+      homeDir,
       {
-        origin: "workspace",
-        source: "/Users/x/ws/.openclaw/extensions/matrix/index.ts",
+        OPENCLAW_BUNDLED_PLUGINS_DIR: "~/bundled",
+        OPENCLAW_STATE_DIR: "~/state",
       },
-      {
-        stock: "/opt/homebrew/lib/node_modules/openclaw/extensions",
-        global: "/Users/x/.openclaw/extensions",
-        workspace: "/Users/x/ws/.openclaw/extensions",
-      },
+      (env) =>
+        resolvePluginSourceRoots({
+          env,
+          workspaceDir: "~/ws",
+        }),
     );
-    expect(out.value).toBe("workspace:matrix/index.ts");
-    expect(out.rootKey).toBe("workspace");
-  });
 
-  it("shortens global plugin sources under the global root", () => {
-    const out = formatPluginSourceForTable(
-      {
-        origin: "global",
-        source: "/Users/x/.openclaw/extensions/zalo/index.js",
-      },
-      {
-        stock: "/opt/homebrew/lib/node_modules/openclaw/extensions",
-        global: "/Users/x/.openclaw/extensions",
-        workspace: "/Users/x/ws/.openclaw/extensions",
-      },
-    );
-    expect(out.value).toBe("global:zalo/index.js");
-    expect(out.rootKey).toBe("global");
+    expect(roots).toEqual({
+      stock: path.join(homeDir, "bundled"),
+      global: path.join(homeDir, "state", "extensions"),
+      workspace: path.join(homeDir, "ws", ".openclaw", "extensions"),
+    });
   });
 });

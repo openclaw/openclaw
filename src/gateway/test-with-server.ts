@@ -1,6 +1,5 @@
-import { afterAll, beforeAll } from "vitest";
-import { startServerWithClient } from "./test-helpers.js";
-import { connectOk } from "./test-helpers.js";
+import { afterAll, beforeAll, beforeEach } from "vitest";
+import { connectOk, startServerWithClient, testState } from "./test-helpers.js";
 
 type StartServerWithClient = typeof startServerWithClient;
 export type GatewayWs = Awaited<ReturnType<StartServerWithClient>>["ws"];
@@ -21,9 +20,10 @@ export function installConnectedControlUiServerSuite(
   onReady: (started: { server: GatewayServer; ws: GatewayWs; port: number }) => void,
 ): void {
   let started: Awaited<ReturnType<StartServerWithClient>> | null = null;
+  const token = "secret";
 
   beforeAll(async () => {
-    started = await startServerWithClient(undefined, { controlUiEnabled: true });
+    started = await startServerWithClient(token, { controlUiEnabled: true });
     onReady({
       server: started.server,
       ws: started.ws,
@@ -32,10 +32,16 @@ export function installConnectedControlUiServerSuite(
     await connectOk(started.ws);
   });
 
+  beforeEach(() => {
+    process.env.OPENCLAW_GATEWAY_TOKEN = token;
+    testState.gatewayAuth = { mode: "token", token };
+  });
+
   afterAll(async () => {
     started?.ws.close();
     if (started?.server) {
       await started.server.close();
     }
+    started?.envSnapshot.restore();
   });
 }

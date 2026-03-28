@@ -3,12 +3,17 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { loadOpenClawPlugins } from "./loader.js";
+import { loadOpenClawPlugins, type PluginLoadOptions } from "./loader.js";
+import type { OpenClawPluginCliCommandDescriptor } from "./types.js";
 import type { PluginLogger } from "./types.js";
 
 const log = createSubsystemLogger("plugins");
 
-export function registerPluginCliCommands(program: Command, cfg?: OpenClawConfig) {
+function loadPluginCliRegistry(
+  cfg?: OpenClawConfig,
+  env?: NodeJS.ProcessEnv,
+  loaderOptions?: Pick<PluginLoadOptions, "pluginSdkResolution">,
+) {
   const config = cfg ?? loadConfig();
   const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
   const logger: PluginLogger = {
@@ -17,11 +22,50 @@ export function registerPluginCliCommands(program: Command, cfg?: OpenClawConfig
     error: (msg: string) => log.error(msg),
     debug: (msg: string) => log.debug(msg),
   };
-  const registry = loadOpenClawPlugins({
+  return {
     config,
     workspaceDir,
     logger,
-  });
+    registry: loadOpenClawPlugins({
+      config,
+      workspaceDir,
+      env,
+      logger,
+      ...loaderOptions,
+    }),
+  };
+}
+
+export function getPluginCliCommandDescriptors(
+  cfg?: OpenClawConfig,
+  env?: NodeJS.ProcessEnv,
+): OpenClawPluginCliCommandDescriptor[] {
+  try {
+    const { registry } = loadPluginCliRegistry(cfg, env);
+    const seen = new Set<string>();
+    const descriptors: OpenClawPluginCliCommandDescriptor[] = [];
+    for (const entry of registry.cliRegistrars) {
+      for (const descriptor of entry.descriptors) {
+        if (seen.has(descriptor.name)) {
+          continue;
+        }
+        seen.add(descriptor.name);
+        descriptors.push(descriptor);
+      }
+    }
+    return descriptors;
+  } catch {
+    return [];
+  }
+}
+
+export function registerPluginCliCommands(
+  program: Command,
+  cfg?: OpenClawConfig,
+  env?: NodeJS.ProcessEnv,
+  loaderOptions?: Pick<PluginLoadOptions, "pluginSdkResolution">,
+) {
+  const { config, workspaceDir, logger, registry } = loadPluginCliRegistry(cfg, env, loaderOptions);
 
   const existingCommands = new Set(program.commands.map((cmd) => cmd.name()));
 

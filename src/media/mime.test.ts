@@ -99,16 +99,12 @@ describe("extensionForMime", () => {
 });
 
 describe("isAudioFileName", () => {
-  it("matches known audio extensions", () => {
-    const cases = [
-      { fileName: "voice.mp3", expected: true },
-      { fileName: "voice.caf", expected: true },
-      { fileName: "voice.bin", expected: false },
-    ] as const;
-
-    for (const testCase of cases) {
-      expect(isAudioFileName(testCase.fileName)).toBe(testCase.expected);
-    }
+  it.each([
+    { fileName: "voice.mp3", expected: true },
+    { fileName: "voice.caf", expected: true },
+    { fileName: "voice.bin", expected: false },
+  ] as const)("matches audio extension for $fileName", ({ fileName, expected }) => {
+    expect(isAudioFileName(fileName)).toBe(expected);
   });
 });
 
@@ -128,12 +124,19 @@ describe("mediaKindFromMime", () => {
     { mime: "text/plain", expected: "document" },
     { mime: "text/csv", expected: "document" },
     { mime: "text/html; charset=utf-8", expected: "document" },
-    { mime: "model/gltf+json", expected: "unknown" },
+    { mime: "model/gltf+json", expected: undefined },
+    { mime: null, expected: undefined },
+    { mime: undefined, expected: undefined },
   ] as const)("classifies $mime", ({ mime, expected }) => {
     expect(mediaKindFromMime(mime)).toBe(expected);
   });
 
   it("normalizes MIME strings before kind classification", () => {
     expect(kindFromMime(" Audio/Ogg; codecs=opus ")).toBe("audio");
+  });
+
+  it("returns undefined for missing or unrecognized MIME kinds", () => {
+    expect(kindFromMime(undefined)).toBeUndefined();
+    expect(kindFromMime("model/gltf+json")).toBeUndefined();
   });
 });

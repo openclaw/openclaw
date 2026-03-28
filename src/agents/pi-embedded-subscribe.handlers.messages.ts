@@ -1,4 +1,5 @@
 import type { AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
@@ -7,7 +8,11 @@ import {
   isMessagingToolDuplicateNormalized,
   normalizeTextForComparison,
 } from "./pi-embedded-helpers.js";
-import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
+import type { BlockReplyPayload } from "./pi-embedded-payloads.js";
+import type {
+  EmbeddedPiSubscribeContext,
+  EmbeddedPiSubscribeState,
+} from "./pi-embedded-subscribe.handlers.types.js";
 import { appendRawStream } from "./pi-embedded-subscribe.raw-stream.js";
 import {
   extractAssistantText,
@@ -33,6 +38,15 @@ const stripTrailingDirective = (text: string): string => {
   return text.slice(0, openIndex);
 };
 
+function isTranscriptOnlyOpenClawAssistantMessage(message: AgentMessage | undefined): boolean {
+  if (!message || message.role !== "assistant") {
+    return false;
+  }
+  const provider = typeof message.provider === "string" ? message.provider.trim() : "";
+  const model = typeof message.model === "string" ? message.model.trim() : "";
+  return provider === "openclaw" && (model === "delivery-mirror" || model === "gateway-injected");
+}
+
 function emitReasoningEnd(ctx: EmbeddedPiSubscribeContext) {
   if (!ctx.state.reasoningStreamOpen) {
     return;
@@ -56,12 +70,80 @@ export function resolveSilentReplyFallbackText(params: {
   return fallback;
 }
 
+function clearPendingToolMedia(
+  state: Pick<EmbeddedPiSubscribeState, "pendingToolMediaUrls" | "pendingToolAudioAsVoice">,
+) {
+  state.pendingToolMediaUrls = [];
+  state.pendingToolAudioAsVoice = false;
+}
+
+export function consumePendingToolMediaIntoReply(
+  state: Pick<EmbeddedPiSubscribeState, "pendingToolMediaUrls" | "pendingToolAudioAsVoice">,
+  payload: BlockReplyPayload,
+): BlockReplyPayload {
+  if (payload.isReasoning) {
+    return payload;
+  }
+  if (state.pendingToolMediaUrls.length === 0 && !state.pendingToolAudioAsVoice) {
+    return payload;
+  }
+  const mergedMediaUrls = Array.from(
+    new Set([...(payload.mediaUrls ?? []), ...state.pendingToolMediaUrls]),
+  );
+  const mergedPayload: BlockReplyPayload = {
+    ...payload,
+    mediaUrls: mergedMediaUrls.length ? mergedMediaUrls : undefined,
+    audioAsVoice: payload.audioAsVoice || state.pendingToolAudioAsVoice || undefined,
+  };
+  clearPendingToolMedia(state);
+  return mergedPayload;
+}
+
+export function consumePendingToolMediaReply(
+  state: Pick<EmbeddedPiSubscribeState, "pendingToolMediaUrls" | "pendingToolAudioAsVoice">,
+): BlockReplyPayload | null {
+  if (state.pendingToolMediaUrls.length === 0 && !state.pendingToolAudioAsVoice) {
+    return null;
+  }
+  const payload: BlockReplyPayload = {
+    mediaUrls: state.pendingToolMediaUrls.length
+      ? Array.from(new Set(state.pendingToolMediaUrls))
+      : undefined,
+    audioAsVoice: state.pendingToolAudioAsVoice || undefined,
+  };
+  clearPendingToolMedia(state);
+  return payload;
+}
+
+export function hasAssistantVisibleReply(params: {
+  text?: string;
+  mediaUrls?: string[];
+  mediaUrl?: string;
+  audioAsVoice?: boolean;
+}): boolean {
+  return resolveSendableOutboundReplyParts(params).hasContent || Boolean(params.audioAsVoice);
+}
+
+export function buildAssistantStreamData(params: {
+  text?: string;
+  delta?: string;
+  mediaUrls?: string[];
+  mediaUrl?: string;
+}): { text: string; delta: string; mediaUrls?: string[] } {
+  const mediaUrls = resolveSendableOutboundReplyParts(params).mediaUrls;
+  return {
+    text: params.text ?? "",
+    delta: params.delta ?? "",
+    mediaUrls: mediaUrls.length ? mediaUrls : undefined,
+  };
+}
+
 export function handleMessageStart(
   ctx: EmbeddedPiSubscribeContext,
   evt: AgentEvent & { message: AgentMessage },
 ) {
   const msg = evt.message;
-  if (msg?.role !== "assistant") {
+  if (msg?.role !== "assistant" || isTranscriptOnlyOpenClawAssistantMessage(msg)) {
     return;
   }
 
@@ -80,11 +162,14 @@ export function handleMessageUpdate(
   evt: AgentEvent & { message: AgentMessage; assistantMessageEvent?: unknown },
 ) {
   const msg = evt.message;
-  if (msg?.role !== "assistant") {
+  if (msg?.role !== "assistant" || isTranscriptOnlyOpenClawAssistantMessage(msg)) {
     return;
   }
 
   ctx.noteLastAssistant(msg);
+  if (ctx.state.deterministicApprovalPromptSent) {
+    return;
+  }
 
   const assistantEvent = evt.assistantMessageEvent;
   const assistantRecord =
@@ -193,14 +278,13 @@ export function handleMessageUpdate(
     const parsedDelta = visibleDelta ? ctx.consumePartialReplyDirectives(visibleDelta) : null;
     const parsedFull = parseReplyDirectives(stripTrailingDirective(next));
     const cleanedText = parsedFull.text;
-    const mediaUrls = parsedDelta?.mediaUrls;
-    const hasMedia = Boolean(mediaUrls && mediaUrls.length > 0);
+    const { mediaUrls, hasMedia } = resolveSendableOutboundReplyParts(parsedDelta ?? {});
     const hasAudio = Boolean(parsedDelta?.audioAsVoice);
     const previousCleaned = ctx.state.lastStreamedAssistantCleaned ?? "";
 
     let shouldEmit = false;
     let deltaText = "";
-    if (!cleanedText && !hasMedia && !hasAudio) {
+    if (!hasAssistantVisibleReply({ text: cleanedText, mediaUrls, audioAsVoice: hasAudio })) {
       shouldEmit = false;
     } else if (previousCleaned && !cleanedText.startsWith(previousCleaned)) {
       shouldEmit = false;
@@ -213,29 +297,23 @@ export function handleMessageUpdate(
     ctx.state.lastStreamedAssistantCleaned = cleanedText;
 
     if (shouldEmit) {
+      const data = buildAssistantStreamData({
+        text: cleanedText,
+        delta: deltaText,
+        mediaUrls,
+      });
       emitAgentEvent({
         runId: ctx.params.runId,
         stream: "assistant",
-        data: {
-          text: cleanedText,
-          delta: deltaText,
-          mediaUrls: hasMedia ? mediaUrls : undefined,
-        },
+        data,
       });
       void ctx.params.onAgentEvent?.({
         stream: "assistant",
-        data: {
-          text: cleanedText,
-          delta: deltaText,
-          mediaUrls: hasMedia ? mediaUrls : undefined,
-        },
+        data,
       });
       ctx.state.emittedAssistantUpdate = true;
       if (ctx.params.onPartialReply && ctx.state.shouldEmitPartialReplies) {
-        void ctx.params.onPartialReply({
-          text: cleanedText,
-          mediaUrls: hasMedia ? mediaUrls : undefined,
-        });
+        void ctx.params.onPartialReply(data);
       }
     }
   }
@@ -254,13 +332,16 @@ export function handleMessageEnd(
   evt: AgentEvent & { message: AgentMessage },
 ) {
   const msg = evt.message;
-  if (msg?.role !== "assistant") {
+  if (msg?.role !== "assistant" || isTranscriptOnlyOpenClawAssistantMessage(msg)) {
     return;
   }
 
   const assistantMessage = msg;
   ctx.noteLastAssistant(assistantMessage);
   ctx.recordAssistantUsage((assistantMessage as { usage?: unknown }).usage);
+  if (ctx.state.deterministicApprovalPromptSent) {
+    return;
+  }
   promoteThinkingTagsToBlocks(assistantMessage);
 
   const rawText = extractAssistantText(assistantMessage);
@@ -285,8 +366,7 @@ export function handleMessageEnd(
   const trimmedText = text.trim();
   const parsedText = trimmedText ? parseReplyDirectives(stripTrailingDirective(trimmedText)) : null;
   let cleanedText = parsedText?.text ?? "";
-  let mediaUrls = parsedText?.mediaUrls;
-  let hasMedia = Boolean(mediaUrls && mediaUrls.length > 0);
+  let { mediaUrls, hasMedia } = resolveSendableOutboundReplyParts(parsedText ?? {});
 
   if (!cleanedText && !hasMedia && !ctx.params.enforceFinalTag) {
     const rawTrimmed = rawText.trim();
@@ -295,28 +375,24 @@ export function handleMessageEnd(
     if (rawCandidate) {
       const parsedFallback = parseReplyDirectives(stripTrailingDirective(rawCandidate));
       cleanedText = parsedFallback.text ?? rawCandidate;
-      mediaUrls = parsedFallback.mediaUrls;
-      hasMedia = Boolean(mediaUrls && mediaUrls.length > 0);
+      ({ mediaUrls, hasMedia } = resolveSendableOutboundReplyParts(parsedFallback));
     }
   }
 
   if (!ctx.state.emittedAssistantUpdate && (cleanedText || hasMedia)) {
+    const data = buildAssistantStreamData({
+      text: cleanedText,
+      delta: cleanedText,
+      mediaUrls,
+    });
     emitAgentEvent({
       runId: ctx.params.runId,
       stream: "assistant",
-      data: {
-        text: cleanedText,
-        delta: cleanedText,
-        mediaUrls: hasMedia ? mediaUrls : undefined,
-      },
+      data,
     });
     void ctx.params.onAgentEvent?.({
       stream: "assistant",
-      data: {
-        text: cleanedText,
-        delta: cleanedText,
-        mediaUrls: hasMedia ? mediaUrls : undefined,
-      },
+      data,
     });
     ctx.state.emittedAssistantUpdate = true;
   }
@@ -326,6 +402,16 @@ export function handleMessageEnd(
   ctx.finalizeAssistantTexts({ text, addedDuringMessage, chunkerHasBuffered });
 
   const onBlockReply = ctx.params.onBlockReply;
+  const emitBlockReplySafely = (payload: Parameters<NonNullable<typeof onBlockReply>>[0]) => {
+    if (!onBlockReply) {
+      return;
+    }
+    void Promise.resolve()
+      .then(() => onBlockReply(payload))
+      .catch((err) => {
+        ctx.log.warn(`block reply callback failed: ${String(err)}`);
+      });
+  };
   const shouldEmitReasoning = Boolean(
     ctx.state.includeReasoning &&
     formattedReasoning &&
@@ -339,7 +425,7 @@ export function handleMessageEnd(
       return;
     }
     ctx.state.lastReasoningSent = formattedReasoning;
-    void onBlockReply?.({ text: formattedReasoning, isReasoning: true });
+    emitBlockReplySafely({ text: formattedReasoning, isReasoning: true });
   };
 
   if (shouldEmitReasoningBeforeAnswer) {
@@ -361,8 +447,8 @@ export function handleMessageEnd(
       replyToCurrent,
     } = splitResult;
     // Emit if there's content OR audioAsVoice flag (to propagate the flag).
-    if (cleanedText || (mediaUrls && mediaUrls.length > 0) || audioAsVoice) {
-      void onBlockReply({
+    if (hasAssistantVisibleReply({ text: cleanedText, mediaUrls, audioAsVoice })) {
+      ctx.emitBlockReply({
         text: cleanedText,
         mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
         audioAsVoice,

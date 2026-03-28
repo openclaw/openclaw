@@ -3,8 +3,8 @@ import type {
   OpenClawPluginService,
   OpenClawPluginServiceContext,
   PluginLogger,
-} from "openclaw/plugin-sdk";
-import { registerAcpRuntimeBackend, unregisterAcpRuntimeBackend } from "openclaw/plugin-sdk";
+} from "../runtime-api.js";
+import { registerAcpRuntimeBackend, unregisterAcpRuntimeBackend } from "../runtime-api.js";
 import { resolveAcpxPluginConfig, type ResolvedAcpxPluginConfig } from "./config.js";
 import { ensureAcpx } from "./ensure.js";
 import { ACPX_BACKEND_ID, AcpxRuntime } from "./runtime.js";
@@ -72,6 +72,7 @@ export function createAcpxRuntimeService(
             logger: ctx.logger,
             expectedVersion: pluginConfig.expectedVersion,
             allowInstall: pluginConfig.allowPluginLocalInstall,
+            stripProviderAuthEnvVars: pluginConfig.stripProviderAuthEnvVars,
             spawnOptions: {
               strictWindowsCmdWrapper: pluginConfig.strictWindowsCmdWrapper,
             },

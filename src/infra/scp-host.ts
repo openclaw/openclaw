@@ -1,6 +1,7 @@
 const SSH_TOKEN = /^[A-Za-z0-9._-]+$/;
 const BRACKETED_IPV6 = /^\[[0-9A-Fa-f:.%]+\]$/;
 const WHITESPACE = /\s/;
+const SCP_REMOTE_PATH_UNSAFE_CHARS = new Set(["\\", "'", '"', "`", "$", ";", "|", "&", "<", ">"]);
 
 function hasControlOrWhitespace(value: string): boolean {
   for (const char of value) {
@@ -59,4 +60,27 @@ export function normalizeScpRemoteHost(value: string | null | undefined): string
 
 export function isSafeScpRemoteHost(value: string | null | undefined): boolean {
   return normalizeScpRemoteHost(value) !== undefined;
+}
+
+export function normalizeScpRemotePath(value: string | null | undefined): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!trimmed || !trimmed.startsWith("/")) {
+    return undefined;
+  }
+
+  for (const char of trimmed) {
+    const code = char.charCodeAt(0);
+    if (code <= 0x1f || code === 0x7f || SCP_REMOTE_PATH_UNSAFE_CHARS.has(char)) {
+      return undefined;
+    }
+  }
+
+  return trimmed;
+}
+
+export function isSafeScpRemotePath(value: string | null | undefined): boolean {
+  return normalizeScpRemotePath(value) !== undefined;
 }

@@ -61,11 +61,7 @@ const createSetOnlyController = () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("resolveToolEmoji", () => {
-  const cases: Array<{
-    name: string;
-    tool: string | undefined;
-    expected: string;
-  }> = [
+  it.each([
     { name: "returns coding emoji for exec tool", tool: "exec", expected: DEFAULT_EMOJIS.coding },
     {
       name: "returns coding emoji for process tool",
@@ -91,13 +87,12 @@ describe("resolveToolEmoji", () => {
       tool: "my_exec_wrapper",
       expected: DEFAULT_EMOJIS.coding,
     },
-  ];
-
-  for (const testCase of cases) {
-    it(`should ${testCase.name}`, () => {
-      expect(resolveToolEmoji(testCase.tool, DEFAULT_EMOJIS)).toBe(testCase.expected);
-    });
-  }
+  ] satisfies Array<{ name: string; tool: string | undefined; expected: string }>)(
+    "should $name",
+    ({ tool, expected }) => {
+      expect(resolveToolEmoji(tool, DEFAULT_EMOJIS)).toBe(expected);
+    },
+  );
 });
 
 describe("createStatusReactionController", () => {
@@ -146,6 +141,15 @@ describe("createStatusReactionController", () => {
     // After debounce period
     await vi.advanceTimersByTimeAsync(300);
     expect(calls).toContainEqual({ method: "set", emoji: DEFAULT_EMOJIS.thinking });
+  });
+
+  it("should debounce setCompacting and eventually call adapter", async () => {
+    const { calls, controller } = createEnabledController();
+
+    void controller.setCompacting();
+    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
+
+    expect(calls).toContainEqual({ method: "set", emoji: DEFAULT_EMOJIS.compacting });
   });
 
   it("should classify tool name and debounce", async () => {
@@ -243,6 +247,19 @@ describe("createStatusReactionController", () => {
 
     // Should not add another call
     expect(calls.length).toBe(callsAfterFirst);
+  });
+
+  it("should cancel a pending compacting emoji before resuming thinking", async () => {
+    const { calls, controller } = createEnabledController();
+
+    void controller.setCompacting();
+    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs - 1);
+    controller.cancelPending();
+    void controller.setThinking();
+    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
+
+    const setEmojis = calls.filter((call) => call.method === "set").map((call) => call.emoji);
+    expect(setEmojis).toEqual([DEFAULT_EMOJIS.thinking]);
   });
 
   it("should call removeReaction when adapter supports it and emoji changes", async () => {
@@ -446,6 +463,7 @@ describe("constants", () => {
     const emojiKeys = [
       "queued",
       "thinking",
+      "compacting",
       "tool",
       "coding",
       "web",
