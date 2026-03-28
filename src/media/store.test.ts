@@ -194,6 +194,7 @@ describe("media store", () => {
     const target = path.join(home, "sensitive.txt");
     const source = path.join(home, "source.txt");
     await fs.writeFile(target, "sensitive");
+    await fs.rm(source, { force: true });
     await fs.symlink(target, source);
     return source;
   }
