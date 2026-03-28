@@ -50,6 +50,13 @@ function expectGatewaySubagentRunFailure(
   );
 }
 
+function expectRuntimeValue<T>(
+  readValue: (runtime: ReturnType<typeof createPluginRuntime>) => T,
+  expected: T,
+) {
+  expect(readValue(createPluginRuntime())).toBe(expected);
+}
+
 function expectFunctionKeys(value: Record<string, unknown>, keys: readonly string[]) {
   keys.forEach((key) => {
     expect(typeof value[key]).toBe("function");
@@ -101,10 +108,31 @@ describe("plugin runtime command execution", () => {
     expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(["echo", "hello"], { timeoutMs: 1000 });
   });
 
-  it("exposes runtime.events listener registration helpers", () => {
-    const runtime = createPluginRuntime();
-    expect(runtime.events.onAgentEvent).toBe(onAgentEvent);
-    expect(runtime.events.onSessionTranscriptUpdate).toBe(onSessionTranscriptUpdate);
+  it.each([
+    {
+      name: "exposes runtime.events.onAgentEvent",
+      readValue: (runtime: ReturnType<typeof createPluginRuntime>) => runtime.events.onAgentEvent,
+      expected: onAgentEvent,
+    },
+    {
+      name: "exposes runtime.events.onSessionTranscriptUpdate",
+      readValue: (runtime: ReturnType<typeof createPluginRuntime>) =>
+        runtime.events.onSessionTranscriptUpdate,
+      expected: onSessionTranscriptUpdate,
+    },
+    {
+      name: "exposes runtime.system.requestHeartbeatNow",
+      readValue: (runtime: ReturnType<typeof createPluginRuntime>) =>
+        runtime.system.requestHeartbeatNow,
+      expected: requestHeartbeatNow,
+    },
+    {
+      name: "exposes runtime.version from the shared VERSION constant",
+      readValue: (runtime: ReturnType<typeof createPluginRuntime>) => runtime.version,
+      expected: VERSION,
+    },
+  ] as const)("$name", ({ readValue, expected }) => {
+    expectRuntimeValue(readValue, expected);
   });
 
   it.each([
@@ -170,11 +198,6 @@ describe("plugin runtime command execution", () => {
     expectRuntimeShape(assert);
   });
 
-  it("exposes runtime.system.requestHeartbeatNow", () => {
-    const runtime = createPluginRuntime();
-    expect(runtime.system.requestHeartbeatNow).toBe(requestHeartbeatNow);
-  });
-
   it("modelAuth wrappers strip agentDir and store to prevent credential steering", async () => {
     // The wrappers should not forward agentDir or store from plugin callers.
     // We verify this by checking the wrapper functions exist and are not the
@@ -205,10 +228,5 @@ describe("plugin runtime command execution", () => {
       runId: "run-1",
     });
     expect(run).toHaveBeenCalledWith({ sessionKey: "s-2", message: "hello" });
-  });
-
-  it("exposes runtime.version from the shared VERSION constant", () => {
-    const runtime = createPluginRuntime();
-    expect(runtime.version).toBe(VERSION);
   });
 });
