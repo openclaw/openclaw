@@ -9,6 +9,7 @@ import {
   type XaiXSearchOptions,
 } from "../../../extensions/xai/src/x-search-shared.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveProviderWebSearchPluginConfig } from "../../plugin-sdk/provider-web-search.js";
 import type { RuntimeWebXSearchMetadata } from "../../secrets/runtime-web-tools.types.js";
 import { jsonResult, readStringArrayParam, readStringParam, ToolInputError } from "./common.js";
 import {
@@ -37,27 +38,8 @@ function readLegacyGrokApiKey(cfg?: OpenClawConfig): string | undefined {
 }
 
 function readPluginXaiWebSearchApiKey(cfg?: OpenClawConfig): string | undefined {
-  const plugins = cfg?.plugins;
-  if (!plugins || typeof plugins !== "object") {
-    return undefined;
-  }
-  const entries = (plugins as Record<string, unknown>).entries;
-  if (!entries || typeof entries !== "object") {
-    return undefined;
-  }
-  const entry = (entries as Record<string, unknown>).xai;
-  if (!entry || typeof entry !== "object") {
-    return undefined;
-  }
-  const config = (entry as Record<string, unknown>).config;
-  if (!config || typeof config !== "object") {
-    return undefined;
-  }
-  const webSearch = (config as Record<string, unknown>).webSearch;
   return readConfiguredSecretString(
-    webSearch && typeof webSearch === "object"
-      ? (webSearch as Record<string, unknown>).apiKey
-      : undefined,
+    resolveProviderWebSearchPluginConfig(cfg as Record<string, unknown> | undefined, "xai")?.apiKey,
     "plugins.entries.xai.config.webSearch.apiKey",
   );
 }
