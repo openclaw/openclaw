@@ -28,7 +28,7 @@ export type ModelsProviderData = {
   byProvider: Map<string, Set<string>>;
   providers: string[];
   resolvedDefault: { provider: string; model: string };
-  /** Map from model ID to human-readable display name (when different from ID). */
+  /** Map from provider/model to human-readable display name (when different from model ID). */
   modelNames: Map<string, string>;
 };
 
@@ -121,12 +121,12 @@ export async function buildModelsProviderData(
 
   const providers = [...byProvider.keys()].toSorted();
 
-  // Build a model-ID-to-display-name map from the catalog so UI surfaces can
-  // show human-readable names instead of raw IDs (e.g. UUIDs from Nexos).
+  // Build a provider-scoped model display-name map so surfaces can show
+  // human-readable names without colliding across providers that share IDs.
   const modelNames = new Map<string, string>();
   for (const entry of catalog) {
     if (entry.name && entry.name !== entry.id) {
-      modelNames.set(entry.id, entry.name);
+      modelNames.set(`${normalizeProviderId(entry.provider)}/${entry.id}`, entry.name);
     }
   }
 

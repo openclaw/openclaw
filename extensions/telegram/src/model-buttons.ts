@@ -33,8 +33,8 @@ export type ModelsKeyboardParams = {
   currentPage: number;
   totalPages: number;
   pageSize?: number;
-  /** Optional map from model ID to display name. When provided, the display
-   *  name is shown on the button instead of the raw model ID. */
+  /** Optional map from provider/model to display name. When provided, the
+   *  display name is shown on the button instead of the raw model ID. */
   modelNames?: ReadonlyMap<string, string>;
 };
 
@@ -210,7 +210,7 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
     }
 
     const isCurrentModel = model === currentModelId;
-    const displayLabel = modelNames?.get(model) ?? model;
+    const displayLabel = modelNames?.get(`${provider}/${model}`) ?? model;
     const displayText = truncateModelId(displayLabel, 38);
     const text = isCurrentModel ? `${displayText} ✓` : displayText;
 

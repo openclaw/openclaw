@@ -225,8 +225,8 @@ describe("buildModelsKeyboard", () => {
 
   it("uses modelNames for display text when provided", () => {
     const modelNames = new Map([
-      ["a1b2c3d4-e5f6-7890-abcd-ef1234567890", "Claude Sonnet 4"],
-      ["claude-opus-4", "Claude Opus 4"],
+      ["nexos/a1b2c3d4-e5f6-7890-abcd-ef1234567890", "Claude Sonnet 4"],
+      ["nexos/claude-opus-4", "Claude Opus 4"],
     ]);
     const result = buildModelsKeyboard({
       provider: "nexos",
@@ -246,7 +246,7 @@ describe("buildModelsKeyboard", () => {
   });
 
   it("falls back to model ID when modelNames does not contain an entry", () => {
-    const modelNames = new Map([["known-id", "Known Model"]]);
+    const modelNames = new Map([["anthropic/known-id", "Known Model"]]);
     const result = buildModelsKeyboard({
       provider: "anthropic",
       models: ["known-id", "unknown-id"],
@@ -256,6 +256,31 @@ describe("buildModelsKeyboard", () => {
     });
     expect(result[0]?.[0]?.text).toBe("Known Model");
     expect(result[1]?.[0]?.text).toBe("unknown-id");
+  });
+
+  it("uses provider-scoped modelNames keys to avoid cross-provider collisions", () => {
+    const modelNames = new Map([
+      ["openai/shared-id", "OpenAI Shared"],
+      ["anthropic/shared-id", "Anthropic Shared"],
+    ]);
+
+    const openaiResult = buildModelsKeyboard({
+      provider: "openai",
+      models: ["shared-id"],
+      currentPage: 1,
+      totalPages: 1,
+      modelNames,
+    });
+    const anthropicResult = buildModelsKeyboard({
+      provider: "anthropic",
+      models: ["shared-id"],
+      currentPage: 1,
+      totalPages: 1,
+      modelNames,
+    });
+
+    expect(openaiResult[0]?.[0]?.text).toBe("OpenAI Shared");
+    expect(anthropicResult[0]?.[0]?.text).toBe("Anthropic Shared");
   });
 
   it("renders pagination controls for first, middle, and last pages", () => {
