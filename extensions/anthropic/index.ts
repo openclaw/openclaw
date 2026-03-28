@@ -25,7 +25,7 @@ import {
   validateApiKeyInput,
 } from "openclaw/plugin-sdk/provider-auth";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
-import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-model-shared";
+import { cloneFirstTemplateModel } from "openclaw/plugin-sdk/provider-model-shared";
 import { fetchClaudeUsage } from "openclaw/plugin-sdk/provider-usage";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
 import { buildAnthropicCliMigrationResult, hasClaudeCliAuth } from "./cli-migration.js";
@@ -53,29 +53,6 @@ const ANTHROPIC_OAUTH_ALLOWLIST = [
   "anthropic/claude-sonnet-4-5",
   "anthropic/claude-haiku-4-5",
 ] as const;
-
-function cloneFirstTemplateModel(params: {
-  modelId: string;
-  templateIds: readonly string[];
-  ctx: ProviderResolveDynamicModelContext;
-}): ProviderRuntimeModel | undefined {
-  const trimmedModelId = params.modelId.trim();
-  for (const templateId of [...new Set(params.templateIds)].filter(Boolean)) {
-    const template = params.ctx.modelRegistry.find(
-      PROVIDER_ID,
-      templateId,
-    ) as ProviderRuntimeModel | null;
-    if (!template) {
-      continue;
-    }
-    return normalizeModelCompat({
-      ...template,
-      id: trimmedModelId,
-      name: trimmedModelId,
-    } as ProviderRuntimeModel);
-  }
-  return undefined;
-}
 
 function resolveAnthropic46ForwardCompatModel(params: {
   ctx: ProviderResolveDynamicModelContext;
@@ -106,6 +83,7 @@ function resolveAnthropic46ForwardCompatModel(params: {
   templateIds.push(...params.fallbackTemplateIds);
 
   return cloneFirstTemplateModel({
+    providerId: PROVIDER_ID,
     modelId: trimmedModelId,
     templateIds,
     ctx: params.ctx,
