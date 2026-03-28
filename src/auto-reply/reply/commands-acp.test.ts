@@ -747,7 +747,7 @@ describe("/acp command", () => {
       }),
     );
     expectBoundIntroTextToExclude("session ids: pending (available after the first reply)");
-    expect(hoisted.callGatewayMock).toHaveBeenCalledWith(
+    expect(hoisted.callGatewayMock).not.toHaveBeenCalledWith(
       expect.objectContaining({
         method: "sessions.patch",
       }),
@@ -769,6 +769,19 @@ describe("/acp command", () => {
     const seededWithoutEntry = upsertArgs?.mutate(undefined, undefined);
     expect(seededWithoutEntry?.backend).toBe("acpx");
     expect(seededWithoutEntry?.runtimeSessionName).toContain(":runtime");
+  });
+
+  it("persists ACP spawn labels without a nested gateway self-call", async () => {
+    const params = createDiscordParams("/acp spawn codex --bind here --label inbox");
+
+    const result = await handleAcpCommand(params, true);
+
+    expect(result?.reply?.text).toContain("Bound this conversation to");
+    expect(hoisted.callGatewayMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "sessions.patch",
+      }),
+    );
   });
 
   it("accepts unicode dash option prefixes in /acp spawn args", async () => {
