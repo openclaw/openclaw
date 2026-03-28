@@ -73,7 +73,7 @@ describe("applyExclusiveSlotSelection", () => {
     config: OpenClawConfig;
     selectedId: string;
     selectedKind?: PluginKind;
-    registry?: { plugins: ReadonlyArray<{ id: string; kind: PluginKind }> };
+    registry?: { plugins: ReadonlyArray<{ id: string; kind?: PluginKind }> };
   }) {
     const result = applyExclusiveSlotSelection({
       config: params.config,
