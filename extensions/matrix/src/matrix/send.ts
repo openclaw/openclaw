@@ -22,6 +22,7 @@ import { normalizeThreadId, resolveMatrixRoomId } from "./send/targets.js";
 import {
   EventType,
   MsgType,
+  RelationType,
   type MatrixOutboundContent,
   type MatrixSendOpts,
   type MatrixSendResult,
@@ -254,6 +255,63 @@ export async function sendReadReceiptMatrix(
     const resolvedRoom = await resolveMatrixRoomId(resolved, roomId);
     await resolved.sendReadReceipt(resolvedRoom, eventId.trim());
   });
+}
+
+export async function editMessageMatrix(
+  roomId: string,
+  originalEventId: string,
+  newText: string,
+  opts: {
+    client?: MatrixClient;
+    cfg?: CoreConfig;
+    threadId?: string;
+    accountId?: string;
+  } = {},
+): Promise<string> {
+  return await withResolvedMatrixClient(
+    {
+      client: opts.client,
+      cfg: opts.cfg,
+      accountId: opts.accountId,
+    },
+    async (client) => {
+      const resolvedRoom = await resolveMatrixRoomId(client, roomId);
+      const cfg = opts.cfg ?? getCore().config.loadConfig();
+      const tableMode = getCore().channel.text.resolveMarkdownTableMode({
+        cfg,
+        channel: "matrix",
+        accountId: opts.accountId,
+      });
+      const convertedText = getCore().channel.text.convertMarkdownTables(newText, tableMode);
+      const newContent = buildTextContent(convertedText);
+
+      const replaceRelation: Record<string, unknown> = {
+        rel_type: RelationType.Replace,
+        event_id: originalEventId,
+      };
+      const threadId = normalizeThreadId(opts.threadId);
+      if (threadId) {
+        // Thread-aware replace: Synapse needs the thread context to keep the
+        // edited event visible in the thread timeline.
+        replaceRelation["m.in_reply_to"] = { event_id: threadId };
+      }
+
+      // Spread newContent into the outer event so clients that don't support
+      // m.new_content still see properly formatted text (with HTML).
+      const content: Record<string, unknown> = {
+        ...newContent,
+        body: `* ${convertedText}`,
+        ...(typeof newContent.formatted_body === "string"
+          ? { formatted_body: `* ${newContent.formatted_body}` }
+          : {}),
+        "m.new_content": newContent,
+        "m.relates_to": replaceRelation,
+      };
+
+      const eventId = await client.sendMessage(resolvedRoom, content);
+      return eventId ?? "";
+    },
+  );
 }
 
 export async function reactMatrixMessage(
