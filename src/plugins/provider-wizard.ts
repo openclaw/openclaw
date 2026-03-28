@@ -136,6 +136,8 @@ function resolveProviderWizardProviders(params: {
       config: params.config,
       workspaceDir: params.workspaceDir,
       env,
+      bundledProviderAllowlistCompat: true,
+      bundledProviderVitestCompat: true,
     });
   }
   const cacheKey = buildProviderWizardCacheKey({
@@ -153,6 +155,8 @@ function resolveProviderWizardProviders(params: {
     config: params.config,
     workspaceDir: params.workspaceDir,
     env,
+    bundledProviderAllowlistCompat: true,
+    bundledProviderVitestCompat: true,
   });
   const ttlMs = resolvePluginSnapshotCacheTtlMs(env);
   let nextConfigCache = configCache;

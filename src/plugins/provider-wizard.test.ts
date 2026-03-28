@@ -284,6 +284,8 @@ describe("provider wizard boundaries", () => {
       config,
       workspaceDir: "/tmp/workspace",
       env,
+      bundledProviderAllowlistCompat: true,
+      bundledProviderVitestCompat: true,
     });
   });
 
@@ -431,6 +433,8 @@ describe("provider wizard boundaries", () => {
       config: {},
       workspaceDir: "/tmp/workspace",
       env,
+      bundledProviderAllowlistCompat: true,
+      bundledProviderVitestCompat: true,
     });
     expect(matchingHook).toHaveBeenCalledWith({
       config: {},
