@@ -12,45 +12,15 @@ import {
   resolveAnthropicVertexConfigApiKey,
 } from "../plugin-sdk/anthropic-vertex.js";
 import {
-  normalizeGoogleModelId,
   normalizeGoogleProviderConfig,
   shouldNormalizeGoogleProviderConfig,
 } from "../plugin-sdk/google.js";
-import { buildKilocodeProvider } from "../plugin-sdk/kilocode.js";
-import { buildKimiCodingProvider } from "../plugin-sdk/kimi-coding.js";
-import {
-  MODELSTUDIO_BASE_URL,
-  MODELSTUDIO_DEFAULT_MODEL_ID,
-  applyModelStudioNativeStreamingUsageCompat,
-  buildModelStudioProvider,
-} from "../plugin-sdk/modelstudio.js";
+import { applyModelStudioNativeStreamingUsageCompat } from "../plugin-sdk/modelstudio.js";
 import { applyMoonshotNativeStreamingUsageCompat } from "../plugin-sdk/moonshot.js";
-import { buildNvidiaProvider } from "../plugin-sdk/nvidia.js";
-import { resolveOllamaApiBase } from "../plugin-sdk/ollama-surface.js";
-import {
-  QIANFAN_BASE_URL,
-  QIANFAN_DEFAULT_MODEL_ID,
-  buildQianfanProvider,
-} from "../plugin-sdk/qianfan.js";
-import { normalizeXaiModelId } from "../plugin-sdk/xai.js";
-import { XIAOMI_DEFAULT_MODEL_ID, buildXiaomiProvider } from "../plugin-sdk/xiaomi.js";
 import { isRecord } from "../utils.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles.js";
-export { buildKilocodeProvider } from "../plugin-sdk/kilocode.js";
-export { buildKimiCodingProvider } from "../plugin-sdk/kimi-coding.js";
-export {
-  MODELSTUDIO_BASE_URL,
-  MODELSTUDIO_DEFAULT_MODEL_ID,
-  buildModelStudioProvider,
-} from "../plugin-sdk/modelstudio.js";
-export { buildNvidiaProvider } from "../plugin-sdk/nvidia.js";
-export {
-  QIANFAN_BASE_URL,
-  QIANFAN_DEFAULT_MODEL_ID,
-  buildQianfanProvider,
-} from "../plugin-sdk/qianfan.js";
-export { XIAOMI_DEFAULT_MODEL_ID, buildXiaomiProvider } from "../plugin-sdk/xiaomi.js";
+export * from "./models-config.providers.static.js";
 import {
   groupPluginDiscoveryProvidersByOrder,
   normalizePluginDiscoveryResult,
