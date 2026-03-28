@@ -18,15 +18,16 @@ type HeavyModule = {
 
 const tempDirs: string[] = [];
 
+function writeRuntimeFixtureText(rootDir: string, relativePath: string, value: string) {
+  fs.mkdirSync(path.dirname(path.join(rootDir, relativePath)), { recursive: true });
+  fs.writeFileSync(path.join(rootDir, relativePath), value, "utf8");
+}
+
 function createBundledWhatsAppRuntimeFixture() {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-whatsapp-boundary-"));
   tempDirs.push(rootDir);
-  const distRoot = path.join(rootDir, "dist");
-  const whatsappDistDir = path.join(distRoot, "extensions", "whatsapp");
-  fs.mkdirSync(whatsappDistDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(rootDir, "package.json"),
-    JSON.stringify(
+  for (const [relativePath, value] of Object.entries({
+    "package.json": JSON.stringify(
       {
         name: "openclaw",
         type: "module",
@@ -42,23 +43,13 @@ function createBundledWhatsAppRuntimeFixture() {
       null,
       2,
     ),
-    "utf8",
-  );
-  fs.writeFileSync(path.join(rootDir, "openclaw.mjs"), "export {};\n", "utf8");
-  fs.writeFileSync(path.join(whatsappDistDir, "index.js"), "export default {};\n", "utf8");
-  fs.writeFileSync(
-    path.join(whatsappDistDir, "light-runtime-api.js"),
-    'export { getActiveWebListener } from "../../active-listener.js";\n',
-    "utf8",
-  );
-  fs.writeFileSync(
-    path.join(whatsappDistDir, "runtime-api.js"),
-    'export { getActiveWebListener, setActiveWebListener } from "../../active-listener.js";\n',
-    "utf8",
-  );
-  fs.writeFileSync(
-    path.join(distRoot, "active-listener.js"),
-    [
+    "openclaw.mjs": "export {};\n",
+    "dist/extensions/whatsapp/index.js": "export default {};\n",
+    "dist/extensions/whatsapp/light-runtime-api.js":
+      'export { getActiveWebListener } from "../../active-listener.js";\n',
+    "dist/extensions/whatsapp/runtime-api.js":
+      'export { getActiveWebListener, setActiveWebListener } from "../../active-listener.js";\n',
+    "dist/active-listener.js": [
       'const key = Symbol.for("openclaw.whatsapp.activeListenerState");',
       "const g = globalThis;",
       "if (!g[key]) {",
@@ -77,8 +68,9 @@ function createBundledWhatsAppRuntimeFixture() {
       "}",
       "",
     ].join("\n"),
-    "utf8",
-  );
+  })) {
+    writeRuntimeFixtureText(rootDir, relativePath, value);
+  }
   stageBundledPluginRuntime({ repoRoot: rootDir });
 
   return path.join(rootDir, "dist-runtime", "extensions", "whatsapp");

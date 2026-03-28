@@ -140,6 +140,26 @@ function createBundledPathInstallConfig(params: {
   };
 }
 
+function createCodexAppServerInstallConfig(params: {
+  spec: string;
+  resolvedName?: string;
+  resolvedSpec?: string;
+}) {
+  return {
+    plugins: {
+      installs: {
+        "openclaw-codex-app-server": {
+          source: "npm" as const,
+          spec: params.spec,
+          installPath: "/tmp/openclaw-codex-app-server",
+          ...(params.resolvedName ? { resolvedName: params.resolvedName } : {}),
+          ...(params.resolvedSpec ? { resolvedSpec: params.resolvedSpec } : {}),
+        },
+      },
+    },
+  };
+}
+
 function expectNpmUpdateCall(params: {
   spec: string;
   expectedIntegrity?: string;
@@ -180,6 +200,21 @@ function expectBundledPathInstall(params: {
     sourcePath: params.sourcePath,
     installPath: params.installPath,
     ...(params.spec ? { spec: params.spec } : {}),
+  });
+}
+
+function expectCodexAppServerInstallState(params: {
+  result: Awaited<ReturnType<typeof updateNpmInstalledPlugins>>;
+  spec: string;
+  version: string;
+  resolvedSpec?: string;
+}) {
+  expect(params.result.config.plugins?.installs?.["openclaw-codex-app-server"]).toMatchObject({
+    source: "npm",
+    spec: params.spec,
+    installPath: "/tmp/openclaw-codex-app-server",
+    version: params.version,
+    ...(params.resolvedSpec ? { resolvedSpec: params.resolvedSpec } : {}),
   });
 }
 
@@ -311,92 +346,78 @@ describe("updateNpmInstalledPlugins", () => {
     ]);
   });
 
-  it("reuses a recorded npm dist-tag spec for id-based updates", async () => {
-    installPluginFromNpmSpecMock.mockResolvedValue({
-      ok: true,
-      pluginId: "openclaw-codex-app-server",
-      targetDir: "/tmp/openclaw-codex-app-server",
-      version: "0.2.0-beta.4",
-      extensions: ["index.ts"],
-    });
-
-    const result = await updateNpmInstalledPlugins({
-      config: {
-        plugins: {
-          installs: {
-            "openclaw-codex-app-server": {
-              source: "npm",
-              spec: "openclaw-codex-app-server@beta",
-              installPath: "/tmp/openclaw-codex-app-server",
-              resolvedName: "openclaw-codex-app-server",
-              resolvedSpec: "openclaw-codex-app-server@0.2.0-beta.3",
-            },
-          },
-        },
-      },
-      pluginIds: ["openclaw-codex-app-server"],
-    });
-
-    expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        spec: "openclaw-codex-app-server@beta",
-        expectedPluginId: "openclaw-codex-app-server",
-      }),
-    );
-    expect(result.config.plugins?.installs?.["openclaw-codex-app-server"]).toMatchObject({
-      source: "npm",
-      spec: "openclaw-codex-app-server@beta",
-      installPath: "/tmp/openclaw-codex-app-server",
-      version: "0.2.0-beta.4",
-    });
-  });
-
-  it("uses and persists an explicit npm spec override during updates", async () => {
-    installPluginFromNpmSpecMock.mockResolvedValue({
-      ok: true,
-      pluginId: "openclaw-codex-app-server",
-      targetDir: "/tmp/openclaw-codex-app-server",
-      version: "0.2.0-beta.4",
-      extensions: ["index.ts"],
-      npmResolution: {
-        name: "openclaw-codex-app-server",
+  it.each([
+    {
+      name: "reuses a recorded npm dist-tag spec for id-based updates",
+      installerResult: {
+        ok: true,
+        pluginId: "openclaw-codex-app-server",
+        targetDir: "/tmp/openclaw-codex-app-server",
         version: "0.2.0-beta.4",
-        resolvedSpec: "openclaw-codex-app-server@0.2.0-beta.4",
+        extensions: ["index.ts"],
       },
-    });
-
-    const result = await updateNpmInstalledPlugins({
-      config: {
-        plugins: {
-          installs: {
-            "openclaw-codex-app-server": {
-              source: "npm",
-              spec: "openclaw-codex-app-server",
-              installPath: "/tmp/openclaw-codex-app-server",
-            },
-          },
+      config: createCodexAppServerInstallConfig({
+        spec: "openclaw-codex-app-server@beta",
+        resolvedName: "openclaw-codex-app-server",
+        resolvedSpec: "openclaw-codex-app-server@0.2.0-beta.3",
+      }),
+      expectedSpec: "openclaw-codex-app-server@beta",
+      expectedVersion: "0.2.0-beta.4",
+    },
+    {
+      name: "uses and persists an explicit npm spec override during updates",
+      installerResult: {
+        ok: true,
+        pluginId: "openclaw-codex-app-server",
+        targetDir: "/tmp/openclaw-codex-app-server",
+        version: "0.2.0-beta.4",
+        extensions: ["index.ts"],
+        npmResolution: {
+          name: "openclaw-codex-app-server",
+          version: "0.2.0-beta.4",
+          resolvedSpec: "openclaw-codex-app-server@0.2.0-beta.4",
         },
       },
-      pluginIds: ["openclaw-codex-app-server"],
+      config: createCodexAppServerInstallConfig({
+        spec: "openclaw-codex-app-server",
+      }),
       specOverrides: {
         "openclaw-codex-app-server": "openclaw-codex-app-server@beta",
       },
-    });
+      expectedSpec: "openclaw-codex-app-server@beta",
+      expectedVersion: "0.2.0-beta.4",
+      expectedResolvedSpec: "openclaw-codex-app-server@0.2.0-beta.4",
+    },
+  ] as const)(
+    "$name",
+    async ({
+      installerResult,
+      config,
+      specOverrides,
+      expectedSpec,
+      expectedVersion,
+      expectedResolvedSpec,
+    }) => {
+      installPluginFromNpmSpecMock.mockResolvedValue(installerResult);
 
-    expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        spec: "openclaw-codex-app-server@beta",
+      const result = await updateNpmInstalledPlugins({
+        config,
+        pluginIds: ["openclaw-codex-app-server"],
+        ...(specOverrides ? { specOverrides } : {}),
+      });
+
+      expectNpmUpdateCall({
+        spec: expectedSpec,
         expectedPluginId: "openclaw-codex-app-server",
-      }),
-    );
-    expect(result.config.plugins?.installs?.["openclaw-codex-app-server"]).toMatchObject({
-      source: "npm",
-      spec: "openclaw-codex-app-server@beta",
-      installPath: "/tmp/openclaw-codex-app-server",
-      version: "0.2.0-beta.4",
-      resolvedSpec: "openclaw-codex-app-server@0.2.0-beta.4",
-    });
-  });
+      });
+      expectCodexAppServerInstallState({
+        result,
+        spec: expectedSpec,
+        version: expectedVersion,
+        ...(expectedResolvedSpec ? { resolvedSpec: expectedResolvedSpec } : {}),
+      });
+    },
+  );
 
   it("updates ClawHub-installed plugins via recorded package metadata", async () => {
     installPluginFromClawHubMock.mockResolvedValue({

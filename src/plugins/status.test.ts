@@ -100,6 +100,16 @@ function expectPluginLoaderCall(params: {
   );
 }
 
+function expectAutoEnabledStatusLoad(params: { rawConfig: unknown; autoEnabledConfig: unknown }) {
+  expect(applyPluginAutoEnableMock).toHaveBeenCalledWith({
+    config: params.rawConfig,
+    env: process.env,
+  });
+  expectPluginLoaderCall({
+    config: params.autoEnabledConfig,
+  });
+}
+
 function expectNoCompatibilityWarnings() {
   expect(buildPluginCompatibilityNotices()).toEqual([]);
   expect(buildPluginCompatibilityWarnings()).toEqual([]);
@@ -212,13 +222,10 @@ describe("buildPluginStatusReport", () => {
 
     buildPluginStatusReport({ config: rawConfig });
 
-    expect(applyPluginAutoEnableMock).toHaveBeenCalledWith({
-      config: rawConfig,
-      env: process.env,
+    expectAutoEnabledStatusLoad({
+      rawConfig,
+      autoEnabledConfig,
     });
-    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
-      expect.objectContaining({ config: autoEnabledConfig }),
-    );
   });
 
   it("uses the auto-enabled config snapshot for inspect policy summaries", () => {
@@ -282,17 +289,16 @@ describe("buildPluginStatusReport", () => {
 
     buildPluginStatusReport({ config });
 
+    const pluginIds = ["anthropic", "openai"];
     expect(withBundledPluginAllowlistCompatMock).toHaveBeenCalledWith({
       config,
-      pluginIds: ["anthropic", "openai"],
+      pluginIds,
     });
     expect(withBundledPluginEnablementCompatMock).toHaveBeenCalledWith({
       config: compatConfig,
-      pluginIds: ["anthropic", "openai"],
+      pluginIds,
     });
-    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
-      expect.objectContaining({ config: enabledConfig }),
-    );
+    expectPluginLoaderCall({ config: enabledConfig });
   });
 
   it("normalizes bundled plugin versions to the core base release", () => {

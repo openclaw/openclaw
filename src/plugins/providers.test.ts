@@ -101,8 +101,17 @@ function expectResolvedAllowlistState(params?: {
   });
 }
 
-function expectOwningPluginIds(provider: string, expectedPluginIds?: string[]) {
+function expectOwningPluginIds(provider: string, expectedPluginIds?: readonly string[]) {
   expect(resolveOwningPluginIdsForProvider({ provider })).toEqual(expectedPluginIds);
+}
+
+function expectBundledProviderLoad(params?: { config?: unknown; env?: NodeJS.ProcessEnv }) {
+  expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+    expect.objectContaining({
+      ...(params?.config ? { config: params.config } : {}),
+      ...(params?.env ? { env: params.env } : {}),
+    }),
+  );
 }
 
 describe("resolvePluginProviders", () => {
@@ -271,21 +280,31 @@ describe("resolvePluginProviders", () => {
       config: rawConfig,
       env: process.env,
     });
-    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: autoEnabledConfig,
-      }),
-    );
+    expectBundledProviderLoad({ config: autoEnabledConfig });
   });
 
-  it("maps provider ids to owning plugin ids via manifests", () => {
-    setManifestPlugins([
-      { id: "minimax", providers: ["minimax", "minimax-portal"] },
-      { id: "openai", providers: ["openai", "openai-codex"] },
-    ]);
+  it.each([
+    {
+      provider: "minimax-portal",
+      expectedPluginIds: ["minimax"],
+    },
+    {
+      provider: "openai-codex",
+      expectedPluginIds: ["openai"],
+    },
+    {
+      provider: "gemini-cli",
+      expectedPluginIds: undefined,
+    },
+  ] as const)(
+    "maps $provider to owning plugin ids via manifests",
+    ({ provider, expectedPluginIds }) => {
+      setManifestPlugins([
+        { id: "minimax", providers: ["minimax", "minimax-portal"] },
+        { id: "openai", providers: ["openai", "openai-codex"] },
+      ]);
 
-    expectOwningPluginIds("minimax-portal", ["minimax"]);
-    expectOwningPluginIds("openai-codex", ["openai"]);
-    expectOwningPluginIds("gemini-cli");
-  });
+      expectOwningPluginIds(provider, expectedPluginIds);
+    },
+  );
 });

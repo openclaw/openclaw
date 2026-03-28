@@ -208,6 +208,15 @@ async function createPluginDirFixture(baseDir: string, pluginId = "my-plugin") {
   return pluginDir;
 }
 
+async function expectPathAccessState(pathToCheck: string, expected: "exists" | "missing") {
+  const accessExpectation = fs.access(pathToCheck);
+  if (expected === "exists") {
+    await expect(accessExpectation).resolves.toBeUndefined();
+    return;
+  }
+  await expect(accessExpectation).rejects.toThrow();
+}
+
 describe("resolveUninstallChannelConfigKeys", () => {
   it("falls back to pluginId when channelIds are unknown", () => {
     expect(resolveUninstallChannelConfigKeys("timbot")).toEqual(["timbot"]);
@@ -645,61 +654,67 @@ describe("uninstallPlugin", () => {
     }
   });
 
-  it("preserves directory for linked plugins", async () => {
-    const pluginDir = await createPluginDirFixture(tempDir);
-
-    const config = createPluginConfig({
-      entries: createSinglePluginEntries(),
-      installs: {
-        "my-plugin": createPathInstallRecord(pluginDir),
+  it.each([
+    {
+      name: "preserves directory for linked plugins",
+      setup: async (baseDir: string) => {
+        const pluginDir = await createPluginDirFixture(baseDir);
+        return {
+          config: createPluginConfig({
+            entries: createSinglePluginEntries(),
+            installs: {
+              "my-plugin": createPathInstallRecord(pluginDir),
+            },
+            loadPaths: [pluginDir],
+          }),
+          deleteFiles: true,
+          accessPath: pluginDir,
+          expectedAccess: "exists" as const,
+          expectedActions: {
+            directory: false,
+            loadPath: true,
+          },
+        };
       },
-      loadPaths: [pluginDir],
-    });
-
+    },
+    {
+      name: "does not delete directory when deleteFiles is false",
+      setup: async (baseDir: string) => {
+        const pluginDir = await createPluginDirFixture(baseDir);
+        return {
+          config: createSingleNpmInstallConfig(pluginDir),
+          deleteFiles: false,
+          accessPath: pluginDir,
+          expectedAccess: "exists" as const,
+          expectedActions: {
+            directory: false,
+          },
+        };
+      },
+    },
+    {
+      name: "succeeds even if directory does not exist",
+      setup: async () => ({
+        config: createSingleNpmInstallConfig("/nonexistent/path"),
+        deleteFiles: true,
+        expectedActions: {
+          directory: false,
+          warnings: [],
+        },
+      }),
+    },
+  ] as const)("$name", async ({ setup }) => {
+    const params = await setup(tempDir);
     const result = await uninstallPlugin({
-      config,
+      config: params.config,
       pluginId: "my-plugin",
-      deleteFiles: true,
+      deleteFiles: params.deleteFiles,
     });
 
-    expectSuccessfulUninstallActions(result, {
-      directory: false,
-      loadPath: true,
-    });
-    await expect(fs.access(pluginDir)).resolves.toBeUndefined();
-  });
-
-  it("does not delete directory when deleteFiles is false", async () => {
-    const pluginDir = await createPluginDirFixture(tempDir);
-
-    const config = createSingleNpmInstallConfig(pluginDir);
-
-    const result = await uninstallPlugin({
-      config,
-      pluginId: "my-plugin",
-      deleteFiles: false,
-    });
-
-    expectSuccessfulUninstallActions(result, {
-      directory: false,
-    });
-    await expect(fs.access(pluginDir)).resolves.toBeUndefined();
-  });
-
-  it("succeeds even if directory does not exist", async () => {
-    const config = createSingleNpmInstallConfig("/nonexistent/path");
-
-    const result = await uninstallPlugin({
-      config,
-      pluginId: "my-plugin",
-      deleteFiles: true,
-    });
-
-    // Should succeed; directory deletion failure is not fatal.
-    expectSuccessfulUninstallActions(result, {
-      directory: false,
-      warnings: [],
-    });
+    expectSuccessfulUninstallActions(result, params.expectedActions);
+    if ("accessPath" in params && "expectedAccess" in params) {
+      await expectPathAccessState(params.accessPath, params.expectedAccess);
+    }
   });
 
   it("returns a warning when directory deletion fails unexpectedly", async () => {

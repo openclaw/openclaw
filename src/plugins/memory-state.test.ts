@@ -41,6 +41,14 @@ function expectClearedMemoryState() {
   expect(getMemoryRuntime()).toBeUndefined();
 }
 
+function createMemoryStateSnapshot() {
+  return {
+    promptBuilder: getMemoryPromptSectionBuilder(),
+    flushPlanResolver: getMemoryFlushPlanResolver(),
+    runtime: getMemoryRuntime(),
+  };
+}
+
 describe("memory plugin state", () => {
   afterEach(() => {
     clearMemoryPluginState();
@@ -110,11 +118,7 @@ describe("memory plugin state", () => {
     registerMemoryFlushPlanResolver(() => createMemoryFlushPlan("memory/first.md"));
     const runtime = createMemoryRuntime();
     registerMemoryRuntime(runtime);
-    const snapshot = {
-      promptBuilder: getMemoryPromptSectionBuilder(),
-      flushPlanResolver: getMemoryFlushPlanResolver(),
-      runtime: getMemoryRuntime(),
-    };
+    const snapshot = createMemoryStateSnapshot();
 
     _resetMemoryPluginState();
     expectClearedMemoryState();
