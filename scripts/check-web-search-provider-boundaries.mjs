@@ -53,6 +53,7 @@ const providerIds = new Set([
 const allowedGenericFiles = new Set([
   "src/agents/tools/web-search.ts",
   "src/commands/onboard-search.ts",
+  "src/plugins/bundled-web-search-registry.ts",
   "src/secrets/runtime-web-tools.ts",
   "src/web-search/runtime.ts",
 ]);
