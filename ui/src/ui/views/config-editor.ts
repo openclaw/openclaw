@@ -1,4 +1,7 @@
-import { EditorState, type Extension } from "@codemirror/state";
+import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
+import { json } from "@codemirror/lang-json";
+import { linter, lintGutter, type Diagnostic } from "@codemirror/lint";
+import { EditorState, type Extension, Compartment } from "@codemirror/state";
 import {
   EditorView,
   keymap,
@@ -7,11 +10,8 @@ import {
   drawSelection,
   highlightSpecialChars,
 } from "@codemirror/view";
-import { json } from "@codemirror/lang-json";
-import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
-import { linter, lintGutter, type Diagnostic } from "@codemirror/lint";
 import { css, html, LitElement } from "lit";
-import { customElement, property, query, state } from "lit/decorators.js";
+import { customElement, property, query } from "lit/decorators.js";
 
 /**
  * A JSON editor web component backed by CodeMirror 6.
@@ -31,9 +31,8 @@ export class ConfigEditor extends LitElement {
 
   @query("#editor-mount") editorContainer!: HTMLDivElement;
 
-  @state() private editorReady = false;
-
   private view?: EditorView;
+  private readonlyCompartment = new Compartment();
 
   // ---------------------------------------------------------------------------
   // Styles
@@ -141,10 +140,6 @@ export class ConfigEditor extends LitElement {
   // ---------------------------------------------------------------------------
   // Lifecycle
   // ---------------------------------------------------------------------------
-  override connectedCallback(): void {
-    super.connectedCallback();
-  }
-
   override disconnectedCallback(): void {
     super.disconnectedCallback();
     this.view?.destroy();
@@ -165,7 +160,7 @@ export class ConfigEditor extends LitElement {
     }
     if (changed.has("readonly") && this.view) {
       this.view.dispatch({
-        effects: EditorState.readonly.reconfigure(this.readonly),
+        effects: this.readonlyCompartment.reconfigure(EditorState.readOnly.of(this.readonly)),
       });
     }
   }
@@ -179,7 +174,6 @@ export class ConfigEditor extends LitElement {
       state: EditorState.create({ doc: this.value ?? "", extensions }),
       parent: this.editorContainer,
     });
-    this.editorReady = true;
   }
 
   private buildExtensions(): Extension {
@@ -195,9 +189,6 @@ export class ConfigEditor extends LitElement {
       // Selection
       drawSelection(),
 
-      // Tab indentation
-      indentWithTab,
-
       // JSON language mode
       json(),
 
@@ -209,7 +200,9 @@ export class ConfigEditor extends LitElement {
         const diagnostics: Diagnostic[] = [];
         const docText = view.state.doc.toString().trim();
 
-        if (!docText) return diagnostics;
+        if (!docText) {
+          return diagnostics;
+        }
 
         try {
           JSON.parse(docText);
@@ -230,8 +223,8 @@ export class ConfigEditor extends LitElement {
         return diagnostics;
       }),
 
-      // Keymaps
-      keymap.of([...defaultKeymap, ...historyKeymap]),
+      // Keymaps (includes indentWithTab for Tab-key indentation)
+      keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
 
       // Dispatch on change
       EditorView.updateListener.of((update) => {
@@ -247,8 +240,8 @@ export class ConfigEditor extends LitElement {
         }
       }),
 
-      // Readonly
-      EditorState.readonly.of(this.readonly),
+      // Readonly (via compartment so it can be reconfigured live)
+      this.readonlyCompartment.of(EditorState.readOnly.of(this.readonly)),
     ];
 
     return base;
@@ -258,11 +251,16 @@ export class ConfigEditor extends LitElement {
   // Public methods
   // ---------------------------------------------------------------------------
   /** Format the JSON content with proper indentation */
-  format(): void {
-    if (!this.view) return;
+  // eslint-disable-next-line @typescript-eslint/no-invalid-void-type
+  format = (): void => {
+    if (!this.view) {
+      return;
+    }
     const rawDoc = this.view.state.doc.toString();
     const doc = rawDoc.trim();
-    if (!doc) return;
+    if (!doc) {
+      return;
+    }
 
     try {
       const parsed = JSON.parse(doc);
@@ -273,7 +271,7 @@ export class ConfigEditor extends LitElement {
     } catch {
       // Not valid JSON, ignore format
     }
-  }
+  };
 
   // ---------------------------------------------------------------------------
   // Render
@@ -290,9 +288,7 @@ export class ConfigEditor extends LitElement {
           Format
         </button>
       </div>
-      <div
-        class="cm-editor-wrap ${this.readonly ? "cm-editor-wrap--readonly" : ""}"
-      >
+      <div class="cm-editor-wrap ${this.readonly ? "cm-editor-wrap--readonly" : ""}">
         <div id="editor-mount"></div>
       </div>
     `;
