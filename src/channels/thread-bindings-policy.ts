@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { normalizeAccountId } from "../routing/session-key.js";
+import { getChannelPlugin } from "./plugins/registry.js";
 
 export const DISCORD_THREAD_BINDING_CHANNEL = "discord";
 export const MATRIX_THREAD_BINDING_CHANNEL = "matrix";
@@ -36,6 +37,19 @@ function normalizeChannelId(value: string | undefined | null): string {
 
 export function supportsAutomaticThreadBindingSpawn(channel: string): boolean {
   const normalized = normalizeChannelId(channel);
+  // Check plugin metadata first: channels with native "thread" chat type support
+  // automatic thread binding spawn (Discord, Matrix style).
+  const plugin = getChannelPlugin(normalized);
+  if (plugin?.capabilities?.chatTypes?.includes("thread")) {
+    // Telegram uses topics (embedded threading) rather than native threads,
+    // so it does not support automatic thread binding spawn despite having "thread" in chatTypes.
+    // Feishu does not declare "thread" in chatTypes.
+    if (normalized === "telegram" || normalized === "feishu") {
+      return false;
+    }
+    return true;
+  }
+  // Fallback to legacy hardcoded list for channels without plugin metadata.
   return (
     normalized === DISCORD_THREAD_BINDING_CHANNEL || normalized === MATRIX_THREAD_BINDING_CHANNEL
   );
@@ -43,6 +57,18 @@ export function supportsAutomaticThreadBindingSpawn(channel: string): boolean {
 
 export function requiresNativeThreadContextForThreadHere(channel: string): boolean {
   const normalized = normalizeChannelId(channel);
+  // Check plugin metadata: channels with native "thread" chat type require native thread context.
+  // Telegram and Feishu use embedded threading (topics) within the current conversation.
+  const plugin = getChannelPlugin(normalized);
+  if (plugin?.capabilities?.chatTypes?.includes("thread")) {
+    // Telegram uses topics (embedded threading) rather than native threads.
+    // Feishu does not declare "thread" in chatTypes but supports threads via topics.
+    if (normalized === "telegram" || normalized === "feishu") {
+      return false;
+    }
+    return true;
+  }
+  // Fallback to legacy hardcoded list for channels without plugin metadata.
   return normalized !== "telegram" && normalized !== "feishu";
 }
 
