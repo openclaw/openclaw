@@ -88,6 +88,7 @@ function runPlannerPlan(args: string[], envOverrides: NodeJS.ProcessEnv = {}): s
     cwd: REPO_ROOT,
     env: createPlannerEnv(envOverrides),
     encoding: "utf8",
+    stdio: ["pipe", "pipe", "pipe"],
   });
 }
 
