@@ -21,7 +21,16 @@ function normalizeInlineButtonsScope(value: unknown): TelegramInlineButtonsScope
   return undefined;
 }
 
-function resolveInlineButtonsScopeFromCapabilities(
+export function resolveTelegramInlineButtonsConfigScope(
+  capabilities: unknown,
+): TelegramInlineButtonsScope | undefined {
+  if (!capabilities || Array.isArray(capabilities) || typeof capabilities !== "object") {
+    return undefined;
+  }
+  return normalizeInlineButtonsScope((capabilities as { inlineButtons?: unknown }).inlineButtons);
+}
+
+export function resolveTelegramInlineButtonsScopeFromCapabilities(
   capabilities: unknown,
 ): TelegramInlineButtonsScope {
   if (!capabilities) {
@@ -34,8 +43,7 @@ function resolveInlineButtonsScopeFromCapabilities(
     return enabled ? "all" : "off";
   }
   if (typeof capabilities === "object") {
-    const inlineButtons = (capabilities as { inlineButtons?: unknown }).inlineButtons;
-    return normalizeInlineButtonsScope(inlineButtons) ?? DEFAULT_INLINE_BUTTONS_SCOPE;
+    return resolveTelegramInlineButtonsConfigScope(capabilities) ?? DEFAULT_INLINE_BUTTONS_SCOPE;
   }
   return DEFAULT_INLINE_BUTTONS_SCOPE;
 }
@@ -45,7 +53,7 @@ export function resolveTelegramInlineButtonsScope(params: {
   accountId?: string | null;
 }): TelegramInlineButtonsScope {
   const account = resolveTelegramAccount({ cfg: params.cfg, accountId: params.accountId });
-  return resolveInlineButtonsScopeFromCapabilities(account.config.capabilities);
+  return resolveTelegramInlineButtonsScopeFromCapabilities(account.config.capabilities);
 }
 
 export function isTelegramInlineButtonsEnabled(params: {
