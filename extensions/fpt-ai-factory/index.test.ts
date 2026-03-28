@@ -3,6 +3,7 @@ import { resolveProviderPluginChoice } from "../../src/plugins/provider-wizard.j
 import { registerSingleProviderPlugin } from "../../test/helpers/extensions/plugin-registration.js";
 import fptAiFactoryPlugin from "./index.js";
 import { applyFptAiFactoryConfig, FPT_AI_FACTORY_DEFAULT_MODEL_REF } from "./onboard.js";
+import { buildFptAiFactoryProvider } from "./provider-catalog.js";
 
 describe("fpt-ai-factory provider plugin", () => {
   afterEach(() => {
@@ -116,6 +117,54 @@ describe("fpt-ai-factory provider plugin", () => {
     expect(
       catalog.provider.models?.find((model) => model.id === "Qwen3-VL-8B-Instruct")?.input,
     ).toEqual(["text", "image"]);
+    expect(catalog.provider.models?.find((model) => model.id === "Qwen3-32B")?.cost).toEqual({
+      input: 0.17,
+      output: 0.19,
+      cacheRead: 0,
+      cacheWrite: 0,
+    });
+  });
+
+  it("keeps fallback reasoning metadata when discovery would downgrade SaoLa models", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            data: [
+              {
+                id: "SaoLa4-medium",
+                name: "SaoLa4-medium",
+                context_length: 128000,
+                pricing: { prompt: "0.00000017", completion: "0.00000019" },
+                architecture: {
+                  modality: "text->text",
+                  input_modalities: ["text"],
+                  output_modalities: ["text"],
+                },
+                top_provider: { context_length: 128000, max_completion_tokens: 8192 },
+              },
+            ],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+
+    const provider = await buildFptAiFactoryProvider("test-key");
+
+    expect(provider.models?.find((model) => model.id === "SaoLa4-medium")?.reasoning).toBe(true);
+  });
+
+  it("uses per-million-token fallback pricing when discovery is skipped", async () => {
+    const provider = await buildFptAiFactoryProvider();
+
+    expect(provider.models?.find((model) => model.id === "Qwen3-32B")?.cost).toEqual({
+      input: 0.17,
+      output: 0.19,
+      cacheRead: 0,
+      cacheWrite: 0,
+    });
   });
 
   it("applies provider config and default primary model", () => {

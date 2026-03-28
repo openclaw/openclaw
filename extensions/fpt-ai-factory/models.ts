@@ -6,12 +6,6 @@ export const FPT_AI_FACTORY_DEFAULT_MODEL_REF = `fpt-ai-factory/${FPT_AI_FACTORY
 
 const FPT_AI_FACTORY_DEFAULT_CONTEXT_WINDOW = 128000;
 const FPT_AI_FACTORY_DEFAULT_MAX_TOKENS = 8192;
-const FPT_AI_FACTORY_DEFAULT_COST = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-};
 
 type FptAiFactoryPricing = {
   completion?: string;
@@ -59,7 +53,7 @@ export const FPT_AI_FACTORY_FALLBACK_MODEL_CATALOG: ModelDefinitionConfig[] = [
     input: ["text"],
     contextWindow: 128000,
     maxTokens: 33000,
-    cost: { input: 0.00000017, output: 0.00000019, cacheRead: 0, cacheWrite: 0 },
+    cost: { input: 0.17, output: 0.19, cacheRead: 0, cacheWrite: 0 },
   },
   {
     id: "GLM-4.7",
@@ -68,7 +62,7 @@ export const FPT_AI_FACTORY_FALLBACK_MODEL_CATALOG: ModelDefinitionConfig[] = [
     input: ["text"],
     contextWindow: 128000,
     maxTokens: 8000,
-    cost: { input: 0.0000005, output: 0.0000022, cacheRead: 0, cacheWrite: 0 },
+    cost: { input: 0.5, output: 2.2, cacheRead: 0, cacheWrite: 0 },
   },
   {
     id: "Kimi-K2.5",
@@ -77,7 +71,7 @@ export const FPT_AI_FACTORY_FALLBACK_MODEL_CATALOG: ModelDefinitionConfig[] = [
     input: ["text", "image"],
     contextWindow: 256000,
     maxTokens: 16000,
-    cost: { input: 0.0000005, output: 0.00000275, cacheRead: 0, cacheWrite: 0 },
+    cost: { input: 0.5, output: 2.75, cacheRead: 0, cacheWrite: 0 },
   },
   {
     id: "Qwen3-VL-8B-Instruct",
@@ -86,7 +80,7 @@ export const FPT_AI_FACTORY_FALLBACK_MODEL_CATALOG: ModelDefinitionConfig[] = [
     input: ["text", "image"],
     contextWindow: 256000,
     maxTokens: 32000,
-    cost: { input: 0.0000002, output: 0.00000076, cacheRead: 0, cacheWrite: 0 },
+    cost: { input: 0.2, output: 0.76, cacheRead: 0, cacheWrite: 0 },
   },
   {
     id: "gpt-oss-120b",
@@ -95,7 +89,7 @@ export const FPT_AI_FACTORY_FALLBACK_MODEL_CATALOG: ModelDefinitionConfig[] = [
     input: ["text"],
     contextWindow: 128000,
     maxTokens: 128000,
-    cost: { input: 0.00000014, output: 0.00000061, cacheRead: 0, cacheWrite: 0 },
+    cost: { input: 0.14, output: 0.61, cacheRead: 0, cacheWrite: 0 },
   },
   {
     id: "SaoLa4-medium",
@@ -104,7 +98,7 @@ export const FPT_AI_FACTORY_FALLBACK_MODEL_CATALOG: ModelDefinitionConfig[] = [
     input: ["text"],
     contextWindow: FPT_AI_FACTORY_DEFAULT_CONTEXT_WINDOW,
     maxTokens: FPT_AI_FACTORY_DEFAULT_MAX_TOKENS,
-    cost: { input: 0.00000017, output: 0.00000019, cacheRead: 0, cacheWrite: 0 },
+    cost: { input: 0.17, output: 0.19, cacheRead: 0, cacheWrite: 0 },
   },
   {
     id: "SaoLa4-small",
@@ -113,7 +107,7 @@ export const FPT_AI_FACTORY_FALLBACK_MODEL_CATALOG: ModelDefinitionConfig[] = [
     input: ["text"],
     contextWindow: FPT_AI_FACTORY_DEFAULT_CONTEXT_WINDOW,
     maxTokens: FPT_AI_FACTORY_DEFAULT_MAX_TOKENS,
-    cost: { input: 0.00000013, output: 0.00000015, cacheRead: 0, cacheWrite: 0 },
+    cost: { input: 0.13, output: 0.15, cacheRead: 0, cacheWrite: 0 },
   },
 ];
 
@@ -143,7 +137,10 @@ function parseCost(value: string | undefined): number {
     return 0;
   }
   const parsed = Number(trimmed);
-  return Number.isFinite(parsed) ? parsed : 0;
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return 0;
+  }
+  return Number((parsed * 1_000_000).toFixed(12));
 }
 
 function normalizeName(entry: FptAiFactoryModelEntry): string {
@@ -288,6 +285,7 @@ function mergeCatalogs(discovered: ModelDefinitionConfig[]): ModelDefinitionConf
     byId.set(model.id, {
       ...(previous ?? {}),
       ...model,
+      reasoning: model.reasoning || previous?.reasoning || false,
       cost: model.cost,
       input: model.input,
     });

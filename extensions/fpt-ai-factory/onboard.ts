@@ -22,10 +22,6 @@ const fptAiFactoryPresetAppliers = createModelCatalogPresetAppliers({
 
 export { FPT_AI_FACTORY_DEFAULT_MODEL_REF };
 
-export function applyFptAiFactoryProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return fptAiFactoryPresetAppliers.applyProviderConfig(cfg);
-}
-
 export function applyFptAiFactoryConfig(cfg: OpenClawConfig): OpenClawConfig {
   return fptAiFactoryPresetAppliers.applyConfig(cfg);
 }
