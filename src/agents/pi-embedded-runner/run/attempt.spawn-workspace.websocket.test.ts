@@ -11,16 +11,16 @@ describe("openai websocket transport selection", () => {
     ).toBe(true);
   });
 
-  it("accepts the Codex responses transport pair", () => {
+  it("rejects the Codex responses transport pair (chatgpt.com has no WS endpoint)", () => {
     expect(
       shouldUseOpenAIWebSocketTransport({
         provider: "openai-codex",
         modelApi: "openai-codex-responses",
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
 
-  it("rejects mismatched OpenAI websocket transport pairs", () => {
+  it("rejects mismatched or non-OpenAI transport pairs", () => {
     expect(
       shouldUseOpenAIWebSocketTransport({
         provider: "openai",

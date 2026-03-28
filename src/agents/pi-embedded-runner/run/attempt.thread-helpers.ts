@@ -35,10 +35,10 @@ export function shouldUseOpenAIWebSocketTransport(params: {
   provider: string;
   modelApi?: string | null;
 }): boolean {
-  return (
-    (params.modelApi === "openai-responses" && params.provider === "openai") ||
-    (params.modelApi === "openai-codex-responses" && params.provider === "openai-codex")
-  );
+  // Only use the WebSocket transport for vanilla OpenAI (api.openai.com).
+  // Codex (openai-codex) uses chatgpt.com/backend-api which does not expose
+  // a compatible WebSocket endpoint, so it must stay on the HTTP path.
+  return params.modelApi === "openai-responses" && params.provider === "openai";
 }
 
 export function shouldAppendAttemptCacheTtl(params: {
