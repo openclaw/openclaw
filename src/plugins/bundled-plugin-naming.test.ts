@@ -53,32 +53,35 @@ function normalizeText(value: unknown): string | undefined {
 }
 
 function readBundledPluginRecords(): BundledPluginRecord[] {
-  const records: BundledPluginRecord[] = [];
-  for (const dirName of fs.readdirSync(EXTENSIONS_ROOT).toSorted()) {
-    const rootDir = path.join(EXTENSIONS_ROOT, dirName);
-    const packagePath = path.join(rootDir, "package.json");
-    const manifestPath = path.join(rootDir, "openclaw.plugin.json");
-    if (!fs.existsSync(packagePath) || !fs.existsSync(manifestPath)) {
-      continue;
-    }
+  return fs
+    .readdirSync(EXTENSIONS_ROOT)
+    .toSorted()
+    .flatMap((dirName) => {
+      const rootDir = path.join(EXTENSIONS_ROOT, dirName);
+      const packagePath = path.join(rootDir, "package.json");
+      const manifestPath = path.join(rootDir, "openclaw.plugin.json");
+      if (!fs.existsSync(packagePath) || !fs.existsSync(manifestPath)) {
+        return [];
+      }
 
-    const manifest = readJsonFile<PluginManifestShape>(manifestPath);
-    const pkg = readJsonFile<OpenClawPackageShape>(packagePath);
-    const manifestId = normalizeText(manifest.id);
-    const packageName = normalizeText(pkg.name);
-    if (!manifestId || !packageName) {
-      continue;
-    }
+      const manifest = readJsonFile<PluginManifestShape>(manifestPath);
+      const pkg = readJsonFile<OpenClawPackageShape>(packagePath);
+      const manifestId = normalizeText(manifest.id);
+      const packageName = normalizeText(pkg.name);
+      if (!manifestId || !packageName) {
+        return [];
+      }
 
-    records.push({
-      dirName,
-      packageName,
-      manifestId,
-      installNpmSpec: normalizeText(pkg.openclaw?.install?.npmSpec),
-      channelId: normalizeText(pkg.openclaw?.channel?.id),
+      return [
+        {
+          dirName,
+          packageName,
+          manifestId,
+          installNpmSpec: normalizeText(pkg.openclaw?.install?.npmSpec),
+          channelId: normalizeText(pkg.openclaw?.channel?.id),
+        },
+      ];
     });
-  }
-  return records;
 }
 
 function resolveAllowedPackageNamesForId(pluginId: string): string[] {

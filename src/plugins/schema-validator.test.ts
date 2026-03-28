@@ -21,6 +21,16 @@ function expectValidationIssue(
   return issue;
 }
 
+function expectIssueMessageIncludes(
+  issue: ReturnType<typeof expectValidationIssue>,
+  fragments: readonly string[],
+) {
+  expect(issue?.message).toEqual(expect.stringContaining(fragments[0] ?? ""));
+  fragments.slice(1).forEach((fragment) => {
+    expect(issue?.message).toContain(fragment);
+  });
+}
+
 describe("schema validator", () => {
   it("can apply JSON Schema defaults while validating", () => {
     const res = validateJsonSchemaValue({
@@ -145,9 +155,7 @@ describe("schema validator", () => {
     const result = expectValidationFailure(params);
     const issue = expectValidationIssue(result, path);
 
-    for (const fragment of messageIncludes) {
-      expect(issue?.message).toContain(fragment);
-    }
+    expectIssueMessageIncludes(issue, messageIncludes);
     if (allowedValues) {
       expect(issue?.allowedValues).toEqual(allowedValues);
       expect(issue?.allowedValuesHiddenCount).toBe(hiddenCount);

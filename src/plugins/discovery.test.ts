@@ -146,12 +146,12 @@ function expectCandidateIds(
   params: { includes?: readonly string[]; excludes?: readonly string[] },
 ) {
   const ids = candidates.map((candidate) => candidate.idHint);
-  for (const includedId of params.includes ?? []) {
-    expect(ids).toContain(includedId);
+  if (params.includes?.length) {
+    expect(ids).toEqual(expect.arrayContaining([...params.includes]));
   }
-  for (const excludedId of params.excludes ?? []) {
+  params.excludes?.forEach((excludedId) => {
     expect(ids).not.toContain(excludedId);
-  }
+  });
 }
 
 function findCandidateById<T extends { idHint?: string }>(candidates: T[], idHint: string) {

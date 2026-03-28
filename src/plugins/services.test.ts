@@ -19,14 +19,12 @@ import { startPluginServices } from "./services.js";
 
 function createRegistry(services: OpenClawPluginService[]) {
   const registry = createEmptyPluginRegistry();
-  for (const service of services) {
-    registry.services.push({
-      pluginId: "plugin:test",
-      service,
-      source: "test",
-      rootDir: "/plugins/test-plugin",
-    });
-  }
+  registry.services = services.map((service) => ({
+    pluginId: "plugin:test",
+    service,
+    source: "test",
+    rootDir: "/plugins/test-plugin",
+  })) as typeof registry.services;
   return registry;
 }
 
@@ -52,9 +50,9 @@ function expectServiceContexts(
   config: Parameters<typeof startPluginServices>[0]["config"],
 ) {
   expect(contexts).not.toHaveLength(0);
-  for (const ctx of contexts) {
+  contexts.forEach((ctx) => {
     expectServiceContext(ctx, config);
-  }
+  });
 }
 
 function createTrackingService(

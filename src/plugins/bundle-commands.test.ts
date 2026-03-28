@@ -41,14 +41,18 @@ async function writeClaudeBundleCommandFixture(params: {
     `${JSON.stringify({ name: params.pluginId }, null, 2)}\n`,
     "utf-8",
   );
-  for (const command of params.commands) {
-    await fs.mkdir(path.dirname(path.join(pluginRoot, command.relativePath)), { recursive: true });
-    await fs.writeFile(
-      path.join(pluginRoot, command.relativePath),
-      [...command.contents, ""].join("\n"),
-      "utf-8",
-    );
-  }
+  await Promise.all(
+    params.commands.map(async (command) => {
+      await fs.mkdir(path.dirname(path.join(pluginRoot, command.relativePath)), {
+        recursive: true,
+      });
+      await fs.writeFile(
+        path.join(pluginRoot, command.relativePath),
+        [...command.contents, ""].join("\n"),
+        "utf-8",
+      );
+    }),
+  );
 }
 
 describe("loadEnabledClaudeBundleCommands", () => {

@@ -26,6 +26,14 @@ function createChannelRegistryPair(pluginId = "demo-channel") {
   };
 }
 
+function createRegistrySet() {
+  return {
+    startup: createEmptyPluginRegistry(),
+    replacement: createEmptyPluginRegistry(),
+    unrelated: createEmptyPluginRegistry(),
+  };
+}
+
 describe("channel registry pinning", () => {
   afterEach(() => {
     resetPluginRuntimeStateForTest();
@@ -95,10 +103,8 @@ describe("channel registry pinning", () => {
       expectAfterSwap: "first",
     },
   ] as const)("$name", ({ pin, releasePinnedRegistry, expectDuringPin, expectAfterSwap }) => {
-    const startup = createEmptyPluginRegistry();
+    const { startup, replacement, unrelated } = createRegistrySet();
     setActivePluginRegistry(startup);
-    const unrelated = createEmptyPluginRegistry();
-    const replacement = createEmptyPluginRegistry();
     if (pin) {
       pinActivePluginChannelRegistry(startup);
     }
@@ -123,13 +129,12 @@ describe("channel registry pinning", () => {
   });
 
   it("resetPluginRuntimeStateForTest clears channel pin", () => {
-    const startup = createEmptyPluginRegistry();
+    const { startup, replacement: fresh } = createRegistrySet();
     setActivePluginRegistry(startup);
     pinActivePluginChannelRegistry(startup);
 
     resetPluginRuntimeStateForTest();
 
-    const fresh = createEmptyPluginRegistry();
     setActivePluginRegistry(fresh);
     expect(getActivePluginChannelRegistry()).toBe(fresh);
   });
