@@ -7,7 +7,6 @@ import {
   BUNDLED_WEB_SEARCH_PLUGIN_IDS,
 } from "../bundled-capability-metadata.js";
 import { loadBundledCapabilityRuntimeRegistry } from "../bundled-capability-runtime.js";
-import { resolvePluginProviders } from "../providers.runtime.js";
 import type {
   ImageGenerationProviderPlugin,
   MediaUnderstandingProviderPlugin,
@@ -84,48 +83,31 @@ let mediaUnderstandingProviderContractRegistryCache:
 let imageGenerationProviderContractRegistryCache: ImageGenerationProviderContractEntry[] | null =
   null;
 const providerContractPluginIdsByProviderId = createProviderContractPluginIdsByProviderId();
-const providerContractEntriesByPluginId = new Map<string, ProviderContractEntry[]>();
 
 export let providerContractLoadError: Error | undefined;
-
-function loadProviderContractEntriesForPluginId(pluginId: string): ProviderContractEntry[] {
-  const cached = providerContractEntriesByPluginId.get(pluginId);
-  if (cached) {
-    return cached;
-  }
-  try {
-    providerContractLoadError = undefined;
-    const entries = resolvePluginProviders({
-      bundledProviderAllowlistCompat: true,
-      bundledProviderVitestCompat: true,
-      onlyPluginIds: [pluginId],
-      pluginSdkResolution: "dist",
-      cache: false,
-      activate: false,
-    }).map((provider) => ({
-      pluginId: provider.pluginId ?? pluginId,
-      provider,
-    }));
-    providerContractEntriesByPluginId.set(pluginId, entries);
-    return entries;
-  } catch (error) {
-    providerContractLoadError = error instanceof Error ? error : new Error(String(error));
-    providerContractEntriesByPluginId.set(pluginId, []);
-    return [];
-  }
-}
 
 function loadProviderContractEntriesForPluginIds(
   pluginIds: readonly string[],
 ): ProviderContractEntry[] {
-  return pluginIds.flatMap((pluginId) => loadProviderContractEntriesForPluginId(pluginId));
+  const allowed = new Set(pluginIds);
+  return loadProviderContractRegistry().filter((entry) => allowed.has(entry.pluginId));
 }
 
 function loadProviderContractRegistry(): ProviderContractEntry[] {
   if (!providerContractRegistryCache) {
-    providerContractRegistryCache = loadProviderContractEntriesForPluginIds(
-      BUNDLED_PROVIDER_PLUGIN_IDS,
-    );
+    try {
+      providerContractLoadError = undefined;
+      providerContractRegistryCache = loadBundledCapabilityRuntimeRegistry({
+        pluginIds: BUNDLED_PROVIDER_PLUGIN_IDS,
+        pluginSdkResolution: "dist",
+      }).providers.map((entry) => ({
+        pluginId: entry.pluginId,
+        provider: entry.provider,
+      }));
+    } catch (error) {
+      providerContractLoadError = error instanceof Error ? error : new Error(String(error));
+      providerContractRegistryCache = [];
+    }
   }
   return providerContractRegistryCache;
 }
