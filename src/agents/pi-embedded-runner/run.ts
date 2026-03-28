@@ -6,7 +6,7 @@ import {
   resolveContextEngine,
 } from "../../context-engine/index.js";
 import { emitAgentPlanEvent } from "../../infra/agent-events.js";
-import { sleepWithAbort } from "../../infra/backoff.js";
+import { computeBackoff, sleepWithAbort, type BackoffPolicy } from "../../infra/backoff.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
@@ -75,7 +75,6 @@ import {
   createCompactionDiagId,
   resolveActiveErrorContext,
   resolveMaxRunRetryIterations,
-  resolveOverloadFailoverBackoffMs,
   resolveOverloadProfileRotationLimit,
   resolveRateLimitProfileRotationLimit,
   type RuntimeAuthState,
@@ -319,7 +318,18 @@ export async function runEmbeddedPiAgent(
       });
       let rateLimitProfileRotations = 0;
       let timeoutCompactionAttempts = 0;
-      const overloadFailoverBackoffMs = resolveOverloadFailoverBackoffMs(params.config);
+      // Read config override if available — default 30s ceiling.
+      // A higher ceiling preserves the retry budget under sustained overload;
+      // operators with many auth profiles can lower this for faster rotation.
+      const overloadBackoffMaxMs =
+        params.config?.agents?.defaults?.embeddedPi?.overloadBackoffMaxMs ?? 30_000;
+      const OVERLOAD_FAILOVER_BACKOFF_POLICY: BackoffPolicy = {
+        initialMs: 250,
+        maxMs: overloadBackoffMaxMs,
+        factor: 2,
+        jitter: 0.2,
+      };
+      let overloadFailoverAttempts = 0;
       const overloadProfileRotationLimit = resolveOverloadProfileRotationLimit(params.config);
       const rateLimitProfileRotationLimit = resolveRateLimitProfileRotationLimit(params.config);
       const maybeEscalateRateLimitProfileFallback = (params: {
@@ -379,14 +389,16 @@ export async function runEmbeddedPiAgent(
         return failoverReason;
       };
       const maybeBackoffBeforeOverloadFailover = async (reason: FailoverReason | null) => {
-        if (reason !== "overloaded" || overloadFailoverBackoffMs <= 0) {
+        if (reason !== "overloaded") {
           return;
         }
+        overloadFailoverAttempts += 1;
+        const delayMs = computeBackoff(OVERLOAD_FAILOVER_BACKOFF_POLICY, overloadFailoverAttempts);
         log.warn(
-          `overload backoff before failover for ${provider}/${modelId}: delayMs=${overloadFailoverBackoffMs}`,
+          `overload backoff before failover for ${provider}/${modelId}: attempt=${overloadFailoverAttempts} delayMs=${delayMs}`,
         );
         try {
-          await sleepWithAbort(overloadFailoverBackoffMs, params.abortSignal);
+          await sleepWithAbort(delayMs, params.abortSignal);
         } catch (err) {
           if (params.abortSignal?.aborted) {
             const abortErr = new Error("Operation aborted", { cause: err });
