@@ -35,9 +35,9 @@ status: <verified|registered|unregistered|new_session>
 ### Status Transitions
 
 ```
-unregistered → /register → registered (channel-only)
-unregistered → /verify   → verified   (token-linked)
-registered   → /verify   → verified   (upgraded)
+unregistered → !register → registered (channel-only)
+unregistered → !verify   → verified   (token-linked)
+registered   → !verify   → verified   (upgraded)
 ```
 
 ## How to Consume Identity in Your Plugin
@@ -160,8 +160,8 @@ ORDER BY m.created_at DESC;
 
 | Command                    | Description                                       | Auth Required |
 | -------------------------- | ------------------------------------------------- | ------------- |
-| `/verify <token>`          | Validate JWT/token, link channel to verified user | No            |
-| `/register <first> <last>` | Create channel-only identity (no token)           | No            |
+| `!verify <token>`          | Validate JWT/token, link channel to verified user | No            |
+| `!register <first> <last>` | Create channel-only identity (no token)           | No            |
 | `/whoami`                  | Show current identity and linked channels         | No            |
 
 ## Configuration
@@ -173,7 +173,7 @@ plugins:
     auth:
       mode: "jwt-hs256" # or "verify-endpoint"
       jwtSecret: "your-secret" # for jwt-hs256
-      # verifyEndpoint: "https://myapp.com/api/verify"  # for verify-endpoint
+      # verifyEndpoint: "https://myapp.com/api!verify"  # for verify-endpoint
       issuer: "https://myapp.com" # optional JWT claim checks
       audience: "openclaw-agent" # optional JWT claim checks
 ```

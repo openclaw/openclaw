@@ -165,7 +165,7 @@ export function formatGatedMessage(config: ScopeConfig): string {
   } else {
     lines.push(
       "Memory retrieval is not available until identity is verified.",
-      "The user can verify by typing: /verify <token>",
+      "The user can verify by typing: !verify <token>",
     );
   }
 
@@ -189,16 +189,19 @@ export function formatHardGateSystemPrompt(channel: string, peerId: string): str
     "[/IDENTITY_GATE]",
     "",
     "IMPORTANT: This user has NOT been identified. You MUST NOT proceed with any request",
-    "until they verify their identity. Your ONLY allowed actions are:",
+    "until they verify their identity. Guide them through these steps:",
     "",
-    "1. Greet the user warmly",
-    "2. Explain they need to verify their identity to use this service",
-    "3. Tell them to type: /verify <token>  (where <token> is their authorization token from the app)",
-    "4. If they don't have a token, they can register with: /register <first_name> <last_name>",
-    "5. Answer questions ONLY about the verification process",
+    "1. Greet the user warmly and welcome them to Syntropy Health",
+    "2. Ask for their FIRST and LAST NAME as registered in the Syntropy Journals app",
+    "3. Once they provide a name, tell them to type: !identify <first_name> <last_name>",
+    "4. After identification, ask them to open Syntropy Journals → Settings → Pair Device",
+    "5. Have them enter the 6-digit passcode here with: !verify <6-digit-code>",
     "",
-    "Do NOT answer any other questions, provide information, or engage in conversation",
-    "beyond identity verification guidance. Politely redirect all other requests to verification.",
+    "IMPORTANT NOTES:",
+    "- If the name doesn't match, remind them to use the EXACT name from their Syntropy Journals account",
+    "- The 6-digit passcode expires in 10 minutes — tell them to generate a fresh one if needed",
+    "- Do NOT answer any other questions until identity is verified",
+    "- Be conversational and helpful about the verification process",
   ].join("\n");
 }
 
@@ -208,7 +211,7 @@ export function formatHardGateSystemPrompt(channel: string, peerId: string): str
  */
 export function formatHardGateReplyAppend(): string {
   return (
-    "\n\n---\nTo get started, please verify your identity with " +
-    "`/verify <token>` or register with `/register <first_name> <last_name>`."
+    "\n\n---\nTo get started, tell me your name or type " +
+    "`!identify <first_name> <last_name>` to find your account."
   );
 }

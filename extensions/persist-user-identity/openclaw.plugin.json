@@ -17,6 +17,22 @@
       "label": "Token Verification Endpoint",
       "placeholder": "https://myapp.com/api/verify-token",
       "help": "POST endpoint that validates a token and returns { user_id, first_name, last_name }"
+    },
+    "auth.passcodeVerifyUrl": {
+      "label": "Passcode Verify URL",
+      "placeholder": "https://app.example.com/auth/passcodes/verify",
+      "help": "POST endpoint for verifying 6-digit passcodes (Syntropy Journals)"
+    },
+    "auth.userLookupUrl": {
+      "label": "User Lookup URL",
+      "placeholder": "https://app.example.com/api/ext/users/search",
+      "help": "GET endpoint for fuzzy name search (returns user list)"
+    },
+    "auth.apiToken": {
+      "label": "API Token",
+      "sensitive": true,
+      "placeholder": "sj_...",
+      "help": "API token for authenticating with the Syntropy Journals API"
     }
   },
   "configSchema": {
@@ -28,9 +44,15 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "mode": { "type": "string", "enum": ["jwt-hs256", "verify-endpoint"] },
+          "mode": {
+            "type": "string",
+            "enum": ["jwt-hs256", "verify-endpoint", "passcode-endpoint"]
+          },
           "jwtSecret": { "type": "string" },
           "verifyEndpoint": { "type": "string" },
+          "passcodeVerifyUrl": { "type": "string" },
+          "userLookupUrl": { "type": "string" },
+          "apiToken": { "type": "string" },
           "issuer": { "type": "string" },
           "audience": { "type": "string" }
         }

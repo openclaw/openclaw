@@ -131,7 +131,7 @@ describe("formatScopeBlock", () => {
     const result = formatScopeBlock(unverifiedScope, { requireVerified: true });
     expect(result).toContain("[MEMORY_SCOPE]");
     expect(result).toContain("gated: true");
-    expect(result).toContain("/verify <token>");
+    expect(result).toContain("!verify <token>");
     expect(result).not.toContain("scope_key:");
   });
 
@@ -148,7 +148,7 @@ describe("formatGatedMessage", () => {
     expect(result).toContain("[MEMORY_SCOPE]");
     expect(result).toContain("gated: true");
     expect(result).toContain("Memory retrieval is not available until identity is verified.");
-    expect(result).toContain("/verify <token>");
+    expect(result).toContain("!verify <token>");
   });
 
   test("uses custom gate message when provided", () => {
@@ -175,25 +175,24 @@ describe("formatHardGateSystemPrompt", () => {
     expect(result).toContain("[/IDENTITY_GATE]");
   });
 
-  test("instructs agent to only discuss verification", () => {
+  test("instructs agent to guide name-passcode flow", () => {
     const result = formatHardGateSystemPrompt("whatsapp", "+1234567890");
     expect(result).toContain("MUST NOT proceed");
-    expect(result).toContain("/verify <token>");
-    expect(result).toContain("/register <first_name> <last_name>");
+    expect(result).toContain("!identify <first_name> <last_name>");
+    expect(result).toContain("!verify <6-digit-code>");
+    expect(result).toContain("Syntropy Journals");
   });
 
   test("forbids answering unrelated questions", () => {
     const result = formatHardGateSystemPrompt("slack", "U12345");
     expect(result).toContain("Do NOT answer any other questions");
-    expect(result).toContain("Politely redirect");
   });
 });
 
 describe("formatHardGateReplyAppend", () => {
-  test("includes verification CTA with both commands", () => {
+  test("includes identify CTA", () => {
     const result = formatHardGateReplyAppend();
-    expect(result).toContain("/verify <token>");
-    expect(result).toContain("/register <first_name> <last_name>");
+    expect(result).toContain("!identify <first_name> <last_name>");
   });
 
   test("starts with separator", () => {

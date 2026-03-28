@@ -38,8 +38,10 @@
         "enabled": true,
         "config": {
           "auth": {
-            "mode": "jwt-hs256",
-            "jwtSecret": "e2e-test-secret-key-for-identity-verification"
+            "mode": "passcode-endpoint",
+            "passcodeVerifyUrl": "http://localhost:3000/auth/passcodes/verify",
+            "userLookupUrl": "http://localhost:3000/api/ext/users/search",
+            "apiToken": ""
           }
         }
       },

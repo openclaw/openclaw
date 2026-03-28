@@ -26,7 +26,7 @@ gated: true
 [/MEMORY_SCOPE]
 
 Memory retrieval is not available until identity is verified.
-The user can verify by typing: /verify <token>
+The user can verify by typing: !verify <token>
 ```
 
 ### Field Reference
@@ -43,8 +43,8 @@ The user can verify by typing: /verify <token>
 
 The `scope_key` is derived as follows:
 
-1. If the user has an `external_id` (verified via `/verify <token>`), the scope key is the `external_id`. This provides cross-channel memory continuity — the same user on Telegram, WhatsApp, and web chat shares one memory namespace.
-2. If the user is channel-only (registered via `/register` without token), the scope key is the internal `user_id` UUID. This provides per-channel isolation without cross-channel linking.
+1. If the user has an `external_id` (verified via `!verify <token>`), the scope key is the `external_id`. This provides cross-channel memory continuity — the same user on Telegram, WhatsApp, and web chat shares one memory namespace.
+2. If the user is channel-only (registered via `!register` without token), the scope key is the internal `user_id` UUID. This provides per-channel isolation without cross-channel linking.
 
 ## How to Consume Scope in Your Plugin
 
@@ -147,7 +147,7 @@ When the `[MEMORY_SCOPE]` block contains `gated: true`:
 - **Memory plugins should skip recall entirely.** Do not inject any memories into context.
 - The gate message tells the user how to verify their identity.
 - The agent can still converse normally — only memory retrieval is blocked.
-- Once verified (via `/verify <token>`), subsequent messages will have `gated: false` and memory recall proceeds normally.
+- Once verified (via `!verify <token>`), subsequent messages will have `gated: false` and memory recall proceeds normally.
 
 ### Hard Gate (`hardGate: true`)
 
@@ -164,8 +164,8 @@ IMPORTANT: This user has NOT been identified. You MUST NOT proceed with any requ
 until they verify their identity. Your ONLY allowed actions are:
 1. Greet the user warmly
 2. Explain they need to verify their identity to use this service
-3. Tell them to type: /verify <token>
-4. If they don't have a token, they can register with: /register <first_name> <last_name>
+3. Tell them to type: !verify <token>
+4. If they don't have a token, they can register with: !register <first_name> <last_name>
 5. Answer questions ONLY about the verification process
 ```
 
@@ -182,17 +182,17 @@ User sends message
   │   └─ User registered (or verified) → inject MEMORY_SCOPE, remove from gatedPeers
   │
   └─ message_sending (priority 30)
-      └─ If recipient is in gatedPeers → append "/verify or /register" CTA
+      └─ If recipient is in gatedPeers → append "!verify or !register" CTA
 
-User runs /verify <token> or /register <name>
+User runs !verify <token> or !register <name>
   │
   └─ Next message: before_agent_start re-evaluates
       └─ User now found → inject MEMORY_SCOPE, clear gate
 ```
 
-**When does the gate clear?** The gate is in-memory (a `Set<string>` keyed by `channel:peerId`). It is cleared as soon as the user runs `/verify` or `/register` and the next `before_agent_start` finds them in the database. No gateway restart is needed.
+**When does the gate clear?** The gate is in-memory (a `Set<string>` keyed by `channel:peerId`). It is cleared as soon as the user runs `!verify` or `!register` and the next `before_agent_start` finds them in the database. No gateway restart is needed.
 
-**What about users who want to register later from the main web app?** Users who `/register` with just their name get a channel-only identity (unverified, no `external_id`). They can later run `/verify <token>` from any channel to link their app account. The plugin merges the channel-only identity with the token-verified one, preserving conversation history.
+**What about users who want to register later from the main web app?** Users who `!register` with just their name get a channel-only identity (unverified, no `external_id`). They can later run `!verify <token>` from any channel to link their app account. The plugin merges the channel-only identity with the token-verified one, preserving conversation history.
 
 ## Database Schema
 

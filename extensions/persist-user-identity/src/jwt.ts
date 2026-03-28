@@ -17,11 +17,21 @@ export type JWTPayload = {
 };
 
 export type AuthConfig = {
-  mode: "jwt-hs256" | "verify-endpoint";
+  mode: "jwt-hs256" | "verify-endpoint" | "passcode-endpoint";
   jwtSecret?: string;
   verifyEndpoint?: string;
+  passcodeVerifyUrl?: string;
+  userLookupUrl?: string;
+  apiToken?: string;
   issuer?: string;
   audience?: string;
+};
+
+export type UserLookupResult = {
+  userId: string;
+  firstName: string;
+  lastName: string;
+  email: string;
 };
 
 /**
@@ -52,6 +62,9 @@ export async function verifyToken(
   }
   if (config.mode === "verify-endpoint" && config.verifyEndpoint) {
     return verifyViaEndpoint(token, config.verifyEndpoint);
+  }
+  if (config.mode === "passcode-endpoint" && config.passcodeVerifyUrl && /^\d{4,10}$/.test(token)) {
+    return verifyViaPasscode(token, undefined, config);
   }
   return null;
 }
@@ -150,5 +163,94 @@ async function verifyViaEndpoint(
     };
   } catch {
     return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Passcode endpoint — POST { code, user_identifier, channel } → identity
+// ---------------------------------------------------------------------------
+
+export async function verifyViaPasscode(
+  code: string,
+  userIdentifier: string | undefined,
+  config: AuthConfig,
+): Promise<VerifiedIdentity | null> {
+  if (!config.passcodeVerifyUrl) {
+    return null;
+  }
+  try {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (config.apiToken) {
+      headers["Authorization"] = `Bearer ${config.apiToken}`;
+    }
+    const res = await fetch(config.passcodeVerifyUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        code,
+        user_identifier: userIdentifier ?? "",
+        channel: "openclaw",
+      }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) {
+      return null;
+    }
+    const data = (await res.json()) as Record<string, unknown>;
+    const externalId = (data.user_id as string) ?? (data.sub as string);
+    if (!externalId) {
+      return null;
+    }
+    return {
+      externalId,
+      firstName: data.first_name as string | undefined,
+      lastName: data.last_name as string | undefined,
+      email: data.email as string | undefined,
+      raw: data,
+    };
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// User lookup by name — GET /api/ext/users/search?q=<name>
+// ---------------------------------------------------------------------------
+
+export async function lookupUserByName(
+  name: string,
+  config: AuthConfig,
+): Promise<UserLookupResult[]> {
+  if (!config.userLookupUrl) {
+    return [];
+  }
+  try {
+    const url = `${config.userLookupUrl}?q=${encodeURIComponent(name)}`;
+    const headers: Record<string, string> = {};
+    if (config.apiToken) {
+      headers["Authorization"] = `Bearer ${config.apiToken}`;
+    }
+    const res = await fetch(url, {
+      method: "GET",
+      headers,
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) {
+      return [];
+    }
+    const data = (await res.json()) as Array<Record<string, unknown>>;
+    if (!Array.isArray(data)) {
+      return [];
+    }
+    return data
+      .filter((r) => r.user_id && r.first_name)
+      .map((r) => ({
+        userId: r.user_id as string,
+        firstName: r.first_name as string,
+        lastName: (r.last_name as string) ?? "",
+        email: (r.email as string) ?? "",
+      }));
+  } catch {
+    return [];
   }
 }

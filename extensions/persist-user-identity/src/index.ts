@@ -12,7 +12,13 @@ import {
   listUserChannels,
   type ResolvedIdentity,
 } from "./db.js";
-import { verifyToken, type AuthConfig } from "./jwt.js";
+import {
+  verifyToken,
+  verifyViaPasscode,
+  lookupUserByName,
+  type AuthConfig,
+  type UserLookupResult,
+} from "./jwt.js";
 
 // ---------------------------------------------------------------------------
 // Session key parsing — reuses persist-postgres convention
@@ -106,9 +112,10 @@ function formatUnknownUserContext(channel: string, peerId: string): string {
     "gate_eligible: true",
     "[/USER_IDENTITY]",
     "",
-    "This user is not registered. You may ask for their name.",
-    "If they have an authorization token from the app, they can type: /verify <token>",
-    "To register with just a name: /register <first_name> <last_name>",
+    "This user is not registered. Ask for their first and last name.",
+    "They can type: !identify <first_name> <last_name> to find their account,",
+    "then verify with a 6-digit passcode from the Syntropy Journals app.",
+    "Alternatively: !register <first_name> <last_name> for a basic account.",
   ].join("\n");
 }
 
@@ -132,6 +139,9 @@ const persistUserIdentityPlugin = {
     }
 
     const authConfig = api.pluginConfig?.auth as AuthConfig | undefined;
+
+    // Track pending !identify results so !verify can use the email as user_identifier
+    const pendingIdentify = new Map<string, { email: string; userId: string; expiresAt: number }>();
 
     api.logger.info("persist-user-identity: connecting to PostgreSQL");
     const sql = createPgClient(databaseUrl);
@@ -204,7 +214,7 @@ const persistUserIdentityPlugin = {
       handler: async (ctx) => {
         const token = ctx.args?.trim();
         if (!token) {
-          return { text: "Usage: /verify <authorization_token>" };
+          return { text: "Usage: !verify <token_or_passcode>" };
         }
         if (!authConfig) {
           return {
@@ -220,9 +230,33 @@ const persistUserIdentityPlugin = {
 
         const channel = ctx.channel ?? "unknown";
         const peerId = ctx.senderId ?? ctx.from ?? "unknown";
+        const peerKey = `${channel}:${peerId}`;
 
-        const verified = await verifyToken(token, authConfig);
+        // Passcode path: 6-digit numeric code in passcode-endpoint mode
+        const isPasscode = /^\d{4,10}$/.test(token);
+        let verified: Awaited<ReturnType<typeof verifyToken>> = null;
+
+        if (authConfig.mode === "passcode-endpoint" && isPasscode) {
+          // Use email from prior !identify if available
+          const pending = pendingIdentify.get(peerKey);
+          if (pending && pending.expiresAt > Date.now()) {
+            verified = await verifyViaPasscode(token, pending.email, authConfig);
+          } else {
+            verified = await verifyViaPasscode(token, undefined, authConfig);
+          }
+          if (verified) {
+            pendingIdentify.delete(peerKey);
+          }
+        } else {
+          verified = await verifyToken(token, authConfig);
+        }
+
         if (!verified) {
+          if (isPasscode) {
+            return {
+              text: "Invalid or expired passcode. Please generate a new 6-digit code from the Syntropy Journals app (Settings → Pair Device) and try again.",
+            };
+          }
           return { text: "Token verification failed. Please check your token and try again." };
         }
 
@@ -271,6 +305,80 @@ const persistUserIdentityPlugin = {
     });
 
     // -------------------------------------------------------------------
+    // Command: /identify <first_name> <last_name>
+    // Fuzzy name lookup via Syntropy Journals API, then prompts for passcode.
+    // -------------------------------------------------------------------
+
+    api.registerCommand({
+      name: "identify",
+      description: "Find your account by name, then verify with a 6-digit passcode",
+      acceptsArgs: true,
+      requireAuth: false,
+      handler: async (ctx) => {
+        const name = ctx.args?.trim();
+        if (!name) {
+          return {
+            text:
+              "Please tell me your first and last name as registered in the Syntropy Journals app.\n" +
+              "Usage: !identify <first_name> <last_name>",
+          };
+        }
+        if (!authConfig || authConfig.mode !== "passcode-endpoint") {
+          return { text: "Name-based identification is not configured on this agent." };
+        }
+
+        try {
+          await ensureReady();
+        } catch {
+          return { text: "Identity service is temporarily unavailable." };
+        }
+
+        const channel = ctx.channel ?? "unknown";
+        const peerId = ctx.senderId ?? ctx.from ?? "unknown";
+        const peerKey = `${channel}:${peerId}`;
+
+        const results = await lookupUserByName(name, authConfig);
+
+        if (results.length === 0) {
+          return {
+            text:
+              "I couldn't find that name in our system. Please use the exact first and last name " +
+              "registered in your Syntropy Journals account.\n\n" +
+              "Note: Make sure to use the same name you registered with " +
+              '(e.g., if you registered as "Mohamed", use that instead of "Mo").',
+          };
+        }
+
+        // Store the first match for the upcoming !verify passcode call
+        const match = results[0] as UserLookupResult;
+        pendingIdentify.set(peerKey, {
+          email: match.email,
+          userId: match.userId,
+          expiresAt: Date.now() + 15 * 60_000,
+        });
+
+        if (results.length === 1) {
+          return {
+            text:
+              `I found your account, ${match.firstName}! ` +
+              "Please open the Syntropy Journals app → Settings → Pair Device, " +
+              "and enter the 6-digit code here.\n\n" +
+              "Type: !verify <6-digit-code>",
+          };
+        }
+
+        const list = results.map((r, i) => `${i + 1}. ${r.firstName} ${r.lastName}`).join("\n");
+        return {
+          text:
+            `I found a few possible matches:\n${list}\n\n` +
+            "Please open the Syntropy Journals app → Settings → Pair Device, " +
+            "and enter the 6-digit code here to confirm your identity.\n\n" +
+            "Type: !verify <6-digit-code>",
+        };
+      },
+    });
+
+    // -------------------------------------------------------------------
     // Command: /register <first_name> <last_name>
     // Creates a channel-only (unverified) user identity. The user can
     // later upgrade to verified via /verify.
@@ -284,7 +392,7 @@ const persistUserIdentityPlugin = {
       handler: async (ctx) => {
         const args = ctx.args?.trim();
         if (!args) {
-          return { text: "Usage: /register <first_name> <last_name>" };
+          return { text: "Usage: !register <first_name> <last_name>" };
         }
 
         const parts = args.split(/\s+/);
@@ -293,7 +401,7 @@ const persistUserIdentityPlugin = {
 
         if (!firstName) {
           return {
-            text: "Please provide at least a first name: /register <first_name> <last_name>",
+            text: "Please provide at least a first name: !register <first_name> <last_name>",
           };
         }
 
@@ -316,7 +424,7 @@ const persistUserIdentityPlugin = {
               `Updated your name to ${firstName} ${lastName}.` +
               (existing.external_id
                 ? ""
-                : "\nTip: Use /verify <token> to link your app account for cross-channel access."),
+                : "\nTip: Use !verify <token> to link your app account for cross-channel access."),
           };
         }
 
@@ -332,7 +440,7 @@ const persistUserIdentityPlugin = {
           text:
             `Registered as ${firstName} ${lastName}.\n` +
             `Your user ID: ${user.id}\n` +
-            "Tip: Use /verify <token> to link your app account for cross-channel access.",
+            "Tip: Use !verify <token> to link your app account for cross-channel access.",
         };
       },
     });
@@ -363,7 +471,7 @@ const persistUserIdentityPlugin = {
               `You are not registered.\n` +
               `Current channel: ${channel}\n` +
               `Channel ID: ${peerId}\n\n` +
-              "Use /register <first_name> <last_name> or /verify <token> to set up your identity.",
+              "Use !register <first_name> <last_name> or !verify <token> to set up your identity.",
           };
         }
 
