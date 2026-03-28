@@ -92,6 +92,26 @@ describe("probeGatewayStatus", () => {
     });
   });
 
+  it("prefers the close reason over a generic timeout when both are present", async () => {
+    callGatewayMock.mockReset();
+    probeGatewayMock.mockReset();
+    probeGatewayMock.mockResolvedValueOnce({
+      ok: false,
+      error: "timeout",
+      close: { code: 1008, reason: "pairing required" },
+    });
+
+    const result = await probeGatewayStatus({
+      url: "ws://127.0.0.1:19191",
+      timeoutMs: 5_000,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: "gateway closed (1008): pairing required",
+    });
+  });
+
   it("surfaces status RPC errors when requireRpc is enabled", async () => {
     callGatewayMock.mockReset();
     probeGatewayMock.mockReset();
