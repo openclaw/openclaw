@@ -192,6 +192,56 @@ describe("matrix onboarding", () => {
     });
   });
 
+  it("preserves SecretRef access tokens when keeping existing credentials", async () => {
+    installMatrixTestRuntime();
+
+    process.env.MATRIX_ACCESS_TOKEN = "env-token";
+
+    const prompter = createMatrixWizardPrompter({
+      select: {
+        "Matrix already configured. What do you want to do?": "update",
+      },
+      text: {
+        "Matrix homeserver URL": "https://matrix.example.org",
+        "Matrix device name (optional)": "OpenClaw Gateway",
+      },
+      confirm: {
+        "Matrix credentials already configured. Keep them?": true,
+        "Enable end-to-end encryption (E2EE)?": false,
+        "Configure Matrix rooms access?": false,
+      },
+    });
+
+    const result = await runMatrixInteractiveConfigure({
+      cfg: {
+        channels: {
+          matrix: {
+            homeserver: "https://matrix.example.org",
+            accessToken: { source: "env", provider: "default", id: "MATRIX_ACCESS_TOKEN" },
+          },
+        },
+        secrets: {
+          defaults: {
+            env: "default",
+          },
+        },
+      } as CoreConfig,
+      prompter,
+      configured: true,
+    });
+
+    expect(result).not.toBe("skip");
+    if (result === "skip") {
+      return;
+    }
+
+    expect(result.cfg.channels?.matrix?.accessToken).toEqual({
+      source: "env",
+      provider: "default",
+      id: "MATRIX_ACCESS_TOKEN",
+    });
+  });
+
   it("resolves status using the overridden Matrix account", async () => {
     const status = await matrixOnboardingAdapter.getStatus({
       cfg: {

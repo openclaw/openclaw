@@ -1,5 +1,6 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
-import { normalizeAccountId } from "../runtime-api.js";
+import { coerceSecretRef } from "openclaw/plugin-sdk/config-runtime";
+import { normalizeAccountId, normalizeSecretInputString } from "../runtime-api.js";
 import type { CoreConfig, MatrixConfig } from "../types.js";
 import { findMatrixAccountConfig } from "./account-config.js";
 
@@ -9,8 +10,8 @@ export type MatrixAccountPatch = {
   homeserver?: string | null;
   allowPrivateNetwork?: boolean | null;
   userId?: string | null;
-  accessToken?: string | null;
-  password?: string | null;
+  accessToken?: MatrixConfig["accessToken"] | null;
+  password?: MatrixConfig["password"] | null;
   deviceId?: string | null;
   deviceName?: string | null;
   avatarUrl?: string | null;
@@ -42,6 +43,36 @@ function applyNullableStringField(
     return;
   }
   target[key] = trimmed;
+}
+
+function applyNullableSecretInputField(
+  target: Record<string, unknown>,
+  key: "accessToken" | "password",
+  value: MatrixConfig["accessToken"] | MatrixConfig["password"] | null | undefined,
+  defaults?: NonNullable<CoreConfig["secrets"]>["defaults"],
+): void {
+  if (value === undefined) {
+    return;
+  }
+  if (value === null) {
+    delete target[key];
+    return;
+  }
+  if (typeof value === "string") {
+    const normalized = normalizeSecretInputString(value);
+    if (normalized) {
+      target[key] = normalized;
+    } else {
+      delete target[key];
+    }
+    return;
+  }
+
+  const ref = coerceSecretRef(value, defaults);
+  if (!ref) {
+    throw new Error(`Invalid Matrix ${key} SecretInput.`);
+  }
+  target[key] = ref;
 }
 
 function cloneMatrixDmConfig(dm: MatrixConfig["dm"]): MatrixConfig["dm"] {
@@ -140,8 +171,13 @@ export function updateMatrixAccountConfig(
 
   applyNullableStringField(nextAccount, "homeserver", patch.homeserver);
   applyNullableStringField(nextAccount, "userId", patch.userId);
-  applyNullableStringField(nextAccount, "accessToken", patch.accessToken);
-  applyNullableStringField(nextAccount, "password", patch.password);
+  applyNullableSecretInputField(
+    nextAccount,
+    "accessToken",
+    patch.accessToken,
+    cfg.secrets?.defaults,
+  );
+  applyNullableSecretInputField(nextAccount, "password", patch.password, cfg.secrets?.defaults);
   applyNullableStringField(nextAccount, "deviceId", patch.deviceId);
   applyNullableStringField(nextAccount, "deviceName", patch.deviceName);
   applyNullableStringField(nextAccount, "avatarUrl", patch.avatarUrl);

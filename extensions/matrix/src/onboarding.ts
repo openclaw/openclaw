@@ -24,6 +24,7 @@ import type { DmPolicy } from "./runtime-api.js";
 import {
   addWildcardAllowFrom,
   formatDocsLink,
+  hasConfiguredSecretInput,
   isPrivateOrLoopbackHost,
   mergeAllowFromEntries,
   moveSingleAccountChannelSectionToDefaultAccount,
@@ -385,23 +386,23 @@ async function runMatrixConfigure(params: {
     allowPrivateNetwork,
   });
 
-  let accessToken = existing.accessToken ?? "";
-  let password = typeof existing.password === "string" ? existing.password : "";
+  let accessToken = existing.accessToken;
+  let password = existing.password;
   let userId = existing.userId ?? "";
 
-  if (accessToken || password) {
+  if (hasConfiguredSecretInput(accessToken) || hasConfiguredSecretInput(password)) {
     const keep = await params.prompter.confirm({
       message: "Matrix credentials already configured. Keep them?",
       initialValue: true,
     });
     if (!keep) {
-      accessToken = "";
-      password = "";
+      accessToken = undefined;
+      password = undefined;
       userId = "";
     }
   }
 
-  if (!accessToken && !password) {
+  if (!hasConfiguredSecretInput(accessToken) && !hasConfiguredSecretInput(password)) {
     const authMode = await params.prompter.select({
       message: "Matrix auth method",
       options: [
@@ -417,6 +418,7 @@ async function runMatrixConfigure(params: {
           validate: (value) => (value?.trim() ? undefined : "Required"),
         }),
       ).trim();
+      password = undefined;
       userId = "";
     } else {
       userId = String(
@@ -444,6 +446,7 @@ async function runMatrixConfigure(params: {
           validate: (value) => (value?.trim() ? undefined : "Required"),
         }),
       ).trim();
+      accessToken = undefined;
     }
   }
 
@@ -466,8 +469,8 @@ async function runMatrixConfigure(params: {
       ? { allowPrivateNetwork: allowPrivateNetwork ? true : null }
       : {}),
     userId: userId || null,
-    accessToken: accessToken || null,
-    password: password || null,
+    accessToken: accessToken ?? null,
+    password: password ?? null,
     deviceName: deviceName || null,
     encryption: enableEncryption,
   });

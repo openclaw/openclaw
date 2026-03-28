@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { coerceSecretRef, resolveSecretInputRef } from "../config/types.secrets.js";
+import { getMatrixScopedEnvVarNames } from "../plugin-sdk/matrix.js";
 import { collectTtsApiKeyAssignments } from "./runtime-config-collectors-tts.js";
 import {
   collectSecretInputAssignment,
@@ -620,35 +621,86 @@ function collectMatrixAssignments(params: {
   const { channel: matrix, surface } = resolved;
   const envAccessTokenConfigured =
     normalizeSecretStringValue(params.context.env.MATRIX_ACCESS_TOKEN).length > 0;
+  const defaultScopedAccessTokenConfigured =
+    normalizeSecretStringValue(
+      params.context.env[getMatrixScopedEnvVarNames("default").accessToken],
+    ).length > 0;
   const baseAccessTokenConfigured = hasConfiguredSecretInputValue(
     matrix.accessToken,
     params.defaults,
   );
-  const hasAccountAccessToken = (account: Record<string, unknown>) =>
-    hasConfiguredSecretInputValue(account.accessToken, params.defaults);
-  collectConditionalChannelFieldAssignments({
-    channelKey: "matrix",
-    field: "password",
-    channel: matrix,
-    surface,
+  collectSecretInputAssignment({
+    value: matrix.accessToken,
+    path: "channels.matrix.accessToken",
+    expected: "string",
     defaults: params.defaults,
     context: params.context,
-    topLevelActiveWithoutAccounts: !(baseAccessTokenConfigured || envAccessTokenConfigured),
-    topLevelInheritedAccountActive: ({ account, enabled }) =>
-      enabled &&
-      !hasOwnProperty(account, "password") &&
-      !hasAccountAccessToken(account) &&
-      !(baseAccessTokenConfigured || envAccessTokenConfigured),
-    accountActive: ({ account, enabled }) => {
-      const inheritedAccessTokenConfigured =
-        !hasOwnProperty(account, "accessToken") &&
-        (baseAccessTokenConfigured || envAccessTokenConfigured);
-      return enabled && !(hasAccountAccessToken(account) || inheritedAccessTokenConfigured);
+    active: surface.channelEnabled,
+    inactiveReason: "Matrix channel is disabled.",
+    apply: (value) => {
+      matrix.accessToken = value;
     },
-    topInactiveReason:
-      "no enabled Matrix surface inherits this top-level password (an accessToken is configured).",
-    accountInactiveReason: "Matrix account is disabled or an accessToken is configured.",
   });
+  collectSecretInputAssignment({
+    value: matrix.password,
+    path: "channels.matrix.password",
+    expected: "string",
+    defaults: params.defaults,
+    context: params.context,
+    active:
+      surface.channelEnabled &&
+      !(
+        baseAccessTokenConfigured ||
+        envAccessTokenConfigured ||
+        defaultScopedAccessTokenConfigured
+      ),
+    inactiveReason: "Matrix channel is disabled or a top-level accessToken is configured.",
+    apply: (value) => {
+      matrix.password = value;
+    },
+  });
+  if (!surface.hasExplicitAccounts) {
+    return;
+  }
+  for (const { accountId, account, enabled } of surface.accounts) {
+    if (hasOwnProperty(account, "accessToken")) {
+      collectSecretInputAssignment({
+        value: account.accessToken,
+        path: `channels.matrix.accounts.${accountId}.accessToken`,
+        expected: "string",
+        defaults: params.defaults,
+        context: params.context,
+        active: enabled,
+        inactiveReason: "Matrix account is disabled.",
+        apply: (value) => {
+          account.accessToken = value;
+        },
+      });
+    }
+    if (!hasOwnProperty(account, "password")) {
+      continue;
+    }
+    const accountAccessTokenConfigured = hasConfiguredSecretInputValue(
+      account.accessToken,
+      params.defaults,
+    );
+    const scopedEnvAccessTokenConfigured =
+      normalizeSecretStringValue(
+        params.context.env[getMatrixScopedEnvVarNames(accountId).accessToken],
+      ).length > 0;
+    collectSecretInputAssignment({
+      value: account.password,
+      path: `channels.matrix.accounts.${accountId}.password`,
+      expected: "string",
+      defaults: params.defaults,
+      context: params.context,
+      active: enabled && !(accountAccessTokenConfigured || scopedEnvAccessTokenConfigured),
+      inactiveReason: "Matrix account is disabled or this account has an accessToken configured.",
+      apply: (value) => {
+        account.password = value;
+      },
+    });
+  }
 }
 
 function collectZaloAssignments(params: {

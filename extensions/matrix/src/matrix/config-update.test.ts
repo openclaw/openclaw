@@ -55,6 +55,24 @@ describe("updateMatrixAccountConfig", () => {
     expect(updated.channels?.["matrix"]?.accounts?.default?.userId).toBeUndefined();
   });
 
+  it("preserves SecretRef auth inputs when updating config", () => {
+    const updated = updateMatrixAccountConfig({} as CoreConfig, "default", {
+      accessToken: { source: "env", provider: "default", id: "MATRIX_ACCESS_TOKEN" },
+      password: { source: "env", provider: "default", id: "MATRIX_PASSWORD" },
+    });
+
+    expect(updated.channels?.matrix?.accessToken).toEqual({
+      source: "env",
+      provider: "default",
+      id: "MATRIX_ACCESS_TOKEN",
+    });
+    expect(updated.channels?.matrix?.password).toEqual({
+      source: "env",
+      provider: "default",
+      id: "MATRIX_PASSWORD",
+    });
+  });
+
   it("stores and clears Matrix allowBots and allowPrivateNetwork settings", () => {
     const cfg = {
       channels: {
