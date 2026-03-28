@@ -1,18 +1,25 @@
 import { appendFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
+import { loadConfig } from "../config/config.js";
+import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import { resolveSessionFilePath, resolveSessionFilePathOptions } from "../config/sessions/paths.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { scopedHeartbeatWakeOptions } from "../routing/session-key.js";
+import type { DeliveryContext } from "../utils/delivery-context.js";
+import { queueEmbeddedPiMessage } from "./pi-embedded.js";
 
 const DEFAULT_STREAM_FLUSH_MS = 2_500;
 const DEFAULT_NO_OUTPUT_NOTICE_MS = 60_000;
 const DEFAULT_NO_OUTPUT_POLL_MS = 15_000;
 const DEFAULT_MAX_RELAY_LIFETIME_MS = 6 * 60 * 60 * 1000;
+const DEFAULT_COMPLETION_ANNOUNCE_TIMEOUT_MS = 5_000;
 const STREAM_BUFFER_MAX_CHARS = 4_000;
 const STREAM_SNIPPET_MAX_CHARS = 220;
+
+type AcpParentUpdateMode = "system" | "notify";
 
 function compactWhitespace(value: string): string {
   return value.replace(/\s+/g, " ").trim();
@@ -22,10 +29,10 @@ function truncate(value: string, maxChars: number): string {
   if (value.length <= maxChars) {
     return value;
   }
-  if (maxChars <= 1) {
+  if (maxChars <= 3) {
     return value.slice(0, maxChars);
   }
-  return `${value.slice(0, maxChars - 1)}…`;
+  return `${value.slice(0, maxChars - 3)}...`;
 }
 
 function toTrimmedString(value: unknown): string | undefined {
@@ -40,9 +47,40 @@ function toFiniteNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+function summarizeError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message || "error";
+  }
+  if (typeof error === "string") {
+    return error;
+  }
+  return "error";
+}
+
 function resolveAcpStreamLogPathFromSessionFile(sessionFile: string, sessionId: string): string {
   const baseDir = path.dirname(path.resolve(sessionFile));
   return path.join(baseDir, `${sessionId}.acp-stream.jsonl`);
+}
+
+let subagentAnnounceModulePromise: Promise<typeof import("./subagent-announce.js")> | null = null;
+
+async function loadSubagentAnnounceModule() {
+  subagentAnnounceModulePromise ??= import("./subagent-announce.js");
+  return await subagentAnnounceModulePromise;
+}
+
+function loadParentSessionEntry(sessionKey: string) {
+  const normalizedSessionKey = sessionKey.trim();
+  if (!normalizedSessionKey) {
+    return undefined;
+  }
+  const cfg = loadConfig();
+  const agentId = normalizedSessionKey.startsWith("agent:")
+    ? normalizedSessionKey.split(":")[1]?.trim() || undefined
+    : undefined;
+  const storePath = resolveStorePath(cfg.session?.store, { agentId });
+  const store = loadSessionStore(storePath);
+  return store[normalizedSessionKey];
 }
 
 export function resolveAcpSpawnStreamLogPath(params: {
@@ -84,6 +122,10 @@ export function startAcpSpawnParentStreamRelay(params: {
   noOutputPollMs?: number;
   maxRelayLifetimeMs?: number;
   emitStartNotice?: boolean;
+  relayProgressToParent?: boolean;
+  parentUpdateMode?: AcpParentUpdateMode;
+  requesterOrigin?: DeliveryContext;
+  taskLabel?: string;
 }): AcpSpawnParentRelayHandle {
   const runId = params.runId.trim();
   const parentSessionKey = params.parentSessionKey.trim();
@@ -94,6 +136,8 @@ export function startAcpSpawnParentStreamRelay(params: {
     };
   }
 
+  const parentUpdateMode = params.parentUpdateMode === "notify" ? "notify" : "system";
+  const relayProgressToParent = params.relayProgressToParent !== false;
   const streamFlushMs =
     typeof params.streamFlushMs === "number" && Number.isFinite(params.streamFlushMs)
       ? Math.max(0, Math.floor(params.streamFlushMs))
@@ -112,6 +156,7 @@ export function startAcpSpawnParentStreamRelay(params: {
       : DEFAULT_MAX_RELAY_LIFETIME_MS;
 
   const relayLabel = truncate(compactWhitespace(params.agentId), 40) || "ACP child";
+  const relayTaskLabel = compactWhitespace(params.taskLabel ?? "") || `${relayLabel} task`;
   const contextPrefix = `acp-spawn:${runId}`;
   const logPath = toTrimmedString(params.logPath);
   let logDirReady = false;
@@ -185,7 +230,7 @@ export function startAcpSpawnParentStreamRelay(params: {
       }),
     );
   };
-  const emit = (text: string, contextKey: string) => {
+  const emitSystemEvent = (text: string, contextKey: string) => {
     const cleaned = text.trim();
     if (!cleaned) {
       return;
@@ -194,14 +239,119 @@ export function startAcpSpawnParentStreamRelay(params: {
     enqueueSystemEvent(cleaned, { sessionKey: parentSessionKey, contextKey });
     wake();
   };
+  let cachedParentSessionId: string | undefined;
+  const resolveParentSessionId = () => {
+    if (cachedParentSessionId) {
+      return cachedParentSessionId;
+    }
+    try {
+      cachedParentSessionId = toTrimmedString(loadParentSessionEntry(parentSessionKey)?.sessionId);
+      return cachedParentSessionId;
+    } catch (error) {
+      logEvent("notify_parent_lookup_failed", {
+        error: summarizeError(error),
+      });
+      return undefined;
+    }
+  };
+  const tryNotifyParentRun = (text: string, contextKey: string) => {
+    if (parentUpdateMode !== "notify") {
+      return false;
+    }
+    const cleaned = text.trim();
+    if (!cleaned) {
+      return false;
+    }
+    const parentSessionId = resolveParentSessionId();
+    if (!parentSessionId) {
+      logEvent("notify_parent_unavailable", {
+        contextKey,
+        reason: "missing_parent_session_id",
+        text: cleaned,
+      });
+      return false;
+    }
+    const queued = queueEmbeddedPiMessage(parentSessionId, cleaned);
+    logEvent(queued ? "notify_parent_queued" : "notify_parent_unavailable", {
+      contextKey,
+      sessionId: parentSessionId,
+      reason: queued ? undefined : "queue_rejected",
+      text: cleaned,
+    });
+    return queued;
+  };
+  const emitProgressUpdate = (text: string, contextKey: string) => {
+    if (!relayProgressToParent) {
+      return;
+    }
+    const cleaned = text.trim();
+    if (!cleaned) {
+      return;
+    }
+    if (tryNotifyParentRun(cleaned, contextKey)) {
+      return;
+    }
+    emitSystemEvent(cleaned, contextKey);
+  };
+  const announceCompletionToParent = async (completion: {
+    phase: "end" | "error";
+    startedAt?: number;
+    endedAt?: number;
+    errorText?: string;
+  }) => {
+    if (parentUpdateMode !== "notify") {
+      return false;
+    }
+    try {
+      const { runSubagentAnnounceFlow } = await loadSubagentAnnounceModule();
+      const didAnnounce = await runSubagentAnnounceFlow({
+        childSessionKey: params.childSessionKey,
+        childRunId: runId,
+        requesterSessionKey: parentSessionKey,
+        requesterOrigin: params.requesterOrigin,
+        requesterDisplayKey: parentSessionKey,
+        task: relayTaskLabel,
+        timeoutMs: DEFAULT_COMPLETION_ANNOUNCE_TIMEOUT_MS,
+        cleanup: "keep",
+        waitForCompletion: false,
+        startedAt: completion.startedAt,
+        endedAt: completion.endedAt,
+        label: relayTaskLabel,
+        outcome:
+          completion.phase === "error"
+            ? {
+                status: "error",
+                error: completion.errorText,
+              }
+            : {
+                status: "ok",
+              },
+        announceType: "acp task",
+        expectsCompletionMessage: true,
+        spawnMode: "run",
+      });
+      logEvent("completion_announce", {
+        phase: completion.phase,
+        delivered: didAnnounce,
+      });
+      return didAnnounce;
+    } catch (error) {
+      logEvent("completion_announce_failed", {
+        phase: completion.phase,
+        error: summarizeError(error),
+      });
+      return false;
+    }
+  };
   const emitStartNotice = () => {
-    emit(
+    emitProgressUpdate(
       `Started ${relayLabel} session ${params.childSessionKey}. Streaming progress updates to parent session.`,
       `${contextPrefix}:start`,
     );
   };
 
   let disposed = false;
+  let terminalPhaseHandling = false;
   let pendingText = "";
   let lastProgressAt = Date.now();
   let stallNotified = false;
@@ -228,16 +378,20 @@ export function startAcpSpawnParentStreamRelay(params: {
     if (!pendingText) {
       return;
     }
+    if (!relayProgressToParent) {
+      pendingText = "";
+      return;
+    }
     const snippet = truncate(compactWhitespace(pendingText), STREAM_SNIPPET_MAX_CHARS);
     pendingText = "";
     if (!snippet) {
       return;
     }
-    emit(`${relayLabel}: ${snippet}`, `${contextPrefix}:progress`);
+    emitProgressUpdate(`${relayLabel}: ${snippet}`, `${contextPrefix}:progress`);
   };
 
   const scheduleFlush = () => {
-    if (disposed || flushTimer || streamFlushMs <= 0) {
+    if (disposed || terminalPhaseHandling || flushTimer || streamFlushMs <= 0) {
       return;
     }
     flushTimer = setTimeout(() => {
@@ -247,7 +401,7 @@ export function startAcpSpawnParentStreamRelay(params: {
   };
 
   const noOutputWatcherTimer = setInterval(() => {
-    if (disposed || noOutputNoticeMs <= 0) {
+    if (disposed || terminalPhaseHandling || !relayProgressToParent || noOutputNoticeMs <= 0) {
       return;
     }
     if (stallNotified) {
@@ -257,7 +411,7 @@ export function startAcpSpawnParentStreamRelay(params: {
       return;
     }
     stallNotified = true;
-    emit(
+    emitProgressUpdate(
       `${relayLabel} has produced no output for ${Math.round(noOutputNoticeMs / 1000)}s. It may be waiting for interactive input.`,
       `${contextPrefix}:stall`,
     );
@@ -265,10 +419,10 @@ export function startAcpSpawnParentStreamRelay(params: {
   noOutputWatcherTimer.unref?.();
 
   relayLifetimeTimer = setTimeout(() => {
-    if (disposed) {
+    if (disposed || terminalPhaseHandling) {
       return;
     }
-    emit(
+    emitSystemEvent(
       `${relayLabel} stream relay timed out after ${Math.max(1, Math.round(maxRelayLifetimeMs / 1000))}s without completion.`,
       `${contextPrefix}:timeout`,
     );
@@ -281,7 +435,7 @@ export function startAcpSpawnParentStreamRelay(params: {
   }
 
   const unsubscribe = onAgentEvent((event) => {
-    if (disposed || event.runId !== runId) {
+    if (disposed || terminalPhaseHandling || event.runId !== runId) {
       return;
     }
 
@@ -295,10 +449,13 @@ export function startAcpSpawnParentStreamRelay(params: {
         return;
       }
       logEvent("assistant_delta", { delta });
+      if (!relayProgressToParent) {
+        return;
+      }
 
       if (stallNotified) {
         stallNotified = false;
-        emit(`${relayLabel} resumed output.`, `${contextPrefix}:resumed`);
+        emitProgressUpdate(`${relayLabel} resumed output.`, `${contextPrefix}:resumed`);
       }
 
       lastProgressAt = Date.now();
@@ -321,7 +478,6 @@ export function startAcpSpawnParentStreamRelay(params: {
     const phase = toTrimmedString((event.data as { phase?: unknown } | undefined)?.phase);
     logEvent("lifecycle", { phase: phase ?? "unknown", data: event.data });
     if (phase === "end") {
-      flushPending();
       const startedAt = toFiniteNumber(
         (event.data as { startedAt?: unknown } | undefined)?.startedAt,
       );
@@ -330,27 +486,74 @@ export function startAcpSpawnParentStreamRelay(params: {
         startedAt != null && endedAt != null && endedAt >= startedAt
           ? endedAt - startedAt
           : undefined;
-      if (durationMs != null) {
-        emit(
-          `${relayLabel} run completed in ${Math.max(1, Math.round(durationMs / 1000))}s.`,
-          `${contextPrefix}:done`,
-        );
-      } else {
-        emit(`${relayLabel} run completed.`, `${contextPrefix}:done`);
+      flushPending();
+      if (parentUpdateMode !== "notify") {
+        if (durationMs != null) {
+          emitSystemEvent(
+            `${relayLabel} run completed in ${Math.max(1, Math.round(durationMs / 1000))}s.`,
+            `${contextPrefix}:done`,
+          );
+        } else {
+          emitSystemEvent(`${relayLabel} run completed.`, `${contextPrefix}:done`);
+        }
+        dispose();
+        return;
       }
-      dispose();
+      terminalPhaseHandling = true;
+      clearRelayLifetimeTimer();
+      clearInterval(noOutputWatcherTimer);
+      void (async () => {
+        const announced = await announceCompletionToParent({
+          phase: "end",
+          startedAt,
+          endedAt,
+        });
+        if (!announced) {
+          flushPending();
+          if (durationMs != null) {
+            emitSystemEvent(
+              `${relayLabel} run completed in ${Math.max(1, Math.round(durationMs / 1000))}s.`,
+              `${contextPrefix}:done`,
+            );
+          } else {
+            emitSystemEvent(`${relayLabel} run completed.`, `${contextPrefix}:done`);
+          }
+        }
+        dispose();
+      })();
       return;
     }
 
     if (phase === "error") {
-      flushPending();
       const errorText = toTrimmedString((event.data as { error?: unknown } | undefined)?.error);
-      if (errorText) {
-        emit(`${relayLabel} run failed: ${errorText}`, `${contextPrefix}:error`);
-      } else {
-        emit(`${relayLabel} run failed.`, `${contextPrefix}:error`);
+      if (parentUpdateMode !== "notify") {
+        flushPending();
+        if (errorText) {
+          emitSystemEvent(`${relayLabel} run failed: ${errorText}`, `${contextPrefix}:error`);
+        } else {
+          emitSystemEvent(`${relayLabel} run failed.`, `${contextPrefix}:error`);
+        }
+        dispose();
+        return;
       }
-      dispose();
+      terminalPhaseHandling = true;
+      clearRelayLifetimeTimer();
+      clearInterval(noOutputWatcherTimer);
+      void (async () => {
+        const announced = await announceCompletionToParent({
+          phase: "error",
+          errorText,
+        });
+        if (!announced) {
+          flushPending();
+          if (errorText) {
+            emitSystemEvent(`${relayLabel} run failed: ${errorText}`, `${contextPrefix}:error`);
+          } else {
+            emitSystemEvent(`${relayLabel} run failed.`, `${contextPrefix}:error`);
+          }
+        }
+        dispose();
+      })();
     }
   });
 
@@ -368,7 +571,12 @@ export function startAcpSpawnParentStreamRelay(params: {
 
   return {
     dispose,
-    notifyStarted: emitStartNotice,
+    notifyStarted: () => {
+      if (disposed) {
+        return;
+      }
+      emitStartNotice();
+    },
   };
 }
 

@@ -64,6 +64,8 @@ export const ACP_SPAWN_SANDBOX_MODES = ["inherit", "require"] as const;
 export type SpawnAcpSandboxMode = (typeof ACP_SPAWN_SANDBOX_MODES)[number];
 export const ACP_SPAWN_STREAM_TARGETS = ["parent"] as const;
 export type SpawnAcpStreamTarget = (typeof ACP_SPAWN_STREAM_TARGETS)[number];
+export const ACP_PARENT_UPDATE_MODES = ["system", "notify"] as const;
+export type SpawnAcpParentUpdateMode = (typeof ACP_PARENT_UPDATE_MODES)[number];
 
 export type SpawnAcpParams = {
   task: string;
@@ -75,6 +77,7 @@ export type SpawnAcpParams = {
   thread?: boolean;
   sandbox?: SpawnAcpSandboxMode;
   streamTo?: SpawnAcpStreamTarget;
+  parentUpdates?: SpawnAcpParentUpdateMode;
 };
 
 export type SpawnAcpContext = {
@@ -704,7 +707,19 @@ export async function spawnAcpDirect(
     };
   }
   const streamToParentRequested = params.streamTo === "parent";
+  const requestedParentUpdates =
+    params.parentUpdates === "notify"
+      ? "notify"
+      : params.parentUpdates === "system"
+        ? "system"
+        : undefined;
   const parentSessionKey = ctx.agentSessionKey?.trim();
+  if (requestedParentUpdates === "notify" && !parentSessionKey) {
+    return {
+      status: "error",
+      error: 'sessions_spawn parentUpdates="notify" requires an active requester session context.',
+    };
+  }
   if (streamToParentRequested && !parentSessionKey) {
     return {
       status: "error",
@@ -736,6 +751,12 @@ export async function spawnAcpDirect(
       error: 'mode="session" requires thread=true so the ACP session can stay bound to a thread.',
     };
   }
+  if (requestedParentUpdates === "notify" && spawnMode !== "run") {
+    return {
+      status: "error",
+      error: 'sessions_spawn parentUpdates="notify" is only supported for ACP mode="run".',
+    };
+  }
 
   const requesterState = resolveAcpSpawnRequesterState({
     cfg,
@@ -748,6 +769,8 @@ export async function spawnAcpDirect(
     streamToParentRequested,
     requester: requesterState,
   });
+  const effectiveParentUpdates =
+    requestedParentUpdates === "notify" ? "notify" : effectiveStreamToParent ? "system" : undefined;
 
   const targetAgentResult = resolveTargetAcpAgentId({
     requestedAgentId: params.agentId,
@@ -846,14 +869,17 @@ export async function spawnAcpDirect(
   });
   const childIdem = crypto.randomUUID();
   let childRunId: string = childIdem;
+  const taskLabel = params.label?.trim() || params.task.trim() || targetAgentId;
   const streamLogPath =
     effectiveStreamToParent && parentSessionKey
       ? resolveAcpSpawnStreamLogPath({
           childSessionKey: sessionKey,
         })
       : undefined;
+  const shouldStartParentRelay =
+    Boolean(parentSessionKey) && (effectiveStreamToParent || effectiveParentUpdates === "notify");
   let parentRelay: AcpSpawnParentRelayHandle | undefined;
-  if (effectiveStreamToParent && parentSessionKey) {
+  if (shouldStartParentRelay && parentSessionKey) {
     // Register relay before dispatch so fast lifecycle failures are not missed.
     parentRelay = startAcpSpawnParentStreamRelay({
       runId: childIdem,
@@ -862,6 +888,10 @@ export async function spawnAcpDirect(
       agentId: targetAgentId,
       logPath: streamLogPath,
       emitStartNotice: false,
+      relayProgressToParent: effectiveStreamToParent,
+      parentUpdateMode: effectiveParentUpdates,
+      requesterOrigin: requesterState.origin,
+      taskLabel,
     });
   }
   try {
@@ -898,7 +928,7 @@ export async function spawnAcpDirect(
     };
   }
 
-  if (effectiveStreamToParent && parentSessionKey) {
+  if (shouldStartParentRelay && parentSessionKey) {
     if (parentRelay && childRunId !== childIdem) {
       parentRelay.dispose();
       // Defensive fallback if gateway returns a runId that differs from idempotency key.
@@ -909,6 +939,10 @@ export async function spawnAcpDirect(
         agentId: targetAgentId,
         logPath: streamLogPath,
         emitStartNotice: false,
+        relayProgressToParent: effectiveStreamToParent,
+        parentUpdateMode: effectiveParentUpdates,
+        requesterOrigin: requesterState.origin,
+        taskLabel,
       });
     }
     parentRelay?.notifyStarted();

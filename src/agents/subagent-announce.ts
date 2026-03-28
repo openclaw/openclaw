@@ -157,7 +157,7 @@ export function buildSubagentSystemPrompt(params: {
 export { captureSubagentCompletionReply } from "./subagent-announce-output.js";
 export type { SubagentRunOutcome } from "./subagent-announce-output.js";
 
-export type SubagentAnnounceType = "subagent task" | "cron job";
+export type SubagentAnnounceType = "subagent task" | "cron job" | "acp task";
 
 function buildAnnounceReplyInstruction(params: {
   requesterIsSubagent: boolean;
@@ -543,7 +543,12 @@ export async function runSubagentAnnounceFlow(params: {
     const internalEvents: AgentInternalEvent[] = [
       {
         type: "task_completion",
-        source: announceType === "cron job" ? "cron" : "subagent",
+        source:
+          announceType === "cron job"
+            ? "cron"
+            : announceType === "acp task"
+              ? "acp"
+              : "subagent",
         childSessionKey: params.childSessionKey,
         childSessionId: announceSessionId,
         announceType,
