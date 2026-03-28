@@ -544,12 +544,20 @@ describe("gateway agent handler", () => {
       updatedAt: Date.now(),
       fastMode: true,
       sendPolicy: "deny",
+      lastChannel: "telegram",
+      lastTo: "-100123",
+      lastAccountId: "acct-1",
+      lastThreadId: 42,
     });
     mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
       const store: Record<string, unknown> = {
         "agent:main:main": buildExistingMainStoreEntry({
           fastMode: true,
           sendPolicy: "deny",
+          lastChannel: "telegram",
+          lastTo: "-100123",
+          lastAccountId: "acct-1",
+          lastThreadId: 42,
         }),
       };
       return await updater(store);
@@ -557,6 +565,10 @@ describe("gateway agent handler", () => {
     mocks.loadGatewaySessionRow.mockReturnValue({
       fastMode: true,
       sendPolicy: "deny",
+      lastChannel: "telegram",
+      lastTo: "-100123",
+      lastAccountId: "acct-1",
+      lastThreadId: 42,
       totalTokens: 12,
       status: "running",
     });
@@ -590,6 +602,10 @@ describe("gateway agent handler", () => {
         reason: "send",
         fastMode: true,
         sendPolicy: "deny",
+        lastChannel: "telegram",
+        lastTo: "-100123",
+        lastAccountId: "acct-1",
+        lastThreadId: 42,
         totalTokens: 12,
         status: "running",
       }),
