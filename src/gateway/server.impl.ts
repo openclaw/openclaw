@@ -92,6 +92,9 @@ import {
   createSessionMessageSubscriberRegistry,
 } from "./server-chat.js";
 import { createGatewayCloseHandler } from "./server-close.js";
+import { resolveStateDir } from "../config/paths.js";
+import { ProjectGatewayService } from "./server-projects.js";
+import { setProjectsService } from "./server-methods/projects.js";
 import { buildGatewayCronService } from "./server-cron.js";
 import { startGatewayDiscovery } from "./server-discovery-runtime.js";
 import { applyGatewayLaneConcurrency } from "./server-lanes.js";
@@ -1283,6 +1286,18 @@ export async function startGatewayServer(
       }
     }
 
+    let projectsService: ProjectGatewayService | null = null;
+    if (!minimalTestGateway) {
+      try {
+        const projectsRoot = path.join(resolveStateDir(process.env), "projects");
+        projectsService = new ProjectGatewayService(projectsRoot, broadcast);
+        setProjectsService(projectsService);
+        await projectsService.start();
+      } catch (err) {
+        log.warn(`projects service failed to start: ${String(err)}`);
+      }
+    }
+
     configReloader = minimalTestGateway
       ? { stop: async () => {} }
       : (() => {
@@ -1396,6 +1411,7 @@ export async function startGatewayServer(
     clients,
     configReloader,
     browserControl,
+    projectsService,
     wss,
     httpServer,
     httpServers,
