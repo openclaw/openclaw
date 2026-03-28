@@ -16,7 +16,6 @@ import {
   createResolvedDirectoryEntriesLister,
 } from "openclaw/plugin-sdk/directory-runtime";
 import { runStoppablePassiveMonitor } from "openclaw/plugin-sdk/extension-shared";
-import { chunkTextForOutbound } from "openclaw/plugin-sdk/irc";
 import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
@@ -40,6 +39,7 @@ import { probeIrc } from "./probe.js";
 import {
   buildBaseChannelStatusSummary,
   createAccountStatusSink,
+  chunkTextForOutbound,
   DEFAULT_ACCOUNT_ID,
   getChatChannelMeta,
   PAIRING_APPROVED_MESSAGE,
