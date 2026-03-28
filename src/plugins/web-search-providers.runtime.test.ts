@@ -4,6 +4,7 @@ type RegistryModule = typeof import("./registry.js");
 type RuntimeModule = typeof import("./runtime.js");
 type WebSearchProvidersRuntimeModule = typeof import("./web-search-providers.runtime.js");
 type ManifestRegistryModule = typeof import("./manifest-registry.js");
+type PluginAutoEnableModule = typeof import("../config/plugin-auto-enable.js");
 
 const BUNDLED_WEB_SEARCH_PROVIDERS = [
   { pluginId: "brave", id: "brave", order: 10 },
@@ -26,6 +27,8 @@ let resetWebSearchProviderSnapshotCacheForTests: WebSearchProvidersRuntimeModule
 let loadOpenClawPluginsMock: ReturnType<typeof vi.fn>;
 let loaderModule: typeof import("./loader.js");
 let manifestRegistryModule: ManifestRegistryModule;
+let pluginAutoEnableModule: PluginAutoEnableModule;
+let applyPluginAutoEnableSpy: ReturnType<typeof vi.fn>;
 
 const DEFAULT_WEB_SEARCH_WORKSPACE = "/tmp/workspace";
 const EXPECTED_BUNDLED_RUNTIME_WEB_SEARCH_PROVIDER_KEYS = [
@@ -181,6 +184,7 @@ describe("resolvePluginWebSearchProviders", () => {
     ({ createEmptyPluginRegistry } = await import("./registry.js"));
     manifestRegistryModule = await import("./manifest-registry.js");
     loaderModule = await import("./loader.js");
+    pluginAutoEnableModule = await import("../config/plugin-auto-enable.js");
     ({ setActivePluginRegistry } = await import("./runtime.js"));
     ({
       resolvePluginWebSearchProviders,
@@ -191,6 +195,16 @@ describe("resolvePluginWebSearchProviders", () => {
 
   beforeEach(() => {
     resetWebSearchProviderSnapshotCacheForTests();
+    applyPluginAutoEnableSpy?.mockRestore();
+    applyPluginAutoEnableSpy = vi
+      .spyOn(pluginAutoEnableModule, "applyPluginAutoEnable")
+      .mockImplementation(
+        (params: { config: unknown }) =>
+          ({
+            config: params.config,
+            changes: [],
+          }) as ReturnType<PluginAutoEnableModule["applyPluginAutoEnable"]>,
+      );
     loadPluginManifestRegistryMock = vi
       .spyOn(manifestRegistryModule, "loadPluginManifestRegistry")
       .mockReturnValue(
@@ -221,6 +235,32 @@ describe("resolvePluginWebSearchProviders", () => {
 
     expectBundledRuntimeProviderKeys(providers);
     expectLoaderCallCount(1);
+  });
+
+  it("loads plugin web-search providers from the auto-enabled config snapshot", () => {
+    const rawConfig = createBraveAllowConfig();
+    const autoEnabledConfig = {
+      plugins: {
+        allow: ["brave", "perplexity"],
+      },
+    };
+    applyPluginAutoEnableSpy.mockReturnValue({ config: autoEnabledConfig, changes: [] });
+
+    resolvePluginWebSearchProviders(createSnapshotParams({ config: rawConfig }));
+
+    expect(applyPluginAutoEnableSpy).toHaveBeenCalledWith({
+      config: rawConfig,
+      env: createWebSearchEnv(),
+    });
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          plugins: expect.objectContaining({
+            allow: expect.arrayContaining(["brave", "perplexity"]),
+          }),
+        }),
+      }),
+    );
   });
 
   it("scopes plugin loading to manifest-declared web-search candidates", () => {
