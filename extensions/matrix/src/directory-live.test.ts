@@ -1,6 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { listMatrixDirectoryGroupsLive, listMatrixDirectoryPeersLive } from "./directory-live.js";
-import { resolveMatrixAuth } from "./matrix/client.js";
 
 const { requestJsonMock } = vi.hoisted(() => ({
   requestJsonMock: vi.fn(),
@@ -18,10 +16,18 @@ vi.mock("./matrix/sdk/http-client.js", () => ({
   },
 }));
 
+let listMatrixDirectoryGroupsLive: typeof import("./directory-live.js").listMatrixDirectoryGroupsLive;
+let listMatrixDirectoryPeersLive: typeof import("./directory-live.js").listMatrixDirectoryPeersLive;
+let resolveMatrixAuth: typeof import("./matrix/client.js").resolveMatrixAuth;
+
 describe("matrix directory live", () => {
   const cfg = { channels: { matrix: {} } };
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ listMatrixDirectoryGroupsLive, listMatrixDirectoryPeersLive } =
+      await import("./directory-live.js"));
+    ({ resolveMatrixAuth } = await import("./matrix/client.js"));
     vi.mocked(resolveMatrixAuth).mockReset();
     vi.mocked(resolveMatrixAuth).mockResolvedValue({
       accountId: "assistant",
@@ -48,7 +54,7 @@ describe("matrix directory live", () => {
     await listMatrixDirectoryGroupsLive({
       cfg,
       accountId: "assistant",
-      query: "!room:example.org",
+      query: "channel:#room:example.org",
       limit: 10,
     });
 

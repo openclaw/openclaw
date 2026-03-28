@@ -1,7 +1,6 @@
 import type { OutputRuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { afterEach, vi } from "vitest";
 import type { RuntimeEnv, WizardPrompter } from "../runtime-api.js";
-import { matrixOnboardingAdapter } from "./onboarding.js";
 import type { CoreConfig } from "./types.js";
 
 const MATRIX_ENV_KEYS = [
@@ -95,6 +94,7 @@ export async function runMatrixInteractiveConfigure(params: {
   forceAllowFrom?: boolean;
   configured?: boolean;
 }) {
+  const { matrixOnboardingAdapter } = await import("./onboarding.js");
   return await matrixOnboardingAdapter.configureInteractive!({
     cfg: params.cfg,
     runtime: createNonExitingTypedRuntimeEnv<RuntimeEnv>(),

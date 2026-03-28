@@ -14,14 +14,12 @@ vi.mock("./create-client.js", () => ({
   createMatrixClient: createMatrixClientMock,
 }));
 
-import {
-  acquireSharedMatrixClient,
-  releaseSharedClientInstance,
-  resolveSharedMatrixClient,
-  stopSharedClient,
-  stopSharedClientForAccount,
-  stopSharedClientInstance,
-} from "./shared.js";
+let acquireSharedMatrixClient: typeof import("./shared.js").acquireSharedMatrixClient;
+let releaseSharedClientInstance: typeof import("./shared.js").releaseSharedClientInstance;
+let resolveSharedMatrixClient: typeof import("./shared.js").resolveSharedMatrixClient;
+let stopSharedClient: typeof import("./shared.js").stopSharedClient;
+let stopSharedClientForAccount: typeof import("./shared.js").stopSharedClientForAccount;
+let stopSharedClientInstance: typeof import("./shared.js").stopSharedClientInstance;
 
 function authFor(accountId: string): MatrixAuth {
   return {
@@ -73,7 +71,16 @@ function primeAccountClientMocks(params?: {
 }
 
 describe("resolveSharedMatrixClient", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({
+      acquireSharedMatrixClient,
+      releaseSharedClientInstance,
+      resolveSharedMatrixClient,
+      stopSharedClient,
+      stopSharedClientForAccount,
+      stopSharedClientInstance,
+    } = await import("./shared.js"));
     resolveMatrixAuthMock.mockReset();
     resolveMatrixAuthContextMock.mockReset();
     createMatrixClientMock.mockReset();

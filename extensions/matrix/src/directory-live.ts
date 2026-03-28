@@ -100,13 +100,20 @@ async function requestMatrixJson<T>(
 export async function listMatrixDirectoryPeersLive(
   params: MatrixDirectoryLiveParams,
 ): Promise<ChannelDirectoryEntry[]> {
-  const context = await resolveMatrixDirectoryContext(params);
-  if (!context) {
+  const query = normalizeQuery(params.query);
+  if (!query) {
     return [];
   }
-  const directUserId = normalizeMatrixMessagingTarget(context.query);
+  const directUserId = normalizeMatrixMessagingTarget(query);
   if (directUserId && isMatrixQualifiedUserId(directUserId)) {
     return [{ kind: "user", id: directUserId }];
+  }
+  const context = await resolveMatrixDirectoryContext({
+    ...params,
+    query,
+  });
+  if (!context) {
+    return [];
   }
 
   const res = await requestMatrixJson<MatrixUserDirectoryResponse>(context.client, {
@@ -168,17 +175,25 @@ async function fetchMatrixRoomName(
 export async function listMatrixDirectoryGroupsLive(
   params: MatrixDirectoryLiveParams,
 ): Promise<ChannelDirectoryEntry[]> {
-  const context = await resolveMatrixDirectoryContext(params);
-  if (!context) {
+  const query = normalizeQuery(params.query);
+  if (!query) {
     return [];
   }
-  const { client, query, queryLower } = context;
-  const limit = resolveMatrixDirectoryLimit(params.limit);
   const directTarget = normalizeMatrixMessagingTarget(query);
 
   if (directTarget?.startsWith("!")) {
     return [createGroupDirectoryEntry({ id: directTarget, name: directTarget })];
   }
+
+  const context = await resolveMatrixDirectoryContext({
+    ...params,
+    query,
+  });
+  if (!context) {
+    return [];
+  }
+  const { client, queryLower } = context;
+  const limit = resolveMatrixDirectoryLimit(params.limit);
 
   if (directTarget?.startsWith("#")) {
     const roomId = await resolveMatrixRoomAlias(client, directTarget);
