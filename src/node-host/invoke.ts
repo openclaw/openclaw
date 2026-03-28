@@ -118,7 +118,7 @@ export function parseWindowsCodePage(raw: string): number | null {
   return codePage;
 }
 
-function resolveWindowsConsoleEncoding(): string | null {
+export function resolveWindowsConsoleEncoding(): string | null {
   if (process.platform !== "win32") {
     return null;
   }
