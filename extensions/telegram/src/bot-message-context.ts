@@ -5,10 +5,10 @@ import {
   type StatusReactionController,
 } from "openclaw/plugin-sdk/channel-feedback";
 import { logInboundDrop } from "openclaw/plugin-sdk/channel-inbound";
+import { recordChannelActivity } from "openclaw/plugin-sdk/channel-runtime";
 import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { TelegramDirectConfig, TelegramGroupConfig } from "openclaw/plugin-sdk/config-runtime";
 import { ensureConfiguredBindingRouteReady } from "openclaw/plugin-sdk/conversation-runtime";
-import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
 import { deriveLastRoutePolicy } from "openclaw/plugin-sdk/routing";
 import { DEFAULT_ACCOUNT_ID, resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
