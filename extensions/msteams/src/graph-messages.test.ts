@@ -13,6 +13,7 @@ import {
 const mockState = vi.hoisted(() => ({
   resolveGraphToken: vi.fn(),
   fetchGraphJson: vi.fn(),
+  fetchGraphAbsoluteUrl: vi.fn(),
   postGraphJson: vi.fn(),
   postGraphBetaJson: vi.fn(),
   deleteGraphRequest: vi.fn(),
@@ -22,6 +23,7 @@ const mockState = vi.hoisted(() => ({
 vi.mock("./graph.js", () => ({
   resolveGraphToken: mockState.resolveGraphToken,
   fetchGraphJson: mockState.fetchGraphJson,
+  fetchGraphAbsoluteUrl: mockState.fetchGraphAbsoluteUrl,
   postGraphJson: mockState.postGraphJson,
   postGraphBetaJson: mockState.postGraphBetaJson,
   deleteGraphRequest: mockState.deleteGraphRequest,
@@ -315,6 +317,60 @@ describe("listPinsMSTeams", () => {
     });
 
     expect(result.pins).toEqual([]);
+  });
+
+  it("follows @odata.nextLink pagination", async () => {
+    mockState.fetchGraphJson.mockResolvedValue({
+      value: [{ id: "pinned-1", message: { id: "msg-1", body: { content: "First page" } } }],
+      "@odata.nextLink":
+        "https://graph.microsoft.com/v1.0/chats/19%3Aabc%40thread.tacv2/pinnedMessages?$expand=message&$skiptoken=page2",
+    });
+    mockState.fetchGraphAbsoluteUrl.mockResolvedValue({
+      value: [{ id: "pinned-2", message: { id: "msg-2", body: { content: "Second page" } } }],
+    });
+
+    const result = await listPinsMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: CHAT_ID,
+    });
+
+    expect(result.pins).toEqual([
+      { id: "pinned-1", pinnedMessageId: "pinned-1", messageId: "msg-1", text: "First page" },
+      { id: "pinned-2", pinnedMessageId: "pinned-2", messageId: "msg-2", text: "Second page" },
+    ]);
+    expect(mockState.fetchGraphAbsoluteUrl).toHaveBeenCalledWith({
+      token: TOKEN,
+      url: "https://graph.microsoft.com/v1.0/chats/19%3Aabc%40thread.tacv2/pinnedMessages?$expand=message&$skiptoken=page2",
+    });
+  });
+
+  it("stops paginating after max pages", async () => {
+    // Return nextLink on every page to test the cap
+    const makePageResponse = (pageNum: number) => ({
+      value: [
+        {
+          id: `pinned-${pageNum}`,
+          message: { id: `msg-${pageNum}`, body: { content: `Page ${pageNum}` } },
+        },
+      ],
+      "@odata.nextLink": `https://graph.microsoft.com/v1.0/next?page=${pageNum + 1}`,
+    });
+
+    mockState.fetchGraphJson.mockResolvedValue(makePageResponse(1));
+    // Pages 2-10 via fetchGraphAbsoluteUrl (page 1 is the initial fetch)
+    for (let i = 2; i <= 10; i++) {
+      mockState.fetchGraphAbsoluteUrl.mockResolvedValueOnce(makePageResponse(i));
+    }
+
+    const result = await listPinsMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: CHAT_ID,
+    });
+
+    // Should collect exactly 10 pages (the max) and stop
+    expect(result.pins).toHaveLength(10);
+    // fetchGraphAbsoluteUrl should be called 9 times (pages 2-10)
+    expect(mockState.fetchGraphAbsoluteUrl).toHaveBeenCalledTimes(9);
   });
 });
 

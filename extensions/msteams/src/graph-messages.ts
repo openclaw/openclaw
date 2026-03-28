@@ -4,6 +4,7 @@ import {
   type GraphResponse,
   deleteGraphRequest,
   escapeOData,
+  fetchGraphAbsoluteUrl,
   fetchGraphJson,
   postGraphBetaJson,
   postGraphJson,
@@ -34,6 +35,7 @@ type GraphPinnedMessage = {
 
 type GraphPinnedMessagesResponse = {
   value?: GraphPinnedMessage[];
+  "@odata.nextLink"?: string;
 };
 
 /**
@@ -161,7 +163,14 @@ export type PinMessageMSTeamsParams = {
 
 /**
  * Pin a message in a chat conversation via Graph API.
- * Channel pinning uses a different endpoint (beta) handled separately.
+ *
+ * Chat pinning uses the v1.0 endpoint: `POST /chats/{chatId}/pinnedMessages`.
+ *
+ * Channel pinning uses `POST /teams/{teamId}/channels/{channelId}/pinnedMessages`.
+ * **Note:** The channel pin endpoint may require the Graph beta API or specific
+ * tenant-level permissions. As of March 2026, general availability is not
+ * confirmed for all tenants. If the call returns 404 or 403, the endpoint may
+ * not be enabled for the target tenant.
  */
 export async function pinMessageMSTeams(
   params: PinMessageMSTeamsParams,
@@ -171,8 +180,13 @@ export async function pinMessageMSTeams(
   const conv = resolveConversationPath(conversationId);
 
   if (conv.kind === "channel") {
-    // Graph v1.0 doesn't have channel pin — use the pinnedMessages pattern on chat
-    // For channels, attempt POST to pinnedMessages (same shape, may require beta)
+    // Channel pin endpoint: /teams/{teamId}/channels/{channelId}/pinnedMessages
+    // This endpoint may only be available in the beta API or require specific
+    // tenant/admin permissions. It uses the same request shape as chat pinning
+    // but GA availability is uncertain.
+    console.warn(
+      "[msteams] Channel pin operations use an endpoint that may require beta API access or tenant-level permissions.",
+    );
     await postGraphJson<unknown>({
       token,
       path: `${conv.basePath}/pinnedMessages`,
@@ -200,6 +214,9 @@ export type UnpinMessageMSTeamsParams = {
  * Unpin a message in a chat conversation via Graph API.
  * `pinnedMessageId` is the pinned-message resource ID (from pin or list-pins),
  * not the underlying chat message ID.
+ *
+ * Channel unpin uses `DELETE /teams/{teamId}/channels/{channelId}/pinnedMessages/{id}`.
+ * See the note on {@link pinMessageMSTeams} regarding beta/GA status.
  */
 export async function unpinMessageMSTeams(
   params: UnpinMessageMSTeamsParams,
@@ -207,6 +224,11 @@ export async function unpinMessageMSTeams(
   const token = await resolveGraphToken(params.cfg);
   const conversationId = await resolveGraphConversationId(params.to);
   const conv = resolveConversationPath(conversationId);
+  if (conv.kind === "channel") {
+    console.warn(
+      "[msteams] Channel unpin operations use an endpoint that may require beta API access or tenant-level permissions.",
+    );
+  }
   const path = `${conv.basePath}/pinnedMessages/${encodeURIComponent(params.pinnedMessageId)}`;
   await deleteGraphRequest({ token, path });
   return { ok: true };
@@ -221,8 +243,15 @@ export type ListPinsMSTeamsResult = {
   pins: Array<{ id: string; pinnedMessageId: string; messageId?: string; text?: string }>;
 };
 
+/** Maximum number of pagination pages to follow to avoid unbounded loops. */
+const LIST_PINS_MAX_PAGES = 10;
+
 /**
  * List all pinned messages in a chat conversation via Graph API.
+ * Follows `@odata.nextLink` pagination to collect the full pin set.
+ *
+ * Channel list-pins uses the same endpoint pattern as channel pin/unpin.
+ * See the note on {@link pinMessageMSTeams} regarding beta/GA status.
  */
 export async function listPinsMSTeams(
   params: ListPinsMSTeamsParams,
@@ -230,15 +259,40 @@ export async function listPinsMSTeams(
   const token = await resolveGraphToken(params.cfg);
   const conversationId = await resolveGraphConversationId(params.to);
   const conv = resolveConversationPath(conversationId);
+
+  if (conv.kind === "channel") {
+    console.warn(
+      "[msteams] Channel list-pins operations use an endpoint that may require beta API access or tenant-level permissions.",
+    );
+  }
+
   const path = `${conv.basePath}/pinnedMessages?$expand=message`;
-  const res = await fetchGraphJson<GraphPinnedMessagesResponse>({ token, path });
-  const pins = (res.value ?? []).map((pin) => ({
-    id: pin.id ?? "",
-    pinnedMessageId: pin.id ?? "",
-    messageId: pin.message?.id,
-    text: pin.message?.body?.content,
-  }));
-  return { pins };
+  const allPins: Array<{ id: string; pinnedMessageId: string; messageId?: string; text?: string }> =
+    [];
+
+  let res = await fetchGraphJson<GraphPinnedMessagesResponse>({ token, path });
+  let pages = 1;
+
+  while (true) {
+    for (const pin of res.value ?? []) {
+      allPins.push({
+        id: pin.id ?? "",
+        pinnedMessageId: pin.id ?? "",
+        messageId: pin.message?.id,
+        text: pin.message?.body?.content,
+      });
+    }
+
+    const nextLink = res["@odata.nextLink"];
+    if (!nextLink || pages >= LIST_PINS_MAX_PAGES) {
+      break;
+    }
+
+    res = await fetchGraphAbsoluteUrl<GraphPinnedMessagesResponse>({ token, url: nextLink });
+    pages++;
+  }
+
+  return { pins: allPins };
 }
 
 // ---------------------------------------------------------------------------
