@@ -57,8 +57,8 @@ vi.mock("openclaw/plugin-sdk/routing", async (importOriginal) => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
+vi.mock("openclaw/plugin-sdk/channel-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-runtime")>();
   return {
     ...actual,
     resolveHeartbeatVisibility: () => state.visibility,
