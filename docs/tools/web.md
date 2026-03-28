@@ -216,6 +216,15 @@ AI-synthesized answers with citations. It accepts natural-language queries and
 optional structured filters. OpenClaw only enables the built-in xAI `x_search`
 tool on the request that serves this tool call.
 
+<Note>
+  xAI documents `x_search` as supporting keyword search, semantic search, user
+  search, and thread fetch. For per-post engagement stats such as reposts,
+  replies, bookmarks, or views, prefer a targeted lookup for the exact post URL
+  or status ID. Broad keyword searches may find the right post but return less
+  complete per-post metadata. A good pattern is: locate the post first, then
+  run a second `x_search` query focused on that exact post.
+</Note>
+
 ### x_search config
 
 ```json5
@@ -255,6 +264,13 @@ await x_search({
   query: "dinner recipes",
   allowed_x_handles: ["nytfood"],
   from_date: "2026-03-01",
+});
+```
+
+```javascript
+// Per-post stats: use the exact status URL or status ID when possible
+await x_search({
+  query: "https://x.com/huntharo/status/1905678901234567890",
 });
 ```
 
