@@ -330,6 +330,72 @@ describe("secrets runtime snapshot", () => {
     ).toEqual({ source: "env", provider: "default", id: "OPENAI_API_KEY" });
   });
 
+  it("resolves top-level Matrix accessToken refs even when named accounts exist", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        channels: {
+          matrix: {
+            accessToken: {
+              source: "env",
+              provider: "default",
+              id: "MATRIX_ACCESS_TOKEN",
+            },
+            accounts: {
+              ops: {
+                homeserver: "https://matrix.example.org",
+                accessToken: "ops-token",
+              },
+            },
+          },
+        },
+      }),
+      env: {
+        MATRIX_ACCESS_TOKEN: "default-matrix-token",
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.config.channels?.matrix?.accessToken).toBe("default-matrix-token");
+  });
+
+  it("ignores Matrix password refs that are shadowed by scoped env access tokens", async () => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        channels: {
+          matrix: {
+            accounts: {
+              ops: {
+                password: {
+                  source: "env",
+                  provider: "default",
+                  id: "MATRIX_OPS_PASSWORD",
+                },
+              },
+            },
+          },
+        },
+      }),
+      env: {
+        MATRIX_OPS_ACCESS_TOKEN: "ops-token",
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.config.channels?.matrix?.accounts?.ops?.password).toEqual({
+      source: "env",
+      provider: "default",
+      id: "MATRIX_OPS_PASSWORD",
+    });
+    expect(snapshot.warnings).toContainEqual(
+      expect.objectContaining({
+        code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+        path: "channels.matrix.accounts.ops.password",
+      }),
+    );
+  });
+
   it("resolves sandbox ssh secret refs for active ssh backends", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({

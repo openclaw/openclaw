@@ -9,7 +9,7 @@ import {
   normalizeAccountId,
 } from "../runtime-api.js";
 import type { CoreConfig, MatrixConfig } from "../types.js";
-import { resolveMatrixBaseConfig } from "./account-config.js";
+import { findMatrixAccountConfig, resolveMatrixBaseConfig } from "./account-config.js";
 import { resolveMatrixConfigForAccount } from "./client.js";
 import { credentialsMatchConfig, loadMatrixCredentials } from "./credentials-read.js";
 
@@ -65,7 +65,7 @@ export function resolveConfiguredMatrixBotUserIds(params: {
   const env = params.env ?? process.env;
   const currentAccountId = normalizeAccountId(params.accountId);
   const accountIds = new Set(resolveConfiguredMatrixAccountIds(params.cfg, env));
-  if (resolveMatrixAccount({ cfg: params.cfg, accountId: DEFAULT_ACCOUNT_ID }).configured) {
+  if (resolveMatrixAccount({ cfg: params.cfg, accountId: DEFAULT_ACCOUNT_ID, env }).configured) {
     accountIds.add(DEFAULT_ACCOUNT_ID);
   }
   const ids = new Set<string>();
@@ -74,7 +74,7 @@ export function resolveConfiguredMatrixBotUserIds(params: {
     if (normalizeAccountId(accountId) === currentAccountId) {
       continue;
     }
-    if (!resolveMatrixAccount({ cfg: params.cfg, accountId }).configured) {
+    if (!resolveMatrixAccount({ cfg: params.cfg, accountId, env }).configured) {
       continue;
     }
     const userId = resolveMatrixAccountUserId({
@@ -93,19 +93,27 @@ export function resolveConfiguredMatrixBotUserIds(params: {
 export function resolveMatrixAccount(params: {
   cfg: CoreConfig;
   accountId?: string | null;
+  env?: NodeJS.ProcessEnv;
 }): ResolvedMatrixAccount {
+  const env = params.env ?? process.env;
   const accountId = normalizeAccountId(params.accountId);
   const matrixBase = resolveMatrixBaseConfig(params.cfg);
+  const explicitAccountConfig =
+    accountId === DEFAULT_ACCOUNT_ID
+      ? matrixBase
+      : (findMatrixAccountConfig(params.cfg, accountId) ?? {});
   const base = resolveMatrixAccountConfig({ cfg: params.cfg, accountId });
   const enabled = base.enabled !== false && matrixBase.enabled !== false;
 
-  const resolved = resolveMatrixConfigForAccount(params.cfg, accountId, process.env);
+  const resolved = resolveMatrixConfigForAccount(params.cfg, accountId, env);
   const hasHomeserver = Boolean(resolved.homeserver);
   const hasUserId = Boolean(resolved.userId);
-  const hasAccessToken = Boolean(resolved.accessToken);
+  const hasAccessToken =
+    Boolean(resolved.accessToken) || hasConfiguredSecretInput(explicitAccountConfig.accessToken);
   const hasPassword = Boolean(resolved.password);
-  const hasPasswordAuth = hasUserId && (hasPassword || hasConfiguredSecretInput(base.password));
-  const stored = loadMatrixCredentials(process.env, accountId);
+  const hasPasswordAuth =
+    hasUserId && (hasPassword || hasConfiguredSecretInput(explicitAccountConfig.password));
+  const stored = loadMatrixCredentials(env, accountId);
   const hasStored =
     stored && resolved.homeserver
       ? credentialsMatchConfig(stored, {
