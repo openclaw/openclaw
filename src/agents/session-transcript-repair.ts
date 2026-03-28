@@ -1,5 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
+import { extractToolCallsFromAssistant, extractToolResultId, sanitizeToolCallId } from "./tool-call-id.js";
 
 const TOOL_CALL_NAME_MAX_CHARS = 64;
 const TOOL_CALL_NAME_RE = /^[A-Za-z0-9_-]+$/;
@@ -408,6 +408,18 @@ export function repairToolUseResultPairing(
 
     const toolCallIds = new Set(toolCalls.map((t) => t.id));
     const toolCallNamesById = new Map(toolCalls.map((t) => [t.id, t.name] as const));
+    // Build a sanitized-to-original ID map so we can match tool results whose
+    // IDs were normalized (e.g. by sanitizeToolCallIds for the Anthropic API)
+    // against raw JSONL IDs that contain underscores/hyphens (#52604).
+    const sanitizedToOriginalId = new Map<string, string>();
+    for (const t of toolCalls) {
+      if (t.id) {
+        const sanitized = sanitizeToolCallId(t.id);
+        if (sanitized !== t.id) {
+          sanitizedToOriginalId.set(sanitized, t.id);
+        }
+      }
+    }
 
     const spanResultsById = new Map<string, Extract<AgentMessage, { role: "toolResult" }>>();
     const remainder: AgentMessage[] = [];
@@ -427,7 +439,13 @@ export function repairToolUseResultPairing(
 
       if (nextRole === "toolResult") {
         const toolResult = next as Extract<AgentMessage, { role: "toolResult" }>;
-        const id = extractToolResultId(toolResult);
+        const rawId = extractToolResultId(toolResult);
+        // Match against raw ID first; fall back to sanitized ID for
+        // cross-model sessions where tool results were saved with sanitized
+        // IDs but tool calls retain the original format (#52604).
+        const id = rawId && toolCallIds.has(rawId)
+          ? rawId
+          : rawId ? (sanitizedToOriginalId.get(rawId) ?? sanitizedToOriginalId.get(sanitizeToolCallId(rawId))) : undefined;
         if (id && toolCallIds.has(id)) {
           if (seenToolResultIds.has(id)) {
             droppedDuplicateCount += 1;
