@@ -30,6 +30,7 @@ import {
 import { bm25RankToScore, buildFtsQuery, mergeHybridResults } from "./hybrid.js";
 import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
 import { searchKeyword, searchVector } from "./manager-search.js";
+import { applyWeightsToResults, WeightedRecallStore } from "./weighted-recall.js";
 const SNIPPET_MAX_CHARS = 700;
 const VECTOR_TABLE = "chunks_vec";
 const FTS_TABLE = "chunks_fts";
@@ -80,6 +81,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   protected readonly agentId: string;
   protected readonly workspaceDir: string;
   protected readonly settings: ResolvedMemorySearchConfig;
+  readonly weightStore: WeightedRecallStore;
   protected provider: EmbeddingProvider | null;
   private readonly requestedProvider: EmbeddingProviderRequest;
   private providerInitPromise: Promise<void> | null = null;
@@ -229,6 +231,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     this.agentId = params.agentId;
     this.workspaceDir = params.workspaceDir;
     this.settings = params.settings;
+    this.weightStore = new WeightedRecallStore(resolveAgentDir(params.cfg, params.agentId));
     this.provider = null;
     this.requestedProvider = params.settings.provider;
     if (params.providerResult) {
@@ -334,6 +337,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (!hasIndexedContent) {
       return [];
     }
+    // Invalidate the weight cache so CLI feedback writes from other processes
+    // are visible without requiring a gateway restart.
+    this.weightStore.invalidate();
     await this.ensureProviderInitialized();
     const minScore = opts?.minScore ?? this.settings.query.minScore;
     const maxResults = opts?.maxResults ?? this.settings.query.maxResults;
@@ -371,12 +377,11 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         }
       }
 
-      const merged = [...seenIds.values()]
+      const weighted = await applyWeightsToResults([...seenIds.values()], this.weightStore);
+      return weighted
         .toSorted((a, b) => b.score - a.score)
         .filter((entry) => entry.score >= minScore)
         .slice(0, maxResults);
-
-      return merged;
     }
 
     // If FTS isn't available, hybrid mode cannot use keyword search; degrade to vector-only.
@@ -392,7 +397,11 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       : [];
 
     if (!hybrid.enabled || !this.fts.enabled || !this.fts.available) {
-      return vectorResults.filter((entry) => entry.score >= minScore).slice(0, maxResults);
+      const weighted = await applyWeightsToResults(vectorResults, this.weightStore);
+      return weighted
+        .toSorted((a, b) => b.score - a.score)
+        .filter((entry) => entry.score >= minScore)
+        .slice(0, maxResults);
     }
 
     const merged = await this.mergeHybridResults({
@@ -505,6 +514,13 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     mmr?: { enabled: boolean; lambda: number };
     temporalDecay?: { enabled: boolean; halfLifeDays: number };
   }): Promise<MemorySearchResult[]> {
+    // Build a composite-key → id lookup from the input results (which carry ids)
+    // so we can re-attach ids after mergeHybridResults strips them from its output.
+    const idByKey = new Map<string, string>();
+    for (const r of [...params.vector, ...params.keyword]) {
+      idByKey.set(`${r.source}:${r.path}:${r.startLine}:${r.endLine}`, r.id);
+    }
+
     return mergeHybridResults({
       vector: params.vector.map((r) => ({
         id: r.id,
@@ -529,7 +545,16 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       mmr: params.mmr,
       temporalDecay: params.temporalDecay,
       workspaceDir: this.workspaceDir,
-    }).then((entries) => entries.map((entry) => entry as MemorySearchResult));
+    }).then(async (entries) => {
+      const entriesWithId = entries.map((e) => ({
+        ...e,
+        id: idByKey.get(`${e.source}:${e.path}:${e.startLine}:${e.endLine}`) ?? "",
+      }));
+      const weighted = await applyWeightsToResults(entriesWithId, this.weightStore);
+      return weighted
+        .toSorted((a, b) => b.score - a.score)
+        .map(({ id: _id, ...rest }) => rest as MemorySearchResult);
+    });
   }
 
   async sync(params?: {

@@ -30,6 +30,19 @@ async function runMemorySearch(queryArg: string | undefined, opts: MemorySearchC
   await runtime.runMemorySearch(queryArg, opts);
 }
 
+async function runMemoryFeedbackRecall(chunkId: string, opts: MemoryCommandOptions): Promise<void> {
+  const runtime = await loadMemoryCliRuntime();
+  await runtime.runMemoryFeedbackRecall(chunkId, opts);
+}
+
+async function runMemoryFeedbackCorrect(
+  chunkId: string,
+  opts: MemoryCommandOptions,
+): Promise<void> {
+  const runtime = await loadMemoryCliRuntime();
+  await runtime.runMemoryFeedbackCorrect(chunkId, opts);
+}
+
 export function registerMemoryCli(program: Command) {
   const memory = program
     .command("memory")
@@ -70,6 +83,40 @@ export function registerMemoryCli(program: Command) {
     .option("--verbose", "Verbose logging", false)
     .action(async (opts: MemoryCommandOptions) => {
       await runMemoryIndex(opts);
+    });
+
+  const feedback = memory
+    .command("feedback")
+    .description("Adjust memory relevance weights (ported from SkillFoundry weighted recall)")
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+          [
+            "openclaw memory feedback recall <chunk-id>",
+            "Mark a result as useful (+0.1 weight boost).",
+          ],
+          [
+            "openclaw memory feedback correct <chunk-id>",
+            "Demote a stale/wrong chunk (weight → 0.3).",
+          ],
+        ])}\n`,
+    );
+
+  feedback
+    .command("recall <chunk-id>")
+    .description("Boost a chunk's relevance weight by 0.1 (max 3.0)")
+    .option("--agent <id>", "Agent id (default: default agent)")
+    .action(async (chunkId: string, opts: MemoryCommandOptions) => {
+      await runMemoryFeedbackRecall(chunkId, opts);
+    });
+
+  feedback
+    .command("correct <chunk-id>")
+    .description("Demote a stale or incorrect chunk (weight → 0.3)")
+    .option("--agent <id>", "Agent id (default: default agent)")
+    .action(async (chunkId: string, opts: MemoryCommandOptions) => {
+      await runMemoryFeedbackCorrect(chunkId, opts);
     });
 
   memory

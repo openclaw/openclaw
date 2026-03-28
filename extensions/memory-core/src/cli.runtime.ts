@@ -2,6 +2,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { resolveAgentDir } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   colorize,
   defaultRuntime,
@@ -29,6 +30,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import type { MemoryCommandOptions, MemorySearchCommandOptions } from "./cli.types.js";
 import { getMemorySearchManager } from "./memory/index.js";
+import { WeightedRecallStore, WEIGHT_CORRECTION_ORIGINAL } from "./memory/weighted-recall.js";
 
 type MemoryManager = NonNullable<Awaited<ReturnType<typeof getMemorySearchManager>>["manager"]>;
 type MemoryManagerPurpose = Parameters<typeof getMemorySearchManager>[0]["purpose"];
@@ -762,4 +764,68 @@ export async function runMemorySearch(
       defaultRuntime.log(lines.join("\n").trim());
     },
   });
+}
+
+/**
+ * `openclaw memory feedback recall <chunk-id>`
+ *
+ * Marks a search result chunk as useful, boosting its relevance weight by
+ * WEIGHT_RECALL_INCREMENT (0.1) up to a maximum of 3.0. Mirrors SkillFoundry's
+ * `$memory` recall feedback that promotes entries the agent found valuable.
+ */
+export async function runMemoryFeedbackRecall(
+  chunkId: string,
+  opts: MemoryCommandOptions,
+): Promise<void> {
+  const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory feedback recall");
+  emitMemorySecretResolveDiagnostics(diagnostics);
+  const agentId = resolveAgent(cfg, opts.agent);
+  const stateDir = resolveAgentDir(cfg, agentId);
+  const store = new WeightedRecallStore(stateDir);
+  const prevWeight = await store.getWeight(chunkId);
+  await store.recordRecall(chunkId);
+  await store.flush();
+  const nextWeight = await store.getWeight(chunkId);
+  const rich = isRich();
+  defaultRuntime.log(
+    `${colorize(rich, theme.success, "✓")} Recall recorded for ${colorize(rich, theme.accent, chunkId)}: ` +
+      `weight ${colorize(rich, theme.muted, prevWeight.toFixed(2))} → ${colorize(rich, theme.success, nextWeight.toFixed(2))}`,
+  );
+}
+
+/**
+ * `openclaw memory feedback correct <chunk-id>`
+ *
+ * Demotes a stale or incorrect chunk by setting its weight to
+ * WEIGHT_CORRECTION_ORIGINAL (0.3). The chunk remains in the index and can
+ * still be found, but it will rank significantly lower in hybrid scoring.
+ * Mirrors SkillFoundry's correction chain that deprioritizes superseded entries.
+ *
+ * Create a corrected replacement entry in your memory files; the replacement
+ * starts at the default weight (1.0) and accumulates recall boosts over time.
+ */
+export async function runMemoryFeedbackCorrect(
+  chunkId: string,
+  opts: MemoryCommandOptions,
+): Promise<void> {
+  const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory feedback correct");
+  emitMemorySecretResolveDiagnostics(diagnostics);
+  const agentId = resolveAgent(cfg, opts.agent);
+  const stateDir = resolveAgentDir(cfg, agentId);
+  const store = new WeightedRecallStore(stateDir);
+  const prevWeight = await store.getWeight(chunkId);
+  const correctionWeight = await store.recordCorrection(chunkId);
+  await store.flush();
+  const rich = isRich();
+  defaultRuntime.log(
+    `${colorize(rich, theme.warn, "⚠")} Correction recorded for ${colorize(rich, theme.accent, chunkId)}: ` +
+      `weight ${colorize(rich, theme.muted, prevWeight.toFixed(2))} → ${colorize(rich, theme.warn, WEIGHT_CORRECTION_ORIGINAL.toFixed(2))} (demoted)`,
+  );
+  defaultRuntime.log(
+    colorize(
+      rich,
+      theme.muted,
+      `Add the corrected content to a memory file. New entries start at weight ${correctionWeight.toFixed(2)}.`,
+    ),
+  );
 }
