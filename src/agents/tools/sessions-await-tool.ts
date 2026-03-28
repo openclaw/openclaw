@@ -68,12 +68,16 @@ export function createSessionsAwaitTool(_opts?: { agentSessionKey?: string }): A
         run: getSubagentRunByChildSessionKey(key),
       }));
 
-      // Suppress auto-announce before waiting so results are delivered only
-      // via this tool return, avoiding duplicate messages in the parent context.
-      const activeEntries = lookups.filter((e) => e.run && typeof e.run.endedAt !== "number");
-      for (const e of activeEntries) {
-        setSuppressAutoAnnounce(e.run!.runId);
+      // Suppress auto-announce for all found runs before filtering by endedAt.
+      // This narrows the race window where a run completes and fires announce
+      // between the lookup snapshot and the suppression call.
+      for (const e of lookups) {
+        if (e.run) {
+          setSuppressAutoAnnounce(e.run.runId);
+        }
       }
+
+      const activeEntries = lookups.filter((e) => e.run && typeof e.run.endedAt !== "number");
 
       if (activeEntries.length > 0) {
         const remainingMs = Math.max(1, deadline - Date.now());

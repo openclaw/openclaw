@@ -1,4 +1,5 @@
 import { Type } from "@sinclair/typebox";
+import { loadConfig } from "../../config/config.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { ACP_SPAWN_MODES, ACP_SPAWN_STREAM_TARGETS, spawnAcpDirect } from "../acp-spawn.js";
 import { optionalStringEnum } from "../schema/typebox.js";
@@ -122,11 +123,13 @@ export function createSessionsSpawnTool(
         params.cleanup === "keep" || params.cleanup === "delete" ? params.cleanup : "keep";
       const sandbox = params.sandbox === "require" ? "require" : "inherit";
       const streamTo = params.streamTo === "parent" ? "parent" : undefined;
+      const cfg = loadConfig();
+      const awaitEnabled = cfg?.agents?.defaults?.subagents?.awaitEnabled === true;
       const waitForCompletion =
         typeof params.waitForCompletion === "boolean"
-          ? params.waitForCompletion
-          : isOpenResponsesSessionKey(opts?.agentSessionKey);
-      const suppressAnnounce = params.suppressAnnounce === true;
+          ? params.waitForCompletion && awaitEnabled
+          : awaitEnabled && isOpenResponsesSessionKey(opts?.agentSessionKey);
+      const suppressAnnounce = params.suppressAnnounce === true && awaitEnabled;
       // Back-compat: older callers used timeoutSeconds for this tool.
       const timeoutSecondsCandidate =
         typeof params.runTimeoutSeconds === "number"
