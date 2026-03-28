@@ -1072,7 +1072,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     onEarlyGatewayDebug = undefined;
     await (runDiscordGatewayLifecycleForTesting ?? runDiscordGatewayLifecycle)({
       accountId: account.accountId,
-      gateway: lifecycleGateway,
+      client: client,
       runtime,
       abortSignal: opts.abortSignal,
       statusSink: opts.setStatus,
