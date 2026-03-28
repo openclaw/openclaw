@@ -47,6 +47,16 @@ function expectServiceContext(
   expect(typeof ctx.logger.error).toBe("function");
 }
 
+function expectServiceContexts(
+  contexts: OpenClawPluginServiceContext[],
+  config: Parameters<typeof startPluginServices>[0]["config"],
+) {
+  expect(contexts).not.toHaveLength(0);
+  for (const ctx of contexts) {
+    expectServiceContext(ctx, config);
+  }
+}
+
 function createTrackingService(
   id: string,
   params: {
@@ -107,9 +117,7 @@ describe("startPluginServices", () => {
     expect(starts).toEqual(["a", "b", "c"]);
     expect(stops).toEqual(["c", "a"]);
     expect(contexts).toHaveLength(3);
-    for (const ctx of contexts) {
-      expectServiceContext(ctx, config);
-    }
+    expectServiceContexts(contexts, config);
   });
 
   it("logs start/stop failures and continues", async () => {

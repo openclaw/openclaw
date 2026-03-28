@@ -28,6 +28,15 @@ function expectTestOnlyArtifactsExcluded(artifacts: readonly string[]) {
   }
 }
 
+function expectGeneratedPathResolution(tempRoot: string, expectedRelativePath: string) {
+  expect(
+    resolveBundledPluginGeneratedPath(tempRoot, {
+      source: "plugin/index.ts",
+      built: "plugin/index.js",
+    }),
+  ).toBe(path.join(tempRoot, expectedRelativePath));
+}
+
 async function writeGeneratedMetadataModule(params: {
   repoRoot: string;
   outputPath?: string;
@@ -79,20 +88,10 @@ describe("bundled plugin metadata", () => {
 
     fs.mkdirSync(path.join(tempRoot, "plugin"), { recursive: true });
     fs.writeFileSync(path.join(tempRoot, "plugin", "index.ts"), "export {};\n", "utf8");
-    expect(
-      resolveBundledPluginGeneratedPath(tempRoot, {
-        source: "plugin/index.ts",
-        built: "plugin/index.js",
-      }),
-    ).toBe(path.join(tempRoot, "plugin", "index.ts"));
+    expectGeneratedPathResolution(tempRoot, path.join("plugin", "index.ts"));
 
     fs.writeFileSync(path.join(tempRoot, "plugin", "index.js"), "export {};\n", "utf8");
-    expect(
-      resolveBundledPluginGeneratedPath(tempRoot, {
-        source: "plugin/index.ts",
-        built: "plugin/index.js",
-      }),
-    ).toBe(path.join(tempRoot, "plugin", "index.js"));
+    expectGeneratedPathResolution(tempRoot, path.join("plugin", "index.js"));
   });
 
   it("supports check mode for stale generated artifacts", async () => {
