@@ -93,7 +93,7 @@ def init_supermemory(executor) -> None:
 
     # v11.7: Graph-RAG dependency engine
     try:
-        executor._graph_engine = DependencyGraphEngine(root_dir=executor._framework_root)
+        executor._graph_engine = DependencyGraphEngine(project_root=executor._framework_root)
         executor._graph_engine.build()
         stats = executor._graph_engine.stats()
         logger.info("Graph-RAG engine initialized", files=stats.total_files, edges=stats.total_edges)
