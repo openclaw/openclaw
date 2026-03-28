@@ -41,6 +41,8 @@ afterEach(() => {
     cleanupFns.pop()?.();
   }
   restoreProcessEnv();
+  vi.resetModules();
+  vi.doUnmock("node:child_process");
   for (const tempDir of tempDirs) {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -165,5 +167,25 @@ describe("installTestEnv", () => {
 
     expect(testEnv.tempHome).toBe(realHome);
     expect(process.env.TEST_PROFILE_ONLY).toBe("from-profile");
+  });
+
+  it("isolates HOME for non-live tests", () => {
+    const realHome = createTempHome();
+    process.env.HOME = realHome;
+    process.env.USERPROFILE = realHome;
+    process.env.OPENCLAW_CONFIG_PATH = "/tmp/host-config.json";
+    process.env.OPENCLAW_STATE_DIR = "/tmp/host-state";
+    process.env.NODE_OPTIONS = "--inspect";
+
+    const testEnv = installTestEnv();
+    cleanupFns.push(testEnv.cleanup);
+
+    expect(testEnv.tempHome).not.toBe(realHome);
+    expect(process.env.HOME).toBe(testEnv.tempHome);
+    expect(process.env.USERPROFILE).toBe(testEnv.tempHome);
+    expect(process.env.OPENCLAW_TEST_HOME).toBe(testEnv.tempHome);
+    expect(process.env.OPENCLAW_TEST_FAST).toBe("1");
+    expect(process.env.OPENCLAW_CONFIG_PATH).toBeUndefined();
+    expect(process.env.NODE_OPTIONS).toBeUndefined();
   });
 });

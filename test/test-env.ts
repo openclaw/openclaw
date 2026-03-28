@@ -50,6 +50,7 @@ function loadProfileEnv(homeDir = os.homedir()): void {
   if (!fs.existsSync(profilePath)) {
     return;
   }
+
   const applyEntry = (entry: string) => {
     const idx = entry.indexOf("=");
     if (idx <= 0) {
@@ -62,6 +63,7 @@ function loadProfileEnv(homeDir = os.homedir()): void {
     process.env[key] = entry.slice(idx + 1);
     return true;
   };
+
   const countAppliedEntries = (entries: Iterable<string>) => {
     let applied = 0;
     for (const entry of entries) {
@@ -71,46 +73,60 @@ function loadProfileEnv(homeDir = os.homedir()): void {
     }
     return applied;
   };
+
+  const bashCandidates =
+    process.platform === "win32"
+      ? ["bash", "C:/Program Files/Git/bin/bash.exe", "C:/Program Files/Git/usr/bin/bash.exe"]
+      : [process.env.SHELL || "/bin/bash", "/bin/bash", "bash"];
+
+  for (const bashPath of bashCandidates) {
+    if (!bashPath) {
+      continue;
+    }
+    try {
+      const output = execFileSync(
+        bashPath,
+        ["-lc", `set -a; source "${profilePath}" >/dev/null 2>&1; env -0`],
+        { encoding: "utf8" },
+      );
+      const applied = countAppliedEntries(output.split("\0").filter(Boolean));
+      if (applied > 0 && !isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST_QUIET)) {
+        console.log(`[live] loaded ${applied} env vars from ~/.profile`);
+      }
+      return;
+    } catch {
+      // try the next shell candidate, then fall back to static parsing below
+    }
+  }
+
   try {
-    const output = execFileSync(
-      "/bin/bash",
-      ["-lc", `set -a; source "${profilePath}" >/dev/null 2>&1; env -0`],
-      { encoding: "utf8" },
-    );
-    const applied = countAppliedEntries(output.split("\0").filter(Boolean));
+    const fallbackEntries = fs
+      .readFileSync(profilePath, "utf8")
+      .split(/\r?\n/u)
+      .map((line) => line.trim())
+      .filter((line) => line && !line.startsWith("#"))
+      .map((line) => line.replace(/^export\s+/u, ""))
+      .map((line) => {
+        const match = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/u);
+        if (!match) {
+          return "";
+        }
+        let value = match[2].trim();
+        if (
+          (value.startsWith('"') && value.endsWith('"')) ||
+          (value.startsWith("'") && value.endsWith("'"))
+        ) {
+          value = value.slice(1, -1);
+        }
+        return `${match[1]}=${value}`;
+      })
+      .filter(Boolean);
+    const applied = countAppliedEntries(fallbackEntries);
     if (applied > 0 && !isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST_QUIET)) {
       console.log(`[live] loaded ${applied} env vars from ~/.profile`);
     }
   } catch {
-    try {
-      const fallbackEntries = fs
-        .readFileSync(profilePath, "utf8")
-        .split(/\r?\n/u)
-        .map((line) => line.trim())
-        .filter((line) => line && !line.startsWith("#"))
-        .map((line) => line.replace(/^export\s+/u, ""))
-        .map((line) => {
-          const match = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/u);
-          if (!match) {
-            return "";
-          }
-          let value = match[2].trim();
-          if (
-            (value.startsWith('"') && value.endsWith('"')) ||
-            (value.startsWith("'") && value.endsWith("'"))
-          ) {
-            value = value.slice(1, -1);
-          }
-          return `${match[1]}=${value}`;
-        })
-        .filter(Boolean);
-      const applied = countAppliedEntries(fallbackEntries);
-      if (applied > 0 && !isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST_QUIET)) {
-        console.log(`[live] loaded ${applied} env vars from ~/.profile`);
-      }
-    } catch {
-      // ignore profile load failures
-    }
+    // ignore profile load failures
   }
 }
 
@@ -156,19 +172,15 @@ function createIsolatedTestHome(restore: RestoreEntry[]): {
   process.env.OPENCLAW_TEST_HOME = tempHome;
   process.env.OPENCLAW_TEST_FAST = "1";
 
-  // Ensure test runs never touch the developer's real config/state, even if they have overrides set.
   delete process.env.OPENCLAW_CONFIG_PATH;
-  // Prefer deriving state dir from HOME so nested tests that change HOME also isolate correctly.
   delete process.env.OPENCLAW_STATE_DIR;
   delete process.env.OPENCLAW_AGENT_DIR;
   delete process.env.PI_CODING_AGENT_DIR;
-  // Prefer test-controlled ports over developer overrides (avoid port collisions across tests/workers).
   delete process.env.OPENCLAW_GATEWAY_PORT;
   delete process.env.OPENCLAW_BRIDGE_ENABLED;
   delete process.env.OPENCLAW_BRIDGE_HOST;
   delete process.env.OPENCLAW_BRIDGE_PORT;
   delete process.env.OPENCLAW_CANVAS_HOST_PORT;
-  // Avoid leaking real GitHub/Copilot tokens into non-live test runs.
   delete process.env.TELEGRAM_BOT_TOKEN;
   delete process.env.DISCORD_BOT_TOKEN;
   delete process.env.SLACK_BOT_TOKEN;
@@ -177,10 +189,8 @@ function createIsolatedTestHome(restore: RestoreEntry[]): {
   delete process.env.COPILOT_GITHUB_TOKEN;
   delete process.env.GH_TOKEN;
   delete process.env.GITHUB_TOKEN;
-  // Avoid leaking local dev tooling flags into tests (e.g. --inspect).
   delete process.env.NODE_OPTIONS;
 
-  // Windows: prefer the default state dir so auth/profile tests match real paths.
   if (process.platform === "win32") {
     process.env.OPENCLAW_STATE_DIR = path.join(tempHome, ".openclaw");
   }
@@ -321,9 +331,11 @@ export function installTestEnv(): { cleanup: () => void; tempHome: string } {
     process.env.OPENCLAW_LIVE_GATEWAY === "1";
   const allowRealHome = isTruthyEnvValue(process.env.OPENCLAW_LIVE_USE_REAL_HOME);
   const realHome = process.env.HOME ?? os.homedir();
-  const liveEnvSnapshot = { ...process.env };
 
-  loadProfileEnv(realHome);
+  if (live) {
+    loadProfileEnv(realHome);
+  }
+  const liveEnvSnapshot = { ...process.env };
 
   if (live && allowRealHome) {
     return { cleanup: () => {}, tempHome: realHome };
