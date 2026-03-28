@@ -52,6 +52,33 @@ describe("normalizeReplyPayloadsForDelivery", () => {
     ]);
   });
 
+  it("drops JSON NO_REPLY action payloads without media", () => {
+    expect(
+      normalizeReplyPayloadsForDelivery([
+        { text: '{"action":"NO_REPLY"}' },
+        { text: "{\n  \"action\": \"NO_REPLY\"\n}" },
+      ]),
+    ).toEqual([]);
+  });
+
+  it("keeps JSON NO_REPLY objects that include extra fields", () => {
+    expect(
+      normalizeReplyPayloadsForDelivery([
+        { text: '{"action":"NO_REPLY","note":"example"}' },
+      ]),
+    ).toEqual([
+      {
+        text: '{"action":"NO_REPLY","note":"example"}',
+        mediaUrls: undefined,
+        mediaUrl: undefined,
+        replyToId: undefined,
+        replyToCurrent: false,
+        replyToTag: false,
+        audioAsVoice: false,
+      },
+    ]);
+  });
+
   it("keeps renderable channel-data payloads and reply-to-current markers", () => {
     expect(
       normalizeReplyPayloadsForDelivery([
