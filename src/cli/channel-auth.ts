@@ -29,6 +29,15 @@ function isConfiguredAuthPlugin(plugin: ChannelPlugin, cfg: OpenClawConfig): boo
   if (isBlockedObjectKey(key)) {
     return false;
   }
+  const channelCfg = (cfg.channels as Record<string, unknown> | undefined)?.[key];
+  if (
+    channelCfg &&
+    typeof channelCfg === "object" &&
+    "enabled" in channelCfg &&
+    (channelCfg as { enabled?: unknown }).enabled === false
+  ) {
+    return false;
+  }
 
   for (const accountId of plugin.config.listAccountIds(cfg)) {
     try {

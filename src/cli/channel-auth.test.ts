@@ -126,19 +126,13 @@ describe("channel-auth", () => {
     );
   });
 
-  it("auto-picks the single auth-capable channel even when raw channel config is omitted", async () => {
-    mocks.loadConfig.mockReturnValue({ channels: {} });
-    plugin.config.listAccountIds.mockReturnValue(["default"]);
-    mocks.resolveAccount.mockReturnValue({ enabled: true });
+  it("does not auto-pick enabled-only channel stubs when channel is omitted", async () => {
+    mocks.loadConfig.mockReturnValue({ channels: { whatsapp: { enabled: false } } });
 
-    await runChannelLogin({}, runtime);
-
-    expect(mocks.normalizeChannelId).toHaveBeenCalledWith("whatsapp");
-    expect(mocks.login).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channelInput: "whatsapp",
-      }),
+    await expect(runChannelLogin({}, runtime)).rejects.toThrow(
+      "Channel is required (no configured channels support login).",
     );
+    expect(mocks.login).not.toHaveBeenCalled();
   });
 
   it("ignores configured channels that do not support login when channel is omitted", async () => {
