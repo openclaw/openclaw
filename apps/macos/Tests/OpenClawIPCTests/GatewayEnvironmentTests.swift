@@ -24,6 +24,12 @@ struct GatewayEnvironmentTests {
         #expect(Semver.parse("OpenClaw 2026.3.23-1") == nil)
     }
 
+    @Test func `gateway version output strips product prefix before parsing`() {
+        let normalized = GatewayEnvironment.normalizeGatewayVersionOutput("  OpenClaw 2026.3.23-1 \n")
+        #expect(normalized == "2026.3.23-1")
+        #expect(Semver.parse(normalized) == Semver(major: 2026, minor: 3, patch: 23))
+    }
+
     @Test func `semver compatibility requires same major and not older`() {
         let required = Semver(major: 2, minor: 1, patch: 0)
         #expect(Semver(major: 2, minor: 1, patch: 0).compatible(with: required))

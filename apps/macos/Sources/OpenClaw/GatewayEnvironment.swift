@@ -291,6 +291,17 @@ enum GatewayEnvironment {
 
     // MARK: - Internals
 
+    /// Exposed for tests so CLI version output normalization stays local to gateway checks.
+    static func normalizeGatewayVersionOutput(_ raw: String?) -> String? {
+        guard var normalized = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !normalized.isEmpty else {
+            return nil
+        }
+        if normalized.lowercased().hasPrefix("openclaw ") {
+            normalized = String(normalized.dropFirst("openclaw ".count))
+        }
+        return normalized
+    }
+
     private static func readGatewayVersion(binary: String) -> Semver? {
         let start = Date()
         let process = Process()
@@ -317,14 +328,8 @@ enum GatewayEnvironment {
                     bin=\(binary, privacy: .public)
                     """)
             }
-            var raw = String(data: data, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            // `openclaw --version` outputs "OpenClaw 2026.x.y"; strip the product prefix
-            // so Semver.parse receives only the version token.
-            if let r = raw, r.lowercased().hasPrefix("openclaw ") {
-                raw = String(r.dropFirst("openclaw ".count))
-            }
-            return Semver.parse(raw)
+            let raw = String(data: data, encoding: .utf8)
+            return Semver.parse(self.normalizeGatewayVersionOutput(raw))
         } catch {
             let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
             self.logger.error(
