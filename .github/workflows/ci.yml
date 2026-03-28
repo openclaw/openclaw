@@ -307,6 +307,7 @@ jobs:
           set -euo pipefail
           case "$TASK" in
             extensions)
+              pnpm build
               pnpm test:extensions
               ;;
             contracts|contracts-protocol)
