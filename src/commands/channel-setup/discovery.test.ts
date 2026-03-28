@@ -1,14 +1,20 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { PluginAutoEnableResult } from "../../config/plugin-auto-enable.js";
 
 const loadPluginManifestRegistry = vi.hoisted(() => vi.fn());
-const applyPluginAutoEnable = vi.hoisted(() => vi.fn(({ config }) => ({ config, changes: [] })));
+const applyPluginAutoEnable = vi.hoisted(() =>
+  vi.fn<(args: { config: unknown; env?: NodeJS.ProcessEnv }) => PluginAutoEnableResult>(
+    ({ config }) => ({ config: config as never, changes: [] }),
+  ),
+);
 
 vi.mock("../../plugins/manifest-registry.js", () => ({
   loadPluginManifestRegistry: (...args: unknown[]) => loadPluginManifestRegistry(...args),
 }));
 
 vi.mock("../../config/plugin-auto-enable.js", () => ({
-  applyPluginAutoEnable: (args: unknown) => applyPluginAutoEnable(args),
+  applyPluginAutoEnable: (args: unknown) =>
+    applyPluginAutoEnable(args as { config: unknown; env?: NodeJS.ProcessEnv }),
 }));
 
 import { listManifestInstalledChannelIds } from "./discovery.js";
@@ -16,7 +22,9 @@ import { listManifestInstalledChannelIds } from "./discovery.js";
 describe("listManifestInstalledChannelIds", () => {
   beforeEach(() => {
     loadPluginManifestRegistry.mockReset();
-    applyPluginAutoEnable.mockReset().mockImplementation(({ config }) => ({ config, changes: [] }));
+    applyPluginAutoEnable
+      .mockReset()
+      .mockImplementation(({ config }) => ({ config: config as never, changes: [] }));
   });
 
   it("uses the auto-enabled config snapshot for manifest discovery", () => {
@@ -25,7 +33,10 @@ describe("listManifestInstalledChannelIds", () => {
       plugins: { allow: ["slack"] },
       autoEnabled: true,
     } as never;
-    applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: ["slack"] });
+    applyPluginAutoEnable.mockReturnValue({
+      config: autoEnabledConfig,
+      changes: ["slack"] as string[],
+    });
     loadPluginManifestRegistry.mockReturnValue({
       plugins: [{ id: "slack", channels: ["slack"] }],
       diagnostics: [],
