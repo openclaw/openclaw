@@ -83,20 +83,25 @@ describe("security/dm-policy-shared", () => {
     expect(state.isMultiUserDm).toBe(false);
   });
 
-  it("skips pairing-store reads when dmPolicy is allowlist", async () => {
-    await expectStoreReadSkipped({
-      provider: "demo-channel-a",
-      accountId: "default",
-      dmPolicy: "allowlist",
-    });
-  });
-
-  it("skips pairing-store reads when shouldRead=false", async () => {
-    await expectStoreReadSkipped({
-      provider: "demo-channel-b",
-      accountId: "default",
-      shouldRead: false,
-    });
+  it.each([
+    {
+      name: "dmPolicy is allowlist",
+      params: {
+        provider: "demo-channel-a",
+        accountId: "default",
+        dmPolicy: "allowlist" as const,
+      },
+    },
+    {
+      name: "shouldRead=false",
+      params: {
+        provider: "demo-channel-b",
+        accountId: "default",
+        shouldRead: false,
+      },
+    },
+  ] as const)("skips pairing-store reads when $name", async ({ params }) => {
+    await expectStoreReadSkipped(params);
   });
 
   it("builds effective DM/group allowlists from config + pairing store", () => {
@@ -143,25 +148,27 @@ describe("security/dm-policy-shared", () => {
     expect(pinnedOwner).toBe("u123");
   });
 
-  it("does not infer pinned owner for wildcard/multi-owner/non-main scope", () => {
+  it.each([
+    {
+      name: "wildcard allowlist",
+      dmScope: "main" as const,
+      allowFrom: ["*"],
+    },
+    {
+      name: "multi-owner allowlist",
+      dmScope: "main" as const,
+      allowFrom: ["u123", "u456"],
+    },
+    {
+      name: "non-main scope",
+      dmScope: "per-channel-peer" as const,
+      allowFrom: ["u123"],
+    },
+  ] as const)("does not infer pinned owner for $name", ({ dmScope, allowFrom }) => {
     expect(
       resolvePinnedMainDmOwnerFromAllowlist({
-        dmScope: "main",
-        allowFrom: ["*"],
-        normalizeEntry: (entry) => entry.trim(),
-      }),
-    ).toBeNull();
-    expect(
-      resolvePinnedMainDmOwnerFromAllowlist({
-        dmScope: "main",
-        allowFrom: ["u123", "u456"],
-        normalizeEntry: (entry) => entry.trim(),
-      }),
-    ).toBeNull();
-    expect(
-      resolvePinnedMainDmOwnerFromAllowlist({
-        dmScope: "per-channel-peer",
-        allowFrom: ["u123"],
+        dmScope,
+        allowFrom: [...allowFrom],
         normalizeEntry: (entry) => entry.trim(),
       }),
     ).toBeNull();
@@ -376,21 +383,30 @@ describe("security/dm-policy-shared", () => {
     ];
 
     for (const channel of channels) {
-      for (const testCase of cases) {
+      for (const {
+        name,
+        isGroup,
+        dmPolicy,
+        groupPolicy,
+        allowFrom,
+        groupAllowFrom,
+        storeAllowFrom,
+        isSenderAllowed,
+        expectedDecision,
+        expectedReactionAllowed,
+      } of cases) {
         const access = resolveDmGroupAccessWithLists({
-          isGroup: testCase.isGroup,
-          dmPolicy: testCase.dmPolicy,
-          groupPolicy: testCase.groupPolicy,
-          allowFrom: testCase.allowFrom,
-          groupAllowFrom: testCase.groupAllowFrom,
-          storeAllowFrom: testCase.storeAllowFrom,
-          isSenderAllowed: testCase.isSenderAllowed,
+          isGroup,
+          dmPolicy,
+          groupPolicy,
+          allowFrom,
+          groupAllowFrom,
+          storeAllowFrom,
+          isSenderAllowed,
         });
         const reactionAllowed = access.decision === "allow";
-        expect(access.decision, `[${channel}] ${testCase.name}`).toBe(testCase.expectedDecision);
-        expect(reactionAllowed, `[${channel}] ${testCase.name} reaction`).toBe(
-          testCase.expectedReactionAllowed,
-        );
+        expect(access.decision, `[${channel}] ${name}`).toBe(expectedDecision);
+        expect(reactionAllowed, `[${channel}] ${name} reaction`).toBe(expectedReactionAllowed);
       }
     }
   });

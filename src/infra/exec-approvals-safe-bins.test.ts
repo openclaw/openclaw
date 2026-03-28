@@ -254,27 +254,22 @@ describe("exec approvals safe bins", () => {
     },
   ];
 
-  for (const testCase of cases) {
-    it(testCase.name, () => {
-      if (process.platform === "win32") {
-        return;
-      }
-      const cwd = testCase.cwd ?? makeTempDir();
-      testCase.setup?.(cwd);
-      const executableName = testCase.executableName ?? "jq";
-      const rawExecutable = testCase.rawExecutable ?? executableName;
-      const ok = isSafeBinUsage({
-        argv: testCase.argv,
-        resolution: {
-          rawExecutable,
-          resolvedPath: testCase.resolvedPath,
-          executableName,
-        },
-        safeBins: normalizeSafeBins(testCase.safeBins ?? [executableName]),
-      });
-      expect(ok).toBe(testCase.expected);
+  it.runIf(process.platform !== "win32").each(cases)("$name", (testCase) => {
+    const cwd = testCase.cwd ?? makeTempDir();
+    testCase.setup?.(cwd);
+    const executableName = testCase.executableName ?? "jq";
+    const rawExecutable = testCase.rawExecutable ?? executableName;
+    const ok = isSafeBinUsage({
+      argv: testCase.argv,
+      resolution: {
+        rawExecutable,
+        resolvedPath: testCase.resolvedPath,
+        executableName,
+      },
+      safeBins: normalizeSafeBins(testCase.safeBins ?? [executableName]),
     });
-  }
+    expect(ok).toBe(testCase.expected);
+  });
 
   it("supports injected trusted safe-bin dirs for tests/callers", () => {
     if (process.platform === "win32") {
