@@ -780,7 +780,12 @@ export function createAgentEventHandler({
       if (sessionKey) {
         const sessionSubscribers = sessionEventSubscribers.getAll();
         if (sessionSubscribers.size > 0) {
-          broadcastToConnIds("session.tool", toolPayload, sessionSubscribers, { dropIfSlow: true });
+          broadcastToConnIds(
+            "session.tool",
+            { ...toolPayload, ...buildSessionEventSnapshot(sessionKey) },
+            sessionSubscribers,
+            { dropIfSlow: true },
+          );
         }
       }
     } else {
