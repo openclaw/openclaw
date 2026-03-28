@@ -46,6 +46,12 @@ static AppState compute_state(void) {
         if (!current_health_state.rpc_ok || !current_health_state.auth_ok) {
             return STATE_DEGRADED;
         }
+        /* TODO(MVP deferral): STATE_RUNNING_WITH_WARNING is intentionally deferred.
+         * The Linux MVP does not yet populate config-audit inputs (config_audit_ok, 
+         * config_issues_count). We explicitly retain this branch to preserve the 
+         * intended UX shape, but do NOT synthesize warning-state behavior from 
+         * unrelated config errors just to make it live.
+         */
         if (!current_health_state.config_audit_ok && current_health_state.config_issues_count > 0) {
             return STATE_RUNNING_WITH_WARNING;
         }

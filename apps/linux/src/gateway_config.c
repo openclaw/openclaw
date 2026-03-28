@@ -208,15 +208,23 @@ GatewayConfig* gateway_config_load(void) {
     gchar *contents = NULL;
     g_autoptr(GError) read_error = NULL;
     if (!g_file_get_contents(config->config_path, &contents, NULL, &read_error)) {
-        /* Config file not existing is valid — use defaults + env overrides */
-        config->port = resolve_port(NULL);
-        resolve_auth(NULL, config);
-        if (!validate_auth(config)) return config;
-        config->valid = TRUE;
-        OC_LOG_DEBUG(OPENCLAW_LOG_CAT_GATEWAY,
-                  "gateway_config_load no config file, defaults port=%d auth_mode=%s",
-                  config->port, config->auth_mode);
-        return config;
+        if (g_error_matches(read_error, G_FILE_ERROR, G_FILE_ERROR_NOENT)) {
+            /* Config file not existing is valid — use defaults + env overrides */
+            config->port = resolve_port(NULL);
+            resolve_auth(NULL, config);
+            if (!validate_auth(config)) return config;
+            config->valid = TRUE;
+            OC_LOG_DEBUG(OPENCLAW_LOG_CAT_GATEWAY,
+                      "gateway_config_load no config file, defaults port=%d auth_mode=%s",
+                      config->port, config->auth_mode);
+            return config;
+        } else {
+            /* Other read errors (permission denied, etc) are explicitly invalid */
+            config->valid = FALSE;
+            config->error_code = GW_CFG_ERR_READ_FAILED;
+            config->error = g_strdup_printf("Failed to read config: %s", read_error->message);
+            return config;
+        }
     }
 
     g_autoptr(JsonParser) parser = json_parser_new();
