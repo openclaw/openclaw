@@ -30,6 +30,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [Anthropic (API + Claude Code CLI)](/providers/anthropic)
 - [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)
 - [DeepSeek](/providers/deepseek)
+- [FPT AI Factory](/providers/fpt-ai-factory)
 - [GitHub Copilot](/providers/github-copilot)
 - [GLM models](/providers/glm)
 - [Google (Gemini)](/providers/google)

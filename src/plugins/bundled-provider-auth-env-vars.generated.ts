@@ -10,6 +10,7 @@ export const BUNDLED_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {
   exa: ["EXA_API_KEY"],
   fal: ["FAL_KEY"],
   firecrawl: ["FIRECRAWL_API_KEY"],
+  "fpt-ai-factory": ["FPT_AI_FACTORY_API_KEY"],
   "github-copilot": ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"],
   google: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
   huggingface: ["HUGGINGFACE_HUB_TOKEN", "HF_TOKEN"],

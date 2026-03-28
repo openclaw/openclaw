@@ -1,0 +1,28 @@
+{
+  "id": "fpt-ai-factory",
+  "providers": ["fpt-ai-factory"],
+  "providerAuthEnvVars": {
+    "fpt-ai-factory": ["FPT_AI_FACTORY_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "fpt-ai-factory",
+      "method": "api-key",
+      "choiceId": "fpt-ai-factory-api-key",
+      "choiceLabel": "FPT AI Factory API key",
+      "choiceHint": "OpenAI-compatible API key",
+      "groupId": "fpt-ai-factory",
+      "groupLabel": "FPT AI Factory",
+      "groupHint": "API key",
+      "optionKey": "fptAiFactoryApiKey",
+      "cliFlag": "--fpt-ai-factory-api-key",
+      "cliOption": "--fpt-ai-factory-api-key <key>",
+      "cliDescription": "FPT AI Factory API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

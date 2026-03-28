@@ -329,3 +329,7 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/fal/**"
+"extensions: fpt-ai-factory":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/fpt-ai-factory/**"
