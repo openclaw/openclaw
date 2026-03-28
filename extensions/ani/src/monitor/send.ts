@@ -84,7 +84,8 @@ export async function uploadAniFile(opts: {
 }): Promise<AniFileUploadResult> {
   const url = `${opts.serverUrl}/api/v1/files/upload`;
   const form = new FormData();
-  const blob = new Blob([opts.buffer]);
+  const bytes = Uint8Array.from(opts.buffer);
+  const blob = new Blob([bytes]);
   form.append("file", blob, opts.filename);
 
   const res = await fetchWithRetry(url, {

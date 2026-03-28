@@ -1,6 +1,11 @@
 import { randomBytes } from "node:crypto";
 import type { CoreConfig } from "../types.js";
-import { createReplyPrefixContext, createTypingCallbacks, type RuntimeEnv } from "../sdk-compat.js";
+import {
+  createReplyPrefixContext,
+  createTypingCallbacks,
+  type OpenClawConfig,
+  type RuntimeEnv,
+} from "../sdk-compat.js";
 import { messageTextOf } from "../utils.js";
 import { createInboundDebouncer } from "./debounce.js";
 import {
@@ -60,8 +65,8 @@ export type AniHandlerParams = {
   cfg: CoreConfig;
   runtime: RuntimeEnv;
   logger: {
-    info: (message: string | Record<string, unknown>, ...meta: unknown[]) => void;
-    warn: (meta: Record<string, unknown>, message: string) => void;
+    info: (message: string) => void;
+    warn: (message: string) => void;
   };
   logVerbose: (message: string) => void;
   serverUrl: string;
@@ -70,6 +75,18 @@ export type AniHandlerParams = {
   selfName: string;
   accountId: string;
 };
+
+function unwrapAniMessageData(
+  data: AniWsMessage["data"],
+): NonNullable<AniWsMessage["data"]> | null {
+  if (!data) return null;
+  if (data.layers) return data;
+  const nested = (data as Record<string, unknown>).message;
+  if (typeof nested === "object" && nested !== null) {
+    return nested as NonNullable<AniWsMessage["data"]>;
+  }
+  return data;
+}
 
 // ---------------------------------------------------------------------------
 // Artifact support: system prompt injection + outbound parsing
@@ -755,9 +772,9 @@ export function createAniMessageHandler(params: AniHandlerParams) {
           );
 
           // Route through OpenClaw agent pipeline
-          const peerKind = isDirect ? "dm" : "channel";
+          const peerKind = isDirect ? "direct" : "channel";
           const route = core.channel.routing.resolveAgentRoute({
-            cfg,
+            cfg: cfg as OpenClawConfig,
             channel: "ani",
             peer: {
               kind: peerKind,
@@ -840,18 +857,16 @@ export function createAniMessageHandler(params: AniHandlerParams) {
             ctx: ctxPayload,
             onRecordError: (err) => {
               logger.warn(
-                {
-                  error: String(err),
-                  storePath,
-                  sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
-                },
-                "failed updating session meta",
+                `ani: failed updating session meta: ${String(err)} (storePath=${storePath}, sessionKey=${ctxPayload.SessionKey ?? route.sessionKey})`,
               );
             },
           });
 
-          const textLimit = core.channel.text.resolveTextChunkLimit(cfg, "ani");
-          const prefixContext = createReplyPrefixContext({ cfg, agentId: route.agentId });
+          const textLimit = core.channel.text.resolveTextChunkLimit(cfg as OpenClawConfig, "ani");
+          const prefixContext = createReplyPrefixContext({
+            cfg: cfg as OpenClawConfig,
+            agentId: route.agentId,
+          });
 
           const typingCallbacks = createTypingCallbacks({
             start: () => Promise.resolve(),
@@ -897,7 +912,10 @@ export function createAniMessageHandler(params: AniHandlerParams) {
             core.channel.reply.createReplyDispatcherWithTyping({
               responsePrefix: prefixContext.responsePrefix,
               responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
-              humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId),
+              humanDelay: core.channel.reply.resolveHumanDelayConfig(
+                cfg as OpenClawConfig,
+                route.agentId,
+              ),
               deliver: async (payload, info) => {
                 if (messageIds.some((mid) => mid && revokedMessages.has(mid))) {
                   logVerbose(`ani: skipping reply block — trigger message was revoked`);
@@ -956,8 +974,7 @@ export function createAniMessageHandler(params: AniHandlerParams) {
                       }
                     } catch (segErr) {
                       logger.warn(
-                        { error: String(segErr), conversationId },
-                        "ani: artifact segment send failed",
+                        `ani: artifact segment send failed in conversation ${conversationId}: ${String(segErr)}`,
                       );
                     }
                   }
@@ -995,7 +1012,7 @@ export function createAniMessageHandler(params: AniHandlerParams) {
 
           const { queuedFinal } = await core.channel.reply.dispatchReplyFromConfig({
             ctx: ctxPayload,
-            cfg,
+            cfg: cfg as OpenClawConfig,
             dispatcher,
             replyOptions: {
               ...replyOptions,
@@ -1118,13 +1135,8 @@ export function createAniMessageHandler(params: AniHandlerParams) {
         return;
       }
 
-      let msg = wsMsg.data;
+      const msg = unwrapAniMessageData(wsMsg.data);
       if (!msg) return;
-
-      // Handle enriched WS format (mention_with_context): { message, context_messages }
-      if (!msg.layers && (msg as any).message) {
-        msg = (msg as any).message;
-      }
 
       // Skip own messages
       if (msg.sender_id === selfEntityId) return;
@@ -1150,7 +1162,7 @@ export function createAniMessageHandler(params: AniHandlerParams) {
           attachments,
           serverUrl,
           apiKey,
-          core.media.saveMediaBuffer,
+          core.channel.media.saveMediaBuffer,
           logVerbose,
         );
         // Also generate text descriptions as supplementary context

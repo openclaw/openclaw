@@ -18,6 +18,13 @@ import { resolveAniCredentials, getMimeType, messageTextOf } from "./utils.js";
 const TASK_STATUS_VALUES = ["pending", "in_progress", "done", "cancelled", "handed_over"] as const;
 const TASK_PRIORITY_VALUES = ["low", "medium", "high"] as const;
 
+function textToolResult(text: string, details: Record<string, unknown> = {}) {
+  return {
+    content: [{ type: "text" as const, text }],
+    details,
+  };
+}
+
 function formatTask(task: AniTask): string {
   const assignee =
     task.assignee?.display_name ??
@@ -95,7 +102,7 @@ export function createSendFileTool(): ChannelAgentTool {
         }),
       ),
     }),
-    execute: async (_toolCallId, args) => {
+    execute: async (_toolCallId, args, _signal, _onUpdate) => {
       const params = args as {
         conversation_id?: number;
         file_path?: string;
@@ -106,7 +113,7 @@ export function createSendFileTool(): ChannelAgentTool {
 
       const conversationId = params.conversation_id;
       if (!conversationId) {
-        return { content: [{ type: "text" as const, text: "Error: conversation_id is required" }] };
+        return textToolResult("Error: conversation_id is required");
       }
 
       const filePath = params.file_path?.trim();
@@ -114,9 +121,7 @@ export function createSendFileTool(): ChannelAgentTool {
       const caption = params.caption?.trim() ?? "";
 
       if (!filePath && !textContent) {
-        return {
-          content: [{ type: "text" as const, text: "Error: provide either file_path or content" }],
-        };
+        return textToolResult("Error: provide either file_path or content");
       }
 
       try {
@@ -130,30 +135,16 @@ export function createSendFileTool(): ChannelAgentTool {
           const resolved = path.resolve(filePath);
           const workspace = process.cwd();
           if (!resolved.startsWith(workspace + path.sep) && resolved !== workspace) {
-            return {
-              content: [
-                {
-                  type: "text" as const,
-                  text: `Access denied: file must be within workspace (${workspace})`,
-                },
-              ],
-            };
+            return textToolResult(`Access denied: file must be within workspace (${workspace})`);
           }
           const stat = await fs.stat(resolved);
           if (!stat.isFile()) {
-            return {
-              content: [{ type: "text" as const, text: `Error: ${resolved} is not a file` }],
-            };
+            return textToolResult(`Error: ${resolved} is not a file`);
           }
           if (stat.size > 32 * 1024 * 1024) {
-            return {
-              content: [
-                {
-                  type: "text" as const,
-                  text: `Error: file too large (${(stat.size / 1024 / 1024).toFixed(1)}MB, max 32MB)`,
-                },
-              ],
-            };
+            return textToolResult(
+              `Error: file too large (${(stat.size / 1024 / 1024).toFixed(1)}MB, max 32MB)`,
+            );
           }
           buffer = await fs.readFile(resolved);
           filename = params.filename?.trim() || path.basename(filePath);
@@ -194,23 +185,14 @@ export function createSendFileTool(): ChannelAgentTool {
           contentType: attachType,
         });
 
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `File "${filename}" (${(buffer.length / 1024).toFixed(1)}KB, ${mimeType}) sent to conversation ${conversationId}. Message ID: ${result.messageId}`,
-            },
-          ],
-        };
+        return textToolResult(
+          `File "${filename}" (${(buffer.length / 1024).toFixed(1)}KB, ${mimeType}) sent to conversation ${conversationId}. Message ID: ${result.messageId}`,
+          { conversationId, filename, mimeType, messageId: result.messageId },
+        );
       } catch (err) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Error sending file: ${err instanceof Error ? err.message : String(err)}`,
-            },
-          ],
-        };
+        return textToolResult(
+          `Error sending file: ${err instanceof Error ? err.message : String(err)}`,
+        );
       }
     },
   };
@@ -257,7 +239,7 @@ export function createGetHistoryTool(): ChannelAgentTool {
         }),
       ),
     }),
-    execute: async (_toolCallId, args) => {
+    execute: async (_toolCallId, args, _signal, _onUpdate) => {
       const params = args as {
         conversation_id?: number;
         limit?: number;
@@ -266,7 +248,7 @@ export function createGetHistoryTool(): ChannelAgentTool {
 
       const conversationId = params.conversation_id;
       if (!conversationId) {
-        return { content: [{ type: "text" as const, text: "Error: conversation_id is required" }] };
+        return textToolResult("Error: conversation_id is required");
       }
 
       const limit = Math.min(Math.max(params.limit ?? 5, 1), 50);
@@ -284,11 +266,7 @@ export function createGetHistoryTool(): ChannelAgentTool {
         });
 
         if (!res.ok) {
-          return {
-            content: [
-              { type: "text" as const, text: `Error fetching history: HTTP ${res.status}` },
-            ],
-          };
+          return textToolResult(`Error fetching history: HTTP ${res.status}`);
         }
 
         const json = (await res.json()) as { data?: { messages?: Array<Record<string, unknown>> } };
@@ -313,23 +291,12 @@ export function createGetHistoryTool(): ChannelAgentTool {
           })
           .reverse(); // oldest first for readability
 
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Conversation ${conversationId} — last ${messages.length} messages:\n\n${formatted.join("\n")}`,
-            },
-          ],
-        };
+        return textToolResult(
+          `Conversation ${conversationId} — last ${messages.length} messages:\n\n${formatted.join("\n")}`,
+          { conversationId, count: messages.length },
+        );
       } catch (err) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Error: ${err instanceof Error ? err.message : String(err)}`,
-            },
-          ],
-        };
+        return textToolResult(`Error: ${err instanceof Error ? err.message : String(err)}`);
       }
     },
   };
@@ -355,14 +322,14 @@ export function createListTasksTool(): ChannelAgentTool {
         }),
       ),
     }),
-    execute: async (_toolCallId, args) => {
+    execute: async (_toolCallId, args, _signal, _onUpdate) => {
       const params = args as { conversation_id?: number; status?: string };
       if (!params.conversation_id) {
-        return { content: [{ type: "text" as const, text: "Error: conversation_id is required" }] };
+        return textToolResult("Error: conversation_id is required");
       }
       const statusErr = validateTaskStatus(params.status);
       if (statusErr) {
-        return { content: [{ type: "text" as const, text: statusErr }] };
+        return textToolResult(statusErr);
       }
 
       try {
@@ -375,33 +342,20 @@ export function createListTasksTool(): ChannelAgentTool {
         });
 
         if (tasks.length === 0) {
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text: `Conversation ${params.conversation_id} has no tasks${params.status ? ` with status ${params.status}` : ""}.`,
-              },
-            ],
-          };
+          return textToolResult(
+            `Conversation ${params.conversation_id} has no tasks${params.status ? ` with status ${params.status}` : ""}.`,
+            { conversationId: params.conversation_id, count: 0, status: params.status },
+          );
         }
 
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Conversation ${params.conversation_id} tasks (${tasks.length}):\n\n${tasks.map(formatTask).join("\n\n")}`,
-            },
-          ],
-        };
+        return textToolResult(
+          `Conversation ${params.conversation_id} tasks (${tasks.length}):\n\n${tasks.map(formatTask).join("\n\n")}`,
+          { conversationId: params.conversation_id, count: tasks.length, status: params.status },
+        );
       } catch (err) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Error listing tasks: ${err instanceof Error ? err.message : String(err)}`,
-            },
-          ],
-        };
+        return textToolResult(
+          `Error listing tasks: ${err instanceof Error ? err.message : String(err)}`,
+        );
       }
     },
   };
@@ -417,27 +371,20 @@ export function createGetTaskTool(): ChannelAgentTool {
         description: "The ANI task ID to retrieve.",
       }),
     }),
-    execute: async (_toolCallId, args) => {
+    execute: async (_toolCallId, args, _signal, _onUpdate) => {
       const params = args as { task_id?: number };
       if (!params.task_id) {
-        return { content: [{ type: "text" as const, text: "Error: task_id is required" }] };
+        return textToolResult("Error: task_id is required");
       }
 
       try {
         const { serverUrl, apiKey } = resolveAniCredentials();
         const task = await getAniTask({ serverUrl, apiKey, taskId: params.task_id });
-        return {
-          content: [{ type: "text" as const, text: formatTask(task) }],
-        };
+        return textToolResult(formatTask(task), { taskId: params.task_id });
       } catch (err) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Error getting task: ${err instanceof Error ? err.message : String(err)}`,
-            },
-          ],
-        };
+        return textToolResult(
+          `Error getting task: ${err instanceof Error ? err.message : String(err)}`,
+        );
       }
     },
   };
@@ -484,7 +431,7 @@ export function createCreateTaskTool(): ChannelAgentTool {
         }),
       ),
     }),
-    execute: async (_toolCallId, args) => {
+    execute: async (_toolCallId, args, _signal, _onUpdate) => {
       const params = args as {
         conversation_id?: number;
         title?: string;
@@ -496,14 +443,14 @@ export function createCreateTaskTool(): ChannelAgentTool {
       };
 
       if (!params.conversation_id) {
-        return { content: [{ type: "text" as const, text: "Error: conversation_id is required" }] };
+        return textToolResult("Error: conversation_id is required");
       }
       if (!params.title?.trim()) {
-        return { content: [{ type: "text" as const, text: "Error: title is required" }] };
+        return textToolResult("Error: title is required");
       }
       const priorityErr = validateTaskPriority(params.priority);
       if (priorityErr) {
-        return { content: [{ type: "text" as const, text: priorityErr }] };
+        return textToolResult(priorityErr);
       }
 
       try {
@@ -519,18 +466,11 @@ export function createCreateTaskTool(): ChannelAgentTool {
           due_date: params.due_date,
           parent_task_id: params.parent_task_id,
         });
-        return {
-          content: [{ type: "text" as const, text: `Task created:\n${formatTask(task)}` }],
-        };
+        return textToolResult(`Task created:\n${formatTask(task)}`, { taskId: task.id });
       } catch (err) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Error creating task: ${err instanceof Error ? err.message : String(err)}`,
-            },
-          ],
-        };
+        return textToolResult(
+          `Error creating task: ${err instanceof Error ? err.message : String(err)}`,
+        );
       }
     },
   };
@@ -565,7 +505,7 @@ export function createUpdateTaskTool(): ChannelAgentTool {
       ),
       sort_order: Type.Optional(Type.Number({ description: "Optional new sort order integer." })),
     }),
-    execute: async (_toolCallId, args) => {
+    execute: async (_toolCallId, args, _signal, _onUpdate) => {
       const params = args as {
         task_id?: number;
         title?: string;
@@ -578,7 +518,7 @@ export function createUpdateTaskTool(): ChannelAgentTool {
       };
 
       if (!params.task_id) {
-        return { content: [{ type: "text" as const, text: "Error: task_id is required" }] };
+        return textToolResult("Error: task_id is required");
       }
       if (
         params.title === undefined &&
@@ -589,17 +529,15 @@ export function createUpdateTaskTool(): ChannelAgentTool {
         params.due_date === undefined &&
         params.sort_order === undefined
       ) {
-        return {
-          content: [{ type: "text" as const, text: "Error: provide at least one field to update" }],
-        };
+        return textToolResult("Error: provide at least one field to update");
       }
       const statusErr = validateTaskStatus(params.status);
       if (statusErr) {
-        return { content: [{ type: "text" as const, text: statusErr }] };
+        return textToolResult(statusErr);
       }
       const priorityErr = validateTaskPriority(params.priority);
       if (priorityErr) {
-        return { content: [{ type: "text" as const, text: priorityErr }] };
+        return textToolResult(priorityErr);
       }
 
       try {
@@ -616,18 +554,11 @@ export function createUpdateTaskTool(): ChannelAgentTool {
           due_date: params.due_date,
           sort_order: params.sort_order,
         });
-        return {
-          content: [{ type: "text" as const, text: `Task updated:\n${formatTask(task)}` }],
-        };
+        return textToolResult(`Task updated:\n${formatTask(task)}`, { taskId: task.id });
       } catch (err) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Error updating task: ${err instanceof Error ? err.message : String(err)}`,
-            },
-          ],
-        };
+        return textToolResult(
+          `Error updating task: ${err instanceof Error ? err.message : String(err)}`,
+        );
       }
     },
   };
@@ -646,27 +577,20 @@ export function createDeleteTaskTool(): ChannelAgentTool {
         description: "The ANI task ID to delete.",
       }),
     }),
-    execute: async (_toolCallId, args) => {
+    execute: async (_toolCallId, args, _signal, _onUpdate) => {
       const params = args as { task_id?: number };
       if (!params.task_id) {
-        return { content: [{ type: "text" as const, text: "Error: task_id is required" }] };
+        return textToolResult("Error: task_id is required");
       }
 
       try {
         const { serverUrl, apiKey } = resolveAniCredentials();
         await deleteAniTask({ serverUrl, apiKey, taskId: params.task_id });
-        return {
-          content: [{ type: "text" as const, text: `Task #${params.task_id} deleted.` }],
-        };
+        return textToolResult(`Task #${params.task_id} deleted.`, { taskId: params.task_id });
       } catch (err) {
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Error deleting task: ${err instanceof Error ? err.message : String(err)}`,
-            },
-          ],
-        };
+        return textToolResult(
+          `Error deleting task: ${err instanceof Error ? err.message : String(err)}`,
+        );
       }
     },
   };

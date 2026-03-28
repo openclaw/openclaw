@@ -44,7 +44,7 @@ export async function monitorAniProvider(opts: MonitorAniOpts = {}): Promise<voi
   };
   const logVerbose = (message: string) => {
     if (!core.logging.shouldLogVerbose()) return;
-    logger.debug(message);
+    logger.debug?.(message);
   };
 
   // Verify connection before starting WebSocket
@@ -56,7 +56,10 @@ export async function monitorAniProvider(opts: MonitorAniOpts = {}): Promise<voi
     core,
     cfg,
     runtime,
-    logger,
+    logger: {
+      info: (message) => logger.info(message),
+      warn: (message) => logger.warn(message),
+    },
     logVerbose,
     serverUrl,
     apiKey,
@@ -123,7 +126,7 @@ export async function monitorAniProvider(opts: MonitorAniOpts = {}): Promise<voi
         const msg = JSON.parse(raw);
         await handleMessage(msg);
       })().catch((err) => {
-        logger.warn({ error: String(err) }, "ani: WebSocket message handler error");
+        logger.warn(`ani: WebSocket message handler error: ${String(err)}`);
       });
     });
 

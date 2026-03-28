@@ -9,8 +9,16 @@ import {
   applyAccountNameToChannelSection,
   buildChannelConfigSchema,
   type ChannelPlugin,
+  type OpenClawConfig,
 } from "./sdk-compat.js";
 import { normalizeAniServerUrl } from "./utils.js";
+
+type AniSetupInput = {
+  name?: string;
+  useEnv?: boolean;
+  serverUrl?: string;
+  apiKey?: string;
+};
 
 const meta = {
   id: "ani",
@@ -25,7 +33,7 @@ const meta = {
 
 export function resolveAniAccount(params: {
   cfg: CoreConfig;
-  accountId?: string;
+  accountId?: string | null;
 }): ResolvedAniAccount {
   const accountId = normalizeAccountId(params.accountId);
   const aniCfg = params.cfg.channels?.ani ?? {};
@@ -85,7 +93,7 @@ export const aniPlugin: ChannelPlugin<ResolvedAniAccount> = {
       name: account.name,
       enabled: account.enabled,
       configured: account.configured,
-      baseUrl: account.serverUrl,
+      baseUrl: account.serverUrl ?? undefined,
     }),
   },
 
@@ -95,6 +103,7 @@ export const aniPlugin: ChannelPlugin<ResolvedAniAccount> = {
       allowFrom: [],
       policyPath: "channels.ani.dm.policy",
       allowFromPath: "channels.ani.dm.allowFrom",
+      approveHint: "",
     }),
   },
 
@@ -108,30 +117,32 @@ export const aniPlugin: ChannelPlugin<ResolvedAniAccount> = {
         name,
       }),
     validateInput: ({ input }) => {
-      if (input.useEnv) return null;
-      if (!input.serverUrl?.trim()) return "ANI requires --server-url";
-      if (!input.apiKey?.trim()) return "ANI requires --api-key (permanent aim_ key)";
-      const key = input.apiKey?.trim() ?? "";
+      const setupInput = input as AniSetupInput;
+      if (setupInput.useEnv) return null;
+      if (!setupInput.serverUrl?.trim()) return "ANI requires --server-url";
+      if (!setupInput.apiKey?.trim()) return "ANI requires --api-key (permanent aim_ key)";
+      const key = setupInput.apiKey.trim();
       if (key.startsWith("aimb_")) {
         return "ANI requires a permanent key (aim_ prefix). Legacy aimb_ keys are no longer supported.";
       }
       return null;
     },
     applyAccountConfig: ({ cfg, input }) => {
+      const setupInput = input as AniSetupInput;
       const named = applyAccountNameToChannelSection({
         cfg: cfg as CoreConfig,
         channelKey: "ani",
         accountId: DEFAULT_ACCOUNT_ID,
-        name: input.name,
+        name: setupInput.name,
       });
-      if (input.useEnv) {
+      if (setupInput.useEnv) {
         return {
           ...named,
           channels: {
             ...named.channels,
             ani: { ...named.channels?.ani, enabled: true },
           },
-        } as CoreConfig;
+        } as OpenClawConfig;
       }
       const existing = (named as CoreConfig).channels?.ani ?? {};
       return {
@@ -141,11 +152,13 @@ export const aniPlugin: ChannelPlugin<ResolvedAniAccount> = {
           ani: {
             ...existing,
             enabled: true,
-            ...(input.serverUrl ? { serverUrl: input.serverUrl.trim().replace(/\/+$/, "") } : {}),
-            ...(input.apiKey ? { apiKey: input.apiKey.trim() } : {}),
+            ...(setupInput.serverUrl
+              ? { serverUrl: setupInput.serverUrl.trim().replace(/\/+$/, "") }
+              : {}),
+            ...(setupInput.apiKey ? { apiKey: setupInput.apiKey.trim() } : {}),
           },
         },
-      } as CoreConfig;
+      } as OpenClawConfig;
     },
   },
 

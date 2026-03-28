@@ -1,3 +1,5 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+
 /** ANI channel configuration stored in openclaw config under channels.ani */
 export type AniConfig = {
   enabled?: boolean;
@@ -31,7 +33,7 @@ export type ResolvedAniAccount = {
   config: AniConfig;
 };
 
-export type CoreConfig = {
+export type CoreConfig = OpenClawConfig & {
   channels?: {
     ani?: AniConfig;
     defaults?: {
@@ -44,7 +46,7 @@ export type CoreConfig = {
   };
   messages?: {
     ackReaction?: string;
-    ackReactionScope?: string;
+    ackReactionScope?: "all" | "direct" | "group-all" | "group-mentions" | "none" | "off";
   };
   [key: string]: unknown;
 };

@@ -4,6 +4,9 @@ import { sendAniMessage, uploadAniFile, toggleAniReaction } from "./monitor/send
 import { getAniRuntime } from "./runtime.js";
 import { resolveAniCredentials } from "./utils.js";
 
+type AniSendMediaParams = Parameters<NonNullable<ChannelOutboundAdapter["sendMedia"]>>[0];
+type AniChunker = NonNullable<ChannelOutboundAdapter["chunker"]>;
+
 /** Parse conversation ID from target string like "ani:conv:123" or "123". */
 export function parseConversationId(to: string): number {
   const cleaned = to
@@ -56,19 +59,12 @@ export async function sendAniAckReaction(messageId: number, emoji: string): Prom
 
 export const aniOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
-  chunker: (text, limit) => getAniRuntime().channel.text.chunkMarkdownText(text, limit),
+  chunker: ((text: string, limit: number) =>
+    getAniRuntime().channel.text.chunkMarkdownText(text, limit)) satisfies AniChunker,
   chunkerMode: "markdown",
   textChunkLimit: 4000,
 
-  sendText: async ({ to, text, mentions }) => {
-    // Pass through mentions if the OpenClaw context provides them.
-    // OpenClaw may pass mentions as an array of string IDs; convert to numbers.
-    const mentionIds = Array.isArray(mentions)
-      ? mentions
-          .map((m) => (typeof m === "number" ? m : Number.parseInt(String(m), 10)))
-          .filter((n) => !Number.isNaN(n) && n > 0)
-      : undefined;
-
+  sendText: async ({ to, text }) => {
     const { serverUrl, apiKey } = resolveAniCredentials();
     const conversationId = parseConversationId(to);
     const result = await sendAniMessage({
@@ -76,7 +72,6 @@ export const aniOutbound: ChannelOutboundAdapter = {
       apiKey,
       conversationId,
       text,
-      mentions: mentionIds,
     });
     return {
       channel: "ani",
@@ -85,7 +80,7 @@ export const aniOutbound: ChannelOutboundAdapter = {
     };
   },
 
-  sendMedia: async ({ to, text, mediaUrl }) => {
+  sendMedia: async ({ to, text, mediaUrl }: AniSendMediaParams) => {
     const { serverUrl, apiKey } = resolveAniCredentials();
     const conversationId = parseConversationId(to);
 
@@ -146,9 +141,12 @@ export const aniOutbound: ChannelOutboundAdapter = {
         ];
       } catch (err) {
         // If media download/upload fails, fall back to sending text with a link
-        getAniRuntime().logging?.verbose(
-          `ani: sendMedia failed, falling back to text: ${String(err)}`,
-        );
+        const runtime = getAniRuntime();
+        if (runtime.logging.shouldLogVerbose()) {
+          runtime.logging
+            .getChildLogger({ module: "ani-outbound" })
+            .debug?.(`ani: sendMedia failed, falling back to text: ${String(err)}`);
+        }
         const fallbackText = text
           ? `${text}\n\n[Media link: ${mediaUrl}]`
           : `[Media link: ${mediaUrl}]`;
