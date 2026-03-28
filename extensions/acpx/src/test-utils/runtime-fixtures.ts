@@ -41,6 +41,9 @@ if (args.includes("--version")) {
 }
 
 if (args.includes("--help")) {
+  if (process.env.MOCK_ACPX_HELP_SIGNAL) {
+    process.kill(process.pid, process.env.MOCK_ACPX_HELP_SIGNAL);
+  }
   process.stdout.write("mock-acpx help\\n");
   process.exit(0);
 }
@@ -184,6 +187,9 @@ if (command === "set") {
 
 if (command === "status") {
   writeLog({ kind: "status", agent, args, sessionName: sessionFromOption });
+  if (process.env.MOCK_ACPX_STATUS_SIGNAL) {
+    process.kill(process.pid, process.env.MOCK_ACPX_STATUS_SIGNAL);
+  }
   const status = process.env.MOCK_ACPX_STATUS_STATUS || (sessionFromOption ? "alive" : "no-session");
   const summary = process.env.MOCK_ACPX_STATUS_SUMMARY || "";
   emitJson({

@@ -99,6 +99,15 @@ function formatAcpxExitMessage(params: {
   return `acpx exited with code ${params.exitCode ?? "unknown"}`;
 }
 
+function didAcpxProcessExitWithFailure(params: {
+  exitCode: number | null | undefined;
+  signal?: NodeJS.Signals | null;
+}): boolean {
+  return params.exitCode !== null && params.exitCode !== undefined
+    ? params.exitCode !== 0
+    : params.signal !== null && params.signal !== undefined;
+}
+
 function summarizeLogText(text: string, maxChars = 240): string {
   const normalized = text.trim().replace(/\s+/g, " ");
   if (!normalized) {
@@ -250,7 +259,13 @@ export class AcpxRuntime implements AcpRuntime {
 
     try {
       const result = await this.runHelpCheck();
-      if (result.error != null || (result.code ?? 0) !== 0) {
+      if (
+        result.error != null ||
+        didAcpxProcessExitWithFailure({
+          exitCode: result.code,
+          signal: result.signal,
+        })
+      ) {
         return {
           ok: false,
           failure: {
@@ -641,7 +656,10 @@ export class AcpxRuntime implements AcpRuntime {
         throw new AcpRuntimeError("ACP_TURN_FAILED", exit.error.message, { cause: exit.error });
       }
 
-      const exitedWithFailure = exit.code !== null ? exit.code !== 0 : exit.signal !== null;
+      const exitedWithFailure = didAcpxProcessExitWithFailure({
+        exitCode: exit.code,
+        signal: exit.signal,
+      });
       if (exitedWithFailure && !sawError) {
         yield {
           type: "error",
@@ -1008,7 +1026,12 @@ export class AcpxRuntime implements AcpRuntime {
       );
     }
 
-    if ((result.code ?? 0) !== 0) {
+    if (
+      didAcpxProcessExitWithFailure({
+        exitCode: result.code,
+        signal: result.signal,
+      })
+    ) {
       throw new AcpRuntimeError(
         params.fallbackCode,
         formatAcpxExitMessage({

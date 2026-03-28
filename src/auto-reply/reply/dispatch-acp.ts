@@ -358,7 +358,7 @@ export async function tryDispatchAcpReply(params: {
     identityPendingBeforeTurn &&
     (Boolean(params.ctx.MessageThreadId != null && String(params.ctx.MessageThreadId).trim()) ||
       hasBoundConversationForSession({
-        sessionKey,
+        sessionKey: canonicalSessionKey,
         channelRaw: params.ctx.OriginatingChannel ?? params.ctx.Surface ?? params.ctx.Provider,
         accountIdRaw: params.ctx.AccountId,
       }));
@@ -368,9 +368,9 @@ export async function tryDispatchAcpReply(params: {
       ? (
           acpResolution.meta.agent?.trim() ||
           params.cfg.acp?.defaultAgent?.trim() ||
-          resolveAgentIdFromSessionKey(sessionKey)
+          resolveAgentIdFromSessionKey(canonicalSessionKey)
         ).trim()
-      : resolveAgentIdFromSessionKey(sessionKey);
+      : resolveAgentIdFromSessionKey(canonicalSessionKey);
   const projector = createAcpReplyProjector({
     cfg: params.cfg,
     shouldSendToolSummaries: params.shouldSendToolSummaries,
@@ -443,7 +443,7 @@ export async function tryDispatchAcpReply(params: {
 
     await acpManager.runTurn({
       cfg: params.cfg,
-      sessionKey,
+      sessionKey: canonicalSessionKey,
       text: promptText,
       attachments: attachments.length > 0 ? attachments : undefined,
       mode: "prompt",
@@ -456,7 +456,7 @@ export async function tryDispatchAcpReply(params: {
     queuedFinal =
       (await finalizeAcpTurnOutput({
         cfg: params.cfg,
-        sessionKey,
+        sessionKey: canonicalSessionKey,
         delivery,
         inboundAudio: params.inboundAudio,
         sessionTtsAuto: params.sessionTtsAuto,
