@@ -4,6 +4,7 @@ import type { ModelCompatConfig } from "../config/types.models.js";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
 import { resolveMergedSafeBinProfileFixtures } from "../infra/exec-safe-bin-runtime-policy.js";
 import { logWarn } from "../logger.js";
+import { hasNativeWebSearchTool } from "../plugins/provider-model-compat.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
 import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
@@ -18,7 +19,6 @@ import {
 import { listChannelAgentTools } from "./channel-tools.js";
 import { resolveImageSanitizationLimits } from "./image-sanitization.js";
 import type { ModelAuthMode } from "./model-auth.js";
-import { hasNativeWebSearchTool } from "./model-compat.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { wrapToolWithAbortSignal } from "./pi-tools.abort.js";
 import { wrapToolWithBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
@@ -360,7 +360,7 @@ export function createOpenClawCodingTools(options?: {
   // (tools.fs.workspaceOnly is a separate umbrella flag for read/write/edit/apply_patch.)
   const applyPatchWorkspaceOnly = workspaceOnly || applyPatchConfig?.workspaceOnly !== false;
   const applyPatchEnabled =
-    !!applyPatchConfig?.enabled &&
+    applyPatchConfig?.enabled !== false &&
     isOpenAIProvider(options?.modelProvider) &&
     isApplyPatchAllowedForModel({
       modelProvider: options?.modelProvider,

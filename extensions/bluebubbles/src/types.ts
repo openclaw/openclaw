@@ -1,7 +1,7 @@
-import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/infra-runtime";
 import type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/setup";
+import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 
-export type { SsrFPolicy } from "openclaw/plugin-sdk/infra-runtime";
+export type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 export type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/setup";
 
 export type BlueBubblesGroupConfig = {
@@ -33,7 +33,7 @@ export type BlueBubblesAccountConfig = {
   groupAllowFrom?: Array<string | number>;
   /** Group message handling policy. */
   groupPolicy?: GroupPolicy;
-  /** Enrich unnamed group participants with local macOS Contacts names after gating. Default: false. */
+  /** Enrich unnamed group participants with local macOS Contacts names after gating. Default: true. */
   enrichGroupParticipantsFromContacts?: boolean;
   /** Max group messages to keep as history context (0 disables). */
   historyLimit?: number;

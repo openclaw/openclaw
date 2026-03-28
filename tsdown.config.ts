@@ -115,10 +115,6 @@ function buildCoreDistEntries(): Record<string, string> {
     entry: "src/entry.ts",
     // Ensure this module is bundled as an entry so legacy CLI shims can resolve its exports.
     "cli/daemon-cli": "src/cli/daemon-cli.ts",
-    // Ensure memory-cli is a stable entry so the runtime tools plugin can import
-    // it by a deterministic path instead of a content-hashed chunk name.
-    // See https://github.com/openclaw/openclaw/issues/51676
-    "cli/memory-cli": "src/cli/memory-cli.ts",
     // Keep long-lived lazy runtime boundaries on stable filenames so rebuilt
     // dist/ trees do not strand already-running gateways on stale hashed chunks.
     "agents/auth-profiles.runtime": "src/agents/auth-profiles.runtime.ts",
@@ -159,7 +155,7 @@ export default defineConfig([
     // and bundled hooks in one graph so runtime singletons are emitted once.
     entry: buildUnifiedDistEntries(),
     deps: {
-      neverBundle: ["@lancedb/lancedb"],
+      neverBundle: ["@lancedb/lancedb", "@matrix-org/matrix-sdk-crypto-nodejs", "matrix-js-sdk"],
     },
   }),
 ]);

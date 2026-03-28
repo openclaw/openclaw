@@ -224,6 +224,32 @@ describe("gateway auth browser hardening", () => {
     });
   });
 
+  test("rejects browser-origin connects that claim to be tui clients", async () => {
+    testState.gatewayAuth = { mode: "token", token: "secret" };
+    await withGatewayServer(async ({ port }) => {
+      const ws = await openWs(port, { origin: "https://attacker.example" });
+      try {
+        const res = await connectReq(ws, {
+          token: "secret",
+          client: {
+            id: GATEWAY_CLIENT_NAMES.TUI,
+            version: "1.0.0",
+            platform: "darwin",
+            mode: GATEWAY_CLIENT_MODES.UI,
+          },
+          device: null,
+        });
+        expect(res.ok).toBe(false);
+        expect(res.error?.message ?? "").toContain("origin not allowed");
+        expect((res.error?.details as { code?: string } | undefined)?.code).toBe(
+          ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED,
+        );
+      } finally {
+        ws.close();
+      }
+    });
+  });
+
   test("rate-limits browser-origin auth failures on loopback even when loopback exemption is enabled", async () => {
     testState.gatewayAuth = {
       mode: "token",
