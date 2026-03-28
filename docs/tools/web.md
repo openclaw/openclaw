@@ -46,7 +46,7 @@ returns results. Results are cached by query for 15 minutes (configurable).
 ## Choosing a provider
 
 <CardGroup cols={2}>
-  <Card title="Baidu Search" icon="globe" href="/tools/web">
+  <Card title="Baidu Search" icon="globe">
     Chinese-first web search via Qianfan. Supports direct structured results and smart AI-synthesized answers.
   </Card>
   <Card title="Brave Search" icon="shield" href="/tools/brave-search">

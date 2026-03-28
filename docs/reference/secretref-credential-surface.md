@@ -36,6 +36,7 @@ Scope intent:
 - `plugins.entries.xai.config.webSearch.apiKey`
 - `plugins.entries.moonshot.config.webSearch.apiKey`
 - `plugins.entries.perplexity.config.webSearch.apiKey`
+- `plugins.entries.qianfan.config.webSearch.apiKey`
 - `plugins.entries.firecrawl.config.webSearch.apiKey`
 - `plugins.entries.tavily.config.webSearch.apiKey`
 - `tools.web.search.apiKey`
