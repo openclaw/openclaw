@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { installTestEnv } from "./test-env.js";
+import { __testing, installTestEnv } from "./test-env.js";
 
 const ORIGINAL_ENV = { ...process.env };
 
@@ -135,5 +135,22 @@ describe("installTestEnv", () => {
     expect(testEnv.tempHome).toBe(realHome);
     expect(process.env.HOME).toBe(realHome);
     expect(process.env.TEST_PROFILE_ONLY).toBe("from-profile");
+  });
+
+  it("parses simple exported profile vars without relying on bash", () => {
+    expect(
+      __testing.parseSimpleProfileEnv(
+        [
+          "# comment",
+          "export TEST_PROFILE_ONLY=from-profile",
+          "QUOTED_VALUE='hello world'",
+          'DOUBLE_QUOTED="quoted"',
+        ].join("\n"),
+      ),
+    ).toEqual([
+      { key: "TEST_PROFILE_ONLY", value: "from-profile" },
+      { key: "QUOTED_VALUE", value: "hello world" },
+      { key: "DOUBLE_QUOTED", value: "quoted" },
+    ]);
   });
 });
