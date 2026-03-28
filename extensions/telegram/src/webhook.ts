@@ -4,7 +4,7 @@ import type { IncomingMessage } from "node:http";
 import net from "node:net";
 import * as grammy from "grammy";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { isDiagnosticsEnabled } from "openclaw/plugin-sdk/infra-runtime";
+import { isDiagnosticsEnabled } from "openclaw/plugin-sdk/diagnostic-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";

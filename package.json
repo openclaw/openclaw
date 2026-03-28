@@ -328,6 +328,10 @@
       "types": "./dist/plugin-sdk/device-bootstrap.d.ts",
       "default": "./dist/plugin-sdk/device-bootstrap.js"
     },
+    "./plugin-sdk/diagnostic-runtime": {
+      "types": "./dist/plugin-sdk/diagnostic-runtime.d.ts",
+      "default": "./dist/plugin-sdk/diagnostic-runtime.js"
+    },
     "./plugin-sdk/diagnostics-otel": {
       "types": "./dist/plugin-sdk/diagnostics-otel.d.ts",
       "default": "./dist/plugin-sdk/diagnostics-otel.js"
@@ -367,6 +371,10 @@
     "./plugin-sdk/discord-timeouts": {
       "types": "./dist/plugin-sdk/discord-timeouts.d.ts",
       "default": "./dist/plugin-sdk/discord-timeouts.js"
+    },
+    "./plugin-sdk/error-runtime": {
+      "types": "./dist/plugin-sdk/error-runtime.d.ts",
+      "default": "./dist/plugin-sdk/error-runtime.js"
     },
     "./plugin-sdk/extension-shared": {
       "types": "./dist/plugin-sdk/extension-shared.d.ts",
