@@ -289,11 +289,12 @@ export const bluebubblesPlugin: ChannelPlugin<ResolvedBlueBubblesAccount, BlueBu
           /^bluebubbles:/i,
           normalizeBlueBubblesHandle,
         ),
-        notify: async ({ cfg, id, message }) => {
+        notify: async ({ cfg, id, message, accountId }) => {
           await (
             await loadBlueBubblesChannelRuntime()
           ).sendMessageBlueBubbles(id, message, {
             cfg: cfg,
+            accountId,
           });
         },
       },
