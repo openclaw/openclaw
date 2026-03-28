@@ -705,6 +705,64 @@ describe("gateway server sessions", () => {
     );
   });
 
+  test("sessions.changed mutation events include subagent ownership metadata", async () => {
+    await createSessionStoreDir();
+    await writeSessionStore({
+      entries: {
+        "subagent:child": {
+          sessionId: "sess-child",
+          updatedAt: Date.now(),
+          spawnedBy: "agent:main:main",
+          spawnedWorkspaceDir: "/tmp/subagent-workspace",
+          forkedFromParent: true,
+          spawnDepth: 2,
+          subagentRole: "orchestrator",
+          subagentControlScope: "children",
+        },
+      },
+    });
+
+    const broadcastToConnIds = vi.fn();
+    const respond = vi.fn();
+    const sessionsHandlers = await getSessionsHandlers();
+    await sessionsHandlers["sessions.patch"]({
+      req: {} as never,
+      params: {
+        key: "subagent:child",
+        label: "Child",
+      },
+      respond,
+      context: {
+        broadcastToConnIds,
+        getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+        loadGatewayModelCatalog: async () => ({ providers: [] }),
+      } as never,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ ok: true, key: "agent:main:subagent:child" }),
+      undefined,
+    );
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "sessions.changed",
+      expect.objectContaining({
+        sessionKey: "agent:main:subagent:child",
+        reason: "patch",
+        spawnedBy: "agent:main:main",
+        spawnedWorkspaceDir: "/tmp/subagent-workspace",
+        forkedFromParent: true,
+        spawnDepth: 2,
+        subagentRole: "orchestrator",
+        subagentControlScope: "children",
+      }),
+      new Set(["conn-1"]),
+      { dropIfSlow: true },
+    );
+  });
+
   test("lists and patches session store via sessions.* RPC", async () => {
     const { dir, storePath } = await createSessionStoreDir();
     const now = Date.now();
