@@ -76,11 +76,12 @@ export function markdownTablesToBlockKitAttachment(
   if (!tables.length) {
     return [];
   }
-  // One table per attachment — Slack allows one table block per
-  // block surface, but multiple attachments per message.
-  return tables.map((table) => ({
-    blocks: [markdownTableToBlockKit(table)],
-  }));
+  // Slack enforces exactly one table block per message — sending
+  // multiple table blocks (even across separate attachments) triggers
+  // invalid_attachments / only_one_table_allowed.  Render only the
+  // first table as Block Kit; callers must fall back to code mode
+  // for any remaining tables.
+  return [{ blocks: [markdownTableToBlockKit(tables[0])] }];
 }
 
 /**

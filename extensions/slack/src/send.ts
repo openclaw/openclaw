@@ -377,6 +377,15 @@ export async function sendMessageSlack(
     }
     if (allTables.length > 0) {
       tableAttachments = markdownTablesToBlockKitAttachment(allTables);
+      // Slack only allows one table block per message. Render any
+      // additional tables as code blocks in the text stream.
+      if (allTables.length > 1) {
+        const extraTablesText = allTables
+          .slice(1)
+          .map((t) => "```\n" + tableFallbackText([t]) + "\n```")
+          .join("\n\n");
+        chunks.push(extraTablesText);
+      }
     }
   } else {
     chunks.push(

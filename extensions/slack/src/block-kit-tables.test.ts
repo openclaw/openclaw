@@ -126,18 +126,18 @@ describe("markdownTablesToBlockKitAttachment", () => {
     expect(result[0]?.blocks).toHaveLength(1);
   });
 
-  it("places each table in its own attachment (one table per block surface)", () => {
+  it("renders only the first table as Block Kit (Slack one-table-per-message limit)", () => {
     const tables: MarkdownTableData[] = [
       { headers: ["X"], rows: [["1"]], placeholderOffset: 0 },
       { headers: ["Y"], rows: [["2"]], placeholderOffset: 10 },
     ];
 
     const result = markdownTablesToBlockKitAttachment(tables);
-    expect(result).toHaveLength(2);
+    // Only one attachment with the first table — additional tables
+    // must be handled by the caller (e.g. code-block fallback).
+    expect(result).toHaveLength(1);
     expect(result[0]?.blocks).toHaveLength(1);
-    expect(result[1]?.blocks).toHaveLength(1);
     expect(result[0]?.blocks[0]?.rows[0]?.[0]?.text).toBe("X");
-    expect(result[1]?.blocks[0]?.rows[0]?.[0]?.text).toBe("Y");
   });
 
   it("returns empty array for no tables", () => {
