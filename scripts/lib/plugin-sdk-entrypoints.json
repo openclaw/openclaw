@@ -97,6 +97,7 @@
   "feishu",
   "feishu-conversation",
   "feishu-setup",
+  "fetch-runtime",
   "group-access",
   "google",
   "global-singleton",
