@@ -6,7 +6,10 @@ import {
   listChatChannels,
   normalizeChatChannelId,
 } from "../channels/registry.js";
-import { BUNDLED_AUTO_ENABLE_PROVIDER_PLUGIN_IDS } from "../plugins/bundled-capability-metadata.js";
+import {
+  BUNDLED_AUTO_ENABLE_PROVIDER_PLUGIN_IDS,
+  BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS,
+} from "../plugins/bundled-capability-metadata.js";
 import {
   loadPluginManifestRegistry,
   type PluginManifestRegistry,
@@ -135,6 +138,40 @@ function isProviderConfigured(cfg: OpenClawConfig, providerId: string): boolean 
   }
 
   return false;
+}
+
+function hasPluginOwnedWebSearchConfig(cfg: OpenClawConfig, pluginId: string): boolean {
+  const pluginConfig = cfg.plugins?.entries?.[pluginId]?.config;
+  if (!isRecord(pluginConfig)) {
+    return false;
+  }
+  return isRecord(pluginConfig.webSearch);
+}
+
+function hasPluginOwnedToolConfig(cfg: OpenClawConfig, pluginId: string): boolean {
+  // x_search is now plugin-owned by xAI, but the persisted config shape still
+  // lives under tools.web.x_search for backward compatibility. Treat that as
+  // plugin configuration so tool/runtime loading can activate xAI generically.
+  if (pluginId === "xai") {
+    return isRecord(cfg.tools?.web?.x_search as Record<string, unknown> | undefined);
+  }
+  return false;
+}
+
+function resolveProviderPluginsWithOwnedWebSearch(
+  registry: PluginManifestRegistry,
+): ReadonlySet<string> {
+  const pluginIds = new Set(
+    BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.filter(
+      (entry) => entry.providerIds.length > 0 && entry.webSearchProviderIds.length > 0,
+    ).map((entry) => entry.pluginId),
+  );
+  for (const plugin of registry.plugins) {
+    if (plugin.providers.length > 0 && (plugin.contracts?.webSearchProviders?.length ?? 0) > 0) {
+      pluginIds.add(plugin.id);
+    }
+  }
+  return pluginIds;
 }
 
 function buildChannelToPluginIdMap(registry: PluginManifestRegistry): Map<string, string> {
@@ -303,6 +340,22 @@ function resolveConfiguredPlugins(
       changes.push({
         pluginId,
         reason: `${providerId} auth configured`,
+      });
+    }
+  }
+  for (const pluginId of resolveProviderPluginsWithOwnedWebSearch(registry)) {
+    if (hasPluginOwnedWebSearchConfig(cfg, pluginId)) {
+      changes.push({
+        pluginId,
+        reason: `${pluginId} web search configured`,
+      });
+    }
+  }
+  for (const pluginId of resolveProviderPluginsWithOwnedWebSearch(registry)) {
+    if (hasPluginOwnedToolConfig(cfg, pluginId)) {
+      changes.push({
+        pluginId,
+        reason: `${pluginId} tool configured`,
       });
     }
   }
