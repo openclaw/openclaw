@@ -9,6 +9,7 @@ import type {
 import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { firstDefined, normalizeAllowFrom, type NormalizedAllowFrom } from "../bot-access.js";
+import { normalizeTelegramReplyToMessageId } from "../outbound-params.js";
 import type { TelegramGetChat, TelegramStreamMode } from "./types.js";
 
 const TELEGRAM_GENERAL_TOPIC_ID = 1;
@@ -415,14 +416,7 @@ export function expandTextLinks(text: string, entities?: TelegramTextLinkEntity[
 }
 
 export function resolveTelegramReplyId(raw?: string): number | undefined {
-  if (!raw) {
-    return undefined;
-  }
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed)) {
-    return undefined;
-  }
-  return parsed;
+  return normalizeTelegramReplyToMessageId(raw);
 }
 
 export type TelegramReplyTarget = {
