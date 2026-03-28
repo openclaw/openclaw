@@ -62,13 +62,7 @@ function createFixtureSkill(params: {
     description: params.description,
     filePath: params.filePath,
     baseDir: params.baseDir,
-    sourceInfo: {
-      path: params.filePath,
-      source: params.source,
-      scope: "project",
-      origin: "top-level",
-      baseDir: params.baseDir,
-    },
+    source: params.source,
     disableModelInvocation: false,
   } as SkillEntry["skill"];
 }
