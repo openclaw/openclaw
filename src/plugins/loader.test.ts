@@ -2277,6 +2277,44 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
     ).toEqual(["duplicate_tool"]);
   });
 
+  it("keeps non-conflicting tool registrations when advertised names only partially overlap", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "partial-overlap-tool-registration",
+      filename: "partial-overlap-tool-registration.cjs",
+      body: `module.exports = { id: "partial-overlap-tool-registration", register(api) {
+  api.registerTool({
+    name: "tool_a",
+    description: "tool a",
+    parameters: { type: "object", properties: {} },
+    async execute() {
+      return { content: [], details: { tool: "a" } };
+    },
+  }, { names: ["tool_a", "shared_name"] });
+  api.registerTool({
+    name: "tool_c",
+    description: "tool c",
+    parameters: { type: "object", properties: {} },
+    async execute() {
+      return { content: [], details: { tool: "c" } };
+    },
+  }, { names: ["shared_name", "tool_c"] });
+} };`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["partial-overlap-tool-registration"],
+      },
+    });
+
+    expect(registry.tools).toHaveLength(2);
+    expect(
+      registry.plugins.find((entry) => entry.id === "partial-overlap-tool-registration")?.toolNames,
+    ).toEqual(["tool_a", "shared_name", "tool_c"]);
+  });
+
   it("enforces plugin http route validation and conflict rules", () => {
     useNoBundledPlugins();
     const scenarios = [
@@ -3663,6 +3701,38 @@ describe("getCompatibleActivePluginRegistry", () => {
         workspaceDir: startupLoadOptions.workspaceDir,
       }),
     ).toBe(registry);
+  });
+
+  it("does not reuse a gateway-bindable active registry when core gateway method names differ", () => {
+    const registry = createEmptyPluginRegistry();
+    const startupLoadOptions = {
+      config: {
+        plugins: {
+          allow: ["demo"],
+          load: { paths: ["/tmp/demo.js"] },
+        },
+      },
+      workspaceDir: "/tmp/workspace-a",
+      coreGatewayHandlers: {
+        "plugins.demo": async () => undefined,
+      },
+      runtimeOptions: {
+        allowGatewaySubagentBinding: true,
+      },
+    };
+    const { cacheKey, cacheKeyParts } = __testing.resolvePluginLoadCacheContext(startupLoadOptions);
+    setActivePluginRegistry(registry, cacheKey, cacheKeyParts);
+
+    expect(
+      __testing.getCompatibleActivePluginRegistry({
+        config: startupLoadOptions.config,
+        workspaceDir: startupLoadOptions.workspaceDir,
+        coreGatewayHandlers: {
+          "plugins.demo": async () => undefined,
+          "plugins.demo.extra": async () => undefined,
+        },
+      }),
+    ).toBeUndefined();
   });
 
   it("falls back to the current active runtime when no compatibility-shaping inputs are supplied", () => {

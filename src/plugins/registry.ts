@@ -79,6 +79,24 @@ export type PluginToolRegistration = {
   pluginConfig?: Record<string, unknown>;
 };
 
+function hasExactRegisteredToolMatch(params: {
+  existing: PluginToolRegistration;
+  pluginId: string;
+  normalizedNames: string[];
+  optional: boolean;
+  source: string;
+  rootDir?: string;
+}): boolean {
+  return (
+    params.existing.pluginId === params.pluginId &&
+    params.existing.optional === params.optional &&
+    params.existing.source === params.source &&
+    params.existing.rootDir === params.rootDir &&
+    params.existing.names.length === params.normalizedNames.length &&
+    params.existing.names.every((name, index) => name === params.normalizedNames[index])
+  );
+}
+
 export type PluginCliRegistration = {
   pluginId: string;
   pluginName?: string;
@@ -294,17 +312,22 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
 
     const normalized = Array.from(new Set(names.map((name) => name.trim()).filter(Boolean)));
     if (normalized.length > 0) {
-      const alreadyRegistered = registry.tools.some(
-        (existing) =>
-          existing.pluginId === record.id &&
-          existing.names.some((name) => normalized.includes(name)),
+      const alreadyRegistered = registry.tools.some((existing) =>
+        hasExactRegisteredToolMatch({
+          existing,
+          pluginId: record.id,
+          normalizedNames: normalized,
+          optional,
+          source: record.source,
+          rootDir: record.rootDir,
+        }),
       );
       if (alreadyRegistered) {
         return;
       }
     }
     if (normalized.length > 0) {
-      record.toolNames.push(...normalized);
+      record.toolNames = Array.from(new Set([...record.toolNames, ...normalized]));
     }
     registry.tools.push({
       pluginId: record.id,

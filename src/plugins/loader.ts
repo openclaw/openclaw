@@ -16,7 +16,6 @@ import {
   normalizePluginsConfig,
   resolveEffectiveEnableState,
   resolveMemorySlotDecision,
-  type NormalizedPluginsConfig,
 } from "./config-state.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
 import { initializeGlobalHookRunner } from "./hook-runner-global.js";
@@ -195,19 +194,7 @@ function setCachedPluginRegistry(cacheKey: string, state: CachedPluginState): vo
   }
 }
 
-function buildCacheKey(params: {
-  workspaceDir?: string;
-  plugins: NormalizedPluginsConfig;
-  installs?: Record<string, PluginInstallRecord>;
-  env: NodeJS.ProcessEnv;
-  onlyPluginIds?: string[];
-  includeSetupOnlyChannelPlugins?: boolean;
-  preferSetupRuntimeForChannelPlugins?: boolean;
-  runtimeSubagentMode?: "default" | "explicit" | "gateway-bindable";
-  pluginSdkResolution?: PluginSdkResolutionPreference;
-  coreGatewayMethodNames?: string[];
-}): string {
-  const parts = buildCacheKeyParts(params);
+function buildCacheKeyFromParts(parts: ReturnType<typeof buildCacheKeyParts>): string {
   return `${parts.pluginInputKey}::${parts.scopeKey}::${parts.setupOnlyKey}::${parts.startupChannelMode}::${parts.runtimeSubagentMode}::${parts.pluginSdkResolution}::${parts.gatewayMethodsKey}`;
 }
 
@@ -308,18 +295,6 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
   const includeSetupOnlyChannelPlugins = options.includeSetupOnlyChannelPlugins === true;
   const preferSetupRuntimeForChannelPlugins = options.preferSetupRuntimeForChannelPlugins === true;
   const coreGatewayMethodNames = Object.keys(options.coreGatewayHandlers ?? {}).toSorted();
-  const cacheKey = buildCacheKey({
-    workspaceDir: options.workspaceDir,
-    plugins: normalized,
-    installs: cfg.plugins?.installs,
-    env,
-    onlyPluginIds,
-    includeSetupOnlyChannelPlugins,
-    preferSetupRuntimeForChannelPlugins,
-    runtimeSubagentMode: resolveRuntimeSubagentMode(options.runtimeOptions),
-    pluginSdkResolution: options.pluginSdkResolution,
-    coreGatewayMethodNames,
-  });
   const cacheKeyParts = buildCacheKeyParts({
     workspaceDir: options.workspaceDir,
     plugins: normalized,
@@ -332,6 +307,7 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     pluginSdkResolution: options.pluginSdkResolution,
     coreGatewayMethodNames,
   });
+  const cacheKey = buildCacheKeyFromParts(cacheKeyParts);
   return {
     env,
     cfg,
@@ -372,7 +348,9 @@ function getCompatibleActivePluginRegistry(
     requestCacheKeyParts.scopeKey === activeCacheKeyParts.scopeKey &&
     requestCacheKeyParts.setupOnlyKey === activeCacheKeyParts.setupOnlyKey &&
     requestCacheKeyParts.startupChannelMode === activeCacheKeyParts.startupChannelMode &&
-    requestCacheKeyParts.pluginSdkResolution === activeCacheKeyParts.pluginSdkResolution
+    requestCacheKeyParts.pluginSdkResolution === activeCacheKeyParts.pluginSdkResolution &&
+    (options.coreGatewayHandlers === undefined ||
+      requestCacheKeyParts.gatewayMethodsKey === activeCacheKeyParts.gatewayMethodsKey)
   ) {
     return activeRegistry;
   }
