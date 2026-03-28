@@ -9,6 +9,18 @@ export type ExtraParamsCapture<TPayload extends Record<string, unknown>> = {
   payload: TPayload;
 };
 
+function createMockStream(): ReturnType<StreamFn> {
+  return {
+    push() {},
+    async result() {
+      return undefined;
+    },
+    async *[Symbol.asyncIterator]() {
+      // Minimal async stream surface for wrappers that decorate iteration.
+    },
+  } as unknown as ReturnType<StreamFn>;
+}
+
 type RunExtraParamsCaseParams<
   TApi extends "openai-completions" | "openai-responses",
   TPayload extends Record<string, unknown>,
@@ -34,7 +46,7 @@ export function runExtraParamsCase<
   const baseStreamFn: StreamFn = (model, _context, options) => {
     captured.headers = options?.headers;
     options?.onPayload?.(params.payload, model);
-    return {} as ReturnType<StreamFn>;
+    return createMockStream();
   };
   const agent = { streamFn: baseStreamFn };
 
