@@ -1,42 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createHookRunner } from "./hooks.js";
-import { addTestHook } from "./hooks.test-helpers.js";
+import { addStaticTestHooks } from "./hooks.test-helpers.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "./registry.js";
-import type {
-  PluginHookBeforeToolCallResult,
-  PluginHookMessageSendingResult,
-  PluginHookRegistration,
-} from "./types.js";
-
-function addBeforeToolCallHook(
-  registry: PluginRegistry,
-  pluginId: string,
-  handler: () => PluginHookBeforeToolCallResult | Promise<PluginHookBeforeToolCallResult>,
-  priority?: number,
-) {
-  addTestHook({
-    registry,
-    pluginId,
-    hookName: "before_tool_call",
-    handler: handler as PluginHookRegistration["handler"],
-    priority,
-  });
-}
-
-function addMessageSendingHook(
-  registry: PluginRegistry,
-  pluginId: string,
-  handler: () => PluginHookMessageSendingResult | Promise<PluginHookMessageSendingResult>,
-  priority?: number,
-) {
-  addTestHook({
-    registry,
-    pluginId,
-    hookName: "message_sending",
-    handler: handler as PluginHookRegistration["handler"],
-    priority,
-  });
-}
+import type { PluginHookBeforeToolCallResult, PluginHookMessageSendingResult } from "./types.js";
 
 const toolEvent = { toolName: "bash", params: { command: "echo hello" } };
 const toolCtx = { toolName: "bash" };
@@ -53,9 +19,10 @@ async function runBeforeToolCallWithHooks(
   }>,
   catchErrors = true,
 ) {
-  for (const { pluginId, result, priority, handler } of hooks) {
-    addBeforeToolCallHook(registry, pluginId, handler ?? (() => result), priority);
-  }
+  addStaticTestHooks(registry, {
+    hookName: "before_tool_call",
+    hooks,
+  });
   const runner = createHookRunner(registry, { catchErrors });
   return await runner.runBeforeToolCall(toolEvent, toolCtx);
 }
@@ -70,9 +37,10 @@ async function runMessageSendingWithHooks(
   }>,
   catchErrors = true,
 ) {
-  for (const { pluginId, result, priority, handler } of hooks) {
-    addMessageSendingHook(registry, pluginId, handler ?? (() => result), priority);
-  }
+  addStaticTestHooks(registry, {
+    hookName: "message_sending",
+    hooks,
+  });
   const runner = createHookRunner(registry, { catchErrors });
   return await runner.runMessageSending(messageEvent, messageCtx);
 }
