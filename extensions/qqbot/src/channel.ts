@@ -17,20 +17,11 @@ import {
 } from "./config.js";
 import { getQQBotRuntime } from "./runtime.js";
 import { qqbotSetupWizard } from "./setup-surface.js";
+// Re-export text helpers so existing consumers of channel.ts are unaffected.
+// The canonical definition lives in text-utils.ts to avoid a circular
+// dependency: channel.ts → (dynamic) gateway.ts → outbound-deliver.ts → channel.ts.
+export { chunkText, TEXT_CHUNK_LIMIT } from "./text-utils.js";
 import type { ResolvedQQBotAccount } from "./types.js";
-
-/** Maximum text length for a single QQ Bot message. */
-export const TEXT_CHUNK_LIMIT = 5000;
-
-/**
- * Markdown-aware text chunking.
- *
- * Delegates to the SDK chunker so code fences and bracket balance stay intact.
- */
-export function chunkText(text: string, limit: number): string[] {
-  const runtime = getQQBotRuntime();
-  return runtime.channel.text.chunkMarkdownText(text, limit);
-}
 
 export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
   id: "qqbot",

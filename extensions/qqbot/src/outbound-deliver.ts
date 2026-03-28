@@ -14,7 +14,6 @@ import {
   sendC2CImageMessage,
   sendGroupImageMessage,
 } from "./api.js";
-import { chunkText, TEXT_CHUNK_LIMIT } from "./channel.js";
 import {
   sendPhoto,
   sendVoice,
@@ -24,6 +23,7 @@ import {
   type MediaTargetContext,
 } from "./outbound.js";
 import { getQQBotRuntime } from "./runtime.js";
+import { chunkText, TEXT_CHUNK_LIMIT } from "./text-utils.js";
 import type { ResolvedQQBotAccount } from "./types.js";
 import { getImageSize, formatQQBotMarkdownImage, hasQQBotImageSize } from "./utils/image-size.js";
 import { normalizeMediaTags } from "./utils/media-tags.js";
