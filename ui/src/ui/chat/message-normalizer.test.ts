@@ -43,7 +43,7 @@ describe("message-normalizer", () => {
         timestamp: 2000,
       });
 
-      expect(result.role).toBe("assistant");
+      expect(result.role).toBe("toolResult");
       expect(result.content).toHaveLength(2);
       expect(result.content[0]).toEqual({
         type: "text",
@@ -86,6 +86,21 @@ describe("message-normalizer", () => {
       });
 
       expect(result.role).toBe("toolResult");
+    });
+
+    it("detects tool messages by toolcall content blocks", () => {
+      const result = normalizeMessage({
+        role: "assistant",
+        content: [{ type: "toolcall", name: "Bash", arguments: { command: "pwd" } }],
+      });
+
+      expect(result.role).toBe("toolResult");
+      expect(result.content[0]).toEqual({
+        type: "toolcall",
+        text: undefined,
+        name: "Bash",
+        args: { command: "pwd" },
+      });
     });
 
     it("handles missing role", () => {
