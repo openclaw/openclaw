@@ -775,6 +775,39 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("agent.wait does not grace-delay plain lifecycle completions", async () => {
+    const runId = "idem-wait-lifecycle-no-structured";
+    const waitP = rpcReq(ws, "agent.wait", {
+      runId,
+      timeoutMs: 10_000,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 1 },
+    });
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "end", startedAt: 1, endedAt: 2 },
+    });
+
+    const waitRes = await Promise.race([
+      waitP,
+      new Promise<"timed-out">((resolve) => setTimeout(() => resolve("timed-out"), 150)),
+    ]);
+    expect(waitRes).not.toBe("timed-out");
+    expect(waitRes).toMatchObject({
+      ok: true,
+      payload: {
+        runId,
+        status: "ok",
+      },
+    });
+  });
+
   test("agent.wait ignores stale chat dedupe when an agent run with the same runId is in flight", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     let resolveAgentRun: (() => void) | undefined;
