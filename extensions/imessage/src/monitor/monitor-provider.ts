@@ -19,7 +19,7 @@ import {
   upsertChannelPairingRequest,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
-import { normalizeScpRemoteHost } from "openclaw/plugin-sdk/infra-runtime";
+import { normalizeScpRemoteHost } from "openclaw/plugin-sdk/host-runtime";
 import {
   isInboundPathAllowed,
   resolveIMessageAttachmentRoots,
