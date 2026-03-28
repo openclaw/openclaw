@@ -189,11 +189,20 @@ export type AcpDispatchAttemptResult = {
 
 const ACP_STALE_BINDING_UNBIND_REASON = "acp-session-init-failed";
 
+function isStaleSessionInitError(params: { code: string; message: string }): boolean {
+  if (params.code !== "ACP_SESSION_INIT_FAILED") {
+    return false;
+  }
+  return /(ACP (session )?metadata is missing|missing ACP metadata|Session is not ACP-enabled|Resource not found)/i.test(
+    params.message,
+  );
+}
+
 async function maybeUnbindStaleBoundConversations(params: {
   sessionKey: string;
   error: { code: string; message: string };
 }): Promise<void> {
-  if (params.error.code !== "ACP_SESSION_INIT_FAILED") {
+  if (!isStaleSessionInitError(params.error)) {
     return;
   }
   try {
@@ -370,17 +379,31 @@ export async function tryDispatchAcpReply(params: {
   });
 
   const acpDispatchStartedAt = Date.now();
+  if (acpResolution.kind === "stale") {
+    await maybeUnbindStaleBoundConversations({
+      sessionKey,
+      error: acpResolution.error,
+    });
+    const delivered = await delivery.deliver("final", {
+      text: formatAcpRuntimeErrorText(acpResolution.error),
+      isError: true,
+    });
+    const counts = params.dispatcher.getQueuedCounts();
+    delivery.applyRoutedCounts(counts);
+    const acpStats = acpManager.getObservabilitySnapshot(params.cfg);
+    logVerbose(
+      `acp-dispatch: session=${sessionKey} outcome=error code=${acpResolution.error.code} latencyMs=${Date.now() - acpDispatchStartedAt} queueDepth=${acpStats.turns.queueDepth} activeRuntimes=${acpStats.runtimeCache.activeSessions}`,
+    );
+    params.recordProcessed("completed", {
+      reason: `acp_error:${acpResolution.error.code.toLowerCase()}`,
+    });
+    params.markIdle("message_completed");
+    return { queuedFinal: delivered, counts };
+  }
   try {
     const dispatchPolicyError = resolveAcpDispatchPolicyError(params.cfg);
     if (dispatchPolicyError) {
       throw dispatchPolicyError;
-    }
-    if (acpResolution.kind === "stale") {
-      await maybeUnbindStaleBoundConversations({
-        sessionKey,
-        error: acpResolution.error,
-      });
-      throw acpResolution.error;
     }
     const agentPolicyError = resolveAcpAgentPolicyError(params.cfg, resolvedAcpAgent);
     if (agentPolicyError) {

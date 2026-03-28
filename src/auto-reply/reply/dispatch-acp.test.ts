@@ -508,6 +508,7 @@ describe("tryDispatchAcpReply", () => {
     });
 
     expect(managerMocks.runTurn).not.toHaveBeenCalled();
+    expect(bindingServiceMocks.unbind).toHaveBeenCalledTimes(1);
     expect(bindingServiceMocks.unbind).toHaveBeenCalledWith({
       targetSessionKey: sessionKey,
       reason: "acp-session-init-failed",
@@ -520,7 +521,7 @@ describe("tryDispatchAcpReply", () => {
     );
   });
 
-  it("unbinds stale bindings on ACP runTurn init failure", async () => {
+  it("does not unbind valid bindings on generic ACP runTurn init failure", async () => {
     setReadyAcpResolution();
     // Match the post-reset module instance so dispatch-acp preserves the ACP error code.
     const { AcpRuntimeError: FreshAcpRuntimeError } = await import("../../acp/runtime/errors.js");
@@ -528,6 +529,31 @@ describe("tryDispatchAcpReply", () => {
       new FreshAcpRuntimeError(
         "ACP_SESSION_INIT_FAILED",
         "Could not initialize ACP session runtime.",
+      ),
+    );
+    const { dispatcher } = createDispatcher();
+
+    await runDispatch({
+      bodyForAgent: "test",
+      dispatcher,
+    });
+
+    expect(bindingServiceMocks.unbind).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        isError: true,
+        text: expect.stringContaining("Could not initialize ACP session runtime."),
+      }),
+    );
+  });
+
+  it("unbinds stale bindings on ACP runTurn missing-metadata failures", async () => {
+    setReadyAcpResolution();
+    const { AcpRuntimeError: FreshAcpRuntimeError } = await import("../../acp/runtime/errors.js");
+    managerMocks.runTurn.mockRejectedValueOnce(
+      new FreshAcpRuntimeError(
+        "ACP_SESSION_INIT_FAILED",
+        `ACP metadata is missing for ${sessionKey}. Recreate this ACP session with /acp spawn and rebind the thread.`,
       ),
     );
     bindingServiceMocks.unbind.mockResolvedValueOnce([
@@ -551,6 +577,7 @@ describe("tryDispatchAcpReply", () => {
       dispatcher,
     });
 
+    expect(bindingServiceMocks.unbind).toHaveBeenCalledTimes(1);
     expect(bindingServiceMocks.unbind).toHaveBeenCalledWith({
       targetSessionKey: sessionKey,
       reason: "acp-session-init-failed",
@@ -558,7 +585,7 @@ describe("tryDispatchAcpReply", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
       expect.objectContaining({
         isError: true,
-        text: expect.stringContaining("Could not initialize ACP session runtime."),
+        text: expect.stringContaining("ACP metadata is missing"),
       }),
     );
   });
