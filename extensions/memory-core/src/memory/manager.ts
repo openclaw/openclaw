@@ -28,10 +28,12 @@ import {
   type EmbeddingProviderResult,
   type EmbeddingProviderRuntime,
 } from "./embeddings.js";
-import { createEpisodeEncoder } from "./episodic/encoder.js";
-import { EpisodicSearch } from "./episodic/search.js";
-import { EpisodicStore } from "./episodic/store.js";
-import type { EpisodeSearchResult } from "./episodic/types.js";
+import {
+  createEpisodeEncoder,
+  EpisodicSearch,
+  EpisodicStore,
+} from "openclaw/plugin-sdk/memory-core-host-engine-episodic";
+import type { EpisodeSearchResult } from "openclaw/plugin-sdk/memory-core-host-engine-episodic";
 import { bm25RankToScore, buildFtsQuery, mergeHybridResults } from "./hybrid.js";
 import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
 import { searchKeyword, searchVector } from "./manager-search.js";

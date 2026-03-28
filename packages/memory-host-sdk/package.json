@@ -16,6 +16,7 @@
     "./multimodal": "./src/multimodal.ts",
     "./query": "./src/query.ts",
     "./secret": "./src/secret.ts",
-    "./status": "./src/status.ts"
+    "./status": "./src/status.ts",
+    "./engine-episodic": "./src/engine-episodic.ts"
   }
 }
