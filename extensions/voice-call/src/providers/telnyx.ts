@@ -169,9 +169,9 @@ export class TelnyxProvider implements VoiceCallProvider {
         return {
           ...baseEvent,
           type: "call.speech",
-          transcript: data.payload?.transcription || "",
-          isFinal: data.payload?.is_final ?? true,
-          confidence: data.payload?.confidence,
+          transcript: data.payload?.transcription_data?.transcript || "",
+          isFinal: data.payload?.transcription_data?.is_final ?? true,
+          confidence: data.payload?.transcription_data?.confidence,
         };
 
       case "call.hangup":
