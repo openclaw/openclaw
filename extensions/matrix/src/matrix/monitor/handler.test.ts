@@ -1675,6 +1675,29 @@ describe("matrix monitor handler draft streaming", () => {
     await finish();
   });
 
+  it("redacts stale draft when final payload intentionally drops reply threading", async () => {
+    const { dispatch, redactEventMock } = createStreamingHarness({ replyToMode: "first" });
+    const { deliver, opts, finish } = await dispatch();
+
+    // A tool payload can consume the first reply slot upstream while draft
+    // streaming for the next assistant block still starts from the original
+    // reply target.
+    await deliver({ text: "tool result", replyToId: "$msg1" }, { kind: "tool" });
+    opts.onAssistantMessageStart?.();
+
+    opts.onPartialReply?.({ text: "Partial reply" });
+    await vi.waitFor(() => {
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+    });
+
+    deliverMatrixRepliesMock.mockClear();
+    await deliver({ text: "Final text" }, { kind: "final" });
+
+    expect(redactEventMock).toHaveBeenCalledWith("!room:example.org", "$draft1");
+    expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(1);
+    await finish();
+  });
+
   it("redacts stale draft for media-only finals", async () => {
     const { dispatch, redactEventMock } = createStreamingHarness();
     const { deliver, opts, finish } = await dispatch();

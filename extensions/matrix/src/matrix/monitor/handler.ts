@@ -911,6 +911,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       });
       const streamingEnabled = streaming === "partial";
       const draftReplyToId = replyToMode !== "off" && !threadTarget ? _messageId : undefined;
+      let currentDraftReplyToId = draftReplyToId;
       const draftStream = streamingEnabled
         ? createMatrixDraftStream({
             roomId,
@@ -971,11 +972,11 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               // Skip when replyToMode is "off" (replies stripped anyway)
               // or when threadTarget is set (thread relations take
               // precedence over replyToId in deliverMatrixReplies).
+              const payloadReplyToId = payload.replyToId?.trim() || undefined;
               const payloadReplyMismatch =
                 replyToMode !== "off" &&
                 !threadTarget &&
-                payload.replyToId?.trim() &&
-                payload.replyToId.trim() !== draftReplyToId;
+                payloadReplyToId !== currentDraftReplyToId;
               const mustDeliverFinalNormally = draftStream.mustDeliverFinalNormally();
 
               if (
@@ -1083,6 +1084,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 materializedTextLength = lastPartialFullTextLength;
                 draftConsumed = false;
                 draftStream.reset();
+                currentDraftReplyToId = replyToMode === "all" ? draftReplyToId : undefined;
 
                 // Re-assert typing so the user still sees the indicator while
                 // the next block generates.
