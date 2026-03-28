@@ -3,7 +3,7 @@ import type { MsgContext } from "../auto-reply/templating.js";
 import { resolveConversationLabel } from "./conversation-label.js";
 
 describe("resolveConversationLabel", () => {
-  const cases: Array<{ name: string; ctx: MsgContext; expected: string }> = [
+  it.each([
     {
       name: "prefers ConversationLabel when present",
       ctx: { ConversationLabel: "Pinned Label", ChatType: "group" },
@@ -61,11 +61,10 @@ describe("resolveConversationLabel", () => {
       },
       expected: "Family id:123@g.us",
     },
-  ];
-
-  for (const testCase of cases) {
-    it(testCase.name, () => {
-      expect(resolveConversationLabel(testCase.ctx)).toBe(testCase.expected);
-    });
-  }
+  ] satisfies Array<{ name: string; ctx: MsgContext; expected: string }>)(
+    "$name",
+    ({ ctx, expected }) => {
+      expect(resolveConversationLabel(ctx)).toBe(expected);
+    },
+  );
 });
