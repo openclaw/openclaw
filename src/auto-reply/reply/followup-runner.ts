@@ -299,6 +299,7 @@ export function createFollowupRunner(params: {
             queued.run.config,
           ),
           logLabel: "followup",
+          recordAssistantActivity: true,
         });
       }
 

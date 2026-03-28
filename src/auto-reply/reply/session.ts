@@ -471,6 +471,7 @@ export async function initSessionState(params: {
     ...baseEntry,
     sessionId,
     updatedAt: Date.now(),
+    lastUserMessageAt: Date.now(),
     systemSent,
     abortedLastRun,
     // Persist previously stored thinking/verbose levels when present.
@@ -585,6 +586,9 @@ export async function initSessionState(params: {
   });
   sessionEntry = resolvedSessionFile.sessionEntry;
   if (isNewSession) {
+    sessionEntry.lastAssistantMessageAt = undefined;
+    sessionEntry.lastCacheTouchAt = undefined;
+    sessionEntry.lastIdleCompactionForCacheTouchAt = undefined;
     sessionEntry.compactionCount = 0;
     sessionEntry.memoryFlushCompactionCount = undefined;
     sessionEntry.memoryFlushAt = undefined;

@@ -487,12 +487,22 @@ export function applyContextPruningDefaults(cfg: OpenClawConfig): OpenClawConfig
       }
       const current = entry ?? {};
       const params = (current as { params?: Record<string, unknown> }).params ?? {};
-      if (typeof params.cacheRetention === "string") {
+      const nextParams = { ...params };
+      let paramsMutated = false;
+      if (typeof params.cacheRetention !== "string") {
+        nextParams.cacheRetention = "short";
+        paramsMutated = true;
+      }
+      if (typeof params.sessionCacheTtl !== "string") {
+        nextParams.sessionCacheTtl = "1h";
+        paramsMutated = true;
+      }
+      if (!paramsMutated) {
         continue;
       }
       nextModels[key] = {
         ...(current as Record<string, unknown>),
-        params: { ...params, cacheRetention: "short" },
+        params: nextParams,
       };
       modelsMutated = true;
     }
@@ -507,10 +517,20 @@ export function applyContextPruningDefaults(cfg: OpenClawConfig): OpenClawConfig
         const entry = nextModels[key];
         const current = entry ?? {};
         const params = (current as { params?: Record<string, unknown> }).params ?? {};
+        const nextParams = { ...params };
+        let paramsMutated = false;
         if (typeof params.cacheRetention !== "string") {
+          nextParams.cacheRetention = "short";
+          paramsMutated = true;
+        }
+        if (typeof params.sessionCacheTtl !== "string") {
+          nextParams.sessionCacheTtl = "1h";
+          paramsMutated = true;
+        }
+        if (paramsMutated) {
           nextModels[key] = {
             ...(current as Record<string, unknown>),
-            params: { ...params, cacheRetention: "short" },
+            params: nextParams,
           };
           modelsMutated = true;
         }

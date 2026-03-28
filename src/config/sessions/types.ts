@@ -82,6 +82,17 @@ export type SessionEntry = {
   lastHeartbeatSentAt?: number;
   sessionId: string;
   updatedAt: number;
+  /** Timestamp (ms) of the latest inbound user turn recorded for this session. */
+  lastUserMessageAt?: number;
+  /** Timestamp (ms) of the latest completed assistant turn recorded for this session. */
+  lastAssistantMessageAt?: number;
+  /** Timestamp (ms) when this session last touched the model prompt cache. */
+  lastCacheTouchAt?: number;
+  /**
+   * Cache-touch timestamp already serviced by idle cache-warming compaction.
+   * Prevents retrying the same idle compaction every maintenance sweep.
+   */
+  lastIdleCompactionForCacheTouchAt?: number;
   sessionFile?: string;
   /** Parent session key that spawned this session (used for sandbox session-tool scoping). */
   spawnedBy?: string;

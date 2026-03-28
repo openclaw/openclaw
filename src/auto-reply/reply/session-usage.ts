@@ -1,4 +1,5 @@
 import { setCliSessionBinding, setCliSessionId } from "../../agents/cli-session.js";
+import { resolveCacheTtlMs } from "../../agents/pi-embedded-runner/cache-ttl.js";
 import {
   deriveSessionTotalTokens,
   hasNonzeroUsage,
@@ -12,6 +13,7 @@ import {
   updateSessionStoreEntry,
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 
 function applyCliSessionIdToSessionPatch(
@@ -89,6 +91,7 @@ export async function persistSessionUsageUpdate(params: {
   cliSessionId?: string;
   cliSessionBinding?: import("../../config/sessions.js").CliSessionBinding;
   logLabel?: string;
+  recordAssistantActivity?: boolean;
 }): Promise<void> {
   const { storePath, sessionKey } = params;
   if (!storePath || !sessionKey) {
@@ -111,6 +114,7 @@ export async function persistSessionUsageUpdate(params: {
         storePath,
         sessionKey,
         update: async (entry) => {
+          const now = Date.now();
           const resolvedContextTokens = params.contextTokensUsed ?? entry.contextTokens;
           // Use last-call usage for totalTokens when available. The accumulated
           // `usage.input` sums input tokens from every API call in the run
@@ -138,8 +142,25 @@ export async function persistSessionUsageUpdate(params: {
             model: params.modelUsed ?? entry.model,
             contextTokens: resolvedContextTokens,
             systemPromptReport: params.systemPromptReport ?? entry.systemPromptReport,
-            updatedAt: Date.now(),
+            updatedAt: now,
           };
+          if (params.recordAssistantActivity) {
+            patch.lastAssistantMessageAt = now;
+            const providerForCache = params.providerUsed ?? entry.modelProvider;
+            const modelForCache = params.modelUsed ?? entry.model;
+            if (providerForCache && modelForCache) {
+              const cacheTtlMs = resolveCacheTtlMs({
+                config: cfg,
+                provider: providerForCache,
+                modelId: modelForCache,
+                agentId: resolveAgentIdFromSessionKey(sessionKey),
+              });
+              if (cacheTtlMs != null) {
+                patch.lastCacheTouchAt = now;
+                patch.lastIdleCompactionForCacheTouchAt = undefined;
+              }
+            }
+          }
           if (hasUsage) {
             patch.inputTokens = params.usage?.input ?? 0;
             patch.outputTokens = params.usage?.output ?? 0;
@@ -173,13 +194,31 @@ export async function persistSessionUsageUpdate(params: {
         storePath,
         sessionKey,
         update: async (entry) => {
+          const now = Date.now();
           const patch: Partial<SessionEntry> = {
             modelProvider: params.providerUsed ?? entry.modelProvider,
             model: params.modelUsed ?? entry.model,
             contextTokens: params.contextTokensUsed ?? entry.contextTokens,
             systemPromptReport: params.systemPromptReport ?? entry.systemPromptReport,
-            updatedAt: Date.now(),
+            updatedAt: now,
           };
+          if (params.recordAssistantActivity) {
+            patch.lastAssistantMessageAt = now;
+            const providerForCache = params.providerUsed ?? entry.modelProvider;
+            const modelForCache = params.modelUsed ?? entry.model;
+            if (providerForCache && modelForCache) {
+              const cacheTtlMs = resolveCacheTtlMs({
+                config: cfg,
+                provider: providerForCache,
+                modelId: modelForCache,
+                agentId: resolveAgentIdFromSessionKey(sessionKey),
+              });
+              if (cacheTtlMs != null) {
+                patch.lastCacheTouchAt = now;
+                patch.lastIdleCompactionForCacheTouchAt = undefined;
+              }
+            }
+          }
           return applyCliSessionIdToSessionPatch(params, entry, patch);
         },
       });

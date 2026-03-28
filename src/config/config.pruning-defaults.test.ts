@@ -75,9 +75,15 @@ describe("config pruning defaults", () => {
     expect(
       cfg.agents?.defaults?.models?.["anthropic/claude-opus-4-5"]?.params?.cacheRetention,
     ).toBe("short");
+    expect(
+      cfg.agents?.defaults?.models?.["anthropic/claude-opus-4-5"]?.params?.sessionCacheTtl,
+    ).toBe("1h");
+    expect(
+      cfg.agents?.defaults?.models?.["anthropic/claude-opus-4-5"]?.params?.timeBasedContextCompact,
+    ).toBeUndefined();
   });
 
-  it("adds cacheRetention defaults for dated Anthropic primary model refs", async () => {
+  it("adds cacheRetention and sessionCacheTtl defaults for dated Anthropic primary model refs", async () => {
     const cfg = await loadConfigForHome({
       auth: {
         profiles: {
@@ -95,9 +101,16 @@ describe("config pruning defaults", () => {
     expect(
       cfg.agents?.defaults?.models?.["anthropic/claude-sonnet-4-20250514"]?.params?.cacheRetention,
     ).toBe("short");
+    expect(
+      cfg.agents?.defaults?.models?.["anthropic/claude-sonnet-4-20250514"]?.params?.sessionCacheTtl,
+    ).toBe("1h");
+    expect(
+      cfg.agents?.defaults?.models?.["anthropic/claude-sonnet-4-20250514"]?.params
+        ?.timeBasedContextCompact,
+    ).toBeUndefined();
   });
 
-  it("adds default cacheRetention for Anthropic Claude models on Bedrock", async () => {
+  it("adds default cacheRetention and sessionCacheTtl for Anthropic Claude models on Bedrock", async () => {
     const cfg = await loadConfigForHome({
       auth: {
         profiles: {
@@ -115,6 +128,14 @@ describe("config pruning defaults", () => {
       cfg.agents?.defaults?.models?.["amazon-bedrock/us.anthropic.claude-opus-4-6-v1"]?.params
         ?.cacheRetention,
     ).toBe("short");
+    expect(
+      cfg.agents?.defaults?.models?.["amazon-bedrock/us.anthropic.claude-opus-4-6-v1"]?.params
+        ?.sessionCacheTtl,
+    ).toBe("1h");
+    expect(
+      cfg.agents?.defaults?.models?.["amazon-bedrock/us.anthropic.claude-opus-4-6-v1"]?.params
+        ?.timeBasedContextCompact,
+    ).toBeUndefined();
   });
 
   it("does not add default cacheRetention for non-Anthropic Bedrock models", async () => {
@@ -134,6 +155,40 @@ describe("config pruning defaults", () => {
     expect(
       cfg.agents?.defaults?.models?.["amazon-bedrock/amazon.nova-micro-v1:0"]?.params
         ?.cacheRetention,
+    ).toBeUndefined();
+    expect(
+      cfg.agents?.defaults?.models?.["amazon-bedrock/amazon.nova-micro-v1:0"]?.params
+        ?.sessionCacheTtl,
+    ).toBeUndefined();
+  });
+
+  it("adds sessionCacheTtl even when cacheRetention is explicitly configured", async () => {
+    const cfg = await loadConfigForHome({
+      auth: {
+        profiles: {
+          "anthropic:api": { provider: "anthropic", mode: "api_key" },
+        },
+      },
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-5" },
+          models: {
+            "anthropic/claude-opus-4-5": {
+              params: { cacheRetention: "long" },
+            },
+          },
+        },
+      },
+    });
+
+    expect(
+      cfg.agents?.defaults?.models?.["anthropic/claude-opus-4-5"]?.params?.cacheRetention,
+    ).toBe("long");
+    expect(
+      cfg.agents?.defaults?.models?.["anthropic/claude-opus-4-5"]?.params?.sessionCacheTtl,
+    ).toBe("1h");
+    expect(
+      cfg.agents?.defaults?.models?.["anthropic/claude-opus-4-5"]?.params?.timeBasedContextCompact,
     ).toBeUndefined();
   });
 

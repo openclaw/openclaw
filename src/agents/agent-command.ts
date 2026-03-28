@@ -532,7 +532,12 @@ async function agentCommandInternal(
     if (sessionStore && sessionKey) {
       const entry = sessionStore[sessionKey] ??
         sessionEntry ?? { sessionId, updatedAt: Date.now() };
-      const next: SessionEntry = { ...entry, sessionId, updatedAt: Date.now() };
+      const next: SessionEntry = {
+        ...entry,
+        sessionId,
+        updatedAt: Date.now(),
+        lastUserMessageAt: Date.now(),
+      };
       if (thinkOverride) {
         next.thinkingLevel = thinkOverride;
       }

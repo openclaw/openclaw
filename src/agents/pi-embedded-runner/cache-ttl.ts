@@ -1,4 +1,9 @@
+import { parseDurationMs } from "../../cli/parse-duration.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { resolveProviderCacheTtlEligibility } from "../../plugins/provider-runtime.js";
+import { resolveCacheRetention } from "./anthropic-stream-wrappers.js";
+import { resolveExtraParams } from "./extra-params.js";
+import { log } from "./logger.js";
 
 type CustomEntryLike = { type?: unknown; customType?: unknown; data?: unknown };
 
@@ -9,6 +14,14 @@ export type CacheTtlEntryData = {
   provider?: string;
   modelId?: string;
 };
+
+const CACHE_RETENTION_TTL_MS = {
+  short: 5 * 60_000,
+  long: 60 * 60_000,
+} as const;
+const warnedSessionCacheTtlMismatchKeys = new Set<string>();
+
+export type TimeBasedContextCompactMode = "none" | "compact" | "reset";
 
 export function isCacheTtlEligibleProvider(provider: string, modelId: string): boolean {
   const normalizedProvider = provider.toLowerCase();
@@ -64,4 +77,122 @@ export function appendCacheTtlTimestamp(sessionManager: unknown, data: CacheTtlE
   } catch {
     // ignore persistence failures
   }
+}
+
+export function resolveCacheRetentionTtlMs(
+  cacheRetention: "none" | "short" | "long" | undefined,
+): number | null {
+  if (!cacheRetention || cacheRetention === "none") {
+    return null;
+  }
+  return CACHE_RETENTION_TTL_MS[cacheRetention];
+}
+
+function parsePositiveDuration(value: unknown): number | null {
+  if (typeof value !== "string" || !value.trim()) {
+    return null;
+  }
+  try {
+    const ttlMs = parseDurationMs(value.trim(), { defaultUnit: "m" });
+    return ttlMs > 0 ? ttlMs : null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveConfiguredSessionCacheTtlMs(
+  extraParams: Record<string, unknown> | undefined,
+): number | null {
+  return parsePositiveDuration(extraParams?.sessionCacheTtl);
+}
+
+export function resolveTimeBasedContextCompactMode(
+  extraParams: Record<string, unknown> | undefined,
+): TimeBasedContextCompactMode {
+  const mode = extraParams?.timeBasedContextCompact;
+  return mode === "compact" || mode === "reset" ? mode : "none";
+}
+
+function resolveExplicitModelCacheTtlMs(
+  extraParams: Record<string, unknown> | undefined,
+  provider: string,
+): number | null {
+  if (!extraParams) {
+    return null;
+  }
+  if (Object.hasOwn(extraParams, "cacheRetention")) {
+    const cacheRetention = resolveCacheRetention(extraParams, provider);
+    if (cacheRetention === "none") {
+      return null;
+    }
+    return resolveCacheRetentionTtlMs(cacheRetention);
+  }
+  if (Object.hasOwn(extraParams, "cacheControlTtl")) {
+    return parsePositiveDuration(extraParams.cacheControlTtl);
+  }
+  return null;
+}
+
+function maybeWarnSessionCacheTtlMismatch(params: {
+  provider: string;
+  modelId: string;
+  sessionCacheTtlMs: number;
+  explicitModelCacheTtlMs: number;
+}) {
+  const warningKey = [
+    params.provider,
+    params.modelId,
+    params.sessionCacheTtlMs,
+    params.explicitModelCacheTtlMs,
+  ].join(":");
+  if (warnedSessionCacheTtlMismatchKeys.has(warningKey)) {
+    return;
+  }
+  warnedSessionCacheTtlMismatchKeys.add(warningKey);
+  log.warn("sessionCacheTtl exceeds explicit model cache ttl", {
+    provider: params.provider,
+    modelId: params.modelId,
+    sessionCacheTtlMs: params.sessionCacheTtlMs,
+    explicitModelCacheTtlMs: params.explicitModelCacheTtlMs,
+  });
+}
+
+export function resolveCacheTtlMs(params: {
+  config?: OpenClawConfig;
+  provider: string;
+  modelId: string;
+  agentId?: string;
+}): number | null {
+  if (!isCacheTtlEligibleProvider(params.provider, params.modelId)) {
+    return null;
+  }
+
+  const resolvedExtraParams = resolveExtraParams({
+    cfg: params.config,
+    provider: params.provider,
+    modelId: params.modelId,
+    agentId: params.agentId,
+  });
+  const timeBasedContextCompact = resolveTimeBasedContextCompactMode(resolvedExtraParams);
+  if (timeBasedContextCompact === "none") {
+    return null;
+  }
+  const sessionCacheTtlMs = resolveConfiguredSessionCacheTtlMs(resolvedExtraParams);
+  if (sessionCacheTtlMs == null) {
+    return null;
+  }
+
+  const explicitModelCacheTtlMs = resolveExplicitModelCacheTtlMs(
+    resolvedExtraParams,
+    params.provider,
+  );
+  if (explicitModelCacheTtlMs != null && sessionCacheTtlMs > explicitModelCacheTtlMs) {
+    maybeWarnSessionCacheTtlMismatch({
+      provider: params.provider,
+      modelId: params.modelId,
+      sessionCacheTtlMs,
+      explicitModelCacheTtlMs,
+    });
+  }
+  return sessionCacheTtlMs;
 }
