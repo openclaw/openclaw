@@ -239,6 +239,23 @@ describe("dispatchCronDelivery — responsePrefix", () => {
     );
   });
 
+  it("recognizes already-prefixed text when prefix ends with whitespace", async () => {
+    vi.mocked(resolveEffectiveMessagesConfig).mockReturnValue({
+      messagePrefix: "",
+      responsePrefix: "[bot] ",
+    });
+
+    const params = makeBaseParams({ synthesizedText: "[bot] hello" });
+    await dispatchCronDelivery(params);
+
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expect(deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payloads: [{ text: "[bot] hello" }],
+      }),
+    );
+  });
+
   it("does not prepend a stray space when responsePrefix is empty string", async () => {
     vi.mocked(resolveEffectiveMessagesConfig).mockReturnValue({
       messagePrefix: "",

@@ -27,10 +27,15 @@ import {
 } from "./subagent-followup.js";
 
 /** Boundary-aware prefix check: requires end-of-string or whitespace/punctuation/symbol
- *  after the prefix so short prefixes like "Hi" don't match "History". */
+ *  after the prefix so short prefixes like "Hi" don't match "History".
+ *  When the prefix itself ends with whitespace (e.g. "[bot] "), startsWith alone
+ *  is sufficient — the trailing whitespace is the natural boundary. */
 function hasResponsePrefix(text: string, prefix: string): boolean {
   if (!text.startsWith(prefix)) {
     return false;
+  }
+  if (/\s$/.test(prefix)) {
+    return true;
   }
   const afterPrefix = text[prefix.length];
   return afterPrefix === undefined || /[\s\p{P}\p{S}]/u.test(afterPrefix);
