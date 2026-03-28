@@ -60230,6 +60230,124 @@
       "hasChildren": false
     },
     {
+      "path": "tools.code_execution",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "tools.code_execution.apiKey",
+      "kind": "core",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "security",
+        "tools"
+      ],
+      "label": "xAI API Key",
+      "help": "xAI API key for remote code execution (fallback: XAI_API_KEY env var).",
+      "hasChildren": true
+    },
+    {
+      "path": "tools.code_execution.apiKey.id",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.code_execution.apiKey.provider",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.code_execution.apiKey.source",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.code_execution.enabled",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "tools"
+      ],
+      "label": "Enable Code Execution Tool",
+      "help": "Enable the code_execution tool (requires XAI_API_KEY or tools.code_execution.apiKey).",
+      "hasChildren": false
+    },
+    {
+      "path": "tools.code_execution.maxTurns",
+      "kind": "core",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "performance",
+        "tools"
+      ],
+      "label": "Code Execution Max Turns",
+      "help": "Optional max internal tool turns xAI may use per code_execution request. Omit to let xAI choose.",
+      "hasChildren": false
+    },
+    {
+      "path": "tools.code_execution.model",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "models",
+        "tools"
+      ],
+      "label": "Code Execution Model",
+      "help": "Model to use for remote code execution (default: \"grok-4-1-fast\").",
+      "hasChildren": false
+    },
+    {
+      "path": "tools.code_execution.timeoutSeconds",
+      "kind": "core",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "performance",
+        "tools"
+      ],
+      "label": "Code Execution Timeout (sec)",
+      "help": "Timeout in seconds for code_execution requests.",
+      "hasChildren": false
+    },
+    {
       "path": "tools.deny",
       "kind": "core",
       "type": "array",
@@ -64704,6 +64822,154 @@
       ],
       "label": "Web Search Timeout (sec)",
       "help": "Timeout in seconds for web_search requests.",
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.x_search",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "tools.web.x_search.apiKey",
+      "kind": "core",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "security",
+        "tools"
+      ],
+      "label": "xAI API Key",
+      "help": "xAI API key for X search (fallback: XAI_API_KEY env var).",
+      "hasChildren": true
+    },
+    {
+      "path": "tools.web.x_search.apiKey.id",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.x_search.apiKey.provider",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.x_search.apiKey.source",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.x_search.cacheTtlMinutes",
+      "kind": "core",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "performance",
+        "storage",
+        "tools"
+      ],
+      "label": "X Search Cache TTL (min)",
+      "help": "Cache TTL in minutes for x_search results.",
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.x_search.enabled",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "tools"
+      ],
+      "label": "Enable X Search Tool",
+      "help": "Enable the x_search tool (requires XAI_API_KEY or tools.web.x_search.apiKey).",
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.x_search.inlineCitations",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "tools"
+      ],
+      "label": "X Search Inline Citations",
+      "help": "Keep inline citations from xAI in x_search responses when available (default: false).",
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.x_search.maxTurns",
+      "kind": "core",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "performance",
+        "tools"
+      ],
+      "label": "X Search Max Turns",
+      "help": "Optional max internal search/tool turns xAI may use per x_search request. Omit to let xAI choose.",
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.x_search.model",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "models",
+        "tools"
+      ],
+      "label": "X Search Model",
+      "help": "Model to use for X search (default: \"grok-4-1-fast-non-reasoning\").",
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.x_search.timeoutSeconds",
+      "kind": "core",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "performance",
+        "tools"
+      ],
+      "label": "X Search Timeout (sec)",
+      "help": "Timeout in seconds for x_search requests.",
       "hasChildren": false
     },
     {

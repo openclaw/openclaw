@@ -10,6 +10,7 @@ describe("command secret target ids", () => {
     const ids = getAgentRuntimeCommandSecretTargetIds();
     expect(ids.has("agents.defaults.memorySearch.remote.apiKey")).toBe(true);
     expect(ids.has("agents.list[].memorySearch.remote.apiKey")).toBe(true);
+    expect(ids.has("tools.code_execution.apiKey")).toBe(true);
     expect(ids.has("tools.web.fetch.firecrawl.apiKey")).toBe(true);
     expect(ids.has("tools.web.x_search.apiKey")).toBe(true);
   });
