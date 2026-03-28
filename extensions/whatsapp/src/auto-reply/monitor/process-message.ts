@@ -56,6 +56,10 @@ export type GroupHistoryEntry = {
   timestamp?: number;
   id?: string;
   senderJid?: string;
+  /** Local file path for a downloaded media attachment. */
+  mediaPath?: string;
+  /** MIME type of the media attachment, if present. */
+  mediaType?: string;
 };
 
 async function resolveWhatsAppCommandAuthorized(params: {
@@ -302,6 +306,8 @@ export async function processMessage(params: {
             sender: entry.sender,
             body: entry.body,
             timestamp: entry.timestamp,
+            mediaPath: entry.mediaPath,
+            mediaType: entry.mediaType,
           }),
         )
       : undefined;
