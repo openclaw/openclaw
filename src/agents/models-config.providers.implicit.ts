@@ -20,6 +20,7 @@ import {
   createProviderApiKeyResolver,
   createProviderAuthResolver,
 } from "./models-config.providers.secrets.js";
+import { findNormalizedProviderValue } from "./provider-id.js";
 
 const log = createSubsystemLogger("agents/model-providers");
 
@@ -30,6 +31,7 @@ const PROVIDER_IMPLICIT_MERGERS: Partial<
   >
 > = {
   "anthropic-vertex": mergeImplicitAnthropicVertexProvider,
+  ollama: ({ implicit }) => implicit,
 };
 
 const CORE_IMPLICIT_PROVIDER_RESOLVERS = [
@@ -102,6 +104,61 @@ function mergeImplicitProviderSet(
   }
 }
 
+function mergeImplicitProviderConfig(params: {
+  providerId: string;
+  existing: ProviderConfig | undefined;
+  implicit: ProviderConfig;
+}): ProviderConfig {
+  const { providerId, existing, implicit } = params;
+  if (!existing) {
+    return implicit;
+  }
+  const merge = PROVIDER_IMPLICIT_MERGERS[providerId];
+  if (merge) {
+    return merge({ existing, implicit });
+  }
+  return {
+    ...implicit,
+    ...existing,
+    models:
+      Array.isArray(existing.models) && existing.models.length > 0
+        ? existing.models
+        : implicit.models,
+  };
+}
+
+function resolveConfiguredImplicitProvider(params: {
+  configuredProviders?: Record<string, ProviderConfig> | null;
+  providerIds: readonly string[];
+}): ProviderConfig | undefined {
+  for (const providerId of params.providerIds) {
+    const configured = findNormalizedProviderValue(
+      params.configuredProviders ?? undefined,
+      providerId,
+    );
+    if (configured) {
+      return configured;
+    }
+  }
+  return undefined;
+}
+
+function resolveExistingImplicitProviderFromContext(params: {
+  ctx: ImplicitProviderContext;
+  providerIds: readonly string[];
+}): ProviderConfig | undefined {
+  return (
+    resolveConfiguredImplicitProvider({
+      configuredProviders: params.ctx.explicitProviders,
+      providerIds: params.providerIds,
+    }) ??
+    resolveConfiguredImplicitProvider({
+      configuredProviders: params.ctx.config?.models?.providers,
+      providerIds: params.providerIds,
+    })
+  );
+}
+
 async function resolvePluginImplicitProviders(
   ctx: ImplicitProviderContext,
   order: import("../plugins/types.js").ProviderDiscoveryOrder,
@@ -132,13 +189,27 @@ async function resolvePluginImplicitProviders(
     if (!result) {
       continue;
     }
-    mergeImplicitProviderSet(
-      discovered,
-      normalizePluginDiscoveryResult({
-        provider,
-        result,
-      }),
-    );
+    const normalizedResult = normalizePluginDiscoveryResult({
+      provider,
+      result,
+    });
+    for (const [providerId, implicitProvider] of Object.entries(normalizedResult)) {
+      discovered[providerId] = mergeImplicitProviderConfig({
+        providerId,
+        existing:
+          discovered[providerId] ??
+          resolveExistingImplicitProviderFromContext({
+            ctx,
+            providerIds: [
+              providerId,
+              provider.id,
+              ...(provider.aliases ?? []),
+              ...(provider.hookAliases ?? []),
+            ],
+          }),
+        implicit: implicitProvider,
+      });
+    }
   }
   return Object.keys(discovered).length > 0 ? discovered : undefined;
 }
@@ -199,6 +270,7 @@ async function runProviderCatalogWithTimeout(
 
 async function mergeCoreImplicitProviders(params: {
   config?: OpenClawConfig;
+  explicitProviders?: Record<string, ProviderConfig> | null;
   env: NodeJS.ProcessEnv;
   providers: Record<string, ProviderConfig>;
 }): Promise<void> {
@@ -208,12 +280,14 @@ async function mergeCoreImplicitProviders(params: {
       continue;
     }
     const merge = PROVIDER_IMPLICIT_MERGERS[provider.id];
-    if (!merge) {
-      params.providers[provider.id] = implicit;
-      continue;
-    }
-    params.providers[provider.id] = merge({
-      existing: params.providers[provider.id],
+    params.providers[provider.id] = (merge ?? mergeImplicitProviderConfig)({
+      providerId: provider.id,
+      existing:
+        params.providers[provider.id] ??
+        resolveConfiguredImplicitProvider({
+          configuredProviders: params.explicitProviders ?? params.config?.models?.providers,
+          providerIds: [provider.id],
+        }),
       implicit,
     });
   }
@@ -241,6 +315,7 @@ export async function resolveImplicitProviders(
 
   await mergeCoreImplicitProviders({
     config: params.config,
+    explicitProviders: params.explicitProviders,
     env,
     providers,
   });
