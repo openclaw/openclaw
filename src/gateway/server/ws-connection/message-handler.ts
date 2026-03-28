@@ -512,7 +512,7 @@ export function attachGatewayWsMessageHandler(params: {
           close(1008, truncateCloseReason(authMessage));
         };
         const clearUnboundScopes = () => {
-          if (scopes.length > 0) {
+          if (scopes.length > 0 && !sharedAuthOk) {
             scopes = [];
             connectParams.scopes = scopes;
           }
