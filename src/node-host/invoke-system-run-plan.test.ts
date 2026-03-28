@@ -314,68 +314,66 @@ describe("hardenApprovedExecutionPaths", () => {
     },
   ];
 
-  for (const testCase of cases) {
-    it.runIf(process.platform !== "win32")(testCase.name, () => {
-      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-hardening-"));
-      const oldPath = process.env.PATH;
-      let pathToken: PathTokenSetup | null = null;
-      if (testCase.withPathToken) {
-        const binDir = path.join(tmp, "bin");
-        fs.mkdirSync(binDir, { recursive: true });
-        const link = path.join(binDir, "poccmd");
-        fs.symlinkSync("/bin/echo", link);
-        pathToken = { expected: fs.realpathSync(link) };
-        process.env.PATH = `${binDir}${path.delimiter}${oldPath ?? ""}`;
-      }
-      try {
-        if (testCase.mode === "build-plan") {
-          const prepared = buildSystemRunApprovalPlan({
-            command: testCase.argv,
-            cwd: tmp,
-          });
-          expect(prepared.ok).toBe(true);
-          if (!prepared.ok) {
-            throw new Error("unreachable");
-          }
-          expect(prepared.plan.argv).toEqual(testCase.expectedArgv({ pathToken }));
-          if (testCase.expectedCmdText) {
-            expect(prepared.plan.commandText).toBe(testCase.expectedCmdText);
-          }
-          if (testCase.checkRawCommandMatchesArgv) {
-            expect(prepared.plan.commandText).toBe(formatExecCommand(prepared.plan.argv));
-          }
-          if ("expectedCommandPreview" in testCase) {
-            expect(prepared.plan.commandPreview ?? null).toBe(testCase.expectedCommandPreview);
-          }
-          return;
-        }
-
-        const hardened = hardenApprovedExecutionPaths({
-          approvedByAsk: true,
-          argv: testCase.argv,
-          shellCommand: testCase.shellCommand ?? null,
+  it.runIf(process.platform !== "win32").each(cases)("$name", (testCase) => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-hardening-"));
+    const oldPath = process.env.PATH;
+    let pathToken: PathTokenSetup | null = null;
+    if (testCase.withPathToken) {
+      const binDir = path.join(tmp, "bin");
+      fs.mkdirSync(binDir, { recursive: true });
+      const link = path.join(binDir, "poccmd");
+      fs.symlinkSync("/bin/echo", link);
+      pathToken = { expected: fs.realpathSync(link) };
+      process.env.PATH = `${binDir}${path.delimiter}${oldPath ?? ""}`;
+    }
+    try {
+      if (testCase.mode === "build-plan") {
+        const prepared = buildSystemRunApprovalPlan({
+          command: testCase.argv,
           cwd: tmp,
         });
-        expect(hardened.ok).toBe(true);
-        if (!hardened.ok) {
+        expect(prepared.ok).toBe(true);
+        if (!prepared.ok) {
           throw new Error("unreachable");
         }
-        expect(hardened.argv).toEqual(testCase.expectedArgv({ pathToken }));
-        if (typeof testCase.expectedArgvChanged === "boolean") {
-          expect(hardened.argvChanged).toBe(testCase.expectedArgvChanged);
+        expect(prepared.plan.argv).toEqual(testCase.expectedArgv({ pathToken }));
+        if (testCase.expectedCmdText) {
+          expect(prepared.plan.commandText).toBe(testCase.expectedCmdText);
         }
-      } finally {
-        if (testCase.withPathToken) {
-          if (oldPath === undefined) {
-            delete process.env.PATH;
-          } else {
-            process.env.PATH = oldPath;
-          }
+        if (testCase.checkRawCommandMatchesArgv) {
+          expect(prepared.plan.commandText).toBe(formatExecCommand(prepared.plan.argv));
         }
-        fs.rmSync(tmp, { recursive: true, force: true });
+        if ("expectedCommandPreview" in testCase) {
+          expect(prepared.plan.commandPreview ?? null).toBe(testCase.expectedCommandPreview);
+        }
+        return;
       }
-    });
-  }
+
+      const hardened = hardenApprovedExecutionPaths({
+        approvedByAsk: true,
+        argv: testCase.argv,
+        shellCommand: testCase.shellCommand ?? null,
+        cwd: tmp,
+      });
+      expect(hardened.ok).toBe(true);
+      if (!hardened.ok) {
+        throw new Error("unreachable");
+      }
+      expect(hardened.argv).toEqual(testCase.expectedArgv({ pathToken }));
+      if (typeof testCase.expectedArgvChanged === "boolean") {
+        expect(hardened.argvChanged).toBe(testCase.expectedArgvChanged);
+      }
+    } finally {
+      if (testCase.withPathToken) {
+        if (oldPath === undefined) {
+          delete process.env.PATH;
+        } else {
+          process.env.PATH = oldPath;
+        }
+      }
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
 
   const mutableOperandCases: RuntimeFixture[] = [
     {
@@ -557,8 +555,9 @@ describe("hardenApprovedExecutionPaths", () => {
     },
   ];
 
-  for (const runtimeCase of mutableOperandCases) {
-    it(`captures mutable ${runtimeCase.name} operands in approval plans`, () => {
+  it.each(mutableOperandCases)(
+    "captures mutable $name operands in approval plans",
+    (runtimeCase) => {
       if (runtimeCase.skipOnWin32 && process.platform === "win32") {
         return;
       }
@@ -587,8 +586,8 @@ describe("hardenApprovedExecutionPaths", () => {
           );
         },
       });
-    });
-  }
+    },
+  );
 
   it("captures mutable shell script operands in approval plans", () => {
     withScriptOperandPlanFixture(
@@ -601,22 +600,20 @@ describe("hardenApprovedExecutionPaths", () => {
     );
   });
 
-  for (const testCase of unsafeRuntimeInvocationCases) {
-    it(testCase.name, () => {
-      withFakeRuntimeBin({
-        binName: testCase.binName,
-        run: () => {
-          const tmp = fs.mkdtempSync(path.join(os.tmpdir(), testCase.tmpPrefix));
-          try {
-            testCase.setup?.(tmp);
-            expectRuntimeApprovalDenied(testCase.command, tmp);
-          } finally {
-            fs.rmSync(tmp, { recursive: true, force: true });
-          }
-        },
-      });
+  it.each(unsafeRuntimeInvocationCases)("$name", (testCase) => {
+    withFakeRuntimeBin({
+      binName: testCase.binName,
+      run: () => {
+        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), testCase.tmpPrefix));
+        try {
+          testCase.setup?.(tmp);
+          expectRuntimeApprovalDenied(testCase.command, tmp);
+        } finally {
+          fs.rmSync(tmp, { recursive: true, force: true });
+        }
+      },
     });
-  }
+  });
 
   it("captures the real shell script operand after value-taking shell flags", () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shell-option-value-"));

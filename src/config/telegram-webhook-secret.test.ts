@@ -2,28 +2,61 @@ import { describe, expect, it } from "vitest";
 import { validateConfigObject } from "./config.js";
 
 describe("Telegram webhook config", () => {
-  it("accepts webhookUrl when webhookSecret is configured", () => {
-    const res = validateConfigObject({
-      channels: {
+  it.each([
+    {
+      name: "webhookUrl when webhookSecret is configured",
+      config: {
         telegram: {
           webhookUrl: "https://example.com/telegram-webhook",
           webhookSecret: "secret",
         },
       },
-    });
-    expect(res.ok).toBe(true);
-  });
-
-  it("accepts webhookUrl when webhookSecret is configured as SecretRef", () => {
-    const res = validateConfigObject({
-      channels: {
+    },
+    {
+      name: "webhookUrl when webhookSecret is configured as SecretRef",
+      config: {
         telegram: {
           webhookUrl: "https://example.com/telegram-webhook",
-          webhookSecret: { source: "env", provider: "default", id: "TELEGRAM_WEBHOOK_SECRET" },
+          webhookSecret: {
+            source: "env",
+            provider: "default",
+            id: "TELEGRAM_WEBHOOK_SECRET",
+          },
         },
       },
-    });
-    expect(res.ok).toBe(true);
+    },
+    {
+      name: "account webhookUrl when base webhookSecret is configured",
+      config: {
+        telegram: {
+          webhookSecret: "secret",
+          accounts: {
+            ops: {
+              webhookUrl: "https://example.com/telegram-webhook",
+            },
+          },
+        },
+      },
+    },
+    {
+      name: "account webhookUrl when account webhookSecret is configured as SecretRef",
+      config: {
+        telegram: {
+          accounts: {
+            ops: {
+              webhookUrl: "https://example.com/telegram-webhook",
+              webhookSecret: {
+                source: "env",
+                provider: "default",
+                id: "TELEGRAM_OPS_WEBHOOK_SECRET",
+              },
+            },
+          },
+        },
+      },
+    },
+  ] as const)("accepts $name", ({ config }) => {
+    expect(validateConfigObject({ channels: config }).ok).toBe(true);
   });
 
   it("rejects webhookUrl without webhookSecret", () => {
@@ -38,42 +71,6 @@ describe("Telegram webhook config", () => {
     if (!res.ok) {
       expect(res.issues[0]?.path).toBe("channels.telegram.webhookSecret");
     }
-  });
-
-  it("accepts account webhookUrl when base webhookSecret is configured", () => {
-    const res = validateConfigObject({
-      channels: {
-        telegram: {
-          webhookSecret: "secret",
-          accounts: {
-            ops: {
-              webhookUrl: "https://example.com/telegram-webhook",
-            },
-          },
-        },
-      },
-    });
-    expect(res.ok).toBe(true);
-  });
-
-  it("accepts account webhookUrl when account webhookSecret is configured as SecretRef", () => {
-    const res = validateConfigObject({
-      channels: {
-        telegram: {
-          accounts: {
-            ops: {
-              webhookUrl: "https://example.com/telegram-webhook",
-              webhookSecret: {
-                source: "env",
-                provider: "default",
-                id: "TELEGRAM_OPS_WEBHOOK_SECRET",
-              },
-            },
-          },
-        },
-      },
-    });
-    expect(res.ok).toBe(true);
   });
 
   it("rejects account webhookUrl without webhookSecret", () => {
