@@ -253,7 +253,7 @@
           "exportName": "CliBackendPlugin",
           "kind": "type",
           "source": {
-            "line": 1508,
+            "line": 1584,
             "path": "src/plugins/types.ts"
           }
         },
@@ -397,7 +397,7 @@
           "exportName": "MediaUnderstandingProviderPlugin",
           "kind": "type",
           "source": {
-            "line": 1159,
+            "line": 1235,
             "path": "src/plugins/types.ts"
           }
         },
@@ -415,7 +415,7 @@
           "exportName": "OpenClawPluginApi",
           "kind": "type",
           "source": {
-            "line": 1552,
+            "line": 1628,
             "path": "src/plugins/types.ts"
           }
         },
@@ -523,7 +523,7 @@
           "exportName": "SpeechProviderPlugin",
           "kind": "type",
           "source": {
-            "line": 1134,
+            "line": 1210,
             "path": "src/plugins/types.ts"
           }
         },
@@ -1664,6 +1664,15 @@
           "source": {
             "line": 65,
             "path": "src/infra/heartbeat-events.ts"
+          }
+        },
+        {
+          "declaration": "export function resetSystemEventsForTest(): void;",
+          "exportName": "resetSystemEventsForTest",
+          "kind": "function",
+          "source": {
+            "line": 157,
+            "path": "src/infra/system-events.ts"
           }
         },
         {
@@ -3378,7 +3387,7 @@
           "exportName": "definePluginEntry",
           "kind": "function",
           "source": {
-            "line": 131,
+            "line": 137,
             "path": "src/plugin-sdk/plugin-entry.ts"
           }
         },
@@ -3738,7 +3747,7 @@
           "exportName": "MediaUnderstandingProviderPlugin",
           "kind": "type",
           "source": {
-            "line": 1159,
+            "line": 1235,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3756,7 +3765,7 @@
           "exportName": "OpenClawPluginApi",
           "kind": "type",
           "source": {
-            "line": 1552,
+            "line": 1628,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3765,7 +3774,7 @@
           "exportName": "OpenClawPluginCommandDefinition",
           "kind": "type",
           "source": {
-            "line": 1278,
+            "line": 1354,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3783,7 +3792,7 @@
           "exportName": "OpenClawPluginDefinition",
           "kind": "type",
           "source": {
-            "line": 1534,
+            "line": 1610,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3792,7 +3801,7 @@
           "exportName": "OpenClawPluginService",
           "kind": "type",
           "source": {
-            "line": 1501,
+            "line": 1577,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3801,7 +3810,7 @@
           "exportName": "OpenClawPluginServiceContext",
           "kind": "type",
           "source": {
-            "line": 1493,
+            "line": 1569,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3828,7 +3837,7 @@
           "exportName": "PluginCommandContext",
           "kind": "type",
           "source": {
-            "line": 1174,
+            "line": 1250,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3837,7 +3846,7 @@
           "exportName": "PluginInteractiveTelegramHandlerContext",
           "kind": "type",
           "source": {
-            "line": 1307,
+            "line": 1383,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3864,7 +3873,7 @@
           "exportName": "ProviderAugmentModelCatalogContext",
           "kind": "type",
           "source": {
-            "line": 672,
+            "line": 707,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3882,7 +3891,7 @@
           "exportName": "ProviderAuthDoctorHintContext",
           "kind": "type",
           "source": {
-            "line": 476,
+            "line": 511,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3918,7 +3927,7 @@
           "exportName": "ProviderBuildMissingAuthMessageContext",
           "kind": "type",
           "source": {
-            "line": 584,
+            "line": 619,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3927,7 +3936,7 @@
           "exportName": "ProviderBuildUnknownModelHintContext",
           "kind": "type",
           "source": {
-            "line": 600,
+            "line": 635,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3936,7 +3945,7 @@
           "exportName": "ProviderBuiltInModelSuppressionContext",
           "kind": "type",
           "source": {
-            "line": 616,
+            "line": 651,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3945,7 +3954,7 @@
           "exportName": "ProviderBuiltInModelSuppressionResult",
           "kind": "type",
           "source": {
-            "line": 625,
+            "line": 660,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3954,7 +3963,7 @@
           "exportName": "ProviderCacheTtlEligibilityContext",
           "kind": "type",
           "source": {
-            "line": 572,
+            "line": 607,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3981,7 +3990,7 @@
           "exportName": "ProviderDefaultThinkingPolicyContext",
           "kind": "type",
           "source": {
-            "line": 649,
+            "line": 684,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3990,7 +3999,7 @@
           "exportName": "ProviderDiscoveryContext",
           "kind": "type",
           "source": {
-            "line": 688,
+            "line": 723,
             "path": "src/plugins/types.ts"
           }
         },
@@ -3999,7 +4008,7 @@
           "exportName": "ProviderFetchUsageSnapshotContext",
           "kind": "type",
           "source": {
-            "line": 457,
+            "line": 492,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4008,7 +4017,7 @@
           "exportName": "ProviderModernModelPolicyContext",
           "kind": "type",
           "source": {
-            "line": 659,
+            "line": 694,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4026,7 +4035,7 @@
           "exportName": "ProviderPreparedRuntimeAuth",
           "kind": "type",
           "source": {
-            "line": 404,
+            "line": 439,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4044,7 +4053,7 @@
           "exportName": "ProviderPrepareExtraParamsContext",
           "kind": "type",
           "source": {
-            "line": 490,
+            "line": 525,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4053,7 +4062,7 @@
           "exportName": "ProviderPrepareRuntimeAuthContext",
           "kind": "type",
           "source": {
-            "line": 383,
+            "line": 418,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4062,7 +4071,7 @@
           "exportName": "ProviderResolvedUsageAuth",
           "kind": "type",
           "source": {
-            "line": 444,
+            "line": 479,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4080,7 +4089,7 @@
           "exportName": "ProviderResolveUsageAuthContext",
           "kind": "type",
           "source": {
-            "line": 425,
+            "line": 460,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4098,7 +4107,7 @@
           "exportName": "ProviderThinkingPolicyContext",
           "kind": "type",
           "source": {
-            "line": 637,
+            "line": 672,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4116,7 +4125,7 @@
           "exportName": "ProviderWrapStreamFnContext",
           "kind": "type",
           "source": {
-            "line": 523,
+            "line": 558,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4161,7 +4170,7 @@
           "exportName": "SpeechProviderPlugin",
           "kind": "type",
           "source": {
-            "line": 1134,
+            "line": 1210,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4226,7 +4235,7 @@
           "exportName": "definePluginEntry",
           "kind": "function",
           "source": {
-            "line": 131,
+            "line": 137,
             "path": "src/plugin-sdk/plugin-entry.ts"
           }
         },
@@ -4253,7 +4262,7 @@
           "exportName": "MediaUnderstandingProviderPlugin",
           "kind": "type",
           "source": {
-            "line": 1159,
+            "line": 1235,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4271,7 +4280,7 @@
           "exportName": "OpenClawPluginApi",
           "kind": "type",
           "source": {
-            "line": 1552,
+            "line": 1628,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4280,7 +4289,7 @@
           "exportName": "OpenClawPluginCommandDefinition",
           "kind": "type",
           "source": {
-            "line": 1278,
+            "line": 1354,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4298,7 +4307,7 @@
           "exportName": "OpenClawPluginDefinition",
           "kind": "type",
           "source": {
-            "line": 1534,
+            "line": 1610,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4307,7 +4316,7 @@
           "exportName": "OpenClawPluginService",
           "kind": "type",
           "source": {
-            "line": 1501,
+            "line": 1577,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4316,7 +4325,7 @@
           "exportName": "OpenClawPluginServiceContext",
           "kind": "type",
           "source": {
-            "line": 1493,
+            "line": 1569,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4343,7 +4352,7 @@
           "exportName": "PluginCommandContext",
           "kind": "type",
           "source": {
-            "line": 1174,
+            "line": 1250,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4352,7 +4361,7 @@
           "exportName": "PluginInteractiveTelegramHandlerContext",
           "kind": "type",
           "source": {
-            "line": 1307,
+            "line": 1383,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4370,7 +4379,7 @@
           "exportName": "ProviderAugmentModelCatalogContext",
           "kind": "type",
           "source": {
-            "line": 672,
+            "line": 707,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4388,7 +4397,7 @@
           "exportName": "ProviderAuthDoctorHintContext",
           "kind": "type",
           "source": {
-            "line": 476,
+            "line": 511,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4424,7 +4433,7 @@
           "exportName": "ProviderBuildMissingAuthMessageContext",
           "kind": "type",
           "source": {
-            "line": 584,
+            "line": 619,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4433,7 +4442,7 @@
           "exportName": "ProviderBuildUnknownModelHintContext",
           "kind": "type",
           "source": {
-            "line": 600,
+            "line": 635,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4442,7 +4451,7 @@
           "exportName": "ProviderBuiltInModelSuppressionContext",
           "kind": "type",
           "source": {
-            "line": 616,
+            "line": 651,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4451,7 +4460,7 @@
           "exportName": "ProviderBuiltInModelSuppressionResult",
           "kind": "type",
           "source": {
-            "line": 625,
+            "line": 660,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4460,7 +4469,7 @@
           "exportName": "ProviderCacheTtlEligibilityContext",
           "kind": "type",
           "source": {
-            "line": 572,
+            "line": 607,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4487,7 +4496,7 @@
           "exportName": "ProviderDefaultThinkingPolicyContext",
           "kind": "type",
           "source": {
-            "line": 649,
+            "line": 684,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4496,7 +4505,7 @@
           "exportName": "ProviderDiscoveryContext",
           "kind": "type",
           "source": {
-            "line": 688,
+            "line": 723,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4505,7 +4514,7 @@
           "exportName": "ProviderFetchUsageSnapshotContext",
           "kind": "type",
           "source": {
-            "line": 457,
+            "line": 492,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4514,7 +4523,16 @@
           "exportName": "ProviderModernModelPolicyContext",
           "kind": "type",
           "source": {
-            "line": 659,
+            "line": 694,
+            "path": "src/plugins/types.ts"
+          }
+        },
+        {
+          "declaration": "export type ProviderNormalizeConfigContext = ProviderNormalizeConfigContext;",
+          "exportName": "ProviderNormalizeConfigContext",
+          "kind": "type",
+          "source": {
+            "line": 383,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4537,11 +4555,20 @@
           }
         },
         {
+          "declaration": "export type ProviderNormalizeTransportContext = ProviderNormalizeTransportContext;",
+          "exportName": "ProviderNormalizeTransportContext",
+          "kind": "type",
+          "source": {
+            "line": 395,
+            "path": "src/plugins/types.ts"
+          }
+        },
+        {
           "declaration": "export type ProviderPreparedRuntimeAuth = ProviderPreparedRuntimeAuth;",
           "exportName": "ProviderPreparedRuntimeAuth",
           "kind": "type",
           "source": {
-            "line": 404,
+            "line": 439,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4559,7 +4586,7 @@
           "exportName": "ProviderPrepareExtraParamsContext",
           "kind": "type",
           "source": {
-            "line": 490,
+            "line": 525,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4568,7 +4595,16 @@
           "exportName": "ProviderPrepareRuntimeAuthContext",
           "kind": "type",
           "source": {
-            "line": 383,
+            "line": 418,
+            "path": "src/plugins/types.ts"
+          }
+        },
+        {
+          "declaration": "export type ProviderResolveConfigApiKeyContext = ProviderResolveConfigApiKeyContext;",
+          "exportName": "ProviderResolveConfigApiKeyContext",
+          "kind": "type",
+          "source": {
+            "line": 407,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4577,7 +4613,7 @@
           "exportName": "ProviderResolvedUsageAuth",
           "kind": "type",
           "source": {
-            "line": 444,
+            "line": 479,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4595,7 +4631,7 @@
           "exportName": "ProviderResolveUsageAuthContext",
           "kind": "type",
           "source": {
-            "line": 425,
+            "line": 460,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4613,7 +4649,7 @@
           "exportName": "ProviderThinkingPolicyContext",
           "kind": "type",
           "source": {
-            "line": 637,
+            "line": 672,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4622,7 +4658,7 @@
           "exportName": "ProviderWrapStreamFnContext",
           "kind": "type",
           "source": {
-            "line": 523,
+            "line": 558,
             "path": "src/plugins/types.ts"
           }
         },
@@ -4631,7 +4667,7 @@
           "exportName": "SpeechProviderPlugin",
           "kind": "type",
           "source": {
-            "line": 1134,
+            "line": 1210,
             "path": "src/plugins/types.ts"
           }
         }

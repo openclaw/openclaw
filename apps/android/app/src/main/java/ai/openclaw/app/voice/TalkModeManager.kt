@@ -19,7 +19,6 @@ import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import androidx.core.content.ContextCompat
 import ai.openclaw.app.gateway.GatewaySession
-import ai.openclaw.app.isCanonicalMainSessionKey
 import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
@@ -131,7 +130,6 @@ class TalkModeManager(
   fun setMainSessionKey(sessionKey: String?) {
     val trimmed = sessionKey?.trim().orEmpty()
     if (trimmed.isEmpty()) return
-    if (isCanonicalMainSessionKey(mainSessionKey)) return
     mainSessionKey = trimmed
   }
 
@@ -911,9 +909,6 @@ class TalkModeManager(
       val res = session.request("talk.config", "{}")
       val root = json.parseToJsonElement(res).asObjectOrNull()
       val parsed = TalkModeGatewayConfigParser.parse(root?.get("config").asObjectOrNull())
-      if (!isCanonicalMainSessionKey(mainSessionKey)) {
-        mainSessionKey = parsed.mainSessionKey
-      }
       silenceWindowMs = parsed.silenceTimeoutMs
       parsed.interruptOnSpeech?.let { interruptOnSpeech = it }
       configLoaded = true

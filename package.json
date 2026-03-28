@@ -92,6 +92,10 @@
       "types": "./dist/plugin-sdk/setup-tools.d.ts",
       "default": "./dist/plugin-sdk/setup-tools.js"
     },
+    "./plugin-sdk/approval-runtime": {
+      "types": "./dist/plugin-sdk/approval-runtime.d.ts",
+      "default": "./dist/plugin-sdk/approval-runtime.js"
+    },
     "./plugin-sdk/config-runtime": {
       "types": "./dist/plugin-sdk/config-runtime.d.ts",
       "default": "./dist/plugin-sdk/config-runtime.js"
@@ -204,6 +208,10 @@
       "types": "./dist/plugin-sdk/hook-runtime.d.ts",
       "default": "./dist/plugin-sdk/hook-runtime.js"
     },
+    "./plugin-sdk/host-runtime": {
+      "types": "./dist/plugin-sdk/host-runtime.d.ts",
+      "default": "./dist/plugin-sdk/host-runtime.js"
+    },
     "./plugin-sdk/process-runtime": {
       "types": "./dist/plugin-sdk/process-runtime.d.ts",
       "default": "./dist/plugin-sdk/process-runtime.js"
@@ -308,6 +316,10 @@
       "types": "./dist/plugin-sdk/command-auth.d.ts",
       "default": "./dist/plugin-sdk/command-auth.js"
     },
+    "./plugin-sdk/collection-runtime": {
+      "types": "./dist/plugin-sdk/collection-runtime.d.ts",
+      "default": "./dist/plugin-sdk/collection-runtime.js"
+    },
     "./plugin-sdk/compat": {
       "types": "./dist/plugin-sdk/compat.d.ts",
       "default": "./dist/plugin-sdk/compat.js"
@@ -323,6 +335,10 @@
     "./plugin-sdk/device-bootstrap": {
       "types": "./dist/plugin-sdk/device-bootstrap.d.ts",
       "default": "./dist/plugin-sdk/device-bootstrap.js"
+    },
+    "./plugin-sdk/diagnostic-runtime": {
+      "types": "./dist/plugin-sdk/diagnostic-runtime.d.ts",
+      "default": "./dist/plugin-sdk/diagnostic-runtime.js"
     },
     "./plugin-sdk/diagnostics-otel": {
       "types": "./dist/plugin-sdk/diagnostics-otel.d.ts",
@@ -363,6 +379,10 @@
     "./plugin-sdk/discord-timeouts": {
       "types": "./dist/plugin-sdk/discord-timeouts.d.ts",
       "default": "./dist/plugin-sdk/discord-timeouts.js"
+    },
+    "./plugin-sdk/error-runtime": {
+      "types": "./dist/plugin-sdk/error-runtime.d.ts",
+      "default": "./dist/plugin-sdk/error-runtime.js"
     },
     "./plugin-sdk/extension-shared": {
       "types": "./dist/plugin-sdk/extension-shared.d.ts",
@@ -431,6 +451,10 @@
     "./plugin-sdk/feishu-setup": {
       "types": "./dist/plugin-sdk/feishu-setup.d.ts",
       "default": "./dist/plugin-sdk/feishu-setup.js"
+    },
+    "./plugin-sdk/file-lock": {
+      "types": "./dist/plugin-sdk/file-lock.d.ts",
+      "default": "./dist/plugin-sdk/file-lock.js"
     },
     "./plugin-sdk/fetch-runtime": {
       "types": "./dist/plugin-sdk/fetch-runtime.d.ts",
@@ -1084,6 +1108,7 @@
     "plugin-sdk:facades:check": "node scripts/generate-plugin-sdk-facades.mjs --check",
     "plugin-sdk:facades:gen": "node scripts/generate-plugin-sdk-facades.mjs --write",
     "plugin-sdk:sync-exports": "node scripts/sync-plugin-sdk-exports.mjs",
+    "plugin-sdk:usage": "node --import tsx scripts/analyze-plugin-sdk-usage.ts",
     "plugins:sync": "node --import tsx scripts/sync-plugin-versions.ts",
     "prepack": "pnpm build && pnpm ui:build",
     "prepare": "command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1 && git config core.hooksPath git-hooks || exit 0",
@@ -1156,6 +1181,7 @@
     "test:ui": "pnpm lint:ui:no-raw-window-open && pnpm --dir ui test",
     "test:voicecall:closedloop": "vitest run extensions/voice-call/src/manager.test.ts extensions/voice-call/src/media-stream.test.ts src/plugins/voice-call.plugin.test.ts --maxWorkers=1",
     "test:watch": "vitest",
+    "ts-topology": "node --import tsx scripts/ts-topology.ts",
     "tui": "node scripts/run-node.mjs tui",
     "tui:dev": "OPENCLAW_PROFILE=dev node scripts/run-node.mjs --dev tui",
     "ui:build": "node scripts/ui.js build",
@@ -1195,6 +1221,7 @@
     "linkedom": "^0.18.12",
     "long": "^5.3.2",
     "markdown-it": "^14.1.1",
+    "matrix-js-sdk": "41.2.0",
     "node-edge-tts": "^1.2.10",
     "osc-progress": "^0.3.0",
     "pdfjs-dist": "^5.5.207",
@@ -1243,6 +1270,7 @@
     }
   },
   "optionalDependencies": {
+    "@matrix-org/matrix-sdk-crypto-nodejs": "^0.4.0",
     "openshell": "0.1.0"
   },
   "engines": {

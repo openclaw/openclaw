@@ -23,7 +23,8 @@ import {
 import { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
 import { normalizeResolvedProviderModel } from "./model.provider-normalization.js";
 
-type InlineModelEntry = ModelDefinitionConfig & {
+type InlineModelEntry = Omit<ModelDefinitionConfig, "api"> & {
+  api?: Api;
   provider: string;
   baseUrl?: string;
   headers?: Record<string, string>;
@@ -58,6 +59,22 @@ const DEFAULT_PROVIDER_RUNTIME_HOOKS: ProviderRuntimeHooks = {
   normalizeProviderResolvedModelWithPlugin,
   normalizeProviderTransportWithPlugin,
 };
+
+function normalizeResolvedTransportApi(api: unknown): ModelDefinitionConfig["api"] | undefined {
+  switch (api) {
+    case "anthropic-messages":
+    case "bedrock-converse-stream":
+    case "github-copilot":
+    case "google-generative-ai":
+    case "ollama":
+    case "openai-codex-responses":
+    case "openai-completions":
+    case "openai-responses":
+      return api;
+    default:
+      return undefined;
+  }
+}
 
 function sanitizeModelHeaders(
   headers: unknown,
@@ -116,12 +133,12 @@ function normalizeResolvedModel(params: {
 
 function resolveProviderTransport(params: {
   provider: string;
-  api?: ModelDefinitionConfig["api"] | null;
+  api?: Api | null;
   baseUrl?: string;
   cfg?: OpenClawConfig;
   runtimeHooks?: ProviderRuntimeHooks;
 }): {
-  api?: ModelDefinitionConfig["api"];
+  api?: Api;
   baseUrl?: string;
 } {
   const runtimeHooks = params.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
@@ -133,10 +150,10 @@ function resolveProviderTransport(params: {
       api: params.api,
       baseUrl: params.baseUrl,
     },
-  }) as { api?: ModelDefinitionConfig["api"] | null; baseUrl?: string } | undefined;
+  }) as { api?: Api | null; baseUrl?: string } | undefined;
 
   return {
-    api: normalized?.api ?? params.api ?? undefined,
+    api: normalizeResolvedTransportApi(normalized?.api ?? params.api),
     baseUrl: normalized?.baseUrl ?? params.baseUrl,
   };
 }
@@ -270,7 +287,7 @@ export function buildInlineProviderModels(
         ...model,
         provider: trimmed,
         baseUrl: transport.baseUrl,
-        api: transport.api,
+        api: transport.api ?? model.api,
         headers: (() => {
           const modelHeaders = sanitizeModelHeaders((model as InlineModelEntry).headers, {
             stripSecretRefMarkers: true,
@@ -438,7 +455,7 @@ function resolveConfiguredFallbackModel(params: {
     model: {
       id: modelId,
       name: modelId,
-      api: fallbackTransport.api,
+      api: fallbackTransport.api ?? "openai-responses",
       provider,
       baseUrl: fallbackTransport.baseUrl,
       reasoning: configuredModel?.reasoning ?? false,

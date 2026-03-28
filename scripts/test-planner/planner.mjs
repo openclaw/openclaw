@@ -97,13 +97,7 @@ const normalizeSurfaces = (values = []) => [
   ),
 ];
 
-const EXPLICIT_PLAN_SURFACES = new Set([
-  "unit",
-  "extensions",
-  "channels",
-  "contracts",
-  "gateway",
-]);
+const EXPLICIT_PLAN_SURFACES = new Set(["unit", "extensions", "channels", "contracts", "gateway"]);
 const FAILURE_POLICIES = new Set(["fail-fast", "collect-all"]);
 
 const validateExplicitSurfaces = (surfaces) => {
@@ -1196,14 +1190,7 @@ export function buildCIExecutionManifest(scopeInput = {}, options = {}) {
     minShards: 1,
     maxShards: 9,
   });
-  const bunShardCount = resolveDynamicShardCount({
-    estimatedDurationMs: sumKnownManifestDurationsMs(context.unitTimingManifest),
-    fileCount: context.catalog.allKnownUnitFiles.length,
-    targetDurationMs: 30_000,
-    targetFilesPerShard: 80,
-    minShards: 1,
-    maxShards: 4,
-  });
+  const bunShardCount = windowsShardCount;
 
   const checksFastInclude = nodeEligible
     ? [

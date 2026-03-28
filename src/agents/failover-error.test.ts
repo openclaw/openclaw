@@ -67,6 +67,7 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ statusCode: "429" })).toBe("rate_limit");
     expect(resolveFailoverReasonFromError({ status: 403 })).toBe("auth");
     expect(resolveFailoverReasonFromError({ status: 408 })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ status: 410 })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ status: 499 })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ status: 400 })).toBe("format");
     expect(resolveFailoverReasonFromError({ status: 422 })).toBe("format");
@@ -80,6 +81,46 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ status: 523 })).toBeNull();
     expect(resolveFailoverReasonFromError({ status: 524 })).toBeNull();
     expect(resolveFailoverReasonFromError({ status: 529 })).toBe("overloaded");
+  });
+
+  it("treats session-specific HTTP 410s differently from generic 410s", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        status: 410,
+        message: "session not found",
+      }),
+    ).toBe("session_expired");
+    expect(
+      resolveFailoverReasonFromError({
+        message: "HTTP 410: No body",
+      }),
+    ).toBe("timeout");
+    expect(
+      resolveFailoverReasonFromError({
+        message: "HTTP 410: conversation expired",
+      }),
+    ).toBe("session_expired");
+  });
+
+  it("preserves explicit auth and billing signals on HTTP 410", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        status: 410,
+        message: "invalid_api_key",
+      }),
+    ).toBe("auth_permanent");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 410,
+        message: "authentication failed",
+      }),
+    ).toBe("auth");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 410,
+        message: "insufficient credits",
+      }),
+    ).toBe("billing");
   });
 
   it("classifies documented provider error shapes at the error boundary", () => {
