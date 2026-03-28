@@ -33,6 +33,9 @@ export type ModelsKeyboardParams = {
   currentPage: number;
   totalPages: number;
   pageSize?: number;
+  /** Optional map from model ID to display name. When provided, the display
+   *  name is shown on the button instead of the raw model ID. */
+  modelNames?: ReadonlyMap<string, string>;
 };
 
 const MODELS_PAGE_SIZE = 8;
@@ -180,7 +183,7 @@ export function buildProviderKeyboard(providers: ProviderInfo[]): ButtonRow[] {
  * Build model list keyboard with pagination and back button.
  */
 export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
-  const { provider, models, currentModel, currentPage, totalPages } = params;
+  const { provider, models, currentModel, currentPage, totalPages, modelNames } = params;
   const pageSize = params.pageSize ?? MODELS_PAGE_SIZE;
 
   if (models.length === 0) {
@@ -207,7 +210,8 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
     }
 
     const isCurrentModel = model === currentModelId;
-    const displayText = truncateModelId(model, 38);
+    const displayLabel = modelNames?.get(model) ?? model;
+    const displayText = truncateModelId(displayLabel, 38);
     const text = isCurrentModel ? `${displayText} ✓` : displayText;
 
     rows.push([
