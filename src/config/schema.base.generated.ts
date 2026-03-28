@@ -25506,7 +25506,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "hooks.mappings[].channel": {
       label: "Hook Mapping Delivery Channel",
-      help: 'Delivery channel override for mapping outputs (for example "last", "telegram", "discord", "slack", "signal", "imessage", or "msteams"). Keep channel overrides explicit to avoid accidental cross-channel sends.',
+      help: 'Delivery channel override for mapping outputs (for example "last", "telegram", "slack", "feishu", or any registered plugin channel). Keep channel overrides explicit to avoid accidental cross-channel sends.',
       tags: ["advanced"],
     },
     "hooks.mappings[].to": {
