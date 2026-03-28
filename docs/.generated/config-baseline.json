@@ -21610,7 +21610,10 @@
     {
       "path": "channels.matrix.accessToken",
       "kind": "channel",
-      "type": "string",
+      "type": [
+        "object",
+        "string"
+      ],
       "required": false,
       "deprecated": false,
       "sensitive": true,
@@ -21621,6 +21624,36 @@
         "network",
         "security"
       ],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.matrix.accessToken.id",
+      "kind": "channel",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.matrix.accessToken.provider",
+      "kind": "channel",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.matrix.accessToken.source",
+      "kind": "channel",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -23872,6 +23905,16 @@
       "kind": "channel",
       "type": "string",
       "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.msteams.blockStreaming",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -44773,6 +44816,26 @@
     },
     {
       "path": "models.providers.*.models.*.compat.toolSchemaProfile",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "models.providers.*.models.*.compat.unsupportedToolSchemaKeywords",
+      "kind": "core",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "models.providers.*.models.*.compat.unsupportedToolSchemaKeywords.*",
       "kind": "core",
       "type": "string",
       "required": false,
