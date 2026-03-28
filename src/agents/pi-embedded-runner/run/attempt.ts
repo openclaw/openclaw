@@ -880,6 +880,7 @@ export async function runEmbeddedAttempt(
       // but OpenClaw overwrites streamFn above, losing the auth-injection wrapper.
       // This fix restores the callback so pi-agent-core can resolve API keys from authStorage.
       // Guard is forward-compat only — as of SDK 0.63.0, createAgentSession() never pre-populates getApiKey.
+      // TODO(#55816): Add integration test covering getApiKey restoration after streamFn override path.
       type AgentWithCallback = typeof activeSession.agent & {
         getApiKey?: (provider: string) => Promise<string | undefined>;
       };
