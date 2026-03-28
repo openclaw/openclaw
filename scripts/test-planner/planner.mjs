@@ -782,6 +782,16 @@ const createTargetedUnit = (context, classification, filters) => {
         ...filters,
       ];
     }
+    if (owner === "contracts") {
+      return [
+        "vitest",
+        "run",
+        "--config",
+        "vitest.contracts.config.ts",
+        ...context.noIsolateArgs,
+        ...filters,
+      ];
+    }
     if (owner === "live") {
       return [
         "vitest",

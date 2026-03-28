@@ -388,6 +388,17 @@ describe("scripts/test-parallel lane planning", () => {
     expect(output).toContain("pool=forks");
   });
 
+  it("routes targeted contract tests through the contracts config", () => {
+    const output = runPlannerPlan([
+      "--explain",
+      "src/channels/plugins/contracts/registry-backed.contract.test.ts",
+    ]);
+
+    expect(output).toContain("surface=contracts");
+    expect(output).toContain("vitest.contracts.config.ts");
+    expect(output).not.toContain("vitest.unit.config.ts");
+  });
+
   it("prints the planner-backed CI manifest as JSON", () => {
     const output = runPlannerPlan(["--ci-manifest"], {
       GITHUB_EVENT_NAME: "pull_request",
