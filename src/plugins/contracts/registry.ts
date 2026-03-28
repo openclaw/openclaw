@@ -1,8 +1,9 @@
-import { listBundledImageGenerationProviderEntries } from "../../bundled-image-generation-providers.js";
 import {
   BUNDLED_IMAGE_GENERATION_PLUGIN_IDS,
+  BUNDLED_MEDIA_UNDERSTANDING_PLUGIN_IDS,
   BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS,
   BUNDLED_PROVIDER_PLUGIN_IDS,
+  BUNDLED_SPEECH_PLUGIN_IDS,
   BUNDLED_WEB_SEARCH_PLUGIN_IDS,
 } from "../bundled-capability-metadata.js";
 import { loadBundledCapabilityRuntimeRegistry } from "../bundled-capability-runtime.js";
@@ -14,6 +15,11 @@ import type {
   SpeechProviderPlugin,
   WebSearchProviderPlugin,
 } from "../types.js";
+import {
+  loadVitestImageGenerationProviderContractRegistry,
+  loadVitestMediaUnderstandingProviderContractRegistry,
+  loadVitestSpeechProviderContractRegistry,
+} from "./speech-vitest-registry.js";
 
 type CapabilityContractEntry<T> = {
   pluginId: string;
@@ -54,33 +60,6 @@ function createProviderContractPluginIdsByProviderId(): Map<string, string[]> {
     }
   }
   return result;
-}
-
-function createContractSpeechProvider(providerId: string): SpeechProviderPlugin {
-  return {
-    id: providerId,
-    label: providerId,
-    isConfigured: () => true,
-    synthesize: async () => ({
-      audioBuffer: Buffer.alloc(0),
-      outputFormat: "mp3",
-      fileExtension: "mp3",
-      voiceCompatible: true,
-    }),
-    listVoices: async () => [],
-  };
-}
-
-function createContractMediaUnderstandingProvider(
-  providerId: string,
-): MediaUnderstandingProviderPlugin {
-  return {
-    id: providerId,
-    capabilities: ["image"],
-    describeImages: async () => {
-      throw new Error(`media-understanding contract stub invoked for ${providerId}`);
-    },
-  };
 }
 
 function uniqueStrings(values: readonly string[]): string[] {
@@ -164,9 +143,7 @@ function loadProviderContractPluginIds(): string[] {
 }
 
 function loadProviderContractCompatPluginIds(): string[] {
-  return loadProviderContractPluginIds().map((pluginId) =>
-    pluginId === "kimi-coding" ? "kimi" : pluginId,
-  );
+  return loadProviderContractPluginIds();
 }
 
 function resolveWebSearchCredentialValue(provider: WebSearchProviderPlugin): unknown {
@@ -200,36 +177,45 @@ function loadWebSearchProviderContractRegistry(): WebSearchProviderContractEntry
 
 function loadSpeechProviderContractRegistry(): SpeechProviderContractEntry[] {
   if (!speechProviderContractRegistryCache) {
-    // Contract tests only need bundled ownership and public speech surface shape.
-    speechProviderContractRegistryCache = BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.flatMap((entry) =>
-      entry.speechProviderIds.map((providerId) => ({
-        pluginId: entry.pluginId,
-        provider: createContractSpeechProvider(providerId),
-      })),
-    );
+    speechProviderContractRegistryCache = process.env.VITEST
+      ? loadVitestSpeechProviderContractRegistry()
+      : loadBundledCapabilityRuntimeRegistry({
+          pluginIds: BUNDLED_SPEECH_PLUGIN_IDS,
+          pluginSdkResolution: "dist",
+        }).speechProviders.map((entry) => ({
+          pluginId: entry.pluginId,
+          provider: entry.provider,
+        }));
   }
   return speechProviderContractRegistryCache;
 }
 
 function loadMediaUnderstandingProviderContractRegistry(): MediaUnderstandingProviderContractEntry[] {
   if (!mediaUnderstandingProviderContractRegistryCache) {
-    mediaUnderstandingProviderContractRegistryCache = BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.flatMap(
-      (entry) =>
-        entry.mediaUnderstandingProviderIds.map((providerId) => ({
+    mediaUnderstandingProviderContractRegistryCache = process.env.VITEST
+      ? loadVitestMediaUnderstandingProviderContractRegistry()
+      : loadBundledCapabilityRuntimeRegistry({
+          pluginIds: BUNDLED_MEDIA_UNDERSTANDING_PLUGIN_IDS,
+          pluginSdkResolution: "dist",
+        }).mediaUnderstandingProviders.map((entry) => ({
           pluginId: entry.pluginId,
-          provider: createContractMediaUnderstandingProvider(providerId),
-        })),
-    );
+          provider: entry.provider,
+        }));
   }
   return mediaUnderstandingProviderContractRegistryCache;
 }
 
 function loadImageGenerationProviderContractRegistry(): ImageGenerationProviderContractEntry[] {
   if (!imageGenerationProviderContractRegistryCache) {
-    imageGenerationProviderContractRegistryCache =
-      listBundledImageGenerationProviderEntries().filter((entry) =>
-        BUNDLED_IMAGE_GENERATION_PLUGIN_IDS.includes(entry.pluginId),
-      );
+    imageGenerationProviderContractRegistryCache = process.env.VITEST
+      ? loadVitestImageGenerationProviderContractRegistry()
+      : loadBundledCapabilityRuntimeRegistry({
+          pluginIds: BUNDLED_IMAGE_GENERATION_PLUGIN_IDS,
+          pluginSdkResolution: "dist",
+        }).imageGenerationProviders.map((entry) => ({
+          pluginId: entry.pluginId,
+          provider: entry.provider,
+        }));
   }
   return imageGenerationProviderContractRegistryCache;
 }

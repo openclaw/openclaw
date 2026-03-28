@@ -1,19 +1,36 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserServerState } from "./server-context.types.js";
 
-let cfgProfiles: Record<string, { cdpPort?: number; cdpUrl?: string; color?: string }> = {};
+type TestProfileConfig = { cdpPort?: number; cdpUrl?: string; color?: string };
+type TestConfig = {
+  browser: {
+    enabled: true;
+    color: string;
+    headless: true;
+    defaultProfile: string;
+    profiles: Record<string, TestProfileConfig>;
+  };
+};
 
-// Simulate module-level cache behavior
-let cachedConfig: ReturnType<typeof buildConfig> | null = null;
+const mockState = vi.hoisted(
+  () =>
+    ({
+      cfgProfiles: {} as Record<string, TestProfileConfig>,
+      cachedConfig: null as TestConfig | null,
+    }) satisfies {
+      cfgProfiles: Record<string, TestProfileConfig>;
+      cachedConfig: TestConfig | null;
+    },
+);
 
-function buildConfig() {
+function buildConfig(): TestConfig {
   return {
     browser: {
       enabled: true,
       color: "#FF4500",
       headless: true,
       defaultProfile: "openclaw",
-      profiles: { ...cfgProfiles },
+      profiles: { ...mockState.cfgProfiles },
     },
   };
 }
@@ -31,14 +48,18 @@ vi.mock("../config/config.js", async (importOriginal) => {
     getRuntimeConfigSnapshot: () => null,
     loadConfig: () => {
       // simulate stale loadConfig that doesn't see updates unless cache cleared
-      if (!cachedConfig) {
-        cachedConfig = buildConfig();
+      if (!mockState.cachedConfig) {
+        mockState.cachedConfig = buildConfig();
       }
-      return cachedConfig;
+      return mockState.cachedConfig;
     },
     writeConfigFile: vi.fn(async () => {}),
   };
 });
+
+vi.mock("./config-refresh-source.js", () => ({
+  loadBrowserConfigForRuntimeRefresh: () => buildConfig(),
+}));
 
 describe("server-context hot-reload profiles", () => {
   let loadConfig: typeof import("../config/config.js").loadConfig;
@@ -54,10 +75,10 @@ describe("server-context hot-reload profiles", () => {
     ({ refreshResolvedBrowserConfigFromDisk, resolveBrowserProfileWithHotReload } =
       await import("./resolved-config-refresh.js"));
     vi.clearAllMocks();
-    cfgProfiles = {
+    mockState.cfgProfiles = {
       openclaw: { cdpPort: 18800, color: "#FF4500" },
     };
-    cachedConfig = null; // Clear simulated cache
+    mockState.cachedConfig = null; // Clear simulated cache
   });
 
   it("forProfile hot-reloads newly added profiles from config", async () => {
@@ -85,7 +106,7 @@ describe("server-context hot-reload profiles", () => {
     ).toBeNull();
 
     // 2. Simulate adding a new profile to config (like user editing openclaw.json)
-    cfgProfiles.desktop = { cdpUrl: "http://127.0.0.1:9222", color: "#0066CC" };
+    mockState.cfgProfiles.desktop = { cdpUrl: "http://127.0.0.1:9222", color: "#0066CC" };
 
     // 3. Verify without clearConfigCache, loadConfig() still returns stale cached value
     const staleCfg = loadConfig();
@@ -140,8 +161,8 @@ describe("server-context hot-reload profiles", () => {
       profiles: new Map(),
     };
 
-    cfgProfiles.openclaw = { cdpPort: 19999, color: "#FF4500" };
-    cachedConfig = null;
+    mockState.cfgProfiles.openclaw = { cdpPort: 19999, color: "#FF4500" };
+    mockState.cachedConfig = null;
 
     const after = resolveBrowserProfileWithHotReload({
       current: state,
@@ -162,8 +183,8 @@ describe("server-context hot-reload profiles", () => {
       profiles: new Map(),
     };
 
-    cfgProfiles.desktop = { cdpPort: 19999, color: "#0066CC" };
-    cachedConfig = null;
+    mockState.cfgProfiles.desktop = { cdpPort: 19999, color: "#0066CC" };
+    mockState.cachedConfig = null;
 
     refreshResolvedBrowserConfigFromDisk({
       current: state,
@@ -195,8 +216,8 @@ describe("server-context hot-reload profiles", () => {
       ]),
     };
 
-    cfgProfiles.openclaw = { cdpPort: 19999, color: "#FF4500" };
-    cachedConfig = null;
+    mockState.cfgProfiles.openclaw = { cdpPort: 19999, color: "#FF4500" };
+    mockState.cachedConfig = null;
 
     refreshResolvedBrowserConfigFromDisk({
       current: state,

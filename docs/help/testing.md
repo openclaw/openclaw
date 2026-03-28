@@ -33,6 +33,7 @@ When you touch tests or want extra confidence:
 When debugging real providers/models (requires real creds):
 
 - Live suite (models + gateway tool/image probes): `pnpm test:live`
+- Target one live file quietly: `pnpm test:live -- src/agents/models.profiles.live.test.ts`
 
 Tip: when you only need one failing case, prefer narrowing live tests via the allowlist env vars described below.
 
@@ -150,7 +151,8 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - Not CI-stable by design (real networks, real provider policies, quotas, outages)
   - Costs money / uses rate limits
   - Prefer running narrowed subsets instead of “everything”
-  - Live runs will source `~/.profile` to pick up missing API keys
+- Live runs will source `~/.profile` to pick up missing API keys
+- `pnpm test:live` now defaults to a quieter mode: it keeps `[live] ...` progress output, but suppresses the extra `~/.profile` notice and mutes gateway bootstrap logs/Bonjour chatter. Set `OPENCLAW_LIVE_TEST_QUIET=0` if you want the full startup logs back.
 - API key rotation (provider-specific): set `*_API_KEYS` with comma/semicolon format or `*_API_KEY_1`, `*_API_KEY_2` (for example `OPENAI_API_KEYS`, `ANTHROPIC_API_KEYS`, `GEMINI_API_KEYS`) or per-live override via `OPENCLAW_LIVE_*_KEY`; tests retry on rate limit responses.
 - Progress/heartbeat output:
   - Live suites now emit progress lines to stderr so long provider calls are visibly active even when Vitest console capture is quiet.
@@ -318,6 +320,49 @@ Notes:
 - For `claude-cli`, it installs the Linux `@anthropic-ai/claude-code` package into a cached writable prefix at `OPENCLAW_DOCKER_CLI_TOOLS_DIR` (default: `~/.cache/openclaw/docker-cli-tools`).
 - It copies `~/.claude` into the container when available, but on machines where Claude auth is backed by `ANTHROPIC_API_KEY`, it also preserves `ANTHROPIC_API_KEY` / `ANTHROPIC_API_KEY_OLD` for the child Claude CLI via `OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV`.
 
+## Live: ACP bind smoke (`/acp spawn ... --bind here`)
+
+- Test: `src/gateway/gateway-acp-bind.live.test.ts`
+- Goal: validate the real ACP conversation-bind flow with a live ACP agent:
+  - send `/acp spawn <agent> --bind here`
+  - bind a synthetic message-channel conversation in place
+  - send a normal follow-up on that same conversation
+  - verify the follow-up lands in the bound ACP session transcript
+- Enable:
+  - `pnpm test:live src/gateway/gateway-acp-bind.live.test.ts`
+  - `OPENCLAW_LIVE_ACP_BIND=1`
+- Defaults:
+  - ACP agent: `claude`
+  - Synthetic channel: Slack DM-style conversation context
+  - ACP backend: `acpx`
+- Overrides:
+  - `OPENCLAW_LIVE_ACP_BIND_AGENT=claude`
+  - `OPENCLAW_LIVE_ACP_BIND_AGENT=codex`
+  - `OPENCLAW_LIVE_ACP_BIND_ACPX_COMMAND=/full/path/to/acpx`
+- Notes:
+  - This lane uses the gateway `chat.send` surface with admin-only synthetic originating-route fields so tests can attach message-channel context without pretending to deliver externally.
+  - When `OPENCLAW_LIVE_ACP_BIND_ACPX_COMMAND` is unset, the test uses the configured/bundled acpx command. If your harness auth depends on env vars from `~/.profile`, prefer a custom `acpx` command that preserves provider env.
+
+Example:
+
+```bash
+OPENCLAW_LIVE_ACP_BIND=1 \
+  OPENCLAW_LIVE_ACP_BIND_AGENT=claude \
+  pnpm test:live src/gateway/gateway-acp-bind.live.test.ts
+```
+
+Docker recipe:
+
+```bash
+pnpm test:docker:live-acp-bind
+```
+
+Docker notes:
+
+- The Docker runner lives at `scripts/test-live-acp-bind-docker.sh`.
+- It sources `~/.profile`, copies the matching CLI auth home (`~/.claude` or `~/.codex`) into the container, installs `acpx` into a writable npm prefix, then installs the requested live CLI (`@anthropic-ai/claude-code` or `@openai/codex`) if missing.
+- Inside Docker, the runner sets `OPENCLAW_LIVE_ACP_BIND_ACPX_COMMAND=$HOME/.npm-global/bin/acpx` so acpx keeps provider env vars from the sourced profile available to the child harness CLI.
+
 ### Recommended live recipes
 
 Narrow, explicit allowlists are fastest and least flaky:
@@ -450,16 +495,18 @@ If you want to rely on env keys (e.g. exported in your `~/.profile`), run local 
 These Docker runners split into two buckets:
 
 - Live-model runners: `test:docker:live-models` and `test:docker:live-gateway` run `pnpm test:live` inside the repo Docker image, mounting your local config dir and workspace (and sourcing `~/.profile` if mounted).
-- Container smoke runners: `test:docker:openwebui`, `test:docker:onboard`, `test:docker:gateway-network`, and `test:docker:plugins` boot one or more real containers and verify higher-level integration paths.
+- Container smoke runners: `test:docker:openwebui`, `test:docker:onboard`, `test:docker:gateway-network`, `test:docker:mcp-channels`, and `test:docker:plugins` boot one or more real containers and verify higher-level integration paths.
 
 The live-model Docker runners also bind-mount only the needed CLI auth homes (or all supported ones when the run is not narrowed), then copy them into the container home before the run so external-CLI OAuth can refresh tokens without mutating the host auth store:
 
 - Direct models: `pnpm test:docker:live-models` (script: `scripts/test-live-models-docker.sh`)
+- ACP bind smoke: `pnpm test:docker:live-acp-bind` (script: `scripts/test-live-acp-bind-docker.sh`)
 - CLI backend smoke: `pnpm test:docker:live-cli-backend` (script: `scripts/test-live-cli-backend-docker.sh`)
 - Gateway + dev agent: `pnpm test:docker:live-gateway` (script: `scripts/test-live-gateway-models-docker.sh`)
 - Open WebUI live smoke: `pnpm test:docker:openwebui` (script: `scripts/e2e/openwebui-docker.sh`)
 - Onboarding wizard (TTY, full scaffolding): `pnpm test:docker:onboard` (script: `scripts/e2e/onboard-docker.sh`)
 - Gateway networking (two containers, WS auth + health): `pnpm test:docker:gateway-network` (script: `scripts/e2e/gateway-network-docker.sh`)
+- MCP channel bridge (seeded Gateway + stdio bridge + raw Claude notification-frame smoke): `pnpm test:docker:mcp-channels` (script: `scripts/e2e/mcp-channels-docker.sh`)
 - Plugins (install smoke + `/plugin` alias + Claude-bundle restart semantics): `pnpm test:docker:plugins` (script: `scripts/e2e/plugins-docker.sh`)
 
 The live-model Docker runners also bind-mount the current checkout read-only and
@@ -481,6 +528,14 @@ This lane expects a usable live model key, and `OPENCLAW_PROFILE_FILE`
 (`~/.profile` by default) is the primary way to provide it in Dockerized runs.
 Successful runs print a small JSON payload like `{ "ok": true, "model":
 "openclaw/default", ... }`.
+`test:docker:mcp-channels` is intentionally deterministic and does not need a
+real Telegram, Discord, or iMessage account. It boots a seeded Gateway
+container, starts a second container that spawns `openclaw mcp serve`, then
+verifies routed conversation discovery, transcript reads, attachment metadata,
+live event queue behavior, outbound send routing, and Claude-style channel +
+permission notifications over the real stdio MCP bridge. The notification check
+inspects the raw stdio MCP frames directly so the smoke validates what the
+bridge actually emits, not just what a specific client SDK happens to surface.
 
 Manual ACP plain-language thread smoke (not CI):
 
@@ -506,7 +561,8 @@ Useful env vars:
 
 ## Docs sanity
 
-Run docs checks after doc edits: `pnpm docs:list`.
+Run docs checks after doc edits: `pnpm check:docs`.
+Run full Mintlify anchor validation when you need in-page heading checks too: `pnpm docs:check-links:anchors`.
 
 ## Offline regression (CI-safe)
 
@@ -562,7 +618,7 @@ Located in `src/channels/plugins/contracts/*.contract.test.ts`:
 - **directory** - Directory/roster API
 - **group-policy** - Group policy enforcement
 
-### Provider contracts
+### Provider status contracts
 
 Located in `src/plugins/contracts/*.contract.test.ts`.
 

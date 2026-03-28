@@ -1,5 +1,6 @@
 {
   "id": "anthropic",
+  "enabledByDefault": true,
   "providers": ["anthropic"],
   "cliBackends": ["claude-cli"],
   "providerAuthEnvVars": {
@@ -10,6 +11,7 @@
       "provider": "anthropic",
       "method": "cli",
       "choiceId": "anthropic-cli",
+      "deprecatedChoiceIds": ["claude-cli"],
       "choiceLabel": "Anthropic Claude CLI",
       "choiceHint": "Reuse a local Claude CLI login on this host",
       "groupId": "anthropic",

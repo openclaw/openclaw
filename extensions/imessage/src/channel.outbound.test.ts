@@ -21,6 +21,14 @@ function requireIMessageSendMedia() {
   return sendMedia;
 }
 
+function requireIMessageChunker() {
+  const chunker = imessagePlugin.outbound?.chunker;
+  if (!chunker) {
+    throw new Error("imessage outbound.chunker unavailable");
+  }
+  return chunker;
+}
+
 const requestMock = vi.fn();
 const stopMock = vi.fn();
 
@@ -183,6 +191,13 @@ describe("imessagePlugin outbound", () => {
         }),
       sendIMessage,
     });
+  });
+
+  it("chunks outbound text without requiring iMessage runtime initialization", () => {
+    const chunker = requireIMessageChunker();
+
+    expect(() => chunker("hello world", 5)).not.toThrow();
+    expect(chunker("hello world", 5)).toEqual(["hello", "world"]);
   });
 });
 

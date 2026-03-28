@@ -644,8 +644,8 @@ Live directory lookup uses the logged-in Matrix account:
 - `homeserver`: homeserver URL, for example `https://matrix.example.org`.
 - `allowPrivateNetwork`: allow this Matrix account to connect to private/internal homeservers. Enable this when the homeserver resolves to `localhost`, a LAN/Tailscale IP, or an internal host such as `matrix-synapse`.
 - `userId`: full Matrix user ID, for example `@bot:example.org`.
-- `accessToken`: access token for token-based auth.
-- `password`: password for password-based login.
+- `accessToken`: access token for token-based auth. Plaintext values and SecretRef values are supported for `channels.matrix.accessToken` and `channels.matrix.accounts.<id>.accessToken` across env/file/exec providers. See [Secrets Management](/gateway/secrets).
+- `password`: password for password-based login. Plaintext values and SecretRef values are supported.
 - `deviceId`: explicit Matrix device ID.
 - `deviceName`: device display name for password login.
 - `avatarUrl`: stored self-avatar URL for profile sync and `set-profile` updates.

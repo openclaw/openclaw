@@ -35,9 +35,10 @@ type SupportedThinkingFormat =
 export type ModelCompatConfig = SupportedOpenAICompatFields & {
   thinkingFormat?: SupportedThinkingFormat;
   supportsTools?: boolean;
-  toolSchemaProfile?: "xai";
+  toolSchemaProfile?: string;
+  unsupportedToolSchemaKeywords?: string[];
   nativeWebSearchTool?: boolean;
-  toolCallArgumentsEncoding?: "html-entities";
+  toolCallArgumentsEncoding?: string;
   requiresMistralToolIds?: boolean;
   requiresOpenAiAnthropicToolPayload?: boolean;
 };

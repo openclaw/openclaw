@@ -2,19 +2,18 @@ import {
   type ProviderResolveDynamicModelContext,
   type ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
+import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import {
-  applyOpenAIConfig,
   DEFAULT_CONTEXT_TOKENS,
   normalizeModelCompat,
   normalizeProviderId,
-  OPENAI_DEFAULT_MODEL,
   type ProviderPlugin,
-} from "openclaw/plugin-sdk/provider-models";
+} from "openclaw/plugin-sdk/provider-model-shared";
 import {
   createOpenAIAttributionHeadersWrapper,
   createOpenAIDefaultTransportWrapper,
 } from "openclaw/plugin-sdk/provider-stream";
+import { applyOpenAIConfig, OPENAI_DEFAULT_MODEL } from "./default-models.js";
 import {
   cloneFirstTemplateModel,
   findCatalogTemplate,
