@@ -182,6 +182,48 @@ describe("buildPluginStatusReport", () => {
     );
   });
 
+  it("uses the auto-enabled config snapshot for inspect policy summaries", () => {
+    const rawConfig = {
+      plugins: {},
+      channels: { demo: { enabled: true } },
+    };
+    const autoEnabledConfig = {
+      ...rawConfig,
+      plugins: {
+        entries: {
+          demo: {
+            enabled: true,
+            subagent: {
+              allowModelOverride: true,
+              allowedModels: ["openai/gpt-5.4"],
+              hasAllowedModelsConfig: true,
+            },
+          },
+        },
+      },
+    };
+    applyPluginAutoEnableMock.mockReturnValue({ config: autoEnabledConfig, changes: [] });
+    setSinglePluginLoadResult(
+      createPluginRecord({
+        id: "demo",
+        name: "Demo",
+        description: "Auto-enabled plugin",
+        origin: "bundled",
+        providerIds: ["demo"],
+      }),
+    );
+
+    const inspect = buildPluginInspectReport({ id: "demo", config: rawConfig });
+
+    expect(inspect).not.toBeNull();
+    expect(inspect?.policy).toEqual({
+      allowPromptInjection: undefined,
+      allowModelOverride: true,
+      allowedModels: ["openai/gpt-5.4"],
+      hasAllowedModelsConfig: true,
+    });
+  });
+
   it("applies the full bundled provider compat chain before loading plugins", () => {
     const config = { plugins: { allow: ["telegram"] } };
     loadConfigMock.mockReturnValue(config);

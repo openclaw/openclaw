@@ -123,6 +123,16 @@ function buildCompatibilityNoticesForInspect(
 
 const log = createSubsystemLogger("plugins");
 
+function resolveStatusConfig(
+  config: ReturnType<typeof loadConfig>,
+  env: NodeJS.ProcessEnv | undefined,
+) {
+  return applyPluginAutoEnable({
+    config,
+    env: env ?? process.env,
+  }).config;
+}
+
 function resolveReportedPluginVersion(
   plugin: PluginRegistry["plugins"][number],
   env: NodeJS.ProcessEnv | undefined,
@@ -144,10 +154,7 @@ export function buildPluginStatusReport(params?: {
   env?: NodeJS.ProcessEnv;
 }): PluginStatusReport {
   const rawConfig = params?.config ?? loadConfig();
-  const config = applyPluginAutoEnable({
-    config: rawConfig,
-    env: params?.env ?? process.env,
-  }).config;
+  const config = resolveStatusConfig(rawConfig, params?.env);
   const workspaceDir = params?.workspaceDir
     ? params.workspaceDir
     : (resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config)) ??
@@ -240,7 +247,8 @@ export function buildPluginInspectReport(params: {
   env?: NodeJS.ProcessEnv;
   report?: PluginStatusReport;
 }): PluginInspectReport | null {
-  const config = params.config ?? loadConfig();
+  const rawConfig = params.config ?? loadConfig();
+  const config = resolveStatusConfig(rawConfig, params.env);
   const report =
     params.report ??
     buildPluginStatusReport({
@@ -373,7 +381,8 @@ export function buildAllPluginInspectReports(params?: {
   env?: NodeJS.ProcessEnv;
   report?: PluginStatusReport;
 }): PluginInspectReport[] {
-  const config = params?.config ?? loadConfig();
+  const rawConfig = params?.config ?? loadConfig();
+  const config = resolveStatusConfig(rawConfig, params?.env);
   const report =
     params?.report ??
     buildPluginStatusReport({
