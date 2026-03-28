@@ -1,0 +1,26 @@
+{
+  "name": "openclaw-continuity-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Authoritative tracked source for the OpenClaw continuity bridge sidecar",
+  "type": "module",
+  "main": "dist/openclaw-continuity-bridge.js",
+  "scripts": {
+    "build": "tsc --project tsconfig.hq.json",
+    "start:continuity": "node dist/openclaw-continuity-bridge.js",
+    "sync:sidecar": "node scripts/sync-to-sidecar.mjs",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1",
+    "better-sqlite3": "^11.8.1",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^4.0.18"
+  }
+}

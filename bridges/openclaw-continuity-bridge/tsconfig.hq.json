@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "include": [
+    "openclaw-continuity-bridge.ts",
+    "engine-tools.ts",
+    "proxy.ts",
+    "memory-read-tools.ts",
+    "workspace-context.ts"
+  ]
+}
