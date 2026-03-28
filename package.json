@@ -452,10 +452,6 @@
       "types": "./dist/plugin-sdk/fetch-runtime.d.ts",
       "default": "./dist/plugin-sdk/fetch-runtime.js"
     },
-    "./plugin-sdk/file-lock": {
-      "types": "./dist/plugin-sdk/file-lock.d.ts",
-      "default": "./dist/plugin-sdk/file-lock.js"
-    },
     "./plugin-sdk/group-access": {
       "types": "./dist/plugin-sdk/group-access.d.ts",
       "default": "./dist/plugin-sdk/group-access.js"
@@ -1104,6 +1100,7 @@
     "plugin-sdk:facades:check": "node scripts/generate-plugin-sdk-facades.mjs --check",
     "plugin-sdk:facades:gen": "node scripts/generate-plugin-sdk-facades.mjs --write",
     "plugin-sdk:sync-exports": "node scripts/sync-plugin-sdk-exports.mjs",
+    "plugin-sdk:usage": "node --import tsx scripts/analyze-plugin-sdk-usage.ts",
     "plugins:sync": "node --import tsx scripts/sync-plugin-versions.ts",
     "prepack": "pnpm build && pnpm ui:build",
     "prepare": "command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1 && git config core.hooksPath git-hooks || exit 0",
@@ -1176,6 +1173,7 @@
     "test:ui": "pnpm lint:ui:no-raw-window-open && pnpm --dir ui test",
     "test:voicecall:closedloop": "vitest run extensions/voice-call/src/manager.test.ts extensions/voice-call/src/media-stream.test.ts src/plugins/voice-call.plugin.test.ts --maxWorkers=1",
     "test:watch": "vitest",
+    "ts-topology": "node --import tsx scripts/ts-topology.ts",
     "tui": "node scripts/run-node.mjs tui",
     "tui:dev": "OPENCLAW_PROFILE=dev node scripts/run-node.mjs --dev tui",
     "ui:build": "node scripts/ui.js build",

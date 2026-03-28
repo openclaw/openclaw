@@ -3,7 +3,7 @@ import {
   resolveExecutionBudget,
   resolveRuntimeCapabilities,
 } from "../scripts/test-planner/runtime-profile.mjs";
-import { resolveLocalVitestMaxWorkers } from "../vitest.config.ts";
+import baseConfig, { resolveLocalVitestMaxWorkers } from "../vitest.config.ts";
 
 function resolveHighMemoryLocalRuntime() {
   return resolveRuntimeCapabilities(
@@ -189,5 +189,11 @@ describe("resolveLocalVitestMaxWorkers", () => {
     expect(runtime.loadBand).toBe("idle");
     expect(budget.extensionsBatchTargetMs).toBe(300_000);
     expect(budget.extensionWorkers).toBe(5);
+  });
+});
+
+describe("base vitest config", () => {
+  it("excludes fixture trees from test collection", () => {
+    expect(baseConfig.test?.exclude).toContain("test/fixtures/**");
   });
 });

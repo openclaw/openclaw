@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@pierre/diffs": "1.1.5",
+    "@pierre/theme": "0.0.22",
     "@sinclair/typebox": "0.34.48",
     "playwright-core": "1.58.2"
   },
