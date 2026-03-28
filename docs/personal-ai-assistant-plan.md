@@ -185,6 +185,7 @@
 | `claude-cli` | ✅ 已安装 | Claude (via CLI) | 复杂任务路由到本地 Claude Max |
 | `wechat-search` | ✅ 已安装 | Claude (via CLI) | 微信历史搜索（Claude CLI → MCP） |
 | `daily-digest` | ✅ 已安装 | DeepSeek | 每日消息摘要（支持 cron 定时推送） |
+| `memory` | ✅ 已安装 | DeepSeek | 跨会话持久记忆（文件存储） |
 
 ---
 
@@ -237,12 +238,14 @@
 
 **目标**：自动复杂度检测 + 持久记忆 + 定时任务
 
-| 任务 | 说明 | 依赖 |
+| 任务 | 说明 | 状态 |
 |------|------|------|
-| 复杂度自动检测 | DeepSeek 判断任务复杂度，自动升级到 Claude | Phase 2 |
-| 持久化记忆层 | 跨会话知识存储（文件/SQLite） | 无 |
-| 定时任务系统 | 内置调度器替代外部 Cron | Phase 2 |
-| 邮箱接入 | 调研 OpenClaw 邮箱支持或 MCP 接入 | 无 |
+| 复杂度自动检测 | CLAUDE.md 规则让 DeepSeek 主动建议切换 Claude | ✅ 完成 |
+| 持久化记忆层 | memory skill + `~/.openclaw/memory/notes.md` 文件存储 | ✅ 完成 |
+| 定时任务配置 | CLAUDE.md 规则指导 agent 使用 cron 工具设置每日摘要 | ✅ 完成 |
+| 邮箱接入 | 调研完成：无原生插件，可用 claude.ai Gmail MCP connector | ✅ 调研完成 |
+
+**邮箱接入结论**：OpenClaw 无原生邮箱 channel。最简方案是使用 Claude.ai 自带的 Gmail MCP connector（`claude mcp list` 中已发现，需 OAuth 认证）。如需完整双向邮箱，可自建 Gmail MCP Server。
 
 ---
 
@@ -257,3 +260,4 @@
 | 2026-03-27 | Phase 1 v1：claude-cli / wechat-search skill 创建，CLAUDE.md 路由规则配置 |
 | 2026-03-28 | Phase 1 v2：改用 OpenClaw 原生 cliBackends 机制，@model claude-cli/opus 切换验证通过 |
 | 2026-03-28 | Phase 2 完成：消息分类增强、跨渠道紧急转发、daily-digest skill、MCP 权限预授权 |
+| 2026-03-28 | Phase 3 完成：复杂度检测建议、memory skill 持久记忆、cron 定时任务、邮箱调研 |
