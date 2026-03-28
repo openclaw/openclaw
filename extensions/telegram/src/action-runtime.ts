@@ -46,7 +46,12 @@ export const telegramActionRuntime = {
   sendStickerTelegram,
 };
 
+type TelegramForumTopicIconColor = 0x6fb9f0 | 0xffd67e | 0xcb86db | 0x8eee98 | 0xff93b2 | 0xfb6f5f;
+
 const TELEGRAM_BUTTON_STYLES: readonly TelegramButtonStyle[] = ["danger", "success", "primary"];
+const TELEGRAM_FORUM_TOPIC_ICON_COLORS = new Set<TelegramForumTopicIconColor>([
+  0x6fb9f0, 0xffd67e, 0xcb86db, 0x8eee98, 0xff93b2, 0xfb6f5f,
+]);
 const TELEGRAM_ACTION_ALIASES = {
   createForumTopic: "createForumTopic",
   delete: "deleteMessage",
@@ -578,6 +583,14 @@ export async function handleTelegramAction(
     const name = readStringParam(params, "name", { required: true });
     const iconColor = readNumberParam(params, "iconColor", { integer: true });
     const iconCustomEmojiId = readStringParam(params, "iconCustomEmojiId");
+    if (
+      typeof iconColor === "number" &&
+      !TELEGRAM_FORUM_TOPIC_ICON_COLORS.has(iconColor as TelegramForumTopicIconColor)
+    ) {
+      throw new Error(
+        "iconColor must be one of: 0x6FB9F0, 0xFFD67E, 0xCB86DB, 0x8EEE98, 0xFF93B2, 0xFB6F5F.",
+      );
+    }
     const token = resolveTelegramToken(cfg, { accountId }).token;
     if (!token) {
       throw new Error(
@@ -588,7 +601,7 @@ export async function handleTelegramAction(
       cfg,
       token,
       accountId: accountId ?? undefined,
-      iconColor: iconColor ?? undefined,
+      iconColor: iconColor as TelegramForumTopicIconColor | undefined,
       iconCustomEmojiId: iconCustomEmojiId ?? undefined,
     });
     return jsonResult({
