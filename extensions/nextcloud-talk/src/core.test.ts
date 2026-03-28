@@ -31,6 +31,11 @@ vi.mock("../../../src/config/bundled-channel-config-runtime.js", () => ({
   getBundledChannelConfigSchemaMap: () => new Map(),
 }));
 
+vi.mock("../../../src/channels/plugins/bundled.js", () => ({
+  bundledChannelPlugins: [],
+  bundledChannelSetupPlugins: [],
+}));
+
 const fetchWithSsrFGuard = vi.hoisted(() => vi.fn());
 const readFileSync = vi.hoisted(() => vi.fn());
 
