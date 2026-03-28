@@ -111,7 +111,7 @@ export function resolvePluginTools(params: {
     }
     let resolved: AnyAgentTool | AnyAgentTool[] | null | undefined = null;
     try {
-      resolved = entry.factory(params.context);
+      resolved = entry.factory({ ...params.context, pluginConfig: entry.pluginConfig });
     } catch (err) {
       log.error(`plugin tool failed (${entry.pluginId}): ${String(err)}`);
       continue;

@@ -76,7 +76,26 @@ export type PluginToolRegistration = {
   optional: boolean;
   source: string;
   rootDir?: string;
+  pluginConfig?: Record<string, unknown>;
 };
+
+function hasExactRegisteredToolMatch(params: {
+  existing: PluginToolRegistration;
+  pluginId: string;
+  normalizedNames: string[];
+  optional: boolean;
+  source: string;
+  rootDir?: string;
+}): boolean {
+  return (
+    params.existing.pluginId === params.pluginId &&
+    params.existing.optional === params.optional &&
+    params.existing.source === params.source &&
+    params.existing.rootDir === params.rootDir &&
+    params.existing.names.length === params.normalizedNames.length &&
+    params.existing.names.every((name, index) => name === params.normalizedNames[index])
+  );
+}
 
 export type PluginCliRegistration = {
   pluginId: string;
@@ -280,6 +299,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     record: PluginRecord,
     tool: AnyAgentTool | OpenClawPluginToolFactory,
     opts?: { name?: string; names?: string[]; optional?: boolean },
+    pluginConfig?: Record<string, unknown>,
   ) => {
     const names = opts?.names ?? (opts?.name ? [opts.name] : []);
     const optional = opts?.optional === true;
@@ -290,9 +310,24 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       names.push(tool.name);
     }
 
-    const normalized = names.map((name) => name.trim()).filter(Boolean);
+    const normalized = Array.from(new Set(names.map((name) => name.trim()).filter(Boolean)));
     if (normalized.length > 0) {
-      record.toolNames.push(...normalized);
+      const alreadyRegistered = registry.tools.some((existing) =>
+        hasExactRegisteredToolMatch({
+          existing,
+          pluginId: record.id,
+          normalizedNames: normalized,
+          optional,
+          source: record.source,
+          rootDir: record.rootDir,
+        }),
+      );
+      if (alreadyRegistered) {
+        return;
+      }
+    }
+    if (normalized.length > 0) {
+      record.toolNames = Array.from(new Set([...record.toolNames, ...normalized]));
     }
     registry.tools.push({
       pluginId: record.id,
@@ -302,6 +337,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       optional,
       source: record.source,
       rootDir: record.rootDir,
+      pluginConfig,
     });
   };
 
@@ -975,7 +1011,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       handlers: {
         ...(registrationMode === "full"
           ? {
-              registerTool: (tool, opts) => registerTool(record, tool, opts),
+              registerTool: (tool, opts) => registerTool(record, tool, opts, params.pluginConfig),
               registerHook: (events, handler, opts) =>
                 registerHook(record, events, handler, opts, params.config),
               registerHttpRoute: (routeParams) => registerHttpRoute(record, routeParams),
