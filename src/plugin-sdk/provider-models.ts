@@ -19,6 +19,7 @@ export {
   matchesExactOrPrefix,
   normalizeModelCompat,
   normalizeProviderId,
+  resolveUnsupportedToolSchemaKeywords,
   resolveMoonshotThinkingType,
   resolveToolCallArgumentsEncoding,
 } from "./provider-model-shared.js";
