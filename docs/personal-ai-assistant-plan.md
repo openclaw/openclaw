@@ -85,7 +85,7 @@
 | 微信（深度读取） | ✅ | - | MCP Server 本地 DB 解密 | 生产可用 |
 | WhatsApp | ✅ | ✅ | OpenClaw 插件 | 已配置 |
 | Discord | ✅ | ✅ | OpenClaw 插件 | 已配置（未启用） |
-| 邮箱（Gmail） | ❌ | ❌ | claude.ai Gmail MCP | 待认证 |
+| 邮箱（Gmail） | ✅ | ✅ | 本地 Gmail MCP Server | **2026-03-28 接通** |
 
 ### 系统数据源（规划中）
 
@@ -261,7 +261,7 @@
 | calendar skill | 日程查询、创建、修改、搜索 | ✅ 完成 |
 | Clipboard MCP Server | Python 自建，读写系统剪贴板 | ✅ 完成 |
 | 晨间简报 | CLAUDE.md 规则整合日历+消息，用户说"早安"触发 | ✅ 完成 |
-| 邮箱 MCP | 复用 huolalamap Google Cloud 项目，启用 Gmail API | 待开发 |
+| Gmail MCP Server | 本地 MCP + OAuth，复用 huolalamap 项目 | ✅ 完成 |
 
 ### Phase 5：健康 + 通知
 
@@ -294,4 +294,4 @@
 | 2026-03-28 | Phase 2 完成：消息分类、跨渠道转发、daily-digest、MCP 权限预授权 |
 | 2026-03-28 | Phase 3 完成：复杂度检测、memory skill、cron 定时任务、邮箱调研 |
 | 2026-03-28 | 项目正式命名**头号助手**，扩展为全方位个人 AI 助手 |
-| 2026-03-28 | Phase 4 核心完成：Google Calendar MCP + Clipboard MCP + 晨间简报 |
+| 2026-03-28 | Phase 4 完成：Google Calendar + Clipboard + Gmail MCP + 晨间简报 |
