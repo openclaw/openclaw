@@ -70,15 +70,10 @@ export const buildTelegramMessageContext = async ({
   const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
   const senderId = msg.from?.id ? String(msg.from.id) : "";
   const messageThreadId = (msg as { message_thread_id?: number }).message_thread_id;
-  const api = bot.api as unknown as {
-    setMessageReaction?: (
-      chatId: number | string,
-      messageId: number,
-      reactions: Array<{ type: "emoji"; emoji: string }>,
-    ) => Promise<void>;
-  };
   const reactionApi =
-    typeof api.setMessageReaction === "function" ? api.setMessageReaction.bind(api) : null;
+    typeof bot.api.setMessageReaction === "function"
+      ? bot.api.setMessageReaction.bind(bot.api)
+      : null;
   const getChatApi: TelegramGetChat = bot.api.getChat.bind(bot.api);
   const isForum = await resolveTelegramForumFlag({
     chatId,
