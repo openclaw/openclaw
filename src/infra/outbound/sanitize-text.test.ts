@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isPlainTextSurface, sanitizeForPlainText } from "./sanitize-text.js";
+import { isPlainTextSurface, sanitizeForPlainText, shouldStripMarkdown } from "./sanitize-text.js";
 
 // ---------------------------------------------------------------------------
 // isPlainTextSurface
@@ -112,5 +112,48 @@ describe("sanitizeForPlainText", () => {
 
   it("collapses excessive newlines", () => {
     expect(sanitizeForPlainText("a<br><br><br><br>b")).toBe("a\n\nb");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// shouldStripMarkdown
+// ---------------------------------------------------------------------------
+
+describe("shouldStripMarkdown", () => {
+  it("returns true for iMessage (auto-detect)", () => {
+    expect(shouldStripMarkdown("imessage")).toBe(true);
+  });
+
+  it("returns true for sms (auto-detect)", () => {
+    expect(shouldStripMarkdown("sms")).toBe(true);
+  });
+
+  it("returns false for discord (auto-detect)", () => {
+    expect(shouldStripMarkdown("discord")).toBe(false);
+  });
+
+  it("returns false for slack (auto-detect)", () => {
+    expect(shouldStripMarkdown("slack")).toBe(false);
+  });
+
+  it("returns true when strip is explicitly true on a markdown-capable channel", () => {
+    expect(shouldStripMarkdown("discord", { strip: true })).toBe(true);
+  });
+
+  it("returns false when strip is explicitly false on a non-markdown channel", () => {
+    expect(shouldStripMarkdown("imessage", { strip: false })).toBe(false);
+  });
+
+  it("returns true for auto with non-markdown channel", () => {
+    expect(shouldStripMarkdown("imessage", { strip: "auto" })).toBe(true);
+  });
+
+  it("returns false for auto with markdown-capable channel", () => {
+    expect(shouldStripMarkdown("discord", { strip: "auto" })).toBe(false);
+  });
+
+  it("treats undefined strip as auto", () => {
+    expect(shouldStripMarkdown("imessage", {})).toBe(true);
+    expect(shouldStripMarkdown("discord", {})).toBe(false);
   });
 });

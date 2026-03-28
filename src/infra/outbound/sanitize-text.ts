@@ -11,6 +11,9 @@
  * @see https://github.com/openclaw/openclaw/issues/18558
  */
 
+import type { MarkdownConfig } from "../../config/types.base.js";
+import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
+
 /** Channels where HTML tags should be converted/stripped. */
 const PLAIN_TEXT_SURFACES = new Set([
   "whatsapp",
@@ -61,4 +64,24 @@ export function sanitizeForPlainText(text: string): string {
       // Collapse 3+ consecutive newlines into 2
       .replace(/\n{3,}/g, "\n\n")
   );
+}
+
+/**
+ * Determine whether markdown should be stripped for a given channel.
+ *
+ * Resolution order:
+ * - `strip: true` → always strip
+ * - `strip: false` → never strip
+ * - `strip: "auto"` or `undefined` → strip if channel is not markdown-capable
+ */
+export function shouldStripMarkdown(channel: string, markdownConfig?: MarkdownConfig): boolean {
+  const strip = markdownConfig?.strip;
+  if (strip === true) {
+    return true;
+  }
+  if (strip === false) {
+    return false;
+  }
+  // "auto" or undefined — strip if channel cannot render markdown
+  return !isMarkdownCapableMessageChannel(channel);
 }
