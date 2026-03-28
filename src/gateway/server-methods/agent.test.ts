@@ -332,6 +332,30 @@ async function invokeAgentIdentityGet(
   return respond;
 }
 
+async function invokeAgentWait(
+  params: { runId: string; timeoutMs?: number },
+  options?: {
+    respond?: ReturnType<typeof vi.fn>;
+    reqId?: string;
+    context?: GatewayRequestContext;
+  },
+) {
+  const respond = options?.respond ?? vi.fn();
+  await agentHandlers["agent.wait"]({
+    params,
+    respond: respond as never,
+    context: options?.context ?? makeContext(),
+    req: {
+      type: "req",
+      id: options?.reqId ?? "agent-wait-test-req",
+      method: "agent.wait",
+    },
+    client: null,
+    isWebchatConnect: () => false,
+  });
+  return respond;
+}
+
 describe("gateway agent handler", () => {
   it("preserves ACP metadata from the current stored session entry", async () => {
     const existingAcpMeta = {
@@ -1101,6 +1125,38 @@ describe("gateway agent handler", () => {
       broadcastToConnIds,
       completedRun,
       childSessionKey,
+    });
+  });
+
+  it("does not suppress terminal agent snapshots for active agent runs", async () => {
+    const runId = "run-wait-agent-terminal";
+    const context = makeContext();
+    context.chatAbortControllers.set(runId, createActiveRun(runId, { kind: "agent" }));
+    context.dedupe.set(`agent:${runId}`, {
+      ts: Date.now(),
+      ok: true,
+      payload: {
+        runId,
+        status: "ok",
+        startedAt: 10,
+        endedAt: 20,
+      },
+    });
+
+    const respond = await invokeAgentWait(
+      {
+        runId,
+        timeoutMs: 50,
+      },
+      { context },
+    );
+
+    expect(respond).toHaveBeenCalledWith(true, {
+      runId,
+      status: "ok",
+      startedAt: 10,
+      endedAt: 20,
+      error: undefined,
     });
   });
 
