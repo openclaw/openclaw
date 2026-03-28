@@ -61,6 +61,8 @@ export async function monitorFeishuProvider(
   return await monitorFeishuProvider(...args);
 }
 
+let toolsRegistered = false;
+
 export default defineChannelPluginEntry({
   id: "feishu",
   name: "Feishu",
@@ -68,6 +70,8 @@ export default defineChannelPluginEntry({
   plugin: feishuPlugin,
   setRuntime: setFeishuRuntime,
   registerFull(api) {
+    if (toolsRegistered) return;
+    toolsRegistered = true;
     registerFeishuSubagentHooks(api);
     registerFeishuDocTools(api);
     registerFeishuChatTools(api);
