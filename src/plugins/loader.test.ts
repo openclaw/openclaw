@@ -3714,6 +3714,178 @@ describe("resolveRuntimePluginRegistry", () => {
     // are disabled in test env, but we verify it does NOT return the gateway registry.
     expect(resolveRuntimePluginRegistry(differentGatewayOptions)).not.toBe(registry);
   });
+
+  // --- R1: Per-field isolation tests ---
+
+  it("does not fall back when only coreGatewayHandlers is gateway-scoped", () => {
+    const registry = createEmptyPluginRegistry();
+    const gatewayOptions = {
+      config: { plugins: { allow: ["demo"] } },
+      workspaceDir: "/tmp/workspace-a",
+      onlyPluginIds: ["telegram"],
+      coreGatewayHandlers: { "sessions.get": () => undefined },
+    };
+    const { cacheKey } = __testing.resolvePluginLoadCacheContext(gatewayOptions);
+    setActivePluginRegistry(registry, cacheKey);
+
+    const scopedOptions = {
+      config: { plugins: { allow: ["demo"] } },
+      workspaceDir: "/tmp/workspace-a",
+      coreGatewayHandlers: { "sessions.list": () => undefined },
+    };
+    expect(resolveRuntimePluginRegistry(scopedOptions)).not.toBe(registry);
+  });
+
+  it("does not fall back when only includeSetupOnlyChannelPlugins is gateway-scoped", () => {
+    const registry = createEmptyPluginRegistry();
+    const gatewayOptions = {
+      config: { plugins: { allow: ["demo"] } },
+      workspaceDir: "/tmp/workspace-a",
+      onlyPluginIds: ["telegram"],
+      coreGatewayHandlers: { "sessions.get": () => undefined },
+    };
+    const { cacheKey } = __testing.resolvePluginLoadCacheContext(gatewayOptions);
+    setActivePluginRegistry(registry, cacheKey);
+
+    const scopedOptions = {
+      config: { plugins: { allow: ["demo"] } },
+      workspaceDir: "/tmp/workspace-a",
+      includeSetupOnlyChannelPlugins: true,
+    };
+    expect(resolveRuntimePluginRegistry(scopedOptions)).not.toBe(registry);
+  });
+
+  it("does not fall back when only preferSetupRuntimeForChannelPlugins is gateway-scoped", () => {
+    const registry = createEmptyPluginRegistry();
+    const gatewayOptions = {
+      config: { plugins: { allow: ["demo"] } },
+      workspaceDir: "/tmp/workspace-a",
+      onlyPluginIds: ["telegram"],
+      coreGatewayHandlers: { "sessions.get": () => undefined },
+    };
+    const { cacheKey } = __testing.resolvePluginLoadCacheContext(gatewayOptions);
+    setActivePluginRegistry(registry, cacheKey);
+
+    const scopedOptions = {
+      config: { plugins: { allow: ["demo"] } },
+      workspaceDir: "/tmp/workspace-a",
+      preferSetupRuntimeForChannelPlugins: true,
+    };
+    expect(resolveRuntimePluginRegistry(scopedOptions)).not.toBe(registry);
+  });
+
+  it("treats empty onlyPluginIds as non-gateway-scoped", () => {
+    const registry = createEmptyPluginRegistry();
+    const gatewayOptions = {
+      config: { plugins: { allow: ["demo"] } },
+      workspaceDir: "/tmp/workspace-a",
+      onlyPluginIds: ["telegram"],
+      coreGatewayHandlers: { "sessions.get": () => undefined },
+    };
+    const { cacheKey } = __testing.resolvePluginLoadCacheContext(gatewayOptions);
+    setActivePluginRegistry(registry, cacheKey);
+
+    const toolOptions = {
+      config: { plugins: { allow: ["demo"] } },
+      workspaceDir: "/tmp/workspace-a",
+      onlyPluginIds: [],
+    };
+    expect(resolveRuntimePluginRegistry(toolOptions)).toBe(registry);
+  });
+
+  // --- R2: Caller-shape regression tests ---
+
+  it("falls back for tools.ts caller shape (config + workspaceDir + runtimeOptions + env + logger)", () => {
+    const registry = createEmptyPluginRegistry();
+    const gatewayOptions = {
+      config: { plugins: { allow: ["demo"] } },
+      workspaceDir: "/tmp/workspace-a",
+      onlyPluginIds: ["telegram"],
+      coreGatewayHandlers: { "sessions.get": () => undefined },
+    };
+    const { cacheKey } = __testing.resolvePluginLoadCacheContext(gatewayOptions);
+    setActivePluginRegistry(registry, cacheKey);
+
+    const toolOptions = {
+      config: { plugins: { allow: ["demo"] } },
+      workspaceDir: "/tmp/workspace-a",
+      runtimeOptions: { allowGatewaySubagentBinding: true },
+      env: {},
+      logger: undefined,
+    };
+    expect(resolveRuntimePluginRegistry(toolOptions)).toBe(registry);
+  });
+
+  it("falls back for memory-runtime.ts caller shape (config only)", () => {
+    const registry = createEmptyPluginRegistry();
+    const gatewayOptions = {
+      config: { plugins: { allow: ["demo"] } },
+      workspaceDir: "/tmp/workspace-a",
+      onlyPluginIds: ["telegram"],
+      coreGatewayHandlers: { "sessions.get": () => undefined },
+    };
+    const { cacheKey } = __testing.resolvePluginLoadCacheContext(gatewayOptions);
+    setActivePluginRegistry(registry, cacheKey);
+
+    const memoryOptions = {
+      config: { plugins: { allow: ["demo"] } },
+    };
+    expect(resolveRuntimePluginRegistry(memoryOptions)).toBe(registry);
+  });
+
+  it("falls back for channel-resolution.ts caller shape (config + workspaceDir + runtimeOptions)", () => {
+    const registry = createEmptyPluginRegistry();
+    const gatewayOptions = {
+      config: { plugins: { allow: ["demo"] } },
+      workspaceDir: "/tmp/workspace-a",
+      onlyPluginIds: ["telegram"],
+      coreGatewayHandlers: { "sessions.get": () => undefined },
+    };
+    const { cacheKey } = __testing.resolvePluginLoadCacheContext(gatewayOptions);
+    setActivePluginRegistry(registry, cacheKey);
+
+    const channelOptions = {
+      config: { plugins: { allow: ["demo"] } },
+      workspaceDir: "/tmp/workspace-a",
+      runtimeOptions: { allowGatewaySubagentBinding: true },
+    };
+    expect(resolveRuntimePluginRegistry(channelOptions)).toBe(registry);
+  });
+
+  it("does not fall back for web-search-providers.runtime.ts caller shape with onlyPluginIds", () => {
+    const registry = createEmptyPluginRegistry();
+    const gatewayOptions = {
+      config: { plugins: { allow: ["demo"] } },
+      workspaceDir: "/tmp/workspace-a",
+      onlyPluginIds: ["telegram"],
+      coreGatewayHandlers: { "sessions.get": () => undefined },
+    };
+    const { cacheKey } = __testing.resolvePluginLoadCacheContext(gatewayOptions);
+    setActivePluginRegistry(registry, cacheKey);
+
+    const webSearchOptions = {
+      config: { plugins: { allow: ["demo"] } },
+      onlyPluginIds: ["web-search-plugin"],
+    };
+    expect(resolveRuntimePluginRegistry(webSearchOptions)).not.toBe(registry);
+  });
+
+  // --- R3: Cold-start test ---
+
+  it("falls through to loadOpenClawPlugins when no active registry exists and caller is not gateway-scoped", () => {
+    // No setActivePluginRegistry call — active registry is null
+    const toolOptions = {
+      config: { plugins: { allow: ["demo"] } },
+      workspaceDir: "/tmp/workspace-a",
+      runtimeOptions: { allowGatewaySubagentBinding: true },
+    };
+    // loadOpenClawPlugins returns a fresh registry (or undefined in test env)
+    const result = resolveRuntimePluginRegistry(toolOptions);
+    // In test env with no plugins, this will NOT be the active registry (which is null)
+    expect(getActivePluginRegistry()).toBeNull();
+    // Result comes from loadOpenClawPlugins, not from fallback
+    expect(result).not.toBeNull();
+  });
 });
 
 describe("clearPluginLoaderCache", () => {
