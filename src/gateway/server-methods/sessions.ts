@@ -1159,25 +1159,34 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const raw = fs.readFileSync(filePath, "utf-8");
-    const lines = raw.split(/\r?\n/).filter((l) => l.trim().length > 0);
-    if (lines.length <= maxLines) {
-      respond(
-        true,
-        {
-          ok: true,
-          key: target.canonicalKey,
-          compacted: false,
-          kept: lines.length,
-        },
-        undefined,
-      );
-      return;
+    // Acquire write lock before reading/writing the transcript so that concurrent
+    // sessions.truncate (which also holds this lock during its file write) cannot
+    // interleave and silently overwrite compact's output with stale pre-compact content.
+    const compactWriteLock = await acquireSessionWriteLock({ sessionFile: filePath });
+    let archived = "";
+    let keptLines: string[] = [];
+    try {
+      const raw = fs.readFileSync(filePath, "utf-8");
+      const lines = raw.split(/\r?\n/).filter((l) => l.trim().length > 0);
+      if (lines.length <= maxLines) {
+        respond(
+          true,
+          {
+            ok: true,
+            key: target.canonicalKey,
+            compacted: false,
+            kept: lines.length,
+          },
+          undefined,
+        );
+        return;
+      }
+      archived = archiveFileOnDisk(filePath, "bak");
+      keptLines = lines.slice(-maxLines);
+      fs.writeFileSync(filePath, `${keptLines.join("\n")}\n`, "utf-8");
+    } finally {
+      await compactWriteLock.release();
     }
-
-    const archived = archiveFileOnDisk(filePath, "bak");
-    const keptLines = lines.slice(-maxLines);
-    fs.writeFileSync(filePath, `${keptLines.join("\n")}\n`, "utf-8");
 
     await updateSessionStore(storePath, (store) => {
       const entryKey = compactTarget.primaryKey;
@@ -1330,8 +1339,9 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
 
     // Phase 3c: re-acquire the write lock and perform the actual file write.
-    // Re-scan for p.seq under the lock: sessions.compact can rewrite the transcript
-    // (without holding acquireSessionWriteLock) so line indices from Phase 1 may be stale.
+    // Re-scan for p.seq under the lock: sessions.compact now also acquires this lock
+    // before rewriting the transcript, so all transcript writes are serialized and
+    // line indices from Phase 1 are re-validated before the final swap.
     let keptLines: string[] = [];
     let archived = "";
     let seqFoundInPhase3c = false;
