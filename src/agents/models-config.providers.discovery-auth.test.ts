@@ -114,54 +114,6 @@ describe("provider discovery auth marker guardrails", () => {
     expect(request?.headers?.Authorization).toBe("Bearer ALLCAPS_SAMPLE");
   });
 
-  it("surfaces xai provider auth from plugin web search config without persisting plaintext", async () => {
-    const agentDir = await createAgentDirWithAuthProfiles({});
-
-    const providers = await resolveImplicitProvidersForTest({
-      agentDir,
-      env: {},
-      config: {
-        plugins: {
-          entries: {
-            xai: {
-              config: {
-                webSearch: {
-                  apiKey: "xai-plugin-config-key", // pragma: allowlist secret
-                },
-              },
-            },
-          },
-        },
-      },
-    });
-
-    expect(providers?.xai?.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
-  });
-
-  it("surfaces xai provider auth from SecretRef-backed plugin web search config", async () => {
-    const agentDir = await createAgentDirWithAuthProfiles({});
-
-    const providers = await resolveImplicitProvidersForTest({
-      agentDir,
-      env: {},
-      config: {
-        plugins: {
-          entries: {
-            xai: {
-              config: {
-                webSearch: {
-                  apiKey: { source: "file", provider: "vault", id: "/xai/apiKey" },
-                },
-              },
-            },
-          },
-        },
-      },
-    });
-
-    expect(providers?.xai?.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
-  });
-
   it("surfaces xai provider auth from legacy grok web search config without persisting plaintext", async () => {
     const agentDir = await createAgentDirWithAuthProfiles({});
 

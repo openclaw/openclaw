@@ -11,6 +11,10 @@ import {
   runProviderCatalog,
 } from "../plugins/provider-discovery.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
+import {
+  isNonSecretApiKeyMarker,
+  resolveNonEnvSecretRefApiKeyMarker,
+} from "./model-auth-markers.js";
 import type {
   ProviderApiKeyResolver,
   ProviderAuthResolver,
@@ -174,14 +178,51 @@ async function resolvePluginImplicitProviders(
   const discovered: Record<string, ProviderConfig> = {};
   const catalogConfig = buildPluginCatalogConfig(ctx);
   for (const provider of byOrder[order]) {
+    const resolveCatalogProviderApiKey = (providerId?: string) => {
+      const resolvedProviderId = providerId?.trim() || provider.id;
+      const resolved = ctx.resolveProviderApiKey(resolvedProviderId);
+      if (resolved.apiKey) {
+        return resolved;
+      }
+
+      if (
+        !findNormalizedProviderValue(
+          {
+            [provider.id]: true,
+            ...Object.fromEntries((provider.aliases ?? []).map((alias) => [alias, true])),
+            ...Object.fromEntries((provider.hookAliases ?? []).map((alias) => [alias, true])),
+          },
+          resolvedProviderId,
+        )
+      ) {
+        return resolved;
+      }
+
+      const synthetic = provider.resolveSyntheticAuth?.({
+        config: catalogConfig,
+        provider: resolvedProviderId,
+        providerConfig: catalogConfig.models?.providers?.[resolvedProviderId],
+      });
+      const syntheticApiKey = synthetic?.apiKey?.trim();
+      if (!syntheticApiKey) {
+        return resolved;
+      }
+
+      return {
+        apiKey: isNonSecretApiKeyMarker(syntheticApiKey)
+          ? syntheticApiKey
+          : resolveNonEnvSecretRefApiKeyMarker("file"),
+        discoveryApiKey: undefined,
+      };
+    };
+
     const result = await runProviderCatalogWithTimeout({
       provider,
       config: catalogConfig,
       agentDir: ctx.agentDir,
       workspaceDir: ctx.workspaceDir,
       env: ctx.env,
-      resolveProviderApiKey: (providerId) =>
-        ctx.resolveProviderApiKey(providerId?.trim() || provider.id),
+      resolveProviderApiKey: resolveCatalogProviderApiKey,
       resolveProviderAuth: (providerId, options) =>
         ctx.resolveProviderAuth(providerId?.trim() || provider.id, options),
       timeoutMs: resolveLiveProviderCatalogTimeoutMs(ctx.env),
