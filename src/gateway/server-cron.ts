@@ -285,6 +285,7 @@ export function buildGatewayCronService(params: {
         agentId,
         sessionKey,
         heartbeat: heartbeatOverride,
+        abortSignal: opts?.abortSignal,
         deps: { ...params.deps, runtime: defaultRuntime },
       });
     },
