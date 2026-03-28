@@ -15,6 +15,7 @@ export { enqueueSystemEvent } from "../infra/system-events.js";
 export { recordChannelActivity } from "../infra/channel-activity.js";
 export * from "../infra/heartbeat-events.ts";
 export * from "../infra/heartbeat-visibility.ts";
+export * from "../infra/transport-ready.js";
 export {
   isWhatsAppGroupJid,
   isWhatsAppUserTarget,
