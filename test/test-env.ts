@@ -93,7 +93,8 @@ function loadProfileEnv(homeDir = os.homedir()): void {
   }
 
   let applied = 0;
-  if (process.platform !== "win32" && fs.existsSync("/bin/bash")) {
+  let shouldParseProfileDirectly = process.platform === "win32" || !fs.existsSync("/bin/bash");
+  if (!shouldParseProfileDirectly) {
     try {
       const output = execFileSync(
         "/bin/bash",
@@ -110,11 +111,11 @@ function loadProfileEnv(homeDir = os.homedir()): void {
         .filter((entry): entry is readonly [string, string] => entry !== null);
       applied = applyMissingEnvEntries(entries);
     } catch {
-      // Fall back to direct .profile parsing when no POSIX shell is available.
+      shouldParseProfileDirectly = true;
     }
   }
 
-  if (applied === 0) {
+  if (shouldParseProfileDirectly) {
     try {
       applied = applyMissingEnvEntries(
         parseProfileEnv(fs.readFileSync(profilePath, "utf8")).entries(),
@@ -307,19 +308,59 @@ function collectLiveStateDirs(params: { env: NodeJS.ProcessEnv; realHome: string
   return ordered;
 }
 
+function hasLiveAuthState(realStateDir: string): boolean {
+  if (fs.existsSync(path.join(realStateDir, "credentials"))) {
+    return true;
+  }
+  const agentsDir = path.join(realStateDir, "agents");
+  if (!fs.existsSync(agentsDir)) {
+    return false;
+  }
+  for (const entry of fs.readdirSync(agentsDir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+    if (fs.existsSync(path.join(agentsDir, entry.name, "agent", "auth-profiles.json"))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function hasLiveStateConfig(realStateDir: string): boolean {
+  return fs.existsSync(path.join(realStateDir, "openclaw.json"));
+}
+
+function selectLiveStateDir(realStateDirs: string[], fallbackDir: string): string {
+  for (const realStateDir of realStateDirs) {
+    if (hasLiveAuthState(realStateDir)) {
+      return realStateDir;
+    }
+  }
+  for (const realStateDir of realStateDirs) {
+    if (hasLiveStateConfig(realStateDir)) {
+      return realStateDir;
+    }
+  }
+  return realStateDirs[0] ?? fallbackDir;
+}
+
 function stageLiveTestState(params: {
   env: NodeJS.ProcessEnv;
   realHome: string;
   tempHome: string;
 }): void {
   const realStateDirs = collectLiveStateDirs(params);
-  const primaryStateDir = realStateDirs[0] ?? path.join(params.realHome, ".openclaw");
+  const selectedStateDir = selectLiveStateDir(
+    realStateDirs,
+    path.join(params.realHome, ".openclaw"),
+  );
   const tempStateDir = path.join(params.tempHome, ".openclaw");
   fs.mkdirSync(tempStateDir, { recursive: true });
 
   const realConfigPath = params.env.OPENCLAW_CONFIG_PATH?.trim()
     ? resolveHomeRelativePath(params.env.OPENCLAW_CONFIG_PATH, params.realHome)
-    : path.join(primaryStateDir, "openclaw.json");
+    : path.join(selectedStateDir, "openclaw.json");
   if (fs.existsSync(realConfigPath)) {
     const rawConfig = fs.readFileSync(realConfigPath, "utf8");
     fs.writeFileSync(
@@ -329,10 +370,11 @@ function stageLiveTestState(params: {
     );
   }
 
-  for (const realStateDir of realStateDirs) {
-    copyDirIfExists(path.join(realStateDir, "credentials"), path.join(tempStateDir, "credentials"));
-    copyLiveAuthProfiles(realStateDir, tempStateDir);
-  }
+  copyDirIfExists(
+    path.join(selectedStateDir, "credentials"),
+    path.join(tempStateDir, "credentials"),
+  );
+  copyLiveAuthProfiles(selectedStateDir, tempStateDir);
 
   for (const authDir of LIVE_EXTERNAL_AUTH_DIRS) {
     copyDirIfExists(path.join(params.realHome, authDir), path.join(params.tempHome, authDir));

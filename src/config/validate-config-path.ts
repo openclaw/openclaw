@@ -33,6 +33,10 @@ function isArraySchema(node: JsonSchemaNode): boolean {
   );
 }
 
+function isUnconstrainedSchema(node: JsonSchemaNode): boolean {
+  return Object.keys(node).length === 0;
+}
+
 function expandSchemaVariants(node: JsonSchemaNode): JsonSchemaNode[] {
   const variants = [node];
   for (const key of ["anyOf", "oneOf", "allOf"]) {
@@ -50,25 +54,33 @@ function expandSchemaVariants(node: JsonSchemaNode): JsonSchemaNode[] {
 }
 
 function schemaAllowsPath(node: JsonSchemaNode, path: PathSegment[], index = 0): boolean {
-  if (index >= path.length) {
+  if (index >= path.length || isUnconstrainedSchema(node)) {
     return true;
   }
 
   for (const candidate of expandSchemaVariants(node)) {
+    if (isUnconstrainedSchema(candidate)) {
+      return true;
+    }
+
     if (isArraySchema(candidate)) {
       const segment = path[index];
-      if (!isIndexSegment(segment)) {
-        continue;
-      }
-      const items = candidate.items;
-      if (Array.isArray(items)) {
-        const itemIndex = Number.parseInt(segment, 10);
-        const itemSchema = items[itemIndex];
-        if (isSchemaObject(itemSchema) && schemaAllowsPath(itemSchema, path, index + 1)) {
+      if (isIndexSegment(segment)) {
+        const items = candidate.items;
+        if (Array.isArray(items)) {
+          const itemIndex = Number.parseInt(segment, 10);
+          const itemSchema = items[itemIndex];
+          if (isSchemaObject(itemSchema) && schemaAllowsPath(itemSchema, path, index + 1)) {
+            return true;
+          }
+        } else if (isSchemaObject(items) && schemaAllowsPath(items, path, index + 1)) {
           return true;
         }
-      } else if (isSchemaObject(items) && schemaAllowsPath(items, path, index + 1)) {
-        return true;
+        if (!isObjectSchema(candidate)) {
+          continue;
+        }
+      } else if (!isObjectSchema(candidate)) {
+        continue;
       }
     }
 
@@ -80,9 +92,18 @@ function schemaAllowsPath(node: JsonSchemaNode, path: PathSegment[], index = 0):
     const properties = isSchemaObject(candidate.properties)
       ? (candidate.properties as Record<string, unknown>)
       : undefined;
+    const hasNamedProperty = Boolean(
+      properties && Object.prototype.hasOwnProperty.call(properties, segment),
+    );
     const propertySchema = properties?.[segment];
-    if (isSchemaObject(propertySchema) && schemaAllowsPath(propertySchema, path, index + 1)) {
-      return true;
+    if (isSchemaObject(propertySchema)) {
+      if (schemaAllowsPath(propertySchema, path, index + 1)) {
+        return true;
+      }
+      continue;
+    }
+    if (hasNamedProperty) {
+      continue;
     }
 
     const additional = candidate.additionalProperties;
@@ -165,14 +186,14 @@ function collectSuggestedPaths(path: PathSegment[], schemaInfo: ConfigSchemaResp
     .toSorted((a, b) => a.distance - b.distance || a.display.localeCompare(b.display));
 
   for (const entry of ranked) {
+    if (suggestions.length >= 2) {
+      break;
+    }
     if (entry.distance > Math.max(4, Math.floor(requested.length / 3))) {
       continue;
     }
     if (!suggestions.includes(entry.display)) {
       suggestions.push(entry.display);
-    }
-    if (suggestions.length >= 2) {
-      break;
     }
   }
 
