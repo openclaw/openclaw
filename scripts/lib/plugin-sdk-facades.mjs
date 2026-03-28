@@ -335,7 +335,12 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   {
     subpath: "kimi-coding",
     source: "../../extensions/kimi-coding/api.js",
-    exports: ["buildKimiCodingProvider"],
+    exports: [
+      "buildKimiCodingProvider",
+      "KIMI_CODING_DEFAULT_CONTEXT_WINDOW",
+      "KIMI_CODING_DEFAULT_MAX_TOKENS",
+      "KIMI_MODEL_CATALOG",
+    ],
   },
   {
     subpath: "kilocode",
