@@ -31,6 +31,7 @@ export function createGatewayCloseHandler(params: {
   clients: Set<{ socket: { close: (code: number, reason: string) => void } }>;
   configReloader: { stop: () => Promise<void> };
   browserControl: { stop: () => Promise<void> } | null;
+  projectsService: { stop: () => Promise<void> } | null;
   wss: WebSocketServer;
   httpServer: HttpServer;
   httpServers?: HttpServer[];
@@ -76,6 +77,13 @@ export function createGatewayCloseHandler(params: {
       await stopGmailWatcher();
       params.cron.stop();
       params.heartbeatRunner.stop();
+      if (params.projectsService) {
+        try {
+          await params.projectsService.stop();
+        } catch {
+          /* ignore */
+        }
+      }
       try {
         params.updateCheckStop?.();
       } catch {

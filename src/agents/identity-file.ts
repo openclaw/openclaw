@@ -9,6 +9,7 @@ export type AgentIdentityFile = {
   creature?: string;
   vibe?: string;
   avatar?: string;
+  capabilities?: string[];
 };
 
 const IDENTITY_PLACEHOLDER_VALUES = new Set([
@@ -72,6 +73,15 @@ export function parseIdentityMarkdown(content: string): AgentIdentityFile {
     }
     if (label === "avatar") {
       identity.avatar = value;
+    }
+    if (label === "capabilities") {
+      const caps = value
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (caps.length > 0) {
+        identity.capabilities = caps;
+      }
     }
   }
   return identity;

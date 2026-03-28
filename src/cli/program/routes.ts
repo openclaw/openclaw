@@ -310,6 +310,94 @@ const routeModelsStatus: RouteSpec = {
   },
 };
 
+const routeProjectsCreate: RouteSpec = {
+  match: (path) => path[0] === "projects" && path[1] === "create",
+  loadPlugins: false,
+  run: async (argv) => {
+    const positionals = getCommandPositionalsWithRootOptions(argv, {
+      commandPath: ["projects", "create"],
+      booleanFlags: ["--json"],
+      valueFlags: ["--description", "--owner", "--parent"],
+    });
+    if (!positionals) {
+      return false;
+    }
+    const description = getFlagValue(argv, "--description");
+    if (description === null) {
+      return false;
+    }
+    const owner = getFlagValue(argv, "--owner");
+    if (owner === null) {
+      return false;
+    }
+    const parent = getFlagValue(argv, "--parent");
+    if (parent === null) {
+      return false;
+    }
+    const json = hasFlag(argv, "--json");
+    const { projectsCreateCommand } = await import("../../commands/projects.create.js");
+    await projectsCreateCommand({
+      name: positionals[0],
+      description,
+      owner,
+      parent,
+      json,
+    });
+    return true;
+  },
+};
+
+const routeProjectsList: RouteSpec = {
+  match: (path) => path[0] === "projects" && path[1] === "list",
+  loadPlugins: false,
+  run: async (argv) => {
+    const json = hasFlag(argv, "--json");
+    const { projectsListCommand } = await import("../../commands/projects.list.js");
+    await projectsListCommand({ json });
+    return true;
+  },
+};
+
+const routeProjectsStatus: RouteSpec = {
+  match: (path) => path[0] === "projects" && path[1] === "status",
+  loadPlugins: false,
+  run: async (argv) => {
+    const positionals = getCommandPositionalsWithRootOptions(argv, {
+      commandPath: ["projects", "status"],
+      booleanFlags: ["--json"],
+    });
+    if (!positionals) {
+      return false;
+    }
+    const json = hasFlag(argv, "--json");
+    const { projectsStatusCommand } = await import("../../commands/projects.status.js");
+    await projectsStatusCommand({ name: positionals[0] ?? "", json });
+    return true;
+  },
+};
+
+const routeProjectsReindex: RouteSpec = {
+  match: (path) => path[0] === "projects" && path[1] === "reindex",
+  loadPlugins: false,
+  run: async (argv) => {
+    const json = hasFlag(argv, "--json");
+    const { projectsReindexCommand } = await import("../../commands/projects.reindex.js");
+    await projectsReindexCommand({ json });
+    return true;
+  },
+};
+
+const routeProjectsValidate: RouteSpec = {
+  match: (path) => path[0] === "projects" && path[1] === "validate",
+  loadPlugins: false,
+  run: async (argv) => {
+    const json = hasFlag(argv, "--json");
+    const { projectsValidateCommand } = await import("../../commands/projects.validate.js");
+    await projectsValidateCommand({ json });
+    return true;
+  },
+};
+
 const routes: RouteSpec[] = [
   routeHealth,
   routeStatus,
@@ -321,6 +409,11 @@ const routes: RouteSpec[] = [
   routeConfigUnset,
   routeModelsList,
   routeModelsStatus,
+  routeProjectsCreate,
+  routeProjectsList,
+  routeProjectsStatus,
+  routeProjectsReindex,
+  routeProjectsValidate,
 ];
 
 export function findRoutedCommand(path: string[]): RouteSpec | null {

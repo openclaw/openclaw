@@ -8,6 +8,7 @@ export const TAB_GROUPS = [
     tabs: ["overview", "channels", "instances", "sessions", "usage", "cron"],
   },
   { label: "agent", tabs: ["agents", "skills", "nodes"] },
+  { label: "projects", tabs: ["projects"] },
   {
     label: "settings",
     tabs: [
@@ -34,6 +35,7 @@ export type Tab =
   | "skills"
   | "nodes"
   | "chat"
+  | "projects"
   | "config"
   | "communications"
   | "appearance"
@@ -54,6 +56,7 @@ const TAB_PATHS: Record<Tab, string> = {
   skills: "/skills",
   nodes: "/nodes",
   chat: "/chat",
+  projects: "/projects",
   config: "/config",
   communications: "/communications",
   appearance: "/appearance",
@@ -120,7 +123,11 @@ export function tabFromPath(pathname: string, basePath = ""): Tab | null {
   if (normalized === "/") {
     return "chat";
   }
-  return PATH_TO_TAB.get(normalized) ?? null;
+  // Exact match first, then check nested project paths
+  const exact = PATH_TO_TAB.get(normalized);
+  if (exact) return exact;
+  if (normalized.startsWith("/projects")) return "projects";
+  return null;
 }
 
 export function inferBasePathFromPathname(pathname: string): string {
@@ -167,6 +174,8 @@ export function iconForTab(tab: Tab): IconName {
       return "zap";
     case "nodes":
       return "monitor";
+    case "projects":
+      return "folder";
     case "config":
       return "settings";
     case "communications":

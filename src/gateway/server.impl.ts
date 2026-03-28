@@ -20,6 +20,7 @@ import {
   writeConfigFile,
 } from "../config/config.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
+import { resolveStateDir } from "../config/paths.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
@@ -100,6 +101,7 @@ import { GATEWAY_EVENTS, listGatewayMethods } from "./server-methods-list.js";
 import { coreGatewayHandlers } from "./server-methods.js";
 import { createExecApprovalHandlers } from "./server-methods/exec-approval.js";
 import { safeParseJson } from "./server-methods/nodes.helpers.js";
+import { setProjectsService } from "./server-methods/projects.js";
 import { createSecretsHandlers } from "./server-methods/secrets.js";
 import { hasConnectedMobileNode } from "./server-mobile-nodes.js";
 import { loadGatewayModelCatalog } from "./server-model-catalog.js";
@@ -109,6 +111,7 @@ import {
   reloadDeferredGatewayPlugins,
 } from "./server-plugin-bootstrap.js";
 import { setFallbackGatewayContextResolver } from "./server-plugins.js";
+import { ProjectGatewayService } from "./server-projects.js";
 import { createGatewayReloadHandlers } from "./server-reload-handlers.js";
 import { resolveGatewayRuntimeConfig } from "./server-runtime-config.js";
 import { createGatewayRuntimeState } from "./server-runtime-state.js";
@@ -1283,6 +1286,18 @@ export async function startGatewayServer(
       }
     }
 
+    let projectsService: ProjectGatewayService | null = null;
+    if (!minimalTestGateway) {
+      try {
+        const projectsRoot = path.join(resolveStateDir(process.env), "projects");
+        projectsService = new ProjectGatewayService(projectsRoot, broadcast);
+        setProjectsService(projectsService);
+        await projectsService.start();
+      } catch (err) {
+        log.warn(`projects service failed to start: ${String(err)}`);
+      }
+    }
+
     configReloader = minimalTestGateway
       ? { stop: async () => {} }
       : (() => {
@@ -1396,6 +1411,7 @@ export async function startGatewayServer(
     clients,
     configReloader,
     browserControl,
+    projectsService,
     wss,
     httpServer,
     httpServers,

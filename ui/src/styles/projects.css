@@ -1,0 +1,740 @@
+/* Project list wrapper */
+.projects-list {
+  display: grid;
+  gap: 24px;
+  max-width: 960px;
+}
+
+/* Status badge -- extends .chip pattern */
+.projects-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: var(--radius-full);
+  padding: 4px 8px;
+}
+
+.projects-badge--active {
+  color: var(--ok);
+  border: 1px solid rgba(34, 197, 94, 0.3);
+  background: var(--ok-subtle);
+}
+
+.projects-badge--paused {
+  color: var(--warn);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  background: var(--warn-subtle);
+}
+
+.projects-badge--complete {
+  color: var(--muted);
+  border: 1px solid var(--border);
+  background: var(--secondary);
+}
+
+/* Compact task count display inside table cells */
+.projects-task-counts {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.projects-task-counts span {
+  white-space: nowrap;
+}
+
+/* Dashboard container */
+.projects-dashboard {
+  display: grid;
+  gap: 24px;
+  max-width: 1120px;
+  animation: dashboard-enter 0.3s var(--ease-out) backwards;
+}
+
+/* Widget grid -- 2 columns wide, 1 column narrow */
+.projects-widget-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px;
+}
+
+@media (max-width: 720px) {
+  .projects-widget-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (min-width: 1200px) {
+  .projects-widget-grid {
+    gap: 24px;
+  }
+}
+
+/* Widget card -- extends .card */
+.projects-widget {
+  display: grid;
+  gap: 12px;
+}
+
+.projects-widget__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+/* Stacked bar for task counts (D-09) */
+.projects-bar {
+  display: flex;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--bg-muted);
+}
+
+.projects-bar__segment {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 600;
+  color: #fff;
+  min-width: 28px;
+  transition: flex-basis var(--duration-normal) var(--ease-out);
+}
+
+.projects-bar__segment--backlog {
+  background: var(--muted);
+}
+
+.projects-bar__segment--in-progress {
+  background: var(--info);
+}
+
+.projects-bar__segment--review {
+  background: var(--warn);
+}
+
+.projects-bar__segment--done {
+  background: var(--ok);
+}
+
+.projects-bar__segment--blocked {
+  background: var(--danger);
+}
+
+/* Bar legend */
+.projects-bar-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.projects-bar-legend__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.projects-bar-legend__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+}
+
+/* Active agents widget (D-10) */
+.projects-agent-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.projects-agent-row:last-child {
+  border-bottom: none;
+}
+
+.projects-agent-name {
+  font-weight: 600;
+  color: var(--text-strong);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.projects-agent-task {
+  flex: 1;
+  min-width: 0;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.projects-agent-time {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+/* Recent activity widget (D-11) */
+.projects-activity-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 8px;
+  align-items: baseline;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.projects-activity-row:last-child {
+  border-bottom: none;
+}
+
+.projects-activity-time {
+  color: var(--muted);
+  font-size: 12px;
+  font-family: var(--mono);
+  white-space: nowrap;
+}
+
+.projects-activity-agent {
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.projects-activity-action {
+  color: var(--text);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Sub-project mini cards (D-12) */
+.projects-subprojects {
+  display: grid;
+  gap: 12px;
+}
+
+.projects-subprojects__title {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.projects-subproject-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+}
+
+/* Mini card -- smaller variant of .card */
+.projects-subproject-card {
+  border: 1px solid var(--border);
+  background: var(--card);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  cursor: pointer;
+  transition:
+    border-color var(--duration-normal) var(--ease-out),
+    box-shadow var(--duration-normal) var(--ease-out);
+}
+
+.projects-subproject-card:hover {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-sm);
+}
+
+.projects-subproject-card__name {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--text-strong);
+}
+
+.projects-subproject-card__counts {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* Breadcrumb navigation (D-15) */
+.projects-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  min-width: 0;
+}
+
+.projects-breadcrumb__link {
+  color: var(--muted);
+  cursor: pointer;
+  transition: color var(--duration-fast) var(--ease-out);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.projects-breadcrumb__link:hover {
+  color: var(--text-strong);
+}
+
+.projects-breadcrumb__sep {
+  color: var(--muted);
+  user-select: none;
+}
+
+.projects-breadcrumb__current {
+  color: var(--text-strong);
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Empty state (D-04) */
+.projects-empty {
+  display: grid;
+  gap: 12px;
+  justify-items: center;
+  text-align: center;
+  padding: 48px 24px;
+}
+
+.projects-empty__title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.projects-empty__hint {
+  color: var(--muted);
+  font-size: 14px;
+  max-width: 400px;
+}
+
+.projects-empty__command {
+  display: inline-block;
+  margin-top: 4px;
+  padding: 8px 12px;
+  font-family: var(--mono);
+  font-size: 12px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  user-select: all;
+}
+
+/* Error state */
+.projects-error {
+  padding: 12px 16px;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(239, 68, 68, 0.25);
+  background: linear-gradient(135deg, rgba(239, 68, 68, 0.08) 0%, rgba(239, 68, 68, 0.04) 100%);
+  color: var(--danger);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/* Skeleton loading (D-18) */
+/* Widget skeleton -- card-shaped placeholder */
+.projects-skeleton-widget {
+  height: 160px;
+  border-radius: var(--radius-lg);
+}
+
+/* Table row skeleton */
+.projects-skeleton-row {
+  display: grid;
+  grid-template-columns: 2fr 80px 1fr 60px 100px;
+  gap: 12px;
+  padding: 8px 12px;
+  align-items: center;
+}
+
+/* ============================
+ * Kanban Board (Phase 10)
+ * ============================ */
+
+/* Tab bar below breadcrumb — switches between Overview and Board */
+.projects-view-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 24px;
+}
+
+.projects-view-tab {
+  padding: 8px 16px;
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--muted);
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  transition: color var(--duration-fast) var(--ease-out),
+              border-color var(--duration-fast) var(--ease-out);
+  background: none;
+  border-top: none;
+  border-left: none;
+  border-right: none;
+}
+
+.projects-view-tab:hover {
+  color: var(--text-strong);
+}
+
+.projects-view-tab--active {
+  color: var(--text-strong);
+  font-weight: 600;
+  border-bottom-color: var(--text-strong);
+}
+
+/* Board container — horizontal scroll for many columns */
+.projects-board {
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  padding: 0 16px 16px;
+  min-height: 400px;
+}
+
+/* Individual column */
+.projects-board-column {
+  flex: 0 0 280px;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  max-height: calc(100vh - 200px);
+}
+
+/* Column header — stays fixed at top */
+.projects-board-column__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+  z-index: 1;
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+}
+
+.projects-board-column__name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+/* Task count badge in column header */
+.projects-board-column__count {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  background: var(--secondary);
+  padding: 4px 8px;
+  border-radius: var(--radius-full);
+}
+
+/* Scrollable card area */
+.projects-board-column__cards {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Empty column placeholder */
+.projects-board-column__empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px;
+  color: var(--muted);
+  font-size: 12px;
+  font-style: italic;
+}
+
+/* Kanban task card — compact with priority stripe */
+.projects-board-card {
+  position: relative;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px 8px 16px;
+  cursor: default;
+  transition: border-color var(--duration-fast) var(--ease-out);
+}
+
+.projects-board-card:hover {
+  border-color: var(--text-strong);
+}
+
+/* Priority stripe — 4px left edge */
+.projects-board-card::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+}
+
+.projects-board-card--critical::before {
+  background: var(--danger);
+}
+
+.projects-board-card--high::before {
+  background: var(--warn);
+}
+
+.projects-board-card--medium::before {
+  background: var(--info);
+}
+
+.projects-board-card--low::before {
+  background: var(--muted);
+}
+
+/* Card content layout */
+.projects-board-card__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.projects-board-card__id {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  font-family: var(--mono);
+}
+
+.projects-board-card__title {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text);
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.projects-board-card__assignee {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+/* Blocked badge */
+.projects-board-card__blocked {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--danger);
+  background: rgba(239, 68, 68, 0.1);
+  padding: 4px 8px;
+  border-radius: var(--radius-full);
+}
+
+.projects-board-card__blocked svg {
+  width: 12px;
+  height: 12px;
+}
+
+/* Agent badge bar at card bottom — only shown on claimed tasks */
+.projects-board-card__agent {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.projects-board-card__agent-name {
+  font-weight: 600;
+  color: var(--text-strong);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.projects-board-card__agent-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+  background: var(--ok);
+  box-shadow: 0 0 8px rgba(34, 197, 94, 0.5);
+  animation: pulse-subtle 2s ease-in-out infinite;
+}
+
+/* Expandable peek panel below card */
+.projects-peek {
+  background: var(--secondary);
+  border: 1px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+  padding: 12px;
+  margin-top: -1px;
+  animation: peek-expand 0.2s var(--ease-out);
+}
+
+@keyframes peek-expand {
+  from {
+    opacity: 0;
+    max-height: 0;
+    padding: 0 12px;
+  }
+  to {
+    opacity: 1;
+    max-height: 400px;
+    padding: 12px;
+  }
+}
+
+/* Peek field rows */
+.projects-peek__field {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+.projects-peek__label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  min-width: 80px;
+  flex-shrink: 0;
+}
+
+.projects-peek__value {
+  font-size: 12px;
+  color: var(--text);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Progress bar in peek */
+.projects-peek__progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.projects-peek__progress-bar {
+  flex: 1;
+  height: 4px;
+  background: var(--secondary);
+  border-radius: var(--radius-full);
+  overflow: hidden;
+}
+
+.projects-peek__progress-fill {
+  height: 100%;
+  background: var(--info);
+  border-radius: var(--radius-full);
+  transition: width var(--duration-normal) var(--ease-out);
+}
+
+.projects-peek__progress-pct {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-strong);
+  min-width: 32px;
+  text-align: right;
+}
+
+/* Log entries in peek */
+.projects-peek__log {
+  margin-top: 8px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+
+.projects-peek__log-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+
+.projects-peek__log-entry {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.projects-peek__log-entry:last-child {
+  border-bottom: none;
+}
+
+.projects-peek__log-time {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.projects-peek__log-action {
+  color: var(--text);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Skeleton board while loading */
+.projects-board-skeleton {
+  display: flex;
+  gap: 12px;
+  padding: 0 16px;
+}
+
+.projects-board-skeleton__column {
+  flex: 0 0 280px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}

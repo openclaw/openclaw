@@ -2,7 +2,11 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { AgentBootstrapHookContext } from "../hooks/internal-hooks.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { registerProjectContextHook } from "./project-context-hook.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
+
+// Register the project context bootstrap hook (AGNT-02)
+registerProjectContextHook();
 
 export async function applyBootstrapHookOverrides(params: {
   files: WorkspaceBootstrapFile[];
