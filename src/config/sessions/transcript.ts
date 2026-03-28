@@ -1,7 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
+import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { loadConfig } from "../config.js";
 import { parseSessionThreadInfo } from "./delivery-info.js";
 import {
   resolveDefaultSessionStorePath,
@@ -67,17 +69,21 @@ export function resolveMirroredTranscriptText(params: {
 async function ensureSessionHeader(params: {
   sessionFile: string;
   sessionId: string;
+  agentId?: string;
 }): Promise<void> {
   if (fs.existsSync(params.sessionFile)) {
     return;
   }
   await fs.promises.mkdir(path.dirname(params.sessionFile), { recursive: true });
+  const cwd = params.agentId
+    ? resolveAgentWorkspaceDir(loadConfig(), params.agentId)
+    : process.cwd();
   const header = {
     type: "session",
     version: CURRENT_SESSION_VERSION,
     id: params.sessionId,
     timestamp: new Date().toISOString(),
-    cwd: process.cwd(),
+    cwd,
   };
   await fs.promises.writeFile(params.sessionFile, `${JSON.stringify(header)}\n`, {
     encoding: "utf-8",
@@ -179,7 +185,7 @@ export async function appendAssistantMessageToSessionTranscript(params: {
     };
   }
 
-  await ensureSessionHeader({ sessionFile, sessionId: entry.sessionId });
+  await ensureSessionHeader({ sessionFile, sessionId: entry.sessionId, agentId: params.agentId });
 
   const existingMessageId = params.idempotencyKey
     ? await transcriptHasIdempotencyKey(sessionFile, params.idempotencyKey)
