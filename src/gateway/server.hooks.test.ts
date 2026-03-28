@@ -937,7 +937,7 @@ describe("hook announcement policy", () => {
     });
   });
 
-  test("does not inject main-session fallback when delivery was attempted but not acked", async () => {
+  test("treats deliveryAttempted as handled-for-fallback even when delivered is false", async () => {
     testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
     await withGatewayServer(async ({ port }) => {
       cronIsolatedRun.mockClear();
@@ -954,6 +954,9 @@ describe("hook announcement policy", () => {
         name: "Email",
       });
       expect(res.status).toBe(200);
+      // dispatchCronDelivery uses deliveryAttempted not only for outbound-send
+      // attempts, but also for handled/no-fallback paths such as descendant
+      // orchestration and stale interim suppression.
       await expectNoSystemEvent();
     });
   });

@@ -51,6 +51,11 @@ export function shouldAnnounceHookResultToMain(params: {
     return false;
   }
 
+  // `deliveryAttempted` is intentionally broader than "an outbound send
+  // definitely happened": dispatchCronDelivery also sets it on handled/no-
+  // fallback paths (for example stale delivery skips and descendant/interim
+  // suppression) specifically to prevent redundant enqueueSystemEvent
+  // fallback.
   if (result.deliveryAttempted === true) {
     return false;
   }
