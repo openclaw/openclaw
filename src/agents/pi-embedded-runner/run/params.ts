@@ -93,6 +93,17 @@ export type RunEmbeddedPiAgentParams = {
   bootstrapContextMode?: "full" | "lightweight";
   /** Run kind hint for context mode behavior. */
   bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
+  /**
+   * Workspace scope for subagents - controls which bootstrap files are injected.
+   * Reduces token consumption for narrow, stateless subagent tasks.
+   * - "full": All bootstrap files (default)
+   * - "essential": AGENTS.md, TOOLS.md, BOOTSTRAP.md only
+   * - "minimal": BOOTSTRAP.md only
+   * - "none": No workspace context injected
+   */
+  subagentWorkspaceScope?: "full" | "essential" | "minimal" | "none";
+  /** Custom allowlist of bootstrap files for subagents (overrides subagentWorkspaceScope). */
+  subagentWorkspaceFiles?: string[];
   /** Seen bootstrap truncation warning signatures for this session (once mode dedupe). */
   bootstrapPromptWarningSignaturesSeen?: string[];
   /** Last shown bootstrap truncation warning signature for this session. */
