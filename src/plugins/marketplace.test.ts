@@ -44,6 +44,19 @@ function mockRemoteMarketplaceClone(manifest: unknown) {
   });
 }
 
+async function expectRemoteMarketplaceError(params: { manifest: unknown; expectedError: string }) {
+  mockRemoteMarketplaceClone(params.manifest);
+
+  const { listMarketplacePlugins } = await import("./marketplace.js");
+  const result = await listMarketplacePlugins({ marketplace: "owner/repo" });
+
+  expect(result).toEqual({
+    ok: false,
+    error: params.expectedError,
+  });
+  expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
+}
+
 describe("marketplace plugins", () => {
   afterEach(() => {
     installPluginFromPathMock.mockReset();
@@ -296,15 +309,6 @@ describe("marketplace plugins", () => {
         "remote marketplaces may not use HTTP(S) plugin paths",
     },
   ] as const)("$name", async ({ manifest, expectedError }) => {
-    mockRemoteMarketplaceClone(manifest);
-
-    const { listMarketplacePlugins } = await import("./marketplace.js");
-    const result = await listMarketplacePlugins({ marketplace: "owner/repo" });
-
-    expect(result).toEqual({
-      ok: false,
-      error: expectedError,
-    });
-    expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
+    await expectRemoteMarketplaceError({ manifest, expectedError });
   });
 });

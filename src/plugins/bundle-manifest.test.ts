@@ -40,6 +40,37 @@ function writeBundleManifest(
   fs.writeFileSync(path.join(rootDir, relativePath), JSON.stringify(manifest), "utf-8");
 }
 
+function writeJsonFile(rootDir: string, relativePath: string, value: unknown) {
+  mkdirSafe(path.dirname(path.join(rootDir, relativePath)));
+  fs.writeFileSync(path.join(rootDir, relativePath), JSON.stringify(value), "utf-8");
+}
+
+function setupClaudeHookFixture(
+  rootDir: string,
+  kind: "default-hooks" | "custom-hooks" | "no-hooks",
+) {
+  mkdirSafe(path.join(rootDir, ".claude-plugin"));
+  if (kind === "default-hooks") {
+    mkdirSafe(path.join(rootDir, "hooks"));
+    writeJsonFile(rootDir, "hooks/hooks.json", { hooks: [] });
+    writeBundleManifest(rootDir, CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH, {
+      name: "Hook Plugin",
+      description: "Claude hooks fixture",
+    });
+    return;
+  }
+  if (kind === "custom-hooks") {
+    mkdirSafe(path.join(rootDir, "custom-hooks"));
+    writeBundleManifest(rootDir, CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH, {
+      name: "Custom Hook Plugin",
+      hooks: "custom-hooks",
+    });
+    return;
+  }
+  mkdirSafe(path.join(rootDir, "skills"));
+  writeBundleManifest(rootDir, CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH, { name: "No Hooks" });
+}
+
 afterEach(() => {
   cleanupTrackedTempDirs(tempDirs);
 });
@@ -224,36 +255,7 @@ describe("bundle manifest parsing", () => {
     },
   ] as const)("$name", ({ setupKind, expectedHooks, hasHooksCapability }) => {
     const rootDir = makeTempDir();
-    mkdirSafe(path.join(rootDir, ".claude-plugin"));
-    if (setupKind === "default-hooks") {
-      mkdirSafe(path.join(rootDir, "hooks"));
-      fs.writeFileSync(path.join(rootDir, "hooks", "hooks.json"), '{"hooks":[]}', "utf-8");
-      fs.writeFileSync(
-        path.join(rootDir, CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH),
-        JSON.stringify({
-          name: "Hook Plugin",
-          description: "Claude hooks fixture",
-        }),
-        "utf-8",
-      );
-    } else if (setupKind === "custom-hooks") {
-      mkdirSafe(path.join(rootDir, "custom-hooks"));
-      fs.writeFileSync(
-        path.join(rootDir, CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH),
-        JSON.stringify({
-          name: "Custom Hook Plugin",
-          hooks: "custom-hooks",
-        }),
-        "utf-8",
-      );
-    } else {
-      mkdirSafe(path.join(rootDir, "skills"));
-      fs.writeFileSync(
-        path.join(rootDir, CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH),
-        JSON.stringify({ name: "No Hooks" }),
-        "utf-8",
-      );
-    }
+    setupClaudeHookFixture(rootDir, setupKind);
     const manifest = expectLoadedManifest(rootDir, "claude");
     expect(manifest.hooks).toEqual(expectedHooks);
     expect(manifest.capabilities.includes("hooks")).toBe(hasHooksCapability);

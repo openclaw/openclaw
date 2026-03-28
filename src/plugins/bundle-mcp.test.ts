@@ -28,6 +28,10 @@ async function expectResolvedPathEqual(actual: unknown, expected: string): Promi
   );
 }
 
+function expectNoDiagnostics(diagnostics: unknown[]) {
+  expect(diagnostics).toEqual([]);
+}
+
 const tempHarness = createBundleMcpTempHarness();
 
 afterEach(async () => {
@@ -98,7 +102,7 @@ describe("loadEnabledBundleMcpConfig", () => {
       const loadedServerPath = typeof loadedArgs?.[0] === "string" ? loadedArgs[0] : undefined;
       const resolvedPluginRoot = await fs.realpath(pluginRoot);
 
-      expect(loaded.diagnostics).toEqual([]);
+      expectNoDiagnostics(loaded.diagnostics);
       expect(isRecord(loadedServer) ? loadedServer.command : undefined).toBe("node");
       expect(loadedArgs).toHaveLength(1);
       expect(loadedServerPath).toBeDefined();
@@ -191,7 +195,7 @@ describe("loadEnabledBundleMcpConfig", () => {
         const loadedEnv =
           isRecord(loadedServer) && isRecord(loadedServer.env) ? loadedServer.env : {};
 
-        expect(loaded.diagnostics).toEqual([]);
+        expectNoDiagnostics(loaded.diagnostics);
         await expectResolvedPathEqual(loadedCwd, pluginRoot);
         expect(typeof loadedCommand).toBe("string");
         expect(loadedArgs).toHaveLength(2);

@@ -35,6 +35,21 @@ const { ClawHubRequestError } = await import("../infra/clawhub.js");
 const { CLAWHUB_INSTALL_ERROR_CODE, formatClawHubSpecifier, installPluginFromClawHub } =
   await import("./clawhub.js");
 
+async function expectClawHubInstallError(params: {
+  setup?: () => void;
+  spec: string;
+  expected: {
+    ok: false;
+    code: (typeof CLAWHUB_INSTALL_ERROR_CODE)[keyof typeof CLAWHUB_INSTALL_ERROR_CODE];
+    error: string;
+  };
+}) {
+  params.setup?.();
+  await expect(installPluginFromClawHub({ spec: params.spec })).resolves.toMatchObject(
+    params.expected,
+  );
+}
+
 describe("installPluginFromClawHub", () => {
   beforeEach(() => {
     parseClawHubPluginSpecMock.mockReset();
@@ -208,7 +223,6 @@ describe("installPluginFromClawHub", () => {
       },
     },
   ] as const)("$name", async ({ setup, spec, expected }) => {
-    setup();
-    await expect(installPluginFromClawHub({ spec })).resolves.toMatchObject(expected);
+    await expectClawHubInstallError({ setup, spec, expected });
   });
 });

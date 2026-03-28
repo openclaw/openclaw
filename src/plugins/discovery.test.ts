@@ -115,6 +115,23 @@ function createPackagePlugin(params: {
   }
 }
 
+function createPackagePluginWithEntry(params: {
+  packageDir: string;
+  packageName: string;
+  pluginId?: string;
+  entryPath?: string;
+}) {
+  const entryPath = params.entryPath ?? "src/index.ts";
+  mkdirSafe(path.dirname(path.join(params.packageDir, entryPath)));
+  createPackagePlugin({
+    packageDir: params.packageDir,
+    packageName: params.packageName,
+    extensions: [`./${entryPath}`],
+    ...(params.pluginId ? { pluginId: params.pluginId } : {}),
+  });
+  writePluginEntry(path.join(params.packageDir, entryPath));
+}
+
 function createBundleRoot(bundleDir: string, markerPath: string, manifest?: unknown) {
   mkdirSafe(path.dirname(path.join(bundleDir, markerPath)));
   if (manifest) {
@@ -296,13 +313,11 @@ describe("discoverOpenClawPlugins", () => {
       name: "derives unscoped ids for scoped packages",
       setup: (stateDir: string) => {
         const packageDir = path.join(stateDir, "extensions", "voice-call-pack");
-        mkdirSafe(path.join(packageDir, "src"));
-        createPackagePlugin({
+        createPackagePluginWithEntry({
           packageDir,
           packageName: "@openclaw/voice-call",
-          extensions: ["./src/index.ts"],
+          entryPath: "src/index.ts",
         });
-        writePluginEntry(path.join(packageDir, "src", "index.ts"));
         return {};
       },
       includes: ["voice-call"],
@@ -311,14 +326,12 @@ describe("discoverOpenClawPlugins", () => {
       name: "strips provider suffixes from package-derived ids",
       setup: (stateDir: string) => {
         const packageDir = path.join(stateDir, "extensions", "ollama-provider-pack");
-        mkdirSafe(path.join(packageDir, "src"));
-        createPackagePlugin({
+        createPackagePluginWithEntry({
           packageDir,
           packageName: "@openclaw/ollama-provider",
-          extensions: ["./src/index.ts"],
           pluginId: "ollama",
+          entryPath: "src/index.ts",
         });
-        writePluginEntry(path.join(packageDir, "src", "index.ts"));
         return {};
       },
       includes: ["ollama"],
@@ -332,14 +345,12 @@ describe("discoverOpenClawPlugins", () => {
           ["microsoft-speech-pack", "@openclaw/microsoft-speech", "microsoft"],
         ] as const) {
           const packageDir = path.join(stateDir, "extensions", dirName);
-          mkdirSafe(path.join(packageDir, "src"));
-          createPackagePlugin({
+          createPackagePluginWithEntry({
             packageDir,
             packageName,
-            extensions: ["./src/index.ts"],
             pluginId,
+            entryPath: "src/index.ts",
           });
-          writePluginEntry(path.join(packageDir, "src", "index.ts"));
         }
         return {};
       },
@@ -350,12 +361,11 @@ describe("discoverOpenClawPlugins", () => {
       name: "treats configured directory paths as plugin packages",
       setup: (stateDir: string) => {
         const packageDir = path.join(stateDir, "packs", "demo-plugin-dir");
-        createPackagePlugin({
+        createPackagePluginWithEntry({
           packageDir,
           packageName: "@openclaw/demo-plugin-dir",
-          extensions: ["./index.js"],
+          entryPath: "index.js",
         });
-        fs.writeFileSync(path.join(packageDir, "index.js"), "module.exports = {}", "utf-8");
         return { extraPaths: [packageDir] };
       },
       includes: ["demo-plugin-dir"],
