@@ -379,31 +379,31 @@ export async function tryDispatchAcpReply(params: {
   });
 
   const acpDispatchStartedAt = Date.now();
-  if (acpResolution.kind === "stale") {
-    await maybeUnbindStaleBoundConversations({
-      sessionKey,
-      error: acpResolution.error,
-    });
-    const delivered = await delivery.deliver("final", {
-      text: formatAcpRuntimeErrorText(acpResolution.error),
-      isError: true,
-    });
-    const counts = params.dispatcher.getQueuedCounts();
-    delivery.applyRoutedCounts(counts);
-    const acpStats = acpManager.getObservabilitySnapshot(params.cfg);
-    logVerbose(
-      `acp-dispatch: session=${sessionKey} outcome=error code=${acpResolution.error.code} latencyMs=${Date.now() - acpDispatchStartedAt} queueDepth=${acpStats.turns.queueDepth} activeRuntimes=${acpStats.runtimeCache.activeSessions}`,
-    );
-    params.recordProcessed("completed", {
-      reason: `acp_error:${acpResolution.error.code.toLowerCase()}`,
-    });
-    params.markIdle("message_completed");
-    return { queuedFinal: delivered, counts };
-  }
   try {
     const dispatchPolicyError = resolveAcpDispatchPolicyError(params.cfg);
     if (dispatchPolicyError) {
       throw dispatchPolicyError;
+    }
+    if (acpResolution.kind === "stale") {
+      await maybeUnbindStaleBoundConversations({
+        sessionKey,
+        error: acpResolution.error,
+      });
+      const delivered = await delivery.deliver("final", {
+        text: formatAcpRuntimeErrorText(acpResolution.error),
+        isError: true,
+      });
+      const counts = params.dispatcher.getQueuedCounts();
+      delivery.applyRoutedCounts(counts);
+      const acpStats = acpManager.getObservabilitySnapshot(params.cfg);
+      logVerbose(
+        `acp-dispatch: session=${sessionKey} outcome=error code=${acpResolution.error.code} latencyMs=${Date.now() - acpDispatchStartedAt} queueDepth=${acpStats.turns.queueDepth} activeRuntimes=${acpStats.runtimeCache.activeSessions}`,
+      );
+      params.recordProcessed("completed", {
+        reason: `acp_error:${acpResolution.error.code.toLowerCase()}`,
+      });
+      params.markIdle("message_completed");
+      return { queuedFinal: delivered, counts };
     }
     const agentPolicyError = resolveAcpAgentPolicyError(params.cfg, resolvedAcpAgent);
     if (agentPolicyError) {

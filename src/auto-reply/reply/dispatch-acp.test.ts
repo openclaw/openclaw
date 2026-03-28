@@ -480,6 +480,32 @@ describe("tryDispatchAcpReply", () => {
     expect(bindingServiceMocks.unbind).not.toHaveBeenCalled();
   });
 
+  it("does not unbind stale bindings when ACP dispatch is disabled by policy", async () => {
+    managerMocks.resolveSession.mockReturnValue({
+      kind: "stale",
+      sessionKey,
+      error: new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP metadata is missing."),
+    });
+    policyMocks.resolveAcpDispatchPolicyError.mockReturnValue(
+      new AcpRuntimeError("ACP_DISPATCH_DISABLED", "ACP dispatch is disabled by policy."),
+    );
+    const { dispatcher } = createDispatcher();
+
+    await runDispatch({
+      bodyForAgent: "test",
+      dispatcher,
+    });
+
+    expect(managerMocks.runTurn).not.toHaveBeenCalled();
+    expect(bindingServiceMocks.unbind).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        isError: true,
+        text: expect.stringContaining("ACP dispatch is disabled by policy."),
+      }),
+    );
+  });
+
   it("unbinds stale bound conversations before surfacing stale ACP resolution errors", async () => {
     managerMocks.resolveSession.mockReturnValue({
       kind: "stale",
