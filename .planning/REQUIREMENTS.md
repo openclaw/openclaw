@@ -65,14 +65,14 @@ Requirements for Phase 1 release. Each maps to roadmap phases.
 ### UI
 
 - [x] **UI-01**: "Projects" tab appears in web UI sidebar navigation
-- [ ] **UI-02**: Project list view shows all projects with name, status, task counts from `.index/project.json`
-- [ ] **UI-03**: Project dashboard with configurable widgets (task summary, recent activity, agent status)
-- [ ] **UI-04**: Dashboard widgets are configurable per project via PROJECT.md frontmatter with sensible defaults
+- [x] **UI-02**: Project list view shows all projects with name, status, task counts from `.index/project.json`
+- [x] **UI-03**: Project dashboard with configurable widgets (task summary, recent activity, agent status)
+- [x] **UI-04**: Dashboard widgets are configurable per project via PROJECT.md frontmatter with sensible defaults
 - [ ] **UI-05**: Read-only kanban board with configurable columns populated from task frontmatter status
 - [ ] **UI-06**: Kanban board shows live agent indicators (pulsing badge, agent name) on claimed tasks
 - [ ] **UI-07**: Agent session peek on hover/click shows current task checkpoint and recent log entries
 - [x] **UI-08**: UI updates near-real-time via WebSocket event subscriptions
-- [ ] **UI-09**: Sub-project navigation from parent project view
+- [x] **UI-09**: Sub-project navigation from parent project view
 
 ### CLI
 
@@ -175,14 +175,14 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CLI-04      | Phase 8  | Complete |
 | CLI-05      | Phase 8  | Complete |
 | UI-01       | Phase 9  | Complete |
-| UI-02       | Phase 9  | Pending  |
-| UI-03       | Phase 9  | Pending  |
-| UI-04       | Phase 9  | Pending  |
+| UI-02       | Phase 9  | Complete |
+| UI-03       | Phase 9  | Complete |
+| UI-04       | Phase 9  | Complete |
 | UI-05       | Phase 10 | Pending  |
 | UI-06       | Phase 10 | Pending  |
 | UI-07       | Phase 10 | Pending  |
 | UI-08       | Phase 9  | Complete |
-| UI-09       | Phase 9  | Pending  |
+| UI-09       | Phase 9  | Complete |
 
 **Coverage:**
 
