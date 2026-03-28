@@ -199,11 +199,9 @@
 3. Tasks claimed by an agent show a pulsing badge with the agent name
 4. Hovering or clicking an agent indicator shows the current task checkpoint and recent log entries
    **Plans:** 2/2 plans complete
-   Plans:
-
-- [x] 10-01-PLAN.md — Gateway extensions, state fields, CSS, URL routing
-- [x] 10-02-PLAN.md — Kanban board view, tab bar, session peek panels
-      **Estimated complexity**: M
+   - [x] 10-01-PLAN.md — Gateway extensions, state fields, CSS, URL routing
+   - [x] 10-02-PLAN.md — Kanban board view, tab bar, session peek panels
+         **Estimated complexity**: M
 
 ## Dependency Graph
 
@@ -299,9 +297,9 @@ Phase 1 (Types & Schemas)
 | 5. Context Injection                | 1/2            | In Progress |            |
 | 6. Queue & Heartbeat                | 3/3            | Complete    | 2026-03-27 |
 | 7. Gateway Service                  | 2/2            | Complete    | 2026-03-28 |
-| 8. CLI Commands                     | 2/2 | Complete   | 2026-03-28 |
-| 9. Project Views & Dashboard        | 2/2 | Complete   | 2026-03-28 |
-| 10. Kanban Board & Agent Indicators | 1/2 | In Progress|  |
+| 8. CLI Commands                     | 2/2            | Complete    | 2026-03-28 |
+| 9. Project Views & Dashboard        | 2/2            | Complete    | 2026-03-28 |
+| 10. Kanban Board & Agent Indicators | 1/2            | In Progress |            |
 
 ---
 
