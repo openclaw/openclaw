@@ -3,7 +3,7 @@ import { sanitizeForLog } from "../../../terminal/ansi.js";
 import { asObjectRecord } from "../shared/object.js";
 import type { DoctorAccountRecord } from "../types.js";
 
-type DiscordNumericIdHit = { path: string; entry: number };
+type DiscordNumericIdHit = { path: string; entry: number; safe: boolean };
 
 type DiscordIdListRef = {
   pathLabel: string;
@@ -102,7 +102,11 @@ export function scanDiscordNumericIdEntries(cfg: OpenClawConfig): DiscordNumeric
       if (typeof entry !== "number") {
         continue;
       }
-      hits.push({ path: `${pathLabel}[${index}]`, entry });
+      hits.push({
+        path: `${pathLabel}[${index}]`,
+        entry,
+        safe: Number.isSafeInteger(entry) && entry >= 0,
+      });
     }
   };
 
@@ -122,12 +126,29 @@ export function collectDiscordNumericIdWarnings(params: {
   if (params.hits.length === 0) {
     return [];
   }
-  const samplePath = sanitizeForLog(params.hits[0]?.path ?? "channels.discord.allowFrom");
-  const sampleEntry = sanitizeForLog(String(params.hits[0]?.entry ?? ""));
-  return [
-    `- Discord allowlists contain ${params.hits.length} numeric entries (e.g. ${samplePath}=${sampleEntry}).`,
-    `- Discord IDs must be strings; run "${params.doctorFixCommand}" to convert numeric IDs to quoted strings.`,
-  ];
+  const lines: string[] = [];
+  const safeHits = params.hits.filter((h) => h.safe);
+  const unsafeHits = params.hits.filter((h) => !h.safe);
+
+  if (safeHits.length > 0) {
+    const sample = safeHits[0];
+    const samplePath = sanitizeForLog(sample.path);
+    const sampleEntry = sanitizeForLog(String(sample.entry));
+    lines.push(
+      `- Discord allowlists contain ${safeHits.length} numeric ${safeHits.length === 1 ? "entry" : "entries"} (e.g. ${samplePath}=${sampleEntry}).`,
+      `- Discord IDs must be strings; run "${params.doctorFixCommand}" to convert numeric IDs to quoted strings.`,
+    );
+  }
+  if (unsafeHits.length > 0) {
+    const sample = unsafeHits[0];
+    const samplePath = sanitizeForLog(sample.path);
+    const sampleEntry = sanitizeForLog(String(sample.entry));
+    lines.push(
+      `- Discord allowlists contain ${unsafeHits.length} numeric ${unsafeHits.length === 1 ? "entry" : "entries"} that cannot be auto-repaired (e.g. ${samplePath}=${sampleEntry}).`,
+      `- These IDs lost precision or are invalid; manually wrap the original value in quotes in your config file.`,
+    );
+  }
+  return lines;
 }
 
 export function maybeRepairDiscordNumericIds(cfg: OpenClawConfig): {
@@ -149,7 +170,7 @@ export function maybeRepairDiscordNumericIds(cfg: OpenClawConfig): {
     }
     let converted = 0;
     const updated = raw.map((entry) => {
-      if (typeof entry === "number") {
+      if (typeof entry === "number" && Number.isSafeInteger(entry) && entry >= 0) {
         converted += 1;
         return String(entry);
       }
