@@ -132,7 +132,7 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
   let nickServRecoverAttempted = false;
   let fallbackNickAttempted = false;
 
-  // Incoming batch state: batchId -> messages
+  // Incoming batch state: batchId -> messages (only for draft/multiline)
   const incomingBatches = new Map<string, Array<{
     senderNick: string;
     senderUser?: string;
@@ -140,6 +140,8 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
     target: string;
     text: string;
   }>>();
+  // Track which batches are draft/multiline
+  const multilineBatchIds = new Set<string>();
   let multilineCap = false;
   let batchCounter = 0;
   let accumulatedCaps = ""; // Accumulate caps across multi-chunk CAP LS responses
@@ -424,20 +426,25 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
         continue;
       }
 
-      // Handle BATCH commands for draft/multiline
+      // Handle BATCH commands for draft/multiline only
       if (line.command === "BATCH") {
         const batchParam = line.params[0] || line.trailing;
         if (!batchParam) continue;
 
         if (batchParam.startsWith("+")) {
-          // Start of batch - just initialize the buffer
+          // Start of batch - only track draft/multiline batches
           const batchId = batchParam.slice(1);
-          incomingBatches.set(batchId, []);
+          const batchType = line.params[1]?.toLowerCase();
+          if (batchType === "draft/multiline") {
+            incomingBatches.set(batchId, []);
+            multilineBatchIds.add(batchId);
+          }
         } else if (batchParam.startsWith("-")) {
-          // End of batch - combine and emit
+          // End of batch - combine and emit only for multiline batches
           const batchId = batchParam.slice(1);
           const messages = incomingBatches.get(batchId);
           incomingBatches.delete(batchId);
+          multilineBatchIds.delete(batchId);
 
           if (messages && messages.length > 0 && options.onPrivmsg) {
             // Combine all messages in the batch
@@ -467,9 +474,9 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
         const prefix = parseIrcPrefix(line.prefix);
         const senderNick = prefix.nick ? prefix.nick.trim() : "";
 
-        // Check if this message is part of a batch *before* filtering empty text
+        // Check if this message is part of a multiline batch *before* filtering empty text
         const batchTag = line.tags?.get("batch");
-        if (batchTag) {
+        if (batchTag && multilineBatchIds.has(batchTag)) {
           // Buffer the message for later
           const batch = incomingBatches.get(batchTag);
           if (batch) {
