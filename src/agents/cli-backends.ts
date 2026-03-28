@@ -18,6 +18,10 @@ function pickBackendConfig(
   config: Record<string, CliBackendConfig>,
   normalizedId: string,
 ): CliBackendConfig | undefined {
+  const directKey = Object.keys(config).find((key) => key.trim().toLowerCase() === normalizedId);
+  if (directKey) {
+    return config[directKey];
+  }
   for (const [key, entry] of Object.entries(config)) {
     if (normalizeBackendKey(key) === normalizedId) {
       return entry;

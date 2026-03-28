@@ -310,3 +310,43 @@ describe("resolveCliBackendConfig google-gemini-cli defaults", () => {
     expect(resolved?.config.modelAliases?.pro).toBe("gemini-3.1-pro-preview");
   });
 });
+
+describe("resolveCliBackendConfig alias precedence", () => {
+  it("prefers the canonical backend key over legacy aliases when both are configured", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.cliBackends = [
+      createBackendEntry({
+        pluginId: "moonshot",
+        id: "kimi",
+        config: {
+          command: "kimi",
+          args: ["--default"],
+        },
+      }),
+    ];
+    setActivePluginRegistry(registry);
+
+    const cfg = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "kimi-coding": {
+              command: "kimi-legacy",
+              args: ["--legacy"],
+            },
+            kimi: {
+              command: "kimi-canonical",
+              args: ["--canonical"],
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const resolved = resolveCliBackendConfig("kimi", cfg);
+
+    expect(resolved).not.toBeNull();
+    expect(resolved?.config.command).toBe("kimi-canonical");
+    expect(resolved?.config.args).toEqual(["--canonical"]);
+  });
+});
