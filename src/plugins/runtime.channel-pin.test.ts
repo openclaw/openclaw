@@ -38,6 +38,16 @@ function expectActiveChannelRegistry(registry: ReturnType<typeof createEmptyPlug
   expect(getActivePluginChannelRegistry()).toBe(registry);
 }
 
+function expectPinnedChannelRegistry(
+  startupRegistry: ReturnType<typeof createEmptyPluginRegistry>,
+  replacementRegistry: ReturnType<typeof createEmptyPluginRegistry>,
+) {
+  setActivePluginRegistry(startupRegistry);
+  pinActivePluginChannelRegistry(startupRegistry);
+  setActivePluginRegistry(replacementRegistry);
+  expectActiveChannelRegistry(startupRegistry);
+}
+
 describe("channel registry pinning", () => {
   afterEach(() => {
     resetPluginRuntimeStateForTest();
@@ -51,14 +61,9 @@ describe("channel registry pinning", () => {
 
   it("preserves pinned channel registry across setActivePluginRegistry calls", () => {
     const { registry: startup } = createRegistryWithChannel();
-    setActivePluginRegistry(startup);
-    pinActivePluginChannelRegistry(startup);
-
     // A subsequent registry swap (e.g., config-schema load) must not evict channels.
     const replacement = createEmptyPluginRegistry();
-    setActivePluginRegistry(replacement);
-
-    expectActiveChannelRegistry(startup);
+    expectPinnedChannelRegistry(startup, replacement);
     expect(getActivePluginChannelRegistry()!.channels).toHaveLength(1);
   });
 

@@ -49,6 +49,14 @@ function expectMemoryRuntimeLoaded(autoEnabledConfig: unknown) {
   });
 }
 
+function setAutoEnabledMemoryRuntime() {
+  const { rawConfig, autoEnabledConfig } = createMemoryAutoEnableFixture();
+  const runtime = createMemoryRuntimeFixture();
+  applyPluginAutoEnableMock.mockReturnValue({ config: autoEnabledConfig, changes: [] });
+  getMemoryRuntimeMock.mockReturnValueOnce(undefined).mockReturnValue(runtime);
+  return { rawConfig, autoEnabledConfig, runtime };
+}
+
 describe("memory runtime auto-enable loading", () => {
   beforeEach(async () => {
     vi.resetModules();
@@ -66,36 +74,37 @@ describe("memory runtime auto-enable loading", () => {
     } = await import("./memory-runtime.js"));
   });
 
-  it("loads memory runtime from the auto-enabled config snapshot", async () => {
-    const { rawConfig, autoEnabledConfig } = createMemoryAutoEnableFixture();
-    const runtime = createMemoryRuntimeFixture();
-    applyPluginAutoEnableMock.mockReturnValue({ config: autoEnabledConfig, changes: [] });
-    getMemoryRuntimeMock.mockReturnValueOnce(undefined).mockReturnValue(runtime);
+  it.each([
+    {
+      name: "loads memory runtime from the auto-enabled config snapshot",
+      run: async (rawConfig: unknown) =>
+        getActiveMemorySearchManager({
+          cfg: rawConfig as never,
+          agentId: "main",
+        }),
+      expectedResult: undefined,
+    },
+    {
+      name: "reuses the same auto-enabled load path for backend config resolution",
+      run: async (rawConfig: unknown) =>
+        resolveActiveMemoryBackendConfig({
+          cfg: rawConfig as never,
+          agentId: "main",
+        }),
+      expectedResult: { backend: "builtin" },
+    },
+  ] as const)("$name", async ({ run, expectedResult }) => {
+    const { rawConfig, autoEnabledConfig } = setAutoEnabledMemoryRuntime();
 
-    await getActiveMemorySearchManager({
-      cfg: rawConfig as never,
-      agentId: "main",
-    });
+    const result = await run(rawConfig);
 
+    if (expectedResult !== undefined) {
+      expect(result).toEqual(expectedResult);
+    }
     expect(applyPluginAutoEnableMock).toHaveBeenCalledWith({
       config: rawConfig,
       env: process.env,
     });
-    expectMemoryRuntimeLoaded(autoEnabledConfig);
-  });
-
-  it("reuses the same auto-enabled load path for backend config resolution", () => {
-    const { rawConfig, autoEnabledConfig } = createMemoryAutoEnableFixture();
-    const runtime = createMemoryRuntimeFixture();
-    applyPluginAutoEnableMock.mockReturnValue({ config: autoEnabledConfig, changes: [] });
-    getMemoryRuntimeMock.mockReturnValueOnce(undefined).mockReturnValue(runtime);
-
-    const result = resolveActiveMemoryBackendConfig({
-      cfg: rawConfig as never,
-      agentId: "main",
-    });
-
-    expect(result).toEqual({ backend: "builtin" });
     expectMemoryRuntimeLoaded(autoEnabledConfig);
   });
 
