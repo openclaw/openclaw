@@ -49,6 +49,11 @@ export type SessionListDeliveryContext = {
 
 export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout";
 
+// ============================================================================
+
+/** Maximum input size for A2A calls (1MB) */
+export const MAX_A2A_INPUT_SIZE = 1_000_000;
+
 export type SessionListRow = {
   key: string;
   kind: SessionKind;
