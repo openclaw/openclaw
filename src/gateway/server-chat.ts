@@ -493,13 +493,17 @@ export function createAgentEventHandler({
         const runCtx = opts?.runId ? getAgentRunContext(opts.runId) : undefined;
         let canonicalKey = canonicalKeyCache.get(sessionKey) ?? runCtx?.sessionKey;
         if (canonicalKey === undefined) {
-          if (canonicalKeyCache.size >= CANONICAL_KEY_CACHE_LIMIT) {
-            const oldest = canonicalKeyCache.keys().next().value;
-            if (oldest !== undefined) {
-              canonicalKeyCache.delete(oldest);
-            }
-          }
           canonicalKey = loadSessionEntry(sessionKey).canonicalKey;
+        }
+        // Evict before insert to enforce cap regardless of which path resolved the key.
+        if (
+          !canonicalKeyCache.has(sessionKey) &&
+          canonicalKeyCache.size >= CANONICAL_KEY_CACHE_LIMIT
+        ) {
+          const oldest = canonicalKeyCache.keys().next().value;
+          if (oldest !== undefined) {
+            canonicalKeyCache.delete(oldest);
+          }
         }
         canonicalKeyCache.set(sessionKey, canonicalKey);
         if (canonicalKey !== sessionKey) {
