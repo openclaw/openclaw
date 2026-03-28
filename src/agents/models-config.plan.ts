@@ -58,13 +58,13 @@ function resolveExplicitBaseUrlProviders(
   );
 }
 
-async function resolveProvidersForMode(params: {
+function resolveProvidersForMode(params: {
   mode: NonNullable<ModelsConfig["mode"]>;
   existingParsed: unknown;
   providers: Record<string, ProviderConfig>;
   secretRefManagedProviders: ReadonlySet<string>;
   explicitBaseUrlProviders: ReadonlySet<string>;
-}): Promise<Record<string, ProviderConfig>> {
+}): Record<string, ProviderConfig> {
   if (params.mode !== "merge") {
     return params.providers;
   }
@@ -111,7 +111,7 @@ export async function planOpenClawModelsJson(params: {
       sourceSecretDefaults: params.sourceConfigForSecrets?.secrets?.defaults,
       secretRefManagedProviders,
     }) ?? providers;
-  const mergedProviders = await resolveProvidersForMode({
+  const mergedProviders = resolveProvidersForMode({
     mode,
     existingParsed: params.existingParsed,
     providers: normalizedProviders,

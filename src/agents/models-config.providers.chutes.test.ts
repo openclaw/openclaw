@@ -71,7 +71,7 @@ async function resolveChutesProvidersForProfiles(
 ) {
   const agentDir = createTempAgentDir();
   await writeChutesAuthProfiles(agentDir, profiles);
-  return await resolveImplicitProvidersForTest({ agentDir, env });
+  return resolveImplicitProvidersForTest({ agentDir, env });
 }
 
 function expectChutesApiKeyProvider(

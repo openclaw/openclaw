@@ -31,6 +31,13 @@ export {
   looksLikeIMessageTargetId,
   normalizeIMessageMessagingTarget,
 } from "../channels/plugins/normalize/imessage.js";
+export {
+  parseChatAllowTargetPrefixes,
+  parseChatTargetPrefixesOrThrow,
+  resolveServicePrefixedAllowTarget,
+  resolveServicePrefixedTarget,
+  type ParsedChatTarget,
+} from "./imessage-targets.js";
 
 export {
   resolveAllowlistProviderRuntimeGroupPolicy,

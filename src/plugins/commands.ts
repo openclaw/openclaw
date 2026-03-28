@@ -148,6 +148,7 @@ function resolveBindingConversationFromCommand(params: {
   to?: string;
   accountId?: string;
   messageThreadId?: string | number;
+  threadParentId?: string;
 }): {
   channel: string;
   accountId: string;
@@ -199,6 +200,8 @@ function resolveBindingConversationFromCommand(params: {
         "conversationId" in target
           ? target.conversationId
           : `${target.chatType === "direct" ? "user" : "channel"}:${target.to}`,
+      parentConversationId: params.threadParentId?.trim() || undefined,
+      threadId: params.messageThreadId,
     };
   }
   return null;
@@ -224,6 +227,7 @@ export async function executePluginCommand(params: {
   to?: PluginCommandContext["to"];
   accountId?: PluginCommandContext["accountId"];
   messageThreadId?: PluginCommandContext["messageThreadId"];
+  threadParentId?: PluginCommandContext["threadParentId"];
 }): Promise<PluginCommandResult> {
   const { command, args, senderId, channel, isAuthorizedSender, commandBody, config } = params;
 
@@ -244,6 +248,7 @@ export async function executePluginCommand(params: {
     to: params.to,
     accountId: params.accountId,
     messageThreadId: params.messageThreadId,
+    threadParentId: params.threadParentId,
   });
 
   const ctx: PluginCommandContext = {
@@ -259,6 +264,7 @@ export async function executePluginCommand(params: {
     to: params.to,
     accountId: params.accountId,
     messageThreadId: params.messageThreadId,
+    threadParentId: params.threadParentId,
     requestConversationBinding: async (bindingParams) => {
       if (!command.pluginRoot || !bindingConversation) {
         return {
