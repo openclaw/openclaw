@@ -15,7 +15,7 @@ import { markdownToSignalTextChunks } from "./format.js";
 import { signalMessageActions } from "./message-actions.js";
 import { looksLikeSignalTargetId, normalizeSignalMessagingTarget } from "./normalize.js";
 import { resolveSignalOutboundTarget } from "./outbound-session.js";
-import type { SignalProbe } from "./probe.js";
+import { probeSignal, type SignalProbe } from "./probe.js";
 import {
   buildBaseChannelStatusSummary,
   collectStatusIssuesFromLastError,
@@ -257,7 +257,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
           }),
         probeAccount: async ({ account, timeoutMs }) => {
           const baseUrl = account.baseUrl;
-          return await getSignalRuntime().channel.signal.probeSignal(baseUrl, timeoutMs);
+          return await probeSignal(baseUrl, timeoutMs);
         },
         formatCapabilitiesProbe: ({ probe }) =>
           (probe as SignalProbe | undefined)?.version
