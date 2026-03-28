@@ -31,9 +31,15 @@ vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent,
 }));
 
-vi.mock("../infra/heartbeat-wake.js", () => ({
-  requestHeartbeatNow,
-}));
+vi.mock("../infra/heartbeat-wake.js", async () => {
+  const actual = await vi.importActual<typeof import("../infra/heartbeat-wake.js")>(
+    "../infra/heartbeat-wake.js",
+  );
+  return {
+    ...actual,
+    requestHeartbeatNow,
+  };
+});
 
 vi.mock("../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
