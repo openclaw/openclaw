@@ -1,4 +1,9 @@
-import { findPreferredConversationByUserId } from "./conversation-store-selection.js";
+import {
+  findPreferredDmConversationByUserId,
+  mergeStoredConversationReference,
+  normalizeStoredConversationId,
+  toConversationStoreEntries,
+} from "./conversation-store-helpers.js";
 import type {
   MSTeamsConversationStore,
   MSTeamsConversationStoreEntry,
@@ -9,41 +14,38 @@ export function createMSTeamsConversationStoreMemory(
   initial: MSTeamsConversationStoreEntry[] = [],
 ): MSTeamsConversationStore {
   const map = new Map<string, StoredConversationReference>();
-  const normalizeConversationId = (raw: string): string => raw.split(";")[0] ?? raw;
   for (const { conversationId, reference } of initial) {
-    map.set(normalizeConversationId(conversationId), reference);
+    map.set(normalizeStoredConversationId(conversationId), reference);
   }
+
+  const findPreferredDmByUserId = async (
+    id: string,
+  ): Promise<MSTeamsConversationStoreEntry | null> => {
+    return findPreferredDmConversationByUserId(toConversationStoreEntries(map.entries()), id);
+  };
 
   return {
     upsert: async (conversationId, reference) => {
-      const normalizedId = normalizeConversationId(conversationId);
-      const existing = map.get(normalizedId);
-      map.set(normalizedId, {
-        ...(existing?.timezone && !reference.timezone ? { timezone: existing.timezone } : {}),
-        ...reference,
-        lastSeenAt: new Date().toISOString(),
-      });
-    },
-    get: async (conversationId) => {
-      return map.get(normalizeConversationId(conversationId)) ?? null;
-    },
-    list: async () => {
-      return Array.from(map.entries()).map(([conversationId, reference]) => ({
-        conversationId,
-        reference,
-      }));
-    },
-    remove: async (conversationId) => {
-      return map.delete(normalizeConversationId(conversationId));
-    },
-    findByUserId: async (id) => {
-      return findPreferredConversationByUserId(
-        Array.from(map.entries()).map(([conversationId, reference]) => ({
-          conversationId,
+      const normalizedId = normalizeStoredConversationId(conversationId);
+      map.set(
+        normalizedId,
+        mergeStoredConversationReference(
+          map.get(normalizedId),
           reference,
-        })),
-        id,
+          new Date().toISOString(),
+        ),
       );
     },
+    get: async (conversationId) => {
+      return map.get(normalizeStoredConversationId(conversationId)) ?? null;
+    },
+    list: async () => {
+      return toConversationStoreEntries(map.entries());
+    },
+    remove: async (conversationId) => {
+      return map.delete(normalizeStoredConversationId(conversationId));
+    },
+    findPreferredDmByUserId,
+    findByUserId: findPreferredDmByUserId,
   };
 }

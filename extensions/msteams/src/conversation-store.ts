@@ -48,5 +48,8 @@ export type MSTeamsConversationStore = {
   get: (conversationId: string) => Promise<StoredConversationReference | null>;
   list: () => Promise<MSTeamsConversationStoreEntry[]>;
   remove: (conversationId: string) => Promise<boolean>;
+  /** Person-targeted proactive lookup: prefer the freshest personal DM reference. */
+  findPreferredDmByUserId: (id: string) => Promise<MSTeamsConversationStoreEntry | null>;
+  /** @deprecated Use `findPreferredDmByUserId` for proactive user-targeted sends. */
   findByUserId: (id: string) => Promise<MSTeamsConversationStoreEntry | null>;
 };

@@ -92,7 +92,7 @@ async function findConversationReference(recipient: {
     return null;
   }
 
-  const found = await recipient.store.findByUserId(recipient.id);
+  const found = await recipient.store.findPreferredDmByUserId(recipient.id);
   if (!found) {
     return null;
   }
