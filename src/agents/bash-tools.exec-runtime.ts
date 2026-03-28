@@ -11,6 +11,7 @@ import { isDangerousHostEnvVarName } from "../infra/host-env-security.js";
 import { findPathKey, mergePathPrepend } from "../infra/path-prepend.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { scopedHeartbeatWakeOptions } from "../routing/session-key.js";
+import { isInternalMessageChannel } from "../utils/message-channel.js";
 import type { ProcessSession } from "./bash-process-registry.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
@@ -362,7 +363,7 @@ export function buildApprovalPendingMessage(params: {
   lines.push(commandBlock);
   lines.push("Mode: foreground (interactive approvals available).");
   lines.push("Background mode requires pre-approved policy (allow-always or ask=off).");
-  if (params.turnSourceChannel === "webchat") {
+  if (isInternalMessageChannel(params.turnSourceChannel)) {
     lines.push(
       "Use the exec approval buttons (Allow once, Always allow, or Deny) in the Control UI.",
     );
