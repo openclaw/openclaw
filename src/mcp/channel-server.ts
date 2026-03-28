@@ -166,6 +166,15 @@ function toText(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
+function resolveMessageId(entry: Record<string, unknown>): string | undefined {
+  return (
+    toText(entry.id) ??
+    (entry.__openclaw && typeof entry.__openclaw === "object"
+      ? toText((entry.__openclaw as { id?: unknown }).id)
+      : undefined)
+  );
+}
+
 function summarizeResult(
   label: string,
   count: number,
@@ -832,7 +841,7 @@ export async function createOpenClawChannelMcpServer(opts: OpenClawMcpServeOptio
     },
     async ({ session_key, message_id, limit }) => {
       const messages = await bridge.readMessages(session_key, limit ?? 100);
-      const message = messages.find((entry) => toText(entry.id) === message_id);
+      const message = messages.find((entry) => resolveMessageId(entry) === message_id);
       if (!message) {
         return {
           content: [{ type: "text", text: `message not found: ${message_id}` }],
