@@ -476,6 +476,45 @@ function isExecReadNonceProbeMiss(error: string): boolean {
   return error.toLowerCase().includes("exec+read probe missing nonce");
 }
 
+function isPromptProbeMiss(error: string): boolean {
+  const msg = error.toLowerCase();
+  return msg.includes("not meaningful:") || msg.includes("missing required keywords:");
+}
+
+function shouldSkipToolNonceProbeMiss(provider: string): boolean {
+  return (
+    provider === "anthropic" ||
+    provider === "minimax" ||
+    provider === "opencode" ||
+    provider === "opencode-go" ||
+    provider === "xai" ||
+    provider === "zai"
+  );
+}
+
+describe("shouldSkipToolNonceProbeMiss", () => {
+  it.each([
+    { provider: "anthropic", expected: true },
+    { provider: "minimax", expected: true },
+    { provider: "opencode", expected: true },
+    { provider: "opencode-go", expected: true },
+    { provider: "xai", expected: true },
+    { provider: "zai", expected: true },
+    { provider: "openai", expected: false },
+  ])("returns $expected for $provider", ({ provider, expected }) => {
+    expect(shouldSkipToolNonceProbeMiss(provider)).toBe(expected);
+  });
+});
+
+describe("isPromptProbeMiss", () => {
+  it.each([
+    { error: "not meaningful: let me think", expected: true },
+    { error: "missing required keywords: event loop summary", expected: true },
+    { error: "tool probe missing nonce: nonce-a", expected: false },
+  ])("returns $expected for $error", ({ error, expected }) => {
+    expect(isPromptProbeMiss(error)).toBe(expected);
+  });
+});
 function isMissingProfileError(error: string): boolean {
   return /no credentials found for profile/i.test(error);
 }
@@ -1447,6 +1486,11 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
             logProgress(`${progressLabel}: skip (provider unavailable)`);
             break;
           }
+          if (model.provider === "openrouter" && isPromptProbeMiss(message)) {
+            skippedCount += 1;
+            logProgress(`${progressLabel}: skip (openrouter prompt probe miss)`);
+            break;
+          }
           if (params.allowNotFoundSkip && isModelNotFoundErrorMessage(message)) {
             skippedCount += 1;
             logProgress(`${progressLabel}: skip (model not found)`);
@@ -1503,12 +1547,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
             logProgress(`${progressLabel}: skip (exec/read workspace isolation)`);
             break;
           }
-          if (
-            (model.provider === "anthropic" ||
-              model.provider === "minimax" ||
-              model.provider === "opencode-go") &&
-            isToolNonceProbeMiss(message)
-          ) {
+          if (shouldSkipToolNonceProbeMiss(model.provider) && isToolNonceProbeMiss(message)) {
             skippedCount += 1;
             logProgress(`${progressLabel}: skip (${model.provider} tool probe nonce miss)`);
             break;
