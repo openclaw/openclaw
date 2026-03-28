@@ -10,6 +10,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { closePluginStateSqliteStore } from "../plugin-state/plugin-state-store.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { SUBSYSTEM_STOP_TIMEOUT_MS, raceTimeout } from "./shutdown-timeout.js";
 
 const shutdownLog = createSubsystemLogger("gateway/shutdown");
 const GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS = 1_000;
@@ -57,9 +58,38 @@ async function shutdownStep(
   name: string,
   fn: () => Promise<void> | void,
   warnings: string[],
+  opts: { timeoutMs?: number } = {},
 ): Promise<boolean> {
+  const operation = Promise.resolve().then(fn);
+  const timeoutMs = opts.timeoutMs;
+  if (timeoutMs !== undefined) {
+    let timeoutRecorded = false;
+    void operation.catch((err: unknown) => {
+      if (!timeoutRecorded) {
+        return;
+      }
+      const detail = err instanceof Error ? err.message : String(err);
+      shutdownLog.warn(`${name}: ${detail}`);
+      recordShutdownWarning(warnings, name);
+    });
+    try {
+      await raceTimeout(operation, timeoutMs, name, {
+        warn: () => {
+          timeoutRecorded = true;
+          shutdownLog.warn(`${name} exceeded ${timeoutMs}ms during shutdown; continuing`);
+          recordShutdownWarning(warnings, name);
+        },
+      });
+      return !timeoutRecorded;
+    } catch (err: unknown) {
+      const detail = err instanceof Error ? err.message : String(err);
+      shutdownLog.warn(`${name}: ${detail}`);
+      recordShutdownWarning(warnings, name);
+      return false;
+    }
+  }
   try {
-    await fn();
+    await operation;
     return true;
   } catch (err: unknown) {
     const detail = err instanceof Error ? err.message : String(err);
@@ -260,22 +290,34 @@ export function createGatewayCloseHandler(params: {
         );
       }
       if (params.bonjourStop) {
-        await shutdownStep("bonjour", () => params.bonjourStop!(), warnings);
+        await shutdownStep("bonjour", () => params.bonjourStop!(), warnings, {
+          timeoutMs: SUBSYSTEM_STOP_TIMEOUT_MS,
+        });
       }
       if (params.tailscaleCleanup) {
-        await shutdownStep("tailscale", () => params.tailscaleCleanup!(), warnings);
+        await shutdownStep("tailscale", () => params.tailscaleCleanup!(), warnings, {
+          timeoutMs: SUBSYSTEM_STOP_TIMEOUT_MS,
+        });
       }
       if (params.canvasHost) {
-        await shutdownStep("canvas-host", () => params.canvasHost!.close(), warnings);
+        await shutdownStep("canvas-host", () => params.canvasHost!.close(), warnings, {
+          timeoutMs: SUBSYSTEM_STOP_TIMEOUT_MS,
+        });
       }
       if (params.canvasHostServer) {
-        await shutdownStep("canvas-host-server", () => params.canvasHostServer!.close(), warnings);
+        await shutdownStep("canvas-host-server", () => params.canvasHostServer!.close(), warnings, {
+          timeoutMs: SUBSYSTEM_STOP_TIMEOUT_MS,
+        });
       }
       const channelIds = params.channelIds ?? listChannelPlugins().map((plugin) => plugin.id);
       for (const channelId of channelIds) {
-        await shutdownStep(`channel/${channelId}`, () => params.stopChannel(channelId), warnings);
+        await shutdownStep(`channel/${channelId}`, () => params.stopChannel(channelId), warnings, {
+          timeoutMs: SUBSYSTEM_STOP_TIMEOUT_MS,
+        });
       }
-      await shutdownStep("agent-harnesses", () => disposeRegisteredAgentHarnesses(), warnings);
+      await shutdownStep("agent-harnesses", () => disposeRegisteredAgentHarnesses(), warnings, {
+        timeoutMs: SUBSYSTEM_STOP_TIMEOUT_MS,
+      });
       await Promise.all([
         disposeRuntimeWithShutdownGrace({
           label: "bundle-mcp",
@@ -291,10 +333,14 @@ export function createGatewayCloseHandler(params: {
         }),
       ]);
       if (params.pluginServices) {
-        await shutdownStep("plugin-services", () => params.pluginServices!.stop(), warnings);
+        await shutdownStep("plugin-services", () => params.pluginServices!.stop(), warnings, {
+          timeoutMs: SUBSYSTEM_STOP_TIMEOUT_MS,
+        });
       }
       await shutdownStep("plugin-state-store", () => closePluginStateSqliteStore(), warnings);
-      await shutdownStep("gmail-watcher", () => stopGmailWatcherOnDemand(), warnings);
+      await shutdownStep("gmail-watcher", () => stopGmailWatcherOnDemand(), warnings, {
+        timeoutMs: SUBSYSTEM_STOP_TIMEOUT_MS,
+      });
       params.cron.stop();
       params.heartbeatRunner.stop();
       await shutdownStep(
@@ -343,7 +389,9 @@ export function createGatewayCloseHandler(params: {
         recordShutdownWarning(warnings, "ws-clients");
       }
       params.clients.clear();
-      await shutdownStep("config-reloader", () => params.configReloader.stop(), warnings);
+      await shutdownStep("config-reloader", () => params.configReloader.stop(), warnings, {
+        timeoutMs: SUBSYSTEM_STOP_TIMEOUT_MS,
+      });
       const wsClients = params.wss.clients ?? new Set();
       const closePromise = new Promise<void>((resolve) => params.wss.close(() => resolve()));
       const websocketGraceTimeout = createTimeoutRace(

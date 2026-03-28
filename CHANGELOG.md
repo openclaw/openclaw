@@ -47,6 +47,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Gate zalouser startup name matching [AI]. (#77411) Thanks @pgondhi987.
+- Gateway/shutdown: bound non-HTTP subsystem teardown steps during close handling so hung channel, plugin, watcher, or local service stops cannot starve later cleanup while preserving HTTP listener force-close semantics. Thanks @p3nchan.
 - fix(device-pair): require pairing scope for pair command [AI]. (#76377) Thanks @pgondhi987.
 - fix(qqbot): keep private commands off framework surface [AI]. (#77212) Thanks @pgondhi987.
 - Memory/wiki: preserve representation from both corpora in `corpus=all` searches while backfilling unused result capacity, so memory hits are not starved by numerically higher wiki integer scores. Fixes #77337. Thanks @hclsys.
