@@ -15,15 +15,18 @@ vi.mock("../media/store.js", async (importOriginal) => {
 const MEDIA_CLEANUP_TTL_MS = 24 * 60 * 60_000;
 const ABORTED_RUN_TTL_MS = 60 * 60_000;
 
-function createActiveRun(sessionKey: string): ChatAbortControllerEntry {
+function createActiveRun(
+  sessionKey: string,
+  params?: { kind?: ChatAbortControllerEntry["kind"]; expiresAtMs?: number },
+): ChatAbortControllerEntry {
   const now = Date.now();
   return {
-    kind: "chat",
+    kind: params?.kind ?? "chat",
     controller: new AbortController(),
     sessionId: "sess-1",
     sessionKey,
     startedAtMs: now,
-    expiresAtMs: now + ABORTED_RUN_TTL_MS,
+    expiresAtMs: params?.expiresAtMs ?? now + ABORTED_RUN_TTL_MS,
   };
 }
 
@@ -201,6 +204,29 @@ describe("startGatewayMaintenanceTimers", () => {
     expect(deps.chatRunBuffers.has(runId)).toBe(false);
     expect(deps.chatDeltaSentAt.has(runId)).toBe(false);
     expect(deps.chatDeltaLastBroadcastLen.has(runId)).toBe(false);
+
+    stopMaintenanceTimers(timers);
+  });
+
+  it("sweeps expired agent abort entries from the shared registry", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    const deps = createMaintenanceTimerDeps();
+    const runId = "run-expired-agent";
+    const entry = createActiveRun("agent:main:main", {
+      kind: "agent",
+      expiresAtMs: Date.now() - 1,
+    });
+    deps.chatAbortControllers.set(runId, entry);
+
+    const timers = startGatewayMaintenanceTimers(deps);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(entry.controller.signal.aborted).toBe(true);
+    expect(deps.chatAbortControllers.has(runId)).toBe(false);
+    expect(deps.chatRunState.abortedRuns.has(runId)).toBe(true);
 
     stopMaintenanceTimers(timers);
   });

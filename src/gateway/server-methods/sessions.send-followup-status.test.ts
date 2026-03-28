@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import { expectSubagentFollowupReactivation } from "./subagent-followup.test-helpers.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -121,5 +122,69 @@ describe("sessions.send completed subagent follow-up status", () => {
       completedRun,
       childSessionKey,
     });
+  });
+
+  it("interrupts active agent-owned session runs before steering a follow-up", async () => {
+    const sessionKey = "agent:main:subagent:interrupt";
+    const agentEntry: ChatAbortControllerEntry = {
+      kind: "agent",
+      controller: new AbortController(),
+      sessionId: "sess-interrupt",
+      sessionKey,
+      startedAtMs: Date.now(),
+      expiresAtMs: Date.now() + 60_000,
+    };
+
+    loadSessionEntryMock.mockReturnValue({
+      canonicalKey: sessionKey,
+      storePath: "/tmp/sessions.json",
+      entry: { sessionId: "sess-interrupt" },
+    });
+    readSessionMessagesMock.mockReturnValue([]);
+    chatSendMock.mockImplementation(async ({ respond }: { respond: RespondFn }) => {
+      respond(true, { runId: "run-new", status: "started" }, undefined, undefined);
+    });
+
+    const respond = vi.fn() as unknown as RespondFn;
+    const context = {
+      chatAbortControllers: new Map([["run-agent", agentEntry]]),
+      chatRunBuffers: new Map(),
+      chatDeltaSentAt: new Map(),
+      chatDeltaLastBroadcastLen: new Map(),
+      chatAbortedRuns: new Map(),
+      removeChatRun: vi.fn(() => undefined),
+      agentRunSeq: new Map(),
+      broadcast: vi.fn(),
+      nodeSendToSession: vi.fn(),
+      broadcastToConnIds: vi.fn(),
+      getSessionEventSubscriberConnIds: () => new Set<string>(),
+    } as unknown as GatewayRequestContext;
+
+    await sessionsHandlers["sessions.steer"]({
+      req: { id: "req-2" } as never,
+      params: {
+        key: sessionKey,
+        message: "follow-up",
+        idempotencyKey: "run-new",
+      },
+      respond,
+      context,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(agentEntry.controller.signal.aborted).toBe(true);
+    expect(context.chatAbortControllers.has("run-agent")).toBe(false);
+    expect(chatSendMock).toHaveBeenCalledOnce();
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        runId: "run-new",
+        status: "started",
+        messageSeq: 1,
+      }),
+      undefined,
+      undefined,
+    );
   });
 });

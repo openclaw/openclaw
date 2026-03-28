@@ -1,6 +1,6 @@
 import type { HealthSummary } from "../commands/health.js";
 import { cleanOldMedia } from "../media/store.js";
-import { abortChatRunById, type ChatAbortControllerEntry } from "./chat-abort.js";
+import { abortTrackedRunById, type ChatAbortControllerEntry } from "./chat-abort.js";
 import type { ChatRunEntry } from "./server-chat.js";
 import {
   DEDUPE_MAX,
@@ -107,7 +107,7 @@ export function startGatewayMaintenanceTimers(params: {
       if (now <= entry.expiresAtMs) {
         continue;
       }
-      abortChatRunById(
+      abortTrackedRunById(
         {
           chatAbortControllers: params.chatAbortControllers,
           chatRunBuffers: params.chatRunBuffers,
