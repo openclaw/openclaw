@@ -1,5 +1,6 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../config/config.js";
+import { findNormalizedProviderValue } from "../model-selection.js";
 import { extractAssistantText } from "../pi-embedded-utils.js";
 import { coerceToolModelConfig, type ToolModelConfig } from "./model-config.helpers.js";
 
@@ -59,9 +60,10 @@ export function resolveProviderVisionModelFromConfig(params: {
   cfg?: OpenClawConfig;
   provider: string;
 }): string | null {
-  const providerCfg = params.cfg?.models?.providers?.[params.provider] as unknown as
-    | { models?: Array<{ id?: string; input?: string[] }> }
-    | undefined;
+  const providerCfg = findNormalizedProviderValue(
+    params.cfg?.models?.providers,
+    params.provider,
+  ) as unknown as { models?: Array<{ id?: string; input?: string[] }> } | undefined;
   const models = providerCfg?.models ?? [];
   const picked = models.find((m) => Boolean((m?.id ?? "").trim()) && m.input?.includes("image"));
   const id = (picked?.id ?? "").trim();
