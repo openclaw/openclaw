@@ -746,6 +746,41 @@ function validateConfigObjectWithPluginsBase(
     issues.push({ path, message: `unknown heartbeat target: ${target}` });
   };
 
+  const hookMappingChannelIds = new Set<string>(["last", ...CHANNEL_IDS]);
+
+  const validateHookMappingChannel = (channel: string | undefined, path: string) => {
+    if (typeof channel !== "string") {
+      return;
+    }
+    const trimmed = channel.trim();
+    if (!trimmed) {
+      issues.push({ path, message: "hook mapping channel must not be empty" });
+      return;
+    }
+    const normalized = trimmed.toLowerCase();
+    if (!hookMappingChannelIds.has(normalized)) {
+      const { registry } = ensureRegistry();
+      for (const record of registry.plugins) {
+        for (const channelId of record.channels) {
+          const pluginChannel = channelId.trim();
+          if (pluginChannel) {
+            hookMappingChannelIds.add(pluginChannel.toLowerCase());
+          }
+        }
+      }
+    }
+    if (hookMappingChannelIds.has(normalized)) {
+      return;
+    }
+    issues.push({ path, message: `unknown hook mapping channel: ${channel}` });
+  };
+
+  if (Array.isArray(config.hooks?.mappings)) {
+    for (const [index, mapping] of config.hooks.mappings.entries()) {
+      validateHookMappingChannel(mapping?.channel, `hooks.mappings.${index}.channel`);
+    }
+  }
+
   validateHeartbeatTarget(
     config.agents?.defaults?.heartbeat?.target,
     "agents.defaults.heartbeat.target",

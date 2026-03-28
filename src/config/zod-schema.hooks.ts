@@ -49,19 +49,7 @@ export const HookMappingSchema = z
     textTemplate: z.string().optional(),
     deliver: z.boolean().optional(),
     allowUnsafeExternalContent: z.boolean().optional(),
-    channel: z
-      .union([
-        z.literal("last"),
-        z.literal("whatsapp"),
-        z.literal("telegram"),
-        z.literal("discord"),
-        z.literal("irc"),
-        z.literal("slack"),
-        z.literal("signal"),
-        z.literal("imessage"),
-        z.literal("msteams"),
-      ])
-      .optional(),
+    channel: z.string().trim().min(1).optional(),
     to: z.string().optional(),
     model: z.string().optional(),
     thinking: z.string().optional(),
