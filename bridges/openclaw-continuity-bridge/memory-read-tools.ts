@@ -600,6 +600,7 @@ function enforceRolloutAccess(
             text: JSON.stringify(
               {
                 error: "Memory retrieval rollout restricted to internal workspaces",
+                code: "MEMORY_ROLLOUT_RESTRICTED",
                 workspace_id: workspaceId,
                 rollout,
               },
@@ -608,6 +609,7 @@ function enforceRolloutAccess(
             ),
           },
         ],
+        isError: true,
       },
     };
   }
@@ -890,12 +892,18 @@ async function handleMemorySearch(
           {
             type: "text",
             text: JSON.stringify(
-              { error: "Query must contain non-whitespace characters", workspace_id: workspaceId },
+              {
+                ok: false,
+                error: "Query must contain non-whitespace characters",
+                code: "VALIDATION_ERROR",
+                workspace_id: workspaceId,
+              },
               null,
               2,
             ),
           },
         ],
+        isError: true,
       };
     }
 
@@ -1019,12 +1027,15 @@ async function handleMemoryRead(
           {
             type: "text",
             text: JSON.stringify({
+              ok: false,
               error: "Memory not found",
+              code: "MEMORY_NOT_FOUND",
               id: input.id,
               workspace_id: workspaceId,
             }),
           },
         ],
+        isError: true,
       };
     }
 

@@ -29,11 +29,6 @@ function buildWorkspaceContextHeaders(apiSecret?: string): Record<string, string
   return { Authorization: `Bearer ${apiSecret}` };
 }
 
-function isHtmlResponse(response: Response): boolean {
-  const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
-  return contentType.includes("text/html");
-}
-
 async function readWorkspaceContextPayload(response: Response): Promise<{
   payload: {
     ok?: boolean;
@@ -114,7 +109,7 @@ export async function resolveMcpWorkspaceId(
   // Older/stale HQ runtimes may not expose the dedicated workspace-context route
   // even though /api/airya/tool is live. In local nil-workspace mode, the safe
   // compatibility fallback is the legacy default workspace id.
-  if (response.status === 404 || (payload === null && isHtmlResponse(response))) {
+  if (response.status === 404) {
     return LEGACY_DEFAULT_WORKSPACE_ID;
   }
 

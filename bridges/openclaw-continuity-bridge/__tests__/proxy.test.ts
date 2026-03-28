@@ -336,6 +336,42 @@ describe("auth propagation", () => {
     expect(toolBody.tool).toBe("card_activity_log");
     expect(toolBody.workspace_id).toBe("00000000-0000-0000-0000-000000000000");
   });
+
+  it("fails closed when workspace-context returns an HTML 500 instead of silently falling back", async () => {
+    resetCallerInstanceCache();
+    const fetchFn = vi.fn().mockImplementation(async (url: string) => {
+      if (url === "http://localhost:3000/api/airya/workspace-context") {
+        return {
+          ok: false,
+          status: 500,
+          headers: { get: () => "text/html; charset=utf-8" },
+          text: async () => "<!DOCTYPE html><html><body>500</body></html>",
+        };
+      }
+
+      throw new Error("tool execution should not be attempted after workspace-context 500");
+    }) as unknown as typeof fetch;
+
+    const result = await proxyToolCall(
+      "card_activity_log",
+      {
+        work_item_id: "c38ab336-f5eb-41c6-b8d8-76a49a905422",
+        actor: "codex",
+        action: "repro_attempt",
+      },
+      makeConfig({
+        workspaceId: "00000000-0000-0000-0000-000000000000",
+        fetchFn,
+      }),
+    );
+
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(result.content[0].text)).toMatchObject({
+      code: "WORKSPACE_RESOLUTION_FAILED",
+      error: "Workspace context request returned a non-JSON response with status 500.",
+    });
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("read-only proxy helper", () => {
