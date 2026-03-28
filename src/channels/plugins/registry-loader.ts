@@ -1,5 +1,8 @@
-import type { PluginChannelRegistration, PluginRegistry } from "../../plugins/registry.js";
-import { getActivePluginRegistry } from "../../plugins/runtime.js";
+import type { PluginChannelRegistration } from "../../plugins/registry.js";
+import {
+  getActivePluginChannelRegistry,
+  getActivePluginChannelRegistryVersion,
+} from "../../plugins/runtime.js";
 import type { ChannelId } from "./types.js";
 
 type ChannelRegistryValueResolver<TValue> = (
@@ -10,13 +13,14 @@ export function createChannelRegistryLoader<TValue>(
   resolveValue: ChannelRegistryValueResolver<TValue>,
 ): (id: ChannelId) => Promise<TValue | undefined> {
   const cache = new Map<ChannelId, TValue>();
-  let lastRegistry: PluginRegistry | null = null;
+  let lastRegistryVersion = -1;
 
   return async (id: ChannelId): Promise<TValue | undefined> => {
-    const registry = getActivePluginRegistry();
-    if (registry !== lastRegistry) {
+    const registry = getActivePluginChannelRegistry();
+    const registryVersion = getActivePluginChannelRegistryVersion();
+    if (registryVersion !== lastRegistryVersion) {
       cache.clear();
-      lastRegistry = registry;
+      lastRegistryVersion = registryVersion;
     }
     const cached = cache.get(id);
     if (cached) {

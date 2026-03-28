@@ -4,7 +4,11 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { clearPluginDiscoveryCache } from "../../../plugins/discovery.js";
 import { clearPluginManifestRegistryCache } from "../../../plugins/manifest-registry.js";
-import { setActivePluginRegistry } from "../../../plugins/runtime.js";
+import {
+  pinActivePluginChannelRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
   createOutboundTestPlugin,
@@ -562,6 +566,19 @@ describe("channel plugin loader", () => {
       case "missing-outbound":
         await expectOutboundAdapterMissingCase(testCase.registry);
         return;
+    }
+  });
+
+  it("keeps outbound adapter resolution on the pinned channel registry after active registry replacement", async () => {
+    try {
+      setActivePluginRegistry(registryWithDemoLoader);
+      pinActivePluginChannelRegistry(registryWithDemoLoader);
+      setActivePluginRegistry(emptyRegistry);
+
+      expect(await loadChannelOutboundAdapter("demo-loader")).toBe(demoOutbound);
+    } finally {
+      resetPluginRuntimeStateForTest();
+      setActivePluginRegistry(emptyRegistry);
     }
   });
 });
