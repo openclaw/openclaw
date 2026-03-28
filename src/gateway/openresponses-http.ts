@@ -686,7 +686,7 @@ export async function handleOpenResponsesHttpRequest(
     let collectedThinking = "";
     let currentThinkingSegment = "";
     const unsubThinking = onAgentEvent((evt) => {
-      if (evt.runId !== responseId || evt.stream !== "thinking") {
+      if (evt.runId !== responseId || evt.stream !== "thinking-raw") {
         return;
       }
       const raw = typeof evt.data?.rawText === "string" ? evt.data.rawText : "";
@@ -959,7 +959,7 @@ export async function handleOpenResponsesHttpRequest(
       return;
     }
 
-    if (evt.stream === "thinking") {
+    if (evt.stream === "thinking-raw") {
       const raw = typeof evt.data?.rawText === "string" ? evt.data.rawText : "";
       if (!raw) {
         return;
@@ -1115,11 +1115,19 @@ export async function handleOpenResponsesHttpRequest(
           item: completedFunctionCallItem,
         });
 
+        const toolCallOutput: OutputItem[] = [completedItem, functionCallItem];
+        if (accumulatedThinking) {
+          toolCallOutput.push({
+            type: "reasoning",
+            id: reasoningItemId,
+            content: accumulatedThinking,
+          });
+        }
         const incompleteResponse = createResponseResource({
           id: responseId,
           model,
           status: "incomplete",
-          output: [completedItem, functionCallItem],
+          output: toolCallOutput,
           usage,
         });
         closed = true;
