@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { promisify, TextDecoder } from "node:util";
+import { decodeCapturedOutputBuffer, resolveWindowsConsoleEncoding } from "../node-host/invoke.js";
 import { danger, shouldLogVerbose } from "../globals.js";
 import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
 import { logDebug, logError } from "../logger.js";
@@ -137,10 +138,9 @@ export async function runExec(
         )
       : await execFileAsync(execCommand, execArgs, options);
     
-    // Decode buffers with platform-specific encoding
-    const decoder = new TextDecoder(process.platform === "win32" ? "gbk" : "utf-8");
-    const stdout = decoder.decode(stdoutBuffer);
-    const stderr = decoder.decode(stderrBuffer);
+    // Decode buffers using the existing utility function
+    const stdout = decodeCapturedOutputBuffer({ buffer: stdoutBuffer });
+    const stderr = decodeCapturedOutputBuffer({ buffer: stderrBuffer });
     
     if (shouldLogVerbose()) {
       if (stdout.trim()) {
@@ -250,8 +250,15 @@ export async function runCommandWithTimeout(
   );
   // Spawn with inherited stdin (TTY) so tools like `pi` stay interactive when needed.
   return await new Promise((resolve, reject) => {
-    // Create TextDecoder once outside stream callbacks
-    const encoding = process.platform === "win32" ? "gbk" : "utf-8";
+    // Create TextDecoder with proper encoding detection and fallback
+    const rawEncoding = process.platform === "win32" ? (resolveWindowsConsoleEncoding() ?? "utf-8") : "utf-8";
+    let encoding: string;
+    try {
+      new TextDecoder(rawEncoding); // probe support
+      encoding = rawEncoding;
+    } catch {
+      encoding = "utf-8";
+    }
     const stdoutDecoder = new TextDecoder(encoding);
     const stderrDecoder = new TextDecoder(encoding);
     
