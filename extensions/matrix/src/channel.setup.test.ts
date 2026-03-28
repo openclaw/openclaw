@@ -10,8 +10,11 @@ vi.mock("./matrix/actions/verification.js", () => ({
 }));
 
 import { matrixPlugin } from "./channel.js";
+import { matrixSetupAdapter } from "./setup-core.js";
 import { installMatrixTestRuntime } from "./test-runtime.js";
 import type { CoreConfig } from "./types.js";
+
+let runMatrixSetupBootstrapAfterConfigWrite: typeof import("./setup-bootstrap.js").runMatrixSetupBootstrapAfterConfigWrite;
 
 describe("matrix setup post-write bootstrap", () => {
   const log = vi.fn();
@@ -46,7 +49,7 @@ describe("matrix setup post-write bootstrap", () => {
       previousCfg: params.previousCfg,
       accountId: params.accountId,
       input: params.input,
-      nextCfg: matrixPlugin.setup!.applyAccountConfig({
+      nextCfg: matrixSetupAdapter.applyAccountConfig({
         cfg: params.previousCfg,
         accountId: params.accountId,
         input: params.input,
@@ -85,11 +88,10 @@ describe("matrix setup post-write bootstrap", () => {
     accountId: string;
     input: Record<string, unknown>;
   }) {
-    await matrixPlugin.setup!.afterAccountConfigWritten?.({
+    await runMatrixSetupBootstrapAfterConfigWrite({
       previousCfg: params.previousCfg,
       cfg: params.nextCfg,
       accountId: params.accountId,
-      input: params.input,
       runtime,
     });
   }
@@ -121,7 +123,9 @@ describe("matrix setup post-write bootstrap", () => {
     }
   }
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ runMatrixSetupBootstrapAfterConfigWrite } = await import("./setup-bootstrap.js"));
     verificationMocks.bootstrapMatrixVerification.mockReset();
     log.mockClear();
     error.mockClear();
@@ -226,7 +230,7 @@ describe("matrix setup post-write bootstrap", () => {
       },
       () => {
         expect(
-          matrixPlugin.setup!.validateInput?.({
+          matrixSetupAdapter.validateInput?.({
             cfg: {} as CoreConfig,
             accountId: "default",
             input: { useEnv: true },
