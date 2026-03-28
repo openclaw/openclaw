@@ -1,4 +1,5 @@
 import { normalizeDeviceAuthRole, normalizeDeviceAuthScopes } from "./device-auth.js";
+import { roleScopesAllow } from "./operator-scope-compat.js";
 
 export type DeviceBootstrapProfile = {
   roles: string[];
@@ -69,9 +70,28 @@ export function satisfiesDeviceBootstrapProfile(
   requested: DeviceBootstrapProfile,
   allowed: DeviceBootstrapProfile,
 ): boolean {
-  return (
-    requested.roles.length > 0 &&
-    requested.roles.every((role) => allowed.roles.includes(role)) &&
-    requested.scopes.every((scope) => allowed.scopes.includes(scope))
+  if (requested.roles.length === 0) {
+    return false;
+  }
+  const rolesMatch = requested.roles.every((role) => allowed.roles.includes(role));
+  if (!rolesMatch) {
+    return false;
+  }
+
+  // Scopes must be permitted under at least one of the requested roles
+  // (usually there is only one role requested during verification).
+  const scopesMatch = requested.roles.some((role) =>
+    roleScopesAllow({
+      role,
+      requestedScopes: requested.scopes,
+      allowedScopes: allowed.scopes,
+    }),
   );
+
+  // If no scopes are requested, scopesMatch will be true.
+  // If multiple roles are requested, and some scopes are 'operator' scopes and some are 'node' scopes,
+  // roleScopesAllow requires that ALL requested scopes be valid for the GIVEN role.
+  // To support multi-role requests requesting a mix of scopes, we must fall back to basic inclusion
+  // if `roleScopesAllow` fails, because `roleScopesAllow` enforces prefix checking (e.g. `operator.` for operator).
+  return scopesMatch || requested.scopes.every((scope) => allowed.scopes.includes(scope));
 }

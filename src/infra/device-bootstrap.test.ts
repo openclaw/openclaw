@@ -164,6 +164,24 @@ describe("device bootstrap tokens", () => {
     await expect(fs.readFile(bootstrapPath, "utf8")).resolves.toBe("{}");
   });
 
+  it("honors operator.admin when validating requested operator subsets", async () => {
+    const baseDir = await createTempDir();
+    const issued = await issueDeviceBootstrapToken({
+      baseDir,
+      profile: {
+        roles: ["operator"],
+        scopes: ["operator.admin"],
+      },
+    });
+
+    await expect(
+      verifyBootstrapToken(baseDir, issued.token, {
+        role: "operator",
+        scopes: ["operator.read", "operator.write", "operator.pairing"],
+      }),
+    ).resolves.toEqual({ ok: true });
+  });
+
   it("keeps the token when required verification fields are blank", async () => {
     const baseDir = await createTempDir();
     const issued = await issueDeviceBootstrapToken({ baseDir });
