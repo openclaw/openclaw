@@ -37,7 +37,7 @@ import {
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
-import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
+import { isAcpSessionKey, isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import {
   AVATAR_MAX_BYTES,
   isAvatarDataUrl,
@@ -1026,51 +1026,116 @@ export function resolveSessionModelRef(
   return { provider, model };
 }
 
+function resolveSessionModelIdentityLiteral(
+  cfg: OpenClawConfig,
+  modelRef?: string,
+): { provider?: string; model: string } | undefined {
+  const trimmed = modelRef?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const inferredProvider = inferUniqueProviderFromConfiguredModels({
+    cfg,
+    model: trimmed,
+  });
+  if (inferredProvider) {
+    return { provider: inferredProvider, model: trimmed };
+  }
+  if (trimmed.includes("/")) {
+    const parsed = parseModelRef(trimmed, DEFAULT_PROVIDER);
+    if (parsed) {
+      return { provider: parsed.provider, model: parsed.model };
+    }
+  }
+  return { model: trimmed };
+}
+
+function resolveSessionModelIdentityLiteralWithProvider(
+  cfg: OpenClawConfig,
+  modelRef: string | undefined,
+  providerRef: string | undefined,
+): { provider?: string; model: string } | undefined {
+  const trimmedModel = modelRef?.trim();
+  if (!trimmedModel) {
+    return undefined;
+  }
+  const trimmedProvider = providerRef?.trim();
+  if (!trimmedProvider) {
+    return resolveSessionModelIdentityLiteral(cfg, trimmedModel);
+  }
+  const parsed = parseModelRef(trimmedModel, trimmedProvider);
+  if (parsed) {
+    return { provider: parsed.provider, model: parsed.model };
+  }
+  return { provider: trimmedProvider, model: trimmedModel };
+}
+
+function resolveExplicitSessionModelIdentityRef(
+  cfg: OpenClawConfig,
+  entry?:
+    | SessionEntry
+    | Pick<SessionEntry, "model" | "modelProvider" | "modelOverride" | "providerOverride" | "acp">,
+  fallbackModelRef?: string,
+): { provider?: string; model: string } | undefined {
+  const runtimeIdentity = resolveSessionModelIdentityLiteralWithProvider(
+    cfg,
+    entry?.model,
+    entry?.modelProvider,
+  );
+  if (runtimeIdentity) {
+    return runtimeIdentity;
+  }
+
+  const acpRuntimeIdentity = resolveSessionModelIdentityLiteral(
+    cfg,
+    entry?.acp?.runtimeOptions?.model,
+  );
+  if (acpRuntimeIdentity) {
+    return acpRuntimeIdentity;
+  }
+
+  const fallbackIdentity = resolveSessionModelIdentityLiteral(cfg, fallbackModelRef);
+  if (fallbackIdentity) {
+    return fallbackIdentity;
+  }
+
+  return resolveSessionModelIdentityLiteralWithProvider(
+    cfg,
+    entry?.modelOverride,
+    entry?.providerOverride,
+  );
+}
+
 export function resolveSessionModelIdentityRef(
   cfg: OpenClawConfig,
   entry?:
     | SessionEntry
-    | Pick<SessionEntry, "model" | "modelProvider" | "modelOverride" | "providerOverride">,
+    | Pick<SessionEntry, "model" | "modelProvider" | "modelOverride" | "providerOverride" | "acp">,
   agentId?: string,
   fallbackModelRef?: string,
 ): { provider?: string; model: string } {
-  const runtimeModel = entry?.model?.trim();
-  const runtimeProvider = entry?.modelProvider?.trim();
-  if (runtimeModel) {
-    if (runtimeProvider) {
-      return { provider: runtimeProvider, model: runtimeModel };
-    }
-    const inferredProvider = inferUniqueProviderFromConfiguredModels({
-      cfg,
-      model: runtimeModel,
-    });
-    if (inferredProvider) {
-      return { provider: inferredProvider, model: runtimeModel };
-    }
-    if (runtimeModel.includes("/")) {
-      const parsedRuntime = parseModelRef(runtimeModel, DEFAULT_PROVIDER);
-      if (parsedRuntime) {
-        return { provider: parsedRuntime.provider, model: parsedRuntime.model };
-      }
-      return { model: runtimeModel };
-    }
-    return { model: runtimeModel };
+  const runtimeIdentity = resolveSessionModelIdentityLiteralWithProvider(
+    cfg,
+    entry?.model,
+    entry?.modelProvider,
+  );
+  if (runtimeIdentity) {
+    return runtimeIdentity;
   }
-  const fallbackRef = fallbackModelRef?.trim();
-  if (fallbackRef) {
-    const parsedFallback = parseModelRef(fallbackRef, DEFAULT_PROVIDER);
-    if (parsedFallback) {
-      return { provider: parsedFallback.provider, model: parsedFallback.model };
-    }
-    const inferredProvider = inferUniqueProviderFromConfiguredModels({
-      cfg,
-      model: fallbackRef,
-    });
-    if (inferredProvider) {
-      return { provider: inferredProvider, model: fallbackRef };
-    }
-    return { model: fallbackRef };
+
+  const acpRuntimeIdentity = resolveSessionModelIdentityLiteral(
+    cfg,
+    entry?.acp?.runtimeOptions?.model,
+  );
+  if (acpRuntimeIdentity) {
+    return acpRuntimeIdentity;
   }
+
+  const fallbackIdentity = resolveSessionModelIdentityLiteral(cfg, fallbackModelRef);
+  if (fallbackIdentity) {
+    return fallbackIdentity;
+  }
+
   const resolved = resolveSessionModelRef(cfg, entry, agentId);
   return { provider: resolved.provider, model: resolved.model };
 }
@@ -1120,14 +1185,11 @@ export function buildGatewaySessionRow(params: {
   const subagentStartedAt = subagentRun ? getSubagentSessionStartedAt(subagentRun) : undefined;
   const subagentEndedAt = subagentRun ? subagentRun.endedAt : undefined;
   const subagentRuntimeMs = subagentRun ? resolveSessionRuntimeMs(subagentRun, now) : undefined;
-  const resolvedModel = resolveSessionModelIdentityRef(
-    cfg,
-    entry,
-    sessionAgentId,
-    subagentRun?.model,
-  );
-  const modelProvider = resolvedModel.provider;
-  const model = resolvedModel.model ?? DEFAULT_MODEL;
+  const resolvedModel = isAcpSessionKey(key)
+    ? resolveExplicitSessionModelIdentityRef(cfg, entry, subagentRun?.model)
+    : resolveSessionModelIdentityRef(cfg, entry, sessionAgentId, subagentRun?.model);
+  const modelProvider = resolvedModel?.provider;
+  const model = resolvedModel?.model ?? (isAcpSessionKey(key) ? undefined : DEFAULT_MODEL);
   const transcriptUsage =
     resolvePositiveNumber(resolveFreshSessionTotalTokens(entry)) === undefined ||
     resolvePositiveNumber(entry?.contextTokens) === undefined ||

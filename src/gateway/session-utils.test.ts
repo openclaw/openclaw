@@ -720,6 +720,30 @@ describe("resolveSessionModelIdentityRef", () => {
       model: "anthropic/claude-sonnet-4-6",
     });
   });
+
+  test("uses ACP runtimeOptions.model before generic defaults", () => {
+    const cfg = createModelDefaultsConfig({
+      primary: "xai/grok-4.20-0309-non-reasoning",
+    });
+
+    const resolved = resolveSessionModelIdentityRef(cfg, {
+      sessionId: "acp-session",
+      updatedAt: Date.now(),
+      acp: {
+        backend: "acpx",
+        agent: "codex",
+        runtimeSessionName: "runtime:1",
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: Date.now(),
+        runtimeOptions: {
+          model: "openai/gpt-5.4",
+        },
+      },
+    } as SessionEntry);
+
+    expect(resolved).toEqual({ provider: "openai", model: "gpt-5.4" });
+  });
 });
 
 describe("deriveSessionTitle", () => {
@@ -2132,5 +2156,68 @@ describe("loadCombinedSessionStoreForGateway includes disk-only agents (#32804)"
       expect(store["agent:main:main"]).toBeDefined();
       expect(store["agent:codex:acp-task"]).toBeDefined();
     });
+  });
+});
+
+describe("listSessionsFromStore ACP model reporting", () => {
+  const cfg = createModelDefaultsConfig({
+    primary: "xai/grok-4.20-0309-non-reasoning",
+  });
+
+  test("reports ACP runtime model from session metadata", () => {
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store: {
+        "agent:codex:acp:task-1": {
+          sessionId: "sess-acp-1",
+          updatedAt: Date.now(),
+          acp: {
+            backend: "acpx",
+            agent: "codex",
+            runtimeSessionName: "runtime:1",
+            mode: "persistent",
+            state: "idle",
+            lastActivityAt: Date.now(),
+            runtimeOptions: {
+              model: "openai/gpt-5.4",
+            },
+          },
+        } as SessionEntry,
+      },
+      opts: {},
+    });
+
+    expect(result.sessions[0]).toMatchObject({
+      key: "agent:codex:acp:task-1",
+      modelProvider: "openai",
+      model: "gpt-5.4",
+    });
+  });
+
+  test("does not fall back to configured default model for ACP sessions with no runtime model", () => {
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store: {
+        "agent:claude:acp:task-2": {
+          sessionId: "sess-acp-2",
+          updatedAt: Date.now(),
+          acp: {
+            backend: "acpx",
+            agent: "claude",
+            runtimeSessionName: "runtime:2",
+            mode: "persistent",
+            state: "idle",
+            lastActivityAt: Date.now(),
+          },
+        } as SessionEntry,
+      },
+      opts: {},
+    });
+
+    expect(result.sessions[0]?.key).toBe("agent:claude:acp:task-2");
+    expect(result.sessions[0]?.modelProvider).toBeUndefined();
+    expect(result.sessions[0]?.model).toBeUndefined();
   });
 });
