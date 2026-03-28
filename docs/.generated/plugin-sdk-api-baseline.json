@@ -1404,7 +1404,7 @@
           }
         },
         {
-          "declaration": "export type ReplyPrefixContext = import(\"src/auto-reply/reply/response-prefix-template\").ResponsePrefixContext;",
+          "declaration": "export type ReplyPrefixContext = import(\"../auto-reply/reply/response-prefix-template.ts\").ResponsePrefixContext;",
           "exportName": "ReplyPrefixContext",
           "kind": "type",
           "source": {
@@ -1484,6 +1484,33 @@
           "source": {
             "line": 23,
             "path": "src/channels/typing.ts"
+          }
+        },
+        {
+          "declaration": "export function emitHeartbeatEvent(evt: Omit<HeartbeatEventPayload, \"ts\">): void;",
+          "exportName": "emitHeartbeatEvent",
+          "kind": "function",
+          "source": {
+            "line": 51,
+            "path": "src/infra/heartbeat-events.ts"
+          }
+        },
+        {
+          "declaration": "export function enqueueSystemEvent(text: string, options: SystemEventOptions): boolean;",
+          "exportName": "enqueueSystemEvent",
+          "kind": "function",
+          "source": {
+            "line": 91,
+            "path": "src/infra/system-events.ts"
+          }
+        },
+        {
+          "declaration": "export function getLastHeartbeatEvent(): HeartbeatEventPayload | null;",
+          "exportName": "getLastHeartbeatEvent",
+          "kind": "function",
+          "source": {
+            "line": 61,
+            "path": "src/infra/heartbeat-events.ts"
           }
         },
         {
@@ -1604,6 +1631,15 @@
           }
         },
         {
+          "declaration": "export function onHeartbeatEvent(listener: (evt: HeartbeatEventPayload) => void): () => void;",
+          "exportName": "onHeartbeatEvent",
+          "kind": "function",
+          "source": {
+            "line": 57,
+            "path": "src/infra/heartbeat-events.ts"
+          }
+        },
+        {
           "declaration": "export function recordChannelActivity(params: { channel: ChannelId; accountId?: string | null | undefined; direction: ChannelDirection; at?: number | undefined; }): void;",
           "exportName": "recordChannelActivity",
           "kind": "function",
@@ -1619,6 +1655,33 @@
           "source": {
             "line": 3,
             "path": "src/channels/plugins/outbound/interactive.ts"
+          }
+        },
+        {
+          "declaration": "export function resetHeartbeatEventsForTest(): void;",
+          "exportName": "resetHeartbeatEventsForTest",
+          "kind": "function",
+          "source": {
+            "line": 65,
+            "path": "src/infra/heartbeat-events.ts"
+          }
+        },
+        {
+          "declaration": "export function resolveHeartbeatVisibility(params: { cfg: OpenClawConfig; channel: GatewayMessageChannel; accountId?: string | undefined; }): ResolvedHeartbeatVisibility;",
+          "exportName": "resolveHeartbeatVisibility",
+          "kind": "function",
+          "source": {
+            "line": 22,
+            "path": "src/infra/heartbeat-visibility.ts"
+          }
+        },
+        {
+          "declaration": "export function resolveIndicatorType(status: \"sent\" | \"ok-empty\" | \"ok-token\" | \"skipped\" | \"failed\"): HeartbeatIndicatorType | undefined;",
+          "exportName": "resolveIndicatorType",
+          "kind": "function",
+          "source": {
+            "line": 23,
+            "path": "src/infra/heartbeat-events.ts"
           }
         },
         {
@@ -2333,6 +2396,24 @@
           }
         },
         {
+          "declaration": "export type HeartbeatEventPayload = HeartbeatEventPayload;",
+          "exportName": "HeartbeatEventPayload",
+          "kind": "type",
+          "source": {
+            "line": 6,
+            "path": "src/infra/heartbeat-events.ts"
+          }
+        },
+        {
+          "declaration": "export type HeartbeatIndicatorType = HeartbeatIndicatorType;",
+          "exportName": "HeartbeatIndicatorType",
+          "kind": "type",
+          "source": {
+            "line": 4,
+            "path": "src/infra/heartbeat-events.ts"
+          }
+        },
+        {
           "declaration": "export type NormalizedPollInput = NormalizedPollInput;",
           "exportName": "NormalizedPollInput",
           "kind": "type",
@@ -2366,6 +2447,15 @@
           "source": {
             "line": 20,
             "path": "src/channels/reply-prefix.ts"
+          }
+        },
+        {
+          "declaration": "export type ResolvedHeartbeatVisibility = ResolvedHeartbeatVisibility;",
+          "exportName": "ResolvedHeartbeatVisibility",
+          "kind": "type",
+          "source": {
+            "line": 5,
+            "path": "src/infra/heartbeat-visibility.ts"
           }
         },
         {
@@ -3581,7 +3671,7 @@
           }
         },
         {
-          "declaration": "export type ChannelOutboundSessionRouteParams = {    cfg: OpenClawConfig;    agentId: string;    accountId?: string | null;    target: string;    resolvedTarget?: {        to: string;        kind: import(\"src/channels/plugins/types.core\").ChannelDirectoryEntryKind | \"channel\";        display?: string;        source: \"normalized\" | \"directory\";    };    replyToId?: string | null;    threadId?: string | number | null;};",
+          "declaration": "export type ChannelOutboundSessionRouteParams = {    cfg: OpenClawConfig;    agentId: string;    accountId?: string | null;    target: string;    resolvedTarget?: {        to: string;        kind: import(\"../channels/plugins/types.core.js\").ChannelDirectoryEntryKind | \"channel\";        display?: string;        source: \"normalized\" | \"directory\";    };    replyToId?: string | null;    threadId?: string | number | null;};",
           "exportName": "ChannelOutboundSessionRouteParams",
           "kind": "type",
           "source": {
