@@ -8,7 +8,7 @@ vi.mock("../../plugins/manifest-registry.js", () => ({
 }));
 
 vi.mock("../../config/plugin-auto-enable.js", () => ({
-  applyPluginAutoEnable: (...args: unknown[]) => applyPluginAutoEnable(...args),
+  applyPluginAutoEnable: (args: unknown) => applyPluginAutoEnable(args),
 }));
 
 import { listManifestInstalledChannelIds } from "./discovery.js";
@@ -24,7 +24,7 @@ describe("listManifestInstalledChannelIds", () => {
       channels: { slack: { enabled: true } },
       plugins: { allow: ["slack"] },
       autoEnabled: true,
-    };
+    } as never;
     applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: ["slack"] });
     loadPluginManifestRegistry.mockReturnValue({
       plugins: [{ id: "slack", channels: ["slack"] }],
