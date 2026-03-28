@@ -525,11 +525,12 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       if (!obj) {
         return;
       }
-      const sessionKey =
+      const sessionKeyRaw =
         typeof obj.sessionKey === "string" ? obj.sessionKey.trim() : `node-${nodeId}`;
-      if (!sessionKey) {
+      if (!sessionKeyRaw) {
         return;
       }
+      const { canonicalKey: sessionKey } = loadSessionEntry(sessionKeyRaw);
 
       // Respect tools.exec.notifyOnExit setting (default: true)
       // When false, skip system event notifications for node exec events.
