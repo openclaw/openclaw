@@ -176,8 +176,8 @@ describe("resolveHeartbeatPrompt", () => {
         expected: "ping",
       },
     ] as const;
-    for (const testCase of cases) {
-      expect(resolveHeartbeatPrompt(testCase.cfg)).toBe(testCase.expected);
+    for (const { cfg, expected } of cases) {
+      expect(resolveHeartbeatPrompt(cfg)).toBe(expected);
     }
   });
 });
@@ -346,11 +346,8 @@ describe("resolveHeartbeatDeliveryTarget", () => {
         },
       },
     ];
-    for (const testCase of cases) {
-      expect(
-        resolveHeartbeatDeliveryTarget({ cfg: testCase.cfg, entry: testCase.entry }),
-        testCase.name,
-      ).toEqual(testCase.expected);
+    for (const { cfg, entry, name, expected } of cases) {
+      expect(resolveHeartbeatDeliveryTarget({ cfg, entry }), name).toEqual(expected);
     }
   });
 
@@ -359,18 +356,18 @@ describe("resolveHeartbeatDeliveryTarget", () => {
       { to: "-100111:topic:42", expectedTo: "-100111", expectedThreadId: 42 },
       { to: "-100111", expectedTo: "-100111", expectedThreadId: undefined },
     ] as const;
-    for (const testCase of cases) {
+    for (const { to, expectedTo, expectedThreadId } of cases) {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
-            heartbeat: { target: "telegram", to: testCase.to },
+            heartbeat: { target: "telegram", to },
           },
         },
       };
       const result = resolveHeartbeatDeliveryTarget({ cfg, entry: baseEntry });
       expect(result.channel).toBe("telegram");
-      expect(result.to).toBe(testCase.expectedTo);
-      expect(result.threadId).toBe(testCase.expectedThreadId);
+      expect(result.to).toBe(expectedTo);
+      expect(result.threadId).toBe(expectedThreadId);
     }
   });
 
@@ -398,16 +395,16 @@ describe("resolveHeartbeatDeliveryTarget", () => {
       },
     ] as const;
 
-    for (const testCase of cases) {
+    for (const { accountId, expected } of cases) {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
-            heartbeat: { target: "telegram", to: "-100123", accountId: testCase.accountId },
+            heartbeat: { target: "telegram", to: "-100123", accountId },
           },
         },
         channels: { telegram: { accounts: { work: { botToken: "token" } } } },
       };
-      expect(resolveHeartbeatDeliveryTarget({ cfg, entry: baseEntry })).toEqual(testCase.expected);
+      expect(resolveHeartbeatDeliveryTarget({ cfg, entry: baseEntry })).toEqual(expected);
     }
   });
 
@@ -779,8 +776,8 @@ describe("runHeartbeatOnce", () => {
         },
       ]);
 
-      for (const testCase of cases) {
-        const tmpDir = await createCaseDir(testCase.caseDir);
+      for (const { name, caseDir, peerKind, peerId, message, applyOverride, runOptions } of cases) {
+        const tmpDir = await createCaseDir(caseDir);
         const storePath = path.join(tmpDir, "sessions.json");
         const cfg: OpenClawConfig = {
           agents: {
@@ -800,10 +797,10 @@ describe("runHeartbeatOnce", () => {
         const overrideSessionKey = buildAgentPeerSessionKey({
           agentId,
           channel: "whatsapp",
-          peerKind: testCase.peerKind,
-          peerId: testCase.peerId,
+          peerKind,
+          peerId,
         });
-        testCase.applyOverride({ cfg, sessionKey: overrideSessionKey });
+        applyOverride({ cfg, sessionKey: overrideSessionKey });
 
         await fs.writeFile(
           storePath,
@@ -815,16 +812,16 @@ describe("runHeartbeatOnce", () => {
               lastTo: "120363401234567890@g.us",
             },
             [overrideSessionKey]: {
-              sessionId: `sid-${testCase.peerKind}`,
+              sessionId: `sid-${peerKind}`,
               updatedAt: Date.now() + 10_000,
               lastChannel: "whatsapp",
-              lastTo: testCase.peerId,
+              lastTo: peerId,
             },
           }),
         );
 
         replySpy.mockClear();
-        replySpy.mockResolvedValue([{ text: testCase.message }]);
+        replySpy.mockResolvedValue([{ text: message }]);
         const sendWhatsApp = vi
           .fn<
             (
@@ -837,21 +834,17 @@ describe("runHeartbeatOnce", () => {
 
         await runHeartbeatOnce({
           cfg,
-          ...testCase.runOptions({ sessionKey: overrideSessionKey }),
+          ...runOptions({ sessionKey: overrideSessionKey }),
           deps: createHeartbeatDeps(sendWhatsApp),
         });
 
-        expect(sendWhatsApp, testCase.name).toHaveBeenCalledTimes(1);
-        expect(sendWhatsApp, testCase.name).toHaveBeenCalledWith(
-          testCase.peerId,
-          testCase.message,
-          expect.any(Object),
-        );
-        expect(replySpy, testCase.name).toHaveBeenCalledWith(
+        expect(sendWhatsApp, name).toHaveBeenCalledTimes(1);
+        expect(sendWhatsApp, name).toHaveBeenCalledWith(peerId, message, expect.any(Object));
+        expect(replySpy, name).toHaveBeenCalledWith(
           expect.objectContaining({
             SessionKey: overrideSessionKey,
-            From: testCase.peerId,
-            To: testCase.peerId,
+            From: peerId,
+            To: peerId,
             Provider: "heartbeat",
           }),
           expect.objectContaining({ isHeartbeat: true, suppressToolErrorWarnings: false }),
@@ -939,8 +932,8 @@ describe("runHeartbeatOnce", () => {
         },
       ]);
 
-      for (const testCase of cases) {
-        const tmpDir = await createCaseDir(testCase.caseDir);
+      for (const { name, caseDir, replies, expectedTexts } of cases) {
+        const tmpDir = await createCaseDir(caseDir);
         const storePath = path.join(tmpDir, "sessions.json");
         const cfg: OpenClawConfig = {
           agents: {
@@ -972,7 +965,7 @@ describe("runHeartbeatOnce", () => {
         );
 
         replySpy.mockClear();
-        replySpy.mockResolvedValue(testCase.replies);
+        replySpy.mockResolvedValue(replies);
         const sendWhatsApp = vi
           .fn<
             (
@@ -988,9 +981,9 @@ describe("runHeartbeatOnce", () => {
           deps: createHeartbeatDeps(sendWhatsApp),
         });
 
-        expect(sendWhatsApp, testCase.name).toHaveBeenCalledTimes(testCase.expectedTexts.length);
-        for (const [index, text] of testCase.expectedTexts.entries()) {
-          expect(sendWhatsApp, testCase.name).toHaveBeenNthCalledWith(
+        expect(sendWhatsApp, name).toHaveBeenCalledTimes(expectedTexts.length);
+        for (const [index, text] of expectedTexts.entries()) {
+          expect(sendWhatsApp, name).toHaveBeenNthCalledWith(
             index + 1,
             "120363401234567890@g.us",
             text,
@@ -1241,19 +1234,27 @@ describe("runHeartbeatOnce", () => {
       },
     ];
 
-    for (const testCase of cases) {
-      const { res, replySpy, sendWhatsApp } = await runHeartbeatFileScenario(testCase);
+    for (const {
+      name,
+      expectedStatus,
+      expectedSkipReason,
+      expectedReplyCalls,
+      expectedSendCalls,
+      expectCronContext,
+      ...scenario
+    } of cases) {
+      const { res, replySpy, sendWhatsApp } = await runHeartbeatFileScenario(scenario);
       try {
-        expect(res.status, testCase.name).toBe(testCase.expectedStatus);
+        expect(res.status, name).toBe(expectedStatus);
         if (res.status === "skipped") {
-          expect(res.reason, testCase.name).toBe(testCase.expectedSkipReason);
+          expect(res.reason, name).toBe(expectedSkipReason);
         }
-        expect(replySpy, testCase.name).toHaveBeenCalledTimes(testCase.expectedReplyCalls);
-        expect(sendWhatsApp, testCase.name).toHaveBeenCalledTimes(testCase.expectedSendCalls);
-        if (testCase.expectCronContext) {
+        expect(replySpy, name).toHaveBeenCalledTimes(expectedReplyCalls);
+        expect(sendWhatsApp, name).toHaveBeenCalledTimes(expectedSendCalls);
+        if (expectCronContext) {
           const calledCtx = replySpy.mock.calls[0]?.[0] as { Provider?: string; Body?: string };
-          expect(calledCtx.Provider, testCase.name).toBe("cron-event");
-          expect(calledCtx.Body, testCase.name).toContain("scheduled reminder has been triggered");
+          expect(calledCtx.Provider, name).toBe("cron-event");
+          expect(calledCtx.Body, name).toContain("scheduled reminder has been triggered");
         }
       } finally {
         replySpy.mockRestore();
