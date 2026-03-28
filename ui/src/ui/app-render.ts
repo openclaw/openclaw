@@ -78,7 +78,14 @@ import {
 import { loadLogs } from "./controllers/logs.ts";
 import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
-import { deleteSessionsAndRefresh, loadSessions, patchSession } from "./controllers/sessions.ts";
+import {
+  createControlUiSession,
+  createDefaultControlUiSessionLabel,
+  deleteSessionsAndRefresh,
+  loadSessions,
+  patchSession,
+  resolveNewControlUiSessionLabel,
+} from "./controllers/sessions.ts";
 import {
   installSkill,
   loadSkills,
@@ -329,6 +336,8 @@ export function renderApp(state: AppViewState) {
     state.agentsList?.agents?.[0]?.id ??
     null;
   const activeSessionAgentId = resolveAgentIdFromSessionKey(state.sessionKey);
+  const currentSessionRow =
+    state.sessionsResult?.sessions?.find((row) => row.key === state.sessionKey) ?? null;
   const toolsPanelUsesActiveSession = Boolean(
     resolvedAgentId && activeSessionAgentId && resolvedAgentId === activeSessionAgentId,
   );
@@ -390,6 +399,48 @@ export function renderApp(state: AppViewState) {
     state.cronForm.deliveryMode === "webhook"
       ? rawDeliveryToSuggestions.filter((value) => isHttpUrl(value))
       : rawDeliveryToSuggestions;
+  const handleCreateChatSession = async () => {
+    if (!state.client || !state.connected) {
+      return;
+    }
+    const now = new Date();
+    const nextLabel = resolveNewControlUiSessionLabel(
+      window.prompt("New chat title:", createDefaultControlUiSessionLabel(now)),
+      now,
+    );
+    if (!nextLabel) {
+      return;
+    }
+    state.lastError = null;
+    const result = await createControlUiSession(state, {
+      agentId: activeSessionAgentId,
+      label: nextLabel,
+    });
+    if (!result?.key) {
+      state.lastError = state.sessionsError ?? "Failed to create chat";
+      return;
+    }
+    switchChatSession(state, result.key);
+  };
+  const handleRenameChatSession = async () => {
+    if (!state.client || !state.connected) {
+      return;
+    }
+    const currentLabel = currentSessionRow?.label?.trim() || "";
+    const promptValue = window.prompt("Rename chat:", currentLabel);
+    if (promptValue === null) {
+      return;
+    }
+    const nextLabel = promptValue.trim();
+    if (!nextLabel || nextLabel === currentLabel) {
+      return;
+    }
+    state.lastError = null;
+    const result = await patchSession(state, state.sessionKey, { label: nextLabel });
+    if (!result) {
+      state.lastError = state.sessionsError ?? "Failed to rename chat";
+    }
+  };
 
   return html`
     ${renderCommandPalette({
@@ -1470,7 +1521,8 @@ export function renderApp(state: AppViewState) {
               canAbort: Boolean(state.chatRunId),
               onAbort: () => void state.handleAbortChat(),
               onQueueRemove: (id) => state.removeQueuedMessage(id),
-              onNewSession: () => state.handleSendChat("/new", { restoreDraft: true }),
+              onNewSession: () => void handleCreateChatSession(),
+              onRenameSession: () => void handleRenameChatSession(),
               onClearHistory: async () => {
                 if (!state.client || !state.connected) {
                   return;

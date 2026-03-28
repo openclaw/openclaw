@@ -1,6 +1,7 @@
+import { normalizeAgentId } from "../../../../src/routing/session-key.js";
 import { toNumber } from "../format.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
-import type { SessionsListResult } from "../types.ts";
+import type { SessionsListResult, SessionsPatchResult } from "../types.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
@@ -17,6 +18,77 @@ export type SessionsState = {
   sessionsIncludeGlobal: boolean;
   sessionsIncludeUnknown: boolean;
 };
+
+const CONTROL_UI_SESSION_SLUG_MAX = 32;
+
+function pad2(value: number): string {
+  return String(value).padStart(2, "0");
+}
+
+function createControlUiSessionRandomSuffix(): string {
+  if (typeof globalThis.crypto?.randomUUID === "function") {
+    return globalThis.crypto.randomUUID().replaceAll("-", "").slice(0, 4);
+  }
+  if (typeof globalThis.crypto?.getRandomValues === "function") {
+    const array = new Uint8Array(2);
+    globalThis.crypto.getRandomValues(array);
+    return Array.from(array, (value) => value.toString(16).padStart(2, "0"))
+      .join("")
+      .slice(0, 4);
+  }
+  return Math.random().toString(16).slice(2, 6).padEnd(4, "0");
+}
+
+function formatControlUiSessionTimestamp(now: Date): string {
+  return (
+    [now.getFullYear(), pad2(now.getMonth() + 1), pad2(now.getDate())].join("") +
+    `-${pad2(now.getHours())}${pad2(now.getMinutes())}`
+  );
+}
+
+function formatControlUiSessionLabelTimestamp(now: Date): string {
+  return `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())} ${pad2(now.getHours())}:${pad2(now.getMinutes())}`;
+}
+
+function slugifyControlUiSessionLabel(label: string): string {
+  return (
+    label
+      .trim()
+      .toLowerCase()
+      .replace(/['’"]/g, "")
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, CONTROL_UI_SESSION_SLUG_MAX) || "chat"
+  );
+}
+
+export function buildControlUiSessionKey(params: {
+  agentId: string;
+  label: string;
+  now?: Date;
+  randomSuffix?: string;
+}): string {
+  const now = params.now ?? new Date();
+  const suffix = (params.randomSuffix ?? createControlUiSessionRandomSuffix()).trim().toLowerCase();
+  const safeSuffix = suffix || createControlUiSessionRandomSuffix();
+  const slug = slugifyControlUiSessionLabel(params.label);
+  return `agent:${normalizeAgentId(params.agentId)}:ui:${formatControlUiSessionTimestamp(now)}-${slug}-${safeSuffix}`;
+}
+
+export function createDefaultControlUiSessionLabel(now: Date = new Date()): string {
+  return `Chat ${formatControlUiSessionLabelTimestamp(now)}`;
+}
+
+export function resolveNewControlUiSessionLabel(
+  input: string | null | undefined,
+  now: Date = new Date(),
+): string | null {
+  if (input === null) {
+    return null;
+  }
+  const trimmed = typeof input === "string" ? input.trim() : "";
+  return trimmed || createDefaultControlUiSessionLabel(now);
+}
 
 export async function subscribeSessions(state: SessionsState) {
   if (!state.client || !state.connected) {
@@ -87,9 +159,9 @@ export async function patchSession(
     verboseLevel?: string | null;
     reasoningLevel?: string | null;
   },
-) {
+): Promise<SessionsPatchResult | null> {
   if (!state.client || !state.connected) {
-    return;
+    return null;
   }
   const params: Record<string, unknown> = { key };
   if ("label" in patch) {
@@ -108,11 +180,27 @@ export async function patchSession(
     params.reasoningLevel = patch.reasoningLevel;
   }
   try {
-    await state.client.request("sessions.patch", params);
+    const result = await state.client.request<SessionsPatchResult>("sessions.patch", params);
     await loadSessions(state);
+    return result ?? null;
   } catch (err) {
     state.sessionsError = String(err);
+    return null;
   }
+}
+
+export async function createControlUiSession(
+  state: SessionsState,
+  params: {
+    agentId: string;
+    label: string;
+    now?: Date;
+    randomSuffix?: string;
+  },
+): Promise<SessionsPatchResult | null> {
+  const label = params.label.trim();
+  const key = buildControlUiSessionKey({ ...params, label });
+  return patchSession(state, key, { label });
 }
 
 export async function deleteSessionsAndRefresh(

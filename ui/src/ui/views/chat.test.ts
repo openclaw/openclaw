@@ -185,6 +185,7 @@ function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
     onSend: () => undefined,
     onQueueRemove: () => undefined,
     onNewSession: () => undefined,
+    onRenameSession: () => undefined,
     agentsList: null,
     currentAgentId: "",
     onAgentChange: () => undefined,
@@ -637,28 +638,33 @@ describe("chat view", () => {
     expect(stopButton).not.toBeUndefined();
     stopButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onAbort).toHaveBeenCalledTimes(1);
-    expect(container.textContent).not.toContain("New session");
+    expect(container.querySelector('button[title="New chat"]')).toBeNull();
+    expect(container.querySelector('button[title="Rename chat"]')).toBeNull();
   });
 
-  it("shows a new session button when aborting is unavailable", () => {
+  it("shows new chat and rename actions when aborting is unavailable", () => {
     const container = document.createElement("div");
     const onNewSession = vi.fn();
+    const onRenameSession = vi.fn();
     render(
       renderChat(
         createProps({
           canAbort: false,
           onNewSession,
+          onRenameSession,
         }),
       ),
       container,
     );
 
-    const newSessionButton = container.querySelector<HTMLButtonElement>(
-      'button[title="New session"]',
-    );
+    const newSessionButton = container.querySelector<HTMLButtonElement>('button[title="New chat"]');
+    const renameButton = container.querySelector<HTMLButtonElement>('button[title="Rename chat"]');
     expect(newSessionButton).not.toBeUndefined();
+    expect(renameButton).not.toBeUndefined();
     newSessionButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    renameButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onNewSession).toHaveBeenCalledTimes(1);
+    expect(onRenameSession).toHaveBeenCalledTimes(1);
     expect(container.textContent).not.toContain("Stop");
   });
 

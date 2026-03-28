@@ -1,5 +1,5 @@
 import { render } from "lit";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import "../../styles.css";
 import { renderChat, type ChatProps } from "./chat.ts";
 
@@ -68,6 +68,7 @@ function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
     onSend: () => undefined,
     onQueueRemove: () => undefined,
     onNewSession: () => undefined,
+    onRenameSession: () => undefined,
     agentsList: null,
     currentAgentId: "",
     onAgentChange: () => undefined,
@@ -123,5 +124,28 @@ describe("chat context notice", () => {
     expect(iconStyle.width).toBe("16px");
     expect(iconStyle.height).toBe("16px");
     expect(icon.getBoundingClientRect().width).toBeLessThan(24);
+  });
+
+  it("fires the new chat and rename chat toolbar actions", async () => {
+    const onNewSession = vi.fn();
+    const onRenameSession = vi.fn();
+    const container = document.createElement("div");
+    document.body.append(container);
+    render(
+      renderChat(
+        createProps({
+          onNewSession,
+          onRenameSession,
+        }),
+      ),
+      container,
+    );
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
+    container.querySelector<HTMLButtonElement>('button[title="New chat"]')?.click();
+    container.querySelector<HTMLButtonElement>('button[title="Rename chat"]')?.click();
+
+    expect(onNewSession).toHaveBeenCalledTimes(1);
+    expect(onRenameSession).toHaveBeenCalledTimes(1);
   });
 });
