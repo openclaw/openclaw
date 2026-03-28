@@ -4,20 +4,28 @@ import { createPluginRecord } from "./status.test-helpers.js";
 import type { PluginHookAgentContext, PluginHookRegistration } from "./types.js";
 
 export function createMockPluginRegistry(
-  hooks: Array<{ hookName: string; handler: (...args: unknown[]) => unknown }>,
+  hooks: Array<{
+    hookName: string;
+    handler: (...args: unknown[]) => unknown;
+    pluginId?: string;
+  }>,
 ): PluginRegistry {
+  const pluginIds =
+    hooks.length > 0
+      ? [...new Set(hooks.map((hook) => hook.pluginId ?? "test-plugin"))]
+      : ["test-plugin"];
   return {
-    plugins: [
+    plugins: pluginIds.map((pluginId) =>
       createPluginRecord({
-        id: "test-plugin",
+        id: pluginId,
         name: "Test Plugin",
         source: "test",
-        hookCount: hooks.length,
+        hookCount: hooks.filter((hook) => (hook.pluginId ?? "test-plugin") === pluginId).length,
       }),
-    ],
+    ),
     hooks: hooks as never[],
     typedHooks: hooks.map((h) => ({
-      pluginId: "test-plugin",
+      pluginId: h.pluginId ?? "test-plugin",
       hookName: h.hookName,
       handler: h.handler,
       priority: 0,
@@ -109,7 +117,11 @@ export function addStaticTestHooks<TResult>(
 }
 
 export function createHookRunnerWithRegistry(
-  hooks: Array<{ hookName: string; handler: (...args: unknown[]) => unknown }>,
+  hooks: Array<{
+    hookName: string;
+    handler: (...args: unknown[]) => unknown;
+    pluginId?: string;
+  }>,
   options?: Parameters<typeof createHookRunner>[1],
 ) {
   const registry = createMockPluginRegistry(hooks);
