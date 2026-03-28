@@ -88,6 +88,41 @@ function createRuntime(): { runtime: PluginRuntime; mocks: LineRuntimeMocks } {
 }
 
 describe("linePlugin outbound.sendPayload", () => {
+  it("preserves resolved accountId when pairing notifications push directly", async () => {
+    const { runtime, mocks } = createRuntime();
+    setLineRuntime(runtime);
+    const cfg = {
+      channels: {
+        line: {
+          accounts: {
+            primary: {
+              channelAccessToken: "token-primary",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    mocks.resolveLineAccount.mockReturnValue({
+      accountId: "primary",
+      channelAccessToken: "token-primary",
+      config: {},
+    });
+
+    await linePlugin.pairing!.notifyApproval!({
+      cfg,
+      id: "line:user:1",
+    });
+
+    expect(mocks.pushMessageLine).toHaveBeenCalledWith(
+      "line:user:1",
+      "OpenClaw: your access has been approved.",
+      {
+        accountId: "primary",
+        channelAccessToken: "token-primary",
+      },
+    );
+  });
+
   it("sends flex message without dropping text", async () => {
     const { runtime, mocks } = createRuntime();
     setLineRuntime(runtime);

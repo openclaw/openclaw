@@ -291,6 +291,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = createChatChannelP
           throw new Error("LINE channel access token not configured");
         }
         await line.pushMessageLine(id, message, {
+          accountId: account.accountId,
           channelAccessToken: account.channelAccessToken,
         });
       },
