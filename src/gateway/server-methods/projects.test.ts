@@ -1,9 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BoardIndex, ProjectIndex, QueueIndex } from "../../projects/sync-types.js";
-import type { GatewayRequestHandlerOptions, RespondFn } from "./types.js";
-
 // Import the handler module and its setter
 import { projectsHandlers, setProjectsService } from "./projects.js";
+import type { GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 
 describe("projectsHandlers", () => {
   const mockListProjects = vi.fn<() => Promise<Array<{ name: string } & ProjectIndex>>>();

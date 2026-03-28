@@ -79,7 +79,10 @@ describe("ProjectGatewayService", () => {
   it('on SyncEvent "project:changed", broadcast is called with ("projects.changed", { project })', async () => {
     const svc = new ProjectGatewayService(tmpDir, broadcast);
     await svc.start();
-    lastMockInstance!.emit("sync", { type: "project:changed", project: "myproj" } satisfies SyncEvent);
+    lastMockInstance!.emit("sync", {
+      type: "project:changed",
+      project: "myproj",
+    } satisfies SyncEvent);
     expect(broadcastCalls).toEqual([{ event: "projects.changed", payload: { project: "myproj" } }]);
   });
 
@@ -137,7 +140,11 @@ describe("ProjectGatewayService", () => {
       const projDir = path.join(tmpDir, "alpha");
       const indexDir = path.join(projDir, ".index");
       await fs.mkdir(indexDir, { recursive: true });
-      const projectData = { name: "alpha", description: "Test project", indexedAt: "2026-01-01T00:00:00Z" };
+      const projectData = {
+        name: "alpha",
+        description: "Test project",
+        indexedAt: "2026-01-01T00:00:00Z",
+      };
       await fs.writeFile(path.join(indexDir, "project.json"), JSON.stringify(projectData));
 
       mockDiscoverProjects.mockResolvedValueOnce([projDir]);
@@ -162,7 +169,11 @@ describe("ProjectGatewayService", () => {
       const projDir = path.join(tmpDir, "beta");
       const indexDir = path.join(projDir, ".index");
       await fs.mkdir(indexDir, { recursive: true });
-      const projectData = { name: "Beta", description: "Another project", indexedAt: "2026-01-01T00:00:00Z" };
+      const projectData = {
+        name: "Beta",
+        description: "Another project",
+        indexedAt: "2026-01-01T00:00:00Z",
+      };
       await fs.writeFile(path.join(indexDir, "project.json"), JSON.stringify(projectData));
 
       const svc = new ProjectGatewayService(tmpDir, broadcast);

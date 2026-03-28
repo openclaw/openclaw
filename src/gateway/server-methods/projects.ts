@@ -13,10 +13,7 @@ export function setProjectsService(svc: ProjectGatewayService): void {
  * Validate that params.project is a non-empty string.
  * On failure, sends an error response and returns null.
  */
-function validateProjectParam(
-  params: Record<string, unknown>,
-  respond: RespondFn,
-): string | null {
+function validateProjectParam(params: Record<string, unknown>, respond: RespondFn): string | null {
   if (typeof params.project === "string" && params.project.trim()) {
     return params.project.trim();
   }
@@ -31,11 +28,7 @@ function validateProjectParam(
 export const projectsHandlers: GatewayRequestHandlers = {
   "projects.list": async ({ respond }) => {
     if (!projectsService) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, "projects service not started"),
-      );
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "projects service not started"));
       return;
     }
     const projects = await projectsService.listProjects();
@@ -44,11 +37,7 @@ export const projectsHandlers: GatewayRequestHandlers = {
 
   "projects.get": async ({ params, respond }) => {
     if (!projectsService) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, "projects service not started"),
-      );
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "projects service not started"));
       return;
     }
     const name = validateProjectParam(params, respond);
@@ -67,11 +56,7 @@ export const projectsHandlers: GatewayRequestHandlers = {
 
   "projects.board.get": async ({ params, respond }) => {
     if (!projectsService) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, "projects service not started"),
-      );
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "projects service not started"));
       return;
     }
     const name = validateProjectParam(params, respond);
@@ -90,11 +75,7 @@ export const projectsHandlers: GatewayRequestHandlers = {
 
   "projects.queue.get": async ({ params, respond }) => {
     if (!projectsService) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, "projects service not started"),
-      );
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "projects service not started"));
       return;
     }
     const name = validateProjectParam(params, respond);
