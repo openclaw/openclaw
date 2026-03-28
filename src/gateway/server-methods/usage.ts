@@ -25,6 +25,7 @@ import {
 } from "../../infra/session-cost-usage.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { buildUsageAggregateTail } from "../../shared/usage-aggregates.js";
+import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import {
   ErrorCodes,
   errorShape,
@@ -39,6 +40,7 @@ import {
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 const COST_USAGE_CACHE_TTL_MS = 30_000;
+const USAGE_REPORT_SESSION_CONCURRENCY = 8;
 
 type DateRange = { startMs: number; endMs: number };
 
@@ -324,17 +326,31 @@ async function loadUsageReportSummaryCached(params: {
       startMs: params.startMs,
       endMs: params.endMs,
     });
+    const {
+      results: sessionUsages,
+      firstError,
+      hasError,
+    } = await runTasksWithConcurrency({
+      tasks: sessions.map(
+        (session) => async () =>
+          loadSessionCostSummary({
+            sessionFile: session.sessionFile,
+            config: params.config,
+            agentId: session.agentId,
+            startMs: params.startMs,
+            endMs: params.endMs,
+          }),
+      ),
+      limit: Math.min(USAGE_REPORT_SESSION_CONCURRENCY, Math.max(1, sessions.length)),
+      errorMode: "stop",
+    });
+    if (hasError) {
+      throw firstError;
+    }
     const byModelMap = new Map<string, SessionModelUsage>();
     const byProviderMap = new Map<string, SessionModelUsage>();
 
-    for (const session of sessions) {
-      const usage = await loadSessionCostSummary({
-        sessionFile: session.sessionFile,
-        config: params.config,
-        agentId: session.agentId,
-        startMs: params.startMs,
-        endMs: params.endMs,
-      });
+    for (const usage of sessionUsages) {
       if (!usage?.modelUsage?.length) {
         continue;
       }
