@@ -488,6 +488,7 @@ describe("exec approvals", () => {
       ask: "always",
       approvalRunningNoticeMs: 0,
       sessionKey: "agent:main:main",
+      messageProvider: "webchat",
       elevated: { enabled: true, allowed: true, defaultLevel: "ask" },
     });
 

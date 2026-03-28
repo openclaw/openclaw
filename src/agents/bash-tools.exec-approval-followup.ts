@@ -71,10 +71,11 @@ export async function sendExecApprovalFollowup(
   // Webchat (internal channel) has no outbound delivery route — the gateway
   // would try to remap it to a configured external channel and fail.  Skip
   // `deliver` for internal channels and explicitly route the agent run to
-  // INTERNAL_MESSAGE_CHANNEL.  For external channels, keep `deliver: true`
-  // even when an explicit `to` is missing so the gateway can fall back to
-  // session-level implicit routing (last channel / default target).
-  const hasExternalDeliveryPair = deliveryTarget.deliver && !isInternal;
+  // INTERNAL_MESSAGE_CHANNEL.  For external channels, only request delivery
+  // when a concrete deliverable route was resolved (channel + target); when
+  // the route is incomplete or the origin channel is unknown, stay
+  // session-only so the gateway does not fall back to an unrelated default.
+  const deliver = deliveryTarget.deliver && !isInternal;
 
   await callGatewayTool(
     "agent",
@@ -82,16 +83,12 @@ export async function sendExecApprovalFollowup(
     {
       sessionKey,
       message: buildExecApprovalFollowupPrompt(resultText),
-      deliver: hasExternalDeliveryPair,
-      ...(hasExternalDeliveryPair ? { bestEffortDeliver: true as const } : {}),
-      channel: hasExternalDeliveryPair
-        ? deliveryTarget.channel
-        : isInternal
-          ? INTERNAL_MESSAGE_CHANNEL
-          : undefined,
-      to: hasExternalDeliveryPair ? deliveryTarget.to : undefined,
-      accountId: hasExternalDeliveryPair ? deliveryTarget.accountId : undefined,
-      threadId: hasExternalDeliveryPair ? deliveryTarget.threadId : undefined,
+      deliver,
+      ...(deliver ? { bestEffortDeliver: true as const } : {}),
+      channel: deliver ? deliveryTarget.channel : isInternal ? INTERNAL_MESSAGE_CHANNEL : undefined,
+      to: deliver ? deliveryTarget.to : undefined,
+      accountId: deliver ? deliveryTarget.accountId : undefined,
+      threadId: deliver ? deliveryTarget.threadId : undefined,
       idempotencyKey: `exec-approval-followup:${params.approvalId}`,
     },
     { expectFinal: true },
