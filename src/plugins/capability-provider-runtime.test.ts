@@ -107,7 +107,7 @@ describe("resolvePluginCapabilityProviders", () => {
           origin: "workspace",
           contracts: {},
         },
-      ],
+      ] as never,
       diagnostics: [],
     });
     mocks.withBundledPluginAllowlistCompat.mockReturnValue(allowlistCompat);
