@@ -24,15 +24,17 @@ function createModel(id: string, name: string): ModelDefinitionConfig {
   };
 }
 
-function expectPrimaryModel(cfg: OpenClawConfig) {
+function expectPrimaryModel(cfg: OpenClawConfig, primary: string) {
   expect(cfg.agents?.defaults?.model).toEqual({
-    primary: "demo/demo-default",
+    primary,
   });
 }
 
-function expectCatalogPrimaryModel(cfg: OpenClawConfig) {
-  expect(cfg.agents?.defaults?.model).toEqual({
-    primary: "catalog/default",
+function expectPrimaryModelAlias(cfg: OpenClawConfig, modelRef: string, alias: string) {
+  expect(cfg.agents?.defaults?.models).toMatchObject({
+    [modelRef]: {
+      alias,
+    },
   });
 }
 
@@ -45,10 +47,10 @@ function expectProviderModels(
   expect(providers?.[providerId]).toMatchObject(expected);
 }
 
-function expectDefaultPrimaryModel(cfg: OpenClawConfig, modelRef: string) {
-  expect(cfg.agents?.defaults?.model).toEqual({
-    primary: modelRef,
-  });
+function resolveAliasObjects(aliases: Array<string | { modelRef: string; alias: string }>) {
+  return aliases.filter(
+    (alias): alias is { modelRef: string; alias: string } => typeof alias !== "string",
+  );
 }
 
 function createDemoProviderParams(params?: {
@@ -96,22 +98,16 @@ describe("provider onboarding preset appliers", () => {
           baseUrl: params.baseUrl,
           defaultModel: params.models[0],
           defaultModelId: params.models[0]?.id ?? "demo-default",
-          aliases: params.aliases.filter(
-            (alias): alias is { modelRef: string; alias: string } => typeof alias !== "string",
-          ),
+          aliases: resolveAliasObjects(params.aliases),
         }),
       });
 
       const providerOnly = appliers.applyProviderConfig({});
-      expect(providerOnly.agents?.defaults?.models).toMatchObject({
-        "demo/demo-default": {
-          alias: "Demo",
-        },
-      });
+      expectPrimaryModelAlias(providerOnly, "demo/demo-default", "Demo");
       expect(providerOnly.agents?.defaults?.model).toBeUndefined();
 
       const withPrimary = appliers.applyConfig({});
-      expectPrimaryModel(withPrimary);
+      expectPrimaryModel(withPrimary, "demo/demo-default");
       return;
     }
 
@@ -127,9 +123,7 @@ describe("provider onboarding preset appliers", () => {
           api: params.api,
           baseUrl,
           defaultModels: params.models,
-          aliases: params.aliases.filter(
-            (alias): alias is { modelRef: string; alias: string } => typeof alias !== "string",
-          ),
+          aliases: resolveAliasObjects(params.aliases),
         }),
       });
 
@@ -141,7 +135,7 @@ describe("provider onboarding preset appliers", () => {
           { id: "b", name: "Model B" },
         ],
       });
-      expectDefaultPrimaryModel(cfg, "demo/a");
+      expectPrimaryModel(cfg, "demo/a");
       return;
     }
 
@@ -174,11 +168,7 @@ describe("provider onboarding preset appliers", () => {
       },
     });
 
-    expect(cfg.agents?.defaults?.models).toMatchObject({
-      "catalog/default": {
-        alias: "Existing Alias",
-      },
-    });
-    expectCatalogPrimaryModel(cfg);
+    expectPrimaryModelAlias(cfg, "catalog/default", "Existing Alias");
+    expectPrimaryModel(cfg, "catalog/default");
   });
 });

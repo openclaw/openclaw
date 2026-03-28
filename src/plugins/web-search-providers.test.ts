@@ -68,22 +68,48 @@ function expectResolvedPluginIdsExcluding(
   }
 }
 
-describe("resolveBundledPluginWebSearchProviders", () => {
-  it(
-    "returns bundled providers in alphabetical order",
-    { timeout: WEB_SEARCH_PROVIDER_TEST_TIMEOUT_MS },
-    () => {
-      const providers = resolveBundledPluginWebSearchProviders({});
+function expectBundledWebSearchResolution(params: {
+  options?: Parameters<typeof resolveBundledPluginWebSearchProviders>[0];
+  expectedProviders?: "full";
+  expectedPluginIds?: readonly string[];
+  excludedPluginIds?: readonly string[];
+}) {
+  const providers = resolveBundledPluginWebSearchProviders(params.options ?? {});
 
-      expectBundledWebSearchProviders(providers);
-      expect(
-        providers.find((provider) => provider.id === "firecrawl")?.applySelectionConfig,
-      ).toEqual(expect.any(Function));
-      expect(
-        providers.find((provider) => provider.id === "perplexity")?.resolveRuntimeMetadata,
-      ).toEqual(expect.any(Function));
+  if (params.expectedProviders === "full") {
+    expectBundledWebSearchProviders(providers);
+  }
+  if (params.expectedPluginIds) {
+    expectResolvedPluginIds(providers, params.expectedPluginIds);
+  }
+  if (params.excludedPluginIds) {
+    expectResolvedPluginIdsExcluding(providers, params.excludedPluginIds);
+  }
+}
+
+describe("resolveBundledPluginWebSearchProviders", () => {
+  it.each([
+    {
+      title: "returns bundled providers in alphabetical order",
+      options: {},
     },
-  );
+    {
+      title: "can resolve bundled providers through the manifest-scoped loader path",
+      options: {
+        bundledAllowlistCompat: true,
+      },
+    },
+  ] as const)("$title", { timeout: WEB_SEARCH_PROVIDER_TEST_TIMEOUT_MS }, ({ options }) => {
+    const providers = resolveBundledPluginWebSearchProviders(options);
+
+    expectBundledWebSearchProviders(providers);
+    expect(providers.find((provider) => provider.id === "firecrawl")?.applySelectionConfig).toEqual(
+      expect.any(Function),
+    );
+    expect(
+      providers.find((provider) => provider.id === "perplexity")?.resolveRuntimeMetadata,
+    ).toEqual(expect.any(Function));
+  });
 
   it.each([
     {
@@ -137,31 +163,24 @@ describe("resolveBundledPluginWebSearchProviders", () => {
       },
       expectedPluginIds: ["google"],
     },
-  ])("$title", ({ params, expectedPluginIds }) => {
-    const providers = resolveBundledPluginWebSearchProviders(params);
-
-    expectResolvedPluginIds(providers, expectedPluginIds);
-  });
-
-  it("preserves explicit bundled provider entry state", () => {
-    const providers = resolveBundledPluginWebSearchProviders({
-      config: {
-        plugins: {
-          entries: {
-            perplexity: { enabled: false },
+    {
+      title: "preserves explicit bundled provider entry state",
+      params: {
+        config: {
+          plugins: {
+            entries: {
+              perplexity: { enabled: false },
+            },
           },
         },
       },
+      excludedPluginIds: ["perplexity"],
+    },
+  ])("$title", ({ params, expectedPluginIds, excludedPluginIds }) => {
+    expectBundledWebSearchResolution({
+      options: params,
+      expectedPluginIds,
+      excludedPluginIds,
     });
-
-    expectResolvedPluginIdsExcluding(providers, ["perplexity"]);
-  });
-
-  it("can resolve bundled providers through the manifest-scoped loader path", () => {
-    const providers = resolveBundledPluginWebSearchProviders({
-      bundledAllowlistCompat: true,
-    });
-
-    expectBundledWebSearchProviders(providers);
   });
 });

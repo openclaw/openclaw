@@ -5,7 +5,7 @@ import {
   normalizePluginDiscoveryResult,
   runProviderCatalog,
 } from "./provider-discovery.js";
-import type { ProviderDiscoveryOrder, ProviderPlugin } from "./types.js";
+import type { ProviderCatalogResult, ProviderDiscoveryOrder, ProviderPlugin } from "./types.js";
 
 function makeProvider(params: {
   id: string;
@@ -61,6 +61,20 @@ function createCatalogRuntimeContext() {
   };
 }
 
+function createCatalogProvider(params: {
+  id?: string;
+  catalogRun?: () => Promise<ProviderCatalogResult>;
+  discoveryRun?: () => Promise<ProviderCatalogResult>;
+}) {
+  return {
+    id: params.id ?? "demo",
+    label: "Demo",
+    auth: [],
+    ...(params.catalogRun ? { catalog: { run: params.catalogRun } } : {}),
+    ...(params.discoveryRun ? { discovery: { run: params.discoveryRun } } : {}),
+  };
+}
+
 function expectNormalizedDiscoveryResult(params: {
   provider: ProviderPlugin;
   result: Parameters<typeof normalizePluginDiscoveryResult>[0]["result"];
@@ -72,6 +86,18 @@ function expectNormalizedDiscoveryResult(params: {
       result: params.result,
     }),
   ).toEqual(params.expected);
+}
+
+async function expectProviderCatalogResult(params: {
+  provider: ProviderPlugin;
+  expected: Record<string, unknown>;
+}) {
+  await expect(
+    runProviderCatalog({
+      provider: params.provider,
+      ...createCatalogRuntimeContext(),
+    }),
+  ).resolves.toEqual(params.expected);
 }
 
 describe("groupPluginDiscoveryProvidersByOrder", () => {
@@ -158,21 +184,16 @@ describe("runProviderCatalog", () => {
       provider: makeModelProviderConfig({ baseUrl: "http://discovery.example/v1" }),
     });
 
-    const result = await runProviderCatalog({
-      provider: {
-        id: "demo",
-        label: "Demo",
-        auth: [],
-        catalog: { run: catalogRun },
-        discovery: { run: discoveryRun },
-      },
-      ...createCatalogRuntimeContext(),
-    });
-
-    expect(result).toEqual({
-      provider: {
-        baseUrl: "http://catalog.example/v1",
-        models: [],
+    await expectProviderCatalogResult({
+      provider: createCatalogProvider({
+        catalogRun,
+        discoveryRun,
+      }),
+      expected: {
+        provider: {
+          baseUrl: "http://catalog.example/v1",
+          models: [],
+        },
       },
     });
   });
