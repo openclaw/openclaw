@@ -48,6 +48,7 @@ export async function runDiscordGatewayLifecycle(params: {
     abortSignal: params.abortSignal,
     pushStatus,
     isLifecycleStopping: () => lifecycleStopping,
+    signalLifecycleStopping: () => { lifecycleStopping = true; },
     drainPendingGatewayErrors: () => drainPendingGatewayErrors(),
   });
   const onGatewayDebug = reconnectController.onGatewayDebug;

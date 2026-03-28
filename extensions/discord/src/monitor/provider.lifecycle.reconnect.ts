@@ -49,6 +49,7 @@ export function createDiscordGatewayReconnectController(params: {
   abortSignal?: AbortSignal;
   pushStatus: (patch: Parameters<DiscordMonitorStatusSink>[0]) => void;
   isLifecycleStopping: () => boolean;
+  signalLifecycleStopping?: () => void;
   drainPendingGatewayErrors: () => "continue" | "stop";
 }) {
   let forceStopHandler: ((err: unknown) => void) | undefined;
@@ -401,6 +402,10 @@ export function createDiscordGatewayReconnectController(params: {
     if (!params.gateway) {
       return;
     }
+    // Signal lifecycle stopping BEFORE disconnect so the gateway error handler
+    // recognizes the "reconnect-exhausted" event as expected and suppresses it
+    // instead of letting it bubble up as an uncaught exception.
+    params.signalLifecycleStopping?.();
     params.gateway.options.reconnect = { maxAttempts: 0 };
     params.gateway.disconnect();
   };
