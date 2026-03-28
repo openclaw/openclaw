@@ -121,6 +121,36 @@ describe("buildSingleProviderApiKeyCatalog", () => {
     });
   });
 
+  it("matches explicit base url config across canonical provider aliases", async () => {
+    const result = await buildSingleProviderApiKeyCatalog({
+      ctx: createCatalogContext({
+        apiKeys: { zai: "secret-key" },
+        config: {
+          models: {
+            providers: {
+              "z.ai": {
+                baseUrl: " https://api.z.ai/custom ",
+                models: [],
+              },
+            },
+          },
+        },
+      }),
+      providerId: "z-ai",
+      buildProvider: () => createProviderConfig({ baseUrl: "https://default.example/zai" }),
+      allowExplicitBaseUrl: true,
+    });
+
+    expect(result).toEqual({
+      provider: {
+        api: "openai-completions",
+        baseUrl: "https://api.z.ai/custom",
+        models: [],
+        apiKey: "secret-key",
+      },
+    });
+  });
+
   it("adds api key to each paired provider", async () => {
     const result = await buildPairedProviderApiKeyCatalog({
       ctx: createCatalogContext({
