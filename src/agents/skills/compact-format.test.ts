@@ -1,5 +1,9 @@
 import os from "node:os";
-import { formatSkillsForPrompt, type Skill } from "@mariozechner/pi-coding-agent";
+import {
+  createSyntheticSourceInfo,
+  formatSkillsForPrompt,
+  type Skill,
+} from "@mariozechner/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SkillEntry } from "./types.js";
@@ -10,16 +14,14 @@ import {
 } from "./workspace.js";
 
 function makeSkill(name: string, desc = "A skill", filePath = `/skills/${name}/SKILL.md`): Skill {
-  const skill = {
+  return {
     name,
     description: desc,
     filePath,
     baseDir: `/skills/${name}`,
-    source: "workspace",
-    sourceInfo: { source: "workspace" },
+    sourceInfo: createSyntheticSourceInfo(filePath, { source: "workspace" }),
     disableModelInvocation: false,
   };
-  return skill as unknown as Skill;
 }
 
 function makeEntry(skill: Skill): SkillEntry {
