@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import type { ResolvedAcpxPluginConfig } from "../config.js";
@@ -270,6 +270,29 @@ if (command === "prompt") {
     process.exit(5);
   }
 
+  if (stdinText.includes("nonzero-no-error")) {
+    process.stderr.write("plain stderr failure\n");
+    process.exit(7);
+  }
+
+  if (stdinText.includes("synthetic-done")) {
+    emitUpdate(sessionFromOption, {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "synthetic-ok" },
+    });
+    process.exit(0);
+  }
+
+  if (stdinText.includes("untyped-event")) {
+    emitJson({ foo: "bar", note: "ignored structured line" });
+    emitUpdate(sessionFromOption, {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "after-untyped" },
+    });
+    emitJson({ type: "done", stopReason: "end_turn" });
+    process.exit(0);
+  }
+
   if (stdinText.includes("split-spacing")) {
     emitUpdate(sessionFromOption, {
       sessionUpdate: "agent_message_chunk",
@@ -333,11 +356,15 @@ export async function createMockRuntimeFixture(params?: {
   runtime: AcpxRuntime;
   logPath: string;
   config: ResolvedAcpxPluginConfig;
+  stateDir: string;
 }> {
   const scriptPath = await ensureMockCliScriptPath();
   const dir = path.dirname(scriptPath);
   const logPath = path.join(dir, `calls-${logFileSequence++}.log`);
+  const stateDir = path.join(dir, ".openclaw-state");
+  await mkdir(stateDir, { recursive: true });
   process.env.MOCK_ACPX_LOG = logPath;
+  process.env.OPENCLAW_STATE_DIR = stateDir;
 
   const config: ResolvedAcpxPluginConfig = {
     command: scriptPath,
@@ -359,6 +386,7 @@ export async function createMockRuntimeFixture(params?: {
     }),
     logPath,
     config,
+    stateDir,
   };
 }
 
@@ -377,6 +405,10 @@ async function ensureMockCliScriptPath(): Promise<string> {
     return scriptPath;
   })();
   return await sharedMockCliScriptPath;
+}
+
+export function resolveMockRuntimeArtifactRoot(stateDir: string): string {
+  return path.join(stateDir, "artifacts", "acpx", "runs");
 }
 
 export async function readMockRuntimeLogEntries(
@@ -399,6 +431,7 @@ export async function cleanupMockRuntimeFixtures(): Promise<void> {
   delete process.env.MOCK_ACPX_ENSURE_EXIT_1;
   delete process.env.MOCK_ACPX_STATUS_STATUS;
   delete process.env.MOCK_ACPX_STATUS_SUMMARY;
+  delete process.env.OPENCLAW_STATE_DIR;
   sharedMockCliScriptPath = null;
   logFileSequence = 0;
   while (tempDirs.length > 0) {

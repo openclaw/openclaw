@@ -1,17 +1,34 @@
+import { readdir, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { runAcpRuntimeAdapterContract } from "../../../src/acp/runtime/adapter-contract.testkit.js";
+import * as runArtifactsModule from "./runtime-internals/run-artifacts.js";
 import { AcpxRuntime, decodeAcpxRuntimeHandleState } from "./runtime.js";
 import {
   cleanupMockRuntimeFixtures,
   createMockRuntimeFixture,
   NOOP_LOGGER,
   readMockRuntimeLogEntries,
+  resolveMockRuntimeArtifactRoot,
 } from "./test-utils/runtime-fixtures.js";
 
 let sharedFixture: Awaited<ReturnType<typeof createMockRuntimeFixture>> | null = null;
 let missingCommandRuntime: AcpxRuntime | null = null;
+
+async function readJson<T>(filePath: string): Promise<T> {
+  const raw = await readFile(filePath, "utf8");
+  return JSON.parse(raw) as T;
+}
+
+async function listRunDirs(stateDir: string): Promise<string[]> {
+  const root = resolveMockRuntimeArtifactRoot(stateDir);
+  const entries = await readdir(root, { withFileTypes: true });
+  return entries
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort();
+}
 
 beforeAll(async () => {
   sharedFixture = await createMockRuntimeFixture();
@@ -173,6 +190,258 @@ describe("AcpxRuntime", () => {
     expect(promptArgs).toContain("--ttl");
     expect(promptArgs).toContain("180");
     expect(promptArgs).toContain("--approve-all");
+  });
+
+  it("persists wrapper-owned terminal artifacts for successful turns", async () => {
+    const { runtime, stateDir } = await createMockRuntimeFixture();
+    const handle = await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:artifacts-success",
+      agent: "codex",
+      mode: "persistent",
+    });
+
+    const events = [];
+    for await (const event of runtime.runTurn({
+      handle,
+      text: "artifact-success",
+      mode: "prompt",
+      requestId: "req-artifacts-success",
+    })) {
+      events.push(event);
+    }
+
+    expect(events.some((event) => event.type === "done")).toBe(true);
+
+    const runDirs = await listRunDirs(stateDir);
+    expect(runDirs).toContain("req-artifacts-success");
+
+    const root = resolveMockRuntimeArtifactRoot(stateDir);
+    const route = await readJson<Record<string, unknown>>(
+      path.join(root, "req-artifacts-success", "route.json"),
+    );
+    const terminal = await readJson<Record<string, unknown>>(
+      path.join(root, "req-artifacts-success", "terminal.json"),
+    );
+    const stdoutLog = await readFile(
+      path.join(root, "req-artifacts-success", "stdout.log"),
+      "utf8",
+    );
+
+    expect(route.state).toBe("completed");
+    expect(terminal.state).toBe("completed");
+    expect(terminal.capture_status).toBe("captured");
+    expect(typeof terminal.result_ref).toBe("string");
+    expect(terminal.error_ref).toBeNull();
+    expect(stdoutLog).toContain("echo:artifact-success");
+  });
+
+  it("marks parsed ACP errors as failed terminal runs", async () => {
+    const { runtime, stateDir } = await createMockRuntimeFixture();
+    const handle = await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:artifacts-error",
+      agent: "codex",
+      mode: "persistent",
+    });
+
+    const events = [];
+    for await (const event of runtime.runTurn({
+      handle,
+      text: "trigger-error",
+      mode: "prompt",
+      requestId: "req-artifacts-error",
+    })) {
+      events.push(event);
+    }
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "error",
+        message: "mock failure",
+      }),
+    );
+
+    const root = resolveMockRuntimeArtifactRoot(stateDir);
+    const terminal = await readJson<Record<string, unknown>>(
+      path.join(root, "req-artifacts-error", "terminal.json"),
+    );
+    expect(terminal.state).toBe("failed");
+    expect(typeof terminal.error_ref).toBe("string");
+    expect(terminal.result_ref).toBeNull();
+  });
+
+  it("marks nonzero exits without parsed errors as failed terminal runs", async () => {
+    const { runtime, stateDir } = await createMockRuntimeFixture();
+    const handle = await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:artifacts-nonzero",
+      agent: "codex",
+      mode: "persistent",
+    });
+
+    for await (const _event of runtime.runTurn({
+      handle,
+      text: "nonzero-no-error",
+      mode: "prompt",
+      requestId: "req-nonzero-no-error",
+    })) {
+      // drain
+    }
+
+    const root = resolveMockRuntimeArtifactRoot(stateDir);
+    const terminal = await readJson<Record<string, unknown>>(
+      path.join(root, "req-nonzero-no-error", "terminal.json"),
+    );
+    const stderrLog = await readFile(path.join(root, "req-nonzero-no-error", "stderr.log"), "utf8");
+
+    expect(terminal.state).toBe("failed");
+    expect(stderrLog).toContain("plain stderr failure");
+  });
+
+  it("records synthetic done when backend exits cleanly without explicit done", async () => {
+    const { runtime, stateDir } = await createMockRuntimeFixture();
+    const handle = await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:synthetic-done",
+      agent: "codex",
+      mode: "persistent",
+    });
+
+    for await (const _event of runtime.runTurn({
+      handle,
+      text: "synthetic-done",
+      mode: "prompt",
+      requestId: "req-synthetic-done",
+    })) {
+      // drain
+    }
+
+    const root = resolveMockRuntimeArtifactRoot(stateDir);
+    const terminal = await readJson<Record<string, unknown>>(
+      path.join(root, "req-synthetic-done", "terminal.json"),
+    );
+    expect(terminal.state).toBe("completed");
+    expect(terminal.synthetic_done).toBe(true);
+  });
+
+  it("captures raw stdout lines even when the structured event is ignored", async () => {
+    const { runtime, stateDir } = await createMockRuntimeFixture();
+    const handle = await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:untyped-event",
+      agent: "codex",
+      mode: "persistent",
+    });
+
+    for await (const _event of runtime.runTurn({
+      handle,
+      text: "untyped-event",
+      mode: "prompt",
+      requestId: "req-untyped-event",
+    })) {
+      // drain
+    }
+
+    const root = resolveMockRuntimeArtifactRoot(stateDir);
+    const stdoutLog = await readFile(path.join(root, "req-untyped-event", "stdout.log"), "utf8");
+    expect(stdoutLog).toContain('"foo":"bar"');
+    expect(stdoutLog).toContain("after-untyped");
+  });
+
+  it("allocates collision-safe persisted run ids when requestId repeats", async () => {
+    const { runtime, stateDir } = await createMockRuntimeFixture();
+    const handle = await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:collision",
+      agent: "codex",
+      mode: "persistent",
+    });
+
+    for await (const _event of runtime.runTurn({
+      handle,
+      text: "first-collision",
+      mode: "prompt",
+      requestId: "req-collision",
+    })) {
+      // drain
+    }
+
+    for await (const _event of runtime.runTurn({
+      handle,
+      text: "second-collision",
+      mode: "prompt",
+      requestId: "req-collision",
+    })) {
+      // drain
+    }
+
+    const runDirs = await listRunDirs(stateDir);
+    expect(runDirs).toContain("req-collision");
+    expect(runDirs).toContain("req-collision--2");
+  });
+
+  it("does not spawn and finalizes lost when aborted after artifact creation", async () => {
+    const { runtime, logPath, stateDir } = await createMockRuntimeFixture();
+    const handle = await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:abort-before-spawn",
+      agent: "codex",
+      mode: "persistent",
+    });
+    const controller = new AbortController();
+    const originalCreateRunArtifacts = runArtifactsModule.createRunArtifacts;
+    const createRunArtifactsSpy = vi.spyOn(runArtifactsModule, "createRunArtifacts");
+    createRunArtifactsSpy.mockImplementation(async (params) => {
+      const artifacts = await originalCreateRunArtifacts(params);
+      controller.abort();
+      return artifacts;
+    });
+
+    try {
+      const events = [];
+      for await (const event of runtime.runTurn({
+        handle,
+        text: "abort-before-spawn",
+        mode: "prompt",
+        requestId: "req-abort-before-spawn",
+        signal: controller.signal,
+      })) {
+        events.push(event);
+      }
+
+      expect(events).toEqual([]);
+
+      const logs = await readMockRuntimeLogEntries(logPath);
+      const promptEntry = logs.find(
+        (entry) =>
+          entry.kind === "prompt" &&
+          String(entry.sessionName ?? "") === "agent:codex:acp:abort-before-spawn",
+      );
+      expect(promptEntry).toBeUndefined();
+
+      const root = resolveMockRuntimeArtifactRoot(stateDir);
+      const route = await readJson<Record<string, unknown>>(
+        path.join(root, "req-abort-before-spawn", "route.json"),
+      );
+      const terminal = await readJson<Record<string, unknown>>(
+        path.join(root, "req-abort-before-spawn", "terminal.json"),
+      );
+      const stdoutLog = await readFile(
+        path.join(root, "req-abort-before-spawn", "stdout.log"),
+        "utf8",
+      );
+      const stderrLog = await readFile(
+        path.join(root, "req-abort-before-spawn", "stderr.log"),
+        "utf8",
+      );
+
+      expect(route.state).toBe("lost");
+      expect(route.started_at).toBeUndefined();
+      expect(terminal.state).toBe("lost");
+      expect(terminal.capture_status).toBe("captured");
+      expect(terminal.error_code).toBe("ABORTED");
+      expect(terminal.error_message).toBe("ACP turn aborted before spawn.");
+      expect(terminal.started_at).toBeUndefined();
+      expect(terminal.exit_code).toBeNull();
+      expect(stdoutLog).toBe("");
+      expect(stderrLog).toBe("");
+    } finally {
+      createRunArtifactsSpy.mockRestore();
+    }
   });
 
   it("uses sessions new with --resume-session when resumeSessionId is provided", async () => {
