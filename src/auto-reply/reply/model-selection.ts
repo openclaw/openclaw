@@ -242,9 +242,14 @@ function collectImageModelKeys(
  * 4. Pure name match for providerless entries (matches any provider)
  */
 function isImageModel(provider: string, model: string, imageModelKeys: Set<string>): boolean {
-  const modelSlash = model.indexOf("/");
-  const pureModel = modelSlash > 0 ? model.slice(modelSlash + 1) : model;
-  const effectiveProvider = modelSlash > 0 ? model.slice(0, modelSlash) : provider;
+  // Do not split model on the first "/" here: the model parameter comes from
+  // normalizeModelRef which already handles provider/model separation. For providers
+  // like OpenRouter, model IDs such as "openai/gpt-4o" are the actual model identifier
+  // (not provider/model format), so splitting would incorrectly compute effectiveProvider="openai"
+  // instead of using the passed provider. This preserves correct key matching for
+  // provider-qualified image model configs like "openrouter/openai/gpt-4o".
+  const effectiveProvider = provider;
+  const pureModel = model;
 
   // 1. Check exact provider/model key match
   const key = modelKey(effectiveProvider, pureModel);
