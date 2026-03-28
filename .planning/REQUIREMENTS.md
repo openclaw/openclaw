@@ -68,9 +68,9 @@ Requirements for Phase 1 release. Each maps to roadmap phases.
 - [x] **UI-02**: Project list view shows all projects with name, status, task counts from `.index/project.json`
 - [x] **UI-03**: Project dashboard with configurable widgets (task summary, recent activity, agent status)
 - [x] **UI-04**: Dashboard widgets are configurable per project via PROJECT.md frontmatter with sensible defaults
-- [ ] **UI-05**: Read-only kanban board with configurable columns populated from task frontmatter status
-- [ ] **UI-06**: Kanban board shows live agent indicators (pulsing badge, agent name) on claimed tasks
-- [ ] **UI-07**: Agent session peek on hover/click shows current task checkpoint and recent log entries
+- [x] **UI-05**: Read-only kanban board with configurable columns populated from task frontmatter status
+- [x] **UI-06**: Kanban board shows live agent indicators (pulsing badge, agent name) on claimed tasks
+- [x] **UI-07**: Agent session peek on hover/click shows current task checkpoint and recent log entries
 - [x] **UI-08**: UI updates near-real-time via WebSocket event subscriptions
 - [x] **UI-09**: Sub-project navigation from parent project view
 
@@ -178,9 +178,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | UI-02       | Phase 9  | Complete |
 | UI-03       | Phase 9  | Complete |
 | UI-04       | Phase 9  | Complete |
-| UI-05       | Phase 10 | Pending  |
-| UI-06       | Phase 10 | Pending  |
-| UI-07       | Phase 10 | Pending  |
+| UI-05       | Phase 10 | Complete |
+| UI-06       | Phase 10 | Complete |
+| UI-07       | Phase 10 | Complete |
 | UI-08       | Phase 9  | Complete |
 | UI-09       | Phase 9  | Complete |
 

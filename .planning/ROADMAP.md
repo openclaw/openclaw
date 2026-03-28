@@ -298,7 +298,7 @@ Phase 1 (Types & Schemas)
 | 7. Gateway Service                  | 2/2            | Complete    | 2026-03-28 |
 | 8. CLI Commands                     | 2/2 | Complete   | 2026-03-28 |
 | 9. Project Views & Dashboard        | 2/2 | Complete   | 2026-03-28 |
-| 10. Kanban Board & Agent Indicators | 0/?            | Not started | -          |
+| 10. Kanban Board & Agent Indicators | 1/2 | In Progress|  |
 
 ---
 
