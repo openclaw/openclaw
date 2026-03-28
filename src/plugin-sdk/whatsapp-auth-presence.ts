@@ -1,1 +1,1 @@
-export { hasAnyWhatsAppAuth } from "../../extensions/whatsapp/auth-presence.js";
+export { hasAnyWhatsAppAuth } from "./whatsapp.js";
