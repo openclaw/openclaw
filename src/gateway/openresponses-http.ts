@@ -1063,6 +1063,20 @@ export async function handleOpenResponsesHttpRequest(
         pendingToolCalls &&
         pendingToolCalls.length > 0
       ) {
+        // Flush any pending thinking segment before closing the stream.
+        if (currentStreamThinkingSegment) {
+          if (
+            !accumulatedThinking ||
+            !currentStreamThinkingSegment.startsWith(accumulatedThinking)
+          ) {
+            accumulatedThinking +=
+              (accumulatedThinking ? "\n\n" : "") + currentStreamThinkingSegment;
+          } else {
+            accumulatedThinking = currentStreamThinkingSegment;
+          }
+          currentStreamThinkingSegment = "";
+        }
+
         const functionCall = pendingToolCalls[0];
         const usage = finalUsage ?? createEmptyUsage();
         const finalText =
