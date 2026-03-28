@@ -236,7 +236,7 @@ function createSyntheticOperatorClient(params?: {
   };
 }
 
-function hasAdminScope(client: GatewayRequestOptions["client"]): boolean {
+function hasAdminScope(client: GatewayRequestOptions["client"] | null | undefined): boolean {
   const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
   return scopes.includes(ADMIN_SCOPE);
 }
