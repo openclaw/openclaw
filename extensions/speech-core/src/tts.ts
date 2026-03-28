@@ -27,6 +27,7 @@ import {
   canonicalizeSpeechProviderId,
   getSpeechProvider,
   listSpeechProviders,
+  normalizeSpeechProviderId,
   normalizeTtsAutoMode,
   parseTtsDirectives,
   scheduleCleanup,
@@ -56,6 +57,7 @@ export type ResolvedTtsConfig = {
   prefsPath?: string;
   maxTextLength: number;
   timeoutMs: number;
+  rawConfig?: TtsConfig;
 };
 
 type TtsUserPrefs = {
@@ -115,6 +117,16 @@ let lastTtsAttempt: TtsStatusEntry | undefined;
 
 function resolveConfiguredTtsAutoMode(raw: TtsConfig): TtsAutoMode {
   return normalizeTtsAutoMode(raw.auto) ?? (raw.enabled ? "always" : "off");
+}
+
+function normalizeConfiguredSpeechProviderId(
+  providerId: string | undefined,
+): TtsProvider | undefined {
+  const normalized = normalizeSpeechProviderId(providerId);
+  if (!normalized) {
+    return undefined;
+  }
+  return normalized === "edge" ? "microsoft" : normalized;
 }
 
 function resolveTtsPrefsPathValue(prefsPath: string | undefined): string {
@@ -184,26 +196,76 @@ function asProviderConfigMap(value: unknown): Record<string, unknown> {
     : {};
 }
 
-function resolveSpeechProviderConfigs(
-  raw: TtsConfig,
-  cfg: OpenClawConfig,
-  timeoutMs: number,
-): Record<string, SpeechProviderConfig> {
-  const providerConfigs: Record<string, SpeechProviderConfig> = {};
-  const rawProviders = asProviderConfigMap(raw.providers);
-  for (const provider of listSpeechProviders(cfg)) {
-    providerConfigs[provider.id] =
-      provider.resolveConfig?.({
-        cfg,
-        rawConfig: {
-          ...(raw as Record<string, unknown>),
-          providers: rawProviders,
-        },
-        timeoutMs,
-      }) ??
-      asProviderConfig(rawProviders[provider.id] ?? (raw as Record<string, unknown>)[provider.id]);
+function resolveRawProviderConfig(
+  raw: TtsConfig | undefined,
+  providerId: string,
+): SpeechProviderConfig {
+  if (!raw) {
+    return {};
   }
-  return providerConfigs;
+  const rawProviders = asProviderConfigMap(raw.providers);
+  const direct = rawProviders[providerId] ?? (raw as Record<string, unknown>)[providerId];
+  return asProviderConfig(direct);
+}
+
+function resolveLazyProviderConfig(
+  config: ResolvedTtsConfig,
+  providerId: string,
+  cfg?: OpenClawConfig,
+): SpeechProviderConfig {
+  const canonical =
+    normalizeConfiguredSpeechProviderId(providerId) ?? providerId.trim().toLowerCase();
+  const existing = config.providerConfigs[canonical];
+  if (existing) {
+    return existing;
+  }
+  const rawConfig = resolveRawProviderConfig(config.rawConfig, canonical);
+  const resolvedProvider = getSpeechProvider(canonical, cfg);
+  const next =
+    cfg && resolvedProvider?.resolveConfig
+      ? resolvedProvider.resolveConfig({
+          cfg,
+          rawConfig: {
+            ...(config.rawConfig as Record<string, unknown> | undefined),
+            providers: asProviderConfigMap(config.rawConfig?.providers),
+          },
+          timeoutMs: config.timeoutMs,
+        })
+      : rawConfig;
+  config.providerConfigs[canonical] = next;
+  return next;
+}
+
+function collectDirectProviderConfigEntries(raw: TtsConfig): Record<string, SpeechProviderConfig> {
+  const entries: Record<string, SpeechProviderConfig> = {};
+  const rawProviders = asProviderConfigMap(raw.providers);
+  for (const [providerId, value] of Object.entries(rawProviders)) {
+    const normalized = normalizeConfiguredSpeechProviderId(providerId) ?? providerId;
+    entries[normalized] = asProviderConfig(value);
+  }
+  const reservedKeys = new Set([
+    "auto",
+    "enabled",
+    "maxTextLength",
+    "mode",
+    "modelOverrides",
+    "prefsPath",
+    "provider",
+    "providers",
+    "summaryModel",
+    "timeoutMs",
+  ]);
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (reservedKeys.has(key)) {
+      continue;
+    }
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      continue;
+    }
+    const normalized = normalizeConfiguredSpeechProviderId(key) ?? key;
+    entries[normalized] ??= asProviderConfig(value);
+  }
+  return entries;
 }
 
 export function getResolvedSpeechProviderConfig(
@@ -212,8 +274,10 @@ export function getResolvedSpeechProviderConfig(
   cfg?: OpenClawConfig,
 ): SpeechProviderConfig {
   const canonical =
-    canonicalizeSpeechProviderId(providerId, cfg) ?? providerId.trim().toLowerCase();
-  return config.providerConfigs[canonical] ?? {};
+    canonicalizeSpeechProviderId(providerId, cfg) ??
+    normalizeConfiguredSpeechProviderId(providerId) ??
+    providerId.trim().toLowerCase();
+  return resolveLazyProviderConfig(config, canonical, cfg);
 }
 
 export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
@@ -225,15 +289,16 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
     auto,
     mode: raw.mode ?? "final",
     provider:
-      canonicalizeSpeechProviderId(raw.provider, cfg) ??
-      resolveRegistryDefaultSpeechProviderId(cfg),
+      normalizeConfiguredSpeechProviderId(raw.provider) ??
+      (providerSource === "config" ? raw.provider?.trim().toLowerCase() || "" : ""),
     providerSource,
     summaryModel: raw.summaryModel?.trim() || undefined,
     modelOverrides: resolveModelOverridePolicy(raw.modelOverrides),
-    providerConfigs: resolveSpeechProviderConfigs(raw, cfg, timeoutMs),
+    providerConfigs: collectDirectProviderConfigEntries(raw),
     prefsPath: raw.prefsPath,
     maxTextLength: raw.maxTextLength ?? DEFAULT_MAX_TEXT_LENGTH,
     timeoutMs,
+    rawConfig: raw,
   };
 }
 
@@ -368,12 +433,14 @@ export function setTtsEnabled(prefsPath: string, enabled: boolean): void {
 
 export function getTtsProvider(config: ResolvedTtsConfig, prefsPath: string): TtsProvider {
   const prefs = readPrefs(prefsPath);
-  const prefsProvider = canonicalizeSpeechProviderId(prefs.tts?.provider);
+  const prefsProvider =
+    canonicalizeSpeechProviderId(prefs.tts?.provider) ??
+    normalizeConfiguredSpeechProviderId(prefs.tts?.provider);
   if (prefsProvider) {
     return prefsProvider;
   }
   if (config.providerSource === "config") {
-    return canonicalizeSpeechProviderId(config.provider) ?? config.provider;
+    return normalizeConfiguredSpeechProviderId(config.provider) ?? config.provider;
   }
 
   for (const provider of sortSpeechProvidersForAutoSelection()) {
