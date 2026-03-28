@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import type { CoreConfig } from "../types.js";
 import { createReplyPrefixContext, createTypingCallbacks, type RuntimeEnv } from "../sdk-compat.js";
+import { messageTextOf } from "../utils.js";
 import { createInboundDebouncer } from "./debounce.js";
 import {
   sendAniMessage,
@@ -483,6 +484,11 @@ export function createAniMessageHandler(params: AniHandlerParams) {
   /** Maps trigger messageId → streamId assigned during processing. */
   const messageToStreamMap = new Map<string, string>();
 
+  /** Maps trigger messageId → sessionKey so later system events can target the right session. */
+  const messageToSessionMap = new Map<string, { sessionKey: string; trackedAt: number }>();
+  const MESSAGE_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+  const MESSAGE_SESSION_MAX = 2000;
+
   /** Set of trigger messageIds whose source messages have been revoked. */
   const revokedMessages = new Set<string>();
 
@@ -531,6 +537,31 @@ export function createAniMessageHandler(params: AniHandlerParams) {
       convCache.set(conversationId, { conv, memories, fetchedAt: Date.now() });
     }
     return { conv, memories };
+  }
+
+  function pruneTrackedMessageSessions(now: number = Date.now()) {
+    for (const [mid, entry] of messageToSessionMap) {
+      if (now - entry.trackedAt > MESSAGE_SESSION_TTL_MS) {
+        messageToSessionMap.delete(mid);
+      }
+    }
+    if (messageToSessionMap.size <= MESSAGE_SESSION_MAX) return;
+    const overflow = messageToSessionMap.size - MESSAGE_SESSION_MAX;
+    let removed = 0;
+    for (const mid of messageToSessionMap.keys()) {
+      messageToSessionMap.delete(mid);
+      removed += 1;
+      if (removed >= overflow) break;
+    }
+  }
+
+  function trackMessageSession(messageIds: string[], sessionKey: string) {
+    const now = Date.now();
+    pruneTrackedMessageSessions(now);
+    for (const mid of messageIds) {
+      if (!mid) continue;
+      messageToSessionMap.set(mid, { sessionKey, trackedAt: now });
+    }
   }
 
   function buildConversationSystemPrompt(
@@ -801,6 +832,8 @@ export function createAniMessageHandler(params: AniHandlerParams) {
             OriginatingTo: `ani:conv:${conversationId}`,
           });
 
+          trackMessageSession(messageIds, ctxPayload.SessionKey ?? route.sessionKey);
+
           await core.channel.session.recordInboundSession({
             storePath,
             sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
@@ -1030,14 +1063,20 @@ export function createAniMessageHandler(params: AniHandlerParams) {
           logVerbose(`ani: message ${revokedId} revoked in conv=${conversationId ?? "?"}`);
 
           // Notify the agent session about the revocation
-          const streamId = messageToStreamMap.get(revokedId);
-          core.system.enqueueSystemEvent(
-            `User revoked message ${revokedId} in conversation ${conversationId ?? "unknown"}`,
-            {
-              contextKey: `ani:revoked:${conversationId ?? 0}:${revokedId}`,
-              ...(streamId ? { sessionKey: streamId } : {}),
-            },
-          );
+          pruneTrackedMessageSessions();
+          const sessionKey = messageToSessionMap.get(revokedId)?.sessionKey;
+          if (sessionKey) {
+            core.system.enqueueSystemEvent(
+              `User revoked message ${revokedId} in conversation ${conversationId ?? "unknown"}`,
+              {
+                contextKey: `ani:revoked:${conversationId ?? 0}:${revokedId}`,
+                sessionKey,
+              },
+            );
+          } else {
+            logVerbose(`ani: no tracked session key for revoked message ${revokedId}`);
+          }
+          messageToSessionMap.delete(revokedId);
         }
         return;
       }
@@ -1094,15 +1133,7 @@ export function createAniMessageHandler(params: AniHandlerParams) {
       if (!conversationId) return;
 
       // Prefer data.body (full content) over summary (may be truncated by frontend)
-      const dataBody =
-        typeof msg.layers?.data === "object" && msg.layers?.data !== null
-          ? (msg.layers.data as Record<string, unknown>).body
-          : undefined;
-      const text =
-        (typeof dataBody === "string" ? dataBody : null) ??
-        msg.layers?.summary ??
-        msg.layers?.detail ??
-        "";
+      const text = messageTextOf(msg);
 
       // Process attachments:
       // 1. Download and save to disk for OpenClaw media pipeline (MediaPath/MediaType)

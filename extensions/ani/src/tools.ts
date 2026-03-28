@@ -13,7 +13,7 @@ import {
   uploadAniFile,
   type AniTask,
 } from "./monitor/send.js";
-import { resolveAniCredentials, getMimeType } from "./utils.js";
+import { resolveAniCredentials, getMimeType, messageTextOf } from "./utils.js";
 
 const TASK_STATUS_VALUES = ["pending", "in_progress", "done", "cancelled", "handed_over"] as const;
 const TASK_PRIORITY_VALUES = ["low", "medium", "high"] as const;
@@ -299,7 +299,10 @@ export function createGetHistoryTool(): ChannelAgentTool {
           .map((m: Record<string, unknown>) => {
             const sender =
               (m.sender as Record<string, unknown>)?.display_name ?? `entity-${m.sender_id}`;
-            const text = ((m.layers as Record<string, unknown>)?.summary as string) ?? "";
+            const text = messageTextOf({
+              layers:
+                (m.layers as { summary?: string; detail?: string; data?: unknown }) ?? undefined,
+            });
             const time = m.created_at as string;
             const atts = (m.attachments as Array<Record<string, unknown>>) ?? [];
             const attDesc =

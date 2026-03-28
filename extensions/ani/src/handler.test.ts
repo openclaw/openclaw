@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { parseArtifacts, isTextFile } from "./monitor/handler.js";
+import { messageTextOf } from "./utils.js";
 
 describe("parseArtifacts", () => {
   it("returns a single text segment when no artifacts present", () => {
@@ -152,5 +153,27 @@ describe("isTextFile", () => {
   it("prefers MIME type when both are provided", () => {
     // text/ MIME should return true even with binary extension
     expect(isTextFile("text/plain", "file.png")).toBe(true);
+  });
+});
+
+describe("messageTextOf", () => {
+  it("prefers layers.data.body over summary", () => {
+    expect(
+      messageTextOf({
+        layers: {
+          summary: "short summary",
+          data: { body: "full message body" },
+        },
+      }),
+    ).toBe("full message body");
+  });
+
+  it("falls back to summary and detail", () => {
+    expect(messageTextOf({ layers: { summary: "summary text" } })).toBe("summary text");
+    expect(messageTextOf({ layers: { detail: "detail text" } })).toBe("detail text");
+  });
+
+  it("returns empty string when no text exists", () => {
+    expect(messageTextOf({})).toBe("");
   });
 });

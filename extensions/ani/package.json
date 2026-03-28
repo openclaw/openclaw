@@ -31,12 +31,12 @@
     "access": "public"
   },
   "dependencies": {
-    "@sinclair/typebox": "^0.34.41",
-    "ws": "^8.18.0",
+    "@sinclair/typebox": "0.34.48",
+    "ws": "^8.20.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@types/ws": "^8.5.13",
+    "@types/ws": "^8.18.1",
     "openclaw": "workspace:*"
   },
   "peerDependencies": {

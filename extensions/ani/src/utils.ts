@@ -73,6 +73,24 @@ export function getMimeType(filename: string): string {
   return MIME_MAP[ext] ?? "application/octet-stream";
 }
 
+type MessageLayers = {
+  summary?: string;
+  detail?: string;
+  data?: unknown;
+};
+
+/** Prefer ANI's full `layers.data.body` content over truncated summaries. */
+export function messageTextOf(message: { layers?: MessageLayers | null }): string {
+  const layers = message.layers;
+  const dataBody =
+    typeof layers?.data === "object" && layers.data !== null
+      ? (layers.data as Record<string, unknown>).body
+      : undefined;
+  return (
+    (typeof dataBody === "string" ? dataBody : null) ?? layers?.summary ?? layers?.detail ?? ""
+  );
+}
+
 /** Resolve ANI serverUrl and apiKey from config. Throws if not configured. */
 export function resolveAniCredentials(): { serverUrl: string; apiKey: string } {
   const core = getAniRuntime();
