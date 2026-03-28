@@ -40,6 +40,22 @@ vi.mock("./protocol.js", async () => {
   };
 });
 
+vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
+  const original = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...original,
+    resolveMarkdownTableMode: hoisted.resolveMarkdownTableMode,
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/text-runtime", async (importOriginal) => {
+  const original = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...original,
+    convertMarkdownTables: hoisted.convertMarkdownTables,
+  };
+});
+
 import { sendMessageIrc } from "./send.js";
 
 describe("sendMessageIrc cfg threading", () => {
@@ -110,5 +126,34 @@ describe("sendMessageIrc cfg threading", () => {
       accountId: "default",
       direction: "outbound",
     });
+  });
+
+  it("sends with provided cfg even when the runtime store is not initialized", async () => {
+    const providedCfg = {
+      channels: {
+        irc: {
+          host: "irc.example.com",
+          nick: "openclaw",
+        },
+      },
+    } as unknown as CoreConfig;
+    const client = {
+      isReady: vi.fn(() => true),
+      sendPrivmsg: vi.fn(),
+    } as unknown as IrcClient;
+    hoisted.record.mockImplementation(() => {
+      throw new Error("IRC runtime not initialized");
+    });
+
+    const result = await sendMessageIrc("#room", "hello", {
+      cfg: providedCfg,
+      client,
+    });
+
+    expect(hoisted.loadConfig).not.toHaveBeenCalled();
+    expect(client.sendPrivmsg).toHaveBeenCalledWith("#room", "hello");
+    expect(result.target).toBe("#room");
+    expect(result.messageId).toEqual(expect.any(String));
+    expect(result.messageId.length).toBeGreaterThan(0);
   });
 });
