@@ -219,6 +219,11 @@ describe("plugin-sdk subpath exports", () => {
       "createFixedWindowRateLimiter",
       "withResolvedWebhookRequestPipeline",
     ]);
+    expectSourceMentions("bluebubbles-policy", [
+      "isAllowedBlueBubblesSender",
+      "resolveBlueBubblesGroupRequireMention",
+      "resolveBlueBubblesGroupToolPolicy",
+    ]);
     for (const subpath of [
       "feishu",
       "googlechat",
@@ -611,6 +616,12 @@ describe("plugin-sdk subpath exports", () => {
       "createDelegatedSetupWizardProxy",
       "createTopLevelChannelDmPolicy",
       "mergeAllowFromEntries",
+    ]);
+    expectSourceMentions("setup-tools", [
+      "formatCliCommand",
+      "detectBinary",
+      "installSignalCli",
+      "formatDocsLink",
     ]);
     expectSourceMentions("lazy-runtime", ["createLazyRuntimeSurface", "createLazyRuntimeModule"]);
     expectSourceMentions("self-hosted-provider-setup", [
