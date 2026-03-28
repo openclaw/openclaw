@@ -93,13 +93,13 @@ class LATSEngine:
 
     def __init__(
         self,
-        vllm_url: str,
-        model: str,
+        vllm_url: str = "",
+        model: str = "",
         n_branches: int = _DEFAULT_BRANCHES,
         max_depth: int = _MAX_DEPTH,
     ):
         self.vllm_url = vllm_url.rstrip("/") if vllm_url else ""
-        self.model = model
+        self.model = model or "meta-llama/llama-3.3-70b-instruct:free"
         self.n_branches = max(2, min(n_branches, 5))
         self.max_depth = max(1, min(max_depth, 5))
         self._node_counter = 0

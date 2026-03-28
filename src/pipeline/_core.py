@@ -141,7 +141,10 @@ class PipelineExecutor:
         self._sandbox = DynamicSandbox()
 
         # v11.7: LATS tree search + MARCH hallucination control
-        self._lats_engine = LATSEngine(vllm_url=self.vllm_url)
+        lats_model = self.config.get("model_router", {}).get(
+            "research", "meta-llama/llama-3.3-70b-instruct:free"
+        )
+        self._lats_engine = LATSEngine(model=lats_model, vllm_url=self.vllm_url)
         self._march_protocol = MARCHProtocol(vllm_url=self.vllm_url)
 
     def _init_supermemory(self) -> None:
