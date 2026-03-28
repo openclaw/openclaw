@@ -452,6 +452,29 @@ describe("resolveApiKeyForProvider", () => {
       mode: "api-key",
     });
   });
+
+  it("does not reuse xai fallback auth when the xai plugin is disabled", async () => {
+    await expect(
+      resolveApiKeyForProvider({
+        provider: "xai",
+        cfg: {
+          plugins: {
+            entries: {
+              xai: {
+                enabled: false,
+                config: {
+                  webSearch: {
+                    apiKey: "xai-plugin-fallback-key", // pragma: allowlist secret
+                  },
+                },
+              },
+            },
+          },
+        },
+        store: { version: 1, profiles: {} },
+      }),
+    ).rejects.toThrow('No API key found for provider "xai"');
+  });
 });
 
 describe("resolveApiKeyForProvider – synthetic local auth for custom providers", () => {
