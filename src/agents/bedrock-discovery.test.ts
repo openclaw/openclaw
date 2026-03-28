@@ -219,13 +219,6 @@ describe("bedrock discovery", () => {
             bedrockDiscovery: {
               enabled: true,
             },
-            providers: {
-              "amazon-bedrock": {
-                baseUrl: "https://bedrock-runtime.us-west-2.amazonaws.com",
-                headers: { "x-test-header": "1" },
-                models: [],
-              },
-            },
           },
         },
         env: {
@@ -252,13 +245,6 @@ describe("bedrock discovery", () => {
         models: {
           bedrockDiscovery: {
             enabled: true,
-          },
-          providers: {
-            "amazon-bedrock": {
-              baseUrl: "https://bedrock-runtime.us-west-2.amazonaws.com",
-              headers: { "x-test-header": "1" },
-              models: [],
-            },
           },
         },
       },
