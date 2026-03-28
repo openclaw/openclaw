@@ -50832,6 +50832,21 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.google.config.webSearch.baseUrl",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced",
+        "url-secret"
+      ],
+      "label": "Gemini Search Base URL",
+      "help": "Base URL override (default: https://generativelanguage.googleapis.com/v1beta).",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.google.config.webSearch.model",
       "kind": "plugin",
       "type": "string",
@@ -60065,6 +60080,21 @@
       "hasChildren": false
     },
     {
+      "path": "plugins.entries.xai.config.webSearch.baseUrl",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced",
+        "url-secret"
+      ],
+      "label": "Grok Search Base URL",
+      "help": "Base URL override (default: https://api.x.ai/v1).",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.xai.config.webSearch.inlineCitations",
       "kind": "plugin",
       "type": "boolean",
@@ -67197,6 +67227,21 @@
       "deprecated": false,
       "sensitive": false,
       "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.x_search.baseUrl",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced",
+        "tools"
+      ],
+      "label": "X Search Base URL",
+      "help": "Base URL override for X search (default: https://api.x.ai/v1).",
       "hasChildren": false
     },
     {

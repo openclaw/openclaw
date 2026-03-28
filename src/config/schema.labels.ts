@@ -258,6 +258,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.web.fetch.firecrawl.timeoutSeconds": "Firecrawl Timeout (sec)",
   "tools.web.x_search.enabled": "Enable X Search Tool",
   "tools.web.x_search.apiKey": "xAI API Key", // pragma: allowlist secret
+  "tools.web.x_search.baseUrl": "X Search Base URL",
   "tools.web.x_search.model": "X Search Model",
   "tools.web.x_search.inlineCitations": "X Search Inline Citations",
   "tools.web.x_search.maxTurns": "X Search Max Turns",

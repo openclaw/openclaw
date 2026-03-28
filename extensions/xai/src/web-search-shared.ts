@@ -1,7 +1,7 @@
 import { postTrustedWebToolsJson, wrapWebContent } from "openclaw/plugin-sdk/provider-web-search";
 import { normalizeXaiModelId } from "../model-id.js";
 
-export const XAI_WEB_SEARCH_ENDPOINT = "https://api.x.ai/v1/responses";
+export const XAI_WEB_SEARCH_DEFAULT_BASE_URL = "https://api.x.ai/v1";
 export const XAI_DEFAULT_WEB_SEARCH_MODEL = "grok-4-1-fast";
 
 export type XaiWebSearchResponse = {
@@ -31,6 +31,7 @@ export type XaiWebSearchResponse = {
 };
 
 type XaiWebSearchConfig = Record<string, unknown> & {
+  baseUrl?: unknown;
   model?: unknown;
   inlineCitations?: unknown;
 };
@@ -84,6 +85,12 @@ export function resolveXaiWebSearchModel(searchConfig?: Record<string, unknown>)
     : XAI_DEFAULT_WEB_SEARCH_MODEL;
 }
 
+export function resolveXaiWebSearchBaseUrl(searchConfig?: Record<string, unknown>): string {
+  const config = resolveXaiSearchConfig(searchConfig);
+  const baseUrl = typeof config.baseUrl === "string" ? config.baseUrl.trim().replace(/\/+$/, "") : "";
+  return baseUrl || XAI_WEB_SEARCH_DEFAULT_BASE_URL;
+}
+
 export function resolveXaiInlineCitations(searchConfig?: Record<string, unknown>): boolean {
   return resolveXaiSearchConfig(searchConfig).inlineCitations === true;
 }
@@ -127,12 +134,14 @@ export async function requestXaiWebSearch(params: {
   query: string;
   model: string;
   apiKey: string;
+  baseUrl: string;
   timeoutSeconds: number;
   inlineCitations: boolean;
 }): Promise<XaiWebSearchResult> {
+  const endpoint = `${params.baseUrl}/responses`;
   return await postTrustedWebToolsJson(
     {
-      url: XAI_WEB_SEARCH_ENDPOINT,
+      url: endpoint,
       timeoutSeconds: params.timeoutSeconds,
       apiKey: params.apiKey,
       body: {
@@ -166,7 +175,9 @@ export const __testing = {
   extractXaiWebSearchContent,
   resolveXaiInlineCitations,
   resolveXaiSearchConfig,
+  resolveXaiWebSearchBaseUrl,
   resolveXaiWebSearchModel,
   requestXaiWebSearch,
   XAI_DEFAULT_WEB_SEARCH_MODEL,
+  XAI_WEB_SEARCH_DEFAULT_BASE_URL,
 } as const;

@@ -738,6 +738,7 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.web.x_search.enabled":
     "Enable the x_search tool (requires XAI_API_KEY or tools.web.x_search.apiKey).",
   "tools.web.x_search.apiKey": "xAI API key for X search (fallback: XAI_API_KEY env var).",
+  "tools.web.x_search.baseUrl": "Base URL override for X search (default: https://api.x.ai/v1).",
   "tools.web.x_search.model": 'Model to use for X search (default: "grok-4-1-fast-non-reasoning").',
   "tools.web.x_search.inlineCitations":
     "Keep inline citations from xAI in x_search responses when available (default: false).",

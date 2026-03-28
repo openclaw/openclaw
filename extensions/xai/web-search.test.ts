@@ -13,6 +13,7 @@ const {
   extractXaiWebSearchContent,
   resolveXaiInlineCitations,
   resolveXaiToolSearchConfig,
+  resolveXaiWebSearchBaseUrl,
   resolveXaiWebSearchCredential,
   resolveXaiWebSearchModel,
 } = __testing;
@@ -21,6 +22,7 @@ describe("xai web search config resolution", () => {
   it("prefers configured api keys and resolves grok scoped defaults", () => {
     expect(resolveXaiWebSearchCredential({ grok: { apiKey: "xai-secret" } })).toBe("xai-secret");
     expect(resolveXaiWebSearchModel()).toBe("grok-4-1-fast");
+    expect(resolveXaiWebSearchBaseUrl()).toBe("https://api.x.ai/v1");
     expect(resolveXaiInlineCitations()).toBe(false);
   });
 
@@ -264,6 +266,52 @@ describe("xai web search config resolution", () => {
   it("uses default model when not specified", () => {
     expect(resolveXaiWebSearchModel({})).toBe("grok-4-1-fast");
     expect(resolveXaiWebSearchModel(undefined)).toBe("grok-4-1-fast");
+  });
+
+  it("defaults baseUrl to the xAI API endpoint", () => {
+    expect(resolveXaiWebSearchBaseUrl()).toBe("https://api.x.ai/v1");
+    expect(resolveXaiWebSearchBaseUrl({})).toBe("https://api.x.ai/v1");
+    expect(resolveXaiWebSearchBaseUrl(undefined)).toBe("https://api.x.ai/v1");
+  });
+
+  it("uses config baseUrl when provided", () => {
+    expect(resolveXaiWebSearchBaseUrl({ grok: { baseUrl: "https://proxy.example.com/xai/v1" } })).toBe(
+      "https://proxy.example.com/xai/v1",
+    );
+  });
+
+  it("strips trailing slashes and whitespace from baseUrl", () => {
+    expect(
+      resolveXaiWebSearchBaseUrl({ grok: { baseUrl: "https://proxy.example.com/xai/v1/" } }),
+    ).toBe("https://proxy.example.com/xai/v1");
+    expect(
+      resolveXaiWebSearchBaseUrl({ grok: { baseUrl: "https://proxy.example.com/xai/v1///" } }),
+    ).toBe("https://proxy.example.com/xai/v1");
+    expect(
+      resolveXaiWebSearchBaseUrl({ grok: { baseUrl: "  https://proxy.example.com/xai/v1  " } }),
+    ).toBe("https://proxy.example.com/xai/v1");
+  });
+
+  it("respects baseUrl from merged plugin config", () => {
+    const searchConfig = resolveXaiToolSearchConfig({
+      config: {
+        plugins: {
+          entries: {
+            xai: {
+              enabled: true,
+              config: {
+                webSearch: {
+                  apiKey: "plugin-key",
+                  baseUrl: "https://proxy.example.com/xai/v1",
+                },
+              },
+            },
+          },
+        },
+      },
+      searchConfig: { provider: "grok" },
+    });
+    expect(resolveXaiWebSearchBaseUrl(searchConfig)).toBe("https://proxy.example.com/xai/v1");
   });
 
   it("uses config model when provided", () => {

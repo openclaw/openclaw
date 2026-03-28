@@ -2,11 +2,12 @@ import { postTrustedWebToolsJson, wrapWebContent } from "openclaw/plugin-sdk/pro
 import { normalizeXaiModelId } from "../model-id.js";
 import { extractXaiWebSearchContent, type XaiWebSearchResponse } from "./web-search-shared.js";
 
-export const XAI_X_SEARCH_ENDPOINT = "https://api.x.ai/v1/responses";
+export const XAI_X_SEARCH_DEFAULT_BASE_URL = "https://api.x.ai/v1";
 export const XAI_DEFAULT_X_SEARCH_MODEL = "grok-4-1-fast-non-reasoning";
 
 export type XaiXSearchConfig = {
   apiKey?: unknown;
+  baseUrl?: unknown;
   model?: unknown;
   inlineCitations?: unknown;
   maxTurns?: unknown;
@@ -34,6 +35,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 export function resolveXaiXSearchConfig(config?: Record<string, unknown>): XaiXSearchConfig {
   return isRecord(config) ? (config as XaiXSearchConfig) : {};
+}
+
+export function resolveXaiXSearchBaseUrl(config?: Record<string, unknown>): string | undefined {
+  const resolved = resolveXaiXSearchConfig(config);
+  const baseUrl = typeof resolved.baseUrl === "string" ? resolved.baseUrl.trim().replace(/\/+$/, "") : "";
+  return baseUrl || undefined;
 }
 
 export function resolveXaiXSearchModel(config?: Record<string, unknown>): string {
@@ -106,6 +113,7 @@ export function buildXaiXSearchPayload(params: {
 
 export async function requestXaiXSearch(params: {
   apiKey: string;
+  baseUrl: string;
   model: string;
   timeoutSeconds: number;
   inlineCitations: boolean;
@@ -114,7 +122,7 @@ export async function requestXaiXSearch(params: {
 }): Promise<XaiXSearchResult> {
   return await postTrustedWebToolsJson(
     {
-      url: XAI_X_SEARCH_ENDPOINT,
+      url: `${params.baseUrl}/responses`,
       timeoutSeconds: params.timeoutSeconds,
       apiKey: params.apiKey,
       body: {
@@ -148,9 +156,11 @@ export const __testing = {
   buildXSearchTool,
   buildXaiXSearchPayload,
   requestXaiXSearch,
+  resolveXaiXSearchBaseUrl,
   resolveXaiXSearchConfig,
   resolveXaiXSearchInlineCitations,
   resolveXaiXSearchMaxTurns,
   resolveXaiXSearchModel,
   XAI_DEFAULT_X_SEARCH_MODEL,
+  XAI_X_SEARCH_DEFAULT_BASE_URL,
 } as const;

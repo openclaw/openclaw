@@ -466,6 +466,8 @@ type XSearchToolConfig = {
   enabled?: boolean;
   /** API key for xAI (defaults to XAI_API_KEY env var). Supports SecretRef. */
   apiKey?: SecretInput;
+  /** Base URL override for the xAI API (default: https://api.x.ai/v1). */
+  baseUrl?: string;
   /** Model id to use for X search. */
   model?: string;
   /** Keep inline citations in the xAI response payload when available. */

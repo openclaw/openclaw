@@ -5402,6 +5402,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       },
                     ],
                   },
+                  baseUrl: {
+                    type: "string",
+                  },
                   model: {
                     type: "string",
                   },
@@ -12686,6 +12689,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       help: "xAI API key for X search (fallback: XAI_API_KEY env var).",
       tags: ["security", "auth", "tools"],
       sensitive: true,
+    },
+    "tools.web.x_search.baseUrl": {
+      label: "X Search Base URL",
+      help: "Base URL override for X search (default: https://api.x.ai/v1).",
+      tags: ["advanced", "tools"],
     },
     "tools.web.x_search.model": {
       label: "X Search Model",

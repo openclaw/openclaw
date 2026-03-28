@@ -25,6 +25,7 @@ import {
   extractXaiWebSearchContent,
   requestXaiWebSearch,
   resolveXaiInlineCitations,
+  resolveXaiWebSearchBaseUrl,
   resolveXaiWebSearchModel,
 } from "./src/web-search-shared.js";
 import { XAI_DEFAULT_X_SEARCH_MODEL } from "./src/x-search-shared.js";
@@ -146,12 +147,13 @@ function runXaiWebSearch(params: {
   query: string;
   model: string;
   apiKey: string;
+  baseUrl: string;
   timeoutSeconds: number;
   inlineCitations: boolean;
   cacheTtlMs: number;
 }): Promise<Record<string, unknown>> {
   const cacheKey = normalizeCacheKey(
-    `grok:${params.model}:${String(params.inlineCitations)}:${params.query}`,
+    `grok:${params.baseUrl}:${params.model}:${String(params.inlineCitations)}:${params.query}`,
   );
   const cached = readCache(XAI_WEB_SEARCH_CACHE, cacheKey);
   if (cached) {
@@ -164,6 +166,7 @@ function runXaiWebSearch(params: {
       query: params.query,
       model: params.model,
       apiKey: params.apiKey,
+      baseUrl: params.baseUrl,
       timeoutSeconds: params.timeoutSeconds,
       inlineCitations: params.inlineCitations,
     });
@@ -259,6 +262,7 @@ export function createXaiWebSearchProvider(): WebSearchProviderPlugin {
             query,
             model: resolveXaiWebSearchModel(searchConfig),
             apiKey,
+            baseUrl: resolveXaiWebSearchBaseUrl(searchConfig),
             timeoutSeconds: resolveTimeoutSeconds(
               (searchConfig?.timeoutSeconds as number | undefined) ?? undefined,
               DEFAULT_TIMEOUT_SECONDS,
@@ -280,6 +284,7 @@ export const __testing = {
   extractXaiWebSearchContent,
   resolveXaiToolSearchConfig,
   resolveXaiInlineCitations,
+  resolveXaiWebSearchBaseUrl,
   resolveXaiWebSearchCredential,
   resolveXaiWebSearchModel,
   requestXaiWebSearch,

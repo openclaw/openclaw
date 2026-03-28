@@ -16,9 +16,11 @@ import {
 import {
   buildXaiXSearchPayload,
   requestXaiXSearch,
+  resolveXaiXSearchBaseUrl,
   resolveXaiXSearchInlineCitations,
   resolveXaiXSearchMaxTurns,
   resolveXaiXSearchModel,
+  XAI_X_SEARCH_DEFAULT_BASE_URL,
   type XaiXSearchOptions,
 } from "./src/x-search-shared.js";
 
@@ -77,6 +79,29 @@ function readPluginXaiWebSearchApiKey(cfg?: OpenClawConfig): string | undefined 
 
 function resolveFallbackXaiApiKey(cfg?: OpenClawConfig): string | undefined {
   return readPluginXaiWebSearchApiKey(cfg) ?? readLegacyGrokApiKey(cfg);
+}
+
+function readPluginXaiWebSearchBaseUrl(cfg?: OpenClawConfig): string | undefined {
+  const pluginConfig = resolveProviderWebSearchPluginConfig(
+    cfg as Record<string, unknown> | undefined,
+    "xai",
+  );
+  const raw = pluginConfig?.baseUrl;
+  const trimmed = typeof raw === "string" ? raw.trim().replace(/\/+$/, "") : "";
+  return trimmed || undefined;
+}
+
+function resolveXSearchBaseUrl(params: {
+  xSearchConfig: Record<string, unknown> | undefined;
+  cfg?: OpenClawConfig;
+  runtimeConfig?: OpenClawConfig;
+}): string {
+  return (
+    resolveXaiXSearchBaseUrl(params.xSearchConfig) ??
+    readPluginXaiWebSearchBaseUrl(params.runtimeConfig) ??
+    readPluginXaiWebSearchBaseUrl(params.cfg) ??
+    XAI_X_SEARCH_DEFAULT_BASE_URL
+  );
 }
 
 function resolveXSearchConfig(cfg?: OpenClawConfig): XSearchConfig {
@@ -159,6 +184,7 @@ function normalizeOptionalIsoDate(value: string | undefined, label: string): str
 
 function buildXSearchCacheKey(params: {
   query: string;
+  baseUrl: string;
   model: string;
   inlineCitations: boolean;
   maxTurns?: number;
@@ -166,6 +192,7 @@ function buildXSearchCacheKey(params: {
 }) {
   return JSON.stringify([
     "x_search",
+    params.baseUrl,
     params.model,
     params.query,
     params.inlineCitations,
@@ -259,10 +286,16 @@ export function createXSearchTool(options?: {
       };
       const xSearchConfigRecord = xSearchConfig as Record<string, unknown> | undefined;
       const model = resolveXaiXSearchModel(xSearchConfigRecord);
+      const baseUrl = resolveXSearchBaseUrl({
+        xSearchConfig: xSearchConfigRecord,
+        cfg: options?.config,
+        runtimeConfig: runtimeConfig ?? undefined,
+      });
       const inlineCitations = resolveXaiXSearchInlineCitations(xSearchConfigRecord);
       const maxTurns = resolveXaiXSearchMaxTurns(xSearchConfigRecord);
       const cacheKey = buildXSearchCacheKey({
         query,
+        baseUrl,
         model,
         inlineCitations,
         maxTurns,
@@ -283,6 +316,7 @@ export function createXSearchTool(options?: {
       const startedAt = Date.now();
       const result = await requestXaiXSearch({
         apiKey,
+        baseUrl,
         model,
         timeoutSeconds: resolveTimeoutSeconds(xSearchConfig?.timeoutSeconds, 30),
         inlineCitations,
@@ -308,3 +342,9 @@ export function createXSearchTool(options?: {
     },
   };
 }
+
+export const __testing = {
+  buildXSearchCacheKey,
+  readPluginXaiWebSearchBaseUrl,
+  resolveXSearchBaseUrl,
+} as const;
