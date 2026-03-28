@@ -15,12 +15,26 @@ import {
   resolveXaiCodeExecutionModel,
 } from "./src/code-execution-shared.js";
 
+type XaiPluginConfig = NonNullable<
+  NonNullable<OpenClawConfig["plugins"]>["entries"]
+>["xai"] extends {
+  config?: infer Config;
+}
+  ? Config
+  : undefined;
+
 type CodeExecutionConfig = {
   enabled?: boolean;
-  model?: unknown;
-  maxTurns?: unknown;
+  model?: string;
+  maxTurns?: number;
   timeoutSeconds?: number;
 };
+
+function readCodeExecutionConfigRecord(
+  config?: CodeExecutionConfig,
+): Record<string, unknown> | undefined {
+  return config && typeof config === "object" ? (config as Record<string, unknown>) : undefined;
+}
 
 function readLegacyGrokApiKey(cfg?: OpenClawConfig): string | undefined {
   const search = cfg?.tools?.web?.search;
@@ -69,7 +83,7 @@ function resolveCodeExecutionEnabled(params: {
   runtimeConfig?: OpenClawConfig;
   config?: CodeExecutionConfig;
 }): boolean {
-  if (params.config?.enabled === false) {
+  if (readCodeExecutionConfigRecord(params.config)?.enabled === false) {
     return false;
   }
   return Boolean(
@@ -123,14 +137,19 @@ export function createCodeExecutionTool(options?: {
       }
 
       const task = readStringParam(args, "task", { required: true });
-      const codeExecutionConfigRecord = codeExecutionConfig as Record<string, unknown> | undefined;
+      const codeExecutionConfigRecord = readCodeExecutionConfigRecord(codeExecutionConfig);
       const model = resolveXaiCodeExecutionModel(codeExecutionConfigRecord);
       const maxTurns = resolveXaiCodeExecutionMaxTurns(codeExecutionConfigRecord);
+      const timeoutSeconds =
+        typeof codeExecutionConfigRecord?.timeoutSeconds === "number" &&
+        Number.isFinite(codeExecutionConfigRecord.timeoutSeconds)
+          ? codeExecutionConfigRecord.timeoutSeconds
+          : 30;
       const startedAt = Date.now();
       const result = await requestXaiCodeExecution({
         apiKey,
         model,
-        timeoutSeconds: codeExecutionConfig?.timeoutSeconds ?? 30,
+        timeoutSeconds,
         maxTurns,
         task,
       });
