@@ -11452,8 +11452,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/openviking",
-    packageVersion: "2026.2.6-3",
-    packageDescription: "OpenClaw OpenViking-backed long-term memory plugin",
+    packageVersion: "2026.3.25",
+    packageDescription:
+      "OpenClaw OpenViking-backed long-term memory plugin (install to ~/.openclaw/extensions)",
     packageManifest: {
       extensions: ["./index.ts"],
     },
@@ -11514,6 +11515,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           recallTokenBudget: {
             type: "number",
           },
+          commitTokenThreshold: {
+            type: "number",
+          },
           ingestReplyAssist: {
             type: "boolean",
           },
@@ -11522,6 +11526,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           },
           ingestReplyAssistMinChars: {
             type: "number",
+          },
+          emitStandardDiagnostics: {
+            type: "boolean",
           },
         },
       },
@@ -11615,6 +11622,12 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           advanced: true,
           help: "Maximum estimated tokens for auto-recall memory injection",
         },
+        commitTokenThreshold: {
+          label: "Commit Token Threshold",
+          placeholder: "2000",
+          advanced: true,
+          help: "Minimum estimated pending tokens before auto-commit triggers. Set to 0 to commit every turn.",
+        },
         ingestReplyAssist: {
           label: "Ingest Reply Assist",
           help: "When transcript-like memory ingestion is detected, add a lightweight reply instruction to reduce NO_REPLY.",
@@ -11631,6 +11644,11 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           placeholder: "120",
           help: "Minimum sanitized text length required before ingest reply assist can trigger.",
           advanced: true,
+        },
+        emitStandardDiagnostics: {
+          label: "Standard diagnostics (diag JSON lines)",
+          advanced: true,
+          help: "Emit structured openviking: diag {...} for assemble/afterTurn. Set false to disable.",
         },
       },
     },

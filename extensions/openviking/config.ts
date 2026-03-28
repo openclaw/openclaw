@@ -23,9 +23,15 @@ export type MemoryOpenVikingConfig = {
   recallMaxContentChars?: number;
   recallPreferAbstract?: boolean;
   recallTokenBudget?: number;
+  commitTokenThreshold?: number;
   ingestReplyAssist?: boolean;
   ingestReplyAssistMinSpeakerTurns?: number;
   ingestReplyAssistMinChars?: number;
+  /**
+   * When true (default), emit structured `openviking: diag {...}` lines (and any future
+   * standard-diagnostics file writes) for assemble/afterTurn. Set false to disable.
+   */
+  emitStandardDiagnostics?: boolean;
 };
 
 const DEFAULT_BASE_URL = "http://127.0.0.1:1933";
@@ -39,9 +45,11 @@ const DEFAULT_RECALL_SCORE_THRESHOLD = 0.15;
 const DEFAULT_RECALL_MAX_CONTENT_CHARS = 500;
 const DEFAULT_RECALL_PREFER_ABSTRACT = true;
 const DEFAULT_RECALL_TOKEN_BUDGET = 2000;
+const DEFAULT_COMMIT_TOKEN_THRESHOLD = 20000;
 const DEFAULT_INGEST_REPLY_ASSIST = true;
 const DEFAULT_INGEST_REPLY_ASSIST_MIN_SPEAKER_TURNS = 2;
 const DEFAULT_INGEST_REPLY_ASSIST_MIN_CHARS = 120;
+const DEFAULT_EMIT_STANDARD_DIAGNOSTICS = false;
 const DEFAULT_LOCAL_CONFIG_PATH = join(homedir(), ".openviking", "ov.conf");
 
 const DEFAULT_AGENT_ID = "default";
@@ -118,9 +126,11 @@ export const memoryOpenVikingConfigSchema = {
         "recallMaxContentChars",
         "recallPreferAbstract",
         "recallTokenBudget",
+        "commitTokenThreshold",
         "ingestReplyAssist",
         "ingestReplyAssistMinSpeakerTurns",
         "ingestReplyAssistMinChars",
+        "emitStandardDiagnostics",
       ],
       "openviking config",
     );
@@ -181,6 +191,10 @@ export const memoryOpenVikingConfigSchema = {
         100,
         Math.min(50000, Math.floor(toNumber(cfg.recallTokenBudget, DEFAULT_RECALL_TOKEN_BUDGET))),
       ),
+      commitTokenThreshold: Math.max(
+        0,
+        Math.min(100_000, Math.floor(toNumber(cfg.commitTokenThreshold, DEFAULT_COMMIT_TOKEN_THRESHOLD))),
+      ),
       ingestReplyAssist: cfg.ingestReplyAssist !== false,
       ingestReplyAssistMinSpeakerTurns: Math.max(
         1,
@@ -201,6 +215,10 @@ export const memoryOpenVikingConfigSchema = {
           Math.floor(toNumber(cfg.ingestReplyAssistMinChars, DEFAULT_INGEST_REPLY_ASSIST_MIN_CHARS)),
         ),
       ),
+      emitStandardDiagnostics:
+        typeof cfg.emitStandardDiagnostics === "boolean"
+          ? cfg.emitStandardDiagnostics
+          : DEFAULT_EMIT_STANDARD_DIAGNOSTICS,
     };
   },
   uiHints: {
@@ -292,6 +310,12 @@ export const memoryOpenVikingConfigSchema = {
       advanced: true,
       help: "Maximum estimated tokens for auto-recall memory injection. Injection stops when budget is exhausted.",
     },
+    commitTokenThreshold: {
+      label: "Commit Token Threshold",
+      placeholder: String(DEFAULT_COMMIT_TOKEN_THRESHOLD),
+      advanced: true,
+      help: "Minimum estimated pending tokens before auto-commit triggers. Set to 0 to commit every turn.",
+    },
     ingestReplyAssist: {
       label: "Ingest Reply Assist",
       help: "When transcript-like memory ingestion is detected, add a lightweight reply instruction to reduce NO_REPLY.",
@@ -308,6 +332,11 @@ export const memoryOpenVikingConfigSchema = {
       placeholder: String(DEFAULT_INGEST_REPLY_ASSIST_MIN_CHARS),
       help: "Minimum sanitized text length required before ingest reply assist can trigger.",
       advanced: true,
+    },
+    emitStandardDiagnostics: {
+      label: "Standard diagnostics (diag JSON lines)",
+      advanced: true,
+      help: "When enabled, emit structured openviking: diag {...} lines for assemble and afterTurn. Disable to reduce log noise.",
     },
   },
 };

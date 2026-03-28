@@ -5,7 +5,8 @@ import { Type } from "@sinclair/typebox";
 import { memoryOpenVikingConfigSchema } from "./config.js";
 
 import { OpenVikingClient, localClientCache, localClientPendingPromises, isMemoryUri } from "./client.js";
-import type { FindResultItem, PendingClientEntry } from "./client.js";
+import type { FindResultItem, PendingClientEntry, CommitSessionResult, OVMessage } from "./client.js";
+import { formatMessageFaithful } from "./context-engine.js";
 import {
   isTranscriptLikeIngest,
   extractLatestUserText,
@@ -21,13 +22,14 @@ import {
 import {
   IS_WIN,
   waitForHealth,
+  quickHealthCheck,
   quickRecallPrecheck,
   withTimeout,
   resolvePythonCommand,
   prepareLocalPort,
 } from "./process-manager.js";
-import { createMemoryOpenVikingContextEngine } from "./context-engine.js";
-import type { ContextEngineWithSessionMapping } from "./context-engine.js";
+import { createMemoryOpenVikingContextEngine, commitLocks } from "./context-engine.js";
+import type { ContextEngineWithCommit } from "./context-engine.js";
 
 type PluginLogger = {
   debug?: (message: string) => void;
@@ -42,19 +44,27 @@ type HookAgentContext = {
   sessionKey?: string;
 };
 
+type ToolDefinition = {
+  name: string;
+  label: string;
+  description: string;
+  parameters: unknown;
+  execute: (_toolCallId: string, params: Record<string, unknown>) => Promise<unknown>;
+};
+
+type ToolContext = {
+  sessionKey?: string;
+  sessionId?: string;
+  agentId?: string;
+};
+
 type OpenClawPluginApi = {
   pluginConfig?: unknown;
   logger: PluginLogger;
-  registerTool: (
-    tool: {
-      name: string;
-      label: string;
-      description: string;
-      parameters: unknown;
-      execute: (_toolCallId: string, params: Record<string, unknown>) => Promise<unknown>;
-    },
-    opts?: { name?: string; names?: string[] },
-  ) => void;
+  registerTool: {
+    (tool: ToolDefinition, opts?: { name?: string; names?: string[] }): void;
+    (factory: (ctx: ToolContext) => ToolDefinition): void;
+  };
   registerService: (service: {
     id: string;
     start: (ctx?: unknown) => void | Promise<void>;
@@ -71,6 +81,12 @@ type OpenClawPluginApi = {
 const MAX_OPENVIKING_STDERR_LINES = 200;
 const MAX_OPENVIKING_STDERR_CHARS = 256_000;
 const AUTO_RECALL_TIMEOUT_MS = 5_000;
+
+function totalCommitMemories(r: CommitSessionResult): number {
+  const m = r.memories_extracted;
+  if (!m || typeof m !== "object") return 0;
+  return Object.values(m).reduce((sum, n) => sum + (n ?? 0), 0);
+}
 
 const contextEnginePlugin = {
   id: "openviking",
@@ -239,7 +255,6 @@ const contextEnginePlugin = {
           text: Type.String({ description: "Information to store as memory source text" }),
           role: Type.Optional(Type.String({ description: "Session role, default user" })),
           sessionId: Type.Optional(Type.String({ description: "Existing OpenViking session ID" })),
-          sessionKey: Type.Optional(Type.String({ description: "OpenClaw sessionKey — uses the persistent 1:1 mapped OV session" })),
         }),
         async execute(_toolCallId: string, params: Record<string, unknown>) {
           const { text } = params as { text: string };
@@ -248,30 +263,61 @@ const contextEnginePlugin = {
               ? (params as { role: string }).role
               : "user";
           const sessionIdIn = (params as { sessionId?: string }).sessionId;
-          const sessionKeyIn = (params as { sessionKey?: string }).sessionKey;
 
           api.logger.info?.(
-            `openviking: memory_store invoked (textLength=${text?.length ?? 0}, sessionId=${sessionIdIn ?? "auto"}, sessionKey=${sessionKeyIn ?? "none"})`,
+            `openviking: memory_store invoked (textLength=${text?.length ?? 0}, sessionId=${sessionIdIn ?? "auto"})`,
           );
 
           let sessionId = sessionIdIn;
-          let usedMappedSession = false;
-          const storeAgentId = sessionKeyIn ? resolveAgentId(sessionKeyIn) : undefined;
+          let usedTempSession = false;
+          const storeAgentId = sessionId ? resolveAgentId(sessionId) : undefined;
           try {
             const c = await getClient();
-            if (!sessionId && sessionKeyIn && contextEngineRef) {
-              sessionId = await contextEngineRef.resolveOVSession?.(sessionKeyIn);
-              usedMappedSession = true;
-            }
             if (!sessionId) {
-              return {
-                content: [{ type: "text", text: "Either sessionKey or sessionId is required to store memory." }],
-                details: { action: "rejected", reason: "missing_session_identifier" },
-              };
+              sessionId = `memory-store-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+              usedTempSession = true;
             }
             await c.addSessionMessage(sessionId, role, text, storeAgentId);
+            
+            // Wait if another commit is in progress
+            let waitCount = 0;
+            while (commitLocks.has(sessionId) && waitCount < 50) {
+              await new Promise(r => setTimeout(r, 100));
+              waitCount++;
+            }
+            
             const commitResult = await c.commitSession(sessionId, { wait: true, agentId: storeAgentId });
-            const memoriesCount = commitResult.memories_extracted ?? 0;
+            const memoriesCount = totalCommitMemories(commitResult);
+            if (commitResult.status === "failed") {
+              api.logger.warn(
+                `openviking: memory_store commit failed (sessionId=${sessionId}): ${commitResult.error ?? "unknown"}`,
+              );
+              return {
+                content: [{ type: "text", text: `Memory extraction failed for session ${sessionId}: ${commitResult.error ?? "unknown"}` }],
+                details: {
+                  action: "failed",
+                  sessionId,
+                  status: "failed",
+                  error: commitResult.error,
+                  usedTempSession,
+                },
+              };
+            }
+            if (commitResult.status === "timeout") {
+              api.logger.warn(
+                `openviking: memory_store commit timed out (sessionId=${sessionId}), task_id=${commitResult.task_id ?? "none"}. Memories may still be extracting in background.`,
+              );
+              return {
+                content: [{ type: "text", text: `Memory extraction timed out for session ${sessionId}. It may still complete in the background (task_id=${commitResult.task_id ?? "none"}).` }],
+                details: {
+                  action: "timeout",
+                  sessionId,
+                  status: "timeout",
+                  taskId: commitResult.task_id,
+                  usedTempSession,
+                },
+              };
+            }
             if (memoriesCount === 0) {
               api.logger.warn(
                 `openviking: memory_store committed but 0 memories extracted (sessionId=${sessionId}). ` +
@@ -287,7 +333,14 @@ const contextEnginePlugin = {
                   text: `Stored in OpenViking session ${sessionId} and committed ${memoriesCount} memories.`,
                 },
               ],
-              details: { action: "stored", sessionId, memoriesCount, archived: commitResult.archived ?? false, usedMappedSession },
+              details: {
+                action: "stored",
+                sessionId,
+                memoriesCount,
+                status: commitResult.status,
+                archived: commitResult.archived ?? false,
+                usedTempSession,
+              },
             };
           } catch (err) {
             api.logger.warn(`openviking: memory_store failed: ${String(err)}`);
@@ -400,7 +453,82 @@ const contextEnginePlugin = {
       },
       { name: "memory_forget" },
     );
-    let contextEngineRef: ContextEngineWithSessionMapping | null = null;
+    api.registerTool((ctx: ToolContext) => ({
+      name: "ov_archive_expand",
+      label: "Archive Expand (OpenViking)",
+      description:
+        "Retrieve original messages from a compressed session archive. " +
+        "Use when a session summary lacks specific details " +
+        "such as exact commands, file paths, code snippets, or config values. " +
+        "Check [Archive Index] to find the right archive ID.",
+      parameters: Type.Object({
+        archiveId: Type.String({
+          description:
+            'Archive ID from [Archive Index] (e.g. "archive_002")',
+        }),
+      }),
+      async execute(_toolCallId: string, params: Record<string, unknown>) {
+        const archiveId = String((params as { archiveId?: string }).archiveId ?? "").trim();
+        const sessionId = ctx.sessionId ?? "";
+        api.logger.info?.(`openviking: ov_archive_expand invoked (archiveId=${archiveId || "(empty)"}, sessionId=${sessionId || "(empty)"})`);
+
+        if (!archiveId) {
+          api.logger.warn?.(`openviking: ov_archive_expand missing archiveId`);
+          return {
+            content: [{ type: "text", text: "Error: archiveId is required." }],
+            details: { error: "missing_param", param: "archiveId" },
+          };
+        }
+
+        if (!sessionId) {
+          return {
+            content: [{ type: "text", text: "Error: no active session." }],
+            details: { error: "no_session" },
+          };
+        }
+
+        try {
+          const client = await getClient();
+          const agentId = resolveAgentId(sessionId);
+          const detail = await client.getSessionArchive(
+            sessionId,
+            archiveId,
+            agentId,
+          );
+
+          const header = [
+            `## ${detail.archive_id}`,
+            detail.abstract ? `**Summary**: ${detail.abstract}` : "",
+            `**Messages**: ${detail.messages.length}`,
+            "",
+          ].filter(Boolean).join("\n");
+
+          const body = detail.messages
+            .map((m: OVMessage) => formatMessageFaithful(m))
+            .join("\n\n");
+
+          api.logger.info?.(`openviking: ov_archive_expand expanded ${detail.archive_id}, messages=${detail.messages.length}, chars=${body.length}, sessionId=${sessionId}`);
+          return {
+            content: [{ type: "text", text: `${header}\n${body}` }],
+            details: {
+              action: "expanded",
+              archiveId: detail.archive_id,
+              messageCount: detail.messages.length,
+              sessionId,
+            },
+          };
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          api.logger.warn?.(`openviking: ov_archive_expand failed (archiveId=${archiveId}, sessionId=${sessionId}): ${msg}`);
+          return {
+            content: [{ type: "text", text: `Failed to expand ${archiveId}: ${msg}` }],
+            details: { error: msg, archiveId, sessionId },
+          };
+        }
+      },
+    }));
+
+    let contextEngineRef: ContextEngineWithCommit | null = null;
 
     const sessionAgentIds = new Map<string, string>();
     const rememberSessionAgentId = (ctx: {
@@ -430,7 +558,7 @@ const contextEnginePlugin = {
     api.on("before_prompt_build", async (event: unknown, ctx?: HookAgentContext) => {
       rememberSessionAgentId(ctx ?? {});
 
-      const hookSessionId = ctx?.sessionId ?? ctx?.sessionKey ?? "";
+      const hookSessionId = ctx?.sessionId ?? "";
       const agentId = resolveAgentId(hookSessionId);
       let client: OpenVikingClient;
       try {
@@ -561,11 +689,13 @@ const contextEnginePlugin = {
       rememberSessionAgentId(ctx ?? {});
     });
     api.on("before_reset", async (_event: unknown, ctx?: HookAgentContext) => {
-      const sessionKey = ctx?.sessionKey;
-      if (sessionKey && contextEngineRef) {
+      const sessionId = ctx?.sessionId;
+      if (sessionId && contextEngineRef) {
         try {
-          await contextEngineRef.commitOVSession?.(sessionKey);
-          api.logger.info(`openviking: committed OV session on reset for sessionKey=${sessionKey}`);
+          const ok = await contextEngineRef.commitOVSession(sessionId);
+          if (ok) {
+            api.logger.info(`openviking: committed OV session on reset for session=${sessionId}`);
+          }
         } catch (err) {
           api.logger.warn(`openviking: failed to commit OV session on reset: ${String(err)}`);
         }
@@ -589,7 +719,7 @@ const contextEnginePlugin = {
         return contextEngineRef;
       });
       api.logger.info(
-        "openviking: registered context-engine (before_prompt_build=auto-recall, afterTurn=auto-capture, sessionKey=1:1 mapping)",
+        "openviking: registered context-engine (before_prompt_build=auto-recall, afterTurn=auto-capture, assemble=archive+active)",
       );
     } else {
       api.logger.warn(
@@ -678,10 +808,8 @@ const contextEnginePlugin = {
               localProcess = null;
               localClientCache.delete(localCacheKey);
             }
-            if (code != null && code !== 0 || signal) {
-              const out = formatStderrOutput();
-              api.logger.warn(`openviking: subprocess exited (code=${code}, signal=${signal})${out}`);
-            }
+            const out = formatStderrOutput();
+            api.logger.warn(`openviking: subprocess exited (code=${code}, signal=${signal})${out}`);
           });
           try {
             await waitForHealth(baseUrl, timeoutMs, intervalMs);
@@ -702,6 +830,82 @@ const contextEnginePlugin = {
               );
             }
             throw err;
+          }
+        } else if (cfg.mode === "local") {
+          // Defensive re-spawn: if we're not the designated spawner but there's
+          // no valid local process, trigger a fresh spawn to recover from
+          // scenarios like Gateway force-restart where the child process was
+          // orphaned or exited silently.
+          const cached = localClientCache.get(localCacheKey);
+          const processAlive = cached?.process && cached.process.exitCode === null && !cached.process.killed;
+          if (!processAlive) {
+            const healthOk = await quickHealthCheck(`http://127.0.0.1:${cfg.port}`, 2000);
+            if (!healthOk) {
+              api.logger.warn(
+                `openviking: no valid local process detected (isSpawner=false), triggering defensive re-spawn`,
+              );
+              const timeoutMs = 60_000;
+              const intervalMs = 500;
+              const actualPort = await prepareLocalPort(cfg.port, api.logger);
+              const baseUrl = `http://127.0.0.1:${actualPort}`;
+              const pythonCmd = resolvePythonCommand(api.logger);
+              const pathSep = IS_WIN ? ";" : ":";
+              const env = {
+                ...process.env,
+                PYTHONUNBUFFERED: "1",
+                PYTHONWARNINGS: "ignore::RuntimeWarning",
+                OPENVIKING_CONFIG_FILE: cfg.configPath,
+                OPENVIKING_START_CONFIG: cfg.configPath,
+                OPENVIKING_START_HOST: "127.0.0.1",
+                OPENVIKING_START_PORT: String(actualPort),
+                ...(process.env.OPENVIKING_GO_PATH && { PATH: `${process.env.OPENVIKING_GO_PATH}${pathSep}${process.env.PATH || ""}` }),
+                ...(process.env.OPENVIKING_GOPATH && { GOPATH: process.env.OPENVIKING_GOPATH }),
+                ...(process.env.OPENVIKING_GOPROXY && { GOPROXY: process.env.OPENVIKING_GOPROXY }),
+              };
+              const runpyCode = `import sys,os,warnings; warnings.filterwarnings('ignore', category=RuntimeWarning, message='.*sys.modules.*'); sys.argv=['openviking.server.bootstrap','--config',os.environ['OPENVIKING_START_CONFIG'],'--host',os.environ.get('OPENVIKING_START_HOST','127.0.0.1'),'--port',os.environ['OPENVIKING_START_PORT']]; import runpy, importlib.util; spec=importlib.util.find_spec('openviking.server.bootstrap'); (runpy.run_path(spec.origin, run_name='__main__') if spec and getattr(spec,'origin',None) else runpy.run_module('openviking.server.bootstrap', run_name='__main__', alter_sys=True))`;
+              const child = spawn(
+                pythonCmd,
+                ["-c", runpyCode],
+                { env, cwd: IS_WIN ? tmpdir() : "/tmp", stdio: ["ignore", "pipe", "pipe"] },
+              );
+              localProcess = child;
+              child.on("error", (err: Error) => api.logger.warn(`openviking: local server error (re-spawn): ${String(err)}`));
+              child.stderr?.on("data", (chunk: Buffer) => {
+                api.logger.debug?.(`[openviking-respawn] ${String(chunk).trim()}`);
+              });
+              child.on("exit", (code: number | null, signal: string | null) => {
+                if (localProcess === child) {
+                  localProcess = null;
+                  localClientCache.delete(localCacheKey);
+                }
+                api.logger.warn(`openviking: re-spawned subprocess exited (code=${code}, signal=${signal})`);
+              });
+              try {
+                await waitForHealth(baseUrl, timeoutMs, intervalMs);
+                const client = new OpenVikingClient(baseUrl, cfg.apiKey, cfg.agentId, cfg.timeoutMs);
+                localClientCache.set(localCacheKey, { client, process: child });
+                if (resolveLocalClient) {
+                  resolveLocalClient(client);
+                  rejectLocalClient = null;
+                }
+                api.logger.info(
+                  `openviking: local server re-spawned successfully (${baseUrl}, config: ${cfg.configPath})`,
+                );
+              } catch (err) {
+                localProcess = null;
+                child.kill("SIGTERM");
+                markLocalUnavailable("re-spawn failed", err);
+                api.logger.warn(`openviking: defensive re-spawn failed: ${String(err)}`);
+                throw err;
+              }
+            } else {
+              api.logger.info(`openviking: local process healthy on port ${cfg.port} (isSpawner=false)`);
+            }
+          } else {
+            await (await getClient()).healthCheck().catch(() => {});
+            api.logger.info(
+              `openviking: initialized via cache (url: ${cfg.baseUrl}, targetUri: ${cfg.targetUri})`,
+            );
           }
         } else {
           await (await getClient()).healthCheck().catch(() => {});
