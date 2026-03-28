@@ -13,8 +13,15 @@ type GeneratedBundledChannelEntry = {
   };
 };
 
-const generatedBundledChannelEntries =
-  GENERATED_BUNDLED_CHANNEL_ENTRIES as unknown as readonly GeneratedBundledChannelEntry[];
+function coerceGeneratedBundledChannelEntries(
+  value: unknown,
+): readonly GeneratedBundledChannelEntry[] {
+  return Array.isArray(value) ? (value as readonly GeneratedBundledChannelEntry[]) : [];
+}
+
+const generatedBundledChannelEntries = coerceGeneratedBundledChannelEntries(
+  GENERATED_BUNDLED_CHANNEL_ENTRIES,
+);
 
 export const bundledChannelPlugins = generatedBundledChannelEntries.map(
   ({ entry }) => entry.channelPlugin,
