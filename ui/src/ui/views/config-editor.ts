@@ -9,8 +9,8 @@ import {
 } from "@codemirror/view";
 import { json } from "@codemirror/lang-json";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
-import { linter, lintGutter } from "@codemirror/lint";
-import { css, html, LitElement, nothing } from "lit";
+import { linter, lintGutter, type Diagnostic } from "@codemirror/lint";
+import { css, html, LitElement } from "lit";
 import { customElement, property, query, state } from "lit/decorators.js";
 
 /**
@@ -29,7 +29,7 @@ export class ConfigEditor extends LitElement {
   /** Whether the editor should use a dark theme */
   @property({ type: Boolean }) dark = false;
 
-  @query("div") editorContainer!: HTMLDivElement;
+  @query("#editor-mount") editorContainer!: HTMLDivElement;
 
   @state() private editorReady = false;
 
@@ -60,7 +60,7 @@ export class ConfigEditor extends LitElement {
       background: var(--oc-input-bg-readonly, #f9fafb);
     }
 
-    div {
+    #editor-mount {
       height: 480px;
     }
 
@@ -206,7 +206,7 @@ export class ConfigEditor extends LitElement {
 
       // JSON linter
       linter((view) => {
-        const diagnostics: ReturnType<typeof linter> = [];
+        const diagnostics: Diagnostic[] = [];
         const docText = view.state.doc.toString().trim();
 
         if (!docText) return diagnostics;
@@ -218,7 +218,6 @@ export class ConfigEditor extends LitElement {
             // Try to extract line/col from error message
             const match = e.message.match(/position\s+(\d+)/i);
             const pos = match ? parseInt(match[1], 10) : 0;
-            const line = docText.substring(0, pos).split("\n").length;
 
             diagnostics.push({
               from: Math.min(pos, docText.length),
@@ -261,14 +260,15 @@ export class ConfigEditor extends LitElement {
   /** Format the JSON content with proper indentation */
   format(): void {
     if (!this.view) return;
-    const doc = this.view.state.doc.toString().trim();
+    const rawDoc = this.view.state.doc.toString();
+    const doc = rawDoc.trim();
     if (!doc) return;
 
     try {
       const parsed = JSON.parse(doc);
       const formatted = JSON.stringify(parsed, null, 2);
       this.view.dispatch({
-        changes: { from: 0, to: doc.length, insert: formatted },
+        changes: { from: 0, to: rawDoc.length, insert: formatted },
       });
     } catch {
       // Not valid JSON, ignore format
@@ -293,7 +293,7 @@ export class ConfigEditor extends LitElement {
       <div
         class="cm-editor-wrap ${this.readonly ? "cm-editor-wrap--readonly" : ""}"
       >
-        <div></div>
+        <div id="editor-mount"></div>
       </div>
     `;
   }
