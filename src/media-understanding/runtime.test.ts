@@ -5,27 +5,27 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 
-const { resolveRuntimePluginRegistryMock } = vi.hoisted(() => ({
-  resolveRuntimePluginRegistryMock: vi.fn<
-    (params?: unknown) => ReturnType<typeof createEmptyPluginRegistry> | undefined
-  >(() => undefined),
-}));
-
-vi.mock("../plugins/loader.js", () => ({
-  resolveRuntimePluginRegistry: resolveRuntimePluginRegistryMock,
-}));
-
 let describeImageFile: typeof import("./runtime.js").describeImageFile;
 let runMediaUnderstandingFile: typeof import("./runtime.js").runMediaUnderstandingFile;
+let resolveRuntimePluginRegistryMock: ReturnType<
+  typeof vi.fn<(params?: unknown) => ReturnType<typeof createEmptyPluginRegistry> | undefined>
+>;
 
 describe("media-understanding runtime helpers", () => {
   afterEach(() => {
     resolveRuntimePluginRegistryMock.mockReset();
     resolveRuntimePluginRegistryMock.mockReturnValue(undefined);
+    vi.doUnmock("../plugins/loader.js");
   });
 
   beforeEach(async () => {
     vi.resetModules();
+    resolveRuntimePluginRegistryMock = vi.fn<
+      (params?: unknown) => ReturnType<typeof createEmptyPluginRegistry> | undefined
+    >(() => undefined);
+    vi.doMock("../plugins/loader.js", () => ({
+      resolveRuntimePluginRegistry: resolveRuntimePluginRegistryMock,
+    }));
     ({ describeImageFile, runMediaUnderstandingFile } = await import("./runtime.js"));
   });
 
