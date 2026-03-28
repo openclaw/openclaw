@@ -230,7 +230,7 @@
 | `memory` | ✅ 已安装 | DeepSeek | 跨会话持久记忆（文件存储） |
 | `calendar` | 待开发 | DeepSeek | 日程管理（Google Calendar MCP） |
 | `health` | 待开发 | Claude | 健康数据分析和建议 |
-| `clipboard` | 待开发 | DeepSeek | 跨设备剪贴板同步 |
+| `clipboard` | ✅ 已安装 | DeepSeek | 跨设备剪贴板同步 |
 
 ---
 
@@ -257,11 +257,11 @@
 
 | 任务 | 说明 | 优先级 |
 |------|------|--------|
-| Google Calendar MCP 认证 | OAuth 授权 claude.ai Calendar connector | P0 |
-| calendar skill | 日程查询、创建、修改、每日提醒 | P0 |
-| Clipboard MCP Server | Python 自建，读写系统剪贴板 | P0 |
-| 邮箱 MCP 认证 | OAuth 授权 claude.ai Gmail connector | P1 |
-| 晨间简报 | 整合日历+消息+天气，每天早上推送 | P1 |
+| Google Calendar MCP | 本地 MCP Server + Google OAuth | ✅ 完成 |
+| calendar skill | 日程查询、创建、修改、搜索 | ✅ 完成 |
+| Clipboard MCP Server | Python 自建，读写系统剪贴板 | ✅ 完成 |
+| 晨间简报 | CLAUDE.md 规则整合日历+消息，用户说"早安"触发 | ✅ 完成 |
+| 邮箱 MCP | 复用 huolalamap Google Cloud 项目，启用 Gmail API | 待开发 |
 
 ### Phase 5：健康 + 通知
 
@@ -294,3 +294,4 @@
 | 2026-03-28 | Phase 2 完成：消息分类、跨渠道转发、daily-digest、MCP 权限预授权 |
 | 2026-03-28 | Phase 3 完成：复杂度检测、memory skill、cron 定时任务、邮箱调研 |
 | 2026-03-28 | 项目正式命名**头号助手**，扩展为全方位个人 AI 助手 |
+| 2026-03-28 | Phase 4 核心完成：Google Calendar MCP + Clipboard MCP + 晨间简报 |
