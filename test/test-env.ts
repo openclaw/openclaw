@@ -5,6 +5,7 @@ import path from "node:path";
 import JSON5 from "json5";
 
 type RestoreEntry = { key: string; value: string | undefined };
+type ProfileEnvEntry = { key: string; value: string };
 
 const LIVE_EXTERNAL_AUTH_DIRS = [".claude", ".codex", ".minimax"] as const;
 
@@ -45,41 +46,96 @@ function resolveHomeRelativePath(input: string, homeDir: string): string {
   return path.resolve(trimmed);
 }
 
+function stripWrappingQuotes(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed.length >= 2) {
+    const first = trimmed[0];
+    const last = trimmed[trimmed.length - 1];
+    if ((first === '"' || first === "'") && first === last) {
+      return trimmed.slice(1, -1);
+    }
+  }
+  return trimmed;
+}
+
+function applyProfileEnvEntries(entries: Iterable<ProfileEnvEntry>): number {
+  let applied = 0;
+  for (const entry of entries) {
+    if (!entry.key || (process.env[entry.key] ?? "") !== "") {
+      continue;
+    }
+    process.env[entry.key] = entry.value;
+    applied += 1;
+  }
+  return applied;
+}
+
+function parseSimpleProfileEnv(content: string): ProfileEnvEntry[] {
+  const entries: ProfileEnvEntry[] = [];
+  for (const rawLine of content.split(/\r?\n/u)) {
+    const trimmed = rawLine.trim();
+    if (!trimmed || trimmed.startsWith("#")) {
+      continue;
+    }
+    const match = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$/u.exec(trimmed);
+    if (!match) {
+      continue;
+    }
+    const [, key, rawValue] = match;
+    entries.push({ key, value: stripWrappingQuotes(rawValue) });
+  }
+  return entries;
+}
+
 function loadProfileEnv(homeDir = os.homedir()): void {
   const profilePath = path.join(homeDir, ".profile");
   if (!fs.existsSync(profilePath)) {
     return;
   }
+  let applied = 0;
+  let loadedFromShell = false;
   try {
-    const output = execFileSync(
-      "/bin/bash",
-      ["-lc", `set -a; source "${profilePath}" >/dev/null 2>&1; env -0`],
-      { encoding: "utf8" },
-    );
-    const entries = output.split("\0");
-    let applied = 0;
-    for (const entry of entries) {
-      if (!entry) {
+    const shellCandidates =
+      process.platform === "win32" ? ["bash", "/bin/bash"] : ["/bin/bash", "bash"];
+    for (const shellCommand of shellCandidates) {
+      try {
+        const output = execFileSync(
+          shellCommand,
+          ["-lc", `set -a; source "${profilePath}" >/dev/null 2>&1; env -0`],
+          { encoding: "utf8" },
+        );
+        const entries: ProfileEnvEntry[] = [];
+        for (const entry of output.split("\0")) {
+          if (!entry) {
+            continue;
+          }
+          const idx = entry.indexOf("=");
+          if (idx <= 0) {
+            continue;
+          }
+          entries.push({ key: entry.slice(0, idx), value: entry.slice(idx + 1) });
+        }
+        applied = applyProfileEnvEntries(entries);
+        loadedFromShell = true;
+        break;
+      } catch {
         continue;
       }
-      const idx = entry.indexOf("=");
-      if (idx <= 0) {
-        continue;
-      }
-      const key = entry.slice(0, idx);
-      if (!key || (process.env[key] ?? "") !== "") {
-        continue;
-      }
-      process.env[key] = entry.slice(idx + 1);
-      applied += 1;
     }
-    if (applied > 0 && !isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST_QUIET)) {
-      console.log(`[live] loaded ${applied} env vars from ~/.profile`);
+    if (!loadedFromShell) {
+      applied = applyProfileEnvEntries(parseSimpleProfileEnv(fs.readFileSync(profilePath, "utf8")));
     }
   } catch {
     // ignore profile load failures
   }
+  if (applied > 0 && !isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST_QUIET)) {
+    console.log(`[live] loaded ${applied} env vars from ~/.profile`);
+  }
 }
+
+export const __testing = {
+  parseSimpleProfileEnv,
+};
 
 function resolveRestoreEntries(): RestoreEntry[] {
   return [
