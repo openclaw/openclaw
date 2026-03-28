@@ -67,6 +67,18 @@ function isOpenAiCompletionsModel(model: Model<Api>): model is Model<"openai-com
 }
 
 /**
+ * Extracts and lowercases the hostname from a URL string.
+ * Returns null for malformed URLs.
+ */
+function getHostname(baseUrl: string): string | null {
+  try {
+    return new URL(baseUrl).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Returns true only for endpoints that are confirmed to be native OpenAI
  * infrastructure and therefore accept the `developer` message role.
  * Azure OpenAI uses the Chat Completions API and does NOT accept `developer`.
@@ -74,12 +86,7 @@ function isOpenAiCompletionsModel(model: Model<Api>): model is Model<"openai-com
  * only support the standard `system` role.
  */
 function isOpenAINativeEndpoint(baseUrl: string): boolean {
-  try {
-    const host = new URL(baseUrl).hostname.toLowerCase();
-    return host === "api.openai.com";
-  } catch {
-    return false;
-  }
+  return getHostname(baseUrl) === "api.openai.com";
 }
 
 function isAnthropicMessagesModel(model: Model<Api>): model is Model<"anthropic-messages"> {
@@ -130,6 +137,7 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
   const forcedDeveloperRole = compat?.supportsDeveloperRole === true;
   const hasStreamingUsageOverride = compat?.supportsUsageInStreaming !== undefined;
   const targetStrictMode = compat?.supportsStrictMode ?? false;
+  const forcedUsageStreaming = compat?.supportsUsageInStreaming === true;
   if (
     compat?.supportsDeveloperRole !== undefined &&
     hasStreamingUsageOverride &&
@@ -138,20 +146,18 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
     return model;
   }
 
+  const normalizedCompat: ModelCompatConfig = compat
+    ? {
+        ...compat,
+        supportsDeveloperRole: forcedDeveloperRole || false,
+        supportsUsageInStreaming: forcedUsageStreaming || false,
+        supportsStrictMode: targetStrictMode,
+      }
+    : { supportsDeveloperRole: false, supportsUsageInStreaming: false, supportsStrictMode: false };
+
   // Return a new object — do not mutate the caller's model reference.
   return {
     ...model,
-    compat: compat
-      ? {
-          ...compat,
-          supportsDeveloperRole: forcedDeveloperRole || false,
-          ...(hasStreamingUsageOverride ? {} : { supportsUsageInStreaming: false }),
-          supportsStrictMode: targetStrictMode,
-        }
-      : {
-          supportsDeveloperRole: false,
-          supportsUsageInStreaming: false,
-          supportsStrictMode: false,
-        },
+    compat: normalizedCompat,
   } as typeof model;
 }

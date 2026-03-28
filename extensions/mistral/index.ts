@@ -1,4 +1,5 @@
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
+import { applyMistralModelCompat } from "./api.js";
 import { mistralMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { applyMistralConfig, MISTRAL_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildMistralProvider } from "./provider-catalog.js";
@@ -32,6 +33,7 @@ export default defineSingleProviderPluginEntry({
       buildProvider: buildMistralProvider,
       allowExplicitBaseUrl: true,
     },
+    normalizeResolvedModel: ({ model }) => applyMistralModelCompat(model),
     capabilities: {
       transcriptToolCallIdMode: "strict9",
       transcriptToolCallIdModelHints: [
