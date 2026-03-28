@@ -44,7 +44,7 @@ export type SessionListDeliveryContext = {
   channel?: string;
   to?: string;
   accountId?: string;
-  threadId?: string;
+  threadId?: string | number;
 };
 
 export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout";
