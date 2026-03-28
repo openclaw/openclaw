@@ -274,6 +274,10 @@ async function resolveRequestedBinding(request: PluginBindingRequest) {
   throw new Error("expected pending or bound bind result");
 }
 
+async function requestResolvedBinding(input: PluginBindingRequestInput) {
+  return await resolveRequestedBinding(await requestPluginConversationBinding(input));
+}
+
 async function flushMicrotasks(): Promise<void> {
   await new Promise<void>((resolve) => setImmediate(resolve));
 }
@@ -576,7 +580,7 @@ describe("plugin conversation binding approvals", () => {
   });
 
   it("persists detachHint on approved plugin bindings", async () => {
-    const request = await requestPluginConversationBinding(
+    const binding = await requestResolvedBinding(
       createCodexBindRequest({
         channel: "discord",
         accountId: "isolated",
@@ -586,26 +590,7 @@ describe("plugin conversation binding approvals", () => {
       }),
     );
 
-    expect(["pending", "bound"]).toContain(request.status);
-
-    if (request.status === "pending") {
-      const approved = await resolvePluginConversationBindingApproval({
-        approvalId: request.approvalId,
-        decision: "allow-once",
-        senderId: "user-1",
-      });
-
-      expect(approved.status).toBe("approved");
-      if (approved.status !== "approved") {
-        throw new Error("expected approved bind request");
-      }
-
-      expect(approved.binding.detachHint).toBe("/codex_detach");
-    } else if (request.status === "bound") {
-      expect(request.binding.detachHint).toBe("/codex_detach");
-    } else {
-      throw new Error(`expected pending or bound request, got ${request.status}`);
-    }
+    expect(binding.detachHint).toBe("/codex_detach");
 
     const currentBinding = await getCurrentPluginConversationBinding({
       pluginRoot: "/plugins/codex-a",
@@ -736,7 +721,7 @@ describe("plugin conversation binding approvals", () => {
   });
 
   it("returns and detaches only bindings owned by the requesting plugin root", async () => {
-    const request = await requestPluginConversationBinding({
+    await requestResolvedBinding({
       pluginId: "codex",
       pluginName: "Codex App Server",
       pluginRoot: "/plugins/codex-a",
@@ -748,15 +733,6 @@ describe("plugin conversation binding approvals", () => {
       },
       binding: { summary: "Bind this conversation to Codex thread 123." },
     });
-
-    expect(["pending", "bound"]).toContain(request.status);
-    if (request.status === "pending") {
-      await resolvePluginConversationBindingApproval({
-        approvalId: request.approvalId,
-        decision: "allow-once",
-        senderId: "user-1",
-      });
-    }
 
     const current = await getCurrentPluginConversationBinding({
       pluginRoot: "/plugins/codex-a",
