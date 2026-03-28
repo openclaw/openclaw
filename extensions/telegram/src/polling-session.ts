@@ -204,6 +204,7 @@ export class TelegramPollingSession {
     await this.#confirmPersistedOffset(bot);
 
     let lastGetUpdatesAt = Date.now();
+    let lastApiActivityAt = Date.now();
     let lastGetUpdatesStartedAt: number | null = null;
     let lastGetUpdatesFinishedAt: number | null = null;
     let lastGetUpdatesDurationMs: number | null = null;
@@ -216,7 +217,13 @@ export class TelegramPollingSession {
 
     bot.api.config.use(async (prev, method, payload, signal) => {
       if (method !== "getUpdates") {
-        return prev(method, payload, signal);
+        const result = await prev(method, payload, signal);
+        // Any successful non-getUpdates API call (sendMessage, sendChatAction, …)
+        // proves the network is alive. Update the activity timestamp so the
+        // polling-stall watchdog does not misinterpret slow message processing
+        // as a network stall.
+        lastApiActivityAt = Date.now();
+        return result;
       }
 
       const startedAt = Date.now();
@@ -301,8 +308,17 @@ export class TelegramPollingSession {
       const idleElapsed =
         inFlightGetUpdates > 0 ? 0 : now - (lastGetUpdatesFinishedAt ?? lastGetUpdatesAt);
       const elapsed = inFlightGetUpdates > 0 ? activeElapsed : idleElapsed;
+      const apiIdle = now - lastApiActivityAt;
 
-      if (elapsed > POLL_STALL_THRESHOLD_MS && runner.isRunning()) {
+      // Only treat as a stall if BOTH getUpdates and all other API activity
+      // (sendMessage, sendChatAction, …) have been silent beyond the threshold.
+      // This prevents the watchdog from aborting in-flight sendMessage calls
+      // when the agent is simply taking a long time to process a message.
+      if (
+        elapsed > POLL_STALL_THRESHOLD_MS &&
+        apiIdle > POLL_STALL_THRESHOLD_MS &&
+        runner.isRunning()
+      ) {
         if (stallDiagLoggedAt && now - stallDiagLoggedAt < POLL_STALL_THRESHOLD_MS / 2) {
           return;
         }

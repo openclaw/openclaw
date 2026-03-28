@@ -58,7 +58,8 @@ function installPollingStallWatchdogHarness() {
   const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout").mockImplementation(() => {});
   const dateNowSpy = vi
     .spyOn(Date, "now")
-    .mockImplementationOnce(() => 0)
+    .mockImplementationOnce(() => 0) // lastGetUpdatesAt init
+    .mockImplementationOnce(() => 0) // lastApiActivityAt init
     .mockImplementation(() => 120_001);
 
   return {
@@ -361,6 +362,120 @@ describe("TelegramPollingSession", () => {
 
     expectTelegramBotTransportSequence(transport1, transport2);
     expect(createTelegramTransport).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not trigger stall restart when non-getUpdates API calls are active", async () => {
+    const abort = new AbortController();
+    const botStop = vi.fn(async () => undefined);
+    const runnerStop = vi.fn(async () => undefined);
+
+    // Capture the API middleware so we can simulate sendMessage calls
+    let apiMiddleware:
+      | ((
+          prev: (...args: unknown[]) => Promise<unknown>,
+          method: string,
+          payload: unknown,
+        ) => Promise<unknown>)
+      | undefined;
+
+    const bot = {
+      api: {
+        deleteWebhook: vi.fn(async () => true),
+        getUpdates: vi.fn(async () => []),
+        config: {
+          use: vi.fn((fn: typeof apiMiddleware) => {
+            apiMiddleware = fn;
+          }),
+        },
+      },
+      stop: botStop,
+    };
+    createTelegramBotMock.mockReturnValue(bot);
+
+    let firstTaskResolve: (() => void) | undefined;
+    const firstTask = new Promise<void>((resolve) => {
+      firstTaskResolve = resolve;
+    });
+    runMock.mockImplementation(() => ({
+      task: () => firstTask,
+      stop: async () => {
+        await runnerStop();
+        firstTaskResolve?.();
+      },
+      isRunning: () => true,
+    }));
+
+    // t=0: lastGetUpdatesAt and lastApiActivityAt initialized
+    // t=120_001: watchdog fires (getUpdates stale for 120s)
+    // But right before watchdog, a sendMessage succeeded at t=120_000
+    const setIntervalSpy = vi.spyOn(globalThis, "setInterval").mockImplementation((fn) => {
+      watchdog = fn as () => void;
+      return 1 as unknown as ReturnType<typeof setInterval>;
+    });
+    const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval").mockImplementation(() => {});
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation((fn) => {
+      void Promise.resolve().then(() => (fn as () => void)());
+      return 1 as unknown as ReturnType<typeof setTimeout>;
+    });
+    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout").mockImplementation(() => {});
+    const dateNowSpy = vi
+      .spyOn(Date, "now")
+      .mockImplementationOnce(() => 0) // lastGetUpdatesAt init
+      .mockImplementationOnce(() => 0) // lastApiActivityAt init
+      // Call 3+: watchdog check time and sendMessage activity time
+      .mockImplementation(() => 120_001);
+
+    let watchdog: (() => void) | undefined;
+    const log = vi.fn();
+    const session = new TelegramPollingSession({
+      token: "tok",
+      config: {},
+      accountId: "default",
+      runtime: undefined,
+      proxyFetch: undefined,
+      abortSignal: abort.signal,
+      runnerOptions: {},
+      getLastUpdateId: () => null,
+      persistUpdateId: async () => undefined,
+      log,
+      telegramTransport: undefined,
+    });
+
+    try {
+      const runPromise = session.runUntilAbort();
+
+      // Wait for watchdog to be captured
+      for (let attempt = 0; attempt < 20 && !watchdog; attempt += 1) {
+        await Promise.resolve();
+      }
+      expect(watchdog).toBeTypeOf("function");
+
+      // Simulate a sendMessage call through the middleware before watchdog fires.
+      // This updates lastApiActivityAt, proving the network is alive.
+      if (apiMiddleware) {
+        const fakePrev = vi.fn(async () => ({ ok: true }));
+        await apiMiddleware(fakePrev, "sendMessage", { chat_id: 123, text: "hello" });
+      }
+
+      // Now fire the watchdog — getUpdates is stale (120s) but API was just active
+      watchdog?.();
+
+      // The watchdog should NOT have triggered a restart
+      expect(runnerStop).not.toHaveBeenCalled();
+      expect(botStop).not.toHaveBeenCalled();
+      expect(log).not.toHaveBeenCalledWith(expect.stringContaining("Polling stall detected"));
+
+      // Clean up: abort to end the session
+      abort.abort();
+      firstTaskResolve?.();
+      await runPromise;
+    } finally {
+      setIntervalSpy.mockRestore();
+      clearIntervalSpy.mockRestore();
+      setTimeoutSpy.mockRestore();
+      clearTimeoutSpy.mockRestore();
+      dateNowSpy.mockRestore();
+    }
   });
 
   it("reuses the transport after a getUpdates conflict", async () => {
