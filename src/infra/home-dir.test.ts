@@ -1,6 +1,7 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  expandEnvVars,
   expandHomePrefix,
   resolveEffectiveHomeDir,
   resolveHomeRelativePath,
@@ -159,6 +160,55 @@ describe("expandHomePrefix", () => {
   });
 });
 
+describe("expandEnvVars", () => {
+  it.each([
+    {
+      name: "expands braced ${VAR} references",
+      input: "${HOME}/workspace",
+      env: { HOME: "/home/alice" } as NodeJS.ProcessEnv,
+      expected: "/home/alice/workspace",
+    },
+    {
+      name: "expands unbraced $VAR references",
+      input: "$HOME/workspace",
+      env: { HOME: "/home/alice" } as NodeJS.ProcessEnv,
+      expected: "/home/alice/workspace",
+    },
+    {
+      name: "expands XDG_CONFIG_HOME",
+      input: "${XDG_CONFIG_HOME}/skills",
+      env: { XDG_CONFIG_HOME: "/home/node/.config" } as NodeJS.ProcessEnv,
+      expected: "/home/node/.config/skills",
+    },
+    {
+      name: "leaves unknown variables as-is",
+      input: "${UNKNOWN_VAR}/path",
+      env: {} as NodeJS.ProcessEnv,
+      expected: "${UNKNOWN_VAR}/path",
+    },
+    {
+      name: "expands multiple variables in one string",
+      input: "${HOME}/${USER}/docs",
+      env: { HOME: "/home/alice", USER: "alice" } as NodeJS.ProcessEnv,
+      expected: "/home/alice/alice/docs",
+    },
+    {
+      name: "returns input unchanged when no variables present",
+      input: "/tmp/plain/path",
+      env: {} as NodeJS.ProcessEnv,
+      expected: "/tmp/plain/path",
+    },
+    {
+      name: "handles empty env value",
+      input: "${HOME}/workspace",
+      env: { HOME: "" } as NodeJS.ProcessEnv,
+      expected: "/workspace",
+    },
+  ])("$name", ({ input, env, expected }) => {
+    expect(expandEnvVars(input, env)).toBe(expected);
+  });
+});
+
 describe("resolveHomeRelativePath", () => {
   it.each([
     {
@@ -194,6 +244,25 @@ describe("resolveHomeRelativePath", () => {
         },
       },
       expected: path.resolve(process.cwd()),
+    },
+    {
+      name: "expands ${XDG_CONFIG_HOME} in paths",
+      input: "${XDG_CONFIG_HOME}/workspace",
+      opts: {
+        env: { XDG_CONFIG_HOME: "/home/node/.openclaw" } as NodeJS.ProcessEnv,
+      },
+      expected: path.resolve("/home/node/.openclaw/workspace"),
+    },
+    {
+      name: "expands env vars before tilde in combined paths",
+      input: "~/${APP_DIR}/skills",
+      opts: {
+        env: {
+          OPENCLAW_HOME: "/home/alice",
+          APP_DIR: "myapp",
+        } as NodeJS.ProcessEnv,
+      },
+      expected: path.resolve("/home/alice/myapp/skills"),
     },
   ])("$name", ({ input, opts, expected }) => {
     expect(resolveHomeRelativePath(input, opts)).toBe(expected);

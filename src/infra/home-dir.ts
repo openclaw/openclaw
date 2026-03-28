@@ -98,6 +98,19 @@ export function expandHomePrefix(
   return input.replace(/^~(?=$|[\\/])/, home);
 }
 
+/**
+ * Expand `${VAR}` and `$VAR` references in a string using the given environment.
+ * Unknown variables are left as-is so the caller can detect misconfiguration.
+ */
+export function expandEnvVars(input: string, env: NodeJS.ProcessEnv = process.env): string {
+  // Match ${VAR_NAME} (braced) and $VAR_NAME (unbraced, word-boundary delimited).
+  return input.replace(/\$\{([A-Za-z_]\w*)\}|\$([A-Za-z_]\w*)/g, (match, braced, unbraced) => {
+    const varName = braced ?? unbraced;
+    const value = env[varName];
+    return value !== undefined ? value : match;
+  });
+}
+
 export function resolveHomeRelativePath(
   input: string,
   opts?: {
@@ -109,15 +122,18 @@ export function resolveHomeRelativePath(
   if (!trimmed) {
     return trimmed;
   }
-  if (trimmed.startsWith("~")) {
-    const expanded = expandHomePrefix(trimmed, {
-      home: resolveRequiredHomeDir(opts?.env ?? process.env, opts?.homedir ?? os.homedir),
-      env: opts?.env,
+  const env = opts?.env ?? process.env;
+  // Expand environment variable references before any other resolution.
+  const envExpanded = expandEnvVars(trimmed, env);
+  if (envExpanded.startsWith("~")) {
+    const expanded = expandHomePrefix(envExpanded, {
+      home: resolveRequiredHomeDir(env, opts?.homedir ?? os.homedir),
+      env,
       homedir: opts?.homedir,
     });
     return path.resolve(expanded);
   }
-  return path.resolve(trimmed);
+  return path.resolve(envExpanded);
 }
 
 export function resolveOsHomeRelativePath(
@@ -131,13 +147,15 @@ export function resolveOsHomeRelativePath(
   if (!trimmed) {
     return trimmed;
   }
-  if (trimmed.startsWith("~")) {
-    const expanded = expandHomePrefix(trimmed, {
-      home: resolveRequiredOsHomeDir(opts?.env ?? process.env, opts?.homedir ?? os.homedir),
-      env: opts?.env,
+  const env = opts?.env ?? process.env;
+  const envExpanded = expandEnvVars(trimmed, env);
+  if (envExpanded.startsWith("~")) {
+    const expanded = expandHomePrefix(envExpanded, {
+      home: resolveRequiredOsHomeDir(env, opts?.homedir ?? os.homedir),
+      env,
       homedir: opts?.homedir,
     });
     return path.resolve(expanded);
   }
-  return path.resolve(trimmed);
+  return path.resolve(envExpanded);
 }
