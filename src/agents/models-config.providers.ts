@@ -212,6 +212,84 @@ function normalizeProviderSpecificConfig(
   return provider;
 }
 
+function normalizeConfiguredProviderApiKey(params: {
+  providerKey: string;
+  provider: ProviderConfig;
+  secretDefaults: SecretDefaults | undefined;
+  profileApiKey: ProfileApiKeyResolution | undefined;
+  secretRefManagedProviders?: Set<string>;
+}): ProviderConfig {
+  const configuredApiKey = params.provider.apiKey;
+  const configuredApiKeyRef = resolveSecretInputRef({
+    value: configuredApiKey,
+    defaults: params.secretDefaults,
+  }).ref;
+
+  if (configuredApiKeyRef && configuredApiKeyRef.id.trim()) {
+    const marker =
+      configuredApiKeyRef.source === "env"
+        ? configuredApiKeyRef.id.trim()
+        : resolveNonEnvSecretRefApiKeyMarker(configuredApiKeyRef.source);
+    params.secretRefManagedProviders?.add(params.providerKey);
+    if (params.provider.apiKey === marker) {
+      return params.provider;
+    }
+    return {
+      ...params.provider,
+      apiKey: marker,
+    };
+  }
+
+  if (typeof configuredApiKey !== "string") {
+    return params.provider;
+  }
+
+  const normalizedConfiguredApiKey = normalizeApiKeyConfig(configuredApiKey);
+  if (isNonSecretApiKeyMarker(normalizedConfiguredApiKey)) {
+    params.secretRefManagedProviders?.add(params.providerKey);
+  }
+  if (
+    params.profileApiKey &&
+    params.profileApiKey.source !== "plaintext" &&
+    normalizedConfiguredApiKey === params.profileApiKey.apiKey
+  ) {
+    params.secretRefManagedProviders?.add(params.providerKey);
+  }
+  if (normalizedConfiguredApiKey === configuredApiKey) {
+    return params.provider;
+  }
+  return {
+    ...params.provider,
+    apiKey: normalizedConfiguredApiKey,
+  };
+}
+
+function normalizeResolvedEnvApiKey(params: {
+  providerKey: string;
+  provider: ProviderConfig;
+  env: NodeJS.ProcessEnv;
+  secretRefManagedProviders?: Set<string>;
+}): ProviderConfig {
+  const currentApiKey = params.provider.apiKey;
+  if (
+    typeof currentApiKey !== "string" ||
+    !currentApiKey.trim() ||
+    ENV_VAR_NAME_RE.test(currentApiKey.trim())
+  ) {
+    return params.provider;
+  }
+
+  const envVarName = resolveEnvApiKeyVarName(params.providerKey, params.env);
+  if (!envVarName || params.env[envVarName] !== currentApiKey) {
+    return params.provider;
+  }
+  params.secretRefManagedProviders?.add(params.providerKey);
+  return {
+    ...params.provider,
+    apiKey: envVarName,
+  };
+}
+
 function normalizeHeaderValues(params: {
   headers: ProviderConfig["headers"] | undefined;
   secretDefaults: SecretDefaults | undefined;
@@ -512,65 +590,36 @@ export function normalizeProviders(params: {
       mutated = true;
       normalizedProvider = { ...normalizedProvider, headers: normalizedHeaders.headers };
     }
-    const configuredApiKey = normalizedProvider.apiKey;
-    const configuredApiKeyRef = resolveSecretInputRef({
-      value: configuredApiKey,
-      defaults: params.secretDefaults,
-    }).ref;
     const profileApiKey = resolveApiKeyFromProfiles({
       provider: normalizedKey,
       store: authStore,
       env,
     });
-
-    if (configuredApiKeyRef && configuredApiKeyRef.id.trim()) {
-      const marker =
-        configuredApiKeyRef.source === "env"
-          ? configuredApiKeyRef.id.trim()
-          : resolveNonEnvSecretRefApiKeyMarker(configuredApiKeyRef.source);
-      if (normalizedProvider.apiKey !== marker) {
-        mutated = true;
-        normalizedProvider = { ...normalizedProvider, apiKey: marker };
-      }
-      params.secretRefManagedProviders?.add(normalizedKey);
-    } else if (typeof configuredApiKey === "string") {
-      // Fix common misconfig: apiKey set to "${ENV_VAR}" instead of "ENV_VAR".
-      const normalizedConfiguredApiKey = normalizeApiKeyConfig(configuredApiKey);
-      if (normalizedConfiguredApiKey !== configuredApiKey) {
-        mutated = true;
-        normalizedProvider = {
-          ...normalizedProvider,
-          apiKey: normalizedConfiguredApiKey,
-        };
-      }
-      if (isNonSecretApiKeyMarker(normalizedConfiguredApiKey)) {
-        params.secretRefManagedProviders?.add(normalizedKey);
-      }
-      if (
-        profileApiKey &&
-        profileApiKey.source !== "plaintext" &&
-        normalizedConfiguredApiKey === profileApiKey.apiKey
-      ) {
-        params.secretRefManagedProviders?.add(normalizedKey);
-      }
+    const providerWithConfiguredApiKey = normalizeConfiguredProviderApiKey({
+      providerKey: normalizedKey,
+      provider: normalizedProvider,
+      secretDefaults: params.secretDefaults,
+      profileApiKey,
+      secretRefManagedProviders: params.secretRefManagedProviders,
+    });
+    if (providerWithConfiguredApiKey !== normalizedProvider) {
+      mutated = true;
+      normalizedProvider = providerWithConfiguredApiKey;
     }
 
     // Reverse-lookup: if apiKey looks like a resolved secret value (not an env
     // var name), check whether it matches the canonical env var for this provider.
     // This prevents resolveConfigEnvVars()-resolved secrets from being persisted
     // to models.json as plaintext. (Fixes #38757)
-    const currentApiKey = normalizedProvider.apiKey;
-    if (
-      typeof currentApiKey === "string" &&
-      currentApiKey.trim() &&
-      !ENV_VAR_NAME_RE.test(currentApiKey.trim())
-    ) {
-      const envVarName = resolveEnvApiKeyVarName(normalizedKey, env);
-      if (envVarName && env[envVarName] === currentApiKey) {
-        mutated = true;
-        normalizedProvider = { ...normalizedProvider, apiKey: envVarName };
-        params.secretRefManagedProviders?.add(normalizedKey);
-      }
+    const providerWithResolvedEnvApiKey = normalizeResolvedEnvApiKey({
+      providerKey: normalizedKey,
+      provider: normalizedProvider,
+      env,
+      secretRefManagedProviders: params.secretRefManagedProviders,
+    });
+    if (providerWithResolvedEnvApiKey !== normalizedProvider) {
+      mutated = true;
+      normalizedProvider = providerWithResolvedEnvApiKey;
     }
 
     const providerWithApiKey = resolveMissingProviderApiKey({
