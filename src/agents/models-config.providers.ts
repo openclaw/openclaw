@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { coerceSecretRef, resolveSecretInputRef } from "../config/types.secrets.js";
+import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   mergeImplicitBedrockProvider,
@@ -18,8 +18,7 @@ import {
 import { applyModelStudioNativeStreamingUsageCompat } from "../plugin-sdk/modelstudio.js";
 import { applyMoonshotNativeStreamingUsageCompat } from "../plugin-sdk/moonshot.js";
 import { isRecord } from "../utils.js";
-import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
-import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles.js";
+import { ensureAuthProfileStore } from "./auth-profiles.js";
 export * from "./models-config.providers.static.js";
 import {
   groupPluginDiscoveryProvidersByOrder,
@@ -28,27 +27,39 @@ import {
   runProviderCatalog,
 } from "../plugins/provider-discovery.js";
 import {
-  isNonSecretApiKeyMarker,
   resolveNonEnvSecretRefApiKeyMarker,
   resolveNonEnvSecretRefHeaderValueMarker,
   resolveEnvSecretRefHeaderValueMarker,
 } from "./model-auth-markers.js";
-import { resolveAwsSdkEnvVarName, resolveEnvApiKey } from "./model-auth.js";
+import type {
+  ProfileApiKeyResolution,
+  ProviderApiKeyResolver,
+  ProviderAuthResolver,
+  ProviderConfig,
+  SecretDefaults,
+} from "./models-config.providers.secrets.js";
+import {
+  createProviderApiKeyResolver,
+  createProviderAuthResolver,
+  normalizeConfiguredProviderApiKey,
+  normalizeHeaderValues,
+  normalizeResolvedEnvApiKey,
+  resolveApiKeyFromProfiles,
+  resolveMissingProviderApiKey,
+} from "./models-config.providers.secrets.js";
+export type {
+  ProfileApiKeyResolution,
+  ProviderApiKeyResolver,
+  ProviderAuthResolver,
+  ProviderConfig,
+  SecretDefaults,
+} from "./models-config.providers.secrets.js";
 export { resolveOllamaApiBase } from "../plugin-sdk/ollama-surface.js";
 export { normalizeGoogleModelId } from "../plugin-sdk/google.js";
 export { normalizeXaiModelId } from "../plugin-sdk/xai.js";
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
-export type ProviderConfig = NonNullable<ModelsConfig["providers"]>[string];
-type SecretDefaults = {
-  env?: string;
-  file?: string;
-  exec?: string;
-};
-
 const log = createSubsystemLogger("agents/model-providers");
-
-const ENV_VAR_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;
 
 const NATIVE_STREAMING_USAGE_COMPAT: Record<string, (provider: ProviderConfig) => ProviderConfig> =
   {
@@ -122,12 +133,6 @@ function resolveLiveProviderDiscoveryFilter(env: NodeJS.ProcessEnv): string[] | 
   return ids.length > 0 ? [...new Set(ids)] : undefined;
 }
 
-function normalizeApiKeyConfig(value: string): string {
-  const trimmed = value.trim();
-  const match = /^\$\{([A-Z0-9_]+)\}$/.exec(trimmed);
-  return match?.[1] ?? trimmed;
-}
-
 export function applyNativeStreamingUsageCompat(
   providers: Record<string, ProviderConfig>,
 ): Record<string, ProviderConfig> {
@@ -143,65 +148,6 @@ export function applyNativeStreamingUsageCompat(
   return changed ? nextProviders : providers;
 }
 
-function resolveEnvApiKeyVarName(
-  provider: string,
-  env: NodeJS.ProcessEnv = process.env,
-): string | undefined {
-  const resolved = resolveEnvApiKey(provider, env);
-  if (!resolved) {
-    return undefined;
-  }
-  const match = /^(?:env: |shell env: )([A-Z0-9_]+)$/.exec(resolved.source);
-  return match ? match[1] : undefined;
-}
-
-function resolveAwsSdkApiKeyVarName(env: NodeJS.ProcessEnv = process.env): string {
-  return resolveAwsSdkEnvVarName(env) ?? "AWS_PROFILE";
-}
-
-function resolveMissingProviderApiKey(params: {
-  providerKey: string;
-  provider: ProviderConfig;
-  env: NodeJS.ProcessEnv;
-  profileApiKey: ProfileApiKeyResolution | undefined;
-  secretRefManagedProviders?: Set<string>;
-}): ProviderConfig {
-  const hasModels = Array.isArray(params.provider.models) && params.provider.models.length > 0;
-  const normalizedApiKey = normalizeOptionalSecretInput(params.provider.apiKey);
-  const hasConfiguredApiKey = Boolean(normalizedApiKey || params.provider.apiKey);
-  if (!hasModels || hasConfiguredApiKey) {
-    return params.provider;
-  }
-
-  const authMode = params.provider.auth;
-  const providerApiKeyResolver = PROVIDER_CONFIG_API_KEY_RESOLVERS[params.providerKey];
-  if (providerApiKeyResolver && (!authMode || authMode === "aws-sdk")) {
-    return {
-      ...params.provider,
-      apiKey: providerApiKeyResolver(params.env),
-    };
-  }
-  if (authMode === "aws-sdk") {
-    return {
-      ...params.provider,
-      apiKey: resolveAwsSdkApiKeyVarName(params.env),
-    };
-  }
-
-  const fromEnv = resolveEnvApiKeyVarName(params.providerKey, params.env);
-  const apiKey = fromEnv ?? params.profileApiKey?.apiKey;
-  if (!apiKey?.trim()) {
-    return params.provider;
-  }
-  if (params.profileApiKey && params.profileApiKey.source !== "plaintext") {
-    params.secretRefManagedProviders?.add(params.providerKey);
-  }
-  return {
-    ...params.provider,
-    apiKey,
-  };
-}
-
 function normalizeProviderSpecificConfig(
   providerKey: string,
   provider: ProviderConfig,
@@ -210,204 +156,6 @@ function normalizeProviderSpecificConfig(
     return normalizeGoogleProviderConfig(providerKey, provider);
   }
   return provider;
-}
-
-function normalizeConfiguredProviderApiKey(params: {
-  providerKey: string;
-  provider: ProviderConfig;
-  secretDefaults: SecretDefaults | undefined;
-  profileApiKey: ProfileApiKeyResolution | undefined;
-  secretRefManagedProviders?: Set<string>;
-}): ProviderConfig {
-  const configuredApiKey = params.provider.apiKey;
-  const configuredApiKeyRef = resolveSecretInputRef({
-    value: configuredApiKey,
-    defaults: params.secretDefaults,
-  }).ref;
-
-  if (configuredApiKeyRef && configuredApiKeyRef.id.trim()) {
-    const marker =
-      configuredApiKeyRef.source === "env"
-        ? configuredApiKeyRef.id.trim()
-        : resolveNonEnvSecretRefApiKeyMarker(configuredApiKeyRef.source);
-    params.secretRefManagedProviders?.add(params.providerKey);
-    if (params.provider.apiKey === marker) {
-      return params.provider;
-    }
-    return {
-      ...params.provider,
-      apiKey: marker,
-    };
-  }
-
-  if (typeof configuredApiKey !== "string") {
-    return params.provider;
-  }
-
-  const normalizedConfiguredApiKey = normalizeApiKeyConfig(configuredApiKey);
-  if (isNonSecretApiKeyMarker(normalizedConfiguredApiKey)) {
-    params.secretRefManagedProviders?.add(params.providerKey);
-  }
-  if (
-    params.profileApiKey &&
-    params.profileApiKey.source !== "plaintext" &&
-    normalizedConfiguredApiKey === params.profileApiKey.apiKey
-  ) {
-    params.secretRefManagedProviders?.add(params.providerKey);
-  }
-  if (normalizedConfiguredApiKey === configuredApiKey) {
-    return params.provider;
-  }
-  return {
-    ...params.provider,
-    apiKey: normalizedConfiguredApiKey,
-  };
-}
-
-function normalizeResolvedEnvApiKey(params: {
-  providerKey: string;
-  provider: ProviderConfig;
-  env: NodeJS.ProcessEnv;
-  secretRefManagedProviders?: Set<string>;
-}): ProviderConfig {
-  const currentApiKey = params.provider.apiKey;
-  if (
-    typeof currentApiKey !== "string" ||
-    !currentApiKey.trim() ||
-    ENV_VAR_NAME_RE.test(currentApiKey.trim())
-  ) {
-    return params.provider;
-  }
-
-  const envVarName = resolveEnvApiKeyVarName(params.providerKey, params.env);
-  if (!envVarName || params.env[envVarName] !== currentApiKey) {
-    return params.provider;
-  }
-  params.secretRefManagedProviders?.add(params.providerKey);
-  return {
-    ...params.provider,
-    apiKey: envVarName,
-  };
-}
-
-function normalizeHeaderValues(params: {
-  headers: ProviderConfig["headers"] | undefined;
-  secretDefaults: SecretDefaults | undefined;
-}): { headers: ProviderConfig["headers"] | undefined; mutated: boolean } {
-  const { headers } = params;
-  if (!headers) {
-    return { headers, mutated: false };
-  }
-  let mutated = false;
-  const nextHeaders: Record<string, NonNullable<ProviderConfig["headers"]>[string]> = {};
-  for (const [headerName, headerValue] of Object.entries(headers)) {
-    const resolvedRef = resolveSecretInputRef({
-      value: headerValue,
-      defaults: params.secretDefaults,
-    }).ref;
-    if (!resolvedRef || !resolvedRef.id.trim()) {
-      nextHeaders[headerName] = headerValue;
-      continue;
-    }
-    mutated = true;
-    nextHeaders[headerName] =
-      resolvedRef.source === "env"
-        ? resolveEnvSecretRefHeaderValueMarker(resolvedRef.id)
-        : resolveNonEnvSecretRefHeaderValueMarker(resolvedRef.source);
-  }
-  if (!mutated) {
-    return { headers, mutated: false };
-  }
-  return { headers: nextHeaders, mutated: true };
-}
-
-type ProfileApiKeyResolution = {
-  apiKey: string;
-  source: "plaintext" | "env-ref" | "non-env-ref";
-  /** Optional secret value that may be used for provider discovery only. */
-  discoveryApiKey?: string;
-};
-
-function toDiscoveryApiKey(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  if (!trimmed || isNonSecretApiKeyMarker(trimmed)) {
-    return undefined;
-  }
-  return trimmed;
-}
-
-function resolveApiKeyFromCredential(
-  cred: ReturnType<typeof ensureAuthProfileStore>["profiles"][string] | undefined,
-  env: NodeJS.ProcessEnv = process.env,
-): ProfileApiKeyResolution | undefined {
-  if (!cred) {
-    return undefined;
-  }
-  if (cred.type === "api_key") {
-    const keyRef = coerceSecretRef(cred.keyRef);
-    if (keyRef && keyRef.id.trim()) {
-      if (keyRef.source === "env") {
-        const envVar = keyRef.id.trim();
-        return {
-          apiKey: envVar,
-          source: "env-ref",
-          discoveryApiKey: toDiscoveryApiKey(env[envVar]),
-        };
-      }
-      return {
-        apiKey: resolveNonEnvSecretRefApiKeyMarker(keyRef.source),
-        source: "non-env-ref",
-      };
-    }
-    if (cred.key?.trim()) {
-      return {
-        apiKey: cred.key,
-        source: "plaintext",
-        discoveryApiKey: toDiscoveryApiKey(cred.key),
-      };
-    }
-    return undefined;
-  }
-  if (cred.type === "token") {
-    const tokenRef = coerceSecretRef(cred.tokenRef);
-    if (tokenRef && tokenRef.id.trim()) {
-      if (tokenRef.source === "env") {
-        const envVar = tokenRef.id.trim();
-        return {
-          apiKey: envVar,
-          source: "env-ref",
-          discoveryApiKey: toDiscoveryApiKey(env[envVar]),
-        };
-      }
-      return {
-        apiKey: resolveNonEnvSecretRefApiKeyMarker(tokenRef.source),
-        source: "non-env-ref",
-      };
-    }
-    if (cred.token?.trim()) {
-      return {
-        apiKey: cred.token,
-        source: "plaintext",
-        discoveryApiKey: toDiscoveryApiKey(cred.token),
-      };
-    }
-  }
-  return undefined;
-}
-
-function resolveApiKeyFromProfiles(params: {
-  provider: string;
-  store: ReturnType<typeof ensureAuthProfileStore>;
-  env?: NodeJS.ProcessEnv;
-}): ProfileApiKeyResolution | undefined {
-  const ids = listProfilesForProvider(params.store, params.provider);
-  for (const id of ids) {
-    const resolved = resolveApiKeyFromCredential(params.store.profiles[id], params.env);
-    if (resolved) {
-      return resolved;
-    }
-  }
-  return undefined;
 }
 
 function normalizeSourceProviderLookup(
@@ -628,6 +376,7 @@ export function normalizeProviders(params: {
       env,
       profileApiKey,
       secretRefManagedProviders: params.secretRefManagedProviders,
+      providerApiKeyResolver: PROVIDER_CONFIG_API_KEY_RESOLVERS[normalizedKey],
     });
     if (providerWithApiKey !== normalizedProvider) {
       mutated = true;
@@ -675,22 +424,6 @@ type ImplicitProviderParams = {
   explicitProviders?: Record<string, ProviderConfig> | null;
 };
 
-type ProviderApiKeyResolver = (provider: string) => {
-  apiKey: string | undefined;
-  discoveryApiKey?: string;
-};
-
-type ProviderAuthResolver = (
-  provider: string,
-  options?: { oauthMarker?: string },
-) => {
-  apiKey: string | undefined;
-  discoveryApiKey?: string;
-  mode: "api_key" | "oauth" | "token" | "none";
-  source: "env" | "profile" | "none";
-  profileId?: string;
-};
-
 const PLUGIN_DISCOVERY_ORDERS = ["simple", "profile", "paired", "late"] as const;
 
 type ImplicitProviderContext = ImplicitProviderParams & {
@@ -710,91 +443,6 @@ function mergeImplicitProviderSet(
   for (const [key, value] of Object.entries(additions)) {
     target[key] = value;
   }
-}
-
-function createProviderApiKeyResolver(
-  env: NodeJS.ProcessEnv,
-  authStore: ReturnType<typeof ensureAuthProfileStore>,
-): ProviderApiKeyResolver {
-  return (provider: string): { apiKey: string | undefined; discoveryApiKey?: string } => {
-    const envVar = resolveEnvApiKeyVarName(provider, env);
-    if (envVar) {
-      return {
-        apiKey: envVar,
-        discoveryApiKey: toDiscoveryApiKey(env[envVar]),
-      };
-    }
-    const fromProfiles = resolveApiKeyFromProfiles({ provider, store: authStore, env });
-    return {
-      apiKey: fromProfiles?.apiKey,
-      discoveryApiKey: fromProfiles?.discoveryApiKey,
-    };
-  };
-}
-
-function createProviderAuthResolver(
-  env: NodeJS.ProcessEnv,
-  authStore: ReturnType<typeof ensureAuthProfileStore>,
-): ProviderAuthResolver {
-  return (provider: string, options?: { oauthMarker?: string }) => {
-    const envVar = resolveEnvApiKeyVarName(provider, env);
-    if (envVar) {
-      return {
-        apiKey: envVar,
-        discoveryApiKey: toDiscoveryApiKey(env[envVar]),
-        mode: "api_key" as const,
-        source: "env" as const,
-      };
-    }
-
-    const ids = listProfilesForProvider(authStore, provider);
-    let oauthCandidate:
-      | {
-          apiKey: string | undefined;
-          discoveryApiKey?: string;
-          mode: "oauth";
-          source: "profile";
-          profileId: string;
-        }
-      | undefined;
-    for (const id of ids) {
-      const cred = authStore.profiles[id];
-      if (!cred) {
-        continue;
-      }
-      if (cred.type === "oauth") {
-        oauthCandidate ??= {
-          apiKey: options?.oauthMarker,
-          discoveryApiKey: toDiscoveryApiKey(cred.access),
-          mode: "oauth",
-          source: "profile",
-          profileId: id,
-        };
-        continue;
-      }
-      const resolved = resolveApiKeyFromCredential(cred, env);
-      if (!resolved) {
-        continue;
-      }
-      return {
-        apiKey: resolved.apiKey,
-        discoveryApiKey: resolved.discoveryApiKey,
-        mode: cred.type,
-        source: "profile" as const,
-        profileId: id,
-      };
-    }
-    if (oauthCandidate) {
-      return oauthCandidate;
-    }
-
-    return {
-      apiKey: undefined,
-      discoveryApiKey: undefined,
-      mode: "none" as const,
-      source: "none" as const,
-    };
-  };
 }
 
 async function resolvePluginImplicitProviders(
