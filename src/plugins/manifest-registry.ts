@@ -74,7 +74,7 @@ export type PluginManifestRecord = {
     id: string;
     label?: string;
     blurb?: string;
-    preferOver?: string[];
+    preferOver?: readonly string[];
   };
 };
 

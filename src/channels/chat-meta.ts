@@ -1,112 +1,111 @@
+import { GENERATED_BUNDLED_PLUGIN_METADATA } from "../plugins/bundled-plugin-metadata.generated.js";
+import type { PluginPackageChannel } from "../plugins/manifest.js";
 import { CHAT_CHANNEL_ORDER, type ChatChannelId } from "./ids.js";
 import type { ChannelMeta } from "./plugins/types.js";
 
 export type ChatChannelMeta = ChannelMeta;
 
-const WEBSITE_URL = "https://openclaw.ai";
+const CHAT_CHANNEL_ID_SET = new Set<string>(CHAT_CHANNEL_ORDER);
 
-const CHAT_CHANNEL_META: Record<ChatChannelId, ChannelMeta> = {
-  telegram: {
-    id: "telegram",
-    label: "Telegram",
-    selectionLabel: "Telegram (Bot API)",
-    detailLabel: "Telegram Bot",
-    docsPath: "/channels/telegram",
-    docsLabel: "telegram",
-    blurb: "simplest way to get started — register a bot with @BotFather and get going.",
-    systemImage: "paperplane",
-    selectionDocsPrefix: "",
-    selectionDocsOmitLabel: true,
-    selectionExtras: [WEBSITE_URL],
-  },
-  whatsapp: {
-    id: "whatsapp",
-    label: "WhatsApp",
-    selectionLabel: "WhatsApp (QR link)",
-    detailLabel: "WhatsApp Web",
-    docsPath: "/channels/whatsapp",
-    docsLabel: "whatsapp",
-    blurb: "works with your own number; recommend a separate phone + eSIM.",
-    systemImage: "message",
-  },
-  discord: {
-    id: "discord",
-    label: "Discord",
-    selectionLabel: "Discord (Bot API)",
-    detailLabel: "Discord Bot",
-    docsPath: "/channels/discord",
-    docsLabel: "discord",
-    blurb: "very well supported right now.",
-    systemImage: "bubble.left.and.bubble.right",
-  },
-  irc: {
-    id: "irc",
-    label: "IRC",
-    selectionLabel: "IRC (Server + Nick)",
-    detailLabel: "IRC",
-    docsPath: "/channels/irc",
-    docsLabel: "irc",
-    blurb: "classic IRC networks with DM/channel routing and pairing controls.",
-    systemImage: "network",
-  },
-  googlechat: {
-    id: "googlechat",
-    label: "Google Chat",
-    selectionLabel: "Google Chat (Chat API)",
-    detailLabel: "Google Chat",
-    docsPath: "/channels/googlechat",
-    docsLabel: "googlechat",
-    blurb: "Google Workspace Chat app with HTTP webhook.",
-    systemImage: "message.badge",
-  },
-  slack: {
-    id: "slack",
-    label: "Slack",
-    selectionLabel: "Slack (Socket Mode)",
-    detailLabel: "Slack Bot",
-    docsPath: "/channels/slack",
-    docsLabel: "slack",
-    blurb: "supported (Socket Mode).",
-    systemImage: "number",
-  },
-  signal: {
-    id: "signal",
-    label: "Signal",
-    selectionLabel: "Signal (signal-cli)",
-    detailLabel: "Signal REST",
-    docsPath: "/channels/signal",
-    docsLabel: "signal",
-    blurb: 'signal-cli linked device; more setup (David Reagans: "Hop on Discord.").',
-    systemImage: "antenna.radiowaves.left.and.right",
-  },
-  imessage: {
-    id: "imessage",
-    label: "iMessage",
-    selectionLabel: "iMessage (imsg)",
-    detailLabel: "iMessage",
-    docsPath: "/channels/imessage",
-    docsLabel: "imessage",
-    blurb: "this is still a work in progress.",
-    systemImage: "message.fill",
-  },
-  line: {
-    id: "line",
-    label: "LINE",
-    selectionLabel: "LINE (Messaging API)",
-    detailLabel: "LINE Bot",
-    docsPath: "/channels/line",
-    docsLabel: "line",
-    blurb: "LINE Messaging API webhook bot.",
-    systemImage: "message",
-  },
-};
+function toChatChannelMeta(params: {
+  id: ChatChannelId;
+  channel: PluginPackageChannel;
+}): ChatChannelMeta {
+  const label = params.channel.label?.trim();
+  if (!label) {
+    throw new Error(`Missing label for bundled chat channel "${params.id}"`);
+  }
 
-export const CHAT_CHANNEL_ALIASES: Record<string, ChatChannelId> = {
-  imsg: "imessage",
-  "internet-relay-chat": "irc",
-  "google-chat": "googlechat",
-  gchat: "googlechat",
-};
+  return {
+    id: params.id,
+    label,
+    selectionLabel: params.channel.selectionLabel?.trim() || label,
+    docsPath: params.channel.docsPath?.trim() || `/channels/${params.id}`,
+    docsLabel: params.channel.docsLabel?.trim() || undefined,
+    blurb: params.channel.blurb?.trim() || "",
+    ...(params.channel.aliases?.length ? { aliases: params.channel.aliases } : {}),
+    ...(params.channel.order !== undefined ? { order: params.channel.order } : {}),
+    ...(params.channel.selectionDocsPrefix !== undefined
+      ? { selectionDocsPrefix: params.channel.selectionDocsPrefix }
+      : {}),
+    ...(params.channel.selectionDocsOmitLabel !== undefined
+      ? { selectionDocsOmitLabel: params.channel.selectionDocsOmitLabel }
+      : {}),
+    ...(params.channel.selectionExtras?.length
+      ? { selectionExtras: params.channel.selectionExtras }
+      : {}),
+    ...(params.channel.detailLabel?.trim()
+      ? { detailLabel: params.channel.detailLabel.trim() }
+      : {}),
+    ...(params.channel.systemImage?.trim()
+      ? { systemImage: params.channel.systemImage.trim() }
+      : {}),
+    ...(params.channel.markdownCapable !== undefined
+      ? { markdownCapable: params.channel.markdownCapable }
+      : {}),
+    ...(params.channel.showConfigured !== undefined
+      ? { showConfigured: params.channel.showConfigured }
+      : {}),
+    ...(params.channel.quickstartAllowFrom !== undefined
+      ? { quickstartAllowFrom: params.channel.quickstartAllowFrom }
+      : {}),
+    ...(params.channel.forceAccountBinding !== undefined
+      ? { forceAccountBinding: params.channel.forceAccountBinding }
+      : {}),
+    ...(params.channel.preferSessionLookupForAnnounceTarget !== undefined
+      ? {
+          preferSessionLookupForAnnounceTarget: params.channel.preferSessionLookupForAnnounceTarget,
+        }
+      : {}),
+    ...(params.channel.preferOver?.length ? { preferOver: params.channel.preferOver } : {}),
+  };
+}
+
+function buildChatChannelMetaById(): Record<ChatChannelId, ChatChannelMeta> {
+  const entries = new Map<ChatChannelId, ChatChannelMeta>();
+
+  for (const entry of GENERATED_BUNDLED_PLUGIN_METADATA) {
+    const channel =
+      entry.packageManifest && "channel" in entry.packageManifest
+        ? entry.packageManifest.channel
+        : undefined;
+    if (!channel) {
+      continue;
+    }
+    const rawId = channel?.id?.trim();
+    if (!rawId || !CHAT_CHANNEL_ID_SET.has(rawId)) {
+      continue;
+    }
+    const id = rawId as ChatChannelId;
+    entries.set(
+      id,
+      toChatChannelMeta({
+        id,
+        channel,
+      }),
+    );
+  }
+
+  const missingIds = CHAT_CHANNEL_ORDER.filter((id) => !entries.has(id));
+  if (missingIds.length > 0) {
+    throw new Error(`Missing bundled chat channel metadata for: ${missingIds.join(", ")}`);
+  }
+
+  return Object.freeze(Object.fromEntries(entries)) as Record<ChatChannelId, ChatChannelMeta>;
+}
+
+const CHAT_CHANNEL_META = buildChatChannelMetaById();
+
+export const CHAT_CHANNEL_ALIASES: Record<string, ChatChannelId> = Object.freeze(
+  Object.fromEntries(
+    Object.values(CHAT_CHANNEL_META)
+      .flatMap((meta) =>
+        (meta.aliases ?? []).map((alias) => [alias.trim().toLowerCase(), meta.id] as const),
+      )
+      .filter(([alias]) => alias.length > 0)
+      .toSorted(([left], [right]) => left.localeCompare(right)),
+  ),
+) as Record<string, ChatChannelId>;
 
 function normalizeChannelKey(raw?: string | null): string | undefined {
   const normalized = raw?.trim().toLowerCase();
