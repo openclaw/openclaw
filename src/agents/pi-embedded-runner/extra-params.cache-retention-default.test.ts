@@ -240,4 +240,36 @@ describe("cacheRetention default behavior", () => {
       }),
     );
   });
+
+  it("reports structured output as disabled when sanitization forces toolChoice to none", () => {
+    const agent: { streamFn?: StreamFn } = {};
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-4.1": {
+              params: {
+                toolChoice: "required",
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const { requestedStructuredOutput } = applyExtraParamsToAgent(
+      agent,
+      cfg,
+      "openai",
+      "gpt-4.1",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      new Set(),
+    );
+
+    expect(requestedStructuredOutput).toBe(false);
+  });
 });

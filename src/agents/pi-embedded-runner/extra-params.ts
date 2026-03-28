@@ -202,6 +202,13 @@ function sanitizeToolChoiceOverride(
   };
 }
 
+export function isStructuredOutputRequestedFromExtraParams(
+  extraParams: Record<string, unknown> | undefined,
+): boolean {
+  const toolChoice = extraParams?.toolChoice;
+  return isToolChoiceOverride(toolChoice) && toolChoice !== "none";
+}
+
 function resolveSupportedTransport(value: unknown): SupportedTransport | undefined {
   return value === "sse" || value === "websocket" || value === "auto" ? value : undefined;
 }
@@ -540,7 +547,10 @@ export function applyExtraParamsToAgent(
   workspaceDir?: string,
   model?: ProviderRuntimeModel,
   allowedToolNames?: Set<string>,
-): { effectiveExtraParams: Record<string, unknown> } {
+): {
+  effectiveExtraParams: Record<string, unknown>;
+  requestedStructuredOutput: boolean;
+} {
   const resolvedExtraParams = resolveExtraParams({
     cfg,
     provider,
@@ -602,5 +612,8 @@ export function applyExtraParamsToAgent(
     providerWrapperHandled,
   });
 
-  return { effectiveExtraParams };
+  return {
+    effectiveExtraParams,
+    requestedStructuredOutput: isStructuredOutputRequestedFromExtraParams(sanitizedExtraParams),
+  };
 }

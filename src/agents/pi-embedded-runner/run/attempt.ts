@@ -8,6 +8,7 @@ import {
 } from "@mariozechner/pi-coding-agent";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
+import { registerAgentRunContext } from "../../../infra/agent-events.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import {
   ensureGlobalUndiciEnvProxyDispatcher,
@@ -880,7 +881,7 @@ export async function runEmbeddedAttempt(
         ...(params.fastMode !== undefined ? { fastMode: params.fastMode } : {}),
         ...(allowedToolNames.size === 0 ? { toolChoice: "none" } : {}),
       };
-      const { effectiveExtraParams } = applyExtraParamsToAgent(
+      const { effectiveExtraParams, requestedStructuredOutput } = applyExtraParamsToAgent(
         activeSession.agent,
         params.config,
         params.provider,
@@ -892,6 +893,7 @@ export async function runEmbeddedAttempt(
         params.model,
         allowedToolNames,
       );
+      registerAgentRunContext(params.runId, { requestedStructuredOutput });
       const agentTransportOverride = resolveAgentTransportOverride({
         settingsManager,
         effectiveExtraParams,

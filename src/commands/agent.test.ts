@@ -17,7 +17,6 @@ import { clearSessionStoreCacheForTest } from "../config/sessions.js";
 import * as sessionPathsModule from "../config/sessions/paths.js";
 import {
   emitAgentEvent,
-  getAgentRunContext,
   onAgentEvent,
   resetAgentEventsForTest,
   resetAgentRunContextForTest,
@@ -712,69 +711,6 @@ describe("agentCommand", () => {
       await agentCommand({ message: "hi", to: "+1555" }, runtime);
 
       expectLastRunProviderModel("openai", "gpt-4.1-mini");
-    });
-  });
-
-  it("marks requestedStructuredOutput when toolChoice comes from model params", async () => {
-    await withTempHome(async (home) => {
-      const {
-        agentCommand: freshAgentCommand,
-        configModuleFresh,
-        commandSecretGatewayModuleFresh,
-        runEmbeddedPiAgentMock,
-        loadModelCatalogMock,
-        isCliProviderMock,
-      } = await loadFreshAgentCommandModulesForTest();
-      const freshConfigSpy = vi.spyOn(configModuleFresh, "loadConfig");
-      const freshReadConfigFileSnapshotForWriteSpy = vi.spyOn(
-        configModuleFresh,
-        "readConfigFileSnapshotForWrite",
-      );
-      loadModelCatalogMock.mockResolvedValue([]);
-      isCliProviderMock.mockImplementation(() => false);
-
-      const store = path.join(home, "sessions.json");
-      const cfg = {
-        agents: {
-          defaults: {
-            model: { primary: "openai/gpt-4.1-mini" },
-            models: {
-              "anthropic/claude-opus-4-5": {},
-              "openai/gpt-4.1-mini": {
-                params: {
-                  toolChoice: "required",
-                },
-              },
-            },
-            workspace: path.join(home, "openclaw"),
-          },
-        },
-        session: { store, mainKey: "main" },
-      } as OpenClawConfig;
-      freshConfigSpy.mockReturnValue(cfg);
-      freshReadConfigFileSnapshotForWriteSpy.mockResolvedValue({
-        snapshot: { valid: false, resolved: {} as OpenClawConfig },
-        writeOptions: {},
-      } as Awaited<ReturnType<typeof configModule.readConfigFileSnapshotForWrite>>);
-      vi.spyOn(
-        commandSecretGatewayModuleFresh,
-        "resolveCommandSecretRefsViaGateway",
-      ).mockResolvedValueOnce({
-        resolvedConfig: cfg,
-        diagnostics: [],
-        targetStatesByPath: {},
-        hadUnresolvedTargets: false,
-      });
-
-      let requestedStructuredOutput: boolean | undefined;
-      runEmbeddedPiAgentMock.mockImplementationOnce(async (params) => {
-        requestedStructuredOutput = getAgentRunContext(params.runId)?.requestedStructuredOutput;
-        return createDefaultAgentResult() as never;
-      });
-
-      await freshAgentCommand({ message: "hi", to: "+1555" }, runtime);
-
-      expect(requestedStructuredOutput).toBe(true);
     });
   });
 

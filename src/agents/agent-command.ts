@@ -76,7 +76,6 @@ import {
   resolveDefaultModelForAgent,
   resolveThinkingDefault,
 } from "./model-selection.js";
-import { resolvePreparedExtraParams } from "./pi-embedded-runner/extra-params.js";
 import { buildWorkspaceSkillSnapshot } from "./skills.js";
 import { getSkillsSnapshotVersion } from "./skills/refresh.js";
 import { normalizeSpawnedRunMetadata } from "./spawned-context.js";
@@ -357,15 +356,8 @@ async function agentCommandInternal(
     acpResolution,
   } = prepared;
   let sessionEntry = prepared.sessionEntry;
-
-  const resolveRequestedStructuredOutput = (provider: string, model: string): boolean =>
-    resolvePreparedExtraParams({
-      cfg,
-      provider,
-      modelId: model,
-      extraParamsOverride: opts.streamParams,
-      agentId: sessionAgentId,
-    }).toolChoice != null;
+  const initialRequestedStructuredOutput =
+    opts.streamParams?.toolChoice != null && opts.streamParams.toolChoice !== "none";
 
   try {
     if (opts.deliver === true) {
@@ -712,7 +704,7 @@ async function agentCommandInternal(
       registerAgentRunContext(runId, {
         sessionKey,
         verboseLevel: resolvedVerboseLevel,
-        requestedStructuredOutput: resolveRequestedStructuredOutput(provider, model),
+        requestedStructuredOutput: initialRequestedStructuredOutput,
       });
     }
     let sessionFile: string | undefined;
@@ -780,10 +772,7 @@ async function agentCommandInternal(
             registerAgentRunContext(runId, {
               sessionKey,
               verboseLevel: resolvedVerboseLevel,
-              requestedStructuredOutput: resolveRequestedStructuredOutput(
-                providerOverride,
-                modelOverride,
-              ),
+              requestedStructuredOutput: initialRequestedStructuredOutput,
             });
           }
           return runAgentAttempt({

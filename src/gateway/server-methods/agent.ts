@@ -877,7 +877,6 @@ export const agentHandlers: GatewayRequestHandlers = {
         ? Math.max(0, Math.floor(p.timeoutMs))
         : 30_000;
     const hasActiveChatRun = context.chatAbortControllers.has(runId);
-    const requestedStructuredOutput = getAgentRunContext(runId)?.requestedStructuredOutput === true;
 
     const cachedGatewaySnapshot = readTerminalSnapshotFromGatewayDedupe({
       dedupe: context.dedupe,
@@ -940,7 +939,12 @@ export const agentHandlers: GatewayRequestHandlers = {
             ])) ?? null;
           snapshot = mergeAgentWaitStructuredMetadata(snapshot, immediateDedupeMetadata);
         }
-        if (isMissingAgentWaitStructuredMetadata(snapshot, requestedStructuredOutput)) {
+        if (
+          isMissingAgentWaitStructuredMetadata(
+            snapshot,
+            getAgentRunContext(runId)?.requestedStructuredOutput === true,
+          )
+        ) {
           let graceTimer: ReturnType<typeof setTimeout> | null = null;
           const dedupeMetadata =
             (await Promise.race([
