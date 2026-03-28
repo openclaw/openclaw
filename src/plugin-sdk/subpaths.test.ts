@@ -193,7 +193,20 @@ describe("plugin-sdk subpath exports", () => {
       "parseChatTargetPrefixesOrThrow",
       "resolveServicePrefixedAllowTarget",
       "resolveServicePrefixedTarget",
+      "chunkTextForOutbound",
     ]);
+    for (const subpath of [
+      "feishu",
+      "googlechat",
+      "matrix",
+      "mattermost",
+      "msteams",
+      "zalo",
+      "zalouser",
+    ]) {
+      expectSourceMentions(subpath, ["chunkTextForOutbound"]);
+    }
+    expectSourceMentions("signal", ["chunkText"]);
     expectSourceMentions("reply-history", [
       "buildPendingHistoryContextFromMap",
       "clearHistoryEntriesIfEnabled",
@@ -534,6 +547,7 @@ describe("plugin-sdk subpath exports", () => {
       "closeDispatcher",
       "createPinnedDispatcher",
       "resolvePinnedHostnameWithPolicy",
+      "formatErrorMessage",
       "assertHttpUrlTargetsPrivateNetwork",
       "ssrfPolicyFromAllowPrivateNetwork",
     ]);

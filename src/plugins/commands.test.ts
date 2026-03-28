@@ -19,6 +19,34 @@ async function importCommandsModule(cacheBust: string): Promise<CommandsModule> 
   return (await import(`${commandsModuleUrl}?t=${cacheBust}`)) as CommandsModule;
 }
 
+function createVoiceCommand(overrides: Partial<Parameters<typeof registerPluginCommand>[1]> = {}) {
+  return {
+    name: "voice",
+    description: "Voice command",
+    handler: async () => ({ text: "ok" }),
+    ...overrides,
+  };
+}
+
+function resolveBindingConversationFromCommand(
+  params: Parameters<typeof __testing.resolveBindingConversationFromCommand>[0],
+) {
+  return __testing.resolveBindingConversationFromCommand(params);
+}
+
+function expectCommandMatch(
+  commandBody: string,
+  params: { name: string; pluginId: string; args: string },
+) {
+  expect(matchPluginCommand(commandBody)).toMatchObject({
+    command: expect.objectContaining({
+      name: params.name,
+      pluginId: params.pluginId,
+    }),
+    args: params.args,
+  });
+}
+
 beforeEach(() => {
   setActivePluginRegistry(createTestRegistry([]));
 });
@@ -28,30 +56,34 @@ afterEach(() => {
 });
 
 describe("registerPluginCommand", () => {
-  it("rejects malformed runtime command shapes", () => {
-    const invalidName = registerPluginCommand(
-      "demo-plugin",
-      // Runtime plugin payloads are untyped; guard at boundary.
-      {
+  it.each([
+    {
+      name: "rejects invalid command names",
+      command: {
+        // Runtime plugin payloads are untyped; guard at boundary.
         name: undefined as unknown as string,
         description: "Demo",
         handler: async () => ({ text: "ok" }),
       },
-    );
-    expect(invalidName).toEqual({
-      ok: false,
-      error: "Command name must be a string",
-    });
-
-    const invalidDescription = registerPluginCommand("demo-plugin", {
-      name: "demo",
-      description: undefined as unknown as string,
-      handler: async () => ({ text: "ok" }),
-    });
-    expect(invalidDescription).toEqual({
-      ok: false,
-      error: "Command description must be a string",
-    });
+      expected: {
+        ok: false,
+        error: "Command name must be a string",
+      },
+    },
+    {
+      name: "rejects invalid command descriptions",
+      command: {
+        name: "demo",
+        description: undefined as unknown as string,
+        handler: async () => ({ text: "ok" }),
+      },
+      expected: {
+        ok: false,
+        error: "Command description must be a string",
+      },
+    },
+  ] as const)("$name", ({ command, expected }) => {
+    expect(registerPluginCommand("demo-plugin", command)).toEqual(expected);
   });
 
   it("normalizes command metadata for downstream consumers", () => {
@@ -78,15 +110,16 @@ describe("registerPluginCommand", () => {
   });
 
   it("supports provider-specific native command aliases", () => {
-    const result = registerPluginCommand("demo-plugin", {
-      name: "voice",
-      nativeNames: {
-        default: "talkvoice",
-        discord: "discordvoice",
-      },
-      description: "Demo command",
-      handler: async () => ({ text: "ok" }),
-    });
+    const result = registerPluginCommand(
+      "demo-plugin",
+      createVoiceCommand({
+        nativeNames: {
+          default: "talkvoice",
+          discord: "discordvoice",
+        },
+        description: "Demo command",
+      }),
+    );
 
     expect(result).toEqual({ ok: true });
     expect(getPluginCommandSpecs()).toEqual([
@@ -120,14 +153,14 @@ describe("registerPluginCommand", () => {
     first.clearPluginCommands();
 
     expect(
-      first.registerPluginCommand("demo-plugin", {
-        name: "voice",
-        nativeNames: {
-          telegram: "voice",
-        },
-        description: "Voice command",
-        handler: async () => ({ text: "ok" }),
-      }),
+      first.registerPluginCommand(
+        "demo-plugin",
+        createVoiceCommand({
+          nativeNames: {
+            telegram: "voice",
+          },
+        }),
+      ),
     ).toEqual({ ok: true });
 
     expect(second.getPluginCommandSpecs("telegram")).toEqual([
@@ -148,177 +181,174 @@ describe("registerPluginCommand", () => {
   });
 
   it("matches provider-specific native aliases back to the canonical command", () => {
-    const result = registerPluginCommand("demo-plugin", {
-      name: "voice",
-      nativeNames: {
-        default: "talkvoice",
-        discord: "discordvoice",
-      },
-      description: "Demo command",
-      acceptsArgs: true,
-      handler: async () => ({ text: "ok" }),
-    });
+    const result = registerPluginCommand(
+      "demo-plugin",
+      createVoiceCommand({
+        nativeNames: {
+          default: "talkvoice",
+          discord: "discordvoice",
+        },
+        description: "Demo command",
+        acceptsArgs: true,
+      }),
+    );
 
     expect(result).toEqual({ ok: true });
-    expect(matchPluginCommand("/talkvoice now")).toMatchObject({
-      command: expect.objectContaining({ name: "voice", pluginId: "demo-plugin" }),
-      args: "now",
-    });
-    expect(matchPluginCommand("/discordvoice now")).toMatchObject({
-      command: expect.objectContaining({ name: "voice", pluginId: "demo-plugin" }),
-      args: "now",
-    });
+    for (const commandBody of ["/talkvoice now", "/discordvoice now"]) {
+      expectCommandMatch(commandBody, {
+        name: "voice",
+        pluginId: "demo-plugin",
+        args: "now",
+      });
+    }
   });
 
-  it("rejects provider aliases that collide with another registered command", () => {
-    expect(
-      registerPluginCommand("demo-plugin", {
-        name: "voice",
-        nativeNames: {
-          telegram: "pair_device",
-        },
-        description: "Voice command",
-        handler: async () => ({ text: "ok" }),
-      }),
-    ).toEqual({ ok: true });
-
-    expect(
-      registerPluginCommand("other-plugin", {
+  it.each([
+    {
+      name: "rejects provider aliases that collide with another registered command",
+      setup: () =>
+        registerPluginCommand(
+          "demo-plugin",
+          createVoiceCommand({
+            nativeNames: {
+              telegram: "pair_device",
+            },
+          }),
+        ),
+      candidate: {
         name: "pair",
         nativeNames: {
           telegram: "pair_device",
         },
         description: "Pair command",
         handler: async () => ({ text: "ok" }),
-      }),
-    ).toEqual({
-      ok: false,
-      error: 'Command "pair_device" already registered by plugin "demo-plugin"',
-    });
-  });
-
-  it("rejects reserved provider aliases", () => {
-    expect(
-      registerPluginCommand("demo-plugin", {
-        name: "voice",
+      },
+      expected: {
+        ok: false,
+        error: 'Command "pair_device" already registered by plugin "demo-plugin"',
+      },
+    },
+    {
+      name: "rejects reserved provider aliases",
+      candidate: createVoiceCommand({
         nativeNames: {
           telegram: "help",
         },
-        description: "Voice command",
-        handler: async () => ({ text: "ok" }),
       }),
-    ).toEqual({
-      ok: false,
-      error:
-        'Native command alias "telegram" invalid: Command name "help" is reserved by a built-in command',
-    });
+      expected: {
+        ok: false,
+        error:
+          'Native command alias "telegram" invalid: Command name "help" is reserved by a built-in command',
+      },
+    },
+  ] as const)("$name", ({ setup, candidate, expected }) => {
+    setup?.();
+    expect(registerPluginCommand("other-plugin", candidate)).toEqual(expected);
   });
 
-  it("resolves Discord DM command bindings with the user target prefix intact", () => {
-    expect(
-      __testing.resolveBindingConversationFromCommand({
+  it.each([
+    {
+      name: "resolves Discord DM command bindings with the user target prefix intact",
+      params: {
         channel: "discord",
         from: "discord:1177378744822943744",
         to: "slash:1177378744822943744",
         accountId: "default",
-      }),
-    ).toEqual({
-      channel: "discord",
-      accountId: "default",
-      conversationId: "user:1177378744822943744",
-    });
-  });
-
-  it("resolves Discord guild command bindings with the channel target prefix intact", () => {
-    expect(
-      __testing.resolveBindingConversationFromCommand({
+      },
+      expected: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: "user:1177378744822943744",
+      },
+    },
+    {
+      name: "resolves Discord guild command bindings with the channel target prefix intact",
+      params: {
         channel: "discord",
         from: "discord:channel:1480554272859881494",
         accountId: "default",
-      }),
-    ).toEqual({
-      channel: "discord",
-      accountId: "default",
-      conversationId: "channel:1480554272859881494",
-    });
-  });
-
-  it("resolves Discord thread command bindings with parent channel context intact", () => {
-    expect(
-      __testing.resolveBindingConversationFromCommand({
+      },
+      expected: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: "channel:1480554272859881494",
+      },
+    },
+    {
+      name: "resolves Discord thread command bindings with parent channel context intact",
+      params: {
         channel: "discord",
         from: "discord:channel:1480554272859881494",
         accountId: "default",
         messageThreadId: "thread-42",
         threadParentId: "channel-parent-7",
-      }),
-    ).toEqual({
-      channel: "discord",
-      accountId: "default",
-      conversationId: "channel:1480554272859881494",
-      parentConversationId: "channel-parent-7",
-      threadId: "thread-42",
-    });
-  });
-
-  it("resolves Telegram topic command bindings without a Telegram registry entry", () => {
-    expect(
-      __testing.resolveBindingConversationFromCommand({
+      },
+      expected: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: "channel:1480554272859881494",
+        parentConversationId: "channel-parent-7",
+        threadId: "thread-42",
+      },
+    },
+    {
+      name: "resolves Telegram topic command bindings without a Telegram registry entry",
+      params: {
         channel: "telegram",
         from: "telegram:group:-100123",
         to: "telegram:group:-100123:topic:77",
         accountId: "default",
-      }),
-    ).toEqual({
-      channel: "telegram",
-      accountId: "default",
-      conversationId: "-100123",
-      threadId: 77,
-    });
-  });
-
-  it("resolves Telegram native slash command bindings using the From peer", () => {
-    expect(
-      __testing.resolveBindingConversationFromCommand({
+      },
+      expected: {
+        channel: "telegram",
+        accountId: "default",
+        conversationId: "-100123",
+        threadId: 77,
+      },
+    },
+    {
+      name: "resolves Telegram native slash command bindings using the From peer",
+      params: {
         channel: "telegram",
         from: "telegram:group:-100123:topic:77",
         to: "slash:12345",
         accountId: "default",
         messageThreadId: 77,
-      }),
-    ).toEqual({
-      channel: "telegram",
-      accountId: "default",
-      conversationId: "-100123",
-      threadId: 77,
-    });
-  });
-
-  it("falls back to the parsed From threadId for Telegram slash commands when messageThreadId is missing", () => {
-    expect(
-      __testing.resolveBindingConversationFromCommand({
+      },
+      expected: {
+        channel: "telegram",
+        accountId: "default",
+        conversationId: "-100123",
+        threadId: 77,
+      },
+    },
+    {
+      name: "falls back to the parsed From threadId for Telegram slash commands when messageThreadId is missing",
+      params: {
         channel: "telegram",
         from: "telegram:group:-100123:topic:77",
         to: "slash:12345",
         accountId: "default",
-      }),
-    ).toEqual({
-      channel: "telegram",
-      accountId: "default",
-      conversationId: "-100123",
-      threadId: 77,
-    });
-  });
-
-  it("does not resolve binding conversations for unsupported command channels", () => {
-    expect(
-      __testing.resolveBindingConversationFromCommand({
+      },
+      expected: {
+        channel: "telegram",
+        accountId: "default",
+        conversationId: "-100123",
+        threadId: 77,
+      },
+    },
+    {
+      name: "does not resolve binding conversations for unsupported command channels",
+      params: {
         channel: "slack",
         from: "slack:U123",
         to: "C456",
         accountId: "default",
-      }),
-    ).toBeNull();
+      },
+      expected: null,
+    },
+  ] as const)("$name", ({ params, expected }) => {
+    expect(resolveBindingConversationFromCommand(params)).toEqual(expected);
   });
 
   it("does not expose binding APIs to plugin commands on unsupported channels", async () => {

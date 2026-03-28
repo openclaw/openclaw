@@ -6,25 +6,40 @@ import {
 } from "./bundled-web-search.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 
+function resolveManifestBundledWebSearchPluginIds() {
+  return loadPluginManifestRegistry({})
+    .plugins.filter(
+      (plugin) =>
+        plugin.origin === "bundled" && (plugin.contracts?.webSearchProviders?.length ?? 0) > 0,
+    )
+    .map((plugin) => plugin.id)
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
+function resolveRegistryBundledWebSearchPluginIds() {
+  return listBundledWebSearchProviders()
+    .map(({ pluginId }) => pluginId)
+    .filter((value, index, values) => values.indexOf(value) === index)
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
+function expectBundledWebSearchIds(actual: readonly string[], expected: readonly string[]) {
+  expect(actual).toEqual(expected);
+}
+
 describe("bundled web search metadata", () => {
-  it("keeps bundled web search compat ids aligned with bundled manifests", () => {
-    const bundledWebSearchPluginIds = loadPluginManifestRegistry({})
-      .plugins.filter(
-        (plugin) =>
-          plugin.origin === "bundled" && (plugin.contracts?.webSearchProviders?.length ?? 0) > 0,
-      )
-      .map((plugin) => plugin.id)
-      .toSorted((left, right) => left.localeCompare(right));
-
-    expect(resolveBundledWebSearchPluginIds({})).toEqual(bundledWebSearchPluginIds);
-  });
-
-  it("keeps bundled web search fast-path ids aligned with the registry", () => {
-    expect([...BUNDLED_WEB_SEARCH_PLUGIN_IDS]).toEqual(
-      listBundledWebSearchProviders()
-        .map(({ pluginId }) => pluginId)
-        .filter((value, index, values) => values.indexOf(value) === index)
-        .toSorted((left, right) => left.localeCompare(right)),
-    );
+  it.each([
+    [
+      "keeps bundled web search compat ids aligned with bundled manifests",
+      resolveBundledWebSearchPluginIds({}),
+      resolveManifestBundledWebSearchPluginIds(),
+    ],
+    [
+      "keeps bundled web search fast-path ids aligned with the registry",
+      [...BUNDLED_WEB_SEARCH_PLUGIN_IDS],
+      resolveRegistryBundledWebSearchPluginIds(),
+    ],
+  ] as const)("%s", (_name, actual, expected) => {
+    expectBundledWebSearchIds(actual, expected);
   });
 });

@@ -11,53 +11,78 @@ afterEach(async () => {
   await tempHarness.cleanup();
 });
 
+async function withBundleHomeEnv<T>(
+  prefix: string,
+  run: (params: { homeDir: string; workspaceDir: string }) => Promise<T>,
+): Promise<T> {
+  const env = captureEnv(["HOME", "USERPROFILE", "OPENCLAW_HOME", "OPENCLAW_STATE_DIR"]);
+  try {
+    const homeDir = await tempHarness.createTempDir(`${prefix}-home-`);
+    const workspaceDir = await tempHarness.createTempDir(`${prefix}-workspace-`);
+    process.env.HOME = homeDir;
+    process.env.USERPROFILE = homeDir;
+    delete process.env.OPENCLAW_HOME;
+    delete process.env.OPENCLAW_STATE_DIR;
+    return await run({ homeDir, workspaceDir });
+  } finally {
+    env.restore();
+  }
+}
+
+async function writeClaudeBundleCommandFixture(params: {
+  homeDir: string;
+  pluginId: string;
+  commands: Array<{ relativePath: string; contents: string[] }>;
+}) {
+  const pluginRoot = path.join(params.homeDir, ".openclaw", "extensions", params.pluginId);
+  await fs.mkdir(path.join(pluginRoot, ".claude-plugin"), { recursive: true });
+  await fs.writeFile(
+    path.join(pluginRoot, ".claude-plugin", "plugin.json"),
+    `${JSON.stringify({ name: params.pluginId }, null, 2)}\n`,
+    "utf-8",
+  );
+  for (const command of params.commands) {
+    await fs.mkdir(path.dirname(path.join(pluginRoot, command.relativePath)), { recursive: true });
+    await fs.writeFile(
+      path.join(pluginRoot, command.relativePath),
+      [...command.contents, ""].join("\n"),
+      "utf-8",
+    );
+  }
+}
+
 describe("loadEnabledClaudeBundleCommands", () => {
   it("loads enabled Claude bundle markdown commands and skips disabled-model-invocation entries", async () => {
-    const env = captureEnv(["HOME", "USERPROFILE", "OPENCLAW_HOME", "OPENCLAW_STATE_DIR"]);
-    try {
-      const homeDir = await tempHarness.createTempDir("openclaw-bundle-commands-home-");
-      const workspaceDir = await tempHarness.createTempDir("openclaw-bundle-commands-workspace-");
-      process.env.HOME = homeDir;
-      process.env.USERPROFILE = homeDir;
-      delete process.env.OPENCLAW_HOME;
-      delete process.env.OPENCLAW_STATE_DIR;
-
-      const pluginRoot = path.join(homeDir, ".openclaw", "extensions", "compound-bundle");
-      await fs.mkdir(path.join(pluginRoot, ".claude-plugin"), { recursive: true });
-      await fs.mkdir(path.join(pluginRoot, "commands", "workflows"), { recursive: true });
-      await fs.writeFile(
-        path.join(pluginRoot, ".claude-plugin", "plugin.json"),
-        `${JSON.stringify({ name: "compound-bundle" }, null, 2)}\n`,
-        "utf-8",
-      );
-      await fs.writeFile(
-        path.join(pluginRoot, "commands", "office-hours.md"),
-        [
-          "---",
-          "description: Help with scoping and architecture",
-          "---",
-          "Give direct engineering advice.",
-          "",
-        ].join("\n"),
-        "utf-8",
-      );
-      await fs.writeFile(
-        path.join(pluginRoot, "commands", "workflows", "review.md"),
-        [
-          "---",
-          "name: workflows:review",
-          "description: Run a structured review",
-          "---",
-          "Review the code. $ARGUMENTS",
-          "",
-        ].join("\n"),
-        "utf-8",
-      );
-      await fs.writeFile(
-        path.join(pluginRoot, "commands", "disabled.md"),
-        ["---", "disable-model-invocation: true", "---", "Do not load me.", ""].join("\n"),
-        "utf-8",
-      );
+    await withBundleHomeEnv("openclaw-bundle-commands", async ({ homeDir, workspaceDir }) => {
+      await writeClaudeBundleCommandFixture({
+        homeDir,
+        pluginId: "compound-bundle",
+        commands: [
+          {
+            relativePath: "commands/office-hours.md",
+            contents: [
+              "---",
+              "description: Help with scoping and architecture",
+              "---",
+              "Give direct engineering advice.",
+            ],
+          },
+          {
+            relativePath: "commands/workflows/review.md",
+            contents: [
+              "---",
+              "name: workflows:review",
+              "description: Run a structured review",
+              "---",
+              "Review the code. $ARGUMENTS",
+            ],
+          },
+          {
+            relativePath: "commands/disabled.md",
+            contents: ["---", "disable-model-invocation: true", "---", "Do not load me."],
+          },
+        ],
+      });
 
       const commands = loadEnabledClaudeBundleCommands({
         workspaceDir,
@@ -87,8 +112,6 @@ describe("loadEnabledClaudeBundleCommands", () => {
         ]),
       );
       expect(commands.some((entry) => entry.rawName === "disabled")).toBe(false);
-    } finally {
-      env.restore();
-    }
+    });
   });
 });

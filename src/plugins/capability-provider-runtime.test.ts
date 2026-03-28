@@ -38,6 +38,56 @@ vi.mock("./bundled-compat.js", () => ({
 
 let resolvePluginCapabilityProviders: typeof import("./capability-provider-runtime.js").resolvePluginCapabilityProviders;
 
+function expectBundledCompatLoadPath(params: {
+  cfg: OpenClawConfig;
+  allowlistCompat: { plugins: { allow: string[] } };
+  enablementCompat: {
+    plugins: {
+      allow: string[];
+      entries: { openai: { enabled: boolean } };
+    };
+  };
+}) {
+  expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledWith({
+    config: params.cfg,
+    env: process.env,
+  });
+  expect(mocks.withBundledPluginAllowlistCompat).toHaveBeenCalledWith({
+    config: params.cfg,
+    pluginIds: ["openai"],
+  });
+  expect(mocks.withBundledPluginEnablementCompat).toHaveBeenCalledWith({
+    config: params.allowlistCompat,
+    pluginIds: ["openai"],
+  });
+  expect(mocks.withBundledPluginVitestCompat).toHaveBeenCalledWith({
+    config: params.enablementCompat,
+    pluginIds: ["openai"],
+    env: process.env,
+  });
+  expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith({
+    config: params.enablementCompat,
+  });
+}
+
+function setBundledCapabilityFixture(contractKey: string) {
+  mocks.loadPluginManifestRegistry.mockReturnValue({
+    plugins: [
+      {
+        id: "openai",
+        origin: "bundled",
+        contracts: { [contractKey]: ["openai"] },
+      },
+      {
+        id: "custom-plugin",
+        origin: "workspace",
+        contracts: {},
+      },
+    ] as never,
+    diagnostics: [],
+  });
+}
+
 describe("resolvePluginCapabilityProviders", () => {
   beforeEach(async () => {
     vi.resetModules();
@@ -95,46 +145,17 @@ describe("resolvePluginCapabilityProviders", () => {
         entries: { openai: { enabled: true } },
       },
     };
-    mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "openai",
-          origin: "bundled",
-          contracts: { [contractKey]: ["openai"] },
-        },
-        {
-          id: "custom-plugin",
-          origin: "workspace",
-          contracts: {},
-        },
-      ] as never,
-      diagnostics: [],
-    });
+    setBundledCapabilityFixture(contractKey);
     mocks.withBundledPluginAllowlistCompat.mockReturnValue(allowlistCompat);
     mocks.withBundledPluginEnablementCompat.mockReturnValue(enablementCompat);
     mocks.withBundledPluginVitestCompat.mockReturnValue(enablementCompat);
 
     resolvePluginCapabilityProviders({ key, cfg });
 
-    expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledWith({
-      config: cfg,
-      env: process.env,
-    });
-    expect(mocks.withBundledPluginAllowlistCompat).toHaveBeenCalledWith({
-      config: cfg,
-      pluginIds: ["openai"],
-    });
-    expect(mocks.withBundledPluginEnablementCompat).toHaveBeenCalledWith({
-      config: allowlistCompat,
-      pluginIds: ["openai"],
-    });
-    expect(mocks.withBundledPluginVitestCompat).toHaveBeenCalledWith({
-      config: enablementCompat,
-      pluginIds: ["openai"],
-      env: process.env,
-    });
-    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith({
-      config: enablementCompat,
+    expectBundledCompatLoadPath({
+      cfg,
+      allowlistCompat,
+      enablementCompat,
     });
   });
 });

@@ -28,6 +28,27 @@ function expectTestOnlyArtifactsExcluded(artifacts: readonly string[]) {
   }
 }
 
+function expectGeneratedPathResolution(tempRoot: string, expectedRelativePath: string) {
+  expect(
+    resolveBundledPluginGeneratedPath(tempRoot, {
+      source: "plugin/index.ts",
+      built: "plugin/index.js",
+    }),
+  ).toBe(path.join(tempRoot, expectedRelativePath));
+}
+
+async function writeGeneratedMetadataModule(params: {
+  repoRoot: string;
+  outputPath?: string;
+  check?: boolean;
+}) {
+  return writeBundledPluginMetadataModule({
+    repoRoot: params.repoRoot,
+    outputPath: params.outputPath ?? "src/plugins/bundled-plugin-metadata.generated.ts",
+    ...(params.check ? { check: true } : {}),
+  });
+}
+
 describe("bundled plugin metadata", () => {
   it(
     "matches the generated metadata snapshot",
@@ -67,20 +88,10 @@ describe("bundled plugin metadata", () => {
 
     fs.mkdirSync(path.join(tempRoot, "plugin"), { recursive: true });
     fs.writeFileSync(path.join(tempRoot, "plugin", "index.ts"), "export {};\n", "utf8");
-    expect(
-      resolveBundledPluginGeneratedPath(tempRoot, {
-        source: "plugin/index.ts",
-        built: "plugin/index.js",
-      }),
-    ).toBe(path.join(tempRoot, "plugin", "index.ts"));
+    expectGeneratedPathResolution(tempRoot, path.join("plugin", "index.ts"));
 
     fs.writeFileSync(path.join(tempRoot, "plugin", "index.js"), "export {};\n", "utf8");
-    expect(
-      resolveBundledPluginGeneratedPath(tempRoot, {
-        source: "plugin/index.ts",
-        built: "plugin/index.js",
-      }),
-    ).toBe(path.join(tempRoot, "plugin", "index.js"));
+    expectGeneratedPathResolution(tempRoot, path.join("plugin", "index.js"));
   });
 
   it("supports check mode for stale generated artifacts", async () => {
@@ -98,17 +109,10 @@ describe("bundled plugin metadata", () => {
       configSchema: { type: "object" },
     });
 
-    const initial = await writeBundledPluginMetadataModule({
-      repoRoot: tempRoot,
-      outputPath: "src/plugins/bundled-plugin-metadata.generated.ts",
-    });
+    const initial = await writeGeneratedMetadataModule({ repoRoot: tempRoot });
     expect(initial.wrote).toBe(true);
 
-    const current = await writeBundledPluginMetadataModule({
-      repoRoot: tempRoot,
-      outputPath: "src/plugins/bundled-plugin-metadata.generated.ts",
-      check: true,
-    });
+    const current = await writeGeneratedMetadataModule({ repoRoot: tempRoot, check: true });
     expect(current.changed).toBe(false);
     expect(current.wrote).toBe(false);
 
@@ -118,11 +122,7 @@ describe("bundled plugin metadata", () => {
       "utf8",
     );
 
-    const stale = await writeBundledPluginMetadataModule({
-      repoRoot: tempRoot,
-      outputPath: "src/plugins/bundled-plugin-metadata.generated.ts",
-      check: true,
-    });
+    const stale = await writeGeneratedMetadataModule({ repoRoot: tempRoot, check: true });
     expect(stale.changed).toBe(true);
     expect(stale.wrote).toBe(false);
   });

@@ -62,9 +62,9 @@ function createFixtureSkill(params: {
     description: params.description,
     filePath: params.filePath,
     baseDir: params.baseDir,
-    sourceInfo: { source: params.source } as never,
+    source: params.source,
     disableModelInvocation: false,
-  } as SkillEntry["skill"];
+  };
 }
 
 describe("buildWorkspaceSkillStatus", () => {

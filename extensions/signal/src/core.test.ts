@@ -131,6 +131,18 @@ describe("probeSignal", () => {
   });
 });
 
+describe("signal outbound", () => {
+  it("chunks outbound text without requiring Signal runtime initialization", () => {
+    clearSignalRuntime();
+    const chunker = signalPlugin.outbound?.chunker;
+    if (!chunker) {
+      throw new Error("signal outbound.chunker unavailable");
+    }
+
+    expect(chunker("alpha beta", 5)).toEqual(["alpha", "beta"]);
+  });
+});
+
 describe("classifySignalCliLogLine", () => {
   it("treats INFO/DEBUG as log", () => {
     expect(classifySignalCliLogLine("INFO  DaemonCommand - Started")).toBe("log");

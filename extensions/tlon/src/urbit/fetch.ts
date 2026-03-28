@@ -1,8 +1,4 @@
-import {
-  fetchWithSsrFGuard,
-  type LookupFn,
-  type SsrFPolicy,
-} from "openclaw/plugin-sdk/infra-runtime";
+import { fetchWithSsrFGuard, type LookupFn, type SsrFPolicy } from "../../runtime-api.js";
 import { validateUrbitBaseUrl } from "./base-url.js";
 import { UrbitUrlError } from "./errors.js";
 

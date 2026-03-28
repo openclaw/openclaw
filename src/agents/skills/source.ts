@@ -14,7 +14,6 @@ export function resolveSkillSource(skill: Skill): string {
   if (sourceInfoSource) {
     return sourceInfoSource;
   }
-  const legacySource =
-    typeof compatSkill.source === "string" ? compatSkill.source.trim() : "";
+  const legacySource = typeof compatSkill.source === "string" ? compatSkill.source.trim() : "";
   return legacySource || "unknown";
 }

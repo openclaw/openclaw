@@ -59,6 +59,80 @@ const MODEL: ProviderRuntimeModel = {
   contextWindow: 128_000,
   maxTokens: 8_192,
 };
+const DEMO_PROVIDER_ID = "demo";
+
+function createOpenAiCatalogProviderPlugin(
+  overrides: Partial<ProviderPlugin> = {},
+): ProviderPlugin {
+  return {
+    id: "openai",
+    label: "OpenAI",
+    auth: [],
+    suppressBuiltInModel: ({ provider, modelId }) =>
+      (provider === "openai" || provider === "azure-openai-responses") &&
+      modelId === "gpt-5.3-codex-spark"
+        ? { suppress: true, errorMessage: "openai-codex/gpt-5.3-codex-spark" }
+        : undefined,
+    augmentModelCatalog: () => [
+      { provider: "openai", id: "gpt-5.4", name: "gpt-5.4" },
+      { provider: "openai", id: "gpt-5.4-pro", name: "gpt-5.4-pro" },
+      { provider: "openai", id: "gpt-5.4-mini", name: "gpt-5.4-mini" },
+      { provider: "openai", id: "gpt-5.4-nano", name: "gpt-5.4-nano" },
+      { provider: "openai-codex", id: "gpt-5.4", name: "gpt-5.4" },
+      {
+        provider: "openai-codex",
+        id: "gpt-5.3-codex-spark",
+        name: "gpt-5.3-codex-spark",
+      },
+    ],
+    ...overrides,
+  };
+}
+
+function expectProviderRuntimePluginLoad(params: {
+  provider: string;
+  expectedPluginId?: string;
+  expectedOnlyPluginIds?: string[];
+}) {
+  const plugin = resolveProviderRuntimePlugin({ provider: params.provider });
+
+  expect(plugin?.id).toBe(params.expectedPluginId);
+  expect(resolveOwningPluginIdsForProviderMock).toHaveBeenCalledWith(
+    expect.objectContaining({
+      provider: params.provider,
+    }),
+  );
+  if (params.expectedOnlyPluginIds) {
+    expect(resolvePluginProvidersMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: params.expectedOnlyPluginIds,
+        bundledProviderAllowlistCompat: true,
+        bundledProviderVitestCompat: true,
+      }),
+    );
+  } else {
+    expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
+  }
+}
+
+function createDemoRuntimeContext<TContext extends Record<string, unknown>>(
+  overrides: TContext,
+): TContext & { provider: string; modelId: string } {
+  return {
+    provider: DEMO_PROVIDER_ID,
+    modelId: MODEL.id,
+    ...overrides,
+  };
+}
+
+function createDemoResolvedModelContext<TContext extends Record<string, unknown>>(
+  overrides: TContext,
+): TContext & { provider: string; modelId: string; model: ProviderRuntimeModel } {
+  return createDemoRuntimeContext({
+    model: MODEL,
+    ...overrides,
+  });
+}
 
 describe("provider-runtime", () => {
   beforeEach(async () => {
@@ -120,33 +194,17 @@ describe("provider-runtime", () => {
       },
     ]);
 
-    const plugin = resolveProviderRuntimePlugin({ provider: "Open Router" });
-
-    expect(plugin?.id).toBe("openrouter");
-    expect(resolveOwningPluginIdsForProviderMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "Open Router",
-      }),
-    );
-    expect(resolvePluginProvidersMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        onlyPluginIds: ["openrouter"],
-        bundledProviderAllowlistCompat: true,
-        bundledProviderVitestCompat: true,
-      }),
-    );
+    expectProviderRuntimePluginLoad({
+      provider: "Open Router",
+      expectedPluginId: "openrouter",
+      expectedOnlyPluginIds: ["openrouter"],
+    });
   });
 
   it("skips plugin loading when the provider has no owning plugin", () => {
-    const plugin = resolveProviderRuntimePlugin({ provider: "anthropic" });
-
-    expect(plugin).toBeUndefined();
-    expect(resolveOwningPluginIdsForProviderMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "anthropic",
-      }),
-    );
-    expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
+    expectProviderRuntimePluginLoad({
+      provider: "anthropic",
+    });
   });
 
   it("dispatches runtime hooks for the matched provider", async () => {
@@ -198,7 +256,7 @@ describe("provider-runtime", () => {
     resolvePluginProvidersMock.mockImplementation((_params: unknown) => {
       return [
         {
-          id: "demo",
+          id: DEMO_PROVIDER_ID,
           label: "Demo",
           auth: [],
           resolveDynamicModel: () => MODEL,
@@ -236,55 +294,34 @@ describe("provider-runtime", () => {
           isModernModelRef: ({ modelId }) => modelId.startsWith("gpt-5"),
         },
         {
-          id: "openai",
-          label: "OpenAI",
-          auth: [],
-          buildMissingAuthMessage: () =>
-            'No API key found for provider "openai". Use openai-codex/gpt-5.4.',
-          buildUnknownModelHint,
-          suppressBuiltInModel: ({ provider, modelId }) =>
-            provider === "azure-openai-responses" && modelId === "gpt-5.3-codex-spark"
-              ? { suppress: true, errorMessage: "openai-codex/gpt-5.3-codex-spark" }
-              : undefined,
-          augmentModelCatalog: () => [
-            { provider: "openai", id: "gpt-5.4", name: "gpt-5.4" },
-            { provider: "openai", id: "gpt-5.4-pro", name: "gpt-5.4-pro" },
-            { provider: "openai", id: "gpt-5.4-mini", name: "gpt-5.4-mini" },
-            { provider: "openai", id: "gpt-5.4-nano", name: "gpt-5.4-nano" },
-            { provider: "openai-codex", id: "gpt-5.4", name: "gpt-5.4" },
-            {
-              provider: "openai-codex",
-              id: "gpt-5.3-codex-spark",
-              name: "gpt-5.3-codex-spark",
-            },
-          ],
-        },
+          ...createOpenAiCatalogProviderPlugin({
+            buildMissingAuthMessage: () =>
+              'No API key found for provider "openai". Use openai-codex/gpt-5.4.',
+            buildUnknownModelHint,
+          }),
+        } as ProviderPlugin,
       ];
     });
 
     expect(
       runProviderDynamicModel({
-        provider: "demo",
-        context: {
-          provider: "demo",
-          modelId: MODEL.id,
+        provider: DEMO_PROVIDER_ID,
+        context: createDemoRuntimeContext({
           modelRegistry: { find: () => null } as never,
-        },
+        }),
       }),
     ).toMatchObject(MODEL);
 
     await prepareProviderDynamicModel({
-      provider: "demo",
-      context: {
-        provider: "demo",
-        modelId: MODEL.id,
+      provider: DEMO_PROVIDER_ID,
+      context: createDemoRuntimeContext({
         modelRegistry: { find: () => null } as never,
-      },
+      }),
     });
 
     expect(
       resolveProviderCapabilitiesWithPlugin({
-        provider: "demo",
+        provider: DEMO_PROVIDER_ID,
       }),
     ).toMatchObject({
       providerFamily: "openai",
@@ -292,12 +329,10 @@ describe("provider-runtime", () => {
 
     expect(
       prepareProviderExtraParams({
-        provider: "demo",
-        context: {
-          provider: "demo",
-          modelId: MODEL.id,
+        provider: DEMO_PROVIDER_ID,
+        context: createDemoRuntimeContext({
           extraParams: { temperature: 0.3 },
-        },
+        }),
       }),
     ).toMatchObject({
       temperature: 0.3,
@@ -306,21 +341,17 @@ describe("provider-runtime", () => {
 
     expect(
       resolveProviderStreamFn({
-        provider: "demo",
-        context: {
-          provider: "demo",
-          modelId: MODEL.id,
-          model: MODEL,
-        },
+        provider: DEMO_PROVIDER_ID,
+        context: createDemoResolvedModelContext({}),
       }),
     ).toBeTypeOf("function");
 
     await expect(
       createProviderEmbeddingProvider({
-        provider: "demo",
+        provider: DEMO_PROVIDER_ID,
         context: {
           config: {} as never,
-          provider: "demo",
+          provider: DEMO_PROVIDER_ID,
           model: "demo-embed",
         },
       }),
@@ -332,24 +363,17 @@ describe("provider-runtime", () => {
 
     expect(
       wrapProviderStreamFn({
-        provider: "demo",
-        context: {
-          provider: "demo",
-          modelId: MODEL.id,
-          model: MODEL,
+        provider: DEMO_PROVIDER_ID,
+        context: createDemoResolvedModelContext({
           streamFn: vi.fn(),
-        },
+        }),
       }),
     ).toBeTypeOf("function");
 
     expect(
       normalizeProviderResolvedModelWithPlugin({
-        provider: "demo",
-        context: {
-          provider: "demo",
-          modelId: MODEL.id,
-          model: MODEL,
-        },
+        provider: DEMO_PROVIDER_ID,
+        context: createDemoResolvedModelContext({}),
       }),
     ).toMatchObject({
       ...MODEL,
@@ -358,16 +382,13 @@ describe("provider-runtime", () => {
 
     await expect(
       prepareProviderRuntimeAuth({
-        provider: "demo",
+        provider: DEMO_PROVIDER_ID,
         env: process.env,
-        context: {
+        context: createDemoResolvedModelContext({
           env: process.env,
-          provider: "demo",
-          modelId: MODEL.id,
-          model: MODEL,
           apiKey: "source-token",
           authMode: "api-key",
-        },
+        }),
       }),
     ).resolves.toMatchObject({
       apiKey: "runtime-token",
@@ -377,10 +398,10 @@ describe("provider-runtime", () => {
 
     expect(
       formatProviderAuthProfileApiKeyWithPlugin({
-        provider: "demo",
+        provider: DEMO_PROVIDER_ID,
         context: {
           type: "oauth",
-          provider: "demo",
+          provider: DEMO_PROVIDER_ID,
           access: "oauth-access",
           refresh: "oauth-refresh",
           expires: Date.now() + 60_000,
@@ -390,10 +411,10 @@ describe("provider-runtime", () => {
 
     await expect(
       refreshProviderOAuthCredentialWithPlugin({
-        provider: "demo",
+        provider: DEMO_PROVIDER_ID,
         context: {
           type: "oauth",
-          provider: "demo",
+          provider: DEMO_PROVIDER_ID,
           access: "oauth-access",
           refresh: "oauth-refresh",
           expires: Date.now() + 60_000,
@@ -405,9 +426,9 @@ describe("provider-runtime", () => {
 
     await expect(
       buildProviderAuthDoctorHintWithPlugin({
-        provider: "demo",
+        provider: DEMO_PROVIDER_ID,
         context: {
-          provider: "demo",
+          provider: DEMO_PROVIDER_ID,
           profileId: "demo:default",
           store: { version: 1, profiles: {} },
         },
@@ -416,12 +437,12 @@ describe("provider-runtime", () => {
 
     await expect(
       resolveProviderUsageAuthWithPlugin({
-        provider: "demo",
+        provider: DEMO_PROVIDER_ID,
         env: process.env,
         context: {
           config: {} as never,
           env: process.env,
-          provider: "demo",
+          provider: DEMO_PROVIDER_ID,
           resolveApiKeyFromConfigAndStore: () => "source-token",
           resolveOAuthToken: async () => null,
         },
@@ -433,12 +454,12 @@ describe("provider-runtime", () => {
 
     await expect(
       resolveProviderUsageSnapshotWithPlugin({
-        provider: "demo",
+        provider: DEMO_PROVIDER_ID,
         env: process.env,
         context: {
           config: {} as never,
           env: process.env,
-          provider: "demo",
+          provider: DEMO_PROVIDER_ID,
           token: "usage-token",
           timeoutMs: 5_000,
           fetchFn: vi.fn() as never,
@@ -451,9 +472,9 @@ describe("provider-runtime", () => {
 
     expect(
       resolveProviderCacheTtlEligibility({
-        provider: "demo",
+        provider: DEMO_PROVIDER_ID,
         context: {
-          provider: "demo",
+          provider: DEMO_PROVIDER_ID,
           modelId: "anthropic/claude-sonnet-4-5",
         },
       }),
@@ -461,9 +482,9 @@ describe("provider-runtime", () => {
 
     expect(
       resolveProviderBinaryThinking({
-        provider: "demo",
+        provider: DEMO_PROVIDER_ID,
         context: {
-          provider: "demo",
+          provider: DEMO_PROVIDER_ID,
           modelId: "glm-5",
         },
       }),
@@ -471,9 +492,9 @@ describe("provider-runtime", () => {
 
     expect(
       resolveProviderXHighThinking({
-        provider: "demo",
+        provider: DEMO_PROVIDER_ID,
         context: {
-          provider: "demo",
+          provider: DEMO_PROVIDER_ID,
           modelId: "gpt-5.4",
         },
       }),
@@ -481,9 +502,9 @@ describe("provider-runtime", () => {
 
     expect(
       resolveProviderDefaultThinkingLevel({
-        provider: "demo",
+        provider: DEMO_PROVIDER_ID,
         context: {
-          provider: "demo",
+          provider: DEMO_PROVIDER_ID,
           modelId: "gpt-5.4",
           reasoning: true,
         },
@@ -492,9 +513,9 @@ describe("provider-runtime", () => {
 
     expect(
       resolveProviderModernModelRef({
-        provider: "demo",
+        provider: DEMO_PROVIDER_ID,
         context: {
-          provider: "demo",
+          provider: DEMO_PROVIDER_ID,
           modelId: "gpt-5.4",
         },
       }),
@@ -502,9 +523,9 @@ describe("provider-runtime", () => {
 
     expect(
       resolveProviderSyntheticAuthWithPlugin({
-        provider: "demo",
+        provider: DEMO_PROVIDER_ID,
         context: {
-          provider: "demo",
+          provider: DEMO_PROVIDER_ID,
           providerConfig: {
             api: "openai-completions",
             baseUrl: "http://localhost:11434",
@@ -550,31 +571,7 @@ describe("provider-runtime", () => {
       if (!onlyPluginIds || !onlyPluginIds.includes("openai")) {
         return [];
       }
-      return [
-        {
-          id: "openai",
-          label: "OpenAI",
-          auth: [],
-          suppressBuiltInModel: ({ provider, modelId }) =>
-            provider === "openai" && modelId === "gpt-5.3-codex-spark"
-              ? { suppress: true, errorMessage: "openai-codex/gpt-5.3-codex-spark" }
-              : provider === "azure-openai-responses" && modelId === "gpt-5.3-codex-spark"
-                ? { suppress: true, errorMessage: "openai-codex/gpt-5.3-codex-spark" }
-                : undefined,
-          augmentModelCatalog: () => [
-            { provider: "openai", id: "gpt-5.4", name: "gpt-5.4" },
-            { provider: "openai", id: "gpt-5.4-pro", name: "gpt-5.4-pro" },
-            { provider: "openai", id: "gpt-5.4-mini", name: "gpt-5.4-mini" },
-            { provider: "openai", id: "gpt-5.4-nano", name: "gpt-5.4-nano" },
-            { provider: "openai-codex", id: "gpt-5.4", name: "gpt-5.4" },
-            {
-              provider: "openai-codex",
-              id: "gpt-5.3-codex-spark",
-              name: "gpt-5.3-codex-spark",
-            },
-          ],
-        },
-      ];
+      return [createOpenAiCatalogProviderPlugin()];
     });
 
     expect(
