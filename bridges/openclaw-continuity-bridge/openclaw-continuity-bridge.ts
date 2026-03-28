@@ -246,7 +246,7 @@ function recordRequestStat(
 function buildStatsPayload(stats: BridgeRuntimeStats): Record<string, unknown> {
   const byTool = Object.fromEntries(
     [...stats.byTool.entries()]
-      .toSorted(([left], [right]) => left.localeCompare(right))
+      .toSorted(([left], [right]: [string, ToolStatsAccumulator]) => left.localeCompare(right))
       .map(([toolName, toolStats]) => [
         toolName,
         {
@@ -258,7 +258,9 @@ function buildStatsPayload(stats: BridgeRuntimeStats): Record<string, unknown> {
   );
 
   const errorsByTool = Object.fromEntries(
-    [...stats.errorsByTool.entries()].toSorted(([left], [right]) => left.localeCompare(right)),
+    [...stats.errorsByTool.entries()].toSorted(([left], [right]: [string, number]) =>
+      left.localeCompare(right),
+    ),
   );
 
   return {
