@@ -569,52 +569,40 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       return;
     }
 
-    // Always broadcast raw thinking via agent events so HTTP listeners
-    // (e.g. OpenResponses /v1/responses) can capture reasoning content
-    // even when the channel-specific streamReasoning mode is off.
     const rawPrior = state.lastStreamedReasoningRaw ?? "";
     const rawDelta = text.startsWith(rawPrior) ? text.slice(rawPrior.length) : text;
     state.lastStreamedReasoningRaw = text;
 
-    emitAgentEvent({
-      runId: params.runId,
-      stream: "thinking",
-      data: {
-        rawText: text,
-        rawDelta,
-      },
-    });
-
-    if (!state.streamReasoning) {
-      return;
-    }
-
+    // Compute formatted text and delta for channel consumers.
     const formatted = formatReasoningMessage(text);
-    if (!formatted) {
-      return;
+    const formattedPrior = state.lastStreamedReasoning ?? "";
+    const formattedDelta =
+      formatted && formatted !== formattedPrior
+        ? formatted.startsWith(formattedPrior)
+          ? formatted.slice(formattedPrior.length)
+          : formatted
+        : undefined;
+    if (formatted && formatted !== formattedPrior) {
+      state.lastStreamedReasoning = formatted;
     }
-    if (formatted === state.lastStreamedReasoning) {
-      return;
-    }
-    const prior = state.lastStreamedReasoning ?? "";
-    const delta = formatted.startsWith(prior) ? formatted.slice(prior.length) : formatted;
-    state.lastStreamedReasoning = formatted;
 
-    // Re-emit with formatted text for channel-specific consumers
+    // Single event with both raw and formatted fields. HTTP listeners
+    // use rawText; channel-specific consumers use text/delta.
     emitAgentEvent({
       runId: params.runId,
       stream: "thinking",
       data: {
-        text: formatted,
-        delta,
+        ...(formatted ? { text: formatted, delta: formattedDelta } : {}),
         rawText: text,
         rawDelta,
       },
     });
 
-    void params.onReasoningStream?.({
-      text: formatted,
-    });
+    if (state.streamReasoning && formatted) {
+      void params.onReasoningStream?.({
+        text: formatted,
+      });
+    }
   };
 
   const resetForCompactionRetry = () => {

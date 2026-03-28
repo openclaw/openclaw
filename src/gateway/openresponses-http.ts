@@ -693,9 +693,10 @@ export async function handleOpenResponsesHttpRequest(
       if (!raw) {
         return;
       }
-      if (currentThinkingSegment) {
+      // rawText is cumulative within a block. Only flush the previous segment
+      // when the new value does NOT extend it (indicates a new thinking block).
+      if (currentThinkingSegment && !raw.startsWith(currentThinkingSegment)) {
         collectedThinking += (collectedThinking ? "\n\n" : "") + currentThinkingSegment;
-        currentThinkingSegment = "";
       }
       currentThinkingSegment = raw;
     });
@@ -884,11 +885,21 @@ export async function handleOpenResponsesHttpRequest(
       item: completedItem,
     });
 
+    const completedOutput: OutputItem[] = [];
+    if (accumulatedThinking) {
+      completedOutput.push({
+        type: "reasoning",
+        id: reasoningItemId,
+        content: accumulatedThinking,
+      });
+    }
+    completedOutput.push(completedItem);
+
     const finalResponse = createResponseResource({
       id: responseId,
       model,
       status: finalizeRequested.status,
-      output: [completedItem],
+      output: completedOutput,
       usage,
     });
 
@@ -952,9 +963,8 @@ export async function handleOpenResponsesHttpRequest(
       if (!raw) {
         return;
       }
-      if (currentStreamThinkingSegment) {
+      if (currentStreamThinkingSegment && !raw.startsWith(currentStreamThinkingSegment)) {
         accumulatedThinking += (accumulatedThinking ? "\n\n" : "") + currentStreamThinkingSegment;
-        currentStreamThinkingSegment = "";
       }
       currentStreamThinkingSegment = raw;
 
