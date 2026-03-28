@@ -13,14 +13,13 @@
  */
 
 import type { ChatModel } from "./chat.js";
-import type { MemoryCategory } from "./config.js";
+import { DEFAULT_CAPTURE_MAX_CHARS, type MemoryCategory } from "./config.js";
 import { TaskPriority } from "./limiter.js";
 
-export const DEFAULT_CAPTURE_MAX_CHARS = 1000;
 /** Minimum message length to be worth remembering or summarizing */
 export const MIN_MESSAGE_LENGTH = 10;
 
-import { tracer } from "./tracer.js";
+import { type MemoryTracer, type Logger } from "./tracer.js";
 
 // ============================================================================
 // Rule-based capture (from original memory-lancedb)
@@ -50,14 +49,6 @@ const PROMPT_INJECTION_PATTERNS = [
   /you\s+must\s+now\s+act\s+as/i,
 ];
 
-const PROMPT_ESCAPE_MAP: Record<string, string> = {
-  "&": "&amp;",
-  "<": "&lt;",
-  ">": "&gt;",
-  '"': "&quot;",
-  "'": "&#39;",
-};
-
 /** Check if text looks like a prompt injection attempt */
 export function looksLikePromptInjection(text: string): boolean {
   const normalized = text.replace(/\s+/g, " ").trim();
@@ -65,9 +56,13 @@ export function looksLikePromptInjection(text: string): boolean {
   return PROMPT_INJECTION_PATTERNS.some((p) => p.test(normalized));
 }
 
-/** Escape special chars in memory text before injecting into prompt */
+/**
+ * Escape chars in memory text before injecting into prompt.
+ * Only neutralize angle brackets to prevent XML tag injection into
+ * star-map/relevant-memories blocks. Other chars are safe for LLM context.
+ */
 export function escapeMemoryForPrompt(text: string): string {
-  return text.replace(/[&<>"']/g, (char) => PROMPT_ESCAPE_MAP[char] ?? char);
+  return text.replace(/</g, "‹").replace(/>/g, "›");
 }
 
 /** Format memories for injection into LLM context */
@@ -165,6 +160,8 @@ export async function smartCapture(
   userMessage: string,
   assistantMessage: string | undefined,
   chatModel: ChatModel,
+  tracer: MemoryTracer,
+  logger?: Logger,
   priority = TaskPriority.NORMAL,
 ): Promise<SmartCaptureResult> {
   const today = new Date().toISOString().split("T")[0];
@@ -309,10 +306,9 @@ Rules:
     };
   } catch (error) {
     // Smart capture is best-effort — fall back to rule-based
-    console.warn(
-      `[memory-hybrid][capture] smartCapture JSON parse failed`,
-      error instanceof Error ? error.message : String(error),
-    );
+    if (logger) {
+      logger.warn(`[memory-hybrid][capture] smartCapture failed: ${error}`);
+    }
     return { shouldStore: false, facts: [] };
   }
 }
@@ -328,13 +324,15 @@ Rules:
 export async function generateMemorySummary(
   text: string,
   chatModel: ChatModel,
+  logger?: Logger,
   priority = TaskPriority.LOW,
 ): Promise<string> {
   if (text.length < 100) return text; // Too short to summarize, keep it as is.
 
+  const safeText = JSON.stringify(text.slice(0, 5000)).slice(1, -1);
   const prompt = `Condense the following memory into a single short sentence (maximum 150 characters) that captures its core meaning. Focus on the factual or emotional essence.
   
-Original memory: "${text.slice(0, 5000)}" // Truncate if insanely long
+Original memory: "${safeText}"
 
 Return ONLY the summary text, nothing else.`;
 
@@ -342,7 +340,7 @@ Return ONLY the summary text, nothing else.`;
     const response = await chatModel.complete([{ role: "user", content: prompt }], false, priority);
     return response.trim().slice(0, 150);
   } catch (error) {
-    console.warn(`[memory-hybrid][summary] Failed to generate summary:`, String(error));
+    if (logger) logger.warn(`[memory-hybrid][summary] Failed to generate summary: ${error}`);
     return text.slice(0, 150) + "..."; // Fallback
   }
 }

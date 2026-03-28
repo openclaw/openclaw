@@ -1,5 +1,6 @@
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
+import { type Logger } from "./tracer.js";
 
 /**
  * Working Memory Buffer ("Short-term Memory")
@@ -54,32 +55,40 @@ export class WorkingMemoryBuffer {
   }
 
   /**
-   * Load buffer from disk (JSONL format).
+   * Load buffer from disk (JSON array format).
    */
-  async load(path: string): Promise<void> {
+  async load(path: string, logger?: Logger): Promise<boolean> {
     try {
-      const raw = await readFile(path, "utf-8");
-      const lines = raw.split("\n").filter((l) => l.trim() !== "");
-      this.buffer = lines.map((l) => JSON.parse(l) as BufferEntry);
-      // Cap if file was larger than current maxSize
-      if (this.buffer.length > this.maxSize) {
-        this.buffer = this.buffer.slice(-this.maxSize);
+      const data = await readFile(path, "utf-8");
+      const entries = JSON.parse(data);
+      if (Array.isArray(entries)) {
+        this.buffer = entries.filter((e) => e && e.text && e.timestamp);
+        // Cap if file was larger than current maxSize
+        if (this.buffer.length > this.maxSize) {
+          this.buffer = this.buffer.slice(-this.maxSize);
+        }
+        if (logger) {
+          logger.info(`[memory-hybrid][buffer] Loaded ${this.buffer.length} entries from disk.`);
+        }
+        return true;
       }
     } catch (err) {
-      // Normal if file doesn't exist yet
+      // No file or corrupted, skip
     }
+    return false;
   }
 
   /**
-   * Save buffer to disk (JSONL format).
+   * Save buffer to disk (JSON array format).
    */
-  async save(path: string): Promise<void> {
+  async save(path: string, logger?: Logger): Promise<void> {
     try {
       await mkdir(dirname(path), { recursive: true });
-      const lines = this.buffer.map((entry) => JSON.stringify(entry)).join("\n");
-      await writeFile(path, lines, "utf-8");
+      await writeFile(path, JSON.stringify(this.buffer, null, 2), "utf-8");
     } catch (err) {
-      console.warn(`[memory-hybrid] Failed to save working memory buffer: ${err}`);
+      if (logger) {
+        logger.warn(`[memory-hybrid][buffer] Save failed: ${String(err)}`);
+      }
     }
   }
 
