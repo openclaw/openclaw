@@ -1,5 +1,6 @@
 import type { Model } from "@mariozechner/pi-ai";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { __testing as extraParamsTesting } from "./extra-params.js";
 import { runExtraParamsCase } from "./extra-params.test-support.js";
 
 vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
@@ -13,8 +14,37 @@ vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
   };
 });
 
-describe("extra-params: Ollama thinking payload compatibility", () => {
-  it("injects top-level think=false when thinkingLevel is off", () => {
+beforeEach(() => {
+  extraParamsTesting.setProviderRuntimeDepsForTest({
+    prepareProviderExtraParams: ({ context }) => context.extraParams,
+    wrapProviderStreamFn: ({ provider, context }) => {
+      if (provider !== "ollama" || context.thinkingLevel !== "off") {
+        return context.streamFn;
+      }
+      const baseStreamFn = context.streamFn;
+      if (!baseStreamFn) {
+        return undefined;
+      }
+      return (model, streamContext, options) =>
+        baseStreamFn(model, streamContext, {
+          ...options,
+          onPayload: (payload, payloadModel) => {
+            if (payload && typeof payload === "object") {
+              (payload as Record<string, unknown>).think = false;
+            }
+            return options?.onPayload?.(payload, payloadModel);
+          },
+        });
+    },
+  });
+});
+
+afterEach(() => {
+  extraParamsTesting.resetProviderRuntimeDepsForTest();
+});
+
+describe("extra-params: Ollama plugin handoff", () => {
+  it("passes thinking-off intent through the provider runtime wrapper seam", () => {
     const payload = runExtraParamsCase({
       applyProvider: "ollama",
       applyModelId: "qwen3.5:9b",
@@ -39,7 +69,7 @@ describe("extra-params: Ollama thinking payload compatibility", () => {
     expect((payload.options as Record<string, unknown>).think).toBeUndefined();
   });
 
-  it("does not inject think=false for non-ollama models", () => {
+  it("does not apply the plugin wrapper for non-ollama providers", () => {
     const payload = runExtraParamsCase({
       applyProvider: "openai",
       applyModelId: "gpt-5.4",
@@ -58,7 +88,7 @@ describe("extra-params: Ollama thinking payload compatibility", () => {
     expect(payload.think).toBeUndefined();
   });
 
-  it("does not inject think=false when thinkingLevel is not off", () => {
+  it("does not apply the plugin wrapper when thinkingLevel is not off", () => {
     const payload = runExtraParamsCase({
       applyProvider: "ollama",
       applyModelId: "qwen3.5:9b",
