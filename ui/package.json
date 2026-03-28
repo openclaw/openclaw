@@ -11,6 +11,12 @@
   "dependencies": {
     "@create-markdown/preview": "^2.0.0",
     "@noble/ed25519": "3.0.1",
+    "@codemirror/autocomplete": "^6.18.0",
+    "@codemirror/commands": "^6.8.0",
+    "@codemirror/lang-json": "^6.0.1",
+    "@codemirror/lint": "^6.8.0",
+    "@codemirror/state": "^6.5.2",
+    "@codemirror/view": "^6.36.5",
     "dompurify": "^3.3.3",
     "lit": "^3.3.2",
     "marked": "^17.0.5"

@@ -14,6 +14,7 @@ import {
   type JsonSchema,
 } from "./config-form.shared.ts";
 import { analyzeConfigSchema, renderConfigForm, SECTION_META } from "./config-form.ts";
+import "./config-editor.ts";
 
 const BORDER_RADIUS_LABELS: Record<BorderRadiusStop, string> = {
   0: "None",
@@ -1104,13 +1105,12 @@ export function renderConfig(props: ConfigProps) {
                             </div>
                           `
                         : html`
-                            <textarea
-                              placeholder="Raw config (JSON/JSON5)"
+                            <config-editor
                               .value=${props.raw}
-                              @input=${(e: Event) => {
-                                props.onRawChange((e.target as HTMLTextAreaElement).value);
-                              }}
-                            ></textarea>
+                              ?readonly=${blurred}
+                              @change=${(e: CustomEvent) =>
+                                props.onRawChange(e.detail.value)}
+                            ></config-editor>
                           `}
                     </div>
                   `;
