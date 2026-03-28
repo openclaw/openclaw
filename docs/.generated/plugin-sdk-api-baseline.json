@@ -442,7 +442,7 @@
           "exportName": "PluginRuntime",
           "kind": "type",
           "source": {
-            "line": 54,
+            "line": 65,
             "path": "src/plugins/runtime/types.ts"
           }
         },
@@ -577,7 +577,7 @@
           "exportName": "SubagentRunParams",
           "kind": "type",
           "source": {
-            "line": 8,
+            "line": 10,
             "path": "src/plugins/runtime/types.ts"
           }
         },
@@ -586,7 +586,7 @@
           "exportName": "SubagentRunResult",
           "kind": "type",
           "source": {
-            "line": 19,
+            "line": 24,
             "path": "src/plugins/runtime/types.ts"
           }
         },
@@ -3864,7 +3864,7 @@
           "exportName": "PluginRuntime",
           "kind": "type",
           "source": {
-            "line": 54,
+            "line": 65,
             "path": "src/plugins/runtime/types.ts"
           }
         },
@@ -4687,8 +4687,8 @@
           "exportName": "applyAgentDefaultModelPrimary",
           "kind": "function",
           "source": {
-            "line": 76,
-            "path": "src/plugins/provider-onboarding-config.ts"
+            "line": 267,
+            "path": "src/plugin-sdk/provider-onboard.ts"
           }
         },
         {
@@ -4696,8 +4696,8 @@
           "exportName": "applyOnboardAuthAgentModelsAndProviders",
           "kind": "function",
           "source": {
-            "line": 53,
-            "path": "src/plugins/provider-onboarding-config.ts"
+            "line": 244,
+            "path": "src/plugin-sdk/provider-onboard.ts"
           }
         },
         {
@@ -4705,8 +4705,8 @@
           "exportName": "applyProviderConfigWithDefaultModel",
           "kind": "function",
           "source": {
-            "line": 131,
-            "path": "src/plugins/provider-onboarding-config.ts"
+            "line": 321,
+            "path": "src/plugin-sdk/provider-onboard.ts"
           }
         },
         {
@@ -4714,8 +4714,8 @@
           "exportName": "applyProviderConfigWithDefaultModelPreset",
           "kind": "function",
           "source": {
-            "line": 152,
-            "path": "src/plugins/provider-onboarding-config.ts"
+            "line": 342,
+            "path": "src/plugin-sdk/provider-onboard.ts"
           }
         },
         {
@@ -4723,8 +4723,8 @@
           "exportName": "applyProviderConfigWithDefaultModels",
           "kind": "function",
           "source": {
-            "line": 96,
-            "path": "src/plugins/provider-onboarding-config.ts"
+            "line": 287,
+            "path": "src/plugin-sdk/provider-onboard.ts"
           }
         },
         {
@@ -4732,8 +4732,8 @@
           "exportName": "applyProviderConfigWithDefaultModelsPreset",
           "kind": "function",
           "source": {
-            "line": 230,
-            "path": "src/plugins/provider-onboarding-config.ts"
+            "line": 384,
+            "path": "src/plugin-sdk/provider-onboard.ts"
           }
         },
         {
@@ -4741,8 +4741,8 @@
           "exportName": "applyProviderConfigWithModelCatalog",
           "kind": "function",
           "source": {
-            "line": 272,
-            "path": "src/plugins/provider-onboarding-config.ts"
+            "line": 426,
+            "path": "src/plugin-sdk/provider-onboard.ts"
           }
         },
         {
@@ -4750,8 +4750,8 @@
           "exportName": "applyProviderConfigWithModelCatalogPreset",
           "kind": "function",
           "source": {
-            "line": 304,
-            "path": "src/plugins/provider-onboarding-config.ts"
+            "line": 458,
+            "path": "src/plugin-sdk/provider-onboard.ts"
           }
         },
         {
@@ -4759,8 +4759,8 @@
           "exportName": "createDefaultModelPresetAppliers",
           "kind": "function",
           "source": {
-            "line": 213,
-            "path": "src/plugins/provider-onboarding-config.ts"
+            "line": 367,
+            "path": "src/plugin-sdk/provider-onboard.ts"
           }
         },
         {
@@ -4768,8 +4768,8 @@
           "exportName": "createDefaultModelsPresetAppliers",
           "kind": "function",
           "source": {
-            "line": 255,
-            "path": "src/plugins/provider-onboarding-config.ts"
+            "line": 409,
+            "path": "src/plugin-sdk/provider-onboard.ts"
           }
         },
         {
@@ -4777,8 +4777,8 @@
           "exportName": "createModelCatalogPresetAppliers",
           "kind": "function",
           "source": {
-            "line": 327,
-            "path": "src/plugins/provider-onboarding-config.ts"
+            "line": 481,
+            "path": "src/plugin-sdk/provider-onboard.ts"
           }
         },
         {
@@ -4786,8 +4786,8 @@
           "exportName": "ensureModelAllowlistEntry",
           "kind": "function",
           "source": {
-            "line": 5,
-            "path": "src/plugins/provider-model-allowlist.ts"
+            "line": 498,
+            "path": "src/plugin-sdk/provider-onboard.ts"
           }
         },
         {
@@ -4795,8 +4795,8 @@
           "exportName": "withAgentModelAliases",
           "kind": "function",
           "source": {
-            "line": 38,
-            "path": "src/plugins/provider-onboarding-config.ts"
+            "line": 229,
+            "path": "src/plugin-sdk/provider-onboard.ts"
           }
         },
         {
@@ -4805,7 +4805,7 @@
           "kind": "type",
           "source": {
             "line": 21,
-            "path": "src/plugins/provider-onboarding-config.ts"
+            "path": "src/plugin-sdk/provider-onboard.ts"
           }
         },
         {
@@ -4849,8 +4849,8 @@
           "exportName": "ProviderOnboardPresetAppliers",
           "kind": "type",
           "source": {
-            "line": 177,
-            "path": "src/plugins/provider-onboarding-config.ts"
+            "line": 28,
+            "path": "src/plugin-sdk/provider-onboard.ts"
           }
         }
       ],
@@ -5114,7 +5114,7 @@
           "exportName": "PluginRuntime",
           "kind": "type",
           "source": {
-            "line": 54,
+            "line": 65,
             "path": "src/plugins/runtime/types.ts"
           }
         }
@@ -5289,7 +5289,7 @@
           "exportName": "PluginRuntime",
           "kind": "type",
           "source": {
-            "line": 54,
+            "line": 65,
             "path": "src/plugins/runtime/types.ts"
           }
         },
