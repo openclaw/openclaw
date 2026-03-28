@@ -277,8 +277,8 @@ static void ws_handle_frame(const gchar *text) {
     case GATEWAY_FRAME_RES:
         if (ws_client->state == GATEWAY_WS_AUTHENTICATING) {
             if (frame->error) {
-                OC_LOG_WARN(OPENCLAW_LOG_CAT_GATEWAY, "ws auth rejected: code=%d msg=%s",
-                          frame->code, frame->error);
+                OC_LOG_WARN(OPENCLAW_LOG_CAT_GATEWAY, "ws auth rejected: code=%s msg=%s",
+                          frame->code ? frame->code : "(none)", frame->error);
                 ws_client->reconnect_paused_for_auth = TRUE;
                 ws_set_error(frame->error);
                 ws_set_state(GATEWAY_WS_AUTH_FAILED);
