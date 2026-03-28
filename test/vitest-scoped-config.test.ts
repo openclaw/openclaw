@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createChannelsVitestConfig } from "../vitest.channels.config.ts";
 import { createExtensionsVitestConfig } from "../vitest.extensions.config.ts";
 import { createGatewayVitestConfig } from "../vitest.gateway.config.ts";
@@ -9,6 +9,11 @@ import { createScopedVitestConfig, resolveVitestIsolation } from "../vitest.scop
 import { BUNDLED_PLUGIN_TEST_GLOB, bundledPluginFile } from "./helpers/bundled-plugin-paths.js";
 
 const EXTENSIONS_CHANNEL_GLOB = ["extensions", "channel", "**"].join("/");
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.resetModules();
+});
 
 describe("resolveVitestIsolation", () => {
   it("defaults shared scoped configs to non-isolated workers", () => {
@@ -52,8 +57,10 @@ describe("createScopedVitestConfig", () => {
 
 describe("scoped vitest configs", () => {
   const defaultChannelsConfig = createChannelsVitestConfig({});
-  const defaultExtensionsConfig = createExtensionsVitestConfig({});
-  const defaultGatewayConfig = createGatewayVitestConfig({});
+  const defaultExtensionsConfig = createExtensionsVitestConfig({
+    OPENCLAW_VITEST_INCLUDE_FILE: "",
+  });
+  const defaultGatewayConfig = createGatewayVitestConfig();
 
   it("defaults channel tests to non-isolated mode", () => {
     expect(defaultChannelsConfig.test?.isolate).toBe(false);

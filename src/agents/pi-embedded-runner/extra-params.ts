@@ -390,7 +390,10 @@ function applyPrePluginStreamWrappers(ctx: ApplyExtraParamsContext): void {
     log.debug(`applying Google safety settings for ${ctx.provider}/${ctx.modelId}`);
     ctx.agent.streamFn = createGoogleSafetySettingsWrapper(
       ctx.agent.streamFn,
+<<<<<<< HEAD
       ctx.provider,
+=======
+>>>>>>> fix: drop stale xAI wrapper import
       googleSafetySettings,
     );
   }
