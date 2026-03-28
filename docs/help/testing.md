@@ -320,6 +320,49 @@ Notes:
 - For `claude-cli`, it installs the Linux `@anthropic-ai/claude-code` package into a cached writable prefix at `OPENCLAW_DOCKER_CLI_TOOLS_DIR` (default: `~/.cache/openclaw/docker-cli-tools`).
 - It copies `~/.claude` into the container when available, but on machines where Claude auth is backed by `ANTHROPIC_API_KEY`, it also preserves `ANTHROPIC_API_KEY` / `ANTHROPIC_API_KEY_OLD` for the child Claude CLI via `OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV`.
 
+## Live: ACP bind smoke (`/acp spawn ... --bind here`)
+
+- Test: `src/gateway/gateway-acp-bind.live.test.ts`
+- Goal: validate the real ACP conversation-bind flow with a live ACP agent:
+  - send `/acp spawn <agent> --bind here`
+  - bind a synthetic message-channel conversation in place
+  - send a normal follow-up on that same conversation
+  - verify the follow-up lands in the bound ACP session transcript
+- Enable:
+  - `pnpm test:live src/gateway/gateway-acp-bind.live.test.ts`
+  - `OPENCLAW_LIVE_ACP_BIND=1`
+- Defaults:
+  - ACP agent: `claude`
+  - Synthetic channel: Slack DM-style conversation context
+  - ACP backend: `acpx`
+- Overrides:
+  - `OPENCLAW_LIVE_ACP_BIND_AGENT=claude`
+  - `OPENCLAW_LIVE_ACP_BIND_AGENT=codex`
+  - `OPENCLAW_LIVE_ACP_BIND_ACPX_COMMAND=/full/path/to/acpx`
+- Notes:
+  - This lane uses the gateway `chat.send` surface with admin-only synthetic originating-route fields so tests can attach message-channel context without pretending to deliver externally.
+  - When `OPENCLAW_LIVE_ACP_BIND_ACPX_COMMAND` is unset, the test uses the configured/bundled acpx command. If your harness auth depends on env vars from `~/.profile`, prefer a custom `acpx` command that preserves provider env.
+
+Example:
+
+```bash
+OPENCLAW_LIVE_ACP_BIND=1 \
+  OPENCLAW_LIVE_ACP_BIND_AGENT=claude \
+  pnpm test:live src/gateway/gateway-acp-bind.live.test.ts
+```
+
+Docker recipe:
+
+```bash
+pnpm test:docker:live-acp-bind
+```
+
+Docker notes:
+
+- The Docker runner lives at `scripts/test-live-acp-bind-docker.sh`.
+- It sources `~/.profile`, copies the matching CLI auth home (`~/.claude` or `~/.codex`) into the container, installs `acpx` into a writable npm prefix, then installs the requested live CLI (`@anthropic-ai/claude-code` or `@openai/codex`) if missing.
+- Inside Docker, the runner sets `OPENCLAW_LIVE_ACP_BIND_ACPX_COMMAND=$HOME/.npm-global/bin/acpx` so acpx keeps provider env vars from the sourced profile available to the child harness CLI.
+
 ### Recommended live recipes
 
 Narrow, explicit allowlists are fastest and least flaky:
@@ -457,6 +500,7 @@ These Docker runners split into two buckets:
 The live-model Docker runners also bind-mount only the needed CLI auth homes (or all supported ones when the run is not narrowed), then copy them into the container home before the run so external-CLI OAuth can refresh tokens without mutating the host auth store:
 
 - Direct models: `pnpm test:docker:live-models` (script: `scripts/test-live-models-docker.sh`)
+- ACP bind smoke: `pnpm test:docker:live-acp-bind` (script: `scripts/test-live-acp-bind-docker.sh`)
 - CLI backend smoke: `pnpm test:docker:live-cli-backend` (script: `scripts/test-live-cli-backend-docker.sh`)
 - Gateway + dev agent: `pnpm test:docker:live-gateway` (script: `scripts/test-live-gateway-models-docker.sh`)
 - Open WebUI live smoke: `pnpm test:docker:openwebui` (script: `scripts/e2e/openwebui-docker.sh`)

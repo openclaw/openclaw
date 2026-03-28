@@ -6,6 +6,7 @@ import {
   resolveGatewayPort,
   resolveStateDir,
 } from "../config/config.js";
+import { loadConfig as loadConfigFromIo } from "../config/io.js";
 import {
   resolveConfigPath as resolveConfigPathFromPaths,
   resolveGatewayPort as resolveGatewayPortFromPaths,
@@ -96,6 +97,16 @@ const gatewayCallDeps = {
   ...defaultGatewayCallDeps,
 };
 
+function loadGatewayConfig(): OpenClawConfig {
+  const loadConfigFn =
+    typeof gatewayCallDeps.loadConfig === "function"
+      ? gatewayCallDeps.loadConfig
+      : typeof defaultGatewayCallDeps.loadConfig === "function"
+        ? defaultGatewayCallDeps.loadConfig
+        : loadConfigFromIo;
+  return loadConfigFn();
+}
+
 function resolveGatewayStateDir(env: NodeJS.ProcessEnv): string {
   const resolveStateDirFn =
     typeof gatewayCallDeps.resolveStateDir === "function"
@@ -129,7 +140,7 @@ export function buildGatewayConnectionDetails(
   } = {},
 ): GatewayConnectionDetails {
   return buildGatewayConnectionDetailsWithResolvers(options, {
-    loadConfig: () => gatewayCallDeps.loadConfig(),
+    loadConfig: () => loadGatewayConfig(),
     resolveConfigPath: (env) => resolveGatewayConfigPath(env),
     resolveGatewayPort: (config, env) => resolveGatewayPortValue(config, env),
   });
@@ -270,7 +281,7 @@ function resolveGatewayCallTimeout(timeoutValue: unknown): {
 }
 
 function resolveGatewayCallContext(opts: CallGatewayBaseOptions): ResolvedGatewayCallContext {
-  const config = opts.config ?? gatewayCallDeps.loadConfig();
+  const config = opts.config ?? loadGatewayConfig();
   const configPath = opts.configPath ?? resolveGatewayConfigPath(process.env);
   const isRemoteMode = config.gateway?.mode === "remote";
   const remote = isRemoteMode
