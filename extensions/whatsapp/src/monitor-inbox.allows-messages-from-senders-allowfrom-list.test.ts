@@ -298,6 +298,45 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
+  it("filters self-chat DM fromMe echoes when the gateway sent the matching message id", async () => {
+    mockLoadConfig.mockReturnValue({
+      channels: {
+        whatsapp: {
+          selfChatMode: true,
+          allowFrom: ["+123"],
+        },
+      },
+      messages: DEFAULT_MESSAGES_CFG,
+    });
+
+    const onMessage = vi.fn();
+    const { listener, sock } = await startInboxMonitor(onMessage);
+
+    sock.sendMessage.mockResolvedValueOnce({ key: { id: "bot-dm-echo-1" } });
+    await listener.sendMessage("123@s.whatsapp.net", "self-chat reply");
+
+    sock.ev.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        {
+          key: {
+            id: "bot-dm-echo-1",
+            fromMe: true,
+            remoteJid: "123@s.whatsapp.net",
+          },
+          message: { conversation: "self-chat reply" },
+          messageTimestamp: nowSeconds(),
+          pushName: "Owner",
+        },
+      ],
+    });
+    await settleInboundWork();
+
+    expect(onMessage).not.toHaveBeenCalled();
+
+    await listener.close();
+  });
+
   it("handles append messages by marking them read but skipping auto-reply", async () => {
     const { onMessage, listener, sock } = await openInboxMonitor();
     const staleTs = Math.floor(Date.now() / 1000) - 300;

@@ -9,17 +9,19 @@ import { stringEnum } from "../agents/schema/typebox.js";
 
 /** Schema helper for channels that expose button rows on the shared `message` tool. */
 export function createMessageToolButtonsSchema(): TSchema {
-  return Type.Array(
+  return Type.Optional(
     Type.Array(
-      Type.Object({
-        text: Type.String(),
-        callback_data: Type.String(),
-        style: Type.Optional(stringEnum(["danger", "success", "primary"])),
-      }),
+      Type.Array(
+        Type.Object({
+          text: Type.String(),
+          callback_data: Type.String(),
+          style: Type.Optional(stringEnum(["danger", "success", "primary"])),
+        }),
+      ),
+      {
+        description: "Button rows for channels that support button-style actions.",
+      },
     ),
-    {
-      description: "Button rows for channels that support button-style actions.",
-    },
   );
 }
 

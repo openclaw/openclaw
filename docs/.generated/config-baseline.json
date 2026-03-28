@@ -24619,6 +24619,36 @@
       "hasChildren": false
     },
     {
+      "path": "channels.msteams.feedbackEnabled",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.msteams.feedbackReflection",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.msteams.feedbackReflectionCooldownMs",
+      "kind": "channel",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.msteams.groupAllowFrom",
       "kind": "channel",
       "type": "array",
@@ -24649,6 +24679,16 @@
         "allowlist"
       ],
       "defaultValue": "allowlist",
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.msteams.groupWelcomeCard",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -24793,6 +24833,26 @@
       "path": "channels.msteams.mediaMaxMb",
       "kind": "channel",
       "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.msteams.promptStarters",
+      "kind": "channel",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.msteams.promptStarters.*",
+      "kind": "channel",
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -25275,6 +25335,16 @@
       "path": "channels.msteams.webhook.port",
       "kind": "channel",
       "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.msteams.welcomeCard",
+      "kind": "channel",
+      "type": "boolean",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -51474,6 +51544,127 @@
       "hasChildren": true
     },
     {
+      "path": "plugins.entries.microsoft-foundry",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/microsoft-foundry",
+      "help": "OpenClaw Microsoft Foundry provider plugin (plugin: microsoft-foundry)",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.microsoft-foundry.config",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "@openclaw/microsoft-foundry Config",
+      "help": "Plugin-defined config payload for microsoft-foundry.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.microsoft-foundry.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable @openclaw/microsoft-foundry",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.microsoft-foundry.hooks",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Hook Policy",
+      "help": "Per-plugin typed hook policy controls for core-enforced safety gates. Use this to constrain high-impact hook categories without disabling the entire plugin.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.microsoft-foundry.hooks.allowPromptInjection",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Prompt Injection Hooks",
+      "help": "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.microsoft-foundry.subagent",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Plugin Subagent Policy",
+      "help": "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.microsoft-foundry.subagent.allowedModels",
+      "kind": "plugin",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Plugin Subagent Allowed Models",
+      "help": "Allowed override targets for trusted plugin subagent runs as canonical \"provider/model\" refs. Use \"*\" only when you intentionally allow any model.",
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.microsoft-foundry.subagent.allowedModels.*",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.microsoft-foundry.subagent.allowModelOverride",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "access"
+      ],
+      "label": "Allow Plugin Subagent Model Override",
+      "help": "Explicitly allows this plugin to request provider/model overrides in background subagent runs. Keep false unless the plugin is trusted to steer model selection.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.microsoft.config",
       "kind": "plugin",
       "type": "object",
@@ -64608,6 +64799,21 @@
       ],
       "label": "Web Fetch Max Redirects",
       "help": "Maximum redirects allowed for web_fetch (default: 3).",
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.fetch.maxResponseBytes",
+      "kind": "core",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "performance",
+        "tools"
+      ],
+      "label": "Web Fetch Max Download Size (bytes)",
+      "help": "Max download size before truncation.",
       "hasChildren": false
     },
     {

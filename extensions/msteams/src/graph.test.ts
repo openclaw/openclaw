@@ -60,7 +60,7 @@ describe("msteams graph helpers", () => {
         status: 200,
         headers: { "content-type": "application/json" },
       });
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     await expect(
       fetchGraphJson<{ value: Array<{ id: string }> }>({
@@ -82,7 +82,7 @@ describe("msteams graph helpers", () => {
 
     globalThis.fetch = vi.fn(async () => {
       return new Response("forbidden", { status: 403 });
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     await expect(
       fetchGraphJson({
@@ -148,7 +148,7 @@ describe("msteams graph helpers", () => {
           headers: { "content-type": "application/json" },
         },
       );
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     await expect(listTeamsByName("graph-token", "Bob's Team")).resolves.toEqual([
       { id: "team-1", displayName: "Ops" },
@@ -165,7 +165,7 @@ describe("msteams graph helpers", () => {
   });
 
   it("returns no graph users for blank queries", async () => {
-    globalThis.fetch = vi.fn() as typeof fetch;
+    globalThis.fetch = vi.fn() as unknown as typeof fetch;
     await expect(searchGraphUsers({ token: "token-1", query: "   " })).resolves.toEqual([]);
     expect(globalThis.fetch).not.toHaveBeenCalled();
   });
@@ -176,7 +176,7 @@ describe("msteams graph helpers", () => {
         status: 200,
         headers: { "content-type": "application/json" },
       });
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     const result = await searchGraphUsers({
       token: "token-2",
@@ -202,7 +202,7 @@ describe("msteams graph helpers", () => {
         status: 200,
         headers: { "content-type": "application/json" },
       });
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
 
     await expect(searchGraphUsers({ token: "token-3", query: "bob", top: 25 })).resolves.toEqual([
       { id: "user-2", displayName: "Bob" },

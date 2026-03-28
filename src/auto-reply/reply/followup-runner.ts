@@ -19,8 +19,8 @@ import { stripHeartbeatToken } from "../heartbeat.js";
 import type { OriginatingChannelType } from "../templating.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
-import { normalizeFollowupRun } from "./agent-runner-utils.js";
+import { runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
+import { normalizeFollowupRun, resolveRunAuthProfile } from "./agent-runner-utils.js";
 import {
   resolveOriginAccountId,
   resolveOriginMessageProvider,
@@ -154,8 +154,20 @@ export function createFollowupRunner(params: {
       let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
       let fallbackProvider = queued.run.provider;
       let fallbackModel = queued.run.model;
-      const activeSessionEntry =
+      let activeSessionEntry =
         (sessionKey ? sessionStore?.[sessionKey] : undefined) ?? sessionEntry;
+      activeSessionEntry = await runPreflightCompactionIfNeeded({
+        cfg: queued.run.config,
+        followupRun: queued,
+        promptForEstimate: queued.prompt,
+        defaultModel,
+        agentCfgContextTokens,
+        sessionEntry: activeSessionEntry,
+        sessionStore,
+        sessionKey,
+        storePath,
+        isHeartbeat: opts?.isHeartbeat === true,
+      });
       let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
         activeSessionEntry?.systemPromptReport,
       );

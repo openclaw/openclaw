@@ -26,7 +26,7 @@ describe("listMicrosoftVoices", () => {
         ]),
         { status: 200 },
       ),
-    ) as typeof globalThis.fetch;
+    ) as unknown as typeof globalThis.fetch;
 
     const voices = await listMicrosoftVoices();
 
@@ -56,7 +56,9 @@ describe("listMicrosoftVoices", () => {
   it("throws on Microsoft voice list failures", async () => {
     globalThis.fetch = vi
       .fn()
-      .mockResolvedValue(new Response("nope", { status: 503 })) as typeof globalThis.fetch;
+      .mockResolvedValue(
+        new Response("nope", { status: 503 }),
+      ) as unknown as typeof globalThis.fetch;
 
     await expect(listMicrosoftVoices()).rejects.toThrow("Microsoft voices API error (503)");
   });

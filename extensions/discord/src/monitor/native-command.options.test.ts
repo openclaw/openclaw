@@ -1,6 +1,31 @@
 import { ChannelType } from "discord-api-types/v10";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, loadConfig } from "../../../../src/config/config.js";
+
+const { logVerboseMock } = vi.hoisted(() => ({
+  logVerboseMock: vi.fn(),
+}));
+const { loggerWarnMock } = vi.hoisted(() => ({
+  loggerWarnMock: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/runtime-env")>(
+    "openclaw/plugin-sdk/runtime-env",
+  );
+  return {
+    ...actual,
+    createSubsystemLogger: () => ({
+      child: vi.fn(),
+      info: vi.fn(),
+      error: vi.fn(),
+      warn: loggerWarnMock,
+      debug: vi.fn(),
+    }),
+    logVerbose: logVerboseMock,
+  };
+});
+
 let listNativeCommandSpecs: typeof import("../../../../src/auto-reply/commands-registry.js").listNativeCommandSpecs;
 let createDiscordNativeCommand: typeof import("./native-command.js").createDiscordNativeCommand;
 let createNoopThreadBindingManager: typeof import("./thread-bindings.js").createNoopThreadBindingManager;
@@ -75,6 +100,11 @@ describe("createDiscordNativeCommand option wiring", () => {
     ({ listNativeCommandSpecs } = await import("../../../../src/auto-reply/commands-registry.js"));
     ({ createDiscordNativeCommand } = await import("./native-command.js"));
     ({ createNoopThreadBindingManager } = await import("./thread-bindings.js"));
+  });
+
+  beforeEach(() => {
+    logVerboseMock.mockReset();
+    loggerWarnMock.mockReset();
   });
 
   it("uses autocomplete for /acp action so inline action values are accepted", async () => {
@@ -167,5 +197,43 @@ describe("createDiscordNativeCommand option wiring", () => {
     } as never);
 
     expect(respond).toHaveBeenCalledWith([]);
+  });
+
+  it("truncates Discord command and option descriptions to Discord's limit", () => {
+    const longDescription = "x".repeat(140);
+    const cfg = {} as ReturnType<typeof loadConfig>;
+    const discordConfig = {} as NonNullable<OpenClawConfig["channels"]>["discord"];
+    const command = createDiscordNativeCommand({
+      command: {
+        name: "longdesc",
+        description: longDescription,
+        acceptsArgs: true,
+        args: [
+          {
+            name: "input",
+            description: longDescription,
+            type: "string",
+            required: false,
+          },
+        ],
+      },
+      cfg,
+      discordConfig,
+      accountId: "default",
+      sessionPrefix: "discord:slash",
+      ephemeralDefault: true,
+      threadBindings: createNoopThreadBindingManager("default"),
+    });
+
+    expect(command.description).toHaveLength(100);
+    expect(command.description).toBe("x".repeat(100));
+    expect(requireOption(command, "input").description).toHaveLength(100);
+    expect(requireOption(command, "input").description).toBe("x".repeat(100));
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      expect.stringContaining("truncating native command description (command:longdesc)"),
+    );
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      expect.stringContaining("truncating native command description (command:longdesc arg:input)"),
+    );
   });
 });

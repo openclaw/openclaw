@@ -1,8 +1,6 @@
 import { resolveAgentConfig } from "../agents/agent-scope.js";
-import {
-  resolveSandboxConfigForAgent,
-  resolveSandboxToolPolicyForAgent,
-} from "../agents/sandbox.js";
+import { resolveSandboxConfigForAgent } from "../agents/sandbox.js";
+import { resolveSandboxToolPolicyForAgent } from "../agents/sandbox/tool-policy.js";
 import { normalizeAnyChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
@@ -221,8 +219,10 @@ export async function sandboxExplainCommand(
     fixIt.push("agents.list[].sandbox.mode=off");
   }
   fixIt.push("tools.sandbox.tools.allow");
+  fixIt.push("tools.sandbox.tools.alsoAllow");
   fixIt.push("tools.sandbox.tools.deny");
   fixIt.push("agents.list[].tools.sandbox.tools.allow");
+  fixIt.push("agents.list[].tools.sandbox.tools.alsoAllow");
   fixIt.push("agents.list[].tools.sandbox.tools.deny");
   fixIt.push("tools.elevated.enabled");
   if (channel) {

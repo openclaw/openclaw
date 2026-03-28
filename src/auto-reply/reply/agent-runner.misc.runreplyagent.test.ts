@@ -22,6 +22,10 @@ vi.mock("../../agents/model-fallback.js", () => ({
     model: string;
     run: (provider: string, model: string) => Promise<unknown>;
   }) => runWithModelFallbackMock(params),
+  isFallbackSummaryError: (err: unknown) =>
+    err instanceof Error &&
+    err.name === "FallbackSummaryError" &&
+    Array.isArray((err as { attempts?: unknown[] }).attempts),
 }));
 
 vi.mock("../../agents/pi-embedded.js", async () => {
@@ -2035,5 +2039,99 @@ describe("runReplyAgent billing error classification", () => {
     const payload = Array.isArray(result) ? result[0] : result;
     expect(payload?.text).toContain("billing error");
     expect(payload?.text).not.toContain("Context overflow");
+  });
+});
+
+describe("runReplyAgent mid-turn rate-limit fallback", () => {
+  function createRun() {
+    const typing = createMockTypingController();
+    const sessionCtx = {
+      Provider: "telegram",
+      MessageSid: "msg",
+    } as unknown as TemplateContext;
+    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
+    const followupRun = {
+      prompt: "hello",
+      summaryLine: "hello",
+      enqueuedAt: Date.now(),
+      run: {
+        sessionId: "session",
+        sessionKey: "main",
+        messageProvider: "telegram",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        config: {},
+        skillsSnapshot: {},
+        provider: "anthropic",
+        model: "claude",
+        thinkLevel: "low",
+        verboseLevel: "off",
+        elevatedLevel: "off",
+        bashElevated: {
+          enabled: false,
+          allowed: false,
+          defaultLevel: "off",
+        },
+        timeoutMs: 1_000,
+        blockReplyBreak: "message_end",
+      },
+    } as unknown as FollowupRun;
+
+    return runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: "main",
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      defaultModel: "anthropic/claude",
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+  }
+
+  it("surfaces a final error when only reasoning preceded a mid-turn rate limit", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "reasoning", isReasoning: true }],
+      meta: {
+        error: {
+          kind: "retry_limit",
+          message: "429 Too Many Requests: rate limit exceeded",
+        },
+      },
+    });
+
+    const result = await createRun();
+    const payload = Array.isArray(result) ? result[0] : result;
+
+    expect(payload?.text).toContain("API rate limit reached");
+  });
+
+  it("preserves successful media-only replies that use legacy mediaUrl", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ mediaUrl: "https://example.test/image.png" }],
+      meta: {
+        error: {
+          kind: "retry_limit",
+          message: "429 Too Many Requests: rate limit exceeded",
+        },
+      },
+    });
+
+    const result = await createRun();
+    const payload = Array.isArray(result) ? result[0] : result;
+
+    expect(payload).toMatchObject({
+      mediaUrl: "https://example.test/image.png",
+    });
+    expect(payload?.text).toBeUndefined();
   });
 });
