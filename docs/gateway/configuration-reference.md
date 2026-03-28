@@ -2356,13 +2356,13 @@ Base URL should omit `/v1` (Anthropic client appends it). Shortcut: `openclaw on
 ```
 
 Set `MINIMAX_API_KEY`. Shortcut: `openclaw onboard --auth-choice minimax-api`.
-`MiniMax-M2.5` and `MiniMax-M2.5-highspeed` remain available if you prefer the older text models.
+The model catalog now defaults to M2.7 only.
 
 </Accordion>
 
 <Accordion title="Local models (LM Studio)">
 
-See [Local Models](/gateway/local-models). TL;DR: run MiniMax M2.5 via LM Studio Responses API on serious hardware; keep hosted models merged for fallback.
+See [Local Models](/gateway/local-models). TL;DR: run a large local model via LM Studio Responses API on serious hardware; keep hosted models merged for fallback.
 
 </Accordion>
 

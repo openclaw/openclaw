@@ -74,7 +74,7 @@ override with a custom `baseUrl` in config.
 - **qwen3-coder-plus**, **qwen3-coder-next** — Qwen coding models
 - **GLM-5** — GLM models via Alibaba
 - **Kimi K2.5** — Moonshot AI via Alibaba
-- **MiniMax-M2.5** — MiniMax via Alibaba
+- **MiniMax-M2.7** — MiniMax via Alibaba
 
 Some models (qwen3.5-plus, kimi-k2.5) support image input. Context windows range from 200K to 1M tokens.
 

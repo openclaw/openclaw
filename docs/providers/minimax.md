@@ -14,6 +14,29 @@ OpenClaw's MiniMax provider defaults to **MiniMax M2.7**.
 
 - `MiniMax-M2.7`: default hosted text model.
 - `MiniMax-M2.7-highspeed`: faster M2.7 text tier.
+- `image-01`: image generation model (generate and image-to-image editing).
+
+## Image generation
+
+The MiniMax plugin registers the `image-01` model for the `image_generate` tool. It supports:
+
+- **Text-to-image generation** with aspect ratio control.
+- **Image-to-image editing** (subject reference) with aspect ratio control.
+- Supported aspect ratios: `1:1`, `16:9`, `4:3`, `3:2`, `2:3`, `3:4`, `9:16`, `21:9`.
+
+To use MiniMax for image generation, set it as the image generation provider:
+
+```json5
+{
+  agents: {
+    defaults: {
+      imageGenerationModel: { primary: "minimax/image-01" },
+    },
+  },
+}
+```
+
+The plugin uses the same `MINIMAX_API_KEY` or OAuth auth as the text models. No additional configuration is needed if MiniMax is already set up.
 
 ## Choose a setup
 
