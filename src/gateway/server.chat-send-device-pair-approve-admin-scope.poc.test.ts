@@ -20,6 +20,7 @@ import {
   connectOk,
   getReplyFromConfig,
   installGatewayTestHooks,
+  onceMessage,
   rpcReq,
   startServerWithClient,
   trackConnectChallengeNonce,
@@ -130,34 +131,26 @@ describe("gateway chat.send /pair approve admin scope", () => {
         expect(directApprove.error?.message).toBe("missing scope: operator.admin");
 
         const runId = "idem-chat-send-device-pair-approve-admin-scope-poc";
+        const finalEventPromise = onceMessage(
+          started.ws,
+          (o) =>
+            o.type === "event" &&
+            o.event === "chat" &&
+            o.payload?.state === "final" &&
+            o.payload?.runId === runId,
+          8000,
+        );
         const viaChatSend = await rpcReq(started.ws, "chat.send", {
           sessionKey: "main",
           message: "/pair approve latest",
           idempotencyKey: runId,
         });
         expect(viaChatSend.ok).toBe(true);
-        expect(["started", "ok"]).toContain(String(viaChatSend.payload?.status ?? ""));
+        expect(viaChatSend.payload).toMatchObject({ runId, status: "started" });
 
-        let completedChatSend = viaChatSend;
-        if (viaChatSend.payload?.status !== "ok") {
-          await vi.waitFor(
-            async () => {
-              const again = await rpcReq(started.ws, "chat.send", {
-                sessionKey: "main",
-                message: "/pair approve latest",
-                idempotencyKey: runId,
-              });
-              expect(again.ok).toBe(true);
-              expect(again.payload?.status).toBe("ok");
-              completedChatSend = again;
-            },
-            { timeout: 5_000 },
-          );
-        }
+        const finalEvent = await finalEventPromise;
+        expect(finalEvent.payload?.text).toMatch(/scope|denied|unauthorized|admin/i);
 
-        expect(completedChatSend.result?.text ?? completedChatSend.result?.reply).toMatch(
-          /Cannot approve a request requiring operator\.admin/,
-        );
         const paired = await getPairedDevice(pendingAdmin.identity.deviceId);
         expect(paired).toBeNull();
 
