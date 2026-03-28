@@ -8532,6 +8532,17 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
                 type: "string",
                 enum: ["open", "disabled", "allowlist"],
               },
+              streaming: {
+                anyOf: [
+                  {
+                    type: "string",
+                    enum: ["partial", "off"],
+                  },
+                  {
+                    type: "boolean",
+                  },
+                ],
+              },
               replyToMode: {
                 type: "string",
                 enum: ["off", "first", "all"],
