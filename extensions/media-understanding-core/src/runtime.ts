@@ -51,6 +51,17 @@ export async function runMediaUnderstandingFile(
     return { text: undefined };
   }
 
+  const config = params.cfg.tools?.media?.[params.capability];
+  if (config?.enabled === false) {
+    // Avoid loading plugin-backed providers when the capability is disabled.
+    return {
+      text: undefined,
+      provider: undefined,
+      model: undefined,
+      output: undefined,
+    };
+  }
+
   const providerRegistry = buildProviderRegistry(undefined, params.cfg);
   const cache = createMediaAttachmentCache(attachments, {
     localPathRoots: [path.dirname(params.filePath)],
@@ -65,7 +76,7 @@ export async function runMediaUnderstandingFile(
       media: attachments,
       agentDir: params.agentDir,
       providerRegistry,
-      config: params.cfg.tools?.media?.[params.capability],
+      config,
       activeModel: params.activeModel,
     });
     const output = result.outputs.find(
