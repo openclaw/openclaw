@@ -79,10 +79,6 @@ function parsePidsFromLsofOutput(stdout: string): number[] {
 }
 
 /**
- * Find PIDs of gateway processes listening on the given port using synchronous lsof.
- * Returns only PIDs that belong to openclaw gateway processes (not the current process).
- */
-/**
  * Parse gateway PIDs from `netstat -ano` output on Windows.
  * Looks for LISTENING entries on the given port and returns PIDs of openclaw
  * processes (excluding the current process).
@@ -125,18 +121,18 @@ function findGatewayPidsOnPortWindows(
   // Verify each PID is actually an openclaw/node process via tasklist
   const confirmed: number[] = [];
   for (const pid of pids) {
-    try {
-      const tl = spawnSync("tasklist", ["/FI", `PID eq ${pid}`, "/FO", "CSV", "/NH"], {
-        encoding: "utf8",
-        timeout: spawnTimeoutMs,
-        windowsHide: true,
-      });
-      if (tl.stdout && tl.stdout.toLowerCase().includes("node")) {
-        confirmed.push(pid);
-      }
-    } catch {
+    const tl = spawnSync("tasklist", ["/FI", `PID eq ${pid}`, "/FO", "CSV", "/NH"], {
+      encoding: "utf8",
+      timeout: spawnTimeoutMs,
+      windowsHide: true,
+    });
+    if (tl.error || tl.status !== 0) {
       // If tasklist fails, include the PID anyway — better to kill a stale
       // process than leave a port occupied.
+      confirmed.push(pid);
+      continue;
+    }
+    if (tl.stdout && tl.stdout.toLowerCase().includes("node")) {
       confirmed.push(pid);
     }
   }
@@ -176,6 +172,10 @@ function pollPortOnceWindows(port: number): PollResult {
   }
 }
 
+/**
+ * Find PIDs of gateway processes listening on the given port using synchronous lsof.
+ * Returns only PIDs that belong to openclaw gateway processes (not the current process).
+ */
 export function findGatewayPidsOnPortSync(
   port: number,
   spawnTimeoutMs = SPAWN_TIMEOUT_MS,
