@@ -39,7 +39,7 @@ describe("skills-cli (e2e)", () => {
           description: "Capture UI screenshots",
           filePath,
           baseDir,
-          source: "openclaw-bundled",
+          sourceInfo: { path: "/tmp", source: "openclaw-bundled", scope: "project" as const, origin: "top-level" as const },
         }),
         frontmatter: {},
         metadata: { emoji: "📸" },

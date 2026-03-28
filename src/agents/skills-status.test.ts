@@ -17,7 +17,7 @@ describe("buildWorkspaceSkillStatus", () => {
         description: "test",
         filePath: "/tmp/os-scoped",
         baseDir: "/tmp",
-        source: "test",
+        sourceInfo: { path: "/tmp", source: "test", scope: "project" as const, origin: "top-level" as const },
       }),
       frontmatter: {},
       metadata: {

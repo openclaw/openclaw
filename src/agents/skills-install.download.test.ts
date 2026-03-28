@@ -61,7 +61,7 @@ function buildEntry(name: string): SkillEntry {
       description: `${name} test skill`,
       filePath,
       baseDir: skillDir,
-      source: "openclaw-workspace",
+      sourceInfo: { path: "/tmp", source: "openclaw-workspace", scope: "project" as const, origin: "top-level" as const },
     }),
     frontmatter: {},
   };
