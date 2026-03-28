@@ -7,7 +7,12 @@ import {
 describe("live model error helpers", () => {
   it("detects generic model-not-found messages", () => {
     expect(isModelNotFoundErrorMessage('{"code":404,"message":"model not found"}')).toBe(true);
-    expect(isModelNotFoundErrorMessage("model: MiniMax-M2.5-highspeed not found")).toBe(true);
+    expect(isModelNotFoundErrorMessage("model: MiniMax-M2.7-highspeed not found")).toBe(true);
+    expect(
+      isModelNotFoundErrorMessage(
+        "HTTP 400 not_found_error: model: claude-3-5-haiku-20241022 (request_id: req_123)",
+      ),
+    ).toBe(true);
     expect(isModelNotFoundErrorMessage("request ended without sending any chunks")).toBe(false);
   });
 

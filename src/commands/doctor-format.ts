@@ -4,6 +4,7 @@ import {
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
 } from "../daemon/constants.js";
+import { resolveDaemonContainerContext } from "../daemon/container-context.js";
 import { formatRuntimeStatus } from "../daemon/runtime-format.js";
 import { buildPlatformRuntimeLogHints } from "../daemon/runtime-hints.js";
 import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
@@ -11,6 +12,7 @@ import {
   isSystemdUnavailableDetail,
   renderSystemdUnavailableHints,
 } from "../daemon/systemd-hints.js";
+import { classifySystemdUnavailableDetail } from "../daemon/systemd-unavailable.js";
 import { isWSLEnv } from "../infra/wsl.js";
 import { getResolvedLoggerSettings } from "../logging.js";
 
@@ -35,6 +37,7 @@ export function buildGatewayRuntimeHints(
   }
   const platform = options.platform ?? process.platform;
   const env = options.env ?? process.env;
+  const container = Boolean(resolveDaemonContainerContext(env));
   const fileLog = (() => {
     try {
       return getResolvedLoggerSettings().file;
@@ -43,7 +46,13 @@ export function buildGatewayRuntimeHints(
     }
   })();
   if (platform === "linux" && isSystemdUnavailableDetail(runtime.detail)) {
-    hints.push(...renderSystemdUnavailableHints({ wsl: isWSLEnv() }));
+    hints.push(
+      ...renderSystemdUnavailableHints({
+        wsl: isWSLEnv(),
+        kind: classifySystemdUnavailableDetail(runtime.detail),
+        container,
+      }),
+    );
     if (fileLog) {
       hints.push(`File logs: ${fileLog}`);
     }

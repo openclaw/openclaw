@@ -6,7 +6,10 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.js";
-import { buildSystemRunApprovalBinding } from "../../infra/system-run-approval-binding.js";
+import {
+  buildSystemRunApprovalBinding,
+  buildSystemRunApprovalEnvBinding,
+} from "../../infra/system-run-approval-binding.js";
 import { resetLogger, setLoggerOverride } from "../../logging.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { validateExecApprovalRequestParams } from "../protocol/index.js";
@@ -263,6 +266,27 @@ describe("normalizeRpcAttachmentsToChatAttachments", () => {
     },
   ])("$name", ({ attachments, expected }) => {
     expect(normalizeRpcAttachmentsToChatAttachments(attachments)).toEqual(expected);
+  });
+
+  it("accepts dashboard image attachments with nested base64 source", () => {
+    const res = normalizeRpcAttachmentsToChatAttachments([
+      {
+        type: "image",
+        source: {
+          type: "base64",
+          media_type: "image/png",
+          data: "Zm9v",
+        },
+      },
+    ]);
+    expect(res).toEqual([
+      {
+        type: "image",
+        mimeType: "image/png",
+        fileName: undefined,
+        content: "Zm9v",
+      },
+    ]);
   });
 });
 
@@ -583,6 +607,31 @@ describe("exec approval handlers", () => {
     );
   });
 
+  it("stores sorted env keys for gateway approvals without node-only binding", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        host: "gateway",
+        nodeId: undefined,
+        systemRunPlan: undefined,
+        env: {
+          Z_VAR: "z",
+          A_VAR: "a",
+        },
+      },
+    });
+    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
+    expect(requested).toBeTruthy();
+    const request = (requested?.payload as { request?: Record<string, unknown> })?.request ?? {};
+    expect(request["envKeys"]).toEqual(
+      buildSystemRunApprovalEnvBinding({ A_VAR: "a", Z_VAR: "z" }).envKeys,
+    );
+    expect(request["systemRunBinding"]).toBeNull();
+  });
+
   it("prefers systemRunPlan canonical command/cwd when present", async () => {
     const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
     await requestExecApproval({
@@ -819,7 +868,9 @@ describe("exec approval handlers", () => {
       false,
       undefined,
       expect.objectContaining({
+        code: "INVALID_REQUEST",
         message: "unknown or expired approval id",
+        details: expect.objectContaining({ reason: "APPROVAL_NOT_FOUND" }),
       }),
     );
   });

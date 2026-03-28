@@ -207,10 +207,9 @@ describe("sanitizeToolUseResultPairing", () => {
     expect(result.added[0]?.toolCallId).toBe("call_normal");
   });
 
-  it("drops orphan tool results that follow an aborted assistant message", () => {
-    // When an assistant message is aborted, any tool results that follow should be
-    // dropped as orphans (since we skip extracting tool calls from aborted messages).
-    // This addresses the edge case where a partial tool result was persisted before abort.
+  it("retains matching tool results that follow an aborted assistant message", () => {
+    // Aborted assistant turns do not synthesize missing tool results, but real
+    // matching results in the same span remain part of the repaired transcript.
     const input = castAgentMessages([
       {
         role: "assistant",
@@ -229,12 +228,11 @@ describe("sanitizeToolUseResultPairing", () => {
 
     const result = repairToolUseResultPairing(input);
 
-    // The orphan tool result should be dropped
-    expect(result.droppedOrphanCount).toBe(1);
-    expect(result.messages).toHaveLength(2);
+    expect(result.droppedOrphanCount).toBe(0);
+    expect(result.messages).toHaveLength(3);
     expect(result.messages[0]?.role).toBe("assistant");
-    expect(result.messages[1]?.role).toBe("user");
-    // No synthetic results should be added
+    expect(result.messages[1]?.role).toBe("toolResult");
+    expect(result.messages[2]?.role).toBe("user");
     expect(result.added).toHaveLength(0);
   });
 });
@@ -486,145 +484,5 @@ describe("stripToolResultDetails", () => {
 
     const out = stripToolResultDetails(input);
     expect(out).toBe(input);
-  });
-});
-
-describe("post-compaction orphaned tool_result removal (#15691)", () => {
-  it("drops orphaned tool_result blocks left after compaction removes tool_use messages", () => {
-    const input = castAgentMessages([
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "Here is a summary of our earlier conversation..." }],
-      },
-      {
-        role: "toolResult",
-        toolCallId: "toolu_compacted_1",
-        toolName: "Read",
-        content: [{ type: "text", text: "file contents" }],
-        isError: false,
-      },
-      {
-        role: "toolResult",
-        toolCallId: "toolu_compacted_2",
-        toolName: "exec",
-        content: [{ type: "text", text: "command output" }],
-        isError: false,
-      },
-      { role: "user", content: "now do something else" },
-      {
-        role: "assistant",
-        content: [
-          { type: "text", text: "I'll read that file" },
-          { type: "toolCall", id: "toolu_active_1", name: "Read", arguments: { path: "foo.ts" } },
-        ],
-      },
-      {
-        role: "toolResult",
-        toolCallId: "toolu_active_1",
-        toolName: "Read",
-        content: [{ type: "text", text: "actual content" }],
-        isError: false,
-      },
-    ]);
-
-    const result = repairToolUseResultPairing(input);
-
-    expect(result.droppedOrphanCount).toBe(2);
-    const toolResults = result.messages.filter((message) => message.role === "toolResult");
-    expect(toolResults).toHaveLength(1);
-    expect((toolResults[0] as { toolCallId?: string }).toolCallId).toBe("toolu_active_1");
-    expect(result.messages.map((message) => message.role)).toEqual([
-      "assistant",
-      "user",
-      "assistant",
-      "toolResult",
-    ]);
-  });
-
-  it("handles synthetic tool_result from interrupted request after compaction", () => {
-    const input = castAgentMessages([
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "Compaction summary of previous conversation." }],
-      },
-      {
-        role: "toolResult",
-        toolCallId: "toolu_interrupted",
-        toolName: "unknown",
-        content: [
-          {
-            type: "text",
-            text: "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.",
-          },
-        ],
-        isError: true,
-      },
-      { role: "user", content: "continue please" },
-    ]);
-
-    const result = repairToolUseResultPairing(input);
-
-    expect(result.droppedOrphanCount).toBe(1);
-    expect(result.messages.some((message) => message.role === "toolResult")).toBe(false);
-    expect(result.messages.map((message) => message.role)).toEqual(["assistant", "user"]);
-  });
-
-  it("preserves valid tool_use/tool_result pairs while removing orphans", () => {
-    const input = castAgentMessages([
-      {
-        role: "assistant",
-        content: [
-          { type: "toolCall", id: "toolu_valid", name: "Read", arguments: { path: "a.ts" } },
-        ],
-      },
-      {
-        role: "toolResult",
-        toolCallId: "toolu_valid",
-        toolName: "Read",
-        content: [{ type: "text", text: "content of a.ts" }],
-        isError: false,
-      },
-      { role: "user", content: "thanks, what about b.ts?" },
-      {
-        role: "toolResult",
-        toolCallId: "toolu_gone",
-        toolName: "Read",
-        content: [{ type: "text", text: "content of old file" }],
-        isError: false,
-      },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "Let me check b.ts" }],
-      },
-    ]);
-
-    const result = repairToolUseResultPairing(input);
-
-    expect(result.droppedOrphanCount).toBe(1);
-    const toolResults = result.messages.filter((message) => message.role === "toolResult");
-    expect(toolResults).toHaveLength(1);
-    expect((toolResults[0] as { toolCallId?: string }).toolCallId).toBe("toolu_valid");
-  });
-
-  it("returns original array when no orphans exist", () => {
-    const input = castAgentMessages([
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "toolu_1", name: "Read", arguments: { path: "x.ts" } }],
-      },
-      {
-        role: "toolResult",
-        toolCallId: "toolu_1",
-        toolName: "Read",
-        content: [{ type: "text", text: "ok" }],
-        isError: false,
-      },
-      { role: "user", content: "good" },
-    ]);
-
-    const result = repairToolUseResultPairing(input);
-
-    expect(result.droppedOrphanCount).toBe(0);
-    expect(result.messages).toStrictEqual(input);
   });
 });

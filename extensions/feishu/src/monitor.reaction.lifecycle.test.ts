@@ -1,5 +1,5 @@
-import type { ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
 import { describe, expect, it } from "vitest";
+import type { ClawdbotConfig } from "../runtime-api.js";
 import {
   resolveReactionSyntheticEvent,
   type FeishuReactionCreatedEvent,

@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/mattermost";
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../../runtime-api.js";
 import {
   resolveDefaultMattermostAccountId,
   resolveMattermostAccount,
@@ -86,5 +86,32 @@ describe("resolveMattermostReplyToMode", () => {
   it("defaults to off when replyToMode is unset", () => {
     const account = resolveMattermostAccount({ cfg: {}, accountId: "default" });
     expect(resolveMattermostReplyToMode(account, "channel")).toBe("off");
+  });
+
+  it("preserves shared commands config when an account overrides one commands field", () => {
+    const account = resolveMattermostAccount({
+      cfg: {
+        channels: {
+          mattermost: {
+            commands: {
+              native: true,
+            },
+            accounts: {
+              work: {
+                commands: {
+                  callbackPath: "/hooks/work",
+                },
+              },
+            },
+          },
+        },
+      },
+      accountId: "work",
+    });
+
+    expect(account.config.commands).toEqual({
+      native: true,
+      callbackPath: "/hooks/work",
+    });
   });
 });

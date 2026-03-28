@@ -1,6 +1,10 @@
 import { toNumber } from "../format.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { SessionsListResult } from "../types.ts";
+import {
+  formatMissingOperatorReadScopeMessage,
+  isMissingOperatorReadScopeError,
+} from "./scope-errors.ts";
 
 export type SessionsState = {
   client: GatewayBrowserClient | null;
@@ -13,6 +17,17 @@ export type SessionsState = {
   sessionsIncludeGlobal: boolean;
   sessionsIncludeUnknown: boolean;
 };
+
+export async function subscribeSessions(state: SessionsState) {
+  if (!state.client || !state.connected) {
+    return;
+  }
+  try {
+    await state.client.request("sessions.subscribe", {});
+  } catch (err) {
+    state.sessionsError = String(err);
+  }
+}
 
 export async function loadSessions(
   state: SessionsState,
@@ -51,7 +66,12 @@ export async function loadSessions(
       state.sessionsResult = res;
     }
   } catch (err) {
-    state.sessionsError = String(err);
+    if (isMissingOperatorReadScopeError(err)) {
+      state.sessionsResult = null;
+      state.sessionsError = formatMissingOperatorReadScopeMessage("sessions");
+    } else {
+      state.sessionsError = String(err);
+    }
   } finally {
     state.sessionsLoading = false;
   }
@@ -95,37 +115,44 @@ export async function patchSession(
   }
 }
 
-export async function deleteSession(state: SessionsState, key: string): Promise<boolean> {
-  if (!state.client || !state.connected) {
-    return false;
+export async function deleteSessionsAndRefresh(
+  state: SessionsState,
+  keys: string[],
+): Promise<string[]> {
+  if (!state.client || !state.connected || keys.length === 0) {
+    return [];
   }
   if (state.sessionsLoading) {
-    return false;
+    return [];
   }
+  const noun = keys.length === 1 ? "session" : "sessions";
   const confirmed = window.confirm(
-    `Delete session "${key}"?\n\nDeletes the session entry and archives its transcript.`,
+    `Delete ${keys.length} ${noun}?\n\nThis will delete the session entries and archive their transcripts.`,
   );
   if (!confirmed) {
-    return false;
+    return [];
   }
   state.sessionsLoading = true;
   state.sessionsError = null;
+  const deleted: string[] = [];
+  const deleteErrors: string[] = [];
   try {
-    await state.client.request("sessions.delete", { key, deleteTranscript: true });
-    return true;
-  } catch (err) {
-    state.sessionsError = String(err);
-    return false;
+    for (const key of keys) {
+      try {
+        await state.client.request("sessions.delete", { key, deleteTranscript: true });
+        deleted.push(key);
+      } catch (err) {
+        deleteErrors.push(String(err));
+      }
+    }
   } finally {
     state.sessionsLoading = false;
   }
-}
-
-export async function deleteSessionAndRefresh(state: SessionsState, key: string): Promise<boolean> {
-  const deleted = await deleteSession(state, key);
-  if (!deleted) {
-    return false;
+  if (deleted.length > 0) {
+    await loadSessions(state);
   }
-  await loadSessions(state);
-  return true;
+  if (deleteErrors.length > 0) {
+    state.sessionsError = deleteErrors.join("; ");
+  }
+  return deleted;
 }

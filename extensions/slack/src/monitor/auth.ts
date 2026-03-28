@@ -1,4 +1,4 @@
-import { readStoreAllowFromForDmPolicy } from "../../../../src/security/dm-policy-shared.js";
+import { readStoreAllowFromForDmPolicy } from "openclaw/plugin-sdk/security-runtime";
 import {
   allowListMatches,
   normalizeAllowList,

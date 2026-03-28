@@ -1,7 +1,9 @@
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
 import { createOutboundSendDeps } from "../../cli/deps.js";
 import { loadConfig } from "../../config/config.js";
+import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resolution.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
@@ -75,7 +77,10 @@ async function resolveRequestedChannel(params: {
       error: errorShape(ErrorCodes.INVALID_REQUEST, params.unsupportedMessage(channelInput)),
     };
   }
-  const cfg = loadConfig();
+  const cfg = applyPluginAutoEnable({
+    config: loadConfig(),
+    env: process.env,
+  }).config;
   let channel = normalizedChannel;
   if (!channel) {
     try {
@@ -88,7 +93,7 @@ async function resolveRequestedChannel(params: {
 }
 
 export const sendHandlers: GatewayRequestHandlers = {
-  send: async ({ params, respond, context }) => {
+  send: async ({ params, respond, context, client }) => {
     const p = params;
     if (!validateSendParams(p)) {
       respond(
@@ -211,7 +216,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           .filter(Boolean)
           .join("\n");
         const mirrorMediaUrls = mirrorPayloads.flatMap(
-          (payload) => payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []),
+          (payload) => resolveSendableOutboundReplyParts(payload).mediaUrls,
         );
         const providedSessionKey =
           typeof request.sessionKey === "string" && request.sessionKey.trim()
@@ -262,6 +267,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           gifPlayback: request.gifPlayback,
           threadId: threadId ?? null,
           deps: outboundDeps,
+          gatewayClientScopes: client?.connect?.scopes ?? [],
           mirror: providedSessionKey
             ? {
                 sessionKey: providedSessionKey,
@@ -331,7 +337,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       inflightMap.delete(dedupeKey);
     }
   },
-  poll: async ({ params, respond, context }) => {
+  poll: async ({ params, respond, context, client }) => {
     const p = params;
     if (!validatePollParams(p)) {
       respond(
@@ -443,6 +449,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         threadId,
         silent: request.silent,
         isAnonymous: request.isAnonymous,
+        gatewayClientScopes: client?.connect?.scopes ?? [],
       });
       const payload: Record<string, unknown> = {
         runId: idem,

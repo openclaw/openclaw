@@ -10,7 +10,7 @@ sidebarTitle: "CLI reference"
 # CLI Setup Reference
 
 This page is the full reference for `openclaw onboard`.
-For the short guide, see [Setup Wizard (CLI)](/start/wizard).
+For the short guide, see [Onboarding (CLI)](/start/wizard).
 
 ## What the wizard does
 
@@ -126,7 +126,10 @@ What you set:
   <Accordion title="Anthropic API key">
     Uses `ANTHROPIC_API_KEY` if present or prompts for a key, then saves it for daemon use.
   </Accordion>
-  <Accordion title="Anthropic OAuth (Claude Code CLI)">
+  <Accordion title="Anthropic Claude CLI">
+    Reuses a local Claude CLI login on the gateway host and switches model
+    selection to `claude-cli/...`.
+
     - macOS: checks Keychain item "Claude Code-credentials"
     - Linux and Windows: reuses `~/.claude/.credentials.json` if present
 
@@ -149,7 +152,7 @@ What you set:
   <Accordion title="OpenAI API key">
     Uses `OPENAI_API_KEY` if present or prompts for a key, then stores the credential in auth profiles.
 
-    Sets `agents.defaults.model` to `openai/gpt-5.1-codex` when model is unset, `openai/*`, or `openai-codex/*`.
+    Sets `agents.defaults.model` to `openai/gpt-5.4` when model is unset, `openai/*`, or `openai-codex/*`.
 
   </Accordion>
   <Accordion title="xAI (Grok) API key">
@@ -170,8 +173,8 @@ What you set:
     Prompts for account ID, gateway ID, and `CLOUDFLARE_AI_GATEWAY_API_KEY`.
     More detail: [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway).
   </Accordion>
-  <Accordion title="MiniMax M2.5">
-    Config is auto-written.
+  <Accordion title="MiniMax">
+    Config is auto-written. Hosted default is `MiniMax-M2.7`; `MiniMax-M2.5` stays available.
     More detail: [MiniMax](/providers/minimax).
   </Accordion>
   <Accordion title="Synthetic (Anthropic-compatible)">
@@ -294,6 +297,6 @@ Signal setup behavior:
 
 ## Related docs
 
-- Onboarding hub: [Setup Wizard (CLI)](/start/wizard)
+- Onboarding hub: [Onboarding (CLI)](/start/wizard)
 - Automation and scripts: [CLI Automation](/start/wizard-cli-automation)
 - Command reference: [`openclaw onboard`](/cli/onboard)

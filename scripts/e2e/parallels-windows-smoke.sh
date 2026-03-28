@@ -4,7 +4,11 @@ set -euo pipefail
 VM_NAME="Windows 11"
 SNAPSHOT_HINT="pre-openclaw-native-e2e-2026-03-12"
 MODE="both"
-OPENAI_API_KEY_ENV="OPENAI_API_KEY"
+PROVIDER="openai"
+API_KEY_ENV=""
+AUTH_CHOICE=""
+AUTH_KEY_FLAG=""
+MODEL_ID=""
 INSTALL_URL="https://openclaw.ai/install.ps1"
 HOST_PORT="18426"
 HOST_PORT_EXPLICIT=0
@@ -15,11 +19,15 @@ TARGET_PACKAGE_SPEC=""
 JSON_OUTPUT=0
 KEEP_SERVER=0
 CHECK_LATEST_REF=1
+SNAPSHOT_ID=""
+SNAPSHOT_STATE=""
+SNAPSHOT_NAME=""
 
 MAIN_TGZ_DIR="$(mktemp -d)"
 MAIN_TGZ_PATH=""
 MINGIT_ZIP_PATH=""
 MINGIT_ZIP_NAME=""
+WINDOWS_ONBOARD_SCRIPT_PATH=""
 SERVER_PID=""
 RUN_DIR="$(mktemp -d /tmp/openclaw-parallels-windows.XXXXXX)"
 BUILD_LOCK_DIR="${TMPDIR:-/tmp}/openclaw-parallels-build.lock"
@@ -81,8 +89,11 @@ Options:
   --snapshot-hint <name>     Snapshot name substring/fuzzy match.
                              Default: "pre-openclaw-native-e2e-2026-03-12"
   --mode <fresh|upgrade|both>
-  --openai-api-key-env <var> Host env var name for OpenAI API key.
-                             Default: OPENAI_API_KEY
+  --provider <openai|anthropic>
+                             Provider auth/model lane. Default: openai
+  --api-key-env <var>        Host env var name for provider API key.
+                             Default: OPENAI_API_KEY for openai, ANTHROPIC_API_KEY for anthropic
+  --openai-api-key-env <var> Alias for --api-key-env (backward compatible)
   --install-url <url>        Installer URL for latest release. Default: https://openclaw.ai/install.ps1
   --host-port <port>         Host HTTP port for current-main tgz. Default: 18426
   --host-ip <ip>             Override Parallels host IP.
@@ -100,6 +111,9 @@ EOF
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --)
+      shift
+      ;;
     --vm)
       VM_NAME="$2"
       shift 2
@@ -112,8 +126,12 @@ while [[ $# -gt 0 ]]; do
       MODE="$2"
       shift 2
       ;;
-    --openai-api-key-env)
-      OPENAI_API_KEY_ENV="$2"
+    --provider)
+      PROVIDER="$2"
+      shift 2
+      ;;
+    --api-key-env|--openai-api-key-env)
+      API_KEY_ENV="$2"
       shift 2
       ;;
     --install-url)
@@ -170,8 +188,26 @@ case "$MODE" in
     ;;
 esac
 
-OPENAI_API_KEY_VALUE="${!OPENAI_API_KEY_ENV:-}"
-[[ -n "$OPENAI_API_KEY_VALUE" ]] || die "$OPENAI_API_KEY_ENV is required"
+case "$PROVIDER" in
+  openai)
+    AUTH_CHOICE="openai-api-key"
+    AUTH_KEY_FLAG="openai-api-key"
+    MODEL_ID="openai/gpt-5.4"
+    [[ -n "$API_KEY_ENV" ]] || API_KEY_ENV="OPENAI_API_KEY"
+    ;;
+  anthropic)
+    AUTH_CHOICE="apiKey"
+    AUTH_KEY_FLAG="anthropic-api-key"
+    MODEL_ID="anthropic/claude-sonnet-4-6"
+    [[ -n "$API_KEY_ENV" ]] || API_KEY_ENV="ANTHROPIC_API_KEY"
+    ;;
+  *)
+    die "invalid --provider: $PROVIDER"
+    ;;
+esac
+
+API_KEY_VALUE="${!API_KEY_ENV:-}"
+[[ -n "$API_KEY_VALUE" ]] || die "$API_KEY_ENV is required"
 
 ps_single_quote() {
   printf "%s" "$1" | sed "s/'/''/g"
@@ -194,7 +230,7 @@ ps_array_literal() {
   printf '@(%s)' "$joined"
 }
 
-resolve_snapshot_id() {
+resolve_snapshot_info() {
   local json hint
   json="$(prlctl snapshot-list "$VM_NAME" --json)"
   hint="$SNAPSHOT_HINT"
@@ -202,28 +238,54 @@ resolve_snapshot_id() {
 import difflib
 import json
 import os
+import re
 import sys
 
 payload = json.loads(os.environ["SNAPSHOT_JSON"])
 hint = os.environ["SNAPSHOT_HINT"].strip().lower()
 best_id = None
+best_meta = None
 best_score = -1.0
+
+def aliases(name: str) -> list[str]:
+    values = [name]
+    for pattern in (
+        r"^(.*)-poweroff$",
+        r"^(.*)-poweroff-\d{4}-\d{2}-\d{2}$",
+    ):
+        match = re.match(pattern, name)
+        if match:
+            values.append(match.group(1))
+    return values
+
 for snapshot_id, meta in payload.items():
     name = str(meta.get("name", "")).strip()
     lowered = name.lower()
     score = 0.0
-    if lowered == hint:
-        score = 10.0
-    elif hint and hint in lowered:
-        score = 5.0 + len(hint) / max(len(lowered), 1)
-    else:
-        score = difflib.SequenceMatcher(None, hint, lowered).ratio()
+    for alias in aliases(lowered):
+        if alias == hint:
+            score = max(score, 10.0)
+        elif hint and hint in alias:
+            score = max(score, 5.0 + len(hint) / max(len(alias), 1))
+        else:
+            score = max(score, difflib.SequenceMatcher(None, hint, alias).ratio())
+    if str(meta.get("state", "")).lower() == "poweroff":
+        score += 0.5
     if score > best_score:
         best_score = score
         best_id = snapshot_id
+        best_meta = meta
 if not best_id:
     sys.exit("no snapshot matched")
-print(best_id)
+print(
+    "\t".join(
+        [
+            best_id,
+            str(best_meta.get("state", "")).strip(),
+            str(best_meta.get("name", "")).strip(),
+        ]
+    )
+)
 PY
 }
 
@@ -283,6 +345,35 @@ guest_exec() {
   prlctl exec "$VM_NAME" --current-user "$@"
 }
 
+host_timeout_exec() {
+  local timeout_s="$1"
+  shift
+  HOST_TIMEOUT_S="$timeout_s" python3 - "$@" <<'PY'
+import os
+import subprocess
+import sys
+
+timeout = int(os.environ["HOST_TIMEOUT_S"])
+args = sys.argv[1:]
+
+try:
+    completed = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
+except subprocess.TimeoutExpired as exc:
+    if exc.stdout:
+        sys.stdout.buffer.write(exc.stdout)
+    if exc.stderr:
+        sys.stderr.buffer.write(exc.stderr)
+    sys.stderr.write(f"host timeout after {timeout}s\n")
+    raise SystemExit(124)
+
+if completed.stdout:
+    sys.stdout.buffer.write(completed.stdout)
+if completed.stderr:
+    sys.stderr.buffer.write(completed.stderr)
+raise SystemExit(completed.returncode)
+PY
+}
+
 guest_powershell() {
   local script="$1"
   local encoded
@@ -299,49 +390,102 @@ PY
   guest_exec powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand "$encoded"
 }
 
+guest_powershell_poll() {
+  local timeout_s="$1"
+  local script="$2"
+  local encoded
+  encoded="$(
+    SCRIPT_CONTENT="$script" python3 - <<'PY'
+import base64
+import os
+
+script = "$ProgressPreference = 'SilentlyContinue'\n" + os.environ["SCRIPT_CONTENT"]
+payload = script.encode("utf-16le")
+print(base64.b64encode(payload).decode("ascii"))
+PY
+  )"
+  host_timeout_exec "$timeout_s" prlctl exec "$VM_NAME" --current-user powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand "$encoded"
+}
+
 guest_run_openclaw() {
   local env_name="${1:-}"
   local env_value="${2:-}"
   shift 2
 
-  local args_literal stdout_name stderr_name env_name_q env_value_q
+  local args_literal env_name_q env_value_q
   args_literal="$(ps_array_literal "$@")"
-  stdout_name="openclaw-stdout-$RANDOM-$RANDOM.log"
-  stderr_name="openclaw-stderr-$RANDOM-$RANDOM.log"
   env_name_q="$(ps_single_quote "$env_name")"
   env_value_q="$(ps_single_quote "$env_value")"
 
   guest_powershell "$(cat <<EOF
-\$stdout = Join-Path \$env:TEMP '$stdout_name'
-\$stderr = Join-Path \$env:TEMP '$stderr_name'
-try {
-  if ('${env_name_q}' -ne '') {
-    Set-Item -Path ('Env:' + '${env_name_q}') -Value '${env_value_q}'
-  }
-  \$proc = Start-Process -FilePath (Join-Path \$env:APPDATA 'npm\openclaw.cmd') -ArgumentList $args_literal -NoNewWindow -PassThru -RedirectStandardOutput \$stdout -RedirectStandardError \$stderr
-  \$proc.WaitForExit()
-  if (Test-Path \$stdout) {
-    Get-Content \$stdout
-  }
-  if (Test-Path \$stderr) {
-    Get-Content \$stderr
-  }
-  exit \$proc.ExitCode
-} finally {
-  Remove-Item \$stdout, \$stderr -Force -ErrorAction SilentlyContinue
+\$openclaw = Join-Path \$env:APPDATA 'npm\openclaw.cmd'
+\$args = $args_literal
+if ('${env_name_q}' -ne '') {
+  Set-Item -Path ('Env:' + '${env_name_q}') -Value '${env_value_q}'
 }
+# openclaw.cmd preserves multi-word --message args reliably here; Start-Process
+# against the shim can re-split argv and make Commander reject the turn.
+\$output = & \$openclaw @args 2>&1
+if (\$null -ne \$output) {
+  \$output | ForEach-Object { \$_ }
+}
+exit \$LASTEXITCODE
 EOF
 )"
+}
+
+run_windows_retry() {
+  local label="$1"
+  local max_attempts="$2"
+  shift 2
+
+  local attempt rc
+  rc=0
+  for (( attempt = 1; attempt <= max_attempts; attempt++ )); do
+    printf '%s attempt %d/%d\n' "$label" "$attempt" "$max_attempts"
+    set +e
+    "$@"
+    rc=$?
+    set -e
+    if [[ $rc -eq 0 ]]; then
+      return 0
+    fi
+    warn "$label attempt $attempt failed (rc=$rc)"
+    if (( attempt < max_attempts )); then
+      wait_for_guest_ready >/dev/null 2>&1 || true
+      sleep 5
+    fi
+  done
+  return "$rc"
 }
 
 restore_snapshot() {
   local snapshot_id="$1"
   say "Restore snapshot $SNAPSHOT_HINT ($snapshot_id)"
   prlctl snapshot-switch "$VM_NAME" --id "$snapshot_id" >/dev/null
+  if [[ "$SNAPSHOT_STATE" == "poweroff" ]]; then
+    wait_for_vm_status "stopped" || die "restored poweroff snapshot did not reach stopped state in $VM_NAME"
+    say "Start restored poweroff snapshot $SNAPSHOT_NAME"
+    prlctl start "$VM_NAME" >/dev/null
+  fi
 }
 
 verify_windows_user_ready() {
   guest_exec cmd.exe /d /s /c "echo ready"
+}
+
+wait_for_vm_status() {
+  local expected="$1"
+  local deadline status
+  deadline=$((SECONDS + TIMEOUT_SNAPSHOT_S))
+  while (( SECONDS < deadline )); do
+    status="$(prlctl status "$VM_NAME" 2>/dev/null || true)"
+    if [[ "$status" == *" $expected" ]]; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
 }
 
 wait_for_guest_ready() {
@@ -439,6 +583,7 @@ summary = {
     "snapshotHint": os.environ["SUMMARY_SNAPSHOT_HINT"],
     "snapshotId": os.environ["SUMMARY_SNAPSHOT_ID"],
     "mode": os.environ["SUMMARY_MODE"],
+    "provider": os.environ["SUMMARY_PROVIDER"],
     "latestVersion": os.environ["SUMMARY_LATEST_VERSION"],
     "installVersion": os.environ["SUMMARY_INSTALL_VERSION"],
     "targetPackageSpec": os.environ["SUMMARY_TARGET_PACKAGE_SPEC"],
@@ -673,13 +818,15 @@ install_latest_release() {
   if [[ -n "$INSTALL_VERSION" ]]; then
     version_flag_q="-Tag '$(ps_single_quote "$INSTALL_VERSION")' "
   fi
-  guest_powershell "$(cat <<EOF
+  local install_script
+  install_script="$(cat <<EOF
 \$ProgressPreference = 'SilentlyContinue'
 \$script = Invoke-RestMethod -Uri '$install_url_q'
 & ([scriptblock]::Create(\$script)) ${version_flag_q}-NoOnboard
 & (Join-Path \$env:APPDATA 'npm\openclaw.cmd') --version
 EOF
 )"
+  run_windows_retry "latest release installer" 2 guest_powershell "$install_script"
 }
 
 install_main_tgz() {
@@ -687,7 +834,11 @@ install_main_tgz() {
   local temp_name="$2"
   local tgz_url
   tgz_url="http://$host_ip:$HOST_PORT/$(basename "$MAIN_TGZ_PATH")"
-  guest_exec cmd.exe /d /s /c "set \"PATH=%LOCALAPPDATA%\\OpenClaw\\deps\\portable-git\\cmd;%LOCALAPPDATA%\\OpenClaw\\deps\\portable-git\\mingw64\\bin;%LOCALAPPDATA%\\OpenClaw\\deps\\portable-git\\usr\\bin;%PATH%\" && curl.exe -fsSL \"$tgz_url\" -o \"%TEMP%\\$temp_name\" && npm.cmd install -g \"%TEMP%\\$temp_name\" --no-fund --no-audit && \"%APPDATA%\\npm\\openclaw.cmd\" --version"
+  # Global npm installs on the Windows guest can stay silent for long stretches.
+  # Treat the phase log plus retry wrapper as the primary signal before assuming
+  # the guest hung.
+  run_windows_retry "main tgz install" 2 \
+    guest_exec cmd.exe /d /s /c "set \"PATH=%LOCALAPPDATA%\\OpenClaw\\deps\\portable-git\\cmd;%LOCALAPPDATA%\\OpenClaw\\deps\\portable-git\\mingw64\\bin;%LOCALAPPDATA%\\OpenClaw\\deps\\portable-git\\usr\\bin;%PATH%\" && curl.exe -fsSL \"$tgz_url\" -o \"%TEMP%\\$temp_name\" && npm.cmd install -g \"%TEMP%\\$temp_name\" --no-fund --no-audit && \"%APPDATA%\\npm\\openclaw.cmd\" --version"
 }
 
 verify_version_contains() {
@@ -704,12 +855,129 @@ verify_version_contains() {
   esac
 }
 
+write_onboard_runner_script() {
+  WINDOWS_ONBOARD_SCRIPT_PATH="$MAIN_TGZ_DIR/openclaw-onboard-$PROVIDER.ps1"
+  cat >"$WINDOWS_ONBOARD_SCRIPT_PATH" <<EOF
+param(
+  [Parameter(Mandatory = \$true)][string]\$LogPath,
+  [Parameter(Mandatory = \$true)][string]\$DonePath
+)
+
+\$ErrorActionPreference = 'Stop'
+\$PSNativeCommandUseErrorActionPreference = \$false
+
+try {
+  \$openclaw = Join-Path \$env:APPDATA 'npm\openclaw.cmd'
+  \$cmdLine = ('"{0}" onboard --non-interactive --mode local --auth-choice ${AUTH_CHOICE} --secret-input-mode ref --gateway-port 18789 --gateway-bind loopback --install-daemon --skip-skills --accept-risk --json > "{1}" 2>&1' -f \$openclaw, \$LogPath)
+  & cmd.exe /d /s /c \$cmdLine
+  Set-Content -Path \$DonePath -Value ([string]\$LASTEXITCODE)
+} catch {
+  if (Test-Path \$LogPath) {
+    Add-Content -Path \$LogPath -Value (\$_ | Out-String)
+  } else {
+    (\$_ | Out-String) | Set-Content -Path \$LogPath
+  }
+  Set-Content -Path \$DonePath -Value '1'
+}
+EOF
+}
+
 run_ref_onboard() {
-  local openai_key_q runner_name log_name done_name done_status
-  openai_key_q="$(ps_single_quote "$OPENAI_API_KEY_VALUE")"
+  local api_key_env_q api_key_value_q script_url
+  local runner_name log_name done_name done_status launcher_state
+  local poll_rc state_rc log_rc start_seconds poll_deadline startup_checked
+  api_key_env_q="$(ps_single_quote "$API_KEY_ENV")"
+  api_key_value_q="$(ps_single_quote "$API_KEY_VALUE")"
+  write_onboard_runner_script
+  script_url="http://$HOST_IP:$HOST_PORT/$(basename "$WINDOWS_ONBOARD_SCRIPT_PATH")"
   runner_name="openclaw-onboard-$RANDOM-$RANDOM.ps1"
   log_name="openclaw-onboard-$RANDOM-$RANDOM.log"
   done_name="openclaw-onboard-$RANDOM-$RANDOM.done"
+  start_seconds="$SECONDS"
+  poll_deadline=$((SECONDS + TIMEOUT_ONBOARD_S + 60))
+  startup_checked=0
+
+  guest_powershell "$(cat <<EOF
+\$runner = Join-Path \$env:TEMP '$runner_name'
+\$log = Join-Path \$env:TEMP '$log_name'
+\$done = Join-Path \$env:TEMP '$done_name'
+Remove-Item \$runner, \$log, \$done -Force -ErrorAction SilentlyContinue
+Set-Item -Path ('Env:' + '${api_key_env_q}') -Value '${api_key_value_q}'
+curl.exe -fsSL '$script_url' -o \$runner
+Start-Process powershell.exe -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', \$runner, '-LogPath', \$log, '-DonePath', \$done) -WindowStyle Hidden | Out-Null
+EOF
+)"
+
+  while :; do
+    set +e
+    done_status="$(
+      guest_powershell_poll 20 "\$done = Join-Path \$env:TEMP '$done_name'; if (Test-Path \$done) { (Get-Content \$done -Raw).Trim() }"
+    )"
+    poll_rc=$?
+    set -e
+    done_status="${done_status//$'\r'/}"
+    if [[ $poll_rc -ne 0 ]]; then
+      warn "windows onboard helper poll failed; retrying"
+      if (( SECONDS >= poll_deadline )); then
+        warn "windows onboard helper timed out while polling done file"
+        return 1
+      fi
+      sleep 2
+      continue
+    fi
+    if [[ -n "$done_status" ]]; then
+      set +e
+      guest_powershell_poll 20 "\$log = Join-Path \$env:TEMP '$log_name'; if (Test-Path \$log) { Get-Content \$log }"
+      log_rc=$?
+      set -e
+      if [[ $log_rc -ne 0 ]]; then
+        warn "windows onboard helper log drain failed after completion"
+      fi
+      [[ "$done_status" == "0" ]]
+      return $?
+    fi
+    if [[ "$startup_checked" -eq 0 && $((SECONDS - start_seconds)) -ge 20 ]]; then
+      set +e
+      launcher_state="$(
+        guest_powershell_poll 20 "\$runner = Join-Path \$env:TEMP '$runner_name'; \$log = Join-Path \$env:TEMP '$log_name'; \$done = Join-Path \$env:TEMP '$done_name'; 'runner=' + (Test-Path \$runner) + ' log=' + (Test-Path \$log) + ' done=' + (Test-Path \$done)"
+      )"
+      state_rc=$?
+      set -e
+      launcher_state="${launcher_state//$'\r'/}"
+      startup_checked=1
+      if [[ $state_rc -eq 0 && "$launcher_state" == *"runner=False"* && "$launcher_state" == *"log=False"* && "$launcher_state" == *"done=False"* ]]; then
+        warn "windows onboard helper failed to materialize guest files"
+        return 1
+      fi
+    fi
+    if (( SECONDS >= poll_deadline )); then
+      set +e
+      guest_powershell_poll 20 "\$log = Join-Path \$env:TEMP '$log_name'; if (Test-Path \$log) { Get-Content \$log }"
+      log_rc=$?
+      set -e
+      if [[ $log_rc -ne 0 ]]; then
+        warn "windows onboard helper log drain failed after timeout"
+      fi
+      warn "windows onboard helper timed out waiting for done file"
+      return 1
+    fi
+    sleep 2
+  done
+}
+
+verify_gateway() {
+  guest_run_openclaw "" "" gateway status --deep --require-rpc
+}
+
+restart_gateway() {
+  local runner_name log_name done_name done_status launcher_state
+  local poll_rc state_rc log_rc start_seconds poll_deadline startup_checked
+  runner_name="openclaw-gateway-restart-$RANDOM-$RANDOM.ps1"
+  log_name="openclaw-gateway-restart-$RANDOM-$RANDOM.log"
+  done_name="openclaw-gateway-restart-$RANDOM-$RANDOM.done"
+  start_seconds="$SECONDS"
+  poll_deadline=$((SECONDS + TIMEOUT_GATEWAY_S + 60))
+  startup_checked=0
 
   guest_powershell "$(cat <<EOF
 \$runner = Join-Path \$env:TEMP '$runner_name'
@@ -721,11 +989,9 @@ Remove-Item \$runner, \$log, \$done -Force -ErrorAction SilentlyContinue
 \$PSNativeCommandUseErrorActionPreference = \$false
 \$log = Join-Path \$env:TEMP '$log_name'
 \$done = Join-Path \$env:TEMP '$done_name'
-\$env:OPENAI_API_KEY = '$openai_key_q'
 try {
   \$openclaw = Join-Path \$env:APPDATA 'npm\openclaw.cmd'
-  \$cmdLine = ('"{0}" onboard --non-interactive --mode local --auth-choice openai-api-key --secret-input-mode ref --gateway-port 18789 --gateway-bind loopback --install-daemon --skip-skills --accept-risk --json > "{1}" 2>&1' -f \$openclaw, \$log)
-  & cmd.exe /d /s /c \$cmdLine
+  & \$openclaw gateway restart *>&1 | Tee-Object -FilePath \$log -Append | Out-Null
   Set-Content -Path \$done -Value ([string]\$LASTEXITCODE)
 } catch {
   if (Test-Path \$log) {
@@ -741,21 +1007,60 @@ EOF
 )"
 
   while :; do
+    set +e
     done_status="$(
-      guest_powershell "\$done = Join-Path \$env:TEMP '$done_name'; if (Test-Path \$done) { (Get-Content \$done -Raw).Trim() }"
+      guest_powershell_poll 20 "\$done = Join-Path \$env:TEMP '$done_name'; if (Test-Path \$done) { (Get-Content \$done -Raw).Trim() }"
     )"
+    poll_rc=$?
+    set -e
     done_status="${done_status//$'\r'/}"
+    if [[ $poll_rc -ne 0 ]]; then
+      warn "windows gateway restart helper poll failed; retrying"
+      if (( SECONDS >= poll_deadline )); then
+        warn "windows gateway restart helper timed out while polling done file"
+        return 1
+      fi
+      sleep 2
+      continue
+    fi
     if [[ -n "$done_status" ]]; then
-      guest_powershell "\$log = Join-Path \$env:TEMP '$log_name'; if (Test-Path \$log) { Get-Content \$log }"
+      set +e
+      guest_powershell_poll 20 "\$log = Join-Path \$env:TEMP '$log_name'; if (Test-Path \$log) { Get-Content \$log }"
+      log_rc=$?
+      set -e
+      if [[ $log_rc -ne 0 ]]; then
+        warn "windows gateway restart helper log drain failed after completion"
+      fi
       [[ "$done_status" == "0" ]]
       return $?
     fi
+    if [[ "$startup_checked" -eq 0 && $((SECONDS - start_seconds)) -ge 20 ]]; then
+      set +e
+      launcher_state="$(
+        guest_powershell_poll 20 "\$runner = Join-Path \$env:TEMP '$runner_name'; \$log = Join-Path \$env:TEMP '$log_name'; \$done = Join-Path \$env:TEMP '$done_name'; 'runner=' + (Test-Path \$runner) + ' log=' + (Test-Path \$log) + ' done=' + (Test-Path \$done)"
+      )"
+      state_rc=$?
+      set -e
+      launcher_state="${launcher_state//$'\r'/}"
+      startup_checked=1
+      if [[ $state_rc -eq 0 && "$launcher_state" == *"runner=False"* && "$launcher_state" == *"log=False"* && "$launcher_state" == *"done=False"* ]]; then
+        warn "windows gateway restart helper failed to materialize guest files"
+        return 1
+      fi
+    fi
+    if (( SECONDS >= poll_deadline )); then
+      set +e
+      guest_powershell_poll 20 "\$log = Join-Path \$env:TEMP '$log_name'; if (Test-Path \$log) { Get-Content \$log }"
+      log_rc=$?
+      set -e
+      if [[ $log_rc -ne 0 ]]; then
+        warn "windows gateway restart helper log drain failed after timeout"
+      fi
+      warn "windows gateway restart helper timed out waiting for done file"
+      return 1
+    fi
     sleep 2
   done
-}
-
-verify_gateway() {
-  guest_run_openclaw "" "" gateway status --deep --require-rpc
 }
 
 show_gateway_status_compat() {
@@ -767,7 +1072,9 @@ show_gateway_status_compat() {
 }
 
 verify_turn() {
-  guest_run_openclaw "" "" agent --agent main --message "Reply with exact ASCII text OK only." --json
+  guest_run_openclaw "" "" models set "$MODEL_ID"
+  guest_run_openclaw "$API_KEY_ENV" "$API_KEY_VALUE" \
+    agent --agent main --message "Reply with exact ASCII text OK only." --json
 }
 
 capture_latest_ref_failure() {
@@ -823,6 +1130,7 @@ run_upgrade_lane() {
   phase_run "upgrade.install-main" "$TIMEOUT_INSTALL_S" install_main_tgz "$host_ip" "openclaw-main-upgrade.tgz" || return $?
   UPGRADE_MAIN_VERSION="$(extract_last_version "$(phase_log_path upgrade.install-main)")"
   phase_run "upgrade.verify-main-version" "$TIMEOUT_VERIFY_S" verify_target_version || return $?
+  phase_run "upgrade.gateway-restart" "$TIMEOUT_GATEWAY_S" restart_gateway || return $?
   phase_run "upgrade.onboard-ref" "$TIMEOUT_ONBOARD_S" run_ref_onboard || return $?
   phase_run "upgrade.gateway-status" "$TIMEOUT_GATEWAY_S" verify_gateway || return $?
   UPGRADE_GATEWAY_STATUS="pass"
@@ -830,13 +1138,16 @@ run_upgrade_lane() {
   UPGRADE_AGENT_STATUS="pass"
 }
 
-SNAPSHOT_ID="$(resolve_snapshot_id)"
+IFS=$'\t' read -r SNAPSHOT_ID SNAPSHOT_STATE SNAPSHOT_NAME <<<"$(resolve_snapshot_info)"
+[[ -n "$SNAPSHOT_ID" ]] || die "failed to resolve snapshot id"
+[[ -n "$SNAPSHOT_NAME" ]] || SNAPSHOT_NAME="$SNAPSHOT_HINT"
 LATEST_VERSION="$(resolve_latest_version)"
 HOST_IP="$(resolve_host_ip)"
 HOST_PORT="$(resolve_host_port)"
 
 say "VM: $VM_NAME"
 say "Snapshot hint: $SNAPSHOT_HINT"
+say "Resolved snapshot: $SNAPSHOT_NAME [$SNAPSHOT_STATE]"
 say "Latest npm version: $LATEST_VERSION"
 say "Current head: $(git rev-parse --short HEAD)"
 say "Run logs: $RUN_DIR"
@@ -878,6 +1189,7 @@ SUMMARY_JSON_PATH="$(
   SUMMARY_SNAPSHOT_HINT="$SNAPSHOT_HINT" \
   SUMMARY_SNAPSHOT_ID="$SNAPSHOT_ID" \
   SUMMARY_MODE="$MODE" \
+  SUMMARY_PROVIDER="$PROVIDER" \
   SUMMARY_LATEST_VERSION="$LATEST_VERSION" \
   SUMMARY_INSTALL_VERSION="$INSTALL_VERSION" \
   SUMMARY_TARGET_PACKAGE_SPEC="$TARGET_PACKAGE_SPEC" \

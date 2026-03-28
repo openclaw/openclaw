@@ -1,47 +1,51 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
-const logDebugMock = vi.hoisted(() => vi.fn());
-
-vi.mock("../logger.js", () => ({
-  logDebug: (...args: unknown[]) => logDebugMock(...args),
-}));
-
-const { ignoreCiaoCancellationRejection } = await import("./bonjour-ciao.js");
+const { classifyCiaoUnhandledRejection, ignoreCiaoUnhandledRejection } =
+  await import("./bonjour-ciao.js");
 
 describe("bonjour-ciao", () => {
-  it("ignores and logs ciao announcement cancellation rejections", () => {
+  it("classifies ciao cancellation rejections separately from side effects", () => {
+    expect(classifyCiaoUnhandledRejection(new Error("CIAO PROBING CANCELLED"))).toEqual({
+      kind: "cancellation",
+      formatted: "CIAO PROBING CANCELLED",
+    });
+  });
+
+  it("classifies ciao interface assertions separately from side effects", () => {
     expect(
-      ignoreCiaoCancellationRejection(new Error("Ciao announcement cancelled by shutdown")),
-    ).toBe(true);
-    expect(logDebugMock).toHaveBeenCalledWith(
-      expect.stringContaining("ignoring unhandled ciao rejection"),
-    );
+      classifyCiaoUnhandledRejection(
+        new Error("Reached illegal state! IPV4 address change from defined to undefined!"),
+      ),
+    ).toEqual({
+      kind: "interface-assertion",
+      formatted: "Reached illegal state! IPV4 address change from defined to undefined!",
+    });
   });
 
-  it("ignores and logs ciao probing cancellation rejections", () => {
-    logDebugMock.mockReset();
-
-    expect(ignoreCiaoCancellationRejection(new Error("CIAO PROBING CANCELLED"))).toBe(true);
-    expect(logDebugMock).toHaveBeenCalledWith(
-      expect.stringContaining("ignoring unhandled ciao rejection"),
-    );
-  });
-
-  it("ignores lower-case string cancellation reasons too", () => {
-    logDebugMock.mockReset();
-
-    expect(ignoreCiaoCancellationRejection("ciao announcement cancelled during cleanup")).toBe(
+  it("suppresses ciao announcement cancellation rejections", () => {
+    expect(ignoreCiaoUnhandledRejection(new Error("Ciao announcement cancelled by shutdown"))).toBe(
       true,
     );
-    expect(logDebugMock).toHaveBeenCalledWith(
-      expect.stringContaining("ignoring unhandled ciao rejection"),
+  });
+
+  it("suppresses ciao probing cancellation rejections", () => {
+    expect(ignoreCiaoUnhandledRejection(new Error("CIAO PROBING CANCELLED"))).toBe(true);
+  });
+
+  it("suppresses lower-case string cancellation reasons too", () => {
+    expect(ignoreCiaoUnhandledRejection("ciao announcement cancelled during cleanup")).toBe(true);
+  });
+
+  it("suppresses ciao interface assertion rejections as non-fatal", () => {
+    const error = Object.assign(
+      new Error("Reached illegal state! IPV4 address change from defined to undefined!"),
+      { name: "AssertionError" },
     );
+
+    expect(ignoreCiaoUnhandledRejection(error)).toBe(true);
   });
 
   it("keeps unrelated rejections visible", () => {
-    logDebugMock.mockReset();
-
-    expect(ignoreCiaoCancellationRejection(new Error("boom"))).toBe(false);
-    expect(logDebugMock).not.toHaveBeenCalled();
+    expect(ignoreCiaoUnhandledRejection(new Error("boom"))).toBe(false);
   });
 });

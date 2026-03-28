@@ -25,10 +25,10 @@ OpenClaw uses the pi SDK to embed an AI coding agent into its messaging gateway 
 
 ```json
 {
-  "@mariozechner/pi-agent-core": "0.49.3",
-  "@mariozechner/pi-ai": "0.49.3",
-  "@mariozechner/pi-coding-agent": "0.49.3",
-  "@mariozechner/pi-tui": "0.49.3"
+  "@mariozechner/pi-agent-core": "0.61.1",
+  "@mariozechner/pi-ai": "0.61.1",
+  "@mariozechner/pi-coding-agent": "0.61.1",
+  "@mariozechner/pi-tui": "0.61.1"
 }
 ```
 
@@ -119,18 +119,23 @@ src/agents/
 │   ├── browser-tool.ts
 │   ├── canvas-tool.ts
 │   ├── cron-tool.ts
-│   ├── discord-actions*.ts
 │   ├── gateway-tool.ts
 │   ├── image-tool.ts
 │   ├── message-tool.ts
 │   ├── nodes-tool.ts
 │   ├── session*.ts
-│   ├── slack-actions.ts
-│   ├── telegram-actions.ts
 │   ├── web-*.ts
-│   └── whatsapp-actions.ts
+│   └── ...
 └── ...
 ```
+
+Channel-specific message action runtimes now live in the plugin-owned extension
+directories instead of under `src/agents/tools`, for example:
+
+- `extensions/discord/src/actions/runtime*.ts`
+- `extensions/slack/src/action-runtime.ts`
+- `extensions/telegram/src/action-runtime.ts`
+- `extensions/whatsapp/src/action-runtime.ts`
 
 ## Core Integration Flow
 

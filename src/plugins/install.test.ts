@@ -1,10 +1,9 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import * as tar from "tar";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { safePathSegmentHashed } from "../infra/install-safe-path.js";
-import * as skillScanner from "../security/skill-scanner.js";
+import { runCommandWithTimeout } from "../process/exec.js";
 import {
   expectSingleNpmInstallIgnoreScriptsCall,
   expectSingleNpmPackIgnoreScriptsCall,
@@ -14,18 +13,38 @@ import {
   expectIntegrityDriftRejected,
   mockNpmPackMetadataResult,
 } from "../test-utils/npm-spec-install-test-helpers.js";
+import * as installSecurityScan from "./install-security-scan.js";
+import {
+  installPluginFromArchive,
+  installPluginFromDir,
+  installPluginFromNpmSpec,
+  installPluginFromPath,
+  PLUGIN_INSTALL_ERROR_CODE,
+  resolvePluginInstallDir,
+} from "./install.js";
 
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: vi.fn(),
 }));
 
-let installPluginFromArchive: typeof import("./install.js").installPluginFromArchive;
-let installPluginFromDir: typeof import("./install.js").installPluginFromDir;
-let installPluginFromNpmSpec: typeof import("./install.js").installPluginFromNpmSpec;
-let installPluginFromPath: typeof import("./install.js").installPluginFromPath;
-let PLUGIN_INSTALL_ERROR_CODE: typeof import("./install.js").PLUGIN_INSTALL_ERROR_CODE;
-let resolvePluginInstallDir: typeof import("./install.js").resolvePluginInstallDir;
-let runCommandWithTimeout: typeof import("../process/exec.js").runCommandWithTimeout;
+const resolveCompatibilityHostVersionMock = vi.fn();
+
+vi.mock("./install.runtime.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("./install.runtime.js")>("./install.runtime.js");
+  return {
+    ...actual,
+    resolveCompatibilityHostVersion: (...args: unknown[]) =>
+      resolveCompatibilityHostVersionMock(...args),
+    scanBundleInstallSource: (
+      ...args: Parameters<typeof installSecurityScan.scanBundleInstallSource>
+    ) => installSecurityScan.scanBundleInstallSource(...args),
+    scanPackageInstallSource: (
+      ...args: Parameters<typeof installSecurityScan.scanPackageInstallSource>
+    ) => installSecurityScan.scanPackageInstallSource(...args),
+  };
+});
+
 let suiteTempRoot = "";
 let suiteFixtureRoot = "";
 let tempDirCounter = 0;
@@ -67,7 +86,9 @@ function ensureSuiteTempRoot() {
   if (suiteTempRoot) {
     return suiteTempRoot;
   }
-  suiteTempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-install-"));
+  const bundleTempRoot = path.join(process.cwd(), ".tmp");
+  fs.mkdirSync(bundleTempRoot, { recursive: true });
+  suiteTempRoot = fs.mkdtempSync(path.join(bundleTempRoot, "openclaw-plugin-install-"));
   return suiteTempRoot;
 }
 
@@ -91,20 +112,23 @@ async function packToArchive({
   pkgDir,
   outDir,
   outName,
+  flatRoot,
 }: {
   pkgDir: string;
   outDir: string;
   outName: string;
+  flatRoot?: boolean;
 }) {
   const dest = path.join(outDir, outName);
   fs.rmSync(dest, { force: true });
+  const entries = flatRoot ? fs.readdirSync(pkgDir) : [path.basename(pkgDir)];
   await tar.c(
     {
       gzip: true,
       file: dest,
-      cwd: path.dirname(pkgDir),
+      cwd: flatRoot ? pkgDir : path.dirname(pkgDir),
     },
-    [path.basename(pkgDir)],
+    entries,
   );
   return dest;
 }
@@ -238,6 +262,55 @@ function setupManifestInstallFixture(params: { manifestId: string }) {
   return { pluginDir, extensionsDir: path.join(stateDir, "extensions") };
 }
 
+function setPluginMinHostVersion(pluginDir: string, minHostVersion: string) {
+  const packageJsonPath = path.join(pluginDir, "package.json");
+  const manifest = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8")) as {
+    openclaw?: { install?: Record<string, unknown> };
+  };
+  manifest.openclaw = {
+    ...manifest.openclaw,
+    install: {
+      ...manifest.openclaw?.install,
+      minHostVersion,
+    },
+  };
+  fs.writeFileSync(packageJsonPath, JSON.stringify(manifest), "utf-8");
+}
+
+function expectFailedInstallResult<
+  TResult extends { ok: boolean; code?: string } & Partial<{ error: string }>,
+>(params: { result: TResult; code?: string; messageIncludes: readonly string[] }) {
+  expect(params.result.ok).toBe(false);
+  if (params.result.ok) {
+    throw new Error("expected install failure");
+  }
+  if (params.code) {
+    expect(params.result.code).toBe(params.code);
+  }
+  expect(params.result.error).toBeDefined();
+  params.messageIncludes.forEach((fragment) => {
+    expect(params.result.error).toContain(fragment);
+  });
+  return params.result;
+}
+
+function mockSuccessfulCommandRun(run: ReturnType<typeof vi.mocked<typeof runCommandWithTimeout>>) {
+  run.mockResolvedValue({
+    code: 0,
+    stdout: "",
+    stderr: "",
+    signal: null,
+    killed: false,
+    termination: "exit",
+  });
+}
+
+function expectInstalledFiles(targetDir: string, expectedFiles: readonly string[]) {
+  expectedFiles.forEach((relativePath) => {
+    expect(fs.existsSync(path.join(targetDir, relativePath))).toBe(true);
+  });
+}
+
 function setupBundleInstallFixture(params: {
   bundleFormat: "codex" | "claude" | "cursor";
   name: string;
@@ -364,12 +437,14 @@ async function installArchivePackageAndReturnResult(params: {
   packageJson: Record<string, unknown>;
   outName: string;
   withDistIndex?: boolean;
+  flatRoot?: boolean;
 }) {
   const stateDir = makeTempDir();
   const archivePath = await ensureDynamicArchiveTemplate({
     outName: params.outName,
     packageJson: params.packageJson,
     withDistIndex: params.withDistIndex === true,
+    flatRoot: params.flatRoot === true,
   });
 
   const extensionsDir = path.join(stateDir, "extensions");
@@ -383,10 +458,12 @@ async function installArchivePackageAndReturnResult(params: {
 function buildDynamicArchiveTemplateKey(params: {
   packageJson: Record<string, unknown>;
   withDistIndex: boolean;
+  flatRoot: boolean;
 }): string {
   return JSON.stringify({
     packageJson: params.packageJson,
     withDistIndex: params.withDistIndex,
+    flatRoot: params.flatRoot,
   });
 }
 
@@ -394,17 +471,19 @@ async function ensureDynamicArchiveTemplate(params: {
   packageJson: Record<string, unknown>;
   outName: string;
   withDistIndex: boolean;
+  flatRoot?: boolean;
 }): Promise<string> {
   const templateKey = buildDynamicArchiveTemplateKey({
     packageJson: params.packageJson,
     withDistIndex: params.withDistIndex,
+    flatRoot: params.flatRoot === true,
   });
   const cachedPath = dynamicArchiveTemplatePathCache.get(templateKey);
   if (cachedPath) {
     return cachedPath;
   }
   const templateDir = makeTempDir();
-  const pkgDir = path.join(templateDir, "package");
+  const pkgDir = params.flatRoot ? templateDir : path.join(templateDir, "package");
   fs.mkdirSync(pkgDir, { recursive: true });
   if (params.withDistIndex) {
     fs.mkdirSync(path.join(pkgDir, "dist"), { recursive: true });
@@ -415,6 +494,7 @@ async function ensureDynamicArchiveTemplate(params: {
     pkgDir,
     outDir: ensureSuiteFixtureRoot(),
     outName: params.outName,
+    flatRoot: params.flatRoot,
   });
   dynamicArchiveTemplatePathCache.set(templateKey, archivePath);
   return archivePath;
@@ -433,16 +513,6 @@ afterAll(() => {
 });
 
 beforeAll(async () => {
-  ({
-    installPluginFromArchive,
-    installPluginFromDir,
-    installPluginFromNpmSpec,
-    installPluginFromPath,
-    PLUGIN_INSTALL_ERROR_CODE,
-    resolvePluginInstallDir,
-  } = await import("./install.js"));
-  ({ runCommandWithTimeout } = await import("../process/exec.js"));
-
   installPluginFromDirTemplateDir = path.join(
     ensureSuiteFixtureRoot(),
     "install-from-dir-template",
@@ -489,54 +559,67 @@ beforeAll(async () => {
     "utf-8",
   );
 
-  for (const preset of DYNAMIC_ARCHIVE_TEMPLATE_PRESETS) {
-    await ensureDynamicArchiveTemplate({
-      packageJson: preset.packageJson,
-      outName: preset.outName,
-      withDistIndex: preset.withDistIndex,
-    });
-  }
+  await Promise.all(
+    DYNAMIC_ARCHIVE_TEMPLATE_PRESETS.map((preset) =>
+      ensureDynamicArchiveTemplate({
+        packageJson: preset.packageJson,
+        outName: preset.outName,
+        withDistIndex: preset.withDistIndex,
+        flatRoot: false,
+      }),
+    ),
+  );
 });
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.unstubAllEnvs();
+  resolveCompatibilityHostVersionMock.mockReturnValue("2026.3.28");
 });
 
 describe("installPluginFromArchive", () => {
-  it("installs into ~/.openclaw/extensions and preserves scoped package ids", async () => {
-    const { stateDir, archivePath, extensionsDir } = await setupVoiceCallArchiveInstall({
-      outName: "plugin.tgz",
-      version: "0.0.1",
+  it("installs scoped archives, rejects duplicate installs, and allows updates", async () => {
+    const stateDir = makeTempDir();
+    const archiveV1 = getArchiveFixturePath({
+      cacheKey: "voice-call:0.0.1",
+      outName: "voice-call-0.0.1.tgz",
+      buffer: VOICE_CALL_ARCHIVE_V1_BUFFER,
+    });
+    const archiveV2 = getArchiveFixturePath({
+      cacheKey: "voice-call:0.0.2",
+      outName: "voice-call-0.0.2.tgz",
+      buffer: VOICE_CALL_ARCHIVE_V2_BUFFER,
     });
 
-    const result = await installPluginFromArchive({
-      archivePath,
-      extensionsDir,
-    });
-    expectSuccessfulArchiveInstall({ result, stateDir, pluginId: "@openclaw/voice-call" });
-  });
-
-  it("rejects installing when plugin already exists", async () => {
-    const { archivePath, extensionsDir } = await setupVoiceCallArchiveInstall({
-      outName: "plugin.tgz",
-      version: "0.0.1",
-    });
-
+    const extensionsDir = path.join(stateDir, "extensions");
     const first = await installPluginFromArchive({
-      archivePath,
+      archivePath: archiveV1,
       extensionsDir,
     });
-    const second = await installPluginFromArchive({
-      archivePath,
-      extensionsDir,
-    });
+    expectSuccessfulArchiveInstall({ result: first, stateDir, pluginId: "@openclaw/voice-call" });
 
-    expect(first.ok).toBe(true);
-    expect(second.ok).toBe(false);
-    if (second.ok) {
+    const duplicate = await installPluginFromArchive({
+      archivePath: archiveV1,
+      extensionsDir,
+    });
+    expect(duplicate.ok).toBe(false);
+    if (!duplicate.ok) {
+      expect(duplicate.error).toContain("already exists");
+    }
+
+    const updated = await installPluginFromArchive({
+      archivePath: archiveV2,
+      extensionsDir,
+      mode: "update",
+    });
+    expect(updated.ok).toBe(true);
+    if (!updated.ok) {
       return;
     }
-    expect(second.error).toContain("already exists");
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(updated.targetDir, "package.json"), "utf-8"),
+    ) as { version?: string };
+    expect(manifest.version).toBe("0.0.2");
   });
 
   it("installs from a zip archive", async () => {
@@ -555,53 +638,33 @@ describe("installPluginFromArchive", () => {
     expectSuccessfulArchiveInstall({ result, stateDir, pluginId: "@openclaw/zipper" });
   });
 
-  it("allows updates when mode is update", async () => {
-    const stateDir = makeTempDir();
-    const archiveV1 = getArchiveFixturePath({
-      cacheKey: "voice-call:0.0.1",
-      outName: "voice-call-0.0.1.tgz",
-      buffer: VOICE_CALL_ARCHIVE_V1_BUFFER,
-    });
-    const archiveV2 = getArchiveFixturePath({
-      cacheKey: "voice-call:0.0.2",
-      outName: "voice-call-0.0.2.tgz",
-      buffer: VOICE_CALL_ARCHIVE_V2_BUFFER,
-    });
-
-    const extensionsDir = path.join(stateDir, "extensions");
-    const first = await installPluginFromArchive({
-      archivePath: archiveV1,
-      extensionsDir,
-    });
-    const second = await installPluginFromArchive({
-      archivePath: archiveV2,
-      extensionsDir,
-      mode: "update",
+  it("installs flat-root plugin archives from ClawHub-style downloads", async () => {
+    const result = await installArchivePackageAndReturnResult({
+      packageJson: {
+        name: "@openclaw/rootless",
+        version: "0.0.1",
+        openclaw: { extensions: ["./dist/index.js"] },
+      },
+      outName: "rootless-plugin.tgz",
+      withDistIndex: true,
+      flatRoot: true,
     });
 
-    expect(first.ok).toBe(true);
-    expect(second.ok).toBe(true);
-    if (!second.ok) {
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
       return;
     }
-    const manifest = JSON.parse(
-      fs.readFileSync(path.join(second.targetDir, "package.json"), "utf-8"),
-    ) as { version?: string };
-    expect(manifest.version).toBe("0.0.2");
+    expect(fs.existsSync(path.join(result.targetDir, "package.json"))).toBe(true);
+    expect(fs.existsSync(path.join(result.targetDir, "dist", "index.js"))).toBe(true);
   });
 
-  it("rejects traversal-like plugin names", async () => {
-    await expectArchiveInstallReservedSegmentRejection({
-      packageName: "@evil/..",
-      outName: "traversal.tgz",
-    });
-  });
-
-  it("rejects reserved plugin ids", async () => {
-    await expectArchiveInstallReservedSegmentRejection({
-      packageName: "@evil/.",
-      outName: "reserved.tgz",
-    });
+  it("rejects reserved archive package ids", async () => {
+    for (const params of [
+      { packageName: "@evil/..", outName: "traversal.tgz" },
+      { packageName: "@evil/.", outName: "reserved.tgz" },
+    ]) {
+      await expectArchiveInstallReservedSegmentRejection(params);
+    }
   });
 
   it("rejects packages without openclaw.extensions", async () => {
@@ -700,7 +763,7 @@ describe("installPluginFromArchive", () => {
 
   it("continues install when scanner throws", async () => {
     const scanSpy = vi
-      .spyOn(skillScanner, "scanDirectoryWithSummary")
+      .spyOn(installSecurityScan, "scanPackageInstallSource")
       .mockRejectedValueOnce(new Error("scanner exploded"));
 
     const { pluginDir, extensionsDir } = setupPluginInstallDirs();
@@ -728,13 +791,14 @@ describe("installPluginFromDir", () => {
     result: Awaited<ReturnType<typeof installPluginFromDir>>,
     extensionsDir: string,
     pluginId: string,
+    name?: string,
   ) {
-    expect(result.ok).toBe(true);
+    expect(result.ok, name).toBe(true);
     if (!result.ok) {
       return;
     }
-    expect(result.pluginId).toBe(pluginId);
-    expect(result.targetDir).toBe(resolvePluginInstallDir(pluginId, extensionsDir));
+    expect(result.pluginId, name).toBe(pluginId);
+    expect(result.targetDir, name).toBe(resolvePluginInstallDir(pluginId, extensionsDir));
   }
 
   it("uses --ignore-scripts for dependency install", async () => {
@@ -760,14 +824,7 @@ describe("installPluginFromDir", () => {
     });
 
     const run = vi.mocked(runCommandWithTimeout);
-    run.mockResolvedValue({
-      code: 0,
-      stdout: "",
-      stderr: "",
-      signal: null,
-      killed: false,
-      termination: "exit",
-    });
+    mockSuccessfulCommandRun(run);
 
     const res = await installPluginFromDir({
       dirPath: pluginDir,
@@ -786,6 +843,50 @@ describe("installPluginFromDir", () => {
     expect(manifest.devDependencies?.openclaw).toBeUndefined();
     expect(manifest.devDependencies?.vitest).toBe("^3.0.0");
   });
+
+  it.each([
+    {
+      name: "rejects plugins whose minHostVersion is newer than the current host",
+      hostVersion: "2026.3.21",
+      minHostVersion: ">=2026.3.22",
+      expectedCode: PLUGIN_INSTALL_ERROR_CODE.INCOMPATIBLE_HOST_VERSION,
+      expectedMessageIncludes: ["requires OpenClaw >=2026.3.22, but this host is 2026.3.21"],
+    },
+    {
+      name: "rejects plugins with invalid minHostVersion metadata",
+      minHostVersion: "2026.3.22",
+      expectedCode: PLUGIN_INSTALL_ERROR_CODE.INVALID_MIN_HOST_VERSION,
+      expectedMessageIncludes: ["invalid package.json openclaw.install.minHostVersion"],
+    },
+    {
+      name: "reports unknown host versions distinctly for minHostVersion-gated plugins",
+      hostVersion: "unknown",
+      minHostVersion: ">=2026.3.22",
+      expectedCode: PLUGIN_INSTALL_ERROR_CODE.UNKNOWN_HOST_VERSION,
+      expectedMessageIncludes: ["host version could not be determined"],
+    },
+  ] as const)(
+    "$name",
+    async ({ hostVersion, minHostVersion, expectedCode, expectedMessageIncludes }) => {
+      if (hostVersion) {
+        resolveCompatibilityHostVersionMock.mockReturnValueOnce(hostVersion);
+      }
+      const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture();
+      setPluginMinHostVersion(pluginDir, minHostVersion);
+
+      const result = await installPluginFromDir({
+        dirPath: pluginDir,
+        extensionsDir,
+      });
+
+      expectFailedInstallResult({
+        result,
+        code: expectedCode,
+        messageIncludes: expectedMessageIncludes,
+      });
+      expect(vi.mocked(runCommandWithTimeout)).not.toHaveBeenCalled();
+    },
+  );
 
   it("uses openclaw.plugin.json id as install key when it differs from package name", async () => {
     const { pluginDir, extensionsDir } = setupManifestInstallFixture({
@@ -809,63 +910,59 @@ describe("installPluginFromDir", () => {
     ).toBe(true);
   });
 
-  it("preserves scoped manifest ids as install keys", async () => {
-    const { pluginDir, extensionsDir } = setupManifestInstallFixture({
-      manifestId: "@team/memory-cognee",
-    });
-
-    const res = await installPluginFromDir({
-      dirPath: pluginDir,
-      extensionsDir,
+  it.each([
+    {
+      name: "manifest id wins for scoped plugin ids",
+      setup: () => setupManifestInstallFixture({ manifestId: "@team/memory-cognee" }),
       expectedPluginId: "@team/memory-cognee",
-      logger: { info: () => {}, warn: () => {} },
-    });
+      install: (pluginDir: string, extensionsDir: string) =>
+        installPluginFromDir({
+          dirPath: pluginDir,
+          extensionsDir,
+          expectedPluginId: "@team/memory-cognee",
+          logger: { info: () => {}, warn: () => {} },
+        }),
+    },
+    {
+      name: "package name keeps scoped plugin id by default",
+      setup: () => setupInstallPluginFromDirFixture(),
+      expectedPluginId: "@openclaw/test-plugin",
+      install: (pluginDir: string, extensionsDir: string) =>
+        installPluginFromDir({
+          dirPath: pluginDir,
+          extensionsDir,
+        }),
+    },
+    {
+      name: "unscoped expectedPluginId resolves to scoped install id",
+      setup: () => setupInstallPluginFromDirFixture(),
+      expectedPluginId: "@openclaw/test-plugin",
+      install: (pluginDir: string, extensionsDir: string) =>
+        installPluginFromDir({
+          dirPath: pluginDir,
+          extensionsDir,
+          expectedPluginId: "test-plugin",
+        }),
+    },
+  ] as const)(
+    "keeps scoped install ids aligned across manifest and package-name cases: $name",
+    async (scenario) => {
+      const { pluginDir, extensionsDir } = scenario.setup();
+      const res = await scenario.install(pluginDir, extensionsDir);
+      expectInstalledWithPluginId(res, extensionsDir, scenario.expectedPluginId, scenario.name);
+    },
+  );
 
-    expectInstalledWithPluginId(res, extensionsDir, "@team/memory-cognee");
-  });
+  it.each(["@", "@/name", "team/name"] as const)(
+    "keeps scoped install-dir validation aligned: %s",
+    (invalidId) => {
+      expect(() => resolvePluginInstallDir(invalidId), invalidId).toThrow(
+        "invalid plugin name: scoped ids must use @scope/name format",
+      );
+    },
+  );
 
-  it("preserves scoped package names when no plugin manifest id is present", async () => {
-    const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture();
-
-    const res = await installPluginFromDir({
-      dirPath: pluginDir,
-      extensionsDir,
-    });
-
-    expectInstalledWithPluginId(res, extensionsDir, "@openclaw/test-plugin");
-  });
-
-  it("accepts legacy unscoped expected ids for scoped package names without manifest ids", async () => {
-    const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture();
-
-    const res = await installPluginFromDir({
-      dirPath: pluginDir,
-      extensionsDir,
-      expectedPluginId: "test-plugin",
-    });
-
-    expectInstalledWithPluginId(res, extensionsDir, "@openclaw/test-plugin");
-  });
-
-  it("rejects bare @ as an invalid scoped id", () => {
-    expect(() => resolvePluginInstallDir("@")).toThrow(
-      "invalid plugin name: scoped ids must use @scope/name format",
-    );
-  });
-
-  it("rejects empty scoped segments like @/name", () => {
-    expect(() => resolvePluginInstallDir("@/name")).toThrow(
-      "invalid plugin name: scoped ids must use @scope/name format",
-    );
-  });
-
-  it("rejects two-segment ids without a scope prefix", () => {
-    expect(() => resolvePluginInstallDir("team/name")).toThrow(
-      "invalid plugin name: scoped ids must use @scope/name format",
-    );
-  });
-
-  it("uses a unique hashed install dir for scoped ids", () => {
+  it("keeps scoped install-dir validation aligned for real scoped ids", () => {
     const extensionsDir = path.join(makeTempDir(), "extensions");
     const scopedTarget = resolvePluginInstallDir("@scope/name", extensionsDir);
     const hashedFlatId = safePathSegmentHashed("@scope/name");
@@ -875,24 +972,46 @@ describe("installPluginFromDir", () => {
     expect(scopedTarget).not.toBe(flatTarget);
   });
 
-  it("installs Codex bundles from a local directory", async () => {
-    const { pluginDir, extensionsDir } = setupBundleInstallFixture({
-      bundleFormat: "codex",
-      name: "Sample Bundle",
-    });
+  it.each([
+    {
+      name: "installs Codex bundles from a local directory",
+      setup: () =>
+        setupBundleInstallFixture({
+          bundleFormat: "codex",
+          name: "Sample Bundle",
+        }),
+      expectedPluginId: "sample-bundle",
+      expectedFiles: [".codex-plugin/plugin.json", "skills/SKILL.md"],
+    },
+    {
+      name: "installs manifestless Claude bundles from a local directory",
+      setup: () => setupManifestlessClaudeInstallFixture(),
+      expectedPluginId: "claude-manifestless",
+      expectedFiles: ["commands/review.md", "settings.json"],
+    },
+    {
+      name: "installs Cursor bundles from a local directory",
+      setup: () =>
+        setupBundleInstallFixture({
+          bundleFormat: "cursor",
+          name: "Cursor Sample",
+        }),
+      expectedPluginId: "cursor-sample",
+      expectedFiles: [".cursor-plugin/plugin.json", ".cursor/commands/review.md"],
+    },
+  ] as const)("$name", async ({ setup, expectedPluginId, expectedFiles }) => {
+    const { pluginDir, extensionsDir } = setup();
 
     const res = await installPluginFromDir({
       dirPath: pluginDir,
       extensionsDir,
     });
 
-    expect(res.ok).toBe(true);
+    expectInstalledWithPluginId(res, extensionsDir, expectedPluginId);
     if (!res.ok) {
       return;
     }
-    expect(res.pluginId).toBe("sample-bundle");
-    expect(fs.existsSync(path.join(res.targetDir, ".codex-plugin", "plugin.json"))).toBe(true);
-    expect(fs.existsSync(path.join(res.targetDir, "skills", "SKILL.md"))).toBe(true);
+    expectInstalledFiles(res.targetDir, expectedFiles);
   });
 
   it("prefers native package installs over bundle installs for dual-format directories", async () => {
@@ -901,14 +1020,7 @@ describe("installPluginFromDir", () => {
     });
 
     const run = vi.mocked(runCommandWithTimeout);
-    run.mockResolvedValue({
-      code: 0,
-      stdout: "",
-      stderr: "",
-      signal: null,
-      killed: false,
-      termination: "exit",
-    });
+    mockSuccessfulCommandRun(run);
 
     const res = await installPluginFromDir({
       dirPath: pluginDir,
@@ -925,43 +1037,6 @@ describe("installPluginFromDir", () => {
       calls: run.mock.calls as Array<[unknown, { cwd?: string } | undefined]>,
       expectedTargetDir: res.targetDir,
     });
-  });
-
-  it("installs manifestless Claude bundles from a local directory", async () => {
-    const { pluginDir, extensionsDir } = setupManifestlessClaudeInstallFixture();
-
-    const res = await installPluginFromDir({
-      dirPath: pluginDir,
-      extensionsDir,
-    });
-
-    expect(res.ok).toBe(true);
-    if (!res.ok) {
-      return;
-    }
-    expect(res.pluginId).toBe("claude-manifestless");
-    expect(fs.existsSync(path.join(res.targetDir, "commands", "review.md"))).toBe(true);
-    expect(fs.existsSync(path.join(res.targetDir, "settings.json"))).toBe(true);
-  });
-
-  it("installs Cursor bundles from a local directory", async () => {
-    const { pluginDir, extensionsDir } = setupBundleInstallFixture({
-      bundleFormat: "cursor",
-      name: "Cursor Sample",
-    });
-
-    const res = await installPluginFromDir({
-      dirPath: pluginDir,
-      extensionsDir,
-    });
-
-    expect(res.ok).toBe(true);
-    if (!res.ok) {
-      return;
-    }
-    expect(res.pluginId).toBe("cursor-sample");
-    expect(fs.existsSync(path.join(res.targetDir, ".cursor-plugin", "plugin.json"))).toBe(true);
-    expect(fs.existsSync(path.join(res.targetDir, ".cursor", "commands", "review.md"))).toBe(true);
   });
 });
 
@@ -1033,14 +1108,7 @@ describe("installPluginFromPath", () => {
     });
 
     const run = vi.mocked(runCommandWithTimeout);
-    run.mockResolvedValue({
-      code: 0,
-      stdout: "",
-      stderr: "",
-      signal: null,
-      killed: false,
-      termination: "exit",
-    });
+    mockSuccessfulCommandRun(run);
 
     const result = await installPluginFromPath({
       path: archivePath,
@@ -1172,77 +1240,74 @@ describe("installPluginFromNpmSpec", () => {
     }
   });
 
-  it("rejects bare npm specs that resolve to prerelease versions", async () => {
-    const run = vi.mocked(runCommandWithTimeout);
-    mockNpmPackMetadataResult(run, {
+  it("handles prerelease npm specs correctly", async () => {
+    const prereleaseMetadata = {
       id: "@openclaw/voice-call@0.0.2-beta.1",
       name: "@openclaw/voice-call",
       version: "0.0.2-beta.1",
       filename: "voice-call-0.0.2-beta.1.tgz",
       integrity: "sha512-beta",
       shasum: "betashasum",
-    });
+    };
 
-    const result = await installPluginFromNpmSpec({
-      spec: "@openclaw/voice-call",
-      logger: { info: () => {}, warn: () => {} },
-    });
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error).toContain("prerelease version 0.0.2-beta.1");
-      expect(result.error).toContain('"@openclaw/voice-call@beta"');
-    }
-  });
+    {
+      const run = vi.mocked(runCommandWithTimeout);
+      mockNpmPackMetadataResult(run, prereleaseMetadata);
 
-  it("allows explicit prerelease npm tags", async () => {
-    const run = vi.mocked(runCommandWithTimeout);
-    let packTmpDir = "";
-    const packedName = "voice-call-0.0.2-beta.1.tgz";
-    const voiceCallArchiveBuffer = VOICE_CALL_ARCHIVE_V1_BUFFER;
-    run.mockImplementation(async (argv, opts) => {
-      if (argv[0] === "npm" && argv[1] === "pack") {
-        packTmpDir = String(typeof opts === "number" ? "" : (opts.cwd ?? ""));
-        fs.writeFileSync(path.join(packTmpDir, packedName), voiceCallArchiveBuffer);
-        return {
-          code: 0,
-          stdout: JSON.stringify([
-            {
-              id: "@openclaw/voice-call@0.0.2-beta.1",
-              name: "@openclaw/voice-call",
-              version: "0.0.2-beta.1",
-              filename: packedName,
-              integrity: "sha512-beta",
-              shasum: "betashasum",
-            },
-          ]),
-          stderr: "",
-          signal: null,
-          killed: false,
-          termination: "exit",
-        };
+      const result = await installPluginFromNpmSpec({
+        spec: "@openclaw/voice-call",
+        logger: { info: () => {}, warn: () => {} },
+      });
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error).toContain("prerelease version 0.0.2-beta.1");
+        expect(result.error).toContain('"@openclaw/voice-call@beta"');
       }
-      throw new Error(`unexpected command: ${argv.join(" ")}`);
-    });
-
-    const { extensionsDir } = await setupVoiceCallArchiveInstall({
-      outName: "voice-call-0.0.2-beta.1.tgz",
-      version: "0.0.1",
-    });
-    const result = await installPluginFromNpmSpec({
-      spec: "@openclaw/voice-call@beta",
-      extensionsDir,
-      logger: { info: () => {}, warn: () => {} },
-    });
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      return;
     }
-    expect(result.npmResolution?.version).toBe("0.0.2-beta.1");
-    expect(result.npmResolution?.resolvedSpec).toBe("@openclaw/voice-call@0.0.2-beta.1");
-    expectSingleNpmPackIgnoreScriptsCall({
-      calls: run.mock.calls,
-      expectedSpec: "@openclaw/voice-call@beta",
-    });
-    expect(packTmpDir).not.toBe("");
+
+    vi.clearAllMocks();
+
+    {
+      const run = vi.mocked(runCommandWithTimeout);
+      let packTmpDir = "";
+      const packedName = "voice-call-0.0.2-beta.1.tgz";
+      const voiceCallArchiveBuffer = VOICE_CALL_ARCHIVE_V1_BUFFER;
+      run.mockImplementation(async (argv, opts) => {
+        if (argv[0] === "npm" && argv[1] === "pack") {
+          packTmpDir = String(typeof opts === "number" ? "" : (opts.cwd ?? ""));
+          fs.writeFileSync(path.join(packTmpDir, packedName), voiceCallArchiveBuffer);
+          return {
+            code: 0,
+            stdout: JSON.stringify([prereleaseMetadata]),
+            stderr: "",
+            signal: null,
+            killed: false,
+            termination: "exit",
+          };
+        }
+        throw new Error(`unexpected command: ${argv.join(" ")}`);
+      });
+
+      const { extensionsDir } = await setupVoiceCallArchiveInstall({
+        outName: "voice-call-0.0.2-beta.1.tgz",
+        version: "0.0.1",
+      });
+      const result = await installPluginFromNpmSpec({
+        spec: "@openclaw/voice-call@beta",
+        extensionsDir,
+        logger: { info: () => {}, warn: () => {} },
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        return;
+      }
+      expect(result.npmResolution?.version).toBe("0.0.2-beta.1");
+      expect(result.npmResolution?.resolvedSpec).toBe("@openclaw/voice-call@0.0.2-beta.1");
+      expectSingleNpmPackIgnoreScriptsCall({
+        calls: run.mock.calls,
+        expectedSpec: "@openclaw/voice-call@beta",
+      });
+      expect(packTmpDir).not.toBe("");
+    }
   });
 });

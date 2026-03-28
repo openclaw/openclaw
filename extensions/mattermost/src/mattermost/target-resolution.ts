@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/mattermost";
+import type { OpenClawConfig } from "../runtime-api.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import {
   createMattermostClient,
@@ -79,7 +79,11 @@ export async function resolveMattermostOpaqueTarget(params: {
     return { kind: "channel", id: input, to: `channel:${input}` };
   }
 
-  const client = createMattermostClient({ baseUrl, botToken: token });
+  const client = createMattermostClient({
+    baseUrl,
+    botToken: token,
+    allowPrivateNetwork: account?.config?.allowPrivateNetwork === true,
+  });
   try {
     await fetchMattermostUser(client, input);
     mattermostOpaqueTargetCache.set(key, true);

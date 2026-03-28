@@ -1,13 +1,31 @@
-export { sendBlueBubblesAttachment } from "./attachments.js";
-export {
-  addBlueBubblesParticipant,
-  editBlueBubblesMessage,
-  leaveBlueBubblesChat,
-  removeBlueBubblesParticipant,
-  renameBlueBubblesChat,
-  setGroupIconBlueBubbles,
-  unsendBlueBubblesMessage,
+import { sendBlueBubblesAttachment as sendBlueBubblesAttachmentImpl } from "./attachments.js";
+import {
+  addBlueBubblesParticipant as addBlueBubblesParticipantImpl,
+  editBlueBubblesMessage as editBlueBubblesMessageImpl,
+  leaveBlueBubblesChat as leaveBlueBubblesChatImpl,
+  removeBlueBubblesParticipant as removeBlueBubblesParticipantImpl,
+  renameBlueBubblesChat as renameBlueBubblesChatImpl,
+  setGroupIconBlueBubbles as setGroupIconBlueBubblesImpl,
+  unsendBlueBubblesMessage as unsendBlueBubblesMessageImpl,
 } from "./chat.js";
-export { resolveBlueBubblesMessageId } from "./monitor.js";
-export { sendBlueBubblesReaction } from "./reactions.js";
-export { resolveChatGuidForTarget, sendMessageBlueBubbles } from "./send.js";
+import { resolveBlueBubblesMessageId as resolveBlueBubblesMessageIdImpl } from "./monitor.js";
+import { sendBlueBubblesReaction as sendBlueBubblesReactionImpl } from "./reactions.js";
+import {
+  resolveChatGuidForTarget as resolveChatGuidForTargetImpl,
+  sendMessageBlueBubbles as sendMessageBlueBubblesImpl,
+} from "./send.js";
+
+export const blueBubblesActionsRuntime = {
+  sendBlueBubblesAttachment: sendBlueBubblesAttachmentImpl,
+  addBlueBubblesParticipant: addBlueBubblesParticipantImpl,
+  editBlueBubblesMessage: editBlueBubblesMessageImpl,
+  leaveBlueBubblesChat: leaveBlueBubblesChatImpl,
+  removeBlueBubblesParticipant: removeBlueBubblesParticipantImpl,
+  renameBlueBubblesChat: renameBlueBubblesChatImpl,
+  setGroupIconBlueBubbles: setGroupIconBlueBubblesImpl,
+  unsendBlueBubblesMessage: unsendBlueBubblesMessageImpl,
+  resolveBlueBubblesMessageId: resolveBlueBubblesMessageIdImpl,
+  sendBlueBubblesReaction: sendBlueBubblesReactionImpl,
+  resolveChatGuidForTarget: resolveChatGuidForTargetImpl,
+  sendMessageBlueBubbles: sendMessageBlueBubblesImpl,
+};

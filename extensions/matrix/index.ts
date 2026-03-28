@@ -1,17 +1,50 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/matrix";
-import { emptyPluginConfigSchema } from "openclaw/plugin-sdk/matrix";
+import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
 import { matrixPlugin } from "./src/channel.js";
 import { setMatrixRuntime } from "./src/runtime.js";
 
-const plugin = {
+export { matrixPlugin } from "./src/channel.js";
+export { setMatrixRuntime } from "./src/runtime.js";
+
+export default defineChannelPluginEntry({
   id: "matrix",
   name: "Matrix",
   description: "Matrix channel plugin (matrix-js-sdk)",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
-    setMatrixRuntime(api.runtime);
-    api.registerChannel({ plugin: matrixPlugin });
-  },
-};
+  plugin: matrixPlugin,
+  setRuntime: setMatrixRuntime,
+  registerFull(api) {
+    void import("./src/plugin-entry.runtime.js")
+      .then(({ ensureMatrixCryptoRuntime }) =>
+        ensureMatrixCryptoRuntime({ log: api.logger.info }).catch((err: unknown) => {
+          const message = err instanceof Error ? err.message : String(err);
+          api.logger.warn?.(`matrix: crypto runtime bootstrap failed: ${message}`);
+        }),
+      )
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        api.logger.warn?.(`matrix: failed loading crypto bootstrap runtime: ${message}`);
+      });
 
-export default plugin;
+    api.registerGatewayMethod("matrix.verify.recoveryKey", async (ctx) => {
+      const { handleVerifyRecoveryKey } = await import("./src/plugin-entry.runtime.js");
+      await handleVerifyRecoveryKey(ctx);
+    });
+
+    api.registerGatewayMethod("matrix.verify.bootstrap", async (ctx) => {
+      const { handleVerificationBootstrap } = await import("./src/plugin-entry.runtime.js");
+      await handleVerificationBootstrap(ctx);
+    });
+
+    api.registerGatewayMethod("matrix.verify.status", async (ctx) => {
+      const { handleVerificationStatus } = await import("./src/plugin-entry.runtime.js");
+      await handleVerificationStatus(ctx);
+    });
+
+    api.registerCli(
+      async ({ program }) => {
+        const { registerMatrixCli } = await import("./src/cli.js");
+        registerMatrixCli({ program });
+      },
+      { commands: ["matrix"] },
+    );
+  },
+});

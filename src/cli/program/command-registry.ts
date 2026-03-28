@@ -56,7 +56,7 @@ const coreEntries: CoreCliEntry[] = [
     commands: [
       {
         name: "onboard",
-        description: "Interactive setup wizard for gateway, workspace, and skills",
+        description: "Interactive onboarding for gateway, workspace, and skills",
         hasSubcommands: false,
       },
     ],
@@ -70,7 +70,7 @@ const coreEntries: CoreCliEntry[] = [
       {
         name: "configure",
         description:
-          "Interactive setup wizard for credentials, channels, gateway, and agent defaults",
+          "Interactive configuration for credentials, channels, gateway, and agent defaults",
         hasSubcommands: false,
       },
     ],
@@ -84,7 +84,7 @@ const coreEntries: CoreCliEntry[] = [
       {
         name: "config",
         description:
-          "Non-interactive config helpers (get/set/unset/file/validate). Default: starts setup wizard.",
+          "Non-interactive config helpers (get/set/unset/file/validate). Default: starts guided setup.",
         hasSubcommands: true,
       },
     ],
@@ -150,14 +150,14 @@ const coreEntries: CoreCliEntry[] = [
   {
     commands: [
       {
-        name: "memory",
-        description: "Search and reindex memory files",
+        name: "mcp",
+        description: "Manage OpenClaw MCP config and channel bridge",
         hasSubcommands: true,
       },
     ],
     register: async ({ program }) => {
-      const mod = await import("../memory-cli.js");
-      mod.registerMemoryCli(program);
+      const mod = await import("../mcp-cli.js");
+      mod.registerMcpCli(program);
     },
   },
   {
@@ -201,19 +201,6 @@ const coreEntries: CoreCliEntry[] = [
     register: async ({ program }) => {
       const mod = await import("./register.status-health-sessions.js");
       mod.registerStatusHealthSessionsCommands(program);
-    },
-  },
-  {
-    commands: [
-      {
-        name: "browser",
-        description: "Manage OpenClaw's dedicated browser (Chrome/Chromium)",
-        hasSubcommands: true,
-      },
-    ],
-    register: async ({ program }) => {
-      const mod = await import("../browser-cli.js");
-      mod.registerBrowserCli(program);
     },
   },
 ];

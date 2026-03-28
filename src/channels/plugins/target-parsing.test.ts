@@ -1,14 +1,15 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { setDefaultChannelPluginRegistryForTests } from "../../commands/channel-test-helpers.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { parseExplicitTargetForChannel } from "./target-parsing.js";
 
 describe("parseExplicitTargetForChannel", () => {
   beforeEach(() => {
-    setActivePluginRegistry(createTestRegistry([]));
+    setDefaultChannelPluginRegistryForTests();
   });
 
-  it("parses bundled Telegram targets without an active Telegram registry entry", () => {
+  it("parses Telegram targets via the registered channel plugin contract", () => {
     expect(parseExplicitTargetForChannel("telegram", "telegram:group:-100123:topic:77")).toEqual({
       to: "-100123",
       threadId: 77,
@@ -24,15 +25,15 @@ describe("parseExplicitTargetForChannel", () => {
     setActivePluginRegistry(
       createTestRegistry([
         {
-          pluginId: "msteams",
+          pluginId: "demo-target",
           source: "test",
           plugin: {
-            id: "msteams",
+            id: "demo-target",
             meta: {
-              id: "msteams",
-              label: "Microsoft Teams",
-              selectionLabel: "Microsoft Teams",
-              docsPath: "/channels/msteams",
+              id: "demo-target",
+              label: "Demo Target",
+              selectionLabel: "Demo Target",
+              docsPath: "/channels/demo-target",
               blurb: "test stub",
             },
             capabilities: { chatTypes: ["direct"] },
@@ -51,7 +52,7 @@ describe("parseExplicitTargetForChannel", () => {
       ]),
     );
 
-    expect(parseExplicitTargetForChannel("msteams", "team-room")).toEqual({
+    expect(parseExplicitTargetForChannel("demo-target", "team-room")).toEqual({
       to: "TEAM-ROOM",
       chatType: "direct",
     });

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
+import type { DoctorRepairMode } from "./doctor-repair-mode.js";
 
 const runExec = vi.fn();
 const note = vi.fn();
@@ -32,7 +33,14 @@ describe("maybeRepairSandboxImages", () => {
   };
 
   const mockPrompter: DoctorPrompter = {
-    confirmSkipInNonInteractive: vi.fn().mockResolvedValue(false),
+    confirmRuntimeRepair: vi.fn().mockResolvedValue(false),
+    repairMode: {
+      shouldRepair: false,
+      shouldForce: false,
+      nonInteractive: false,
+      canPrompt: true,
+      updateInProgress: false,
+    } satisfies DoctorRepairMode,
   } as unknown as DoctorPrompter;
 
   beforeEach(() => {

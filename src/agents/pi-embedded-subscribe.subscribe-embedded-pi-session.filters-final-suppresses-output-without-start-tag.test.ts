@@ -132,7 +132,7 @@ describe("subscribeEmbeddedPiSession", () => {
     const payload = onPartialReply.mock.calls[0][0];
     expect(payload.text).toBe("Hello world");
   });
-  it("emits block replies on message_end", () => {
+  it("emits block replies on message_end", async () => {
     const { session, emit } = createStubSessionHarness();
 
     const onBlockReply = vi.fn();
@@ -150,6 +150,7 @@ describe("subscribeEmbeddedPiSession", () => {
     } as AssistantMessage;
 
     emit({ type: "message_end", message: assistantMessage });
+    await Promise.resolve();
 
     expect(onBlockReply).toHaveBeenCalled();
     const payload = onBlockReply.mock.calls[0][0];

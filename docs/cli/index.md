@@ -27,6 +27,7 @@ This page describes the current CLI behavior. If commands change, update this do
 - [`agent`](/cli/agent)
 - [`agents`](/cli/agents)
 - [`acp`](/cli/acp)
+- [`mcp`](/cli/mcp)
 - [`status`](/cli/status)
 - [`health`](/cli/health)
 - [`sessions`](/cli/sessions)
@@ -88,7 +89,7 @@ OpenClaw uses a lobster palette for CLI output.
 - `error` (#E23D2D): errors, failures.
 - `muted` (#8B7F77): de-emphasis, metadata.
 
-Palette source of truth: `src/terminal/palette.ts` (aka “lobster seam”).
+Palette source of truth: `src/terminal/palette.ts` (the “lobster palette”).
 
 ## Command tree
 
@@ -101,6 +102,8 @@ openclaw [--dev] [--profile <name>] <command>
     get
     set
     unset
+    file
+    validate
   completion
   doctor
   dashboard
@@ -111,7 +114,9 @@ openclaw [--dev] [--profile <name>] <command>
     audit
   secrets
     reload
-    migrate
+    audit
+    configure
+    apply
   reset
   uninstall
   update
@@ -130,22 +135,28 @@ openclaw [--dev] [--profile <name>] <command>
     check
   plugins
     list
-    info
+    inspect
     install
+    uninstall
+    update
     enable
     disable
     doctor
+    marketplace list
   memory
     status
     index
     search
   message
+    send
+    broadcast
   agent
   agents
     list
     add
     delete
   acp
+  mcp
   status
   health
   sessions
@@ -274,16 +285,16 @@ Note: plugins can add additional top-level commands (for example `openclaw voice
 ## Secrets
 
 - `openclaw secrets reload` — re-resolve refs and atomically swap the runtime snapshot.
-- `openclaw secrets audit` — scan for plaintext residues, unresolved refs, and precedence drift.
-- `openclaw secrets configure` — interactive helper for provider setup + SecretRef mapping + preflight/apply.
-- `openclaw secrets apply --from <plan.json>` — apply a previously generated plan (`--dry-run` supported).
+- `openclaw secrets audit` — scan for plaintext residues, unresolved refs, and precedence drift (`--allow-exec` to execute exec providers during audit).
+- `openclaw secrets configure` — interactive helper for provider setup + SecretRef mapping + preflight/apply (`--allow-exec` to execute exec providers during preflight and exec-containing apply flows).
+- `openclaw secrets apply --from <plan.json>` — apply a previously generated plan (`--dry-run` supported; use `--allow-exec` to permit exec providers in dry-run and exec-containing write plans).
 
 ## Plugins
 
 Manage extensions and their config:
 
 - `openclaw plugins list` — discover plugins (use `--json` for machine output).
-- `openclaw plugins info <id>` — show details for a plugin.
+- `openclaw plugins inspect <id>` — show details for a plugin (`info` is an alias).
 - `openclaw plugins install <path|.tgz|npm-spec|plugin@marketplace>` — install a plugin (or add a plugin path to `plugins.load.paths`).
 - `openclaw plugins marketplace list <marketplace>` — list marketplace entries before install.
 - `openclaw plugins enable <id>` / `disable <id>` — toggle `plugins.entries.<id>.enabled`.
@@ -318,22 +329,22 @@ Initialize config + workspace.
 Options:
 
 - `--workspace <dir>`: agent workspace path (default `~/.openclaw/workspace`).
-- `--wizard`: run the setup wizard.
-- `--non-interactive`: run wizard without prompts.
-- `--mode <local|remote>`: wizard mode.
+- `--wizard`: run onboarding.
+- `--non-interactive`: run onboarding without prompts.
+- `--mode <local|remote>`: onboard mode.
 - `--remote-url <url>`: remote Gateway URL.
 - `--remote-token <token>`: remote Gateway token.
 
-Wizard auto-runs when any wizard flags are present (`--non-interactive`, `--mode`, `--remote-url`, `--remote-token`).
+Onboarding auto-runs when any onboarding flags are present (`--non-interactive`, `--mode`, `--remote-url`, `--remote-token`).
 
 ### `onboard`
 
-Interactive wizard to set up gateway, workspace, and skills.
+Interactive onboarding for gateway, workspace, and skills.
 
 Options:
 
 - `--workspace <dir>`
-- `--reset` (reset config + credentials + sessions before wizard)
+- `--reset` (reset config + credentials + sessions before onboarding)
 - `--reset-scope <config|config+creds+sessions|full>` (default `config+creds+sessions`; use `full` to also remove workspace)
 - `--non-interactive`
 - `--mode <local|remote>`
@@ -387,15 +398,24 @@ Interactive configuration wizard (models, channels, skills, gateway).
 
 ### `config`
 
-Non-interactive config helpers (get/set/unset/file/validate). Running `openclaw config` with no
+Non-interactive config helpers (get/set/unset/file/schema/validate). Running `openclaw config` with no
 subcommand launches the wizard.
 
 Subcommands:
 
 - `config get <path>`: print a config value (dot/bracket path).
-- `config set <path> <value>`: set a value (JSON5 or raw string).
+- `config set`: supports four assignment modes:
+  - value mode: `config set <path> <value>` (JSON5-or-string parsing)
+  - SecretRef builder mode: `config set <path> --ref-provider <provider> --ref-source <source> --ref-id <id>`
+  - provider builder mode: `config set secrets.providers.<alias> --provider-source <env|file|exec> ...`
+  - batch mode: `config set --batch-json '<json>'` or `config set --batch-file <path>`
+- `config set --dry-run`: validate assignments without writing `openclaw.json` (exec SecretRef checks are skipped by default).
+- `config set --allow-exec --dry-run`: opt in to exec SecretRef dry-run checks (may execute provider commands).
+- `config set --dry-run --json`: emit machine-readable dry-run output (checks + completeness signal, operations, refs checked/skipped, errors).
+- `config set --strict-json`: require JSON5 parsing for path/value input. `--json` remains a legacy alias for strict parsing outside dry-run output mode.
 - `config unset <path>`: remove a value.
 - `config file`: print the active config file path.
+- `config schema`: print the generated JSON schema for `openclaw.json`.
 - `config validate`: validate the current config against the schema without starting the gateway.
 - `config validate --json`: emit machine-readable JSON output.
 
@@ -414,7 +434,7 @@ Options:
 
 ### `channels`
 
-Manage chat channel accounts (WhatsApp/Telegram/Discord/Google Chat/Slack/Mattermost (plugin)/Signal/iMessage/MS Teams).
+Manage chat channel accounts (WhatsApp/Telegram/Discord/Google Chat/Slack/Mattermost (plugin)/Signal/iMessage/Microsoft Teams).
 
 Subcommands:
 
@@ -475,6 +495,9 @@ List and inspect available skills plus readiness info.
 
 Subcommands:
 
+- `skills search [query...]`: search ClawHub skills.
+- `skills install <slug>`: install a skill from ClawHub into the active workspace.
+- `skills update <slug|--all>`: update tracked ClawHub skills.
 - `skills list`: list skills (default when no subcommand).
 - `skills info <name>`: show details for one skill.
 - `skills check`: summary of ready vs missing requirements.
@@ -485,7 +508,7 @@ Options:
 - `--json`: output JSON (no styling).
 - `-v`, `--verbose`: include missing requirements detail.
 
-Tip: use `npx clawhub` to search, install, and sync skills.
+Tip: use `openclaw skills search`, `openclaw skills install`, and `openclaw skills update` for ClawHub-backed skills.
 
 ### `pairing`
 
@@ -759,7 +782,8 @@ Options:
 - `--reset` (reset dev config + credentials + sessions + workspace)
 - `--force` (kill existing listener on port)
 - `--verbose`
-- `--claude-cli-logs`
+- `--cli-backend-logs`
+- `--claude-cli-logs` (deprecated alias)
 - `--ws-log <auto|full|compact>`
 - `--compact` (alias for `--ws-log compact`)
 - `--raw-stream`
@@ -849,6 +873,13 @@ openclaw models status
 Policy note: this is technical compatibility. Anthropic has blocked some
 subscription usage outside Claude Code in the past; verify current Anthropic
 terms before relying on setup-token in production.
+
+Anthropic Claude CLI migration:
+
+```bash
+openclaw models auth login --provider anthropic --method cli --set-default
+openclaw onboard --auth-choice anthropic-cli
+```
 
 ### `models` (root)
 
@@ -1022,7 +1053,7 @@ Subcommands:
 Auth notes:
 
 - `node` resolves gateway auth from env/config (no `--token`/`--password` flags): `OPENCLAW_GATEWAY_TOKEN` / `OPENCLAW_GATEWAY_PASSWORD`, then `gateway.auth.*`. In local mode, node host intentionally ignores `gateway.remote.*`; in `gateway.mode=remote`, `gateway.remote.*` participates per remote precedence rules.
-- Legacy `CLAWDBOT_GATEWAY_*` env vars are intentionally ignored for node-host auth resolution.
+- Node-host auth resolution only honors `OPENCLAW_GATEWAY_*` env vars.
 
 ## Nodes
 

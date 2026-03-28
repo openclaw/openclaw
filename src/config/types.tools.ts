@@ -238,6 +238,11 @@ export type ExecToolConfig = {
   pathPrepend?: string[];
   /** Safe stdin-only binaries that can run without allowlist entries. */
   safeBins?: string[];
+  /**
+   * Require explicit approval for interpreter inline-eval forms (`python -c`, `node -e`, etc.).
+   * Prevents silent allowlist reuse and allow-always persistence for those forms.
+   */
+  strictInlineEval?: boolean;
   /** Extra explicit directories trusted for safeBins path checks (never derived from PATH). */
   safeBinTrustedDirs?: string[];
   /** Optional custom safe-bin profiles for entries in tools.exec.safeBins. */
@@ -257,9 +262,9 @@ export type ExecToolConfig = {
    * Default false to reduce context noise.
    */
   notifyOnExitEmptySuccess?: boolean;
-  /** apply_patch subtool configuration (experimental). */
+  /** apply_patch subtool configuration. */
   applyPatch?: {
-    /** Enable apply_patch for OpenAI models (default: false). */
+    /** Enable apply_patch for OpenAI models (default: true; set false to disable). */
     enabled?: boolean;
     /**
      * Restrict apply_patch paths to the workspace directory.
@@ -307,6 +312,8 @@ export type AgentToolsConfig = {
   sandbox?: {
     tools?: {
       allow?: string[];
+      /** Additional allowlist entries merged into allow and/or the sandbox default allowlist. */
+      alsoAllow?: string[];
       deny?: string[];
     };
   };
@@ -333,8 +340,8 @@ export type MemorySearchConfig = {
     /** Enable session transcript indexing (experimental, default: false). */
     sessionMemory?: boolean;
   };
-  /** Embedding provider mode. */
-  provider?: "openai" | "gemini" | "local" | "voyage" | "mistral" | "ollama";
+  /** Memory embedding provider adapter id. */
+  provider?: string;
   remote?: {
     baseUrl?: string;
     apiKey?: SecretInput;
@@ -352,8 +359,8 @@ export type MemorySearchConfig = {
       timeoutMinutes?: number;
     };
   };
-  /** Fallback behavior when embeddings fail. */
-  fallback?: "openai" | "gemini" | "local" | "voyage" | "mistral" | "ollama" | "none";
+  /** Fallback memory embedding provider adapter id when embeddings fail. */
+  fallback?: string;
   /** Embedding model id (remote) or alias (local). */
   model?: string;
   /**
@@ -444,6 +451,31 @@ export type MemorySearchConfig = {
   };
 };
 
+type WebSearchLegacyProviderConfig = {
+  apiKey?: SecretInput;
+  baseUrl?: string;
+  model?: string;
+  mode?: string;
+  inlineCitations?: boolean;
+};
+
+type XSearchToolConfig = {
+  /** Enable X search tool (default: true when an xAI API key is available). */
+  enabled?: boolean;
+  /** API key for xAI (defaults to XAI_API_KEY env var). Supports SecretRef. */
+  apiKey?: SecretInput;
+  /** Model id to use for X search. */
+  model?: string;
+  /** Keep inline citations in the xAI response payload when available. */
+  inlineCitations?: boolean;
+  /** Optional max search/tool turns for xAI to use internally. */
+  maxTurns?: number;
+  /** Timeout in seconds for X search requests. */
+  timeoutSeconds?: number;
+  /** Cache TTL in minutes for X search results. */
+  cacheTtlMinutes?: number;
+};
+
 export type ToolsConfig = {
   /** Base tool profile applied before allow/deny lists. */
   profile?: ToolProfileId;
@@ -457,9 +489,9 @@ export type ToolsConfig = {
     search?: {
       /** Enable web search tool (default: true when API key is present). */
       enabled?: boolean;
-      /** Search provider ("brave", "firecrawl", "gemini", "grok", "kimi", or "perplexity"). */
-      provider?: "brave" | "firecrawl" | "gemini" | "grok" | "kimi" | "perplexity";
-      /** Brave Search API key (optional; defaults to BRAVE_API_KEY env var). */
+      /** Search provider id. */
+      provider?: string;
+      /** Shared API key slot used by providers that do not need nested config. */
       apiKey?: SecretInput;
       /** Default search results count (1-10). */
       maxResults?: number;
@@ -467,53 +499,21 @@ export type ToolsConfig = {
       timeoutSeconds?: number;
       /** Cache TTL in minutes for search results. */
       cacheTtlMinutes?: number;
-      /** Brave-specific configuration (used when provider="brave"). */
-      brave?: {
-        /** Brave Search mode: "web" (standard results) or "llm-context" (pre-extracted page content). Default: "web". */
-        mode?: "web" | "llm-context";
-      };
-      /** Gemini-specific configuration (used when provider="gemini"). */
-      gemini?: {
-        /** Gemini API key (defaults to GEMINI_API_KEY env var). */
-        apiKey?: SecretInput;
-        /** Model to use for grounded search (defaults to "gemini-2.5-flash"). */
-        model?: string;
-      };
-      /** Firecrawl-specific configuration (used when provider="firecrawl"). */
-      firecrawl?: {
-        /** Firecrawl API key (defaults to FIRECRAWL_API_KEY env var). */
-        apiKey?: SecretInput;
-        /** Base URL for API requests (defaults to "https://api.firecrawl.dev"). */
-        baseUrl?: string;
-      };
-      /** Grok-specific configuration (used when provider="grok"). */
-      grok?: {
-        /** API key for xAI (defaults to XAI_API_KEY env var). */
-        apiKey?: SecretInput;
-        /** Model to use (defaults to "grok-4-1-fast"). */
-        model?: string;
-        /** Include inline citations in response text as markdown links (default: false). */
-        inlineCitations?: boolean;
-      };
-      /** Kimi-specific configuration (used when provider="kimi"). */
-      kimi?: {
-        /** Moonshot/Kimi API key (defaults to KIMI_API_KEY or MOONSHOT_API_KEY env var). */
-        apiKey?: SecretInput;
-        /** Base URL for API requests (defaults to "https://api.moonshot.ai/v1"). */
-        baseUrl?: string;
-        /** Model to use (defaults to "moonshot-v1-128k"). */
-        model?: string;
-      };
-      /** Perplexity-specific configuration (used when provider="perplexity"). */
-      perplexity?: {
-        /** API key for Perplexity (defaults to PERPLEXITY_API_KEY env var). */
-        apiKey?: SecretInput;
-        /** @deprecated Legacy Sonar/OpenRouter field. Ignored by Search API. */
-        baseUrl?: string;
-        /** @deprecated Legacy Sonar/OpenRouter field. Ignored by Search API. */
-        model?: string;
-      };
-    };
+      /** @deprecated Legacy Brave scoped config. */
+      brave?: WebSearchLegacyProviderConfig;
+      /** @deprecated Legacy Firecrawl scoped config. */
+      firecrawl?: WebSearchLegacyProviderConfig;
+      /** @deprecated Legacy Gemini scoped config. */
+      gemini?: WebSearchLegacyProviderConfig;
+      /** @deprecated Legacy Grok scoped config. */
+      grok?: WebSearchLegacyProviderConfig;
+      /** @deprecated Legacy Kimi scoped config. */
+      kimi?: WebSearchLegacyProviderConfig;
+      /** @deprecated Legacy Perplexity scoped config. */
+      perplexity?: WebSearchLegacyProviderConfig;
+    } & Record<string, unknown>;
+    /** X (formerly Twitter) search tool configuration using xAI Grok. */
+    x_search?: XSearchToolConfig;
     fetch?: {
       /** Enable web fetch tool (default: true). */
       enabled?: boolean;
@@ -521,6 +521,8 @@ export type ToolsConfig = {
       maxChars?: number;
       /** Hard cap for maxChars (tool or config), defaults to 50000. */
       maxCharsCap?: number;
+      /** Max download size before truncation, defaults to 2000000. */
+      maxResponseBytes?: number;
       /** Timeout in seconds for fetch requests. */
       timeoutSeconds?: number;
       /** Cache TTL in minutes for fetched content. */
@@ -625,6 +627,8 @@ export type ToolsConfig = {
   sandbox?: {
     tools?: {
       allow?: string[];
+      /** Additional allowlist entries merged into allow and/or the sandbox default allowlist. */
+      alsoAllow?: string[];
       deny?: string[];
     };
   };

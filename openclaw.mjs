@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+import { readFileSync } from "node:fs";
+import { access } from "node:fs/promises";
 import module from "node:module";
 import { fileURLToPath } from "node:url";
 
@@ -59,7 +61,11 @@ const isDirectModuleNotFoundError = (err, specifier) => {
   }
 
   const message = "message" in err && typeof err.message === "string" ? err.message : "";
-  return message.includes(fileURLToPath(expectedUrl));
+  const expectedPath = fileURLToPath(expectedUrl);
+  return (
+    message.includes(`Cannot find module '${expectedPath}'`) ||
+    message.includes(`Cannot find module "${expectedPath}"`)
+  );
 };
 
 const installProcessWarningFilter = async () => {
@@ -80,8 +86,6 @@ const installProcessWarningFilter = async () => {
   }
 };
 
-await installProcessWarningFilter();
-
 const tryImport = async (specifier) => {
   try {
     await import(specifier);
@@ -95,10 +99,82 @@ const tryImport = async (specifier) => {
   }
 };
 
-if (await tryImport("./dist/entry.js")) {
-  // OK
-} else if (await tryImport("./dist/entry.mjs")) {
+const exists = async (specifier) => {
+  try {
+    await access(new URL(specifier, import.meta.url));
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const buildMissingEntryErrorMessage = async () => {
+  const lines = ["openclaw: missing dist/entry.(m)js (build output)."];
+  if (!(await exists("./src/entry.ts"))) {
+    return lines.join("\n");
+  }
+
+  lines.push("This install looks like an unbuilt source tree or GitHub source archive.");
+  lines.push(
+    "Build locally with `pnpm install && pnpm build`, or install a built package instead.",
+  );
+  lines.push(
+    "For pinned GitHub installs, use `npm install -g github:openclaw/openclaw#<ref>` instead of a raw `/archive/<ref>.tar.gz` URL.",
+  );
+  lines.push("For releases, use `npm install -g openclaw@latest`.");
+  return lines.join("\n");
+};
+
+const isBareRootHelpInvocation = (argv) =>
+  argv.length === 3 && (argv[2] === "--help" || argv[2] === "-h");
+
+const loadPrecomputedRootHelpText = () => {
+  try {
+    const raw = readFileSync(new URL("./dist/cli-startup-metadata.json", import.meta.url), "utf8");
+    const parsed = JSON.parse(raw);
+    return typeof parsed?.rootHelpText === "string" && parsed.rootHelpText.length > 0
+      ? parsed.rootHelpText
+      : null;
+  } catch {
+    return null;
+  }
+};
+
+const tryOutputBareRootHelp = async () => {
+  if (!isBareRootHelpInvocation(process.argv)) {
+    return false;
+  }
+  const precomputed = loadPrecomputedRootHelpText();
+  if (precomputed) {
+    process.stdout.write(precomputed);
+    return true;
+  }
+  for (const specifier of ["./dist/cli/program/root-help.js", "./dist/cli/program/root-help.mjs"]) {
+    try {
+      const mod = await import(specifier);
+      if (typeof mod.outputRootHelp === "function") {
+        mod.outputRootHelp();
+        return true;
+      }
+    } catch (err) {
+      if (isDirectModuleNotFoundError(err, specifier)) {
+        continue;
+      }
+      throw err;
+    }
+  }
+  return false;
+};
+
+if (await tryOutputBareRootHelp()) {
   // OK
 } else {
-  throw new Error("openclaw: missing dist/entry.(m)js (build output).");
+  await installProcessWarningFilter();
+  if (await tryImport("./dist/entry.js")) {
+    // OK
+  } else if (await tryImport("./dist/entry.mjs")) {
+    // OK
+  } else {
+    throw new Error(await buildMissingEntryErrorMessage());
+  }
 }

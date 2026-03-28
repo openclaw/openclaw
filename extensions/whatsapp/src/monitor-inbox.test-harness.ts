@@ -2,8 +2,14 @@ import { EventEmitter } from "node:events";
 import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, beforeEach, expect, vi } from "vitest";
-import { resetLogger, setLoggerOverride } from "../../../src/logging.js";
+import {
+  loadConfigMock,
+  readAllowFromStoreMock as pairingReadAllowFromStoreMock,
+  resetPairingSecurityMocks,
+  upsertPairingRequestMock as pairingUpsertPairingRequestMock,
+} from "./pairing-security.test-harness.js";
 
 // Avoid exporting vitest mock types (TS2742 under pnpm + d.ts emit).
 // oxlint-disable-next-line typescript/no-explicit-any
@@ -23,13 +29,9 @@ export const DEFAULT_WEB_INBOX_CONFIG = {
     responsePrefix: undefined,
   },
 } as const;
-
-export const mockLoadConfig: AnyMockFn = vi.fn().mockReturnValue(DEFAULT_WEB_INBOX_CONFIG);
-
-export const readAllowFromStoreMock: AnyMockFn = vi.fn().mockResolvedValue([]);
-export const upsertPairingRequestMock: AnyMockFn = vi
-  .fn()
-  .mockResolvedValue({ code: "PAIRCODE", created: true });
+export const mockLoadConfig = loadConfigMock;
+export const readAllowFromStoreMock = pairingReadAllowFromStoreMock;
+export const upsertPairingRequestMock = pairingUpsertPairingRequestMock;
 
 export type MockSock = {
   ev: EventEmitter;
@@ -44,8 +46,12 @@ export type MockSock = {
       getPNForLID: AnyMockFn;
     };
   };
-  user: { id: string; lid?: string };
+  user: { id: string };
 };
+
+const sessionState = vi.hoisted(() => ({
+  sock: undefined as MockSock | undefined,
+}));
 
 function createResolvedMock() {
   return vi.fn().mockResolvedValue(undefined);
@@ -66,23 +72,12 @@ function createMockSock(): MockSock {
         getPNForLID: vi.fn().mockResolvedValue(null),
       },
     },
-    user: { id: "123@s.whatsapp.net", lid: "123:1@lid" },
+    user: { id: "123@s.whatsapp.net" },
   };
 }
 
-function getPairingStoreMocks() {
-  const readChannelAllowFromStore = (...args: unknown[]) => readAllowFromStoreMock(...args);
-  const upsertChannelPairingRequest = (...args: unknown[]) => upsertPairingRequestMock(...args);
-  return {
-    readChannelAllowFromStore,
-    upsertChannelPairingRequest,
-  };
-}
-
-const sock: MockSock = createMockSock();
-
-vi.mock("../../../src/media/store.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../src/media/store.js")>();
+vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>();
   return {
     ...actual,
     saveMediaBuffer: vi.fn().mockResolvedValue({
@@ -94,34 +89,123 @@ vi.mock("../../../src/media/store.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../../../src/config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../src/config/config.js")>();
+vi.mock("./session.js", async () => {
+  const actual = await vi.importActual<typeof import("./session.js")>("./session.js");
   return {
     ...actual,
-    loadConfig: () => mockLoadConfig(),
+    createWaSocket: vi.fn().mockImplementation(async () => {
+      if (!sessionState.sock) {
+        throw new Error("mock WhatsApp socket not initialized");
+      }
+      return sessionState.sock;
+    }),
+    waitForWaConnection: vi.fn().mockResolvedValue(undefined),
+    getStatusCode: vi.fn(() => 500),
   };
 });
 
-vi.mock("../../../src/pairing/pairing-store.js", () => getPairingStoreMocks());
-
-vi.mock("./session.js", () => ({
-  createWaSocket: vi.fn().mockResolvedValue(sock),
-  waitForWaConnection: vi.fn().mockResolvedValue(undefined),
-  getStatusCode: vi.fn(() => 500),
-}));
-
 export function getSock(): MockSock {
-  return sock;
+  if (!sessionState.sock) {
+    throw new Error("mock WhatsApp socket not initialized");
+  }
+  return sessionState.sock;
+}
+
+type MonitorWebInbox = typeof import("./inbound.js").monitorWebInbox;
+export type InboxOnMessage = NonNullable<Parameters<MonitorWebInbox>[0]["onMessage"]>;
+let monitorWebInbox: MonitorWebInbox;
+
+function expectInboxPairingReplyText(
+  text: string,
+  params: {
+    channel: string;
+    idLine: string;
+    code?: string;
+  },
+): string {
+  const code = text.match(/Pairing code:\s*```[\r\n]+([A-Z2-9]{6,})/)?.[1];
+  expect(code).toBeDefined();
+  const resolvedCode = params.code ?? code ?? "";
+  expect(text).toContain("OpenClaw: access not configured.");
+  expect(text).toContain(params.idLine);
+  expect(text).toContain("Pairing code:");
+  expect(text).toContain(`\n\`\`\`\n${resolvedCode}\n\`\`\`\n`);
+  expect(text).toContain(`pairing approve ${params.channel} ${resolvedCode}`);
+  return resolvedCode;
+}
+
+export function getMonitorWebInbox(): MonitorWebInbox {
+  if (!monitorWebInbox) {
+    throw new Error("monitorWebInbox not initialized");
+  }
+  return monitorWebInbox;
+}
+
+export async function settleInboundWork() {
+  await new Promise((resolve) => setTimeout(resolve, 25));
+}
+
+export async function waitForMessageCalls(onMessage: ReturnType<typeof vi.fn>, count: number) {
+  await vi.waitFor(
+    () => {
+      expect(onMessage).toHaveBeenCalledTimes(count);
+    },
+    // Channel-suite workers can be saturated under no-isolate CI runs.
+    { timeout: 5_000, interval: 5 },
+  );
+}
+
+export async function startInboxMonitor(onMessage: InboxOnMessage) {
+  if (!monitorWebInbox) {
+    ({ monitorWebInbox } = await import("./inbound.js"));
+  }
+  const listener = await monitorWebInbox({
+    verbose: false,
+    onMessage,
+    accountId: DEFAULT_ACCOUNT_ID,
+    authDir: getAuthDir(),
+  });
+  return { listener, sock: getSock() };
+}
+
+export function buildNotifyMessageUpsert(params: {
+  id: string;
+  remoteJid: string;
+  text: string;
+  timestamp: number;
+  pushName?: string;
+  participant?: string;
+}) {
+  return {
+    type: "notify",
+    messages: [
+      {
+        key: {
+          id: params.id,
+          fromMe: false,
+          remoteJid: params.remoteJid,
+          participant: params.participant,
+        },
+        message: { conversation: params.text },
+        messageTimestamp: params.timestamp,
+        pushName: params.pushName,
+      },
+    ],
+  };
 }
 
 export function expectPairingPromptSent(sock: MockSock, jid: string, senderE164: string) {
   expect(sock.sendMessage).toHaveBeenCalledTimes(1);
-  expect(sock.sendMessage).toHaveBeenCalledWith(jid, {
-    text: expect.stringContaining(`Your WhatsApp phone number: ${senderE164}`),
-  });
-  expect(sock.sendMessage).toHaveBeenCalledWith(jid, {
-    text: expect.stringContaining("Pairing code: PAIRCODE"),
-  });
+  const sendCall = sock.sendMessage.mock.calls[0];
+  expect(sendCall?.[0]).toBe(jid);
+  expectInboxPairingReplyText(
+    String((sendCall?.[1] as { text?: string } | undefined)?.text ?? ""),
+    {
+      channel: "whatsapp",
+      idLine: `Your WhatsApp phone number: ${senderE164}`,
+      code: "PAIRCODE",
+    },
+  );
 }
 
 let authDir: string | undefined;
@@ -137,14 +221,14 @@ export function installWebMonitorInboxUnitTestHooks(opts?: { authDir?: boolean }
   const createAuthDir = opts?.authDir ?? true;
 
   beforeEach(async () => {
+    vi.useRealTimers();
+    vi.resetModules();
     vi.clearAllMocks();
-    mockLoadConfig.mockReturnValue(DEFAULT_WEB_INBOX_CONFIG);
-    readAllowFromStoreMock.mockResolvedValue([]);
-    upsertPairingRequestMock.mockResolvedValue({
-      code: "PAIRCODE",
-      created: true,
-    });
-    const { resetWebInboundDedupe } = await import("./inbound.js");
+    sessionState.sock = createMockSock();
+    resetPairingSecurityMocks(DEFAULT_WEB_INBOX_CONFIG);
+    const inboundModule = await import("./inbound.js");
+    monitorWebInbox = inboundModule.monitorWebInbox;
+    const { resetWebInboundDedupe } = inboundModule;
     resetWebInboundDedupe();
     if (createAuthDir) {
       authDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-"));

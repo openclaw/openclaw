@@ -1,4 +1,4 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/voice-call";
+import type { OpenClawPluginApi } from "../api.js";
 import type { VoiceCallTtsConfig } from "./config.js";
 
 export type CoreConfig = {

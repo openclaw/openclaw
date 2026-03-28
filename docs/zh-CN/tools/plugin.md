@@ -155,7 +155,6 @@ Bundle hook 支持仅限于常规 OpenClaw hook 目录格式（在声明的 hook
 - OpenCode Zen provider 能力 — 以 `opencode` 形式捆绑（默认启用）
 - OpenRouter provider 运行时 — 以 `openrouter` 形式捆绑（默认启用）
 - Qianfan provider catalog — 以 `qianfan` 形式捆绑（默认启用）
-- Qwen OAuth（provider 身份验证 + catalog）— 以 `qwen-portal-auth` 形式捆绑（默认启用）
 - Synthetic provider catalog — 以 `synthetic` 形式捆绑（默认启用）
 - Together provider catalog — 以 `together` 形式捆绑（默认启用）
 - Venice provider catalog — 以 `venice` 形式捆绑（默认启用）
@@ -497,7 +496,7 @@ api.registerHttpRoute({
   `openclaw/plugin-sdk/minimax-portal-auth`、
   `openclaw/plugin-sdk/nextcloud-talk`、`openclaw/plugin-sdk/nostr`、
   `openclaw/plugin-sdk/open-prose`、`openclaw/plugin-sdk/phone-control`、
-  `openclaw/plugin-sdk/qwen-portal-auth`、`openclaw/plugin-sdk/synology-chat`、
+  `openclaw/plugin-sdk/synology-chat`、
   `openclaw/plugin-sdk/talk-voice`、`openclaw/plugin-sdk/test-utils`、
   `openclaw/plugin-sdk/thread-ownership`、`openclaw/plugin-sdk/tlon`、
   `openclaw/plugin-sdk/twitch`、`openclaw/plugin-sdk/voice-call`、
@@ -613,7 +612,6 @@ OpenClaw 按以下顺序扫描：
 - `openrouter`
 - `phone-control`
 - `qianfan`
-- `qwen-portal-auth`
 - `sglang`
 - `synthetic`
 - `talk-voice`
@@ -949,6 +947,35 @@ export default function (api) {
   }));
 }
 ```
+
+如果你的引擎**并不拥有**压缩算法，仍然要实现 `compact()`，并显式委托给运行时：
+
+```ts
+import { delegateCompactionToRuntime } from "openclaw/plugin-sdk";
+
+export default function (api) {
+  api.registerContextEngine("my-memory-engine", () => ({
+    info: {
+      id: "my-memory-engine",
+      name: "My Memory Engine",
+      ownsCompaction: false,
+    },
+    async ingest() {
+      return { ingested: true };
+    },
+    async assemble({ messages }) {
+      return { messages, estimatedTokens: 0 };
+    },
+    async compact(params) {
+      return await delegateCompactionToRuntime(params);
+    },
+  }));
+}
+```
+
+`ownsCompaction: false` 不会自动回退到 legacy 压缩路径。
+只要该引擎处于激活状态，它自己的 `compact()` 仍然会处理 `/compact`
+和溢出恢复。
 
 然后在配置中启用它：
 

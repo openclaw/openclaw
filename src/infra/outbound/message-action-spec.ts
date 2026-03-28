@@ -56,8 +56,10 @@ export const MESSAGE_ACTION_TARGET_MODE: Record<ChannelMessageActionName, Messag
     timeout: "none",
     kick: "none",
     ban: "none",
+    "set-profile": "none",
     "set-presence": "none",
     "download-file": "none",
+    "upload-file": "to",
   };
 
 type ActionTargetAliasSpec = {

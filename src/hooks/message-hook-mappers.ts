@@ -35,6 +35,8 @@ export type CanonicalInboundMessageHookContext = {
   threadId?: string | number;
   mediaPath?: string;
   mediaType?: string;
+  mediaPaths?: string[];
+  mediaTypes?: string[];
   originatingChannel?: string;
   originatingTo?: string;
   guildId?: string;
@@ -75,6 +77,16 @@ export function deriveInboundMessageHookContext(
   const channelId = (ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider ?? "").toLowerCase();
   const conversationId = ctx.OriginatingTo ?? ctx.To ?? ctx.From ?? undefined;
   const isGroup = Boolean(ctx.GroupSubject || ctx.GroupChannel);
+  const mediaPaths = Array.isArray(ctx.MediaPaths)
+    ? ctx.MediaPaths.filter(
+        (value): value is string => typeof value === "string" && value.length > 0,
+      )
+    : undefined;
+  const mediaTypes = Array.isArray(ctx.MediaTypes)
+    ? ctx.MediaTypes.filter(
+        (value): value is string => typeof value === "string" && value.length > 0,
+      )
+    : undefined;
   return {
     from: ctx.From ?? "",
     to: ctx.To,
@@ -102,8 +114,10 @@ export function deriveInboundMessageHookContext(
     provider: ctx.Provider,
     surface: ctx.Surface,
     threadId: ctx.MessageThreadId,
-    mediaPath: ctx.MediaPath,
-    mediaType: ctx.MediaType,
+    mediaPath: ctx.MediaPath ?? mediaPaths?.[0],
+    mediaType: ctx.MediaType ?? mediaTypes?.[0],
+    mediaPaths,
+    mediaTypes,
     originatingChannel: ctx.OriginatingChannel,
     originatingTo: ctx.OriginatingTo,
     guildId: ctx.GroupSpace,
@@ -272,6 +286,8 @@ export function toPluginInboundClaimEvent(
       senderE164: canonical.senderE164,
       mediaPath: canonical.mediaPath,
       mediaType: canonical.mediaType,
+      mediaPaths: canonical.mediaPaths,
+      mediaTypes: canonical.mediaTypes,
       guildId: canonical.guildId,
       channelName: canonical.channelName,
       groupId: canonical.groupId,

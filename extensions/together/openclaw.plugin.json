@@ -1,5 +1,6 @@
 {
   "id": "together",
+  "enabledByDefault": true,
   "providers": ["together"],
   "providerAuthEnvVars": {
     "together": ["TOGETHER_API_KEY"]

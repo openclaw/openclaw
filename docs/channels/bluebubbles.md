@@ -126,7 +126,7 @@ launchctl load ~/Library/LaunchAgents/com.user.poke-messages.plist
 
 ## Onboarding
 
-BlueBubbles is available in the interactive setup wizard:
+BlueBubbles is available in interactive onboarding:
 
 ```
 openclaw onboard
@@ -162,6 +162,25 @@ Groups:
 - `channels.bluebubbles.groupPolicy = open | allowlist | disabled` (default: `allowlist`).
 - `channels.bluebubbles.groupAllowFrom` controls who can trigger in groups when `allowlist` is set.
 
+### Contact name enrichment (macOS, optional)
+
+BlueBubbles group webhooks often only include raw participant addresses. If you want `GroupMembers` context to show local contact names instead, you can opt in to local Contacts enrichment on macOS:
+
+- `channels.bluebubbles.enrichGroupParticipantsFromContacts = true` enables the lookup. Default: `false`.
+- Lookups run only after group access, command authorization, and mention gating have allowed the message through.
+- Only unnamed phone participants are enriched.
+- Raw phone numbers remain as the fallback when no local match is found.
+
+```json5
+{
+  channels: {
+    bluebubbles: {
+      enrichGroupParticipantsFromContacts: true,
+    },
+  },
+}
+```
+
 ### Mention gating (groups)
 
 BlueBubbles supports mention gating for group chats, matching iMessage/WhatsApp behavior:
@@ -192,6 +211,60 @@ Per-group configuration:
 - Control commands (e.g., `/config`, `/model`) require authorization.
 - Uses `allowFrom` and `groupAllowFrom` to determine command authorization.
 - Authorized senders can run control commands even without mentioning in groups.
+
+## ACP conversation bindings
+
+BlueBubbles chats can be turned into durable ACP workspaces without changing the transport layer.
+
+Fast operator flow:
+
+- Run `/acp spawn codex --bind here` inside the DM or allowed group chat.
+- Future messages in that same BlueBubbles conversation route to the spawned ACP session.
+- `/new` and `/reset` reset the same bound ACP session in place.
+- `/acp close` closes the ACP session and removes the binding.
+
+Configured persistent bindings are also supported through top-level `bindings[]` entries with `type: "acp"` and `match.channel: "bluebubbles"`.
+
+`match.peer.id` can use any supported BlueBubbles target form:
+
+- normalized DM handle such as `+15555550123` or `user@example.com`
+- `chat_id:<id>`
+- `chat_guid:<guid>`
+- `chat_identifier:<identifier>`
+
+For stable group bindings, prefer `chat_id:*` or `chat_identifier:*`.
+
+Example:
+
+```json5
+{
+  agents: {
+    list: [
+      {
+        id: "codex",
+        runtime: {
+          type: "acp",
+          acp: { agent: "codex", backend: "acpx", mode: "persistent" },
+        },
+      },
+    ],
+  },
+  bindings: [
+    {
+      type: "acp",
+      agentId: "codex",
+      match: {
+        channel: "bluebubbles",
+        accountId: "default",
+        peer: { kind: "dm", id: "+15555550123" },
+      },
+      acp: { label: "codex-imessage" },
+    },
+  ],
+}
+```
+
+See [ACP Agents](/tools/acp-agents) for shared ACP binding behavior.
 
 ## Typing + read receipts
 
@@ -247,8 +320,9 @@ Available actions:
 - **addParticipant**: Add someone to a group (`chatGuid`, `address`)
 - **removeParticipant**: Remove someone from a group (`chatGuid`, `address`)
 - **leaveGroup**: Leave a group chat (`chatGuid`)
-- **sendAttachment**: Send media/files (`to`, `buffer`, `filename`, `asVoice`)
+- **upload-file**: Send media/files (`to`, `buffer`, `filename`, `asVoice`)
   - Voice memos: set `asVoice: true` with **MP3** or **CAF** audio to send as an iMessage voice message. BlueBubbles converts MP3 → CAF when sending voice memos.
+- Legacy alias: `sendAttachment` still works, but `upload-file` is the canonical action name.
 
 ### Message IDs (short vs full)
 
@@ -300,6 +374,7 @@ Provider options:
 - `channels.bluebubbles.allowFrom`: DM allowlist (handles, emails, E.164 numbers, `chat_id:*`, `chat_guid:*`).
 - `channels.bluebubbles.groupPolicy`: `open | allowlist | disabled` (default: `allowlist`).
 - `channels.bluebubbles.groupAllowFrom`: Group sender allowlist.
+- `channels.bluebubbles.enrichGroupParticipantsFromContacts`: On macOS, optionally enrich unnamed group participants from local Contacts after gating passes. Default: `false`.
 - `channels.bluebubbles.groups`: Per-group config (`requireMention`, etc.).
 - `channels.bluebubbles.sendReadReceipts`: Send read receipts (default: `true`).
 - `channels.bluebubbles.blockStreaming`: Enable block streaming (default: `false`; required for streaming replies).

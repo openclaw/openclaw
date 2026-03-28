@@ -1,16 +1,25 @@
-import { emptyPluginConfigSchema, type OpenClawPluginApi } from "openclaw/plugin-sdk/core";
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { buildOpenAICodexCliBackend } from "./cli-backend.js";
+import { buildOpenAIImageGenerationProvider } from "./image-generation-provider.js";
+import {
+  openaiCodexMediaUnderstandingProvider,
+  openaiMediaUnderstandingProvider,
+} from "./media-understanding-provider.js";
 import { buildOpenAICodexProviderPlugin } from "./openai-codex-provider.js";
 import { buildOpenAIProvider } from "./openai-provider.js";
+import { buildOpenAISpeechProvider } from "./speech-provider.js";
 
-const openAIPlugin = {
+export default definePluginEntry({
   id: "openai",
   name: "OpenAI Provider",
   description: "Bundled OpenAI provider plugins",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
+  register(api) {
+    api.registerCliBackend(buildOpenAICodexCliBackend());
     api.registerProvider(buildOpenAIProvider());
     api.registerProvider(buildOpenAICodexProviderPlugin());
+    api.registerSpeechProvider(buildOpenAISpeechProvider());
+    api.registerMediaUnderstandingProvider(openaiMediaUnderstandingProvider);
+    api.registerMediaUnderstandingProvider(openaiCodexMediaUnderstandingProvider);
+    api.registerImageGenerationProvider(buildOpenAIImageGenerationProvider());
   },
-};
-
-export default openAIPlugin;
+});

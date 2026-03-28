@@ -10,7 +10,8 @@
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/mattermost";
+import type { OpenClawPluginApi } from "../runtime-api.js";
+import type { MattermostConfig } from "../types.js";
 import type { ResolvedMattermostAccount } from "./accounts.js";
 import { resolveSlashCommandConfig, type MattermostRegisteredCommand } from "./slash-commands.js";
 import { createSlashCommandHttpHandler } from "./slash-http.js";
@@ -86,8 +87,8 @@ export function activateSlashCommands(params: {
   registeredCommands: MattermostRegisteredCommand[];
   triggerMap?: Map<string, string>;
   api: {
-    cfg: import("openclaw/plugin-sdk/mattermost").OpenClawConfig;
-    runtime: import("openclaw/plugin-sdk/mattermost").RuntimeEnv;
+    cfg: import("../runtime-api.js").OpenClawConfig;
+    runtime: import("../runtime-api.js").RuntimeEnv;
   };
   log?: (msg: string) => void;
 }) {
@@ -149,7 +150,7 @@ export function deactivateSlashCommands(accountId?: string) {
  * by matching the inbound token against each account's registered tokens.
  */
 export function registerSlashCommandRoute(api: OpenClawPluginApi) {
-  const mmConfig = api.config.channels?.mattermost as Record<string, unknown> | undefined;
+  const mmConfig = api.config.channels?.mattermost as MattermostConfig | undefined;
 
   // Collect callback paths from both top-level and per-account config.
   // Command registration uses account.config.commands, so the HTTP route
@@ -180,12 +181,9 @@ export function registerSlashCommandRoute(api: OpenClawPluginApi) {
     | undefined;
   addCallbackPaths(commandsRaw);
 
-  const accountsRaw = (mmConfig?.accounts ?? {}) as Record<string, unknown>;
+  const accountsRaw = mmConfig?.accounts ?? {};
   for (const accountId of Object.keys(accountsRaw)) {
-    const accountCfg = accountsRaw[accountId] as Record<string, unknown> | undefined;
-    const accountCommandsRaw = accountCfg?.commands as
-      | Partial<import("./slash-commands.js").MattermostSlashCommandConfig>
-      | undefined;
+    const accountCommandsRaw = accountsRaw[accountId]?.commands;
     addCallbackPaths(accountCommandsRaw);
   }
 
