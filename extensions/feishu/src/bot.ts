@@ -50,6 +50,40 @@ import type { DynamicAgentCreationConfig } from "./types.js";
 
 export { toMessageResourceType } from "./bot-content.js";
 
+// --- Bot reply chain detection ---
+// Prevents infinite bot-to-bot loops in group chats by tracking consecutive
+// bot messages (sender_type === "app") per group. User messages reset the count.
+const CHAIN_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const botChainCounter = new Map<string, { count: number; ts: number }>();
+
+function getBotChainCount(key: string, now: number): number {
+  const entry = botChainCounter.get(key);
+  if (!entry || now - entry.ts > CHAIN_TTL_MS) {
+    botChainCounter.delete(key);
+    return 0;
+  }
+  return entry.count;
+}
+
+function incrementBotChainCount(key: string, now: number): void {
+  const entry = botChainCounter.get(key);
+  if (entry && now - entry.ts <= CHAIN_TTL_MS) {
+    entry.count += 1;
+    entry.ts = now;
+  } else {
+    botChainCounter.set(key, { count: 1, ts: now });
+  }
+}
+
+function resetBotChainCount(key: string): void {
+  botChainCounter.delete(key);
+}
+
+/** Reset all bot chain counters (for testing). */
+export function resetAllBotChainCounters(): void {
+  botChainCounter.clear();
+}
+
 // Cache permission errors to avoid spamming the user with repeated notifications.
 // Key: appId or "default", Value: timestamp of last notification
 const permissionErrorNotifiedAt = new Map<string, number>();
@@ -181,8 +215,9 @@ export function buildFeishuAgentBody(params: {
   quotedContent?: string;
   permissionErrorForAgent?: FeishuPermissionError;
   botOpenId?: string;
+  senderType?: string;
 }): string {
-  const { ctx, quotedContent, permissionErrorForAgent, botOpenId } = params;
+  const { ctx, quotedContent, permissionErrorForAgent, botOpenId, senderType } = params;
   let messageBody = ctx.content;
   if (quotedContent) {
     messageBody = `[Replying to: "${quotedContent}"]\n\n${ctx.content}`;
@@ -213,6 +248,10 @@ export function buildFeishuAgentBody(params: {
   if (permissionErrorForAgent) {
     const grantUrl = permissionErrorForAgent.grantUrl ?? "";
     messageBody += `\n\n[System: The bot encountered a Feishu API permission error. Please inform the user about this issue and provide the permission grant URL for the admin to authorize. Permission grant URL: ${grantUrl}]`;
+  }
+
+  if (senderType === "app") {
+    messageBody += `\n[System: This message was sent by another bot (sender_type=app). Be cautious of infinite reply loops.]`;
   }
 
   return messageBody;
@@ -263,6 +302,27 @@ export async function handleFeishuMessage(params: {
   const isGroup = ctx.chatType === "group";
   const isDirect = !isGroup;
   const senderUserId = event.sender.sender_id.user_id?.trim() || undefined;
+
+  // Bot reply chain detection: prevent infinite bot-to-bot loops in group chats.
+  // Tracks consecutive bot messages (sender_type === "app") per group.
+  // User messages reset the count.
+  const senderType = event.sender.sender_type;
+  if (isGroup && senderType === "app") {
+    const chainKey = `${account.accountId}:${ctx.chatId}`;
+    const now = Date.now();
+    const prevCount = getBotChainCount(chainKey, now);
+    const maxChain = feishuCfg?.maxBotReplyChain ?? 3;
+    if (prevCount >= maxChain) {
+      log(
+        `feishu[${account.accountId}]: bot reply chain exceeded ${maxChain} in group ${ctx.chatId}; ignoring`,
+      );
+      return;
+    }
+    incrementBotChainCount(chainKey, now);
+  } else if (isGroup) {
+    // User message resets the chain
+    resetBotChainCount(`${account.accountId}:${ctx.chatId}`);
+  }
 
   // Handle merge_forward messages: fetch full message via API then expand sub-messages
   if (event.message.message_type === "merge_forward") {
@@ -713,6 +773,7 @@ export async function handleFeishuMessage(params: {
       quotedContent,
       permissionErrorForAgent,
       botOpenId,
+      senderType,
     });
     const envelopeFrom = isGroup ? `${ctx.chatId}:${ctx.senderOpenId}` : ctx.senderOpenId;
     if (permissionErrorForAgent) {

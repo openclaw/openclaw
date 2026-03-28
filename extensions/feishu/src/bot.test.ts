@@ -9,6 +9,7 @@ import {
   buildBroadcastSessionKey,
   buildFeishuAgentBody,
   handleFeishuMessage,
+  resetAllBotChainCounters,
   resolveBroadcastAgents,
   toMessageResourceType,
 } from "./bot.js";
@@ -2494,6 +2495,199 @@ describe("handleFeishuMessage command authorization", () => {
     };
 
     await Promise.all([dispatchMessage({ cfg, event }), dispatchMessage({ cfg, event })]);
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("bot reply chain detection", () => {
+  const mockFinalizeInboundContext = vi.fn((ctx: unknown) => ctx);
+  const mockDispatchReplyFromConfig = vi
+    .fn()
+    .mockResolvedValue({ queuedFinal: false, counts: { final: 1 } });
+  const mockWithReplyDispatcher = vi.fn(
+    async ({ run }: Parameters<PluginRuntime["channel"]["reply"]["withReplyDispatcher"]>[0]) =>
+      await run(),
+  );
+  const mockResolveCommandAuthorizedFromAuthorizers = vi.fn(() => false);
+  const mockShouldComputeCommandAuthorized = vi.fn(() => false);
+  const mockReadAllowFromStore = vi.fn().mockResolvedValue([]);
+  const mockEnqueueSystemEvent = vi.fn();
+
+  const groupCfg: ClawdbotConfig = {
+    channels: {
+      feishu: {
+        dmPolicy: "pairing",
+        groupPolicy: "open",
+        requireMention: false,
+        maxBotReplyChain: 3,
+      },
+    },
+  } as unknown as ClawdbotConfig;
+
+  function makeBotMessage(messageId: string): FeishuMessageEvent {
+    return {
+      sender: {
+        sender_id: { open_id: "ou-bot-other" },
+        sender_type: "app",
+      },
+      message: {
+        message_id: messageId,
+        chat_id: "oc-test-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "hello from bot" }),
+        mentions: [
+          {
+            key: "@_user_1",
+            id: { open_id: "ou-self-bot" },
+            name: "Self Bot",
+          },
+        ],
+      },
+    };
+  }
+
+  function makeUserMessage(messageId: string): FeishuMessageEvent {
+    return {
+      sender: {
+        sender_id: { open_id: "ou-human" },
+        sender_type: "user",
+      },
+      message: {
+        message_id: messageId,
+        chat_id: "oc-test-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "hello from human" }),
+        mentions: [
+          {
+            key: "@_user_1",
+            id: { open_id: "ou-self-bot" },
+            name: "Self Bot",
+          },
+        ],
+      },
+    };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetAllBotChainCounters();
+    mockShouldComputeCommandAuthorized.mockReset().mockReturnValue(false);
+    mockResolveAgentRoute.mockReturnValue(buildDefaultResolveRoute());
+    mockCreateFeishuClient.mockReturnValue({
+      contact: {
+        user: {
+          get: vi.fn().mockResolvedValue({ data: { user: { name: "Bot" } } }),
+        },
+      },
+    });
+    mockEnqueueSystemEvent.mockReset();
+    setFeishuRuntime(
+      createPluginRuntimeMock({
+        system: {
+          enqueueSystemEvent: mockEnqueueSystemEvent,
+        },
+        channel: {
+          routing: {
+            resolveAgentRoute:
+              mockResolveAgentRoute as unknown as PluginRuntime["channel"]["routing"]["resolveAgentRoute"],
+          },
+          reply: {
+            resolveEnvelopeFormatOptions: resolveEnvelopeFormatOptionsMock as never,
+            formatAgentEnvelope: vi.fn((params: { body: string }) => params.body),
+            finalizeInboundContext: finalizeInboundContextMock as never,
+            dispatchReplyFromConfig: mockDispatchReplyFromConfig,
+            withReplyDispatcher: mockWithReplyDispatcher as never,
+          },
+          commands: {
+            shouldComputeCommandAuthorized: mockShouldComputeCommandAuthorized,
+            resolveCommandAuthorizedFromAuthorizers: mockResolveCommandAuthorizedFromAuthorizers,
+          },
+          pairing: {
+            readAllowFromStore: mockReadAllowFromStore,
+          },
+        },
+        media: {
+          detectMime: vi.fn(async () => "application/octet-stream"),
+        },
+      }),
+    );
+  });
+
+  it("allows bot messages up to maxBotReplyChain", async () => {
+    for (let i = 1; i <= 3; i++) {
+      await dispatchMessage({ cfg: groupCfg, event: makeBotMessage(`chain-allow-${i}`) });
+    }
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(3);
+  });
+
+  it("ignores bot messages after maxBotReplyChain is exceeded", async () => {
+    for (let i = 1; i <= 4; i++) {
+      await dispatchMessage({ cfg: groupCfg, event: makeBotMessage(`chain-exceed-${i}`) });
+    }
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(3);
+  });
+
+  it("resets chain count when a user message is received", async () => {
+    await dispatchMessage({ cfg: groupCfg, event: makeBotMessage("chain-reset-b1") });
+    await dispatchMessage({ cfg: groupCfg, event: makeBotMessage("chain-reset-b2") });
+    await dispatchMessage({ cfg: groupCfg, event: makeBotMessage("chain-reset-b3") });
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(3);
+
+    await dispatchMessage({ cfg: groupCfg, event: makeUserMessage("chain-reset-u1") });
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(4);
+
+    await dispatchMessage({ cfg: groupCfg, event: makeBotMessage("chain-reset-b4") });
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(5);
+  });
+
+  it("does not apply chain limit in DMs", async () => {
+    const dmCfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          maxBotReplyChain: 2,
+        },
+      },
+    } as unknown as ClawdbotConfig;
+
+    for (let i = 1; i <= 4; i++) {
+      await dispatchMessage({
+        cfg: dmCfg,
+        event: {
+          sender: {
+            sender_id: { open_id: "ou-bot-other" },
+            sender_type: "app",
+          },
+          message: {
+            message_id: `dm-chain-${i}`,
+            chat_id: "oc-dm",
+            chat_type: "p2p",
+            message_type: "text",
+            content: JSON.stringify({ text: "dm bot msg" }),
+          },
+        },
+      });
+    }
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(4);
+  });
+
+  it("respects custom maxBotReplyChain=1", async () => {
+    const strictCfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "pairing",
+          groupPolicy: "open",
+          requireMention: false,
+          maxBotReplyChain: 1,
+        },
+      },
+    } as unknown as ClawdbotConfig;
+
+    await dispatchMessage({ cfg: strictCfg, event: makeBotMessage("chain-strict-1") });
+    await dispatchMessage({ cfg: strictCfg, event: makeBotMessage("chain-strict-2") });
     expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
   });
 });

@@ -182,6 +182,7 @@ const FeishuSharedConfigShape = {
   reactionNotifications: ReactionNotificationModeSchema,
   typingIndicator: z.boolean().optional(),
   resolveSenderNames: z.boolean().optional(),
+  maxBotReplyChain: z.number().int().min(1).max(10).optional(),
 };
 
 /**
@@ -229,6 +230,8 @@ export const FeishuConfigSchema = z
     // Optimization flags
     typingIndicator: z.boolean().optional().default(true),
     resolveSenderNames: z.boolean().optional().default(true),
+    // Bot-to-bot loop prevention: max consecutive bot messages in a group before ignoring
+    maxBotReplyChain: z.number().int().min(1).max(10).optional().default(3),
     // Multi-account configuration
     accounts: z.record(z.string(), FeishuAccountConfigSchema.optional()).optional(),
   })
