@@ -776,6 +776,13 @@ export async function runWithModelFallback<T>(params: {
       if (isLikelyContextOverflowError(errMessage)) {
         throw err;
       }
+      // LiveSessionModelSwitchError indicates a model switch was requested
+      // (e.g., user changed /model during a live session, or image model override
+      // was applied). This should be handled by the outer runner, not trigger fallback.
+      // Rethrow immediately so agent-runner-execution.ts can handle it.
+      if (err instanceof LiveSessionModelSwitchError) {
+        throw err;
+      }
       const normalized =
         coerceToFailoverError(err, {
           provider: candidate.provider,
@@ -906,20 +913,62 @@ export async function runWithImageModelFallback<T>(params: {
 
   const attempts: FallbackAttempt[] = [];
   let lastError: unknown;
+  const requestedProvider = candidates[0]?.provider;
+  const requestedModel = candidates[0]?.model;
 
   for (let i = 0; i < candidates.length; i += 1) {
     const candidate = candidates[i];
+    const isPrimary = i === 0;
     const attemptRun = await runFallbackAttempt({ run: params.run, ...candidate, attempts });
     if ("success" in attemptRun) {
+      // Log successful model selection for image tool
+      logModelFallbackDecision({
+        decision: "candidate_succeeded",
+        runId: undefined,
+        requestedProvider,
+        requestedModel,
+        candidate,
+        attempt: i + 1,
+        total: candidates.length,
+        isPrimary,
+        requestedModelMatched: requestedModel,
+        fallbackConfigured: candidates.length > 1,
+      });
       return attemptRun.success;
     }
     {
       const err = attemptRun.error;
       lastError = err;
+      const normalized = coerceToFailoverError(err, {
+        provider: candidate.provider,
+        model: candidate.model,
+      });
+      const described = describeFailoverError(normalized);
       attempts.push({
         provider: candidate.provider,
         model: candidate.model,
-        error: err instanceof Error ? err.message : String(err),
+        error: described.message,
+        reason: described.reason ?? "unknown",
+        status: described.status,
+        code: described.code,
+      });
+      // Log failed candidate for image tool fallback tracking
+      logModelFallbackDecision({
+        decision: "candidate_failed",
+        runId: undefined,
+        requestedProvider,
+        requestedModel,
+        candidate,
+        attempt: i + 1,
+        total: candidates.length,
+        reason: described.reason,
+        status: described.status,
+        code: described.code,
+        error: described.message,
+        nextCandidate: candidates[i + 1],
+        isPrimary,
+        requestedModelMatched: requestedModel,
+        fallbackConfigured: candidates.length > 1,
       });
       await params.onError?.({
         provider: candidate.provider,
