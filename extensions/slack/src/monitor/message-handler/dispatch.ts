@@ -58,10 +58,12 @@ export function shouldEnableSlackPreviewStreaming(params: {
   if (params.mode === "off") {
     return false;
   }
-  if (!params.isDirectMessage) {
-    return true;
-  }
-  return Boolean(params.threadTs);
+  // Enable preview streaming for all modes in both channels and DMs.
+  // Previously, DMs without an existing threadTs were excluded to avoid
+  // orphaned drafts, but createSlackDraftStream() posts directly to the
+  // DM target and does not require a pre-existing thread. This blocked
+  // post-and-edit streaming in flat (replyToMode: off) DM conversations.
+  return true;
 }
 
 export function shouldInitializeSlackDraftStream(params: {
