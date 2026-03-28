@@ -494,7 +494,7 @@ export async function tryDispatchAcpReply(params: {
           }),
           new Promise<void>((resolve) => {
             const t = setTimeout(resolve, DRAIN_GRACE_MS);
-            (t as NodeJS.Timeout).unref?.();
+            t.unref?.();
           }),
         ]);
       }
