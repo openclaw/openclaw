@@ -14,11 +14,12 @@ vi.mock("node:http", () => {
   return { default: { request: mockRequest, get: mockGet }, request: mockRequest, get: mockGet };
 });
 
-// Import after mocks are set up
-const { sendMessage, sendFileUrl, fetchChatUsers, resolveLegacyWebhookNameToChatUserId } =
-  await import("./client.js");
 const https = await import("node:https");
 let fakeNowMs = 1_700_000_000_000;
+let sendMessage: typeof import("./client.js").sendMessage;
+let sendFileUrl: typeof import("./client.js").sendFileUrl;
+let fetchChatUsers: typeof import("./client.js").fetchChatUsers;
+let resolveLegacyWebhookNameToChatUserId: typeof import("./client.js").resolveLegacyWebhookNameToChatUserId;
 
 async function settleTimers<T>(promise: Promise<T>): Promise<T> {
   await Promise.resolve();
@@ -55,6 +56,7 @@ function mockFailureResponse(statusCode = 500) {
 function installFakeTimerHarness() {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.resetModules();
     vi.useFakeTimers();
     fakeNowMs += 10_000;
     vi.setSystemTime(fakeNowMs);
@@ -62,6 +64,11 @@ function installFakeTimerHarness() {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  beforeEach(async () => {
+    ({ sendMessage, sendFileUrl, fetchChatUsers, resolveLegacyWebhookNameToChatUserId } =
+      await import("./client.js"));
   });
 }
 

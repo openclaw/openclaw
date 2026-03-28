@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resetInboundDedupe } from "../../../src/auto-reply/reply/inbound-dedupe.js";
 import {
   flush,
@@ -71,11 +71,9 @@ beforeEach(() => {
   resetInboundDedupe();
 });
 
-beforeAll(async () => {
-  ({ monitorSlackProvider } = await import("./monitor.js"));
-});
-
 beforeEach(async () => {
+  vi.resetModules();
+  ({ monitorSlackProvider } = await import("./monitor.js"));
   resetInboundDedupe();
   resetSlackTestState({
     messages: { responsePrefix: "PFX" },
