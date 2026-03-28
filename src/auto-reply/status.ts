@@ -538,11 +538,13 @@ export function buildStatusMessage(args: StatusArgs): string {
     cfg: contextConfig,
     provider: selectedProvider,
     model: selectedModel,
+    allowAsyncLoad: false,
   });
   const activeContextTokens = resolveContextTokensForModel({
     cfg: contextConfig,
     ...(contextLookupProvider ? { provider: contextLookupProvider } : {}),
     model: contextLookupModel,
+    allowAsyncLoad: false,
   });
   const persistedContextTokens =
     typeof entry?.contextTokens === "number" && entry.contextTokens > 0
@@ -611,6 +613,7 @@ export function buildStatusMessage(args: StatusArgs): string {
         model: contextLookupModel,
         contextTokensOverride: persistedContextTokens ?? args.agent?.contextTokens,
         fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
+        allowAsyncLoad: false,
       }) ?? DEFAULT_CONTEXT_TOKENS);
 
   const thinkLevel =
@@ -701,6 +704,7 @@ export function buildStatusMessage(args: StatusArgs): string {
         provider: activeProvider,
         model: activeModel,
         config: args.config,
+        allowPluginNormalization: false,
       })
     : undefined;
   const hasUsage = typeof inputTokens === "number" || typeof outputTokens === "number";
