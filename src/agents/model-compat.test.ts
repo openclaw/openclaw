@@ -9,8 +9,8 @@ vi.mock("../plugins/provider-runtime.js", () => ({
   resolveProviderModernModelRef: providerRuntimeMocks.resolveProviderModernModelRef,
 }));
 
+import { normalizeModelCompat } from "../plugins/provider-model-compat.js";
 import { isHighSignalLiveModelRef, isModernModelRef } from "./live-model-filter.js";
-import { normalizeModelCompat } from "./model-compat.js";
 
 const baseModel = (): Model<Api> =>
   ({

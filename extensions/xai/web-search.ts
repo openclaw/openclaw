@@ -3,14 +3,18 @@ import {
   DEFAULT_CACHE_TTL_MINUTES,
   DEFAULT_TIMEOUT_SECONDS,
   getScopedCredentialValue,
+  mergeScopedSearchConfig,
   normalizeCacheKey,
   readCache,
   readNumberParam,
   readStringParam,
   resolveCacheTtlMs,
+  resolveProviderWebSearchPluginConfig,
   resolveTimeoutSeconds,
   resolveWebSearchProviderCredential,
+  setProviderWebSearchPluginConfigValue,
   setScopedCredentialValue,
+  type SearchConfigRecord,
   type WebSearchProviderPlugin,
   writeCache,
 } from "openclaw/plugin-sdk/provider-web-search";
@@ -67,6 +71,25 @@ function runXaiWebSearch(params: {
   })();
 }
 
+function resolveXaiToolSearchConfig(ctx: {
+  config?: Record<string, unknown>;
+  searchConfig?: Record<string, unknown>;
+}): SearchConfigRecord | undefined {
+  return mergeScopedSearchConfig(
+    ctx.searchConfig as SearchConfigRecord | undefined,
+    "grok",
+    resolveProviderWebSearchPluginConfig(ctx.config, "xai"),
+  ) as SearchConfigRecord | undefined;
+}
+
+function resolveXaiWebSearchCredential(searchConfig?: SearchConfigRecord): string | undefined {
+  return resolveWebSearchProviderCredential({
+    credentialValue: getScopedCredentialValue(searchConfig, "grok"),
+    path: "tools.web.search.grok.apiKey",
+    envVars: ["XAI_API_KEY"],
+  });
+}
+
 export function createXaiWebSearchProvider(): WebSearchProviderPlugin {
   return {
     id: "grok",
@@ -85,61 +108,67 @@ export function createXaiWebSearchProvider(): WebSearchProviderPlugin {
       getScopedCredentialValue(searchConfig, "grok"),
     setCredentialValue: (searchConfigTarget: Record<string, unknown>, value: unknown) =>
       setScopedCredentialValue(searchConfigTarget, "grok", value),
-    createTool: (ctx: { searchConfig?: Record<string, unknown> }) => ({
-      description:
-        "Search the web using xAI Grok. Returns AI-synthesized answers with citations from real-time web search.",
-      parameters: Type.Object({
-        query: Type.String({ description: "Search query string." }),
-        count: Type.Optional(
-          Type.Number({
-            description: "Number of results to return (1-10).",
-            minimum: 1,
-            maximum: 10,
-          }),
-        ),
-      }),
-      execute: async (args: Record<string, unknown>) => {
-        const apiKey = resolveWebSearchProviderCredential({
-          credentialValue: getScopedCredentialValue(ctx.searchConfig, "grok"),
-          path: "tools.web.search.grok.apiKey",
-          envVars: ["XAI_API_KEY"],
-        });
-
-        if (!apiKey) {
-          return {
-            error: "missing_xai_api_key",
-            message:
-              "web_search (grok) needs an xAI API key. Set XAI_API_KEY in the Gateway environment, or configure plugins.entries.xai.config.webSearch.apiKey.",
-            docs: "https://docs.openclaw.ai/tools/web",
-          };
-        }
-
-        const query = readStringParam(args, "query", { required: true });
-        void readNumberParam(args, "count", { integer: true });
-
-        return await runXaiWebSearch({
-          query,
-          model: resolveXaiWebSearchModel(ctx.searchConfig),
-          apiKey,
-          timeoutSeconds: resolveTimeoutSeconds(
-            (ctx.searchConfig?.timeoutSeconds as number | undefined) ?? undefined,
-            DEFAULT_TIMEOUT_SECONDS,
+    getConfiguredCredentialValue: (config) =>
+      resolveProviderWebSearchPluginConfig(config, "xai")?.apiKey,
+    setConfiguredCredentialValue: (configTarget, value) => {
+      setProviderWebSearchPluginConfigValue(configTarget, "xai", "apiKey", value);
+    },
+    createTool: (ctx) => {
+      const searchConfig = resolveXaiToolSearchConfig(ctx);
+      return {
+        description:
+          "Search the web using xAI Grok. Returns AI-synthesized answers with citations from real-time web search.",
+        parameters: Type.Object({
+          query: Type.String({ description: "Search query string." }),
+          count: Type.Optional(
+            Type.Number({
+              description: "Number of results to return (1-10).",
+              minimum: 1,
+              maximum: 10,
+            }),
           ),
-          inlineCitations: resolveXaiInlineCitations(ctx.searchConfig),
-          cacheTtlMs: resolveCacheTtlMs(
-            (ctx.searchConfig?.cacheTtlMinutes as number | undefined) ?? undefined,
-            DEFAULT_CACHE_TTL_MINUTES,
-          ),
-        });
-      },
-    }),
+        }),
+        execute: async (args: Record<string, unknown>) => {
+          const apiKey = resolveXaiWebSearchCredential(searchConfig);
+
+          if (!apiKey) {
+            return {
+              error: "missing_xai_api_key",
+              message:
+                "web_search (grok) needs an xAI API key. Set XAI_API_KEY in the Gateway environment, or configure plugins.entries.xai.config.webSearch.apiKey.",
+              docs: "https://docs.openclaw.ai/tools/web",
+            };
+          }
+
+          const query = readStringParam(args, "query", { required: true });
+          void readNumberParam(args, "count", { integer: true });
+
+          return await runXaiWebSearch({
+            query,
+            model: resolveXaiWebSearchModel(searchConfig),
+            apiKey,
+            timeoutSeconds: resolveTimeoutSeconds(
+              (searchConfig?.timeoutSeconds as number | undefined) ?? undefined,
+              DEFAULT_TIMEOUT_SECONDS,
+            ),
+            inlineCitations: resolveXaiInlineCitations(searchConfig),
+            cacheTtlMs: resolveCacheTtlMs(
+              (searchConfig?.cacheTtlMinutes as number | undefined) ?? undefined,
+              DEFAULT_CACHE_TTL_MINUTES,
+            ),
+          });
+        },
+      };
+    },
   };
 }
 
 export const __testing = {
   buildXaiWebSearchPayload,
   extractXaiWebSearchContent,
+  resolveXaiToolSearchConfig,
   resolveXaiInlineCitations,
+  resolveXaiWebSearchCredential,
   resolveXaiWebSearchModel,
   requestXaiWebSearch,
 };

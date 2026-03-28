@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderPlugin, ProviderRuntimeModel } from "../../../src/plugins/types.js";
 import {
@@ -675,6 +676,68 @@ export function describeXAIProviderRuntimeContract() {
           toolCallArgumentsEncoding: "html-entities",
         },
       });
+    });
+
+    it("owns xai tool_stream defaults", () => {
+      const provider = requireProviderContractProvider("xai");
+
+      expect(
+        provider.prepareExtraParams?.({
+          provider: "xai",
+          modelId: "grok-4-1-fast-reasoning",
+          extraParams: { temperature: 0.2 },
+        }),
+      ).toEqual({
+        temperature: 0.2,
+        tool_stream: true,
+      });
+
+      expect(
+        provider.prepareExtraParams?.({
+          provider: "xai",
+          modelId: "grok-4-1-fast-reasoning",
+          extraParams: { tool_stream: false },
+        }),
+      ).toEqual({
+        tool_stream: false,
+      });
+    });
+
+    it("owns xai fast-mode model rewriting through the plugin stream hook", () => {
+      const provider = requireProviderContractProvider("xai");
+      let capturedModelId = "";
+      const baseStreamFn: StreamFn = (model) => {
+        capturedModelId = model.id;
+        return {
+          push() {},
+          async result() {
+            return undefined;
+          },
+          async *[Symbol.asyncIterator]() {
+            // Minimal async stream surface for xAI decode wrappers.
+          },
+        } as unknown as ReturnType<StreamFn>;
+      };
+
+      const streamFn = provider.wrapStreamFn?.({
+        provider: "xai",
+        modelId: "grok-4",
+        extraParams: { fastMode: true },
+        streamFn: baseStreamFn,
+      });
+
+      expect(streamFn).toBeTypeOf("function");
+      void streamFn?.(
+        createModel({
+          id: "grok-4",
+          provider: "xai",
+          api: "openai-completions",
+          baseUrl: "https://api.x.ai/v1",
+        }) as never,
+        { messages: [] } as never,
+        {},
+      );
+      expect(capturedModelId).toBe("grok-4-fast");
     });
   });
 }
