@@ -191,7 +191,7 @@ final class HandshakeManager {
 
 // MARK: - KeychainHelper
 
-private enum KeychainHelper {
+enum KeychainHelper {
 
     static func read(key: String) -> String? {
         guard let data = readData(key: key) else { return nil }
