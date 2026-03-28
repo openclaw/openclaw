@@ -452,6 +452,7 @@ export async function handleOpenResponsesHttpRequest(
       : Math.max(limits.maxBodyBytes, limits.files.maxBytes * 2, limits.images.maxBytes * 2));
   const handled = await handleGatewayPostJsonEndpoint(req, res, {
     pathname: "/v1/responses",
+    requiredOperatorMethod: "chat.send",
     auth: opts.auth,
     trustedProxies: opts.trustedProxies,
     allowRealIpFallback: opts.allowRealIpFallback,
