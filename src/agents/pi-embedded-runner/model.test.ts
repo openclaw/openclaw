@@ -1049,6 +1049,7 @@ describe("resolveModel", () => {
         runProviderDynamicModel: () => undefined,
         normalizeProviderResolvedModelWithPlugin: ({ provider, context }) =>
           provider === "xai" ? (context.model as never) : undefined,
+        normalizeProviderTransportWithPlugin: () => undefined,
       },
     });
 
