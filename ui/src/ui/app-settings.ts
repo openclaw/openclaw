@@ -290,6 +290,30 @@ export async function refreshActiveTab(host: SettingsHost) {
     await loadLogs(host as unknown as OpenClawApp, { reset: true });
     scheduleLogsScroll(host as unknown as Parameters<typeof scheduleLogsScroll>[0], true);
   }
+  if (host.tab === "projects") {
+    // Parse URL for project name
+    const path = window.location.pathname.replace(host.basePath, "");
+    const projectMatch = path.match(/^\/projects\/([^/]+)(?:\/sub\/(.+))?$/);
+    if (projectMatch) {
+      host.projectsView = "dashboard";
+      host.projectsName = projectMatch[1];
+      host.projectsSubProject = projectMatch[2] ?? null;
+      const fullName = projectMatch[2]
+        ? `${projectMatch[1]}/${projectMatch[2]}`
+        : projectMatch[1];
+      const { loadProjectDashboard } = await import("./controllers/projects.ts");
+      await loadProjectDashboard(
+        host as unknown as Parameters<typeof loadProjectDashboard>[0],
+        fullName,
+      );
+    } else {
+      host.projectsView = "list";
+      host.projectsName = null;
+      host.projectsSubProject = null;
+    }
+    const { loadProjects } = await import("./controllers/projects.ts");
+    await loadProjects(host as unknown as Parameters<typeof loadProjects>[0]);
+  }
 }
 
 export function inferBasePath() {
