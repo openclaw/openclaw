@@ -322,7 +322,7 @@ class NodeRuntime(
       supportsChatSubscribe = false,
     )
   private val voiceReplySpeakerLazy: Lazy<TalkModeManager> = lazy {
-    // Reuse the existing TalkMode speech engine (ElevenLabs + deterministic system-TTS fallback)
+    // Reuse the existing TalkMode speech engine for native Android TTS playback
     // without enabling the legacy talk capture loop.
     TalkModeManager(
       context = appContext,
