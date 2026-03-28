@@ -826,6 +826,28 @@ async function resolvePluginImplicitProviders(
   return Object.keys(discovered).length > 0 ? discovered : undefined;
 }
 
+async function mergeCoreImplicitProviders(params: {
+  config?: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  providers: Record<string, ProviderConfig>;
+}): Promise<void> {
+  for (const provider of CORE_IMPLICIT_PROVIDER_RESOLVERS) {
+    const implicit = await provider.resolve({ config: params.config, env: params.env });
+    if (!implicit) {
+      continue;
+    }
+    const merge = PROVIDER_IMPLICIT_MERGERS[provider.id];
+    if (!merge) {
+      params.providers[provider.id] = implicit;
+      continue;
+    }
+    params.providers[provider.id] = merge({
+      existing: params.providers[provider.id],
+      implicit,
+    });
+  }
+}
+
 export async function resolveImplicitProviders(
   params: ImplicitProviderParams,
 ): Promise<ModelsConfig["providers"]> {
@@ -846,21 +868,11 @@ export async function resolveImplicitProviders(
     mergeImplicitProviderSet(providers, await resolvePluginImplicitProviders(context, order));
   }
 
-  for (const provider of CORE_IMPLICIT_PROVIDER_RESOLVERS) {
-    const implicit = await provider.resolve({ config: params.config, env });
-    if (!implicit) {
-      continue;
-    }
-    const merge = PROVIDER_IMPLICIT_MERGERS[provider.id];
-    if (!merge) {
-      providers[provider.id] = implicit;
-      continue;
-    }
-    providers[provider.id] = merge({
-      existing: providers[provider.id],
-      implicit,
-    });
-  }
+  await mergeCoreImplicitProviders({
+    config: params.config,
+    env,
+    providers,
+  });
 
   return providers;
 }
