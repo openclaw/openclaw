@@ -189,9 +189,8 @@ function buildSkillStatus(
   const isConfigSatisfied = (pathStr: string) => isConfigPathTruthy(config, pathStr);
   const skillSource = resolveSkillSource(entry.skill);
   const bundled =
-    bundledNames && bundledNames.size > 0
-      ? bundledNames.has(entry.skill.name)
-      : skillSource === "openclaw-bundled";
+    skillSource === "openclaw-bundled" ||
+    (skillSource === "unknown" && bundledNames?.has(entry.skill.name) === true);
 
   const { emoji, homepage, required, missing, requirementsSatisfied, configChecks } =
     evaluateEntryRequirementsForCurrentPlatform({
