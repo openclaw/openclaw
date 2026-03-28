@@ -49,7 +49,7 @@ import { resolveSlackGroupRequireMention, resolveSlackGroupToolPolicy } from "./
 import { isSlackInteractiveRepliesEnabled } from "./interactive-replies.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
 import { slackOutbound } from "./outbound-adapter.js";
-import type { SlackProbe } from "./probe.js";
+import { probeSlack, type SlackProbe } from "./probe.js";
 import { resolveSlackUserAllowlist } from "./resolve-users.js";
 import {
   DEFAULT_ACCOUNT_ID,
@@ -85,6 +85,17 @@ const resolveSlackDmPolicy = createScopedDmSecurityResolver<ResolvedSlackAccount
       .replace(/^(slack|user):/i, "")
       .trim(),
 });
+
+function resolveSlackProbe() {
+  try {
+    return getSlackRuntime().channel.slack.probeSlack;
+  } catch (error) {
+    if (error instanceof Error && error.message === "Slack runtime not initialized") {
+      return probeSlack;
+    }
+    throw error;
+  }
+}
 
 // Select the appropriate Slack token for read/write operations.
 function getTokenForOperation(
@@ -380,7 +391,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
         if (!token) {
           return { ok: false, error: "missing token" };
         }
-        return await getSlackRuntime().channel.slack.probeSlack(token, timeoutMs);
+        return await resolveSlackProbe()(token, timeoutMs);
       },
       formatCapabilitiesProbe: ({ probe }) => {
         const slackProbe = probe as SlackProbe | undefined;
