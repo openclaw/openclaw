@@ -1,11 +1,11 @@
-import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 import { describe, expect, it, vi } from "vitest";
 import { normalizeToolParameters } from "./pi-tools.schema.js";
+import type { AnyAgentTool } from "./pi-tools.types.js";
 
 describe("normalizeToolParameters", () => {
   it("strips compat-declared unsupported schema keywords without provider-specific branching", () => {
-    const tool: AgentTool = {
+    const tool: AnyAgentTool = {
       name: "demo",
       label: "demo",
       description: "demo",
