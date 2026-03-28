@@ -14,7 +14,7 @@
 - [ ] **Phase 5: Context Injection** - PROJECT.md cwd pickup, bootstrap hook, capability tags
 - [x] **Phase 6: Queue & Heartbeat** - Agent task claiming, checkpoint/resume, dependency resolution (completed 2026-03-27)
 - [x] **Phase 7: Gateway Service** - ProjectService lifecycle, WebSocket RPC methods, event broadcasting (completed 2026-03-28)
-- [ ] **Phase 8: CLI Commands** - create, list, status, reindex, validate commands
+- [x] **Phase 8: CLI Commands** - create, list, status, reindex, validate commands (completed 2026-03-28)
 - [ ] **Phase 9: Project Views & Dashboard** - Sidebar tab, project list, dashboard widgets, WebSocket live updates, sub-project nav
 - [ ] **Phase 10: Kanban Board & Agent Indicators** - Read-only kanban with live agent badges and session peek
 
@@ -167,7 +167,7 @@
    Plans:
 
 - [x] 08-01-PLAN.md — Create and list commands with route registration for all 5 subcommands
-- [ ] 08-02-PLAN.md — Status, reindex, and validate commands
+- [x] 08-02-PLAN.md — Status, reindex, and validate commands
       **Estimated complexity**: M
 
 ### Phase 9: Project Views & Dashboard
@@ -296,7 +296,7 @@ Phase 1 (Types & Schemas)
 | 5. Context Injection                | 1/2            | In Progress |            |
 | 6. Queue & Heartbeat                | 3/3            | Complete    | 2026-03-27 |
 | 7. Gateway Service                  | 2/2            | Complete    | 2026-03-28 |
-| 8. CLI Commands                     | 0/2            | Planned     | -          |
+| 8. CLI Commands                     | 2/2            | Complete    | 2026-03-28 |
 | 9. Project Views & Dashboard        | 0/?            | Not started | -          |
 | 10. Kanban Board & Agent Indicators | 0/?            | Not started | -          |
 

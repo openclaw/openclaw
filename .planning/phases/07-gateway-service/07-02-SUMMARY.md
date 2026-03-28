@@ -10,7 +10,8 @@ tags: [gateway, websocket, rpc, lifecycle]
 dependency_graph:
   requires: [07-01]
   provides: [project-gateway-wiring]
-  affects: [server.impl.ts, server-close.ts, server-methods-list.ts, server-methods.ts, method-scopes.ts]
+  affects:
+    [server.impl.ts, server-close.ts, server-methods-list.ts, server-methods.ts, method-scopes.ts]
 tech_stack:
   added: []
   patterns: [service-lifecycle-wiring, rpc-handler-registration, scope-classification]
@@ -48,20 +49,20 @@ Gateway project WebSocket support fully wired: 4 RPC methods registered and disp
 
 ## Files Modified
 
-| File | Changes |
-|------|---------|
-| src/gateway/server-methods-list.ts | Added 4 methods to BASE_METHODS, 3 events to GATEWAY_EVENTS |
-| src/gateway/server-methods.ts | Imported projectsHandlers, spread into coreGatewayHandlers |
-| src/gateway/method-scopes.ts | Added 4 project methods to READ_SCOPE array |
-| src/gateway/server.impl.ts | Import + create + start ProjectGatewayService, pass to close handler |
-| src/gateway/server-close.ts | Added projectsService param with stop() in shutdown sequence |
+| File                               | Changes                                                              |
+| ---------------------------------- | -------------------------------------------------------------------- |
+| src/gateway/server-methods-list.ts | Added 4 methods to BASE_METHODS, 3 events to GATEWAY_EVENTS          |
+| src/gateway/server-methods.ts      | Imported projectsHandlers, spread into coreGatewayHandlers           |
+| src/gateway/method-scopes.ts       | Added 4 project methods to READ_SCOPE array                          |
+| src/gateway/server.impl.ts         | Import + create + start ProjectGatewayService, pass to close handler |
+| src/gateway/server-close.ts        | Added projectsService param with stop() in shutdown sequence         |
 
 ## Commits
 
-| Task | Commit | Description |
-|------|--------|-------------|
-| 1 | e8841eb | Register project methods, events, scopes, and handlers |
-| 2 | b0e4fc1 | Wire ProjectGatewayService into gateway lifecycle |
+| Task | Commit  | Description                                            |
+| ---- | ------- | ------------------------------------------------------ |
+| 1    | e8841eb | Register project methods, events, scopes, and handlers |
+| 2    | b0e4fc1 | Wire ProjectGatewayService into gateway lifecycle      |
 
 ## Verification
 
@@ -73,6 +74,7 @@ Gateway project WebSocket support fully wired: 4 RPC methods registered and disp
 ### Adjusted Approach
 
 **1. [Rule 3 - Blocking] server-startup.ts not modified**
+
 - **Found during:** Task 2
 - **Issue:** Plan frontmatter listed server-startup.ts as a modified file, but the plan action text explicitly stated NOT to modify it (broadcast unavailable there)
 - **Fix:** Followed the plan action instructions; created service in server.impl.ts only

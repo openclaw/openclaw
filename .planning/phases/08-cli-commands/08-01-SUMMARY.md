@@ -55,12 +55,12 @@ CLI project commands with interactive creation, table listing, and all 5 project
 
 ## Verification Results
 
-| Check | Result |
-|-------|--------|
-| `pnpm test -- src/commands/projects.create.test.ts src/commands/projects.list.test.ts` | 9/9 pass |
-| `pnpm tsgo` (plan files) | Clean (no errors in our files) |
-| `pnpm build` | Pass |
-| `pnpm check` format | Clean (after format:fix) |
+| Check                                                                                  | Result                         |
+| -------------------------------------------------------------------------------------- | ------------------------------ |
+| `pnpm test -- src/commands/projects.create.test.ts src/commands/projects.list.test.ts` | 9/9 pass                       |
+| `pnpm tsgo` (plan files)                                                               | Clean (no errors in our files) |
+| `pnpm build`                                                                           | Pass                           |
+| `pnpm check` format                                                                    | Clean (after format:fix)       |
 
 Pre-existing type errors in `src/gateway/server.impl.ts` and `src/gateway/server-projects.ts` from Phase 07 work are not caused by this plan.
 
@@ -69,6 +69,7 @@ Pre-existing type errors in `src/gateway/server.impl.ts` and `src/gateway/server
 ### Auto-fixed Issues
 
 **1. [Rule 2 - Missing functionality] Created stub command files for Plan 02 routes**
+
 - **Found during:** Task 2
 - **Issue:** routes.ts dynamically imports projects.status.js, projects.reindex.js, projects.validate.js which don't exist yet -- TypeScript fails
 - **Fix:** Created minimal stub files with proper exports that throw "not yet implemented"
@@ -76,6 +77,7 @@ Pre-existing type errors in `src/gateway/server.impl.ts` and `src/gateway/server
 - **Commit:** 92ed2d9
 
 **2. [Rule 1 - Bug] Fixed command signature for testability**
+
 - **Found during:** Task 1
 - **Issue:** Plan specified `(opts, runtime?, homeDir?)` but tests need injectable homeDir for temp directory isolation
 - **Fix:** Commands use `(opts, context: { homeDir?: string }, runtime)` three-parameter pattern matching linter expectations
@@ -83,15 +85,16 @@ Pre-existing type errors in `src/gateway/server.impl.ts` and `src/gateway/server
 
 ## Known Stubs
 
-| File | Line | Reason |
-|------|------|--------|
-| src/commands/projects.status.ts | 14 | Placeholder for Plan 08-02 |
-| src/commands/projects.reindex.ts | 14 | Placeholder for Plan 08-02 |
-| src/commands/projects.validate.ts | 14 | Placeholder for Plan 08-02 |
+| File                              | Line | Reason                     |
+| --------------------------------- | ---- | -------------------------- |
+| src/commands/projects.status.ts   | 14   | Placeholder for Plan 08-02 |
+| src/commands/projects.reindex.ts  | 14   | Placeholder for Plan 08-02 |
+| src/commands/projects.validate.ts | 14   | Placeholder for Plan 08-02 |
 
 These stubs are intentional -- Plan 08-02 will replace them with full implementations.
 
 ## Requirements Delivered
+
 - CLI-01: `openclaw projects create` scaffolds project with interactive prompts
 - CLI-02: `openclaw projects list` shows table with project summaries
 

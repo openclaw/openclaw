@@ -52,7 +52,7 @@ Plan: 1 of 2
 | Phase 06 P03           | 405   | 2 tasks | 3 files |
 | Phase 07 P01           | 257   | 2 tasks | 4 files |
 | Phase 07 P02           | 254   | 2 tasks | 5 files |
-| Phase 08 P01 | 535 | 2 tasks | 8 files |
+| Phase 08 P01           | 535   | 2 tasks | 8 files |
 
 ## Accumulated Context
 

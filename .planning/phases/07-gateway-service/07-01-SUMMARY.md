@@ -17,7 +17,11 @@ affects: [07-02-gateway-wiring, 09-kanban-board, 10-web-ui]
 
 tech-stack:
   added: []
-  patterns: ["module-level setter for service injection into handler modules", "readJsonFile helper returning null on ENOENT"]
+  patterns:
+    [
+      "module-level setter for service injection into handler modules",
+      "readJsonFile helper returning null on ENOENT",
+    ]
 
 key-files:
   created:
@@ -82,6 +86,7 @@ completed: 2026-03-27
 ### Auto-fixed Issues
 
 **1. [Rule 1 - Bug] Fixed mock constructor in server-projects.test.ts**
+
 - **Found during:** Task 1
 - **Issue:** Previous test mock used `vi.fn().mockImplementation()` which doesn't work as a constructor in Vitest forks pool
 - **Fix:** Replaced with a real class extending EventEmitter in the mock factory
@@ -90,10 +95,10 @@ completed: 2026-03-27
 
 ## Commits
 
-| Task | Commit    | Description                                           |
-| ---- | --------- | ----------------------------------------------------- |
+| Task | Commit    | Description                                            |
+| ---- | --------- | ------------------------------------------------------ |
 | 1    | `96b5d91` | ProjectGatewayService with lifecycle and event mapping |
-| 2    | `65bb60a` | RPC handler module for project methods                |
+| 2    | `65bb60a` | RPC handler module for project methods                 |
 
 ## Known Stubs
 

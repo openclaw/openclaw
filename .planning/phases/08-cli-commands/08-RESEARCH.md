@@ -33,6 +33,7 @@ Pattern for subcommands: match on `path[0] === "projects" && path[1] === "create
 ### Argument Parsing
 
 Utilities in `src/cli/argv.ts`:
+
 - `hasFlag(argv, "--json")` — boolean flag detection
 - `getFlagValue(argv, "--name")` — single value extraction (returns `null` on parse error, `undefined` if absent)
 - `getPositiveIntFlagValue(argv, "--timeout")` — integer flag parsing
@@ -41,8 +42,9 @@ Utilities in `src/cli/argv.ts`:
 ### Command Handler Pattern
 
 Commands are async functions in `src/commands/`:
+
 ```typescript
-export async function projectsListCommand(opts: Options, runtime: RuntimeEnv): Promise<void>
+export async function projectsListCommand(opts: Options, runtime: RuntimeEnv): Promise<void>;
 ```
 
 They use `requireValidConfig()` for config access, `writeRuntimeJson()` for JSON output, and `console.log()` for text output.
@@ -50,6 +52,7 @@ They use `requireValidConfig()` for config access, `writeRuntimeJson()` for JSON
 ### Table Rendering
 
 `src/terminal/table.ts` provides `renderTable()`:
+
 ```typescript
 type RenderTableOptions = {
   columns: TableColumn[];
@@ -63,6 +66,7 @@ type RenderTableOptions = {
 ### Interactive Prompts
 
 `@clack/prompts` is already used via `src/cli/progress.ts`. Available prompt types:
+
 - `text()` — free text input
 - `select()` — single selection
 - `confirm()` — yes/no
@@ -74,7 +78,7 @@ type RenderTableOptions = {
 ```typescript
 class ProjectManager {
   constructor(homeDir?: string);
-  async create(opts: CreateProjectOpts): Promise<string>;      // returns projectDir path
+  async create(opts: CreateProjectOpts): Promise<string>; // returns projectDir path
   async createSubProject(opts: CreateSubProjectOpts): Promise<string>;
   async nextTaskId(projectDir: string): Promise<string>;
 }
@@ -90,7 +94,7 @@ class ProjectManager {
 ```typescript
 class ProjectSyncService {
   constructor(projectsRoot: string);
-  async discoverProjects(): Promise<string[]>;  // returns array of project dir paths
+  async discoverProjects(): Promise<string[]>; // returns array of project dir paths
   async start(): Promise<void>;
   async stop(): Promise<void>;
 }
@@ -124,6 +128,7 @@ function parseQueueFrontmatter(content: string): ParseResult<QueueFrontmatter>;
 ### Queue Manager (queue-manager.ts)
 
 Lock-related exports:
+
 ```typescript
 const QUEUE_LOCK_OPTIONS: FileLockOptions;
 class QueueLockError extends Error;
@@ -136,7 +141,7 @@ Stale lock cleanup is built into lock acquisition. Lock files older than 60s or 
 ### Path Resolution (config/paths.ts)
 
 ```typescript
-function resolveStateDir(env?: NodeJS.ProcessEnv): string;  // returns ~/.openclaw
+function resolveStateDir(env?: NodeJS.ProcessEnv): string; // returns ~/.openclaw
 const STATE_DIR: string;
 ```
 
@@ -147,6 +152,7 @@ Projects root = `path.join(resolveStateDir(), "projects")`.
 ### File Organization
 
 5 commands → 5 command files + 1 barrel + route registrations:
+
 - `src/commands/projects.create.ts` — create command
 - `src/commands/projects.list.ts` — list command
 - `src/commands/projects.status.ts` — status command
@@ -158,6 +164,7 @@ Projects root = `path.join(resolveStateDir(), "projects")`.
 ### Route Registration
 
 5 RouteSpec entries for:
+
 - `["projects", "create"]` — no plugins needed
 - `["projects", "list"]` — no plugins needed
 - `["projects", "status"]` — no plugins needed
@@ -170,7 +177,13 @@ None of these commands need gateway plugins loaded.
 
 ```typescript
 // create
-type ProjectsCreateOptions = { name?: string; description?: string; owner?: string; parent?: string; json?: boolean };
+type ProjectsCreateOptions = {
+  name?: string;
+  description?: string;
+  owner?: string;
+  parent?: string;
+  json?: boolean;
+};
 export async function projectsCreateCommand(opts: ProjectsCreateOptions): Promise<void>;
 
 // list
@@ -193,6 +206,7 @@ export async function projectsValidateCommand(opts: ProjectsValidateOptions): Pr
 ### Reindex Lock Clearing
 
 For stale lock clearing during reindex:
+
 1. After regenerating indexes, scan for `*.lock` files under each project dir
 2. Read lock file content (PID + timestamp)
 3. Check if PID is alive and if lock is younger than 60s
@@ -202,6 +216,7 @@ For stale lock clearing during reindex:
 ### Testing Strategy
 
 Each command gets a colocated test file:
+
 - `src/commands/projects.create.test.ts`
 - `src/commands/projects.list.test.ts`
 - `src/commands/projects.status.test.ts`
@@ -209,6 +224,7 @@ Each command gets a colocated test file:
 - `src/commands/projects.validate.test.ts`
 
 Tests use temp directories with mock project structures. They test:
+
 - Correct output format (table/JSON)
 - Error cases (missing project, empty directory)
 - Flag parsing
@@ -220,13 +236,13 @@ Tests use temp directories with mock project structures. They test:
 
 Per-requirement verification with direct test coverage:
 
-| Requirement | Verification Method |
-|-------------|-------------------|
-| CLI-01 | Test: create command produces correct directory structure |
-| CLI-02 | Test: list command outputs table with project summaries |
-| CLI-03 | Test: status command shows grouped sections with task counts |
-| CLI-04 | Test: reindex regenerates .index/ files + clears stale locks |
-| CLI-05 | Test: validate reports frontmatter parse errors with file paths |
+| Requirement | Verification Method                                             |
+| ----------- | --------------------------------------------------------------- |
+| CLI-01      | Test: create command produces correct directory structure       |
+| CLI-02      | Test: list command outputs table with project summaries         |
+| CLI-03      | Test: status command shows grouped sections with task counts    |
+| CLI-04      | Test: reindex regenerates .index/ files + clears stale locks    |
+| CLI-05      | Test: validate reports frontmatter parse errors with file paths |
 
 ### Cross-cutting Verification
 
