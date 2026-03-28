@@ -23,6 +23,14 @@ import { qqbotSetupWizard } from "./setup-surface.js";
 export { chunkText, TEXT_CHUNK_LIMIT } from "./text-utils.js";
 import type { ResolvedQQBotAccount } from "./types.js";
 
+// Shared promise so concurrent multi-account startups serialize the dynamic
+// import of the gateway module, avoiding an ESM circular-dependency race.
+let _gatewayModulePromise: Promise<typeof import("./gateway.js")> | undefined;
+function loadGatewayModule(): Promise<typeof import("./gateway.js")> {
+  _gatewayModulePromise ??= import("./gateway.js");
+  return _gatewayModulePromise;
+}
+
 export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
   id: "qqbot",
   setupWizard: qqbotSetupWizard,
@@ -212,7 +220,10 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
     startAccount: async (ctx) => {
       const { account } = ctx;
       const { abortSignal, log, cfg } = ctx;
-      const { startGateway } = await import("./gateway.js");
+      // Serialize the dynamic import so concurrent multi-account startups
+      // do not hit an ESM circular-dependency race where the gateway chunk's
+      // transitive imports have not finished evaluating yet.
+      const { startGateway } = await loadGatewayModule();
 
       log?.info(
         `[qqbot:${account.accountId}] Starting gateway — appId=${account.appId}, enabled=${account.enabled}, name=${account.name ?? "unnamed"}`,
