@@ -642,6 +642,8 @@ type ProviderAuthResolver = (
   profileId?: string;
 };
 
+const PLUGIN_DISCOVERY_ORDERS = ["simple", "profile", "paired", "late"] as const;
+
 type ImplicitProviderContext = ImplicitProviderParams & {
   authStore: ReturnType<typeof ensureAuthProfileStore>;
   env: NodeJS.ProcessEnv;
@@ -659,6 +661,91 @@ function mergeImplicitProviderSet(
   for (const [key, value] of Object.entries(additions)) {
     target[key] = value;
   }
+}
+
+function createProviderApiKeyResolver(
+  env: NodeJS.ProcessEnv,
+  authStore: ReturnType<typeof ensureAuthProfileStore>,
+): ProviderApiKeyResolver {
+  return (provider: string): { apiKey: string | undefined; discoveryApiKey?: string } => {
+    const envVar = resolveEnvApiKeyVarName(provider, env);
+    if (envVar) {
+      return {
+        apiKey: envVar,
+        discoveryApiKey: toDiscoveryApiKey(env[envVar]),
+      };
+    }
+    const fromProfiles = resolveApiKeyFromProfiles({ provider, store: authStore, env });
+    return {
+      apiKey: fromProfiles?.apiKey,
+      discoveryApiKey: fromProfiles?.discoveryApiKey,
+    };
+  };
+}
+
+function createProviderAuthResolver(
+  env: NodeJS.ProcessEnv,
+  authStore: ReturnType<typeof ensureAuthProfileStore>,
+): ProviderAuthResolver {
+  return (provider: string, options?: { oauthMarker?: string }) => {
+    const envVar = resolveEnvApiKeyVarName(provider, env);
+    if (envVar) {
+      return {
+        apiKey: envVar,
+        discoveryApiKey: toDiscoveryApiKey(env[envVar]),
+        mode: "api_key" as const,
+        source: "env" as const,
+      };
+    }
+
+    const ids = listProfilesForProvider(authStore, provider);
+    let oauthCandidate:
+      | {
+          apiKey: string | undefined;
+          discoveryApiKey?: string;
+          mode: "oauth";
+          source: "profile";
+          profileId: string;
+        }
+      | undefined;
+    for (const id of ids) {
+      const cred = authStore.profiles[id];
+      if (!cred) {
+        continue;
+      }
+      if (cred.type === "oauth") {
+        oauthCandidate ??= {
+          apiKey: options?.oauthMarker,
+          discoveryApiKey: toDiscoveryApiKey(cred.access),
+          mode: "oauth",
+          source: "profile",
+          profileId: id,
+        };
+        continue;
+      }
+      const resolved = resolveApiKeyFromCredential(cred, env);
+      if (!resolved) {
+        continue;
+      }
+      return {
+        apiKey: resolved.apiKey,
+        discoveryApiKey: resolved.discoveryApiKey,
+        mode: cred.type,
+        source: "profile" as const,
+        profileId: id,
+      };
+    }
+    if (oauthCandidate) {
+      return oauthCandidate;
+    }
+
+    return {
+      apiKey: undefined,
+      discoveryApiKey: undefined,
+      mode: "none" as const,
+      source: "none" as const,
+    };
+  };
 }
 
 async function resolvePluginImplicitProviders(
@@ -747,96 +834,17 @@ export async function resolveImplicitProviders(
   const authStore = ensureAuthProfileStore(params.agentDir, {
     allowKeychainPrompt: false,
   });
-  const resolveProviderApiKey: ProviderApiKeyResolver = (
-    provider: string,
-  ): { apiKey: string | undefined; discoveryApiKey?: string } => {
-    const envVar = resolveEnvApiKeyVarName(provider, env);
-    if (envVar) {
-      return {
-        apiKey: envVar,
-        discoveryApiKey: toDiscoveryApiKey(env[envVar]),
-      };
-    }
-    const fromProfiles = resolveApiKeyFromProfiles({ provider, store: authStore, env });
-    return {
-      apiKey: fromProfiles?.apiKey,
-      discoveryApiKey: fromProfiles?.discoveryApiKey,
-    };
-  };
-  const resolveProviderAuth: ProviderAuthResolver = (
-    provider: string,
-    options?: { oauthMarker?: string },
-  ) => {
-    const envVar = resolveEnvApiKeyVarName(provider, env);
-    if (envVar) {
-      return {
-        apiKey: envVar,
-        discoveryApiKey: toDiscoveryApiKey(env[envVar]),
-        mode: "api_key",
-        source: "env",
-      };
-    }
-
-    const ids = listProfilesForProvider(authStore, provider);
-    let oauthCandidate:
-      | {
-          apiKey: string | undefined;
-          discoveryApiKey?: string;
-          mode: "oauth";
-          source: "profile";
-          profileId: string;
-        }
-      | undefined;
-    for (const id of ids) {
-      const cred = authStore.profiles[id];
-      if (!cred) {
-        continue;
-      }
-      if (cred.type === "oauth") {
-        oauthCandidate ??= {
-          apiKey: options?.oauthMarker,
-          discoveryApiKey: toDiscoveryApiKey(cred.access),
-          mode: "oauth",
-          source: "profile",
-          profileId: id,
-        };
-        continue;
-      }
-      const resolved = resolveApiKeyFromCredential(cred, env);
-      if (!resolved) {
-        continue;
-      }
-      return {
-        apiKey: resolved.apiKey,
-        discoveryApiKey: resolved.discoveryApiKey,
-        mode: cred.type,
-        source: "profile",
-        profileId: id,
-      };
-    }
-    if (oauthCandidate) {
-      return oauthCandidate;
-    }
-
-    return {
-      apiKey: undefined,
-      discoveryApiKey: undefined,
-      mode: "none",
-      source: "none",
-    };
-  };
   const context: ImplicitProviderContext = {
     ...params,
     authStore,
     env,
-    resolveProviderApiKey,
-    resolveProviderAuth,
+    resolveProviderApiKey: createProviderApiKeyResolver(env, authStore),
+    resolveProviderAuth: createProviderAuthResolver(env, authStore),
   };
 
-  mergeImplicitProviderSet(providers, await resolvePluginImplicitProviders(context, "simple"));
-  mergeImplicitProviderSet(providers, await resolvePluginImplicitProviders(context, "profile"));
-  mergeImplicitProviderSet(providers, await resolvePluginImplicitProviders(context, "paired"));
-  mergeImplicitProviderSet(providers, await resolvePluginImplicitProviders(context, "late"));
+  for (const order of PLUGIN_DISCOVERY_ORDERS) {
+    mergeImplicitProviderSet(providers, await resolvePluginImplicitProviders(context, order));
+  }
 
   for (const provider of CORE_IMPLICIT_PROVIDER_RESOLVERS) {
     const implicit = await provider.resolve({ config: params.config, env });
