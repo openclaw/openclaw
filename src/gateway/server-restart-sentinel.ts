@@ -34,6 +34,7 @@ function enqueueRestartSentinelWake(
 ) {
   enqueueSystemEvent(message, {
     sessionKey,
+    contextKey: "restart",
     ...(deliveryContext ? { deliveryContext } : {}),
   });
   requestHeartbeatNow({ reason: "wake", sessionKey });

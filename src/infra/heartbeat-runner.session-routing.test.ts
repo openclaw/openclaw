@@ -422,7 +422,7 @@ describe("system-event-triggered heartbeat session routing", () => {
     replySpy.mockRestore();
   });
 
-  it("keeps untagged events (no contextKey) in the originating session", async () => {
+  it("migrates untagged events (no contextKey) to the heartbeat session alongside tagged events", async () => {
     const tmpDir = await createCaseDir("hb-untagged-events");
     const storePath = path.join(tmpDir, "sessions.json");
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
@@ -480,15 +480,15 @@ describe("system-event-triggered heartbeat session routing", () => {
       }),
     );
 
-    // Enqueue an exec event (tagged — should migrate) and an untagged event (should stay)
+    // Enqueue a tagged exec event and an untagged event — both should migrate
     enqueueSystemEvent("exec finished (xyz99999, code 0) :: build done", {
       sessionKey: dmSessionKey,
       contextKey: "exec:xyz99999",
     });
-    enqueueSystemEvent("Session maintenance warning: would be evicted", {
+    enqueueSystemEvent("CLI system event: manual notice", {
       sessionKey: dmSessionKey,
-      // No contextKey — simulates the real session-maintenance-warning.ts behavior
-      // before the contextKey fix; these should stay in the originating session.
+      // No contextKey — untagged events are now migrated so wake-trigger
+      // payloads are never lost.
     });
 
     expect(peekSystemEventEntries(dmSessionKey)).toHaveLength(2);
@@ -508,15 +508,14 @@ describe("system-event-triggered heartbeat session routing", () => {
       deps: createHeartbeatDeps(sendTelegram),
     });
 
-    // Tagged exec event should migrate to heartbeat session
+    // Both events should migrate to the heartbeat session
     const heartbeatEntries = peekSystemEventEntries(heartbeatSessionKey);
-    expect(heartbeatEntries).toHaveLength(1);
+    expect(heartbeatEntries).toHaveLength(2);
     expect(heartbeatEntries[0].text).toContain("build done");
+    expect(heartbeatEntries[1].text).toContain("CLI system event");
 
-    // Untagged event should remain in the originating DM session
-    const dmEntries = peekSystemEventEntries(dmSessionKey);
-    expect(dmEntries).toHaveLength(1);
-    expect(dmEntries[0].text).toContain("Session maintenance warning");
+    // No events should remain in the originating DM session
+    expect(hasSystemEvents(dmSessionKey)).toBe(false);
 
     replySpy.mockRestore();
   });
