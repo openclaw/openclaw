@@ -20,12 +20,21 @@ function expectResolvedEnableState(
   expect(resolveEnableState(...params)).toEqual(expected);
 }
 
-function expectMemoryPluginState(
-  config: Parameters<typeof normalizePluginsConfig>[0],
-  expected: ReturnType<typeof resolveEnableState>,
-) {
-  expect(resolveEnableState("memory-core", "bundled", normalizePluginsConfig(config))).toEqual(
-    expected,
+function expectNormalizedEnableState(params: {
+  id: string;
+  origin: "bundled" | "workspace";
+  config: Record<string, unknown>;
+  manifestEnabledByDefault?: boolean;
+  expected: ReturnType<typeof resolveEnableState>;
+}) {
+  expectResolvedEnableState(
+    [
+      params.id,
+      params.origin,
+      normalizePluginsConfig(params.config),
+      params.manifestEnabledByDefault,
+    ],
+    params.expected,
   );
 }
 
@@ -185,19 +194,18 @@ describe("resolveEnableState", () => {
     },
   );
 
-  it("keeps the selected memory slot plugin enabled even when omitted from plugins.allow", () => {
-    expectMemoryPluginState(
-      {
+  it.each([
+    {
+      name: "keeps the selected memory slot plugin enabled even when omitted from plugins.allow",
+      config: {
         allow: ["telegram"],
         slots: { memory: "memory-core" },
       },
-      { enabled: true },
-    );
-  });
-
-  it("keeps explicit disable authoritative for the selected memory slot plugin", () => {
-    expectMemoryPluginState(
-      {
+      expected: { enabled: true },
+    },
+    {
+      name: "keeps explicit disable authoritative for the selected memory slot plugin",
+      config: {
         allow: ["telegram"],
         slots: { memory: "memory-core" },
         entries: {
@@ -206,8 +214,15 @@ describe("resolveEnableState", () => {
           },
         },
       },
-      { enabled: false, reason: "disabled in config" },
-    );
+      expected: { enabled: false, reason: "disabled in config" },
+    },
+  ] as const)("$name", ({ config, expected }) => {
+    expectNormalizedEnableState({
+      id: "memory-core",
+      origin: "bundled",
+      config,
+      expected,
+    });
   });
 
   it.each([
@@ -239,18 +254,16 @@ describe("resolveEnableState", () => {
   });
 
   it("does not let the default memory slot auto-enable an untrusted workspace plugin", () => {
-    expectResolvedEnableState(
-      [
-        "memory-core",
-        "workspace",
-        normalizePluginsConfig({
-          slots: { memory: "memory-core" },
-        }),
-      ],
-      {
+    expectNormalizedEnableState({
+      id: "memory-core",
+      origin: "workspace",
+      config: {
+        slots: { memory: "memory-core" },
+      },
+      expected: {
         enabled: false,
         reason: "workspace plugin (disabled by default)",
       },
-    );
+    });
   });
 });

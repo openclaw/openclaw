@@ -59,6 +59,30 @@ function expectServiceContexts(
   });
 }
 
+function expectServiceLifecycleState(params: {
+  starts: string[];
+  stops: string[];
+  contexts: OpenClawPluginServiceContext[];
+  config: Parameters<typeof startPluginServices>[0]["config"];
+}) {
+  expect(params.starts).toEqual(["a", "b", "c"]);
+  expect(params.stops).toEqual(["c", "a"]);
+  expect(params.contexts).toHaveLength(3);
+  expectServiceContexts(params.contexts, params.config);
+}
+
+async function startTrackingServices(params: {
+  services: OpenClawPluginService[];
+  config?: Parameters<typeof startPluginServices>[0]["config"];
+  workspaceDir?: string;
+}) {
+  return startPluginServices({
+    registry: createRegistry(params.services),
+    config: params.config ?? createServiceConfig(),
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+  });
+}
+
 function createTrackingService(
   id: string,
   params: {
@@ -105,21 +129,18 @@ describe("startPluginServices", () => {
     const contexts: OpenClawPluginServiceContext[] = [];
 
     const config = createServiceConfig();
-    const handle = await startPluginServices({
-      registry: createRegistry([
+    const handle = await startTrackingServices({
+      services: [
         createTrackingService("service-a", { starts, stops, contexts }),
         createTrackingService("service-b", { starts, contexts }),
         createTrackingService("service-c", { starts, stops, contexts }),
-      ]),
+      ],
       config,
       workspaceDir: "/tmp/workspace",
     });
     await handle.stop();
 
-    expect(starts).toEqual(["a", "b", "c"]);
-    expect(stops).toEqual(["c", "a"]);
-    expect(contexts).toHaveLength(3);
-    expectServiceContexts(contexts, config);
+    expectServiceLifecycleState({ starts, stops, contexts, config });
   });
 
   it("logs start/stop failures and continues", async () => {
@@ -128,16 +149,15 @@ describe("startPluginServices", () => {
       throw new Error("stop failed");
     });
 
-    const handle = await startPluginServices({
-      registry: createRegistry([
+    const handle = await startTrackingServices({
+      services: [
         createTrackingService("service-start-fail", {
           failOnStart: true,
           stopSpy: vi.fn(),
         }),
         createTrackingService("service-ok", { stopSpy: stopOk }),
         createTrackingService("service-stop-fail", { stopSpy: stopThrows }),
-      ]),
-      config: createServiceConfig(),
+      ],
     });
 
     await handle.stop();

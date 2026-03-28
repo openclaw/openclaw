@@ -30,14 +30,18 @@ function setManifestPlugins(plugins: Array<Record<string, unknown>>) {
   });
 }
 
-function expectAuthChoice(choiceId: string, providerId: string) {
-  expect(resolveManifestProviderAuthChoice(choiceId)?.providerId).toBe(providerId);
-}
-
-function expectDeprecatedAuthChoice(choiceIds: string[], expectedChoiceId?: string) {
-  for (const choiceId of choiceIds) {
+function expectResolvedProviderAuthChoices(params: {
+  expectedFlattened: Array<Record<string, unknown>>;
+  resolvedProviderIds?: Record<string, string | undefined>;
+  deprecatedChoiceIds?: Record<string, string | undefined>;
+}) {
+  expect(resolveManifestProviderAuthChoices()).toEqual(params.expectedFlattened);
+  Object.entries(params.resolvedProviderIds ?? {}).forEach(([choiceId, providerId]) => {
+    expect(resolveManifestProviderAuthChoice(choiceId)?.providerId).toBe(providerId);
+  });
+  Object.entries(params.deprecatedChoiceIds ?? {}).forEach(([choiceId, expectedChoiceId]) => {
     expect(resolveManifestDeprecatedProviderAuthChoice(choiceId)?.choiceId).toBe(expectedChoiceId);
-  }
+  });
 }
 
 function setSingleManifestProviderAuthChoices(
@@ -62,20 +66,22 @@ describe("provider auth choice manifest helpers", () => {
       }),
     ]);
 
-    expect(resolveManifestProviderAuthChoices()).toEqual([
-      {
-        pluginId: "openai",
-        providerId: "openai",
-        methodId: "api-key",
-        choiceId: "openai-api-key",
-        choiceLabel: "OpenAI API key",
-        onboardingScopes: ["text-inference"],
-        optionKey: "openaiApiKey",
-        cliFlag: "--openai-api-key",
-        cliOption: "--openai-api-key <key>",
-      },
-    ]);
-    expectAuthChoice("openai-api-key", "openai");
+    expectResolvedProviderAuthChoices({
+      expectedFlattened: [
+        {
+          pluginId: "openai",
+          providerId: "openai",
+          methodId: "api-key",
+          choiceId: "openai-api-key",
+          choiceLabel: "OpenAI API key",
+          onboardingScopes: ["text-inference"],
+          optionKey: "openaiApiKey",
+          cliFlag: "--openai-api-key",
+          cliOption: "--openai-api-key <key>",
+        },
+      ],
+      resolvedProviderIds: { "openai-api-key": "openai" },
+    });
   });
 
   it.each([
@@ -128,10 +134,24 @@ describe("provider auth choice manifest helpers", () => {
           }),
         ]),
       ],
-      run: () => {
-        expectDeprecatedAuthChoice(["minimax", "minimax-api"], "minimax-global-api");
-        expectDeprecatedAuthChoice(["openai"]);
-      },
+      run: () =>
+        expectResolvedProviderAuthChoices({
+          expectedFlattened: [
+            {
+              pluginId: "minimax",
+              providerId: "minimax",
+              methodId: "api-global",
+              choiceId: "minimax-global-api",
+              choiceLabel: "minimax-global-api",
+              deprecatedChoiceIds: ["minimax", "minimax-api"],
+            },
+          ],
+          deprecatedChoiceIds: {
+            minimax: "minimax-global-api",
+            "minimax-api": "minimax-global-api",
+            openai: undefined,
+          },
+        }),
     },
   ])("$name", ({ plugins, run }) => {
     setManifestPlugins(plugins);

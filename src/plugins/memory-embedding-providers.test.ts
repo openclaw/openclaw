@@ -57,16 +57,39 @@ function expectMemoryEmbeddingProviderIds(expectedIds: readonly string[]) {
   expect(listMemoryEmbeddingProviders().map((adapter) => adapter.id)).toEqual([...expectedIds]);
 }
 
+function expectCurrentMemoryEmbeddingProvider(
+  id: string,
+  adapter: MemoryEmbeddingProviderAdapter | undefined,
+) {
+  expect(getMemoryEmbeddingProvider(id)).toBe(adapter);
+}
+
 function expectMemoryEmbeddingProviderState(params: {
   expectedIds: readonly string[];
   expectedCurrent?: { id: string; adapter: MemoryEmbeddingProviderAdapter };
 }) {
   if (params.expectedCurrent) {
-    expect(getMemoryEmbeddingProvider(params.expectedCurrent.id)).toBe(
-      params.expectedCurrent.adapter,
-    );
+    expectCurrentMemoryEmbeddingProvider(params.expectedCurrent.id, params.expectedCurrent.adapter);
   }
   expectMemoryEmbeddingProviderIds(params.expectedIds);
+}
+
+function expectRegisteredProviderSnapshotCase(params: {
+  entry: {
+    adapter: MemoryEmbeddingProviderAdapter;
+    ownerPluginId?: string;
+  };
+  setup: (entry: { adapter: MemoryEmbeddingProviderAdapter; ownerPluginId?: string }) => void;
+  expectedList?: Array<{
+    adapter: MemoryEmbeddingProviderAdapter;
+    ownerPluginId?: string;
+  }>;
+}) {
+  params.setup(params.entry);
+  expectRegisteredProviderState({
+    entry: params.entry,
+    ...(params.expectedList ? { expectedList: params.expectedList } : {}),
+  });
 }
 
 afterEach(() => {
@@ -93,8 +116,8 @@ describe("memory embedding provider registry", () => {
 
     restoreMemoryEmbeddingProviders([beta]);
 
-    expect(getMemoryEmbeddingProvider("alpha")).toBeUndefined();
-    expect(getMemoryEmbeddingProvider("beta")).toBe(beta);
+    expectCurrentMemoryEmbeddingProvider("alpha", undefined);
+    expectCurrentMemoryEmbeddingProvider("beta", beta);
   });
 
   it.each([
@@ -113,9 +136,9 @@ describe("memory embedding provider registry", () => {
       expectList: false,
     },
   ] as const)("$name", ({ entry, setup, expectList }) => {
-    setup(entry);
-    expectRegisteredProviderState({
+    expectRegisteredProviderSnapshotCase({
       entry,
+      setup,
       ...(expectList ? { expectedList: [entry] } : {}),
     });
   });

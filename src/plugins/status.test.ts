@@ -110,6 +110,39 @@ function expectAutoEnabledStatusLoad(params: { rawConfig: unknown; autoEnabledCo
   });
 }
 
+function createCompatChainFixture() {
+  const config = { plugins: { allow: ["telegram"] } };
+  const pluginIds = ["anthropic", "openai"];
+  const compatConfig = { plugins: { allow: ["telegram", ...pluginIds] } };
+  const enabledConfig = {
+    plugins: {
+      allow: ["telegram", ...pluginIds],
+      entries: {
+        anthropic: { enabled: true },
+        openai: { enabled: true },
+      },
+    },
+  };
+  return { config, pluginIds, compatConfig, enabledConfig };
+}
+
+function expectBundledCompatChainApplied(params: {
+  config: unknown;
+  pluginIds: string[];
+  compatConfig: unknown;
+  enabledConfig: unknown;
+}) {
+  expect(withBundledPluginAllowlistCompatMock).toHaveBeenCalledWith({
+    config: params.config,
+    pluginIds: params.pluginIds,
+  });
+  expect(withBundledPluginEnablementCompatMock).toHaveBeenCalledWith({
+    config: params.compatConfig,
+    pluginIds: params.pluginIds,
+  });
+  expectPluginLoaderCall({ config: params.enabledConfig });
+}
+
 function createAutoEnabledStatusConfig(
   entries: Record<string, unknown>,
   rawConfigOverrides?: Record<string, unknown>,
@@ -159,6 +192,13 @@ function expectInspectShape(
   expect(inspect.shape).toBe(params.shape);
   expect(inspect.capabilityMode).toBe(params.capabilityMode);
   expectCapabilityKinds(inspect, params.capabilityKinds);
+}
+
+function expectInspectPolicy(
+  inspect: NonNullable<ReturnType<typeof buildPluginInspectReport>>,
+  expected: Record<string, unknown>,
+) {
+  expect(inspect.policy).toEqual(expected);
 }
 
 function expectBundleInspectState(
@@ -267,7 +307,7 @@ describe("buildPluginStatusReport", () => {
     const inspect = buildPluginInspectReport({ id: "demo", config: rawConfig });
 
     expect(inspect).not.toBeNull();
-    expect(inspect?.policy).toEqual({
+    expectInspectPolicy(inspect!, {
       allowPromptInjection: undefined,
       allowModelOverride: true,
       allowedModels: ["openai/gpt-5.4"],
@@ -276,34 +316,20 @@ describe("buildPluginStatusReport", () => {
   });
 
   it("applies the full bundled provider compat chain before loading plugins", () => {
-    const config = { plugins: { allow: ["telegram"] } };
+    const { config, pluginIds, compatConfig, enabledConfig } = createCompatChainFixture();
     loadConfigMock.mockReturnValue(config);
-    resolveBundledProviderCompatPluginIdsMock.mockReturnValue(["anthropic", "openai"]);
-    const compatConfig = { plugins: { allow: ["telegram", "anthropic", "openai"] } };
-    const enabledConfig = {
-      plugins: {
-        allow: ["telegram", "anthropic", "openai"],
-        entries: {
-          anthropic: { enabled: true },
-          openai: { enabled: true },
-        },
-      },
-    };
+    resolveBundledProviderCompatPluginIdsMock.mockReturnValue(pluginIds);
     withBundledPluginAllowlistCompatMock.mockReturnValue(compatConfig);
     withBundledPluginEnablementCompatMock.mockReturnValue(enabledConfig);
 
     buildPluginStatusReport({ config });
 
-    const pluginIds = ["anthropic", "openai"];
-    expect(withBundledPluginAllowlistCompatMock).toHaveBeenCalledWith({
+    expectBundledCompatChainApplied({
       config,
       pluginIds,
+      compatConfig,
+      enabledConfig,
     });
-    expect(withBundledPluginEnablementCompatMock).toHaveBeenCalledWith({
-      config: compatConfig,
-      pluginIds,
-    });
-    expectPluginLoaderCall({ config: enabledConfig });
   });
 
   it("normalizes bundled plugin versions to the core base release", () => {
@@ -378,7 +404,7 @@ describe("buildPluginStatusReport", () => {
     expect(inspect?.compatibility).toEqual([
       createCompatibilityNotice({ pluginId: "google", code: "legacy-before-agent-start" }),
     ]);
-    expect(inspect?.policy).toEqual({
+    expectInspectPolicy(inspect!, {
       allowPromptInjection: false,
       allowModelOverride: true,
       allowedModels: ["openai/gpt-5.4"],

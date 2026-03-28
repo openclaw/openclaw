@@ -28,6 +28,10 @@ function expectFormattedSource(params: {
   expect(out.rootKey).toBe(params.expectedRootKey);
 }
 
+function expectFormattedSourceCase(params: ReturnType<typeof createFormattedSourceExpectation>) {
+  expectFormattedSource(params);
+}
+
 function expectResolvedSourceRoots(params: {
   homeDir: string;
   env: NodeJS.ProcessEnv;
@@ -44,48 +48,28 @@ function expectResolvedSourceRoots(params: {
   expect(roots).toEqual(params.expected);
 }
 
+function createFormattedSourceExpectation(
+  origin: "bundled" | "workspace" | "global",
+  sourceKey: "stock" | "workspace" | "global",
+  dirName: string,
+  fileName: string,
+) {
+  return {
+    origin,
+    sourceKey,
+    dirName,
+    fileName,
+    expectedValue: `${origin === "bundled" ? "stock" : origin}:${dirName}/${fileName}`,
+    expectedRootKey: sourceKey,
+  } as const;
+}
+
 describe("formatPluginSourceForTable", () => {
   it.each([
-    {
-      name: "bundled plugin sources under the stock root",
-      origin: "bundled" as const,
-      sourceKey: "stock" as const,
-      dirName: "demo-stock",
-      fileName: "index.ts",
-      expectedValue: "stock:demo-stock/index.ts",
-      expectedRootKey: "stock" as const,
-    },
-    {
-      name: "workspace plugin sources under the workspace root",
-      origin: "workspace" as const,
-      sourceKey: "workspace" as const,
-      dirName: "demo-workspace",
-      fileName: "index.ts",
-      expectedValue: "workspace:demo-workspace/index.ts",
-      expectedRootKey: "workspace" as const,
-    },
-    {
-      name: "global plugin sources under the global root",
-      origin: "global" as const,
-      sourceKey: "global" as const,
-      dirName: "demo-global",
-      fileName: "index.js",
-      expectedValue: "global:demo-global/index.js",
-      expectedRootKey: "global" as const,
-    },
-  ])(
-    "shortens $name",
-    ({ origin, sourceKey, dirName, fileName, expectedValue, expectedRootKey }) => {
-      expectFormattedSource({
-        origin,
-        sourceKey,
-        dirName,
-        fileName,
-        expectedValue,
-        expectedRootKey,
-      });
-    },
-  );
+    createFormattedSourceExpectation("bundled", "stock", "demo-stock", "index.ts"),
+    createFormattedSourceExpectation("workspace", "workspace", "demo-workspace", "index.ts"),
+    createFormattedSourceExpectation("global", "global", "demo-global", "index.js"),
+  ])("shortens $origin sources under the $sourceKey root", expectFormattedSourceCase);
 
   it("resolves source roots from an explicit env override", () => {
     const homeDir = path.resolve(path.sep, "tmp", "openclaw-home");

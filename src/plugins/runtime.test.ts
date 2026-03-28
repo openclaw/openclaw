@@ -59,6 +59,11 @@ function expectPinnedRouteRegistry(
   expect(resolveActivePluginHttpRouteRegistry(laterRegistry)).toBe(startupRegistry);
 }
 
+function expectRouteRegistryState(params: { setup: () => void; assert: () => void }) {
+  params.setup();
+  params.assert();
+}
+
 describe("plugin runtime route registry", () => {
   afterEach(() => {
     releasePinnedPluginHttpRouteRegistry();
@@ -71,26 +76,38 @@ describe("plugin runtime route registry", () => {
     expect(getActivePluginRegistry()).toBeNull();
   });
 
-  it("keeps the pinned route registry when the active plugin registry changes", () => {
-    const { startupRegistry, laterRegistry } = createRuntimeRegistryPair();
-    expectPinnedRouteRegistry(startupRegistry, laterRegistry);
-  });
+  it.each([
+    {
+      name: "keeps the pinned route registry when the active plugin registry changes",
+      run: () => {
+        const { startupRegistry, laterRegistry } = createRuntimeRegistryPair();
+        expectPinnedRouteRegistry(startupRegistry, laterRegistry);
+      },
+    },
+    {
+      name: "tracks route registry repins separately from the active registry version",
+      run: () => {
+        const { startupRegistry, laterRegistry } = createRuntimeRegistryPair();
+        const repinnedRegistry = createEmptyPluginRegistry();
 
-  it("tracks route registry repins separately from the active registry version", () => {
-    const { startupRegistry, laterRegistry } = createRuntimeRegistryPair();
-    const repinnedRegistry = createEmptyPluginRegistry();
+        setActivePluginRegistry(startupRegistry);
+        pinActivePluginHttpRouteRegistry(laterRegistry);
 
-    setActivePluginRegistry(startupRegistry);
-    pinActivePluginHttpRouteRegistry(laterRegistry);
+        const activeVersionBeforeRepin = getActivePluginRegistryVersion();
+        const routeVersionBeforeRepin = getActivePluginHttpRouteRegistryVersion();
 
-    const activeVersionBeforeRepin = getActivePluginRegistryVersion();
-    const routeVersionBeforeRepin = getActivePluginHttpRouteRegistryVersion();
+        pinActivePluginHttpRouteRegistry(repinnedRegistry);
 
-    pinActivePluginHttpRouteRegistry(repinnedRegistry);
-
-    expectRegistryVersions({
-      active: activeVersionBeforeRepin,
-      routes: routeVersionBeforeRepin + 1,
+        expectRegistryVersions({
+          active: activeVersionBeforeRepin,
+          routes: routeVersionBeforeRepin + 1,
+        });
+      },
+    },
+  ] as const)("$name", ({ run }) => {
+    expectRouteRegistryState({
+      setup: () => {},
+      assert: run,
     });
   });
 

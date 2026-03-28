@@ -57,6 +57,27 @@ function expectRuntimeValue<T>(
   expect(readValue(createPluginRuntime())).toBe(expected);
 }
 
+function expectRuntimeSubagentRun(
+  runtime: ReturnType<typeof createPluginRuntime>,
+  params: { sessionKey: string; message: string },
+) {
+  return runtime.subagent.run(params);
+}
+
+function createGatewaySubagentRunFixture(params?: { allowGatewaySubagentBinding?: boolean }) {
+  const run = vi.fn().mockResolvedValue({ runId: "run-1" });
+  const runtime = params?.allowGatewaySubagentBinding
+    ? createPluginRuntime({ allowGatewaySubagentBinding: true })
+    : createPluginRuntime();
+
+  setGatewaySubagentRuntime({
+    ...createGatewaySubagentRuntime(),
+    run,
+  });
+
+  return { run, runtime };
+}
+
 function expectFunctionKeys(value: Record<string, unknown>, keys: readonly string[]) {
   keys.forEach((key) => {
     expect(typeof value[key]).toBe("function");
@@ -209,22 +230,19 @@ describe("plugin runtime command execution", () => {
   });
 
   it("keeps subagent unavailable by default even after gateway initialization", async () => {
-    const runtime = createPluginRuntime();
-    setGatewaySubagentRuntime(createGatewaySubagentRuntime());
+    const { runtime } = createGatewaySubagentRunFixture();
 
     expectGatewaySubagentRunFailure(runtime, { sessionKey: "s-1", message: "hello" });
   });
 
   it("late-binds to the gateway subagent when explicitly enabled", async () => {
-    const run = vi.fn().mockResolvedValue({ runId: "run-1" });
-    const runtime = createPluginRuntime({ allowGatewaySubagentBinding: true });
-
-    setGatewaySubagentRuntime({
-      ...createGatewaySubagentRuntime(),
-      run,
+    const { run, runtime } = createGatewaySubagentRunFixture({
+      allowGatewaySubagentBinding: true,
     });
 
-    await expect(runtime.subagent.run({ sessionKey: "s-2", message: "hello" })).resolves.toEqual({
+    await expect(
+      expectRuntimeSubagentRun(runtime, { sessionKey: "s-2", message: "hello" }),
+    ).resolves.toEqual({
       runId: "run-1",
     });
     expect(run).toHaveBeenCalledWith({ sessionKey: "s-2", message: "hello" });

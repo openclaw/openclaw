@@ -48,13 +48,20 @@ function expectGuardState(params: {
   expect(params.source, params.message).not.toContain(params.needle);
 }
 
+function readGuardrailSource(relativePath: string) {
+  return readFileSync(resolve(repoRoot, relativePath), "utf8");
+}
+
 describe("runtime live state guardrails", () => {
   it.each(guardAssertions())(
     "keeps split-runtime state holders on explicit direct globals: $relativePath $type $needle",
     ({ relativePath, type, needle, message }) => {
-      const source = readFileSync(resolve(repoRoot, relativePath), "utf8");
-
-      expectGuardState({ source, type, needle, message });
+      expectGuardState({
+        source: readGuardrailSource(relativePath),
+        type,
+        needle,
+        message,
+      });
     },
   );
 });

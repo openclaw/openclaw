@@ -69,6 +69,12 @@ describe("applyExclusiveSlotSelection", () => {
     expect(result.warnings).toHaveLength(0);
   }
 
+  function buildSelectionRegistry(plugins: ReadonlyArray<{ id: string; kind?: PluginKind }>) {
+    return {
+      plugins: [...plugins],
+    };
+  }
+
   function expectUnchangedSelectionCase(params: {
     config: OpenClawConfig;
     selectedId: string;
@@ -81,9 +87,7 @@ describe("applyExclusiveSlotSelection", () => {
       ...(params.selectedKind ? { selectedKind: params.selectedKind } : {}),
       ...(params.registry
         ? {
-            registry: {
-              plugins: [...params.registry.plugins],
-            },
+            registry: buildSelectionRegistry(params.registry.plugins),
           }
         : {}),
     });
@@ -92,23 +96,67 @@ describe("applyExclusiveSlotSelection", () => {
     expect(result.config).toBe(params.config);
   }
 
-  it("selects the slot and disables other entries for the same kind", () => {
-    const config = createMemoryConfig({
-      slots: { memory: "memory-core" },
-      entries: { "memory-core": { enabled: true } },
-    });
-    const result = runMemorySelection(config);
+  function expectChangedSelectionCase(params: {
+    config: OpenClawConfig;
+    selectedId?: string;
+    expectedDisabled?: boolean;
+    warningChecks: {
+      contains?: readonly string[];
+      excludes?: readonly string[];
+    };
+  }) {
+    const result = runMemorySelection(params.config, params.selectedId);
 
     expectMemorySelectionState(result, {
       changed: true,
-      selectedId: "memory",
-      disabledCompetingPlugin: false,
+      selectedId: params.selectedId ?? "memory",
+      ...(params.expectedDisabled != null
+        ? { disabledCompetingPlugin: params.expectedDisabled }
+        : {}),
     });
-    expectSelectionWarnings(result.warnings, {
-      contains: [
-        'Exclusive slot "memory" switched from "memory-core" to "memory".',
-        'Disabled other "memory" slot plugins: memory-core.',
-      ],
+    expectSelectionWarnings(result.warnings, params.warningChecks);
+  }
+
+  it.each([
+    {
+      name: "selects the slot and disables other entries for the same kind",
+      config: createMemoryConfig({
+        slots: { memory: "memory-core" },
+        entries: { "memory-core": { enabled: true } },
+      }),
+      expectedDisabled: false,
+      warningChecks: {
+        contains: [
+          'Exclusive slot "memory" switched from "memory-core" to "memory".',
+          'Disabled other "memory" slot plugins: memory-core.',
+        ],
+      },
+    },
+    {
+      name: "warns when the slot falls back to a default",
+      config: createMemoryConfig(),
+      warningChecks: {
+        contains: ['Exclusive slot "memory" switched from "memory-core" to "memory".'],
+      },
+    },
+    {
+      name: "keeps disabled competing plugins disabled without adding disable warnings",
+      config: createMemoryConfig({
+        entries: {
+          "memory-core": { enabled: false },
+        },
+      }),
+      expectedDisabled: false,
+      warningChecks: {
+        contains: ['Exclusive slot "memory" switched from "memory-core" to "memory".'],
+        excludes: ['Disabled other "memory" slot plugins: memory-core.'],
+      },
+    },
+  ] as const)("$name", ({ config, expectedDisabled, warningChecks }) => {
+    expectChangedSelectionCase({
+      config,
+      ...(expectedDisabled != null ? { expectedDisabled } : {}),
+      warningChecks,
     });
   });
 
@@ -132,41 +180,7 @@ describe("applyExclusiveSlotSelection", () => {
       config,
       selectedId,
       ...(selectedKind ? { selectedKind } : {}),
-      ...(registry ? { registry: { plugins: [...registry.plugins] } } : {}),
+      ...(registry ? { registry: buildSelectionRegistry(registry.plugins) } : {}),
     });
-  });
-
-  it.each([
-    {
-      name: "warns when the slot falls back to a default",
-      config: createMemoryConfig(),
-      selectedId: "memory",
-      expectedDisabled: undefined,
-      warningChecks: {
-        contains: ['Exclusive slot "memory" switched from "memory-core" to "memory".'],
-      },
-    },
-    {
-      name: "keeps disabled competing plugins disabled without adding disable warnings",
-      config: createMemoryConfig({
-        entries: {
-          "memory-core": { enabled: false },
-        },
-      }),
-      selectedId: "memory",
-      expectedDisabled: false,
-      warningChecks: {
-        contains: ['Exclusive slot "memory" switched from "memory-core" to "memory".'],
-        excludes: ['Disabled other "memory" slot plugins: memory-core.'],
-      },
-    },
-  ] as const)("$name", ({ config, selectedId, expectedDisabled, warningChecks }) => {
-    const result = runMemorySelection(config, selectedId);
-
-    expectMemorySelectionState(result, {
-      changed: true,
-      ...(expectedDisabled != null ? { disabledCompetingPlugin: expectedDisabled } : {}),
-    });
-    expectSelectionWarnings(result.warnings, warningChecks);
   });
 });
