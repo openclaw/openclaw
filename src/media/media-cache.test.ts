@@ -27,7 +27,7 @@ describe("media-cache", () => {
       const result = await cacheMediaToDisk(PNG_BASE64, "image/png");
 
       expect(result.hash).toHaveLength(16);
-      expect(result.path).toContain("media/cache/");
+      expect(result.path).toContain(path.join("media", "cache") + path.sep);
       expect(result.path).toMatch(/\.png$/);
 
       const stat = await fs.stat(result.path);
@@ -72,7 +72,7 @@ describe("media-cache", () => {
       await fs.rm(cacheDir, { recursive: true, force: true }).catch(() => {});
 
       const result = await cacheMediaToDisk(PNG_BASE64, "image/png");
-      expect(result.path).toContain("cache/");
+      expect(result.path).toContain(path.sep + "cache" + path.sep);
 
       const stat = await fs.stat(result.path);
       expect(stat.isFile()).toBe(true);
