@@ -76,6 +76,25 @@ function expectInspectReport(pluginId: string) {
   return inspect;
 }
 
+function expectPluginLoaderCall(params: {
+  config?: unknown;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}) {
+  expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+    expect.objectContaining({
+      ...(params.config !== undefined ? { config: params.config } : {}),
+      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+      ...(params.env ? { env: params.env } : {}),
+    }),
+  );
+}
+
+function expectNoCompatibilityWarnings() {
+  expect(buildPluginCompatibilityNotices()).toEqual([]);
+  expect(buildPluginCompatibilityWarnings()).toEqual([]);
+}
+
 describe("buildPluginStatusReport", () => {
   beforeEach(async () => {
     vi.resetModules();
@@ -113,13 +132,11 @@ describe("buildPluginStatusReport", () => {
       env,
     });
 
-    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: {},
-        workspaceDir: "/workspace",
-        env,
-      }),
-    );
+    expectPluginLoaderCall({
+      config: {},
+      workspaceDir: "/workspace",
+      env,
+    });
   });
 
   it("applies the full bundled provider compat chain before loading plugins", () => {
@@ -337,8 +354,7 @@ describe("buildPluginStatusReport", () => {
       }),
     );
 
-    expect(buildPluginCompatibilityNotices()).toEqual([]);
-    expect(buildPluginCompatibilityWarnings()).toEqual([]);
+    expectNoCompatibilityWarnings();
   });
 
   it.each([

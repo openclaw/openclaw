@@ -106,6 +106,17 @@ function resolveOptionalDemoTools(toolAllowlist?: readonly string[]) {
   return resolvePluginTools(createResolveToolsParams({ toolAllowlist }));
 }
 
+function expectResolvedToolNames(
+  tools: ReturnType<typeof resolvePluginTools>,
+  expectedToolNames: readonly string[],
+) {
+  expect(tools.map((tool) => tool.name)).toEqual(expectedToolNames);
+}
+
+function expectLoaderCall(overrides: Record<string, unknown>) {
+  expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(expect.objectContaining(overrides));
+}
+
 describe("resolvePluginTools optional tools", () => {
   beforeEach(async () => {
     vi.resetModules();
@@ -139,7 +150,7 @@ describe("resolvePluginTools optional tools", () => {
     setOptionalDemoRegistry();
     const tools = resolveOptionalDemoTools(toolAllowlist);
 
-    expect(tools.map((tool) => tool.name)).toEqual(["optional_tool"]);
+    expectResolvedToolNames(tools, ["optional_tool"]);
   });
 
   it("rejects plugin id collisions with core tool names", () => {
@@ -167,7 +178,7 @@ describe("resolvePluginTools optional tools", () => {
     const registry = setMultiToolRegistry();
     const tools = resolveWithConflictingCoreName();
 
-    expect(tools.map((tool) => tool.name)).toEqual(["other_tool"]);
+    expectResolvedToolNames(tools, ["other_tool"]);
     expect(registry.diagnostics).toHaveLength(1);
     expect(registry.diagnostics[0]?.message).toContain("plugin tool name conflict");
   });
@@ -176,44 +187,38 @@ describe("resolvePluginTools optional tools", () => {
     const registry = setMultiToolRegistry();
     const tools = resolveWithConflictingCoreName({ suppressNameConflicts: true });
 
-    expect(tools.map((tool) => tool.name)).toEqual(["other_tool"]);
+    expectResolvedToolNames(tools, ["other_tool"]);
     expect(registry.diagnostics).toHaveLength(0);
   });
 
-  it("forwards an explicit env to plugin loading", () => {
-    setOptionalDemoRegistry();
-    const env = { OPENCLAW_HOME: "/srv/openclaw-home" } as NodeJS.ProcessEnv;
-
-    resolvePluginTools(
-      createResolveToolsParams({
-        env,
+  it.each([
+    {
+      name: "forwards an explicit env to plugin loading",
+      params: {
+        env: { OPENCLAW_HOME: "/srv/openclaw-home" } as NodeJS.ProcessEnv,
         toolAllowlist: ["optional_tool"],
-      }),
-    );
-
-    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        env,
-      }),
-    );
-  });
-
-  it("forwards gateway subagent binding to plugin runtime options", () => {
-    setOptionalDemoRegistry();
-
-    resolvePluginTools(
-      createResolveToolsParams({
+      },
+      expectedLoaderCall: {
+        env: { OPENCLAW_HOME: "/srv/openclaw-home" },
+      },
+    },
+    {
+      name: "forwards gateway subagent binding to plugin runtime options",
+      params: {
         allowGatewaySubagentBinding: true,
         toolAllowlist: ["optional_tool"],
-      }),
-    );
-
-    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
+      },
+      expectedLoaderCall: {
         runtimeOptions: {
           allowGatewaySubagentBinding: true,
         },
-      }),
-    );
+      },
+    },
+  ])("$name", ({ params, expectedLoaderCall }) => {
+    setOptionalDemoRegistry();
+
+    resolvePluginTools(createResolveToolsParams(params));
+
+    expectLoaderCall(expectedLoaderCall);
   });
 });

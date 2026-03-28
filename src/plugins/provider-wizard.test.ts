@@ -37,6 +37,36 @@ function createSglangSetupProvider() {
   });
 }
 
+function createSglangWizardProvider(params?: {
+  includeSetup?: boolean;
+  includeModelPicker?: boolean;
+}) {
+  return makeProvider({
+    id: "sglang",
+    label: "SGLang",
+    auth: [{ id: "server", label: "Server", kind: "custom", run: vi.fn() }],
+    wizard: {
+      ...((params?.includeSetup ?? true)
+        ? {
+            setup: {
+              choiceLabel: "SGLang setup",
+              groupId: "sglang",
+              groupLabel: "SGLang",
+            },
+          }
+        : {}),
+      ...(params?.includeModelPicker
+        ? {
+            modelPicker: {
+              label: "SGLang server",
+              methodId: "server",
+            },
+          }
+        : {}),
+    },
+  });
+}
+
 function createSglangConfig() {
   return {
     plugins: {
@@ -45,9 +75,10 @@ function createSglangConfig() {
   };
 }
 
-function createHomeEnv(suffix = "") {
+function createHomeEnv(suffix = "", overrides?: Partial<NodeJS.ProcessEnv>) {
   return {
     OPENCLAW_HOME: `/tmp/openclaw-home${suffix}`,
+    ...overrides,
   } as NodeJS.ProcessEnv;
 }
 
@@ -83,6 +114,11 @@ function resolveWizardOptionsTwice(params: {
   const runtimeParams = createWizardRuntimeParams(params);
   resolveProviderWizardOptions(runtimeParams);
   resolveProviderWizardOptions(runtimeParams);
+}
+
+function expectWizardProviderCacheMiss(params: { config?: object; env: NodeJS.ProcessEnv }) {
+  resolveWizardOptionsTwice(params);
+  expect(resolvePluginProviders).toHaveBeenCalledTimes(2);
 }
 
 function expectSingleWizardChoice(params: {
@@ -275,22 +311,7 @@ describe("provider wizard boundaries", () => {
   });
 
   it("reuses provider resolution across wizard consumers for the same config and env", () => {
-    const provider = makeProvider({
-      id: "sglang",
-      label: "SGLang",
-      auth: [{ id: "server", label: "Server", kind: "custom", run: vi.fn() }],
-      wizard: {
-        setup: {
-          choiceLabel: "SGLang setup",
-          groupId: "sglang",
-          groupLabel: "SGLang",
-        },
-        modelPicker: {
-          label: "SGLang server",
-          methodId: "server",
-        },
-      },
-    });
+    const provider = createSglangWizardProvider({ includeModelPicker: true });
     const config = {};
     const env = createHomeEnv();
     resolvePluginProviders.mockReturnValue([provider]);
@@ -326,37 +347,32 @@ describe("provider wizard boundaries", () => {
   it.each([
     {
       name: "skips provider-wizard memoization when plugin cache opt-outs are set",
-      env: {
-        OPENCLAW_HOME: "/tmp/openclaw-home",
+      env: createHomeEnv("", {
         OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
-      } as NodeJS.ProcessEnv,
+      }),
     },
     {
       name: "skips provider-wizard memoization when discovery cache ttl is zero",
-      env: {
-        OPENCLAW_HOME: "/tmp/openclaw-home",
+      env: createHomeEnv("", {
         OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS: "0",
-      } as NodeJS.ProcessEnv,
+      }),
     },
   ] as const)("$name", ({ env }) => {
     const provider = createSglangSetupProvider();
     const config = createSglangConfig();
     resolvePluginProviders.mockReturnValue([provider]);
 
-    resolveWizardOptionsTwice({ config, env });
-
-    expect(resolvePluginProviders).toHaveBeenCalledTimes(2);
+    expectWizardProviderCacheMiss({ config, env });
   });
 
   it("expires provider-wizard memoization after the shortest plugin cache ttl", () => {
     vi.useFakeTimers();
     const provider = createSglangSetupProvider();
     const config = {};
-    const env = {
-      ...createHomeEnv(),
+    const env = createHomeEnv("", {
       OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS: "5",
       OPENCLAW_PLUGIN_MANIFEST_CACHE_MS: "20",
-    } as NodeJS.ProcessEnv;
+    });
     resolvePluginProviders.mockReturnValue([provider]);
     const runtimeParams = createWizardRuntimeParams({ config, env });
 
@@ -372,10 +388,9 @@ describe("provider wizard boundaries", () => {
   it("invalidates provider-wizard snapshots when cache-control env values change in place", () => {
     const provider = createSglangSetupProvider();
     const config = {};
-    const env = {
-      ...createHomeEnv(),
+    const env = createHomeEnv("", {
       OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS: "1000",
-    } as NodeJS.ProcessEnv;
+    });
     resolvePluginProviders.mockReturnValue([provider]);
 
     resolveProviderWizardOptions(createWizardRuntimeParams({ config, env }));

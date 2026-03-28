@@ -5,6 +5,24 @@ import {
   expectIndependentTypingLeases,
 } from "./typing-lease.test-support.js";
 
+const TELEGRAM_TYPING_INTERVAL_MS = 2_000;
+const TELEGRAM_TYPING_DEFAULT_INTERVAL_MS = 4_000;
+
+function buildTelegramTypingParams(
+  pulse: (params: {
+    to: string;
+    accountId?: string;
+    cfg?: unknown;
+    messageThreadId?: number;
+  }) => Promise<unknown>,
+) {
+  return {
+    to: "telegram:123",
+    intervalMs: TELEGRAM_TYPING_INTERVAL_MS,
+    pulse,
+  };
+}
+
 describe("createTelegramTypingLease", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -13,11 +31,7 @@ describe("createTelegramTypingLease", () => {
   it("pulses immediately and keeps leases independent", async () => {
     await expectIndependentTypingLeases({
       createLease: createTelegramTypingLease,
-      buildParams: (pulse) => ({
-        to: "telegram:123",
-        intervalMs: 2_000,
-        pulse,
-      }),
+      buildParams: buildTelegramTypingParams,
     });
   });
 
@@ -37,11 +51,7 @@ describe("createTelegramTypingLease", () => {
     await expectBackgroundTypingPulseFailuresAreSwallowed({
       createLease: createTelegramTypingLease,
       pulse,
-      buildParams: (pulse) => ({
-        to: "telegram:123",
-        intervalMs: 2_000,
-        pulse,
-      }),
+      buildParams: buildTelegramTypingParams,
     });
   });
 
@@ -56,7 +66,7 @@ describe("createTelegramTypingLease", () => {
     });
 
     expect(pulse).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(3_999);
+    await vi.advanceTimersByTimeAsync(TELEGRAM_TYPING_DEFAULT_INTERVAL_MS - 1);
     expect(pulse).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(1);
     expect(pulse).toHaveBeenCalledTimes(2);

@@ -22,27 +22,31 @@ function createProgram(existingCommandName?: string) {
   return program;
 }
 
+function createCliRegistry() {
+  return {
+    cliRegistrars: [
+      {
+        pluginId: "memory-core",
+        register: mocks.memoryRegister,
+        commands: ["memory"],
+        source: "bundled",
+      },
+      {
+        pluginId: "other",
+        register: mocks.otherRegister,
+        commands: ["other"],
+        source: "bundled",
+      },
+    ],
+  };
+}
+
 describe("registerPluginCliCommands", () => {
   beforeEach(() => {
     mocks.memoryRegister.mockClear();
     mocks.otherRegister.mockClear();
     mocks.loadOpenClawPlugins.mockReset();
-    mocks.loadOpenClawPlugins.mockReturnValue({
-      cliRegistrars: [
-        {
-          pluginId: "memory-core",
-          register: mocks.memoryRegister,
-          commands: ["memory"],
-          source: "bundled",
-        },
-        {
-          pluginId: "other",
-          register: mocks.otherRegister,
-          commands: ["other"],
-          source: "bundled",
-        },
-      ],
-    });
+    mocks.loadOpenClawPlugins.mockReturnValue(createCliRegistry());
   });
 
   it("skips plugin CLI registrars when commands already exist", () => {

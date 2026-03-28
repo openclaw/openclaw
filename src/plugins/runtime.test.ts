@@ -31,6 +31,19 @@ function createRuntimeRegistryPair() {
   };
 }
 
+function expectActiveRouteRegistryResolution(params: {
+  pinnedRegistry: ReturnType<typeof createEmptyPluginRegistry>;
+  explicitRegistry: ReturnType<typeof createEmptyPluginRegistry>;
+  expectedRegistry: "pinned" | "explicit";
+}) {
+  setActivePluginRegistry(params.pinnedRegistry);
+  pinActivePluginHttpRouteRegistry(params.pinnedRegistry);
+
+  expect(resolveActivePluginHttpRouteRegistry(params.explicitRegistry)).toBe(
+    params.expectedRegistry === "pinned" ? params.pinnedRegistry : params.explicitRegistry,
+  );
+}
+
 describe("plugin runtime route registry", () => {
   afterEach(() => {
     releasePinnedPluginHttpRouteRegistry();
@@ -83,11 +96,10 @@ describe("plugin runtime route registry", () => {
       expected: "pinned",
     },
   ] as const)("$name", ({ pinnedRegistry, explicitRegistry, expected }) => {
-    setActivePluginRegistry(pinnedRegistry);
-    pinActivePluginHttpRouteRegistry(pinnedRegistry);
-
-    expect(resolveActivePluginHttpRouteRegistry(explicitRegistry)).toBe(
-      expected === "pinned" ? pinnedRegistry : explicitRegistry,
-    );
+    expectActiveRouteRegistryResolution({
+      pinnedRegistry,
+      explicitRegistry,
+      expectedRegistry: expected,
+    });
   });
 });
