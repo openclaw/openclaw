@@ -1180,7 +1180,9 @@ export class AcpSessionManager {
           });
           if (
             input.allowBackendUnavailable &&
-            (acpError.code === "ACP_BACKEND_MISSING" || acpError.code === "ACP_BACKEND_UNAVAILABLE")
+            (acpError.code === "ACP_BACKEND_MISSING" ||
+              acpError.code === "ACP_BACKEND_UNAVAILABLE" ||
+              this.isRecoverableAcpxExitError(acpError.message))
           ) {
             // Treat unavailable backends as terminal for this cached handle so it
             // cannot continue counting against maxConcurrentSessions.
@@ -1211,7 +1213,7 @@ export class AcpSessionManager {
           code: (err as AcpRuntimeError).code ?? "UNKNOWN",
           message: (err as Error).message ?? "Unknown error",
         };
-        // Don't rethrow - the inner try-catch handles error propagation
+        throw err;
       } finally {
         // Audit log (both success and failure)
         await this.auditLogger.log({
