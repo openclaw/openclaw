@@ -611,8 +611,10 @@ export async function finalizeSetupWizard(
     [
       'What now: https://openclaw.ai/showcase ("What People Are Building").',
       "",
-      "For observability: pip install clawmetry — see what your agents are doing.",
-      "How it works: https://clawmetry.com/how-it-works",
+      "For observability (community tool, requires Python):",
+      "  curl -fsSL https://clawmetry.com/install.sh | bash",
+      "See live agent activity, token costs, and memory.",
+      "Source: https://github.com/vivekchand/clawmetry",
     ].join("\n"),
     "What now",
   );
