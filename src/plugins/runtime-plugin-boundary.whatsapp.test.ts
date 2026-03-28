@@ -90,6 +90,21 @@ function loadWhatsAppBoundaryModules(runtimePluginDir: string) {
   };
 }
 
+function createListener(messageId = "msg-1") {
+  return {
+    sendMessage: async () => ({ messageId }),
+  };
+}
+
+function expectSharedWhatsAppListenerState(runtimePluginDir: string, accountId: string) {
+  const { light, heavy } = loadWhatsAppBoundaryModules(runtimePluginDir);
+  const listener = createListener();
+
+  heavy.setActiveWebListener(accountId, listener);
+  expect(light.getActiveWebListener(accountId)).toBe(listener);
+  heavy.setActiveWebListener(accountId, null);
+}
+
 afterEach(() => {
   for (const dir of tempDirs.splice(0, tempDirs.length)) {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -98,16 +113,6 @@ afterEach(() => {
 
 describe("runtime plugin boundary whatsapp seam", () => {
   it("shares listener state between staged light and heavy runtime modules", () => {
-    const runtimePluginDir = createBundledWhatsAppRuntimeFixture();
-    const { light, heavy } = loadWhatsAppBoundaryModules(runtimePluginDir);
-    const listener = {
-      sendMessage: async () => ({ messageId: "msg-1" }),
-    };
-
-    heavy.setActiveWebListener("work", listener);
-
-    expect(light.getActiveWebListener("work")).toBe(listener);
-
-    heavy.setActiveWebListener("work", null);
+    expectSharedWhatsAppListenerState(createBundledWhatsAppRuntimeFixture(), "work");
   });
 });
