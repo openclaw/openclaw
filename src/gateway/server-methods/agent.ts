@@ -17,7 +17,7 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
-import { registerAgentRunContext } from "../../infra/agent-events.js";
+import { getAgentRunContext, registerAgentRunContext } from "../../infra/agent-events.js";
 import {
   resolveAgentDeliveryPlan,
   resolveAgentOutboundTarget,
@@ -84,8 +84,14 @@ function mergeAgentWaitStructuredMetadata<T extends AgentWaitTerminalSnapshot>(
   };
 }
 
-function isMissingAgentWaitStructuredMetadata(snapshot: AgentWaitTerminalSnapshot): boolean {
-  return snapshot.stopReason === "tool_calls" && snapshot.pendingToolCalls === undefined;
+function isMissingAgentWaitStructuredMetadata(
+  snapshot: AgentWaitTerminalSnapshot,
+  requestedStructuredOutput: boolean,
+): boolean {
+  if (snapshot.stopReason === "tool_calls") {
+    return snapshot.pendingToolCalls === undefined;
+  }
+  return requestedStructuredOutput && snapshot.stopReason === undefined && snapshot.status === "ok";
 }
 
 function resolveSenderIsOwnerFromClient(client: GatewayRequestHandlerOptions["client"]): boolean {
@@ -587,7 +593,10 @@ export const agentHandlers: GatewayRequestHandlers = {
           bestEffortDeliver = true;
         }
       }
-      registerAgentRunContext(idem, { sessionKey: canonicalSessionKey });
+      registerAgentRunContext(idem, {
+        sessionKey: canonicalSessionKey,
+        requestedStructuredOutput: request.streamParams?.toolChoice != null,
+      });
     }
 
     const runId = idem;
@@ -868,6 +877,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         ? Math.max(0, Math.floor(p.timeoutMs))
         : 30_000;
     const hasActiveChatRun = context.chatAbortControllers.has(runId);
+    const requestedStructuredOutput = getAgentRunContext(runId)?.requestedStructuredOutput === true;
 
     const cachedGatewaySnapshot = readTerminalSnapshotFromGatewayDedupe({
       dedupe: context.dedupe,
@@ -930,7 +940,7 @@ export const agentHandlers: GatewayRequestHandlers = {
             ])) ?? null;
           snapshot = mergeAgentWaitStructuredMetadata(snapshot, immediateDedupeMetadata);
         }
-        if (isMissingAgentWaitStructuredMetadata(snapshot)) {
+        if (isMissingAgentWaitStructuredMetadata(snapshot, requestedStructuredOutput)) {
           let graceTimer: ReturnType<typeof setTimeout> | null = null;
           const dedupeMetadata =
             (await Promise.race([

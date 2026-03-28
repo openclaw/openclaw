@@ -808,6 +808,80 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("agent.wait briefly waits for structured metadata when lifecycle ends first", async () => {
+    await withMainSessionStore(async () => {
+      const runId = "idem-wait-lifecycle-structured";
+      let releaseRun: (() => void) | undefined;
+      const blockedRun = new Promise<void>((resolve) => {
+        releaseRun = resolve;
+      });
+      const agentSpy = vi.mocked(agentCommand);
+      agentSpy.mockImplementationOnce(async () => {
+        await blockedRun;
+        return {
+          meta: {
+            stopReason: "tool_calls",
+            pendingToolCalls: [
+              {
+                id: "call-1",
+                name: "emit_structured_result",
+                arguments: '{"ok":true}',
+              },
+            ],
+          },
+        };
+      });
+
+      const accepted = await rpcReq(ws, "agent", {
+        sessionKey: "main",
+        message: "return structured output",
+        idempotencyKey: runId,
+        streamParams: {
+          toolChoice: "required",
+        },
+      });
+      expect(accepted.ok).toBe(true);
+      expect(accepted.payload?.status).toBe("accepted");
+
+      const waitP = rpcReq(ws, "agent.wait", {
+        runId,
+        timeoutMs: 1_000,
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 1 },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "end", startedAt: 1, endedAt: 2 },
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      releaseRun?.();
+
+      const waitRes = await waitP;
+      expect(waitRes).toMatchObject({
+        ok: true,
+        payload: {
+          runId,
+          status: "ok",
+          stopReason: "tool_calls",
+          pendingToolCalls: [
+            {
+              id: "call-1",
+              name: "emit_structured_result",
+              arguments: '{"ok":true}',
+            },
+          ],
+        },
+      });
+    });
+  });
+
   test("agent.wait ignores stale chat dedupe when an agent run with the same runId is in flight", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     let resolveAgentRun: (() => void) | undefined;
