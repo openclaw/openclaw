@@ -10,23 +10,34 @@
 #   openclaw --container openclaw dashboard --no-open
 #   openclaw --container openclaw channels login
 #
+# If running as a dedicated service user (see setup.sh --runas):
+#   Linux: sudo -u openclaw /home/openclaw/run-openclaw-podman.sh [setup]
+#   macOS: sudo -u openclaw /Users/openclaw/run-openclaw-podman.sh [setup]
+#
 # Legacy: "setup-host" delegates to the Podman setup script
 
 set -euo pipefail
 
 PLATFORM_NAME="$(uname -s 2>/dev/null || echo unknown)"
+OS_NAME="$PLATFORM_NAME"
 
 resolve_user_home() {
   local user="$1"
   local home=""
-  if command -v getent >/dev/null 2>&1; then
+  if [[ "$OS_NAME" == "Darwin" ]]; then
+    home="$(dscl . -read "/Users/$user" NFSHomeDirectory 2>/dev/null | awk '{print $2}' || true)"
+  elif command -v getent >/dev/null 2>&1; then
     home="$(getent passwd "$user" 2>/dev/null | cut -d: -f6 || true)"
   fi
   if [[ -z "$home" && -f /etc/passwd ]]; then
     home="$(awk -F: -v u="$user" '$1==u {print $6}' /etc/passwd 2>/dev/null || true)"
   fi
   if [[ -z "$home" ]]; then
-    home="/home/$user"
+    if [[ "$OS_NAME" == "Darwin" ]]; then
+      home="/Users/$user"
+    else
+      home="/home/$user"
+    fi
   fi
   printf '%s' "$home"
 }
@@ -569,6 +580,4 @@ if [[ "$PLATFORM_NAME" == "Darwin" ]]; then
   echo "  Then open http://127.0.0.1:28889/"
   echo "  Note: find <podman-vm-ssh-port> with: podman system connection list"
 fi
-if [[ "$PLATFORM_NAME" == "Linux" ]]; then
-  echo "For auto-start/restarts, use: ./scripts/podman/setup.sh --quadlet (Quadlet + systemd user service)."
-fi
+echo "For auto-start/restarts, use: ./scripts/podman/setup.sh --quadlet (systemd Quadlet on Linux, launchd on macOS)."

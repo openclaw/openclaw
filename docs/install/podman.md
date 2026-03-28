@@ -27,7 +27,35 @@ The intended model is:
 
 <Steps>
   <Step title="One-time setup">
-    From the repo root, run `./scripts/podman/setup.sh`.
+    From the repo root, run the setup script. By default it uses your current user, builds the container image, and writes config under `~/.openclaw`:
+
+    ```bash
+    ./scripts/podman/setup.sh
+    ```
+
+    This also creates a minimal config at `~/.openclaw/openclaw.json` (sets `gateway.mode` to `"local"`) so the Gateway can start without running the wizard.
+
+    By default the container is **not** installed as a systemd service -- you start it manually in the next step. For a production-style setup with auto-start and restarts, pass `--quadlet` instead:
+
+    ```bash
+    ./scripts/podman/setup.sh --quadlet
+    ```
+
+    (Or set `OPENCLAW_PODMAN_QUADLET=1`. Use `--container` to install only the container and launch script.)
+
+    To create and use a dedicated service user instead of your current user, pass `--runas`:
+
+    ```bash
+    ./scripts/podman/setup.sh --runas              # creates an "openclaw" user
+    ./scripts/podman/setup.sh --runas myuser        # creates a "myuser" user
+    ./scripts/podman/setup.sh --runas --quadlet     # service user + auto-start
+    ```
+
+    **Optional build-time env vars** (set before running `scripts/podman/setup.sh`):
+
+    - `OPENCLAW_DOCKER_APT_PACKAGES` -- install extra apt packages during image build.
+    - `OPENCLAW_EXTENSIONS` -- pre-install extension dependencies (space-separated names, e.g. `diagnostics-otel matrix`).
+
   </Step>
 
   <Step title="Start the Gateway container">
@@ -203,6 +231,14 @@ systemctl --user restart openclaw.service
 ```
 
 For boot persistence on SSH/headless hosts, enable lingering for your current user:
+
+### Dedicated service user (`--runas`)
+
+When you pass `--runas`, the setup script creates a dedicated non-login user:
+
+- **Shell:** `nologin` -- no interactive login; reduces attack surface.
+- **Home:** `/home/openclaw` (Linux) or `/Users/openclaw` (macOS) -- holds `~/.openclaw` (config, workspace) and the launch script `run-openclaw-podman.sh`.
+- **Rootless Podman:** On Linux, the user must have a **subuid** and **subgid** range. Many distros assign these automatically when the user is created. If setup prints a warning, add lines to `/etc/subuid` and `/etc/subgid`:
 
 ```bash
 sudo loginctl enable-linger "$(whoami)"
