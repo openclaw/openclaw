@@ -192,7 +192,10 @@ describe("media store", () => {
 
   async function createSymlinkSource(home: string) {
     const target = path.join(home, "sensitive.txt");
-    const source = path.join(home, "source.txt");
+    const source = path.join(
+      home,
+      `source-${Date.now()}-${Math.random().toString(16).slice(2)}.txt`,
+    );
     await fs.writeFile(target, "sensitive");
     await fs.rm(source, { force: true });
     await fs.symlink(target, source);
