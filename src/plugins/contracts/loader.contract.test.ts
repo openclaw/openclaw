@@ -92,23 +92,15 @@ describe("plugin loader contract", () => {
     expectPluginAllowlistContains(vitestCompatConfig?.plugins?.allow, providerPluginIds);
   });
 
-  it.each([
-    {
-      name: "keeps bundled web search loading scoped to the web search registry",
-      actual: bundledWebSearchPluginIds,
-      expected: webSearchPluginIds,
-    },
-    {
-      name: "keeps bundled web search allowlist compatibility wired to the web search registry",
-      actual: webSearchAllowlistCompatConfig?.plugins?.allow,
-      expected: webSearchPluginIds,
-      extraEntry: demoAllowEntry,
-    },
-  ] as const)("$name", ({ actual, expected, extraEntry }) => {
-    if (Array.isArray(actual) && extraEntry == null) {
-      expect(actual).toEqual(expected);
-      return;
-    }
-    expectPluginAllowlistContains(actual, expected, extraEntry);
+  it("keeps bundled web search loading scoped to the web search registry", () => {
+    expect(bundledWebSearchPluginIds).toEqual(webSearchPluginIds);
+  });
+
+  it("keeps bundled web search allowlist compatibility wired to the web search registry", () => {
+    expectPluginAllowlistContains(
+      webSearchAllowlistCompatConfig?.plugins?.allow,
+      webSearchPluginIds,
+      demoAllowEntry,
+    );
   });
 });

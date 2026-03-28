@@ -1,4 +1,6 @@
 import { beforeEach, describe } from "vitest";
+import { __testing as bluebubblesBindingTesting } from "../../../../extensions/bluebubbles/api.js";
+import { __testing as iMessageBindingTesting } from "../../../../extensions/imessage/api.js";
 import { __testing as sessionBindingTesting } from "../../../infra/outbound/session-binding-service.js";
 import { discordThreadBindingTesting } from "../../../plugin-sdk/discord.js";
 import { feishuThreadBindingTesting } from "../../../plugin-sdk/feishu-conversation.js";
@@ -93,6 +95,8 @@ for (const entry of directoryContractRegistry) {
 
 describe("session binding contract registry", () => {
   beforeEach(async () => {
+    bluebubblesBindingTesting.resetBlueBubblesConversationBindingsForTests();
+    iMessageBindingTesting.resetIMessageConversationBindingsForTests();
     sessionBindingTesting.resetSessionBindingAdaptersForTests();
     discordThreadBindingTesting.resetThreadBindingsForTests();
     feishuThreadBindingTesting.resetFeishuThreadBindingsForTests();
