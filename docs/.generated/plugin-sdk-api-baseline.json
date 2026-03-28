@@ -1667,6 +1667,15 @@
           }
         },
         {
+          "declaration": "export function resetSystemEventsForTest(): void;",
+          "exportName": "resetSystemEventsForTest",
+          "kind": "function",
+          "source": {
+            "line": 157,
+            "path": "src/infra/system-events.ts"
+          }
+        },
+        {
           "declaration": "export function resolveHeartbeatVisibility(params: { cfg: OpenClawConfig; channel: GatewayMessageChannel; accountId?: string | undefined; }): ResolvedHeartbeatVisibility;",
           "exportName": "resolveHeartbeatVisibility",
           "kind": "function",
