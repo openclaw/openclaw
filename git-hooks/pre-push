@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+ROOT_DIR="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+cd "$ROOT_DIR"
+
+if [[ "${OPENCLAW_SKIP_VERIFY_FAST:-0}" == "1" ]]; then
+  echo "[pre-push] OPENCLAW_SKIP_VERIFY_FAST=1 set; skipping verify:fast"
+  exit 0
+fi
+
+if [[ -f "pnpm-lock.yaml" ]] && command -v pnpm >/dev/null 2>&1; then
+  echo "[pre-push] running: pnpm verify:fast"
+  exec pnpm verify:fast
+fi
+
+if command -v npm >/dev/null 2>&1; then
+  echo "[pre-push] running: npm run verify:fast"
+  exec npm run verify:fast
+fi
+
+echo "[pre-push] missing package manager (pnpm or npm)" >&2
+exit 1

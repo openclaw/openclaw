@@ -295,6 +295,7 @@
     "start": "node scripts/run-node.mjs",
     "test": "node scripts/test-parallel.mjs",
     "test:all": "pnpm lint && pnpm build && pnpm test && pnpm test:e2e && pnpm test:live && pnpm test:docker:all",
+    "test:baseline": "vitest run --config vitest.unit.config.ts src/channels/allow-from.test.ts src/channels/allowlist-match.test.ts src/channels/allowlists/resolve-utils.test.ts src/infra/git-commit.test.ts",
     "test:channels": "vitest run --config vitest.channels.config.ts",
     "test:coverage": "vitest run --config vitest.unit.config.ts --coverage",
     "test:docker:all": "pnpm test:docker:live-models && pnpm test:docker:live-gateway && pnpm test:docker:onboard && pnpm test:docker:gateway-network && pnpm test:docker:qr && pnpm test:docker:doctor-switch && pnpm test:docker:plugins && pnpm test:docker:cleanup",
@@ -327,7 +328,8 @@
     "tui:dev": "OPENCLAW_PROFILE=dev CLAWDBOT_PROFILE=dev node scripts/run-node.mjs --dev tui",
     "ui:build": "node scripts/ui.js build",
     "ui:dev": "node scripts/ui.js dev",
-    "ui:install": "node scripts/ui.js install"
+    "ui:install": "node scripts/ui.js install",
+    "verify:fast": "pnpm check && pnpm test:baseline"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "0.14.1",

@@ -1295,13 +1295,7 @@ prepare_gates() {
   fi
 
   run_quiet_logged "pnpm build" ".local/gates-build.log" pnpm build
-  run_quiet_logged "pnpm check" ".local/gates-check.log" pnpm check
-
-  if [ "$docs_only" = "true" ]; then
-    echo "Docs-only change detected with high confidence; skipping pnpm test."
-  else
-    run_quiet_logged "pnpm test" ".local/gates-test.log" pnpm test
-  fi
+  run_quiet_logged "pnpm verify:fast" ".local/gates-verify-fast.log" pnpm verify:fast
 
   cat > .local/gates.env <<EOF_ENV
 PR_NUMBER=$pr
@@ -1410,10 +1404,7 @@ prepare_push() {
 
         bootstrap_deps_if_needed
         run_quiet_logged "pnpm build (lease-retry)" ".local/lease-retry-build.log" pnpm build
-        run_quiet_logged "pnpm check (lease-retry)" ".local/lease-retry-check.log" pnpm check
-        if [ "${DOCS_ONLY:-false}" != "true" ]; then
-          run_quiet_logged "pnpm test (lease-retry)" ".local/lease-retry-test.log" pnpm test
-        fi
+        run_quiet_logged "pnpm verify:fast (lease-retry)" ".local/lease-retry-verify-fast.log" pnpm verify:fast
 
         if ! git push --force-with-lease=refs/heads/$PR_HEAD:$lease_sha prhead HEAD:$PR_HEAD; then
           # Retry also failed — try GraphQL as last resort.

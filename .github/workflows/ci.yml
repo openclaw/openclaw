@@ -178,14 +178,54 @@ jobs:
           install-bun: "false"
           use-sticky-disk: "true"
 
+      - name: Baseline regression gate
+        id: baseline_regression_gate
+        run: pnpm test:baseline
+
       - name: Check types and lint and oxfmt
+        id: check_types_lint_format
         run: pnpm check
 
       - name: Strict TS build smoke
+        id: strict_ts_build_smoke
         run: pnpm build:strict-smoke
 
       - name: Enforce safe external URL opening policy
+        id: safe_external_url_policy
         run: pnpm lint:ui:no-raw-window-open
+
+      - name: Publish quality signal summary
+        if: always()
+        env:
+          BASELINE_OUTCOME: ${{ steps.baseline_regression_gate.outcome }}
+          CHECK_OUTCOME: ${{ steps.check_types_lint_format.outcome }}
+          SMOKE_OUTCOME: ${{ steps.strict_ts_build_smoke.outcome }}
+          URL_POLICY_OUTCOME: ${{ steps.safe_external_url_policy.outcome }}
+        run: |
+          set -euo pipefail
+
+          icon_for() {
+            case "$1" in
+              success) echo "[OK]" ;;
+              failure) echo "[FAIL]" ;;
+              cancelled) echo "[CANCELLED]" ;;
+              skipped) echo "[SKIPPED]" ;;
+              *) echo "[UNKNOWN]" ;;
+            esac
+          }
+
+          {
+            echo "## Quality Signal"
+            echo ""
+            echo "| Gate | Outcome |"
+            echo "| --- | --- |"
+            echo "| Baseline regression (`pnpm test:baseline`) | $(icon_for "${BASELINE_OUTCOME}") ${BASELINE_OUTCOME} |"
+            echo "| Types/Lint/Format (`pnpm check`) | $(icon_for "${CHECK_OUTCOME}") ${CHECK_OUTCOME} |"
+            echo "| Strict TS smoke (`pnpm build:strict-smoke`) | $(icon_for "${SMOKE_OUTCOME}") ${SMOKE_OUTCOME} |"
+            echo "| UI URL safety policy (`pnpm lint:ui:no-raw-window-open`) | $(icon_for "${URL_POLICY_OUTCOME}") ${URL_POLICY_OUTCOME} |"
+            echo ""
+            echo "If a row is not \`success\`, open that step in this job for the exact failing command."
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # Report-only dead-code scans. Runs after scope detection and stores machine-readable
   # results as artifacts for later triage before we enable hard gates.
