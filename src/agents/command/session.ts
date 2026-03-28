@@ -20,6 +20,7 @@ import {
   type SessionEntry,
 } from "../../config/sessions.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
+import { resolvePreferredSessionKeyForSessionIdMatches } from "../../sessions/session-id-resolution.js";
 import { listAgentIds } from "../agent-scope.js";
 import { clearBootstrapSnapshotOnSessionRollover } from "../bootstrap-cache.js";
 
@@ -67,28 +68,33 @@ export function resolveSessionKeyForRequest(opts: {
     explicitSessionKey ?? (ctx ? resolveSessionKey(scope, ctx, mainKey) : undefined);
 
   // If a session id was provided, prefer to re-use its entry (by id) even when no key was derived.
+  // When duplicates exist across agent stores, pick the same deterministic best match used by the
+  // shared gateway/session resolver helpers instead of whichever store happens to be scanned first.
   if (
-    !explicitSessionKey &&
     opts.sessionId &&
+    !explicitSessionKey &&
     (!sessionKey || sessionStore[sessionKey]?.sessionId !== opts.sessionId)
   ) {
-    const foundKey = Object.keys(sessionStore).find(
-      (key) => sessionStore[key]?.sessionId === opts.sessionId,
-    );
-    if (foundKey) {
-      sessionKey = foundKey;
-    }
-  }
+    const matches: Array<[string, SessionEntry]> = [];
+    const storeByKey = new Map<string, SessionKeyResolution>();
+    const addMatches = (
+      candidateStore: Record<string, SessionEntry>,
+      candidateStorePath: string,
+    ): void => {
+      for (const [candidateKey, candidateEntry] of Object.entries(candidateStore)) {
+        if (candidateEntry?.sessionId !== opts.sessionId) {
+          continue;
+        }
+        matches.push([candidateKey, candidateEntry]);
+        storeByKey.set(candidateKey, {
+          sessionKey: candidateKey,
+          sessionStore: candidateStore,
+          storePath: candidateStorePath,
+        });
+      }
+    };
 
-  // When sessionId was provided but not found in the primary store, search all agent stores.
-  // Sessions created under a specific agent live in that agent's store file; the primary
-  // store (derived from the default agent) won't contain them.
-  // Also covers the case where --to derived a sessionKey that doesn't match the requested sessionId.
-  if (
-    opts.sessionId &&
-    !explicitSessionKey &&
-    (!sessionKey || sessionStore[sessionKey]?.sessionId !== opts.sessionId)
-  ) {
+    addMatches(sessionStore, storePath);
     const allAgentIds = listAgentIds(opts.cfg);
     for (const agentId of allAgentIds) {
       if (agentId === storeAgentId) {
@@ -96,12 +102,16 @@ export function resolveSessionKeyForRequest(opts: {
       }
       const altStorePath = resolveStorePath(sessionCfg?.store, { agentId });
       const altStore = loadSessionStore(altStorePath);
-      const foundKey = Object.keys(altStore).find(
-        (key) => altStore[key]?.sessionId === opts.sessionId,
-      );
-      if (foundKey) {
-        return { sessionKey: foundKey, sessionStore: altStore, storePath: altStorePath };
+      addMatches(altStore, altStorePath);
+    }
+
+    const preferredKey = resolvePreferredSessionKeyForSessionIdMatches(matches, opts.sessionId);
+    if (preferredKey) {
+      const preferred = storeByKey.get(preferredKey);
+      if (preferred) {
+        return preferred;
       }
+      sessionKey = preferredKey;
     }
   }
 
@@ -130,7 +140,7 @@ export function resolveSession(opts: {
   const resetType = resolveSessionResetType({ sessionKey });
   const channelReset = resolveChannelResetConfig({
     sessionCfg,
-    channel: sessionEntry?.lastChannel ?? sessionEntry?.channel,
+    channel: sessionEntry?.lastChannel ?? sessionEntry?.channel ?? sessionEntry?.origin?.provider,
   });
   const resetPolicy = resolveSessionResetPolicy({
     sessionCfg,

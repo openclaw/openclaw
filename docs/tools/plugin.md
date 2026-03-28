@@ -90,7 +90,7 @@ and the [Plugin SDK Overview](/plugins/sdk-overview).
     `anthropic`, `byteplus`, `cloudflare-ai-gateway`, `github-copilot`, `google`,
     `huggingface`, `kilocode`, `kimi-coding`, `minimax`, `mistral`, `modelstudio`,
     `moonshot`, `nvidia`, `openai`, `opencode`, `opencode-go`, `openrouter`,
-    `qianfan`, `qwen-portal-auth`, `synthetic`, `together`, `venice`,
+    `qianfan`, `synthetic`, `together`, `venice`,
     `vercel-ai-gateway`, `volcengine`, `xiaomi`, `zai`
   </Accordion>
 
@@ -104,6 +104,7 @@ and the [Plugin SDK Overview](/plugins/sdk-overview).
   </Accordion>
 
   <Accordion title="Other">
+    - `browser` — bundled browser plugin for the browser tool, `openclaw browser` CLI, `browser.request` gateway method, browser runtime, and default browser control service (enabled by default; disable before replacing it)
     - `copilot-proxy` — VS Code Copilot Proxy bridge (disabled by default)
   </Accordion>
 </AccordionGroup>
@@ -257,6 +258,15 @@ Common registration methods:
 | `registerCommand` / `registerCli`    | CLI commands         |
 | `registerContextEngine`              | Context engine       |
 | `registerService`                    | Background service   |
+
+Hook guard behavior for typed lifecycle hooks:
+
+- `before_tool_call`: `{ block: true }` is terminal; lower-priority handlers are skipped.
+- `before_tool_call`: `{ block: false }` is a no-op and does not clear an earlier block.
+- `message_sending`: `{ cancel: true }` is terminal; lower-priority handlers are skipped.
+- `message_sending`: `{ cancel: false }` is a no-op and does not clear an earlier cancel.
+
+For full typed hook behavior, see [SDK Overview](/plugins/sdk-overview#hook-decision-semantics).
 
 ## Related
 

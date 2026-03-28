@@ -7,7 +7,6 @@ export type BuiltInAuthChoice =
   // Legacy alias for `setup-token` (kept for backwards CLI compatibility).
   | "oauth"
   | "setup-token"
-  | "claude-cli"
   | "token"
   | "chutes"
   | "deepseek-api-key"
@@ -25,7 +24,6 @@ export type BuiltInAuthChoice =
   | "venice-api-key"
   | "together-api-key"
   | "huggingface-api-key"
-  | "codex-cli"
   | "apiKey"
   | "gemini-api-key"
   | "google-gemini-cli"
@@ -43,12 +41,13 @@ export type BuiltInAuthChoice =
   | "opencode-go"
   | "github-copilot"
   | "copilot-proxy"
-  | "qwen-portal"
   | "xai-api-key"
   | "mistral-api-key"
   | "volcengine-api-key"
   | "byteplus-api-key"
   | "qianfan-api-key"
+  | "modelstudio-standard-api-key-cn"
+  | "modelstudio-standard-api-key"
   | "modelstudio-api-key-cn"
   | "modelstudio-api-key"
   | "custom-api-key"
@@ -75,7 +74,6 @@ export type BuiltInAuthChoiceGroupId =
   | "synthetic"
   | "venice"
   | "mistral"
-  | "qwen"
   | "together"
   | "huggingface"
   | "qianfan"
@@ -143,6 +141,8 @@ export type OnboardOptions = {
   volcengineApiKey?: string;
   byteplusApiKey?: string;
   qianfanApiKey?: string;
+  modelstudioStandardApiKeyCn?: string;
+  modelstudioStandardApiKey?: string;
   modelstudioApiKeyCn?: string;
   modelstudioApiKey?: string;
   customBaseUrl?: string;

@@ -111,7 +111,7 @@ describe("model-selection", () => {
       expect(normalizeProviderId("Z.ai")).toBe("zai");
       expect(normalizeProviderId("z-ai")).toBe("zai");
       expect(normalizeProviderId("OpenCode-Zen")).toBe("opencode");
-      expect(normalizeProviderId("qwen")).toBe("qwen-portal");
+      expect(normalizeProviderId("qwen")).toBe("qwen");
       expect(normalizeProviderId("kimi-code")).toBe("kimi");
       expect(normalizeProviderId("kimi-coding")).toBe("kimi");
       expect(normalizeProviderId("nvidia-api")).toBe("nvidia");

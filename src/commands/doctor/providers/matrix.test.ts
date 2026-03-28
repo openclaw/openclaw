@@ -4,6 +4,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyMatrixDoctorRepair,
+  cleanStaleMatrixPluginConfig,
   collectMatrixInstallPathWarnings,
   formatMatrixLegacyCryptoPreview,
   formatMatrixLegacyStatePreview,
@@ -137,6 +138,64 @@ describe("doctor matrix provider helpers", () => {
       expect.stringContaining("Matrix encrypted-state migration prepared."),
     ]);
     expect(result.warnings).toEqual([]);
+  });
+
+  it("removes stale Matrix plugin config when install path is missing", async () => {
+    const missingPath = path.join(tmpdir(), "openclaw-matrix-stale-cleanup-test-" + Date.now());
+    await fs.rm(missingPath, { recursive: true, force: true });
+
+    const cfg = {
+      plugins: {
+        installs: {
+          matrix: {
+            source: "path" as const,
+            sourcePath: missingPath,
+            installPath: missingPath,
+          },
+        },
+        load: {
+          paths: [missingPath, "/other/path"],
+        },
+        allow: ["matrix", "other-plugin"],
+      },
+    };
+
+    const result = await cleanStaleMatrixPluginConfig(cfg);
+
+    expect(result.changes).toHaveLength(1);
+    expect(result.changes[0]).toContain("Removed stale Matrix plugin references");
+    expect(result.changes[0]).toContain("install record");
+    expect(result.changes[0]).toContain("load path");
+    expect(result.changes[0]).toContain(missingPath);
+    // Config should have stale refs removed
+    expect(result.config.plugins?.installs?.matrix).toBeUndefined();
+    expect(result.config.plugins?.load?.paths).toEqual(["/other/path"]);
+    // Allowlist should have matrix removed but keep other entries
+    expect(result.config.plugins?.allow).toEqual(["other-plugin"]);
+  });
+
+  it("returns no changes when Matrix install path exists", async () => {
+    const existingPath = tmpdir();
+    const cfg = {
+      plugins: {
+        installs: {
+          matrix: {
+            source: "path" as const,
+            sourcePath: existingPath,
+            installPath: existingPath,
+          },
+        },
+      },
+    };
+
+    const result = await cleanStaleMatrixPluginConfig(cfg);
+    expect(result.changes).toHaveLength(0);
+    expect(result.config).toBe(cfg);
+  });
+
+  it("returns no changes when no Matrix install record exists", async () => {
+    const result = await cleanStaleMatrixPluginConfig({});
+    expect(result.changes).toHaveLength(0);
   });
 
   it("collects matrix preview and install warnings through the provider sequence", async () => {

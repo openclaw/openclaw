@@ -1,6 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+  type OpenClawConfig,
+} from "../config/config.js";
 import { createFixtureSuite } from "../test-utils/fixture-suite.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 import { writeSkill } from "./skills.e2e-test-helpers.js";
@@ -73,6 +78,10 @@ afterAll(async () => {
     tempHome = null;
   }
   await fixtureSuite.cleanup();
+});
+
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
 });
 
 describe("buildWorkspaceSkillCommandSpecs", () => {
@@ -363,6 +372,50 @@ describe("applySkillEnvOverrides", () => {
 
       try {
         expect(process.env.ENV_KEY).toBe("snap-key");
+      } finally {
+        restore();
+        expect(process.env.ENV_KEY).toBeUndefined();
+      }
+    });
+  });
+
+  it("prefers the active runtime snapshot over raw SecretRef skill config", async () => {
+    const workspaceDir = await makeWorkspace();
+    await writeEnvSkill(workspaceDir);
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, resolveTestSkillDirs(workspaceDir));
+    const sourceConfig: OpenClawConfig = {
+      skills: {
+        entries: {
+          "env-skill": {
+            apiKey: {
+              source: "file",
+              provider: "default",
+              id: "/skills/entries/env-skill/apiKey",
+            },
+          },
+        },
+      },
+    };
+    const runtimeConfig: OpenClawConfig = {
+      skills: {
+        entries: {
+          "env-skill": {
+            apiKey: "resolved-key",
+          },
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+
+    withClearedEnv(["ENV_KEY"], () => {
+      const restore = applySkillEnvOverrides({
+        skills: entries,
+        config: sourceConfig,
+      });
+
+      try {
+        expect(process.env.ENV_KEY).toBe("resolved-key");
       } finally {
         restore();
         expect(process.env.ENV_KEY).toBeUndefined();

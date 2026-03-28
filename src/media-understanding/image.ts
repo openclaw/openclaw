@@ -115,17 +115,15 @@ function buildImageContext(
   images: Array<{ buffer: Buffer; mime?: string }>,
 ): Context {
   return {
+    systemPrompt: prompt,
     messages: [
       {
         role: "user",
-        content: [
-          { type: "text", text: prompt },
-          ...images.map((image) => ({
-            type: "image" as const,
-            data: image.buffer.toString("base64"),
-            mimeType: image.mime ?? "image/jpeg",
-          })),
-        ],
+        content: images.map((image) => ({
+          type: "image" as const,
+          data: image.buffer.toString("base64"),
+          mimeType: image.mime ?? "image/jpeg",
+        })),
         timestamp: Date.now(),
       },
     ],

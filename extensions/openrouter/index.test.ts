@@ -1,6 +1,10 @@
+import { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
 import OpenAI from "openai";
 import { describe, expect, it } from "vitest";
-import { createTestPluginApi } from "../../test/helpers/extensions/plugin-api.js";
+import {
+  registerProviderPlugin,
+  requireRegisteredProvider,
+} from "../../test/helpers/extensions/provider-registration.js";
 import plugin from "./index.js";
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY ?? "";
@@ -9,36 +13,12 @@ const LIVE_MODEL_ID =
 const liveEnabled = OPENROUTER_API_KEY.trim().length > 0 && process.env.OPENCLAW_LIVE_TEST === "1";
 const describeLive = liveEnabled ? describe : describe.skip;
 
-function registerOpenRouterPlugin() {
-  const providers: unknown[] = [];
-  const speechProviders: unknown[] = [];
-  const mediaProviders: unknown[] = [];
-  const imageProviders: unknown[] = [];
-
-  plugin.register(
-    createTestPluginApi({
-      id: "openrouter",
-      name: "OpenRouter Provider",
-      source: "test",
-      config: {},
-      runtime: {} as never,
-      registerProvider: (provider) => {
-        providers.push(provider);
-      },
-      registerSpeechProvider: (provider) => {
-        speechProviders.push(provider);
-      },
-      registerMediaUnderstandingProvider: (provider) => {
-        mediaProviders.push(provider);
-      },
-      registerImageGenerationProvider: (provider) => {
-        imageProviders.push(provider);
-      },
-    }),
-  );
-
-  return { providers, speechProviders, mediaProviders, imageProviders };
-}
+const registerOpenRouterPlugin = () =>
+  registerProviderPlugin({
+    plugin,
+    id: "openrouter",
+    name: "OpenRouter Provider",
+  });
 
 describe("openrouter plugin", () => {
   it("registers the expected provider surfaces", () => {
@@ -46,15 +26,9 @@ describe("openrouter plugin", () => {
       registerOpenRouterPlugin();
 
     expect(providers).toHaveLength(1);
-    expect(
-      providers.map(
-        (provider) =>
-          // oxlint-disable-next-line typescript/no-explicit-any
-          (provider as any).id,
-      ),
-    ).toEqual(["openrouter"]);
+    expect(providers.map((provider) => provider.id)).toEqual(["openrouter"]);
     expect(speechProviders).toHaveLength(0);
-    expect(mediaProviders).toHaveLength(0);
+    expect(mediaProviders.map((provider) => provider.id)).toEqual(["openrouter"]);
     expect(imageProviders).toHaveLength(0);
   });
 });
@@ -62,22 +36,12 @@ describe("openrouter plugin", () => {
 describeLive("openrouter plugin live", () => {
   it("registers an OpenRouter provider that can complete a live request", async () => {
     const { providers } = registerOpenRouterPlugin();
-    const provider =
-      // oxlint-disable-next-line typescript/no-explicit-any
-      providers.find((entry) => (entry as any).id === "openrouter");
-    if (!provider) {
-      throw new Error("openrouter provider was not registered");
-    }
+    const provider = requireRegisteredProvider(providers, "openrouter");
 
-    // oxlint-disable-next-line typescript/no-explicit-any
-    const resolved = (provider as any).resolveDynamicModel?.({
+    const resolved = provider.resolveDynamicModel?.({
       provider: "openrouter",
       modelId: LIVE_MODEL_ID,
-      modelRegistry: {
-        find() {
-          return null;
-        },
-      },
+      modelRegistry: new ModelRegistry(AuthStorage.inMemory()),
     });
     if (!resolved) {
       throw new Error(`openrouter provider did not resolve ${LIVE_MODEL_ID}`);

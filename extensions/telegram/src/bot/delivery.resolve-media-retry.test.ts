@@ -1,5 +1,5 @@
 import type { Message } from "@grammyjs/types";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TelegramContext } from "./types.js";
 
 const saveMediaBuffer = vi.fn();
@@ -155,8 +155,8 @@ async function expectTransientGetFileRetrySuccess() {
     expect.objectContaining({
       url: `https://api.telegram.org/file/bot${BOT_TOKEN}/voice/file_0.oga`,
       ssrfPolicy: {
-        allowRfc2544BenchmarkRange: true,
-        allowedHostnames: ["api.telegram.org"],
+        allowRfc2544BenchmarkRange: false,
+        hostnameAllowlist: ["api.telegram.org"],
       },
     }),
   );
@@ -168,9 +168,12 @@ async function flushRetryTimers() {
 }
 
 describe("resolveMedia getFile retry", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     vi.resetModules();
     ({ resolveMedia } = await import("./delivery.js"));
+  });
+
+  beforeEach(() => {
     vi.useFakeTimers();
     fetchRemoteMedia.mockReset();
     saveMediaBuffer.mockReset();
@@ -508,6 +511,31 @@ describe("resolveMedia original filename preservation", () => {
       "inbound",
       MAX_MEDIA_BYTES,
       "documents/file_42.pdf",
+    );
+    expect(result).not.toBeNull();
+  });
+
+  it("allows a configured custom apiRoot host while keeping the hostname allowlist", async () => {
+    const getFile = vi.fn().mockResolvedValue({ file_path: "documents/file_42.pdf" });
+    mockPdfFetchAndSave("file_42.pdf");
+
+    const ctx = makeCtx("document", getFile);
+    const result = await resolveMedia(
+      ctx,
+      MAX_MEDIA_BYTES,
+      BOT_TOKEN,
+      undefined,
+      "http://192.168.1.50:8081/custom-bot-api/",
+    );
+
+    expect(fetchRemoteMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ssrfPolicy: {
+          hostnameAllowlist: ["api.telegram.org", "192.168.1.50"],
+          allowedHostnames: ["192.168.1.50"],
+          allowRfc2544BenchmarkRange: false,
+        },
+      }),
     );
     expect(result).not.toBeNull();
   });

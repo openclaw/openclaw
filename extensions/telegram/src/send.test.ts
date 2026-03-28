@@ -10,8 +10,14 @@ import { clearSentMessageCache, recordSentMessage, wasSentByBot } from "./sent-m
 
 installTelegramSendTestHooks();
 
-const { botApi, botCtorSpy, loadConfig, loadWebMedia, maybePersistResolvedTelegramTarget } =
-  getTelegramSendTestMocks();
+const {
+  botApi,
+  botCtorSpy,
+  imageMetadata,
+  loadConfig,
+  loadWebMedia,
+  maybePersistResolvedTelegramTarget,
+} = getTelegramSendTestMocks();
 const {
   buildInlineKeyboard,
   createForumTopicTelegram,
@@ -43,6 +49,29 @@ async function expectChatNotFoundWithChatId(
     }
     const message = error instanceof Error ? error.message : String(error);
     expect(message).toMatch(/chat not found/i);
+    expect(message).toMatch(new RegExp(`chat_id=${expectedChatId}`));
+  }
+}
+
+async function expectTelegramMembershipErrorWithChatId(
+  action: Promise<unknown>,
+  expectedChatId: string,
+  expectedDetail: RegExp,
+): Promise<void> {
+  try {
+    await action;
+    throw new Error("Expected action to reject with membership error context");
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message === "Expected action to reject with membership error context"
+    ) {
+      throw error;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    expect(message).toMatch(/not a member of the chat, was blocked, or was kicked/i);
+    expect(message).toMatch(expectedDetail);
+    expect(message).toMatch(/Fix: Add the bot to the channel\/group/i);
     expect(message).toMatch(new RegExp(`chat_id=${expectedChatId}`));
   }
 }
@@ -567,6 +596,7 @@ describe("sendMessageTelegram", () => {
     await sendMessageTelegram("https://t.me/mychannel", "hi", {
       token: "tok",
       api,
+      gatewayClientScopes: ["operator.write"],
     });
 
     expect(getChat).toHaveBeenCalledWith("@mychannel");
@@ -577,6 +607,7 @@ describe("sendMessageTelegram", () => {
       expect.objectContaining({
         rawTarget: "https://t.me/mychannel",
         resolvedChatId: "-100123",
+        gatewayClientScopes: ["operator.write"],
       }),
     );
   });
@@ -1025,6 +1056,77 @@ describe("sendMessageTelegram", () => {
     });
     expect(sendPhoto, testCase.name).not.toHaveBeenCalled();
     expect(sendAnimation, testCase.name).not.toHaveBeenCalled();
+    expect(res.messageId).toBe("10");
+  });
+
+  it.each([
+    { name: "oversized dimensions", width: 6000, height: 5001 },
+    { name: "oversized aspect ratio", width: 4000, height: 100 },
+  ])("sends images as documents when Telegram rejects $name", async ({ width, height }) => {
+    const chatId = "123";
+    const sendDocument = vi.fn().mockResolvedValue({
+      message_id: 10,
+      chat: { id: chatId },
+    });
+    const sendPhoto = vi.fn();
+    const api = { sendDocument, sendPhoto } as unknown as {
+      sendDocument: typeof sendDocument;
+      sendPhoto: typeof sendPhoto;
+    };
+
+    imageMetadata.width = width;
+    imageMetadata.height = height;
+    mockLoadedMedia({
+      buffer: Buffer.from("fake-image"),
+      contentType: "image/png",
+      fileName: "photo.png",
+    });
+
+    const res = await sendMessageTelegram(chatId, "caption", {
+      token: "tok",
+      api,
+      mediaUrl: "https://example.com/photo.png",
+    });
+
+    expect(sendDocument).toHaveBeenCalledWith(chatId, expect.anything(), {
+      caption: "caption",
+      parse_mode: "HTML",
+    });
+    expect(sendPhoto).not.toHaveBeenCalled();
+    expect(res.messageId).toBe("10");
+  });
+
+  it("sends images as documents when metadata dimensions are unavailable", async () => {
+    const chatId = "123";
+    const sendDocument = vi.fn().mockResolvedValue({
+      message_id: 10,
+      chat: { id: chatId },
+    });
+    const sendPhoto = vi.fn();
+    const api = { sendDocument, sendPhoto } as unknown as {
+      sendDocument: typeof sendDocument;
+      sendPhoto: typeof sendPhoto;
+    };
+
+    imageMetadata.width = undefined;
+    imageMetadata.height = undefined;
+    mockLoadedMedia({
+      buffer: Buffer.from("fake-image"),
+      contentType: "image/png",
+      fileName: "photo.png",
+    });
+
+    const res = await sendMessageTelegram(chatId, "caption", {
+      token: "tok",
+      api,
+      mediaUrl: "https://example.com/photo.png",
+    });
+
+    expect(sendDocument).toHaveBeenCalledWith(chatId, expect.anything(), {
+      caption: "caption",
+      parse_mode: "HTML",
+    });
+    expect(sendPhoto).not.toHaveBeenCalled();
     expect(res.messageId).toBe("10");
   });
 
@@ -1855,6 +1957,45 @@ describe("shared send behaviors", () => {
       await testCase.run();
     }
   });
+
+  it("wraps membership-related 403 errors with actionable context and original detail", async () => {
+    const cases = [
+      {
+        name: "message send",
+        errorText: "403: Forbidden: bot is not a member of the channel chat",
+        run: async (chatId: string, err: Error) => {
+          const sendMessage = vi.fn().mockRejectedValue(err);
+          const api = { sendMessage } as unknown as {
+            sendMessage: typeof sendMessage;
+          };
+          await expectTelegramMembershipErrorWithChatId(
+            sendMessageTelegram(chatId, "hi", { token: "tok", api }),
+            chatId,
+            /bot is not a member of the channel chat/i,
+          );
+        },
+      },
+      {
+        name: "sticker send",
+        errorText: "403: Forbidden: bot was kicked from the group chat",
+        run: async (chatId: string, err: Error) => {
+          const sendSticker = vi.fn().mockRejectedValue(err);
+          const api = { sendSticker } as unknown as {
+            sendSticker: typeof sendSticker;
+          };
+          await expectTelegramMembershipErrorWithChatId(
+            sendStickerTelegram(chatId, "fileId123", { token: "tok", api }),
+            chatId,
+            /bot was kicked from the group chat/i,
+          );
+        },
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      await testCase.run("123", new Error(testCase.errorText));
+    }
+  });
 });
 
 describe("editMessageTelegram", () => {
@@ -1978,6 +2119,32 @@ describe("editMessageTelegram", () => {
 });
 
 describe("sendPollTelegram", () => {
+  it("propagates gateway client scopes when resolving legacy poll targets", async () => {
+    const api = {
+      getChat: vi.fn(async () => ({ id: -100321 })),
+      sendPoll: vi.fn(async () => ({ message_id: 123, chat: { id: 555 }, poll: { id: "p1" } })),
+    };
+
+    await sendPollTelegram(
+      "https://t.me/mychannel",
+      { question: " Q ", options: [" A ", "B "] },
+      {
+        token: "t",
+        api: api as unknown as Bot["api"],
+        gatewayClientScopes: ["operator.admin"],
+      },
+    );
+
+    expect(api.getChat).toHaveBeenCalledWith("@mychannel");
+    expect(maybePersistResolvedTelegramTarget).toHaveBeenCalledWith(
+      expect.objectContaining({
+        rawTarget: "https://t.me/mychannel",
+        resolvedChatId: "-100321",
+        gatewayClientScopes: ["operator.admin"],
+      }),
+    );
+  });
+
   it("maps durationSeconds to open_period", async () => {
     const api = {
       sendPoll: vi.fn(async () => ({ message_id: 123, chat: { id: 555 }, poll: { id: "p1" } })),

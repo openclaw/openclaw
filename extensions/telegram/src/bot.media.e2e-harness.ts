@@ -91,6 +91,7 @@ export function resetSaveMediaBufferMock() {
 
 type ApiStub = {
   config: { use: (arg: unknown) => void };
+  getChat: Mock;
   sendChatAction: Mock;
   sendMessage: Mock;
   setMyCommands: (commands: Array<{ command: string; description: string }>) => Promise<void>;
@@ -98,6 +99,7 @@ type ApiStub = {
 
 const apiStub: ApiStub = {
   config: { use: useSpy },
+  getChat: vi.fn(async () => undefined),
   sendChatAction: sendChatActionSpy,
   sendMessage: vi.fn(async () => ({ message_id: 1 })),
   setMyCommands: vi.fn(async () => undefined),

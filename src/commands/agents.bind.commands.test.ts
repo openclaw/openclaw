@@ -1,50 +1,63 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
-
-const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
-const writeConfigFileMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-
-vi.mock("../config/config.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../config/config.js")>()),
-  readConfigFileSnapshot: readConfigFileSnapshotMock,
-  writeConfigFile: writeConfigFileMock,
-}));
+import { createBindingResolverTestPlugin } from "../test-utils/channel-plugins.js";
+import {
+  loadFreshAgentsCommandModuleForTest,
+  readConfigFileSnapshotMock,
+  resetAgentsBindTestHarness,
+  runtime,
+  writeConfigFileMock,
+} from "./agents.bind.test-support.js";
+import { baseConfigSnapshot } from "./test-runtime-config-helpers.js";
 
 vi.mock("../channels/plugins/index.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../channels/plugins/index.js")>();
+  const knownChannels = new Map([
+    [
+      "discord",
+      createBindingResolverTestPlugin({ id: "discord", config: { listAccountIds: () => [] } }),
+    ],
+    [
+      "matrix",
+      createBindingResolverTestPlugin({
+        id: "matrix",
+        config: { listAccountIds: () => [] },
+        resolveBindingAccountId: ({ agentId }) => agentId.toLowerCase(),
+      }),
+    ],
+    [
+      "telegram",
+      createBindingResolverTestPlugin({ id: "telegram", config: { listAccountIds: () => [] } }),
+    ],
+  ]);
   return {
     ...actual,
     getChannelPlugin: (channel: string) => {
-      if (channel === "matrix") {
-        return {
-          id: "matrix",
-          setup: {
-            resolveBindingAccountId: ({ agentId }: { agentId: string }) => agentId.toLowerCase(),
-          },
-        };
+      const normalized = channel.trim().toLowerCase();
+      const plugin = knownChannels.get(normalized);
+      if (plugin) {
+        return plugin;
       }
       return actual.getChannelPlugin(channel);
     },
     normalizeChannelId: (channel: string) => {
-      if (channel.trim().toLowerCase() === "matrix") {
-        return "matrix";
+      const normalized = channel.trim().toLowerCase();
+      if (knownChannels.has(normalized)) {
+        return normalized;
       }
       return actual.normalizeChannelId(channel);
     },
   };
 });
 
-import { agentsBindCommand, agentsBindingsCommand, agentsUnbindCommand } from "./agents.js";
-
-const runtime = createTestRuntime();
+let agentsBindCommand: typeof import("./agents.js").agentsBindCommand;
+let agentsBindingsCommand: typeof import("./agents.js").agentsBindingsCommand;
+let agentsUnbindCommand: typeof import("./agents.js").agentsUnbindCommand;
 
 describe("agents bind/unbind commands", () => {
-  beforeEach(() => {
-    readConfigFileSnapshotMock.mockClear();
-    writeConfigFileMock.mockClear();
-    runtime.log.mockClear();
-    runtime.error.mockClear();
-    runtime.exit.mockClear();
+  beforeEach(async () => {
+    ({ agentsBindCommand, agentsBindingsCommand, agentsUnbindCommand } =
+      await loadFreshAgentsCommandModuleForTest());
+    resetAgentsBindTestHarness();
   });
 
   it("lists all bindings by default", async () => {

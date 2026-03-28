@@ -3,11 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
 import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 
-const callGateway = vi.fn(async (..._args: unknown[]) => ({ ok: true }));
+const probeGatewayStatus = vi.fn(async (..._args: unknown[]) => ({ ok: true }));
 const resolveGatewayProgramArguments = vi.fn(async (_opts?: unknown) => ({
   programArguments: ["/bin/node", "cli", "gateway", "--port", "18789"],
 }));
 const serviceInstall = vi.fn().mockResolvedValue(undefined);
+const serviceStage = vi.fn().mockResolvedValue(undefined);
 const serviceUninstall = vi.fn().mockResolvedValue(undefined);
 const serviceStop = vi.fn().mockResolvedValue(undefined);
 const serviceRestart = vi.fn().mockResolvedValue({ outcome: "completed" });
@@ -35,8 +36,8 @@ const buildGatewayInstallPlan = vi.fn(
 
 const { runtimeLogs, defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
 
-vi.mock("../gateway/call.js", () => ({
-  callGateway: (opts: unknown) => callGateway(opts),
+vi.mock("./daemon-cli/probe.js", () => ({
+  probeGatewayStatus: (opts: unknown) => probeGatewayStatus(opts),
 }));
 
 vi.mock("../gateway/probe-auth.js", () => ({
@@ -56,6 +57,7 @@ vi.mock("../daemon/service.js", async (importOriginal) => {
       label: "LaunchAgent",
       loadedText: "loaded",
       notLoadedText: "not loaded",
+      stage: serviceStage,
       install: serviceInstall,
       uninstall: serviceUninstall,
       stop: serviceStop,
@@ -144,19 +146,21 @@ describe("daemon-cli coverage", () => {
 
   it("probes gateway status by default", async () => {
     resetRuntimeCapture();
-    callGateway.mockClear();
+    probeGatewayStatus.mockClear();
 
     await runDaemonCommand(["daemon", "status"]);
 
-    expect(callGateway).toHaveBeenCalledTimes(1);
-    expect(callGateway).toHaveBeenCalledWith(expect.objectContaining({ method: "status" }));
+    expect(probeGatewayStatus).toHaveBeenCalledTimes(1);
+    expect(probeGatewayStatus).toHaveBeenCalledWith(
+      expect.objectContaining({ url: "ws://127.0.0.1:18789" }),
+    );
     expect(findExtraGatewayServices).toHaveBeenCalled();
     expect(inspectPortUsage).toHaveBeenCalled();
   });
 
   it("derives probe URL from service args + env (json)", async () => {
     resetRuntimeCapture();
-    callGateway.mockClear();
+    probeGatewayStatus.mockClear();
     inspectPortUsage.mockClear();
 
     serviceReadCommand.mockResolvedValueOnce({
@@ -172,10 +176,9 @@ describe("daemon-cli coverage", () => {
 
     await runDaemonCommand(["daemon", "status", "--json"]);
 
-    expect(callGateway).toHaveBeenCalledWith(
+    expect(probeGatewayStatus).toHaveBeenCalledWith(
       expect.objectContaining({
         url: "ws://127.0.0.1:19001",
-        method: "status",
       }),
     );
     expect(inspectPortUsage).toHaveBeenCalledWith(19001);

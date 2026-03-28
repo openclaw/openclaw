@@ -8,7 +8,6 @@ import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
 } from "../../config/sessions/paths.js";
-import { updateSessionStore } from "../../config/sessions/store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { logVerbose } from "../../globals.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
@@ -54,6 +53,9 @@ let agentRunnerRuntimePromise: Promise<typeof import("./agent-runner.runtime.js"
 let routeReplyRuntimePromise: Promise<typeof import("./route-reply.runtime.js")> | null = null;
 let sessionUpdatesRuntimePromise: Promise<typeof import("./session-updates.runtime.js")> | null =
   null;
+let sessionStoreRuntimePromise: Promise<
+  typeof import("../../config/sessions/store.runtime.js")
+> | null = null;
 
 function loadPiEmbeddedRuntime() {
   piEmbeddedRuntimePromise ??= import("../../agents/pi-embedded.runtime.js");
@@ -73,6 +75,11 @@ function loadRouteReplyRuntime() {
 function loadSessionUpdatesRuntime() {
   sessionUpdatesRuntimePromise ??= import("./session-updates.runtime.js");
   return sessionUpdatesRuntimePromise;
+}
+
+function loadSessionStoreRuntime() {
+  sessionStoreRuntimePromise ??= import("../../config/sessions/store.runtime.js");
+  return sessionStoreRuntimePromise;
 }
 
 function buildResetSessionNoticeText(params: {
@@ -439,6 +446,7 @@ export async function runPreparedReply(
       sessionEntry.updatedAt = Date.now();
       sessionStore[sessionKey] = sessionEntry;
       if (storePath) {
+        const { updateSessionStore } = await loadSessionStoreRuntime();
         await updateSessionStore(storePath, (store) => {
           store[sessionKey] = sessionEntry;
         });
@@ -585,6 +593,7 @@ export async function runPreparedReply(
     shouldSteer,
     shouldFollowup,
     isActive,
+    isRunActive: () => isEmbeddedPiRunActive(sessionIdFinal),
     isStreaming,
     opts,
     typing,

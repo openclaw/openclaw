@@ -17,16 +17,29 @@ export const formatElevatedRuntimeHint = () =>
 export const formatInternalExecPersistenceDeniedText = () =>
   "Exec defaults require operator.admin for internal gateway callers; skipped persistence.";
 
-export function canPersistInternalExecDirective(params: {
+export const formatInternalVerbosePersistenceDeniedText = () =>
+  "Verbose defaults require operator.admin for internal gateway callers; skipped persistence.";
+
+export const formatInternalVerboseCurrentReplyOnlyText = () =>
+  "Verbose logging set for the current reply only.";
+
+function canPersistInternalDirective(params: {
+  messageProvider?: string;
   surface?: string;
   gatewayClientScopes?: string[];
 }): boolean {
-  if (!isInternalMessageChannel(params.surface)) {
+  const authoritativeChannel = isInternalMessageChannel(params.messageProvider)
+    ? params.messageProvider
+    : params.surface;
+  if (!isInternalMessageChannel(authoritativeChannel)) {
     return true;
   }
   const scopes = params.gatewayClientScopes ?? [];
   return scopes.includes("operator.admin");
 }
+
+export const canPersistInternalExecDirective = canPersistInternalDirective;
+export const canPersistInternalVerboseDirective = canPersistInternalDirective;
 
 export const formatElevatedEvent = (level: ElevatedLevel) => {
   if (level === "full") {

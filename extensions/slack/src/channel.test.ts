@@ -1,22 +1,24 @@
 import { Type } from "@sinclair/typebox";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
+import { slackPlugin } from "./channel.js";
 import { slackOutbound } from "./outbound-adapter.js";
+import * as probeModule from "./probe.js";
 import type { OpenClawConfig } from "./runtime-api.js";
+import { clearSlackRuntime, setSlackRuntime } from "./runtime.js";
 
 const handleSlackActionMock = vi.fn();
 
-vi.mock("./runtime.js", () => ({
-  getSlackRuntime: () => ({
+beforeEach(async () => {
+  handleSlackActionMock.mockReset();
+  setSlackRuntime({
     channel: {
       slack: {
         handleSlackAction: handleSlackActionMock,
       },
     },
-  }),
-}));
-
-import { slackPlugin } from "./channel.js";
+  } as never);
+});
 
 async function getSlackConfiguredState(cfg: OpenClawConfig) {
   const account = slackPlugin.config.resolveAccount(cfg, "default");
@@ -55,7 +57,7 @@ function requireSlackSendMedia() {
 }
 
 function requireSlackSendPayload() {
-  const sendPayload = slackOutbound.sendPayload;
+  const sendPayload = slackPlugin.outbound?.sendPayload ?? slackOutbound.sendPayload;
   if (!sendPayload) {
     throw new Error("slack outbound.sendPayload unavailable");
   }
@@ -143,6 +145,41 @@ describe("slackPlugin actions", () => {
   });
 });
 
+describe("slackPlugin status", () => {
+  it("uses the direct Slack probe helper when runtime is not initialized", async () => {
+    const probeSpy = vi.spyOn(probeModule, "probeSlack").mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      bot: { id: "B1", name: "openclaw-bot" },
+      team: { id: "T1", name: "OpenClaw" },
+    });
+    clearSlackRuntime();
+    const cfg = {
+      channels: {
+        slack: {
+          botToken: "xoxb-test",
+          appToken: "xapp-test",
+        },
+      },
+    } as OpenClawConfig;
+    const account = slackPlugin.config.resolveAccount(cfg, "default");
+
+    const result = await slackPlugin.status!.probeAccount!({
+      account,
+      timeoutMs: 2500,
+      cfg,
+    });
+
+    expect(probeSpy).toHaveBeenCalledWith("xoxb-test", 2500);
+    expect(result).toEqual({
+      ok: true,
+      status: 200,
+      bot: { id: "B1", name: "openclaw-bot" },
+      team: { id: "T1", name: "OpenClaw" },
+    });
+  });
+});
+
 describe("slackPlugin security", () => {
   it("normalizes dm allowlist entries with trimmed prefixes", () => {
     const resolveDmPolicy = slackPlugin.security?.resolveDmPolicy;
@@ -191,6 +228,11 @@ describe("slackPlugin outbound", () => {
       },
     },
   };
+
+  it("advertises the 8000-character Slack default chunk limit", () => {
+    expect(slackOutbound.textChunkLimit).toBe(8000);
+    expect(slackPlugin.outbound?.textChunkLimit).toBe(8000);
+  });
 
   it("uses threadId as threadTs fallback for sendText", async () => {
     const sendSlack = vi.fn().mockResolvedValue({ messageId: "m-text" });
@@ -338,6 +380,77 @@ describe("slackPlugin outbound", () => {
     );
     expect(result).toEqual({ channel: "slack", messageId: "m-final" });
   });
+
+  it("renders shared interactive payloads into Slack Block Kit via plugin outbound", async () => {
+    const sendSlack = vi.fn().mockResolvedValue({ messageId: "m-interactive" });
+    const sendPayload = requireSlackSendPayload();
+
+    const result = await sendPayload({
+      cfg,
+      to: "user:U123",
+      text: "",
+      payload: {
+        text: "Slack interactive smoke.",
+        interactive: {
+          blocks: [
+            {
+              type: "text",
+              text: "Slack interactive smoke.",
+            },
+            {
+              type: "buttons",
+              buttons: [
+                { label: "Approve", value: "approve" },
+                { label: "Reject", value: "reject" },
+              ],
+            },
+            {
+              type: "select",
+              placeholder: "Choose a target",
+              options: [
+                { label: "Canary", value: "canary" },
+                { label: "Production", value: "production" },
+              ],
+            },
+          ],
+        },
+      },
+      accountId: "default",
+      deps: { sendSlack },
+    });
+
+    expect(sendSlack).toHaveBeenCalledWith(
+      "user:U123",
+      "Slack interactive smoke.",
+      expect.objectContaining({
+        blocks: [
+          expect.objectContaining({
+            type: "section",
+          }),
+          expect.objectContaining({
+            type: "actions",
+            elements: [
+              expect.objectContaining({ type: "button", value: "approve" }),
+              expect.objectContaining({ type: "button", value: "reject" }),
+            ],
+          }),
+          expect.objectContaining({
+            type: "actions",
+            elements: [
+              expect.objectContaining({
+                type: "static_select",
+                options: [
+                  expect.objectContaining({ value: "canary" }),
+                  expect.objectContaining({ value: "production" }),
+                ],
+              }),
+            ],
+          }),
+        ],
+      }),
+    );
+    expect(result).toEqual({ channel: "slack", messageId: "m-interactive" });
+  });
 });
 
 describe("slackPlugin directory", () => {
@@ -392,6 +505,9 @@ describe("slackPlugin agentPrompt", () => {
       },
     });
 
+    expect(hints).toContain(
+      "- Prefer Slack buttons/selects for 2-5 discrete choices or parameter picks instead of asking the user to type one.",
+    );
     expect(hints).toContain(
       "- Slack interactive replies: use `[[slack_buttons: Label:value, Other:other]]` to add action buttons that route clicks back as Slack interaction system events.",
     );

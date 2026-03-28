@@ -66,11 +66,17 @@ jobs:
           pnpm release:openclaw:npm:check
 
       - name: Ensure version is not already published
+        env:
+          PREFLIGHT_ONLY: ${{ inputs.preflight_only }}
         run: |
           set -euo pipefail
           PACKAGE_VERSION=$(node -p "require('./package.json').version")
 
           if npm view "openclaw@${PACKAGE_VERSION}" version >/dev/null 2>&1; then
+            if [[ "${PREFLIGHT_ONLY}" == "true" ]]; then
+              echo "openclaw@${PACKAGE_VERSION} is already published on npm; continuing because preflight_only=true."
+              exit 0
+            fi
             echo "openclaw@${PACKAGE_VERSION} is already published on npm."
             exit 1
           fi
@@ -86,9 +92,25 @@ jobs:
       - name: Verify release contents
         run: pnpm release:check
 
+  validate_publish_dispatch_ref:
+    if: ${{ !inputs.preflight_only }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Require main workflow ref for publish
+        env:
+          WORKFLOW_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          if [[ "${WORKFLOW_REF}" != "refs/heads/main" ]]; then
+            echo "Real publish runs must be dispatched from main. Use preflight_only=true for branch validation."
+            exit 1
+          fi
+
   publish_openclaw_npm:
     # npm trusted publishing + provenance requires a GitHub-hosted runner.
-    needs: [preflight_openclaw_npm]
+    needs: [preflight_openclaw_npm, validate_publish_dispatch_ref]
     if: ${{ !inputs.preflight_only }}
     runs-on: ubuntu-latest
     environment: npm-release

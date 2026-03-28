@@ -137,8 +137,13 @@ describe("collectMissingPackPaths", () => {
       expect.arrayContaining([
         "dist/channel-catalog.json",
         "dist/control-ui/index.html",
+        "dist/extensions/matrix/helper-api.js",
+        "dist/extensions/matrix/runtime-api.js",
+        "dist/extensions/matrix/thread-bindings-runtime.js",
         "dist/extensions/matrix/openclaw.plugin.json",
         "dist/extensions/matrix/package.json",
+        "dist/extensions/whatsapp/light-runtime-api.js",
+        "dist/extensions/whatsapp/runtime-api.js",
         "dist/extensions/whatsapp/openclaw.plugin.json",
         "dist/extensions/whatsapp/package.json",
       ]),
@@ -159,6 +164,18 @@ describe("collectMissingPackPaths", () => {
       ]),
     ).toEqual([]);
   });
+
+  it("requires bundled plugin runtime sidecars that dynamic plugin boundaries resolve at runtime", () => {
+    expect(requiredBundledPluginPackPaths).toEqual(
+      expect.arrayContaining([
+        "dist/extensions/matrix/helper-api.js",
+        "dist/extensions/matrix/runtime-api.js",
+        "dist/extensions/matrix/thread-bindings-runtime.js",
+        "dist/extensions/whatsapp/light-runtime-api.js",
+        "dist/extensions/whatsapp/runtime-api.js",
+      ]),
+    );
+  });
 });
 
 describe("collectPackUnpackedSizeErrors", () => {
@@ -172,7 +189,7 @@ describe("collectPackUnpackedSizeErrors", () => {
     expect(
       collectPackUnpackedSizeErrors([makePackResult("openclaw-2026.3.12.tgz", 224_002_564)]),
     ).toEqual([
-      "openclaw-2026.3.12.tgz unpackedSize 224002564 bytes (213.6 MiB) exceeds budget 184549376 bytes (176.0 MiB). Investigate duplicate channel shims, copied extension trees, or other accidental pack bloat before release.",
+      "openclaw-2026.3.12.tgz unpackedSize 224002564 bytes (213.6 MiB) exceeds budget 199229440 bytes (190.0 MiB). Investigate duplicate channel shims, copied extension trees, or other accidental pack bloat before release.",
     ]);
   });
 

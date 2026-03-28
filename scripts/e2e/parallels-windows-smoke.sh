@@ -103,6 +103,9 @@ EOF
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --)
+      shift
+      ;;
     --vm)
       VM_NAME="$2"
       shift 2
@@ -312,6 +315,35 @@ guest_exec() {
   prlctl exec "$VM_NAME" --current-user "$@"
 }
 
+host_timeout_exec() {
+  local timeout_s="$1"
+  shift
+  HOST_TIMEOUT_S="$timeout_s" python3 - "$@" <<'PY'
+import os
+import subprocess
+import sys
+
+timeout = int(os.environ["HOST_TIMEOUT_S"])
+args = sys.argv[1:]
+
+try:
+    completed = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
+except subprocess.TimeoutExpired as exc:
+    if exc.stdout:
+        sys.stdout.buffer.write(exc.stdout)
+    if exc.stderr:
+        sys.stderr.buffer.write(exc.stderr)
+    sys.stderr.write(f"host timeout after {timeout}s\n")
+    raise SystemExit(124)
+
+if completed.stdout:
+    sys.stdout.buffer.write(completed.stdout)
+if completed.stderr:
+    sys.stderr.buffer.write(completed.stderr)
+raise SystemExit(completed.returncode)
+PY
+}
+
 guest_powershell() {
   local script="$1"
   local encoded
@@ -328,37 +360,46 @@ PY
   guest_exec powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand "$encoded"
 }
 
+guest_powershell_poll() {
+  local timeout_s="$1"
+  local script="$2"
+  local encoded
+  encoded="$(
+    SCRIPT_CONTENT="$script" python3 - <<'PY'
+import base64
+import os
+
+script = "$ProgressPreference = 'SilentlyContinue'\n" + os.environ["SCRIPT_CONTENT"]
+payload = script.encode("utf-16le")
+print(base64.b64encode(payload).decode("ascii"))
+PY
+  )"
+  host_timeout_exec "$timeout_s" prlctl exec "$VM_NAME" --current-user powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand "$encoded"
+}
+
 guest_run_openclaw() {
   local env_name="${1:-}"
   local env_value="${2:-}"
   shift 2
 
-  local args_literal stdout_name stderr_name env_name_q env_value_q
+  local args_literal env_name_q env_value_q
   args_literal="$(ps_array_literal "$@")"
-  stdout_name="openclaw-stdout-$RANDOM-$RANDOM.log"
-  stderr_name="openclaw-stderr-$RANDOM-$RANDOM.log"
   env_name_q="$(ps_single_quote "$env_name")"
   env_value_q="$(ps_single_quote "$env_value")"
 
   guest_powershell "$(cat <<EOF
-\$stdout = Join-Path \$env:TEMP '$stdout_name'
-\$stderr = Join-Path \$env:TEMP '$stderr_name'
-try {
-  if ('${env_name_q}' -ne '') {
-    Set-Item -Path ('Env:' + '${env_name_q}') -Value '${env_value_q}'
-  }
-  \$proc = Start-Process -FilePath (Join-Path \$env:APPDATA 'npm\openclaw.cmd') -ArgumentList $args_literal -NoNewWindow -PassThru -RedirectStandardOutput \$stdout -RedirectStandardError \$stderr
-  \$proc.WaitForExit()
-  if (Test-Path \$stdout) {
-    Get-Content \$stdout
-  }
-  if (Test-Path \$stderr) {
-    Get-Content \$stderr
-  }
-  exit \$proc.ExitCode
-} finally {
-  Remove-Item \$stdout, \$stderr -Force -ErrorAction SilentlyContinue
+\$openclaw = Join-Path \$env:APPDATA 'npm\openclaw.cmd'
+\$args = $args_literal
+if ('${env_name_q}' -ne '') {
+  Set-Item -Path ('Env:' + '${env_name_q}') -Value '${env_value_q}'
 }
+# openclaw.cmd preserves multi-word --message args reliably here; Start-Process
+# against the shim can re-split argv and make Commander reject the turn.
+\$output = & \$openclaw @args 2>&1
+if (\$null -ne \$output) {
+  \$output | ForEach-Object { \$_ }
+}
+exit \$LASTEXITCODE
 EOF
 )"
 }
@@ -762,6 +803,9 @@ install_main_tgz() {
   local temp_name="$2"
   local tgz_url
   tgz_url="http://$host_ip:$HOST_PORT/$(basename "$MAIN_TGZ_PATH")"
+  # Global npm installs on the Windows guest can stay silent for long stretches.
+  # Treat the phase log plus retry wrapper as the primary signal before assuming
+  # the guest hung.
   run_windows_retry "main tgz install" 2 \
     guest_exec cmd.exe /d /s /c "set \"PATH=%LOCALAPPDATA%\\OpenClaw\\deps\\portable-git\\cmd;%LOCALAPPDATA%\\OpenClaw\\deps\\portable-git\\mingw64\\bin;%LOCALAPPDATA%\\OpenClaw\\deps\\portable-git\\usr\\bin;%PATH%\" && curl.exe -fsSL \"$tgz_url\" -o \"%TEMP%\\$temp_name\" && npm.cmd install -g \"%TEMP%\\$temp_name\" --no-fund --no-audit && \"%APPDATA%\\npm\\openclaw.cmd\" --version"
 }
@@ -781,11 +825,15 @@ verify_version_contains() {
 }
 
 run_ref_onboard() {
-  local openai_key_q runner_name log_name done_name done_status
+  local openai_key_q runner_name log_name done_name done_status launcher_state
+  local poll_rc state_rc log_rc start_seconds poll_deadline startup_checked
   openai_key_q="$(ps_single_quote "$OPENAI_API_KEY_VALUE")"
   runner_name="openclaw-onboard-$RANDOM-$RANDOM.ps1"
   log_name="openclaw-onboard-$RANDOM-$RANDOM.log"
   done_name="openclaw-onboard-$RANDOM-$RANDOM.done"
+  start_seconds="$SECONDS"
+  poll_deadline=$((SECONDS + TIMEOUT_ONBOARD_S + 60))
+  startup_checked=0
 
   guest_powershell "$(cat <<EOF
 \$runner = Join-Path \$env:TEMP '$runner_name'
@@ -817,14 +865,57 @@ EOF
 )"
 
   while :; do
+    set +e
     done_status="$(
-      guest_powershell "\$done = Join-Path \$env:TEMP '$done_name'; if (Test-Path \$done) { (Get-Content \$done -Raw).Trim() }"
+      guest_powershell_poll 20 "\$done = Join-Path \$env:TEMP '$done_name'; if (Test-Path \$done) { (Get-Content \$done -Raw).Trim() }"
     )"
+    poll_rc=$?
+    set -e
     done_status="${done_status//$'\r'/}"
+    if [[ $poll_rc -ne 0 ]]; then
+      warn "windows onboard helper poll failed; retrying"
+      if (( SECONDS >= poll_deadline )); then
+        warn "windows onboard helper timed out while polling done file"
+        return 1
+      fi
+      sleep 2
+      continue
+    fi
     if [[ -n "$done_status" ]]; then
-      guest_powershell "\$log = Join-Path \$env:TEMP '$log_name'; if (Test-Path \$log) { Get-Content \$log }"
+      set +e
+      guest_powershell_poll 20 "\$log = Join-Path \$env:TEMP '$log_name'; if (Test-Path \$log) { Get-Content \$log }"
+      log_rc=$?
+      set -e
+      if [[ $log_rc -ne 0 ]]; then
+        warn "windows onboard helper log drain failed after completion"
+      fi
       [[ "$done_status" == "0" ]]
       return $?
+    fi
+    if [[ "$startup_checked" -eq 0 && $((SECONDS - start_seconds)) -ge 20 ]]; then
+      set +e
+      launcher_state="$(
+        guest_powershell_poll 20 "\$runner = Join-Path \$env:TEMP '$runner_name'; \$log = Join-Path \$env:TEMP '$log_name'; \$done = Join-Path \$env:TEMP '$done_name'; 'runner=' + (Test-Path \$runner) + ' log=' + (Test-Path \$log) + ' done=' + (Test-Path \$done)"
+      )"
+      state_rc=$?
+      set -e
+      launcher_state="${launcher_state//$'\r'/}"
+      startup_checked=1
+      if [[ $state_rc -eq 0 && "$launcher_state" == *"runner=False"* && "$launcher_state" == *"log=False"* && "$launcher_state" == *"done=False"* ]]; then
+        warn "windows onboard helper failed to materialize guest files"
+        return 1
+      fi
+    fi
+    if (( SECONDS >= poll_deadline )); then
+      set +e
+      guest_powershell_poll 20 "\$log = Join-Path \$env:TEMP '$log_name'; if (Test-Path \$log) { Get-Content \$log }"
+      log_rc=$?
+      set -e
+      if [[ $log_rc -ne 0 ]]; then
+        warn "windows onboard helper log drain failed after timeout"
+      fi
+      warn "windows onboard helper timed out waiting for done file"
+      return 1
     fi
     sleep 2
   done
@@ -832,6 +923,100 @@ EOF
 
 verify_gateway() {
   guest_run_openclaw "" "" gateway status --deep --require-rpc
+}
+
+restart_gateway() {
+  local runner_name log_name done_name done_status launcher_state
+  local poll_rc state_rc log_rc start_seconds poll_deadline startup_checked
+  runner_name="openclaw-gateway-restart-$RANDOM-$RANDOM.ps1"
+  log_name="openclaw-gateway-restart-$RANDOM-$RANDOM.log"
+  done_name="openclaw-gateway-restart-$RANDOM-$RANDOM.done"
+  start_seconds="$SECONDS"
+  poll_deadline=$((SECONDS + TIMEOUT_GATEWAY_S + 60))
+  startup_checked=0
+
+  guest_powershell "$(cat <<EOF
+\$runner = Join-Path \$env:TEMP '$runner_name'
+\$log = Join-Path \$env:TEMP '$log_name'
+\$done = Join-Path \$env:TEMP '$done_name'
+Remove-Item \$runner, \$log, \$done -Force -ErrorAction SilentlyContinue
+@'
+\$ErrorActionPreference = 'Stop'
+\$PSNativeCommandUseErrorActionPreference = \$false
+\$log = Join-Path \$env:TEMP '$log_name'
+\$done = Join-Path \$env:TEMP '$done_name'
+try {
+  \$openclaw = Join-Path \$env:APPDATA 'npm\openclaw.cmd'
+  & \$openclaw gateway restart *>&1 | Tee-Object -FilePath \$log -Append | Out-Null
+  Set-Content -Path \$done -Value ([string]\$LASTEXITCODE)
+} catch {
+  if (Test-Path \$log) {
+    Add-Content -Path \$log -Value (\$_ | Out-String)
+  } else {
+    (\$_ | Out-String) | Set-Content -Path \$log
+  }
+  Set-Content -Path \$done -Value '1'
+}
+'@ | Set-Content -Path \$runner
+Start-Process powershell.exe -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', \$runner) -WindowStyle Hidden | Out-Null
+EOF
+)"
+
+  while :; do
+    set +e
+    done_status="$(
+      guest_powershell_poll 20 "\$done = Join-Path \$env:TEMP '$done_name'; if (Test-Path \$done) { (Get-Content \$done -Raw).Trim() }"
+    )"
+    poll_rc=$?
+    set -e
+    done_status="${done_status//$'\r'/}"
+    if [[ $poll_rc -ne 0 ]]; then
+      warn "windows gateway restart helper poll failed; retrying"
+      if (( SECONDS >= poll_deadline )); then
+        warn "windows gateway restart helper timed out while polling done file"
+        return 1
+      fi
+      sleep 2
+      continue
+    fi
+    if [[ -n "$done_status" ]]; then
+      set +e
+      guest_powershell_poll 20 "\$log = Join-Path \$env:TEMP '$log_name'; if (Test-Path \$log) { Get-Content \$log }"
+      log_rc=$?
+      set -e
+      if [[ $log_rc -ne 0 ]]; then
+        warn "windows gateway restart helper log drain failed after completion"
+      fi
+      [[ "$done_status" == "0" ]]
+      return $?
+    fi
+    if [[ "$startup_checked" -eq 0 && $((SECONDS - start_seconds)) -ge 20 ]]; then
+      set +e
+      launcher_state="$(
+        guest_powershell_poll 20 "\$runner = Join-Path \$env:TEMP '$runner_name'; \$log = Join-Path \$env:TEMP '$log_name'; \$done = Join-Path \$env:TEMP '$done_name'; 'runner=' + (Test-Path \$runner) + ' log=' + (Test-Path \$log) + ' done=' + (Test-Path \$done)"
+      )"
+      state_rc=$?
+      set -e
+      launcher_state="${launcher_state//$'\r'/}"
+      startup_checked=1
+      if [[ $state_rc -eq 0 && "$launcher_state" == *"runner=False"* && "$launcher_state" == *"log=False"* && "$launcher_state" == *"done=False"* ]]; then
+        warn "windows gateway restart helper failed to materialize guest files"
+        return 1
+      fi
+    fi
+    if (( SECONDS >= poll_deadline )); then
+      set +e
+      guest_powershell_poll 20 "\$log = Join-Path \$env:TEMP '$log_name'; if (Test-Path \$log) { Get-Content \$log }"
+      log_rc=$?
+      set -e
+      if [[ $log_rc -ne 0 ]]; then
+        warn "windows gateway restart helper log drain failed after timeout"
+      fi
+      warn "windows gateway restart helper timed out waiting for done file"
+      return 1
+    fi
+    sleep 2
+  done
 }
 
 show_gateway_status_compat() {
@@ -843,7 +1028,8 @@ show_gateway_status_compat() {
 }
 
 verify_turn() {
-  guest_run_openclaw "" "" agent --agent main --message "Reply with exact ASCII text OK only." --json
+  guest_run_openclaw "OPENAI_API_KEY" "$OPENAI_API_KEY_VALUE" \
+    agent --agent main --message "Reply with exact ASCII text OK only." --json
 }
 
 capture_latest_ref_failure() {
@@ -899,6 +1085,7 @@ run_upgrade_lane() {
   phase_run "upgrade.install-main" "$TIMEOUT_INSTALL_S" install_main_tgz "$host_ip" "openclaw-main-upgrade.tgz" || return $?
   UPGRADE_MAIN_VERSION="$(extract_last_version "$(phase_log_path upgrade.install-main)")"
   phase_run "upgrade.verify-main-version" "$TIMEOUT_VERIFY_S" verify_target_version || return $?
+  phase_run "upgrade.gateway-restart" "$TIMEOUT_GATEWAY_S" restart_gateway || return $?
   phase_run "upgrade.onboard-ref" "$TIMEOUT_ONBOARD_S" run_ref_onboard || return $?
   phase_run "upgrade.gateway-status" "$TIMEOUT_GATEWAY_S" verify_gateway || return $?
   UPGRADE_GATEWAY_STATUS="pass"

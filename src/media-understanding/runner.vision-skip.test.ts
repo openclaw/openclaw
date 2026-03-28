@@ -1,6 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  withBundledPluginAllowlistCompat,
+  withBundledPluginEnablementCompat,
+  withBundledPluginVitestCompat,
+} from "../plugins/bundled-compat.js";
+import { __testing as loaderTesting } from "../plugins/loader.js";
+import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { createEmptyPluginRegistry } from "../plugins/registry.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 
 const catalog = [
   {
@@ -26,7 +35,41 @@ vi.mock("../agents/model-catalog.js", async () => {
 let buildProviderRegistry: typeof import("./runner.js").buildProviderRegistry;
 let createMediaAttachmentCache: typeof import("./runner.js").createMediaAttachmentCache;
 let normalizeMediaAttachments: typeof import("./runner.js").normalizeMediaAttachments;
+let resolveAutoImageModel: typeof import("./runner.js").resolveAutoImageModel;
 let runCapability: typeof import("./runner.js").runCapability;
+
+function setCompatibleActiveMediaUnderstandingRegistry(
+  pluginRegistry: ReturnType<typeof createEmptyPluginRegistry>,
+  cfg: OpenClawConfig,
+) {
+  const pluginIds = loadPluginManifestRegistry({
+    config: cfg,
+    env: process.env,
+  })
+    .plugins.filter(
+      (plugin) =>
+        plugin.origin === "bundled" &&
+        (plugin.contracts?.mediaUnderstandingProviders?.length ?? 0) > 0,
+    )
+    .map((plugin) => plugin.id)
+    .toSorted((left, right) => left.localeCompare(right));
+  const compatibleConfig = withBundledPluginVitestCompat({
+    config: withBundledPluginEnablementCompat({
+      config: withBundledPluginAllowlistCompat({
+        config: cfg,
+        pluginIds,
+      }),
+      pluginIds,
+    }),
+    pluginIds,
+    env: process.env,
+  });
+  const { cacheKey } = loaderTesting.resolvePluginLoadCacheContext({
+    config: compatibleConfig,
+    env: process.env,
+  });
+  setActivePluginRegistry(pluginRegistry, cacheKey);
+}
 
 describe("runCapability image skip", () => {
   beforeEach(async () => {
@@ -44,6 +87,7 @@ describe("runCapability image skip", () => {
       buildProviderRegistry,
       createMediaAttachmentCache,
       normalizeMediaAttachments,
+      resolveAutoImageModel,
       runCapability,
     } = await import("./runner.js"));
     loadModelCatalog.mockClear();
@@ -76,6 +120,37 @@ describe("runCapability image skip", () => {
       );
     } finally {
       await cache.cleanup();
+    }
+  });
+
+  it("uses active OpenRouter image models for auto image resolution", async () => {
+    vi.stubEnv("OPENROUTER_API_KEY", "test-openrouter-key");
+    const cfg = {} as OpenClawConfig;
+    const pluginRegistry = createEmptyPluginRegistry();
+    pluginRegistry.mediaUnderstandingProviders.push({
+      pluginId: "openrouter",
+      pluginName: "OpenRouter Provider",
+      source: "test",
+      provider: {
+        id: "openrouter",
+        capabilities: ["image"],
+        describeImage: async () => ({ text: "ok" }),
+      },
+    });
+    setCompatibleActiveMediaUnderstandingRegistry(pluginRegistry, cfg);
+    try {
+      await expect(
+        resolveAutoImageModel({
+          cfg,
+          activeModel: { provider: "openrouter", model: "google/gemini-2.5-flash" },
+        }),
+      ).resolves.toEqual({
+        provider: "openrouter",
+        model: "google/gemini-2.5-flash",
+      });
+    } finally {
+      setActivePluginRegistry(createEmptyPluginRegistry());
+      vi.unstubAllEnvs();
     }
   });
 });

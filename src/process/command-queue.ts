@@ -47,17 +47,23 @@ type LaneState = {
   generation: number;
 };
 
+function isExpectedNonErrorLaneFailure(err: unknown): boolean {
+  return err instanceof Error && err.name === "LiveSessionModelSwitchError";
+}
+
 /**
  * Keep queue runtime state on globalThis so every bundled entry/chunk shares
  * the same lanes, counters, and draining flag in production builds.
  */
 const COMMAND_QUEUE_STATE_KEY = Symbol.for("openclaw.commandQueueState");
 
-const queueState = resolveGlobalSingleton(COMMAND_QUEUE_STATE_KEY, () => ({
-  gatewayDraining: false,
-  lanes: new Map<string, LaneState>(),
-  nextTaskId: 1,
-}));
+function getQueueState() {
+  return resolveGlobalSingleton(COMMAND_QUEUE_STATE_KEY, () => ({
+    gatewayDraining: false,
+    lanes: new Map<string, LaneState>(),
+    nextTaskId: 1,
+  }));
+}
 
 function normalizeLane(lane: string): string {
   return lane.trim() || CommandLane.Main;
@@ -68,6 +74,7 @@ function getLaneDepth(state: LaneState): number {
 }
 
 function getLaneState(lane: string): LaneState {
+  const queueState = getQueueState();
   const existing = queueState.lanes.get(lane);
   if (existing) {
     return existing;
@@ -120,7 +127,7 @@ function drainLane(lane: string) {
           );
         }
         logLaneDequeue(lane, waitedMs, state.queue.length);
-        const taskId = queueState.nextTaskId++;
+        const taskId = getQueueState().nextTaskId++;
         const taskGeneration = state.generation;
         state.activeTaskIds.add(taskId);
         void (async () => {
@@ -138,9 +145,13 @@ function drainLane(lane: string) {
           } catch (err) {
             const completedCurrentGeneration = completeTask(state, taskId, taskGeneration);
             const isProbeLane = lane.startsWith("auth-probe:") || lane.startsWith("session:probe-");
-            if (!isProbeLane) {
+            if (!isProbeLane && !isExpectedNonErrorLaneFailure(err)) {
               diag.error(
                 `lane task error: lane=${lane} durationMs=${Date.now() - startTime} error="${String(err)}"`,
+              );
+            } else if (!isProbeLane) {
+              diag.debug(
+                `lane task interrupted: lane=${lane} durationMs=${Date.now() - startTime} reason="${String(err)}"`,
               );
             }
             if (completedCurrentGeneration) {
@@ -163,7 +174,7 @@ function drainLane(lane: string) {
  * `GatewayDrainingError` instead of being silently killed on shutdown.
  */
 export function markGatewayDraining(): void {
-  queueState.gatewayDraining = true;
+  getQueueState().gatewayDraining = true;
 }
 
 export function setCommandLaneConcurrency(lane: string, maxConcurrent: number) {
@@ -181,6 +192,7 @@ export function enqueueCommandInLane<T>(
     onWait?: (waitMs: number, queuedAhead: number) => void;
   },
 ): Promise<T> {
+  const queueState = getQueueState();
   if (queueState.gatewayDraining) {
     return Promise.reject(new GatewayDrainingError());
   }
@@ -213,7 +225,7 @@ export function enqueueCommand<T>(
 
 export function getQueueSize(lane: string = CommandLane.Main) {
   const resolved = normalizeLane(lane);
-  const state = queueState.lanes.get(resolved);
+  const state = getQueueState().lanes.get(resolved);
   if (!state) {
     return 0;
   }
@@ -222,7 +234,7 @@ export function getQueueSize(lane: string = CommandLane.Main) {
 
 export function getTotalQueueSize() {
   let total = 0;
-  for (const s of queueState.lanes.values()) {
+  for (const s of getQueueState().lanes.values()) {
     total += getLaneDepth(s);
   }
   return total;
@@ -230,7 +242,7 @@ export function getTotalQueueSize() {
 
 export function clearCommandLane(lane: string = CommandLane.Main) {
   const cleaned = normalizeLane(lane);
-  const state = queueState.lanes.get(cleaned);
+  const state = getQueueState().lanes.get(cleaned);
   if (!state) {
     return 0;
   }
@@ -257,6 +269,7 @@ export function clearCommandLane(lane: string = CommandLane.Main) {
  * `enqueueCommandInLane()` call (which may never come).
  */
 export function resetAllLanes(): void {
+  const queueState = getQueueState();
   queueState.gatewayDraining = false;
   const lanesToDrain: string[] = [];
   for (const state of queueState.lanes.values()) {
@@ -278,6 +291,7 @@ export function resetAllLanes(): void {
  * (excludes queued-but-not-started entries).
  */
 export function getActiveTaskCount(): number {
+  const queueState = getQueueState();
   let total = 0;
   for (const s of queueState.lanes.values()) {
     total += s.activeTaskIds.size;
@@ -297,6 +311,7 @@ export function waitForActiveTasks(timeoutMs: number): Promise<{ drained: boolea
   // Keep shutdown/drain checks responsive without busy looping.
   const POLL_INTERVAL_MS = 50;
   const deadline = Date.now() + timeoutMs;
+  const queueState = getQueueState();
   const activeAtStart = new Set<number>();
   for (const state of queueState.lanes.values()) {
     for (const taskId of state.activeTaskIds) {

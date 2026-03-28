@@ -145,12 +145,12 @@ export function scanExecSafeBinTrustedDirHints(
   for (const scope of collectExecSafeBinScopes(cfg)) {
     for (const bin of scope.safeBins) {
       const resolution = resolveCommandResolutionFromArgv([bin]);
-      if (!resolution?.resolvedPath) {
+      if (!resolution?.execution.resolvedPath) {
         continue;
       }
       if (
         isTrustedSafeBinPath({
-          resolvedPath: resolution.resolvedPath,
+          resolvedPath: resolution.execution.resolvedPath,
           trustedDirs: scope.trustedSafeBinDirs,
         })
       ) {
@@ -159,7 +159,7 @@ export function scanExecSafeBinTrustedDirHints(
       hits.push({
         scopePath: scope.scopePath,
         bin,
-        resolvedPath: resolution.resolvedPath,
+        resolvedPath: resolution.execution.resolvedPath,
       });
     }
   }

@@ -1,5 +1,6 @@
 {
   "id": "xai",
+  "enabledByDefault": true,
   "providers": ["xai"],
   "providerAuthEnvVars": {
     "xai": ["XAI_API_KEY"]
@@ -33,6 +34,9 @@
       "label": "Inline Citations",
       "help": "Include inline markdown citations in Grok responses."
     }
+  },
+  "contracts": {
+    "webSearchProviders": ["grok"]
   },
   "configSchema": {
     "type": "object",

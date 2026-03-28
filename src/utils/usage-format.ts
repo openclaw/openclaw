@@ -1,11 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
-import { modelKey, normalizeModelRef, normalizeProviderId } from "../agents/model-selection.js";
+import { normalizeProviderId } from "../agents/provider-id.js";
 import type { NormalizedUsage } from "../agents/usage.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
-import { getCachedGatewayModelPricing } from "../gateway/model-pricing-cache.js";
+import { getCachedGatewayModelPricing } from "../gateway/model-pricing-cache-state.js";
 
 export type ModelCostConfig = {
   input: number;
@@ -29,6 +29,17 @@ type ModelsJsonCostCache = {
 };
 
 let modelsJsonCostCache: ModelsJsonCostCache | null = null;
+
+function modelCostKey(provider: string, model: string): string {
+  const providerId = normalizeProviderId(provider);
+  const modelId = model.trim();
+  if (!providerId || !modelId) {
+    return "";
+  }
+  return modelId.toLowerCase().startsWith(`${providerId.toLowerCase()}/`)
+    ? modelId
+    : `${providerId}/${modelId}`;
+}
 
 export function formatTokenCount(value?: number): string {
   if (value === undefined || !Number.isFinite(value)) {
@@ -68,8 +79,8 @@ function toResolvedModelKey(params: { provider?: string; model?: string }): stri
   if (!provider || !model) {
     return null;
   }
-  const normalized = normalizeModelRef(provider, model);
-  return modelKey(normalized.provider, normalized.model);
+  const key = modelCostKey(provider, model);
+  return key || null;
 }
 
 function buildProviderCostIndex(
@@ -82,8 +93,11 @@ function buildProviderCostIndex(
   for (const [providerKey, providerConfig] of Object.entries(providers)) {
     const normalizedProvider = normalizeProviderId(providerKey);
     for (const model of providerConfig?.models ?? []) {
-      const normalized = normalizeModelRef(normalizedProvider, model.id);
-      entries.set(modelKey(normalized.provider, normalized.model), model.cost);
+      const key = modelCostKey(normalizedProvider, model.id);
+      if (!key) {
+        continue;
+      }
+      entries.set(key, model.cost);
     }
   }
   return entries;

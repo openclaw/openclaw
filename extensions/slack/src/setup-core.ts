@@ -37,6 +37,44 @@ function enableSlackAccount(cfg: OpenClawConfig, accountId: string): OpenClawCon
   });
 }
 
+function hasSlackInteractiveRepliesConfig(cfg: OpenClawConfig, accountId: string): boolean {
+  const capabilities = resolveSlackAccount({ cfg, accountId }).config.capabilities;
+  if (Array.isArray(capabilities)) {
+    return capabilities.some(
+      (entry) => String(entry).trim().toLowerCase() === "interactivereplies",
+    );
+  }
+  if (!capabilities || typeof capabilities !== "object") {
+    return false;
+  }
+  return "interactiveReplies" in capabilities;
+}
+
+function setSlackInteractiveReplies(
+  cfg: OpenClawConfig,
+  accountId: string,
+  interactiveReplies: boolean,
+): OpenClawConfig {
+  const capabilities = resolveSlackAccount({ cfg, accountId }).config.capabilities;
+  const nextCapabilities = Array.isArray(capabilities)
+    ? interactiveReplies
+      ? [...new Set([...capabilities, "interactiveReplies"])]
+      : capabilities.filter((entry) => String(entry).trim().toLowerCase() !== "interactivereplies")
+    : {
+        ...((capabilities && typeof capabilities === "object" ? capabilities : {}) as Record<
+          string,
+          unknown
+        >),
+        interactiveReplies,
+      };
+  return patchChannelConfigForAccount({
+    cfg,
+    channel,
+    accountId,
+    patch: { capabilities: nextCapabilities },
+  });
+}
+
 function createSlackTokenCredential(params: {
   inputKey: "botToken" | "appToken";
   providerHint: "slack-bot" | "slack-app";
@@ -218,6 +256,23 @@ export function createSlackSetupWizardBase(handlers: {
         resolved: unknown;
       }) => setSlackChannelAllowlist(cfg, accountId, resolved as string[]),
     }),
+    finalize: async ({ cfg, accountId, options, prompter }) => {
+      if (hasSlackInteractiveRepliesConfig(cfg, accountId)) {
+        return;
+      }
+      if (options?.quickstartDefaults) {
+        return {
+          cfg: setSlackInteractiveReplies(cfg, accountId, true),
+        };
+      }
+      const enableInteractiveReplies = await prompter.confirm({
+        message: "Enable Slack interactive replies (buttons/selects) for agent responses?",
+        initialValue: true,
+      });
+      return {
+        cfg: setSlackInteractiveReplies(cfg, accountId, enableInteractiveReplies),
+      };
+    },
     disable: (cfg: OpenClawConfig) => setSetupChannelEnabled(cfg, channel, false),
   } satisfies ChannelSetupWizard;
 }
