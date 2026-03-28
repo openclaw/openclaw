@@ -633,6 +633,44 @@ export function createHostWorkspaceEditTool(root: string, options?: { workspaceO
   return wrapToolParamNormalization(withRecovery, CLAUDE_PARAM_GROUPS.edit);
 }
 
+function addMediaUrlToImageResult(
+  result: AgentToolResult<unknown>,
+  filePath: string,
+): AgentToolResult<unknown> {
+  const content = Array.isArray(result.content) ? result.content : [];
+  const hasImageBlock = content.some(
+    (b): b is ImageContentBlock =>
+      !!b &&
+      typeof b === "object" &&
+      (b as { type?: unknown }).type === "image" &&
+      typeof (b as { data?: unknown }).data === "string",
+  );
+  if (!hasImageBlock) {
+    return result;
+  }
+  const existingDetails = (result as { details?: unknown }).details;
+  const existingMedia =
+    existingDetails &&
+    typeof existingDetails === "object" &&
+    !Array.isArray(existingDetails) &&
+    (existingDetails as { media?: unknown }).media &&
+    typeof (existingDetails as { media?: unknown }).media === "object"
+      ? (existingDetails as { media: Record<string, unknown> }).media
+      : undefined;
+  return {
+    ...result,
+    details: {
+      ...(existingDetails && typeof existingDetails === "object"
+        ? (existingDetails as Record<string, unknown>)
+        : {}),
+      media: {
+        ...existingMedia,
+        mediaUrl: filePath,
+      },
+    },
+  };
+}
+
 export function createOpenClawReadTool(
   base: AnyAgentTool,
   options?: OpenClawReadToolOptions,
@@ -656,11 +694,8 @@ export function createOpenClawReadTool(
       const filePath = typeof record?.path === "string" ? String(record.path) : "<unknown>";
       const strippedDetailsResult = stripReadTruncationContentDetails(result);
       const normalizedResult = await normalizeReadImageResult(strippedDetailsResult, filePath);
-      return sanitizeToolResultImages(
-        normalizedResult,
-        `read:${filePath}`,
-        options?.imageSanitization,
-      );
+      const withMediaUrl = addMediaUrlToImageResult(normalizedResult, filePath);
+      return sanitizeToolResultImages(withMediaUrl, `read:${filePath}`, options?.imageSanitization);
     },
   };
 }
