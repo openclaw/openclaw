@@ -608,6 +608,32 @@ describe("handleTelegramAction", () => {
       expectedContent: "",
       expectedOptions: { mediaUrl: "https://example.com/note.ogg" },
     },
+    {
+      name: "filePath alias",
+      params: {
+        action: "sendMessage",
+        to: "123456",
+        filePath: "/tmp/report.docx",
+        asDocument: true,
+      },
+      expectedTo: "123456",
+      expectedContent: "",
+      expectedOptions: {
+        mediaUrl: "/tmp/report.docx",
+        forceDocument: true,
+      },
+    },
+    {
+      name: "path alias",
+      params: {
+        action: "sendMessage",
+        to: "123456",
+        path: "/tmp/image.png",
+      },
+      expectedTo: "123456",
+      expectedContent: "",
+      expectedOptions: { mediaUrl: "/tmp/image.png" },
+    },
   ] as const)("maps sendMessage params for $name", async (testCase) => {
     await handleTelegramAction(testCase.params, telegramConfig());
     expect(sendMessageTelegram).toHaveBeenCalledWith(
