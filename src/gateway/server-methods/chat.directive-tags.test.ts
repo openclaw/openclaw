@@ -554,6 +554,36 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(extractFirstTextBlock(payload)).toBe("hello");
   });
 
+  it("chat.send non-streaming final broadcasts and routes on the canonical session key", async () => {
+    createTranscriptFixture("openclaw-chat-send-canonical-key-");
+    mockState.sessionEntry = {
+      canonicalKey: "agent:main:canon",
+    };
+    mockState.finalText = "hello";
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const payload = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-canonical-key",
+      sessionKey: "legacy-key",
+    });
+
+    expect(payload).toEqual(
+      expect.objectContaining({
+        sessionKey: "agent:main:canon",
+      }),
+    );
+    expect(context.nodeSendToSession).toHaveBeenCalledWith(
+      "agent:main:canon",
+      "chat",
+      expect.objectContaining({
+        sessionKey: "agent:main:canon",
+      }),
+    );
+  });
+
   it("chat.send keeps explicit delivery routes for channel-scoped sessions", async () => {
     createTranscriptFixture("openclaw-chat-send-origin-routing-");
     mockState.finalText = "ok";
