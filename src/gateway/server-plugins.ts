@@ -241,6 +241,34 @@ function hasAdminScope(client: GatewayRequestOptions["client"]): boolean {
   return scopes.includes(ADMIN_SCOPE);
 }
 
+function normalizeOptionalOwnershipText(value?: string | null): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed || undefined;
+}
+
+function canClientAbortTrackedAgentRun(params: {
+  client: GatewayRequestOptions["client"] | undefined;
+  active: { ownerConnId?: string; ownerDeviceId?: string };
+}): boolean {
+  if (hasAdminScope(params.client)) {
+    return true;
+  }
+  const ownerDeviceId = normalizeOptionalOwnershipText(params.active.ownerDeviceId);
+  const ownerConnId = normalizeOptionalOwnershipText(params.active.ownerConnId);
+  if (!ownerDeviceId && !ownerConnId) {
+    return true;
+  }
+  const requesterDeviceId = normalizeOptionalOwnershipText(params.client?.connect?.device?.id);
+  if (ownerDeviceId && requesterDeviceId && ownerDeviceId === requesterDeviceId) {
+    return true;
+  }
+  const requesterConnId = normalizeOptionalOwnershipText(params.client?.connId);
+  if (ownerConnId && requesterConnId && ownerConnId === requesterConnId) {
+    return true;
+  }
+  return false;
+}
+
 function canClientUseModelOverride(client: GatewayRequestOptions["client"]): boolean {
   return hasAdminScope(client) || client?.internal?.allowModelOverride === true;
 }
@@ -305,13 +333,14 @@ export function createGatewayAgentAbort(): PluginRuntime["agent"]["abort"] {
     if (!active || active.kind !== "agent") {
       return { aborted: false };
     }
+    if (!canClientAbortTrackedAgentRun({ client: scope?.client, active })) {
+      return { aborted: false };
+    }
     return abortTrackedRunById(ctx, {
       runId: params.runId,
       // When sessionKey is omitted, fall back to the entry's own sessionKey.
-      // This intentionally bypasses the helper's cross-session ownership check,
-      // allowing any gateway-bound plugin to abort any run
-      // it knows the runId of. This is acceptable because abort access is
-      // gated by allowGatewaySubagentBinding at the runtime level.
+      // Ownership is validated above against the tracked entry metadata before
+      // we reuse the stored session key for the abort call.
       sessionKey: params.sessionKey ?? active.sessionKey,
       stopReason: "plugin",
       expectedKind: "agent",

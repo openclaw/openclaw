@@ -783,6 +783,118 @@ describe("loadGatewayPlugins", () => {
     expect(abortControllers.has("run-42")).toBe(false);
   });
 
+  test("runtime.agent.abort rejects agent-owned run ids from another connection", async () => {
+    const serverPlugins = serverPluginsModule;
+    loadOpenClawPlugins.mockReturnValue(createRegistry([]));
+
+    serverPlugins.loadGatewayPlugins({
+      cfg: {},
+      workspaceDir: "/tmp",
+      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+      coreGatewayHandlers: {},
+      baseMethods: [],
+    });
+    runtimeModule.setGatewayAgentAbort(serverPlugins.createGatewayAgentAbort());
+
+    const controller = new AbortController();
+    const abortControllers = new Map();
+    abortControllers.set("run-foreign", {
+      kind: "agent",
+      controller,
+      sessionKey: "sess-foreign",
+      sessionId: "sid-foreign",
+      startedAtMs: Date.now(),
+      expiresAtMs: Date.now() + 60_000,
+      ownerConnId: "conn-owner",
+    });
+    const scope = {
+      context: {
+        chatAbortControllers: abortControllers,
+        chatRunBuffers: new Map(),
+        chatDeltaSentAt: new Map(),
+        chatDeltaLastBroadcastLen: new Map(),
+        chatAbortedRuns: new Map(),
+        agentRunSeq: new Map(),
+        removeChatRun: () => undefined,
+        broadcast: () => {},
+        nodeSendToSession: () => {},
+      } as unknown as GatewayRequestContext,
+      client: {
+        connId: "conn-other",
+        connect: {
+          scopes: ["operator.write"],
+          device: {},
+        },
+      } as GatewayRequestOptions["client"],
+      isWebchatConnect: () => false,
+    } satisfies PluginRuntimeGatewayRequestScope;
+
+    const runtime = runtimeModule.createPluginRuntime({ allowGatewaySubagentBinding: true });
+    const result = await gatewayRequestScopeModule.withPluginRuntimeGatewayRequestScope(scope, () =>
+      runtime.agent.abort({ runId: "run-foreign" }),
+    );
+
+    expect(result).toEqual({ aborted: false });
+    expect(controller.signal.aborted).toBe(false);
+    expect(abortControllers.has("run-foreign")).toBe(true);
+  });
+
+  test("runtime.agent.abort allows admin callers to abort another connection's agent run", async () => {
+    const serverPlugins = serverPluginsModule;
+    loadOpenClawPlugins.mockReturnValue(createRegistry([]));
+
+    serverPlugins.loadGatewayPlugins({
+      cfg: {},
+      workspaceDir: "/tmp",
+      log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+      coreGatewayHandlers: {},
+      baseMethods: [],
+    });
+    runtimeModule.setGatewayAgentAbort(serverPlugins.createGatewayAgentAbort());
+
+    const controller = new AbortController();
+    const abortControllers = new Map();
+    abortControllers.set("run-admin", {
+      kind: "agent",
+      controller,
+      sessionKey: "sess-admin",
+      sessionId: "sid-admin",
+      startedAtMs: Date.now(),
+      expiresAtMs: Date.now() + 60_000,
+      ownerConnId: "conn-owner",
+    });
+    const scope = {
+      context: {
+        chatAbortControllers: abortControllers,
+        chatRunBuffers: new Map(),
+        chatDeltaSentAt: new Map(),
+        chatDeltaLastBroadcastLen: new Map(),
+        chatAbortedRuns: new Map(),
+        agentRunSeq: new Map(),
+        removeChatRun: () => undefined,
+        broadcast: () => {},
+        nodeSendToSession: () => {},
+      } as unknown as GatewayRequestContext,
+      client: {
+        connId: "conn-admin",
+        connect: {
+          scopes: ["operator.admin"],
+          device: {},
+        },
+      } as GatewayRequestOptions["client"],
+      isWebchatConnect: () => false,
+    } satisfies PluginRuntimeGatewayRequestScope;
+
+    const runtime = runtimeModule.createPluginRuntime({ allowGatewaySubagentBinding: true });
+    const result = await gatewayRequestScopeModule.withPluginRuntimeGatewayRequestScope(scope, () =>
+      runtime.agent.abort({ runId: "run-admin" }),
+    );
+
+    expect(result).toEqual({ aborted: true });
+    expect(controller.signal.aborted).toBe(true);
+    expect(abortControllers.has("run-admin")).toBe(false);
+  });
+
   test("runtime.agent.abort returns aborted=false for unknown runId", async () => {
     const serverPlugins = serverPluginsModule;
     loadOpenClawPlugins.mockReturnValue(createRegistry([]));
