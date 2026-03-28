@@ -200,6 +200,9 @@ function toChannelMeta(params: {
       : {}),
     ...(params.channel.selectionExtras ? { selectionExtras: params.channel.selectionExtras } : {}),
     ...(systemImage ? { systemImage } : {}),
+    ...(params.channel.markdownCapable !== undefined
+      ? { markdownCapable: params.channel.markdownCapable }
+      : {}),
     ...(params.channel.showConfigured !== undefined
       ? { showConfigured: params.channel.showConfigured }
       : {}),

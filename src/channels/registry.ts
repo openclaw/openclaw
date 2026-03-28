@@ -8,14 +8,14 @@ import {
   type ChatChannelMeta,
 } from "./chat-meta.js";
 import { CHANNEL_IDS, CHAT_CHANNEL_ORDER, type ChatChannelId } from "./ids.js";
-import type { ChannelId } from "./plugins/types.js";
+import type { ChannelId, ChannelMeta } from "./plugins/types.js";
 export { CHANNEL_IDS, CHAT_CHANNEL_ORDER } from "./ids.js";
 export type { ChatChannelId } from "./ids.js";
 
 type RegisteredChannelPluginEntry = {
   plugin: {
     id?: string | null;
-    meta?: { aliases?: string[] | null } | null;
+    meta?: Pick<ChannelMeta, "aliases" | "markdownCapable"> | null;
   };
 };
 
@@ -37,6 +37,18 @@ function findRegisteredChannelPluginEntry(
       (alias) => alias.trim().toLowerCase() === normalizedKey,
     );
   });
+}
+
+function findRegisteredChannelPluginEntryById(
+  id: string,
+): RegisteredChannelPluginEntry | undefined {
+  const normalizedId = normalizeChannelKey(id);
+  if (!normalizedId) {
+    return undefined;
+  }
+  return listRegisteredChannelPluginEntries().find(
+    (entry) => normalizeChannelKey(entry.plugin.id) === normalizedId,
+  );
 }
 
 const normalizeChannelKey = (raw?: string | null): string | undefined => {
@@ -78,6 +90,12 @@ export function listRegisteredChannelPluginIds(): ChannelId[] {
 
 export function listRegisteredChannelPluginAliases(): string[] {
   return listRegisteredChannelPluginEntries().flatMap((entry) => entry.plugin.meta?.aliases ?? []);
+}
+
+export function getRegisteredChannelPluginMeta(
+  id: string,
+): Pick<ChannelMeta, "aliases" | "markdownCapable"> | null {
+  return findRegisteredChannelPluginEntryById(id)?.plugin.meta ?? null;
 }
 
 export function formatChannelPrimerLine(meta: ChatChannelMeta): string {

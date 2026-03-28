@@ -19,6 +19,9 @@
       "docsPath": "/channels/irc",
       "docsLabel": "irc",
       "blurb": "classic IRC networks with DM/channel routing and pairing controls.",
+      "aliases": [
+        "internet-relay-chat"
+      ],
       "systemImage": "network"
     }
   }

@@ -349,16 +349,16 @@ function resolvePreferredOverIds(
 ): string[] {
   const normalized = normalizeChatChannelId(pluginId);
   if (normalized) {
-    return getChatChannelMeta(normalized).preferOver ?? [];
+    return [...(getChatChannelMeta(normalized).preferOver ?? [])];
   }
   const installedPlugin = registry.plugins.find((record) => record.id === pluginId);
   const manifestChannelPreferOver = installedPlugin?.channelConfigs?.[pluginId]?.preferOver;
   if (manifestChannelPreferOver?.length) {
-    return manifestChannelPreferOver;
+    return [...manifestChannelPreferOver];
   }
   const installedChannelMeta = installedPlugin?.channelCatalogMeta;
   if (installedChannelMeta?.preferOver?.length) {
-    return installedChannelMeta.preferOver;
+    return [...installedChannelMeta.preferOver];
   }
   return resolveExternalCatalogPreferOver(pluginId, env);
 }
