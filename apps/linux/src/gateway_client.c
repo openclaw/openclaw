@@ -43,6 +43,12 @@ static void publish_health_state(gboolean http_ok, gboolean ws_connected,
     hs.auth_ok = auth_ok;
     hs.config_valid = current_config ? current_config->valid : FALSE;
 
+    /* TODO(MVP deferral): We do not populate config_audit_ok or config_issues_count 
+     * here because those are not yet extracted or tracked in the Linux MVP.
+     * Do NOT synthesize fake errors into these fields just to activate the
+     * STATE_RUNNING_WITH_WARNING branch.
+     */
+
     if (current_config) {
         hs.endpoint_host = g_strdup(current_config->host);
         hs.endpoint_port = current_config->port;

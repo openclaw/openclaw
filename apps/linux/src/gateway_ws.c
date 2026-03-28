@@ -69,8 +69,10 @@ typedef struct {
     gdouble tick_interval_ms;
     gint64 last_tick_us;
 
+    guint connect_generation;
+    GCancellable *connect_cancellable;
+
     guint reconnect_timer_id;
-    guint keepalive_timer_id;
     guint tick_watchdog_timer_id;
     guint challenge_timeout_id;
     guint connect_timeout_id;
@@ -112,6 +114,12 @@ static void ws_publish_status(void) {
 static void ws_cleanup_connection(void) {
     if (!ws_client) return;
     ws_stop_timers();
+    
+    if (ws_client->connect_cancellable) {
+        g_cancellable_cancel(ws_client->connect_cancellable);
+        g_clear_object(&ws_client->connect_cancellable);
+    }
+
     if (ws_client->ws_conn) {
         if (soup_websocket_connection_get_state(ws_client->ws_conn) == SOUP_WEBSOCKET_STATE_OPEN) {
             soup_websocket_connection_close(ws_client->ws_conn, SOUP_WEBSOCKET_CLOSE_GOING_AWAY, NULL);
@@ -125,10 +133,6 @@ static void ws_stop_timers(void) {
     if (ws_client->reconnect_timer_id) {
         g_source_remove(ws_client->reconnect_timer_id);
         ws_client->reconnect_timer_id = 0;
-    }
-    if (ws_client->keepalive_timer_id) {
-        g_source_remove(ws_client->keepalive_timer_id);
-        ws_client->keepalive_timer_id = 0;
     }
     if (ws_client->tick_watchdog_timer_id) {
         g_source_remove(ws_client->tick_watchdog_timer_id);
@@ -165,21 +169,10 @@ static void ws_schedule_reconnect(void) {
     ws_client->reconnect_timer_id = g_timeout_add(delay_ms, ws_on_reconnect_timer, NULL);
 }
 
-static gboolean ws_on_keepalive_timer(gpointer user_data) {
-    (void)user_data;
-    if (!ws_client || !ws_client->ws_conn) return G_SOURCE_REMOVE;
-    if (ws_client->state != GATEWAY_WS_CONNECTED) return G_SOURCE_REMOVE;
-    if (soup_websocket_connection_get_state(ws_client->ws_conn) == SOUP_WEBSOCKET_STATE_OPEN) {
-        /* Best-effort ping keeps NAT/proxy state alive */
-        soup_websocket_connection_send_text(ws_client->ws_conn, "{\"type\":\"ping\"}");
-    }
-    return G_SOURCE_CONTINUE;
-}
-
 static void ws_start_keepalive(void) {
-    if (!ws_client) return;
-    if (ws_client->keepalive_timer_id) g_source_remove(ws_client->keepalive_timer_id);
-    ws_client->keepalive_timer_id = g_timeout_add_seconds((guint)KEEPALIVE_INTERVAL_S, ws_on_keepalive_timer, NULL);
+    if (!ws_client || !ws_client->ws_conn) return;
+    /* Use libsoup's native WebSocket ping control frames instead of text frames */
+    soup_websocket_connection_set_keepalive_interval(ws_client->ws_conn, (guint)KEEPALIVE_INTERVAL_S);
 }
 
 static gboolean ws_on_tick_watchdog(gpointer user_data) {
@@ -366,12 +359,26 @@ static void ws_on_error(SoupWebsocketConnection *conn, GError *error, gpointer u
 }
 
 static void ws_on_connect_ready(GObject *source, GAsyncResult *res, gpointer user_data) {
-    (void)user_data;
+    guint generation = GPOINTER_TO_UINT(user_data);
     g_autoptr(GError) error = NULL;
     SoupWebsocketConnection *conn = soup_session_websocket_connect_finish(
         SOUP_SESSION(source), res, &error);
 
     if (!ws_client) {
+        g_clear_object(&conn);
+        return;
+    }
+
+    /* Reject stale completions from previous connect attempts */
+    if (generation != ws_client->connect_generation) {
+        OC_LOG_DEBUG(OPENCLAW_LOG_CAT_GATEWAY, "ws connect ready dropped (stale generation %u != %u)", 
+                     generation, ws_client->connect_generation);
+        g_clear_object(&conn);
+        return;
+    }
+
+    if (g_error_matches(error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
+        OC_LOG_DEBUG(OPENCLAW_LOG_CAT_GATEWAY, "ws connect cancelled");
         g_clear_object(&conn);
         return;
     }
@@ -415,10 +422,19 @@ static void ws_do_connect(void) {
     ws_client->connect_timeout_id = g_timeout_add_seconds(
         (guint)CONNECT_TIMEOUT_S, ws_on_connect_timeout, NULL);
 
+    ws_client->connect_generation++;
+    guint attempt_generation = ws_client->connect_generation;
+
+    if (ws_client->connect_cancellable) {
+        g_cancellable_cancel(ws_client->connect_cancellable);
+        g_clear_object(&ws_client->connect_cancellable);
+    }
+    ws_client->connect_cancellable = g_cancellable_new();
+
     soup_session_websocket_connect_async(
         ws_client->session, msg, NULL, NULL,
-        G_PRIORITY_DEFAULT, NULL,
-        ws_on_connect_ready, NULL);
+        G_PRIORITY_DEFAULT, ws_client->connect_cancellable,
+        ws_on_connect_ready, GUINT_TO_POINTER(attempt_generation));
     g_object_unref(msg);
 }
 

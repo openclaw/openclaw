@@ -32,6 +32,7 @@ typedef enum {
     GW_CFG_ERR_AUTH_MODE_UNSUPPORTED,
     GW_CFG_ERR_TOKEN_MISSING,
     GW_CFG_ERR_PASSWORD_MISSING,
+    GW_CFG_ERR_READ_FAILED,
 } GatewayConfigError;
 
 typedef struct {

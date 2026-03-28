@@ -52,6 +52,8 @@ void openclaw_log_init(void) {
                 current_categories |= OPENCLAW_LOG_CAT_NOTIFY;
             } else if (g_ascii_strcasecmp(cat, "health") == 0) {
                 current_categories |= OPENCLAW_LOG_CAT_HEALTH;
+            } else if (g_ascii_strcasecmp(cat, "gateway") == 0) {
+                current_categories |= OPENCLAW_LOG_CAT_GATEWAY;
             }
         }
         g_strfreev(cats);
@@ -100,6 +102,8 @@ void openclaw_log_write(OpenClawLogLevel level, guint category_mask, const char 
         cat_str = "NOTI";
     } else if (category_mask & OPENCLAW_LOG_CAT_HEALTH) {
         cat_str = "HLTH";
+    } else if (category_mask & OPENCLAW_LOG_CAT_GATEWAY) {
+        cat_str = "GATE";
     }
 
     // Extract filename from path for terser logging
