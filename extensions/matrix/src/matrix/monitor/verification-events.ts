@@ -219,13 +219,11 @@ async function resolveVerificationSummaryForSignal(
   // Only fall back by user inside the active DM with that user. Otherwise a
   // spoofed verification event in an unrelated room can leak the current SAS
   // prompt into that room.
-  if (
-    !(await isStrictDirectRoom({
-      client,
-      roomId: params.roomId,
-      remoteUserId: params.senderId,
-    }))
-  ) {
+  const inspection = await inspectMatrixDirectRooms({
+    client,
+    remoteUserId: params.senderId,
+  }).catch(() => null);
+  if (trimMaybeString(inspection?.activeRoomId) !== params.roomId) {
     return null;
   }
 
@@ -364,6 +362,14 @@ export function createMatrixVerificationEventRouter(params: {
   const verificationFlowRooms = new Map<string, string>();
   const verificationUserRooms = new Map<string, string>();
 
+  async function resolveActiveDirectRoomId(remoteUserId: string): Promise<string | null> {
+    const inspection = await inspectMatrixDirectRooms({
+      client: params.client,
+      remoteUserId,
+    }).catch(() => null);
+    return trimMaybeString(inspection?.activeRoomId);
+  }
+
   function shouldEmitVerificationEventNotice(event: MatrixRawEvent): boolean {
     const eventTs =
       typeof event.origin_server_ts === "number" && Number.isFinite(event.origin_server_ts)
@@ -421,6 +427,13 @@ export function createMatrixVerificationEventRouter(params: {
       return null;
     }
     const recentRoomId = trimMaybeString(verificationUserRooms.get(remoteUserId));
+    const activeRoomId = await resolveActiveDirectRoomId(remoteUserId);
+    if (recentRoomId && activeRoomId && recentRoomId === activeRoomId) {
+      return recentRoomId;
+    }
+    if (activeRoomId) {
+      return activeRoomId;
+    }
     if (
       recentRoomId &&
       (await isStrictDirectRoom({
@@ -431,11 +444,7 @@ export function createMatrixVerificationEventRouter(params: {
     ) {
       return recentRoomId;
     }
-    const inspection = await inspectMatrixDirectRooms({
-      client: params.client,
-      remoteUserId,
-    }).catch(() => null);
-    return trimMaybeString(inspection?.activeRoomId);
+    return null;
   }
 
   async function routeVerificationSummary(summary: MatrixVerificationSummaryLike): Promise<void> {

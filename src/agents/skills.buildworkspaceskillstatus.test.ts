@@ -1,4 +1,3 @@
-import { createSyntheticSourceInfo } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
 import { buildWorkspaceSkillStatus } from "./skills-status.js";
@@ -20,17 +19,13 @@ function makeEntry(params: {
   }>;
 }): SkillEntry {
   return {
-    skill: {
+    skill: createFixtureSkill({
       name: params.name,
       description: `desc:${params.name}`,
       filePath: `/tmp/${params.name}/SKILL.md`,
       baseDir: `/tmp/${params.name}`,
-      sourceInfo: createSyntheticSourceInfo(`/tmp/${params.name}/SKILL.md`, {
-        source: params.source ?? "openclaw-workspace",
-        baseDir: `/tmp/${params.name}`,
-      }),
-      disableModelInvocation: false,
-    },
+      source: params.source ?? "openclaw-workspace",
+    }),
     frontmatter: {},
     metadata: {
       ...(params.os ? { os: params.os } : {}),
@@ -38,6 +33,23 @@ function makeEntry(params: {
       ...(params.install ? { install: params.install } : {}),
       ...(params.requires?.env?.[0] ? { primaryEnv: params.requires.env[0] } : {}),
     },
+  };
+}
+
+function createFixtureSkill(params: {
+  name: string;
+  description: string;
+  filePath: string;
+  baseDir: string;
+  source: string;
+}): SkillEntry["skill"] {
+  return {
+    name: params.name,
+    description: params.description,
+    filePath: params.filePath,
+    baseDir: params.baseDir,
+    source: params.source,
+    disableModelInvocation: false,
   };
 }
 

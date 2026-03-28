@@ -45,12 +45,17 @@ function createCompatRateLimitError(
   body: { message: string; retry_after: number; global: boolean },
   request?: Request,
 ): RateLimitError {
+  const compatRequest =
+    request ??
+    new Request("https://discord.com/api/v10/applications/commands", {
+      method: "PUT",
+    });
   const RateLimitErrorCtor = RateLimitError as unknown as new (
     response: Response,
     body: { message: string; retry_after: number; global: boolean },
     request?: Request,
   ) => RateLimitError;
-  return new RateLimitErrorCtor(response, body, request);
+  return new RateLimitErrorCtor(response, body, compatRequest);
 }
 
 function createConfigWithDiscordAccount(overrides: Record<string, unknown> = {}): OpenClawConfig {
@@ -653,6 +658,7 @@ describe("monitorDiscordProvider", () => {
         retry_after: 193.632,
         global: false,
       },
+      request,
     );
     rateLimitError.discordCode = 30034;
     clientHandleDeployRequestMock.mockRejectedValueOnce(rateLimitError);

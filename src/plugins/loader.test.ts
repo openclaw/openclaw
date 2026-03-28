@@ -32,6 +32,7 @@ import {
 
 type TempPlugin = { dir: string; file: string; id: string };
 type PluginLoadConfig = NonNullable<Parameters<typeof loadOpenClawPlugins>[0]>["config"];
+type PluginRegistry = ReturnType<typeof loadOpenClawPlugins>;
 
 function chmodSafeDir(dir: string) {
   if (process.platform === "win32") {
@@ -240,6 +241,64 @@ function loadRegistryFromAllowedPlugins(
       },
     },
   });
+}
+
+function runRegistryScenarios<
+  T extends { assert: (registry: PluginRegistry, scenario: T) => void },
+>(scenarios: readonly T[], loadRegistry: (scenario: T) => PluginRegistry) {
+  for (const scenario of scenarios) {
+    scenario.assert(loadRegistry(scenario), scenario);
+  }
+}
+
+function loadRegistryFromScenarioPlugins(plugins: readonly TempPlugin[]) {
+  return plugins.length === 1
+    ? loadRegistryFromSinglePlugin({
+        plugin: plugins[0],
+        pluginConfig: {
+          allow: [plugins[0].id],
+        },
+      })
+    : loadRegistryFromAllowedPlugins([...plugins]);
+}
+
+function expectOpenAllowWarnings(params: {
+  warnings: string[];
+  pluginId: string;
+  expectedWarnings: number;
+  label: string;
+}) {
+  const openAllowWarnings = params.warnings.filter((msg) => msg.includes("plugins.allow is empty"));
+  expect(openAllowWarnings, params.label).toHaveLength(params.expectedWarnings);
+  if (params.expectedWarnings > 0) {
+    expect(
+      openAllowWarnings.some((msg) => msg.includes(params.pluginId)),
+      params.label,
+    ).toBe(true);
+  }
+}
+
+function expectLoadedPluginProvenance(params: {
+  scenario: { label: string };
+  registry: PluginRegistry;
+  warnings: string[];
+  pluginId: string;
+  expectWarning: boolean;
+  expectedSource?: string;
+}) {
+  const plugin = params.registry.plugins.find((entry) => entry.id === params.pluginId);
+  expect(plugin?.status, params.scenario.label).toBe("loaded");
+  if (params.expectedSource) {
+    expect(plugin?.source, params.scenario.label).toBe(params.expectedSource);
+  }
+  expect(
+    params.warnings.some(
+      (msg) =>
+        msg.includes(params.pluginId) &&
+        msg.includes("loaded without install/load-path provenance"),
+    ),
+    params.scenario.label,
+  ).toBe(params.expectWarning);
 }
 
 function createWarningLogger(warnings: string[]) {
@@ -748,70 +807,69 @@ describe("loadOpenClawPlugins", () => {
     expect(bundled?.status).toBe("disabled");
   });
 
-  it("handles bundled telegram plugin enablement and override rules", () => {
-    setupBundledTelegramPlugin();
-    const cases = [
-      {
-        name: "loads bundled telegram plugin when enabled",
-        config: {
-          plugins: {
-            allow: ["telegram"],
-            entries: {
-              telegram: { enabled: true },
-            },
+  it.each([
+    {
+      name: "loads bundled telegram plugin when enabled",
+      config: {
+        plugins: {
+          allow: ["telegram"],
+          entries: {
+            telegram: { enabled: true },
           },
-        } satisfies PluginLoadConfig,
-        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
-          expectTelegramLoaded(registry);
         },
+      } satisfies PluginLoadConfig,
+      assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+        expectTelegramLoaded(registry);
       },
-      {
-        name: "loads bundled channel plugins when channels.<id>.enabled=true",
-        config: {
-          channels: {
-            telegram: {
-              enabled: true,
-            },
-          },
-          plugins: {
+    },
+    {
+      name: "loads bundled channel plugins when channels.<id>.enabled=true",
+      config: {
+        channels: {
+          telegram: {
             enabled: true,
           },
-        } satisfies PluginLoadConfig,
-        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
-          expectTelegramLoaded(registry);
         },
-      },
-      {
-        name: "still respects explicit disable via plugins.entries for bundled channels",
-        config: {
-          channels: {
-            telegram: {
-              enabled: true,
-            },
-          },
-          plugins: {
-            entries: {
-              telegram: { enabled: false },
-            },
-          },
-        } satisfies PluginLoadConfig,
-        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
-          const telegram = registry.plugins.find((entry) => entry.id === "telegram");
-          expect(telegram?.status).toBe("disabled");
-          expect(telegram?.error).toBe("disabled in config");
+        plugins: {
+          enabled: true,
         },
+      } satisfies PluginLoadConfig,
+      assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+        expectTelegramLoaded(registry);
       },
-    ] as const;
-
-    for (const testCase of cases) {
+    },
+    {
+      name: "still respects explicit disable via plugins.entries for bundled channels",
+      config: {
+        channels: {
+          telegram: {
+            enabled: true,
+          },
+        },
+        plugins: {
+          entries: {
+            telegram: { enabled: false },
+          },
+        },
+      } satisfies PluginLoadConfig,
+      assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+        const telegram = registry.plugins.find((entry) => entry.id === "telegram");
+        expect(telegram?.status).toBe("disabled");
+        expect(telegram?.error).toBe("disabled in config");
+      },
+    },
+  ] as const)(
+    "handles bundled telegram plugin enablement and override rules: $name",
+    ({ config, assert }) => {
+      setupBundledTelegramPlugin();
       const registry = loadOpenClawPlugins({
         cache: false,
         workspaceDir: cachedBundledTelegramDir,
-        config: testCase.config,
+        config,
       });
-      testCase.assert(registry);
-    }
-  });
+      assert(registry);
+    },
+  );
 
   it("preserves package.json metadata for bundled memory plugins", () => {
     const registry = loadBundledMemoryPluginRegistry({
@@ -830,150 +888,146 @@ describe("loadOpenClawPlugins", () => {
     expect(memory?.name).toBe("Memory (Core)");
     expect(memory?.version).toBe("1.2.3");
   });
-  it("handles config-path and scoped plugin loads", () => {
-    const scenarios = [
-      {
-        label: "loads plugins from config paths",
-        run: () => {
-          process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
-          const plugin = writePlugin({
-            id: "allowed-config-path",
-            filename: "allowed-config-path.cjs",
-            body: `module.exports = {
+  it.each([
+    {
+      label: "loads plugins from config paths",
+      run: () => {
+        process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+        const plugin = writePlugin({
+          id: "allowed-config-path",
+          filename: "allowed-config-path.cjs",
+          body: `module.exports = {
   id: "allowed-config-path",
   register(api) {
     api.registerGatewayMethod("allowed-config-path.ping", ({ respond }) => respond(true, { ok: true }));
   },
 };`,
-          });
+        });
 
-          const registry = loadOpenClawPlugins({
-            cache: false,
-            workspaceDir: plugin.dir,
-            config: {
-              plugins: {
-                load: { paths: [plugin.file] },
-                allow: ["allowed-config-path"],
-              },
+        const registry = loadOpenClawPlugins({
+          cache: false,
+          workspaceDir: plugin.dir,
+          config: {
+            plugins: {
+              load: { paths: [plugin.file] },
+              allow: ["allowed-config-path"],
             },
-          });
+          },
+        });
 
-          const loaded = registry.plugins.find((entry) => entry.id === "allowed-config-path");
-          expect(loaded?.status).toBe("loaded");
-          expect(Object.keys(registry.gatewayHandlers)).toContain("allowed-config-path.ping");
-        },
+        const loaded = registry.plugins.find((entry) => entry.id === "allowed-config-path");
+        expect(loaded?.status).toBe("loaded");
+        expect(Object.keys(registry.gatewayHandlers)).toContain("allowed-config-path.ping");
       },
-      {
-        label: "limits imports to the requested plugin ids",
-        run: () => {
-          useNoBundledPlugins();
-          const allowed = writePlugin({
-            id: "allowed-scoped-only",
-            filename: "allowed-scoped-only.cjs",
-            body: `module.exports = { id: "allowed-scoped-only", register() {} };`,
-          });
-          const skippedMarker = path.join(makeTempDir(), "skipped-loaded.txt");
-          const skipped = writePlugin({
-            id: "skipped-scoped-only",
-            filename: "skipped-scoped-only.cjs",
-            body: `require("node:fs").writeFileSync(${JSON.stringify(skippedMarker)}, "loaded", "utf-8");
+    },
+    {
+      label: "limits imports to the requested plugin ids",
+      run: () => {
+        useNoBundledPlugins();
+        const allowed = writePlugin({
+          id: "allowed-scoped-only",
+          filename: "allowed-scoped-only.cjs",
+          body: `module.exports = { id: "allowed-scoped-only", register() {} };`,
+        });
+        const skippedMarker = path.join(makeTempDir(), "skipped-loaded.txt");
+        const skipped = writePlugin({
+          id: "skipped-scoped-only",
+          filename: "skipped-scoped-only.cjs",
+          body: `require("node:fs").writeFileSync(${JSON.stringify(skippedMarker)}, "loaded", "utf-8");
 module.exports = { id: "skipped-scoped-only", register() { throw new Error("skipped plugin should not load"); } };`,
-          });
+        });
 
-          const registry = loadOpenClawPlugins({
-            cache: false,
-            config: {
-              plugins: {
-                load: { paths: [allowed.file, skipped.file] },
-                allow: ["allowed-scoped-only", "skipped-scoped-only"],
-              },
+        const registry = loadOpenClawPlugins({
+          cache: false,
+          config: {
+            plugins: {
+              load: { paths: [allowed.file, skipped.file] },
+              allow: ["allowed-scoped-only", "skipped-scoped-only"],
             },
-            onlyPluginIds: ["allowed-scoped-only"],
-          });
+          },
+          onlyPluginIds: ["allowed-scoped-only"],
+        });
 
-          expect(registry.plugins.map((entry) => entry.id)).toEqual(["allowed-scoped-only"]);
-          expect(fs.existsSync(skippedMarker)).toBe(false);
-        },
+        expect(registry.plugins.map((entry) => entry.id)).toEqual(["allowed-scoped-only"]);
+        expect(fs.existsSync(skippedMarker)).toBe(false);
       },
-      {
-        label: "keeps scoped plugin loads in a separate cache entry",
-        run: () => {
-          useNoBundledPlugins();
-          const allowed = writePlugin({
-            id: "allowed-cache-scope",
-            filename: "allowed-cache-scope.cjs",
-            body: `module.exports = { id: "allowed-cache-scope", register() {} };`,
-          });
-          const extra = writePlugin({
-            id: "extra-cache-scope",
-            filename: "extra-cache-scope.cjs",
-            body: `module.exports = { id: "extra-cache-scope", register() {} };`,
-          });
-          const options = {
-            config: {
-              plugins: {
-                load: { paths: [allowed.file, extra.file] },
-                allow: ["allowed-cache-scope", "extra-cache-scope"],
-              },
+    },
+    {
+      label: "keeps scoped plugin loads in a separate cache entry",
+      run: () => {
+        useNoBundledPlugins();
+        const allowed = writePlugin({
+          id: "allowed-cache-scope",
+          filename: "allowed-cache-scope.cjs",
+          body: `module.exports = { id: "allowed-cache-scope", register() {} };`,
+        });
+        const extra = writePlugin({
+          id: "extra-cache-scope",
+          filename: "extra-cache-scope.cjs",
+          body: `module.exports = { id: "extra-cache-scope", register() {} };`,
+        });
+        const options = {
+          config: {
+            plugins: {
+              load: { paths: [allowed.file, extra.file] },
+              allow: ["allowed-cache-scope", "extra-cache-scope"],
             },
-          };
+          },
+        };
 
-          const full = loadOpenClawPlugins(options);
-          const scoped = loadOpenClawPlugins({
-            ...options,
-            onlyPluginIds: ["allowed-cache-scope"],
-          });
-          const scopedAgain = loadOpenClawPlugins({
-            ...options,
-            onlyPluginIds: ["allowed-cache-scope"],
-          });
+        const full = loadOpenClawPlugins(options);
+        const scoped = loadOpenClawPlugins({
+          ...options,
+          onlyPluginIds: ["allowed-cache-scope"],
+        });
+        const scopedAgain = loadOpenClawPlugins({
+          ...options,
+          onlyPluginIds: ["allowed-cache-scope"],
+        });
 
-          expect(full.plugins.map((entry) => entry.id).toSorted()).toEqual([
-            "allowed-cache-scope",
-            "extra-cache-scope",
-          ]);
-          expect(scoped).not.toBe(full);
-          expect(scoped.plugins.map((entry) => entry.id)).toEqual(["allowed-cache-scope"]);
-          expect(scopedAgain).toBe(scoped);
-        },
+        expect(full.plugins.map((entry) => entry.id).toSorted()).toEqual([
+          "allowed-cache-scope",
+          "extra-cache-scope",
+        ]);
+        expect(scoped).not.toBe(full);
+        expect(scoped.plugins.map((entry) => entry.id)).toEqual(["allowed-cache-scope"]);
+        expect(scopedAgain).toBe(scoped);
       },
-      {
-        label: "can load a scoped registry without replacing the active global registry",
-        run: () => {
-          useNoBundledPlugins();
-          const plugin = writePlugin({
-            id: "allowed-nonactivating-scope",
-            filename: "allowed-nonactivating-scope.cjs",
-            body: `module.exports = { id: "allowed-nonactivating-scope", register() {} };`,
-          });
-          const previousRegistry = createEmptyPluginRegistry();
-          setActivePluginRegistry(previousRegistry, "existing-registry");
-          resetGlobalHookRunner();
+    },
+    {
+      label: "can load a scoped registry without replacing the active global registry",
+      run: () => {
+        useNoBundledPlugins();
+        const plugin = writePlugin({
+          id: "allowed-nonactivating-scope",
+          filename: "allowed-nonactivating-scope.cjs",
+          body: `module.exports = { id: "allowed-nonactivating-scope", register() {} };`,
+        });
+        const previousRegistry = createEmptyPluginRegistry();
+        setActivePluginRegistry(previousRegistry, "existing-registry");
+        resetGlobalHookRunner();
 
-          const scoped = loadOpenClawPlugins({
-            cache: false,
-            activate: false,
-            workspaceDir: plugin.dir,
-            config: {
-              plugins: {
-                load: { paths: [plugin.file] },
-                allow: ["allowed-nonactivating-scope"],
-              },
+        const scoped = loadOpenClawPlugins({
+          cache: false,
+          activate: false,
+          workspaceDir: plugin.dir,
+          config: {
+            plugins: {
+              load: { paths: [plugin.file] },
+              allow: ["allowed-nonactivating-scope"],
             },
-            onlyPluginIds: ["allowed-nonactivating-scope"],
-          });
+          },
+          onlyPluginIds: ["allowed-nonactivating-scope"],
+        });
 
-          expect(scoped.plugins.map((entry) => entry.id)).toEqual(["allowed-nonactivating-scope"]);
-          expect(getActivePluginRegistry()).toBe(previousRegistry);
-          expect(getActivePluginRegistryKey()).toBe("existing-registry");
-          expect(getGlobalHookRunner()).toBeNull();
-        },
+        expect(scoped.plugins.map((entry) => entry.id)).toEqual(["allowed-nonactivating-scope"]);
+        expect(getActivePluginRegistry()).toBe(previousRegistry);
+        expect(getActivePluginRegistryKey()).toBe("existing-registry");
+        expect(getGlobalHookRunner()).toBeNull();
       },
-    ] as const;
-
-    for (const scenario of scenarios) {
-      scenario.run();
-    }
+    },
+  ] as const)("handles config-path and scoped plugin loads: $label", ({ run }) => {
+    run();
   });
 
   it("only publishes plugin commands to the global registry during activating loads", async () => {
@@ -1845,22 +1899,19 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
       },
     ] as const;
 
-    for (const scenario of scenarios) {
+    runRegistryScenarios(scenarios, (scenario) => {
       const plugin = writePlugin({
         id: scenario.pluginId,
         filename: `${scenario.pluginId}.cjs`,
         body: scenario.body,
       });
-
-      const registry = loadRegistryFromSinglePlugin({
+      return loadRegistryFromSinglePlugin({
         plugin,
         pluginConfig: {
           allow: [scenario.pluginId],
         },
       });
-
-      scenario.assert(registry);
-    }
+    });
   });
 
   it("registers plugin http routes", () => {
@@ -1874,6 +1925,24 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
         expectedPath: "/demo",
         expectedAuth: "gateway",
         expectedMatch: "exact",
+        assert: (
+          registry: PluginRegistry,
+          scenario: {
+            pluginId: string;
+            expectedPath: string;
+            expectedAuth: string;
+            expectedMatch: string;
+            label: string;
+          },
+        ) => {
+          const route = registry.httpRoutes.find((entry) => entry.pluginId === scenario.pluginId);
+          expect(route, scenario.label).toBeDefined();
+          expect(route?.path, scenario.label).toBe(scenario.expectedPath);
+          expect(route?.auth, scenario.label).toBe(scenario.expectedAuth);
+          expect(route?.match, scenario.label).toBe(scenario.expectedMatch);
+          const httpPlugin = registry.plugins.find((entry) => entry.id === scenario.pluginId);
+          expect(httpPlugin?.httpRoutes, scenario.label).toBe(1);
+        },
       },
       {
         label: "keeps explicit auth and match options",
@@ -1883,10 +1952,28 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
         expectedPath: "/webhook",
         expectedAuth: "plugin",
         expectedMatch: "prefix",
+        assert: (
+          registry: PluginRegistry,
+          scenario: {
+            pluginId: string;
+            expectedPath: string;
+            expectedAuth: string;
+            expectedMatch: string;
+            label: string;
+          },
+        ) => {
+          const route = registry.httpRoutes.find((entry) => entry.pluginId === scenario.pluginId);
+          expect(route, scenario.label).toBeDefined();
+          expect(route?.path, scenario.label).toBe(scenario.expectedPath);
+          expect(route?.auth, scenario.label).toBe(scenario.expectedAuth);
+          expect(route?.match, scenario.label).toBe(scenario.expectedMatch);
+          const httpPlugin = registry.plugins.find((entry) => entry.id === scenario.pluginId);
+          expect(httpPlugin?.httpRoutes, scenario.label).toBe(1);
+        },
       },
     ] as const;
 
-    for (const scenario of scenarios) {
+    runRegistryScenarios(scenarios, (scenario) => {
       const plugin = writePlugin({
         id: scenario.pluginId,
         filename: `${scenario.pluginId}.cjs`,
@@ -1894,22 +1981,13 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
   api.registerHttpRoute(${scenario.routeOptions});
 } };`,
       });
-
-      const registry = loadRegistryFromSinglePlugin({
+      return loadRegistryFromSinglePlugin({
         plugin,
         pluginConfig: {
           allow: [scenario.pluginId],
         },
       });
-
-      const route = registry.httpRoutes.find((entry) => entry.pluginId === scenario.pluginId);
-      expect(route, scenario.label).toBeDefined();
-      expect(route?.path, scenario.label).toBe(scenario.expectedPath);
-      expect(route?.auth, scenario.label).toBe(scenario.expectedAuth);
-      expect(route?.match, scenario.label).toBe(scenario.expectedMatch);
-      const httpPlugin = registry.plugins.find((entry) => entry.id === scenario.pluginId);
-      expect(httpPlugin?.httpRoutes, scenario.label).toBe(1);
-    }
+    });
   });
 
   it("rejects duplicate plugin registrations", () => {
@@ -1925,6 +2003,26 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
         selectCount: (registry: ReturnType<typeof loadOpenClawPlugins>) =>
           registry.hooks.filter((entry) => entry.entry.hook.name === "shared-hook").length,
         duplicateMessage: "hook already registered: shared-hook (hook-owner-a)",
+        assert: (
+          registry: PluginRegistry,
+          scenario: {
+            selectCount: (registry: PluginRegistry) => number;
+            ownerB: string;
+            duplicateMessage: string;
+            label: string;
+          },
+        ) => {
+          expect(scenario.selectCount(registry), scenario.label).toBe(1);
+          expect(
+            registry.diagnostics.some(
+              (diag) =>
+                diag.level === "error" &&
+                diag.pluginId === scenario.ownerB &&
+                diag.message === scenario.duplicateMessage,
+            ),
+            scenario.label,
+          ).toBe(true);
+        },
       },
       {
         label: "plugin service ids",
@@ -1936,6 +2034,26 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
         selectCount: (registry: ReturnType<typeof loadOpenClawPlugins>) =>
           registry.services.filter((entry) => entry.service.id === "shared-service").length,
         duplicateMessage: "service already registered: shared-service (service-owner-a)",
+        assert: (
+          registry: PluginRegistry,
+          scenario: {
+            selectCount: (registry: PluginRegistry) => number;
+            ownerB: string;
+            duplicateMessage: string;
+            label: string;
+          },
+        ) => {
+          expect(scenario.selectCount(registry), scenario.label).toBe(1);
+          expect(
+            registry.diagnostics.some(
+              (diag) =>
+                diag.level === "error" &&
+                diag.pluginId === scenario.ownerB &&
+                diag.message === scenario.duplicateMessage,
+            ),
+            scenario.label,
+          ).toBe(true);
+        },
       },
       {
         label: "plugin context engine ids",
@@ -1947,6 +2065,26 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
         selectCount: () => 1,
         duplicateMessage:
           "context engine already registered: shared-context-engine-loader-test (plugin:context-engine-owner-a)",
+        assert: (
+          registry: PluginRegistry,
+          scenario: {
+            selectCount: (registry: PluginRegistry) => number;
+            ownerB: string;
+            duplicateMessage: string;
+            label: string;
+          },
+        ) => {
+          expect(scenario.selectCount(registry), scenario.label).toBe(1);
+          expect(
+            registry.diagnostics.some(
+              (diag) =>
+                diag.level === "error" &&
+                diag.pluginId === scenario.ownerB &&
+                diag.message === scenario.duplicateMessage,
+            ),
+            scenario.label,
+          ).toBe(true);
+        },
       },
       {
         label: "plugin CLI command roots",
@@ -1960,6 +2098,28 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
         duplicateMessage: "cli command already registered: shared-cli (cli-owner-a)",
         assertPrimaryOwner: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
           expect(registry.cliRegistrars[0]?.pluginId).toBe("cli-owner-a");
+        },
+        assert: (
+          registry: PluginRegistry,
+          scenario: {
+            selectCount: (registry: PluginRegistry) => number;
+            ownerB: string;
+            duplicateMessage: string;
+            label: string;
+            assertPrimaryOwner?: (registry: PluginRegistry) => void;
+          },
+        ) => {
+          expect(scenario.selectCount(registry), scenario.label).toBe(1);
+          scenario.assertPrimaryOwner?.(registry);
+          expect(
+            registry.diagnostics.some(
+              (diag) =>
+                diag.level === "error" &&
+                diag.pluginId === scenario.ownerB &&
+                diag.message === scenario.duplicateMessage,
+            ),
+            scenario.label,
+          ).toBe(true);
         },
       },
       {
@@ -1976,10 +2136,32 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
         assertPrimaryOwner: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
           expect(registry.cliBackends?.[0]?.pluginId).toBe("cli-backend-owner-a");
         },
+        assert: (
+          registry: PluginRegistry,
+          scenario: {
+            selectCount: (registry: PluginRegistry) => number;
+            ownerB: string;
+            duplicateMessage: string;
+            label: string;
+            assertPrimaryOwner?: (registry: PluginRegistry) => void;
+          },
+        ) => {
+          expect(scenario.selectCount(registry), scenario.label).toBe(1);
+          scenario.assertPrimaryOwner?.(registry);
+          expect(
+            registry.diagnostics.some(
+              (diag) =>
+                diag.level === "error" &&
+                diag.pluginId === scenario.ownerB &&
+                diag.message === scenario.duplicateMessage,
+            ),
+            scenario.label,
+          ).toBe(true);
+        },
       },
     ] as const;
 
-    for (const scenario of scenarios) {
+    runRegistryScenarios(scenarios, (scenario) => {
       const first = writePlugin({
         id: scenario.ownerA,
         filename: `${scenario.ownerA}.cjs`,
@@ -1990,23 +2172,8 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
         filename: `${scenario.ownerB}.cjs`,
         body: scenario.buildBody(scenario.ownerB),
       });
-
-      const registry = loadRegistryFromAllowedPlugins([first, second]);
-
-      expect(scenario.selectCount(registry), scenario.label).toBe(1);
-      if ("assertPrimaryOwner" in scenario) {
-        scenario.assertPrimaryOwner?.(registry);
-      }
-      expect(
-        registry.diagnostics.some(
-          (diag) =>
-            diag.level === "error" &&
-            diag.pluginId === scenario.ownerB &&
-            diag.message === scenario.duplicateMessage,
-        ),
-        scenario.label,
-      ).toBe(true);
-    }
+      return loadRegistryFromAllowedPlugins([first, second]);
+    });
   });
 
   it("rewrites removed registerHttpHandler failures into migration diagnostics", () => {
@@ -2189,19 +2356,9 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
       },
     ] as const;
 
-    for (const scenario of scenarios) {
-      const plugins = scenario.buildPlugins();
-      const registry =
-        plugins.length === 1
-          ? loadRegistryFromSinglePlugin({
-              plugin: plugins[0],
-              pluginConfig: {
-                allow: [plugins[0].id],
-              },
-            })
-          : loadRegistryFromAllowedPlugins(plugins);
-      scenario.assert(registry);
-    }
+    runRegistryScenarios(scenarios, (scenario) =>
+      loadRegistryFromScenarioPlugins(scenario.buildPlugins()),
+    );
   });
 
   it("respects explicit disable in config", () => {
@@ -2674,10 +2831,7 @@ module.exports = {
       },
     ] as const;
 
-    for (const scenario of scenarios) {
-      const registry = scenario.loadRegistry();
-      scenario.assert(registry);
-    }
+    runRegistryScenarios(scenarios, ({ loadRegistry }) => loadRegistry());
   });
 
   it("resolves duplicate plugin ids by source precedence", () => {
@@ -2715,6 +2869,25 @@ module.exports = {
         },
         expectedLoadedOrigin: "config",
         expectedDisabledOrigin: "bundled",
+        assert: (
+          registry: PluginRegistry,
+          scenario: {
+            pluginId: string;
+            expectedLoadedOrigin: string;
+            expectedDisabledOrigin: string;
+            label: string;
+            expectedDisabledError?: string;
+          },
+        ) => {
+          const entries = registry.plugins.filter((entry) => entry.id === scenario.pluginId);
+          const loaded = entries.find((entry) => entry.status === "loaded");
+          const overridden = entries.find((entry) => entry.status === "disabled");
+          expect(loaded?.origin, scenario.label).toBe(scenario.expectedLoadedOrigin);
+          expect(overridden?.origin, scenario.label).toBe(scenario.expectedDisabledOrigin);
+          if (scenario.expectedDisabledError) {
+            expect(overridden?.error, scenario.label).toContain(scenario.expectedDisabledError);
+          }
+        },
       },
       {
         label: "bundled beats auto-discovered global duplicate",
@@ -2757,6 +2930,25 @@ module.exports = {
         expectedLoadedOrigin: "bundled",
         expectedDisabledOrigin: "global",
         expectedDisabledError: "overridden by bundled plugin",
+        assert: (
+          registry: PluginRegistry,
+          scenario: {
+            pluginId: string;
+            expectedLoadedOrigin: string;
+            expectedDisabledOrigin: string;
+            label: string;
+            expectedDisabledError?: string;
+          },
+        ) => {
+          const entries = registry.plugins.filter((entry) => entry.id === scenario.pluginId);
+          const loaded = entries.find((entry) => entry.status === "loaded");
+          const overridden = entries.find((entry) => entry.status === "disabled");
+          expect(loaded?.origin, scenario.label).toBe(scenario.expectedLoadedOrigin);
+          expect(overridden?.origin, scenario.label).toBe(scenario.expectedDisabledOrigin);
+          if (scenario.expectedDisabledError) {
+            expect(overridden?.error, scenario.label).toContain(scenario.expectedDisabledError);
+          }
+        },
       },
       {
         label: "installed global beats bundled duplicate",
@@ -2805,20 +2997,29 @@ module.exports = {
         expectedLoadedOrigin: "global",
         expectedDisabledOrigin: "bundled",
         expectedDisabledError: "overridden by global plugin",
+        assert: (
+          registry: PluginRegistry,
+          scenario: {
+            pluginId: string;
+            expectedLoadedOrigin: string;
+            expectedDisabledOrigin: string;
+            label: string;
+            expectedDisabledError?: string;
+          },
+        ) => {
+          const entries = registry.plugins.filter((entry) => entry.id === scenario.pluginId);
+          const loaded = entries.find((entry) => entry.status === "loaded");
+          const overridden = entries.find((entry) => entry.status === "disabled");
+          expect(loaded?.origin, scenario.label).toBe(scenario.expectedLoadedOrigin);
+          expect(overridden?.origin, scenario.label).toBe(scenario.expectedDisabledOrigin);
+          if (scenario.expectedDisabledError) {
+            expect(overridden?.error, scenario.label).toContain(scenario.expectedDisabledError);
+          }
+        },
       },
     ] as const;
 
-    for (const scenario of scenarios) {
-      const registry = scenario.loadRegistry();
-      const entries = registry.plugins.filter((entry) => entry.id === scenario.pluginId);
-      const loaded = entries.find((entry) => entry.status === "loaded");
-      const overridden = entries.find((entry) => entry.status === "disabled");
-      expect(loaded?.origin, scenario.label).toBe(scenario.expectedLoadedOrigin);
-      expect(overridden?.origin, scenario.label).toBe(scenario.expectedDisabledOrigin);
-      if ("expectedDisabledError" in scenario) {
-        expect(overridden?.error, scenario.label).toContain(scenario.expectedDisabledError);
-      }
-    }
+    runRegistryScenarios(scenarios, (scenario) => scenario.loadRegistry());
   });
 
   it("warns about open allowlists only for auto-discovered plugins", () => {
@@ -2888,14 +3089,12 @@ module.exports = {
         scenario.loadRegistry(warnings);
       }
 
-      const openAllowWarnings = warnings.filter((msg) => msg.includes("plugins.allow is empty"));
-      expect(openAllowWarnings, scenario.label).toHaveLength(scenario.expectedWarnings);
-      if (scenario.expectedWarnings > 0) {
-        expect(
-          openAllowWarnings.some((msg) => msg.includes(scenario.pluginId)),
-          scenario.label,
-        ).toBe(true);
-      }
+      expectOpenAllowWarnings({
+        warnings,
+        pluginId: scenario.pluginId,
+        expectedWarnings: scenario.expectedWarnings,
+        label: scenario.label,
+      });
     }
   });
 
@@ -3022,10 +3221,7 @@ module.exports = {
       },
     ] as const;
 
-    for (const scenario of scenarios) {
-      const registry = scenario.loadRegistry();
-      scenario.assert(registry);
-    }
+    runRegistryScenarios(scenarios, (scenario) => scenario.loadRegistry());
   });
 
   it("loads bundled plugins when manifest metadata opts into default enablement", () => {
@@ -3191,21 +3387,15 @@ module.exports = {
 
     for (const scenario of scenarios) {
       const loadedScenario = scenario.loadRegistry();
-      const { registry, warnings, pluginId, expectWarning } = loadedScenario;
       const expectedSource =
-        "expectedSource" in loadedScenario ? loadedScenario.expectedSource : undefined;
-      const plugin = registry.plugins.find((entry) => entry.id === pluginId);
-      expect(plugin?.status, scenario.label).toBe("loaded");
-      if (expectedSource) {
-        expect(plugin?.source, scenario.label).toBe(expectedSource);
-      }
-      expect(
-        warnings.some(
-          (msg) =>
-            msg.includes(pluginId) && msg.includes("loaded without install/load-path provenance"),
-        ),
-        scenario.label,
-      ).toBe(expectWarning);
+        "expectedSource" in loadedScenario && typeof loadedScenario.expectedSource === "string"
+          ? loadedScenario.expectedSource
+          : undefined;
+      expectLoadedPluginProvenance({
+        scenario,
+        ...loadedScenario,
+        expectedSource,
+      });
     }
   });
 

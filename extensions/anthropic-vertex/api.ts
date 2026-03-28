@@ -1,4 +1,4 @@
-import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-models";
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 export {
   ANTHROPIC_VERTEX_DEFAULT_MODEL_ID,
   buildAnthropicVertexProvider,

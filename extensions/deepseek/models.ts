@@ -1,4 +1,4 @@
-import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-models";
+import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 
 export const DEEPSEEK_BASE_URL = "https://api.deepseek.com";
 
