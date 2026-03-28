@@ -198,7 +198,10 @@ function normalizeToolCallNameForDispatch(
 ): string {
   const trimmed = rawName.trim();
   if (!trimmed) {
-    return inferToolNameFromToolCallId(rawToolCallId, allowedToolNames) ?? rawName;
+    // Return a clearly-invalid sentinel so tool dispatch produces a single
+    // descriptive "Tool _blank not found" error instead of looping on an
+    // empty name that the model keeps retrying (#34129, #29965).
+    return inferToolNameFromToolCallId(rawToolCallId, allowedToolNames) ?? "_blank";
   }
   if (!allowedToolNames || allowedToolNames.size === 0) {
     return trimmed;
