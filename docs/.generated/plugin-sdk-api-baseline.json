@@ -5273,7 +5273,7 @@
           "exportName": "applyBasicWebhookRequestGuards",
           "kind": "function",
           "source": {
-            "line": 148,
+            "line": 151,
             "path": "src/plugin-sdk/webhook-request-guards.ts"
           }
         },
@@ -5282,7 +5282,7 @@
           "exportName": "beginWebhookRequestPipelineOrReject",
           "kind": "function",
           "source": {
-            "line": 189,
+            "line": 192,
             "path": "src/plugin-sdk/webhook-request-guards.ts"
           }
         },
@@ -5318,7 +5318,7 @@
           "exportName": "createWebhookInFlightLimiter",
           "kind": "function",
           "source": {
-            "line": 91,
+            "line": 94,
             "path": "src/plugin-sdk/webhook-request-guards.ts"
           }
         },
@@ -5327,7 +5327,7 @@
           "exportName": "isJsonContentType",
           "kind": "function",
           "source": {
-            "line": 138,
+            "line": 141,
             "path": "src/plugin-sdk/webhook-request-guards.ts"
           }
         },
@@ -5363,7 +5363,7 @@
           "exportName": "readJsonWebhookBodyOrReject",
           "kind": "function",
           "source": {
-            "line": 275,
+            "line": 278,
             "path": "src/plugin-sdk/webhook-request-guards.ts"
           }
         },
@@ -5381,7 +5381,7 @@
           "exportName": "readWebhookBodyOrReject",
           "kind": "function",
           "source": {
-            "line": 240,
+            "line": 243,
             "path": "src/plugin-sdk/webhook-request-guards.ts"
           }
         },
@@ -5516,7 +5516,7 @@
           "exportName": "WEBHOOK_BODY_READ_DEFAULTS",
           "kind": "const",
           "source": {
-            "line": 19,
+            "line": 22,
             "path": "src/plugin-sdk/webhook-request-guards.ts"
           }
         },
@@ -5525,7 +5525,7 @@
           "exportName": "WEBHOOK_IN_FLIGHT_DEFAULTS",
           "kind": "const",
           "source": {
-            "line": 30,
+            "line": 33,
             "path": "src/plugin-sdk/webhook-request-guards.ts"
           }
         },
@@ -5597,7 +5597,7 @@
           "exportName": "WebhookBodyReadProfile",
           "kind": "type",
           "source": {
-            "line": 11,
+            "line": 12,
             "path": "src/plugin-sdk/webhook-request-guards.ts"
           }
         },
@@ -5606,7 +5606,7 @@
           "exportName": "WebhookInFlightLimiter",
           "kind": "type",
           "source": {
-            "line": 35,
+            "line": 38,
             "path": "src/plugin-sdk/webhook-request-guards.ts"
           }
         },
