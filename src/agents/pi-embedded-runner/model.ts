@@ -23,7 +23,8 @@ import {
 import { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
 import { normalizeResolvedProviderModel } from "./model.provider-normalization.js";
 
-type InlineModelEntry = ModelDefinitionConfig & {
+type InlineModelEntry = Omit<ModelDefinitionConfig, "api"> & {
+  api?: Api;
   provider: string;
   baseUrl?: string;
   headers?: Record<string, string>;
@@ -132,12 +133,12 @@ function normalizeResolvedModel(params: {
 
 function resolveProviderTransport(params: {
   provider: string;
-  api?: ModelDefinitionConfig["api"] | Api | null;
+  api?: Api | null;
   baseUrl?: string;
   cfg?: OpenClawConfig;
   runtimeHooks?: ProviderRuntimeHooks;
 }): {
-  api?: ModelDefinitionConfig["api"];
+  api?: Api;
   baseUrl?: string;
 } {
   const runtimeHooks = params.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
@@ -149,7 +150,7 @@ function resolveProviderTransport(params: {
       api: params.api,
       baseUrl: params.baseUrl,
     },
-  }) as { api?: ModelDefinitionConfig["api"] | null; baseUrl?: string } | undefined;
+  }) as { api?: Api | null; baseUrl?: string } | undefined;
 
   return {
     api: normalizeResolvedTransportApi(normalized?.api ?? params.api),
@@ -283,7 +284,7 @@ export function buildInlineProviderModels(
         ...model,
         provider: trimmed,
         baseUrl: transport.baseUrl,
-        api: transport.api,
+        api: transport.api ?? model.api,
         headers: (() => {
           const modelHeaders = sanitizeModelHeaders((model as InlineModelEntry).headers, {
             stripSecretRefMarkers: true,

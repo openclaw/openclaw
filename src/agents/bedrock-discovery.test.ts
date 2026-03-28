@@ -236,7 +236,7 @@ describe("bedrock discovery", () => {
           },
           providers: {
             "amazon-bedrock": {
-              baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+              baseUrl: "https://bedrock-runtime.us-west-2.amazonaws.com",
               headers: { "x-test-header": "1" },
               models: [],
             },
@@ -259,7 +259,7 @@ describe("bedrock discovery", () => {
       provider: {
         api: "bedrock-converse-stream",
         auth: "aws-sdk",
-        baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+        baseUrl: "https://bedrock-runtime.us-west-2.amazonaws.com",
         headers: { "x-test-header": "1" },
       },
     });
