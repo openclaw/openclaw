@@ -84,6 +84,7 @@ describe("plugins cli uninstall", () => {
         allowlist: false,
         loadPath: false,
         memorySlot: false,
+        channelConfig: false,
         directory: false,
       },
     });
@@ -187,5 +188,92 @@ describe("plugins cli uninstall", () => {
         pluginId: "linkmind-context",
       }),
     );
+  });
+
+  it("previews and passes loaded channel ids to uninstall", async () => {
+    loadConfig.mockReturnValue({
+      plugins: {
+        entries: {
+          "timbot-plugin": { enabled: true },
+        },
+        installs: {
+          "timbot-plugin": {
+            source: "npm",
+            spec: "timbot-plugin@1.0.0",
+            installPath: "/tmp/openclaw-state/extensions/timbot-plugin",
+          },
+        },
+      },
+      channels: {
+        timbot: { sdkAppId: "123" },
+        "timbot-v2": { sdkAppId: "456" },
+      },
+    } as OpenClawConfig);
+    buildPluginStatusReport.mockReturnValue({
+      plugins: [
+        {
+          id: "timbot-plugin",
+          name: "Timbot",
+          status: "loaded",
+          channelIds: ["timbot", "timbot-v2"],
+        },
+      ],
+      diagnostics: [],
+    });
+
+    await runPluginsCommand(["plugins", "uninstall", "timbot-plugin", "--force"]);
+
+    expect(runtimeLogs.some((line) => line.includes("channel config (channels.timbot)"))).toBe(
+      true,
+    );
+    expect(runtimeLogs.some((line) => line.includes("channel config (channels.timbot-v2)"))).toBe(
+      true,
+    );
+    expect(uninstallPlugin).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginId: "timbot-plugin",
+        channelIds: ["timbot", "timbot-v2"],
+      }),
+    );
+  });
+
+  it("does not preview unrelated channel config when loaded plugin declares no channels", async () => {
+    loadConfig.mockReturnValue({
+      plugins: {
+        entries: {
+          telegram: { enabled: true },
+        },
+        installs: {
+          telegram: {
+            source: "npm",
+            spec: "telegram@1.0.0",
+            installPath: "/tmp/openclaw-state/extensions/telegram",
+          },
+        },
+      },
+      channels: {
+        telegram: { enabled: true },
+      },
+    } as OpenClawConfig);
+    buildPluginStatusReport.mockReturnValue({
+      plugins: [
+        {
+          id: "telegram",
+          name: "Telegram helper",
+          status: "loaded",
+          channelIds: [],
+        },
+      ],
+      diagnostics: [],
+    });
+
+    await runPluginsCommand(["plugins", "uninstall", "telegram", "--dry-run"]);
+
+    const previewLine = runtimeLogs.find((line) => line.startsWith("Will remove:"));
+    if (!previewLine) {
+      throw new Error("expected uninstall preview line");
+    }
+    expect(previewLine).not.toContain("channel config (channels.telegram)");
+    expect(uninstallPlugin).not.toHaveBeenCalled();
   });
 });
