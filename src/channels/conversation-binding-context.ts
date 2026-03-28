@@ -5,6 +5,7 @@ import { getActivePluginChannelRegistry } from "../plugins/runtime.js";
 import { parseExplicitTargetForChannel } from "./plugins/target-parsing.js";
 import type { ChannelPlugin } from "./plugins/types.js";
 import { normalizeAnyChannelId, normalizeChannelId } from "./registry.js";
+import { requiresNativeThreadContextForThreadHere } from "./thread-bindings-policy.js";
 
 export type ConversationBindingContext = {
   channel: string;
@@ -136,8 +137,11 @@ export function resolveConversationBindingContext(
     fallbackTo: params.fallbackTo ?? undefined,
   });
   if (resolvedByProvider?.conversationId) {
+    // For channels using embedded threading (e.g., Telegram topics, Feishu topics),
+    // use conversationId as parentConversationId when no explicit thread context exists.
+    const usesEmbeddedThreading = !requiresNativeThreadContextForThreadHere(channel);
     const resolvedParentConversationId =
-      channel === "telegram" && !threadId && !resolvedByProvider.parentConversationId
+      usesEmbeddedThreading && !threadId && !resolvedByProvider.parentConversationId
         ? resolvedByProvider.conversationId
         : resolvedByProvider.parentConversationId;
     return {
@@ -200,8 +204,11 @@ export function resolveConversationBindingContext(
   if (!conversationId) {
     return null;
   }
+  // For channels using embedded threading (e.g., Telegram topics, Feishu topics),
+  // use conversationId as parentConversationId when no explicit thread context exists.
+  const usesEmbeddedThreading = !requiresNativeThreadContextForThreadHere(channel);
   const normalizedParentConversationId =
-    channel === "telegram" && !threadId && !parentConversationId
+    usesEmbeddedThreading && !threadId && !parentConversationId
       ? conversationId
       : parentConversationId;
   return {
