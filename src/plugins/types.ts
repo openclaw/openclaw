@@ -114,6 +114,8 @@ export type OpenClawPluginConfigSchema = {
 /** Trusted execution context passed to plugin-owned agent tool factories. */
 export type OpenClawPluginToolContext = {
   config?: OpenClawConfig;
+  /** Per-plugin config from plugins.entries.<id>.config in openclaw.json. */
+  pluginConfig?: Record<string, unknown>;
   workspaceDir?: string;
   agentDir?: string;
   agentId?: string;

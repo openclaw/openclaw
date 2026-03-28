@@ -76,6 +76,7 @@ export type PluginToolRegistration = {
   optional: boolean;
   source: string;
   rootDir?: string;
+  pluginConfig?: Record<string, unknown>;
 };
 
 export type PluginCliRegistration = {
@@ -280,6 +281,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     record: PluginRecord,
     tool: AnyAgentTool | OpenClawPluginToolFactory,
     opts?: { name?: string; names?: string[]; optional?: boolean },
+    pluginConfig?: Record<string, unknown>,
   ) => {
     const names = opts?.names ?? (opts?.name ? [opts.name] : []);
     const optional = opts?.optional === true;
@@ -302,6 +304,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       optional,
       source: record.source,
       rootDir: record.rootDir,
+      pluginConfig,
     });
   };
 
@@ -975,7 +978,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       handlers: {
         ...(registrationMode === "full"
           ? {
-              registerTool: (tool, opts) => registerTool(record, tool, opts),
+              registerTool: (tool, opts) => registerTool(record, tool, opts, params.pluginConfig),
               registerHook: (events, handler, opts) =>
                 registerHook(record, events, handler, opts, params.config),
               registerHttpRoute: (routeParams) => registerHttpRoute(record, routeParams),
