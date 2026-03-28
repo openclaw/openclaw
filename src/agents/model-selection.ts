@@ -142,27 +142,44 @@ function normalizeProviderModelId(provider: string, model: string): string {
   );
 }
 
-export function normalizeModelRef(provider: string, model: string): ModelRef {
+type ModelRefNormalizeOptions = {
+  allowPluginNormalization?: boolean;
+};
+
+export function normalizeModelRef(
+  provider: string,
+  model: string,
+  options?: ModelRefNormalizeOptions,
+): ModelRef {
   const normalizedProvider = normalizeProviderId(provider);
-  const normalizedModel = normalizeProviderModelId(normalizedProvider, model.trim());
+  const normalizedModel =
+    options?.allowPluginNormalization === false
+      ? model.trim()
+      : normalizeProviderModelId(normalizedProvider, model.trim());
   return { provider: normalizedProvider, model: normalizedModel };
 }
 
-export function parseModelRef(raw: string, defaultProvider: string): ModelRef | null {
+type ParseModelRefOptions = ModelRefNormalizeOptions;
+
+export function parseModelRef(
+  raw: string,
+  defaultProvider: string,
+  options?: ParseModelRefOptions,
+): ModelRef | null {
   const trimmed = raw.trim();
   if (!trimmed) {
     return null;
   }
   const slash = trimmed.indexOf("/");
   if (slash === -1) {
-    return normalizeModelRef(defaultProvider, trimmed);
+    return normalizeModelRef(defaultProvider, trimmed, options);
   }
   const providerRaw = trimmed.slice(0, slash).trim();
   const model = trimmed.slice(slash + 1).trim();
   if (!providerRaw || !model) {
     return null;
   }
-  return normalizeModelRef(providerRaw, model);
+  return normalizeModelRef(providerRaw, model, options);
 }
 
 export function inferUniqueProviderFromConfiguredModels(params: {
@@ -231,13 +248,16 @@ export function buildConfiguredAllowlistKeys(params: {
 export function buildModelAliasIndex(params: {
   cfg: OpenClawConfig;
   defaultProvider: string;
+  allowPluginNormalization?: boolean;
 }): ModelAliasIndex {
   const byAlias = new Map<string, { alias: string; ref: ModelRef }>();
   const byKey = new Map<string, string[]>();
 
   const rawModels = params.cfg.agents?.defaults?.models ?? {};
   for (const [keyRaw, entryRaw] of Object.entries(rawModels)) {
-    const parsed = parseModelRef(String(keyRaw ?? ""), params.defaultProvider);
+    const parsed = parseModelRef(String(keyRaw ?? ""), params.defaultProvider, {
+      allowPluginNormalization: params.allowPluginNormalization,
+    });
     if (!parsed) {
       continue;
     }
@@ -260,6 +280,7 @@ export function resolveModelRefFromString(params: {
   raw: string;
   defaultProvider: string;
   aliasIndex?: ModelAliasIndex;
+  allowPluginNormalization?: boolean;
 }): { ref: ModelRef; alias?: string } | null {
   const { model } = splitTrailingAuthProfile(params.raw);
   if (!model) {
@@ -272,7 +293,9 @@ export function resolveModelRefFromString(params: {
       return { ref: aliasMatch.ref, alias: aliasMatch.alias };
     }
   }
-  const parsed = parseModelRef(model, params.defaultProvider);
+  const parsed = parseModelRef(model, params.defaultProvider, {
+    allowPluginNormalization: params.allowPluginNormalization,
+  });
   if (!parsed) {
     return null;
   }
@@ -283,6 +306,7 @@ export function resolveConfiguredModelRef(params: {
   cfg: OpenClawConfig;
   defaultProvider: string;
   defaultModel: string;
+  allowPluginNormalization?: boolean;
 }): ModelRef {
   const rawModel = resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model) ?? "";
   if (rawModel) {
@@ -290,6 +314,7 @@ export function resolveConfiguredModelRef(params: {
     const aliasIndex = buildModelAliasIndex({
       cfg: params.cfg,
       defaultProvider: params.defaultProvider,
+      allowPluginNormalization: params.allowPluginNormalization,
     });
     if (!trimmed.includes("/")) {
       const aliasKey = normalizeAliasKey(trimmed);
@@ -310,6 +335,7 @@ export function resolveConfiguredModelRef(params: {
       raw: trimmed,
       defaultProvider: params.defaultProvider,
       aliasIndex,
+      allowPluginNormalization: params.allowPluginNormalization,
     });
     if (resolved) {
       return resolved.ref;
