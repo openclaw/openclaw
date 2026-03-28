@@ -1116,7 +1116,7 @@ function isBtwReplyPayload(payload: ReplyPayload | undefined): payload is ReplyP
   );
 }
 
-function combineNonStreamingReplyParts(parts: string[]): string {
+export function combineNonStreamingReplyParts(parts: string[]): string {
   let combined = "";
   for (const part of parts) {
     if (!part.trim()) {
@@ -1685,11 +1685,9 @@ export const chatHandlers: GatewayRequestHandlers = {
             const btwReplies = deliveredReplies
               .map((entry) => entry.payload)
               .filter(isBtwReplyPayload);
-            const btwText = btwReplies
-              .map((payload) => payload.text.trim())
-              .filter(Boolean)
-              .join("\n\n")
-              .trim();
+            const btwText = combineNonStreamingReplyParts(
+              btwReplies.map((payload) => payload.text),
+            );
             if (btwReplies.length > 0 && btwText) {
               broadcastSideResult({
                 context,

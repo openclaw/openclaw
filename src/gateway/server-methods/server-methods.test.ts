@@ -16,7 +16,7 @@ import { validateExecApprovalRequestParams } from "../protocol/index.js";
 import { waitForAgentJob } from "./agent-job.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
-import { sanitizeChatSendMessageInput } from "./chat.js";
+import { combineNonStreamingReplyParts, sanitizeChatSendMessageInput } from "./chat.js";
 import { createExecApprovalHandlers } from "./exec-approval.js";
 import { logsHandlers } from "./logs.js";
 
@@ -309,6 +309,14 @@ describe("sanitizeChatSendMessageInput", () => {
     },
   ])("$name", ({ input, expected }) => {
     expect(sanitizeChatSendMessageInput(input)).toEqual(expected);
+  });
+});
+
+describe("combineNonStreamingReplyParts", () => {
+  it('preserves an authored single newline when part A ends with "\\n" and part B does not start with one', () => {
+    expect(combineNonStreamingReplyParts(["Section A\n", "Section B"])).toBe(
+      "Section A\nSection B",
+    );
   });
 });
 
