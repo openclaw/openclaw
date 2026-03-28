@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mergeMockedModule } from "../test-utils/vitest-module-mocks.js";
 
 const enqueueSystemEventMock = vi.fn();
 const requestHeartbeatNowMock = vi.fn();
@@ -10,14 +11,13 @@ vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
 }));
 
-vi.mock("../infra/heartbeat-wake.js", async () => {
-  const actual = await vi.importActual<typeof import("../infra/heartbeat-wake.js")>(
-    "../infra/heartbeat-wake.js",
+vi.mock("../infra/heartbeat-wake.js", async (importOriginal) => {
+  return await mergeMockedModule(
+    await importOriginal<typeof import("../infra/heartbeat-wake.js")>(),
+    () => ({
+      requestHeartbeatNow: (...args: unknown[]) => requestHeartbeatNowMock(...args),
+    }),
   );
-  return {
-    ...actual,
-    requestHeartbeatNow: (...args: unknown[]) => requestHeartbeatNowMock(...args),
-  };
 });
 
 vi.mock("../acp/runtime/session-meta.js", () => ({
@@ -39,13 +39,14 @@ async function loadFreshAcpSpawnParentStreamModulesForTest() {
     enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
   }));
   vi.doMock("../infra/heartbeat-wake.js", async () => {
-    const actual = await vi.importActual<typeof import("../infra/heartbeat-wake.js")>(
-      "../infra/heartbeat-wake.js",
+    return await mergeMockedModule(
+      await vi.importActual<typeof import("../infra/heartbeat-wake.js")>(
+        "../infra/heartbeat-wake.js",
+      ),
+      () => ({
+        requestHeartbeatNow: (...args: unknown[]) => requestHeartbeatNowMock(...args),
+      }),
     );
-    return {
-      ...actual,
-      requestHeartbeatNow: (...args: unknown[]) => requestHeartbeatNowMock(...args),
-    };
   });
   vi.doMock("../acp/runtime/session-meta.js", () => ({
     readAcpSessionEntry: (...args: unknown[]) => readAcpSessionEntryMock(...args),

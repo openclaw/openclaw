@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { mergeMockedModule } from "../test-utils/vitest-module-mocks.js";
 
 const requestHeartbeatNowMock = vi.hoisted(() => vi.fn());
 const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
@@ -46,13 +47,14 @@ describe("emitExecSystemEvent", () => {
     requestHeartbeatNowMock.mockClear();
     enqueueSystemEventMock.mockClear();
     vi.doMock("../infra/heartbeat-wake.js", async () => {
-      const actual = await vi.importActual<typeof import("../infra/heartbeat-wake.js")>(
-        "../infra/heartbeat-wake.js",
+      return await mergeMockedModule(
+        await vi.importActual<typeof import("../infra/heartbeat-wake.js")>(
+          "../infra/heartbeat-wake.js",
+        ),
+        () => ({
+          requestHeartbeatNow: requestHeartbeatNowMock,
+        }),
       );
-      return {
-        ...actual,
-        requestHeartbeatNow: requestHeartbeatNowMock,
-      };
     });
     vi.doMock("../infra/system-events.js", () => ({
       enqueueSystemEvent: enqueueSystemEventMock,
