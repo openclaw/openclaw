@@ -444,11 +444,12 @@ export async function getReplyFromConfig(
         // 1. Fallback-only configs (e.g., imageModel.fallbacks: ["openai/gpt-4.1"])
         // 2. Providerless primary with fallbacks (e.g., primary: "gpt-4o", fallbacks: ["openai/gpt-4.1"])
         // 3. Providerless primary alias that resolved to defaultProvider
-        if (
-          (!imageModelPrimary || !primaryHasProvider || imageModelDefaultProvider === defaultProvider) &&
-          channelAliasIndex &&
-          defaultProvider
-        ) {
+        // IMPORTANT: Do NOT enter this block when primary has an explicit provider,
+        // even if that provider equals defaultProvider. Scanning fallbacks in that case
+        // would overwrite the correct primary-derived provider with the first fallback's
+        // provider, breaking mixed-provider configs like primary: "anthropic/claude-3"
+        // with fallbacks: ["openai/gpt-4o", "gpt-4.1"].
+        if ((!imageModelPrimary || !primaryHasProvider) && channelAliasIndex && defaultProvider) {
           // First pass: if primary is providerless, try to resolve it as an alias.
           // Only use the resolved provider if primary is actually an alias.
           if (!primaryHasProvider && imageModelPrimary) {
