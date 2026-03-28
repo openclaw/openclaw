@@ -501,11 +501,20 @@ export async function getReplyFromConfig(
           }
         }
 
-        const addResolvedModelKey = (rawModel: string) => {
+        const addResolvedModelKey = (rawModel: string, isPrimary: boolean) => {
           imageModelKeys.add(rawModel.trim());
+          // For primary: use defaultProvider (primary should resolve against agent default)
+          // For fallbacks: use imageModelDefaultProvider if available (fallbacks should resolve
+          // against fallback-derived provider context for cross-provider configs)
+          const providerContext = isPrimary
+            ? defaultProvider
+            : imageModelDefaultProvider || defaultProvider;
+          if (!providerContext) {
+            return;
+          }
           const resolved = resolveModelRefFromString({
             raw: rawModel.trim(),
-            defaultProvider: imageModelDefaultProvider,
+            defaultProvider: providerContext,
             aliasIndex: channelAliasIndex,
           });
           if (resolved) {
@@ -513,11 +522,11 @@ export async function getReplyFromConfig(
           }
         };
         if (imageModelPrimary) {
-          addResolvedModelKey(imageModelPrimary);
+          addResolvedModelKey(imageModelPrimary, true);
         }
         for (const fb of fallbacks) {
           if (fb?.trim()) {
-            addResolvedModelKey(fb);
+            addResolvedModelKey(fb, false);
           }
         }
         const channelKey = modelKey(channelResolved.ref.provider, channelResolved.ref.model);
