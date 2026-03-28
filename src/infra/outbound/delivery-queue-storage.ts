@@ -204,13 +204,15 @@ export async function ackDelivery(id: string, stateDir?: string): Promise<void> 
 
 /** Update a queue entry after a failed delivery attempt. */
 export async function failDelivery(id: string, error: string, stateDir?: string): Promise<void> {
-  inFlightDeliveryIds.delete(id);
   const filePath = path.join(resolveQueueDir(stateDir), `${id}.json`);
   const entry = await readQueueEntry(filePath);
   entry.retryCount += 1;
   entry.lastAttemptAt = Date.now();
   entry.lastError = error;
   await writeQueueEntry(filePath, entry);
+  // Clear in-flight only after the metadata update is written, so the
+  // recovery timer can't pick up the entry while we're mid-write.
+  inFlightDeliveryIds.delete(id);
 }
 
 /** Load all pending delivery entries from the queue directory. */
