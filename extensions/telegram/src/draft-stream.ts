@@ -23,6 +23,16 @@ type TelegramSendMessageDraft = (
 
 type TelegramSendMessageParams = Parameters<Bot["api"]["sendMessage"]>[2];
 
+function hasNumericMessageThreadId(
+  params: TelegramSendMessageParams | undefined,
+): params is TelegramSendMessageParams & { message_thread_id: number } {
+  return (
+    typeof params === "object" &&
+    params !== null &&
+    typeof (params as { message_thread_id?: unknown }).message_thread_id === "number"
+  );
+}
+
 /**
  * Keep draft-id allocation shared across bundled chunks so concurrent preview
  * lanes do not accidentally reuse draft ids when code-split entries coexist.
@@ -179,9 +189,7 @@ export function createTelegramDraftStream(params: {
           parse_mode: sendArgs.renderedParseMode,
         }
       : replyParams;
-    const usedThreadParams =
-      typeof (sendParams as { message_thread_id?: unknown } | undefined)?.message_thread_id ===
-      "number";
+    const usedThreadParams = hasNumericMessageThreadId(sendParams);
     try {
       return {
         sent: await params.api.sendMessage(chatId, sendArgs.renderedText, sendParams),

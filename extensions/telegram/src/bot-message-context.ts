@@ -76,7 +76,6 @@ export type TelegramMessageContext = {
   statusReactionController: StatusReactionController | null;
   accountId: string;
 };
-
 export const buildTelegramMessageContext = async ({
   primaryCtx,
   allMedia,
@@ -429,7 +428,7 @@ export const buildTelegramMessageContext = async ({
       : null;
 
   // When status reactions are enabled, setQueued() replaces the simple ack reaction
-  const ackReactionPromise = statusReactionController
+  const ackReactionPromise: Promise<boolean> | null = statusReactionController
     ? shouldAckReaction()
       ? Promise.resolve(statusReactionController.setQueued()).then(
           () => true,
@@ -469,7 +468,7 @@ export const buildTelegramMessageContext = async ({
     route,
     rawBody: bodyResult.rawBody,
     bodyText: bodyResult.bodyText,
-    historyKey: bodyResult.historyKey,
+    historyKey: bodyResult.historyKey ?? "",
     historyLimit,
     groupHistories,
     groupConfig,
@@ -493,7 +492,7 @@ export const buildTelegramMessageContext = async ({
     threadSpec,
     replyThreadId,
     isForum,
-    historyKey: bodyResult.historyKey,
+    historyKey: bodyResult.historyKey ?? "",
     historyLimit,
     groupHistories,
     route,
