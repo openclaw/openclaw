@@ -302,6 +302,22 @@ export type AppViewState = {
     logsLimit: number;
     logsMaxBytes: number;
     logsAtBottom: boolean;
+    // Projects view state
+    projectsView: "list" | "dashboard";
+    projectsName: string | null;
+    projectsSubProject: string | null;
+    // Projects data
+    projectsList: Array<{ name: string } & Record<string, unknown>> | null;
+    projectsBoards: Record<string, Record<string, unknown>>;
+    projectsQueues: Record<string, Record<string, unknown>>;
+    projectData: Record<string, unknown> | null;
+    projectBoard: Record<string, unknown> | null;
+    projectQueue: Record<string, unknown> | null;
+    // Projects loading
+    projectsLoading: boolean;
+    projectsError: string | null;
+    projectDashboardLoading: boolean;
+    projectDashboardError: string | null;
     updateAvailable: import("./types.js").UpdateAvailable | null;
     attentionItems: AttentionItem[];
     paletteOpen: boolean;
