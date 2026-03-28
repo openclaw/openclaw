@@ -144,6 +144,45 @@ describe("feishuPlugin.status.probeAccount", () => {
   });
 });
 
+describe("feishuPlugin.pairing.notifyApproval", () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ feishuPlugin } = await import("./channel.js"));
+    sendMessageFeishuMock.mockReset();
+    sendMessageFeishuMock.mockResolvedValue({ messageId: "pairing-msg", chatId: "ou_user" });
+  });
+
+  it("preserves accountId when sending pairing approvals", async () => {
+    const cfg = {
+      channels: {
+        feishu: {
+          accounts: {
+            work: {
+              appId: "cli_work",
+              appSecret: "secret_work",
+              enabled: true,
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await feishuPlugin.pairing?.notifyApproval?.({
+      cfg,
+      id: "ou_user",
+      accountId: "work",
+    });
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg,
+        to: "ou_user",
+        accountId: "work",
+      }),
+    );
+  });
+});
+
 describe("feishuPlugin actions", () => {
   const cfg = {
     channels: {
