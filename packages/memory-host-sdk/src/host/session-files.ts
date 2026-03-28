@@ -103,7 +103,7 @@ function stripRawContentMeta(raw: string, role: "user" | "assistant"): string {
   // tool output quoting, or discussion of the directive protocol) — silently
   // rewriting them would corrupt the searchable transcript index.
   if (role !== "user") {
-    return afterTs;
+    return afterMeta;
   }
   // Inline mid-text mentions (e.g. discussing [[reply_to_current]] in docs)
   // are left intact so they remain searchable in the memory index.
