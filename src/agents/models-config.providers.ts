@@ -761,21 +761,9 @@ async function resolvePluginImplicitProviders(
   });
   const byOrder = groupPluginDiscoveryProvidersByOrder(providers);
   const discovered: Record<string, ProviderConfig> = {};
-  const catalogConfig =
-    ctx.explicitProviders && Object.keys(ctx.explicitProviders).length > 0
-      ? {
-          ...ctx.config,
-          models: {
-            ...ctx.config?.models,
-            providers: {
-              ...ctx.config?.models?.providers,
-              ...ctx.explicitProviders,
-            },
-          },
-        }
-      : (ctx.config ?? {});
+  const catalogConfig = buildPluginCatalogConfig(ctx);
   for (const provider of byOrder[order]) {
-    const catalogRun = runProviderCatalog({
+    const result = await runProviderCatalogWithTimeout({
       provider,
       config: catalogConfig,
       agentDir: ctx.agentDir,
@@ -785,35 +773,10 @@ async function resolvePluginImplicitProviders(
         ctx.resolveProviderApiKey(providerId?.trim() || provider.id),
       resolveProviderAuth: (providerId, options) =>
         ctx.resolveProviderAuth(providerId?.trim() || provider.id, options),
+      timeoutMs: resolveLiveProviderCatalogTimeoutMs(ctx.env),
     });
-    const timeoutMs = resolveLiveProviderCatalogTimeoutMs(ctx.env);
-    let result: Awaited<ReturnType<typeof runProviderCatalog>>;
-    if (!timeoutMs) {
-      result = await catalogRun;
-    } else {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      try {
-        result = await Promise.race([
-          catalogRun,
-          new Promise<never>((_, reject) => {
-            timer = setTimeout(() => {
-              reject(new Error(`provider catalog timed out after ${timeoutMs}ms: ${provider.id}`));
-            }, timeoutMs);
-            timer.unref?.();
-          }),
-        ]);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        if (message.includes("provider catalog timed out after")) {
-          log.warn(`${message}; skipping provider discovery`);
-          continue;
-        }
-        throw error;
-      } finally {
-        if (timer) {
-          clearTimeout(timer);
-        }
-      }
+    if (!result) {
+      continue;
     }
     mergeImplicitProviderSet(
       discovered,
@@ -824,6 +787,60 @@ async function resolvePluginImplicitProviders(
     );
   }
   return Object.keys(discovered).length > 0 ? discovered : undefined;
+}
+
+function buildPluginCatalogConfig(ctx: ImplicitProviderContext): OpenClawConfig {
+  if (!ctx.explicitProviders || Object.keys(ctx.explicitProviders).length === 0) {
+    return ctx.config ?? {};
+  }
+  return {
+    ...ctx.config,
+    models: {
+      ...ctx.config?.models,
+      providers: {
+        ...ctx.config?.models?.providers,
+        ...ctx.explicitProviders,
+      },
+    },
+  };
+}
+
+async function runProviderCatalogWithTimeout(
+  params: Parameters<typeof runProviderCatalog>[0] & {
+    timeoutMs: number | null;
+  },
+): Promise<Awaited<ReturnType<typeof runProviderCatalog>> | undefined> {
+  const catalogRun = runProviderCatalog(params);
+  const timeoutMs = params.timeoutMs ?? undefined;
+  if (!timeoutMs) {
+    return await catalogRun;
+  }
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      catalogRun,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          reject(
+            new Error(`provider catalog timed out after ${timeoutMs}ms: ${params.provider.id}`),
+          );
+        }, timeoutMs);
+        timer.unref?.();
+      }),
+    ]);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes("provider catalog timed out after")) {
+      log.warn(`${message}; skipping provider discovery`);
+      return undefined;
+    }
+    throw error;
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
 }
 
 async function mergeCoreImplicitProviders(params: {
