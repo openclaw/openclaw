@@ -1126,11 +1126,13 @@ export function combineNonStreamingReplyParts(parts: string[]): string {
       combined = part;
       continue;
     }
-    const needsSeparator = !combined.endsWith("\n") && !part.startsWith("\n");
+    const endsWithLineBreak = /(?:\r\n|\r|\n)$/.test(combined);
+    const startsWithLineBreak = /^(?:\r\n|\r|\n)/.test(part);
+    const needsSeparator = !endsWithLineBreak && !startsWithLineBreak;
     combined += needsSeparator ? "\n\n" : "";
     combined += part;
   }
-  return combined.replace(/^\n+/, "").replace(/\n+$/, "");
+  return combined.replace(/^(?:\r\n|\r|\n)+/, "").replace(/(?:\r\n|\r|\n)+$/, "");
 }
 
 function broadcastSideResult(params: {

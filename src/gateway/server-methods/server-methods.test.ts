@@ -318,6 +318,12 @@ describe("combineNonStreamingReplyParts", () => {
       "Section A\nSection B",
     );
   });
+
+  it("trims CRLF boundaries without leaving bare carriage returns", () => {
+    expect(combineNonStreamingReplyParts(["\r\nSection A\r\n", "Section B\r\n"])).toBe(
+      "Section A\r\nSection B",
+    );
+  });
 });
 
 describe("gateway chat transcript writes (guardrail)", () => {
