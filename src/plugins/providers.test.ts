@@ -80,9 +80,9 @@ function expectResolvedAllowlistState(params?: {
   if (params?.expectedEntries) {
     expect(config?.plugins?.entries).toEqual(expect.objectContaining(params.expectedEntries));
   }
-  for (const disallowedPluginId of params?.unexpectedAllow ?? []) {
+  params?.unexpectedAllow?.forEach((disallowedPluginId) => {
     expect(allow).not.toContain(disallowedPluginId);
-  }
+  });
 }
 
 describe("resolvePluginProviders", () => {

@@ -21,11 +21,11 @@ const BUNDLED_PLUGIN_METADATA_TEST_TIMEOUT_MS = 300_000;
 installGeneratedPluginTempRootCleanup();
 
 function expectTestOnlyArtifactsExcluded(artifacts: readonly string[]) {
-  for (const artifact of artifacts) {
+  artifacts.forEach((artifact) => {
     expect(artifact).not.toMatch(/^test-/);
     expect(artifact).not.toContain(".test-");
     expect(artifact).not.toMatch(/\.test\.js$/);
-  }
+  });
 }
 
 function expectGeneratedPathResolution(tempRoot: string, expectedRelativePath: string) {

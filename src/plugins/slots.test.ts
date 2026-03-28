@@ -55,11 +55,11 @@ describe("applyExclusiveSlotSelection", () => {
       excludes?: readonly string[];
     },
   ) {
-    for (const warning of params.contains ?? []) {
-      expect(warnings).toContain(warning);
+    if (params.contains?.length) {
+      expect(warnings).toEqual(expect.arrayContaining([...params.contains]));
     }
     for (const warning of params.excludes ?? []) {
-      expect(warnings).not.toContain(warning);
+      expect(warnings).not.toEqual(expect.arrayContaining([warning]));
     }
   }
 
@@ -75,10 +75,12 @@ describe("applyExclusiveSlotSelection", () => {
       selectedId: "memory",
       disabledCompetingPlugin: false,
     });
-    expect(result.warnings).toContain(
-      'Exclusive slot "memory" switched from "memory-core" to "memory".',
-    );
-    expect(result.warnings).toContain('Disabled other "memory" slot plugins: memory-core.');
+    expectSelectionWarnings(result.warnings, {
+      contains: [
+        'Exclusive slot "memory" switched from "memory-core" to "memory".',
+        'Disabled other "memory" slot plugins: memory-core.',
+      ],
+    });
   });
 
   it("does nothing when the slot already matches", () => {
