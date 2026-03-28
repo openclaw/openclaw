@@ -483,6 +483,13 @@ describe("scripts/test-parallel lane planning", () => {
     );
   });
 
+  it("supports the explicit contracts surface", () => {
+    const output = runPlannerPlan(["--plan", "--surface", "contracts"]);
+
+    expect(output).toContain("contracts filters=all");
+    expect(output).toContain("surface=contracts");
+  });
+
   it("rejects wrapper --files values that look like options", () => {
     expect(() => runPlannerPlan(["--plan", "--files", "--config"])).toThrowError(
       /Invalid --files value/u,
