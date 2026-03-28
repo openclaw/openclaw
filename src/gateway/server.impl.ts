@@ -1142,6 +1142,12 @@ export async function startGatewayServer(
               // a permanent error and moveToFailed() cleans it up.
               return true;
             }
+            // If the channel task has explicitly stopped (disabled/misconfigured),
+            // allow retry so delivery fails with a permanent error and gets
+            // cleaned up instead of being stranded forever.
+            if (account.running === false && account.connected !== true) {
+              return true;
+            }
             // Prefer `connected` (persistent-connection channels like WhatsApp/Discord).
             // Fall back to `running` for webhook/API channels (Google Chat, IRC, etc.)
             // that never populate `connected`.

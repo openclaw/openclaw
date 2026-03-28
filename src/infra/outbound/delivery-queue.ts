@@ -5,6 +5,7 @@ export {
   ensureQueueDir,
   failDelivery,
   isDeliveryInFlight,
+  isEntryStillPending,
   loadPendingDeliveries,
   moveToFailed,
 } from "./delivery-queue-storage.js";

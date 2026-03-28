@@ -260,6 +260,17 @@ export async function loadPendingDeliveries(stateDir?: string): Promise<QueuedDe
   return entries;
 }
 
+/** Check whether a pending queue entry still exists on disk. */
+export async function isEntryStillPending(id: string, stateDir?: string): Promise<boolean> {
+  const { jsonPath } = resolveQueueEntryPaths(id, stateDir);
+  try {
+    await fs.promises.access(jsonPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Move a queue entry to the failed/ subdirectory. */
 export async function moveToFailed(id: string, stateDir?: string): Promise<void> {
   const queueDir = resolveQueueDir(stateDir);

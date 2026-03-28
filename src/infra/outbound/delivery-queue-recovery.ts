@@ -4,6 +4,7 @@ import {
   ackDelivery,
   failDelivery,
   isDeliveryInFlight,
+  isEntryStillPending,
   loadPendingDeliveries,
   moveToFailed,
   type QueuedDelivery,
@@ -223,6 +224,14 @@ export async function recoverPendingDeliveries(opts: {
       opts.log.info(
         `Delivery ${entry.id} not ready for retry yet — backoff ${retryEligibility.remainingBackoffMs}ms remaining`,
       );
+      continue;
+    }
+
+    // Re-check that the queue file still exists before delivering.  Between the
+    // snapshot read and here, the original sender may have finished and ack'd
+    // the entry (removing the file and the in-flight flag), so isDeliveryInFlight
+    // alone is not sufficient to prevent a duplicate send.
+    if (!(await isEntryStillPending(entry.id, opts.stateDir))) {
       continue;
     }
 

@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   _resetInFlightTracking,
+  ackDelivery,
   enqueueDelivery,
   loadPendingDeliveries,
   MAX_RETRIES,
@@ -559,5 +560,29 @@ describe("delivery-queue recovery", () => {
       timer.stop();
       vi.useRealTimers();
     });
+  });
+
+  it("skips entries whose queue file was ack'd between snapshot and delivery", async () => {
+    const id = await enqueueDelivery(
+      { channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] },
+      tmpDir(),
+    );
+    _resetInFlightTracking();
+
+    // Ack the entry before recovery runs — simulates the original sender
+    // finishing between the snapshot read and the per-entry deliver call.
+    await ackDelivery(id, tmpDir());
+
+    const deliver = vi.fn().mockResolvedValue([]);
+    const log = createRecoveryLog();
+    const result = await recoverPendingDeliveries({
+      deliver: asDeliverFn(deliver),
+      log,
+      cfg: baseCfg,
+      stateDir: tmpDir(),
+    });
+
+    expect(deliver).not.toHaveBeenCalled();
+    expect(result.recovered).toBe(0);
   });
 });
