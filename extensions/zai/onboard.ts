@@ -12,6 +12,7 @@ export const ZAI_DEFAULT_MODEL_REF = `zai/${ZAI_DEFAULT_MODEL_ID}`;
 
 const ZAI_DEFAULT_MODELS = [
   buildZaiModelDefinition({ id: "glm-5" }),
+  buildZaiModelDefinition({ id: "glm-5.1" }),
   buildZaiModelDefinition({ id: "glm-5-turbo" }),
   buildZaiModelDefinition({ id: "glm-4.7" }),
   buildZaiModelDefinition({ id: "glm-4.7-flash" }),

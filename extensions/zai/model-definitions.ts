@@ -32,6 +32,14 @@ const ZAI_MODEL_CATALOG = {
     maxTokens: 131100,
     cost: ZAI_DEFAULT_COST,
   },
+  "glm-5.1": {
+    name: "GLM-5.1",
+    reasoning: true,
+    input: ["text"],
+    contextWindow: 204800,
+    maxTokens: 131072,
+    cost: ZAI_DEFAULT_COST,
+  },
   "glm-5-turbo": {
     name: "GLM-5 Turbo",
     reasoning: true,

@@ -831,6 +831,35 @@ export function describeZAIProviderRuntimeContract() {
       });
     });
 
+    it("owns glm-5 point-version forward-compat resolution", () => {
+      const provider = requireProviderContractProvider("zai");
+      const model = provider.resolveDynamicModel?.({
+        provider: "zai",
+        modelId: "glm-5.1",
+        modelRegistry: {
+          find: (_provider: string, id: string) =>
+            id === "glm-4.7"
+              ? createModel({
+                  id,
+                  api: "openai-completions",
+                  provider: "zai",
+                  baseUrl: "https://api.z.ai/api/paas/v4",
+                  reasoning: false,
+                  contextWindow: 202_752,
+                  maxTokens: 16_384,
+                })
+              : null,
+        } as never,
+      });
+
+      expect(model).toMatchObject({
+        id: "glm-5.1",
+        provider: "zai",
+        api: "openai-completions",
+        reasoning: true,
+      });
+    });
+
     it("owns usage auth resolution", async () => {
       const provider = requireProviderContractProvider("zai");
       await expect(

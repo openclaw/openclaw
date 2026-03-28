@@ -36,7 +36,11 @@ function resolveGlm5ForwardCompatModel(
 ): ProviderRuntimeModel | undefined {
   const trimmedModelId = ctx.modelId.trim();
   const lower = trimmedModelId.toLowerCase();
-  if (lower !== GLM5_MODEL_ID && !lower.startsWith(`${GLM5_MODEL_ID}-`)) {
+  if (
+    lower !== GLM5_MODEL_ID &&
+    !lower.startsWith(`${GLM5_MODEL_ID}-`) &&
+    !lower.startsWith(`${GLM5_MODEL_ID}.`)
+  ) {
     return undefined;
   }
 

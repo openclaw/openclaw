@@ -13,6 +13,17 @@ describe("zai model definitions", () => {
     });
   });
 
+  it("publishes GLM-5.1 metadata for direct selection", () => {
+    expect(buildZaiModelDefinition({ id: "glm-5.1" })).toMatchObject({
+      id: "glm-5.1",
+      reasoning: true,
+      input: ["text"],
+      contextWindow: 204800,
+      maxTokens: 131072,
+      cost: ZAI_DEFAULT_COST,
+    });
+  });
+
   it("publishes newer GLM 4.5/4.6 family metadata from Pi", () => {
     expect(buildZaiModelDefinition({ id: "glm-4.6v" })).toMatchObject({
       id: "glm-4.6v",

@@ -12,6 +12,7 @@ describe("zai onboard", () => {
     });
     const ids = cfg.models?.providers?.zai?.models?.map((m) => m.id);
     expect(ids).toContain("glm-5");
+    expect(ids).toContain("glm-5.1");
     expect(ids).toContain("glm-5-turbo");
     expect(ids).toContain("glm-4.7");
     expect(ids).toContain("glm-4.7-flash");
@@ -33,5 +34,12 @@ describe("zai onboard", () => {
     expect(resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model)).toBe(
       "anthropic/claude-opus-4-5",
     );
+  });
+
+  it("supports GLM-5.1 as an onboarding-selected model", () => {
+    const cfg = applyZaiConfig({}, { endpoint: "coding-global", modelId: "glm-5.1" });
+    expect(resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model)).toBe("zai/glm-5.1");
+    expect(cfg.models?.providers?.zai?.baseUrl).toBe("https://api.z.ai/api/coding/paas/v4");
+    expect(cfg.models?.providers?.zai?.models?.map((m) => m.id)).toContain("glm-5.1");
   });
 });
