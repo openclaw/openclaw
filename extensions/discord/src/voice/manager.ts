@@ -11,7 +11,6 @@ import { resolveTtsConfig, type ResolvedTtsConfig } from "openclaw/plugin-sdk/ag
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
 import type { DiscordAccountConfig, TtsConfig } from "openclaw/plugin-sdk/config-runtime";
-import { formatErrorMessage } from "openclaw/plugin-sdk/infra-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/infra-runtime";
 import { transcribeAudioFile } from "openclaw/plugin-sdk/media-understanding-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
@@ -20,6 +19,7 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { parseTtsDirectives } from "openclaw/plugin-sdk/speech";
 import { textToSpeech } from "openclaw/plugin-sdk/speech-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { formatMention } from "../mentions.js";
 import { resolveDiscordOwnerAccess } from "../monitor/allow-list.js";
 import { formatDiscordUserTag } from "../monitor/format.js";
