@@ -154,6 +154,46 @@ const gchar* systemd_get_canonical_unit_name(void) {
     return cached_unit_name;
 }
 
+void systemd_get_runtime_context(gchar **out_profile, gchar **out_state_dir, gchar **out_config_path) {
+    if (out_profile) *out_profile = NULL;
+    if (out_state_dir) *out_state_dir = NULL;
+    if (out_config_path) *out_config_path = NULL;
+
+    const gchar *unit = systemd_get_canonical_unit_name();
+    if (!unit) return;
+
+    /* Profile label derived from unit name (informational only, not used for path derivation) */
+    if (out_profile) {
+        if (g_str_has_prefix(unit, "openclaw-gateway-") && g_str_has_suffix(unit, ".service")) {
+            *out_profile = g_strndup(unit + 17, strlen(unit) - 17 - 8);
+        } else if (g_strcmp0(unit, "openclaw-gateway.service") == 0) {
+            *out_profile = g_strdup("default");
+        }
+    }
+
+    /*
+     * Read the authoritative runtime context from the unit file's Environment= directives.
+     * This is the same environment the gateway service receives at runtime, set by the
+     * installer (src/daemon/systemd-unit.ts:renderEnvLines).
+     */
+    const gchar *home_override = g_getenv("OPENCLAW_HOME");
+    const gchar *home_dir = (home_override && home_override[0] != '\0') ? home_override : g_get_home_dir();
+    g_autofree gchar *unit_file_path = systemd_helpers_find_unit_file(unit, home_dir);
+    if (!unit_file_path) return;
+
+    gchar *contents = NULL;
+    if (!g_file_get_contents(unit_file_path, &contents, NULL, NULL)) return;
+
+    if (out_state_dir) {
+        *out_state_dir = systemd_helpers_parse_unit_env(contents, "OPENCLAW_STATE_DIR");
+    }
+    if (out_config_path) {
+        *out_config_path = systemd_helpers_parse_unit_env(contents, "OPENCLAW_CONFIG_PATH");
+    }
+
+    g_free(contents);
+}
+
 static void clear_unit_subscription(const gchar *reason) {
     OC_LOG_DEBUG(OPENCLAW_LOG_CAT_SYSTEMD, "clear-start reason=%s proxy=%p signal_id=%u unit=%s",
               reason, (void *)unit_proxy, properties_changed_signal_id,

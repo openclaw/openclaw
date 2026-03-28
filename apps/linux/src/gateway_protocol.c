@@ -224,23 +224,27 @@ gboolean gateway_protocol_parse_hello_ok(const GatewayFrame *frame,
 
     JsonObject *obj = json_node_get_object(frame->payload);
 
+    /* A valid connect response must have 'auth' and 'policy' objects */
+    if (!json_object_has_member(obj, "auth") || !json_object_has_member(obj, "policy")) {
+        return FALSE;
+    }
+
+    JsonObject *auth = json_object_get_object_member(obj, "auth");
+    JsonObject *policy = json_object_get_object_member(obj, "policy");
+
+    if (!auth || !policy) return FALSE;
+
     if (out_auth_source) {
         *out_auth_source = NULL;
-        if (json_object_has_member(obj, "auth")) {
-            JsonObject *auth = json_object_get_object_member(obj, "auth");
-            if (auth && json_object_has_member(auth, "source")) {
-                *out_auth_source = g_strdup(json_object_get_string_member(auth, "source"));
-            }
+        if (json_object_has_member(auth, "source")) {
+            *out_auth_source = g_strdup(json_object_get_string_member(auth, "source"));
         }
     }
 
     if (out_tick_interval_ms) {
         *out_tick_interval_ms = 30000.0;
-        if (json_object_has_member(obj, "policy")) {
-            JsonObject *policy = json_object_get_object_member(obj, "policy");
-            if (policy && json_object_has_member(policy, "tickIntervalMs")) {
-                *out_tick_interval_ms = json_object_get_double_member(policy, "tickIntervalMs");
-            }
+        if (json_object_has_member(policy, "tickIntervalMs")) {
+            *out_tick_interval_ms = json_object_get_double_member(policy, "tickIntervalMs");
         }
     }
 
