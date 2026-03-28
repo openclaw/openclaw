@@ -310,6 +310,11 @@ describe("session.message websocket events", () => {
           sessionFile: transcriptPath,
           updatedAt: Date.now(),
           spawnedBy: "agent:main:main",
+          spawnedWorkspaceDir: "/tmp/subagent-workspace",
+          forkedFromParent: true,
+          spawnDepth: 2,
+          subagentRole: "orchestrator",
+          subagentControlScope: "children",
           parentSessionKey: "agent:main:main",
         },
       },
@@ -369,12 +374,22 @@ describe("session.message websocket events", () => {
         expect(messageEvent.payload).toMatchObject({
           sessionKey: "agent:main:child",
           spawnedBy: "agent:main:main",
+          spawnedWorkspaceDir: "/tmp/subagent-workspace",
+          forkedFromParent: true,
+          spawnDepth: 2,
+          subagentRole: "orchestrator",
+          subagentControlScope: "children",
           parentSessionKey: "agent:main:main",
         });
         expect(changedEvent.payload).toMatchObject({
           sessionKey: "agent:main:child",
           phase: "message",
           spawnedBy: "agent:main:main",
+          spawnedWorkspaceDir: "/tmp/subagent-workspace",
+          forkedFromParent: true,
+          spawnDepth: 2,
+          subagentRole: "orchestrator",
+          subagentControlScope: "children",
           parentSessionKey: "agent:main:main",
         });
       } finally {
