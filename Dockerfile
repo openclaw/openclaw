@@ -90,7 +90,8 @@ RUN npm install -g \
     vercel \
     @anthropic-ai/claude-code \
     @shopify/cli \
-    mcporter
+    mcporter \
+    @googleworkspace/cli
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY ui/package.json ./ui/package.json

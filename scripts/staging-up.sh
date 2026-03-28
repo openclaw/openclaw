@@ -101,6 +101,51 @@ json.dump(prod, sys.stdout, indent=2)
 
   rm -rf "$SYNC_TMP"
 
+  # ── Sync persistent data files from prod ──────────────────────────────────
+  # These live on prod's volume and are not in git: OAuth tokens, API credentials,
+  # Google Workspace config, and gh CLI auth. Without them, agent tool checks fail.
+  log "Syncing data files from production..."
+  SYNC_DATA_TMP="$(mktemp -d)"
+
+  # Token/credential JSON files (exclude openclaw.json and qbo-* which are large/dynamic)
+  for f in m365-tokens.json ownerrez-oauth-credentials.json quickbooks-tokens.json \
+            quickbooks-tokens-2.json quickbooks-tokens-3.json stripe-credentials.json; do
+    if fly sftp get --app "$PROD_APP" "/data/$f" "$SYNC_DATA_TMP/$f" 2>/dev/null; then
+      fly ssh console --app "$STAGING_APP" -C "rm -f /data/$f" 2>/dev/null || true
+      fly sftp put --app "$STAGING_APP" "$SYNC_DATA_TMP/$f" "/data/$f" 2>/dev/null \
+        && log "  Synced /data/$f" \
+        || warn "  Could not upload /data/$f"
+    else
+      warn "  /data/$f not found on prod — skipping"
+    fi
+  done
+
+  # Google Workspace CLI config (OAuth client credentials)
+  fly ssh console --app "$STAGING_APP" -C "mkdir -p /data/gws-config" 2>/dev/null || true
+  for f in credentials.json credentials-chameleon.json credentials-radicaldesign.json client_secret.json; do
+    if fly sftp get --app "$PROD_APP" "/data/gws-config/$f" "$SYNC_DATA_TMP/gws-$f" 2>/dev/null; then
+      fly ssh console --app "$STAGING_APP" -C "rm -f /data/gws-config/$f" 2>/dev/null || true
+      fly sftp put --app "$STAGING_APP" "$SYNC_DATA_TMP/gws-$f" "/data/gws-config/$f" 2>/dev/null \
+        && log "  Synced /data/gws-config/$f" \
+        || warn "  Could not upload /data/gws-config/$f"
+    else
+      warn "  /data/gws-config/$f not found on prod — skipping"
+    fi
+  done
+
+  # gh CLI auth (so 'gh' commands work without re-authenticating)
+  fly ssh console --app "$STAGING_APP" -C "mkdir -p /data/config/gh" 2>/dev/null || true
+  if fly sftp get --app "$PROD_APP" "/data/config/gh/hosts.yml" "$SYNC_DATA_TMP/gh-hosts.yml" 2>/dev/null; then
+    fly ssh console --app "$STAGING_APP" -C "rm -f /data/config/gh/hosts.yml" 2>/dev/null || true
+    fly sftp put --app "$STAGING_APP" "$SYNC_DATA_TMP/gh-hosts.yml" "/data/config/gh/hosts.yml" 2>/dev/null \
+      && log "  Synced /data/config/gh/hosts.yml" \
+      || warn "  Could not upload gh hosts.yml"
+  else
+    warn "  /data/config/gh/hosts.yml not found on prod — skipping"
+  fi
+
+  rm -rf "$SYNC_DATA_TMP"
+
   # Restart so the gateway picks up the patched config and agents reload from git workspaces.
   log "Restarting gateway..."
   fly machine restart --app "$STAGING_APP" 2>/dev/null || true
