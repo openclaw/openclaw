@@ -49,6 +49,19 @@ describe("buildSingleProviderApiKeyCatalog", () => {
     expect(result).toEqual({ provider: "Demo Provider", id: "demo-model" });
   });
 
+  it("matches provider templates across canonical provider aliases", () => {
+    const result = findCatalogTemplate({
+      entries: [
+        { provider: "z.ai", id: "glm-4.7" },
+        { provider: "other", id: "fallback" },
+      ],
+      providerId: "z-ai",
+      templateIds: ["GLM-4.7"],
+    });
+
+    expect(result).toEqual({ provider: "z.ai", id: "glm-4.7" });
+  });
+
   it("returns null when api key is missing", async () => {
     const result = await buildSingleProviderApiKeyCatalog({
       ctx: createCatalogContext({}),
