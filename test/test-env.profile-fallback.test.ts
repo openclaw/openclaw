@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const ORIGINAL_ENV = { ...process.env };
 const tempDirs = new Set<string>();
+const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 
 function restoreProcessEnv(): void {
   for (const key of Object.keys(process.env)) {
@@ -26,6 +27,17 @@ function writeFile(targetPath: string, content: string): void {
   fs.writeFileSync(targetPath, content, "utf8");
 }
 
+function setPlatform(value: string) {
+  if (!originalPlatformDescriptor) {
+    throw new Error("missing process.platform descriptor");
+  }
+  Object.defineProperty(process, "platform", {
+    configurable: true,
+    enumerable: originalPlatformDescriptor.enumerable ?? false,
+    value,
+  });
+}
+
 function createTempHome(): string {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-env-fallback-"));
   tempDirs.add(tempDir);
@@ -34,8 +46,12 @@ function createTempHome(): string {
 
 afterEach(() => {
   vi.resetModules();
+  vi.restoreAllMocks();
   vi.doUnmock("node:child_process");
   restoreProcessEnv();
+  if (originalPlatformDescriptor) {
+    Object.defineProperty(process, "platform", originalPlatformDescriptor);
+  }
   for (const tempDir of tempDirs) {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -76,7 +92,15 @@ describe("installTestEnv shell fallback", () => {
     process.env.OPENCLAW_LIVE_USE_REAL_HOME = "1";
     process.env.OPENCLAW_LIVE_TEST_QUIET = "1";
     delete process.env.TEST_PROFILE_ONLY;
+    setPlatform("linux");
 
+    const existsSync = fs.existsSync.bind(fs);
+    vi.spyOn(fs, "existsSync").mockImplementation((targetPath) => {
+      if (targetPath === "/bin/bash") {
+        return true;
+      }
+      return existsSync(targetPath);
+    });
     vi.doMock("node:child_process", () => ({
       execFileSync: () => "",
     }));
