@@ -40,6 +40,7 @@ export function buildSystemdUnit({
   programArguments,
   workingDirectory,
   environment,
+  environmentFilePath,
 }: GatewayServiceRenderArgs): string {
   const execStart = programArguments.map(systemdEscapeArg).join(" ");
   const descriptionValue = description?.trim() || "OpenClaw Gateway";
@@ -48,7 +49,9 @@ export function buildSystemdUnit({
   const workingDirLine = workingDirectory
     ? `WorkingDirectory=${systemdEscapeArg(workingDirectory)}`
     : null;
-  const envLines = renderEnvLines(environment);
+  const envLines = environmentFilePath
+    ? [`EnvironmentFile=${systemdEscapeArg(environmentFilePath)}`]
+    : renderEnvLines(environment);
   return [
     "[Unit]",
     descriptionLine,

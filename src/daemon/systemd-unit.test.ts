@@ -35,4 +35,19 @@ describe("buildSystemdUnit", () => {
       }),
     ).toThrow(/CR or LF/);
   });
+
+  it("renders EnvironmentFile when an env file path is provided", () => {
+    const unit = buildSystemdUnit({
+      description: "OpenClaw Gateway",
+      programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+      environment: {
+        OPENCLAW_GATEWAY_TOKEN: "secret",
+      },
+      environmentFilePath: "/home/test/.config/systemd/user/openclaw-gateway.env",
+    });
+    expect(unit).toContain(
+      "EnvironmentFile=/home/test/.config/systemd/user/openclaw-gateway.env",
+    );
+    expect(unit).not.toContain("Environment=OPENCLAW_GATEWAY_TOKEN=secret");
+  });
 });

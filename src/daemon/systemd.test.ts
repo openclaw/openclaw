@@ -11,6 +11,7 @@ vi.mock("node:child_process", () => ({
 import { splitArgsPreservingQuotes } from "./arg-split.js";
 import { parseSystemdExecStart } from "./systemd-unit.js";
 import {
+  installSystemdService,
   isNonFatalSystemdInstallProbeError,
   isSystemdUserServiceAvailable,
   parseSystemdShow,
@@ -18,6 +19,7 @@ import {
   restartSystemdService,
   resolveSystemdUserUnitPath,
   stopSystemdService,
+  uninstallSystemdService,
 } from "./systemd.js";
 
 type ExecFileError = Error & {
@@ -745,5 +747,93 @@ describe("systemd service control", () => {
         cb(null, "", "");
       });
     await assertRestartSuccess({ USER: "debian" });
+  });
+});
+
+describe("systemd service install rendering", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    execFileMock.mockReset();
+  });
+
+  it("writes an EnvironmentFile-backed unit and env file", async () => {
+    execFileMock
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "status");
+        cb(null, "", "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "daemon-reload");
+        cb(null, "", "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "enable", GATEWAY_SERVICE);
+        cb(null, "", "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "restart", GATEWAY_SERVICE);
+        cb(null, "", "");
+      });
+
+    const writeFileSpy = vi.spyOn(fs, "writeFile").mockResolvedValue(undefined);
+    vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
+    vi.spyOn(fs, "access").mockRejectedValue(Object.assign(new Error("missing"), { code: "ENOENT" }));
+    vi.spyOn(fs, "copyFile").mockResolvedValue(undefined);
+    vi.spyOn(fs, "chmod").mockResolvedValue(undefined);
+    vi.spyOn(fs, "unlink").mockRejectedValue(Object.assign(new Error("missing"), { code: "ENOENT" }));
+
+    await installSystemdService({
+      env: { HOME: TEST_SERVICE_HOME },
+      stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+      programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+      environment: {
+        OPENCLAW_GATEWAY_TOKEN: "env-file-token",
+      },
+      description: "OpenClaw Gateway",
+    });
+
+    expect(writeFileSpy).toHaveBeenCalledTimes(2);
+    expect(writeFileSpy.mock.calls[0]?.[0]).toBe(
+      `${TEST_SERVICE_HOME}/.config/systemd/user/openclaw-gateway.service`,
+    );
+    expect(String(writeFileSpy.mock.calls[0]?.[1])).toContain(
+      `EnvironmentFile=${TEST_SERVICE_HOME}/.config/systemd/user/openclaw-gateway.env`,
+    );
+    expect(writeFileSpy.mock.calls[1]?.[0]).toBe(
+      `${TEST_SERVICE_HOME}/.config/systemd/user/openclaw-gateway.env`,
+    );
+    expect(String(writeFileSpy.mock.calls[1]?.[1])).toContain(
+      'OPENCLAW_GATEWAY_TOKEN="env-file-token"',
+    );
+  });
+
+  it("removes the EnvironmentFile on uninstall", async () => {
+    execFileMock
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "status");
+        cb(null, "", "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "disable", "--now", GATEWAY_SERVICE);
+        cb(null, "", "");
+      });
+
+    const unlinkSpy = vi.spyOn(fs, "unlink").mockResolvedValue(undefined);
+    const write = vi.fn();
+
+    await uninstallSystemdService({
+      env: { HOME: TEST_SERVICE_HOME },
+      stdout: { write } as unknown as NodeJS.WritableStream,
+    });
+
+    expect(unlinkSpy).toHaveBeenNthCalledWith(
+      1,
+      `${TEST_SERVICE_HOME}/.config/systemd/user/openclaw-gateway.service`,
+    );
+    expect(unlinkSpy).toHaveBeenNthCalledWith(
+      2,
+      `${TEST_SERVICE_HOME}/.config/systemd/user/openclaw-gateway.env`,
+    );
+    expect(String(write.mock.calls[1]?.[0])).toContain("Removed systemd environment");
   });
 });

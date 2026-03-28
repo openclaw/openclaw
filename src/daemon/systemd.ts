@@ -55,6 +55,13 @@ function resolveSystemdUnitPath(env: GatewayServiceEnv): string {
   return resolveSystemdUnitPathForName(env, resolveSystemdServiceName(env));
 }
 
+function resolveSystemdEnvironmentFilePath(env: GatewayServiceEnv): string {
+  const unitPath = resolveSystemdUnitPath(env);
+  const unitDir = path.posix.dirname(unitPath);
+  const serviceName = resolveSystemdServiceName(env);
+  return path.posix.join(unitDir, `${serviceName}.env`);
+}
+
 export function resolveSystemdUserUnitPath(env: GatewayServiceEnv): string {
   return resolveSystemdUnitPath(env);
 }
@@ -416,6 +423,25 @@ async function assertSystemdAvailable(env: GatewayServiceEnv = process.env as Ga
   throw new Error(`systemctl --user unavailable: ${detail || "unknown error"}`.trim());
 }
 
+function renderSystemdEnvironmentFileContent(
+  environment: GatewayServiceEnv | undefined,
+): string | null {
+  if (!environment) {
+    return null;
+  }
+  const entries = Object.entries(environment).filter(
+    ([, value]) => typeof value === "string" && value.trim(),
+  );
+  if (entries.length === 0) {
+    return null;
+  }
+  const lines = entries.map(([key, value]) => {
+    const rawValue = value ?? "";
+    return `${key}=${JSON.stringify(rawValue.trim())}`;
+  });
+  return `${lines.join("\n")}\n`;
+}
+
 async function writeSystemdUnit({
   env,
   programArguments,
@@ -426,6 +452,7 @@ async function writeSystemdUnit({
   await assertSystemdAvailable(env);
 
   const unitPath = resolveSystemdUnitPath(env);
+  const environmentFilePath = resolveSystemdEnvironmentFilePath(env);
   await fs.mkdir(path.dirname(unitPath), { recursive: true });
 
   // Preserve user customizations: back up existing unit file before overwriting.
@@ -445,8 +472,21 @@ async function writeSystemdUnit({
     programArguments,
     workingDirectory,
     environment,
+    environmentFilePath:
+      renderSystemdEnvironmentFileContent(environment) !== null ? environmentFilePath : undefined,
   });
   await fs.writeFile(unitPath, unit, "utf8");
+  const environmentFileContent = renderSystemdEnvironmentFileContent(environment);
+  if (environmentFileContent === null) {
+    try {
+      await fs.unlink(environmentFilePath);
+    } catch {
+      // No environment file to remove.
+    }
+  } else {
+    await fs.writeFile(environmentFilePath, environmentFileContent, { encoding: "utf8", mode: 0o600 });
+    await fs.chmod(environmentFilePath, 0o600);
+  }
   return { unitPath, backedUp };
 }
 
@@ -531,11 +571,18 @@ export async function uninstallSystemdService({
   await execSystemctlUser(env, ["disable", "--now", unitName]);
 
   const unitPath = resolveSystemdUnitPath(env);
+  const environmentFilePath = resolveSystemdEnvironmentFilePath(env);
   try {
     await fs.unlink(unitPath);
     stdout.write(`${formatLine("Removed systemd service", unitPath)}\n`);
   } catch {
     stdout.write(`Systemd service not found at ${unitPath}\n`);
+  }
+  try {
+    await fs.unlink(environmentFilePath);
+    stdout.write(`${formatLine("Removed systemd environment", environmentFilePath)}\n`);
+  } catch {
+    // Environment file is optional.
   }
 }
 
