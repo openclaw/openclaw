@@ -19,6 +19,7 @@ import {
   resolveStorePath,
   type SessionEntry,
 } from "../../config/sessions.js";
+import { validateSessionStore } from "../../config/sessions/store-validation.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../../sessions/session-id-resolution.js";
 import { listAgentIds } from "../agent-scope.js";
@@ -133,6 +134,16 @@ export function resolveSession(opts: {
     sessionKey: opts.sessionKey,
     agentId: opts.agentId,
   });
+
+  // Validate and sanitize session entries against current configuration.
+  // This prevents stale provider/model references from removed providers
+  // (e.g., openrouter) from causing runtime errors.
+  const modifiedCount = validateSessionStore(sessionStore, opts.cfg);
+  if (modifiedCount > 0) {
+    // Note: We don't persist the changes here to avoid write amplification.
+    // The session will be naturally updated on next run with correct values.
+  }
+
   const now = Date.now();
 
   const sessionEntry = sessionKey ? sessionStore[sessionKey] : undefined;
