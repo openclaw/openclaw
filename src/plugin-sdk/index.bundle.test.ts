@@ -8,7 +8,13 @@ import { buildPluginSdkEntrySources, pluginSdkEntrypoints } from "./entrypoints.
 const require = createRequire(import.meta.url);
 const tsdownModuleUrl = pathToFileURL(require.resolve("tsdown")).href;
 const bundledRepresentativeEntrypoints = ["matrix-runtime-heavy"] as const;
-const bundledCoverageEntrySources = buildPluginSdkEntrySources(bundledRepresentativeEntrypoints);
+const matrixRuntimeCoverageEntries = {
+  "matrix-runtime-sdk": "extensions/matrix/src/matrix/sdk.ts",
+} as const;
+const bundledCoverageEntrySources = {
+  ...buildPluginSdkEntrySources(bundledRepresentativeEntrypoints),
+  ...matrixRuntimeCoverageEntries,
+};
 const bareMatrixSdkImportPattern = /from\s+["']matrix-js-sdk["']/;
 
 async function listBuiltJsFiles(rootDir: string): Promise<string[]> {
@@ -49,7 +55,9 @@ describe("plugin-sdk bundled exports", () => {
       },
       // Full plugin-sdk coverage belongs to `pnpm build`, package contract
       // guardrails, and `subpaths.test.ts`. This file only keeps the expensive
-      // bundler path honest across representative entrypoint families.
+      // bundler path honest across representative entrypoint families plus the
+      // Matrix SDK runtime import surface that historically crashed plugin
+      // loading when bare and deep SDK entrypoints mixed.
       entry: bundledCoverageEntrySources,
       env: { NODE_ENV: "production" },
       fixedExtension: false,
@@ -61,6 +69,11 @@ describe("plugin-sdk bundled exports", () => {
     expect(pluginSdkEntrypoints.length).toBeGreaterThan(bundledRepresentativeEntrypoints.length);
     await Promise.all(
       bundledRepresentativeEntrypoints.map(async (entry) => {
+        await expect(fs.stat(path.join(outDir, `${entry}.js`))).resolves.toBeTruthy();
+      }),
+    );
+    await Promise.all(
+      Object.keys(matrixRuntimeCoverageEntries).map(async (entry) => {
         await expect(fs.stat(path.join(outDir, `${entry}.js`))).resolves.toBeTruthy();
       }),
     );
