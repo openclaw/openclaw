@@ -44,7 +44,8 @@ const MIME_TO_EXT: Record<string, string> = {
   "image/png": ".png",
   "image/webp": ".webp",
   "image/gif": ".gif",
-  "image/avif": ".avif",
+  // bmp/tiff excluded from isSupportedForOffload to avoid extension-loss
+  // bug in store.ts; entries kept here for future extension support
   "image/bmp": ".bmp",
   "image/tiff": ".tiff",
 };
