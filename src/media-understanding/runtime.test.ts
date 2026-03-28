@@ -1,15 +1,32 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { describeImageFile, runMediaUnderstandingFile } from "./runtime.js";
+
+const { resolveRuntimePluginRegistryMock } = vi.hoisted(() => ({
+  resolveRuntimePluginRegistryMock: vi.fn<
+    (params?: unknown) => ReturnType<typeof createEmptyPluginRegistry> | undefined
+  >(() => undefined),
+}));
+
+vi.mock("../plugins/loader.js", () => ({
+  resolveRuntimePluginRegistry: resolveRuntimePluginRegistryMock,
+}));
+
+let describeImageFile: typeof import("./runtime.js").describeImageFile;
+let runMediaUnderstandingFile: typeof import("./runtime.js").runMediaUnderstandingFile;
 
 describe("media-understanding runtime helpers", () => {
   afterEach(() => {
-    setActivePluginRegistry(createEmptyPluginRegistry());
+    resolveRuntimePluginRegistryMock.mockReset();
+    resolveRuntimePluginRegistryMock.mockReturnValue(undefined);
+  });
+
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ describeImageFile, runMediaUnderstandingFile } = await import("./runtime.js"));
   });
 
   it("describes images through the active media-understanding registry", async () => {
@@ -28,7 +45,7 @@ describe("media-understanding runtime helpers", () => {
         describeImage: async () => ({ text: "image ok", model: "vision-v1" }),
       },
     });
-    setActivePluginRegistry(pluginRegistry);
+    resolveRuntimePluginRegistryMock.mockReturnValue(pluginRegistry);
 
     const cfg = {
       tools: {
