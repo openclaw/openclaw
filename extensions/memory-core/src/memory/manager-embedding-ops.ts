@@ -586,16 +586,91 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     );
   }
 
+  /**
+   * Write chunks (and optional embeddings) for a file into the index.
+   * Handles both the chunks table, the vector table, and the FTS table.
+   * Pass an empty embeddings array to skip vector writes (FTS-only mode).
+   */
+  private writeChunks(
+    entry: MemoryFileEntry | SessionFileEntry,
+    source: MemorySource,
+    model: string,
+    chunks: MemoryChunk[],
+    embeddings: number[][],
+    vectorReady: boolean,
+  ): void {
+    const now = Date.now();
+    this.clearIndexedFileData(entry.path, source);
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      const embedding = embeddings[i] ?? [];
+      const id = hashText(
+        `${source}:${entry.path}:${chunk.startLine}:${chunk.endLine}:${chunk.hash}:${model}`,
+      );
+      this.db
+        .prepare(
+          `INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET
+             hash=excluded.hash,
+             model=excluded.model,
+             text=excluded.text,
+             embedding=excluded.embedding,
+             updated_at=excluded.updated_at`,
+        )
+        .run(
+          id,
+          entry.path,
+          source,
+          chunk.startLine,
+          chunk.endLine,
+          chunk.hash,
+          model,
+          chunk.text,
+          JSON.stringify(embedding),
+          now,
+        );
+      if (vectorReady && embedding.length > 0) {
+        try {
+          this.db.prepare(`DELETE FROM ${VECTOR_TABLE} WHERE id = ?`).run(id);
+        } catch {}
+        this.db
+          .prepare(`INSERT INTO ${VECTOR_TABLE} (id, embedding) VALUES (?, ?)`)
+          .run(id, vectorToBlob(embedding));
+      }
+      if (this.fts.enabled && this.fts.available) {
+        this.db
+          .prepare(
+            `INSERT INTO ${FTS_TABLE} (text, id, path, source, model, start_line, end_line)\n` +
+              ` VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(chunk.text, id, entry.path, source, model, chunk.startLine, chunk.endLine);
+      }
+    }
+    this.upsertFileRecord(entry, source);
+  }
+
   protected async indexFile(
     entry: MemoryFileEntry | SessionFileEntry,
     options: { source: MemorySource; content?: string },
   ) {
-    // FTS-only mode: skip indexing if no provider
+    // FTS-only mode: no embedding provider, but we can still build a FTS index
     if (!this.provider) {
-      log.debug("Skipping embedding indexing in FTS-only mode", {
-        path: entry.path,
-        source: options.source,
-      });
+      if (!this.fts.enabled || !this.fts.available) {
+        return;
+      }
+      // Multimodal files require an embedding provider; skip in FTS-only mode.
+      if ("kind" in entry && entry.kind === "multimodal") {
+        return;
+      }
+      const content = options.content ?? (await fs.readFile(entry.absPath, "utf-8"));
+      const chunks = chunkMarkdown(content, this.settings.chunking).filter(
+        (chunk) => chunk.text.trim().length > 0,
+      );
+      if (options.source === "sessions" && "lineMap" in entry) {
+        remapChunkLines(chunks, entry.lineMap);
+      }
+      this.writeChunks(entry, options.source, "fts-only", chunks, [], false);
       return;
     }
 
@@ -650,62 +725,6 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     }
     const sample = embeddings.find((embedding) => embedding.length > 0);
     const vectorReady = sample ? await this.ensureVectorReady(sample.length) : false;
-    const now = Date.now();
-    this.clearIndexedFileData(entry.path, options.source);
-    for (let i = 0; i < chunks.length; i++) {
-      const chunk = chunks[i];
-      const embedding = embeddings[i] ?? [];
-      const id = hashText(
-        `${options.source}:${entry.path}:${chunk.startLine}:${chunk.endLine}:${chunk.hash}:${this.provider.model}`,
-      );
-      this.db
-        .prepare(
-          `INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(id) DO UPDATE SET
-             hash=excluded.hash,
-             model=excluded.model,
-             text=excluded.text,
-             embedding=excluded.embedding,
-             updated_at=excluded.updated_at`,
-        )
-        .run(
-          id,
-          entry.path,
-          options.source,
-          chunk.startLine,
-          chunk.endLine,
-          chunk.hash,
-          this.provider.model,
-          chunk.text,
-          JSON.stringify(embedding),
-          now,
-        );
-      if (vectorReady && embedding.length > 0) {
-        try {
-          this.db.prepare(`DELETE FROM ${VECTOR_TABLE} WHERE id = ?`).run(id);
-        } catch {}
-        this.db
-          .prepare(`INSERT INTO ${VECTOR_TABLE} (id, embedding) VALUES (?, ?)`)
-          .run(id, vectorToBlob(embedding));
-      }
-      if (this.fts.enabled && this.fts.available) {
-        this.db
-          .prepare(
-            `INSERT INTO ${FTS_TABLE} (text, id, path, source, model, start_line, end_line)\n` +
-              ` VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          )
-          .run(
-            chunk.text,
-            id,
-            entry.path,
-            options.source,
-            this.provider.model,
-            chunk.startLine,
-            chunk.endLine,
-          );
-      }
-    }
-    this.upsertFileRecord(entry, options.source);
+    this.writeChunks(entry, options.source, this.provider.model, chunks, embeddings, vectorReady);
   }
 }

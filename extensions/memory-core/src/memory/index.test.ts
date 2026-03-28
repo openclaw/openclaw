@@ -20,6 +20,7 @@ let registerAdapter: MemoryEmbeddingProvidersModule["registerMemoryEmbeddingProv
 let embedBatchCalls = 0;
 let embedBatchInputCalls = 0;
 let providerCalls: Array<{ provider?: string; model?: string; outputDimensionality?: number }> = [];
+let forceNoProvider = false;
 
 vi.mock("./embeddings.js", () => {
   const embedText = (text: string) => {
@@ -41,6 +42,13 @@ vi.mock("./embeddings.js", () => {
         model: options.model,
         outputDimensionality: options.outputDimensionality,
       });
+      if (forceNoProvider) {
+        return {
+          provider: null,
+          requestedProvider: options.provider ?? "auto",
+          providerUnavailableReason: "No API key found for provider",
+        };
+      }
       const providerId = options.provider === "gemini" ? "gemini" : "mock";
       const model = options.model ?? "mock-embed";
       return {
@@ -115,6 +123,7 @@ describe("memory index", () => {
   let indexStatusPath = "";
   let indexSourceChangePath = "";
   let indexModelPath = "";
+  let indexFtsOnlyPath = "";
   let sourceChangeStateDir = "";
   const sourceChangeSessionLogLines = [
     JSON.stringify({
@@ -154,6 +163,7 @@ describe("memory index", () => {
     indexStatusPath = path.join(workspaceDir, "index-status.sqlite");
     indexSourceChangePath = path.join(workspaceDir, "index-source-change.sqlite");
     indexModelPath = path.join(workspaceDir, "index-model-change.sqlite");
+    indexFtsOnlyPath = path.join(workspaceDir, "index-fts-only.sqlite");
     sourceChangeStateDir = path.join(fixtureRoot, "state-source-change");
 
     await fs.mkdir(memoryDir, { recursive: true });
@@ -183,6 +193,7 @@ describe("memory index", () => {
     embedBatchCalls = 0;
     embedBatchInputCalls = 0;
     providerCalls = [];
+    forceNoProvider = false;
 
     mkdirSync(memoryDir, { recursive: true });
 
@@ -1339,5 +1350,38 @@ describe("memory index", () => {
         "path required",
       );
     }
+  });
+
+  it("builds FTS index and returns search results when no embedding provider is available", async () => {
+    forceNoProvider = true;
+
+    const cfg = createCfg({
+      storePath: indexFtsOnlyPath,
+      hybrid: { enabled: true },
+    });
+    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const manager = requireManager(result);
+    managersForCleanup.add(manager);
+    resetManagerForTest(manager);
+
+    await fs.writeFile(
+      path.join(memoryDir, "2026-01-12.md"),
+      "# Log\nAlpha memory line.\nZebra memory line.",
+    );
+    await manager.sync({ reason: "test" });
+
+    const status = manager.status();
+    // chunks should be indexed via FTS even without a provider
+    expect(status.chunks).toBeGreaterThan(0);
+    expect(embedBatchCalls).toBe(0);
+
+    // keyword search should return matching results
+    const results = await manager.search("Alpha");
+    expect(results.length).toBeGreaterThan(0);
+    expect(results[0]?.snippet).toMatch(/Alpha/i);
+
+    // unknown terms should return no results
+    const noResults = await manager.search("nonexistent_xyz_keyword");
+    expect(noResults.length).toBe(0);
   });
 });
