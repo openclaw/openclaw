@@ -68,6 +68,10 @@ function bundledSkillPath(repoRoot: string, pluginId: string, ...relativePath: s
   return path.join(bundledPluginDir(repoRoot, pluginId), ...relativePath);
 }
 
+function expectBundledSkills(repoRoot: string, pluginId: string, skills: string[]) {
+  expect(readBundledManifest(repoRoot, pluginId).skills).toEqual(skills);
+}
+
 function createTlonSkillPlugin(repoRoot: string, skillPath = "node_modules/@tloncorp/tlon-skill") {
   return createPlugin(repoRoot, {
     id: "tlon",
@@ -117,8 +121,7 @@ describe("copyBundledPluginMetadata", () => {
         "utf8",
       ),
     ).toContain("ACP Router");
-    const bundledManifest = readBundledManifest(repoRoot, "acpx");
-    expect(bundledManifest.skills).toEqual(["./skills"]);
+    expectBundledSkills(repoRoot, "acpx", ["./skills"]);
     const packageJson = readBundledPackageJson(repoRoot, "acpx");
     expect(packageJson.openclaw?.extensions).toEqual(["./index.js"]);
   });
@@ -172,8 +175,7 @@ describe("copyBundledPluginMetadata", () => {
     expect(fs.existsSync(path.join(bundledPluginDir(repoRoot, "tlon"), "node_modules"))).toBe(
       false,
     );
-    const bundledManifest = readBundledManifest(repoRoot, "tlon");
-    expect(bundledManifest.skills).toEqual(["./bundled-skills/@tloncorp/tlon-skill"]);
+    expectBundledSkills(repoRoot, "tlon", ["./bundled-skills/@tloncorp/tlon-skill"]);
   });
 
   it("falls back to repo-root hoisted node_modules skill paths", () => {
@@ -192,8 +194,7 @@ describe("copyBundledPluginMetadata", () => {
         "utf8",
       ),
     ).toContain("Hoisted Tlon Skill");
-    const bundledManifest = readBundledManifest(repoRoot, "tlon");
-    expect(bundledManifest.skills).toEqual(["./bundled-skills/@tloncorp/tlon-skill"]);
+    expectBundledSkills(repoRoot, "tlon", ["./bundled-skills/@tloncorp/tlon-skill"]);
   });
 
   it("omits missing declared skill paths and removes stale generated outputs", () => {
@@ -212,8 +213,7 @@ describe("copyBundledPluginMetadata", () => {
 
     copyBundledPluginMetadata({ repoRoot });
 
-    const bundledManifest = readBundledManifest(repoRoot, "tlon");
-    expect(bundledManifest.skills).toEqual([]);
+    expectBundledSkills(repoRoot, "tlon", []);
     expect(fs.existsSync(path.join(repoRoot, "dist", "extensions", "tlon", "bundled-skills"))).toBe(
       false,
     );

@@ -32,6 +32,10 @@ describe("Claude bundle plugin inspect integration", () => {
     expect(values).toEqual(expect.arrayContaining([...params.includes]));
   }
 
+  function expectNoDiagnostics(diagnostics: unknown[]) {
+    expect(diagnostics).toEqual([]);
+  }
+
   beforeAll(() => {
     rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-claude-bundle-"));
 
@@ -182,7 +186,7 @@ describe("Claude bundle plugin inspect integration", () => {
     expect(mcp.hasSupportedStdioServer).toBe(true);
     expect(mcp.supportedServerNames).toContain("test-stdio-server");
     expect(mcp.unsupportedServerNames).toContain("test-sse-server");
-    expect(mcp.diagnostics).toEqual([]);
+    expectNoDiagnostics(mcp.diagnostics);
   });
 
   it("inspects LSP runtime support with stdio server", () => {
@@ -195,6 +199,6 @@ describe("Claude bundle plugin inspect integration", () => {
     expect(lsp.hasStdioServer).toBe(true);
     expect(lsp.supportedServerNames).toContain("typescript-lsp");
     expect(lsp.unsupportedServerNames).toEqual([]);
-    expect(lsp.diagnostics).toEqual([]);
+    expectNoDiagnostics(lsp.diagnostics);
   });
 });
