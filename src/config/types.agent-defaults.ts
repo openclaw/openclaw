@@ -182,7 +182,7 @@ export type AgentDefaultsConfig = {
      * - trusted: trust project settings as-is
      */
     projectSettingsPolicy?: "trusted" | "sanitize" | "ignore";
-    /** Maximum delay in ms for exponential overload failover backoff (default: 30000). */
+    /** Maximum delay in ms for exponential overload failover backoff (default: 30000). Must be a whole-number value; fractional ms are floored at runtime. */
     overloadBackoffMaxMs?: number;
   };
   /** Vector memory search configuration (per-agent overrides supported). */

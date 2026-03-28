@@ -13993,7 +13993,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     "agents.defaults.embeddedPi.overloadBackoffMaxMs": {
       label: "Embedded Pi Overload Backoff Max (ms)",
       help: "Maximum delay in ms for embedded Pi overload failover retries. Increase this to slow repeated overload fallback churn; values below the initial retry delay clamp up automatically.",
-      tags: ["reliability", "performance"],
+      tags: ["reliability", "performance", "storage"],
     },
     "agents.defaults.heartbeat.directPolicy": {
       label: "Heartbeat Direct Policy",

@@ -134,6 +134,7 @@ export const AgentDefaultsSchema = z
         projectSettingsPolicy: z
           .union([z.literal("trusted"), z.literal("sanitize"), z.literal("ignore")])
           .optional(),
+        overloadBackoffMaxMs: z.number().int().nonnegative().optional(),
       })
       .strict()
       .optional(),

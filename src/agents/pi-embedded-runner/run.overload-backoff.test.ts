@@ -28,10 +28,13 @@ describe("resolveOverloadFailoverBackoffPolicy", () => {
     expect(computeBackoff(policy, 10)).toBe(500);
   });
 
-  it("clamps invalid or undersized values to the initial delay floor", () => {
+  it("treats NaN as unset and applies the default ceiling", () => {
     expect(resolveOverloadFailoverBackoffPolicy(Number.NaN).maxMs).toBe(
       DEFAULT_OVERLOAD_FAILOVER_BACKOFF_MAX_MS,
     );
+  });
+
+  it("clamps negative or undersized values to the initial delay floor", () => {
     expect(resolveOverloadFailoverBackoffPolicy(-1).maxMs).toBe(
       OVERLOAD_FAILOVER_BACKOFF_INITIAL_MS,
     );
