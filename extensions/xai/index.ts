@@ -4,7 +4,6 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { createToolStreamWrapper } from "openclaw/plugin-sdk/provider-stream";
-import { resolveProviderWebSearchPluginConfig } from "openclaw/plugin-sdk/provider-web-search";
 import { normalizeSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import { applyXaiModelCompat, normalizeXaiModelId } from "./api.js";
 import { applyXaiConfig, XAI_DEFAULT_MODEL_REF } from "./onboard.js";
@@ -51,6 +50,38 @@ function readLegacyGrokFallback(
   return apiKey ? { apiKey, source: "tools.web.search.grok.apiKey" } : undefined;
 }
 
+function readPluginWebSearchFallback(
+  config: Record<string, unknown>,
+): { apiKey: string; source: string } | undefined {
+  const plugins = config.plugins;
+  if (!plugins || typeof plugins !== "object") {
+    return undefined;
+  }
+  const entries = (plugins as Record<string, unknown>).entries;
+  if (!entries || typeof entries !== "object") {
+    return undefined;
+  }
+  const xai = (entries as Record<string, unknown>)[PROVIDER_ID];
+  if (!xai || typeof xai !== "object") {
+    return undefined;
+  }
+  const pluginConfig = (xai as Record<string, unknown>).config;
+  if (!pluginConfig || typeof pluginConfig !== "object") {
+    return undefined;
+  }
+  const webSearch = (pluginConfig as Record<string, unknown>).webSearch;
+  if (!webSearch || typeof webSearch !== "object") {
+    return undefined;
+  }
+  const apiKey = readConfiguredOrManagedApiKey((webSearch as Record<string, unknown>).apiKey);
+  return apiKey
+    ? {
+        apiKey,
+        source: "plugins.entries.xai.config.webSearch.apiKey",
+      }
+    : undefined;
+}
+
 function resolveXaiProviderFallbackAuth(
   config: unknown,
 ): { apiKey: string; source: string } | undefined {
@@ -58,14 +89,9 @@ function resolveXaiProviderFallbackAuth(
     return undefined;
   }
   const record = config as Record<string, unknown>;
-  const pluginApiKey = readConfiguredOrManagedApiKey(
-    resolveProviderWebSearchPluginConfig(record, PROVIDER_ID)?.apiKey,
-  );
-  if (pluginApiKey) {
-    return {
-      apiKey: pluginApiKey,
-      source: "plugins.entries.xai.config.webSearch.apiKey",
-    };
+  const pluginFallback = readPluginWebSearchFallback(record);
+  if (pluginFallback) {
+    return pluginFallback;
   }
   return readLegacyGrokFallback(record);
 }
