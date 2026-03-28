@@ -99,7 +99,7 @@ export function addStaticTestHooks<TResult>(
     hookName: PluginHookRegistration["hookName"];
     hooks: ReadonlyArray<{
       pluginId: string;
-      result: TResult;
+      result?: TResult;
       priority?: number;
       handler?: () => TResult | Promise<TResult>;
     }>;
@@ -110,7 +110,7 @@ export function addStaticTestHooks<TResult>(
     params.hooks.map(({ pluginId, result, priority, handler }) => ({
       pluginId,
       hookName: params.hookName,
-      handler: (handler ?? (() => result)) as PluginHookRegistration["handler"],
+      handler: (handler ?? (() => result as TResult)) as PluginHookRegistration["handler"],
       ...(priority !== undefined ? { priority } : {}),
     })),
   );

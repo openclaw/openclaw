@@ -196,7 +196,7 @@ AI CLI backend such as `claude-cli` or `codex-cli`.
 
 ### Hook decision semantics
 
-- `before_tool_call`: returning `{ block: true, blockMode: "hard" }` is terminal. Once any handler sets it, lower-priority handlers are skipped.
+- `before_tool_call`: returning `{ block: true, blockMode: "hard" }` is terminal. Once any handler sets it, lower-priority handlers are skipped. Returning `{ block: false }` against a hard block is a no-op.
 - `before_tool_call`: returning `{ block: true, blockMode: "soft" }` blocks by default but may be cleared by a lower-priority handler returning `{ block: false }`.
 - `before_tool_call`: omitting `blockMode` defaults to `"hard"` for backward compatibility.
 - `message_sending`: returning `{ cancel: true }` is terminal. Once any handler sets it, lower-priority handlers are skipped.

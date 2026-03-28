@@ -261,7 +261,7 @@ Common registration methods:
 
 Hook guard behavior for typed lifecycle hooks:
 
-- `before_tool_call`: `{ block: true, blockMode: "hard" }` is terminal; lower-priority handlers are skipped.
+- `before_tool_call`: `{ block: true, blockMode: "hard" }` is terminal; lower-priority handlers are skipped. Returning `{ block: false }` against a hard block is a no-op.
 - `before_tool_call`: `{ block: true, blockMode: "soft" }` may be cleared by a lower-priority handler returning `{ block: false }`.
 - `before_tool_call`: omitting `blockMode` defaults to `"hard"`.
 - `message_sending`: `{ cancel: true }` is terminal; lower-priority handlers are skipped.

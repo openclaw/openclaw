@@ -13,7 +13,7 @@ async function runBeforeToolCallWithHooks(
   registry: PluginRegistry,
   hooks: ReadonlyArray<{
     pluginId: string;
-    result: PluginHookBeforeToolCallResult;
+    result?: PluginHookBeforeToolCallResult;
     priority?: number;
     handler?: () => PluginHookBeforeToolCallResult | Promise<PluginHookBeforeToolCallResult>;
   }>,
@@ -130,11 +130,10 @@ describe("before_tool_call terminal block semantics", () => {
     const result = await runBeforeToolCallWithHooks(registry, [
       {
         pluginId: "high",
-        result: { block: true, blockReason: "hard-default" },
         priority: 100,
         handler: high,
       },
-      { pluginId: "low", result: { block: false }, priority: 10, handler: low },
+      { pluginId: "low", priority: 10, handler: low },
     ]);
 
     expect(result?.block).toBe(true);

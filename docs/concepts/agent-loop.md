@@ -94,7 +94,7 @@ These run inside the agent loop or gateway pipeline:
 
 Hook decision rules for outbound/tool guards:
 
-- `before_tool_call`: `{ block: true, blockMode: "hard" }` is terminal and stops lower-priority handlers.
+- `before_tool_call`: `{ block: true, blockMode: "hard" }` is terminal and stops lower-priority handlers. Returning `{ block: false }` against a hard block is a no-op.
 - `before_tool_call`: `{ block: true, blockMode: "soft" }` can be cleared by lower-priority handlers returning `{ block: false }`.
 - `before_tool_call`: omitted `blockMode` defaults to `"hard"` for backward compatibility.
 - `message_sending`: `{ cancel: true }` is terminal and stops lower-priority handlers.
