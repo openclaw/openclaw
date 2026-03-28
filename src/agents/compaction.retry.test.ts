@@ -15,6 +15,17 @@ vi.mock("@mariozechner/pi-coding-agent", async (importOriginal) => {
 });
 
 const mockGenerateSummary = vi.mocked(piCodingAgent.generateSummary);
+type MockGenerateSummaryCompat = (
+  currentMessages: AgentMessage[],
+  model: NonNullable<ExtensionContext["model"]>,
+  reserveTokens: number,
+  apiKey: string,
+  headers: Record<string, string> | undefined,
+  signal?: AbortSignal,
+  customInstructions?: string,
+  previousSummary?: string,
+) => Promise<string>;
+const mockGenerateSummaryCompat = mockGenerateSummary as unknown as MockGenerateSummaryCompat;
 
 describe("compaction retry integration", () => {
   beforeEach(() => {
@@ -56,7 +67,7 @@ describe("compaction retry integration", () => {
   } as unknown as NonNullable<ExtensionContext["model"]>;
 
   const invokeGenerateSummary = (signal = new AbortController().signal) =>
-    mockGenerateSummary(testMessages, testModel, 1000, "test-api-key", signal);
+    mockGenerateSummaryCompat(testMessages, testModel, 1000, "test-api-key", undefined, signal);
 
   const runSummaryRetry = (options: Parameters<typeof retryAsync>[1]) =>
     retryAsync(() => invokeGenerateSummary(), options);

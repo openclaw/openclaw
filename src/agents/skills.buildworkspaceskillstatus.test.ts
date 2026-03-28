@@ -19,14 +19,13 @@ function makeEntry(params: {
   }>;
 }): SkillEntry {
   return {
-    skill: {
+    skill: createFixtureSkill({
       name: params.name,
       description: `desc:${params.name}`,
       filePath: `/tmp/${params.name}/SKILL.md`,
       baseDir: `/tmp/${params.name}`,
       source: params.source ?? "openclaw-workspace",
-      disableModelInvocation: false,
-    },
+    }),
     frontmatter: {},
     metadata: {
       ...(params.os ? { os: params.os } : {}),
@@ -35,6 +34,25 @@ function makeEntry(params: {
       ...(params.requires?.env?.[0] ? { primaryEnv: params.requires.env[0] } : {}),
     },
   };
+}
+
+function createFixtureSkill(params: {
+  name: string;
+  description: string;
+  filePath: string;
+  baseDir: string;
+  source: string;
+}): SkillEntry["skill"] {
+  const skill = {
+    name: params.name,
+    description: params.description,
+    filePath: params.filePath,
+    baseDir: params.baseDir,
+    source: params.source,
+    sourceInfo: { source: params.source },
+    disableModelInvocation: false,
+  };
+  return skill as unknown as SkillEntry["skill"];
 }
 
 describe("buildWorkspaceSkillStatus", () => {

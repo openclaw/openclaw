@@ -10,7 +10,7 @@ import {
   readRequestBodyWithLimit,
   requestBodyErrorToText,
 } from "openclaw/plugin-sdk/webhook-ingress";
-import { sendMessage, resolveLegacyWebhookNameToChatUserId } from "./client.js";
+import * as synologyClient from "./client.js";
 import { validateToken, authorizeUserForDm, sanitizeInput, RateLimiter } from "./security.js";
 import type { SynologyWebhookPayload, ResolvedSynologyChatAccount } from "./types.js";
 
@@ -481,7 +481,7 @@ async function resolveSynologyReplyDeliveryUserId(params: {
     return params.payload.user_id;
   }
 
-  const resolvedChatApiUserId = await resolveLegacyWebhookNameToChatUserId({
+  const resolvedChatApiUserId = await synologyClient.resolveLegacyWebhookNameToChatUserId({
     incomingUrl: params.account.incomingUrl,
     mutableWebhookUsername: params.payload.username,
     allowInsecureSsl: params.account.allowInsecureSsl,
@@ -529,7 +529,7 @@ async function processAuthorizedSynologyWebhook(params: {
       return;
     }
 
-    await sendMessage(
+    await synologyClient.sendMessage(
       params.account.incomingUrl,
       reply,
       deliveryUserId,
@@ -544,7 +544,7 @@ async function processAuthorizedSynologyWebhook(params: {
     params.log?.error?.(
       `Failed to process message from ${params.message.payload.username}: ${errMsg}`,
     );
-    await sendMessage(
+    await synologyClient.sendMessage(
       params.account.incomingUrl,
       "Sorry, an error occurred while processing your message.",
       deliveryUserId,

@@ -10,14 +10,16 @@ import {
 } from "./workspace.js";
 
 function makeSkill(name: string, desc = "A skill", filePath = `/skills/${name}/SKILL.md`): Skill {
-  return {
+  const skill = {
     name,
     description: desc,
     filePath,
     baseDir: `/skills/${name}`,
     source: "workspace",
+    sourceInfo: { source: "workspace" },
     disableModelInvocation: false,
   };
+  return skill as unknown as Skill;
 }
 
 function makeEntry(skill: Skill): SkillEntry {
