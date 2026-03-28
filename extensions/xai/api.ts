@@ -1,3 +1,6 @@
+import { applyModelCompatPatch } from "openclaw/plugin-sdk/provider-model-shared";
+import type { ModelCompatConfig } from "openclaw/plugin-sdk/provider-model-shared";
+
 export { buildXaiProvider } from "./provider-catalog.js";
 export {
   buildXaiCatalogModels,
@@ -17,23 +20,9 @@ export const XAI_TOOL_SCHEMA_PROFILE = "xai";
 export const HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING = "html-entities";
 
 export function applyXaiModelCompat<T extends { compat?: unknown }>(model: T): T {
-  const patch = {
+  return applyModelCompatPatch(model as T & { compat?: ModelCompatConfig }, {
     toolSchemaProfile: XAI_TOOL_SCHEMA_PROFILE,
     nativeWebSearchTool: true,
     toolCallArgumentsEncoding: HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING,
-  } satisfies Record<string, unknown>;
-  const compat =
-    model.compat && typeof model.compat === "object"
-      ? (model.compat as Record<string, unknown>)
-      : undefined;
-  if (compat && Object.entries(patch).every(([key, value]) => compat[key] === value)) {
-    return model;
-  }
-  return {
-    ...model,
-    compat: {
-      ...compat,
-      ...patch,
-    } as T extends { compat?: infer TCompat } ? TCompat : never,
-  } as T;
+  }) as T;
 }

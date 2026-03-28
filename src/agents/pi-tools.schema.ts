@@ -1,10 +1,11 @@
 import type { ModelCompatConfig } from "../config/types.models.js";
+import { stripXaiUnsupportedKeywords } from "../plugin-sdk/provider-tools.js";
+import { XAI_TOOL_SCHEMA_PROFILE } from "../plugin-sdk/xai.js";
+import { hasToolSchemaProfile } from "../plugins/provider-model-compat.js";
 import { copyPluginToolMeta } from "../plugins/tools.js";
 import { copyChannelAgentToolMeta } from "./channel-tools.js";
-import { usesXaiToolSchemaProfile } from "./model-compat.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import { cleanSchemaForGemini } from "./schema/clean-for-gemini.js";
-import { stripXaiUnsupportedKeywords } from "./schema/clean-for-xai.js";
 
 function extractEnumValues(schema: unknown): unknown[] | undefined {
   if (!schema || typeof schema !== "object") {
@@ -97,7 +98,7 @@ export function normalizeToolParameters(
     options?.modelProvider?.toLowerCase().includes("google") ||
     options?.modelProvider?.toLowerCase().includes("gemini");
   const isAnthropicProvider = options?.modelProvider?.toLowerCase().includes("anthropic");
-  const hasXaiSchemaProfile = usesXaiToolSchemaProfile(options?.modelCompat);
+  const hasXaiSchemaProfile = hasToolSchemaProfile(options?.modelCompat, XAI_TOOL_SCHEMA_PROFILE);
 
   function applyProviderCleaning(s: unknown): unknown {
     if (isGeminiProvider && !isAnthropicProvider) {
