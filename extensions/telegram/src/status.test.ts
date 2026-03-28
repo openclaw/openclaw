@@ -1,7 +1,7 @@
-import type { ReactionTypeEmoji } from "@grammyjs/types";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_EMOJIS } from "../../../src/channels/status-reactions.js";
+import type { TelegramChatDetails, TelegramGetChat } from "./bot/types.js";
 import { collectTelegramStatusIssues } from "./status-issues.js";
 import {
   buildTelegramStatusReactionVariants,
@@ -139,12 +139,14 @@ describe("isTelegramSupportedReactionEmoji", () => {
 
 describe("extractTelegramAllowedEmojiReactions", () => {
   it("returns undefined when chat does not include available_reactions", () => {
-    const result = extractTelegramAllowedEmojiReactions({});
+    const result = extractTelegramAllowedEmojiReactions({ id: 1 } satisfies TelegramChatDetails);
     expect(result).toBeUndefined();
   });
 
   it("returns null when available_reactions is omitted/null", () => {
-    const result = extractTelegramAllowedEmojiReactions({ available_reactions: null });
+    const result = extractTelegramAllowedEmojiReactions({
+      available_reactions: null,
+    } satisfies TelegramChatDetails);
     expect(result).toBeNull();
   });
 
@@ -155,7 +157,7 @@ describe("extractTelegramAllowedEmojiReactions", () => {
         { type: "custom_emoji", custom_emoji_id: "abc" },
         { type: "emoji", emoji: "🔥" },
       ],
-    });
+    } satisfies TelegramChatDetails);
     expect(result ? Array.from(result).toSorted() : null).toEqual(["👍", "🔥"]);
   });
 
@@ -170,12 +172,12 @@ describe("extractTelegramAllowedEmojiReactions", () => {
 
 describe("resolveTelegramAllowedEmojiReactions", () => {
   it("uses getChat lookup when message chat does not include available_reactions", async () => {
-    const getChat = async () => ({
-      available_reactions: [{ type: "emoji", emoji: "👍" as ReactionTypeEmoji["emoji"] } as const],
+    const getChat: TelegramGetChat = async () => ({
+      available_reactions: [{ type: "emoji", emoji: "👍" }],
     });
 
     const result = await resolveTelegramAllowedEmojiReactions({
-      chat: {},
+      chat: { id: 1 } satisfies TelegramChatDetails,
       chatId: 1,
       getChat,
     });
@@ -189,7 +191,7 @@ describe("resolveTelegramAllowedEmojiReactions", () => {
     };
 
     const result = await resolveTelegramAllowedEmojiReactions({
-      chat: {},
+      chat: { id: 1 } satisfies TelegramChatDetails,
       chatId: 1,
       getChat,
     });

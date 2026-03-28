@@ -33,6 +33,8 @@ import { enforceTelegramDmAccess } from "./dm-access.js";
 import { evaluateTelegramGroupBaseAccess } from "./group-access.js";
 import {
   buildTelegramStatusReactionVariants,
+  type TelegramReactionEmoji,
+  isTelegramSupportedReactionEmoji,
   resolveTelegramAllowedEmojiReactions,
   resolveTelegramReactionVariant,
   resolveTelegramStatusReactionEmojis,
@@ -356,6 +358,8 @@ export const buildTelegramMessageContext = async ({
     channel: "telegram",
     accountId: account.accountId,
   });
+  const ackReactionEmoji =
+    ackReaction && isTelegramSupportedReactionEmoji(ackReaction) ? ackReaction : undefined;
   const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
   const shouldAckReaction = () =>
     Boolean(
@@ -382,7 +386,7 @@ export const buildTelegramMessageContext = async ({
   const statusReactionVariantsByEmoji = buildTelegramStatusReactionVariants(
     resolvedStatusReactionEmojis,
   );
-  let allowedStatusReactionEmojisPromise: Promise<Set<string> | null> | null = null;
+  let allowedStatusReactionEmojisPromise: Promise<Set<TelegramReactionEmoji> | null> | null = null;
   const statusReactionController: StatusReactionController | null =
     statusReactionsEnabled && msg.message_id
       ? createStatusReactionController({
@@ -412,7 +416,7 @@ export const buildTelegramMessageContext = async ({
                   return;
                 }
                 await reactionApi(chatId, msg.message_id, [
-                  { type: "emoji", emoji: resolvedEmoji as ReactionTypeEmoji["emoji"] },
+                  { type: "emoji", emoji: resolvedEmoji },
                 ]);
               }
             },
@@ -435,13 +439,11 @@ export const buildTelegramMessageContext = async ({
           () => false,
         )
       : null
-    : shouldAckReaction() && msg.message_id && reactionApi
+    : shouldAckReaction() && msg.message_id && reactionApi && ackReactionEmoji
       ? withTelegramApiErrorLogging({
           operation: "setMessageReaction",
           fn: () =>
-            reactionApi(chatId, msg.message_id, [
-              { type: "emoji", emoji: ackReaction as ReactionTypeEmoji["emoji"] },
-            ]),
+            reactionApi(chatId, msg.message_id, [{ type: "emoji", emoji: ackReactionEmoji }]),
         }).then(
           () => true,
           (err) => {
