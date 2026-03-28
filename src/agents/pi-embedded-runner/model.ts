@@ -224,7 +224,10 @@ function applyConfiguredProviderOverrides(params: {
     cfg: params.cfg,
     runtimeHooks: params.runtimeHooks,
   });
-  const resolvedApi = resolvedTransport.api ?? (discoveredModel.api as ModelDefinitionConfig["api"]);
+  const resolvedApi =
+    resolvedTransport.api ??
+    (discoveredModel.api as ModelDefinitionConfig["api"]) ??
+    "openai-responses";
   return {
     ...discoveredModel,
     api: resolvedApi,
