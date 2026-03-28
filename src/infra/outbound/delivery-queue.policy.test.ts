@@ -17,6 +17,13 @@ describe("delivery-queue policy", () => {
       "chat_id is empty",
       "Outbound not configured for channel: demo-channel",
       "MatrixError: [403] User @bot:matrix.example.com not in room !mixedCase:matrix.example.com",
+      "400: Bad Request: message is too long",
+      "Request to sendMessage API failed. (413: Request Entity Too Large)",
+      "bad request: can't parse entities",
+      "403 Forbidden",
+      "404 Not Found",
+      "message is too long",
+      "request entity too large",
     ])("returns true for permanent error: %s", (msg) => {
       expect(isPermanentDeliveryError(msg)).toBe(true);
     });
@@ -27,6 +34,8 @@ describe("delivery-queue policy", () => {
       "socket hang up",
       "rate limited",
       "500 Internal Server Error",
+      "429 Too Many Requests",
+      "429 Too Many Requests: retry after 400",
     ])("returns false for transient error: %s", (msg) => {
       expect(isPermanentDeliveryError(msg)).toBe(false);
     });

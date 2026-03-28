@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../config/config.js";
+import { isPermanentDeliveryError } from "./delivery-queue-policy.js";
 import {
   ackDelivery,
   failDelivery,
@@ -7,6 +8,9 @@ import {
   type QueuedDelivery,
   type QueuedDeliveryPayload,
 } from "./delivery-queue-storage.js";
+
+// Re-export so the barrel (delivery-queue.ts) and external callers keep working.
+export { isPermanentDeliveryError };
 
 export type RecoverySummary = {
   recovered: number;
@@ -39,19 +43,6 @@ const BACKOFF_MS: readonly number[] = [
   600_000, // retry 4: 10m
 ];
 
-const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
-  /no conversation reference found/i,
-  /chat not found/i,
-  /user not found/i,
-  /bot.*not.*member/i,
-  /bot was blocked by the user/i,
-  /forbidden: bot was kicked/i,
-  /chat_id is empty/i,
-  /recipient is not a valid/i,
-  /outbound not configured for channel/i,
-  /ambiguous .* recipient/i,
-  /User .* not in room/i,
-];
 
 function createEmptyRecoverySummary(): RecoverySummary {
   return {
@@ -138,9 +129,6 @@ export function isEntryEligibleForRecoveryRetry(
   return { eligible: false, remainingBackoffMs: nextEligibleAt - now };
 }
 
-export function isPermanentDeliveryError(error: string): boolean {
-  return PERMANENT_ERROR_PATTERNS.some((re) => re.test(error));
-}
 
 /**
  * On gateway startup, scan the delivery queue and retry any pending entries.

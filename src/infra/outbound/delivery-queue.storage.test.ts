@@ -121,6 +121,22 @@ describe("delivery-queue storage", () => {
       expect((entry.lastAttemptAt as number) > 0).toBe(true);
       expect(entry.lastError).toBe("connection refused");
     });
+
+    it("moves entry to failed/ immediately for permanent errors", async () => {
+      const id = await enqueueDelivery(
+        {
+          channel: "telegram",
+          to: "123",
+          payloads: [{ text: "x".repeat(5000) }],
+        },
+        tmpDir(),
+      );
+
+      await failDelivery(id, "400: Bad Request: message is too long", tmpDir());
+
+      expect(fs.existsSync(path.join(queueDir(), `${id}.json`))).toBe(false);
+      expect(fs.existsSync(path.join(queueDir(), "failed", `${id}.json`))).toBe(true);
+    });
   });
 
   describe("moveToFailed", () => {

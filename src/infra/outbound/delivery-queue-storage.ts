@@ -3,6 +3,7 @@ import path from "node:path";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { generateSecureUuid } from "../secure-random.js";
+import { isPermanentDeliveryError } from "./delivery-queue-policy.js";
 import type { OutboundMirror } from "./mirror.js";
 import type { OutboundChannel } from "./targets.js";
 
@@ -178,8 +179,24 @@ export async function ackDelivery(id: string, stateDir?: string): Promise<void> 
   await unlinkBestEffort(deliveredPath);
 }
 
-/** Update a queue entry after a failed delivery attempt. */
+/** Update a queue entry after a failed delivery attempt.
+ * If the error matches a known permanent failure pattern (e.g. HTTP 4xx),
+ * the entry is moved to failed/ immediately instead of being retried.
+ */
 export async function failDelivery(id: string, error: string, stateDir?: string): Promise<void> {
+  if (isPermanentDeliveryError(error)) {
+    const filePath = path.join(resolveQueueDir(stateDir), `${id}.json`);
+    try {
+      const entry = await readQueueEntry(filePath);
+      entry.lastError = error;
+      entry.lastAttemptAt = Date.now();
+      await writeQueueEntry(filePath, entry);
+    } catch {
+      // best-effort — proceed with move even if stamp fails
+    }
+    await moveToFailed(id, stateDir);
+    return;
+  }
   const filePath = path.join(resolveQueueDir(stateDir), `${id}.json`);
   const entry = await readQueueEntry(filePath);
   entry.retryCount += 1;
