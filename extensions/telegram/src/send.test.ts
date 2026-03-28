@@ -1919,6 +1919,50 @@ describe("shared send behaviors", () => {
     }
   });
 
+  it("omits invalid reply_to_message_id values before calling Telegram", async () => {
+    const invalidReplyToMessageIds = ["session-meta-id", "123abc", Number.NaN] as const;
+
+    for (const invalidReplyToMessageId of invalidReplyToMessageIds) {
+      const chatId = "123";
+      const sendMessage = vi.fn().mockResolvedValue({
+        message_id: 56,
+        chat: { id: chatId },
+      });
+      const sendSticker = vi.fn().mockResolvedValue({
+        message_id: 102,
+        chat: { id: chatId },
+      });
+      const api = { sendMessage, sendSticker } as unknown as {
+        sendMessage: typeof sendMessage;
+        sendSticker: typeof sendSticker;
+      };
+
+      await sendMessageTelegram(chatId, "reply text", {
+        token: "tok",
+        api,
+        replyToMessageId: invalidReplyToMessageId as unknown as number,
+      });
+      await sendStickerTelegram(chatId, "CAACAgIAAxkBAAI...sticker_file_id", {
+        token: "tok",
+        api,
+        replyToMessageId: invalidReplyToMessageId as unknown as number,
+      });
+
+      expect(sendMessage, String(invalidReplyToMessageId)).toHaveBeenCalledWith(
+        chatId,
+        "reply text",
+        {
+          parse_mode: "HTML",
+        },
+      );
+      expect(sendSticker, String(invalidReplyToMessageId)).toHaveBeenCalledWith(
+        chatId,
+        "CAACAgIAAxkBAAI...sticker_file_id",
+        undefined,
+      );
+    }
+  });
+
   it("wraps chat-not-found with actionable context", async () => {
     const cases = [
       {
