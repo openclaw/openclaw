@@ -580,7 +580,7 @@ export async function downloadClawHubPackageArchive(params: {
   }
   const bytes = new Uint8Array(await response.arrayBuffer());
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-clawhub-package-"));
-  const archivePath = path.join(tmpDir, `${params.name}.zip`);
+  const archivePath = path.join(tmpDir, `${params.name.replace(/\//g, "-")}.zip`);
   await fs.writeFile(archivePath, bytes);
   return {
     archivePath,
