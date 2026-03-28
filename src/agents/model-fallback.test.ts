@@ -203,7 +203,7 @@ describe("runWithModelFallback", () => {
 
     expect(result.result).toBe("ok");
     expect(run).toHaveBeenCalledTimes(1);
-    expect(run).toHaveBeenCalledWith("openai", "gpt-5.4");
+    expect(run).toHaveBeenCalledWith("openai", "gpt-5.4", { externalFallbackActive: true });
   });
 
   it("falls back on unrecognized errors when candidates remain", async () => {
@@ -302,7 +302,7 @@ describe("runWithModelFallback", () => {
     expect(result.provider).toBe("openai");
     expect(result.model).toBe("gpt-4.1-mini");
     expect(run.mock.calls).toEqual([
-      ["anthropic", "claude-opus-4-5"],
+      ["anthropic", "claude-opus-4-5", { externalFallbackActive: true }],
       ["openai", "gpt-4.1-mini"],
     ]);
   });
@@ -340,8 +340,8 @@ describe("runWithModelFallback", () => {
     expect(result.provider).toBe("openrouter");
     expect(result.model).toBe("openrouter/deepseek-chat");
     expect(run.mock.calls).toEqual([
-      ["anthropic", "claude-haiku-3-5"],
-      ["openrouter", "openrouter/deepseek-chat"],
+      ["anthropic", "claude-haiku-3-5", { externalFallbackActive: true }],
+      ["openrouter", "openrouter/deepseek-chat", { externalFallbackActive: true }],
     ]);
   });
 
@@ -371,7 +371,7 @@ describe("runWithModelFallback", () => {
 
     expect(result.result).toBe("ok");
     expect(run.mock.calls).toEqual([
-      ["openai", "gpt-4.1-mini"],
+      ["openai", "gpt-4.1-mini", { externalFallbackActive: true }],
       ["anthropic", "claude-haiku-3-5"],
     ]);
   });
@@ -442,7 +442,7 @@ describe("runWithModelFallback", () => {
 
     expect(result.result).toBe("ok");
     expect(run.mock.calls).toEqual([
-      ["anthropic", "claude-opus-4"],
+      ["anthropic", "claude-opus-4", { externalFallbackActive: true }],
       ["openai", "gpt-4.1-mini"],
     ]);
   });
@@ -645,7 +645,7 @@ describe("runWithModelFallback", () => {
     });
 
     expect(result.result).toBe("ok");
-    expect(run.mock.calls).toEqual([[provider, "m1"]]);
+    expect(run.mock.calls).toEqual([[provider, "m1", { externalFallbackActive: true }]]);
     expect(result.attempts).toEqual([]);
   });
 
@@ -674,7 +674,7 @@ describe("runWithModelFallback", () => {
     ).rejects.toThrow("All models failed");
 
     expect(run.mock.calls).toEqual([
-      ["anthropic", "claude-opus-4-5"],
+      ["anthropic", "claude-opus-4-5", { externalFallbackActive: true }],
       ["anthropic", "claude-haiku-3-5"],
     ]);
   });
@@ -870,8 +870,8 @@ describe("runWithModelFallback", () => {
 
     expect(result.result).toBe("ok");
     expect(run.mock.calls).toEqual([
-      ["anthropic", "claude-sonnet-4"],
-      ["openai", "gpt-4o"],
+      ["anthropic", "claude-sonnet-4", { externalFallbackActive: true }],
+      ["openai", "gpt-4o", { externalFallbackActive: true }],
     ]);
   });
 
@@ -1137,8 +1137,12 @@ describe("runWithModelFallback", () => {
 
       expect(result.result).toBe("fallback success");
       expect(run).toHaveBeenCalledTimes(2);
-      expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-sonnet-4-20250514");
-      expect(run).toHaveBeenNthCalledWith(2, "anthropic", "claude-sonnet-4-5"); // Fallback tried
+      expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-sonnet-4-20250514", {
+        externalFallbackActive: true,
+      });
+      expect(run).toHaveBeenNthCalledWith(2, "anthropic", "claude-sonnet-4-5", {
+        externalFallbackActive: true,
+      }); // Fallback tried
     });
 
     it("allows fallbacks with model version differences within same provider", async () => {
@@ -1167,7 +1171,9 @@ describe("runWithModelFallback", () => {
 
       expect(result.result).toBe("groq success");
       expect(run).toHaveBeenCalledTimes(2);
-      expect(run).toHaveBeenNthCalledWith(2, "groq", "llama-3.3-70b-versatile");
+      expect(run).toHaveBeenNthCalledWith(2, "groq", "llama-3.3-70b-versatile", {
+        externalFallbackActive: true,
+      });
     });
 
     it("still skips fallbacks when using different provider than config", async () => {
@@ -1197,7 +1203,9 @@ describe("runWithModelFallback", () => {
       // Cross-provider requests should skip configured fallbacks but still try configured primary
       expect(result.result).toBe("config primary worked");
       expect(run).toHaveBeenCalledTimes(2);
-      expect(run).toHaveBeenNthCalledWith(1, "openai", "gpt-4.1-mini"); // Original request
+      expect(run).toHaveBeenNthCalledWith(1, "openai", "gpt-4.1-mini", {
+        externalFallbackActive: true,
+      }); // Original request
       expect(run).toHaveBeenNthCalledWith(2, "anthropic", "claude-opus-4-6"); // Config primary as final fallback
     });
 
@@ -1291,6 +1299,7 @@ describe("runWithModelFallback", () => {
       expect(run).toHaveBeenCalledTimes(1); // Primary skipped, fallback attempted
       expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-sonnet-4-5", {
         allowTransientCooldownProbe: true,
+        externalFallbackActive: true,
       });
     });
 
@@ -1321,6 +1330,7 @@ describe("runWithModelFallback", () => {
       expect(run).toHaveBeenCalledTimes(1);
       expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-sonnet-4-5", {
         allowTransientCooldownProbe: true,
+        externalFallbackActive: true,
       });
     });
 
@@ -1428,6 +1438,7 @@ describe("runWithModelFallback", () => {
       expect(run).toHaveBeenCalledTimes(2);
       expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-sonnet-4-5", {
         allowTransientCooldownProbe: true,
+        externalFallbackActive: true,
       }); // Rate limit allows attempt
       expect(run).toHaveBeenNthCalledWith(2, "groq", "llama-3.3-70b-versatile"); // Cross-provider works
     });
@@ -1468,6 +1479,7 @@ describe("runWithModelFallback", () => {
       expect(run).toHaveBeenCalledTimes(2);
       expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-sonnet-4-5", {
         allowTransientCooldownProbe: true,
+        externalFallbackActive: true,
       });
       expect(run).toHaveBeenNthCalledWith(2, "groq", "llama-3.3-70b-versatile");
     });
@@ -1506,9 +1518,11 @@ describe("runWithModelFallback", () => {
       expect(run).toHaveBeenCalledTimes(2);
       expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-sonnet-4-5", {
         allowTransientCooldownProbe: true,
+        externalFallbackActive: true,
       });
       expect(run).toHaveBeenNthCalledWith(2, "anthropic", "claude-haiku-3-5", {
         allowTransientCooldownProbe: true,
+        externalFallbackActive: true,
       });
     });
   });

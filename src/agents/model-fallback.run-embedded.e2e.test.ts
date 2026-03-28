@@ -223,6 +223,7 @@ async function runEmbeddedFallback(params: {
         model,
         authProfileIdSource: "auto",
         allowTransientCooldownProbe: options?.allowTransientCooldownProbe,
+        externalFallbackActive: options?.externalFallbackActive,
         timeoutMs: 5_000,
         runId: params.runId,
         abortSignal: params.abortSignal,
@@ -446,6 +447,183 @@ describe("runWithModelFallback + runEmbeddedPiAgent overload policy", () => {
       expect(usageStats["openai:p1"]?.failureCounts).toBeUndefined();
       expect(computeBackoffMock).not.toHaveBeenCalled();
       expect(sleepWithAbortMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("chains through 529 overloaded then 402 billing to reach third fallback", async () => {
+    // Regression test for #56053 / #56058: when the primary returns 529
+    // (overloaded) and the second candidate returns 402 (billing/insufficient
+    // balance), the fallback chain must continue to the third candidate.
+    // Previously the inner runner could suppress the FailoverError throw on
+    // assistant-side errors when its own config-based fallbackConfigured gate
+    // was false, causing the outer loop to see a normal return and stop.
+    const apiKeyField = ["api", "Key"].join("");
+    const threeProviderConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/mock-1",
+            fallbacks: ["xiaomi/mock-2", "openrouter/mock-3"],
+          },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            api: "openai-responses",
+            [apiKeyField]: "openai-test-key", // pragma: allowlist secret
+            baseUrl: "https://example.com/openai",
+            models: [
+              {
+                id: "mock-1",
+                name: "Mock 1",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 16_000,
+                maxTokens: 2048,
+              },
+            ],
+          },
+          xiaomi: {
+            api: "openai-responses",
+            [apiKeyField]: "xiaomi-test-key", // pragma: allowlist secret
+            baseUrl: "https://example.com/xiaomi",
+            models: [
+              {
+                id: "mock-2",
+                name: "Mock 2",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 16_000,
+                maxTokens: 2048,
+              },
+            ],
+          },
+          openrouter: {
+            api: "openai-responses",
+            [apiKeyField]: "openrouter-test-key", // pragma: allowlist secret
+            baseUrl: "https://example.com/openrouter",
+            models: [
+              {
+                id: "mock-3",
+                name: "Mock 3",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 16_000,
+                maxTokens: 2048,
+              },
+            ],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await fs.writeFile(
+        path.join(agentDir, "auth-profiles.json"),
+        JSON.stringify({
+          version: 1,
+          profiles: {
+            "openai:p1": { type: "api_key", provider: "openai", key: "sk-openai" },
+            "xiaomi:p1": { type: "api_key", provider: "xiaomi", key: "sk-xiaomi" },
+            "openrouter:p1": { type: "api_key", provider: "openrouter", key: "sk-openrouter" },
+          },
+          usageStats: {
+            "openai:p1": { lastUsed: 1 },
+            "xiaomi:p1": { lastUsed: 2 },
+            "openrouter:p1": { lastUsed: 3 },
+          },
+        }),
+      );
+
+      // Primary (openai) → 529 overloaded
+      // Second (xiaomi) → 402 insufficient balance (assistant-side error)
+      // Third (openrouter) → success
+      runEmbeddedAttemptMock.mockImplementation(async (params: unknown) => {
+        const p = params as { provider: string; modelId: string };
+        if (p.provider === "openai") {
+          return makeEmbeddedRunnerAttempt({
+            assistantTexts: [],
+            lastAssistant: buildEmbeddedRunnerAssistant({
+              provider: "openai",
+              model: "mock-1",
+              stopReason: "error",
+              errorMessage: OVERLOADED_ERROR_PAYLOAD,
+            }),
+          });
+        }
+        if (p.provider === "xiaomi") {
+          return makeEmbeddedRunnerAttempt({
+            assistantTexts: [],
+            lastAssistant: buildEmbeddedRunnerAssistant({
+              provider: "xiaomi",
+              model: "mock-2",
+              stopReason: "error",
+              errorMessage: "402 Insufficient account balance",
+            }),
+          });
+        }
+        if (p.provider === "openrouter") {
+          return makeEmbeddedRunnerAttempt({
+            assistantTexts: ["third fallback ok"],
+            lastAssistant: buildEmbeddedRunnerAssistant({
+              provider: "openrouter",
+              model: "mock-3",
+              stopReason: "stop",
+              content: [{ type: "text", text: "third fallback ok" }],
+            }),
+          });
+        }
+        throw new Error(`Unexpected provider ${p.provider}`);
+      });
+
+      const runId = "run:529-402-chain";
+      const result = await runWithModelFallback({
+        cfg: threeProviderConfig,
+        provider: "openai",
+        model: "mock-1",
+        runId,
+        agentDir,
+        run: (provider, model, options) =>
+          runEmbeddedPiAgent({
+            sessionId: `session:${runId}`,
+            sessionKey: "agent:test:chain",
+            sessionFile: path.join(workspaceDir, `${runId}.jsonl`),
+            workspaceDir,
+            agentDir,
+            config: threeProviderConfig,
+            prompt: "hello",
+            provider,
+            model,
+            authProfileIdSource: "auto",
+            allowTransientCooldownProbe: options?.allowTransientCooldownProbe,
+            externalFallbackActive: options?.externalFallbackActive,
+            timeoutMs: 5_000,
+            runId,
+            enqueue: async (task) => await task(),
+          }),
+      });
+
+      // Third candidate should have succeeded
+      expect(result.provider).toBe("openrouter");
+      expect(result.model).toBe("mock-3");
+
+      // All three providers should have been attempted
+      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(3);
+      const providers = runEmbeddedAttemptMock.mock.calls.map(
+        (call) => (call[0] as { provider: string }).provider,
+      );
+      expect(providers).toEqual(["openai", "xiaomi", "openrouter"]);
+
+      // First two should be recorded as failed attempts
+      expect(result.attempts).toHaveLength(2);
+      expect(result.attempts[0]?.provider).toBe("openai");
+      expect(result.attempts[0]?.reason).toBe("overloaded");
+      expect(result.attempts[1]?.provider).toBe("xiaomi");
+      expect(result.attempts[1]?.reason).toBe("billing");
     });
   });
 
