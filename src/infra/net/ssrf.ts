@@ -405,6 +405,17 @@ export function createPinnedDispatcher(
   const lookup = resolvePinnedDispatcherLookup(pinned, policy?.pinnedHostname, ssrfPolicy);
 
   if (!policy || policy.mode === "direct") {
+    // Auto-detect env proxy when no explicit policy is given
+    const hasEnvProxy =
+      typeof process.env.http_proxy === "string" ||
+      typeof process.env.https_proxy === "string" ||
+      typeof process.env.HTTP_PROXY === "string" ||
+      typeof process.env.HTTPS_PROXY === "string";
+    if (hasEnvProxy) {
+      return new EnvHttpProxyAgent({
+        connect: withPinnedLookup(lookup, undefined),
+      });
+    }
     return new Agent({
       connect: withPinnedLookup(lookup, policy?.connect),
     });
