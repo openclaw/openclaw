@@ -33,6 +33,18 @@ function makeModelProviderConfig(overrides?: Partial<ModelProviderConfig>): Mode
   };
 }
 
+function expectGroupedProviderIds(
+  providers: readonly ProviderPlugin[],
+  expected: Record<ProviderDiscoveryOrder | "late", readonly string[]>,
+) {
+  const grouped = groupPluginDiscoveryProvidersByOrder([...providers]);
+
+  expect(grouped.simple.map((provider) => provider.id)).toEqual(expected.simple);
+  expect(grouped.profile.map((provider) => provider.id)).toEqual(expected.profile);
+  expect(grouped.paired.map((provider) => provider.id)).toEqual(expected.paired);
+  expect(grouped.late.map((provider) => provider.id)).toEqual(expected.late);
+}
+
 describe("groupPluginDiscoveryProvidersByOrder", () => {
   it.each([
     {
@@ -64,12 +76,7 @@ describe("groupPluginDiscoveryProvidersByOrder", () => {
       },
     },
   ] as const)("$name", ({ providers, expected }) => {
-    const grouped = groupPluginDiscoveryProvidersByOrder([...providers]);
-
-    expect(grouped.simple.map((provider) => provider.id)).toEqual(expected.simple);
-    expect(grouped.profile.map((provider) => provider.id)).toEqual(expected.profile);
-    expect(grouped.paired.map((provider) => provider.id)).toEqual(expected.paired);
-    expect(grouped.late.map((provider) => provider.id)).toEqual(expected.late);
+    expectGroupedProviderIds(providers, expected);
   });
 });
 

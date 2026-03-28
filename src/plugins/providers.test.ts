@@ -24,6 +24,31 @@ function cloneOptions<T>(value: T): T {
   return structuredClone(value);
 }
 
+function expectLastLoadPluginsCall(params?: {
+  env?: NodeJS.ProcessEnv;
+  onlyPluginIds?: readonly string[];
+}) {
+  expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+    expect.objectContaining({
+      cache: false,
+      activate: false,
+      ...(params?.env ? { env: params.env } : {}),
+      ...(params?.onlyPluginIds ? { onlyPluginIds: params.onlyPluginIds } : {}),
+    }),
+  );
+}
+
+function getLastResolvedPluginConfig() {
+  return getLastLoadPluginsCall().config as
+    | {
+        plugins?: {
+          allow?: string[];
+          entries?: Record<string, { enabled?: boolean }>;
+        };
+      }
+    | undefined;
+}
+
 describe("resolvePluginProviders", () => {
   beforeEach(async () => {
     vi.resetModules();
@@ -131,23 +156,11 @@ describe("resolvePluginProviders", () => {
         cloneOptions(options) as unknown as Parameters<typeof resolvePluginProviders>[0],
       );
 
-      expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          cache: false,
-          activate: false,
-          ...(expectedOnlyPluginIds ? { onlyPluginIds: expectedOnlyPluginIds } : {}),
-        }),
+      expectLastLoadPluginsCall(
+        expectedOnlyPluginIds ? { onlyPluginIds: expectedOnlyPluginIds } : undefined,
       );
 
-      const call = getLastLoadPluginsCall();
-      const config = call.config as
-        | {
-            plugins?: {
-              allow?: string[];
-              entries?: Record<string, { enabled?: boolean }>;
-            };
-          }
-        | undefined;
+      const config = getLastResolvedPluginConfig();
       const allow = config?.plugins?.allow ?? [];
 
       if (expectedAllow) {
@@ -168,20 +181,17 @@ describe("resolvePluginProviders", () => {
       bundledProviderVitestCompat: true,
     });
 
-    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+    expectLastLoadPluginsCall();
+    expect(getLastResolvedPluginConfig()).toEqual(
       expect.objectContaining({
-        config: expect.objectContaining({
-          plugins: expect.objectContaining({
-            enabled: true,
-            allow: expect.arrayContaining(["google", "moonshot"]),
-            entries: expect.objectContaining({
-              google: { enabled: true },
-              moonshot: { enabled: true },
-            }),
+        plugins: expect.objectContaining({
+          enabled: true,
+          allow: expect.arrayContaining(["google", "moonshot"]),
+          entries: expect.objectContaining({
+            google: { enabled: true },
+            moonshot: { enabled: true },
           }),
         }),
-        cache: false,
-        activate: false,
       }),
     );
   });
@@ -215,11 +225,9 @@ describe("resolvePluginProviders", () => {
       bundledProviderAllowlistCompat: true,
     });
 
-    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        onlyPluginIds: ["google", "kilocode", "moonshot"],
-      }),
-    );
+    expectLastLoadPluginsCall({
+      onlyPluginIds: ["google", "kilocode", "moonshot"],
+    });
   });
   it("maps provider ids to owning plugin ids via manifests", () => {
     loadPluginManifestRegistryMock.mockReturnValue({
