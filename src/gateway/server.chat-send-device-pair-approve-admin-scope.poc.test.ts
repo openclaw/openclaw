@@ -53,7 +53,7 @@ function createDevicePairApi(params: {
     pluginConfig: {},
     runtime: {} as OpenClawPluginApi["runtime"],
     registerCommand: params.registerCommand,
-  }) as OpenClawPluginApi;
+  });
 }
 
 async function openWs(port: number): Promise<WebSocket> {
@@ -90,7 +90,7 @@ describe("gateway chat.send /pair approve admin scope", () => {
       },
     });
     clearConfigCache();
-    registerDevicePair.register(
+    await registerDevicePair.register(
       createDevicePairApi({
         registerCommand: (command) => {
           const registered = registerPluginCommand("device-pair", command, {
