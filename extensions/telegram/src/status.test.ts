@@ -157,6 +157,14 @@ describe("extractTelegramAllowedEmojiReactions", () => {
     });
     expect(result ? Array.from(result).toSorted() : null).toEqual(["👍", "🔥"]);
   });
+
+  it("treats malformed available_reactions payloads as an empty allowlist instead of throwing", () => {
+    expect(
+      extractTelegramAllowedEmojiReactions({
+        available_reactions: { type: "emoji", emoji: "👍" },
+      } as never),
+    ).toEqual(new Set<string>());
+  });
 });
 
 describe("resolveTelegramAllowedEmojiReactions", () => {

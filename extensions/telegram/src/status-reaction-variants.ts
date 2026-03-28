@@ -170,6 +170,9 @@ export function extractTelegramAllowedEmojiReactions(
     // Explicitly omitted/null => all emoji reactions are allowed in this chat.
     return null;
   }
+  if (!Array.isArray(availableReactions)) {
+    return new Set<string>();
+  }
 
   const allowed = new Set<string>();
   for (const reaction of availableReactions) {
