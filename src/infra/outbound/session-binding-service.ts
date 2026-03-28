@@ -1,4 +1,4 @@
-import { normalizeAnyChannelId, normalizeChannelId } from "../../channels/registry.js";
+import { normalizeChannelId } from "../../channels/registry.js";
 import { getActivePluginChannelRegistry } from "../../plugins/runtime.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
@@ -244,11 +244,15 @@ function supportsGenericCurrentConversationBindings(params: {
   accountId: string;
 }): boolean {
   void params.accountId;
+  const normalizedChannel = params.channel.trim().toLowerCase();
   return Boolean(
     normalizeChannelId(params.channel) ||
-    normalizeAnyChannelId(params.channel) ||
     getActivePluginChannelRegistry()?.channels.some(
-      (entry) => entry.plugin.id === params.channel.trim().toLowerCase(),
+      (entry) =>
+        entry.plugin.id.trim().toLowerCase() === normalizedChannel ||
+        (entry.plugin.meta?.aliases ?? []).some(
+          (alias) => alias.trim().toLowerCase() === normalizedChannel,
+        ),
     ),
   );
 }
