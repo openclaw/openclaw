@@ -29,14 +29,17 @@ function isPiOverrideKey(key: string): boolean {
   return key.startsWith("@mariozechner/pi-") || key.includes("@mariozechner/pi-");
 }
 
+function readPiDependencySpecs() {
+  const dependencies = readRootManifest().dependencies ?? {};
+  return PI_PACKAGE_NAMES.map((name) => ({
+    name,
+    spec: dependencies[name],
+  }));
+}
+
 describe("pi package graph guardrails", () => {
   it("keeps root Pi packages aligned to the same exact version", () => {
-    const manifest = readRootManifest();
-    const dependencies = manifest.dependencies ?? {};
-    const specs = PI_PACKAGE_NAMES.map((name) => ({
-      name,
-      spec: dependencies[name],
-    }));
+    const specs = readPiDependencySpecs();
 
     const missing = specs.filter((entry) => !entry.spec).map((entry) => entry.name);
     expect(
