@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../../../infra/local-file-access.js";
+import { resolveMediaBufferPath } from "../../../media/store.js";
 import { loadWebMedia } from "../../../media/web-media.js";
 import { resolveUserPath } from "../../../utils.js";
 import type { ImageSanitizationLimits } from "../../image-sanitization.js";
@@ -39,14 +40,22 @@ const PATH_REGEX_SOURCE =
   "(?:^|\\s|[\"'`(])((\\.\\.?/|[~/])[^\\s\"'`()\\[\\]]*\\.(?:" + IMAGE_EXTENSION_PATTERN + "))";
 
 /**
+ * Matches the opaque media URI written by the Gateway's claim-check offload:
+ *   media://inbound/<uuid-or-id>
+ * The ID segment may contain alphanumerics, hyphens, underscores, and dots
+ * (e.g. "1c77ce17-20b9-4546-be64-6e36a9adcb2c.png").
+ */
+const MEDIA_URI_REGEX = /\bmedia:\/\/inbound\/([A-Za-z0-9._-]+)/;
+
+/**
  * Result of detecting an image reference in text.
  */
 export interface DetectedImageRef {
   /** The raw matched string from the prompt */
   raw: string;
   /** The type of reference */
-  type: "path";
-  /** The resolved/normalized path */
+  type: "path" | "media-uri";
+  /** The resolved/normalized path, or the raw media URI for media-uri type */
   resolved: string;
 }
 
@@ -87,6 +96,7 @@ async function sanitizeImagesWithLog(
  * - Home paths: ~/Pictures/screenshot.png
  * - file:// URLs: file:///path/to/image.png
  * - Message attachments: [Image: source: /path/to/image.jpg]
+ * - Gateway claim-check URIs: [media attached: media://inbound/<id>]
  *
  * @param prompt The user prompt text to scan
  * @returns Array of detected image references
@@ -132,6 +142,20 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
 
     // Skip "[media attached: N files]" header lines
     if (/^\d+\s+files?$/i.test(content.trim())) {
+      continue;
+    }
+
+    // Check for a Gateway claim-check URI first (media://inbound/<id>).
+    // This must be tested before the extension-based path regex because the
+    // URI has no file extension suffix in its base form.
+    const mediaUriMatch = content.match(MEDIA_URI_REGEX);
+    if (mediaUriMatch) {
+      const uri = `media://inbound/${mediaUriMatch[1]}`;
+      const dedupeKey = normalizeRefForDedupe(uri);
+      if (!seen.has(dedupeKey)) {
+        seen.add(dedupeKey);
+        refs.push({ raw: uri, type: "media-uri", resolved: uri });
+      }
       continue;
     }
 
@@ -205,6 +229,40 @@ export async function loadImageFromRef(
     sandbox?: { root: string; bridge: SandboxFsBridge };
   },
 ): Promise<ImageContent | null> {
+  // Handle Gateway claim-check URIs (media://inbound/<id>).
+  // These are written by the Gateway's offload path and point to files that
+  // the Gateway has already validated and persisted. They are intentionally
+  // exempt from workspaceOnly checks because they live in the media store
+  // managed by the Gateway, not in the agent workspace.
+  if (ref.type === "media-uri") {
+    const uriMatch = ref.resolved.match(MEDIA_URI_REGEX);
+    if (!uriMatch) {
+      log.debug(`Native image: malformed media URI, skipping: ${ref.resolved}`);
+      return null;
+    }
+    const mediaId = uriMatch[1];
+    try {
+      // resolveMediaBufferPath must be exported from store.ts.
+      // It accepts the media ID (with optional extension) and returns the
+      // absolute path of the persisted file.
+      const physicalPath = await resolveMediaBufferPath(mediaId, "inbound");
+      const media = await loadWebMedia(physicalPath, { maxBytes: options?.maxBytes });
+      if (media.kind !== "image") {
+        log.debug(`Native image: media store entry is not an image: ${mediaId}`);
+        return null;
+      }
+      const mimeType = media.contentType ?? "image/jpeg";
+      const data = media.buffer.toString("base64");
+      log.debug(`Native image: loaded media-uri ${ref.resolved} -> ${physicalPath}`);
+      return { type: "image", data, mimeType };
+    } catch (err) {
+      log.debug(
+        `Native image: failed to load media-uri ${ref.resolved}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return null;
+    }
+  }
+
   try {
     let targetPath = ref.resolved;
 

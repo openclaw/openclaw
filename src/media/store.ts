@@ -407,3 +407,58 @@ export async function saveMediaBuffer(
   await writeSavedMediaBuffer({ dir, id, buffer });
   return buildSavedMediaResult({ dir, id, size: buffer.byteLength, contentType: mime });
 }
+
+/**
+ * Resolves a media ID saved by saveMediaBuffer to its absolute physical path.
+ *
+ * This is the read-side counterpart to saveMediaBuffer and is used by the
+ * agent runner to hydrate opaque `media://inbound/<id>` URIs written by the
+ * Gateway's claim-check offload path.
+ *
+ * Security:
+ * - Rejects IDs containing path separators or ".." to prevent directory
+ *   traversal outside the resolved subdir.
+ * - Verifies the resolved path is a regular file (not a symlink or directory)
+ *   before returning it, matching the write-side MEDIA_FILE_MODE policy.
+ *
+ * @param id      The media ID as returned by SavedMedia.id (may include
+ *                extension and original-filename prefix,
+ *                e.g. "photo---<uuid>.png").
+ * @param subdir  The subdirectory the file was saved into (default "inbound").
+ * @returns       Absolute path to the file on disk.
+ * @throws        If the ID is unsafe, the file does not exist, or is not a
+ *                regular file.
+ */
+export async function resolveMediaBufferPath(
+  id: string,
+  subdir: "inbound" = "inbound",
+): Promise<string> {
+  // Guard against path traversal: reject any ID containing a separator or
+  // "..". IDs produced by buildSavedMediaId only contain alphanumerics,
+  // dots, hyphens, and underscores — no slashes are ever emitted.
+  if (!id || id.includes("/") || id.includes("\\") || id.includes("..")) {
+    throw new Error(`resolveMediaBufferPath: unsafe media ID: ${id}`);
+  }
+
+  const dir = path.join(resolveMediaDir(), subdir);
+  const resolved = path.join(dir, id);
+
+  // Double-check that path.join didn't escape the intended directory.
+  // This should be unreachable after the separator check above, but be
+  // explicit about the invariant.
+  if (!resolved.startsWith(dir + path.sep) && resolved !== dir) {
+    throw new Error(`resolveMediaBufferPath: path escapes media directory: ${id}`);
+  }
+
+  // lstat (not stat) so we see symlinks rather than following them.
+  const stat = await fs.lstat(resolved);
+
+  if (stat.isSymbolicLink()) {
+    throw new Error(`resolveMediaBufferPath: refusing to follow symlink for media ID: ${id}`);
+  }
+  if (!stat.isFile()) {
+    throw new Error(`resolveMediaBufferPath: media ID does not resolve to a file: ${id}`);
+  }
+
+  return resolved;
+}

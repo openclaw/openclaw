@@ -44,11 +44,21 @@ const MIME_TO_EXT: Record<string, string> = {
   "image/png": ".png",
   "image/webp": ".webp",
   "image/gif": ".gif",
-  // bmp/tiff excluded from isSupportedForOffload to avoid extension-loss
+  // bmp/tiff excluded from SUPPORTED_OFFLOAD_MIMES to avoid extension-loss
   // bug in store.ts; entries kept here for future extension support
   "image/bmp": ".bmp",
   "image/tiff": ".tiff",
 };
+
+// Fix #1: Moved outside loop and use a Set for O(1) lookup instead of
+// rebuilding an array on every attachment iteration.
+const SUPPORTED_OFFLOAD_MIMES = new Set([
+  "image/jpeg",
+  "image/jpg",
+  "image/png",
+  "image/webp",
+  "image/gif",
+]);
 
 function normalizeMime(mime?: string): string | undefined {
   if (!mime) {
@@ -63,6 +73,9 @@ function isImageMime(mime?: string): boolean {
 }
 
 function isValidBase64(value: string): boolean {
+  // NOTE: This regex is O(n) over the full string length.
+  // For payloads near maxBytes (~5 MB / ~6.7 M chars) this is non-trivial.
+  // A future optimization could do a sampled spot-check for very large inputs.
   return value.length > 0 && value.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(value);
 }
 
@@ -74,9 +87,18 @@ function ensureExtension(label: string, mime: string): string {
   return ext ? `${label}${ext}` : label;
 }
 
-function extractMediaPath(savedMedia: SavedMedia, fallbackLabel: string): string {
-  const raw = savedMedia.path ?? savedMedia.id ?? fallbackLabel;
-  return raw.replace(/\\/g, "/");
+// Fix #2: Guard against unexpected shapes from saveMediaBuffer before
+// treating the result as SavedMedia, instead of blindly casting with `as`.
+function assertSavedMedia(value: unknown, label: string): SavedMedia {
+  if (
+    value !== null &&
+    typeof value === "object" &&
+    "id" in value &&
+    typeof (value as Record<string, unknown>).id === "string"
+  ) {
+    return value as SavedMedia;
+  }
+  throw new Error(`attachment ${label}: saveMediaBuffer returned unexpected shape`);
 }
 
 function normalizeAttachment(
@@ -125,6 +147,20 @@ function validateAttachmentBase64OrThrow(
  * Parse attachments and extract images as structured content blocks.
  * Returns the message text and an array of image content blocks
  * compatible with Claude API's image format.
+ *
+ * Attachments whose decoded size exceeds OFFLOAD_THRESHOLD_BYTES are saved to
+ * disk via saveMediaBuffer and replaced with an opaque `media://inbound/<id>`
+ * URI appended to the message. Downstream agents must resolve this URI via the
+ * media store before forwarding to the model.
+ *
+ * Known limitation: when a mix of large (offloaded) and small (inline) images
+ * is present, offloaded images appear as text markers appended to the message
+ * while inline images are in the `images` array. The agent's
+ * detectAndLoadPromptImages initialises from `existingImages` first, then
+ * appends prompt-detected refs, so mixed batches may be delivered to the model
+ * in a different order than the original attachment list. Prompts that rely on
+ * attachment order (e.g. "first image") should be aware of this. A future
+ * refactor should unify all image references into a single ordered list.
  */
 export async function parseMessageWithAttachments(
   message: string,
@@ -183,35 +219,44 @@ export async function parseMessageWithAttachments(
         `attachment ${label}: mime mismatch (${providedMime} -> ${sniffedMime}), using sniffed`,
       );
     }
-    const finalMime = sniffedMime ?? providedMime ?? mime;
+
+    // Fix #3: The third fallback normalizes `mime` so that a raw un-normalized
+    // string (e.g. "IMAGE/JPEG" from the caller) doesn't silently bypass the
+    // SUPPORTED_OFFLOAD_MIMES check below. If normalization still yields
+    // nothing, fall back to the raw string as a last resort.
+    const finalMime = sniffedMime ?? providedMime ?? normalizeMime(mime) ?? mime;
 
     let isOffloaded = false;
 
-    const isSupportedForOffload = [
-      "image/jpeg",
-      "image/jpg",
-      "image/png",
-      "image/webp",
-      "image/gif",
-    ].includes(finalMime);
+    // Fix #1 (continued): isSupportedForOffload now uses the module-level Set.
+    const isSupportedForOffload = SUPPORTED_OFFLOAD_MIMES.has(finalMime);
 
     if (sizeBytes > OFFLOAD_THRESHOLD_BYTES && isSupportedForOffload) {
       try {
         const buffer = Buffer.from(b64, "base64");
         const labelWithExt = ensureExtension(label, finalMime);
 
-        const savedMedia = (await saveMediaBuffer(
+        const rawResult = await saveMediaBuffer(
           buffer,
           finalMime,
           "inbound",
           undefined,
           labelWithExt,
-        )) as SavedMedia;
+        );
 
-        const mediaPath = extractMediaPath(savedMedia, labelWithExt);
+        // Fix #2: validate shape before trusting the result.
+        const savedMedia = assertSavedMedia(rawResult, label);
 
-        updatedMessage += `\n[media attached: ${mediaPath}]`;
-        log?.info?.(`[Gateway] Intercepted large image payload. Saved to disk: ${mediaPath}`);
+        // Fix #4: Use an opaque media URI instead of a physical filesystem
+        // path. This decouples the Gateway from the Agent's filesystem layout
+        // and is compatible with workspaceOnly sandboxes.
+        // The agent side must resolve media://inbound/<id> via the media store
+        // before passing the image to the model. (Follow-up: implement
+        // resolveMediaUri in the agent runner.)
+        const mediaRef = `media://inbound/${savedMedia.id}`;
+
+        updatedMessage += `\n[media attached: ${mediaRef}]`;
+        log?.info?.(`[Gateway] Intercepted large image payload. Saved: ${mediaRef}`);
         isOffloaded = true;
       } catch (err) {
         const errorMessage = err instanceof Error ? err.message : String(err);
