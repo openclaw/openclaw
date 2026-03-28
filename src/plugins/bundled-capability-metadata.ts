@@ -90,3 +90,28 @@ export const BUNDLED_WEB_SEARCH_PROVIDER_PLUGIN_IDS = Object.fromEntries(
     entry.webSearchProviderIds.map((providerId) => [providerId, entry.pluginId] as const),
   ).toSorted(([left], [right]) => left.localeCompare(right)),
 ) as Readonly<Record<string, string>>;
+
+export const BUNDLED_PROVIDER_PLUGIN_ID_ALIASES = Object.fromEntries(
+  BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.flatMap((entry) =>
+    entry.providerIds
+      .filter((providerId) => providerId !== entry.pluginId)
+      .map((providerId) => [providerId, entry.pluginId] as const),
+  ).toSorted(([left], [right]) => left.localeCompare(right)),
+) as Readonly<Record<string, string>>;
+
+export const BUNDLED_LEGACY_PLUGIN_ID_ALIASES = Object.fromEntries(
+  BUNDLED_PLUGIN_METADATA.flatMap(({ manifest }) =>
+    (manifest.legacyPluginIds ?? []).map(
+      (legacyPluginId) => [legacyPluginId, manifest.id] as const,
+    ),
+  ).toSorted(([left], [right]) => left.localeCompare(right)),
+) as Readonly<Record<string, string>>;
+
+export const BUNDLED_AUTO_ENABLE_PROVIDER_PLUGIN_IDS = Object.fromEntries(
+  BUNDLED_PLUGIN_METADATA.flatMap(({ manifest }) =>
+    (manifest.autoEnableWhenConfiguredProviders ?? []).map((providerId) => [
+      providerId,
+      manifest.id,
+    ]),
+  ).toSorted(([left], [right]) => left.localeCompare(right)),
+) as Readonly<Record<string, string>>;

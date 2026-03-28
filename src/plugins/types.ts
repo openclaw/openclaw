@@ -51,6 +51,7 @@ import type {
   SpeechTelephonySynthesisResult,
   SpeechVoiceOption,
 } from "../tts/provider-types.js";
+import type { DeliveryContext } from "../utils/delivery-context.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { SecretInputMode } from "./provider-auth-types.js";
 import type { createVpsAwareOAuthHandlers } from "./provider-oauth-flow.js";
@@ -125,6 +126,8 @@ export type OpenClawPluginToolContext = {
   };
   messageChannel?: string;
   agentAccountId?: string;
+  /** Trusted ambient delivery route for the active agent/session. */
+  deliveryContext?: DeliveryContext;
   /** Trusted sender id from inbound context (runtime-provided, not tool args). */
   requesterSenderId?: string;
   /** Whether the trusted sender is an owner. */
@@ -169,6 +172,7 @@ export type ProviderAuthResult = {
 /** Interactive auth context passed to provider login/setup methods. */
 export type ProviderAuthContext = {
   config: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
   agentDir?: string;
   workspaceDir?: string;
   prompter: WizardPrompter;
@@ -733,6 +737,21 @@ export type ProviderPluginWizard = {
   modelPicker?: ProviderPluginWizardModelPicker;
 };
 
+export type ProviderOAuthProfileIdRepair = {
+  /**
+   * Legacy OAuth profile id to migrate away from.
+   *
+   * When omitted, OpenClaw falls back to `<provider>:default`.
+   */
+  legacyProfileId?: string;
+  /**
+   * Optional custom doctor prompt label.
+   *
+   * Defaults to the provider label when omitted.
+   */
+  promptLabel?: string;
+};
+
 export type ProviderModelSelectedContext = {
   config: OpenClawConfig;
   model: string;
@@ -990,6 +1009,14 @@ export type ProviderPlugin = {
    */
   deprecatedProfileIds?: string[];
   /**
+   * Legacy OAuth profile-id migrations that `openclaw doctor` should offer.
+   *
+   * Use this when a provider moved from a legacy default OAuth profile id to a
+   * newer identity-based id and wants doctor to own the config rewrite without
+   * another core-specific migration branch.
+   */
+  oauthProfileIdRepairs?: ProviderOAuthProfileIdRepair[];
+  /**
    * Provider-owned OAuth refresh.
    *
    * OpenClaw calls this before falling back to the shared `pi-ai` OAuth
@@ -1052,6 +1079,15 @@ export type WebSearchProviderPlugin = {
   id: WebSearchProviderId;
   label: string;
   hint: string;
+  /**
+   * Interactive onboarding surfaces where this search provider should appear
+   * when OpenClaw has no config-aware runtime context yet.
+   *
+   * Unlike provider auth, search setup historically exposed only a curated
+   * quickstart subset. Keep this plugin-owned so core does not hardcode the
+   * default bundled provider list.
+   */
+  onboardingScopes?: Array<"text-inference">;
   requiresCredential?: boolean;
   credentialLabel?: string;
   envVars: string[];
@@ -1142,6 +1178,8 @@ export type PluginCommandContext = {
   accountId?: string;
   /** Thread/topic id if available */
   messageThreadId?: string | number;
+  /** Parent conversation id for thread-capable channels */
+  threadParentId?: string;
   requestConversationBinding: (
     params?: PluginConversationBindingRequestParams,
   ) => Promise<PluginConversationBindingRequestResult>;
@@ -1966,10 +2004,35 @@ export type PluginHookBeforeToolCallEvent = {
   toolCallId?: string;
 };
 
+export const PluginApprovalResolutions = {
+  ALLOW_ONCE: "allow-once",
+  ALLOW_ALWAYS: "allow-always",
+  DENY: "deny",
+  TIMEOUT: "timeout",
+  CANCELLED: "cancelled",
+} as const;
+
+export type PluginApprovalResolution =
+  (typeof PluginApprovalResolutions)[keyof typeof PluginApprovalResolutions];
+
 export type PluginHookBeforeToolCallResult = {
   params?: Record<string, unknown>;
   block?: boolean;
   blockReason?: string;
+  requireApproval?: {
+    title: string;
+    description: string;
+    severity?: "info" | "warning" | "critical";
+    timeoutMs?: number;
+    timeoutBehavior?: "allow" | "deny";
+    /** Set automatically by the hook runner — plugins should not set this. */
+    pluginId?: string;
+    /**
+     * Best-effort callback invoked with the final outcome after approval resolves, times out, or is cancelled.
+     * OpenClaw does not await this callback before allowing or denying the tool call.
+     */
+    onResolution?: (decision: PluginApprovalResolution) => Promise<void> | void;
+  };
 };
 
 // after_tool_call hook

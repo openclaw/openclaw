@@ -208,9 +208,7 @@ describe("resolveNestedAllowlistDecision", () => {
     },
   ] as const;
 
-  for (const testCase of cases) {
-    it(testCase.name, () => {
-      expect(resolveNestedAllowlistDecision(testCase.value)).toBe(testCase.expected);
-    });
-  }
+  it.each(cases)("$name", ({ value, expected }) => {
+    expect(resolveNestedAllowlistDecision(value)).toBe(expected);
+  });
 });

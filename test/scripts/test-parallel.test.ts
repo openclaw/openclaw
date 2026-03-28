@@ -371,9 +371,13 @@ describe("scripts/test-parallel lane planning", () => {
       }),
     );
 
-    expect(output).toContain("unit-batch-1 filters=50");
-    expect(output).toContain("unit-batch-2 filters=49");
-    expect(output).not.toContain("unit-batch-3");
+    const unitBatchLines = getPlanLines(output, "unit-batch-");
+    const unitBatchFilterCounts = unitBatchLines.map((line) =>
+      parseNumericPlanField(line, "filters"),
+    );
+
+    expect(unitBatchLines.length).toBe(2);
+    expect(unitBatchFilterCounts).toEqual([50, 50]);
   });
 
   it("explains targeted file ownership and execution policy", () => {
@@ -382,6 +386,17 @@ describe("scripts/test-parallel lane planning", () => {
     expect(output).toContain("surface=base");
     expect(output).toContain("reasons=base-surface,base-pinned-manifest");
     expect(output).toContain("pool=forks");
+  });
+
+  it("routes targeted contract tests through the contracts config", () => {
+    const output = runPlannerPlan([
+      "--explain",
+      "src/channels/plugins/contracts/registry-backed.contract.test.ts",
+    ]);
+
+    expect(output).toContain("surface=contracts");
+    expect(output).toContain("vitest.contracts.config.ts");
+    expect(output).not.toContain("vitest.unit.config.ts");
   });
 
   it("prints the planner-backed CI manifest as JSON", () => {
@@ -466,6 +481,13 @@ describe("scripts/test-parallel lane planning", () => {
     expect(() => runPlannerPlan(["--plan", "--surface", "channel"])).toThrowError(
       /Unsupported --surface value\(s\): channel/u,
     );
+  });
+
+  it("supports the explicit contracts surface", () => {
+    const output = runPlannerPlan(["--plan", "--surface", "contracts"]);
+
+    expect(output).toContain("contracts filters=all");
+    expect(output).toContain("surface=contracts");
   });
 
   it("rejects wrapper --files values that look like options", () => {

@@ -147,9 +147,9 @@ function selectProbeModel(params: {
   if (direct && direct.length > 0) {
     return { provider, model: direct[0] };
   }
-  const fromCatalog = catalog.find((entry) => entry.provider === provider);
+  const fromCatalog = catalog.find((entry) => normalizeProviderId(entry.provider) === provider);
   if (fromCatalog) {
-    return { provider: fromCatalog.provider, model: fromCatalog.id };
+    return { provider, model: fromCatalog.id };
   }
   return null;
 }

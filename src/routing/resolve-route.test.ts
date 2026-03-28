@@ -41,9 +41,9 @@ describe("resolveAgentRoute", () => {
         expected: "agent:main:whatsapp:direct:+15551234567",
       },
     ];
-    for (const testCase of cases) {
+    for (const { dmScope, expected } of cases) {
       const cfg: OpenClawConfig = {
-        session: { dmScope: testCase.dmScope },
+        session: { dmScope },
       };
       const route = resolveAgentRoute({
         cfg,
@@ -51,7 +51,7 @@ describe("resolveAgentRoute", () => {
         accountId: null,
         peer: { kind: "direct", id: "+15551234567" },
       });
-      expect(route.sessionKey).toBe(testCase.expected);
+      expect(route.sessionKey).toBe(expected);
       expect(route.lastRoutePolicy).toBe("session");
     }
   });
@@ -108,10 +108,10 @@ describe("resolveAgentRoute", () => {
         expected: "agent:main:discord:direct:alice",
       },
     ];
-    for (const testCase of cases) {
+    for (const { dmScope, channel, peerId, expected } of cases) {
       const cfg: OpenClawConfig = {
         session: {
-          dmScope: testCase.dmScope,
+          dmScope,
           identityLinks: {
             alice: ["telegram:111111111", "discord:222222222222222222"],
           },
@@ -119,11 +119,11 @@ describe("resolveAgentRoute", () => {
       };
       const route = resolveAgentRoute({
         cfg,
-        channel: testCase.channel,
+        channel,
         accountId: null,
-        peer: { kind: "direct", id: testCase.peerId },
+        peer: { kind: "direct", id: peerId },
       });
-      expect(route.sessionKey).toBe(testCase.expected);
+      expect(route.sessionKey).toBe(expected);
     }
   });
 

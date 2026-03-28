@@ -72,6 +72,7 @@ export function createXaiWebSearchProvider(): WebSearchProviderPlugin {
     id: "grok",
     label: "Grok (xAI)",
     hint: "Requires xAI API key · xAI web-grounded responses",
+    onboardingScopes: ["text-inference"],
     credentialLabel: "xAI API key",
     envVars: ["XAI_API_KEY"],
     placeholder: "xai-...",

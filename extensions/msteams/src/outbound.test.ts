@@ -18,16 +18,6 @@ vi.mock("./polls.js", () => ({
   }),
 }));
 
-vi.mock("./runtime.js", () => ({
-  getMSTeamsRuntime: () => ({
-    channel: {
-      text: {
-        chunkMarkdownText: (text: string) => [text],
-      },
-    },
-  }),
-}));
-
 import { msteamsOutbound } from "./outbound.js";
 
 describe("msteamsOutbound cfg threading", () => {
@@ -127,5 +117,14 @@ describe("msteamsOutbound cfg threading", () => {
         options: ["Pizza", "Sushi"],
       }),
     );
+  });
+
+  it("chunks outbound text without requiring MSTeams runtime initialization", () => {
+    const chunker = msteamsOutbound.chunker;
+    if (!chunker) {
+      throw new Error("msteams outbound.chunker unavailable");
+    }
+
+    expect(chunker("alpha beta", 5)).toEqual(["alpha", "beta"]);
   });
 });

@@ -8,6 +8,8 @@ const buildSessionLookup = (
     sessionId?: string;
     lastChannel?: string;
     lastTo?: string;
+    lastAccountId?: string;
+    lastThreadId?: string | number;
     updatedAt?: number;
     label?: string;
     spawnedBy?: string;
@@ -22,6 +24,8 @@ const buildSessionLookup = (
     updatedAt: entry.updatedAt ?? Date.now(),
     lastChannel: entry.lastChannel,
     lastTo: entry.lastTo,
+    lastAccountId: entry.lastAccountId,
+    lastThreadId: entry.lastThreadId,
     label: entry.label,
     spawnedBy: entry.spawnedBy,
     parentSessionKey: entry.parentSessionKey,
@@ -168,6 +172,33 @@ describe("node exec events", () => {
       { sessionKey: "node-node-2", contextKey: "exec:run-2" },
     );
     expect(requestHeartbeatNowMock).toHaveBeenCalledWith({ reason: "exec-event" });
+  });
+
+  it("canonicalizes exec session key before enqueue and wake", async () => {
+    loadSessionEntryMock.mockReturnValueOnce({
+      ...buildSessionLookup("node-node-2"),
+      canonicalKey: "agent:main:node-node-2",
+    });
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-2", {
+      event: "exec.finished",
+      payloadJSON: JSON.stringify({
+        runId: "run-2",
+        exitCode: 0,
+        timedOut: false,
+        output: "done",
+      }),
+    });
+
+    expect(loadSessionEntryMock).toHaveBeenCalledWith("node-node-2");
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      "Exec finished (node=node-2 id=run-2, code 0)\ndone",
+      { sessionKey: "agent:main:node-node-2", contextKey: "exec:run-2" },
+    );
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+      reason: "exec-event",
+      sessionKey: "agent:main:node-node-2",
+    });
   });
 
   it("suppresses noisy exec.finished success events with empty output", async () => {
@@ -478,6 +509,8 @@ describe("voice transcript events", () => {
         parentSessionKey: "agent:main:parent",
         lastChannel: "discord",
         lastTo: "thread-1",
+        lastAccountId: "acct-1",
+        lastThreadId: 42,
       }),
     );
 
@@ -492,6 +525,8 @@ describe("voice transcript events", () => {
           parentSessionKey: "agent:main:parent",
           lastChannel: "discord",
           lastTo: "thread-1",
+          lastAccountId: "acct-1",
+          lastThreadId: 42,
         },
       };
       update(store);
@@ -515,6 +550,8 @@ describe("voice transcript events", () => {
         parentSessionKey: "agent:main:parent",
         lastChannel: "discord",
         lastTo: "thread-1",
+        lastAccountId: "acct-1",
+        lastThreadId: 42,
       },
     });
   });

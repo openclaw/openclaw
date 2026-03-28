@@ -26,6 +26,13 @@ const DEFAULT_BUNDLED_CHANNEL_ENTRY_IDS = [
 ];
 const MANIFEST_KEY = "openclaw";
 const FORMATTER_CWD = path.resolve(import.meta.dirname, "..");
+const PUBLIC_SURFACE_SOURCE_EXTENSIONS = new Set([".ts", ".mts", ".js", ".mjs", ".cts", ".cjs"]);
+const RUNTIME_SIDECAR_ARTIFACTS = new Set([
+  "helper-api.js",
+  "light-runtime-api.js",
+  "runtime-api.js",
+  "thread-bindings-runtime.js",
+]);
 
 function rewriteEntryToBuiltPath(entry) {
   if (typeof entry !== "string" || entry.trim().length === 0) {
@@ -33,6 +40,53 @@ function rewriteEntryToBuiltPath(entry) {
   }
   const normalized = entry.replace(/^\.\//u, "");
   return normalized.replace(/\.[^.]+$/u, ".js");
+}
+
+function isTopLevelPublicSurfaceSource(name) {
+  if (!PUBLIC_SURFACE_SOURCE_EXTENSIONS.has(path.extname(name))) {
+    return false;
+  }
+  if (name.startsWith(".")) {
+    return false;
+  }
+  if (name.startsWith("test-")) {
+    return false;
+  }
+  if (name.includes(".test-")) {
+    return false;
+  }
+  if (name.endsWith(".d.ts")) {
+    return false;
+  }
+  return !/(\.test|\.spec)(\.[cm]?[jt]s)$/u.test(name);
+}
+
+function collectTopLevelPublicSurfaceArtifacts(params) {
+  const excluded = new Set(
+    [params.sourceEntry, params.setupEntry]
+      .filter((entry) => typeof entry === "string" && entry.trim().length > 0)
+      .map((entry) => path.basename(entry)),
+  );
+  const artifacts = fs
+    .readdirSync(params.pluginDir, { withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => entry.name)
+    .filter(isTopLevelPublicSurfaceSource)
+    .filter((entry) => !excluded.has(entry))
+    .map(rewriteEntryToBuiltPath)
+    .filter((entry) => typeof entry === "string" && entry.length > 0)
+    .toSorted((left, right) => left.localeCompare(right));
+  return artifacts.length > 0 ? artifacts : undefined;
+}
+
+function collectRuntimeSidecarArtifacts(publicSurfaceArtifacts) {
+  if (!publicSurfaceArtifacts) {
+    return undefined;
+  }
+  const runtimeSidecarArtifacts = publicSurfaceArtifacts.filter((artifact) =>
+    RUNTIME_SIDECAR_ARTIFACTS.has(artifact),
+  );
+  return runtimeSidecarArtifacts.length > 0 ? runtimeSidecarArtifacts : undefined;
 }
 
 function deriveIdHint({ filePath, manifestId, packageName, hasMultipleExtensions }) {
@@ -138,8 +192,18 @@ function normalizePluginManifest(raw) {
     ...(normalizeStringList(raw.providers)
       ? { providers: normalizeStringList(raw.providers) }
       : {}),
+    ...(normalizeStringList(raw.autoEnableWhenConfiguredProviders)
+      ? {
+          autoEnableWhenConfiguredProviders: normalizeStringList(
+            raw.autoEnableWhenConfiguredProviders,
+          ),
+        }
+      : {}),
     ...(normalizeStringList(raw.cliBackends)
       ? { cliBackends: normalizeStringList(raw.cliBackends) }
+      : {}),
+    ...(normalizeStringList(raw.legacyPluginIds)
+      ? { legacyPluginIds: normalizeStringList(raw.legacyPluginIds) }
       : {}),
     ...(normalizeObject(raw.providerAuthEnvVars)
       ? { providerAuthEnvVars: raw.providerAuthEnvVars }
@@ -241,16 +305,28 @@ async function collectBundledChannelConfigsForSource({ source, manifest }) {
     return Object.keys(existingChannelConfigs).length > 0 ? existingChannelConfigs : undefined;
   }
 
-  const surfaceJson = execFileSync(
-    process.execPath,
-    ["--import", "tsx", "scripts/load-channel-config-surface.ts", modulePath],
-    {
+  const runSurfaceLoader = (command, args) =>
+    execFileSync(command, args, {
       // Run from the host repo so the generator always resolves its own loader/tooling,
       // even when inspecting a temporary or alternate repo root.
       cwd: FORMATTER_CWD,
       encoding: "utf8",
-    },
-  );
+    });
+
+  let surfaceJson;
+  try {
+    surfaceJson = runSurfaceLoader("bun", ["scripts/load-channel-config-surface.ts", modulePath]);
+  } catch (error) {
+    if (!error || typeof error !== "object" || error.code !== "ENOENT") {
+      throw error;
+    }
+    surfaceJson = runSurfaceLoader(process.execPath, [
+      "--import",
+      "tsx",
+      "scripts/load-channel-config-surface.ts",
+      modulePath,
+    ]);
+  }
   const surface = JSON.parse(surfaceJson);
   if (!surface?.schema) {
     return Object.keys(existingChannelConfigs).length > 0 ? existingChannelConfigs : undefined;
@@ -358,6 +434,12 @@ export async function collectBundledPluginMetadata(params = {}) {
             built: rewriteEntryToBuiltPath(packageManifest.setupEntry.trim()),
           }
         : undefined;
+    const publicSurfaceArtifacts = collectTopLevelPublicSurfaceArtifacts({
+      pluginDir: source.pluginDir,
+      sourceEntry,
+      setupEntry: setupEntry?.source,
+    });
+    const runtimeSidecarArtifacts = collectRuntimeSidecarArtifacts(publicSurfaceArtifacts);
     const channelConfigs = await collectBundledChannelConfigsForSource({ source, manifest });
     if (channelConfigs) {
       manifest.channelConfigs = channelConfigs;
@@ -378,6 +460,8 @@ export async function collectBundledPluginMetadata(params = {}) {
       ...(setupEntry?.built
         ? { setupSource: { source: setupEntry.source, built: setupEntry.built } }
         : {}),
+      ...(publicSurfaceArtifacts ? { publicSurfaceArtifacts } : {}),
+      ...(runtimeSidecarArtifacts ? { runtimeSidecarArtifacts } : {}),
       ...(typeof packageJson.name === "string" ? { packageName: packageJson.name.trim() } : {}),
       ...(typeof packageJson.version === "string"
         ? { packageVersion: packageJson.version.trim() }

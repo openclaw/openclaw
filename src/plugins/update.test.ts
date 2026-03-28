@@ -27,6 +27,64 @@ vi.mock("./bundled-sources.js", () => ({
 
 const { syncPluginsForUpdateChannel, updateNpmInstalledPlugins } = await import("./update.js");
 
+function createSuccessfulNpmUpdateResult(params?: {
+  pluginId?: string;
+  targetDir?: string;
+  version?: string;
+  npmResolution?: {
+    name: string;
+    version: string;
+    resolvedSpec: string;
+  };
+}) {
+  return {
+    ok: true,
+    pluginId: params?.pluginId ?? "opik-openclaw",
+    targetDir: params?.targetDir ?? "/tmp/opik-openclaw",
+    version: params?.version ?? "0.2.6",
+    extensions: ["index.ts"],
+    ...(params?.npmResolution ? { npmResolution: params.npmResolution } : {}),
+  };
+}
+
+function createNpmInstallConfig(params: {
+  pluginId: string;
+  spec: string;
+  installPath: string;
+  integrity?: string;
+  resolvedName?: string;
+  resolvedSpec?: string;
+}) {
+  return {
+    plugins: {
+      installs: {
+        [params.pluginId]: {
+          source: "npm" as const,
+          spec: params.spec,
+          installPath: params.installPath,
+          ...(params.integrity ? { integrity: params.integrity } : {}),
+          ...(params.resolvedName ? { resolvedName: params.resolvedName } : {}),
+          ...(params.resolvedSpec ? { resolvedSpec: params.resolvedSpec } : {}),
+        },
+      },
+    },
+  };
+}
+
+function expectNpmUpdateCall(params: {
+  spec: string;
+  expectedIntegrity?: string;
+  expectedPluginId?: string;
+}) {
+  expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
+    expect.objectContaining({
+      spec: params.spec,
+      expectedIntegrity: params.expectedIntegrity,
+      ...(params.expectedPluginId ? { expectedPluginId: params.expectedPluginId } : {}),
+    }),
+  );
+}
+
 describe("updateNpmInstalledPlugins", () => {
   beforeEach(() => {
     installPluginFromNpmSpecMock.mockReset();
@@ -35,73 +93,76 @@ describe("updateNpmInstalledPlugins", () => {
     resolveBundledPluginSourcesMock.mockReset();
   });
 
-  it("skips integrity drift checks for unpinned npm specs during dry-run updates", async () => {
-    installPluginFromNpmSpecMock.mockResolvedValue({
-      ok: true,
-      pluginId: "opik-openclaw",
-      targetDir: "/tmp/opik-openclaw",
-      version: "0.2.6",
-      extensions: ["index.ts"],
-    });
-
-    await updateNpmInstalledPlugins({
-      config: {
-        plugins: {
-          installs: {
-            "opik-openclaw": {
-              source: "npm",
-              spec: "@opik/opik-openclaw",
-              integrity: "sha512-old",
-              installPath: "/tmp/opik-openclaw",
-            },
-          },
-        },
-      },
+  it.each([
+    {
+      name: "skips integrity drift checks for unpinned npm specs during dry-run updates",
+      config: createNpmInstallConfig({
+        pluginId: "opik-openclaw",
+        spec: "@opik/opik-openclaw",
+        integrity: "sha512-old",
+        installPath: "/tmp/opik-openclaw",
+      }),
       pluginIds: ["opik-openclaw"],
       dryRun: true,
-    });
-
-    expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
-      expect.objectContaining({
+      expectedCall: {
         spec: "@opik/opik-openclaw",
         expectedIntegrity: undefined,
-      }),
-    );
-  });
-
-  it("keeps integrity drift checks for exact-version npm specs during dry-run updates", async () => {
-    installPluginFromNpmSpecMock.mockResolvedValue({
-      ok: true,
-      pluginId: "opik-openclaw",
-      targetDir: "/tmp/opik-openclaw",
-      version: "0.2.6",
-      extensions: ["index.ts"],
-    });
-
-    await updateNpmInstalledPlugins({
-      config: {
-        plugins: {
-          installs: {
-            "opik-openclaw": {
-              source: "npm",
-              spec: "@opik/opik-openclaw@0.2.5",
-              integrity: "sha512-old",
-              installPath: "/tmp/opik-openclaw",
-            },
-          },
-        },
       },
+    },
+    {
+      name: "keeps integrity drift checks for exact-version npm specs during dry-run updates",
+      config: createNpmInstallConfig({
+        pluginId: "opik-openclaw",
+        spec: "@opik/opik-openclaw@0.2.5",
+        integrity: "sha512-old",
+        installPath: "/tmp/opik-openclaw",
+      }),
       pluginIds: ["opik-openclaw"],
       dryRun: true,
-    });
-
-    expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
-      expect.objectContaining({
+      expectedCall: {
         spec: "@opik/opik-openclaw@0.2.5",
         expectedIntegrity: "sha512-old",
+      },
+    },
+    {
+      name: "skips recorded integrity checks when an explicit npm version override changes the spec",
+      config: createNpmInstallConfig({
+        pluginId: "openclaw-codex-app-server",
+        spec: "openclaw-codex-app-server@0.2.0-beta.3",
+        integrity: "sha512-old",
+        installPath: "/tmp/openclaw-codex-app-server",
       }),
-    );
-  });
+      pluginIds: ["openclaw-codex-app-server"],
+      specOverrides: {
+        "openclaw-codex-app-server": "openclaw-codex-app-server@0.2.0-beta.4",
+      },
+      installerResult: createSuccessfulNpmUpdateResult({
+        pluginId: "openclaw-codex-app-server",
+        targetDir: "/tmp/openclaw-codex-app-server",
+        version: "0.2.0-beta.4",
+      }),
+      expectedCall: {
+        spec: "openclaw-codex-app-server@0.2.0-beta.4",
+        expectedIntegrity: undefined,
+      },
+    },
+  ] as const)(
+    "$name",
+    async ({ config, pluginIds, dryRun, specOverrides, installerResult, expectedCall }) => {
+      installPluginFromNpmSpecMock.mockResolvedValue(
+        installerResult ?? createSuccessfulNpmUpdateResult(),
+      );
+
+      await updateNpmInstalledPlugins({
+        config,
+        pluginIds: [...pluginIds],
+        ...(dryRun ? { dryRun: true } : {}),
+        ...(specOverrides ? { specOverrides } : {}),
+      });
+
+      expectNpmUpdateCall(expectedCall);
+    },
+  );
 
   it("formats package-not-found updates with a stable message", async () => {
     installPluginFromNpmSpecMock.mockResolvedValue({
@@ -308,42 +369,6 @@ describe("updateNpmInstalledPlugins", () => {
       clawhubChannel: "official",
       integrity: "sha256-next",
     });
-  });
-
-  it("skips recorded integrity checks when an explicit npm version override changes the spec", async () => {
-    installPluginFromNpmSpecMock.mockResolvedValue({
-      ok: true,
-      pluginId: "openclaw-codex-app-server",
-      targetDir: "/tmp/openclaw-codex-app-server",
-      version: "0.2.0-beta.4",
-      extensions: ["index.ts"],
-    });
-
-    await updateNpmInstalledPlugins({
-      config: {
-        plugins: {
-          installs: {
-            "openclaw-codex-app-server": {
-              source: "npm",
-              spec: "openclaw-codex-app-server@0.2.0-beta.3",
-              integrity: "sha512-old",
-              installPath: "/tmp/openclaw-codex-app-server",
-            },
-          },
-        },
-      },
-      pluginIds: ["openclaw-codex-app-server"],
-      specOverrides: {
-        "openclaw-codex-app-server": "openclaw-codex-app-server@0.2.0-beta.4",
-      },
-    });
-
-    expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        spec: "openclaw-codex-app-server@0.2.0-beta.4",
-        expectedIntegrity: undefined,
-      }),
-    );
   });
 
   it("migrates legacy unscoped install keys when a scoped npm package updates", async () => {

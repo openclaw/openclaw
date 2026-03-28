@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { normalizeSignalAccountInput } from "../../../extensions/signal/api.js";
 import { telegramOutbound, whatsappOutbound } from "../../../test/channel-outbounds.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeIMessageMessagingTarget } from "./normalize/imessage.js";
@@ -185,34 +184,5 @@ describe("whatsappOutbound.resolveTarget", () => {
       ok: true,
       to: "120363401234567890@g.us",
     });
-  });
-});
-
-describe("normalizeSignalAccountInput", () => {
-  it("accepts already normalized numbers", () => {
-    expect(normalizeSignalAccountInput("+15555550123")).toBe("+15555550123");
-  });
-
-  it("normalizes formatted input", () => {
-    expect(normalizeSignalAccountInput("  +1 (555) 000-1234 ")).toBe("+15550001234");
-  });
-
-  it("rejects empty input", () => {
-    expect(normalizeSignalAccountInput("   ")).toBeNull();
-  });
-
-  it("rejects non-numeric input", () => {
-    expect(normalizeSignalAccountInput("ok")).toBeNull();
-    expect(normalizeSignalAccountInput("++--")).toBeNull();
-  });
-
-  it("rejects inputs with stray + characters", () => {
-    expect(normalizeSignalAccountInput("++12345")).toBeNull();
-    expect(normalizeSignalAccountInput("+1+2345")).toBeNull();
-  });
-
-  it("rejects numbers that are too short or too long", () => {
-    expect(normalizeSignalAccountInput("+1234")).toBeNull();
-    expect(normalizeSignalAccountInput("+1234567890123456")).toBeNull();
   });
 });

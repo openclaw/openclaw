@@ -131,13 +131,22 @@ const createCompactionEvent = (params: { messageText: string; tokensBefore: numb
 
 const createCompactionContext = (params: {
   sessionManager: ExtensionContext["sessionManager"];
-  getApiKeyAndHeadersMock: ReturnType<typeof vi.fn>;
+  getApiKeyAndHeadersMock?: ReturnType<typeof vi.fn>;
+  getApiKeyMock?: ReturnType<typeof vi.fn>;
 }) =>
   ({
     model: undefined,
     sessionManager: params.sessionManager,
     modelRegistry: {
-      getApiKeyAndHeaders: params.getApiKeyAndHeadersMock,
+      getApiKeyAndHeaders:
+        params.getApiKeyAndHeadersMock ??
+        vi.fn(async (model) => {
+          const legacyGetApiKey = params.getApiKeyMock as
+            | undefined
+            | ((model: NonNullable<ExtensionContext["model"]>) => Promise<string | undefined>);
+          const apiKey = await legacyGetApiKey?.(model);
+          return apiKey !== undefined ? { ok: true, apiKey } : { ok: false, error: "missing auth" };
+        }),
     },
   }) as unknown as Partial<ExtensionContext>;
 
@@ -150,7 +159,9 @@ async function runCompactionScenario(params: {
   const getApiKeyAndHeadersMock = vi
     .fn()
     .mockResolvedValue(
-      params.apiKey ? { ok: true, apiKey: params.apiKey } : { ok: false, error: "missing auth" },
+      params.apiKey !== null
+        ? { ok: true, apiKey: params.apiKey }
+        : { ok: false, error: "missing auth" },
     );
   const mockContext = createCompactionContext({
     sessionManager: params.sessionManager,
@@ -1226,10 +1237,10 @@ describe("compaction-safeguard recent-turn preservation", () => {
     });
 
     const compactionHandler = createCompactionHandler();
-    const getApiKeyAndHeadersMock = vi.fn().mockResolvedValue({ ok: true, apiKey: "test-key" });
+    const getApiKeyMock = vi.fn().mockResolvedValue("test-key");
     const mockContext = createCompactionContext({
       sessionManager,
-      getApiKeyAndHeadersMock,
+      getApiKeyMock,
     });
     const messagesToSummarize: AgentMessage[] = Array.from({ length: 4 }, (_unused, index) => ({
       role: "user",
@@ -1282,10 +1293,10 @@ describe("compaction-safeguard recent-turn preservation", () => {
     });
 
     const compactionHandler = createCompactionHandler();
-    const getApiKeyAndHeadersMock = vi.fn().mockResolvedValue({ ok: true, apiKey: "test-key" });
+    const getApiKeyMock = vi.fn().mockResolvedValue("test-key");
     const mockContext = createCompactionContext({
       sessionManager,
-      getApiKeyAndHeadersMock,
+      getApiKeyMock,
     });
     const event = {
       preparation: {
@@ -1347,10 +1358,10 @@ describe("compaction-safeguard recent-turn preservation", () => {
     });
 
     const compactionHandler = createCompactionHandler();
-    const getApiKeyAndHeadersMock = vi.fn().mockResolvedValue({ ok: true, apiKey: "test-key" });
+    const getApiKeyMock = vi.fn().mockResolvedValue("test-key");
     const mockContext = createCompactionContext({
       sessionManager,
-      getApiKeyAndHeadersMock,
+      getApiKeyMock,
     });
     const event = {
       preparation: {
@@ -1450,10 +1461,10 @@ describe("compaction-safeguard recent-turn preservation", () => {
     });
 
     const compactionHandler = createCompactionHandler();
-    const getApiKeyAndHeadersMock = vi.fn().mockResolvedValue({ ok: true, apiKey: "test-key" });
+    const getApiKeyMock = vi.fn().mockResolvedValue("test-key");
     const mockContext = createCompactionContext({
       sessionManager,
-      getApiKeyAndHeadersMock,
+      getApiKeyMock,
     });
     const event = {
       preparation: {
@@ -1513,10 +1524,10 @@ describe("compaction-safeguard recent-turn preservation", () => {
     });
 
     const compactionHandler = createCompactionHandler();
-    const getApiKeyAndHeadersMock = vi.fn().mockResolvedValue({ ok: true, apiKey: "test-key" });
+    const getApiKeyMock = vi.fn().mockResolvedValue("test-key");
     const mockContext = createCompactionContext({
       sessionManager,
-      getApiKeyAndHeadersMock,
+      getApiKeyMock,
     });
     const event = {
       preparation: {
@@ -1576,10 +1587,10 @@ describe("compaction-safeguard recent-turn preservation", () => {
     });
 
     const compactionHandler = createCompactionHandler();
-    const getApiKeyAndHeadersMock = vi.fn().mockResolvedValue({ ok: true, apiKey: "test-key" });
+    const getApiKeyMock = vi.fn().mockResolvedValue("test-key");
     const mockContext = createCompactionContext({
       sessionManager,
-      getApiKeyAndHeadersMock,
+      getApiKeyMock,
     });
     const event = {
       preparation: {

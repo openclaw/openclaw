@@ -13,15 +13,41 @@ import {
   restoreMemoryPluginState,
 } from "./memory-state.js";
 
+function createMemoryRuntime() {
+  return {
+    async getMemorySearchManager() {
+      return { manager: null, error: "missing" };
+    },
+    resolveMemoryBackendConfig() {
+      return { backend: "builtin" as const };
+    },
+  };
+}
+
+function createMemoryFlushPlan(relativePath: string) {
+  return {
+    softThresholdTokens: 1,
+    forceFlushTranscriptBytes: 2,
+    reserveTokensFloor: 3,
+    prompt: relativePath,
+    systemPrompt: relativePath,
+    relativePath,
+  };
+}
+
+function expectClearedMemoryState() {
+  expect(resolveMemoryFlushPlan({})).toBeNull();
+  expect(buildMemoryPromptSection({ availableTools: new Set(["memory_search"]) })).toEqual([]);
+  expect(getMemoryRuntime()).toBeUndefined();
+}
+
 describe("memory plugin state", () => {
   afterEach(() => {
     clearMemoryPluginState();
   });
 
   it("returns empty defaults when no memory plugin state is registered", () => {
-    expect(resolveMemoryFlushPlan({})).toBeNull();
-    expect(buildMemoryPromptSection({ availableTools: new Set(["memory_search"]) })).toEqual([]);
-    expect(getMemoryRuntime()).toBeUndefined();
+    expectClearedMemoryState();
   });
 
   it("delegates prompt building to the registered memory plugin", () => {
@@ -66,14 +92,7 @@ describe("memory plugin state", () => {
   });
 
   it("stores the registered memory runtime", async () => {
-    const runtime = {
-      async getMemorySearchManager() {
-        return { manager: null, error: "missing" };
-      },
-      resolveMemoryBackendConfig() {
-        return { backend: "builtin" as const };
-      },
-    };
+    const runtime = createMemoryRuntime();
 
     registerMemoryRuntime(runtime);
 
@@ -88,22 +107,8 @@ describe("memory plugin state", () => {
 
   it("restoreMemoryPluginState swaps both prompt and flush state", () => {
     registerMemoryPromptSection(() => ["first"]);
-    registerMemoryFlushPlanResolver(() => ({
-      softThresholdTokens: 1,
-      forceFlushTranscriptBytes: 2,
-      reserveTokensFloor: 3,
-      prompt: "first",
-      systemPrompt: "first",
-      relativePath: "memory/first.md",
-    }));
-    const runtime = {
-      async getMemorySearchManager() {
-        return { manager: null, error: "missing" };
-      },
-      resolveMemoryBackendConfig() {
-        return { backend: "builtin" as const };
-      },
-    };
+    registerMemoryFlushPlanResolver(() => createMemoryFlushPlan("memory/first.md"));
+    const runtime = createMemoryRuntime();
     registerMemoryRuntime(runtime);
     const snapshot = {
       promptBuilder: getMemoryPromptSectionBuilder(),
@@ -112,9 +117,7 @@ describe("memory plugin state", () => {
     };
 
     _resetMemoryPluginState();
-    expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual([]);
-    expect(resolveMemoryFlushPlan({})).toBeNull();
-    expect(getMemoryRuntime()).toBeUndefined();
+    expectClearedMemoryState();
 
     restoreMemoryPluginState(snapshot);
     expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual(["first"]);
@@ -124,27 +127,11 @@ describe("memory plugin state", () => {
 
   it("clearMemoryPluginState resets both registries", () => {
     registerMemoryPromptSection(() => ["stale section"]);
-    registerMemoryFlushPlanResolver(() => ({
-      softThresholdTokens: 1,
-      forceFlushTranscriptBytes: 2,
-      reserveTokensFloor: 3,
-      prompt: "prompt",
-      systemPrompt: "system",
-      relativePath: "memory/stale.md",
-    }));
-    registerMemoryRuntime({
-      async getMemorySearchManager() {
-        return { manager: null };
-      },
-      resolveMemoryBackendConfig() {
-        return { backend: "builtin" as const };
-      },
-    });
+    registerMemoryFlushPlanResolver(() => createMemoryFlushPlan("memory/stale.md"));
+    registerMemoryRuntime(createMemoryRuntime());
 
     clearMemoryPluginState();
 
-    expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual([]);
-    expect(resolveMemoryFlushPlan({})).toBeNull();
-    expect(getMemoryRuntime()).toBeUndefined();
+    expectClearedMemoryState();
   });
 });
