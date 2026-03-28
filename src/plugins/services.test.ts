@@ -30,6 +30,19 @@ function createRegistry(services: OpenClawPluginService[]) {
   return registry;
 }
 
+function expectServiceContext(
+  ctx: OpenClawPluginServiceContext,
+  config: Parameters<typeof startPluginServices>[0]["config"],
+) {
+  expect(ctx.config).toBe(config);
+  expect(ctx.workspaceDir).toBe("/tmp/workspace");
+  expect(ctx.stateDir).toBe(STATE_DIR);
+  expect(ctx.logger).toBeDefined();
+  expect(typeof ctx.logger.info).toBe("function");
+  expect(typeof ctx.logger.warn).toBe("function");
+  expect(typeof ctx.logger.error).toBe("function");
+}
+
 describe("startPluginServices", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -80,13 +93,7 @@ describe("startPluginServices", () => {
     expect(stops).toEqual(["c", "a"]);
     expect(contexts).toHaveLength(3);
     for (const ctx of contexts) {
-      expect(ctx.config).toBe(config);
-      expect(ctx.workspaceDir).toBe("/tmp/workspace");
-      expect(ctx.stateDir).toBe(STATE_DIR);
-      expect(ctx.logger).toBeDefined();
-      expect(typeof ctx.logger.info).toBe("function");
-      expect(typeof ctx.logger.warn).toBe("function");
-      expect(typeof ctx.logger.error).toBe("function");
+      expectServiceContext(ctx, config);
     }
   });
 

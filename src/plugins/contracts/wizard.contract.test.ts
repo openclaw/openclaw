@@ -191,14 +191,25 @@ describe("provider wizard contract", () => {
   });
 
   it("round-trips every shared wizard choice back to its provider and auth method", () => {
-    for (const option of resolveProviderWizardOptions({ config: {}, env: process.env })) {
+    const options = resolveProviderWizardOptions({ config: {}, env: process.env });
+
+    expect(options).toEqual(
+      expect.arrayContaining(
+        options.map((option) =>
+          expect.objectContaining({
+            value: option.value,
+          }),
+        ),
+      ),
+    );
+    for (const option of options) {
       const resolved = resolveProviderPluginChoice({
         providers: TEST_PROVIDERS,
         choice: option.value,
       });
-      expect(resolved).not.toBeNull();
-      expect(resolved?.provider.id).toBeTruthy();
-      expect(resolved?.method.id).toBeTruthy();
+      expect(resolved, option.value).not.toBeNull();
+      expect(resolved?.provider.id, option.value).toBeTruthy();
+      expect(resolved?.method.id, option.value).toBeTruthy();
     }
   });
 
@@ -213,7 +224,7 @@ describe("provider wizard contract", () => {
         providers: TEST_PROVIDERS,
         choice: entry.value,
       });
-      expect(resolved).not.toBeNull();
+      expect(resolved, entry.value).not.toBeNull();
     }
   });
 });
