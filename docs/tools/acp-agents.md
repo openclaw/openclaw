@@ -15,6 +15,10 @@ title: "ACP Agents"
 
 If you ask OpenClaw in plain language to "run this in Codex" or "start Claude Code in a thread", OpenClaw should route that request to the ACP runtime (not the native sub-agent runtime).
 
+If you want Codex or Claude Code to connect as an external MCP client directly
+to existing OpenClaw channel conversations, use [`openclaw mcp serve`](/cli/mcp)
+instead of ACP.
+
 ## Fast operator flow
 
 Use this when you want a practical `/acp` runbook:

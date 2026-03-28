@@ -9,9 +9,14 @@ import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 const { defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
 const mockLog = defaultRuntime.log;
 const mockError = defaultRuntime.error;
+const serveOpenClawChannelMcp = vi.fn();
 
 vi.mock("../runtime.js", () => ({
   defaultRuntime,
+}));
+
+vi.mock("../mcp/channel-server.js", () => ({
+  serveOpenClawChannelMcp,
 }));
 
 const tempDirs: string[] = [];
@@ -72,6 +77,35 @@ describe("mcp cli", () => {
       expect(mockError).toHaveBeenCalledWith(
         expect.stringContaining('No MCP server named "missing"'),
       );
+    });
+  });
+
+  it("starts the channel bridge with parsed serve options", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async () => {
+      const workspaceDir = await createWorkspace();
+      const tokenFile = path.join(workspaceDir, "gateway.token");
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+      await fs.writeFile(tokenFile, "secret-token\n", "utf-8");
+
+      await runMcpCommand([
+        "mcp",
+        "serve",
+        "--url",
+        "ws://127.0.0.1:18789",
+        "--token-file",
+        tokenFile,
+        "--claude-channel-mode",
+        "on",
+        "--verbose",
+      ]);
+
+      expect(serveOpenClawChannelMcp).toHaveBeenCalledWith({
+        gatewayUrl: "ws://127.0.0.1:18789",
+        gatewayToken: "secret-token",
+        gatewayPassword: undefined,
+        claudeChannelMode: "on",
+        verbose: true,
+      });
     });
   });
 });
