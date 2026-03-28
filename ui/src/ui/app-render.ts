@@ -139,6 +139,7 @@ const lazyNodes = createLazy(() => import("./views/nodes.ts"));
 const lazySessions = createLazy(() => import("./views/sessions.ts"));
 const lazySkills = createLazy(() => import("./views/skills.ts"));
 const lazyProjects = createLazy(() => import("./views/projects.ts"));
+const lazyProjectsBoard = createLazy(() => import("./views/projects-board.ts"));
 
 function lazyRender<M>(getter: () => M | null, render: (mod: M) => unknown) {
   const mod = getter();
@@ -2063,6 +2064,7 @@ export function renderApp(state: AppViewState) {
                   boardExpanded: state.projectsBoardExpanded,
                   checkpoint: state.projectsCheckpoint,
                   checkpointLoading: state.projectsCheckpointLoading,
+                  renderBoard: lazyProjectsBoard() ? lazyProjectsBoard()!.renderKanbanBoard : null,
                   onSwitchSubView: (subView: "overview" | "board") => {
                     state.projectsSubView = subView;
                     state.projectsBoardExpanded = null;

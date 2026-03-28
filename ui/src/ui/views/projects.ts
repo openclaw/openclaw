@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import { renderProjectsList, type ProjectsListProps } from "./projects-list.ts";
 import { renderProjectDashboard, type ProjectDashboardProps } from "./projects-dashboard.ts";
 import type { ProjectListEntry, BoardIndex, QueueIndex } from "../controllers/projects.ts";
+import type { KanbanBoardProps } from "./projects-board.ts";
 
 export type ProjectsProps = {
   // View routing
@@ -23,10 +24,19 @@ export type ProjectsProps = {
   projectDashboardLoading: boolean;
   projectDashboardError: string | null;
 
+  // Board sub-view
+  subView: "overview" | "board";
+  boardExpanded: string | null;
+  checkpoint: Record<string, unknown> | null;
+  checkpointLoading: boolean;
+  renderBoard: ((props: KanbanBoardProps) => unknown) | null;
+
   // Callbacks
   onSelectProject: (name: string) => void;
   onNavigateList: () => void;
   onRefresh: () => void;
+  onSwitchSubView: (view: "overview" | "board") => void;
+  onTogglePeek: (taskId: string) => void;
 };
 
 /** Route between project list and dashboard based on view state. */
@@ -44,6 +54,13 @@ export function renderProjects(props: ProjectsProps) {
       allBoards: props.projectsBoards,
       onNavigateList: props.onNavigateList,
       onNavigateProject: props.onSelectProject,
+      subView: props.subView,
+      boardExpanded: props.boardExpanded,
+      checkpoint: props.checkpoint,
+      checkpointLoading: props.checkpointLoading,
+      onSwitchSubView: props.onSwitchSubView,
+      onTogglePeek: props.onTogglePeek,
+      renderBoard: props.renderBoard,
     });
   }
 

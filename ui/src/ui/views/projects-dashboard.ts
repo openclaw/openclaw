@@ -1,11 +1,12 @@
 import { html, nothing } from "lit";
-import type { ProjectListEntry, BoardIndex, QueueIndex } from "../controllers/projects.ts";
+import type { ProjectListEntry, BoardIndex, QueueIndex, CheckpointInfo } from "../controllers/projects.ts";
 import {
   renderProjectStatusWidget,
   renderTaskCountsWidget,
   renderActiveAgentsWidget,
   renderRecentActivityWidget,
 } from "./projects-widgets.ts";
+import type { KanbanBoardProps } from "./projects-board.ts";
 
 export type ProjectDashboardProps = {
   loading: boolean;
@@ -19,6 +20,13 @@ export type ProjectDashboardProps = {
   allBoards: Record<string, BoardIndex>;
   onNavigateList: () => void;
   onNavigateProject: (name: string) => void;
+  subView: "overview" | "board";
+  boardExpanded: string | null;
+  checkpoint: Record<string, unknown> | null;
+  checkpointLoading: boolean;
+  onSwitchSubView: (view: "overview" | "board") => void;
+  onTogglePeek: (taskId: string) => void;
+  renderBoard: ((props: KanbanBoardProps) => unknown) | null;
 };
 
 /** Default widget IDs when project config is absent. */
@@ -36,6 +44,7 @@ export function renderProjectDashboard(props: ProjectDashboardProps) {
   return html`
     <div class="projects-dashboard">
       ${renderBreadcrumb(props)}
+      ${renderViewTabs(props)}
       ${props.error
         ? html`
             <div class="projects-error">
@@ -46,8 +55,12 @@ export function renderProjectDashboard(props: ProjectDashboardProps) {
           ? renderLoadingSkeleton()
           : props.project
             ? html`
-                ${renderWidgetGrid(props)}
-                ${renderSubProjects(props)}
+                ${props.subView === "board"
+                  ? renderBoardView(props)
+                  : html`
+                    ${renderWidgetGrid(props)}
+                    ${renderSubProjects(props)}
+                  `}
               `
             : nothing}
     </div>
@@ -149,4 +162,50 @@ function renderSubProjects(props: ProjectDashboardProps) {
       </div>
     </div>
   `;
+}
+
+/** Tab bar for switching between Overview and Board sub-views. */
+function renderViewTabs(props: ProjectDashboardProps) {
+  return html`
+    <div class="projects-view-tabs">
+      <button
+        class="projects-view-tab ${props.subView === "overview" ? "projects-view-tab--active" : ""}"
+        @click=${() => props.onSwitchSubView("overview")}
+      >Overview</button>
+      <button
+        class="projects-view-tab ${props.subView === "board" ? "projects-view-tab--active" : ""}"
+        @click=${() => props.onSwitchSubView("board")}
+      >Board</button>
+    </div>
+  `;
+}
+
+/** Render the kanban board view via the passed-in renderer (createLazy pattern). */
+function renderBoardView(props: ProjectDashboardProps) {
+  const board = props.board;
+  if (!board) return html`<div class="projects-board-column__empty">No tasks in this project</div>`;
+  if (!props.renderBoard) {
+    return html`
+      <div class="projects-board-skeleton">
+        ${[1, 2, 3, 4].map(() => html`
+          <div class="projects-board-skeleton__column">
+            <div class="skeleton-line" style="width: 60%"></div>
+            ${[1, 2, 3].map(() => html`<div class="skeleton-block" style="height: 80px"></div>`)}
+          </div>
+        `)}
+      </div>
+    `;
+  }
+
+  const allTasks = board.columns.flatMap((col) => col.tasks);
+  return props.renderBoard({
+    board,
+    loading: false,
+    error: null,
+    expandedTaskId: props.boardExpanded,
+    checkpoint: props.checkpoint as CheckpointInfo | null,
+    checkpointLoading: props.checkpointLoading,
+    allTasks,
+    onTogglePeek: props.onTogglePeek,
+  });
 }
