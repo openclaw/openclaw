@@ -1115,6 +1115,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional secret used to HMAC hash owner IDs when ownerDisplay=hash. Prefer env substitution.",
   "commands.allowFrom":
     "Defines elevated command allow rules by channel and sender for owner-level command surfaces. Use narrow provider-specific identities so privileged commands are not exposed to broad chat audiences.",
+  "commands.shellProfile":
+    "Path to a shell profile file to source before executing commands on the gateway host. When set and non-empty, PowerShell, bash, and other shells will load this profile (e.g., for custom environment variables, aliases, functions). This setting does NOT apply to sandbox execution (host=sandbox, container has isolated filesystem) or node execution (host=node, commands run directly without shell). Leave unset for default behavior without profile loading.",
   mcp: "Global MCP server definitions managed by OpenClaw. Embedded Pi and other runtime adapters can consume these servers without storing them inside Pi-owned project settings.",
   "mcp.servers":
     "Named MCP server definitions. OpenClaw stores them in its own config and runtime adapters decide which transports are supported at execution time.",

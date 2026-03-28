@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { logWarn } from "../logger.js";
 
 export function resolvePowerShellPath(): string {
   // Prefer PowerShell 7 when available; PS 5.1 lacks "&&" support.
@@ -38,33 +39,72 @@ export function resolvePowerShellPath(): string {
   return "powershell.exe";
 }
 
-export function getShellConfig(): { shell: string; args: string[] } {
+function buildSourcePrefix(profilePath: string): string {
+  return `. '${profilePath.replace(/'/g, "'\\''")}'; `;
+}
+
+export function applyProfilePrefix(shellArgs: string[], command: string): string[] {
+  if (shellArgs.length === 2 && shellArgs[0] === "-c" && shellArgs[1].endsWith("; ")) {
+    return ["-c", shellArgs[1] + command];
+  }
+  // Handle Windows PowerShell case: ['-NoProfile', '-NonInteractive', '-Command', "profile; "]
+  if (
+    shellArgs.length === 4 &&
+    shellArgs[0] === "-NoProfile" &&
+    shellArgs[1] === "-NonInteractive" &&
+    shellArgs[2] === "-Command" &&
+    shellArgs[3].endsWith("; ")
+  ) {
+    return ["-NoProfile", "-NonInteractive", "-Command", shellArgs[3] + command];
+  }
+  return [...shellArgs, command];
+}
+
+export function getShellConfig(shellProfile?: string): { shell: string; args: string[] } {
+  const profile = shellProfile?.trim();
   if (process.platform === "win32") {
     // Use PowerShell instead of cmd.exe on Windows.
     // Problem: Many Windows system utilities (ipconfig, systeminfo, etc.) write
     // directly to the console via WriteConsole API, bypassing stdout pipes.
     // When Node.js spawns cmd.exe with piped stdio, these utilities produce no output.
     // PowerShell properly captures and redirects their output to stdout.
-    return {
-      shell: resolvePowerShellPath(),
-      args: ["-NoProfile", "-NonInteractive", "-Command"],
-    };
+    const shell = resolvePowerShellPath();
+    const baseArgs = ["-NoProfile", "-NonInteractive", "-Command"] as const;
+    if (profile) {
+      return {
+        shell,
+        args: [...baseArgs, `. '${profile.replace(/'/g, "''")}'; `],
+      };
+    }
+    return { shell, args: [...baseArgs] };
   }
 
   const envShell = process.env.SHELL?.trim();
   const shellName = envShell ? path.basename(envShell) : "";
+
   // Fish rejects common bashisms used by tools, so prefer bash when detected.
   if (shellName === "fish") {
     const bash = resolveShellFromPath("bash");
     if (bash) {
-      return { shell: bash, args: ["-c"] };
+      return { shell: bash, args: profile ? ["-c", buildSourcePrefix(profile)] : ["-c"] };
     }
     const sh = resolveShellFromPath("sh");
     if (sh) {
-      return { shell: sh, args: ["-c"] };
+      return { shell: sh, args: profile ? ["-c", buildSourcePrefix(profile)] : ["-c"] };
     }
   }
+
   const shell = envShell && envShell.length > 0 ? envShell : "sh";
+  const baseName = path.basename(shell).toLowerCase();
+
+  if (profile) {
+    if (baseName === "bash" || baseName === "zsh" || baseName === "sh") {
+      return { shell, args: ["-c", buildSourcePrefix(profile)] };
+    }
+    logWarn(
+      `shellProfile is set but shell "${baseName}" is not supported; profile will be ignored.`,
+    );
+  }
   return { shell, args: ["-c"] };
 }
 

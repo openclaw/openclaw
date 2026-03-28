@@ -34,7 +34,7 @@ import {
   readEnvInt,
 } from "./bash-tools.shared.js";
 import { buildCursorPositionResponse, stripDsrRequests } from "./pty-dsr.js";
-import { getShellConfig, sanitizeBinaryOutput } from "./shell-utils.js";
+import { applyProfilePrefix, getShellConfig, sanitizeBinaryOutput } from "./shell-utils.js";
 
 const SMKX = "\x1b[?1h";
 const RMKX = "\x1b[?1l";
@@ -455,6 +455,7 @@ export async function runExecProcess(opts: {
   scopeKey?: string;
   sessionKey?: string;
   timeoutSec: number | null;
+  shellProfile?: string;
   onUpdate?: (partialResult: AgentToolResult<ExecToolDetails>) => void;
 }): Promise<ExecProcessHandle> {
   const startedAt = Date.now();
@@ -559,6 +560,8 @@ export async function runExecProcess(opts: {
         childFallbackArgv: string[];
         env: NodeJS.ProcessEnv;
         stdinMode: "pipe-open";
+        shell: string;
+        shellArgs: string[];
       } = await (async () => {
     if (opts.sandbox) {
       const backendExecSpec = await opts.sandbox.buildExecSpec?.({
@@ -586,8 +589,8 @@ export async function runExecProcess(opts: {
           (opts.usePty ? ("pipe-open" as const) : ("pipe-closed" as const)),
       };
     }
-    const { shell, args: shellArgs } = getShellConfig();
-    const childArgv = [shell, ...shellArgs, execCommand];
+    const { shell, args: shellArgs } = getShellConfig(opts.shellProfile);
+    const childArgv = [shell, ...applyProfilePrefix(shellArgs, execCommand)];
     if (opts.usePty) {
       return {
         mode: "pty" as const,
@@ -595,6 +598,8 @@ export async function runExecProcess(opts: {
         childFallbackArgv: childArgv,
         env: shellRuntimeEnv,
         stdinMode: "pipe-open" as const,
+        shell,
+        shellArgs,
       };
     }
     return {
@@ -642,6 +647,9 @@ export async function runExecProcess(opts: {
             ...spawnBase,
             mode: "pty",
             ptyCommand: spawnSpec.ptyCommand,
+            shellProfile: opts.shellProfile,
+            shell: spawnSpec.shell,
+            shellArgs: spawnSpec.shellArgs,
           })
         : await supervisor.spawn({
             ...spawnBase,

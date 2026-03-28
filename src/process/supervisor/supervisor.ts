@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
-import { getShellConfig } from "../../agents/shell-utils.js";
+import { applyProfilePrefix, getShellConfig } from "../../agents/shell-utils.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createChildAdapter } from "./adapters/child.js";
 import { createPtyAdapter } from "./adapters/pty.js";
 import { createRunRegistry } from "./registry.js";
@@ -120,14 +121,17 @@ export function createProcessSupervisor(): ProcessSupervisor {
       const adapter =
         input.mode === "pty"
           ? await (async () => {
-              const { shell, args: shellArgs } = getShellConfig();
+              const { shell, args: shellArgs } =
+                input.shell && input.shellArgs
+                  ? { shell: input.shell, args: input.shellArgs }
+                  : getShellConfig(input.shellProfile);
               const ptyCommand = input.ptyCommand.trim();
               if (!ptyCommand) {
                 throw new Error("PTY command cannot be empty");
               }
               return await createPtyAdapter({
                 shell,
-                args: [...shellArgs, ptyCommand],
+                args: applyProfilePrefix(shellArgs, ptyCommand),
                 cwd: input.cwd,
                 env: input.env,
               });

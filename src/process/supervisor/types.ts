@@ -93,6 +93,9 @@ type SpawnChildInput = SpawnBaseInput & {
 type SpawnPtyInput = SpawnBaseInput & {
   mode: "pty";
   ptyCommand: string;
+  shellProfile?: string;
+  shell?: string;
+  shellArgs?: string[];
 };
 
 export type SpawnInput = SpawnChildInput | SpawnPtyInput;
