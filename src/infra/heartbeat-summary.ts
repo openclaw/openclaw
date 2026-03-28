@@ -23,12 +23,12 @@ export type HeartbeatSummary = {
 
 const DEFAULT_HEARTBEAT_TARGET = "none";
 
-function hasExplicitHeartbeatAgents(cfg: OpenClawConfig) {
+export function hasExplicitHeartbeatAgents(cfg: OpenClawConfig) {
   const list = cfg.agents?.list ?? [];
   return list.some((entry) => Boolean(entry?.heartbeat));
 }
 
-function hasDefaultsHeartbeat(cfg: OpenClawConfig) {
+export function hasDefaultsHeartbeat(cfg: OpenClawConfig) {
   return Boolean(cfg.agents?.defaults?.heartbeat);
 }
 

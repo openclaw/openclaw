@@ -59,6 +59,8 @@ import {
 import { emitHeartbeatEvent, resolveIndicatorType } from "./heartbeat-events.js";
 import { resolveHeartbeatReasonKind } from "./heartbeat-reason.js";
 import {
+  hasDefaultsHeartbeat,
+  hasExplicitHeartbeatAgents,
   isHeartbeatEnabledForAgent,
   resolveHeartbeatIntervalMs,
   resolveHeartbeatSummaryForAgent,
@@ -120,11 +122,6 @@ export type HeartbeatRunner = {
   updateConfig: (cfg: OpenClawConfig) => void;
 };
 
-function hasExplicitHeartbeatAgents(cfg: OpenClawConfig) {
-  const list = cfg.agents?.list ?? [];
-  return list.some((entry) => Boolean(entry?.heartbeat));
-}
-
 function resolveHeartbeatConfig(
   cfg: OpenClawConfig,
   agentId?: string,
@@ -138,10 +135,6 @@ function resolveHeartbeatConfig(
     return overrides;
   }
   return { ...defaults, ...overrides };
-}
-
-function hasDefaultsHeartbeat(cfg: OpenClawConfig) {
-  return Boolean(cfg.agents?.defaults?.heartbeat);
 }
 
 function resolveHeartbeatAgents(cfg: OpenClawConfig): HeartbeatAgent[] {
