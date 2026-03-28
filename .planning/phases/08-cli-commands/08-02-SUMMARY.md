@@ -77,3 +77,8 @@ Three CLI commands for project health inspection with comprehensive test coverag
 ## Known Stubs
 
 None -- all commands are fully wired to real data sources.
+
+## Self-Check: PASSED
+
+- All 6 source/test files exist
+- Both commit hashes (06ab7e0, afd2e33) verified in git log
