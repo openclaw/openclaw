@@ -9,6 +9,7 @@ import {
   PROFILE_OPTIONS,
   resolveCoreToolProfiles,
 } from "../../agents/tool-catalog.js";
+import { summarizeToolDescriptionText } from "../../agents/tool-description-summary.js";
 import { loadConfig } from "../../config/config.js";
 import { getPluginToolMeta, resolvePluginTools } from "../../plugins/tools.js";
 import {
@@ -105,10 +106,10 @@ function buildPluginGroups(params: {
     existing.tools.push({
       id: tool.name,
       label: typeof tool.label === "string" && tool.label.trim() ? tool.label.trim() : tool.name,
-      description:
-        typeof tool.description === "string" && tool.description.trim()
-          ? tool.description.trim()
-          : "Plugin tool",
+      description: summarizeToolDescriptionText({
+        rawDescription: typeof tool.description === "string" ? tool.description : undefined,
+        displaySummary: tool.displaySummary,
+      }),
       source: "plugin",
       pluginId,
       optional: meta?.optional,

@@ -19,7 +19,12 @@ const pluginToolMetaState = new Map<string, { pluginId: string; optional: boolea
 vi.mock("../../plugins/tools.js", () => ({
   resolvePluginTools: vi.fn(() => [
     { name: "voice_call", label: "voice_call", description: "Plugin calling tool" },
-    { name: "matrix_room", label: "matrix_room", description: "Matrix room helper" },
+    {
+      name: "matrix_room",
+      label: "matrix_room",
+      displaySummary: "Summarized Matrix room helper.",
+      description: "Matrix room helper\n\nACTIONS:\n- join\n- leave",
+    },
   ]),
   getPluginToolMeta: vi.fn((tool: { name: string }) => pluginToolMetaState.get(tool.name)),
 }));
@@ -117,6 +122,29 @@ describe("tools.catalog handler", () => {
       pluginId: "voice-call",
       optional: true,
     });
+  });
+
+  it("summarizes plugin tool descriptions the same way as the effective inventory", async () => {
+    const { respond, invoke } = createInvokeParams({});
+    await invoke();
+    const call = respond.mock.calls[0] as RespondCall | undefined;
+    expect(call?.[0]).toBe(true);
+    const payload = call?.[1] as
+      | {
+          groups: Array<{
+            source: "core" | "plugin";
+            tools: Array<{
+              id: string;
+              description: string;
+            }>;
+          }>;
+        }
+      | undefined;
+    const matrixRoom = (payload?.groups ?? [])
+      .filter((group) => group.source === "plugin")
+      .flatMap((group) => group.tools)
+      .find((tool) => tool.id === "matrix_room");
+    expect(matrixRoom?.description).toBe("Summarized Matrix room helper.");
   });
 
   it("opts plugin tool catalog loads into gateway subagent binding", async () => {
