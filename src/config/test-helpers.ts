@@ -88,7 +88,9 @@ export function buildWebSearchProviderConfig(params: {
         ? "xai"
         : params.provider === "kimi"
           ? "moonshot"
-          : params.provider;
+          : params.provider === "baidu"
+            ? "qianfan"
+            : params.provider;
   return {
     tools: {
       web: {

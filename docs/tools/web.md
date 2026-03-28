@@ -1,5 +1,5 @@
 ---
-summary: "web_search tool -- search the web with Brave, Firecrawl, Gemini, Grok, Kimi, Perplexity, or Tavily"
+summary: "web_search tool -- search the web with Baidu, Brave, Firecrawl, Gemini, Grok, Kimi, Perplexity, or Tavily"
 read_when:
   - You want to enable or configure web_search
   - You need to choose a search provider
@@ -46,6 +46,9 @@ returns results. Results are cached by query for 15 minutes (configurable).
 ## Choosing a provider
 
 <CardGroup cols={2}>
+  <Card title="Baidu Search" icon="globe" href="/tools/web">
+    Chinese-first web search via Qianfan. Supports direct structured results and smart AI-synthesized answers.
+  </Card>
   <Card title="Brave Search" icon="shield" href="/tools/brave-search">
     Structured results with snippets. Supports `llm-context` mode, country/language filters. Free tier available.
   </Card>
@@ -77,17 +80,18 @@ returns results. Results are cached by query for 15 minutes (configurable).
 
 ### Provider comparison
 
-| Provider                               | Result style               | Filters                                          | API key                                     |
-| -------------------------------------- | -------------------------- | ------------------------------------------------ | ------------------------------------------- |
-| [Brave](/tools/brave-search)           | Structured snippets        | Country, language, time, `llm-context` mode      | `BRAVE_API_KEY`                             |
-| [DuckDuckGo](/tools/duckduckgo-search) | Structured snippets        | --                                               | None (key-free)                             |
-| [Exa](/tools/exa-search)               | Structured + extracted     | Neural/keyword mode, date, content extraction    | `EXA_API_KEY`                               |
-| [Firecrawl](/tools/firecrawl)          | Structured snippets        | Via `firecrawl_search` tool                      | `FIRECRAWL_API_KEY`                         |
-| [Gemini](/tools/gemini-search)         | AI-synthesized + citations | --                                               | `GEMINI_API_KEY`                            |
-| [Grok](/tools/grok-search)             | AI-synthesized + citations | --                                               | `XAI_API_KEY`                               |
-| [Kimi](/tools/kimi-search)             | AI-synthesized + citations | --                                               | `KIMI_API_KEY` / `MOONSHOT_API_KEY`         |
-| [Perplexity](/tools/perplexity-search) | Structured snippets        | Country, language, time, domains, content limits | `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` |
-| [Tavily](/tools/tavily)                | Structured snippets        | Via `tavily_search` tool                         | `TAVILY_API_KEY`                            |
+| Provider                               | Result style                 | Filters                                          | API key                                     |
+| -------------------------------------- | ---------------------------- | ------------------------------------------------ | ------------------------------------------- |
+| Baidu                                  | Structured or AI + citations | --                                               | `QIANFAN_API_KEY`                           |
+| [Brave](/tools/brave-search)           | Structured snippets          | Country, language, time, `llm-context` mode      | `BRAVE_API_KEY`                             |
+| [DuckDuckGo](/tools/duckduckgo-search) | Structured snippets          | --                                               | None (key-free)                             |
+| [Exa](/tools/exa-search)               | Structured + extracted       | Neural/keyword mode, date, content extraction    | `EXA_API_KEY`                               |
+| [Firecrawl](/tools/firecrawl)          | Structured snippets          | Via `firecrawl_search` tool                      | `FIRECRAWL_API_KEY`                         |
+| [Gemini](/tools/gemini-search)         | AI-synthesized + citations   | --                                               | `GEMINI_API_KEY`                            |
+| [Grok](/tools/grok-search)             | AI-synthesized + citations   | --                                               | `XAI_API_KEY`                               |
+| [Kimi](/tools/kimi-search)             | AI-synthesized + citations   | --                                               | `KIMI_API_KEY` / `MOONSHOT_API_KEY`         |
+| [Perplexity](/tools/perplexity-search) | Structured snippets          | Country, language, time, domains, content limits | `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` |
+| [Tavily](/tools/tavily)                | Structured snippets          | Via `tavily_search` tool                         | `TAVILY_API_KEY`                            |
 
 ## Auto-detection
 
@@ -102,8 +106,9 @@ the first one found:
 3. **Grok** -- `XAI_API_KEY` or `plugins.entries.xai.config.webSearch.apiKey`
 4. **Kimi** -- `KIMI_API_KEY` / `MOONSHOT_API_KEY` or `plugins.entries.moonshot.config.webSearch.apiKey`
 5. **Perplexity** -- `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` or `plugins.entries.perplexity.config.webSearch.apiKey`
-6. **Firecrawl** -- `FIRECRAWL_API_KEY` or `plugins.entries.firecrawl.config.webSearch.apiKey`
-7. **Tavily** -- `TAVILY_API_KEY` or `plugins.entries.tavily.config.webSearch.apiKey`
+6. **Baidu** -- `QIANFAN_API_KEY` or `plugins.entries.qianfan.config.webSearch.apiKey`
+7. **Firecrawl** -- `FIRECRAWL_API_KEY` or `plugins.entries.firecrawl.config.webSearch.apiKey`
+8. **Tavily** -- `TAVILY_API_KEY` or `plugins.entries.tavily.config.webSearch.apiKey`
 
 If no keys are found, it falls back to Brave (you will get a missing-key error
 prompting you to configure one).

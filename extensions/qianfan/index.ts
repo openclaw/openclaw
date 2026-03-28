@@ -1,6 +1,7 @@
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { applyQianfanConfig, QIANFAN_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildQianfanProvider } from "./provider-catalog.js";
+import { createBaiduWebSearchProvider } from "./src/baidu-web-search-provider.js";
 
 const PROVIDER_ID = "qianfan";
 
@@ -27,5 +28,8 @@ export default defineSingleProviderPluginEntry({
     catalog: {
       buildProvider: buildQianfanProvider,
     },
+  },
+  register(api) {
+    api.registerWebSearchProvider(createBaiduWebSearchProvider());
   },
 });

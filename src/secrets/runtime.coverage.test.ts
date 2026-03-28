@@ -30,7 +30,7 @@ vi.mock("../plugins/web-search-providers.runtime.js", () => ({
 }));
 
 function createTestProvider(params: {
-  id: "brave" | "gemini" | "grok" | "kimi" | "perplexity" | "firecrawl" | "tavily";
+  id: "baidu" | "brave" | "gemini" | "grok" | "kimi" | "perplexity" | "firecrawl" | "tavily";
   pluginId: string;
   order: number;
 }): PluginWebSearchProviderEntry {
@@ -84,6 +84,7 @@ function createTestProvider(params: {
 
 function buildTestWebSearchProviders(): PluginWebSearchProviderEntry[] {
   return [
+    createTestProvider({ id: "baidu", pluginId: "qianfan", order: 55 }),
     createTestProvider({ id: "brave", pluginId: "brave", order: 10 }),
     createTestProvider({ id: "gemini", pluginId: "google", order: 20 }),
     createTestProvider({ id: "grok", pluginId: "xai", order: 30 }),
@@ -174,6 +175,9 @@ function buildConfigForOpenClawTarget(entry: SecretRegistryEntry, envId: string)
       ["channels", "feishu", "accounts", "sample", "connectionMode"],
       "webhook",
     );
+  }
+  if (entry.id === "plugins.entries.qianfan.config.webSearch.apiKey") {
+    setPathCreateStrict(config, ["tools", "web", "search", "provider"], "baidu");
   }
   if (entry.id === "plugins.entries.brave.config.webSearch.apiKey") {
     setPathCreateStrict(config, ["tools", "web", "search", "provider"], "brave");

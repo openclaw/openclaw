@@ -13,6 +13,7 @@ const runtime: RuntimeEnv = {
 };
 
 const SEARCH_PROVIDER_ENV_VARS = [
+  "QIANFAN_API_KEY",
   "BRAVE_API_KEY",
   "FIRECRAWL_API_KEY",
   "GEMINI_API_KEY",
@@ -188,6 +189,24 @@ describe("setupSearch", () => {
     expect(result.tools?.web?.search?.enabled).toBe(true);
     expect(pluginWebSearchApiKey(result, "brave")).toBe("BSA-test-key");
     expect(result.plugins?.entries?.brave?.enabled).toBe(true);
+  });
+
+  it("sets provider and key for baidu via the qianfan plugin", async () => {
+    const cfg: OpenClawConfig = {};
+    const { prompter } = createPrompter({
+      selectValue: "baidu",
+      textValue: "bce-v3/test-key",
+    });
+    const result = await setupSearch(cfg, runtime, prompter);
+    expect(result.tools?.web?.search?.provider).toBe("baidu");
+    expect(result.tools?.web?.search?.enabled).toBe(true);
+    expect(pluginWebSearchApiKey(result, "qianfan")).toBe("bce-v3/test-key");
+    expect(result.plugins?.entries?.qianfan?.enabled).toBe(true);
+    expect(prompter.text).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Baidu / Qianfan API key",
+      }),
+    );
   });
 
   it("sets provider and key for gemini", async () => {

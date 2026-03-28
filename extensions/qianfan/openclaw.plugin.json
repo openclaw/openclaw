@@ -5,6 +5,22 @@
   "providerAuthEnvVars": {
     "qianfan": ["QIANFAN_API_KEY"]
   },
+  "uiHints": {
+    "webSearch.apiKey": {
+      "label": "Baidu Search API Key",
+      "help": "Qianfan API key for Baidu web search (fallback: QIANFAN_API_KEY env var).",
+      "sensitive": true,
+      "placeholder": "bce-v3/..."
+    },
+    "webSearch.mode": {
+      "label": "Baidu Search Mode",
+      "help": "Use direct structured search or smart AI-synthesized search."
+    },
+    "webSearch.model": {
+      "label": "Baidu Smart Search Model",
+      "help": "Model override used only for smart mode."
+    }
+  },
   "providerAuthChoices": [
     {
       "provider": "qianfan",
@@ -20,9 +36,29 @@
       "cliDescription": "QIANFAN API key"
     }
   ],
+  "contracts": {
+    "webSearchProviders": ["baidu"]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {}
+    "properties": {
+      "webSearch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": {
+            "type": ["string", "object"]
+          },
+          "mode": {
+            "type": "string",
+            "enum": ["direct", "smart"]
+          },
+          "model": {
+            "type": "string"
+          }
+        }
+      }
+    }
   }
 }

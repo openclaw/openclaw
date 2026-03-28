@@ -11829,7 +11829,12 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
-    publicSurfaceArtifacts: ["api.js", "onboard.js", "provider-catalog.js"],
+    publicSurfaceArtifacts: [
+      "api.js",
+      "onboard.js",
+      "provider-catalog.js",
+      "web-search-provider.js",
+    ],
     packageName: "@openclaw/qianfan-provider",
     packageVersion: "2026.3.27",
     packageDescription: "OpenClaw Qianfan provider plugin",
@@ -11841,7 +11846,24 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       configSchema: {
         type: "object",
         additionalProperties: false,
-        properties: {},
+        properties: {
+          webSearch: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              apiKey: {
+                type: ["string", "object"],
+              },
+              mode: {
+                type: "string",
+                enum: ["direct", "smart"],
+              },
+              model: {
+                type: "string",
+              },
+            },
+          },
+        },
       },
       enabledByDefault: true,
       providers: ["qianfan"],
@@ -11863,6 +11885,25 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           cliDescription: "QIANFAN API key",
         },
       ],
+      uiHints: {
+        "webSearch.apiKey": {
+          label: "Baidu Search API Key",
+          help: "Qianfan API key for Baidu web search (fallback: QIANFAN_API_KEY env var).",
+          sensitive: true,
+          placeholder: "bce-v3/...",
+        },
+        "webSearch.mode": {
+          label: "Baidu Search Mode",
+          help: "Use direct structured search or smart AI-synthesized search.",
+        },
+        "webSearch.model": {
+          label: "Baidu Smart Search Model",
+          help: "Model override used only for smart mode.",
+        },
+      },
+      contracts: {
+        webSearchProviders: ["baidu"],
+      },
     },
   },
   {

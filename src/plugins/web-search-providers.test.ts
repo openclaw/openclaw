@@ -3,6 +3,7 @@ import { resolveBundledPluginWebSearchProviders } from "./web-search-providers.j
 
 const WEB_SEARCH_PROVIDER_TEST_TIMEOUT_MS = 300_000;
 const EXPECTED_BUNDLED_WEB_SEARCH_PROVIDER_KEYS = [
+  "qianfan:baidu",
   "brave:brave",
   "duckduckgo:duckduckgo",
   "exa:exa",
@@ -14,6 +15,7 @@ const EXPECTED_BUNDLED_WEB_SEARCH_PROVIDER_KEYS = [
   "tavily:tavily",
 ] as const;
 const EXPECTED_BUNDLED_WEB_SEARCH_PROVIDER_PLUGIN_IDS = [
+  "qianfan",
   "brave",
   "duckduckgo",
   "exa",
@@ -25,6 +27,7 @@ const EXPECTED_BUNDLED_WEB_SEARCH_PROVIDER_PLUGIN_IDS = [
   "tavily",
 ] as const;
 const EXPECTED_BUNDLED_WEB_SEARCH_CREDENTIAL_PATHS = [
+  "plugins.entries.qianfan.config.webSearch.apiKey",
   "plugins.entries.brave.config.webSearch.apiKey",
   "",
   "plugins.entries.exa.config.webSearch.apiKey",

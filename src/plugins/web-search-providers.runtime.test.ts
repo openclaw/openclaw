@@ -8,6 +8,7 @@ type PluginAutoEnableModule = typeof import("../config/plugin-auto-enable.js");
 type WebSearchProvidersSharedModule = typeof import("./web-search-providers.shared.js");
 
 const BUNDLED_WEB_SEARCH_PROVIDERS = [
+  { pluginId: "qianfan", id: "baidu", order: 55 },
   { pluginId: "brave", id: "brave", order: 10 },
   { pluginId: "google", id: "gemini", order: 20 },
   { pluginId: "xai", id: "grok", order: 30 },
@@ -34,6 +35,7 @@ let webSearchProvidersSharedModule: WebSearchProvidersSharedModule;
 
 const DEFAULT_WEB_SEARCH_WORKSPACE = "/tmp/workspace";
 const EXPECTED_BUNDLED_RUNTIME_WEB_SEARCH_PROVIDER_KEYS = [
+  "qianfan:baidu",
   "brave:brave",
   "duckduckgo:duckduckgo",
   "exa:exa",
