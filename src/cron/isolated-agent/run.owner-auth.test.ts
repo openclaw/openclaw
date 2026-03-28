@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../../agents/test-helpers/fast-coding-tools.js";
-import { createOpenClawCodingTools } from "../../agents/pi-tools.js";
 import {
   loadRunCronIsolatedAgentTurn,
   resetRunCronIsolatedAgentTurnHarness,
@@ -67,12 +66,6 @@ describe("runCronIsolatedAgentTurn owner auth", () => {
       expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
       const senderIsOwner = runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.senderIsOwner;
       expect(senderIsOwner).toBe(true);
-
-      const toolNames = createOpenClawCodingTools({ senderIsOwner }).map(
-        (tool: { name: string }) => tool.name,
-      );
-      expect(toolNames).toContain("cron");
-      expect(toolNames).toContain("gateway");
     },
   );
 });

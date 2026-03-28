@@ -23,8 +23,10 @@ import {
 import {
   formatThreadBindingDisabledError,
   formatThreadBindingSpawnDisabledError,
+  requiresNativeThreadContextForThreadHere,
   resolveThreadBindingIdleTimeoutMsForChannel,
   resolveThreadBindingMaxAgeMsForChannel,
+  resolveThreadBindingPlacementForCurrentContext,
   resolveThreadBindingSpawnPolicy,
 } from "../../../channels/thread-bindings-policy.js";
 import type { OpenClawConfig } from "../../../config/config.js";
@@ -55,23 +57,17 @@ import {
 import { resolveAcpTargetSessionKey } from "./targets.js";
 
 function resolveAcpBindingLabelNoun(params: {
-  channel: string;
+  conversationId?: string;
+  placement: "current" | "child";
   threadId?: string;
-  bindMode: "thread" | "current";
 }): string {
-  if (params.bindMode === "current") {
-    if (params.channel === "discord" && !params.threadId) {
-      return "channel";
-    }
-    if (
-      params.channel === "telegram" ||
-      params.channel === "bluebubbles" ||
-      params.channel === "imessage"
-    ) {
-      return "conversation";
-    }
+  if (params.placement === "child") {
+    return "thread";
   }
-  return params.channel === "telegram" ? "conversation" : "thread";
+  if (!params.threadId) {
+    return "conversation";
+  }
+  return params.conversationId === params.threadId ? "thread" : "conversation";
 }
 
 async function bindSpawnedAcpSessionToCurrentConversation(params: {
@@ -158,9 +154,14 @@ async function bindSpawnedAcpSessionToCurrentConversation(params: {
       ? existingBinding.metadata.boundBy.trim()
       : "";
   if (existingBinding && boundBy && boundBy !== "system" && senderId && senderId !== boundBy) {
+    const currentLabel = resolveAcpBindingLabelNoun({
+      placement: "current",
+      threadId: bindingContext.threadId,
+      conversationId: currentConversationId,
+    });
     return {
       ok: false,
-      error: `Only ${boundBy} can rebind this ${channel === "discord" && !bindingContext.threadId ? "channel" : "conversation"}.`,
+      error: `Only ${boundBy} can rebind this ${currentLabel}.`,
     };
   }
 
@@ -287,7 +288,7 @@ async function bindSpawnedAcpSessionToThread(params: {
 
   const currentThreadId = bindingContext.threadId ?? "";
   const currentConversationId = bindingContext.conversationId?.trim() || "";
-  const requiresThreadIdForHere = channel !== "telegram" && channel !== "feishu";
+  const requiresThreadIdForHere = requiresNativeThreadContextForThreadHere(channel);
   if (
     threadMode === "here" &&
     ((requiresThreadIdForHere && !currentThreadId) ||
@@ -299,12 +300,10 @@ async function bindSpawnedAcpSessionToThread(params: {
     };
   }
 
-  const placement =
-    channel === "telegram" || channel === "feishu"
-      ? "current"
-      : currentThreadId
-        ? "current"
-        : "child";
+  const placement = resolveThreadBindingPlacementForCurrentContext({
+    channel,
+    threadId: currentThreadId || undefined,
+  });
   if (!capabilities.placements.includes(placement)) {
     return {
       ok: false,
@@ -335,9 +334,14 @@ async function bindSpawnedAcpSessionToThread(params: {
         ? existingBinding.metadata.boundBy.trim()
         : "";
     if (existingBinding && boundBy && boundBy !== "system" && senderId && senderId !== boundBy) {
+      const currentLabel = resolveAcpBindingLabelNoun({
+        placement,
+        threadId: currentThreadId || undefined,
+        conversationId: currentConversationId,
+      });
       return {
         ok: false,
-        error: `Only ${boundBy} can rebind this ${channel === "telegram" ? "conversation" : "thread"}.`,
+        error: `Only ${boundBy} can rebind this ${currentLabel}.`,
       };
     }
   }
@@ -537,9 +541,12 @@ export async function handleAcpSpawnAction(
     const currentConversationId = resolveAcpCommandConversationId(params)?.trim() || "";
     const boundConversationId = binding.conversation.conversationId.trim();
     const placementLabel = resolveAcpBindingLabelNoun({
-      channel: binding.conversation.channel,
+      conversationId: currentConversationId,
+      placement:
+        currentConversationId && boundConversationId === currentConversationId
+          ? "current"
+          : "child",
       threadId: resolveAcpCommandThreadId(params),
-      bindMode: spawn.bind !== "off" ? "current" : "thread",
     });
     if (currentConversationId && boundConversationId === currentConversationId) {
       parts.push(`Bound this ${placementLabel} to ${sessionKey}.`);

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { setDefaultChannelPluginRegistryForTests } from "../../../commands/channel-test-helpers.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
   __testing as sessionBindingTesting,
@@ -8,7 +9,6 @@ import {
 } from "../../../infra/outbound/session-binding-service.js";
 import { buildCommandTestParams } from "../commands-spawn.test-harness.js";
 import {
-  isAcpCommandDiscordChannel,
   resolveAcpCommandBindingContext,
   resolveAcpCommandConversationId,
   resolveAcpCommandParentConversationId,
@@ -51,6 +51,7 @@ function registerFeishuBindingAdapterForTest(accountId: string) {
 
 describe("commands-acp context", () => {
   beforeEach(() => {
+    setDefaultChannelPluginRegistryForTests();
     sessionBindingTesting.resetSessionBindingAdaptersForTests();
   });
 
@@ -69,9 +70,8 @@ describe("commands-acp context", () => {
       accountId: "work",
       threadId: "thread-42",
       conversationId: "thread-42",
-      parentConversationId: "parent-1",
+      parentConversationId: "channel:parent-1",
     });
-    expect(isAcpCommandDiscordChannel(params)).toBe(true);
   });
 
   it("resolves discord thread parent from ParentSessionKey when targets point at the thread", () => {
@@ -90,7 +90,7 @@ describe("commands-acp context", () => {
       accountId: "work",
       threadId: "thread-42",
       conversationId: "thread-42",
-      parentConversationId: "parent-9",
+      parentConversationId: "channel:parent-9",
     });
   });
 
@@ -110,7 +110,7 @@ describe("commands-acp context", () => {
       accountId: "work",
       threadId: "thread-42",
       conversationId: "thread-42",
-      parentConversationId: "parent-11",
+      parentConversationId: "channel:parent-11",
     });
   });
 
@@ -129,7 +129,6 @@ describe("commands-acp context", () => {
       conversationId: "123456789",
     });
     expect(resolveAcpCommandConversationId(params)).toBe("123456789");
-    expect(isAcpCommandDiscordChannel(params)).toBe(false);
   });
 
   it("builds canonical telegram topic conversation ids from originating chat + thread", () => {
