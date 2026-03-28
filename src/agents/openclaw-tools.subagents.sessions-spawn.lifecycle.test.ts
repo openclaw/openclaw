@@ -16,18 +16,10 @@ const fastModeEnv = vi.hoisted(() => {
   return { previous };
 });
 
-<<<<<<< HEAD
 const acpSpawnMocks = vi.hoisted(() => ({
   spawnAcpDirect: vi.fn(),
 }));
 
-vi.mock("./pi-embedded.js", () => ({
-  isEmbeddedPiRunActive: () => false,
-  isEmbeddedPiRunStreaming: () => false,
-  queueEmbeddedPiMessage: () => false,
-  waitForEmbeddedPiRunEnd: async () => true,
-}));
-=======
 vi.mock("./pi-embedded.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./pi-embedded.js")>();
   return {
@@ -38,7 +30,6 @@ vi.mock("./pi-embedded.js", async (importOriginal) => {
     waitForEmbeddedPiRunEnd: async () => true,
   };
 });
->>>>>>> origin/main
 
 vi.mock("./acp-spawn.js", () => ({
   ACP_SPAWN_MODES: ["run", "session"],
