@@ -131,17 +131,18 @@ export async function runChannelLogin(
   opts: ChannelAuthOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const loadedCfg = applyPluginAutoEnable({
+  const autoEnabled = applyPluginAutoEnable({
     config: loadConfig(),
     env: process.env,
-  }).config;
+  });
+  const loadedCfg = autoEnabled.config;
   const { cfg, configChanged, channelInput, plugin } = await resolveChannelPluginForMode(
     opts,
     "login",
     loadedCfg,
     runtime,
   );
-  if (configChanged) {
+  if (autoEnabled.changes.length > 0 || configChanged) {
     await writeConfigFile(cfg);
   }
   const login = plugin.auth?.login;
@@ -164,17 +165,18 @@ export async function runChannelLogout(
   opts: ChannelAuthOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const loadedCfg = applyPluginAutoEnable({
+  const autoEnabled = applyPluginAutoEnable({
     config: loadConfig(),
     env: process.env,
-  }).config;
+  });
+  const loadedCfg = autoEnabled.config;
   const { cfg, configChanged, channelInput, plugin } = await resolveChannelPluginForMode(
     opts,
     "logout",
     loadedCfg,
     runtime,
   );
-  if (configChanged) {
+  if (autoEnabled.changes.length > 0 || configChanged) {
     await writeConfigFile(cfg);
   }
   const logoutAccount = plugin.gateway?.logoutAccount;

@@ -158,6 +158,22 @@ describe("channel-auth", () => {
         channelInput: "whatsapp",
       }),
     );
+    expect(mocks.writeConfigFile).toHaveBeenCalledWith(autoEnabledCfg);
+  });
+
+  it("persists auto-enabled config during logout auto-pick too", async () => {
+    const autoEnabledCfg = { channels: { whatsapp: {} }, plugins: { allow: ["whatsapp"] } };
+    mocks.loadConfig.mockReturnValue({});
+    mocks.applyPluginAutoEnable.mockReturnValue({ config: autoEnabledCfg, changes: ["whatsapp"] });
+
+    await runChannelLogout({}, runtime);
+
+    expect(mocks.logoutAccount).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: autoEnabledCfg,
+      }),
+    );
+    expect(mocks.writeConfigFile).toHaveBeenCalledWith(autoEnabledCfg);
   });
 
   it("ignores configured channels that do not support login when channel is omitted", async () => {
