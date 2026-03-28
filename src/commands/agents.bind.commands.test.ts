@@ -12,34 +12,59 @@ vi.mock("../config/config.js", async (importOriginal) => ({
 
 vi.mock("../channels/plugins/index.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../channels/plugins/index.js")>();
+  const knownChannels = new Set(["discord", "matrix", "telegram"]);
+  const createPlugin = (id: "discord" | "matrix" | "telegram") => ({
+    id,
+    meta: {
+      id,
+      label: id,
+      selectionLabel: id,
+      docsPath: `/channels/${id}`,
+      blurb: `${id} test plugin`,
+    },
+    capabilities: {},
+    config: {
+      listAccountIds: () => [],
+    },
+  });
   return {
     ...actual,
     getChannelPlugin: (channel: string) => {
-      if (channel === "matrix") {
+      const normalized = channel.trim().toLowerCase();
+      if (!knownChannels.has(normalized)) {
+        return actual.getChannelPlugin(channel);
+      }
+      if (normalized === "matrix") {
         return {
-          id: "matrix",
+          ...createPlugin("matrix"),
           setup: {
             resolveBindingAccountId: ({ agentId }: { agentId: string }) => agentId.toLowerCase(),
           },
         };
       }
-      return actual.getChannelPlugin(channel);
+      return createPlugin(normalized as "discord" | "telegram");
     },
     normalizeChannelId: (channel: string) => {
-      if (channel.trim().toLowerCase() === "matrix") {
-        return "matrix";
+      const normalized = channel.trim().toLowerCase();
+      if (knownChannels.has(normalized)) {
+        return normalized;
       }
       return actual.normalizeChannelId(channel);
     },
   };
 });
 
-import { agentsBindCommand, agentsBindingsCommand, agentsUnbindCommand } from "./agents.js";
+let agentsBindCommand: typeof import("./agents.js").agentsBindCommand;
+let agentsBindingsCommand: typeof import("./agents.js").agentsBindingsCommand;
+let agentsUnbindCommand: typeof import("./agents.js").agentsUnbindCommand;
 
 const runtime = createTestRuntime();
 
 describe("agents bind/unbind commands", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ agentsBindCommand, agentsBindingsCommand, agentsUnbindCommand } =
+      await import("./agents.js"));
     readConfigFileSnapshotMock.mockClear();
     writeConfigFileMock.mockClear();
     runtime.log.mockClear();
