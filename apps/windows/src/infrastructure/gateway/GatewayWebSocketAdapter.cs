@@ -50,7 +50,9 @@ internal sealed class GatewayWebSocketAdapter : IGatewayWebSocket, IHostedServic
 
         // Gateway v2026.3.13 enforces origin check for control-ui clients.
         // Local loopback origin passes checkBrowserOrigin when isLocalClient=true.
-        _ws.Options.SetRequestHeader("Origin", $"http://{connectUri.Host}:{connectUri.Port}");
+        // wss:// → https:// so the origin matches TLS deployments that allow https://<host>.
+        var originScheme = connectUri.Scheme.Equals("wss", StringComparison.OrdinalIgnoreCase) ? "https" : "http";
+        _ws.Options.SetRequestHeader("Origin", $"{originScheme}://{connectUri.Host}:{connectUri.Port}");
 
         await _ws.ConnectAsync(connectUri, ct);
         _logger.LogInformation("Connected to gateway {Uri}", endpoint.DisplayName);
