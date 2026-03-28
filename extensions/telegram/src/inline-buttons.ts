@@ -21,13 +21,17 @@ function normalizeInlineButtonsScope(value: unknown): TelegramInlineButtonsScope
   return undefined;
 }
 
+function readInlineButtonsCapability(value: unknown): unknown {
+  if (!value || Array.isArray(value) || typeof value !== "object" || !("inlineButtons" in value)) {
+    return undefined;
+  }
+  return value.inlineButtons;
+}
+
 export function resolveTelegramInlineButtonsConfigScope(
   capabilities: unknown,
 ): TelegramInlineButtonsScope | undefined {
-  if (!capabilities || Array.isArray(capabilities) || typeof capabilities !== "object") {
-    return undefined;
-  }
-  return normalizeInlineButtonsScope((capabilities as { inlineButtons?: unknown }).inlineButtons);
+  return normalizeInlineButtonsScope(readInlineButtonsCapability(capabilities));
 }
 
 export function resolveTelegramInlineButtonsScopeFromCapabilities(
