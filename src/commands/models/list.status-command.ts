@@ -19,6 +19,7 @@ import { resolveEnvApiKey } from "../../agents/model-auth.js";
 import {
   buildModelAliasIndex,
   isCliProvider,
+  normalizeProviderId,
   parseModelRef,
   resolveConfiguredModelRef,
   resolveDefaultModelForAgent,
@@ -119,12 +120,12 @@ export async function modelsStatusCommand(
 
   const providersFromStore = new Set(
     Object.values(store.profiles)
-      .map((profile) => profile.provider)
+      .map((profile) => normalizeProviderId(profile.provider))
       .filter((p): p is string => Boolean(p)),
   );
   const providersFromConfig = new Set(
     Object.keys(cfg.models?.providers ?? {})
-      .map((p) => (typeof p === "string" ? p.trim() : ""))
+      .map((p) => (typeof p === "string" ? normalizeProviderId(p) : ""))
       .filter(Boolean),
   );
   const providersFromModels = new Set<string>();
@@ -132,13 +133,13 @@ export async function modelsStatusCommand(
   for (const raw of [defaultLabel, ...fallbacks, imageModel, ...imageFallbacks, ...allowed]) {
     const parsed = parseModelRef(String(raw ?? ""), DEFAULT_PROVIDER);
     if (parsed?.provider) {
-      providersFromModels.add(parsed.provider);
+      providersFromModels.add(normalizeProviderId(parsed.provider));
     }
   }
   for (const raw of [defaultLabel, ...fallbacks, imageModel, ...imageFallbacks]) {
     const parsed = parseModelRef(String(raw ?? ""), DEFAULT_PROVIDER);
     if (parsed?.provider) {
-      providersInUse.add(parsed.provider);
+      providersInUse.add(normalizeProviderId(parsed.provider));
     }
   }
 
