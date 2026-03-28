@@ -1669,6 +1669,134 @@ describe("compaction-safeguard extension model fallback", () => {
   });
 });
 
+describe("compaction-safeguard request auth header merging", () => {
+  const structuredSummary = [
+    "## Decisions",
+    "Used approach A.",
+    "## Open TODOs",
+    "None.",
+    "## Constraints/Rules",
+    "None.",
+    "## Pending user asks",
+    "None.",
+    "## Exact identifiers",
+    "None.",
+  ].join("\n");
+
+  function createHeaderTestEvent(tokensBefore = 10_000) {
+    // Need enough messages to exceed the default recentTurnsPreserve (3 turns)
+    // so that some messages are actually sent to summarizeInStages.
+    const messagesToSummarize = Array.from({ length: 8 }, (_unused, i) => ({
+      role: i % 2 === 0 ? ("user" as const) : ("assistant" as const),
+      content: `message ${i} ${"x".repeat(500)}`,
+      timestamp: i + 1,
+    })) as AgentMessage[];
+    return {
+      preparation: {
+        messagesToSummarize,
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-1",
+        tokensBefore,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 4000 },
+        isSplitTurn: false,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+  }
+
+  it("proceeds with headers-only auth when no apiKey is returned", async () => {
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages.mockResolvedValue(structuredSummary);
+
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model });
+
+    const compactionHandler = createCompactionHandler();
+    const getApiKeyAndHeadersMock = vi
+      .fn()
+      .mockResolvedValue({ ok: true, headers: { Authorization: "Bearer resolved-token" } });
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyAndHeadersMock,
+    });
+    const event = createHeaderTestEvent();
+    const result = (await compactionHandler(event, mockContext)) as {
+      cancel?: boolean;
+      compaction?: { summary: string };
+    };
+
+    expect(result.cancel).not.toBe(true);
+    expect(mockSummarizeInStages).toHaveBeenCalled();
+    expect(mockSummarizeInStages.mock.calls[0]?.[0]?.headers).toEqual({
+      Authorization: "Bearer resolved-token",
+    });
+  });
+
+  it("merges resolved headers with model.headers, resolved taking precedence", async () => {
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages.mockResolvedValue(structuredSummary);
+
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture({
+      headers: { "X-Custom": "model-value", Authorization: "Bearer model-token" },
+    });
+    setCompactionSafeguardRuntime(sessionManager, { model });
+
+    const compactionHandler = createCompactionHandler();
+    const getApiKeyAndHeadersMock = vi
+      .fn()
+      .mockResolvedValue({ ok: true, headers: { Authorization: "Bearer resolved-token" } });
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyAndHeadersMock,
+    });
+    const event = createHeaderTestEvent();
+    const result = (await compactionHandler(event, mockContext)) as {
+      cancel?: boolean;
+      compaction?: { summary: string };
+    };
+
+    expect(result.cancel).not.toBe(true);
+    expect(mockSummarizeInStages).toHaveBeenCalled();
+    expect(mockSummarizeInStages.mock.calls[0]?.[0]?.headers).toEqual({
+      "X-Custom": "model-value",
+      Authorization: "Bearer resolved-token",
+    });
+  });
+
+  it("falls back to model.headers when resolved headers are undefined", async () => {
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages.mockResolvedValue(structuredSummary);
+
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture({
+      headers: { "X-Custom": "model-value" },
+    });
+    setCompactionSafeguardRuntime(sessionManager, { model });
+
+    const compactionHandler = createCompactionHandler();
+    const getApiKeyAndHeadersMock = vi.fn().mockResolvedValue({ ok: true, apiKey: "sk-test" }); // pragma: allowlist secret
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyAndHeadersMock,
+    });
+    const event = createHeaderTestEvent();
+    const result = (await compactionHandler(event, mockContext)) as {
+      cancel?: boolean;
+      compaction?: { summary: string };
+    };
+
+    expect(result.cancel).not.toBe(true);
+    expect(mockSummarizeInStages).toHaveBeenCalled();
+    expect(mockSummarizeInStages.mock.calls[0]?.[0]?.headers).toEqual({
+      "X-Custom": "model-value",
+    });
+  });
+});
+
 describe("compaction-safeguard double-compaction guard", () => {
   it("cancels compaction when there are no real messages to summarize", async () => {
     const sessionManager = stubSessionManager();
