@@ -186,7 +186,12 @@ function buildClawHubArchiveFileName(rawName: string, fallback: string): string 
   if (!trimmed) {
     return `${fallback}.zip`;
   }
-  const safeStem = trimmed.replace(/[\\/]+/g, "__").replace(/\0/g, "").trim() || fallback;
+  const safeStem =
+    trimmed
+      .replace(/[\\/]+/g, "__")
+      .split("\0")
+      .join("")
+      .trim() || fallback;
   return `${safeStem}.zip`;
 }
 

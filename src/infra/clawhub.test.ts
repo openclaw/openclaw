@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   downloadClawHubPackageArchive,
+  downloadClawHubSkillArchive,
   parseClawHubPluginSpec,
   resolveClawHubAuthToken,
   searchClawHubSkills,
@@ -179,6 +180,25 @@ describe("clawhub helpers", () => {
 
     try {
       expect(path.basename(result.archivePath)).toBe("@mkv21__elevenlabs-stt.zip");
+      await expect(fs.readFile(result.archivePath)).resolves.toEqual(Buffer.from(archiveBytes));
+    } finally {
+      await fs.rm(path.dirname(result.archivePath), { recursive: true, force: true });
+    }
+  });
+
+  it("downloads slash-containing skill archives without creating nested temp paths", async () => {
+    const archiveBytes = Uint8Array.from([5, 6, 7, 8]);
+    const result = await downloadClawHubSkillArchive({
+      slug: "mkv21/elevenlabs-stt",
+      fetchImpl: async () =>
+        new Response(archiveBytes, {
+          status: 200,
+          headers: { "content-type": "application/zip" },
+        }),
+    });
+
+    try {
+      expect(path.basename(result.archivePath)).toBe("mkv21__elevenlabs-stt.zip");
       await expect(fs.readFile(result.archivePath)).resolves.toEqual(Buffer.from(archiveBytes));
     } finally {
       await fs.rm(path.dirname(result.archivePath), { recursive: true, force: true });
