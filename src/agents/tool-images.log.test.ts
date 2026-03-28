@@ -1,4 +1,4 @@
-import sharp from "sharp";
+import { Transformer } from "@napi-rs/image";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const { infoMock, warnMock } = vi.hoisted(() => ({
@@ -27,12 +27,9 @@ import { sanitizeContentBlocksImages } from "./tool-images.js";
 async function createLargePng(): Promise<Buffer> {
   const width = 2400;
   const height = 680;
-  const raw = Buffer.alloc(width * height * 3, 0x7f);
-  return await sharp(raw, {
-    raw: { width, height, channels: 3 },
-  })
-    .png({ compressionLevel: 0 })
-    .toBuffer();
+  // Create RGBA pixels (4 bytes per pixel)
+  const rgbaPixels = Buffer.alloc(width * height * 4, 0x7f);
+  return await Transformer.fromRgbaPixels(rgbaPixels, width, height).png({ compressionType: 0 }); // 0 = Default
 }
 
 describe("tool-images log context", () => {
