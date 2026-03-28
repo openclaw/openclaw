@@ -214,6 +214,49 @@ describe("provider-runtime", () => {
     });
   });
 
+  it("invalidates cached runtime providers when config mutates in place", () => {
+    const config = {
+      plugins: {
+        entries: {
+          demo: { enabled: false },
+        },
+      },
+    } as { plugins: { entries: { demo: { enabled: boolean } } } };
+    resolveOwningPluginIdsForProviderMock.mockReturnValue(["demo"]);
+    resolvePluginProvidersMock.mockImplementation((params) => {
+      const runtimeConfig = params?.config as typeof config | undefined;
+      const enabled = runtimeConfig?.plugins?.entries?.demo?.enabled === true;
+      return enabled
+        ? [
+            {
+              id: DEMO_PROVIDER_ID,
+              label: "Demo",
+              auth: [],
+            },
+          ]
+        : [];
+    });
+
+    expect(
+      resolveProviderRuntimePlugin({
+        provider: DEMO_PROVIDER_ID,
+        config: config as never,
+      }),
+    ).toBeUndefined();
+
+    config.plugins.entries.demo.enabled = true;
+
+    expect(
+      resolveProviderRuntimePlugin({
+        provider: DEMO_PROVIDER_ID,
+        config: config as never,
+      }),
+    ).toMatchObject({
+      id: DEMO_PROVIDER_ID,
+    });
+    expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(2);
+  });
+
   it("dispatches runtime hooks for the matched provider", async () => {
     resolveCatalogHookProviderPluginIdsMock.mockReturnValue(["openai"]);
     resolveOwningPluginIdsForProviderMock.mockImplementation((params) => {

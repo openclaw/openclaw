@@ -78,6 +78,7 @@ function resolveHookProviderCacheBucket(params: {
 }
 
 function buildHookProviderCacheKey(params: {
+  config?: OpenClawConfig;
   workspaceDir?: string;
   onlyPluginIds?: string[];
   env?: NodeJS.ProcessEnv;
@@ -86,7 +87,7 @@ function buildHookProviderCacheKey(params: {
     workspaceDir: params.workspaceDir,
     env: params.env,
   });
-  return `${roots.workspace ?? ""}::${roots.global}::${roots.stock ?? ""}::${JSON.stringify(params.onlyPluginIds ?? [])}`;
+  return `${roots.workspace ?? ""}::${roots.global}::${roots.stock ?? ""}::${JSON.stringify(params.config ?? null)}::${JSON.stringify(params.onlyPluginIds ?? [])}`;
 }
 
 export function clearProviderRuntimeHookCache(): void {
@@ -116,6 +117,7 @@ function resolveProviderPluginsForHooks(params: {
     env,
   });
   const cacheKey = buildHookProviderCacheKey({
+    config: params.config,
     workspaceDir: params.workspaceDir,
     onlyPluginIds: params.onlyPluginIds,
     env,
