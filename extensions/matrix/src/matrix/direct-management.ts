@@ -1,8 +1,4 @@
-import {
-  isStrictDirectMembership,
-  isStrictDirectRoom,
-  readJoinedMatrixMembers,
-} from "./direct-room.js";
+import { inspectMatrixDirectRoomEvidence } from "./direct-room.js";
 import type { MatrixClient } from "./sdk.js";
 import { EventType, type MatrixDirectAccountData } from "./send/types.js";
 import { isMatrixQualifiedUserId } from "./target-ids.js";
@@ -11,6 +7,7 @@ export type MatrixDirectRoomCandidate = {
   roomId: string;
   joinedMembers: string[] | null;
   strict: boolean;
+  explicit: boolean;
   source: "account-data" | "joined";
 };
 
@@ -86,17 +83,17 @@ async function classifyDirectRoomCandidate(params: {
   selfUserId: string | null;
   source: "account-data" | "joined";
 }): Promise<MatrixDirectRoomCandidate> {
-  const joinedMembers = await readJoinedMatrixMembers(params.client, params.roomId);
+  const evidence = await inspectMatrixDirectRoomEvidence({
+    client: params.client,
+    roomId: params.roomId,
+    remoteUserId: params.remoteUserId,
+    selfUserId: params.selfUserId,
+  });
   return {
     roomId: params.roomId,
-    joinedMembers,
-    strict:
-      joinedMembers !== null &&
-      isStrictDirectMembership({
-        selfUserId: params.selfUserId,
-        remoteUserId: params.remoteUserId,
-        joinedMembers,
-      }),
+    joinedMembers: evidence.joinedMembers,
+    strict: evidence.strict,
+    explicit: evidence.strict && (params.source === "account-data" || evidence.viaMemberState),
     source: params.source,
   };
 }
@@ -167,22 +164,24 @@ export async function inspectMatrixDirectRooms(params: {
       joinedRooms = [];
     }
   }
-  const discoveredStrictRoomIds: string[] = [];
+  const discoveredStrictRooms: MatrixDirectRoomCandidate[] = [];
   for (const roomId of normalizeRoomIdList(joinedRooms)) {
     if (mappedRoomIds.includes(roomId)) {
       continue;
     }
-    if (
-      await isStrictDirectRoom({
-        client: params.client,
-        roomId,
-        remoteUserId,
-        selfUserId,
-      })
-    ) {
-      discoveredStrictRoomIds.push(roomId);
+    const candidate = await classifyDirectRoomCandidate({
+      client: params.client,
+      roomId,
+      remoteUserId,
+      selfUserId,
+      source: "joined",
+    });
+    if (candidate.strict) {
+      discoveredStrictRooms.push(candidate);
     }
   }
+  const discoveredStrictRoomIds = discoveredStrictRooms.map((room) => room.roomId);
+  const discoveredExplicit = discoveredStrictRooms.find((room) => room.explicit);
 
   return {
     selfUserId,
@@ -190,7 +189,8 @@ export async function inspectMatrixDirectRooms(params: {
     mappedRoomIds,
     mappedRooms,
     discoveredStrictRoomIds,
-    activeRoomId: mappedStrict?.roomId ?? discoveredStrictRoomIds[0] ?? null,
+    activeRoomId:
+      mappedStrict?.roomId ?? discoveredExplicit?.roomId ?? discoveredStrictRoomIds[0] ?? null,
   };
 }
 
