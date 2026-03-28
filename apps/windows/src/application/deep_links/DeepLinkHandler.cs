@@ -48,7 +48,7 @@ internal sealed class DeepLinkHandler
         var route = Parse(url);
         if (route is null)
         {
-            _log.LogDebug("Ignored URL {Url}", url.AbsoluteUri);
+            _log.LogDebug("Ignored URL {Url}", RedactUri(url));
             return;
         }
 
@@ -96,7 +96,7 @@ internal sealed class DeepLinkHandler
                 return;
             }
 
-            var urlText    = originalUrl.AbsoluteUri;
+            var urlText    = RedactUri(originalUrl);
             var urlPreview = urlText.Length > 500 ? urlText[..500] + "…" : urlText;
             var body       = $"Run the agent with this message?\n\n{message}\n\nURL:\n{urlPreview}";
 
@@ -141,12 +141,40 @@ internal sealed class DeepLinkHandler
         settings.SetRemoteUrl(url);
         settings.SetConnectionMode(ConnectionMode.Remote);
         settings.SetRemoteTransport(RemoteTransport.Direct);
-        settings.SetRemoteToken(link.Token ?? string.Empty);
-        settings.SetRemotePassword(link.Password ?? string.Empty);
+        // Preserve existing credentials only when the deep link targets the same host.
+        // A host-only link for a different host must clear the old credentials — they would
+        // otherwise be forwarded to an unrelated gateway via GatewayEndpointStore.
+        var sameHost = !string.IsNullOrEmpty(settings.RemoteUrl)
+            && Uri.TryCreate(settings.RemoteUrl, UriKind.Absolute, out var existing)
+            && string.Equals(existing.Host, link.Host, StringComparison.OrdinalIgnoreCase);
+
+        if (link.Token    is not null) settings.SetRemoteToken(link.Token);
+        else if (!sameHost)            settings.SetRemoteToken(string.Empty);
+
+        if (link.Password is not null) settings.SetRemotePassword(link.Password);
+        else if (!sameHost)            settings.SetRemotePassword(string.Empty);
 
         var saveResult = await _sender.Send(new SaveSettingsCommand(settings));
         if (saveResult.IsError)
             _log.LogWarning("Gateway deep link: failed to save settings — {Error}", saveResult.FirstError.Description);
+    }
+
+    // Replaces values of sensitive query params (key, token, password) with *** before
+    // logging or displaying a deep-link URI, to prevent credential exposure in logs/UI.
+    private static string RedactUri(Uri uri)
+    {
+        if (string.IsNullOrEmpty(uri.Query)) return uri.AbsoluteUri;
+        var parts = uri.Query.TrimStart('?').Split('&');
+        var redacted = parts.Select(p =>
+        {
+            var eq = p.IndexOf('=');
+            if (eq < 0) return p;
+            var key = Uri.UnescapeDataString(p[..eq]);
+            return key is "key" or "token" or "password"
+                ? p[..eq] + "=***"
+                : p;
+        });
+        return new UriBuilder(uri) { Query = string.Join("&", redacted) }.Uri.AbsoluteUri;
     }
 
     private static string GenerateRandomKey()

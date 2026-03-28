@@ -40,9 +40,12 @@ internal sealed class PauseGatewayConnectionHandler : IRequestHandler<PauseGatew
             _connection.MarkPaused();
 
         // Persist IsPaused so the coordinator does not auto-connect on the next app start.
+        // IsPaused is a Windows-only field — it has no counterpart in the gateway config schema.
+        // SaveLocalAsync avoids the gateway config.get/config.set round-trip, which can fail
+        // if the gateway is transiently unavailable, causing the pause action to fail entirely.
         var s = await _settings.LoadAsync(ct);
         s.SetIsPaused(true);
-        await _settings.SaveAsync(s, ct);
+        await _settings.SaveLocalAsync(s, ct);
 
         await _socket.SuspendReceivingAsync(ct);
         await _mediator.Publish(new GatewayPaused(), ct);

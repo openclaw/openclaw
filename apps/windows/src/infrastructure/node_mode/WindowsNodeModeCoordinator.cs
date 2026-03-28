@@ -659,16 +659,8 @@ internal sealed class WindowsNodeModeCoordinator : IHostedService, INodeEventSin
         return GatewayUriNormalizer.Normalize(rawUri);
     }
 
-    // Preserve the scheme from settings.RemoteUrl so wss:// remotes receive a TLS
-    // ClientHello end-to-end through the SSH tunnel instead of plaintext WS.
-    private static string ResolveSshLocalUri(AppSettings settings)
-    {
-        var raw = settings.RemoteUrl?.Trim();
-        if (!string.IsNullOrEmpty(raw) && Uri.TryCreate(raw, UriKind.Absolute, out var url))
-        {
-            var scheme = url.Scheme.Equals("wss", StringComparison.OrdinalIgnoreCase) ? "wss" : "ws";
-            return $"{scheme}://localhost:18789";
-        }
-        return "ws://localhost:18789";
-    }
+    // The SSH tunnel forwards local port 18789 → remote gateway. Always use plain ws://
+    // for the local tunnel endpoint — using wss://localhost would attempt TLS against
+    // localhost, but the certificate is issued for the remote host, so hostname validation fails.
+    private static string ResolveSshLocalUri(AppSettings settings) => "ws://localhost:18789";
 }

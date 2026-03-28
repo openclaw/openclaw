@@ -31,15 +31,34 @@ internal sealed class FileSystemDeepLinkKeyStore : IDeepLinkKeyStore
                 if (File.Exists(KeyPath))
                 {
                     var blob = File.ReadAllBytes(KeyPath);
-                    var plain = ProtectedData.Unprotect(blob, KeyEntropy, DpapiScope);
-                    var existing = Encoding.UTF8.GetString(plain).Trim();
+                    string existing;
+                    try
+                    {
+                        existing = Encoding.UTF8.GetString(
+                            ProtectedData.Unprotect(blob, KeyEntropy, DpapiScope)).Trim();
+                    }
+                    catch (CryptographicException)
+                    {
+                        // Pre-DPAPI migration: file may be plaintext — read as UTF-8 and re-encrypt.
+                        existing = Encoding.UTF8.GetString(blob).Trim();
+                        if (!string.IsNullOrEmpty(existing))
+                        {
+                            try
+                            {
+                                var enc = ProtectedData.Protect(
+                                    Encoding.UTF8.GetBytes(existing), KeyEntropy, DpapiScope);
+                                File.WriteAllBytes(KeyPath, enc);
+                            }
+                            catch { /* non-fatal; key valid for this session */ }
+                        }
+                    }
                     if (!string.IsNullOrEmpty(existing))
                         return _cached = existing;
                 }
             }
-            catch (Exception ex) when (ex is CryptographicException or IOException)
+            catch (IOException)
             {
-                // Corrupt or unreadable key file — generate a new one.
+                // Unreadable file — generate a new key.
             }
 
             var key = GenerateKey();

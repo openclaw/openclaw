@@ -101,20 +101,23 @@ internal sealed class ApplyConnectionModeHandler : IRequestHandler<ApplyConnecti
 
     private static int ResolveRemotePort(AppSettings settings, Dictionary<string, object?> root)
     {
-        // settings.RemoteUrl wins: this is the URL the user just saved in the UI.
-        // Config file is the fallback for setups where the URL lives only in openclaw.json.
+        // Config file is authoritative for the remote port — it reflects the deployment
+        // config and may be updated by admins. settings.RemoteUrl is the fallback for
+        // UI-only setups where the URL was never written to openclaw.json.
         Uri? url = null;
-        var raw = settings.RemoteUrl?.Trim();
-        if (!string.IsNullOrEmpty(raw))
-            Uri.TryCreate(raw, UriKind.Absolute, out url);
-        if (url is null &&
-            root.GetValueOrDefault("gateway") is Dictionary<string, object?> gw &&
+        if (root.GetValueOrDefault("gateway") is Dictionary<string, object?> gw &&
             gw.GetValueOrDefault("remote") is Dictionary<string, object?> rem &&
             rem.GetValueOrDefault("url") is string rawConfig)
         {
             var trimmed = rawConfig.Trim();
             if (!string.IsNullOrEmpty(trimmed))
                 Uri.TryCreate(trimmed, UriKind.Absolute, out url);
+        }
+        if (url is null)
+        {
+            var raw = settings.RemoteUrl?.Trim();
+            if (!string.IsNullOrEmpty(raw))
+                Uri.TryCreate(raw, UriKind.Absolute, out url);
         }
         if (url is not null)
         {

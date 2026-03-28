@@ -3,7 +3,6 @@ using System.Net;
 using System.Net.Sockets;
 using MediatR;
 using Microsoft.Extensions.Hosting;
-using OpenClawWindows.Domain.Config;
 using OpenClawWindows.Domain.Gateway;
 using OpenClawWindows.Domain.Settings;
 
@@ -87,10 +86,7 @@ internal sealed class WindowsGatewayProcessManager : IGatewayProcessManager, IHo
                 var settings = await _settings.LoadAsync(CancellationToken.None).ConfigureAwait(false);
 
                 // Remote mode: the gateway runs on the remote host — never spawn locally.
-                // Also check openclaw.json for config-only setups where ConnectionMode has not
-                // been persisted yet (Unconfigured) but gateway.remote section is present.
-                var root = OpenClawConfigFile.LoadDict();
-                if (settings.ConnectionMode == ConnectionMode.Remote || GatewayRemoteConfig.HasRemoteSection(root))
+                if (settings.ConnectionMode == ConnectionMode.Remote)
                 {
                     _desiredActive = false;
                     SetStatus(GatewayProcessStatus.Stopped());

@@ -334,7 +334,7 @@ internal sealed class JsonSettingsRepositoryAdapter : ISettingsRepository
         // Tailscale
         settings.SetTailscaleMode(dto.TailscaleMode);
         settings.SetTailscaleRequireCredentials(dto.TailscaleRequireCredentials);
-        settings.SetTailscalePassword(dto.TailscalePassword);
+        settings.SetTailscalePassword(DecryptCredential(dto.TailscalePassword ?? string.Empty));
 
         return settings;
     }
@@ -397,7 +397,7 @@ internal sealed class JsonSettingsRepositoryAdapter : ISettingsRepository
         // Tailscale
         TailscaleMode = s.TailscaleMode,
         TailscaleRequireCredentials = s.TailscaleRequireCredentials,
-        TailscalePassword = s.TailscalePassword,
+        TailscalePassword = EncryptCredential(s.TailscalePassword ?? string.Empty),
     };
 
     private static string EncryptCredential(string value)

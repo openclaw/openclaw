@@ -584,16 +584,18 @@ internal sealed class GatewayEndpointStore : IGatewayEndpointStore, IDisposable
 
     private static int ResolveRemoteGatewayPort(Dictionary<string, object?> root, AppSettings settings)
     {
-        var cfgUrl = GatewayRemoteConfig.ResolveGatewayUrl(root);
-        if (cfgUrl is not null)
-        {
-            var p = GatewayRemoteConfig.DefaultPort(cfgUrl);
-            if (p is not null) return p.Value;
-        }
+        // settings.RemoteUrl wins: this is the URL the user just saved in the UI.
+        // Config is the fallback for setups where the URL lives only in openclaw.json.
         var settingsUrl = GatewayRemoteConfig.NormalizeGatewayUrl(settings.RemoteUrl);
         if (settingsUrl is not null)
         {
             var p = GatewayRemoteConfig.DefaultPort(settingsUrl);
+            if (p is not null) return p.Value;
+        }
+        var cfgUrl = GatewayRemoteConfig.ResolveGatewayUrl(root);
+        if (cfgUrl is not null)
+        {
+            var p = GatewayRemoteConfig.DefaultPort(cfgUrl);
             if (p is not null) return p.Value;
         }
         return GatewayEnvironment.GatewayPort();

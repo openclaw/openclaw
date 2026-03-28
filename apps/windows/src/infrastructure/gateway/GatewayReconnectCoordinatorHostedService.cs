@@ -146,19 +146,30 @@ internal sealed class GatewayReconnectCoordinatorHostedService : IHostedService
         // Honour persisted pause across restarts — in-memory state starts as Disconnected.
         if (settings.IsPaused) return null;
 
-        // Effective mode precedence:
+        // Effective mode precedence: explicit setting → settings.RemoteUrl → config-backed
+        // remote (gateway.remote in openclaw.json) → onboarding seen → unconfigured.
         var mode = settings.ConnectionMode != ConnectionMode.Unconfigured
             ? settings.ConnectionMode
             : !string.IsNullOrWhiteSpace(settings.RemoteUrl) ? ConnectionMode.Remote
+            : GatewayRemoteConfig.HasRemoteSection(root)     ? ConnectionMode.Remote
             : settings.OnboardingSeen ? ConnectionMode.Local
             : ConnectionMode.Unconfigured;
 
         if (mode == ConnectionMode.Unconfigured) return null;
 
+        // Mirror GatewayEndpointStore transport resolution: config explicit → SSH default when
+        // section present → settings fallback (covers config-only installs where settings
+        // defaults to Ssh but openclaw.json may declare direct transport).
+        var transport = GatewayRemoteConfig.HasTransportEntry(root)
+            ? GatewayRemoteConfig.ResolveTransport(root)
+            : GatewayRemoteConfig.HasRemoteSection(root)
+                ? RemoteTransport.Ssh
+                : settings.RemoteTransport;
+
         // Determine raw URI based on transport
         // Remote+Ssh: SSH tunnel forwards to local port 18789.
         // Remote+Direct or Local: use the configured GatewayEndpointUri or RemoteUrl.
-        if (mode == ConnectionMode.Remote && settings.RemoteTransport == RemoteTransport.Ssh
+        if (mode == ConnectionMode.Remote && transport == RemoteTransport.Ssh
             && !_tunnel.IsConnected)
         {
             // OQ-003: tunnel died after the initial apply — re-establish before reconnecting.
@@ -171,10 +182,12 @@ internal sealed class GatewayReconnectCoordinatorHostedService : IHostedService
             }
         }
 
-        string? rawUri = mode == ConnectionMode.Remote && settings.RemoteTransport == RemoteTransport.Ssh
+        string? rawUri = mode == ConnectionMode.Remote && transport == RemoteTransport.Ssh
             ? ResolveSshLocalUri(settings, root)
-            : mode == ConnectionMode.Remote && !string.IsNullOrWhiteSpace(settings.RemoteUrl)
-                ? settings.RemoteUrl
+            : mode == ConnectionMode.Remote
+                ? (!string.IsNullOrWhiteSpace(settings.RemoteUrl)
+                    ? settings.RemoteUrl
+                    : GatewayRemoteConfig.ResolveGatewayUrl(root)?.ToString())
                 : settings.GatewayEndpointUri;
 
         // Normalize URI — adds default port 18789 for ws://, enforces loopback for ws://
@@ -187,26 +200,12 @@ internal sealed class GatewayReconnectCoordinatorHostedService : IHostedService
 
     // The SSH tunnel is a transparent TCP forward, so TLS (for wss://) is end-to-end
     // between the client and the remote gateway — the local tunnel port carries whatever
-    // protocol the remote expects. Preserve the scheme from the effective remote URL
-    // (config-backed first, then settings) so wss:// remotes receive a TLS ClientHello
-    // through the tunnel rather than plaintext WS.
-    private static string ResolveSshLocalUri(AppSettings settings, Dictionary<string, object?> root)
-    {
-        // Config file is authoritative; settings.RemoteUrl is the fallback for UI-only setups.
-        Uri? url = GatewayRemoteConfig.ResolveGatewayUrl(root);
-        if (url is null)
-        {
-            var raw = settings.RemoteUrl?.Trim();
-            if (!string.IsNullOrEmpty(raw))
-                Uri.TryCreate(raw, UriKind.Absolute, out url);
-        }
-        if (url is not null)
-        {
-            var scheme = url.Scheme.Equals("wss", StringComparison.OrdinalIgnoreCase) ? "wss" : "ws";
-            return $"{scheme}://localhost:18789";
-        }
-        return "ws://localhost:18789";
-    }
+    // The SSH tunnel forwards local port 18789 → remote gateway. The app always connects
+    // to the local tunnel endpoint using plain ws://, regardless of whether the remote
+    // gateway uses TLS. Using wss://localhost would attempt TLS against localhost, but the
+    // certificate is issued for the remote host, so hostname validation always fails.
+    private static string ResolveSshLocalUri(AppSettings settings, Dictionary<string, object?> root) =>
+        "ws://localhost:18789";
 
     private static int ComputeBackoffMs(int attempt)
     {
