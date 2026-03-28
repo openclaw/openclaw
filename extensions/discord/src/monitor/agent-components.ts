@@ -24,6 +24,7 @@ import {
   resolveEnvelopeFormatOptions,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
+import { enqueueSystemEvent } from "openclaw/plugin-sdk/channel-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
@@ -36,7 +37,6 @@ import {
   resolvePluginConversationBindingApproval,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import {
   dispatchPluginInteractiveHandler,
