@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveThinkingDefault } from "../../agents/model-selection.js";
 import { rewriteTranscriptEntriesInSessionFile } from "../../agents/pi-embedded-runner/transcript-rewrite.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
@@ -10,6 +10,7 @@ import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.j
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
+import { loadConfig } from "../../config/config.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { type SavedMedia, saveMediaBuffer } from "../../media/store.js";
@@ -743,7 +744,11 @@ function resolveTranscriptPath(params: {
   }
 }
 
-function ensureTranscriptFile(params: { transcriptPath: string; sessionId: string }): {
+function ensureTranscriptFile(params: {
+  transcriptPath: string;
+  sessionId: string;
+  agentId?: string;
+}): {
   ok: boolean;
   error?: string;
 } {
@@ -752,12 +757,15 @@ function ensureTranscriptFile(params: { transcriptPath: string; sessionId: strin
   }
   try {
     fs.mkdirSync(path.dirname(params.transcriptPath), { recursive: true });
+    const cwd = params.agentId
+      ? resolveAgentWorkspaceDir(loadConfig(), params.agentId)
+      : process.cwd();
     const header = {
       type: "session",
       version: CURRENT_SESSION_VERSION,
       id: params.sessionId,
       timestamp: new Date().toISOString(),
-      cwd: process.cwd(),
+      cwd,
     };
     fs.writeFileSync(params.transcriptPath, `${JSON.stringify(header)}\n`, {
       encoding: "utf-8",
@@ -819,6 +827,7 @@ function appendAssistantTranscriptMessage(params: {
     const ensured = ensureTranscriptFile({
       transcriptPath,
       sessionId: params.sessionId,
+      agentId: params.agentId,
     });
     if (!ensured.ok) {
       return { ok: false, error: ensured.error ?? "failed to create transcript file" };
