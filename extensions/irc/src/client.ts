@@ -461,11 +461,8 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
         const text = line.trailing != null ? line.trailing : "";
         const prefix = parseIrcPrefix(line.prefix);
         const senderNick = prefix.nick ? prefix.nick.trim() : "";
-        if (!target || !senderNick || !text.trim()) {
-          continue;
-        }
 
-        // Check if this message is part of a batch
+        // Check if this message is part of a batch *before* filtering empty text
         const batchTag = line.tags?.get("batch");
         if (batchTag) {
           // Buffer the message for later
@@ -476,10 +473,14 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
               senderUser: prefix.user ? prefix.user.trim() : undefined,
               senderHost: prefix.host ? prefix.host.trim() : undefined,
               target,
-              text,
+              text, // preserve blank lines; joining happens at BATCH -<id>
             });
           }
           continue; // Don't emit yet - wait for BATCH -<id>
+        }
+
+        if (!target || !senderNick || !text.trim()) {
+          continue;
         }
 
         if (options.onPrivmsg) {
