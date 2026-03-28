@@ -726,6 +726,17 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
     includeInAudit: true,
   },
   {
+    id: "tools.web.x_search.apiKey",
+    targetType: "tools.web.x_search.apiKey",
+    configFile: "openclaw.json",
+    pathPattern: "tools.web.x_search.apiKey",
+    secretShape: SECRET_INPUT_SHAPE,
+    expectedResolvedValue: "string",
+    includeInPlan: true,
+    includeInConfigure: true,
+    includeInAudit: true,
+  },
+  {
     id: "tools.web.search.apiKey",
     targetType: "tools.web.search.apiKey",
     configFile: "openclaw.json",
