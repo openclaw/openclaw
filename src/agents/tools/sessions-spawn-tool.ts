@@ -9,6 +9,7 @@ import { jsonResult, readStringParam, ToolInputError } from "./common.js";
 
 const SESSIONS_SPAWN_RUNTIMES = ["subagent", "acp"] as const;
 const SESSIONS_SPAWN_SANDBOX_MODES = ["inherit", "require"] as const;
+const OPENRESPONSES_SESSION_KEY_RE = /(^|:)openresponses(?:[-:]|$)/i;
 const UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS = [
   "target",
   "transport",
@@ -19,6 +20,14 @@ const UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS = [
   "replyTo",
   "reply_to",
 ] as const;
+
+function isOpenResponsesSessionKey(sessionKey: string | undefined): boolean {
+  const key = sessionKey?.trim();
+  if (!key) {
+    return false;
+  }
+  return OPENRESPONSES_SESSION_KEY_RE.test(key);
+}
 
 const SessionsSpawnToolSchema = Type.Object({
   task: Type.String(),
@@ -42,6 +51,13 @@ const SessionsSpawnToolSchema = Type.Object({
   cleanup: optionalStringEnum(["delete", "keep"] as const),
   sandbox: optionalStringEnum(SESSIONS_SPAWN_SANDBOX_MODES),
   streamTo: optionalStringEnum(ACP_SPAWN_STREAM_TARGETS),
+  waitForCompletion: Type.Optional(Type.Boolean()),
+  suppressAnnounce: Type.Optional(
+    Type.Boolean({
+      description:
+        "Suppress auto-announce for this run. Set true when you plan to collect results via sessions_await instead of receiving announce messages.",
+    }),
+  ),
 
   // Inline attachments (snapshot-by-value).
   // NOTE: Attachment contents are redacted from transcript persistence by sanitizeToolCallInputs.
@@ -106,6 +122,11 @@ export function createSessionsSpawnTool(
         params.cleanup === "keep" || params.cleanup === "delete" ? params.cleanup : "keep";
       const sandbox = params.sandbox === "require" ? "require" : "inherit";
       const streamTo = params.streamTo === "parent" ? "parent" : undefined;
+      const waitForCompletion =
+        typeof params.waitForCompletion === "boolean"
+          ? params.waitForCompletion
+          : isOpenResponsesSessionKey(opts?.agentSessionKey);
+      const suppressAnnounce = params.suppressAnnounce === true;
       // Back-compat: older callers used timeoutSeconds for this tool.
       const timeoutSecondsCandidate =
         typeof params.runTimeoutSeconds === "number"
@@ -186,6 +207,8 @@ export function createSessionsSpawnTool(
           cleanup,
           sandbox,
           expectsCompletionMessage: true,
+          ...(waitForCompletion ? { waitForCompletion: true } : {}),
+          ...(suppressAnnounce ? { suppressAnnounce: true } : {}),
           attachments,
           attachMountPath:
             params.attachAs && typeof params.attachAs === "object"

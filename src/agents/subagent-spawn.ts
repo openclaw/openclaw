@@ -27,7 +27,7 @@ import {
   normalizeSpawnedRunMetadata,
   resolveSpawnedWorkspaceInheritance,
 } from "./spawned-context.js";
-import { buildSubagentSystemPrompt } from "./subagent-announce.js";
+import { buildSubagentSystemPrompt, captureSubagentCompletionReply } from "./subagent-announce.js";
 import {
   decodeStrictBase64,
   materializeSubagentAttachments,
@@ -36,6 +36,7 @@ import {
 import { resolveSubagentCapabilities } from "./subagent-capabilities.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { countActiveRunsForSession, registerSubagentRun } from "./subagent-registry.js";
+import { resolveAgentTimeoutMs } from "./timeout.js";
 import { readStringParam } from "./tools/common.js";
 import {
   resolveDisplaySessionKey,
@@ -62,6 +63,9 @@ export type SpawnSubagentParams = {
   cleanup?: "delete" | "keep";
   sandbox?: SpawnSubagentSandboxMode;
   expectsCompletionMessage?: boolean;
+  waitForCompletion?: boolean;
+  /** Suppress auto-announce at registration time so the caller can collect results via sessions_await. */
+  suppressAnnounce?: boolean;
   attachments?: Array<{
     name: string;
     content: string;
@@ -103,6 +107,12 @@ export type SpawnSubagentResult = {
     totalBytes: number;
     files: Array<{ name: string; bytes: number; sha256: string }>;
     relDir: string;
+  };
+  completion?: {
+    status: "ok" | "error" | "timeout";
+    waitTimeoutMs: number;
+    reply?: string;
+    error?: string;
   };
 };
 
@@ -230,6 +240,68 @@ function summarizeError(err: unknown): string {
   return "error";
 }
 
+async function waitForSpawnedSubagentCompletion(params: {
+  runId: string;
+  childSessionKey: string;
+  waitTimeoutMs: number;
+}): Promise<{
+  status: "ok" | "error" | "timeout";
+  waitTimeoutMs: number;
+  reply?: string;
+  error?: string;
+}> {
+  try {
+    const timeoutMs = Math.max(1, Math.floor(params.waitTimeoutMs));
+    const wait = await callGateway<{
+      status?: string;
+      error?: string;
+    }>({
+      method: "agent.wait",
+      params: {
+        runId: params.runId,
+        timeoutMs,
+      },
+      timeoutMs: timeoutMs + 10_000,
+    });
+
+    if (wait?.status === "error") {
+      return {
+        status: "error",
+        waitTimeoutMs: timeoutMs,
+        error: typeof wait.error === "string" ? wait.error : "subagent run failed",
+      };
+    }
+    if (wait?.status === "timeout") {
+      return {
+        status: "timeout",
+        waitTimeoutMs: timeoutMs,
+        error: "subagent run timed out",
+      };
+    }
+    if (wait?.status !== "ok") {
+      return {
+        status: "error",
+        waitTimeoutMs: timeoutMs,
+        error: `unexpected agent.wait status: ${String(wait?.status)}`,
+      };
+    }
+
+    const capturedReply = await captureSubagentCompletionReply(params.childSessionKey);
+    const reply = capturedReply?.trim() || undefined;
+    return {
+      status: "ok",
+      waitTimeoutMs: timeoutMs,
+      reply,
+    };
+  } catch (err) {
+    return {
+      status: "error",
+      waitTimeoutMs: Math.max(1, Math.floor(params.waitTimeoutMs)),
+      error: summarizeError(err),
+    };
+  }
+}
+
 async function ensureThreadBindingForSubagentSpawn(params: {
   hookRunner: ReturnType<typeof getGlobalHookRunner>;
   childSessionKey: string;
@@ -351,6 +423,7 @@ export async function spawnSubagentDirect(
     typeof params.runTimeoutSeconds === "number" && Number.isFinite(params.runTimeoutSeconds)
       ? Math.max(0, Math.floor(params.runTimeoutSeconds))
       : cfgSubagentTimeout;
+  const waitTimeoutMs = resolveAgentTimeoutMs({ cfg, overrideSeconds: runTimeoutSeconds });
   let modelApplied = false;
   let threadBindingReady = false;
   const { mainKey, alias } = resolveMainSessionAlias(cfg);
@@ -739,6 +812,9 @@ export async function spawnSubagentDirect(
     };
   }
 
+  const shouldWaitForCompletion = params.waitForCompletion === true && spawnMode === "run";
+  const shouldSuppressAnnounce = shouldWaitForCompletion || params.suppressAnnounce === true;
+
   try {
     registerSubagentRun({
       runId: childRunId,
@@ -753,6 +829,7 @@ export async function spawnSubagentDirect(
       model: resolvedModel,
       workspaceDir: spawnedMetadata.workspaceDir,
       runTimeoutSeconds,
+      suppressAutoAnnounce: shouldSuppressAnnounce,
       expectsCompletionMessage,
       spawnMode,
       attachmentsDir: attachmentAbsDir,
@@ -835,6 +912,14 @@ export async function spawnSubagentDirect(
         ? undefined
         : SUBAGENT_SPAWN_ACCEPTED_NOTE;
 
+  const completion = shouldWaitForCompletion
+    ? await waitForSpawnedSubagentCompletion({
+        runId: childRunId,
+        childSessionKey,
+        waitTimeoutMs,
+      })
+    : undefined;
+
   return {
     status: "accepted",
     childSessionKey,
@@ -843,5 +928,6 @@ export async function spawnSubagentDirect(
     note,
     modelApplied: resolvedModel ? modelApplied : undefined,
     attachments: attachmentsReceipt,
+    completion,
   };
 }

@@ -94,6 +94,79 @@ describe("sessions_spawn tool", () => {
     expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
   });
 
+  it("defaults to waitForCompletion for openresponses sessions", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "openresponses-user:alice",
+    });
+
+    await tool.execute("call-openresponses-wait", {
+      task: "research and report",
+    });
+
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: "research and report",
+        waitForCompletion: true,
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("defaults to waitForCompletion for canonical openresponses agent session keys", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:openresponses-user:alice",
+    });
+
+    await tool.execute("call-openresponses-canonical-wait", {
+      task: "research and report",
+    });
+
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: "research and report",
+        waitForCompletion: true,
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("allows overriding waitForCompletion=false for openresponses sessions", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "openresponses-user:alice",
+    });
+
+    await tool.execute("call-openresponses-no-wait", {
+      task: "research and report",
+      waitForCompletion: false,
+    });
+
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        waitForCompletion: true,
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("passes suppressAnnounce through to spawnSubagentDirect", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    await tool.execute("call-suppress-announce", {
+      task: "parallel analysis",
+      suppressAnnounce: true,
+    });
+
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: "parallel analysis",
+        suppressAnnounce: true,
+      }),
+      expect.any(Object),
+    );
+  });
+
   it("passes inherited workspaceDir from tool context, not from tool args", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",

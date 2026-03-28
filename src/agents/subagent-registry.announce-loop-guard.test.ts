@@ -234,6 +234,42 @@ describe("announce loop guard (#18264)", () => {
     expect(announceFn).toHaveBeenCalledTimes(1);
   });
 
+  test("suppresses announce flow when auto-announce is disabled", async () => {
+    announceFn.mockReset();
+    announceFn.mockResolvedValueOnce(true);
+    registry.resetSubagentRegistryForTests();
+
+    const now = Date.now();
+    const runId = "test-suppress-auto-announce";
+    loadSubagentRegistryFromDisk.mockReturnValue(
+      new Map([
+        [
+          runId,
+          {
+            runId,
+            childSessionKey: "agent:main:subagent:child-1",
+            requesterSessionKey: "agent:main:main",
+            requesterDisplayKey: "agent:main:main",
+            task: "inline wait completed",
+            cleanup: "keep" as const,
+            createdAt: now - 20_000,
+            startedAt: now - 10_000,
+            endedAt: now - 5_000,
+            cleanupHandled: false,
+            expectsCompletionMessage: true,
+            suppressAutoAnnounce: true,
+          },
+        ],
+      ]),
+    );
+
+    registry.initSubagentRegistry();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(announceFn).not.toHaveBeenCalled();
+  });
+
   test("announce rejection resets cleanupHandled so retries can resume", async () => {
     announceFn.mockReset();
     announceFn.mockRejectedValueOnce(new Error("announce failed"));

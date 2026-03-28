@@ -517,6 +517,31 @@ export function clearSubagentRunSteerRestart(runId: string) {
   return subagentRunManager.clearSubagentRunSteerRestart(runId);
 }
 
+/**
+ * Mark a run to skip the auto-announce flow so the caller can collect the
+ * result inline (e.g. via `sessions_await`).  Returns `false` when the run
+ * is not found or has already completed (announce may have already fired).
+ */
+export function setSuppressAutoAnnounce(runId: string): boolean {
+  const key = runId.trim();
+  if (!key) {
+    return false;
+  }
+  const entry = subagentRuns.get(key);
+  if (!entry) {
+    return false;
+  }
+  if (typeof entry.endedAt === "number") {
+    return false;
+  }
+  if (entry.suppressAutoAnnounce === true) {
+    return true;
+  }
+  entry.suppressAutoAnnounce = true;
+  persistSubagentRuns();
+  return true;
+}
+
 export function replaceSubagentRunAfterSteer(params: {
   previousRunId: string;
   nextRunId: string;
@@ -540,6 +565,7 @@ export function registerSubagentRun(params: {
   model?: string;
   workspaceDir?: string;
   runTimeoutSeconds?: number;
+  suppressAutoAnnounce?: boolean;
   expectsCompletionMessage?: boolean;
   spawnMode?: "run" | "session";
   attachmentsDir?: string;
