@@ -928,3 +928,27 @@ describe("classifyFailoverReason", () => {
     ).toBe("auth_permanent");
   });
 });
+
+describe("classifyFailoverReason – session_expired via Claude CLI error JSON", () => {
+  // Claude CLI outputs `{"type":"result","subtype":"error_during_execution","is_error":true,
+  // "errors":["No conversation found with session ID: <uuid>"]}` when --resume targets a
+  // missing transcript. The phrase is "no conversation found" (not "conversation not found"),
+  // so it must be matched as its own entry in isCliSessionExpiredErrorMessage.
+  it("classifies Claude CLI 'No conversation found with session ID' as session_expired", () => {
+    const cliErrorJson = JSON.stringify({
+      type: "result",
+      subtype: "error_during_execution",
+      is_error: true,
+      errors: ["No conversation found with session ID: a5bb1e59-66b8-4a97-8465-304a4397b92c"],
+    });
+    expect(classifyFailoverReason(cliErrorJson)).toBe("session_expired");
+  });
+
+  it("classifies plain 'No conversation found with session ID' string as session_expired", () => {
+    expect(
+      classifyFailoverReason(
+        "No conversation found with session ID: a5bb1e59-66b8-4a97-8465-304a4397b92c",
+      ),
+    ).toBe("session_expired");
+  });
+});
