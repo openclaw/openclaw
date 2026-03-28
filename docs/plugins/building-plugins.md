@@ -147,7 +147,7 @@ For the full registration API, see [SDK Overview](/plugins/sdk-overview#registra
 
 Hook guard semantics to keep in mind:
 
-- `before_tool_call`: `{ block: true, blockMode: "hard" }` is terminal and stops lower-priority handlers.
+- `before_tool_call`: `{ block: true, blockMode: "hard" }` is terminal and stops lower-priority handlers. Returning `{ block: false }` against a hard block is a no-op.
 - `before_tool_call`: `{ block: true, blockMode: "soft" }` blocks by default, but lower-priority handlers may clear it with `{ block: false }`.
 - `before_tool_call`: omitting `blockMode` defaults to `"hard"`.
 - `message_sending`: `{ cancel: true }` is terminal and stops lower-priority handlers.
