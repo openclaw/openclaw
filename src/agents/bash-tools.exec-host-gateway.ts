@@ -336,6 +336,7 @@ export async function processGatewayAllowlist(
         initiatingSurface,
         sentApproverDms,
         unavailableReason,
+        turnSourceChannel: params.turnSourceChannel,
       }),
     };
   }

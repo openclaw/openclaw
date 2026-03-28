@@ -340,6 +340,7 @@ export function buildApprovalPendingMessage(params: {
   cwd: string;
   host: "gateway" | "node";
   nodeId?: string;
+  turnSourceChannel?: string;
 }) {
   let fence = "```";
   while (params.command.includes(fence)) {
@@ -361,7 +362,14 @@ export function buildApprovalPendingMessage(params: {
   lines.push(commandBlock);
   lines.push("Mode: foreground (interactive approvals available).");
   lines.push("Background mode requires pre-approved policy (allow-always or ask=off).");
-  lines.push(`Reply with: /approve ${params.approvalSlug} allow-once|allow-always|deny`);
+  if (params.turnSourceChannel === "webchat") {
+    lines.push(
+      "Use the exec approval buttons (Allow once, Always allow, or Deny) in the Control UI.",
+    );
+    lines.push(`Alternatively: /approve ${params.approvalSlug} allow-once|allow-always|deny`);
+  } else {
+    lines.push(`Reply with: /approve ${params.approvalSlug} allow-once|allow-always|deny`);
+  }
   lines.push("If the short code is ambiguous, use the full id in /approve.");
   return lines.join("\n");
 }

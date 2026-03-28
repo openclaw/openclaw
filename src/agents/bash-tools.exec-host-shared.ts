@@ -374,6 +374,7 @@ export function buildExecApprovalPendingToolResult(params: {
   sentApproverDms: boolean;
   unavailableReason: ExecApprovalUnavailableReason | null;
   nodeId?: string;
+  turnSourceChannel?: string;
 }): AgentToolResult<ExecToolDetails> {
   return {
     content: [
@@ -395,6 +396,7 @@ export function buildExecApprovalPendingToolResult(params: {
                 cwd: params.cwd,
                 host: params.host,
                 nodeId: params.nodeId,
+                turnSourceChannel: params.turnSourceChannel,
               }),
       },
     ],
