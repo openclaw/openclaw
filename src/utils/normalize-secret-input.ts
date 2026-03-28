@@ -17,15 +17,19 @@ export function normalizeSecretInput(value: unknown): string {
   if (typeof value !== "string") {
     return "";
   }
-  const collapsed = value.replace(/[\r\n\u2028\u2029]+/g, "");
-  let latin1Only = "";
-  for (const char of collapsed) {
-    const codePoint = char.codePointAt(0);
-    if (typeof codePoint === "number" && codePoint <= 0xff) {
-      latin1Only += char;
-    }
-  }
-  return latin1Only.trim();
+  // Three-step pipeline, each a single regex pass:
+  //   1. Strip embedded line breaks (\r, \n, LS U+2028, PS U+2029).
+  //   2. Drop non-Latin-1 code points (> U+00FF) that would cause
+  //      ByteString violations in HTTP headers.  The character class
+  //      Two ranges cover all non-Latin-1 code points:
+  //        [\u0100-\uFFFF]  — BMP above Latin-1
+  //        [\u{10000}-\u{10FFFF}]  — supplementary planes (emoji, etc.)
+  //      Faster than a per-character loop; /gu flag handles surrogate pairs.
+  //   3. Trim surrounding whitespace.
+  return value
+    .replace(/[\r\n\u2028\u2029]+/g, "")
+    .replace(/[\u0100-\uFFFF]|[\u{10000}-\u{10FFFF}]/gu, "")
+    .trim();
 }
 
 export function normalizeOptionalSecretInput(value: unknown): string | undefined {

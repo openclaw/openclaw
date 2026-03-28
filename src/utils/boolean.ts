@@ -1,3 +1,14 @@
+/**
+ * Boolean string parsing with O(1) lookup.
+ *
+ * Converts environment-variable-style strings ("true", "1", "yes", "on")
+ * to boolean values.  Uses pre-built Sets for the default lists so the
+ * common case (no custom options) pays zero allocation cost per call.
+ *
+ * Returns undefined for unrecognised values rather than defaulting to
+ * false, so callers can distinguish "explicitly false" from "not set".
+ */
+
 export type BooleanParseOptions = {
   truthy?: string[];
   falsy?: string[];

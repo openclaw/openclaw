@@ -1,10 +1,23 @@
+/**
+ * Queue helpers — shared primitives for all bounded, drainable message queues.
+ *
+ * Design principles (inspired by SQLite's "minimal, correct, fast" philosophy):
+ *
+ *  1. ZERO external dependencies — pure TypeScript, no imports.
+ *  2. In-place front-removal via copyWithin + length truncation.
+ *     This avoids Array.shift()'s internal backing-store reallocation in V8,
+ *     reducing GC pressure on high-throughput channels (e.g. WhatsApp storms).
+ *  3. All mutation is explicit and local — no hidden side-effects.
+ *  4. Every exported symbol has a single, well-defined responsibility.
+ */
+
+export type QueueDropPolicy = "summarize" | "old" | "new";
+
 export type QueueSummaryState = {
-  dropPolicy: "summarize" | "old" | "new";
+  dropPolicy: QueueDropPolicy;
   droppedCount: number;
   summaryLines: string[];
 };
-
-export type QueueDropPolicy = QueueSummaryState["dropPolicy"];
 
 export type QueueState<T> = QueueSummaryState & {
   items: T[];
@@ -47,15 +60,15 @@ export function applyQueueRuntimeSettings<TMode extends string>(params: {
   };
 }): void {
   params.target.mode = params.settings.mode;
-  params.target.debounceMs =
-    typeof params.settings.debounceMs === "number"
-      ? Math.max(0, params.settings.debounceMs)
-      : params.target.debounceMs;
-  params.target.cap =
-    typeof params.settings.cap === "number" && params.settings.cap > 0
-      ? Math.floor(params.settings.cap)
-      : params.target.cap;
-  params.target.dropPolicy = params.settings.dropPolicy ?? params.target.dropPolicy;
+  if (typeof params.settings.debounceMs === "number") {
+    params.target.debounceMs = Math.max(0, params.settings.debounceMs);
+  }
+  if (typeof params.settings.cap === "number" && params.settings.cap > 0) {
+    params.target.cap = Math.floor(params.settings.cap);
+  }
+  if (params.settings.dropPolicy !== undefined) {
+    params.target.dropPolicy = params.settings.dropPolicy;
+  }
 }
 
 export function elideQueueText(text: string, limit = 140): string {
@@ -93,18 +106,31 @@ export function applyQueueDropPolicy<T>(params: {
   if (params.queue.dropPolicy === "new") {
     return false;
   }
+  // Evict the oldest items to make room for the incoming item.
   const dropCount = params.queue.items.length - cap + 1;
-  const dropped = params.queue.items.splice(0, dropCount);
+
   if (params.queue.dropPolicy === "summarize") {
-    for (const item of dropped) {
+    // Capture items to summarize before overwriting them in-place.
+    for (let i = 0; i < dropCount; i++) {
       params.queue.droppedCount += 1;
-      params.queue.summaryLines.push(buildQueueSummaryLine(params.summarize(item)));
+      params.queue.summaryLines.push(
+        buildQueueSummaryLine(params.summarize(params.queue.items[i])),
+      );
     }
     const limit = Math.max(0, params.summaryLimit ?? cap);
-    while (params.queue.summaryLines.length > limit) {
-      params.queue.summaryLines.shift();
+    if (params.queue.summaryLines.length > limit) {
+      // Keep only the most recent `limit` lines — in-place, no new array.
+      const excess = params.queue.summaryLines.length - limit;
+      params.queue.summaryLines.copyWithin(0, excess);
+      params.queue.summaryLines.length = limit;
     }
   }
+
+  // Remove the first `dropCount` elements in-place.
+  // copyWithin + length truncation avoids the allocation that splice(0,n) causes.
+  params.queue.items.copyWithin(0, dropCount);
+  params.queue.items.length -= dropCount;
+
   return true;
 }
 
@@ -121,12 +147,12 @@ export function waitForQueueDebounce(queue: {
   }
   return new Promise<void>((resolve) => {
     const check = () => {
-      const since = Date.now() - queue.lastEnqueuedAt;
-      if (since >= debounceMs) {
+      const elapsed = Date.now() - queue.lastEnqueuedAt;
+      if (elapsed >= debounceMs) {
         resolve();
         return;
       }
-      setTimeout(check, debounceMs - since);
+      setTimeout(check, debounceMs - elapsed);
     };
     check();
   });
@@ -144,16 +170,26 @@ export function beginQueueDrain<T extends { draining: boolean }>(
   return queue;
 }
 
+/**
+ * Process the next item in the queue.
+ *
+ * Uses copyWithin + length truncation for in-place front removal
+ * instead of Array.shift() which can trigger V8 backing-store reallocation.
+ *
+ * Returns true if an item was processed, false if the queue was empty.
+ */
 export async function drainNextQueueItem<T>(
   items: T[],
   run: (item: T) => Promise<void>,
 ): Promise<boolean> {
-  const next = items[0];
-  if (!next) {
+  if (items.length === 0) {
     return false;
   }
+  const next = items[0];
   await run(next);
-  items.shift();
+  // In-place removal of the first element.
+  items.copyWithin(0, 1);
+  items.length -= 1;
   return true;
 }
 
@@ -180,7 +216,7 @@ export async function drainCollectQueueStep<T>(params: {
   items: T[];
   run: (item: T) => Promise<void>;
 }): Promise<"skipped" | "drained" | "empty"> {
-  return await drainCollectItemIfNeeded({
+  return drainCollectItemIfNeeded({
     forceIndividualCollect: params.collectState.forceIndividualCollect,
     isCrossChannel: params.isCrossChannel,
     setForceIndividualCollect: (next) => {
@@ -199,10 +235,11 @@ export function buildQueueSummaryPrompt(params: {
   if (params.state.dropPolicy !== "summarize" || params.state.droppedCount <= 0) {
     return undefined;
   }
-  const noun = params.noun;
+  const { state, noun } = params;
+  const count = state.droppedCount;
   const title =
     params.title ??
-    `[Queue overflow] Dropped ${params.state.droppedCount} ${noun}${params.state.droppedCount === 1 ? "" : "s"} due to cap.`;
+    `[Queue overflow] Dropped ${count} ${noun}${count === 1 ? "" : "s"} due to cap.`;
   const lines = [title];
   if (params.state.summaryLines.length > 0) {
     lines.push("Summary:");
@@ -224,9 +261,9 @@ export function buildCollectPrompt<T>(params: {
   if (params.summary) {
     blocks.push(params.summary);
   }
-  params.items.forEach((item, idx) => {
-    blocks.push(params.renderItem(item, idx));
-  });
+  for (let i = 0; i < params.items.length; i++) {
+    blocks.push(params.renderItem(params.items[i], i));
+  }
   return blocks.join("\n\n");
 }
 

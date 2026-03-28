@@ -1,3 +1,30 @@
+/**
+ * Browser origin validation for the WebSocket gateway.
+ *
+ * Security model (defence-in-depth):
+ *
+ *  The gateway must not accept WebSocket connections from arbitrary web pages
+ *  because that would allow any site the user visits to silently read their
+ *  conversation history and issue commands on their behalf (CSRF via WS).
+ *
+ *  Three acceptance paths, ordered from most to least restrictive:
+ *
+ *  1. Explicit allowlist  — operator has pre-approved the origin.  A wildcard
+ *     "*" is supported for development but MUST NOT be used in production.
+ *
+ *  2. Host-header fallback  — opt-in only.  Accepts the connection when the
+ *     parsed Origin host matches the HTTP Host header.  Useful for reverse-
+ *     proxy setups where the operator controls both the proxy and the origin.
+ *     This path is disabled by default because a compromised proxy or a DNS
+ *     rebinding attack can forge the Host header.
+ *
+ *  3. Local-loopback fallback  — accepts connections from loopback origins
+ *     (127.x, ::1, localhost) when the TCP connection itself came from a
+ *     loopback address (isLocalClient).  This is safe because a loopback
+ *     TCP connection cannot be initiated by a remote attacker.
+ *
+ *  All other origins are rejected with a structured error result.
+ */
 import { isLoopbackHost, normalizeHostHeader } from "./net.js";
 
 type OriginCheckResult =

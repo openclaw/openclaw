@@ -1,3 +1,30 @@
+/**
+ * Safe regex compilation with ReDoS (CWE-1333) prevention.
+ *
+ * Threat model:
+ *   User-supplied regex patterns are compiled and used to filter messages.
+ *   A malicious or accidental pattern like `(a+)+` causes catastrophic
+ *   backtracking in NFA-based engines (V8's default), making a single
+ *   crafted input string hang the process for seconds or minutes.
+ *
+ * Defence strategy (conservative static analysis):
+ *   1. Tokenize the pattern into a flat stream of structural tokens.
+ *   2. Walk the token stream tracking per-group state (ParseFrame).
+ *   3. Reject any pattern where a quantified token is itself quantified
+ *      (nested repetition), or where an ambiguous alternation is quantified
+ *      with an unbounded upper limit.
+ *
+ * This is NOT a complete regex safety checker — it is intentionally
+ * conservative (may reject safe patterns) to keep the implementation
+ * small and auditable.  The goal is config-time safety, not a general
+ * regex linter.
+ *
+ * Cache:
+ *   Compiled results are memoised in an LRU-like Map capped at
+ *   SAFE_REGEX_CACHE_MAX entries.  The eviction policy is FIFO (oldest
+ *   insertion key) which is O(1) via Map's guaranteed insertion order.
+ */
+
 type QuantifierRead = {
   consumed: number;
   minRepeat: number;
@@ -101,7 +128,11 @@ function readQuantifier(source: string, index: number): QuantifierRead | null {
   }
 
   let i = index + 1;
-  while (i < source.length && /\d/.test(source[i])) {
+  // Use charCode comparison instead of /\d/.test() to avoid creating a
+  // temporary regex object on every character in the hot tokenizer loop.
+  while (i < source.length) {
+    const cc = source.charCodeAt(i);
+    if (cc < 48 || cc > 57) {break;} // '0'–'9'
     i += 1;
   }
   if (i === index + 1) {
@@ -113,7 +144,9 @@ function readQuantifier(source: string, index: number): QuantifierRead | null {
   if (source[i] === ",") {
     i += 1;
     const maxStart = i;
-    while (i < source.length && /\d/.test(source[i])) {
+    while (i < source.length) {
+      const cc = source.charCodeAt(i);
+      if (cc < 48 || cc > 57) {break;} // '0'–'9'
       i += 1;
     }
     maxRepeat = i === maxStart ? null : Number.parseInt(source.slice(maxStart, i), 10);
@@ -324,15 +357,12 @@ export function compileSafeRegexDetailed(source: string, flags = ""): SafeRegexC
     return { regex: null, source: trimmed, flags, reason: "empty" };
   }
   const cacheKey = `${flags}::${trimmed}`;
-  if (safeRegexCache.has(cacheKey)) {
-    return (
-      safeRegexCache.get(cacheKey) ?? {
-        regex: null,
-        source: trimmed,
-        flags,
-        reason: "invalid-regex",
-      }
-    );
+  // Cache hit: Map.get() is O(1) and guaranteed to return the stored value
+  // when has() returned true — the nullish fallback is unreachable but kept
+  // for TypeScript's type narrowing.
+  const cached = safeRegexCache.get(cacheKey);
+  if (cached !== undefined) {
+    return cached;
   }
 
   let result: SafeRegexCompileResult;
@@ -347,9 +377,12 @@ export function compileSafeRegexDetailed(source: string, flags = ""): SafeRegexC
   }
 
   safeRegexCache.set(cacheKey, result);
+  // FIFO eviction: Map iterates in insertion order, so .keys().next() is
+  // always the oldest entry.  One deletion per insertion keeps the cache
+  // bounded at SAFE_REGEX_CACHE_MAX without a separate LRU list.
   if (safeRegexCache.size > SAFE_REGEX_CACHE_MAX) {
     const oldestKey = safeRegexCache.keys().next().value;
-    if (oldestKey) {
+    if (oldestKey !== undefined) {
       safeRegexCache.delete(oldestKey);
     }
   }
