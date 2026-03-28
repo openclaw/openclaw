@@ -276,7 +276,7 @@ describe("resolvePluginWebSearchProviders", () => {
     expect(loadOpenClawPluginsMock).toHaveBeenCalledTimes(2);
   });
 
-  it("invalidates the snapshot cache when global Vitest fallback changes", () => {
+  it("does not leak host Vitest env into an explicit non-Vitest cache key", () => {
     const originalVitest = process.env.VITEST;
     const config = {};
     const env = { OPENCLAW_HOME: "/tmp/openclaw-home" } as NodeJS.ProcessEnv;
@@ -305,7 +305,7 @@ describe("resolvePluginWebSearchProviders", () => {
       }
     }
 
-    expect(loadOpenClawPluginsMock).toHaveBeenCalledTimes(2);
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledTimes(1);
   });
 
   it("expires web-search snapshot memoization after the shortest plugin cache ttl", () => {

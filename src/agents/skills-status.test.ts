@@ -1,3 +1,4 @@
+import { createSyntheticSourceInfo } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import { buildWorkspaceSkillStatus } from "./skills-status.js";
 import type { SkillEntry } from "./skills/types.js";
@@ -12,20 +13,13 @@ describe("buildWorkspaceSkillStatus", () => {
     const mismatchedOs = process.platform === "darwin" ? "linux" : "darwin";
 
     const entry: SkillEntry = {
-      skill: {
+      skill: createFixtureSkill({
         name: "os-scoped",
         description: "test",
         filePath: "/tmp/os-scoped",
         baseDir: "/tmp",
-        sourceInfo: {
-          path: "/tmp/os-scoped",
-          source: "test",
-          scope: "project",
-          origin: "top-level",
-          baseDir: "/tmp",
-        },
-        disableModelInvocation: false,
-      },
+        source: "test",
+      }),
       frontmatter: {},
       metadata: {
         os: [mismatchedOs],
@@ -47,3 +41,20 @@ describe("buildWorkspaceSkillStatus", () => {
     expect(report.skills[0]?.install).toEqual([]);
   });
 });
+
+function createFixtureSkill(params: {
+  name: string;
+  description: string;
+  filePath: string;
+  baseDir: string;
+  source: string;
+}): SkillEntry["skill"] {
+  return {
+    name: params.name,
+    description: params.description,
+    filePath: params.filePath,
+    baseDir: params.baseDir,
+    sourceInfo: createSyntheticSourceInfo(params.filePath, { source: params.source }),
+    disableModelInvocation: false,
+  };
+}

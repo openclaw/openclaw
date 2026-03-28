@@ -63,6 +63,17 @@ function writePluginPackageManifest(params: {
   );
 }
 
+function writePluginManifest(params: { pluginDir: string; id: string }) {
+  fs.writeFileSync(
+    path.join(params.pluginDir, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: params.id,
+      configSchema: { type: "object" },
+    }),
+    "utf-8",
+  );
+}
+
 function expectEscapesPackageDiagnostic(diagnostics: Array<{ message: string }>) {
   expect(diagnostics.some((entry) => entry.message.includes("escapes package directory"))).toBe(
     true,
@@ -173,6 +184,49 @@ describe("discoverOpenClawPlugins", () => {
     expect(ids).toContain("pack/two");
   });
 
+  it("does not discover nested node_modules copies under installed plugins", async () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "extensions", "opik-openclaw");
+    const nestedDiffsDir = path.join(
+      pluginDir,
+      "node_modules",
+      "openclaw",
+      "dist",
+      "extensions",
+      "diffs",
+    );
+    mkdirSafe(path.join(pluginDir, "src"));
+    mkdirSafe(nestedDiffsDir);
+
+    writePluginPackageManifest({
+      packageDir: pluginDir,
+      packageName: "@opik/opik-openclaw",
+      extensions: ["./src/index.ts"],
+    });
+    writePluginManifest({ pluginDir, id: "opik-openclaw" });
+    fs.writeFileSync(
+      path.join(pluginDir, "src", "index.ts"),
+      "export default function () {}",
+      "utf-8",
+    );
+
+    writePluginPackageManifest({
+      packageDir: path.join(pluginDir, "node_modules", "openclaw"),
+      packageName: "openclaw",
+      extensions: ["./dist/extensions/diffs/index.js"],
+    });
+    writePluginManifest({ pluginDir: nestedDiffsDir, id: "diffs" });
+    fs.writeFileSync(
+      path.join(nestedDiffsDir, "index.js"),
+      "module.exports = { id: 'diffs', register() {} };",
+      "utf-8",
+    );
+
+    const { candidates } = await discoverWithStateDir(stateDir, {});
+
+    expect(candidates.map((candidate) => candidate.idHint)).toEqual(["opik-openclaw"]);
+  });
+
   it("derives unscoped ids for scoped packages", async () => {
     const stateDir = makeTempDir();
     const globalExt = path.join(stateDir, "extensions", "voice-call-pack");
@@ -205,6 +259,7 @@ describe("discoverOpenClawPlugins", () => {
       packageName: "@openclaw/ollama-provider",
       extensions: ["./src/index.ts"],
     });
+    writePluginManifest({ pluginDir: globalExt, id: "ollama" });
     fs.writeFileSync(
       path.join(globalExt, "src", "index.ts"),
       "export default function () {}",
@@ -232,11 +287,13 @@ describe("discoverOpenClawPlugins", () => {
       packageName: "@openclaw/elevenlabs-speech",
       extensions: ["./src/index.ts"],
     });
+    writePluginManifest({ pluginDir: elevenlabsDir, id: "elevenlabs" });
     writePluginPackageManifest({
       packageDir: microsoftDir,
       packageName: "@openclaw/microsoft-speech",
       extensions: ["./src/index.ts"],
     });
+    writePluginManifest({ pluginDir: microsoftDir, id: "microsoft" });
 
     fs.writeFileSync(
       path.join(elevenlabsDir, "src", "index.ts"),

@@ -1,7 +1,5 @@
-import {
-  KIMI_MODEL_CATALOG,
-  type ModelProviderConfig,
-} from "openclaw/plugin-sdk/provider-models";
+import { KIMI_MODEL_CATALOG } from "openclaw/plugin-sdk/provider-models";
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 
 export const KIMI_BASE_URL = "https://api.kimi.com/coding/";
 const KIMI_CODING_USER_AGENT = "claude-code/0.1.0";

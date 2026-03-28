@@ -4,13 +4,13 @@ const resolveProviderUsageAuthWithPluginMock = vi.fn(
   async (..._args: unknown[]): Promise<unknown> => null,
 );
 
-const resolveProviderCapabilitiesWithPluginMock = vi.fn(() => undefined);
-
-vi.mock("../plugins/provider-runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../plugins/provider-runtime.js")>()),
-  resolveProviderCapabilitiesWithPlugin: resolveProviderCapabilitiesWithPluginMock,
-  resolveProviderUsageAuthWithPlugin: resolveProviderUsageAuthWithPluginMock,
-}));
+vi.mock("../plugins/provider-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/provider-runtime.js")>();
+  return {
+    ...actual,
+    resolveProviderUsageAuthWithPlugin: resolveProviderUsageAuthWithPluginMock,
+  };
+});
 
 let resolveProviderAuths: typeof import("./provider-usage.auth.js").resolveProviderAuths;
 

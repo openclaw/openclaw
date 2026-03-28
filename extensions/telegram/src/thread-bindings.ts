@@ -808,14 +808,16 @@ export function setTelegramThreadBindingMaxAgeBySessionKey(params: {
   });
 }
 
+export async function resetTelegramThreadBindingsForTests() {
+  for (const manager of getThreadBindingsState().managersByAccountId.values()) {
+    manager.stop();
+  }
+  await Promise.allSettled(getThreadBindingsState().persistQueueByAccountId.values());
+  getThreadBindingsState().persistQueueByAccountId.clear();
+  getThreadBindingsState().managersByAccountId.clear();
+  getThreadBindingsState().bindingsByAccountConversation.clear();
+}
+
 export const __testing = {
-  async resetTelegramThreadBindingsForTests() {
-    for (const manager of getThreadBindingsState().managersByAccountId.values()) {
-      manager.stop();
-    }
-    await Promise.allSettled(getThreadBindingsState().persistQueueByAccountId.values());
-    getThreadBindingsState().persistQueueByAccountId.clear();
-    getThreadBindingsState().managersByAccountId.clear();
-    getThreadBindingsState().bindingsByAccountConversation.clear();
-  },
+  resetTelegramThreadBindingsForTests,
 };

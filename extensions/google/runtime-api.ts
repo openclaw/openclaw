@@ -3,4 +3,4 @@ export {
   normalizeGoogleApiBaseUrl,
   normalizeGoogleModelId,
   parseGeminiAuth,
-} from "openclaw/plugin-sdk/provider-google";
+} from "./api.js";

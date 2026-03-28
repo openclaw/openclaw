@@ -20,10 +20,13 @@ import type { HandleDirectiveOnlyParams } from "./directive-handling.params.js";
 import { maybeHandleQueueDirective } from "./directive-handling.queue-validation.js";
 import {
   canPersistInternalExecDirective,
+  canPersistInternalVerboseDirective,
   formatDirectiveAck,
   formatElevatedRuntimeHint,
   formatElevatedUnavailableText,
   formatInternalExecPersistenceDeniedText,
+  formatInternalVerboseCurrentReplyOnlyText,
+  formatInternalVerbosePersistenceDeniedText,
   enqueueModeSwitchEvents,
   withOptions,
 } from "./directive-handling.shared.js";
@@ -96,6 +99,12 @@ export async function handleDirectiveOnly(
   }).sandboxed;
   const shouldHintDirectRuntime = directives.hasElevatedDirective && !runtimeIsSandboxed;
   const allowInternalExecPersistence = canPersistInternalExecDirective({
+    messageProvider: params.messageProvider,
+    surface: params.surface,
+    gatewayClientScopes: params.gatewayClientScopes,
+  });
+  const allowInternalVerbosePersistence = canPersistInternalVerboseDirective({
+    messageProvider: params.messageProvider,
     surface: params.surface,
     gatewayClientScopes: params.gatewayClientScopes,
   });
@@ -319,7 +328,9 @@ export async function handleDirectiveOnly(
   const shouldPersistSessionEntry =
     (directives.hasThinkDirective && Boolean(directives.thinkLevel)) ||
     (directives.hasFastDirective && directives.fastMode !== undefined) ||
-    (directives.hasVerboseDirective && Boolean(directives.verboseLevel)) ||
+    (directives.hasVerboseDirective &&
+      Boolean(directives.verboseLevel) &&
+      allowInternalVerbosePersistence) ||
     (directives.hasReasoningDirective && Boolean(directives.reasoningLevel)) ||
     (directives.hasElevatedDirective && Boolean(directives.elevatedLevel)) ||
     (directives.hasExecDirective && directives.hasExecOptions && allowInternalExecPersistence) ||
@@ -342,7 +353,11 @@ export async function handleDirectiveOnly(
     if (shouldDowngradeXHigh) {
       sessionEntry.thinkingLevel = "high";
     }
-    if (directives.hasVerboseDirective && directives.verboseLevel) {
+    if (
+      directives.hasVerboseDirective &&
+      directives.verboseLevel &&
+      allowInternalVerbosePersistence
+    ) {
       applyVerboseOverride(sessionEntry, directives.verboseLevel);
     }
     if (directives.hasReasoningDirective && directives.reasoningLevel) {
@@ -457,12 +472,21 @@ export async function handleDirectiveOnly(
   }
   if (directives.hasVerboseDirective && directives.verboseLevel) {
     parts.push(
-      directives.verboseLevel === "off"
-        ? formatDirectiveAck("Verbose logging disabled.")
-        : directives.verboseLevel === "full"
-          ? formatDirectiveAck("Verbose logging set to full.")
-          : formatDirectiveAck("Verbose logging enabled."),
+      !allowInternalVerbosePersistence
+        ? formatDirectiveAck(formatInternalVerboseCurrentReplyOnlyText())
+        : directives.verboseLevel === "off"
+          ? formatDirectiveAck("Verbose logging disabled.")
+          : directives.verboseLevel === "full"
+            ? formatDirectiveAck("Verbose logging set to full.")
+            : formatDirectiveAck("Verbose logging enabled."),
     );
+  }
+  if (
+    directives.hasVerboseDirective &&
+    directives.verboseLevel &&
+    !allowInternalVerbosePersistence
+  ) {
+    parts.push(formatDirectiveAck(formatInternalVerbosePersistenceDeniedText()));
   }
   if (directives.hasReasoningDirective && directives.reasoningLevel) {
     parts.push(

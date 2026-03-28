@@ -1,3 +1,5 @@
+import { getChatChannelMeta } from "../channels/chat-meta.js";
+import { buildAccountScopedDmSecurityPolicy } from "../channels/plugins/helpers.js";
 import {
   createScopedAccountReplyToModeResolver,
   createTopLevelChannelReplyToModeResolver,
@@ -10,20 +12,17 @@ import type {
 import type {
   ChannelMessagingAdapter,
   ChannelOutboundSessionRoute,
+  ChannelPollResult,
   ChannelThreadingAdapter,
 } from "../channels/plugins/types.core.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
-import { getChatChannelMeta } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ReplyToMode } from "../config/types.base.js";
 import { buildOutboundBaseSessionKey } from "../infra/outbound/base-session-key.js";
+import type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
 import { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { OpenClawPluginApi, OpenClawPluginConfigSchema } from "../plugins/types.js";
-import { createScopedDmSecurityResolver } from "./channel-config-helpers.js";
-import { createTextPairingAdapter } from "./channel-pairing.js";
-import { createAttachedChannelResultAdapter } from "./channel-send-result.js";
-import { definePluginEntry } from "./plugin-entry.js";
 
 export type {
   AnyAgentTool,
@@ -75,6 +74,25 @@ export type {
   ChannelOutboundSessionRoute,
   ChannelMessagingAdapter,
 } from "../channels/plugins/types.core.js";
+
+function createInlineTextPairingAdapter(params: {
+  idLabel: string;
+  message: string;
+  normalizeAllowEntry?: ChannelPairingAdapter["normalizeAllowEntry"];
+  notify: (
+    params: Parameters<NonNullable<ChannelPairingAdapter["notifyApproval"]>>[0] & {
+      message: string;
+    },
+  ) => Promise<void> | void;
+}): ChannelPairingAdapter {
+  return {
+    idLabel: params.idLabel,
+    normalizeAllowEntry: params.normalizeAllowEntry,
+    notifyApproval: async (ctx) => {
+      await params.notify({ ...ctx, message: params.message });
+    },
+  };
+}
 export type {
   ProviderUsageSnapshot,
   UsageProviderId,
@@ -103,7 +121,7 @@ export {
   formatPairingApproveHint,
   parseOptionalDelimitedEntries,
 } from "../channels/plugins/helpers.js";
-export { getChatChannelMeta } from "../channels/registry.js";
+export { getChatChannelMeta } from "../channels/chat-meta.js";
 export {
   channelTargetSchema,
   channelTargetsSchema,
@@ -121,6 +139,7 @@ export type { SecretFileReadOptions, SecretFileReadResult } from "../infra/secre
 export { resolveGatewayBindUrl } from "../shared/gateway-bind-url.js";
 export type { GatewayBindUrlResult } from "../shared/gateway-bind-url.js";
 export { resolveGatewayPort } from "../config/paths.js";
+export { createSubsystemLogger } from "../logging/subsystem.js";
 export { normalizeAtHashSlug, normalizeHyphenSlug } from "../shared/string-normalization.js";
 
 export { resolveTailnetHostWithRunner } from "../shared/tailscale-status.js";
@@ -200,7 +219,12 @@ type DefineChannelPluginEntryOptions<TPlugin = ChannelPlugin> = {
   registerFull?: (api: OpenClawPluginApi) => void;
 };
 
-type DefinedChannelPluginEntry<TPlugin> = ReturnType<typeof definePluginEntry> & {
+type DefinedChannelPluginEntry<TPlugin> = {
+  id: string;
+  name: string;
+  description: string;
+  configSchema: OpenClawPluginConfigSchema;
+  register: (api: OpenClawPluginApi) => void;
   channelPlugin: TPlugin;
   setChannelRuntime?: (runtime: PluginRuntime) => void;
 };
@@ -257,11 +281,12 @@ export function defineChannelPluginEntry<TPlugin>({
   setRuntime,
   registerFull,
 }: DefineChannelPluginEntryOptions<TPlugin>): DefinedChannelPluginEntry<TPlugin> {
-  const entry = definePluginEntry({
+  const resolvedConfigSchema = typeof configSchema === "function" ? configSchema() : configSchema;
+  const entry = {
     id,
     name,
     description,
-    configSchema,
+    configSchema: resolvedConfigSchema,
     register(api: OpenClawPluginApi) {
       setRuntime?.(api.runtime);
       api.registerChannel({ plugin: plugin as ChannelPlugin });
@@ -270,7 +295,7 @@ export function defineChannelPluginEntry<TPlugin>({
       }
       registerFull?.(api);
     },
-  });
+  };
   return {
     ...entry,
     channelPlugin: plugin,
@@ -320,7 +345,11 @@ type ChatChannelPairingOptions = {
     idLabel: string;
     message: string;
     normalizeAllowEntry?: ChannelPairingAdapter["normalizeAllowEntry"];
-    notify: Parameters<typeof createTextPairingAdapter>[0]["notify"];
+    notify: (
+      params: Parameters<NonNullable<ChannelPairingAdapter["notifyApproval"]>>[0] & {
+        message: string;
+      },
+    ) => Promise<void> | void;
   };
 };
 
@@ -346,8 +375,46 @@ type ChatChannelThreadingOptions<TResolvedAccount> =
 
 type ChatChannelAttachedOutboundOptions = {
   base: Omit<ChannelOutboundAdapter, "sendText" | "sendMedia" | "sendPoll">;
-  attachedResults: Parameters<typeof createAttachedChannelResultAdapter>[0];
+  attachedResults: {
+    channel: string;
+    sendText?: (
+      ctx: Parameters<NonNullable<ChannelOutboundAdapter["sendText"]>>[0],
+    ) => MaybePromise<Omit<OutboundDeliveryResult, "channel">>;
+    sendMedia?: (
+      ctx: Parameters<NonNullable<ChannelOutboundAdapter["sendMedia"]>>[0],
+    ) => MaybePromise<Omit<OutboundDeliveryResult, "channel">>;
+    sendPoll?: (
+      ctx: Parameters<NonNullable<ChannelOutboundAdapter["sendPoll"]>>[0],
+    ) => MaybePromise<Omit<ChannelPollResult, "channel">>;
+  };
 };
+
+type MaybePromise<T> = T | Promise<T>;
+
+function createInlineAttachedChannelResultAdapter(
+  params: ChatChannelAttachedOutboundOptions["attachedResults"],
+) {
+  return {
+    sendText: params.sendText
+      ? async (ctx: Parameters<NonNullable<ChannelOutboundAdapter["sendText"]>>[0]) => ({
+          channel: params.channel,
+          ...(await params.sendText!(ctx)),
+        })
+      : undefined,
+    sendMedia: params.sendMedia
+      ? async (ctx: Parameters<NonNullable<ChannelOutboundAdapter["sendMedia"]>>[0]) => ({
+          channel: params.channel,
+          ...(await params.sendMedia!(ctx)),
+        })
+      : undefined,
+    sendPoll: params.sendPoll
+      ? async (ctx: Parameters<NonNullable<ChannelOutboundAdapter["sendPoll"]>>[0]) => ({
+          channel: params.channel,
+          ...(await params.sendPoll!(ctx)),
+        })
+      : undefined,
+  } satisfies Pick<ChannelOutboundAdapter, "sendText" | "sendMedia" | "sendPoll">;
+}
 
 function resolveChatChannelSecurity<TResolvedAccount extends { accountId?: string | null }>(
   security:
@@ -362,7 +429,21 @@ function resolveChatChannelSecurity<TResolvedAccount extends { accountId?: strin
     return security;
   }
   return {
-    resolveDmPolicy: createScopedDmSecurityResolver<TResolvedAccount>(security.dm),
+    resolveDmPolicy: ({ cfg, accountId, account }) =>
+      buildAccountScopedDmSecurityPolicy({
+        cfg,
+        channelKey: security.dm.channelKey,
+        accountId,
+        fallbackAccountId: security.dm.resolveFallbackAccountId?.(account) ?? account.accountId,
+        policy: security.dm.resolvePolicy(account),
+        allowFrom: security.dm.resolveAllowFrom(account) ?? [],
+        defaultPolicy: security.dm.defaultPolicy,
+        allowFromPathSuffix: security.dm.allowFromPathSuffix,
+        policyPathSuffix: security.dm.policyPathSuffix,
+        approveChannelId: security.dm.approveChannelId,
+        approveHint: security.dm.approveHint,
+        normalizeEntry: security.dm.normalizeEntry,
+      }),
     ...(security.collectWarnings ? { collectWarnings: security.collectWarnings } : {}),
   };
 }
@@ -376,7 +457,7 @@ function resolveChatChannelPairing(
   if (!("text" in pairing)) {
     return pairing;
   }
-  return createTextPairingAdapter(pairing.text);
+  return createInlineTextPairingAdapter(pairing.text);
 }
 
 function resolveChatChannelThreading<TResolvedAccount>(
@@ -415,7 +496,7 @@ function resolveChatChannelOutbound(
   }
   return {
     ...outbound.base,
-    ...createAttachedChannelResultAdapter(outbound.attachedResults),
+    ...createInlineAttachedChannelResultAdapter(outbound.attachedResults),
   };
 }
 

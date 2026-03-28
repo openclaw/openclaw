@@ -3,9 +3,9 @@
  * This bypasses pi-ai's content type system which does not have a "document" type.
  */
 
+import { resolveGoogleGenerativeAiApiOrigin } from "../../plugin-sdk/google.js";
 import { isRecord } from "../../utils.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
-import { resolveGoogleGenerativeAiApiOrigin } from "../google-generative-ai.js";
 
 type PdfInput = {
   base64: string;

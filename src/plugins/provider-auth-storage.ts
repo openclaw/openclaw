@@ -1,10 +1,3 @@
-import { HUGGINGFACE_DEFAULT_MODEL_REF } from "../../extensions/huggingface/api.js";
-import { LITELLM_DEFAULT_MODEL_REF } from "../../extensions/litellm/api.js";
-import { OPENROUTER_DEFAULT_MODEL_REF } from "../../extensions/openrouter/api.js";
-import { TOGETHER_DEFAULT_MODEL_REF } from "../../extensions/together/api.js";
-import { VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF } from "../../extensions/vercel-ai-gateway/api.js";
-import { XIAOMI_DEFAULT_MODEL_REF } from "../../extensions/xiaomi/api.js";
-import { ZAI_DEFAULT_MODEL_REF } from "../../extensions/zai/api.js";
 import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
 import { upsertAuthProfile } from "../agents/auth-profiles.js";
 import type { SecretInput } from "../config/types.secrets.js";
@@ -14,7 +7,6 @@ import {
   writeOAuthCredentials,
   type WriteOAuthCredentialsOptions,
 } from "./provider-auth-helpers.js";
-import { KILOCODE_DEFAULT_MODEL_REF } from "./provider-model-kilocode.js";
 
 const resolveAuthAgentDir = (agentDir?: string) => agentDir ?? resolveOpenClawAgentDir();
 
@@ -53,16 +45,21 @@ function createProviderApiKeySetter(
   };
 }
 
-export {
-  HUGGINGFACE_DEFAULT_MODEL_REF,
-  KILOCODE_DEFAULT_MODEL_REF,
-  LITELLM_DEFAULT_MODEL_REF,
-  OPENROUTER_DEFAULT_MODEL_REF,
-  TOGETHER_DEFAULT_MODEL_REF,
-  VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
-  XIAOMI_DEFAULT_MODEL_REF,
-  ZAI_DEFAULT_MODEL_REF,
+type ProviderApiKeySetterSpec = {
+  provider: string;
+  resolveKey?: (key: SecretInput) => SecretInput;
 };
+
+function createProviderApiKeySetters<const T extends Record<string, ProviderApiKeySetterSpec>>(
+  specs: T,
+): { [K in keyof T]: ProviderApiKeySetter } {
+  const entries = Object.entries(specs).map(([name, spec]) => [
+    name,
+    createProviderApiKeySetter(spec.provider, spec.resolveKey),
+  ]);
+  return Object.fromEntries(entries) as { [K in keyof T]: ProviderApiKeySetter };
+}
+
 export {
   buildApiKeyCredential,
   type ApiKeyStorageOptions,
@@ -70,9 +67,78 @@ export {
   type WriteOAuthCredentialsOptions,
 };
 
-export const setAnthropicApiKey = createProviderApiKeySetter("anthropic");
-export const setOpenaiApiKey = createProviderApiKeySetter("openai");
-export const setGeminiApiKey = createProviderApiKeySetter("google");
+const {
+  setAnthropicApiKey,
+  setOpenaiApiKey,
+  setGeminiApiKey,
+  setMoonshotApiKey,
+  setKimiCodingApiKey,
+  setVolcengineApiKey,
+  setByteplusApiKey,
+  setSyntheticApiKey,
+  setVeniceApiKey,
+  setZaiApiKey,
+  setXiaomiApiKey,
+  setOpenrouterApiKey,
+  setLitellmApiKey,
+  setVercelAiGatewayApiKey,
+  setTogetherApiKey,
+  setHuggingfaceApiKey,
+  setQianfanApiKey,
+  setModelStudioApiKey,
+  setXaiApiKey,
+  setMistralApiKey,
+  setKilocodeApiKey,
+} = createProviderApiKeySetters({
+  setAnthropicApiKey: { provider: "anthropic" },
+  setOpenaiApiKey: { provider: "openai" },
+  setGeminiApiKey: { provider: "google" },
+  setMoonshotApiKey: { provider: "moonshot" },
+  setKimiCodingApiKey: { provider: "kimi" },
+  setVolcengineApiKey: { provider: "volcengine" },
+  setByteplusApiKey: { provider: "byteplus" },
+  setSyntheticApiKey: { provider: "synthetic" },
+  setVeniceApiKey: { provider: "venice" },
+  setZaiApiKey: { provider: "zai" },
+  setXiaomiApiKey: { provider: "xiaomi" },
+  setOpenrouterApiKey: {
+    provider: "openrouter",
+    resolveKey: (key) => (typeof key === "string" && key === "undefined" ? "" : key),
+  },
+  setLitellmApiKey: { provider: "litellm" },
+  setVercelAiGatewayApiKey: { provider: "vercel-ai-gateway" },
+  setTogetherApiKey: { provider: "together" },
+  setHuggingfaceApiKey: { provider: "huggingface" },
+  setQianfanApiKey: { provider: "qianfan" },
+  setModelStudioApiKey: { provider: "modelstudio" },
+  setXaiApiKey: { provider: "xai" },
+  setMistralApiKey: { provider: "mistral" },
+  setKilocodeApiKey: { provider: "kilocode" },
+});
+
+export {
+  setAnthropicApiKey,
+  setOpenaiApiKey,
+  setGeminiApiKey,
+  setMoonshotApiKey,
+  setKimiCodingApiKey,
+  setVolcengineApiKey,
+  setByteplusApiKey,
+  setSyntheticApiKey,
+  setVeniceApiKey,
+  setZaiApiKey,
+  setXiaomiApiKey,
+  setOpenrouterApiKey,
+  setLitellmApiKey,
+  setVercelAiGatewayApiKey,
+  setTogetherApiKey,
+  setHuggingfaceApiKey,
+  setQianfanApiKey,
+  setModelStudioApiKey,
+  setXaiApiKey,
+  setMistralApiKey,
+  setKilocodeApiKey,
+};
 
 export async function setMinimaxApiKey(
   key: SecretInput,
@@ -83,18 +149,6 @@ export async function setMinimaxApiKey(
   const provider = profileId.split(":")[0] ?? "minimax";
   upsertProviderApiKeyProfile({ provider, key, agentDir, options, profileId });
 }
-
-export const setMoonshotApiKey = createProviderApiKeySetter("moonshot");
-export const setKimiCodingApiKey = createProviderApiKeySetter("kimi");
-export const setVolcengineApiKey = createProviderApiKeySetter("volcengine");
-export const setByteplusApiKey = createProviderApiKeySetter("byteplus");
-export const setSyntheticApiKey = createProviderApiKeySetter("synthetic");
-export const setVeniceApiKey = createProviderApiKeySetter("venice");
-export const setZaiApiKey = createProviderApiKeySetter("zai");
-export const setXiaomiApiKey = createProviderApiKeySetter("xiaomi");
-export const setOpenrouterApiKey = createProviderApiKeySetter("openrouter", (key) =>
-  typeof key === "string" && key === "undefined" ? "" : key,
-);
 
 export async function setCloudflareAiGatewayConfig(
   accountId: string,
@@ -116,9 +170,6 @@ export async function setCloudflareAiGatewayConfig(
     },
   });
 }
-
-export const setLitellmApiKey = createProviderApiKeySetter("litellm");
-export const setVercelAiGatewayApiKey = createProviderApiKeySetter("vercel-ai-gateway");
 
 export async function setOpencodeZenApiKey(
   key: SecretInput,
@@ -145,11 +196,3 @@ async function setSharedOpencodeApiKey(
     upsertProviderApiKeyProfile({ provider, key, agentDir, options });
   }
 }
-
-export const setTogetherApiKey = createProviderApiKeySetter("together");
-export const setHuggingfaceApiKey = createProviderApiKeySetter("huggingface");
-export const setQianfanApiKey = createProviderApiKeySetter("qianfan");
-export const setModelStudioApiKey = createProviderApiKeySetter("modelstudio");
-export const setXaiApiKey = createProviderApiKeySetter("xai");
-export const setMistralApiKey = createProviderApiKeySetter("mistral");
-export const setKilocodeApiKey = createProviderApiKeySetter("kilocode");

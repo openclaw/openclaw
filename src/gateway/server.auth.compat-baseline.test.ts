@@ -167,7 +167,9 @@ describe("gateway auth compatibility baseline", () => {
         role: "operator",
         scopes: ["operator.admin"],
       });
-      await approveDevicePairing(pending.request.requestId);
+      await approveDevicePairing(pending.request.requestId, {
+        callerScopes: ["operator.admin"],
+      });
 
       const rotated = await rotateDeviceToken({
         deviceId: identity.deviceId,

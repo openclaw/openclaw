@@ -1,4 +1,5 @@
 export type { IMessageAccountConfig } from "../config/types.js";
+export type { IMessageProbe } from "./imessage-runtime.js";
 export type { OpenClawConfig } from "../config/config.js";
 export type {
   ChannelMessageActionContext,
@@ -39,7 +40,7 @@ export {
   normalizeIMessageHandle,
   resolveIMessageGroupRequireMention,
   resolveIMessageGroupToolPolicy,
-} from "../../extensions/imessage/api.js";
+} from "./imessage-policy.js";
 export { IMessageConfigSchema } from "../config/zod-schema.providers-core.js";
 
 export { resolveChannelMediaMaxBytes } from "../channels/plugins/media-limits.js";
@@ -47,8 +48,4 @@ export {
   buildComputedAccountStatusSnapshot,
   collectStatusIssuesFromLastError,
 } from "./status-helpers.js";
-export {
-  monitorIMessageProvider,
-  probeIMessage,
-  sendMessageIMessage,
-} from "../../extensions/imessage/runtime-api.js";
+export { monitorIMessageProvider, probeIMessage, sendMessageIMessage } from "./imessage-runtime.js";
