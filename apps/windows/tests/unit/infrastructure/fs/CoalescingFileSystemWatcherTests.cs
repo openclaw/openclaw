@@ -88,7 +88,8 @@ public sealed class CoalescingFileSystemWatcherTests : IDisposable
         w.HandleEvent(1);
 
         // Wait long enough for the coalesce window to close.
-        await Task.Delay(shortDelay * 4);
+        // 10x buffer: Task.Delay under heavy parallel test load can fire late.
+        await Task.Delay(shortDelay * 10);
 
         callCount.Should().Be(1);
     }

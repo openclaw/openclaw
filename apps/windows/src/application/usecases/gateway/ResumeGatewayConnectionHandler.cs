@@ -39,9 +39,12 @@ internal sealed class ResumeGatewayConnectionHandler : IRequestHandler<ResumeGat
         _connection.MarkResumed();
 
         // Clear persisted IsPaused so the coordinator does not skip auto-connect on restart.
+        // IsPaused is a Windows-only field — it has no counterpart in the gateway config schema.
+        // SaveLocalAsync avoids the gateway config.get/config.set round-trip, which would fail
+        // here because the gateway socket is still disconnected (paused) at this point.
         var s = await _settings.LoadAsync(ct);
         s.SetIsPaused(false);
-        await _settings.SaveAsync(s, ct);
+        await _settings.SaveLocalAsync(s, ct);
 
         await _socket.ResumeReceivingAsync(ct);
         await _mediator.Publish(new GatewayResumed(), ct);

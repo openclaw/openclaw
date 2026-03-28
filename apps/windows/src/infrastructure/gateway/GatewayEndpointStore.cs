@@ -147,10 +147,13 @@ internal sealed class GatewayEndpointStore : IGatewayEndpointStore, IDisposable
                     }
                     // Credentials: config/env are authoritative when present — never mix with settings
                     // to avoid a stale persisted token overriding a config-file password.
-                    // Fall back to settings only when config provides neither credential.
+                    // Fall back to settings only when config has no gateway.remote section at all
+                    // (UI-only installs). When the section exists but auth fields are absent the
+                    // user explicitly removed auth — use null rather than re-injecting stale settings.
                     string? directToken;
                     string? directPassword;
-                    if (!string.IsNullOrEmpty(token) || !string.IsNullOrEmpty(password))
+                    if (!string.IsNullOrEmpty(token) || !string.IsNullOrEmpty(password)
+                        || GatewayRemoteConfig.HasRemoteSection(root))
                     {
                         directToken    = token;
                         directPassword = password;

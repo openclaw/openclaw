@@ -215,7 +215,7 @@ internal sealed class JsonSettingsRepositoryAdapter : ISettingsRepository
         }
     }
 
-    private async Task SaveLocalAsync(AppSettings settings, CancellationToken ct)
+    public async Task SaveLocalAsync(AppSettings settings, CancellationToken ct)
     {
         var tmpPath = _settingsPath + ".tmp";
 
@@ -431,6 +431,9 @@ internal sealed class JsonSettingsRepositoryAdapter : ISettingsRepository
         catch
         {
             // DPAPI unavailable (headless CI, LocalSystem account) — fall back to plaintext
+            Console.Error.WriteLine(
+                "[JsonSettingsRepositoryAdapter] DPAPI unavailable — credential stored as plaintext. " +
+                "This is expected in CI/headless environments but should not occur in normal desktop use.");
             return value;
         }
     }

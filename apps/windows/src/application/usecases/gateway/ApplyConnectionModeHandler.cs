@@ -1,5 +1,6 @@
 using OpenClawWindows.Application.Behaviors;
 using OpenClawWindows.Application.Ports;
+using OpenClawWindows.Domain.Config;
 using OpenClawWindows.Domain.Gateway;
 using OpenClawWindows.Domain.Settings;
 
@@ -85,7 +86,7 @@ internal sealed class ApplyConnectionModeHandler : IRequestHandler<ApplyConnecti
                         ? target
                         : $"{identity}@{target}";
 
-                    var remotePort = ResolveRemotePort(settings);
+                    var remotePort = ResolveRemotePort(settings, OpenClawConfigFile.LoadDict());
                     var result = await _tunnel.ConnectAsync(tunnelEndpoint, LocalTunnelPort, remotePort, ct);
                     if (result.IsError)
                         // Non-fatal: coordinator will retry; tunnel may succeed after GAP-023
@@ -97,10 +98,25 @@ internal sealed class ApplyConnectionModeHandler : IRequestHandler<ApplyConnecti
         return Result.Success;
     }
 
-    private static int ResolveRemotePort(AppSettings settings)
+    private static int ResolveRemotePort(AppSettings settings, Dictionary<string, object?> root)
     {
-        var raw = settings.RemoteUrl?.Trim();
-        if (!string.IsNullOrEmpty(raw) && Uri.TryCreate(raw, UriKind.Absolute, out var url))
+        // Config file is authoritative; settings.RemoteUrl is the fallback for UI-only setups.
+        Uri? url = null;
+        if (root.GetValueOrDefault("gateway") is Dictionary<string, object?> gw &&
+            gw.GetValueOrDefault("remote") is Dictionary<string, object?> rem &&
+            rem.GetValueOrDefault("url") is string rawUrl)
+        {
+            var trimmed = rawUrl.Trim();
+            if (!string.IsNullOrEmpty(trimmed))
+                Uri.TryCreate(trimmed, UriKind.Absolute, out url);
+        }
+        if (url is null)
+        {
+            var raw = settings.RemoteUrl?.Trim();
+            if (!string.IsNullOrEmpty(raw))
+                Uri.TryCreate(raw, UriKind.Absolute, out url);
+        }
+        if (url is not null)
         {
             var portStr = url.GetComponents(UriComponents.Port, UriFormat.Unescaped);
             if (!string.IsNullOrEmpty(portStr) && int.TryParse(portStr, out var explicit0))

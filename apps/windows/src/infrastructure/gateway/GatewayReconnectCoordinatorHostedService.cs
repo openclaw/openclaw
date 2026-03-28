@@ -2,6 +2,7 @@ using MediatR;
 using Microsoft.Extensions.Hosting;
 using OpenClawWindows.Application.Gateway;
 using OpenClawWindows.Application.Ports;
+using OpenClawWindows.Domain.Config;
 using OpenClawWindows.Domain.Gateway;
 using OpenClawWindows.Domain.Settings;
 
@@ -140,6 +141,7 @@ internal sealed class GatewayReconnectCoordinatorHostedService : IHostedService
     private async Task<GatewayEndpoint?> ResolveEndpointAsync(CancellationToken ct)
     {
         var settings = await _settings.LoadAsync(ct);
+        var root     = OpenClawConfigFile.LoadDict();
 
         // Honour persisted pause across restarts — in-memory state starts as Disconnected.
         if (settings.IsPaused) return null;
@@ -170,7 +172,7 @@ internal sealed class GatewayReconnectCoordinatorHostedService : IHostedService
         }
 
         string? rawUri = mode == ConnectionMode.Remote && settings.RemoteTransport == RemoteTransport.Ssh
-            ? ResolveSshLocalUri(settings)
+            ? ResolveSshLocalUri(settings, root)
             : mode == ConnectionMode.Remote && !string.IsNullOrWhiteSpace(settings.RemoteUrl)
                 ? settings.RemoteUrl
                 : settings.GatewayEndpointUri;
@@ -185,12 +187,20 @@ internal sealed class GatewayReconnectCoordinatorHostedService : IHostedService
 
     // The SSH tunnel is a transparent TCP forward, so TLS (for wss://) is end-to-end
     // between the client and the remote gateway — the local tunnel port carries whatever
-    // protocol the remote expects. Preserve the scheme from settings.RemoteUrl so wss://
-    // remotes receive a TLS ClientHello through the tunnel rather than plaintext WS.
-    private static string ResolveSshLocalUri(AppSettings settings)
+    // protocol the remote expects. Preserve the scheme from the effective remote URL
+    // (config-backed first, then settings) so wss:// remotes receive a TLS ClientHello
+    // through the tunnel rather than plaintext WS.
+    private static string ResolveSshLocalUri(AppSettings settings, Dictionary<string, object?> root)
     {
-        var raw = settings.RemoteUrl?.Trim();
-        if (!string.IsNullOrEmpty(raw) && Uri.TryCreate(raw, UriKind.Absolute, out var url))
+        // Config file is authoritative; settings.RemoteUrl is the fallback for UI-only setups.
+        Uri? url = GatewayRemoteConfig.ResolveGatewayUrl(root);
+        if (url is null)
+        {
+            var raw = settings.RemoteUrl?.Trim();
+            if (!string.IsNullOrEmpty(raw))
+                Uri.TryCreate(raw, UriKind.Absolute, out url);
+        }
+        if (url is not null)
         {
             var scheme = url.Scheme.Equals("wss", StringComparison.OrdinalIgnoreCase) ? "wss" : "ws";
             return $"{scheme}://localhost:18789";
