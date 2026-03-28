@@ -1523,6 +1523,38 @@ describe("AcpSessionManager", () => {
     expect(states.at(-1)).toBe("error");
   });
 
+  it("retries once when runtime ensure sees an early transient acpx exit", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.ensureSession.mockRejectedValueOnce(new Error("acpx exited with code 1"));
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:codex:acp:session-1",
+      storeSessionKey: "agent:codex:acp:session-1",
+      acp: readySessionMeta(),
+    });
+
+    const manager = new AcpSessionManager();
+    await expect(
+      manager.runTurn({
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:session-1",
+        text: "do work",
+        mode: "prompt",
+        requestId: "run-ensure-retry",
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
+    expect(runtimeState.runTurn).toHaveBeenCalledTimes(1);
+    const states = extractStatesFromUpserts();
+    expect(states).toContain("running");
+    expect(states).toContain("idle");
+    expect(states).not.toContain("error");
+  });
+
   it("retries once with a fresh runtime handle after an early acpx exit", async () => {
     const runtimeState = createRuntime();
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({

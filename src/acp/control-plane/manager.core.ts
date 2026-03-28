@@ -1606,12 +1606,17 @@ export class AcpSessionManager {
     error: AcpRuntimeError;
   }): boolean {
     const backend = params.backend?.trim().toLowerCase();
-    if (backend !== "acpx" || params.error.code !== "ACP_TURN_FAILED") {
+    if (backend !== "acpx") {
       return false;
     }
     const normalized = params.error.message.trim();
+    if (this.isRecoverableAcpxExitError(normalized)) {
+      return true;
+    }
+    if (params.error.code !== "ACP_TURN_FAILED") {
+      return false;
+    }
     return (
-      this.isRecoverableAcpxExitError(normalized) ||
       /^acpx exited with signal [a-z0-9]+/i.test(normalized) ||
       /\bqueue owner\b.*\bunavailable\b/i.test(normalized)
     );
