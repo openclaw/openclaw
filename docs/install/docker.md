@@ -270,11 +270,23 @@ See the [`ClawDock` Helper README](https://github.com/openclaw/openclaw/blob/mai
   </Accordion>
 
   <Accordion title="Permissions and EACCES">
-    The image runs as `node` (uid 1000). If you see permission errors on
-    `/home/node/.openclaw`, make sure your host bind mounts are owned by uid 1000:
+    The runtime container user defaults to `1000:1000`, but Docker installs can
+    override that with `OPENCLAW_UID` / `OPENCLAW_GID` (for example Unraid's
+    `99:100`). If you see permission errors on `/home/node/.openclaw`, make sure
+    your host bind mounts are writable by the configured runtime UID/GID.
+
+    For the default runtime user:
 
     ```bash
     sudo chown -R 1000:1000 /path/to/openclaw-config /path/to/openclaw-workspace
+    ```
+
+    For common Unraid ownership:
+
+    ```bash
+    export OPENCLAW_UID=99
+    export OPENCLAW_GID=100
+    ./scripts/docker/setup.sh
     ```
 
   </Accordion>
