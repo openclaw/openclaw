@@ -1,0 +1,65 @@
+{
+  "name": "@openclaw/ani",
+  "version": "2026.3.28",
+  "description": "ANI Agent-Native IM channel plugin",
+  "homepage": "https://github.com/openclaw/openclaw/tree/main/extensions/ani",
+  "bugs": {
+    "url": "https://github.com/openclaw/openclaw/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/openclaw/openclaw.git",
+    "directory": "extensions/ani"
+  },
+  "files": [
+    "index.ts",
+    "openclaw.plugin.json",
+    "README.md",
+    "src/channel.ts",
+    "src/config-schema.ts",
+    "src/monitor",
+    "src/outbound.ts",
+    "src/runtime.ts",
+    "src/sdk-compat.ts",
+    "src/tools.ts",
+    "src/types.ts",
+    "src/utils.ts"
+  ],
+  "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "@sinclair/typebox": "^0.34.41",
+    "ws": "^8.18.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.5.13",
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": "*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "ani",
+      "label": "Agent-Native IM",
+      "selectionLabel": "Agent-Native IM (ANI)",
+      "docsPath": "/channels/ani",
+      "docsLabel": "ani",
+      "blurb": "Agent-Native IM — messaging built for AI-first Bot collaboration.",
+      "order": 80,
+      "quickstartAllowFrom": false
+    },
+    "install": {
+      "npmSpec": "@openclaw/ani",
+      "localPath": "extensions/ani",
+      "defaultChoice": "npm"
+    }
+  }
+}

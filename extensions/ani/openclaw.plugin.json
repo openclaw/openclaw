@@ -1,0 +1,72 @@
+{
+  "id": "ani",
+  "channels": ["ani"],
+  "uiHints": {
+    "serverUrl": {
+      "label": "Server URL",
+      "placeholder": "https://your-ani-server.example.com",
+      "help": "Base URL of the ANI server (no trailing slash)"
+    },
+    "apiKey": {
+      "label": "API Key",
+      "placeholder": "aim_...",
+      "sensitive": true,
+      "help": "Permanent ANI API key (aim_ prefix). Legacy aimb_ keys are not supported."
+    },
+    "entityId": {
+      "label": "Bot Entity ID",
+      "help": "Legacy numeric override. Usually leave empty and let ANI auto-detect.",
+      "advanced": true
+    },
+    "enabled": {
+      "label": "Enabled",
+      "help": "Enable or disable the ANI channel"
+    },
+    "textChunkLimit": {
+      "label": "Text Chunk Limit",
+      "help": "Max characters per outbound message chunk (default: 4000)",
+      "advanced": true
+    },
+    "dm.policy": {
+      "label": "DM Policy",
+      "help": "Direct message routing policy (open or disabled)",
+      "advanced": true
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": true,
+    "properties": {
+      "enabled": {
+        "type": "boolean"
+      },
+      "name": {
+        "type": "string"
+      },
+      "serverUrl": {
+        "type": "string"
+      },
+      "apiKey": {
+        "type": "string"
+      },
+      "entityId": {
+        "type": "number"
+      },
+      "dm": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "policy": {
+            "type": "string",
+            "enum": ["open", "disabled"]
+          }
+        }
+      },
+      "textChunkLimit": {
+        "type": "number",
+        "minimum": 100
+      }
+    },
+    "required": []
+  }
+}
