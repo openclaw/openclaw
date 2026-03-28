@@ -121,7 +121,6 @@ describe("plugin-sdk subpath exports", () => {
   it("keeps the curated public list free of internal implementation subpaths", () => {
     for (const deniedSubpath of [
       "acpx",
-      "compat",
       "device-pair",
       "lobster",
       "pairing-access",
@@ -210,6 +209,12 @@ describe("plugin-sdk subpath exports", () => {
     });
     expectSourceMentions("account-helpers", ["createAccountListHelpers"]);
     expectSourceMentions("channel-actions", ["optionalStringEnum", "stringEnum"]);
+    expectSourceMentions("compat", [
+      "createPluginRuntimeStore",
+      "createScopedChannelConfigAdapter",
+      "resolveControlCommandGate",
+      "delegateCompactionToRuntime",
+    ]);
     expectSourceMentions("device-bootstrap", [
       "approveDevicePairing",
       "issueDeviceBootstrapToken",
