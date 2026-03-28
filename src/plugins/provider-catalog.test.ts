@@ -62,6 +62,22 @@ function createSingleCatalogProvider(overrides: Partial<ModelProviderConfig> & {
   };
 }
 
+function createPairedCatalogProviders(
+  apiKey: string,
+  overrides: Partial<ModelProviderConfig> = {},
+) {
+  return {
+    alpha: {
+      ...createProviderConfig(overrides),
+      apiKey,
+    },
+    beta: {
+      ...createProviderConfig(overrides),
+      apiKey,
+    },
+  };
+}
+
 async function expectSingleCatalogResult(params: {
   ctx: ProviderCatalogContext;
   allowExplicitBaseUrl?: boolean;
@@ -199,20 +215,7 @@ describe("buildSingleProviderApiKeyCatalog", () => {
       ctx: createCatalogContext({
         apiKeys: { "test-provider": "secret-key" },
       }),
-      expected: {
-        alpha: {
-          api: "openai-completions",
-          baseUrl: "https://default.example/v1",
-          models: [],
-          apiKey: "secret-key",
-        },
-        beta: {
-          api: "openai-completions",
-          baseUrl: "https://default.example/v1",
-          models: [],
-          apiKey: "secret-key",
-        },
-      },
+      expected: createPairedCatalogProviders("secret-key"),
     });
   });
 });

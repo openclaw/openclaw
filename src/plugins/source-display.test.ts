@@ -28,6 +28,22 @@ function expectFormattedSource(params: {
   expect(out.rootKey).toBe(params.expectedRootKey);
 }
 
+function expectResolvedSourceRoots(params: {
+  homeDir: string;
+  env: NodeJS.ProcessEnv;
+  workspaceDir: string;
+  expected: Record<"stock" | "global" | "workspace", string>;
+}) {
+  const roots = withPathResolutionEnv(params.homeDir, params.env, (env) =>
+    resolvePluginSourceRoots({
+      env,
+      workspaceDir: params.workspaceDir,
+    }),
+  );
+
+  expect(roots).toEqual(params.expected);
+}
+
 describe("formatPluginSourceForTable", () => {
   it.each([
     {
@@ -73,23 +89,18 @@ describe("formatPluginSourceForTable", () => {
 
   it("resolves source roots from an explicit env override", () => {
     const homeDir = path.resolve(path.sep, "tmp", "openclaw-home");
-    const roots = withPathResolutionEnv(
+    expectResolvedSourceRoots({
       homeDir,
-      {
+      env: {
         OPENCLAW_BUNDLED_PLUGINS_DIR: "~/bundled",
         OPENCLAW_STATE_DIR: "~/state",
+      } as NodeJS.ProcessEnv,
+      workspaceDir: "~/ws",
+      expected: {
+        stock: path.join(homeDir, "bundled"),
+        global: path.join(homeDir, "state", "extensions"),
+        workspace: path.join(homeDir, "ws", ".openclaw", "extensions"),
       },
-      (env) =>
-        resolvePluginSourceRoots({
-          env,
-          workspaceDir: "~/ws",
-        }),
-    );
-
-    expect(roots).toEqual({
-      stock: path.join(homeDir, "bundled"),
-      global: path.join(homeDir, "state", "extensions"),
-      workspace: path.join(homeDir, "ws", ".openclaw", "extensions"),
     });
   });
 });

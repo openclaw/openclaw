@@ -70,9 +70,6 @@ function expectStartupPluginIds(config: OpenClawConfig, expected: readonly strin
       env: process.env,
     }),
   ).toEqual(expected);
-}
-
-function expectManifestRegistryFixture() {
   expect(loadPluginManifestRegistry).toHaveBeenCalled();
 }
 
@@ -123,6 +120,5 @@ describe("resolveGatewayStartupPluginIds", () => {
     ],
   ] as const)("%s", (_name, config, expected) => {
     expectStartupPluginIds(config, expected);
-    expectManifestRegistryFixture();
   });
 });
