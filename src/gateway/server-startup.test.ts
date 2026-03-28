@@ -256,4 +256,47 @@ describe("gateway startup session recovery", () => {
       await fs.rm(stateDir, { recursive: true, force: true });
     }
   });
+
+  it("expands templated configured stores for configured agent IDs", async () => {
+    const { __testing } = await import("./server-startup.js");
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-startup-template-store-"));
+    const storeTemplate = path.join(stateDir, "custom-stores", "{agentId}", "sessions.json");
+    const workerStorePath = path.join(stateDir, "custom-stores", "worker", "sessions.json");
+    const nowMs = 1_700_000_300_000;
+
+    try {
+      await fs.mkdir(path.dirname(workerStorePath), { recursive: true });
+      await saveSessionStore(workerStorePath, {
+        "session:worker-running": {
+          sessionId: "session-worker-running",
+          updatedAt: nowMs - 10_000,
+          status: "running",
+          startedAt: nowMs - 25_000,
+        },
+      });
+
+      await expect(
+        __testing.reconcilePersistedRunningSessionsOnStartup({
+          stateDir,
+          configuredStore: storeTemplate,
+          configuredAgentIds: ["main", "worker"],
+          nowMs,
+          log: { warn: vi.fn() },
+        }),
+      ).resolves.toEqual({
+        storesChecked: 1,
+        sessionsReconciled: 1,
+      });
+
+      const store = loadSessionStore(workerStorePath, { skipCache: true });
+      expect(store["session:worker-running"]).toMatchObject({
+        status: "killed",
+        endedAt: nowMs,
+        runtimeMs: 25_000,
+        updatedAt: nowMs,
+      });
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
 });

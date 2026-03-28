@@ -3,6 +3,7 @@ import path from "node:path";
 import { getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { ACP_SESSION_IDENTITY_RENDERER_VERSION } from "../acp/runtime/session-identifiers.js";
 import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
+import { listAgentIds } from "../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import {
@@ -54,6 +55,7 @@ function resolveAgentIdFromSessionsDir(sessionsDir: string): string | undefined 
 async function resolveSessionStorePathsForStartup(params: {
   stateDir: string;
   configuredStore?: string;
+  configuredAgentIds?: string[];
 }): Promise<string[]> {
   const storePaths = new Set<string>();
   const agentIds = new Set<string>();
@@ -65,16 +67,22 @@ async function resolveSessionStorePathsForStartup(params: {
       agentIds.add(agentId);
     }
   }
+  for (const configuredAgentId of params.configuredAgentIds ?? []) {
+    const agentId = configuredAgentId.trim();
+    if (agentId) {
+      agentIds.add(agentId);
+    }
+  }
 
   const configuredStore = params.configuredStore?.trim();
   if (configuredStore) {
     if (configuredStore.includes("{agentId}")) {
-      if (agentIds.size === 0) {
-        storePaths.add(resolveStorePath(configuredStore));
-      } else {
+      if (agentIds.size > 0) {
         for (const agentId of agentIds) {
           storePaths.add(resolveStorePath(configuredStore, { agentId }));
         }
+      } else {
+        storePaths.add(resolveStorePath(configuredStore));
       }
     } else {
       storePaths.add(resolveStorePath(configuredStore));
@@ -114,6 +122,7 @@ async function prewarmConfiguredPrimaryModel(params: {
 async function reconcilePersistedRunningSessionsOnStartup(params: {
   stateDir: string;
   configuredStore?: string;
+  configuredAgentIds?: string[];
   nowMs?: number;
   log?: { warn?: (msg: string) => void };
 }): Promise<{ storesChecked: number; sessionsReconciled: number }> {
@@ -121,6 +130,7 @@ async function reconcilePersistedRunningSessionsOnStartup(params: {
   const storePaths = await resolveSessionStorePathsForStartup({
     stateDir: params.stateDir,
     configuredStore: params.configuredStore,
+    configuredAgentIds: params.configuredAgentIds,
   });
   let storesChecked = 0;
   let sessionsReconciled = 0;
@@ -212,6 +222,7 @@ export async function startGatewaySidecars(params: {
     await reconcilePersistedRunningSessionsOnStartup({
       stateDir,
       configuredStore: params.cfg.session?.store,
+      configuredAgentIds: listAgentIds(params.cfg),
       log: params.log,
     });
   } catch (err) {
