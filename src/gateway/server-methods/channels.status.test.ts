@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   loadConfig: vi.fn(),
@@ -42,6 +43,26 @@ vi.mock("../../infra/channel-activity.js", () => ({
 
 import { channelsHandlers } from "./channels.js";
 
+function createOptions(
+  params: Record<string, unknown>,
+  overrides?: Partial<GatewayRequestHandlerOptions>,
+): GatewayRequestHandlerOptions {
+  return {
+    req: { type: "req", id: "req-1", method: "channels.status", params },
+    params,
+    client: null,
+    isWebchatConnect: () => false,
+    respond: vi.fn(),
+    context: {
+      getRuntimeSnapshot: () => ({
+        channels: {},
+        channelAccounts: {},
+      }),
+    },
+    ...overrides,
+  } as unknown as GatewayRequestHandlerOptions;
+}
+
 describe("channelsHandlers channels.status", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -80,20 +101,14 @@ describe("channelsHandlers channels.status", () => {
     const autoEnabledConfig = { autoEnabled: true };
     mocks.applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
     const respond = vi.fn();
+    const opts = createOptions(
+      { probe: false, timeoutMs: 2000 },
+      {
+        respond,
+      },
+    );
 
-    await channelsHandlers["channels.status"]({
-      req: {} as never,
-      params: { probe: false, timeoutMs: 2000 } as never,
-      client: null,
-      isWebchatConnect: () => false,
-      respond,
-      context: {
-        getRuntimeSnapshot: () => ({
-          channels: {},
-          channelAccounts: {},
-        }),
-      } as never,
-    });
+    await channelsHandlers["channels.status"](opts);
 
     expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith({
       config: {},
