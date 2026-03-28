@@ -217,14 +217,16 @@ function applyConfiguredProviderOverrides(params: {
 
   const resolvedTransport = resolveProviderTransport({
     provider: params.provider,
-    api: configuredModel?.api ?? providerConfig.api ?? discoveredModel.api,
+    api: (configuredModel?.api ??
+      providerConfig.api ??
+      discoveredModel.api) as ModelDefinitionConfig["api"],
     baseUrl: providerConfig.baseUrl ?? discoveredModel.baseUrl,
     cfg: params.cfg,
     runtimeHooks: params.runtimeHooks,
   });
   return {
     ...discoveredModel,
-    api: resolvedTransport.api,
+    api: resolvedTransport.api!,
     baseUrl: resolvedTransport.baseUrl ?? discoveredModel.baseUrl,
     reasoning: configuredModel?.reasoning ?? discoveredModel.reasoning,
     input: normalizedInput,

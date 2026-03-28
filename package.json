@@ -60,6 +60,10 @@
       "types": "./dist/plugin-sdk/routing.d.ts",
       "default": "./dist/plugin-sdk/routing.js"
     },
+    "./plugin-sdk/file-lock": {
+      "types": "./dist/plugin-sdk/file-lock.d.ts",
+      "default": "./dist/plugin-sdk/file-lock.js"
+    },
     "./plugin-sdk/runtime": {
       "types": "./dist/plugin-sdk/runtime.d.ts",
       "default": "./dist/plugin-sdk/runtime.js"
