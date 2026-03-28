@@ -25,6 +25,7 @@ import {
 } from "../api.js";
 import { lineChannelPluginCommon } from "./channel-shared.js";
 import { resolveLineGroupRequireMention } from "./group-policy.js";
+import { probeLineBot } from "./probe.js";
 import { getLineRuntime } from "./runtime.js";
 import { lineSetupAdapter } from "./setup-core.js";
 import { lineSetupWizard } from "./setup-surface.js";
@@ -103,7 +104,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = createChatChannelP
       },
       buildChannelSummary: ({ snapshot }) => buildTokenChannelStatusSummary(snapshot),
       probeAccount: async ({ account, timeoutMs }) =>
-        getLineRuntime().channel.line.probeLineBot(account.channelAccessToken, timeoutMs),
+        await probeLineBot(account.channelAccessToken, timeoutMs),
       resolveAccountSnapshot: ({ account }) => {
         const configured = Boolean(
           account.channelAccessToken?.trim() && account.channelSecret?.trim(),
