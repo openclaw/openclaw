@@ -637,7 +637,7 @@ export class OpenAIRealtimeVoiceBridge {
           let args: unknown;
           // Prefer buffered deltas; fall back to the done-event's final
           // arguments payload in case deltas were missing or incomplete.
-          const rawArgs = buf.args || (event as Record<string, unknown>).arguments as string || "{}";
+          const rawArgs = buf.args || (event as unknown as Record<string, unknown>).arguments as string || "{}";
           try {
             args = JSON.parse(rawArgs);
           } catch {
