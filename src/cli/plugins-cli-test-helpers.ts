@@ -75,19 +75,14 @@ vi.mock("../plugins/slots.js", () => ({
   applyExclusiveSlotSelection: (...args: unknown[]) => applyExclusiveSlotSelection(...args),
 }));
 
-vi.mock("../plugins/uninstall.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../plugins/uninstall.js")>("../plugins/uninstall.js");
-  return {
-    ...actual,
-    uninstallPlugin: (...args: unknown[]) => uninstallPlugin(...args),
-    resolveUninstallDirectoryTarget: ({
-      installRecord,
-    }: {
-      installRecord?: { installPath?: string; sourcePath?: string };
-    }) => installRecord?.installPath ?? installRecord?.sourcePath ?? null,
-  };
-});
+vi.mock("../plugins/uninstall.js", () => ({
+  uninstallPlugin: (...args: unknown[]) => uninstallPlugin(...args),
+  resolveUninstallDirectoryTarget: ({
+    installRecord,
+  }: {
+    installRecord?: { installPath?: string; sourcePath?: string };
+  }) => installRecord?.installPath ?? installRecord?.sourcePath ?? null,
+}));
 
 vi.mock("../plugins/update.js", () => ({
   updateNpmInstalledPlugins: (...args: unknown[]) => updateNpmInstalledPlugins(...args),
@@ -209,7 +204,6 @@ export function resetPluginsCliTestState() {
       allowlist: false,
       loadPath: false,
       memorySlot: false,
-      channelConfig: false,
       directory: false,
     },
   });
