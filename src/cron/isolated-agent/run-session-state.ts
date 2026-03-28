@@ -71,6 +71,7 @@ export function markCronSessionPreRun(params: {
 }) {
   params.entry.modelProvider = params.provider;
   params.entry.model = params.model;
+  params.entry.status = "running";
   params.entry.systemSent = true;
 }
 

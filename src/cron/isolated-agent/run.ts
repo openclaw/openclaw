@@ -419,13 +419,6 @@ async function prepareCronRunContext(params: {
     persistSessionEntry,
   });
 
-  markCronSessionPreRun({ entry: cronSession.sessionEntry, provider, model });
-  try {
-    await persistSessionEntry();
-  } catch (err) {
-    logWarn(`[cron:${input.job.id}] Failed to persist pre-run session entry: ${String(err)}`);
-  }
-
   const authProfileId = await resolveSessionAuthProfileOverride({
     cfg: cfgWithAgentDefaults,
     provider,
@@ -444,6 +437,13 @@ async function prepareCronRunContext(params: {
       ? cronSession.sessionEntry.authProfileOverrideSource
       : undefined,
   };
+
+  markCronSessionPreRun({ entry: cronSession.sessionEntry, provider, model });
+  try {
+    await persistSessionEntry();
+  } catch (err) {
+    logWarn(`[cron:${input.job.id}] Failed to persist pre-run session entry: ${String(err)}`);
+  }
 
   return {
     ok: true,
@@ -563,9 +563,12 @@ async function finalizeCronRun(params: {
   } else {
     telemetry = { model: modelUsed, provider: providerUsed };
   }
-  await prepared.persistSessionEntry();
 
   if (params.isAborted()) {
+    prepared.cronSession.sessionEntry.status = "timeout";
+    try {
+      await prepared.persistSessionEntry();
+    } catch {}
     return prepared.withRunSession({ status: "error", error: params.abortReason(), ...telemetry });
   }
   let {
@@ -580,6 +583,10 @@ async function finalizeCronRun(params: {
     payloads,
     runLevelError: finalRunResult.meta?.error,
   });
+  prepared.cronSession.sessionEntry.status = hasFatalErrorPayload ? "failed" : "done";
+  try {
+    await prepared.persistSessionEntry();
+  } catch {}
   const resolveRunOutcome = (result?: { delivered?: boolean; deliveryAttempted?: boolean }) =>
     prepared.withRunSession({
       status: hasFatalErrorPayload ? "error" : "ok",
@@ -720,6 +727,10 @@ export async function runCronIsolatedAgentTurn(params: {
       isAborted,
     });
   } catch (err) {
+    prepared.context.cronSession.sessionEntry.status = isAborted() ? "timeout" : "failed";
+    try {
+      await prepared.context.persistSessionEntry();
+    } catch {}
     return prepared.context.withRunSession({ status: "error", error: String(err) });
   }
 }
