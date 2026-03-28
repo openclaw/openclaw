@@ -1752,22 +1752,27 @@ export const chatHandlers: GatewayRequestHandlers = {
             : aliasIndex;
 
         // Normalize imageModelPrimary to full provider/model format.
-        // CRITICAL: For providerless primaries, use defaultProvider (not fallback-derived provider).
-        // The fallback-derived provider should only be used for resolving providerless FALLBACKS,
-        // not the primary. This preserves the user's intent:
-        // - If primary is providerless (e.g., "gpt-4o"), it should resolve against defaultProvider
-        // - Fallbacks with explicit providers (e.g., "anthropic/claude-3") are separate alternatives
-        // Using fallback-derived provider for primary would incorrectly route to wrong models.
-        // For example, with defaultProvider "openai", primary "gpt-4o", fallback "anthropic/claude-3":
-        // - WRONG: primary resolves to "anthropic/gpt-4o" (nonexistent model)
-        // - CORRECT: primary resolves to "openai/gpt-4o", fallback is "anthropic/claude-3"
+        // CRITICAL: For providerless primaries, the provider choice depends on origin:
+        // - If primary was promoted from fallback (usedPrimaryFromFallback=true), use the
+        //   fallback-derived imageModelProvider. This handles fallback-only configs like
+        //   fallbacks: ["gpt-4o", "openai/gpt-4.1"] where the promoted "gpt-4o" should
+        //   resolve to "openai/gpt-4o" (inferred provider), not against defaultProvider.
+        // - If primary was explicitly set (e.g., imageModel.primary: "gpt-4o"), use
+        //   defaultProvider. This preserves user intent in mixed-provider configs where
+        //   primary is intentionally providerless and fallbacks are cross-provider alternatives.
         const resolvedImageModelPrimary = primaryHasProvider
           ? imageModelPrimary
           : (() => {
               const resolved = resolveModelRefFromString({
                 raw: imageModelPrimary.trim(),
-                defaultProvider,
-                aliasIndex,
+                defaultProvider:
+                  usedPrimaryFromFallback && imageModelProvider
+                    ? imageModelProvider
+                    : defaultProvider,
+                aliasIndex:
+                  usedPrimaryFromFallback && imageModelProvider
+                    ? imageFallbackAliasIndex
+                    : aliasIndex,
               });
               if (resolved) {
                 return modelKey(resolved.ref.provider, resolved.ref.model);
@@ -1785,16 +1790,26 @@ export const chatHandlers: GatewayRequestHandlers = {
           const imageModelKeys = new Set<string>();
 
           // Helper to resolve and add model key
-          // For primary: use defaultProvider (primary should resolve against agent default)
-          // For fallbacks: use imageModelProvider if available (fallbacks should resolve against
-          // fallback-derived provider context for cross-provider configs)
+          // For promoted primary (usedPrimaryFromFallback=true): use imageModelProvider
+          //   (promoted primary should resolve against fallback-inferred provider)
+          // For explicit primary: use defaultProvider
+          //   (explicit primary should resolve against agent default provider)
+          // For fallbacks: use imageModelProvider if available
+          //   (fallbacks should resolve against fallback-derived provider context)
           const addResolvedModelKey = (rawModel: string, isPrimary: boolean) => {
+            const usePromotedProvider = isPrimary && usedPrimaryFromFallback && imageModelProvider;
             const resolved = resolveModelRefFromString({
               raw: rawModel.trim(),
-              defaultProvider: isPrimary
-                ? defaultProvider
-                : (imageModelProvider ?? defaultProvider),
-              aliasIndex: isPrimary ? aliasIndex : imageFallbackAliasIndex,
+              defaultProvider: usePromotedProvider
+                ? imageModelProvider!
+                : isPrimary
+                  ? defaultProvider
+                  : (imageModelProvider ?? defaultProvider),
+              aliasIndex: usePromotedProvider
+                ? imageFallbackAliasIndex
+                : isPrimary
+                  ? aliasIndex
+                  : imageFallbackAliasIndex,
             });
             if (resolved) {
               const key = modelKey(resolved.ref.provider, resolved.ref.model);
