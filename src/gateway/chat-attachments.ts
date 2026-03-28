@@ -231,7 +231,13 @@ export async function parseMessageWithAttachments(
     // Fix #1 (continued): isSupportedForOffload now uses the module-level Set.
     const isSupportedForOffload = SUPPORTED_OFFLOAD_MIMES.has(finalMime);
 
-    if (sizeBytes > OFFLOAD_THRESHOLD_BYTES && isSupportedForOffload) {
+    if (sizeBytes > OFFLOAD_THRESHOLD_BYTES) {
+      if (!isSupportedForOffload) {
+        throw new Error(
+          `attachment ${label}: format ${finalMime} exceeds size limit (${sizeBytes} > ${OFFLOAD_THRESHOLD_BYTES} bytes) and is not supported by the model. Please convert to JPG, PNG, WEBP, or GIF.`,
+        );
+      }
+
       try {
         const buffer = Buffer.from(b64, "base64");
         const labelWithExt = ensureExtension(label, finalMime);
@@ -260,8 +266,9 @@ export async function parseMessageWithAttachments(
         isOffloaded = true;
       } catch (err) {
         const errorMessage = err instanceof Error ? err.message : String(err);
-        log?.warn(
-          `[Gateway Error] Failed to save intercepted media to disk, falling back to memory: ${errorMessage}`,
+        throw new Error(
+          `[Gateway Error] Failed to save intercepted media to disk: ${errorMessage}`,
+          { cause: err },
         );
       }
     }
