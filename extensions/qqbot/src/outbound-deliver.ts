@@ -386,11 +386,15 @@ function decodeMediaPath(raw: string, log: DeliverAccountContext["log"], prefix:
   mediaPath = normalizePath(mediaPath);
   mediaPath = mediaPath.replace(/\\\\/g, "\\");
 
+  // Skip octal escape decoding for Windows local paths (e.g. C:\Users\1\file.txt)
+  // where backslash-digit sequences like \1, \2 ... \7 are directory separators,
+  // not octal escape sequences.
+  const isWinLocal = /^[a-zA-Z]:[\\/]/.test(mediaPath) || mediaPath.startsWith("\\\\");
   try {
     const hasOctal = /\\[0-7]{1,3}/.test(mediaPath);
     const hasNonASCII = /[\u0080-\u00FF]/.test(mediaPath);
 
-    if (hasOctal || hasNonASCII) {
+    if (!isWinLocal && (hasOctal || hasNonASCII)) {
       log?.debug?.(`${prefix} Decoding path with mixed encoding: ${mediaPath}`);
       let decoded = mediaPath.replace(/\\([0-7]{1,3})/g, (_: string, octal: string) => {
         return String.fromCharCode(parseInt(octal, 8));

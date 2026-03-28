@@ -886,11 +886,15 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
       // Fix paths that the model emitted with markdown-style escaping.
       mediaPath = mediaPath.replace(/\\\\/g, "\\");
 
+      // Skip octal escape decoding for Windows local paths (e.g. C:\Users\1\file.txt)
+      // where backslash-digit sequences like \1, \2 ... \7 are directory separators,
+      // not octal escape sequences.
+      const isWinLocal = /^[a-zA-Z]:[\\/]/.test(mediaPath) || mediaPath.startsWith("\\\\");
       try {
         const hasOctal = /\\[0-7]{1,3}/.test(mediaPath);
         const hasNonASCII = /[\u0080-\u00FF]/.test(mediaPath);
 
-        if (hasOctal || hasNonASCII) {
+        if (!isWinLocal && (hasOctal || hasNonASCII)) {
           debugLog(`[qqbot] sendText: Decoding path with mixed encoding: ${mediaPath}`);
 
           let decoded = mediaPath.replace(/\\([0-7]{1,3})/g, (_: string, octal: string) => {
