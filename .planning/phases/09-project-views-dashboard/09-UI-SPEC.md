@@ -23,16 +23,17 @@ All new classes use `projects-` prefix following BEM-like conventions.
 
 ## 2. Spacing
 
-**Scale:** 4px base unit. All spacing values are multiples of 4.
+**Scale:** 4px base unit. All new spacing values are multiples of 4.
 
 | Token | Value | Usage |
 |-------|-------|-------|
-| `4px` | 4px | Inline icon-to-text gaps, tight chip padding |
-| `8px` | 8px | List gaps, breadcrumb segment gaps, chip-row gaps |
-| `12px` | 12px | Card internal section gaps, table cell padding |
+| `4px` | 4px | Inline icon-to-text gaps, tight chip/badge padding |
+| `8px` | 8px | List gaps, breadcrumb segment gaps, chip-row gaps, badge internal gaps |
+| `12px` | 12px | Card internal section gaps, table cell padding, badge horizontal padding |
 | `16px` | 16px | Widget grid gap (narrow), card padding (compact) |
-| `18px` | 18px | Card padding (matches existing `.card` padding: 18px) |
 | `24px` | 24px | Widget grid gap (wide), section vertical spacing |
+
+**Inherited legacy exception:** The existing `.card` class uses `padding: 18px` (not a multiple of 4). New Phase 9 widget cards inherit this via `.card` — we do NOT redeclare 18px as a new token. If extending `.card`, padding is inherited; if overriding, use `16px` or `20px`.
 
 **Widget grid gap:** 16px on narrow screens, 24px on wide screens.
 **Dashboard section gap:** 24px between breadcrumb header, widget grid, and sub-project section.
@@ -41,19 +42,33 @@ All new classes use `projects-` prefix following BEM-like conventions.
 
 ## 3. Typography
 
-All values inherit from the existing system. Body base is 14px at weight 400, line-height 1.55 (set on `body` in `base.css`).
+All sizes and weights are inherited from the existing design system — **no new type tokens introduced** by Phase 9. The table below documents which existing tokens/classes each UI element uses.
 
-| Role | Size | Weight | Line-height | Token/Class |
-|------|------|--------|-------------|-------------|
-| Page heading (breadcrumb current) | 13px | 650 | 1.2 | `.dashboard-header__breadcrumb-current` (existing) |
-| Card title / widget header | 15px | 600 | 1.2 | `.card-title` (existing) |
-| Body / table cell | 14px | 400 | 1.55 | Inherited from `body` |
-| Small label / table header | 12px | 500 | 1.4 | `.data-table th` pattern, `.stat-label` |
-| Stat value (task count total) | 24px | 700 | 1.1 | `.stat-value` (existing) |
-| Micro label (uppercase) | 11px | 500 | 1.2 | `.stat-label` (existing), uppercase + letter-spacing 0.04em |
-| Code / command hint | 13px | 400 | 1.5 | `font-family: var(--mono)` |
+### New Phase 9 type usage (4 sizes, 2 weights)
 
-**Weights used:** 400 (regular), 500 (medium), 600 (semibold), 700 (bold). These match existing usage across the codebase.
+| Role | Size | Weight | Usage |
+|------|------|--------|-------|
+| Body / table cell / breadcrumb | 12px | 400 | Default text in new components |
+| Body emphasis / card sub | 14px | 600 | Sub-project card names, widget header labels |
+| Empty state title | 16px | 600 | Centered empty state heading |
+| Stat value | 24px | 600 | Task count totals (via existing `.stat-value`) |
+
+**New classes use only 400 (regular) and 600 (semibold).**
+
+### Inherited existing classes (not new declarations)
+
+These existing classes are reused but NOT counted as new type tokens:
+
+| Existing class | Size | Weight | Notes |
+|----------------|------|--------|-------|
+| `.card-title` | 15px | 600 | Widget headers — reused as-is |
+| `.stat-label` | 11px | 500 | Stat labels — reused as-is |
+| `.stat-value` | 24px | 700 | Stat values — reused as-is |
+| `.data-table th` | 12px | 500 | Table headers — reused as-is |
+| `.dashboard-header__breadcrumb-current` | 13px | 650 | Breadcrumb — reused as-is |
+| `body` | 14px | 400 | Base — inherited |
+
+Body base is 14px at weight 400, line-height 1.55 (set on `body` in `base.css`).
 
 ---
 
@@ -65,7 +80,7 @@ All values inherit from the existing system. Body base is 14px at weight 400, li
 |-------|-------|------|
 | 60% Dominant | `--bg` | Page background, main content area |
 | 30% Secondary | `--card` | Widget cards, list rows, table wrapper |
-| 10% Accent | `--accent` (#ff5c5c) | Reserved ONLY for: breadcrumb clickable links on hover, selected/focused interactive elements |
+| 10% Accent | `--accent` (#ff5c5c) | Reserved ONLY for: focus rings on interactive elements (`--focus-ring`). NOT used for breadcrumb hover (which uses `--text-strong`). |
 
 ### Semantic Colors for Project Status Badges (D-05)
 
@@ -140,11 +155,11 @@ Reuse existing `.statusDot.ok` class. For the active agent pulsing indicator, ad
 .projects-badge {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   font-size: 12px;
-  font-weight: 500;
+  font-weight: 600;
   border-radius: var(--radius-full);
-  padding: 3px 10px;
+  padding: 4px 8px;
 }
 
 .projects-badge--active {
@@ -247,7 +262,7 @@ Reuse existing `.statusDot.ok` class. For the active agent pulsing indicator, ad
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
   color: #fff;
   min-width: 28px;
@@ -290,7 +305,7 @@ Reuse existing `.statusDot.ok` class. For the active agent pulsing indicator, ad
 .projects-bar-legend__item {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
 }
 
 .projects-bar-legend__dot {
@@ -309,7 +324,7 @@ Reuse existing `.statusDot.ok` class. For the active agent pulsing indicator, ad
   gap: 12px;
   padding: 8px 0;
   border-bottom: 1px solid var(--border);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .projects-agent-row:last-child {
@@ -317,7 +332,7 @@ Reuse existing `.statusDot.ok` class. For the active agent pulsing indicator, ad
 }
 
 .projects-agent-name {
-  font-weight: 500;
+  font-weight: 600;
   color: var(--text-strong);
   min-width: 0;
   overflow: hidden;
@@ -351,9 +366,9 @@ Reuse existing `.statusDot.ok` class. For the active agent pulsing indicator, ad
   grid-template-columns: auto 1fr auto;
   gap: 8px;
   align-items: baseline;
-  padding: 6px 0;
+  padding: 8px 0;
   border-bottom: 1px solid var(--border);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .projects-activity-row:last-child {
@@ -362,13 +377,13 @@ Reuse existing `.statusDot.ok` class. For the active agent pulsing indicator, ad
 
 .projects-activity-time {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
   font-family: var(--mono);
   white-space: nowrap;
 }
 
 .projects-activity-agent {
-  font-weight: 500;
+  font-weight: 600;
   color: var(--text-strong);
 }
 
@@ -390,8 +405,8 @@ Reuse existing `.statusDot.ok` class. For the active agent pulsing indicator, ad
 }
 
 .projects-subprojects__title {
-  font-size: 11px;
-  font-weight: 500;
+  font-size: 12px;
+  font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--muted);
@@ -421,13 +436,13 @@ Reuse existing `.statusDot.ok` class. For the active agent pulsing indicator, ad
 }
 
 .projects-subproject-card__name {
-  font-weight: 500;
+  font-weight: 600;
   font-size: 14px;
   color: var(--text-strong);
 }
 
 .projects-subproject-card__counts {
-  margin-top: 6px;
+  margin-top: 8px;
   font-size: 12px;
   color: var(--muted);
 }
@@ -442,7 +457,7 @@ Extends existing `.dashboard-header__breadcrumb` pattern. The existing `dashboar
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 13px;
+  font-size: 12px;
   min-width: 0;
 }
 
@@ -465,7 +480,7 @@ Extends existing `.dashboard-header__breadcrumb` pattern. The existing `dashboar
 
 .projects-breadcrumb__current {
   color: var(--text-strong);
-  font-weight: 650;
+  font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -493,14 +508,14 @@ Separator character: `>` (matching existing breadcrumb).
 
 .projects-empty__hint {
   color: var(--muted);
-  font-size: 13px;
+  font-size: 14px;
   max-width: 400px;
 }
 
 .projects-empty__command {
   display: inline-block;
   margin-top: 4px;
-  padding: 6px 12px;
+  padding: 8px 12px;
   font-family: var(--mono);
   font-size: 12px;
   background: var(--bg-elevated);
@@ -521,7 +536,7 @@ Separator character: `>` (matching existing breadcrumb).
   border: 1px solid rgba(239, 68, 68, 0.25);
   background: linear-gradient(135deg, rgba(239, 68, 68, 0.08) 0%, rgba(239, 68, 68, 0.04) 100%);
   color: var(--danger);
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.5;
 }
 ```
@@ -542,7 +557,7 @@ Reuse existing `.skeleton`, `.skeleton-line`, `.skeleton-block` classes from `ba
   display: grid;
   grid-template-columns: 2fr 80px 1fr 60px 100px;
   gap: 12px;
-  padding: 10px 12px;
+  padding: 8px 12px;
   align-items: center;
 }
 ```
@@ -597,6 +612,7 @@ Reuse existing `.skeleton`, `.skeleton-line`, `.skeleton-block` classes from `ba
 - Events carry `{ project: string }` payload for targeted refetch
 
 ### Dashboard Entry Animation
+- **Primary visual anchor:** Task Counts stacked bar widget — largest visual element in the 2-column grid, enters with stagger-2 delay
 - Widgets enter with `dashboard-enter` animation (existing in `base.css`): opacity 0 to 1, translateY 12px to 0, 0.3s
 - Stagger delays via existing `.stagger-1` through `.stagger-4` classes (0ms, 50ms, 100ms, 150ms)
 
@@ -652,6 +668,7 @@ Labels match the project column names from PROJECT.md frontmatter. Defaults:
 | In Progress | `In Progress` |
 | Review | `Review` |
 | Done | `Done` |
+| Blocked | `Blocked` |
 
 If a column has 0 tasks, still show it in the legend but omit it from the bar.
 
