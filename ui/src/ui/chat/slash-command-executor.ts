@@ -743,10 +743,14 @@ async function executeRedirect(
       key: resolved.key,
       message: resolved.message,
     });
+    // Only track the run when redirecting the current session. Subagent
+    // redirects target a different sessionKey, so chat events for that run
+    // would never clear chatRunId on the current view.
     const runId = typeof resp?.runId === "string" ? resp.runId : undefined;
+    const trackRunId = resolved.key === sessionKey ? runId : undefined;
     return {
       content: resolved.label ? `Redirected \`${resolved.label}\`.` : "Redirected.",
-      trackRunId: runId,
+      trackRunId,
     };
   } catch (err) {
     return { content: `Failed to redirect: ${String(err)}` };
