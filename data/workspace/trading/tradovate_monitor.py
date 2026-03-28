@@ -4,8 +4,8 @@ import os
 
 # Configuration for Tradovate API (Simulation/Demo)
 TRADOVATE_URL = "https://demo.tradovateapi.com/v1"
-USERNAME = "tahoeryry"
-PASSWORD = "@Donnasue1944."
+USERNAME = os.environ.get("TRADOVATE_USERNAME", "")
+PASSWORD = os.environ.get("TRADOVATE_PASSWORD", "")
 APP_ID = "OpenClawTrader"
 APP_VERSION = "1.0.0"
 
