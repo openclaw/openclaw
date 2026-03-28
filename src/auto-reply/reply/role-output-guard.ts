@@ -38,8 +38,6 @@ const ROLE_LEAK_MARKERS = [
   "编程助手",
   "写代码",
   "改bug",
-  "bug",
-  "debug",
   "技术问题",
 ];
 
@@ -52,14 +50,18 @@ function isIdentityLikeReply(text: string): boolean {
     return false;
   }
   return (
-    /^(hi|hello|hey|i\s*am|i['’]m|i\s+can|as\s+an?)\b/i.test(trimmed) ||
-    trimmed.startsWith("你好") ||
-    trimmed.startsWith("您好") ||
+    /^(?:hi|hello|hey)[!,. ]*(?:i\s*am|i['’]m|as\s+an?)\b/i.test(trimmed) ||
+    /^(?:i\s*am|i['’]m|as\s+an?)\b/i.test(trimmed) ||
+    /^(?:hi|hello|hey)[!,. ]*i\s+can\s+help\b/i.test(trimmed) ||
+    /^i\s+can\s+help\b/i.test(trimmed) ||
+    trimmed.startsWith("你好，我是") ||
+    trimmed.startsWith("您好，我是") ||
     trimmed.startsWith("我是") ||
     trimmed.startsWith("我是一名") ||
     trimmed.startsWith("我叫") ||
-    trimmed.startsWith("我可以") ||
-    trimmed.startsWith("我能") ||
+    trimmed.startsWith("你好，我可以帮你") ||
+    trimmed.startsWith("您好，我可以帮你") ||
+    trimmed.startsWith("我可以帮你") ||
     trimmed.startsWith("可以帮你")
   );
 }

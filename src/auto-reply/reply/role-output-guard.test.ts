@@ -76,4 +76,20 @@ describe("applyRoleReplyGuard", () => {
 
     expect(applyRoleReplyGuard(payload, "reviewer-bot")).toEqual(payload);
   });
+
+  it("leaves greeted bug findings unchanged", () => {
+    const payload = {
+      text: "Hello! I found a bug on line 42 of auth.ts.",
+    };
+
+    expect(applyRoleReplyGuard(payload, "reviewer-bot")).toEqual(payload);
+  });
+
+  it("leaves greeted debug feedback unchanged", () => {
+    const payload = {
+      text: "Hi, there's a debug log you left in the test.",
+    };
+
+    expect(applyRoleReplyGuard(payload, "reviewer-bot")).toEqual(payload);
+  });
 });
