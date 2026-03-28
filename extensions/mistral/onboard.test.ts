@@ -3,7 +3,6 @@ import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../../src/config/model-input.js";
-import { buildMistralModelDefinition as buildCoreMistralModelDefinition } from "../../src/plugins/provider-model-definitions.js";
 import {
   createConfigWithFallbacks,
   createLegacyProviderConfig,
@@ -52,11 +51,14 @@ describe("mistral onboard", () => {
     expect(mistralDefault?.maxTokens).toBe(16384);
   });
 
-  it("keeps the core and bundled mistral defaults aligned", () => {
+  it("uses the bundled mistral default model definition", () => {
     const bundled = buildBundledMistralModelDefinition();
-    const core = buildCoreMistralModelDefinition();
+    const cfg = applyMistralProviderConfig({});
+    const defaultModel = cfg.models?.providers?.mistral?.models.find(
+      (model) => model.id === bundled.id,
+    );
 
-    expect(core).toMatchObject({
+    expect(defaultModel).toMatchObject({
       id: bundled.id,
       contextWindow: bundled.contextWindow,
       maxTokens: bundled.maxTokens,

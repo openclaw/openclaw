@@ -506,7 +506,8 @@ Useful env vars:
 
 ## Docs sanity
 
-Run docs checks after doc edits: `pnpm docs:list`.
+Run docs checks after doc edits: `pnpm check:docs`.
+Run full Mintlify anchor validation when you need in-page heading checks too: `pnpm docs:check-links:anchors`.
 
 ## Offline regression (CI-safe)
 
@@ -562,7 +563,7 @@ Located in `src/channels/plugins/contracts/*.contract.test.ts`:
 - **directory** - Directory/roster API
 - **group-policy** - Group policy enforcement
 
-### Provider contracts
+### Provider status contracts
 
 Located in `src/plugins/contracts/*.contract.test.ts`.
 

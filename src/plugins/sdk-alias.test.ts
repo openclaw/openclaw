@@ -178,6 +178,76 @@ function resolvePluginRuntimeModule(params: {
   return params.env ? withEnv(params.env, run) : run();
 }
 
+function expectResolvedFixturePath(params: {
+  resolved: string | null;
+  fixture: { srcFile: string; distFile: string };
+  expected: "src" | "dist";
+}) {
+  expect(params.resolved).toBe(
+    params.expected === "dist" ? params.fixture.distFile : params.fixture.srcFile,
+  );
+}
+
+function expectPluginSdkAliasTargets(
+  aliases: Record<string, string | undefined>,
+  params: {
+    rootAliasPath: string;
+    channelRuntimePath?: string;
+  },
+) {
+  expect(fs.realpathSync(aliases["openclaw/plugin-sdk"] ?? "")).toBe(
+    fs.realpathSync(params.rootAliasPath),
+  );
+  if (params.channelRuntimePath) {
+    expect(fs.realpathSync(aliases["openclaw/plugin-sdk/channel-runtime"] ?? "")).toBe(
+      fs.realpathSync(params.channelRuntimePath),
+    );
+  }
+}
+
+function expectPluginSdkAliasResolution(params: {
+  fixture: { root: string; srcFile: string; distFile: string };
+  srcFile: string;
+  distFile: string;
+  modulePath: (root: string) => string;
+  argv1?: (root: string) => string;
+  env?: NodeJS.ProcessEnv;
+  expected: "src" | "dist";
+}) {
+  const resolved = resolvePluginSdkAlias({
+    srcFile: params.srcFile,
+    distFile: params.distFile,
+    modulePath: params.modulePath(params.fixture.root),
+    argv1: params.argv1?.(params.fixture.root),
+    env: params.env,
+  });
+  expectResolvedFixturePath({
+    resolved,
+    fixture: params.fixture,
+    expected: params.expected,
+  });
+}
+
+function expectExtensionApiAliasResolution(params: {
+  fixture: { root: string; srcFile: string; distFile: string };
+  modulePath: (root: string) => string;
+  argv1?: (root: string) => string;
+  env?: NodeJS.ProcessEnv;
+  expected: "src" | "dist";
+}) {
+  const resolved = withEnv(params.env ?? {}, () =>
+    resolveExtensionApiAlias({
+      modulePath: params.modulePath(params.fixture.root),
+      argv1: params.argv1?.(params.fixture.root),
+    }),
+  );
+  expectResolvedFixturePath({
+    resolved,
+    fixture: params.fixture,
+    expected: params.expected,
+  });
+}
+
 afterAll(() => {
   fs.rmSync(fixtureRoot, { recursive: true, force: true });
 });
@@ -260,14 +330,15 @@ describe("plugin sdk alias helpers", () => {
     },
   ])("$name", ({ buildFixture, modulePath, argv1, srcFile, distFile, env, expected }) => {
     const fixture = buildFixture();
-    const resolved = resolvePluginSdkAlias({
+    expectPluginSdkAliasResolution({
+      fixture,
       srcFile,
       distFile,
-      modulePath: modulePath(fixture.root),
-      argv1: argv1?.(fixture.root),
+      modulePath,
+      argv1,
       env,
+      expected,
     });
-    expect(resolved).toBe(expected === "dist" ? fixture.distFile : fixture.srcFile);
   });
 
   it.each([
@@ -291,13 +362,13 @@ describe("plugin sdk alias helpers", () => {
     },
   ])("$name", ({ modulePath, argv1, env, expected }) => {
     const fixture = createExtensionApiAliasFixture();
-    const resolved = withEnv(env ?? {}, () =>
-      resolveExtensionApiAlias({
-        modulePath: modulePath(fixture.root),
-        argv1: argv1?.(fixture.root),
-      }),
-    );
-    expect(resolved).toBe(expected === "dist" ? fixture.distFile : fixture.srcFile);
+    expectExtensionApiAliasResolution({
+      fixture,
+      modulePath,
+      argv1,
+      env,
+      expected,
+    });
   });
 
   it.each([
@@ -447,12 +518,10 @@ describe("plugin sdk alias helpers", () => {
     const sourceAliases = withEnv({ NODE_ENV: undefined }, () =>
       buildPluginLoaderAliasMap(sourcePluginEntry),
     );
-    expect(fs.realpathSync(sourceAliases["openclaw/plugin-sdk"] ?? "")).toBe(
-      fs.realpathSync(sourceRootAlias),
-    );
-    expect(fs.realpathSync(sourceAliases["openclaw/plugin-sdk/channel-runtime"] ?? "")).toBe(
-      fs.realpathSync(path.join(fixture.root, "src", "plugin-sdk", "channel-runtime.ts")),
-    );
+    expectPluginSdkAliasTargets(sourceAliases, {
+      rootAliasPath: sourceRootAlias,
+      channelRuntimePath: path.join(fixture.root, "src", "plugin-sdk", "channel-runtime.ts"),
+    });
 
     const distPluginEntry = path.join(fixture.root, "dist", "extensions", "demo", "index.js");
     fs.mkdirSync(path.dirname(distPluginEntry), { recursive: true });
@@ -461,12 +530,10 @@ describe("plugin sdk alias helpers", () => {
     const distAliases = withEnv({ NODE_ENV: undefined }, () =>
       buildPluginLoaderAliasMap(distPluginEntry),
     );
-    expect(fs.realpathSync(distAliases["openclaw/plugin-sdk"] ?? "")).toBe(
-      fs.realpathSync(distRootAlias),
-    );
-    expect(fs.realpathSync(distAliases["openclaw/plugin-sdk/channel-runtime"] ?? "")).toBe(
-      fs.realpathSync(path.join(fixture.root, "dist", "plugin-sdk", "channel-runtime.js")),
-    );
+    expectPluginSdkAliasTargets(distAliases, {
+      rootAliasPath: distRootAlias,
+      channelRuntimePath: path.join(fixture.root, "dist", "plugin-sdk", "channel-runtime.js"),
+    });
   });
 
   it("applies explicit dist resolution to plugin-sdk subpath aliases too", () => {
@@ -489,12 +556,10 @@ describe("plugin sdk alias helpers", () => {
       buildPluginLoaderAliasMap(sourcePluginEntry, undefined, undefined, "dist"),
     );
 
-    expect(fs.realpathSync(distAliases["openclaw/plugin-sdk"] ?? "")).toBe(
-      fs.realpathSync(distRootAlias),
-    );
-    expect(fs.realpathSync(distAliases["openclaw/plugin-sdk/channel-runtime"] ?? "")).toBe(
-      fs.realpathSync(path.join(fixture.root, "dist", "plugin-sdk", "channel-runtime.js")),
-    );
+    expectPluginSdkAliasTargets(distAliases, {
+      rootAliasPath: distRootAlias,
+      channelRuntimePath: path.join(fixture.root, "dist", "plugin-sdk", "channel-runtime.js"),
+    });
   });
 
   it("resolves plugin-sdk aliases for user-installed plugins via the running openclaw argv hint", () => {
@@ -507,12 +572,10 @@ describe("plugin sdk alias helpers", () => {
       ),
     );
 
-    expect(fs.realpathSync(aliases["openclaw/plugin-sdk"] ?? "")).toBe(
-      fs.realpathSync(sourceRootAlias),
-    );
-    expect(fs.realpathSync(aliases["openclaw/plugin-sdk/channel-runtime"] ?? "")).toBe(
-      fs.realpathSync(path.join(fixture.root, "src", "plugin-sdk", "channel-runtime.ts")),
-    );
+    expectPluginSdkAliasTargets(aliases, {
+      rootAliasPath: sourceRootAlias,
+      channelRuntimePath: path.join(fixture.root, "src", "plugin-sdk", "channel-runtime.ts"),
+    });
   });
 
   it("resolves plugin-sdk aliases for user-installed plugins via moduleUrl hint", () => {
@@ -543,12 +606,10 @@ describe("plugin sdk alias helpers", () => {
       ),
     );
 
-    expect(fs.realpathSync(aliases["openclaw/plugin-sdk"] ?? "")).toBe(
-      fs.realpathSync(sourceRootAlias),
-    );
-    expect(fs.realpathSync(aliases["openclaw/plugin-sdk/channel-runtime"] ?? "")).toBe(
-      fs.realpathSync(path.join(fixture.root, "src", "plugin-sdk", "channel-runtime.ts")),
-    );
+    expectPluginSdkAliasTargets(aliases, {
+      rootAliasPath: sourceRootAlias,
+      channelRuntimePath: path.join(fixture.root, "src", "plugin-sdk", "channel-runtime.ts"),
+    });
   });
 
   it("does not resolve plugin-sdk alias files from cwd fallback when package root is not an OpenClaw root", () => {
@@ -585,6 +646,27 @@ describe("plugin sdk alias helpers", () => {
   it("uses transpiled Jiti loads for source TypeScript plugin entries", () => {
     expect(shouldPreferNativeJiti("/repo/dist/plugins/runtime/index.js")).toBe(true);
     expect(shouldPreferNativeJiti("/repo/extensions/discord/src/channel.runtime.ts")).toBe(false);
+  });
+
+  it("disables native Jiti loads under Bun even for built JavaScript entries", () => {
+    const originalVersions = process.versions;
+    Object.defineProperty(process, "versions", {
+      configurable: true,
+      value: {
+        ...originalVersions,
+        bun: "1.2.0",
+      },
+    });
+
+    try {
+      expect(shouldPreferNativeJiti("/repo/dist/plugins/runtime/index.js")).toBe(false);
+      expect(shouldPreferNativeJiti("/repo/dist/extensions/browser/index.js")).toBe(false);
+    } finally {
+      Object.defineProperty(process, "versions", {
+        configurable: true,
+        value: originalVersions,
+      });
+    }
   });
 
   it("loads source runtime shims through the non-native Jiti boundary", async () => {

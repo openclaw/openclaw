@@ -13,8 +13,10 @@ vi.mock("../api-keys.js", () => ({
 }));
 
 const resolveManifestDeprecatedProviderAuthChoice = vi.hoisted(() => vi.fn(() => undefined));
+const resolveManifestProviderAuthChoices = vi.hoisted(() => vi.fn(() => []));
 vi.mock("../../../plugins/provider-auth-choices.js", () => ({
   resolveManifestDeprecatedProviderAuthChoice,
+  resolveManifestProviderAuthChoices,
 }));
 
 beforeEach(() => {
@@ -33,12 +35,12 @@ describe("applyNonInteractiveAuthChoice", () => {
   it("resolves plugin provider auth before builtin custom-provider handling", async () => {
     const runtime = createRuntime();
     const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;
-    const resolvedConfig = { auth: { profiles: { "openai:default": { mode: "api_key" } } } };
+    const resolvedConfig = { auth: { profiles: { "demo-provider:default": { mode: "api_key" } } } };
     applyNonInteractivePluginProviderChoice.mockResolvedValueOnce(resolvedConfig as never);
 
     const result = await applyNonInteractiveAuthChoice({
       nextConfig,
-      authChoice: "openai-api-key",
+      authChoice: "demo-provider-api-key",
       opts: {} as never,
       runtime: runtime as never,
       baseConfig: nextConfig,
@@ -52,12 +54,12 @@ describe("applyNonInteractiveAuthChoice", () => {
     const runtime = createRuntime();
     const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;
     resolveManifestDeprecatedProviderAuthChoice.mockReturnValueOnce({
-      choiceId: "minimax-global-api",
+      choiceId: "demo-provider-modern-api",
     } as never);
 
     const result = await applyNonInteractiveAuthChoice({
       nextConfig,
-      authChoice: "minimax",
+      authChoice: "demo-provider-legacy",
       opts: {} as never,
       runtime: runtime as never,
       baseConfig: nextConfig,
@@ -65,7 +67,7 @@ describe("applyNonInteractiveAuthChoice", () => {
 
     expect(result).toBeNull();
     expect(runtime.error).toHaveBeenCalledWith(
-      '"minimax" is no longer supported. Use --auth-choice minimax-global-api instead.',
+      '"demo-provider-legacy" is no longer supported. Use --auth-choice demo-provider-modern-api instead.',
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(applyNonInteractivePluginProviderChoice).toHaveBeenCalledOnce();

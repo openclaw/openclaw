@@ -12,20 +12,13 @@ describe("resolveSkillsPromptForRun", () => {
   });
   it("builds prompt from entries when snapshot is missing", () => {
     const entry: SkillEntry = {
-      skill: {
+      skill: createFixtureSkill({
         name: "demo-skill",
         description: "Demo",
         filePath: "/app/skills/demo-skill/SKILL.md",
         baseDir: "/app/skills/demo-skill",
-        sourceInfo: {
-          path: "/app/skills/demo-skill/SKILL.md",
-          source: "openclaw-bundled",
-          scope: "project",
-          origin: "top-level",
-          baseDir: "/app/skills/demo-skill",
-        },
-        disableModelInvocation: false,
-      },
+        source: "openclaw-bundled",
+      }),
       frontmatter: {},
     };
     const prompt = resolveSkillsPromptForRun({
@@ -36,3 +29,20 @@ describe("resolveSkillsPromptForRun", () => {
     expect(prompt).toContain("/app/skills/demo-skill/SKILL.md");
   });
 });
+
+function createFixtureSkill(params: {
+  name: string;
+  description: string;
+  filePath: string;
+  baseDir: string;
+  source: string;
+}): SkillEntry["skill"] {
+  return {
+    name: params.name,
+    description: params.description,
+    filePath: params.filePath,
+    baseDir: params.baseDir,
+    source: params.source,
+    disableModelInvocation: false,
+  };
+}

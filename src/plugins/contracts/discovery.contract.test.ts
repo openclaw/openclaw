@@ -142,6 +142,20 @@ describe("provider discovery contract", () => {
         buildSglangProvider: (...args: unknown[]) => buildSglangProviderMock(...args),
       };
     });
+    vi.doMock("../../../extensions/vllm/api.js", async () => {
+      const actual = await vi.importActual<object>("../../../extensions/vllm/api.js");
+      return {
+        ...actual,
+        buildVllmProvider: (...args: unknown[]) => buildVllmProviderMock(...args),
+      };
+    });
+    vi.doMock("../../../extensions/sglang/api.js", async () => {
+      const actual = await vi.importActual<object>("../../../extensions/sglang/api.js");
+      return {
+        ...actual,
+        buildSglangProvider: (...args: unknown[]) => buildSglangProviderMock(...args),
+      };
+    });
     ({ runProviderCatalog } = await import("../provider-discovery.js"));
     const [
       { default: githubCopilotPlugin },

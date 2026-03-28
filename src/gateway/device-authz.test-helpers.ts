@@ -54,7 +54,9 @@ export async function pairDeviceIdentity(params: {
     clientId: params.clientId,
     clientMode: params.clientMode,
   });
-  await approveDevicePairing(request.request.requestId);
+  await approveDevicePairing(request.request.requestId, {
+    callerScopes: params.scopes,
+  });
   return loaded;
 }
 

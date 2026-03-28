@@ -21,13 +21,33 @@ function makeProvider(overrides: Partial<ProviderPlugin>): ProviderPlugin {
   };
 }
 
-describe("normalizeRegisteredProvider", () => {
-  it("drops invalid and duplicate auth methods, and clears bad wizard method bindings", () => {
-    const { diagnostics, pushDiagnostic } = collectDiagnostics();
+function expectDiagnosticMessages(
+  diagnostics: PluginDiagnostic[],
+  expectedDiagnostics: ReadonlyArray<{ level: PluginDiagnostic["level"]; message: string }>,
+) {
+  expect(diagnostics.map((diag) => ({ level: diag.level, message: diag.message }))).toEqual(
+    expectedDiagnostics,
+  );
+}
 
-    const provider = normalizeRegisteredProvider({
-      pluginId: "demo-plugin",
-      source: "/tmp/demo/index.ts",
+function normalizeProviderFixture(provider: ProviderPlugin) {
+  const { diagnostics, pushDiagnostic } = collectDiagnostics();
+  const normalizedProvider = normalizeRegisteredProvider({
+    pluginId: "demo-plugin",
+    source: "/tmp/demo/index.ts",
+    provider,
+    pushDiagnostic,
+  });
+  return {
+    diagnostics,
+    provider: normalizedProvider,
+  };
+}
+
+describe("normalizeRegisteredProvider", () => {
+  it.each([
+    {
+      name: "drops invalid and duplicate auth methods, and clears bad wizard method bindings",
       provider: makeProvider({
         id: " demo ",
         label: " Demo Provider ",
@@ -68,66 +88,58 @@ describe("normalizeRegisteredProvider", () => {
           },
         },
       }),
-      pushDiagnostic,
-    });
-
-    expect(provider).toMatchObject({
-      id: "demo",
-      label: "Demo Provider",
-      aliases: ["alias-one"],
-      deprecatedProfileIds: ["demo:legacy"],
-      envVars: ["DEMO_API_KEY"],
-      auth: [
-        {
-          id: "primary",
-          label: "Primary",
-          wizard: {
-            choiceId: "demo-primary",
-            modelAllowlist: {
-              allowedKeys: ["demo/model"],
-              initialSelections: ["demo/model"],
-              message: "Demo models",
+      expectedProvider: {
+        id: "demo",
+        label: "Demo Provider",
+        aliases: ["alias-one"],
+        deprecatedProfileIds: ["demo:legacy"],
+        envVars: ["DEMO_API_KEY"],
+        auth: [
+          {
+            id: "primary",
+            label: "Primary",
+            wizard: {
+              choiceId: "demo-primary",
+              modelAllowlist: {
+                allowedKeys: ["demo/model"],
+                initialSelections: ["demo/model"],
+                message: "Demo models",
+              },
             },
           },
+        ],
+        wizard: {
+          setup: {
+            choiceId: "demo-choice",
+          },
+          modelPicker: {
+            label: "Demo models",
+          },
+        },
+      },
+      expectedDiagnostics: [
+        {
+          level: "error",
+          message: 'provider "demo" auth method duplicated id "primary"',
+        },
+        {
+          level: "error",
+          message: 'provider "demo" auth method missing id',
+        },
+        {
+          level: "warn",
+          message:
+            'provider "demo" setup method "missing" not found; falling back to available methods',
+        },
+        {
+          level: "warn",
+          message:
+            'provider "demo" model-picker method "missing" not found; falling back to available methods',
         },
       ],
-      wizard: {
-        setup: {
-          choiceId: "demo-choice",
-        },
-        modelPicker: {
-          label: "Demo models",
-        },
-      },
-    });
-    expect(diagnostics.map((diag) => ({ level: diag.level, message: diag.message }))).toEqual([
-      {
-        level: "error",
-        message: 'provider "demo" auth method duplicated id "primary"',
-      },
-      {
-        level: "error",
-        message: 'provider "demo" auth method missing id',
-      },
-      {
-        level: "warn",
-        message:
-          'provider "demo" setup method "missing" not found; falling back to available methods',
-      },
-      {
-        level: "warn",
-        message:
-          'provider "demo" model-picker method "missing" not found; falling back to available methods',
-      },
-    ]);
-  });
-
-  it("drops wizard metadata when a provider has no auth methods", () => {
-    const { diagnostics, pushDiagnostic } = collectDiagnostics();
-
-    const provider = normalizeRegisteredProvider({
-      pluginId: "demo-plugin",
-      source: "/tmp/demo/index.ts",
+    },
+    {
+      name: "drops wizard metadata when a provider has no auth methods",
       provider: makeProvider({
         wizard: {
           setup: {
@@ -138,23 +150,35 @@ describe("normalizeRegisteredProvider", () => {
           },
         },
       }),
-      pushDiagnostic,
-    });
+      assert: (
+        provider: ReturnType<typeof normalizeRegisteredProvider>,
+        diagnostics: PluginDiagnostic[],
+      ) => {
+        expect(provider?.wizard).toBeUndefined();
+        expect(diagnostics.map((diag) => diag.message)).toEqual([
+          'provider "demo" setup metadata ignored because it has no auth methods',
+          'provider "demo" model-picker metadata ignored because it has no auth methods',
+        ]);
+      },
+    },
+  ] as const)(
+    "$name",
+    ({ provider: inputProvider, expectedProvider, expectedDiagnostics, assert }) => {
+      const { diagnostics, provider } = normalizeProviderFixture(inputProvider);
 
-    expect(provider?.wizard).toBeUndefined();
-    expect(diagnostics.map((diag) => diag.message)).toEqual([
-      'provider "demo" setup metadata ignored because it has no auth methods',
-      'provider "demo" model-picker metadata ignored because it has no auth methods',
-    ]);
-  });
+      if (assert) {
+        assert(provider, diagnostics);
+        return;
+      }
+
+      expect(provider).toMatchObject(expectedProvider);
+      expectDiagnosticMessages(diagnostics, expectedDiagnostics);
+    },
+  );
 
   it("prefers catalog when a provider registers both catalog and discovery", () => {
-    const { diagnostics, pushDiagnostic } = collectDiagnostics();
-
-    const provider = normalizeRegisteredProvider({
-      pluginId: "demo-plugin",
-      source: "/tmp/demo/index.ts",
-      provider: makeProvider({
+    const { diagnostics, provider } = normalizeProviderFixture(
+      makeProvider({
         catalog: {
           run: async () => null,
         },
@@ -167,8 +191,7 @@ describe("normalizeRegisteredProvider", () => {
           }),
         },
       }),
-      pushDiagnostic,
-    });
+    );
 
     expect(provider?.catalog).toBeDefined();
     expect(provider?.discovery).toBeUndefined();

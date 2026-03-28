@@ -1,9 +1,24 @@
 import { afterEach, describe, it, vi } from "vitest";
-import { createDiscordTypingLease } from "./runtime-discord-typing.js";
+import {
+  createDiscordTypingLease,
+  type CreateDiscordTypingLeaseParams,
+} from "./runtime-discord-typing.js";
 import {
   expectBackgroundTypingPulseFailuresAreSwallowed,
   expectIndependentTypingLeases,
 } from "./typing-lease.test-support.js";
+
+const DISCORD_TYPING_INTERVAL_MS = 2_000;
+
+function buildDiscordTypingParams(
+  pulse: CreateDiscordTypingLeaseParams["pulse"],
+): CreateDiscordTypingLeaseParams {
+  return {
+    channelId: "123",
+    intervalMs: DISCORD_TYPING_INTERVAL_MS,
+    pulse,
+  };
+}
 
 describe("createDiscordTypingLease", () => {
   afterEach(() => {
@@ -13,11 +28,7 @@ describe("createDiscordTypingLease", () => {
   it("pulses immediately and keeps leases independent", async () => {
     await expectIndependentTypingLeases({
       createLease: createDiscordTypingLease,
-      buildParams: (pulse) => ({
-        channelId: "123",
-        intervalMs: 2_000,
-        pulse,
-      }),
+      buildParams: buildDiscordTypingParams,
     });
   });
 
@@ -30,11 +41,7 @@ describe("createDiscordTypingLease", () => {
     await expectBackgroundTypingPulseFailuresAreSwallowed({
       createLease: createDiscordTypingLease,
       pulse,
-      buildParams: (pulse) => ({
-        channelId: "123",
-        intervalMs: 2_000,
-        pulse,
-      }),
+      buildParams: buildDiscordTypingParams,
     });
   });
 });

@@ -949,6 +949,11 @@ export async function startGatewayServer(
                 chatType: sessionRow.chatType,
                 origin: sessionRow.origin,
                 spawnedBy: sessionRow.spawnedBy,
+                spawnedWorkspaceDir: sessionRow.spawnedWorkspaceDir,
+                forkedFromParent: sessionRow.forkedFromParent,
+                spawnDepth: sessionRow.spawnDepth,
+                subagentRole: sessionRow.subagentRole,
+                subagentControlScope: sessionRow.subagentControlScope,
                 label: sessionRow.label,
                 displayName: sessionRow.displayName,
                 deliveryContext: sessionRow.deliveryContext,
@@ -967,6 +972,7 @@ export async function startGatewayServer(
                 lastChannel: sessionRow.lastChannel,
                 lastTo: sessionRow.lastTo,
                 lastAccountId: sessionRow.lastAccountId,
+                lastThreadId: sessionRow.lastThreadId,
                 totalTokens: sessionRow.totalTokens,
                 totalTokensFresh: sessionRow.totalTokensFresh,
                 contextTokens: sessionRow.contextTokens,
@@ -1044,6 +1050,11 @@ export async function startGatewayServer(
                     chatType: sessionRow.chatType,
                     origin: sessionRow.origin,
                     spawnedBy: sessionRow.spawnedBy,
+                    spawnedWorkspaceDir: sessionRow.spawnedWorkspaceDir,
+                    forkedFromParent: sessionRow.forkedFromParent,
+                    spawnDepth: sessionRow.spawnDepth,
+                    subagentRole: sessionRow.subagentRole,
+                    subagentControlScope: sessionRow.subagentControlScope,
                     label: event.label ?? sessionRow.label,
                     displayName: event.displayName ?? sessionRow.displayName,
                     deliveryContext: sessionRow.deliveryContext,
@@ -1062,6 +1073,7 @@ export async function startGatewayServer(
                     lastChannel: sessionRow.lastChannel,
                     lastTo: sessionRow.lastTo,
                     lastAccountId: sessionRow.lastAccountId,
+                    lastThreadId: sessionRow.lastThreadId,
                     totalTokens: sessionRow.totalTokens,
                     totalTokensFresh: sessionRow.totalTokensFresh,
                     contextTokens: sessionRow.contextTokens,
@@ -1195,6 +1207,21 @@ export async function startGatewayServer(
           }
         }
         return false;
+      },
+      disconnectClientsForDevice: (deviceId: string, opts?: { role?: string }) => {
+        for (const gatewayClient of clients) {
+          if (gatewayClient.connect.device?.id !== deviceId) {
+            continue;
+          }
+          if (opts?.role && gatewayClient.connect.role !== opts.role) {
+            continue;
+          }
+          try {
+            gatewayClient.socket.close(4001, "device removed");
+          } catch {
+            /* ignore */
+          }
+        }
       },
       nodeRegistry,
       agentRunSeq,

@@ -118,6 +118,21 @@ type SessionUsageSnapshot = {
   used: number;
 };
 
+function isAdminScopeProvenanceRejection(err: unknown): boolean {
+  if (!(err instanceof Error)) {
+    return false;
+  }
+  const gatewayCode =
+    typeof (err as { gatewayCode?: unknown }).gatewayCode === "string"
+      ? (err as { gatewayCode?: string }).gatewayCode
+      : undefined;
+  return (
+    err.name === "GatewayClientRequestError" &&
+    gatewayCode === "INVALID_REQUEST" &&
+    err.message.includes("system provenance fields require admin scope")
+  );
+}
+
 type SessionSnapshot = SessionPresentation & {
   metadata?: SessionMetadata;
   usage?: SessionUsageSnapshot;
@@ -642,6 +657,15 @@ export class AcpGatewayAgent implements Agent {
     const abortController = new AbortController();
     const runId = randomUUID();
     this.sessionStore.setActiveRun(params.sessionId, runId, abortController);
+    const requestParams = {
+      sessionKey: session.sessionKey,
+      message,
+      attachments: attachments.length > 0 ? attachments : undefined,
+      idempotencyKey: runId,
+      thinking: readString(params._meta, ["thinking", "thinkingLevel"]),
+      deliver: readBool(params._meta, ["deliver"]),
+      timeoutMs: readNumber(params._meta, ["timeoutMs"]),
+    };
 
     return new Promise<PromptResponse>((resolve, reject) => {
       this.pendingPrompts.set(params.sessionId, {
@@ -652,27 +676,34 @@ export class AcpGatewayAgent implements Agent {
         reject,
       });
 
-      this.gateway
-        .request(
-          "chat.send",
-          {
-            sessionKey: session.sessionKey,
-            message,
-            attachments: attachments.length > 0 ? attachments : undefined,
-            idempotencyKey: runId,
-            thinking: readString(params._meta, ["thinking", "thinkingLevel"]),
-            deliver: readBool(params._meta, ["deliver"]),
-            timeoutMs: readNumber(params._meta, ["timeoutMs"]),
-            systemInputProvenance,
-            systemProvenanceReceipt,
-          },
-          { expectFinal: true },
-        )
-        .catch((err) => {
-          this.pendingPrompts.delete(params.sessionId);
-          this.sessionStore.clearActiveRun(params.sessionId);
-          reject(err instanceof Error ? err : new Error(String(err)));
-        });
+      const sendWithProvenanceFallback = async () => {
+        try {
+          await this.gateway.request(
+            "chat.send",
+            {
+              ...requestParams,
+              systemInputProvenance,
+              systemProvenanceReceipt,
+            },
+            { expectFinal: true },
+          );
+        } catch (err) {
+          if (
+            (systemInputProvenance || systemProvenanceReceipt) &&
+            isAdminScopeProvenanceRejection(err)
+          ) {
+            await this.gateway.request("chat.send", requestParams, { expectFinal: true });
+            return;
+          }
+          throw err;
+        }
+      };
+
+      void sendWithProvenanceFallback().catch((err) => {
+        this.pendingPrompts.delete(params.sessionId);
+        this.sessionStore.clearActiveRun(params.sessionId);
+        reject(err instanceof Error ? err : new Error(String(err)));
+      });
     });
   }
 

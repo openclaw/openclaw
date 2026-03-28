@@ -575,6 +575,18 @@ export type ChannelConfiguredBindingMatch = ChannelConfiguredBindingConversation
   matchPriority?: number;
 };
 
+export type ChannelCommandConversationContext = {
+  accountId: string;
+  threadId?: string;
+  threadParentId?: string;
+  senderId?: string;
+  sessionKey?: string;
+  parentSessionKey?: string;
+  originatingTo?: string;
+  commandTo?: string;
+  fallbackTo?: string;
+};
+
 export type ChannelConfiguredBindingProvider = {
   compileConfiguredBinding: (params: {
     binding: ConfiguredBindingRule;
@@ -586,6 +598,9 @@ export type ChannelConfiguredBindingProvider = {
     conversationId: string;
     parentConversationId?: string;
   }) => ChannelConfiguredBindingMatch | null;
+  resolveCommandConversation?: (
+    params: ChannelCommandConversationContext,
+  ) => ChannelConfiguredBindingConversationRef | null;
 };
 
 export type ChannelSecurityAdapter<ResolvedAccount = unknown> = {

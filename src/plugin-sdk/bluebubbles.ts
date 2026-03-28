@@ -28,7 +28,7 @@ export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
 export {
   resolveBlueBubblesGroupRequireMention,
   resolveBlueBubblesGroupToolPolicy,
-} from "../../extensions/bluebubbles/api.js";
+} from "./bluebubbles-policy.js";
 export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
 export { resolveChannelMediaMaxBytes } from "../channels/plugins/media-limits.js";
 export {
@@ -56,13 +56,13 @@ export type { OpenClawConfig } from "../config/config.js";
 export type { DmPolicy, GroupPolicy } from "../config/types.js";
 export { ToolPolicySchema } from "../config/zod-schema.agent-runtime.js";
 export { MarkdownConfigSchema } from "../config/zod-schema.core.js";
-export type { ParsedChatTarget } from "../../extensions/imessage/api.js";
 export {
   parseChatAllowTargetPrefixes,
   parseChatTargetPrefixesOrThrow,
   resolveServicePrefixedAllowTarget,
   resolveServicePrefixedTarget,
-} from "../../extensions/imessage/api.js";
+  type ParsedChatTarget,
+} from "./imessage-targets.js";
 export { stripMarkdown } from "./text-runtime.js";
 export { parseFiniteNumber } from "../infra/parse-finite-number.js";
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
@@ -74,6 +74,11 @@ export {
   readStoreAllowFromForDmPolicy,
   resolveDmGroupAccessWithLists,
 } from "../security/dm-policy-shared.js";
+export {
+  matchBlueBubblesAcpConversation,
+  normalizeBlueBubblesAcpConversationId,
+  resolveBlueBubblesConversationIdFromTarget,
+} from "../../extensions/bluebubbles/api.js";
 export { formatDocsLink } from "../terminal/links.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
 export { isAllowedParsedChatSender } from "./allow-from.js";
@@ -85,7 +90,7 @@ export {
   buildComputedAccountStatusSnapshot,
   buildProbeChannelStatusSummary,
 } from "./status-helpers.js";
-export { isAllowedBlueBubblesSender } from "../../extensions/bluebubbles/api.js";
+export { isAllowedBlueBubblesSender } from "./bluebubbles-policy.js";
 export { extractToolSend } from "./tool-send.js";
 export {
   WEBHOOK_RATE_LIMIT_DEFAULTS,
