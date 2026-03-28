@@ -94,6 +94,42 @@ describe("createTeamsReplyStreamController", () => {
     expect(result2).toEqual({ text: "Second segment" });
   });
 
+  it("delivers all segments across 3+ tool call rounds", () => {
+    const ctrl = createController();
+
+    // Round 1: text → tool
+    ctrl.onPartialReply({ text: "Segment 1" });
+    expect(ctrl.preparePayload({ text: "Segment 1" })).toBeUndefined();
+
+    // Round 2: text → tool
+    ctrl.onPartialReply({ text: "Segment 2" });
+    const r2 = ctrl.preparePayload({ text: "Segment 2" });
+    expect(r2).toEqual({ text: "Segment 2" });
+
+    // Round 3: final text
+    ctrl.onPartialReply({ text: "Segment 3" });
+    const r3 = ctrl.preparePayload({ text: "Segment 3" });
+    expect(r3).toEqual({ text: "Segment 3" });
+  });
+
+  it("passes media+text payload through fully after stream finalized", () => {
+    const ctrl = createController();
+
+    // First segment streamed and finalized
+    ctrl.onPartialReply({ text: "Streamed text" });
+    ctrl.preparePayload({ text: "Streamed text" });
+
+    // Second segment has both text and media — should pass through fully
+    const result = ctrl.preparePayload({
+      text: "Post-tool text with image",
+      mediaUrl: "https://example.com/tool-output.png",
+    });
+    expect(result).toEqual({
+      text: "Post-tool text with image",
+      mediaUrl: "https://example.com/tool-output.png",
+    });
+  });
+
   it("still strips text from media payloads when stream handled text", () => {
     const ctrl = createController();
     ctrl.onPartialReply({ text: "Some text" });
