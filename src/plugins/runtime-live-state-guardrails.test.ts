@@ -18,25 +18,30 @@ const LIVE_RUNTIME_STATE_GUARDS: Record<
   },
 };
 
+function guardAssertions() {
+  return Object.entries(LIVE_RUNTIME_STATE_GUARDS).flatMap(([relativePath, guard]) => [
+    ...guard.required.map((needle) => ({
+      relativePath,
+      type: "required" as const,
+      needle,
+      message: `${relativePath} missing ${needle}`,
+    })),
+    ...guard.forbidden.map((needle) => ({
+      relativePath,
+      type: "forbidden" as const,
+      needle,
+      message: `${relativePath} must not contain ${needle}`,
+    })),
+  ]);
+}
+
 describe("runtime live state guardrails", () => {
   it("keeps split-runtime state holders on explicit direct globals", () => {
-    for (const [relativePath, guard] of Object.entries(LIVE_RUNTIME_STATE_GUARDS)) {
+    for (const relativePath of Object.keys(LIVE_RUNTIME_STATE_GUARDS)) {
       const source = readFileSync(resolve(repoRoot, relativePath), "utf8");
-
-      const assertions = [
-        ...guard.required.map((needle) => ({
-          type: "required" as const,
-          needle,
-          message: `${relativePath} missing ${needle}`,
-        })),
-        ...guard.forbidden.map((needle) => ({
-          type: "forbidden" as const,
-          needle,
-          message: `${relativePath} must not contain ${needle}`,
-        })),
-      ];
-
-      for (const assertion of assertions) {
+      for (const assertion of guardAssertions().filter(
+        (entry) => entry.relativePath === relativePath,
+      )) {
         if (assertion.type === "required") {
           expect(source, assertion.message).toContain(assertion.needle);
         } else {
