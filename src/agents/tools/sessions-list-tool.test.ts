@@ -23,6 +23,17 @@ describe("sessions-list-tool", () => {
                 threadId: "thread-1",
               },
             },
+            {
+              key: "agent:main:telegram:topic",
+              kind: "direct",
+              sessionId: "sess-telegram-topic",
+              deliveryContext: {
+                channel: "telegram",
+                to: "telegram:topic",
+                accountId: "acct-2",
+                threadId: 271,
+              },
+            },
           ],
         };
       }
@@ -61,7 +72,7 @@ describe("sessions-list-tool", () => {
           channel?: string;
           to?: string;
           accountId?: string;
-          threadId?: string;
+          threadId?: string | number;
         };
       }>;
     };
@@ -71,6 +82,12 @@ describe("sessions-list-tool", () => {
       to: "discord:child",
       accountId: "acct-1",
       threadId: "thread-1",
+    });
+    expect(details.sessions?.[1]?.deliveryContext).toEqual({
+      channel: "telegram",
+      to: "telegram:topic",
+      accountId: "acct-2",
+      threadId: 271,
     });
   });
 
