@@ -26,6 +26,16 @@ import {
   waitForDescendantSubagentSummary,
 } from "./subagent-followup.js";
 
+/** Boundary-aware prefix check: requires end-of-string or whitespace/punctuation/symbol
+ *  after the prefix so short prefixes like "Hi" don't match "History". */
+function hasResponsePrefix(text: string, prefix: string): boolean {
+  if (!text.startsWith(prefix)) {
+    return false;
+  }
+  const afterPrefix = text[prefix.length];
+  return afterPrefix === undefined || /[\s\p{P}\p{S}]/u.test(afterPrefix);
+}
+
 function normalizeDeliveryTarget(channel: string, to: string): string {
   const channelLower = channel.trim().toLowerCase();
   const toTrimmed = to.trim();
@@ -394,7 +404,7 @@ export async function dispatchCronDelivery(
       );
       const payloadsForDelivery = responsePrefix
         ? rawPayloads.map((p) => {
-            if (!p.text || p.text.startsWith(responsePrefix)) {
+            if (!p.text || hasResponsePrefix(p.text, responsePrefix)) {
               return p;
             }
             return { ...p, text: `${responsePrefix} ${p.text}` };

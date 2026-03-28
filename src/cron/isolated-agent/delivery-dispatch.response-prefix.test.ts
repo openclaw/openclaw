@@ -222,6 +222,23 @@ describe("dispatchCronDelivery — responsePrefix", () => {
     );
   });
 
+  it("applies prefix when text starts with prefix chars but no boundary follows", async () => {
+    vi.mocked(resolveEffectiveMessagesConfig).mockReturnValue({
+      messagePrefix: "",
+      responsePrefix: "Hi",
+    });
+
+    const params = makeBaseParams({ synthesizedText: "History report" });
+    await dispatchCronDelivery(params);
+
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expect(deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payloads: [{ text: "Hi History report" }],
+      }),
+    );
+  });
+
   it("does not prepend a stray space when responsePrefix is empty string", async () => {
     vi.mocked(resolveEffectiveMessagesConfig).mockReturnValue({
       messagePrefix: "",
