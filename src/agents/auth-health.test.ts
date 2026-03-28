@@ -116,6 +116,42 @@ describe("buildAuthHealthSummary", () => {
     expect(statuses["github-copilot:invalid-expires"]).toBe("missing");
     expect(reasonCodes["github-copilot:invalid-expires"]).toBe("invalid_expires");
   });
+
+  it("normalizes provider aliases when filtering and grouping profile health", () => {
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const store = {
+      version: 1,
+      profiles: {
+        "zai:dot": {
+          type: "api_key" as const,
+          provider: "z.ai",
+          key: "sk-dot",
+        },
+        "zai:dash": {
+          type: "api_key" as const,
+          provider: "z-ai",
+          key: "sk-dash",
+        },
+      },
+    };
+
+    const summary = buildAuthHealthSummary({
+      store,
+      providers: ["zai"],
+    });
+
+    expect(summary.profiles.map((profile) => [profile.profileId, profile.provider])).toEqual([
+      ["zai:dash", "zai"],
+      ["zai:dot", "zai"],
+    ]);
+    expect(summary.providers).toEqual([
+      {
+        provider: "zai",
+        status: "static",
+        profiles: summary.profiles,
+      },
+    ]);
+  });
 });
 
 describe("formatRemainingShort", () => {
