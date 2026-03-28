@@ -122,7 +122,9 @@ export class AgentMemoSearchManager implements MemorySearchManager {
             endLine:
               typeof item.metadata?.end_line === "number"
                 ? Math.max(item.metadata.end_line, item.metadata?.start_line ?? 1)
-                : 1,
+                : typeof item.metadata?.start_line === "number"
+                  ? item.metadata.start_line
+                  : 1,
             score: item.score ?? item.similarity ?? 0,
             snippet: item.content ?? item.text ?? "",
             source: "memory",
