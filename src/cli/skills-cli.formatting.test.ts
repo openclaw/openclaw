@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createSyntheticSourceInfo } from "@mariozechner/pi-coding-agent";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
 import type { SkillEntry } from "../agents/skills.js";
@@ -98,10 +97,7 @@ function createFixtureSkill(params: {
     description: params.description,
     filePath: params.filePath,
     baseDir: params.baseDir,
-    sourceInfo: createSyntheticSourceInfo(params.filePath, {
-      source: params.source,
-      baseDir: params.baseDir,
-    }),
+    source: params.source,
     disableModelInvocation: false,
   };
 }
