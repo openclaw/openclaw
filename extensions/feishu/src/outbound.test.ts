@@ -256,6 +256,36 @@ describe("feishuOutbound.sendText replyToId forwarding", () => {
     );
     expect(sendMessageFeishuMock.mock.calls[0][0].replyToMessageId).toBeUndefined();
   });
+
+  it("strips trailing NO_REPLY from visible text", async () => {
+    await sendText({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: "📊 report\n\nNO_REPLY",
+      accountId: "main",
+    });
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "chat_1",
+        text: "📊 report",
+        accountId: "main",
+      }),
+    );
+  });
+
+  it("suppresses pure NO_REPLY text sends", async () => {
+    const result = await sendText({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: "NO_REPLY",
+      accountId: "main",
+    });
+
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+    expect(result).toEqual(expect.objectContaining({ channel: "feishu", messageId: "suppressed" }));
+  });
 });
 
 describe("feishuOutbound.sendMedia replyToId forwarding", () => {
@@ -353,6 +383,25 @@ describe("feishuOutbound.sendMedia renderMode", () => {
         to: "chat_1",
         text: "caption",
         replyToMessageId: "om_thread_1",
+        accountId: "main",
+      }),
+    );
+  });
+
+  it("drops NO_REPLY captions before media sends", async () => {
+    await feishuOutbound.sendMedia?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: "NO_REPLY",
+      mediaUrl: "https://example.com/image.png",
+      accountId: "main",
+    });
+
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(sendMediaFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "chat_1",
+        mediaUrl: "https://example.com/image.png",
         accountId: "main",
       }),
     );

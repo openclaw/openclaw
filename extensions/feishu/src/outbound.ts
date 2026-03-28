@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { createAttachedChannelResultAdapter } from "openclaw/plugin-sdk/channel-send-result";
+import { isSilentReplyText, stripSilentToken } from "../../../src/auto-reply/tokens.js";
 import { chunkTextForOutbound, type ChannelOutboundAdapter } from "../runtime-api.js";
 import { resolveFeishuAccount } from "./accounts.js";
 import { sendMediaFeishu } from "./media.js";
@@ -42,6 +43,17 @@ function normalizePossibleLocalImagePath(text: string | undefined): string | nul
 
 function shouldUseCard(text: string): boolean {
   return /```[\s\S]*?```/.test(text) || /\|.+\|[\r\n]+\|[-:| ]+\|/.test(text);
+}
+
+function normalizeFeishuOutboundText(text: string | undefined): string {
+  if (!text) return "";
+  if (isSilentReplyText(text)) {
+    return "";
+  }
+  if (text.includes("NO_REPLY")) {
+    return stripSilentToken(text);
+  }
+  return text;
 }
 
 function resolveReplyToMessageId(params: {
@@ -95,10 +107,11 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       identity,
     }) => {
       const replyToMessageId = resolveReplyToMessageId({ replyToId, threadId });
+      const normalizedText = normalizeFeishuOutboundText(text);
       // Scheme A compatibility shim:
       // when upstream accidentally returns a local image path as plain text,
       // auto-upload and send as Feishu image message instead of leaking path text.
-      const localImagePath = normalizePossibleLocalImagePath(text);
+      const localImagePath = normalizePossibleLocalImagePath(normalizedText);
       if (localImagePath) {
         try {
           return await sendMediaFeishu({
@@ -115,9 +128,14 @@ export const feishuOutbound: ChannelOutboundAdapter = {
         }
       }
 
+      if (!normalizedText.trim()) {
+        return { channel: "feishu", messageId: "suppressed" };
+      }
+
       const account = resolveFeishuAccount({ cfg, accountId: accountId ?? undefined });
       const renderMode = account.config?.renderMode ?? "auto";
-      const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
+      const useCard =
+        renderMode === "card" || (renderMode === "auto" && shouldUseCard(normalizedText));
       if (useCard) {
         const header = identity
           ? {
@@ -130,7 +148,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
         return await sendStructuredCardFeishu({
           cfg,
           to,
-          text,
+          text: normalizedText,
           replyToMessageId,
           replyInThread: threadId != null && !replyToId,
           accountId: accountId ?? undefined,
@@ -140,7 +158,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       return await sendOutboundText({
         cfg,
         to,
-        text,
+        text: normalizedText,
         accountId: accountId ?? undefined,
         replyToMessageId,
       });
@@ -156,12 +174,13 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       threadId,
     }) => {
       const replyToMessageId = resolveReplyToMessageId({ replyToId, threadId });
+      const normalizedText = normalizeFeishuOutboundText(text);
       // Send text first if provided
-      if (text?.trim()) {
+      if (normalizedText.trim()) {
         await sendOutboundText({
           cfg,
           to,
-          text,
+          text: normalizedText,
           accountId: accountId ?? undefined,
           replyToMessageId,
         });
@@ -193,10 +212,14 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       }
 
       // No media URL, just return text result
+      if (!mediaUrl && !normalizedText.trim()) {
+        return { channel: "feishu", messageId: "suppressed" };
+      }
+
       return await sendOutboundText({
         cfg,
         to,
-        text: text ?? "",
+        text: normalizedText,
         accountId: accountId ?? undefined,
         replyToMessageId,
       });
