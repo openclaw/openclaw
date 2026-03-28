@@ -28,7 +28,7 @@ final class APNsManager {
         Task {
             do {
                 let granted = try await UNUserNotificationCenter.current()
-                    .requestAuthorization(options: [.alert, .sound])
+                    .requestAuthorization(options: [])
                 print("[APNsManager] Authorization \(granted ? "granted" : "denied")")
                 if granted {
                     // visionOS uses UIApplication for remote notification registration
