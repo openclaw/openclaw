@@ -16,6 +16,7 @@ import {
   createResolvedDirectoryEntriesLister,
 } from "openclaw/plugin-sdk/directory-runtime";
 import { runStoppablePassiveMonitor } from "openclaw/plugin-sdk/extension-shared";
+import { chunkTextForOutbound } from "openclaw/plugin-sdk/irc";
 import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
@@ -333,7 +334,7 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChat
   outbound: {
     base: {
       deliveryMode: "direct",
-      chunker: (text, limit) => getIrcRuntime().channel.text.chunkMarkdownText(text, limit),
+      chunker: chunkTextForOutbound,
       chunkerMode: "markdown",
       textChunkLimit: 350,
     },
