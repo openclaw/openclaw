@@ -8,8 +8,10 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: ["runtime-api.js"],
+    runtimeSidecarArtifacts: ["runtime-api.js"],
     packageName: "@openclaw/acpx",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw ACP runtime backend via acpx",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -22,12 +24,15 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         properties: {
           command: {
             type: "string",
+            minLength: 1,
           },
           expectedVersion: {
             type: "string",
+            minLength: 1,
           },
           cwd: {
             type: "string",
+            minLength: 1,
           },
           permissionMode: {
             type: "string",
@@ -55,6 +60,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
               properties: {
                 command: {
                   type: "string",
+                  minLength: 1,
                   description: "Command to run the MCP server",
                 },
                 args: {
@@ -132,8 +138,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: ["api.js", "discovery.js"],
     packageName: "@openclaw/amazon-bedrock-provider",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw Amazon Bedrock provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -145,6 +152,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         additionalProperties: false,
         properties: {},
       },
+      enabledByDefault: true,
       providers: ["amazon-bedrock"],
     },
   },
@@ -155,8 +163,15 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: [
+      "api.js",
+      "cli-backend.js",
+      "cli-migration.js",
+      "cli-shared.js",
+      "media-understanding-provider.js",
+    ],
     packageName: "@openclaw/anthropic-provider",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw Anthropic provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -168,8 +183,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         additionalProperties: false,
         properties: {},
       },
+      enabledByDefault: true,
       providers: ["anthropic"],
-      mediaUnderstandingProviders: ["anthropic"],
+      cliBackends: ["claude-cli"],
       providerAuthEnvVars: {
         anthropic: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
       },
@@ -178,6 +194,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           provider: "anthropic",
           method: "cli",
           choiceId: "anthropic-cli",
+          deprecatedChoiceIds: ["claude-cli"],
           choiceLabel: "Anthropic Claude CLI",
           choiceHint: "Reuse a local Claude CLI login on this host",
           groupId: "anthropic",
@@ -208,6 +225,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           cliDescription: "Anthropic API key",
         },
       ],
+      contracts: {
+        mediaUnderstandingProviders: ["anthropic"],
+      },
     },
   },
   {
@@ -221,8 +241,10 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./setup-entry.ts",
       built: "setup-entry.js",
     },
+    publicSurfaceArtifacts: ["api.js", "channel-config-api.js", "runtime-api.js"],
+    runtimeSidecarArtifacts: ["runtime-api.js"],
     packageName: "@openclaw/bluebubbles",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw BlueBubbles channel plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -244,7 +266,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         npmSpec: "@openclaw/bluebubbles",
         localPath: "extensions/bluebubbles",
         defaultChoice: "npm",
-        minHostVersion: ">=2026.3.22",
+        minHostVersion: ">=2026.3.27",
       },
     },
     manifest: {
@@ -255,6 +277,512 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         properties: {},
       },
       channels: ["bluebubbles"],
+      channelConfigs: {
+        bluebubbles: {
+          schema: {
+            $schema: "http://json-schema.org/draft-07/schema#",
+            type: "object",
+            properties: {
+              name: {
+                type: "string",
+              },
+              enabled: {
+                type: "boolean",
+              },
+              markdown: {
+                type: "object",
+                properties: {
+                  tables: {
+                    type: "string",
+                    enum: ["off", "bullets", "code"],
+                  },
+                },
+                additionalProperties: false,
+              },
+              serverUrl: {
+                type: "string",
+              },
+              password: {
+                anyOf: [
+                  {
+                    type: "string",
+                  },
+                  {
+                    oneOf: [
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "env",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "file",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "exec",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                    ],
+                  },
+                ],
+              },
+              webhookPath: {
+                type: "string",
+              },
+              dmPolicy: {
+                type: "string",
+                enum: ["pairing", "allowlist", "open", "disabled"],
+              },
+              allowFrom: {
+                type: "array",
+                items: {
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "number",
+                    },
+                  ],
+                },
+              },
+              groupAllowFrom: {
+                type: "array",
+                items: {
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "number",
+                    },
+                  ],
+                },
+              },
+              groupPolicy: {
+                type: "string",
+                enum: ["open", "disabled", "allowlist"],
+              },
+              enrichGroupParticipantsFromContacts: {
+                default: true,
+                type: "boolean",
+              },
+              historyLimit: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+              },
+              dmHistoryLimit: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+              },
+              textChunkLimit: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+              },
+              chunkMode: {
+                type: "string",
+                enum: ["length", "newline"],
+              },
+              mediaMaxMb: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+              },
+              mediaLocalRoots: {
+                type: "array",
+                items: {
+                  type: "string",
+                },
+              },
+              sendReadReceipts: {
+                type: "boolean",
+              },
+              allowPrivateNetwork: {
+                type: "boolean",
+              },
+              blockStreaming: {
+                type: "boolean",
+              },
+              groups: {
+                type: "object",
+                properties: {},
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    requireMention: {
+                      type: "boolean",
+                    },
+                    tools: {
+                      type: "object",
+                      properties: {
+                        allow: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                        alsoAllow: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                        deny: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                  },
+                  additionalProperties: false,
+                },
+              },
+              accounts: {
+                type: "object",
+                properties: {},
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    name: {
+                      type: "string",
+                    },
+                    enabled: {
+                      type: "boolean",
+                    },
+                    markdown: {
+                      type: "object",
+                      properties: {
+                        tables: {
+                          type: "string",
+                          enum: ["off", "bullets", "code"],
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    serverUrl: {
+                      type: "string",
+                    },
+                    password: {
+                      anyOf: [
+                        {
+                          type: "string",
+                        },
+                        {
+                          oneOf: [
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "env",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                  pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "file",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "exec",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                          ],
+                        },
+                      ],
+                    },
+                    webhookPath: {
+                      type: "string",
+                    },
+                    dmPolicy: {
+                      type: "string",
+                      enum: ["pairing", "allowlist", "open", "disabled"],
+                    },
+                    allowFrom: {
+                      type: "array",
+                      items: {
+                        anyOf: [
+                          {
+                            type: "string",
+                          },
+                          {
+                            type: "number",
+                          },
+                        ],
+                      },
+                    },
+                    groupAllowFrom: {
+                      type: "array",
+                      items: {
+                        anyOf: [
+                          {
+                            type: "string",
+                          },
+                          {
+                            type: "number",
+                          },
+                        ],
+                      },
+                    },
+                    groupPolicy: {
+                      type: "string",
+                      enum: ["open", "disabled", "allowlist"],
+                    },
+                    enrichGroupParticipantsFromContacts: {
+                      default: true,
+                      type: "boolean",
+                    },
+                    historyLimit: {
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    dmHistoryLimit: {
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    textChunkLimit: {
+                      type: "integer",
+                      exclusiveMinimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    chunkMode: {
+                      type: "string",
+                      enum: ["length", "newline"],
+                    },
+                    mediaMaxMb: {
+                      type: "integer",
+                      exclusiveMinimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    mediaLocalRoots: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                      },
+                    },
+                    sendReadReceipts: {
+                      type: "boolean",
+                    },
+                    allowPrivateNetwork: {
+                      type: "boolean",
+                    },
+                    blockStreaming: {
+                      type: "boolean",
+                    },
+                    groups: {
+                      type: "object",
+                      properties: {},
+                      additionalProperties: {
+                        type: "object",
+                        properties: {
+                          requireMention: {
+                            type: "boolean",
+                          },
+                          tools: {
+                            type: "object",
+                            properties: {
+                              allow: {
+                                type: "array",
+                                items: {
+                                  type: "string",
+                                },
+                              },
+                              alsoAllow: {
+                                type: "array",
+                                items: {
+                                  type: "string",
+                                },
+                              },
+                              deny: {
+                                type: "array",
+                                items: {
+                                  type: "string",
+                                },
+                              },
+                            },
+                            additionalProperties: false,
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                    },
+                  },
+                  required: ["enrichGroupParticipantsFromContacts"],
+                  additionalProperties: false,
+                },
+              },
+              defaultAccount: {
+                type: "string",
+              },
+              actions: {
+                type: "object",
+                properties: {
+                  reactions: {
+                    default: true,
+                    type: "boolean",
+                  },
+                  edit: {
+                    default: true,
+                    type: "boolean",
+                  },
+                  unsend: {
+                    default: true,
+                    type: "boolean",
+                  },
+                  reply: {
+                    default: true,
+                    type: "boolean",
+                  },
+                  sendWithEffect: {
+                    default: true,
+                    type: "boolean",
+                  },
+                  renameGroup: {
+                    default: true,
+                    type: "boolean",
+                  },
+                  setGroupIcon: {
+                    default: true,
+                    type: "boolean",
+                  },
+                  addParticipant: {
+                    default: true,
+                    type: "boolean",
+                  },
+                  removeParticipant: {
+                    default: true,
+                    type: "boolean",
+                  },
+                  leaveGroup: {
+                    default: true,
+                    type: "boolean",
+                  },
+                  sendAttachment: {
+                    default: true,
+                    type: "boolean",
+                  },
+                },
+                required: [
+                  "reactions",
+                  "edit",
+                  "unsend",
+                  "reply",
+                  "sendWithEffect",
+                  "renameGroup",
+                  "setGroupIcon",
+                  "addParticipant",
+                  "removeParticipant",
+                  "leaveGroup",
+                  "sendAttachment",
+                ],
+                additionalProperties: false,
+              },
+            },
+            required: ["enrichGroupParticipantsFromContacts"],
+            additionalProperties: false,
+          },
+          uiHints: {
+            "": {
+              label: "BlueBubbles",
+              help: "BlueBubbles channel provider configuration used for Apple messaging bridge integrations. Keep DM policy aligned with your trusted sender model in shared deployments.",
+            },
+            dmPolicy: {
+              label: "BlueBubbles DM Policy",
+              help: 'Direct message access control ("pairing" recommended). "open" requires channels.bluebubbles.allowFrom=["*"].',
+            },
+          },
+          label: "BlueBubbles",
+          description: "iMessage via the BlueBubbles mac app + REST API.",
+          preferOver: ["imessage"],
+        },
+      },
     },
   },
   {
@@ -264,8 +792,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: ["web-search-provider.js"],
     packageName: "@openclaw/brave-plugin",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw Brave plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -306,6 +835,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           help: "Brave Search mode: web or llm-context.",
         },
       },
+      contracts: {
+        webSearchProviders: ["brave"],
+      },
     },
   },
   {
@@ -315,8 +847,10 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: ["browser-runtime-api.js", "runtime-api.js"],
+    runtimeSidecarArtifacts: ["runtime-api.js"],
     packageName: "@openclaw/browser-plugin",
-    packageVersion: "2026.3.25",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw browser tool plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -338,8 +872,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: ["api.js", "models.js", "provider-catalog.js"],
     packageName: "@openclaw/byteplus-provider",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw BytePlus provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -351,6 +886,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         additionalProperties: false,
         properties: {},
       },
+      enabledByDefault: true,
       providers: ["byteplus", "byteplus-plan"],
       providerAuthEnvVars: {
         byteplus: ["BYTEPLUS_API_KEY"],
@@ -379,8 +915,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: ["api.js", "models.js", "onboard.js", "provider-catalog.js"],
     packageName: "@openclaw/chutes-provider",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw Chutes.ai provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -432,8 +969,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: ["api.js", "models.js", "onboard.js"],
     packageName: "@openclaw/cloudflare-ai-gateway-provider",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw Cloudflare AI Gateway provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -445,6 +983,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         additionalProperties: false,
         properties: {},
       },
+      enabledByDefault: true,
       providers: ["cloudflare-ai-gateway"],
       providerAuthEnvVars: {
         "cloudflare-ai-gateway": ["CLOUDFLARE_AI_GATEWAY_API_KEY"],
@@ -474,8 +1013,10 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: ["runtime-api.js"],
+    runtimeSidecarArtifacts: ["runtime-api.js"],
     packageName: "@openclaw/copilot-proxy",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw Copilot Proxy provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -487,7 +1028,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         additionalProperties: false,
         properties: {},
       },
+      enabledByDefault: true,
       providers: ["copilot-proxy"],
+      autoEnableWhenConfiguredProviders: ["copilot-proxy"],
       providerAuthChoices: [
         {
           provider: "copilot-proxy",
@@ -509,8 +1052,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: ["audio.js", "media-understanding-provider.js"],
     packageName: "@openclaw/deepgram-provider",
-    packageVersion: "2026.3.14",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw Deepgram media-understanding provider",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -522,7 +1066,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         additionalProperties: false,
         properties: {},
       },
-      mediaUnderstandingProviders: ["deepgram"],
+      contracts: {
+        mediaUnderstandingProviders: ["deepgram"],
+      },
     },
   },
   {
@@ -532,8 +1078,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: ["api.js", "models.js", "onboard.js", "provider-catalog.js"],
     packageName: "@openclaw/deepseek-provider",
-    packageVersion: "2026.3.14",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw DeepSeek provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -545,6 +1092,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         additionalProperties: false,
         properties: {},
       },
+      enabledByDefault: true,
       providers: ["deepseek"],
       providerAuthEnvVars: {
         deepseek: ["DEEPSEEK_API_KEY"],
@@ -573,8 +1121,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: ["api.js"],
     packageName: "@openclaw/diagnostics-otel",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw diagnostics OpenTelemetry exporter",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -595,8 +1144,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: ["api.js"],
     packageName: "@openclaw/diffs",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw diff viewer plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -795,8 +1345,17 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./setup-entry.ts",
       built: "setup-entry.js",
     },
+    publicSurfaceArtifacts: [
+      "action-runtime-api.js",
+      "api.js",
+      "channel-config-api.js",
+      "runtime-api.js",
+      "session-key-api.js",
+      "timeouts.js",
+    ],
+    runtimeSidecarArtifacts: ["runtime-api.js"],
     packageName: "@openclaw/discord",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw Discord channel plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -815,7 +1374,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         npmSpec: "@openclaw/discord",
         localPath: "extensions/discord",
         defaultChoice: "npm",
-        minHostVersion: ">=2026.3.22",
+        minHostVersion: ">=2026.3.27",
       },
     },
     manifest: {
@@ -826,6 +1385,2630 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         properties: {},
       },
       channels: ["discord"],
+      channelConfigs: {
+        discord: {
+          schema: {
+            $schema: "http://json-schema.org/draft-07/schema#",
+            type: "object",
+            properties: {
+              name: {
+                type: "string",
+              },
+              capabilities: {
+                type: "array",
+                items: {
+                  type: "string",
+                },
+              },
+              markdown: {
+                type: "object",
+                properties: {
+                  tables: {
+                    type: "string",
+                    enum: ["off", "bullets", "code"],
+                  },
+                },
+                additionalProperties: false,
+              },
+              enabled: {
+                type: "boolean",
+              },
+              commands: {
+                type: "object",
+                properties: {
+                  native: {
+                    anyOf: [
+                      {
+                        type: "boolean",
+                      },
+                      {
+                        type: "string",
+                        const: "auto",
+                      },
+                    ],
+                  },
+                  nativeSkills: {
+                    anyOf: [
+                      {
+                        type: "boolean",
+                      },
+                      {
+                        type: "string",
+                        const: "auto",
+                      },
+                    ],
+                  },
+                },
+                additionalProperties: false,
+              },
+              configWrites: {
+                type: "boolean",
+              },
+              token: {
+                anyOf: [
+                  {
+                    type: "string",
+                  },
+                  {
+                    oneOf: [
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "env",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "file",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "exec",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                    ],
+                  },
+                ],
+              },
+              proxy: {
+                type: "string",
+              },
+              allowBots: {
+                anyOf: [
+                  {
+                    type: "boolean",
+                  },
+                  {
+                    type: "string",
+                    const: "mentions",
+                  },
+                ],
+              },
+              dangerouslyAllowNameMatching: {
+                type: "boolean",
+              },
+              groupPolicy: {
+                default: "allowlist",
+                type: "string",
+                enum: ["open", "disabled", "allowlist"],
+              },
+              historyLimit: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+              },
+              dmHistoryLimit: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+              },
+              dms: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    historyLimit: {
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                  },
+                  additionalProperties: false,
+                },
+              },
+              textChunkLimit: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+              },
+              chunkMode: {
+                type: "string",
+                enum: ["length", "newline"],
+              },
+              blockStreaming: {
+                type: "boolean",
+              },
+              blockStreamingCoalesce: {
+                type: "object",
+                properties: {
+                  minChars: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  maxChars: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  idleMs: {
+                    type: "integer",
+                    minimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                },
+                additionalProperties: false,
+              },
+              streaming: {
+                anyOf: [
+                  {
+                    type: "boolean",
+                  },
+                  {
+                    type: "string",
+                    enum: ["off", "partial", "block", "progress"],
+                  },
+                ],
+              },
+              streamMode: {
+                type: "string",
+                enum: ["partial", "block", "off"],
+              },
+              draftChunk: {
+                type: "object",
+                properties: {
+                  minChars: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  maxChars: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  breakPreference: {
+                    anyOf: [
+                      {
+                        type: "string",
+                        const: "paragraph",
+                      },
+                      {
+                        type: "string",
+                        const: "newline",
+                      },
+                      {
+                        type: "string",
+                        const: "sentence",
+                      },
+                    ],
+                  },
+                },
+                additionalProperties: false,
+              },
+              maxLinesPerMessage: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+              },
+              mediaMaxMb: {
+                type: "number",
+                exclusiveMinimum: 0,
+              },
+              retry: {
+                type: "object",
+                properties: {
+                  attempts: {
+                    type: "integer",
+                    minimum: 1,
+                    maximum: 9007199254740991,
+                  },
+                  minDelayMs: {
+                    type: "integer",
+                    minimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  maxDelayMs: {
+                    type: "integer",
+                    minimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  jitter: {
+                    type: "number",
+                    minimum: 0,
+                    maximum: 1,
+                  },
+                },
+                additionalProperties: false,
+              },
+              actions: {
+                type: "object",
+                properties: {
+                  reactions: {
+                    type: "boolean",
+                  },
+                  stickers: {
+                    type: "boolean",
+                  },
+                  emojiUploads: {
+                    type: "boolean",
+                  },
+                  stickerUploads: {
+                    type: "boolean",
+                  },
+                  polls: {
+                    type: "boolean",
+                  },
+                  permissions: {
+                    type: "boolean",
+                  },
+                  messages: {
+                    type: "boolean",
+                  },
+                  threads: {
+                    type: "boolean",
+                  },
+                  pins: {
+                    type: "boolean",
+                  },
+                  search: {
+                    type: "boolean",
+                  },
+                  memberInfo: {
+                    type: "boolean",
+                  },
+                  roleInfo: {
+                    type: "boolean",
+                  },
+                  roles: {
+                    type: "boolean",
+                  },
+                  channelInfo: {
+                    type: "boolean",
+                  },
+                  voiceStatus: {
+                    type: "boolean",
+                  },
+                  events: {
+                    type: "boolean",
+                  },
+                  moderation: {
+                    type: "boolean",
+                  },
+                  channels: {
+                    type: "boolean",
+                  },
+                  presence: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
+              },
+              replyToMode: {
+                anyOf: [
+                  {
+                    type: "string",
+                    const: "off",
+                  },
+                  {
+                    type: "string",
+                    const: "first",
+                  },
+                  {
+                    type: "string",
+                    const: "all",
+                  },
+                ],
+              },
+              dmPolicy: {
+                type: "string",
+                enum: ["pairing", "allowlist", "open", "disabled"],
+              },
+              allowFrom: {
+                type: "array",
+                items: {
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "number",
+                    },
+                  ],
+                },
+              },
+              defaultTo: {
+                type: "string",
+              },
+              dm: {
+                type: "object",
+                properties: {
+                  enabled: {
+                    type: "boolean",
+                  },
+                  policy: {
+                    type: "string",
+                    enum: ["pairing", "allowlist", "open", "disabled"],
+                  },
+                  allowFrom: {
+                    type: "array",
+                    items: {
+                      anyOf: [
+                        {
+                          type: "string",
+                        },
+                        {
+                          type: "number",
+                        },
+                      ],
+                    },
+                  },
+                  groupEnabled: {
+                    type: "boolean",
+                  },
+                  groupChannels: {
+                    type: "array",
+                    items: {
+                      anyOf: [
+                        {
+                          type: "string",
+                        },
+                        {
+                          type: "number",
+                        },
+                      ],
+                    },
+                  },
+                },
+                additionalProperties: false,
+              },
+              guilds: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    slug: {
+                      type: "string",
+                    },
+                    requireMention: {
+                      type: "boolean",
+                    },
+                    ignoreOtherMentions: {
+                      type: "boolean",
+                    },
+                    tools: {
+                      type: "object",
+                      properties: {
+                        allow: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                        alsoAllow: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                        deny: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    toolsBySender: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "object",
+                        properties: {
+                          allow: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                          },
+                          alsoAllow: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                          },
+                          deny: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                    },
+                    reactionNotifications: {
+                      type: "string",
+                      enum: ["off", "own", "all", "allowlist"],
+                    },
+                    users: {
+                      type: "array",
+                      items: {
+                        anyOf: [
+                          {
+                            type: "string",
+                          },
+                          {
+                            type: "number",
+                          },
+                        ],
+                      },
+                    },
+                    roles: {
+                      type: "array",
+                      items: {
+                        anyOf: [
+                          {
+                            type: "string",
+                          },
+                          {
+                            type: "number",
+                          },
+                        ],
+                      },
+                    },
+                    channels: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "object",
+                        properties: {
+                          allow: {
+                            type: "boolean",
+                          },
+                          requireMention: {
+                            type: "boolean",
+                          },
+                          ignoreOtherMentions: {
+                            type: "boolean",
+                          },
+                          tools: {
+                            type: "object",
+                            properties: {
+                              allow: {
+                                type: "array",
+                                items: {
+                                  type: "string",
+                                },
+                              },
+                              alsoAllow: {
+                                type: "array",
+                                items: {
+                                  type: "string",
+                                },
+                              },
+                              deny: {
+                                type: "array",
+                                items: {
+                                  type: "string",
+                                },
+                              },
+                            },
+                            additionalProperties: false,
+                          },
+                          toolsBySender: {
+                            type: "object",
+                            propertyNames: {
+                              type: "string",
+                            },
+                            additionalProperties: {
+                              type: "object",
+                              properties: {
+                                allow: {
+                                  type: "array",
+                                  items: {
+                                    type: "string",
+                                  },
+                                },
+                                alsoAllow: {
+                                  type: "array",
+                                  items: {
+                                    type: "string",
+                                  },
+                                },
+                                deny: {
+                                  type: "array",
+                                  items: {
+                                    type: "string",
+                                  },
+                                },
+                              },
+                              additionalProperties: false,
+                            },
+                          },
+                          skills: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                          },
+                          enabled: {
+                            type: "boolean",
+                          },
+                          users: {
+                            type: "array",
+                            items: {
+                              anyOf: [
+                                {
+                                  type: "string",
+                                },
+                                {
+                                  type: "number",
+                                },
+                              ],
+                            },
+                          },
+                          roles: {
+                            type: "array",
+                            items: {
+                              anyOf: [
+                                {
+                                  type: "string",
+                                },
+                                {
+                                  type: "number",
+                                },
+                              ],
+                            },
+                          },
+                          systemPrompt: {
+                            type: "string",
+                          },
+                          includeThreadStarter: {
+                            type: "boolean",
+                          },
+                          autoThread: {
+                            type: "boolean",
+                          },
+                          autoThreadName: {
+                            type: "string",
+                            enum: ["message", "generated"],
+                          },
+                          autoArchiveDuration: {
+                            anyOf: [
+                              {
+                                type: "string",
+                                enum: ["60", "1440", "4320", "10080"],
+                              },
+                              {
+                                type: "number",
+                                const: 60,
+                              },
+                              {
+                                type: "number",
+                                const: 1440,
+                              },
+                              {
+                                type: "number",
+                                const: 4320,
+                              },
+                              {
+                                type: "number",
+                                const: 10080,
+                              },
+                            ],
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                    },
+                  },
+                  additionalProperties: false,
+                },
+              },
+              heartbeat: {
+                type: "object",
+                properties: {
+                  showOk: {
+                    type: "boolean",
+                  },
+                  showAlerts: {
+                    type: "boolean",
+                  },
+                  useIndicator: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
+              },
+              healthMonitor: {
+                type: "object",
+                properties: {
+                  enabled: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
+              },
+              execApprovals: {
+                type: "object",
+                properties: {
+                  enabled: {
+                    type: "boolean",
+                  },
+                  approvers: {
+                    type: "array",
+                    items: {
+                      anyOf: [
+                        {
+                          type: "string",
+                        },
+                        {
+                          type: "number",
+                        },
+                      ],
+                    },
+                  },
+                  agentFilter: {
+                    type: "array",
+                    items: {
+                      type: "string",
+                    },
+                  },
+                  sessionFilter: {
+                    type: "array",
+                    items: {
+                      type: "string",
+                    },
+                  },
+                  cleanupAfterResolve: {
+                    type: "boolean",
+                  },
+                  target: {
+                    type: "string",
+                    enum: ["dm", "channel", "both"],
+                  },
+                },
+                additionalProperties: false,
+              },
+              agentComponents: {
+                type: "object",
+                properties: {
+                  enabled: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
+              },
+              ui: {
+                type: "object",
+                properties: {
+                  components: {
+                    type: "object",
+                    properties: {
+                      accentColor: {
+                        type: "string",
+                        pattern: "^#?[0-9a-fA-F]{6}$",
+                      },
+                    },
+                    additionalProperties: false,
+                  },
+                },
+                additionalProperties: false,
+              },
+              slashCommand: {
+                type: "object",
+                properties: {
+                  ephemeral: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
+              },
+              threadBindings: {
+                type: "object",
+                properties: {
+                  enabled: {
+                    type: "boolean",
+                  },
+                  idleHours: {
+                    type: "number",
+                    minimum: 0,
+                  },
+                  maxAgeHours: {
+                    type: "number",
+                    minimum: 0,
+                  },
+                  spawnSubagentSessions: {
+                    type: "boolean",
+                  },
+                  spawnAcpSessions: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
+              },
+              intents: {
+                type: "object",
+                properties: {
+                  presence: {
+                    type: "boolean",
+                  },
+                  guildMembers: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
+              },
+              voice: {
+                type: "object",
+                properties: {
+                  enabled: {
+                    type: "boolean",
+                  },
+                  autoJoin: {
+                    type: "array",
+                    items: {
+                      type: "object",
+                      properties: {
+                        guildId: {
+                          type: "string",
+                          minLength: 1,
+                        },
+                        channelId: {
+                          type: "string",
+                          minLength: 1,
+                        },
+                      },
+                      required: ["guildId", "channelId"],
+                      additionalProperties: false,
+                    },
+                  },
+                  daveEncryption: {
+                    type: "boolean",
+                  },
+                  decryptionFailureTolerance: {
+                    type: "integer",
+                    minimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  tts: {
+                    type: "object",
+                    properties: {
+                      auto: {
+                        type: "string",
+                        enum: ["off", "always", "inbound", "tagged"],
+                      },
+                      enabled: {
+                        type: "boolean",
+                      },
+                      mode: {
+                        type: "string",
+                        enum: ["final", "all"],
+                      },
+                      provider: {
+                        type: "string",
+                        minLength: 1,
+                      },
+                      summaryModel: {
+                        type: "string",
+                      },
+                      modelOverrides: {
+                        type: "object",
+                        properties: {
+                          enabled: {
+                            type: "boolean",
+                          },
+                          allowText: {
+                            type: "boolean",
+                          },
+                          allowProvider: {
+                            type: "boolean",
+                          },
+                          allowVoice: {
+                            type: "boolean",
+                          },
+                          allowModelId: {
+                            type: "boolean",
+                          },
+                          allowVoiceSettings: {
+                            type: "boolean",
+                          },
+                          allowNormalization: {
+                            type: "boolean",
+                          },
+                          allowSeed: {
+                            type: "boolean",
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                      providers: {
+                        type: "object",
+                        propertyNames: {
+                          type: "string",
+                        },
+                        additionalProperties: {
+                          type: "object",
+                          properties: {
+                            apiKey: {
+                              anyOf: [
+                                {
+                                  type: "string",
+                                },
+                                {
+                                  oneOf: [
+                                    {
+                                      type: "object",
+                                      properties: {
+                                        source: {
+                                          type: "string",
+                                          const: "env",
+                                        },
+                                        provider: {
+                                          type: "string",
+                                          pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                        },
+                                        id: {
+                                          type: "string",
+                                          pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                        },
+                                      },
+                                      required: ["source", "provider", "id"],
+                                      additionalProperties: false,
+                                    },
+                                    {
+                                      type: "object",
+                                      properties: {
+                                        source: {
+                                          type: "string",
+                                          const: "file",
+                                        },
+                                        provider: {
+                                          type: "string",
+                                          pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                        },
+                                        id: {
+                                          type: "string",
+                                        },
+                                      },
+                                      required: ["source", "provider", "id"],
+                                      additionalProperties: false,
+                                    },
+                                    {
+                                      type: "object",
+                                      properties: {
+                                        source: {
+                                          type: "string",
+                                          const: "exec",
+                                        },
+                                        provider: {
+                                          type: "string",
+                                          pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                        },
+                                        id: {
+                                          type: "string",
+                                        },
+                                      },
+                                      required: ["source", "provider", "id"],
+                                      additionalProperties: false,
+                                    },
+                                  ],
+                                },
+                              ],
+                            },
+                          },
+                          additionalProperties: {
+                            anyOf: [
+                              {
+                                type: "string",
+                              },
+                              {
+                                type: "number",
+                              },
+                              {
+                                type: "boolean",
+                              },
+                              {
+                                type: "null",
+                              },
+                              {
+                                type: "array",
+                                items: {},
+                              },
+                              {
+                                type: "object",
+                                propertyNames: {
+                                  type: "string",
+                                },
+                                additionalProperties: {},
+                              },
+                            ],
+                          },
+                        },
+                      },
+                      prefsPath: {
+                        type: "string",
+                      },
+                      maxTextLength: {
+                        type: "integer",
+                        minimum: 1,
+                        maximum: 9007199254740991,
+                      },
+                      timeoutMs: {
+                        type: "integer",
+                        minimum: 1000,
+                        maximum: 120000,
+                      },
+                    },
+                    additionalProperties: false,
+                  },
+                },
+                additionalProperties: false,
+              },
+              pluralkit: {
+                type: "object",
+                properties: {
+                  enabled: {
+                    type: "boolean",
+                  },
+                  token: {
+                    anyOf: [
+                      {
+                        type: "string",
+                      },
+                      {
+                        oneOf: [
+                          {
+                            type: "object",
+                            properties: {
+                              source: {
+                                type: "string",
+                                const: "env",
+                              },
+                              provider: {
+                                type: "string",
+                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                              },
+                              id: {
+                                type: "string",
+                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                              },
+                            },
+                            required: ["source", "provider", "id"],
+                            additionalProperties: false,
+                          },
+                          {
+                            type: "object",
+                            properties: {
+                              source: {
+                                type: "string",
+                                const: "file",
+                              },
+                              provider: {
+                                type: "string",
+                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                              },
+                              id: {
+                                type: "string",
+                              },
+                            },
+                            required: ["source", "provider", "id"],
+                            additionalProperties: false,
+                          },
+                          {
+                            type: "object",
+                            properties: {
+                              source: {
+                                type: "string",
+                                const: "exec",
+                              },
+                              provider: {
+                                type: "string",
+                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                              },
+                              id: {
+                                type: "string",
+                              },
+                            },
+                            required: ["source", "provider", "id"],
+                            additionalProperties: false,
+                          },
+                        ],
+                      },
+                    ],
+                  },
+                },
+                additionalProperties: false,
+              },
+              responsePrefix: {
+                type: "string",
+              },
+              ackReaction: {
+                type: "string",
+              },
+              ackReactionScope: {
+                type: "string",
+                enum: ["group-mentions", "group-all", "direct", "all", "off", "none"],
+              },
+              activity: {
+                type: "string",
+              },
+              status: {
+                type: "string",
+                enum: ["online", "dnd", "idle", "invisible"],
+              },
+              autoPresence: {
+                type: "object",
+                properties: {
+                  enabled: {
+                    type: "boolean",
+                  },
+                  intervalMs: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  minUpdateIntervalMs: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  healthyText: {
+                    type: "string",
+                  },
+                  degradedText: {
+                    type: "string",
+                  },
+                  exhaustedText: {
+                    type: "string",
+                  },
+                },
+                additionalProperties: false,
+              },
+              activityType: {
+                anyOf: [
+                  {
+                    type: "number",
+                    const: 0,
+                  },
+                  {
+                    type: "number",
+                    const: 1,
+                  },
+                  {
+                    type: "number",
+                    const: 2,
+                  },
+                  {
+                    type: "number",
+                    const: 3,
+                  },
+                  {
+                    type: "number",
+                    const: 4,
+                  },
+                  {
+                    type: "number",
+                    const: 5,
+                  },
+                ],
+              },
+              activityUrl: {
+                type: "string",
+                format: "uri",
+              },
+              inboundWorker: {
+                type: "object",
+                properties: {
+                  runTimeoutMs: {
+                    type: "integer",
+                    minimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                },
+                additionalProperties: false,
+              },
+              eventQueue: {
+                type: "object",
+                properties: {
+                  listenerTimeout: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  maxQueueSize: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  maxConcurrency: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                },
+                additionalProperties: false,
+              },
+              accounts: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    name: {
+                      type: "string",
+                    },
+                    capabilities: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                      },
+                    },
+                    markdown: {
+                      type: "object",
+                      properties: {
+                        tables: {
+                          type: "string",
+                          enum: ["off", "bullets", "code"],
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    enabled: {
+                      type: "boolean",
+                    },
+                    commands: {
+                      type: "object",
+                      properties: {
+                        native: {
+                          anyOf: [
+                            {
+                              type: "boolean",
+                            },
+                            {
+                              type: "string",
+                              const: "auto",
+                            },
+                          ],
+                        },
+                        nativeSkills: {
+                          anyOf: [
+                            {
+                              type: "boolean",
+                            },
+                            {
+                              type: "string",
+                              const: "auto",
+                            },
+                          ],
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    configWrites: {
+                      type: "boolean",
+                    },
+                    token: {
+                      anyOf: [
+                        {
+                          type: "string",
+                        },
+                        {
+                          oneOf: [
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "env",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                  pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "file",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "exec",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                          ],
+                        },
+                      ],
+                    },
+                    proxy: {
+                      type: "string",
+                    },
+                    allowBots: {
+                      anyOf: [
+                        {
+                          type: "boolean",
+                        },
+                        {
+                          type: "string",
+                          const: "mentions",
+                        },
+                      ],
+                    },
+                    dangerouslyAllowNameMatching: {
+                      type: "boolean",
+                    },
+                    groupPolicy: {
+                      default: "allowlist",
+                      type: "string",
+                      enum: ["open", "disabled", "allowlist"],
+                    },
+                    historyLimit: {
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    dmHistoryLimit: {
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    dms: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "object",
+                        properties: {
+                          historyLimit: {
+                            type: "integer",
+                            minimum: 0,
+                            maximum: 9007199254740991,
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                    },
+                    textChunkLimit: {
+                      type: "integer",
+                      exclusiveMinimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    chunkMode: {
+                      type: "string",
+                      enum: ["length", "newline"],
+                    },
+                    blockStreaming: {
+                      type: "boolean",
+                    },
+                    blockStreamingCoalesce: {
+                      type: "object",
+                      properties: {
+                        minChars: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                        maxChars: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                        idleMs: {
+                          type: "integer",
+                          minimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    streaming: {
+                      anyOf: [
+                        {
+                          type: "boolean",
+                        },
+                        {
+                          type: "string",
+                          enum: ["off", "partial", "block", "progress"],
+                        },
+                      ],
+                    },
+                    streamMode: {
+                      type: "string",
+                      enum: ["partial", "block", "off"],
+                    },
+                    draftChunk: {
+                      type: "object",
+                      properties: {
+                        minChars: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                        maxChars: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                        breakPreference: {
+                          anyOf: [
+                            {
+                              type: "string",
+                              const: "paragraph",
+                            },
+                            {
+                              type: "string",
+                              const: "newline",
+                            },
+                            {
+                              type: "string",
+                              const: "sentence",
+                            },
+                          ],
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    maxLinesPerMessage: {
+                      type: "integer",
+                      exclusiveMinimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    mediaMaxMb: {
+                      type: "number",
+                      exclusiveMinimum: 0,
+                    },
+                    retry: {
+                      type: "object",
+                      properties: {
+                        attempts: {
+                          type: "integer",
+                          minimum: 1,
+                          maximum: 9007199254740991,
+                        },
+                        minDelayMs: {
+                          type: "integer",
+                          minimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                        maxDelayMs: {
+                          type: "integer",
+                          minimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                        jitter: {
+                          type: "number",
+                          minimum: 0,
+                          maximum: 1,
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    actions: {
+                      type: "object",
+                      properties: {
+                        reactions: {
+                          type: "boolean",
+                        },
+                        stickers: {
+                          type: "boolean",
+                        },
+                        emojiUploads: {
+                          type: "boolean",
+                        },
+                        stickerUploads: {
+                          type: "boolean",
+                        },
+                        polls: {
+                          type: "boolean",
+                        },
+                        permissions: {
+                          type: "boolean",
+                        },
+                        messages: {
+                          type: "boolean",
+                        },
+                        threads: {
+                          type: "boolean",
+                        },
+                        pins: {
+                          type: "boolean",
+                        },
+                        search: {
+                          type: "boolean",
+                        },
+                        memberInfo: {
+                          type: "boolean",
+                        },
+                        roleInfo: {
+                          type: "boolean",
+                        },
+                        roles: {
+                          type: "boolean",
+                        },
+                        channelInfo: {
+                          type: "boolean",
+                        },
+                        voiceStatus: {
+                          type: "boolean",
+                        },
+                        events: {
+                          type: "boolean",
+                        },
+                        moderation: {
+                          type: "boolean",
+                        },
+                        channels: {
+                          type: "boolean",
+                        },
+                        presence: {
+                          type: "boolean",
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    replyToMode: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "off",
+                        },
+                        {
+                          type: "string",
+                          const: "first",
+                        },
+                        {
+                          type: "string",
+                          const: "all",
+                        },
+                      ],
+                    },
+                    dmPolicy: {
+                      type: "string",
+                      enum: ["pairing", "allowlist", "open", "disabled"],
+                    },
+                    allowFrom: {
+                      type: "array",
+                      items: {
+                        anyOf: [
+                          {
+                            type: "string",
+                          },
+                          {
+                            type: "number",
+                          },
+                        ],
+                      },
+                    },
+                    defaultTo: {
+                      type: "string",
+                    },
+                    dm: {
+                      type: "object",
+                      properties: {
+                        enabled: {
+                          type: "boolean",
+                        },
+                        policy: {
+                          type: "string",
+                          enum: ["pairing", "allowlist", "open", "disabled"],
+                        },
+                        allowFrom: {
+                          type: "array",
+                          items: {
+                            anyOf: [
+                              {
+                                type: "string",
+                              },
+                              {
+                                type: "number",
+                              },
+                            ],
+                          },
+                        },
+                        groupEnabled: {
+                          type: "boolean",
+                        },
+                        groupChannels: {
+                          type: "array",
+                          items: {
+                            anyOf: [
+                              {
+                                type: "string",
+                              },
+                              {
+                                type: "number",
+                              },
+                            ],
+                          },
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    guilds: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "object",
+                        properties: {
+                          slug: {
+                            type: "string",
+                          },
+                          requireMention: {
+                            type: "boolean",
+                          },
+                          ignoreOtherMentions: {
+                            type: "boolean",
+                          },
+                          tools: {
+                            type: "object",
+                            properties: {
+                              allow: {
+                                type: "array",
+                                items: {
+                                  type: "string",
+                                },
+                              },
+                              alsoAllow: {
+                                type: "array",
+                                items: {
+                                  type: "string",
+                                },
+                              },
+                              deny: {
+                                type: "array",
+                                items: {
+                                  type: "string",
+                                },
+                              },
+                            },
+                            additionalProperties: false,
+                          },
+                          toolsBySender: {
+                            type: "object",
+                            propertyNames: {
+                              type: "string",
+                            },
+                            additionalProperties: {
+                              type: "object",
+                              properties: {
+                                allow: {
+                                  type: "array",
+                                  items: {
+                                    type: "string",
+                                  },
+                                },
+                                alsoAllow: {
+                                  type: "array",
+                                  items: {
+                                    type: "string",
+                                  },
+                                },
+                                deny: {
+                                  type: "array",
+                                  items: {
+                                    type: "string",
+                                  },
+                                },
+                              },
+                              additionalProperties: false,
+                            },
+                          },
+                          reactionNotifications: {
+                            type: "string",
+                            enum: ["off", "own", "all", "allowlist"],
+                          },
+                          users: {
+                            type: "array",
+                            items: {
+                              anyOf: [
+                                {
+                                  type: "string",
+                                },
+                                {
+                                  type: "number",
+                                },
+                              ],
+                            },
+                          },
+                          roles: {
+                            type: "array",
+                            items: {
+                              anyOf: [
+                                {
+                                  type: "string",
+                                },
+                                {
+                                  type: "number",
+                                },
+                              ],
+                            },
+                          },
+                          channels: {
+                            type: "object",
+                            propertyNames: {
+                              type: "string",
+                            },
+                            additionalProperties: {
+                              type: "object",
+                              properties: {
+                                allow: {
+                                  type: "boolean",
+                                },
+                                requireMention: {
+                                  type: "boolean",
+                                },
+                                ignoreOtherMentions: {
+                                  type: "boolean",
+                                },
+                                tools: {
+                                  type: "object",
+                                  properties: {
+                                    allow: {
+                                      type: "array",
+                                      items: {
+                                        type: "string",
+                                      },
+                                    },
+                                    alsoAllow: {
+                                      type: "array",
+                                      items: {
+                                        type: "string",
+                                      },
+                                    },
+                                    deny: {
+                                      type: "array",
+                                      items: {
+                                        type: "string",
+                                      },
+                                    },
+                                  },
+                                  additionalProperties: false,
+                                },
+                                toolsBySender: {
+                                  type: "object",
+                                  propertyNames: {
+                                    type: "string",
+                                  },
+                                  additionalProperties: {
+                                    type: "object",
+                                    properties: {
+                                      allow: {
+                                        type: "array",
+                                        items: {
+                                          type: "string",
+                                        },
+                                      },
+                                      alsoAllow: {
+                                        type: "array",
+                                        items: {
+                                          type: "string",
+                                        },
+                                      },
+                                      deny: {
+                                        type: "array",
+                                        items: {
+                                          type: "string",
+                                        },
+                                      },
+                                    },
+                                    additionalProperties: false,
+                                  },
+                                },
+                                skills: {
+                                  type: "array",
+                                  items: {
+                                    type: "string",
+                                  },
+                                },
+                                enabled: {
+                                  type: "boolean",
+                                },
+                                users: {
+                                  type: "array",
+                                  items: {
+                                    anyOf: [
+                                      {
+                                        type: "string",
+                                      },
+                                      {
+                                        type: "number",
+                                      },
+                                    ],
+                                  },
+                                },
+                                roles: {
+                                  type: "array",
+                                  items: {
+                                    anyOf: [
+                                      {
+                                        type: "string",
+                                      },
+                                      {
+                                        type: "number",
+                                      },
+                                    ],
+                                  },
+                                },
+                                systemPrompt: {
+                                  type: "string",
+                                },
+                                includeThreadStarter: {
+                                  type: "boolean",
+                                },
+                                autoThread: {
+                                  type: "boolean",
+                                },
+                                autoThreadName: {
+                                  type: "string",
+                                  enum: ["message", "generated"],
+                                },
+                                autoArchiveDuration: {
+                                  anyOf: [
+                                    {
+                                      type: "string",
+                                      enum: ["60", "1440", "4320", "10080"],
+                                    },
+                                    {
+                                      type: "number",
+                                      const: 60,
+                                    },
+                                    {
+                                      type: "number",
+                                      const: 1440,
+                                    },
+                                    {
+                                      type: "number",
+                                      const: 4320,
+                                    },
+                                    {
+                                      type: "number",
+                                      const: 10080,
+                                    },
+                                  ],
+                                },
+                              },
+                              additionalProperties: false,
+                            },
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                    },
+                    heartbeat: {
+                      type: "object",
+                      properties: {
+                        showOk: {
+                          type: "boolean",
+                        },
+                        showAlerts: {
+                          type: "boolean",
+                        },
+                        useIndicator: {
+                          type: "boolean",
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    healthMonitor: {
+                      type: "object",
+                      properties: {
+                        enabled: {
+                          type: "boolean",
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    execApprovals: {
+                      type: "object",
+                      properties: {
+                        enabled: {
+                          type: "boolean",
+                        },
+                        approvers: {
+                          type: "array",
+                          items: {
+                            anyOf: [
+                              {
+                                type: "string",
+                              },
+                              {
+                                type: "number",
+                              },
+                            ],
+                          },
+                        },
+                        agentFilter: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                        sessionFilter: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                        cleanupAfterResolve: {
+                          type: "boolean",
+                        },
+                        target: {
+                          type: "string",
+                          enum: ["dm", "channel", "both"],
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    agentComponents: {
+                      type: "object",
+                      properties: {
+                        enabled: {
+                          type: "boolean",
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    ui: {
+                      type: "object",
+                      properties: {
+                        components: {
+                          type: "object",
+                          properties: {
+                            accentColor: {
+                              type: "string",
+                              pattern: "^#?[0-9a-fA-F]{6}$",
+                            },
+                          },
+                          additionalProperties: false,
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    slashCommand: {
+                      type: "object",
+                      properties: {
+                        ephemeral: {
+                          type: "boolean",
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    threadBindings: {
+                      type: "object",
+                      properties: {
+                        enabled: {
+                          type: "boolean",
+                        },
+                        idleHours: {
+                          type: "number",
+                          minimum: 0,
+                        },
+                        maxAgeHours: {
+                          type: "number",
+                          minimum: 0,
+                        },
+                        spawnSubagentSessions: {
+                          type: "boolean",
+                        },
+                        spawnAcpSessions: {
+                          type: "boolean",
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    intents: {
+                      type: "object",
+                      properties: {
+                        presence: {
+                          type: "boolean",
+                        },
+                        guildMembers: {
+                          type: "boolean",
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    voice: {
+                      type: "object",
+                      properties: {
+                        enabled: {
+                          type: "boolean",
+                        },
+                        autoJoin: {
+                          type: "array",
+                          items: {
+                            type: "object",
+                            properties: {
+                              guildId: {
+                                type: "string",
+                                minLength: 1,
+                              },
+                              channelId: {
+                                type: "string",
+                                minLength: 1,
+                              },
+                            },
+                            required: ["guildId", "channelId"],
+                            additionalProperties: false,
+                          },
+                        },
+                        daveEncryption: {
+                          type: "boolean",
+                        },
+                        decryptionFailureTolerance: {
+                          type: "integer",
+                          minimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                        tts: {
+                          type: "object",
+                          properties: {
+                            auto: {
+                              type: "string",
+                              enum: ["off", "always", "inbound", "tagged"],
+                            },
+                            enabled: {
+                              type: "boolean",
+                            },
+                            mode: {
+                              type: "string",
+                              enum: ["final", "all"],
+                            },
+                            provider: {
+                              type: "string",
+                              minLength: 1,
+                            },
+                            summaryModel: {
+                              type: "string",
+                            },
+                            modelOverrides: {
+                              type: "object",
+                              properties: {
+                                enabled: {
+                                  type: "boolean",
+                                },
+                                allowText: {
+                                  type: "boolean",
+                                },
+                                allowProvider: {
+                                  type: "boolean",
+                                },
+                                allowVoice: {
+                                  type: "boolean",
+                                },
+                                allowModelId: {
+                                  type: "boolean",
+                                },
+                                allowVoiceSettings: {
+                                  type: "boolean",
+                                },
+                                allowNormalization: {
+                                  type: "boolean",
+                                },
+                                allowSeed: {
+                                  type: "boolean",
+                                },
+                              },
+                              additionalProperties: false,
+                            },
+                            providers: {
+                              type: "object",
+                              propertyNames: {
+                                type: "string",
+                              },
+                              additionalProperties: {
+                                type: "object",
+                                properties: {
+                                  apiKey: {
+                                    anyOf: [
+                                      {
+                                        type: "string",
+                                      },
+                                      {
+                                        oneOf: [
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "env",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "file",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                          {
+                                            type: "object",
+                                            properties: {
+                                              source: {
+                                                type: "string",
+                                                const: "exec",
+                                              },
+                                              provider: {
+                                                type: "string",
+                                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                              },
+                                              id: {
+                                                type: "string",
+                                              },
+                                            },
+                                            required: ["source", "provider", "id"],
+                                            additionalProperties: false,
+                                          },
+                                        ],
+                                      },
+                                    ],
+                                  },
+                                },
+                                additionalProperties: {
+                                  anyOf: [
+                                    {
+                                      type: "string",
+                                    },
+                                    {
+                                      type: "number",
+                                    },
+                                    {
+                                      type: "boolean",
+                                    },
+                                    {
+                                      type: "null",
+                                    },
+                                    {
+                                      type: "array",
+                                      items: {},
+                                    },
+                                    {
+                                      type: "object",
+                                      propertyNames: {
+                                        type: "string",
+                                      },
+                                      additionalProperties: {},
+                                    },
+                                  ],
+                                },
+                              },
+                            },
+                            prefsPath: {
+                              type: "string",
+                            },
+                            maxTextLength: {
+                              type: "integer",
+                              minimum: 1,
+                              maximum: 9007199254740991,
+                            },
+                            timeoutMs: {
+                              type: "integer",
+                              minimum: 1000,
+                              maximum: 120000,
+                            },
+                          },
+                          additionalProperties: false,
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    pluralkit: {
+                      type: "object",
+                      properties: {
+                        enabled: {
+                          type: "boolean",
+                        },
+                        token: {
+                          anyOf: [
+                            {
+                              type: "string",
+                            },
+                            {
+                              oneOf: [
+                                {
+                                  type: "object",
+                                  properties: {
+                                    source: {
+                                      type: "string",
+                                      const: "env",
+                                    },
+                                    provider: {
+                                      type: "string",
+                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                    },
+                                    id: {
+                                      type: "string",
+                                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                    },
+                                  },
+                                  required: ["source", "provider", "id"],
+                                  additionalProperties: false,
+                                },
+                                {
+                                  type: "object",
+                                  properties: {
+                                    source: {
+                                      type: "string",
+                                      const: "file",
+                                    },
+                                    provider: {
+                                      type: "string",
+                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                    },
+                                    id: {
+                                      type: "string",
+                                    },
+                                  },
+                                  required: ["source", "provider", "id"],
+                                  additionalProperties: false,
+                                },
+                                {
+                                  type: "object",
+                                  properties: {
+                                    source: {
+                                      type: "string",
+                                      const: "exec",
+                                    },
+                                    provider: {
+                                      type: "string",
+                                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                    },
+                                    id: {
+                                      type: "string",
+                                    },
+                                  },
+                                  required: ["source", "provider", "id"],
+                                  additionalProperties: false,
+                                },
+                              ],
+                            },
+                          ],
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    responsePrefix: {
+                      type: "string",
+                    },
+                    ackReaction: {
+                      type: "string",
+                    },
+                    ackReactionScope: {
+                      type: "string",
+                      enum: ["group-mentions", "group-all", "direct", "all", "off", "none"],
+                    },
+                    activity: {
+                      type: "string",
+                    },
+                    status: {
+                      type: "string",
+                      enum: ["online", "dnd", "idle", "invisible"],
+                    },
+                    autoPresence: {
+                      type: "object",
+                      properties: {
+                        enabled: {
+                          type: "boolean",
+                        },
+                        intervalMs: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                        minUpdateIntervalMs: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                        healthyText: {
+                          type: "string",
+                        },
+                        degradedText: {
+                          type: "string",
+                        },
+                        exhaustedText: {
+                          type: "string",
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    activityType: {
+                      anyOf: [
+                        {
+                          type: "number",
+                          const: 0,
+                        },
+                        {
+                          type: "number",
+                          const: 1,
+                        },
+                        {
+                          type: "number",
+                          const: 2,
+                        },
+                        {
+                          type: "number",
+                          const: 3,
+                        },
+                        {
+                          type: "number",
+                          const: 4,
+                        },
+                        {
+                          type: "number",
+                          const: 5,
+                        },
+                      ],
+                    },
+                    activityUrl: {
+                      type: "string",
+                      format: "uri",
+                    },
+                    inboundWorker: {
+                      type: "object",
+                      properties: {
+                        runTimeoutMs: {
+                          type: "integer",
+                          minimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    eventQueue: {
+                      type: "object",
+                      properties: {
+                        listenerTimeout: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                        maxQueueSize: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                        maxConcurrency: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                  },
+                  required: ["groupPolicy"],
+                  additionalProperties: false,
+                },
+              },
+              defaultAccount: {
+                type: "string",
+              },
+            },
+            required: ["groupPolicy"],
+            additionalProperties: false,
+          },
+          uiHints: {
+            "": {
+              label: "Discord",
+              help: "Discord channel provider configuration for bot auth, retry policy, streaming, thread bindings, and optional voice capabilities. Keep privileged intents and advanced features disabled unless needed.",
+            },
+            dmPolicy: {
+              label: "Discord DM Policy",
+              help: 'Direct message access control ("pairing" recommended). "open" requires channels.discord.allowFrom=["*"].',
+            },
+            "dm.policy": {
+              label: "Discord DM Policy",
+              help: 'Direct message access control ("pairing" recommended). "open" requires channels.discord.allowFrom=["*"] (legacy: channels.discord.dm.allowFrom).',
+            },
+            configWrites: {
+              label: "Discord Config Writes",
+              help: "Allow Discord to write config in response to channel events/commands (default: true).",
+            },
+            proxy: {
+              label: "Discord Proxy URL",
+              help: "Proxy URL for Discord gateway + API requests (app-id lookup and allowlist resolution). Set per account via channels.discord.accounts.<id>.proxy.",
+            },
+            "commands.native": {
+              label: "Discord Native Commands",
+              help: 'Override native commands for Discord (bool or "auto").',
+            },
+            "commands.nativeSkills": {
+              label: "Discord Native Skill Commands",
+              help: 'Override native skill commands for Discord (bool or "auto").',
+            },
+            streaming: {
+              label: "Discord Streaming Mode",
+              help: 'Unified Discord stream preview mode: "off" | "partial" | "block" | "progress". "progress" maps to "partial" on Discord. Legacy boolean/streamMode keys are auto-mapped.',
+            },
+            streamMode: {
+              label: "Discord Stream Mode (Legacy)",
+              help: "Legacy Discord preview mode alias (off | partial | block); auto-migrated to channels.discord.streaming.",
+            },
+            "draftChunk.minChars": {
+              label: "Discord Draft Chunk Min Chars",
+              help: 'Minimum chars before emitting a Discord stream preview update when channels.discord.streaming="block" (default: 200).',
+            },
+            "draftChunk.maxChars": {
+              label: "Discord Draft Chunk Max Chars",
+              help: 'Target max size for a Discord stream preview chunk when channels.discord.streaming="block" (default: 800; clamped to channels.discord.textChunkLimit).',
+            },
+            "draftChunk.breakPreference": {
+              label: "Discord Draft Chunk Break Preference",
+              help: "Preferred breakpoints for Discord draft chunks (paragraph | newline | sentence). Default: paragraph.",
+            },
+            "retry.attempts": {
+              label: "Discord Retry Attempts",
+              help: "Max retry attempts for outbound Discord API calls (default: 3).",
+            },
+            "retry.minDelayMs": {
+              label: "Discord Retry Min Delay (ms)",
+              help: "Minimum retry delay in ms for Discord outbound calls.",
+            },
+            "retry.maxDelayMs": {
+              label: "Discord Retry Max Delay (ms)",
+              help: "Maximum retry delay cap in ms for Discord outbound calls.",
+            },
+            "retry.jitter": {
+              label: "Discord Retry Jitter",
+              help: "Jitter factor (0-1) applied to Discord retry delays.",
+            },
+            maxLinesPerMessage: {
+              label: "Discord Max Lines Per Message",
+              help: "Soft max line count per Discord message (default: 17).",
+            },
+            "inboundWorker.runTimeoutMs": {
+              label: "Discord Inbound Worker Timeout (ms)",
+              help: "Optional queued Discord inbound worker timeout in ms. This is separate from Carbon listener timeouts; defaults to 1800000 and can be disabled with 0. Set per account via channels.discord.accounts.<id>.inboundWorker.runTimeoutMs.",
+            },
+            "eventQueue.listenerTimeout": {
+              label: "Discord EventQueue Listener Timeout (ms)",
+              help: "Canonical Discord listener timeout control in ms for gateway normalization/enqueue handlers. Default is 120000 in OpenClaw; set per account via channels.discord.accounts.<id>.eventQueue.listenerTimeout.",
+            },
+            "eventQueue.maxQueueSize": {
+              label: "Discord EventQueue Max Queue Size",
+              help: "Optional Discord EventQueue capacity override (max queued events before backpressure). Set per account via channels.discord.accounts.<id>.eventQueue.maxQueueSize.",
+            },
+            "eventQueue.maxConcurrency": {
+              label: "Discord EventQueue Max Concurrency",
+              help: "Optional Discord EventQueue concurrency override (max concurrent handler executions). Set per account via channels.discord.accounts.<id>.eventQueue.maxConcurrency.",
+            },
+            "threadBindings.enabled": {
+              label: "Discord Thread Binding Enabled",
+              help: "Enable Discord thread binding features (/focus, bound-thread routing/delivery, and thread-bound subagent sessions). Overrides session.threadBindings.enabled when set.",
+            },
+            "threadBindings.idleHours": {
+              label: "Discord Thread Binding Idle Timeout (hours)",
+              help: "Inactivity window in hours for Discord thread-bound sessions (/focus and spawned thread sessions). Set 0 to disable idle auto-unfocus (default: 24). Overrides session.threadBindings.idleHours when set.",
+            },
+            "threadBindings.maxAgeHours": {
+              label: "Discord Thread Binding Max Age (hours)",
+              help: "Optional hard max age in hours for Discord thread-bound sessions. Set 0 to disable hard cap (default: 0). Overrides session.threadBindings.maxAgeHours when set.",
+            },
+            "threadBindings.spawnSubagentSessions": {
+              label: "Discord Thread-Bound Subagent Spawn",
+              help: "Allow subagent spawns with thread=true to auto-create and bind Discord threads (default: false; opt-in). Set true to enable thread-bound subagent spawns for this account/channel.",
+            },
+            "threadBindings.spawnAcpSessions": {
+              label: "Discord Thread-Bound ACP Spawn",
+              help: "Allow /acp spawn to auto-create and bind Discord threads for ACP sessions (default: false; opt-in). Set true to enable thread-bound ACP spawns for this account/channel.",
+            },
+            "ui.components.accentColor": {
+              label: "Discord Component Accent Color",
+              help: "Accent color for Discord component containers (hex). Set per account via channels.discord.accounts.<id>.ui.components.accentColor.",
+            },
+            "intents.presence": {
+              label: "Discord Presence Intent",
+              help: "Enable the Guild Presences privileged intent. Must also be enabled in the Discord Developer Portal. Allows tracking user activities (e.g. Spotify). Default: false.",
+            },
+            "intents.guildMembers": {
+              label: "Discord Guild Members Intent",
+              help: "Enable the Guild Members privileged intent. Must also be enabled in the Discord Developer Portal. Default: false.",
+            },
+            "voice.enabled": {
+              label: "Discord Voice Enabled",
+              help: "Enable Discord voice channel conversations (default: true). Omit channels.discord.voice to keep voice support disabled for the account.",
+            },
+            "voice.autoJoin": {
+              label: "Discord Voice Auto-Join",
+              help: "Voice channels to auto-join on startup (list of guildId/channelId entries).",
+            },
+            "voice.daveEncryption": {
+              label: "Discord Voice DAVE Encryption",
+              help: "Toggle DAVE end-to-end encryption for Discord voice joins (default: true in @discordjs/voice; Discord may require this).",
+            },
+            "voice.decryptionFailureTolerance": {
+              label: "Discord Voice Decrypt Failure Tolerance",
+              help: "Consecutive decrypt failures before DAVE attempts session recovery (passed to @discordjs/voice; default: 24).",
+            },
+            "voice.tts": {
+              label: "Discord Voice Text-to-Speech",
+              help: "Optional TTS overrides for Discord voice playback (merged with messages.tts).",
+            },
+            "pluralkit.enabled": {
+              label: "Discord PluralKit Enabled",
+              help: "Resolve PluralKit proxied messages and treat system members as distinct senders.",
+            },
+            "pluralkit.token": {
+              label: "Discord PluralKit Token",
+              help: "Optional PluralKit token for resolving private systems or members.",
+            },
+            activity: {
+              label: "Discord Presence Activity",
+              help: "Discord presence activity text (defaults to custom status).",
+            },
+            status: {
+              label: "Discord Presence Status",
+              help: "Discord presence status (online, dnd, idle, invisible).",
+            },
+            "autoPresence.enabled": {
+              label: "Discord Auto Presence Enabled",
+              help: "Enable automatic Discord bot presence updates based on runtime/model availability signals. When enabled: healthy=>online, degraded/unknown=>idle, exhausted/unavailable=>dnd.",
+            },
+            "autoPresence.intervalMs": {
+              label: "Discord Auto Presence Check Interval (ms)",
+              help: "How often to evaluate Discord auto-presence state in milliseconds (default: 30000).",
+            },
+            "autoPresence.minUpdateIntervalMs": {
+              label: "Discord Auto Presence Min Update Interval (ms)",
+              help: "Minimum time between actual Discord presence update calls in milliseconds (default: 15000). Prevents status spam on noisy state changes.",
+            },
+            "autoPresence.healthyText": {
+              label: "Discord Auto Presence Healthy Text",
+              help: "Optional custom status text while runtime is healthy (online). If omitted, falls back to static channels.discord.activity when set.",
+            },
+            "autoPresence.degradedText": {
+              label: "Discord Auto Presence Degraded Text",
+              help: "Optional custom status text while runtime/model availability is degraded or unknown (idle).",
+            },
+            "autoPresence.exhaustedText": {
+              label: "Discord Auto Presence Exhausted Text",
+              help: "Optional custom status text while runtime detects exhausted/unavailable model quota (dnd). Supports {reason} template placeholder.",
+            },
+            activityType: {
+              label: "Discord Presence Activity Type",
+              help: "Discord presence activity type (0=Playing,1=Streaming,2=Listening,3=Watching,4=Custom,5=Competing).",
+            },
+            activityUrl: {
+              label: "Discord Presence Activity URL",
+              help: "Discord presence streaming URL (required for activityType=1).",
+            },
+            allowBots: {
+              label: "Discord Allow Bot Messages",
+              help: 'Allow bot-authored messages to trigger Discord replies (default: false). Set "mentions" to only accept bot messages that mention the bot.',
+            },
+            token: {
+              label: "Discord Bot Token",
+              help: "Discord bot token used for gateway and REST API authentication for this provider account. Keep this secret out of committed config and rotate immediately after any leak.",
+            },
+          },
+          label: "Discord",
+          description: "very well supported right now.",
+        },
+      },
     },
   },
   {
@@ -835,8 +4018,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: ["web-search-provider.js"],
     packageName: "@openclaw/duckduckgo-plugin",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw DuckDuckGo plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -872,6 +4056,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           help: "SafeSearch level for DuckDuckGo results.",
         },
       },
+      contracts: {
+        webSearchProviders: ["duckduckgo"],
+      },
     },
   },
   {
@@ -881,8 +4068,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: ["speech-provider.js", "tts.js"],
     packageName: "@openclaw/elevenlabs-speech",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw ElevenLabs speech plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -894,7 +4082,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         additionalProperties: false,
         properties: {},
       },
-      speechProviders: ["elevenlabs"],
+      contracts: {
+        speechProviders: ["elevenlabs"],
+      },
     },
   },
   {
@@ -904,8 +4094,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: ["web-search-provider.js"],
     packageName: "@openclaw/exa-plugin",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw Exa plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -938,6 +4129,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           placeholder: "exa-...",
         },
       },
+      contracts: {
+        webSearchProviders: ["exa"],
+      },
     },
   },
   {
@@ -947,8 +4141,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: ["image-generation-provider.js", "onboard.js"],
     packageName: "@openclaw/fal-provider",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw fal provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -960,8 +4155,8 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         additionalProperties: false,
         properties: {},
       },
+      enabledByDefault: true,
       providers: ["fal"],
-      imageGenerationProviders: ["fal"],
       providerAuthEnvVars: {
         fal: ["FAL_KEY"],
       },
@@ -981,6 +4176,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           cliDescription: "fal API key",
         },
       ],
+      contracts: {
+        imageGenerationProviders: ["fal"],
+      },
     },
   },
   {
@@ -994,8 +4192,10 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./setup-entry.ts",
       built: "setup-entry.js",
     },
+    publicSurfaceArtifacts: ["api.js", "runtime-api.js", "setup-api.js"],
+    runtimeSidecarArtifacts: ["runtime-api.js"],
     packageName: "@openclaw/feishu",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw Feishu/Lark channel plugin (community maintained by @m1heng)",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -1015,7 +4215,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         npmSpec: "@openclaw/feishu",
         localPath: "extensions/feishu",
         defaultChoice: "npm",
-        minHostVersion: ">=2026.3.22",
+        minHostVersion: ">=2026.3.27",
       },
     },
     manifest: {
@@ -1027,6 +4227,1119 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       },
       channels: ["feishu"],
       skills: ["./skills"],
+      channelConfigs: {
+        feishu: {
+          schema: {
+            $schema: "http://json-schema.org/draft-07/schema#",
+            type: "object",
+            properties: {
+              enabled: {
+                type: "boolean",
+              },
+              defaultAccount: {
+                type: "string",
+              },
+              appId: {
+                type: "string",
+              },
+              appSecret: {
+                anyOf: [
+                  {
+                    type: "string",
+                  },
+                  {
+                    oneOf: [
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "env",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "file",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "exec",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                    ],
+                  },
+                ],
+              },
+              encryptKey: {
+                anyOf: [
+                  {
+                    type: "string",
+                  },
+                  {
+                    oneOf: [
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "env",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "file",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "exec",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                    ],
+                  },
+                ],
+              },
+              verificationToken: {
+                anyOf: [
+                  {
+                    type: "string",
+                  },
+                  {
+                    oneOf: [
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "env",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "file",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "exec",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                    ],
+                  },
+                ],
+              },
+              domain: {
+                default: "feishu",
+                anyOf: [
+                  {
+                    type: "string",
+                    enum: ["feishu", "lark"],
+                  },
+                  {
+                    type: "string",
+                    format: "uri",
+                    pattern: "^https:\\/\\/.*",
+                  },
+                ],
+              },
+              connectionMode: {
+                default: "websocket",
+                type: "string",
+                enum: ["websocket", "webhook"],
+              },
+              webhookPath: {
+                default: "/feishu/events",
+                type: "string",
+              },
+              webhookHost: {
+                type: "string",
+              },
+              webhookPort: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+              },
+              capabilities: {
+                type: "array",
+                items: {
+                  type: "string",
+                },
+              },
+              markdown: {
+                type: "object",
+                properties: {
+                  mode: {
+                    type: "string",
+                    enum: ["native", "escape", "strip"],
+                  },
+                  tableMode: {
+                    type: "string",
+                    enum: ["native", "ascii", "simple"],
+                  },
+                },
+                additionalProperties: false,
+              },
+              configWrites: {
+                type: "boolean",
+              },
+              dmPolicy: {
+                default: "pairing",
+                type: "string",
+                enum: ["open", "pairing", "allowlist"],
+              },
+              allowFrom: {
+                type: "array",
+                items: {
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "number",
+                    },
+                  ],
+                },
+              },
+              groupPolicy: {
+                default: "allowlist",
+                anyOf: [
+                  {
+                    type: "string",
+                    enum: ["open", "allowlist", "disabled"],
+                  },
+                  {},
+                ],
+              },
+              groupAllowFrom: {
+                type: "array",
+                items: {
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "number",
+                    },
+                  ],
+                },
+              },
+              groupSenderAllowFrom: {
+                type: "array",
+                items: {
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "number",
+                    },
+                  ],
+                },
+              },
+              requireMention: {
+                type: "boolean",
+              },
+              groups: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    requireMention: {
+                      type: "boolean",
+                    },
+                    tools: {
+                      type: "object",
+                      properties: {
+                        allow: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                        deny: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    skills: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                      },
+                    },
+                    enabled: {
+                      type: "boolean",
+                    },
+                    allowFrom: {
+                      type: "array",
+                      items: {
+                        anyOf: [
+                          {
+                            type: "string",
+                          },
+                          {
+                            type: "number",
+                          },
+                        ],
+                      },
+                    },
+                    systemPrompt: {
+                      type: "string",
+                    },
+                    groupSessionScope: {
+                      type: "string",
+                      enum: ["group", "group_sender", "group_topic", "group_topic_sender"],
+                    },
+                    topicSessionMode: {
+                      type: "string",
+                      enum: ["disabled", "enabled"],
+                    },
+                    replyInThread: {
+                      type: "string",
+                      enum: ["disabled", "enabled"],
+                    },
+                  },
+                  additionalProperties: false,
+                },
+              },
+              historyLimit: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+              },
+              dmHistoryLimit: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+              },
+              dms: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    enabled: {
+                      type: "boolean",
+                    },
+                    systemPrompt: {
+                      type: "string",
+                    },
+                  },
+                  additionalProperties: false,
+                },
+              },
+              textChunkLimit: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+              },
+              chunkMode: {
+                type: "string",
+                enum: ["length", "newline"],
+              },
+              blockStreamingCoalesce: {
+                type: "object",
+                properties: {
+                  enabled: {
+                    type: "boolean",
+                  },
+                  minDelayMs: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  maxDelayMs: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                },
+                additionalProperties: false,
+              },
+              mediaMaxMb: {
+                type: "number",
+                exclusiveMinimum: 0,
+              },
+              httpTimeoutMs: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 300000,
+              },
+              heartbeat: {
+                type: "object",
+                properties: {
+                  visibility: {
+                    type: "string",
+                    enum: ["visible", "hidden"],
+                  },
+                  intervalMs: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                },
+                additionalProperties: false,
+              },
+              renderMode: {
+                type: "string",
+                enum: ["auto", "raw", "card"],
+              },
+              streaming: {
+                type: "boolean",
+              },
+              tools: {
+                type: "object",
+                properties: {
+                  doc: {
+                    type: "boolean",
+                  },
+                  chat: {
+                    type: "boolean",
+                  },
+                  wiki: {
+                    type: "boolean",
+                  },
+                  drive: {
+                    type: "boolean",
+                  },
+                  perm: {
+                    type: "boolean",
+                  },
+                  scopes: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
+              },
+              actions: {
+                type: "object",
+                properties: {
+                  reactions: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
+              },
+              replyInThread: {
+                type: "string",
+                enum: ["disabled", "enabled"],
+              },
+              reactionNotifications: {
+                default: "own",
+                type: "string",
+                enum: ["off", "own", "all"],
+              },
+              typingIndicator: {
+                default: true,
+                type: "boolean",
+              },
+              resolveSenderNames: {
+                default: true,
+                type: "boolean",
+              },
+              groupSessionScope: {
+                type: "string",
+                enum: ["group", "group_sender", "group_topic", "group_topic_sender"],
+              },
+              topicSessionMode: {
+                type: "string",
+                enum: ["disabled", "enabled"],
+              },
+              dynamicAgentCreation: {
+                type: "object",
+                properties: {
+                  enabled: {
+                    type: "boolean",
+                  },
+                  workspaceTemplate: {
+                    type: "string",
+                  },
+                  agentDirTemplate: {
+                    type: "string",
+                  },
+                  maxAgents: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                },
+                additionalProperties: false,
+              },
+              accounts: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    enabled: {
+                      type: "boolean",
+                    },
+                    name: {
+                      type: "string",
+                    },
+                    appId: {
+                      type: "string",
+                    },
+                    appSecret: {
+                      anyOf: [
+                        {
+                          type: "string",
+                        },
+                        {
+                          oneOf: [
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "env",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                  pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "file",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "exec",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                          ],
+                        },
+                      ],
+                    },
+                    encryptKey: {
+                      anyOf: [
+                        {
+                          type: "string",
+                        },
+                        {
+                          oneOf: [
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "env",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                  pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "file",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "exec",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                          ],
+                        },
+                      ],
+                    },
+                    verificationToken: {
+                      anyOf: [
+                        {
+                          type: "string",
+                        },
+                        {
+                          oneOf: [
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "env",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                  pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "file",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "exec",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                          ],
+                        },
+                      ],
+                    },
+                    domain: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          enum: ["feishu", "lark"],
+                        },
+                        {
+                          type: "string",
+                          format: "uri",
+                          pattern: "^https:\\/\\/.*",
+                        },
+                      ],
+                    },
+                    connectionMode: {
+                      type: "string",
+                      enum: ["websocket", "webhook"],
+                    },
+                    webhookPath: {
+                      type: "string",
+                    },
+                    webhookHost: {
+                      type: "string",
+                    },
+                    webhookPort: {
+                      type: "integer",
+                      exclusiveMinimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    capabilities: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                      },
+                    },
+                    markdown: {
+                      type: "object",
+                      properties: {
+                        mode: {
+                          type: "string",
+                          enum: ["native", "escape", "strip"],
+                        },
+                        tableMode: {
+                          type: "string",
+                          enum: ["native", "ascii", "simple"],
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    configWrites: {
+                      type: "boolean",
+                    },
+                    dmPolicy: {
+                      type: "string",
+                      enum: ["open", "pairing", "allowlist"],
+                    },
+                    allowFrom: {
+                      type: "array",
+                      items: {
+                        anyOf: [
+                          {
+                            type: "string",
+                          },
+                          {
+                            type: "number",
+                          },
+                        ],
+                      },
+                    },
+                    groupPolicy: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          enum: ["open", "allowlist", "disabled"],
+                        },
+                        {},
+                      ],
+                    },
+                    groupAllowFrom: {
+                      type: "array",
+                      items: {
+                        anyOf: [
+                          {
+                            type: "string",
+                          },
+                          {
+                            type: "number",
+                          },
+                        ],
+                      },
+                    },
+                    groupSenderAllowFrom: {
+                      type: "array",
+                      items: {
+                        anyOf: [
+                          {
+                            type: "string",
+                          },
+                          {
+                            type: "number",
+                          },
+                        ],
+                      },
+                    },
+                    requireMention: {
+                      type: "boolean",
+                    },
+                    groups: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "object",
+                        properties: {
+                          requireMention: {
+                            type: "boolean",
+                          },
+                          tools: {
+                            type: "object",
+                            properties: {
+                              allow: {
+                                type: "array",
+                                items: {
+                                  type: "string",
+                                },
+                              },
+                              deny: {
+                                type: "array",
+                                items: {
+                                  type: "string",
+                                },
+                              },
+                            },
+                            additionalProperties: false,
+                          },
+                          skills: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                          },
+                          enabled: {
+                            type: "boolean",
+                          },
+                          allowFrom: {
+                            type: "array",
+                            items: {
+                              anyOf: [
+                                {
+                                  type: "string",
+                                },
+                                {
+                                  type: "number",
+                                },
+                              ],
+                            },
+                          },
+                          systemPrompt: {
+                            type: "string",
+                          },
+                          groupSessionScope: {
+                            type: "string",
+                            enum: ["group", "group_sender", "group_topic", "group_topic_sender"],
+                          },
+                          topicSessionMode: {
+                            type: "string",
+                            enum: ["disabled", "enabled"],
+                          },
+                          replyInThread: {
+                            type: "string",
+                            enum: ["disabled", "enabled"],
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                    },
+                    historyLimit: {
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    dmHistoryLimit: {
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    dms: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "object",
+                        properties: {
+                          enabled: {
+                            type: "boolean",
+                          },
+                          systemPrompt: {
+                            type: "string",
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                    },
+                    textChunkLimit: {
+                      type: "integer",
+                      exclusiveMinimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    chunkMode: {
+                      type: "string",
+                      enum: ["length", "newline"],
+                    },
+                    blockStreamingCoalesce: {
+                      type: "object",
+                      properties: {
+                        enabled: {
+                          type: "boolean",
+                        },
+                        minDelayMs: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                        maxDelayMs: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    mediaMaxMb: {
+                      type: "number",
+                      exclusiveMinimum: 0,
+                    },
+                    httpTimeoutMs: {
+                      type: "integer",
+                      exclusiveMinimum: 0,
+                      maximum: 300000,
+                    },
+                    heartbeat: {
+                      type: "object",
+                      properties: {
+                        visibility: {
+                          type: "string",
+                          enum: ["visible", "hidden"],
+                        },
+                        intervalMs: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    renderMode: {
+                      type: "string",
+                      enum: ["auto", "raw", "card"],
+                    },
+                    streaming: {
+                      type: "boolean",
+                    },
+                    tools: {
+                      type: "object",
+                      properties: {
+                        doc: {
+                          type: "boolean",
+                        },
+                        chat: {
+                          type: "boolean",
+                        },
+                        wiki: {
+                          type: "boolean",
+                        },
+                        drive: {
+                          type: "boolean",
+                        },
+                        perm: {
+                          type: "boolean",
+                        },
+                        scopes: {
+                          type: "boolean",
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    actions: {
+                      type: "object",
+                      properties: {
+                        reactions: {
+                          type: "boolean",
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    replyInThread: {
+                      type: "string",
+                      enum: ["disabled", "enabled"],
+                    },
+                    reactionNotifications: {
+                      type: "string",
+                      enum: ["off", "own", "all"],
+                    },
+                    typingIndicator: {
+                      type: "boolean",
+                    },
+                    resolveSenderNames: {
+                      type: "boolean",
+                    },
+                    groupSessionScope: {
+                      type: "string",
+                      enum: ["group", "group_sender", "group_topic", "group_topic_sender"],
+                    },
+                    topicSessionMode: {
+                      type: "string",
+                      enum: ["disabled", "enabled"],
+                    },
+                  },
+                  additionalProperties: false,
+                },
+              },
+            },
+            required: [
+              "domain",
+              "connectionMode",
+              "webhookPath",
+              "dmPolicy",
+              "groupPolicy",
+              "reactionNotifications",
+              "typingIndicator",
+              "resolveSenderNames",
+            ],
+            additionalProperties: false,
+          },
+          label: "Feishu",
+          description: "飞书/Lark enterprise messaging with doc/wiki/drive tools.",
+        },
+      },
     },
   },
   {
@@ -1036,8 +5349,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: ["web-search-provider.js"],
     packageName: "@openclaw/firecrawl-plugin",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw Firecrawl plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -1077,6 +5391,10 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           help: "Firecrawl Search base URL override.",
         },
       },
+      contracts: {
+        webSearchProviders: ["firecrawl"],
+        tools: ["firecrawl_search", "firecrawl_scrape"],
+      },
     },
   },
   {
@@ -1086,8 +5404,16 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: [
+      "api.js",
+      "login.js",
+      "models-defaults.js",
+      "models.js",
+      "token.js",
+      "usage.js",
+    ],
     packageName: "@openclaw/github-copilot-provider",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw GitHub Copilot provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -1099,6 +5425,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         additionalProperties: false,
         properties: {},
       },
+      enabledByDefault: true,
       providers: ["github-copilot"],
       providerAuthEnvVars: {
         "github-copilot": ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"],
@@ -1124,8 +5451,28 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: [
+      "api.js",
+      "cli-backend.js",
+      "gemini-cli-provider.js",
+      "image-generation-provider.js",
+      "media-understanding-provider.js",
+      "model-id.js",
+      "oauth.credentials.js",
+      "oauth.flow.js",
+      "oauth.http.js",
+      "oauth.js",
+      "oauth.project.js",
+      "oauth.runtime.js",
+      "oauth.shared.js",
+      "oauth.token.js",
+      "provider-models.js",
+      "runtime-api.js",
+      "web-search-provider.js",
+    ],
+    runtimeSidecarArtifacts: ["runtime-api.js"],
     packageName: "@openclaw/google-plugin",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw Google plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -1150,9 +5497,10 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           },
         },
       },
+      enabledByDefault: true,
       providers: ["google", "google-gemini-cli"],
-      mediaUnderstandingProviders: ["google"],
-      imageGenerationProviders: ["google"],
+      autoEnableWhenConfiguredProviders: ["google-gemini-cli"],
+      cliBackends: ["google-gemini-cli"],
       providerAuthEnvVars: {
         google: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
       },
@@ -1193,6 +5541,11 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           help: "Gemini model override for web search grounding.",
         },
       },
+      contracts: {
+        mediaUnderstandingProviders: ["google"],
+        imageGenerationProviders: ["google"],
+        webSearchProviders: ["gemini"],
+      },
     },
   },
   {
@@ -1206,8 +5559,10 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./setup-entry.ts",
       built: "setup-entry.js",
     },
+    publicSurfaceArtifacts: ["api.js", "channel-config-api.js", "runtime-api.js"],
+    runtimeSidecarArtifacts: ["runtime-api.js"],
     packageName: "@openclaw/googlechat",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw Google Chat channel plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -1227,7 +5582,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         npmSpec: "@openclaw/googlechat",
         localPath: "extensions/googlechat",
         defaultChoice: "npm",
-        minHostVersion: ">=2026.3.22",
+        minHostVersion: ">=2026.3.27",
       },
     },
     manifest: {
@@ -1238,6 +5593,784 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         properties: {},
       },
       channels: ["googlechat"],
+      channelConfigs: {
+        googlechat: {
+          schema: {
+            $schema: "http://json-schema.org/draft-07/schema#",
+            type: "object",
+            properties: {
+              name: {
+                type: "string",
+              },
+              capabilities: {
+                type: "array",
+                items: {
+                  type: "string",
+                },
+              },
+              enabled: {
+                type: "boolean",
+              },
+              configWrites: {
+                type: "boolean",
+              },
+              allowBots: {
+                type: "boolean",
+              },
+              dangerouslyAllowNameMatching: {
+                type: "boolean",
+              },
+              requireMention: {
+                type: "boolean",
+              },
+              groupPolicy: {
+                default: "allowlist",
+                type: "string",
+                enum: ["open", "disabled", "allowlist"],
+              },
+              groupAllowFrom: {
+                type: "array",
+                items: {
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "number",
+                    },
+                  ],
+                },
+              },
+              groups: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    enabled: {
+                      type: "boolean",
+                    },
+                    allow: {
+                      type: "boolean",
+                    },
+                    requireMention: {
+                      type: "boolean",
+                    },
+                    users: {
+                      type: "array",
+                      items: {
+                        anyOf: [
+                          {
+                            type: "string",
+                          },
+                          {
+                            type: "number",
+                          },
+                        ],
+                      },
+                    },
+                    systemPrompt: {
+                      type: "string",
+                    },
+                  },
+                  additionalProperties: false,
+                },
+              },
+              defaultTo: {
+                type: "string",
+              },
+              serviceAccount: {
+                anyOf: [
+                  {
+                    type: "string",
+                  },
+                  {
+                    type: "object",
+                    propertyNames: {
+                      type: "string",
+                    },
+                    additionalProperties: {},
+                  },
+                  {
+                    oneOf: [
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "env",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "file",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "exec",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                    ],
+                  },
+                ],
+              },
+              serviceAccountRef: {
+                oneOf: [
+                  {
+                    type: "object",
+                    properties: {
+                      source: {
+                        type: "string",
+                        const: "env",
+                      },
+                      provider: {
+                        type: "string",
+                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                      },
+                      id: {
+                        type: "string",
+                        pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                      },
+                    },
+                    required: ["source", "provider", "id"],
+                    additionalProperties: false,
+                  },
+                  {
+                    type: "object",
+                    properties: {
+                      source: {
+                        type: "string",
+                        const: "file",
+                      },
+                      provider: {
+                        type: "string",
+                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                      },
+                      id: {
+                        type: "string",
+                      },
+                    },
+                    required: ["source", "provider", "id"],
+                    additionalProperties: false,
+                  },
+                  {
+                    type: "object",
+                    properties: {
+                      source: {
+                        type: "string",
+                        const: "exec",
+                      },
+                      provider: {
+                        type: "string",
+                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                      },
+                      id: {
+                        type: "string",
+                      },
+                    },
+                    required: ["source", "provider", "id"],
+                    additionalProperties: false,
+                  },
+                ],
+              },
+              serviceAccountFile: {
+                type: "string",
+              },
+              audienceType: {
+                type: "string",
+                enum: ["app-url", "project-number"],
+              },
+              audience: {
+                type: "string",
+              },
+              appPrincipal: {
+                type: "string",
+              },
+              webhookPath: {
+                type: "string",
+              },
+              webhookUrl: {
+                type: "string",
+              },
+              botUser: {
+                type: "string",
+              },
+              historyLimit: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+              },
+              dmHistoryLimit: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+              },
+              dms: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    historyLimit: {
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                  },
+                  additionalProperties: false,
+                },
+              },
+              textChunkLimit: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+              },
+              chunkMode: {
+                type: "string",
+                enum: ["length", "newline"],
+              },
+              blockStreaming: {
+                type: "boolean",
+              },
+              blockStreamingCoalesce: {
+                type: "object",
+                properties: {
+                  minChars: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  maxChars: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  idleMs: {
+                    type: "integer",
+                    minimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                },
+                additionalProperties: false,
+              },
+              streamMode: {
+                default: "replace",
+                type: "string",
+                enum: ["replace", "status_final", "append"],
+              },
+              mediaMaxMb: {
+                type: "number",
+                exclusiveMinimum: 0,
+              },
+              replyToMode: {
+                anyOf: [
+                  {
+                    type: "string",
+                    const: "off",
+                  },
+                  {
+                    type: "string",
+                    const: "first",
+                  },
+                  {
+                    type: "string",
+                    const: "all",
+                  },
+                ],
+              },
+              actions: {
+                type: "object",
+                properties: {
+                  reactions: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
+              },
+              dm: {
+                type: "object",
+                properties: {
+                  enabled: {
+                    type: "boolean",
+                  },
+                  policy: {
+                    default: "pairing",
+                    type: "string",
+                    enum: ["pairing", "allowlist", "open", "disabled"],
+                  },
+                  allowFrom: {
+                    type: "array",
+                    items: {
+                      anyOf: [
+                        {
+                          type: "string",
+                        },
+                        {
+                          type: "number",
+                        },
+                      ],
+                    },
+                  },
+                },
+                required: ["policy"],
+                additionalProperties: false,
+              },
+              healthMonitor: {
+                type: "object",
+                properties: {
+                  enabled: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
+              },
+              typingIndicator: {
+                type: "string",
+                enum: ["none", "message", "reaction"],
+              },
+              responsePrefix: {
+                type: "string",
+              },
+              accounts: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    name: {
+                      type: "string",
+                    },
+                    capabilities: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                      },
+                    },
+                    enabled: {
+                      type: "boolean",
+                    },
+                    configWrites: {
+                      type: "boolean",
+                    },
+                    allowBots: {
+                      type: "boolean",
+                    },
+                    dangerouslyAllowNameMatching: {
+                      type: "boolean",
+                    },
+                    requireMention: {
+                      type: "boolean",
+                    },
+                    groupPolicy: {
+                      default: "allowlist",
+                      type: "string",
+                      enum: ["open", "disabled", "allowlist"],
+                    },
+                    groupAllowFrom: {
+                      type: "array",
+                      items: {
+                        anyOf: [
+                          {
+                            type: "string",
+                          },
+                          {
+                            type: "number",
+                          },
+                        ],
+                      },
+                    },
+                    groups: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "object",
+                        properties: {
+                          enabled: {
+                            type: "boolean",
+                          },
+                          allow: {
+                            type: "boolean",
+                          },
+                          requireMention: {
+                            type: "boolean",
+                          },
+                          users: {
+                            type: "array",
+                            items: {
+                              anyOf: [
+                                {
+                                  type: "string",
+                                },
+                                {
+                                  type: "number",
+                                },
+                              ],
+                            },
+                          },
+                          systemPrompt: {
+                            type: "string",
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                    },
+                    defaultTo: {
+                      type: "string",
+                    },
+                    serviceAccount: {
+                      anyOf: [
+                        {
+                          type: "string",
+                        },
+                        {
+                          type: "object",
+                          propertyNames: {
+                            type: "string",
+                          },
+                          additionalProperties: {},
+                        },
+                        {
+                          oneOf: [
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "env",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                  pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "file",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "exec",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                          ],
+                        },
+                      ],
+                    },
+                    serviceAccountRef: {
+                      oneOf: [
+                        {
+                          type: "object",
+                          properties: {
+                            source: {
+                              type: "string",
+                              const: "env",
+                            },
+                            provider: {
+                              type: "string",
+                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                            },
+                            id: {
+                              type: "string",
+                              pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                            },
+                          },
+                          required: ["source", "provider", "id"],
+                          additionalProperties: false,
+                        },
+                        {
+                          type: "object",
+                          properties: {
+                            source: {
+                              type: "string",
+                              const: "file",
+                            },
+                            provider: {
+                              type: "string",
+                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                            },
+                            id: {
+                              type: "string",
+                            },
+                          },
+                          required: ["source", "provider", "id"],
+                          additionalProperties: false,
+                        },
+                        {
+                          type: "object",
+                          properties: {
+                            source: {
+                              type: "string",
+                              const: "exec",
+                            },
+                            provider: {
+                              type: "string",
+                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                            },
+                            id: {
+                              type: "string",
+                            },
+                          },
+                          required: ["source", "provider", "id"],
+                          additionalProperties: false,
+                        },
+                      ],
+                    },
+                    serviceAccountFile: {
+                      type: "string",
+                    },
+                    audienceType: {
+                      type: "string",
+                      enum: ["app-url", "project-number"],
+                    },
+                    audience: {
+                      type: "string",
+                    },
+                    appPrincipal: {
+                      type: "string",
+                    },
+                    webhookPath: {
+                      type: "string",
+                    },
+                    webhookUrl: {
+                      type: "string",
+                    },
+                    botUser: {
+                      type: "string",
+                    },
+                    historyLimit: {
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    dmHistoryLimit: {
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    dms: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "object",
+                        properties: {
+                          historyLimit: {
+                            type: "integer",
+                            minimum: 0,
+                            maximum: 9007199254740991,
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                    },
+                    textChunkLimit: {
+                      type: "integer",
+                      exclusiveMinimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    chunkMode: {
+                      type: "string",
+                      enum: ["length", "newline"],
+                    },
+                    blockStreaming: {
+                      type: "boolean",
+                    },
+                    blockStreamingCoalesce: {
+                      type: "object",
+                      properties: {
+                        minChars: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                        maxChars: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                        idleMs: {
+                          type: "integer",
+                          minimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    streamMode: {
+                      default: "replace",
+                      type: "string",
+                      enum: ["replace", "status_final", "append"],
+                    },
+                    mediaMaxMb: {
+                      type: "number",
+                      exclusiveMinimum: 0,
+                    },
+                    replyToMode: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "off",
+                        },
+                        {
+                          type: "string",
+                          const: "first",
+                        },
+                        {
+                          type: "string",
+                          const: "all",
+                        },
+                      ],
+                    },
+                    actions: {
+                      type: "object",
+                      properties: {
+                        reactions: {
+                          type: "boolean",
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    dm: {
+                      type: "object",
+                      properties: {
+                        enabled: {
+                          type: "boolean",
+                        },
+                        policy: {
+                          default: "pairing",
+                          type: "string",
+                          enum: ["pairing", "allowlist", "open", "disabled"],
+                        },
+                        allowFrom: {
+                          type: "array",
+                          items: {
+                            anyOf: [
+                              {
+                                type: "string",
+                              },
+                              {
+                                type: "number",
+                              },
+                            ],
+                          },
+                        },
+                      },
+                      required: ["policy"],
+                      additionalProperties: false,
+                    },
+                    healthMonitor: {
+                      type: "object",
+                      properties: {
+                        enabled: {
+                          type: "boolean",
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    typingIndicator: {
+                      type: "string",
+                      enum: ["none", "message", "reaction"],
+                    },
+                    responsePrefix: {
+                      type: "string",
+                    },
+                  },
+                  required: ["groupPolicy", "streamMode"],
+                  additionalProperties: false,
+                },
+              },
+              defaultAccount: {
+                type: "string",
+              },
+            },
+            required: ["groupPolicy", "streamMode"],
+            additionalProperties: false,
+          },
+          label: "Google Chat",
+          description: "Google Workspace Chat app via HTTP webhooks.",
+        },
+      },
     },
   },
   {
@@ -1247,8 +6380,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: ["media-understanding-provider.js"],
     packageName: "@openclaw/groq-provider",
-    packageVersion: "2026.3.14",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw Groq media-understanding provider",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -1260,7 +6394,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         additionalProperties: false,
         properties: {},
       },
-      mediaUnderstandingProviders: ["groq"],
+      contracts: {
+        mediaUnderstandingProviders: ["groq"],
+      },
     },
   },
   {
@@ -1270,8 +6406,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: ["api.js", "models.js", "onboard.js", "provider-catalog.js"],
     packageName: "@openclaw/huggingface-provider",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw Hugging Face provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -1283,6 +6420,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         additionalProperties: false,
         properties: {},
       },
+      enabledByDefault: true,
       providers: ["huggingface"],
       providerAuthEnvVars: {
         huggingface: ["HUGGINGFACE_HUB_TOKEN", "HF_TOKEN"],
@@ -1316,8 +6454,10 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./setup-entry.ts",
       built: "setup-entry.js",
     },
+    publicSurfaceArtifacts: ["api.js", "channel-config-api.js", "runtime-api.js"],
+    runtimeSidecarArtifacts: ["runtime-api.js"],
     packageName: "@openclaw/imessage",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw iMessage channel plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -1342,6 +6482,590 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         properties: {},
       },
       channels: ["imessage"],
+      channelConfigs: {
+        imessage: {
+          schema: {
+            $schema: "http://json-schema.org/draft-07/schema#",
+            type: "object",
+            properties: {
+              name: {
+                type: "string",
+              },
+              capabilities: {
+                type: "array",
+                items: {
+                  type: "string",
+                },
+              },
+              markdown: {
+                type: "object",
+                properties: {
+                  tables: {
+                    type: "string",
+                    enum: ["off", "bullets", "code"],
+                  },
+                },
+                additionalProperties: false,
+              },
+              enabled: {
+                type: "boolean",
+              },
+              configWrites: {
+                type: "boolean",
+              },
+              cliPath: {
+                type: "string",
+              },
+              dbPath: {
+                type: "string",
+              },
+              remoteHost: {
+                type: "string",
+              },
+              service: {
+                anyOf: [
+                  {
+                    type: "string",
+                    const: "imessage",
+                  },
+                  {
+                    type: "string",
+                    const: "sms",
+                  },
+                  {
+                    type: "string",
+                    const: "auto",
+                  },
+                ],
+              },
+              region: {
+                type: "string",
+              },
+              dmPolicy: {
+                default: "pairing",
+                type: "string",
+                enum: ["pairing", "allowlist", "open", "disabled"],
+              },
+              allowFrom: {
+                type: "array",
+                items: {
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "number",
+                    },
+                  ],
+                },
+              },
+              defaultTo: {
+                type: "string",
+              },
+              groupAllowFrom: {
+                type: "array",
+                items: {
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "number",
+                    },
+                  ],
+                },
+              },
+              groupPolicy: {
+                default: "allowlist",
+                type: "string",
+                enum: ["open", "disabled", "allowlist"],
+              },
+              historyLimit: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+              },
+              dmHistoryLimit: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+              },
+              dms: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    historyLimit: {
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                  },
+                  additionalProperties: false,
+                },
+              },
+              includeAttachments: {
+                type: "boolean",
+              },
+              attachmentRoots: {
+                type: "array",
+                items: {
+                  type: "string",
+                },
+              },
+              remoteAttachmentRoots: {
+                type: "array",
+                items: {
+                  type: "string",
+                },
+              },
+              mediaMaxMb: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+              },
+              textChunkLimit: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+              },
+              chunkMode: {
+                type: "string",
+                enum: ["length", "newline"],
+              },
+              blockStreaming: {
+                type: "boolean",
+              },
+              blockStreamingCoalesce: {
+                type: "object",
+                properties: {
+                  minChars: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  maxChars: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  idleMs: {
+                    type: "integer",
+                    minimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                },
+                additionalProperties: false,
+              },
+              groups: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    requireMention: {
+                      type: "boolean",
+                    },
+                    tools: {
+                      type: "object",
+                      properties: {
+                        allow: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                        alsoAllow: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                        deny: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    toolsBySender: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "object",
+                        properties: {
+                          allow: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                          },
+                          alsoAllow: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                          },
+                          deny: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                    },
+                  },
+                  additionalProperties: false,
+                },
+              },
+              heartbeat: {
+                type: "object",
+                properties: {
+                  showOk: {
+                    type: "boolean",
+                  },
+                  showAlerts: {
+                    type: "boolean",
+                  },
+                  useIndicator: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
+              },
+              healthMonitor: {
+                type: "object",
+                properties: {
+                  enabled: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
+              },
+              responsePrefix: {
+                type: "string",
+              },
+              accounts: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    name: {
+                      type: "string",
+                    },
+                    capabilities: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                      },
+                    },
+                    markdown: {
+                      type: "object",
+                      properties: {
+                        tables: {
+                          type: "string",
+                          enum: ["off", "bullets", "code"],
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    enabled: {
+                      type: "boolean",
+                    },
+                    configWrites: {
+                      type: "boolean",
+                    },
+                    cliPath: {
+                      type: "string",
+                    },
+                    dbPath: {
+                      type: "string",
+                    },
+                    remoteHost: {
+                      type: "string",
+                    },
+                    service: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "imessage",
+                        },
+                        {
+                          type: "string",
+                          const: "sms",
+                        },
+                        {
+                          type: "string",
+                          const: "auto",
+                        },
+                      ],
+                    },
+                    region: {
+                      type: "string",
+                    },
+                    dmPolicy: {
+                      default: "pairing",
+                      type: "string",
+                      enum: ["pairing", "allowlist", "open", "disabled"],
+                    },
+                    allowFrom: {
+                      type: "array",
+                      items: {
+                        anyOf: [
+                          {
+                            type: "string",
+                          },
+                          {
+                            type: "number",
+                          },
+                        ],
+                      },
+                    },
+                    defaultTo: {
+                      type: "string",
+                    },
+                    groupAllowFrom: {
+                      type: "array",
+                      items: {
+                        anyOf: [
+                          {
+                            type: "string",
+                          },
+                          {
+                            type: "number",
+                          },
+                        ],
+                      },
+                    },
+                    groupPolicy: {
+                      default: "allowlist",
+                      type: "string",
+                      enum: ["open", "disabled", "allowlist"],
+                    },
+                    historyLimit: {
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    dmHistoryLimit: {
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    dms: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "object",
+                        properties: {
+                          historyLimit: {
+                            type: "integer",
+                            minimum: 0,
+                            maximum: 9007199254740991,
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                    },
+                    includeAttachments: {
+                      type: "boolean",
+                    },
+                    attachmentRoots: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                      },
+                    },
+                    remoteAttachmentRoots: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                      },
+                    },
+                    mediaMaxMb: {
+                      type: "integer",
+                      exclusiveMinimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    textChunkLimit: {
+                      type: "integer",
+                      exclusiveMinimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    chunkMode: {
+                      type: "string",
+                      enum: ["length", "newline"],
+                    },
+                    blockStreaming: {
+                      type: "boolean",
+                    },
+                    blockStreamingCoalesce: {
+                      type: "object",
+                      properties: {
+                        minChars: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                        maxChars: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                        idleMs: {
+                          type: "integer",
+                          minimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    groups: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "object",
+                        properties: {
+                          requireMention: {
+                            type: "boolean",
+                          },
+                          tools: {
+                            type: "object",
+                            properties: {
+                              allow: {
+                                type: "array",
+                                items: {
+                                  type: "string",
+                                },
+                              },
+                              alsoAllow: {
+                                type: "array",
+                                items: {
+                                  type: "string",
+                                },
+                              },
+                              deny: {
+                                type: "array",
+                                items: {
+                                  type: "string",
+                                },
+                              },
+                            },
+                            additionalProperties: false,
+                          },
+                          toolsBySender: {
+                            type: "object",
+                            propertyNames: {
+                              type: "string",
+                            },
+                            additionalProperties: {
+                              type: "object",
+                              properties: {
+                                allow: {
+                                  type: "array",
+                                  items: {
+                                    type: "string",
+                                  },
+                                },
+                                alsoAllow: {
+                                  type: "array",
+                                  items: {
+                                    type: "string",
+                                  },
+                                },
+                                deny: {
+                                  type: "array",
+                                  items: {
+                                    type: "string",
+                                  },
+                                },
+                              },
+                              additionalProperties: false,
+                            },
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                    },
+                    heartbeat: {
+                      type: "object",
+                      properties: {
+                        showOk: {
+                          type: "boolean",
+                        },
+                        showAlerts: {
+                          type: "boolean",
+                        },
+                        useIndicator: {
+                          type: "boolean",
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    healthMonitor: {
+                      type: "object",
+                      properties: {
+                        enabled: {
+                          type: "boolean",
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    responsePrefix: {
+                      type: "string",
+                    },
+                  },
+                  required: ["dmPolicy", "groupPolicy"],
+                  additionalProperties: false,
+                },
+              },
+              defaultAccount: {
+                type: "string",
+              },
+            },
+            required: ["dmPolicy", "groupPolicy"],
+            additionalProperties: false,
+          },
+          uiHints: {
+            "": {
+              label: "iMessage",
+              help: "iMessage channel provider configuration for CLI integration and DM access policy handling. Use explicit CLI paths when runtime environments have non-standard binary locations.",
+            },
+            dmPolicy: {
+              label: "iMessage DM Policy",
+              help: 'Direct message access control ("pairing" recommended). "open" requires channels.imessage.allowFrom=["*"].',
+            },
+            configWrites: {
+              label: "iMessage Config Writes",
+              help: "Allow iMessage to write config in response to channel events/commands (default: true).",
+            },
+            cliPath: {
+              label: "iMessage CLI Path",
+              help: "Filesystem path to the iMessage bridge CLI binary used for send/receive operations. Set explicitly when the binary is not on PATH in service runtime environments.",
+            },
+          },
+          label: "iMessage",
+          description: "this is still a work in progress.",
+        },
+      },
     },
   },
   {
@@ -1355,8 +7079,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./setup-entry.ts",
       built: "setup-entry.js",
     },
+    publicSurfaceArtifacts: ["api.js", "channel-config-api.js"],
     packageName: "@openclaw/irc",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw IRC channel plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -1372,7 +7097,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         systemImage: "network",
       },
       install: {
-        minHostVersion: ">=2026.3.22",
+        minHostVersion: ">=2026.3.27",
       },
     },
     manifest: {
@@ -1383,6 +7108,630 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         properties: {},
       },
       channels: ["irc"],
+      channelConfigs: {
+        irc: {
+          schema: {
+            $schema: "http://json-schema.org/draft-07/schema#",
+            type: "object",
+            properties: {
+              name: {
+                type: "string",
+              },
+              enabled: {
+                type: "boolean",
+              },
+              dangerouslyAllowNameMatching: {
+                type: "boolean",
+              },
+              host: {
+                type: "string",
+              },
+              port: {
+                type: "integer",
+                minimum: 1,
+                maximum: 65535,
+              },
+              tls: {
+                type: "boolean",
+              },
+              nick: {
+                type: "string",
+              },
+              username: {
+                type: "string",
+              },
+              realname: {
+                type: "string",
+              },
+              password: {
+                type: "string",
+              },
+              passwordFile: {
+                type: "string",
+              },
+              nickserv: {
+                type: "object",
+                properties: {
+                  enabled: {
+                    type: "boolean",
+                  },
+                  service: {
+                    type: "string",
+                  },
+                  password: {
+                    type: "string",
+                  },
+                  passwordFile: {
+                    type: "string",
+                  },
+                  register: {
+                    type: "boolean",
+                  },
+                  registerEmail: {
+                    type: "string",
+                  },
+                },
+                additionalProperties: false,
+              },
+              dmPolicy: {
+                default: "pairing",
+                type: "string",
+                enum: ["pairing", "allowlist", "open", "disabled"],
+              },
+              allowFrom: {
+                type: "array",
+                items: {
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "number",
+                    },
+                  ],
+                },
+              },
+              groupPolicy: {
+                default: "allowlist",
+                type: "string",
+                enum: ["open", "disabled", "allowlist"],
+              },
+              groupAllowFrom: {
+                type: "array",
+                items: {
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "number",
+                    },
+                  ],
+                },
+              },
+              groups: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    requireMention: {
+                      type: "boolean",
+                    },
+                    tools: {
+                      type: "object",
+                      properties: {
+                        allow: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                        alsoAllow: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                        deny: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    toolsBySender: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "object",
+                        properties: {
+                          allow: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                          },
+                          alsoAllow: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                          },
+                          deny: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                    },
+                    skills: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                      },
+                    },
+                    enabled: {
+                      type: "boolean",
+                    },
+                    allowFrom: {
+                      type: "array",
+                      items: {
+                        anyOf: [
+                          {
+                            type: "string",
+                          },
+                          {
+                            type: "number",
+                          },
+                        ],
+                      },
+                    },
+                    systemPrompt: {
+                      type: "string",
+                    },
+                  },
+                  additionalProperties: false,
+                },
+              },
+              channels: {
+                type: "array",
+                items: {
+                  type: "string",
+                },
+              },
+              mentionPatterns: {
+                type: "array",
+                items: {
+                  type: "string",
+                },
+              },
+              markdown: {
+                type: "object",
+                properties: {
+                  tables: {
+                    type: "string",
+                    enum: ["off", "bullets", "code"],
+                  },
+                },
+                additionalProperties: false,
+              },
+              historyLimit: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+              },
+              dmHistoryLimit: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+              },
+              dms: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    historyLimit: {
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                  },
+                  additionalProperties: false,
+                },
+              },
+              textChunkLimit: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+              },
+              chunkMode: {
+                type: "string",
+                enum: ["length", "newline"],
+              },
+              blockStreaming: {
+                type: "boolean",
+              },
+              blockStreamingCoalesce: {
+                type: "object",
+                properties: {
+                  minChars: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  maxChars: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  idleMs: {
+                    type: "integer",
+                    minimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                },
+                additionalProperties: false,
+              },
+              responsePrefix: {
+                type: "string",
+              },
+              mediaMaxMb: {
+                type: "number",
+                exclusiveMinimum: 0,
+              },
+              accounts: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    name: {
+                      type: "string",
+                    },
+                    enabled: {
+                      type: "boolean",
+                    },
+                    dangerouslyAllowNameMatching: {
+                      type: "boolean",
+                    },
+                    host: {
+                      type: "string",
+                    },
+                    port: {
+                      type: "integer",
+                      minimum: 1,
+                      maximum: 65535,
+                    },
+                    tls: {
+                      type: "boolean",
+                    },
+                    nick: {
+                      type: "string",
+                    },
+                    username: {
+                      type: "string",
+                    },
+                    realname: {
+                      type: "string",
+                    },
+                    password: {
+                      type: "string",
+                    },
+                    passwordFile: {
+                      type: "string",
+                    },
+                    nickserv: {
+                      type: "object",
+                      properties: {
+                        enabled: {
+                          type: "boolean",
+                        },
+                        service: {
+                          type: "string",
+                        },
+                        password: {
+                          type: "string",
+                        },
+                        passwordFile: {
+                          type: "string",
+                        },
+                        register: {
+                          type: "boolean",
+                        },
+                        registerEmail: {
+                          type: "string",
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    dmPolicy: {
+                      default: "pairing",
+                      type: "string",
+                      enum: ["pairing", "allowlist", "open", "disabled"],
+                    },
+                    allowFrom: {
+                      type: "array",
+                      items: {
+                        anyOf: [
+                          {
+                            type: "string",
+                          },
+                          {
+                            type: "number",
+                          },
+                        ],
+                      },
+                    },
+                    groupPolicy: {
+                      default: "allowlist",
+                      type: "string",
+                      enum: ["open", "disabled", "allowlist"],
+                    },
+                    groupAllowFrom: {
+                      type: "array",
+                      items: {
+                        anyOf: [
+                          {
+                            type: "string",
+                          },
+                          {
+                            type: "number",
+                          },
+                        ],
+                      },
+                    },
+                    groups: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "object",
+                        properties: {
+                          requireMention: {
+                            type: "boolean",
+                          },
+                          tools: {
+                            type: "object",
+                            properties: {
+                              allow: {
+                                type: "array",
+                                items: {
+                                  type: "string",
+                                },
+                              },
+                              alsoAllow: {
+                                type: "array",
+                                items: {
+                                  type: "string",
+                                },
+                              },
+                              deny: {
+                                type: "array",
+                                items: {
+                                  type: "string",
+                                },
+                              },
+                            },
+                            additionalProperties: false,
+                          },
+                          toolsBySender: {
+                            type: "object",
+                            propertyNames: {
+                              type: "string",
+                            },
+                            additionalProperties: {
+                              type: "object",
+                              properties: {
+                                allow: {
+                                  type: "array",
+                                  items: {
+                                    type: "string",
+                                  },
+                                },
+                                alsoAllow: {
+                                  type: "array",
+                                  items: {
+                                    type: "string",
+                                  },
+                                },
+                                deny: {
+                                  type: "array",
+                                  items: {
+                                    type: "string",
+                                  },
+                                },
+                              },
+                              additionalProperties: false,
+                            },
+                          },
+                          skills: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                          },
+                          enabled: {
+                            type: "boolean",
+                          },
+                          allowFrom: {
+                            type: "array",
+                            items: {
+                              anyOf: [
+                                {
+                                  type: "string",
+                                },
+                                {
+                                  type: "number",
+                                },
+                              ],
+                            },
+                          },
+                          systemPrompt: {
+                            type: "string",
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                    },
+                    channels: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                      },
+                    },
+                    mentionPatterns: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                      },
+                    },
+                    markdown: {
+                      type: "object",
+                      properties: {
+                        tables: {
+                          type: "string",
+                          enum: ["off", "bullets", "code"],
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    historyLimit: {
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    dmHistoryLimit: {
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    dms: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "object",
+                        properties: {
+                          historyLimit: {
+                            type: "integer",
+                            minimum: 0,
+                            maximum: 9007199254740991,
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                    },
+                    textChunkLimit: {
+                      type: "integer",
+                      exclusiveMinimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    chunkMode: {
+                      type: "string",
+                      enum: ["length", "newline"],
+                    },
+                    blockStreaming: {
+                      type: "boolean",
+                    },
+                    blockStreamingCoalesce: {
+                      type: "object",
+                      properties: {
+                        minChars: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                        maxChars: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                        idleMs: {
+                          type: "integer",
+                          minimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    responsePrefix: {
+                      type: "string",
+                    },
+                    mediaMaxMb: {
+                      type: "number",
+                      exclusiveMinimum: 0,
+                    },
+                  },
+                  required: ["dmPolicy", "groupPolicy"],
+                  additionalProperties: false,
+                },
+              },
+              defaultAccount: {
+                type: "string",
+              },
+            },
+            required: ["dmPolicy", "groupPolicy"],
+            additionalProperties: false,
+          },
+          uiHints: {
+            "": {
+              label: "IRC",
+              help: "IRC channel provider configuration and compatibility settings for classic IRC transport workflows. Use this section when bridging legacy chat infrastructure into OpenClaw.",
+            },
+            dmPolicy: {
+              label: "IRC DM Policy",
+              help: 'Direct message access control ("pairing" recommended). "open" requires channels.irc.allowFrom=["*"].',
+            },
+            "nickserv.enabled": {
+              label: "IRC NickServ Enabled",
+              help: "Enable NickServ identify/register after connect (defaults to enabled when password is configured).",
+            },
+            "nickserv.service": {
+              label: "IRC NickServ Service",
+              help: "NickServ service nick (default: NickServ).",
+            },
+            "nickserv.password": {
+              label: "IRC NickServ Password",
+              help: "NickServ password used for IDENTIFY/REGISTER (sensitive).",
+            },
+            "nickserv.passwordFile": {
+              label: "IRC NickServ Password File",
+              help: "Optional file path containing NickServ password.",
+            },
+            "nickserv.register": {
+              label: "IRC NickServ Register",
+              help: "If true, send NickServ REGISTER on every connect. Use once for initial registration, then disable.",
+            },
+            "nickserv.registerEmail": {
+              label: "IRC NickServ Register Email",
+              help: "Email used with NickServ REGISTER (required when register=true).",
+            },
+            configWrites: {
+              label: "IRC Config Writes",
+              help: "Allow IRC to write config in response to channel events/commands (default: true).",
+            },
+          },
+          label: "IRC",
+          description: "classic IRC networks with DM/channel routing and pairing controls.",
+        },
+      },
     },
   },
   {
@@ -1392,8 +7741,15 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: [
+      "api.js",
+      "onboard.js",
+      "provider-catalog.js",
+      "provider-models.js",
+      "shared.js",
+    ],
     packageName: "@openclaw/kilocode-provider",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw Kilo Gateway provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -1405,6 +7761,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         additionalProperties: false,
         properties: {},
       },
+      enabledByDefault: true,
       providers: ["kilocode"],
       providerAuthEnvVars: {
         kilocode: ["KILOCODE_API_KEY"],
@@ -1434,8 +7791,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: ["api.js", "onboard.js", "provider-catalog.js"],
     packageName: "@openclaw/kimi-provider",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw Kimi provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -1447,6 +7805,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         additionalProperties: false,
         properties: {},
       },
+      enabledByDefault: true,
       providers: ["kimi", "kimi-coding"],
       providerAuthEnvVars: {
         kimi: ["KIMI_API_KEY", "KIMICODE_API_KEY"],
@@ -1480,8 +7839,10 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./setup-entry.ts",
       built: "setup-entry.js",
     },
+    publicSurfaceArtifacts: ["api.js", "runtime-api.js", "setup-api.js"],
+    runtimeSidecarArtifacts: ["runtime-api.js"],
     packageName: "@openclaw/line",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw LINE channel plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -1500,7 +7861,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         npmSpec: "@openclaw/line",
         localPath: "extensions/line",
         defaultChoice: "npm",
-        minHostVersion: ">=2026.3.22",
+        minHostVersion: ">=2026.3.27",
       },
     },
     manifest: {
@@ -1511,6 +7872,286 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         properties: {},
       },
       channels: ["line"],
+      channelConfigs: {
+        line: {
+          schema: {
+            $schema: "http://json-schema.org/draft-07/schema#",
+            type: "object",
+            properties: {
+              enabled: {
+                type: "boolean",
+              },
+              channelAccessToken: {
+                type: "string",
+              },
+              channelSecret: {
+                type: "string",
+              },
+              tokenFile: {
+                type: "string",
+              },
+              secretFile: {
+                type: "string",
+              },
+              name: {
+                type: "string",
+              },
+              allowFrom: {
+                type: "array",
+                items: {
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "number",
+                    },
+                  ],
+                },
+              },
+              groupAllowFrom: {
+                type: "array",
+                items: {
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "number",
+                    },
+                  ],
+                },
+              },
+              dmPolicy: {
+                default: "pairing",
+                type: "string",
+                enum: ["open", "allowlist", "pairing", "disabled"],
+              },
+              groupPolicy: {
+                default: "allowlist",
+                type: "string",
+                enum: ["open", "allowlist", "disabled"],
+              },
+              responsePrefix: {
+                type: "string",
+              },
+              mediaMaxMb: {
+                type: "number",
+              },
+              webhookPath: {
+                type: "string",
+              },
+              accounts: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    enabled: {
+                      type: "boolean",
+                    },
+                    channelAccessToken: {
+                      type: "string",
+                    },
+                    channelSecret: {
+                      type: "string",
+                    },
+                    tokenFile: {
+                      type: "string",
+                    },
+                    secretFile: {
+                      type: "string",
+                    },
+                    name: {
+                      type: "string",
+                    },
+                    allowFrom: {
+                      type: "array",
+                      items: {
+                        anyOf: [
+                          {
+                            type: "string",
+                          },
+                          {
+                            type: "number",
+                          },
+                        ],
+                      },
+                    },
+                    groupAllowFrom: {
+                      type: "array",
+                      items: {
+                        anyOf: [
+                          {
+                            type: "string",
+                          },
+                          {
+                            type: "number",
+                          },
+                        ],
+                      },
+                    },
+                    dmPolicy: {
+                      default: "pairing",
+                      type: "string",
+                      enum: ["open", "allowlist", "pairing", "disabled"],
+                    },
+                    groupPolicy: {
+                      default: "allowlist",
+                      type: "string",
+                      enum: ["open", "allowlist", "disabled"],
+                    },
+                    responsePrefix: {
+                      type: "string",
+                    },
+                    mediaMaxMb: {
+                      type: "number",
+                    },
+                    webhookPath: {
+                      type: "string",
+                    },
+                    groups: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "object",
+                        properties: {
+                          enabled: {
+                            type: "boolean",
+                          },
+                          allowFrom: {
+                            type: "array",
+                            items: {
+                              anyOf: [
+                                {
+                                  type: "string",
+                                },
+                                {
+                                  type: "number",
+                                },
+                              ],
+                            },
+                          },
+                          requireMention: {
+                            type: "boolean",
+                          },
+                          systemPrompt: {
+                            type: "string",
+                          },
+                          skills: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                    },
+                  },
+                  required: ["dmPolicy", "groupPolicy"],
+                  additionalProperties: false,
+                },
+              },
+              defaultAccount: {
+                type: "string",
+              },
+              groups: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    enabled: {
+                      type: "boolean",
+                    },
+                    allowFrom: {
+                      type: "array",
+                      items: {
+                        anyOf: [
+                          {
+                            type: "string",
+                          },
+                          {
+                            type: "number",
+                          },
+                        ],
+                      },
+                    },
+                    requireMention: {
+                      type: "boolean",
+                    },
+                    systemPrompt: {
+                      type: "string",
+                    },
+                    skills: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                      },
+                    },
+                  },
+                  additionalProperties: false,
+                },
+              },
+            },
+            required: ["dmPolicy", "groupPolicy"],
+            additionalProperties: false,
+          },
+          label: "LINE",
+          description: "LINE Messaging API bot for Japan/Taiwan/Thailand markets.",
+        },
+      },
+    },
+  },
+  {
+    dirName: "litellm",
+    idHint: "litellm",
+    source: {
+      source: "./index.ts",
+      built: "index.js",
+    },
+    publicSurfaceArtifacts: ["api.js", "onboard.js", "provider-catalog.js"],
+    packageName: "@openclaw/litellm-provider",
+    packageVersion: "2026.3.27",
+    packageDescription: "OpenClaw LiteLLM provider plugin",
+    packageManifest: {
+      extensions: ["./index.ts"],
+    },
+    manifest: {
+      id: "litellm",
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {},
+      },
+      enabledByDefault: true,
+      providers: ["litellm"],
+      providerAuthEnvVars: {
+        litellm: ["LITELLM_API_KEY"],
+      },
+      providerAuthChoices: [
+        {
+          provider: "litellm",
+          method: "api-key",
+          choiceId: "litellm-api-key",
+          choiceLabel: "LiteLLM API key",
+          choiceHint: "Unified gateway for 100+ LLM providers",
+          groupId: "litellm",
+          groupLabel: "LiteLLM",
+          groupHint: "Unified LLM gateway (100+ providers)",
+          optionKey: "litellmApiKey",
+          cliFlag: "--litellm-api-key",
+          cliOption: "--litellm-api-key <key>",
+          cliDescription: "LiteLLM API key",
+        },
+      ],
     },
   },
   {
@@ -1520,8 +8161,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: ["api.js"],
     packageName: "@openclaw/llm-task",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw JSON-only LLM task plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -1567,8 +8209,10 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: ["runtime-api.js"],
+    runtimeSidecarArtifacts: ["runtime-api.js"],
     packageName: "@openclaw/lobster",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "Lobster workflow tool plugin (typed pipelines + resumable approvals)",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -1595,8 +8239,16 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./setup-entry.ts",
       built: "setup-entry.js",
     },
+    publicSurfaceArtifacts: [
+      "api.js",
+      "helper-api.js",
+      "legacy-crypto-inspector.js",
+      "runtime-api.js",
+      "thread-bindings-runtime.js",
+    ],
+    runtimeSidecarArtifacts: ["helper-api.js", "runtime-api.js", "thread-bindings-runtime.js"],
     packageName: "@openclaw/matrix",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw Matrix channel plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -1615,7 +8267,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         npmSpec: "@openclaw/matrix",
         localPath: "extensions/matrix",
         defaultChoice: "npm",
-        minHostVersion: ">=2026.3.22",
+        minHostVersion: ">=2026.3.27",
       },
     },
     manifest: {
@@ -1626,6 +8278,522 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         properties: {},
       },
       channels: ["matrix"],
+      channelConfigs: {
+        matrix: {
+          schema: {
+            $schema: "http://json-schema.org/draft-07/schema#",
+            type: "object",
+            properties: {
+              name: {
+                type: "string",
+              },
+              enabled: {
+                type: "boolean",
+              },
+              defaultAccount: {
+                type: "string",
+              },
+              accounts: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {},
+              },
+              markdown: {
+                type: "object",
+                properties: {
+                  tables: {
+                    type: "string",
+                    enum: ["off", "bullets", "code"],
+                  },
+                },
+                additionalProperties: false,
+              },
+              homeserver: {
+                type: "string",
+              },
+              allowPrivateNetwork: {
+                type: "boolean",
+              },
+              userId: {
+                type: "string",
+              },
+              accessToken: {
+                anyOf: [
+                  {
+                    type: "string",
+                  },
+                  {
+                    oneOf: [
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "env",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "file",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "exec",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                    ],
+                  },
+                ],
+              },
+              password: {
+                anyOf: [
+                  {
+                    type: "string",
+                  },
+                  {
+                    oneOf: [
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "env",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "file",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "exec",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                    ],
+                  },
+                ],
+              },
+              deviceId: {
+                type: "string",
+              },
+              deviceName: {
+                type: "string",
+              },
+              avatarUrl: {
+                type: "string",
+              },
+              initialSyncLimit: {
+                type: "number",
+              },
+              encryption: {
+                type: "boolean",
+              },
+              allowlistOnly: {
+                type: "boolean",
+              },
+              allowBots: {
+                anyOf: [
+                  {
+                    type: "boolean",
+                  },
+                  {
+                    type: "string",
+                    const: "mentions",
+                  },
+                ],
+              },
+              groupPolicy: {
+                type: "string",
+                enum: ["open", "disabled", "allowlist"],
+              },
+              replyToMode: {
+                type: "string",
+                enum: ["off", "first", "all"],
+              },
+              threadReplies: {
+                type: "string",
+                enum: ["off", "inbound", "always"],
+              },
+              textChunkLimit: {
+                type: "number",
+              },
+              chunkMode: {
+                type: "string",
+                enum: ["length", "newline"],
+              },
+              responsePrefix: {
+                type: "string",
+              },
+              ackReaction: {
+                type: "string",
+              },
+              ackReactionScope: {
+                type: "string",
+                enum: ["group-mentions", "group-all", "direct", "all", "none", "off"],
+              },
+              reactionNotifications: {
+                type: "string",
+                enum: ["off", "own"],
+              },
+              threadBindings: {
+                type: "object",
+                properties: {
+                  enabled: {
+                    type: "boolean",
+                  },
+                  idleHours: {
+                    type: "number",
+                    minimum: 0,
+                  },
+                  maxAgeHours: {
+                    type: "number",
+                    minimum: 0,
+                  },
+                  spawnSubagentSessions: {
+                    type: "boolean",
+                  },
+                  spawnAcpSessions: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
+              },
+              startupVerification: {
+                type: "string",
+                enum: ["off", "if-unverified"],
+              },
+              startupVerificationCooldownHours: {
+                type: "number",
+              },
+              mediaMaxMb: {
+                type: "number",
+              },
+              autoJoin: {
+                type: "string",
+                enum: ["always", "allowlist", "off"],
+              },
+              autoJoinAllowlist: {
+                type: "array",
+                items: {
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "number",
+                    },
+                  ],
+                },
+              },
+              groupAllowFrom: {
+                type: "array",
+                items: {
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "number",
+                    },
+                  ],
+                },
+              },
+              dm: {
+                type: "object",
+                properties: {
+                  enabled: {
+                    type: "boolean",
+                  },
+                  policy: {
+                    type: "string",
+                    enum: ["pairing", "allowlist", "open", "disabled"],
+                  },
+                  allowFrom: {
+                    type: "array",
+                    items: {
+                      anyOf: [
+                        {
+                          type: "string",
+                        },
+                        {
+                          type: "number",
+                        },
+                      ],
+                    },
+                  },
+                },
+                additionalProperties: false,
+              },
+              groups: {
+                type: "object",
+                properties: {},
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    enabled: {
+                      type: "boolean",
+                    },
+                    allow: {
+                      type: "boolean",
+                    },
+                    requireMention: {
+                      type: "boolean",
+                    },
+                    allowBots: {
+                      anyOf: [
+                        {
+                          type: "boolean",
+                        },
+                        {
+                          type: "string",
+                          const: "mentions",
+                        },
+                      ],
+                    },
+                    tools: {
+                      type: "object",
+                      properties: {
+                        allow: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                        alsoAllow: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                        deny: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    autoReply: {
+                      type: "boolean",
+                    },
+                    users: {
+                      type: "array",
+                      items: {
+                        anyOf: [
+                          {
+                            type: "string",
+                          },
+                          {
+                            type: "number",
+                          },
+                        ],
+                      },
+                    },
+                    skills: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                      },
+                    },
+                    systemPrompt: {
+                      type: "string",
+                    },
+                  },
+                  additionalProperties: false,
+                },
+              },
+              rooms: {
+                type: "object",
+                properties: {},
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    enabled: {
+                      type: "boolean",
+                    },
+                    allow: {
+                      type: "boolean",
+                    },
+                    requireMention: {
+                      type: "boolean",
+                    },
+                    allowBots: {
+                      anyOf: [
+                        {
+                          type: "boolean",
+                        },
+                        {
+                          type: "string",
+                          const: "mentions",
+                        },
+                      ],
+                    },
+                    tools: {
+                      type: "object",
+                      properties: {
+                        allow: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                        alsoAllow: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                        deny: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    autoReply: {
+                      type: "boolean",
+                    },
+                    users: {
+                      type: "array",
+                      items: {
+                        anyOf: [
+                          {
+                            type: "string",
+                          },
+                          {
+                            type: "number",
+                          },
+                        ],
+                      },
+                    },
+                    skills: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                      },
+                    },
+                    systemPrompt: {
+                      type: "string",
+                    },
+                  },
+                  additionalProperties: false,
+                },
+              },
+              actions: {
+                type: "object",
+                properties: {
+                  reactions: {
+                    type: "boolean",
+                  },
+                  messages: {
+                    type: "boolean",
+                  },
+                  pins: {
+                    type: "boolean",
+                  },
+                  profile: {
+                    type: "boolean",
+                  },
+                  memberInfo: {
+                    type: "boolean",
+                  },
+                  channelInfo: {
+                    type: "boolean",
+                  },
+                  verification: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
+              },
+            },
+            additionalProperties: false,
+          },
+          label: "Matrix",
+          description: "open protocol; install the plugin to enable.",
+        },
+      },
     },
   },
   {
@@ -1639,8 +8807,10 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./setup-entry.ts",
       built: "setup-entry.js",
     },
+    publicSurfaceArtifacts: ["api.js", "runtime-api.js"],
+    runtimeSidecarArtifacts: ["runtime-api.js"],
     packageName: "@openclaw/mattermost",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw Mattermost channel plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -1658,7 +8828,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         npmSpec: "@openclaw/mattermost",
         localPath: "extensions/mattermost",
         defaultChoice: "npm",
-        minHostVersion: ">=2026.3.22",
+        minHostVersion: ">=2026.3.27",
       },
     },
     manifest: {
@@ -1669,6 +8839,582 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         properties: {},
       },
       channels: ["mattermost"],
+      channelConfigs: {
+        mattermost: {
+          schema: {
+            $schema: "http://json-schema.org/draft-07/schema#",
+            type: "object",
+            properties: {
+              name: {
+                type: "string",
+              },
+              capabilities: {
+                type: "array",
+                items: {
+                  type: "string",
+                },
+              },
+              dangerouslyAllowNameMatching: {
+                type: "boolean",
+              },
+              markdown: {
+                type: "object",
+                properties: {
+                  tables: {
+                    type: "string",
+                    enum: ["off", "bullets", "code"],
+                  },
+                },
+                additionalProperties: false,
+              },
+              enabled: {
+                type: "boolean",
+              },
+              configWrites: {
+                type: "boolean",
+              },
+              botToken: {
+                anyOf: [
+                  {
+                    type: "string",
+                  },
+                  {
+                    oneOf: [
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "env",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "file",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "exec",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                    ],
+                  },
+                ],
+              },
+              baseUrl: {
+                type: "string",
+              },
+              chatmode: {
+                type: "string",
+                enum: ["oncall", "onmessage", "onchar"],
+              },
+              oncharPrefixes: {
+                type: "array",
+                items: {
+                  type: "string",
+                },
+              },
+              requireMention: {
+                type: "boolean",
+              },
+              dmPolicy: {
+                default: "pairing",
+                type: "string",
+                enum: ["pairing", "allowlist", "open", "disabled"],
+              },
+              allowFrom: {
+                type: "array",
+                items: {
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "number",
+                    },
+                  ],
+                },
+              },
+              groupAllowFrom: {
+                type: "array",
+                items: {
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "number",
+                    },
+                  ],
+                },
+              },
+              groupPolicy: {
+                default: "allowlist",
+                type: "string",
+                enum: ["open", "disabled", "allowlist"],
+              },
+              textChunkLimit: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+              },
+              chunkMode: {
+                type: "string",
+                enum: ["length", "newline"],
+              },
+              blockStreaming: {
+                type: "boolean",
+              },
+              blockStreamingCoalesce: {
+                type: "object",
+                properties: {
+                  minChars: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  maxChars: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  idleMs: {
+                    type: "integer",
+                    minimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                },
+                additionalProperties: false,
+              },
+              replyToMode: {
+                type: "string",
+                enum: ["off", "first", "all"],
+              },
+              responsePrefix: {
+                type: "string",
+              },
+              actions: {
+                type: "object",
+                properties: {
+                  reactions: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
+              },
+              commands: {
+                type: "object",
+                properties: {
+                  native: {
+                    anyOf: [
+                      {
+                        type: "boolean",
+                      },
+                      {
+                        type: "string",
+                        const: "auto",
+                      },
+                    ],
+                  },
+                  nativeSkills: {
+                    anyOf: [
+                      {
+                        type: "boolean",
+                      },
+                      {
+                        type: "string",
+                        const: "auto",
+                      },
+                    ],
+                  },
+                  callbackPath: {
+                    type: "string",
+                  },
+                  callbackUrl: {
+                    type: "string",
+                  },
+                },
+                additionalProperties: false,
+              },
+              interactions: {
+                type: "object",
+                properties: {
+                  callbackBaseUrl: {
+                    type: "string",
+                  },
+                  allowedSourceIps: {
+                    type: "array",
+                    items: {
+                      type: "string",
+                    },
+                  },
+                },
+                additionalProperties: false,
+              },
+              allowPrivateNetwork: {
+                type: "boolean",
+              },
+              dmChannelRetry: {
+                type: "object",
+                properties: {
+                  maxRetries: {
+                    type: "integer",
+                    minimum: 0,
+                    maximum: 10,
+                  },
+                  initialDelayMs: {
+                    type: "integer",
+                    minimum: 100,
+                    maximum: 60000,
+                  },
+                  maxDelayMs: {
+                    type: "integer",
+                    minimum: 1000,
+                    maximum: 60000,
+                  },
+                  timeoutMs: {
+                    type: "integer",
+                    minimum: 5000,
+                    maximum: 120000,
+                  },
+                },
+                additionalProperties: false,
+              },
+              accounts: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    name: {
+                      type: "string",
+                    },
+                    capabilities: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                      },
+                    },
+                    dangerouslyAllowNameMatching: {
+                      type: "boolean",
+                    },
+                    markdown: {
+                      type: "object",
+                      properties: {
+                        tables: {
+                          type: "string",
+                          enum: ["off", "bullets", "code"],
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    enabled: {
+                      type: "boolean",
+                    },
+                    configWrites: {
+                      type: "boolean",
+                    },
+                    botToken: {
+                      anyOf: [
+                        {
+                          type: "string",
+                        },
+                        {
+                          oneOf: [
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "env",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                  pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "file",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "exec",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                          ],
+                        },
+                      ],
+                    },
+                    baseUrl: {
+                      type: "string",
+                    },
+                    chatmode: {
+                      type: "string",
+                      enum: ["oncall", "onmessage", "onchar"],
+                    },
+                    oncharPrefixes: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                      },
+                    },
+                    requireMention: {
+                      type: "boolean",
+                    },
+                    dmPolicy: {
+                      default: "pairing",
+                      type: "string",
+                      enum: ["pairing", "allowlist", "open", "disabled"],
+                    },
+                    allowFrom: {
+                      type: "array",
+                      items: {
+                        anyOf: [
+                          {
+                            type: "string",
+                          },
+                          {
+                            type: "number",
+                          },
+                        ],
+                      },
+                    },
+                    groupAllowFrom: {
+                      type: "array",
+                      items: {
+                        anyOf: [
+                          {
+                            type: "string",
+                          },
+                          {
+                            type: "number",
+                          },
+                        ],
+                      },
+                    },
+                    groupPolicy: {
+                      default: "allowlist",
+                      type: "string",
+                      enum: ["open", "disabled", "allowlist"],
+                    },
+                    textChunkLimit: {
+                      type: "integer",
+                      exclusiveMinimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    chunkMode: {
+                      type: "string",
+                      enum: ["length", "newline"],
+                    },
+                    blockStreaming: {
+                      type: "boolean",
+                    },
+                    blockStreamingCoalesce: {
+                      type: "object",
+                      properties: {
+                        minChars: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                        maxChars: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                        idleMs: {
+                          type: "integer",
+                          minimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    replyToMode: {
+                      type: "string",
+                      enum: ["off", "first", "all"],
+                    },
+                    responsePrefix: {
+                      type: "string",
+                    },
+                    actions: {
+                      type: "object",
+                      properties: {
+                        reactions: {
+                          type: "boolean",
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    commands: {
+                      type: "object",
+                      properties: {
+                        native: {
+                          anyOf: [
+                            {
+                              type: "boolean",
+                            },
+                            {
+                              type: "string",
+                              const: "auto",
+                            },
+                          ],
+                        },
+                        nativeSkills: {
+                          anyOf: [
+                            {
+                              type: "boolean",
+                            },
+                            {
+                              type: "string",
+                              const: "auto",
+                            },
+                          ],
+                        },
+                        callbackPath: {
+                          type: "string",
+                        },
+                        callbackUrl: {
+                          type: "string",
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    interactions: {
+                      type: "object",
+                      properties: {
+                        callbackBaseUrl: {
+                          type: "string",
+                        },
+                        allowedSourceIps: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    allowPrivateNetwork: {
+                      type: "boolean",
+                    },
+                    dmChannelRetry: {
+                      type: "object",
+                      properties: {
+                        maxRetries: {
+                          type: "integer",
+                          minimum: 0,
+                          maximum: 10,
+                        },
+                        initialDelayMs: {
+                          type: "integer",
+                          minimum: 100,
+                          maximum: 60000,
+                        },
+                        maxDelayMs: {
+                          type: "integer",
+                          minimum: 1000,
+                          maximum: 60000,
+                        },
+                        timeoutMs: {
+                          type: "integer",
+                          minimum: 5000,
+                          maximum: 120000,
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                  },
+                  required: ["dmPolicy", "groupPolicy"],
+                  additionalProperties: false,
+                },
+              },
+              defaultAccount: {
+                type: "string",
+              },
+            },
+            required: ["dmPolicy", "groupPolicy"],
+            additionalProperties: false,
+          },
+          label: "Mattermost",
+          description: "self-hosted Slack-style chat; install the plugin to enable.",
+        },
+      },
     },
   },
   {
@@ -1678,8 +9424,10 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: ["api.js", "runtime-api.js"],
+    runtimeSidecarArtifacts: ["runtime-api.js"],
     packageName: "@openclaw/memory-core",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw core memory search plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -1701,8 +9449,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: ["api.js", "config.js", "lancedb-runtime.js"],
     packageName: "@openclaw/memory-lancedb",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw LanceDB-backed long-term memory plugin with auto-recall/capture",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -1710,7 +9459,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         npmSpec: "@openclaw/memory-lancedb",
         localPath: "extensions/memory-lancedb",
         defaultChoice: "npm",
-        minHostVersion: ">=2026.3.22",
+        minHostVersion: ">=2026.3.27",
       },
     },
     manifest: {
@@ -1809,8 +9558,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: ["speech-provider.js", "tts.js"],
     packageName: "@openclaw/microsoft-speech",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw Microsoft speech plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -1822,7 +9572,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         additionalProperties: false,
         properties: {},
       },
-      speechProviders: ["microsoft"],
+      contracts: {
+        speechProviders: ["microsoft"],
+      },
     },
   },
   {
@@ -1832,8 +9584,17 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: [
+      "auth.js",
+      "cli.js",
+      "onboard.js",
+      "provider.js",
+      "runtime.js",
+      "shared-runtime.js",
+      "shared.js",
+    ],
     packageName: "@openclaw/microsoft-foundry",
-    packageVersion: "2026.3.14",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw Microsoft Foundry provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -1881,8 +9642,19 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: [
+      "api.js",
+      "image-generation-provider.js",
+      "media-understanding-provider.js",
+      "model-definitions.js",
+      "oauth.js",
+      "oauth.runtime.js",
+      "onboard.js",
+      "provider-catalog.js",
+      "provider-models.js",
+    ],
     packageName: "@openclaw/minimax-provider",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw MiniMax provider and OAuth plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -1894,9 +9666,10 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         additionalProperties: false,
         properties: {},
       },
+      enabledByDefault: true,
       providers: ["minimax", "minimax-portal"],
-      mediaUnderstandingProviders: ["minimax", "minimax-portal"],
-      imageGenerationProviders: ["minimax", "minimax-portal"],
+      autoEnableWhenConfiguredProviders: ["minimax-portal"],
+      legacyPluginIds: ["minimax-portal-auth"],
       providerAuthEnvVars: {
         minimax: ["MINIMAX_API_KEY"],
         "minimax-portal": ["MINIMAX_OAUTH_TOKEN", "MINIMAX_API_KEY"],
@@ -1916,6 +9689,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           provider: "minimax",
           method: "api-global",
           choiceId: "minimax-global-api",
+          deprecatedChoiceIds: ["minimax", "minimax-api", "minimax-cloud", "minimax-api-lightning"],
           choiceLabel: "MiniMax API key (Global)",
           choiceHint: "Global endpoint - api.minimax.io",
           groupId: "minimax",
@@ -1940,6 +9714,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           provider: "minimax",
           method: "api-cn",
           choiceId: "minimax-cn-api",
+          deprecatedChoiceIds: ["minimax-api-key-cn"],
           choiceLabel: "MiniMax API key (CN)",
           choiceHint: "CN endpoint - api.minimaxi.com",
           groupId: "minimax",
@@ -1951,6 +9726,10 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           cliDescription: "MiniMax API key",
         },
       ],
+      contracts: {
+        mediaUnderstandingProviders: ["minimax", "minimax-portal"],
+        imageGenerationProviders: ["minimax", "minimax-portal"],
+      },
     },
   },
   {
@@ -1960,8 +9739,15 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: [
+      "api.js",
+      "media-understanding-provider.js",
+      "model-definitions.js",
+      "onboard.js",
+      "provider-catalog.js",
+    ],
     packageName: "@openclaw/mistral-provider",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw Mistral provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -1973,8 +9759,8 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         additionalProperties: false,
         properties: {},
       },
+      enabledByDefault: true,
       providers: ["mistral"],
-      mediaUnderstandingProviders: ["mistral"],
       providerAuthEnvVars: {
         mistral: ["MISTRAL_API_KEY"],
       },
@@ -1993,6 +9779,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           cliDescription: "Mistral API key",
         },
       ],
+      contracts: {
+        mediaUnderstandingProviders: ["mistral"],
+      },
     },
   },
   {
@@ -2002,8 +9791,15 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: [
+      "api.js",
+      "model-definitions.js",
+      "models.js",
+      "onboard.js",
+      "provider-catalog.js",
+    ],
     packageName: "@openclaw/modelstudio-provider",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw Model Studio provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -2015,6 +9811,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         additionalProperties: false,
         properties: {},
       },
+      enabledByDefault: true,
       providers: ["modelstudio"],
       providerAuthEnvVars: {
         modelstudio: ["MODELSTUDIO_API_KEY"],
@@ -2086,8 +9883,15 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: [
+      "api.js",
+      "media-understanding-provider.js",
+      "onboard.js",
+      "provider-catalog.js",
+      "web-search-provider.js",
+    ],
     packageName: "@openclaw/moonshot-provider",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw Moonshot provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -2115,8 +9919,8 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           },
         },
       },
+      enabledByDefault: true,
       providers: ["moonshot"],
-      mediaUnderstandingProviders: ["moonshot"],
       providerAuthEnvVars: {
         moonshot: ["MOONSHOT_API_KEY"],
       },
@@ -2163,6 +9967,10 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           help: "Kimi model override.",
         },
       },
+      contracts: {
+        mediaUnderstandingProviders: ["moonshot"],
+        webSearchProviders: ["kimi"],
+      },
     },
   },
   {
@@ -2176,8 +9984,10 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./setup-entry.ts",
       built: "setup-entry.js",
     },
+    publicSurfaceArtifacts: ["api.js", "channel-config-api.js", "runtime-api.js"],
+    runtimeSidecarArtifacts: ["runtime-api.js"],
     packageName: "@openclaw/msteams",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw Microsoft Teams channel plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -2196,7 +10006,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         npmSpec: "@openclaw/msteams",
         localPath: "extensions/msteams",
         defaultChoice: "npm",
-        minHostVersion: ">=2026.3.22",
+        minHostVersion: ">=2026.3.27",
       },
     },
     manifest: {
@@ -2207,6 +10017,448 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         properties: {},
       },
       channels: ["msteams"],
+      channelConfigs: {
+        msteams: {
+          schema: {
+            $schema: "http://json-schema.org/draft-07/schema#",
+            type: "object",
+            properties: {
+              enabled: {
+                type: "boolean",
+              },
+              capabilities: {
+                type: "array",
+                items: {
+                  type: "string",
+                },
+              },
+              dangerouslyAllowNameMatching: {
+                type: "boolean",
+              },
+              markdown: {
+                type: "object",
+                properties: {
+                  tables: {
+                    type: "string",
+                    enum: ["off", "bullets", "code"],
+                  },
+                },
+                additionalProperties: false,
+              },
+              configWrites: {
+                type: "boolean",
+              },
+              appId: {
+                type: "string",
+              },
+              appPassword: {
+                anyOf: [
+                  {
+                    type: "string",
+                  },
+                  {
+                    oneOf: [
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "env",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "file",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "exec",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                    ],
+                  },
+                ],
+              },
+              tenantId: {
+                type: "string",
+              },
+              webhook: {
+                type: "object",
+                properties: {
+                  port: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  path: {
+                    type: "string",
+                  },
+                },
+                additionalProperties: false,
+              },
+              dmPolicy: {
+                default: "pairing",
+                type: "string",
+                enum: ["pairing", "allowlist", "open", "disabled"],
+              },
+              allowFrom: {
+                type: "array",
+                items: {
+                  type: "string",
+                },
+              },
+              defaultTo: {
+                type: "string",
+              },
+              groupAllowFrom: {
+                type: "array",
+                items: {
+                  type: "string",
+                },
+              },
+              groupPolicy: {
+                default: "allowlist",
+                type: "string",
+                enum: ["open", "disabled", "allowlist"],
+              },
+              textChunkLimit: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+              },
+              chunkMode: {
+                type: "string",
+                enum: ["length", "newline"],
+              },
+              blockStreaming: {
+                type: "boolean",
+              },
+              blockStreamingCoalesce: {
+                type: "object",
+                properties: {
+                  minChars: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  maxChars: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  idleMs: {
+                    type: "integer",
+                    minimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                },
+                additionalProperties: false,
+              },
+              mediaAllowHosts: {
+                type: "array",
+                items: {
+                  type: "string",
+                },
+              },
+              mediaAuthAllowHosts: {
+                type: "array",
+                items: {
+                  type: "string",
+                },
+              },
+              requireMention: {
+                type: "boolean",
+              },
+              historyLimit: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+              },
+              dmHistoryLimit: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+              },
+              dms: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    historyLimit: {
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                  },
+                  additionalProperties: false,
+                },
+              },
+              replyStyle: {
+                type: "string",
+                enum: ["thread", "top-level"],
+              },
+              teams: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    requireMention: {
+                      type: "boolean",
+                    },
+                    tools: {
+                      type: "object",
+                      properties: {
+                        allow: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                        alsoAllow: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                        deny: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    toolsBySender: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "object",
+                        properties: {
+                          allow: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                          },
+                          alsoAllow: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                          },
+                          deny: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                    },
+                    replyStyle: {
+                      type: "string",
+                      enum: ["thread", "top-level"],
+                    },
+                    channels: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "object",
+                        properties: {
+                          requireMention: {
+                            type: "boolean",
+                          },
+                          tools: {
+                            type: "object",
+                            properties: {
+                              allow: {
+                                type: "array",
+                                items: {
+                                  type: "string",
+                                },
+                              },
+                              alsoAllow: {
+                                type: "array",
+                                items: {
+                                  type: "string",
+                                },
+                              },
+                              deny: {
+                                type: "array",
+                                items: {
+                                  type: "string",
+                                },
+                              },
+                            },
+                            additionalProperties: false,
+                          },
+                          toolsBySender: {
+                            type: "object",
+                            propertyNames: {
+                              type: "string",
+                            },
+                            additionalProperties: {
+                              type: "object",
+                              properties: {
+                                allow: {
+                                  type: "array",
+                                  items: {
+                                    type: "string",
+                                  },
+                                },
+                                alsoAllow: {
+                                  type: "array",
+                                  items: {
+                                    type: "string",
+                                  },
+                                },
+                                deny: {
+                                  type: "array",
+                                  items: {
+                                    type: "string",
+                                  },
+                                },
+                              },
+                              additionalProperties: false,
+                            },
+                          },
+                          replyStyle: {
+                            type: "string",
+                            enum: ["thread", "top-level"],
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                    },
+                  },
+                  additionalProperties: false,
+                },
+              },
+              mediaMaxMb: {
+                type: "number",
+                exclusiveMinimum: 0,
+              },
+              sharePointSiteId: {
+                type: "string",
+              },
+              heartbeat: {
+                type: "object",
+                properties: {
+                  showOk: {
+                    type: "boolean",
+                  },
+                  showAlerts: {
+                    type: "boolean",
+                  },
+                  useIndicator: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
+              },
+              healthMonitor: {
+                type: "object",
+                properties: {
+                  enabled: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
+              },
+              responsePrefix: {
+                type: "string",
+              },
+              welcomeCard: {
+                type: "boolean",
+              },
+              promptStarters: {
+                type: "array",
+                items: {
+                  type: "string",
+                },
+              },
+              groupWelcomeCard: {
+                type: "boolean",
+              },
+              feedbackEnabled: {
+                type: "boolean",
+              },
+              feedbackReflection: {
+                type: "boolean",
+              },
+              feedbackReflectionCooldownMs: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+              },
+            },
+            required: ["dmPolicy", "groupPolicy"],
+            additionalProperties: false,
+          },
+          uiHints: {
+            "": {
+              label: "MS Teams",
+              help: "Microsoft Teams channel provider configuration and provider-specific policy toggles. Use this section to isolate Teams behavior from other enterprise chat providers.",
+            },
+            configWrites: {
+              label: "MS Teams Config Writes",
+              help: "Allow Microsoft Teams to write config in response to channel events/commands (default: true).",
+            },
+          },
+          label: "Microsoft Teams",
+          description: "Teams SDK; enterprise support.",
+        },
+      },
     },
   },
   {
@@ -2220,8 +10472,10 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./setup-entry.ts",
       built: "setup-entry.js",
     },
+    publicSurfaceArtifacts: ["api.js", "runtime-api.js"],
+    runtimeSidecarArtifacts: ["runtime-api.js"],
     packageName: "@openclaw/nextcloud-talk",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw Nextcloud Talk channel plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -2241,7 +10495,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         npmSpec: "@openclaw/nextcloud-talk",
         localPath: "extensions/nextcloud-talk",
         defaultChoice: "npm",
-        minHostVersion: ">=2026.3.22",
+        minHostVersion: ">=2026.3.27",
       },
     },
     manifest: {
@@ -2252,6 +10506,682 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         properties: {},
       },
       channels: ["nextcloud-talk"],
+      channelConfigs: {
+        "nextcloud-talk": {
+          schema: {
+            $schema: "http://json-schema.org/draft-07/schema#",
+            type: "object",
+            properties: {
+              name: {
+                type: "string",
+              },
+              enabled: {
+                type: "boolean",
+              },
+              markdown: {
+                type: "object",
+                properties: {
+                  tables: {
+                    type: "string",
+                    enum: ["off", "bullets", "code"],
+                  },
+                },
+                additionalProperties: false,
+              },
+              baseUrl: {
+                type: "string",
+              },
+              botSecret: {
+                anyOf: [
+                  {
+                    type: "string",
+                  },
+                  {
+                    oneOf: [
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "env",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "file",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "exec",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                    ],
+                  },
+                ],
+              },
+              botSecretFile: {
+                type: "string",
+              },
+              apiUser: {
+                type: "string",
+              },
+              apiPassword: {
+                anyOf: [
+                  {
+                    type: "string",
+                  },
+                  {
+                    oneOf: [
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "env",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "file",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "exec",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                    ],
+                  },
+                ],
+              },
+              apiPasswordFile: {
+                type: "string",
+              },
+              dmPolicy: {
+                default: "pairing",
+                type: "string",
+                enum: ["pairing", "allowlist", "open", "disabled"],
+              },
+              webhookPort: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+              },
+              webhookHost: {
+                type: "string",
+              },
+              webhookPath: {
+                type: "string",
+              },
+              webhookPublicUrl: {
+                type: "string",
+              },
+              allowFrom: {
+                type: "array",
+                items: {
+                  type: "string",
+                },
+              },
+              groupAllowFrom: {
+                type: "array",
+                items: {
+                  type: "string",
+                },
+              },
+              groupPolicy: {
+                default: "allowlist",
+                type: "string",
+                enum: ["open", "disabled", "allowlist"],
+              },
+              rooms: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    requireMention: {
+                      type: "boolean",
+                    },
+                    tools: {
+                      type: "object",
+                      properties: {
+                        allow: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                        alsoAllow: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                        deny: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    skills: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                      },
+                    },
+                    enabled: {
+                      type: "boolean",
+                    },
+                    allowFrom: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                      },
+                    },
+                    systemPrompt: {
+                      type: "string",
+                    },
+                  },
+                  additionalProperties: false,
+                },
+              },
+              allowPrivateNetwork: {
+                type: "boolean",
+              },
+              historyLimit: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+              },
+              dmHistoryLimit: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+              },
+              dms: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    historyLimit: {
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                  },
+                  additionalProperties: false,
+                },
+              },
+              textChunkLimit: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+              },
+              chunkMode: {
+                type: "string",
+                enum: ["length", "newline"],
+              },
+              blockStreaming: {
+                type: "boolean",
+              },
+              blockStreamingCoalesce: {
+                type: "object",
+                properties: {
+                  minChars: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  maxChars: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  idleMs: {
+                    type: "integer",
+                    minimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                },
+                additionalProperties: false,
+              },
+              responsePrefix: {
+                type: "string",
+              },
+              mediaMaxMb: {
+                type: "number",
+                exclusiveMinimum: 0,
+              },
+              accounts: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    name: {
+                      type: "string",
+                    },
+                    enabled: {
+                      type: "boolean",
+                    },
+                    markdown: {
+                      type: "object",
+                      properties: {
+                        tables: {
+                          type: "string",
+                          enum: ["off", "bullets", "code"],
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    baseUrl: {
+                      type: "string",
+                    },
+                    botSecret: {
+                      anyOf: [
+                        {
+                          type: "string",
+                        },
+                        {
+                          oneOf: [
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "env",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                  pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "file",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "exec",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                          ],
+                        },
+                      ],
+                    },
+                    botSecretFile: {
+                      type: "string",
+                    },
+                    apiUser: {
+                      type: "string",
+                    },
+                    apiPassword: {
+                      anyOf: [
+                        {
+                          type: "string",
+                        },
+                        {
+                          oneOf: [
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "env",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                  pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "file",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "exec",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                          ],
+                        },
+                      ],
+                    },
+                    apiPasswordFile: {
+                      type: "string",
+                    },
+                    dmPolicy: {
+                      default: "pairing",
+                      type: "string",
+                      enum: ["pairing", "allowlist", "open", "disabled"],
+                    },
+                    webhookPort: {
+                      type: "integer",
+                      exclusiveMinimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    webhookHost: {
+                      type: "string",
+                    },
+                    webhookPath: {
+                      type: "string",
+                    },
+                    webhookPublicUrl: {
+                      type: "string",
+                    },
+                    allowFrom: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                      },
+                    },
+                    groupAllowFrom: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                      },
+                    },
+                    groupPolicy: {
+                      default: "allowlist",
+                      type: "string",
+                      enum: ["open", "disabled", "allowlist"],
+                    },
+                    rooms: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "object",
+                        properties: {
+                          requireMention: {
+                            type: "boolean",
+                          },
+                          tools: {
+                            type: "object",
+                            properties: {
+                              allow: {
+                                type: "array",
+                                items: {
+                                  type: "string",
+                                },
+                              },
+                              alsoAllow: {
+                                type: "array",
+                                items: {
+                                  type: "string",
+                                },
+                              },
+                              deny: {
+                                type: "array",
+                                items: {
+                                  type: "string",
+                                },
+                              },
+                            },
+                            additionalProperties: false,
+                          },
+                          skills: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                          },
+                          enabled: {
+                            type: "boolean",
+                          },
+                          allowFrom: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                          },
+                          systemPrompt: {
+                            type: "string",
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                    },
+                    allowPrivateNetwork: {
+                      type: "boolean",
+                    },
+                    historyLimit: {
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    dmHistoryLimit: {
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    dms: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "object",
+                        properties: {
+                          historyLimit: {
+                            type: "integer",
+                            minimum: 0,
+                            maximum: 9007199254740991,
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                    },
+                    textChunkLimit: {
+                      type: "integer",
+                      exclusiveMinimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    chunkMode: {
+                      type: "string",
+                      enum: ["length", "newline"],
+                    },
+                    blockStreaming: {
+                      type: "boolean",
+                    },
+                    blockStreamingCoalesce: {
+                      type: "object",
+                      properties: {
+                        minChars: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                        maxChars: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                        idleMs: {
+                          type: "integer",
+                          minimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    responsePrefix: {
+                      type: "string",
+                    },
+                    mediaMaxMb: {
+                      type: "number",
+                      exclusiveMinimum: 0,
+                    },
+                  },
+                  required: ["dmPolicy", "groupPolicy"],
+                  additionalProperties: false,
+                },
+              },
+              defaultAccount: {
+                type: "string",
+              },
+            },
+            required: ["dmPolicy", "groupPolicy"],
+            additionalProperties: false,
+          },
+          label: "Nextcloud Talk",
+          description: "Self-hosted chat via Nextcloud Talk webhook bots.",
+        },
+      },
     },
   },
   {
@@ -2265,8 +11195,10 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./setup-entry.ts",
       built: "setup-entry.js",
     },
+    publicSurfaceArtifacts: ["api.js", "runtime-api.js", "setup-api.js"],
+    runtimeSidecarArtifacts: ["runtime-api.js"],
     packageName: "@openclaw/nostr",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw Nostr channel plugin for NIP-04 encrypted DMs",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -2285,7 +11217,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         npmSpec: "@openclaw/nostr",
         localPath: "extensions/nostr",
         defaultChoice: "npm",
-        minHostVersion: ">=2026.3.22",
+        minHostVersion: ">=2026.3.27",
       },
     },
     manifest: {
@@ -2296,6 +11228,100 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         properties: {},
       },
       channels: ["nostr"],
+      channelConfigs: {
+        nostr: {
+          schema: {
+            $schema: "http://json-schema.org/draft-07/schema#",
+            type: "object",
+            properties: {
+              name: {
+                type: "string",
+              },
+              defaultAccount: {
+                type: "string",
+              },
+              enabled: {
+                type: "boolean",
+              },
+              markdown: {
+                type: "object",
+                properties: {
+                  tables: {
+                    type: "string",
+                    enum: ["off", "bullets", "code"],
+                  },
+                },
+                additionalProperties: false,
+              },
+              privateKey: {
+                type: "string",
+              },
+              relays: {
+                type: "array",
+                items: {
+                  type: "string",
+                },
+              },
+              dmPolicy: {
+                type: "string",
+                enum: ["pairing", "allowlist", "open", "disabled"],
+              },
+              allowFrom: {
+                type: "array",
+                items: {
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "number",
+                    },
+                  ],
+                },
+              },
+              profile: {
+                type: "object",
+                properties: {
+                  name: {
+                    type: "string",
+                    maxLength: 256,
+                  },
+                  displayName: {
+                    type: "string",
+                    maxLength: 256,
+                  },
+                  about: {
+                    type: "string",
+                    maxLength: 2000,
+                  },
+                  picture: {
+                    type: "string",
+                    format: "uri",
+                  },
+                  banner: {
+                    type: "string",
+                    format: "uri",
+                  },
+                  website: {
+                    type: "string",
+                    format: "uri",
+                  },
+                  nip05: {
+                    type: "string",
+                  },
+                  lud16: {
+                    type: "string",
+                  },
+                },
+                additionalProperties: false,
+              },
+            },
+            additionalProperties: false,
+          },
+          label: "Nostr",
+          description: "Decentralized protocol; encrypted DMs via NIP-04.",
+        },
+      },
     },
   },
   {
@@ -2305,8 +11331,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: ["api.js", "provider-catalog.js"],
     packageName: "@openclaw/nvidia-provider",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw NVIDIA provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -2318,6 +11345,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         additionalProperties: false,
         properties: {},
       },
+      enabledByDefault: true,
       providers: ["nvidia"],
       providerAuthEnvVars: {
         nvidia: ["NVIDIA_API_KEY"],
@@ -2331,8 +11359,10 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: ["api.js", "runtime-api.js"],
+    runtimeSidecarArtifacts: ["runtime-api.js"],
     packageName: "@openclaw/ollama-provider",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw Ollama provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -2344,6 +11374,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         additionalProperties: false,
         properties: {},
       },
+      enabledByDefault: true,
       providers: ["ollama"],
       providerAuthEnvVars: {
         ollama: ["OLLAMA_API_KEY"],
@@ -2369,8 +11400,10 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: ["runtime-api.js"],
+    runtimeSidecarArtifacts: ["runtime-api.js"],
     packageName: "@openclaw/open-prose",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenProse VM skill pack plugin (slash command + telemetry).",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -2394,8 +11427,23 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: [
+      "api.js",
+      "cli-backend.js",
+      "default-models.js",
+      "image-generation-provider.js",
+      "media-understanding-provider.js",
+      "openai-codex-auth-identity.js",
+      "openai-codex-catalog.js",
+      "openai-codex-provider.js",
+      "openai-codex-provider.runtime.js",
+      "openai-provider.js",
+      "shared.js",
+      "speech-provider.js",
+      "tts.js",
+    ],
     packageName: "@openclaw/openai-provider",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw OpenAI provider plugins",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -2407,10 +11455,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         additionalProperties: false,
         properties: {},
       },
+      enabledByDefault: true,
       providers: ["openai", "openai-codex"],
-      speechProviders: ["openai"],
-      mediaUnderstandingProviders: ["openai", "openai-codex"],
-      imageGenerationProviders: ["openai"],
+      cliBackends: ["codex-cli"],
       providerAuthEnvVars: {
         openai: ["OPENAI_API_KEY"],
       },
@@ -2419,6 +11466,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           provider: "openai-codex",
           method: "oauth",
           choiceId: "openai-codex",
+          deprecatedChoiceIds: ["codex-cli"],
           choiceLabel: "OpenAI Codex (ChatGPT OAuth)",
           choiceHint: "Browser sign-in",
           groupId: "openai",
@@ -2439,6 +11487,11 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           cliDescription: "OpenAI API key",
         },
       ],
+      contracts: {
+        speechProviders: ["openai"],
+        mediaUnderstandingProviders: ["openai", "openai-codex"],
+        imageGenerationProviders: ["openai"],
+      },
     },
   },
   {
@@ -2448,8 +11501,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: ["api.js", "onboard.js"],
     packageName: "@openclaw/opencode-provider",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw OpenCode Zen provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -2461,6 +11515,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         additionalProperties: false,
         properties: {},
       },
+      enabledByDefault: true,
       providers: ["opencode"],
       providerAuthEnvVars: {
         opencode: ["OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"],
@@ -2489,8 +11544,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: ["api.js", "onboard.js"],
     packageName: "@openclaw/opencode-go-provider",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw OpenCode Go provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -2502,6 +11558,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         additionalProperties: false,
         properties: {},
       },
+      enabledByDefault: true,
       providers: ["opencode-go"],
       providerAuthEnvVars: {
         "opencode-go": ["OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"],
@@ -2530,8 +11587,14 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: [
+      "api.js",
+      "media-understanding-provider.js",
+      "onboard.js",
+      "provider-catalog.js",
+    ],
     packageName: "@openclaw/openrouter-provider",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw OpenRouter provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -2543,6 +11606,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         additionalProperties: false,
         properties: {},
       },
+      enabledByDefault: true,
       providers: ["openrouter"],
       providerAuthEnvVars: {
         openrouter: ["OPENROUTER_API_KEY"],
@@ -2562,6 +11626,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           cliDescription: "OpenRouter API key",
         },
       ],
+      contracts: {
+        mediaUnderstandingProviders: ["openrouter"],
+      },
     },
   },
   {
@@ -2572,7 +11639,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       built: "index.js",
     },
     packageName: "@openclaw/openshell-sandbox",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw OpenShell sandbox backend",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -2583,25 +11650,35 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         type: "object",
         additionalProperties: false,
         properties: {
+          mode: {
+            type: "string",
+            enum: ["mirror", "remote"],
+          },
           command: {
             type: "string",
+            minLength: 1,
           },
           gateway: {
             type: "string",
+            minLength: 1,
           },
           gatewayEndpoint: {
             type: "string",
+            minLength: 1,
           },
           from: {
             type: "string",
+            minLength: 1,
           },
           policy: {
             type: "string",
+            minLength: 1,
           },
           providers: {
             type: "array",
             items: {
               type: "string",
+              minLength: 1,
             },
           },
           gpu: {
@@ -2612,9 +11689,11 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           },
           remoteWorkspaceDir: {
             type: "string",
+            minLength: 1,
           },
           remoteAgentWorkspaceDir: {
             type: "string",
+            minLength: 1,
           },
           timeoutSeconds: {
             type: "number",
@@ -2626,6 +11705,10 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       description:
         "Sandbox backend powered by OpenShell with mirrored local workspaces and SSH-based command execution.",
       uiHints: {
+        mode: {
+          label: "Mode",
+          help: "Sandbox mode. Use mirror for the default local-workspace flow or remote for a fully remote workspace.",
+        },
         command: {
           label: "OpenShell Command",
           help: "Path or command name for the openshell CLI.",
@@ -2685,8 +11768,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: ["web-search-provider.js"],
     packageName: "@openclaw/perplexity-plugin",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw Perplexity plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -2733,6 +11817,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           help: "Optional Sonar/OpenRouter model override.",
         },
       },
+      contracts: {
+        webSearchProviders: ["perplexity"],
+      },
     },
   },
   {
@@ -2742,8 +11829,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: ["api.js", "onboard.js", "provider-catalog.js"],
     packageName: "@openclaw/qianfan-provider",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw Qianfan provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -2755,6 +11843,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         additionalProperties: false,
         properties: {},
       },
+      enabledByDefault: true,
       providers: ["qianfan"],
       providerAuthEnvVars: {
         qianfan: ["QIANFAN_API_KEY"],
@@ -2783,8 +11872,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: ["api.js", "defaults.js", "models.js"],
     packageName: "@openclaw/sglang-provider",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw SGLang provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -2796,6 +11886,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         additionalProperties: false,
         properties: {},
       },
+      enabledByDefault: true,
       providers: ["sglang"],
       providerAuthEnvVars: {
         sglang: ["SGLANG_API_KEY"],
@@ -2825,8 +11916,15 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./setup-entry.ts",
       built: "setup-entry.js",
     },
+    publicSurfaceArtifacts: [
+      "api.js",
+      "channel-config-api.js",
+      "reaction-runtime-api.js",
+      "runtime-api.js",
+    ],
+    runtimeSidecarArtifacts: ["runtime-api.js"],
     packageName: "@openclaw/signal",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw Signal channel plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -2850,6 +11948,662 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         properties: {},
       },
       channels: ["signal"],
+      channelConfigs: {
+        signal: {
+          schema: {
+            $schema: "http://json-schema.org/draft-07/schema#",
+            type: "object",
+            properties: {
+              name: {
+                type: "string",
+              },
+              capabilities: {
+                type: "array",
+                items: {
+                  type: "string",
+                },
+              },
+              markdown: {
+                type: "object",
+                properties: {
+                  tables: {
+                    type: "string",
+                    enum: ["off", "bullets", "code"],
+                  },
+                },
+                additionalProperties: false,
+              },
+              enabled: {
+                type: "boolean",
+              },
+              configWrites: {
+                type: "boolean",
+              },
+              account: {
+                type: "string",
+              },
+              accountUuid: {
+                type: "string",
+              },
+              httpUrl: {
+                type: "string",
+              },
+              httpHost: {
+                type: "string",
+              },
+              httpPort: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+              },
+              cliPath: {
+                type: "string",
+              },
+              autoStart: {
+                type: "boolean",
+              },
+              startupTimeoutMs: {
+                type: "integer",
+                minimum: 1000,
+                maximum: 120000,
+              },
+              receiveMode: {
+                anyOf: [
+                  {
+                    type: "string",
+                    const: "on-start",
+                  },
+                  {
+                    type: "string",
+                    const: "manual",
+                  },
+                ],
+              },
+              ignoreAttachments: {
+                type: "boolean",
+              },
+              ignoreStories: {
+                type: "boolean",
+              },
+              sendReadReceipts: {
+                type: "boolean",
+              },
+              dmPolicy: {
+                default: "pairing",
+                type: "string",
+                enum: ["pairing", "allowlist", "open", "disabled"],
+              },
+              allowFrom: {
+                type: "array",
+                items: {
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "number",
+                    },
+                  ],
+                },
+              },
+              defaultTo: {
+                type: "string",
+              },
+              groupAllowFrom: {
+                type: "array",
+                items: {
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "number",
+                    },
+                  ],
+                },
+              },
+              groupPolicy: {
+                default: "allowlist",
+                type: "string",
+                enum: ["open", "disabled", "allowlist"],
+              },
+              groups: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    requireMention: {
+                      type: "boolean",
+                    },
+                    tools: {
+                      type: "object",
+                      properties: {
+                        allow: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                        alsoAllow: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                        deny: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    toolsBySender: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "object",
+                        properties: {
+                          allow: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                          },
+                          alsoAllow: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                          },
+                          deny: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                    },
+                  },
+                  additionalProperties: false,
+                },
+              },
+              historyLimit: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+              },
+              dmHistoryLimit: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+              },
+              dms: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    historyLimit: {
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                  },
+                  additionalProperties: false,
+                },
+              },
+              textChunkLimit: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+              },
+              chunkMode: {
+                type: "string",
+                enum: ["length", "newline"],
+              },
+              blockStreaming: {
+                type: "boolean",
+              },
+              blockStreamingCoalesce: {
+                type: "object",
+                properties: {
+                  minChars: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  maxChars: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  idleMs: {
+                    type: "integer",
+                    minimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                },
+                additionalProperties: false,
+              },
+              mediaMaxMb: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+              },
+              reactionNotifications: {
+                type: "string",
+                enum: ["off", "own", "all", "allowlist"],
+              },
+              reactionAllowlist: {
+                type: "array",
+                items: {
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "number",
+                    },
+                  ],
+                },
+              },
+              actions: {
+                type: "object",
+                properties: {
+                  reactions: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
+              },
+              reactionLevel: {
+                type: "string",
+                enum: ["off", "ack", "minimal", "extensive"],
+              },
+              heartbeat: {
+                type: "object",
+                properties: {
+                  showOk: {
+                    type: "boolean",
+                  },
+                  showAlerts: {
+                    type: "boolean",
+                  },
+                  useIndicator: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
+              },
+              healthMonitor: {
+                type: "object",
+                properties: {
+                  enabled: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
+              },
+              responsePrefix: {
+                type: "string",
+              },
+              accounts: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    name: {
+                      type: "string",
+                    },
+                    capabilities: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                      },
+                    },
+                    markdown: {
+                      type: "object",
+                      properties: {
+                        tables: {
+                          type: "string",
+                          enum: ["off", "bullets", "code"],
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    enabled: {
+                      type: "boolean",
+                    },
+                    configWrites: {
+                      type: "boolean",
+                    },
+                    account: {
+                      type: "string",
+                    },
+                    accountUuid: {
+                      type: "string",
+                    },
+                    httpUrl: {
+                      type: "string",
+                    },
+                    httpHost: {
+                      type: "string",
+                    },
+                    httpPort: {
+                      type: "integer",
+                      exclusiveMinimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    cliPath: {
+                      type: "string",
+                    },
+                    autoStart: {
+                      type: "boolean",
+                    },
+                    startupTimeoutMs: {
+                      type: "integer",
+                      minimum: 1000,
+                      maximum: 120000,
+                    },
+                    receiveMode: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "on-start",
+                        },
+                        {
+                          type: "string",
+                          const: "manual",
+                        },
+                      ],
+                    },
+                    ignoreAttachments: {
+                      type: "boolean",
+                    },
+                    ignoreStories: {
+                      type: "boolean",
+                    },
+                    sendReadReceipts: {
+                      type: "boolean",
+                    },
+                    dmPolicy: {
+                      default: "pairing",
+                      type: "string",
+                      enum: ["pairing", "allowlist", "open", "disabled"],
+                    },
+                    allowFrom: {
+                      type: "array",
+                      items: {
+                        anyOf: [
+                          {
+                            type: "string",
+                          },
+                          {
+                            type: "number",
+                          },
+                        ],
+                      },
+                    },
+                    defaultTo: {
+                      type: "string",
+                    },
+                    groupAllowFrom: {
+                      type: "array",
+                      items: {
+                        anyOf: [
+                          {
+                            type: "string",
+                          },
+                          {
+                            type: "number",
+                          },
+                        ],
+                      },
+                    },
+                    groupPolicy: {
+                      default: "allowlist",
+                      type: "string",
+                      enum: ["open", "disabled", "allowlist"],
+                    },
+                    groups: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "object",
+                        properties: {
+                          requireMention: {
+                            type: "boolean",
+                          },
+                          tools: {
+                            type: "object",
+                            properties: {
+                              allow: {
+                                type: "array",
+                                items: {
+                                  type: "string",
+                                },
+                              },
+                              alsoAllow: {
+                                type: "array",
+                                items: {
+                                  type: "string",
+                                },
+                              },
+                              deny: {
+                                type: "array",
+                                items: {
+                                  type: "string",
+                                },
+                              },
+                            },
+                            additionalProperties: false,
+                          },
+                          toolsBySender: {
+                            type: "object",
+                            propertyNames: {
+                              type: "string",
+                            },
+                            additionalProperties: {
+                              type: "object",
+                              properties: {
+                                allow: {
+                                  type: "array",
+                                  items: {
+                                    type: "string",
+                                  },
+                                },
+                                alsoAllow: {
+                                  type: "array",
+                                  items: {
+                                    type: "string",
+                                  },
+                                },
+                                deny: {
+                                  type: "array",
+                                  items: {
+                                    type: "string",
+                                  },
+                                },
+                              },
+                              additionalProperties: false,
+                            },
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                    },
+                    historyLimit: {
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    dmHistoryLimit: {
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    dms: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "object",
+                        properties: {
+                          historyLimit: {
+                            type: "integer",
+                            minimum: 0,
+                            maximum: 9007199254740991,
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                    },
+                    textChunkLimit: {
+                      type: "integer",
+                      exclusiveMinimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    chunkMode: {
+                      type: "string",
+                      enum: ["length", "newline"],
+                    },
+                    blockStreaming: {
+                      type: "boolean",
+                    },
+                    blockStreamingCoalesce: {
+                      type: "object",
+                      properties: {
+                        minChars: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                        maxChars: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                        idleMs: {
+                          type: "integer",
+                          minimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    mediaMaxMb: {
+                      type: "integer",
+                      exclusiveMinimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    reactionNotifications: {
+                      type: "string",
+                      enum: ["off", "own", "all", "allowlist"],
+                    },
+                    reactionAllowlist: {
+                      type: "array",
+                      items: {
+                        anyOf: [
+                          {
+                            type: "string",
+                          },
+                          {
+                            type: "number",
+                          },
+                        ],
+                      },
+                    },
+                    actions: {
+                      type: "object",
+                      properties: {
+                        reactions: {
+                          type: "boolean",
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    reactionLevel: {
+                      type: "string",
+                      enum: ["off", "ack", "minimal", "extensive"],
+                    },
+                    heartbeat: {
+                      type: "object",
+                      properties: {
+                        showOk: {
+                          type: "boolean",
+                        },
+                        showAlerts: {
+                          type: "boolean",
+                        },
+                        useIndicator: {
+                          type: "boolean",
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    healthMonitor: {
+                      type: "object",
+                      properties: {
+                        enabled: {
+                          type: "boolean",
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    responsePrefix: {
+                      type: "string",
+                    },
+                  },
+                  required: ["dmPolicy", "groupPolicy"],
+                  additionalProperties: false,
+                },
+              },
+              defaultAccount: {
+                type: "string",
+              },
+            },
+            required: ["dmPolicy", "groupPolicy"],
+            additionalProperties: false,
+          },
+          uiHints: {
+            "": {
+              label: "Signal",
+              help: "Signal channel provider configuration including account identity and DM policy behavior. Keep account mapping explicit so routing remains stable across multi-device setups.",
+            },
+            dmPolicy: {
+              label: "Signal DM Policy",
+              help: 'Direct message access control ("pairing" recommended). "open" requires channels.signal.allowFrom=["*"].',
+            },
+            configWrites: {
+              label: "Signal Config Writes",
+              help: "Allow Signal to write config in response to channel events/commands (default: true).",
+            },
+            account: {
+              label: "Signal Account",
+              help: "Signal account identifier (phone/number handle) used to bind this channel config to a specific Signal identity. Keep this aligned with your linked device/session state.",
+            },
+          },
+          label: "Signal",
+          description: 'signal-cli linked device; more setup (David Reagans: "Hop on Discord.").',
+        },
+      },
     },
   },
   {
@@ -2863,8 +12617,10 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./setup-entry.ts",
       built: "setup-entry.js",
     },
+    publicSurfaceArtifacts: ["api.js", "channel-config-api.js", "runtime-api.js"],
+    runtimeSidecarArtifacts: ["runtime-api.js"],
     packageName: "@openclaw/slack",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw Slack channel plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -2888,6 +12644,1713 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         properties: {},
       },
       channels: ["slack"],
+      channelConfigs: {
+        slack: {
+          schema: {
+            $schema: "http://json-schema.org/draft-07/schema#",
+            type: "object",
+            properties: {
+              name: {
+                type: "string",
+              },
+              mode: {
+                default: "socket",
+                type: "string",
+                enum: ["socket", "http"],
+              },
+              signingSecret: {
+                anyOf: [
+                  {
+                    type: "string",
+                  },
+                  {
+                    oneOf: [
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "env",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "file",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "exec",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                    ],
+                  },
+                ],
+              },
+              webhookPath: {
+                default: "/slack/events",
+                type: "string",
+              },
+              capabilities: {
+                anyOf: [
+                  {
+                    type: "array",
+                    items: {
+                      type: "string",
+                    },
+                  },
+                  {
+                    type: "object",
+                    properties: {
+                      interactiveReplies: {
+                        type: "boolean",
+                      },
+                    },
+                    additionalProperties: false,
+                  },
+                ],
+              },
+              markdown: {
+                type: "object",
+                properties: {
+                  tables: {
+                    type: "string",
+                    enum: ["off", "bullets", "code"],
+                  },
+                },
+                additionalProperties: false,
+              },
+              enabled: {
+                type: "boolean",
+              },
+              commands: {
+                type: "object",
+                properties: {
+                  native: {
+                    anyOf: [
+                      {
+                        type: "boolean",
+                      },
+                      {
+                        type: "string",
+                        const: "auto",
+                      },
+                    ],
+                  },
+                  nativeSkills: {
+                    anyOf: [
+                      {
+                        type: "boolean",
+                      },
+                      {
+                        type: "string",
+                        const: "auto",
+                      },
+                    ],
+                  },
+                },
+                additionalProperties: false,
+              },
+              configWrites: {
+                type: "boolean",
+              },
+              botToken: {
+                anyOf: [
+                  {
+                    type: "string",
+                  },
+                  {
+                    oneOf: [
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "env",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "file",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "exec",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                    ],
+                  },
+                ],
+              },
+              appToken: {
+                anyOf: [
+                  {
+                    type: "string",
+                  },
+                  {
+                    oneOf: [
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "env",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "file",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "exec",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                    ],
+                  },
+                ],
+              },
+              userToken: {
+                anyOf: [
+                  {
+                    type: "string",
+                  },
+                  {
+                    oneOf: [
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "env",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "file",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "exec",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                    ],
+                  },
+                ],
+              },
+              userTokenReadOnly: {
+                default: true,
+                type: "boolean",
+              },
+              allowBots: {
+                type: "boolean",
+              },
+              dangerouslyAllowNameMatching: {
+                type: "boolean",
+              },
+              requireMention: {
+                type: "boolean",
+              },
+              groupPolicy: {
+                default: "allowlist",
+                type: "string",
+                enum: ["open", "disabled", "allowlist"],
+              },
+              historyLimit: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+              },
+              dmHistoryLimit: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+              },
+              dms: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    historyLimit: {
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                  },
+                  additionalProperties: false,
+                },
+              },
+              textChunkLimit: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+              },
+              chunkMode: {
+                type: "string",
+                enum: ["length", "newline"],
+              },
+              blockStreaming: {
+                type: "boolean",
+              },
+              blockStreamingCoalesce: {
+                type: "object",
+                properties: {
+                  minChars: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  maxChars: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  idleMs: {
+                    type: "integer",
+                    minimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                },
+                additionalProperties: false,
+              },
+              streaming: {
+                anyOf: [
+                  {
+                    type: "boolean",
+                  },
+                  {
+                    type: "string",
+                    enum: ["off", "partial", "block", "progress"],
+                  },
+                ],
+              },
+              nativeStreaming: {
+                type: "boolean",
+              },
+              streamMode: {
+                type: "string",
+                enum: ["replace", "status_final", "append"],
+              },
+              mediaMaxMb: {
+                type: "number",
+                exclusiveMinimum: 0,
+              },
+              reactionNotifications: {
+                type: "string",
+                enum: ["off", "own", "all", "allowlist"],
+              },
+              reactionAllowlist: {
+                type: "array",
+                items: {
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "number",
+                    },
+                  ],
+                },
+              },
+              replyToMode: {
+                anyOf: [
+                  {
+                    type: "string",
+                    const: "off",
+                  },
+                  {
+                    type: "string",
+                    const: "first",
+                  },
+                  {
+                    type: "string",
+                    const: "all",
+                  },
+                ],
+              },
+              replyToModeByChatType: {
+                type: "object",
+                properties: {
+                  direct: {
+                    anyOf: [
+                      {
+                        type: "string",
+                        const: "off",
+                      },
+                      {
+                        type: "string",
+                        const: "first",
+                      },
+                      {
+                        type: "string",
+                        const: "all",
+                      },
+                    ],
+                  },
+                  group: {
+                    anyOf: [
+                      {
+                        type: "string",
+                        const: "off",
+                      },
+                      {
+                        type: "string",
+                        const: "first",
+                      },
+                      {
+                        type: "string",
+                        const: "all",
+                      },
+                    ],
+                  },
+                  channel: {
+                    anyOf: [
+                      {
+                        type: "string",
+                        const: "off",
+                      },
+                      {
+                        type: "string",
+                        const: "first",
+                      },
+                      {
+                        type: "string",
+                        const: "all",
+                      },
+                    ],
+                  },
+                },
+                additionalProperties: false,
+              },
+              thread: {
+                type: "object",
+                properties: {
+                  historyScope: {
+                    type: "string",
+                    enum: ["thread", "channel"],
+                  },
+                  inheritParent: {
+                    type: "boolean",
+                  },
+                  initialHistoryLimit: {
+                    type: "integer",
+                    minimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                },
+                additionalProperties: false,
+              },
+              actions: {
+                type: "object",
+                properties: {
+                  reactions: {
+                    type: "boolean",
+                  },
+                  messages: {
+                    type: "boolean",
+                  },
+                  pins: {
+                    type: "boolean",
+                  },
+                  search: {
+                    type: "boolean",
+                  },
+                  permissions: {
+                    type: "boolean",
+                  },
+                  memberInfo: {
+                    type: "boolean",
+                  },
+                  channelInfo: {
+                    type: "boolean",
+                  },
+                  emojiList: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
+              },
+              slashCommand: {
+                type: "object",
+                properties: {
+                  enabled: {
+                    type: "boolean",
+                  },
+                  name: {
+                    type: "string",
+                  },
+                  sessionPrefix: {
+                    type: "string",
+                  },
+                  ephemeral: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
+              },
+              dmPolicy: {
+                type: "string",
+                enum: ["pairing", "allowlist", "open", "disabled"],
+              },
+              allowFrom: {
+                type: "array",
+                items: {
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "number",
+                    },
+                  ],
+                },
+              },
+              defaultTo: {
+                type: "string",
+              },
+              dm: {
+                type: "object",
+                properties: {
+                  enabled: {
+                    type: "boolean",
+                  },
+                  policy: {
+                    type: "string",
+                    enum: ["pairing", "allowlist", "open", "disabled"],
+                  },
+                  allowFrom: {
+                    type: "array",
+                    items: {
+                      anyOf: [
+                        {
+                          type: "string",
+                        },
+                        {
+                          type: "number",
+                        },
+                      ],
+                    },
+                  },
+                  groupEnabled: {
+                    type: "boolean",
+                  },
+                  groupChannels: {
+                    type: "array",
+                    items: {
+                      anyOf: [
+                        {
+                          type: "string",
+                        },
+                        {
+                          type: "number",
+                        },
+                      ],
+                    },
+                  },
+                  replyToMode: {
+                    anyOf: [
+                      {
+                        type: "string",
+                        const: "off",
+                      },
+                      {
+                        type: "string",
+                        const: "first",
+                      },
+                      {
+                        type: "string",
+                        const: "all",
+                      },
+                    ],
+                  },
+                },
+                additionalProperties: false,
+              },
+              channels: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    enabled: {
+                      type: "boolean",
+                    },
+                    allow: {
+                      type: "boolean",
+                    },
+                    requireMention: {
+                      type: "boolean",
+                    },
+                    tools: {
+                      type: "object",
+                      properties: {
+                        allow: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                        alsoAllow: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                        deny: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    toolsBySender: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "object",
+                        properties: {
+                          allow: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                          },
+                          alsoAllow: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                          },
+                          deny: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                    },
+                    allowBots: {
+                      type: "boolean",
+                    },
+                    users: {
+                      type: "array",
+                      items: {
+                        anyOf: [
+                          {
+                            type: "string",
+                          },
+                          {
+                            type: "number",
+                          },
+                        ],
+                      },
+                    },
+                    skills: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                      },
+                    },
+                    systemPrompt: {
+                      type: "string",
+                    },
+                  },
+                  additionalProperties: false,
+                },
+              },
+              heartbeat: {
+                type: "object",
+                properties: {
+                  showOk: {
+                    type: "boolean",
+                  },
+                  showAlerts: {
+                    type: "boolean",
+                  },
+                  useIndicator: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
+              },
+              healthMonitor: {
+                type: "object",
+                properties: {
+                  enabled: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
+              },
+              responsePrefix: {
+                type: "string",
+              },
+              ackReaction: {
+                type: "string",
+              },
+              typingReaction: {
+                type: "string",
+              },
+              accounts: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    name: {
+                      type: "string",
+                    },
+                    mode: {
+                      type: "string",
+                      enum: ["socket", "http"],
+                    },
+                    signingSecret: {
+                      anyOf: [
+                        {
+                          type: "string",
+                        },
+                        {
+                          oneOf: [
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "env",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                  pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "file",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "exec",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                          ],
+                        },
+                      ],
+                    },
+                    webhookPath: {
+                      type: "string",
+                    },
+                    capabilities: {
+                      anyOf: [
+                        {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                        {
+                          type: "object",
+                          properties: {
+                            interactiveReplies: {
+                              type: "boolean",
+                            },
+                          },
+                          additionalProperties: false,
+                        },
+                      ],
+                    },
+                    markdown: {
+                      type: "object",
+                      properties: {
+                        tables: {
+                          type: "string",
+                          enum: ["off", "bullets", "code"],
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    enabled: {
+                      type: "boolean",
+                    },
+                    commands: {
+                      type: "object",
+                      properties: {
+                        native: {
+                          anyOf: [
+                            {
+                              type: "boolean",
+                            },
+                            {
+                              type: "string",
+                              const: "auto",
+                            },
+                          ],
+                        },
+                        nativeSkills: {
+                          anyOf: [
+                            {
+                              type: "boolean",
+                            },
+                            {
+                              type: "string",
+                              const: "auto",
+                            },
+                          ],
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    configWrites: {
+                      type: "boolean",
+                    },
+                    botToken: {
+                      anyOf: [
+                        {
+                          type: "string",
+                        },
+                        {
+                          oneOf: [
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "env",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                  pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "file",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "exec",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                          ],
+                        },
+                      ],
+                    },
+                    appToken: {
+                      anyOf: [
+                        {
+                          type: "string",
+                        },
+                        {
+                          oneOf: [
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "env",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                  pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "file",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "exec",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                          ],
+                        },
+                      ],
+                    },
+                    userToken: {
+                      anyOf: [
+                        {
+                          type: "string",
+                        },
+                        {
+                          oneOf: [
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "env",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                  pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "file",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "exec",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                          ],
+                        },
+                      ],
+                    },
+                    userTokenReadOnly: {
+                      default: true,
+                      type: "boolean",
+                    },
+                    allowBots: {
+                      type: "boolean",
+                    },
+                    dangerouslyAllowNameMatching: {
+                      type: "boolean",
+                    },
+                    requireMention: {
+                      type: "boolean",
+                    },
+                    groupPolicy: {
+                      type: "string",
+                      enum: ["open", "disabled", "allowlist"],
+                    },
+                    historyLimit: {
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    dmHistoryLimit: {
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    dms: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "object",
+                        properties: {
+                          historyLimit: {
+                            type: "integer",
+                            minimum: 0,
+                            maximum: 9007199254740991,
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                    },
+                    textChunkLimit: {
+                      type: "integer",
+                      exclusiveMinimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    chunkMode: {
+                      type: "string",
+                      enum: ["length", "newline"],
+                    },
+                    blockStreaming: {
+                      type: "boolean",
+                    },
+                    blockStreamingCoalesce: {
+                      type: "object",
+                      properties: {
+                        minChars: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                        maxChars: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                        idleMs: {
+                          type: "integer",
+                          minimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    streaming: {
+                      anyOf: [
+                        {
+                          type: "boolean",
+                        },
+                        {
+                          type: "string",
+                          enum: ["off", "partial", "block", "progress"],
+                        },
+                      ],
+                    },
+                    nativeStreaming: {
+                      type: "boolean",
+                    },
+                    streamMode: {
+                      type: "string",
+                      enum: ["replace", "status_final", "append"],
+                    },
+                    mediaMaxMb: {
+                      type: "number",
+                      exclusiveMinimum: 0,
+                    },
+                    reactionNotifications: {
+                      type: "string",
+                      enum: ["off", "own", "all", "allowlist"],
+                    },
+                    reactionAllowlist: {
+                      type: "array",
+                      items: {
+                        anyOf: [
+                          {
+                            type: "string",
+                          },
+                          {
+                            type: "number",
+                          },
+                        ],
+                      },
+                    },
+                    replyToMode: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "off",
+                        },
+                        {
+                          type: "string",
+                          const: "first",
+                        },
+                        {
+                          type: "string",
+                          const: "all",
+                        },
+                      ],
+                    },
+                    replyToModeByChatType: {
+                      type: "object",
+                      properties: {
+                        direct: {
+                          anyOf: [
+                            {
+                              type: "string",
+                              const: "off",
+                            },
+                            {
+                              type: "string",
+                              const: "first",
+                            },
+                            {
+                              type: "string",
+                              const: "all",
+                            },
+                          ],
+                        },
+                        group: {
+                          anyOf: [
+                            {
+                              type: "string",
+                              const: "off",
+                            },
+                            {
+                              type: "string",
+                              const: "first",
+                            },
+                            {
+                              type: "string",
+                              const: "all",
+                            },
+                          ],
+                        },
+                        channel: {
+                          anyOf: [
+                            {
+                              type: "string",
+                              const: "off",
+                            },
+                            {
+                              type: "string",
+                              const: "first",
+                            },
+                            {
+                              type: "string",
+                              const: "all",
+                            },
+                          ],
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    thread: {
+                      type: "object",
+                      properties: {
+                        historyScope: {
+                          type: "string",
+                          enum: ["thread", "channel"],
+                        },
+                        inheritParent: {
+                          type: "boolean",
+                        },
+                        initialHistoryLimit: {
+                          type: "integer",
+                          minimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    actions: {
+                      type: "object",
+                      properties: {
+                        reactions: {
+                          type: "boolean",
+                        },
+                        messages: {
+                          type: "boolean",
+                        },
+                        pins: {
+                          type: "boolean",
+                        },
+                        search: {
+                          type: "boolean",
+                        },
+                        permissions: {
+                          type: "boolean",
+                        },
+                        memberInfo: {
+                          type: "boolean",
+                        },
+                        channelInfo: {
+                          type: "boolean",
+                        },
+                        emojiList: {
+                          type: "boolean",
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    slashCommand: {
+                      type: "object",
+                      properties: {
+                        enabled: {
+                          type: "boolean",
+                        },
+                        name: {
+                          type: "string",
+                        },
+                        sessionPrefix: {
+                          type: "string",
+                        },
+                        ephemeral: {
+                          type: "boolean",
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    dmPolicy: {
+                      type: "string",
+                      enum: ["pairing", "allowlist", "open", "disabled"],
+                    },
+                    allowFrom: {
+                      type: "array",
+                      items: {
+                        anyOf: [
+                          {
+                            type: "string",
+                          },
+                          {
+                            type: "number",
+                          },
+                        ],
+                      },
+                    },
+                    defaultTo: {
+                      type: "string",
+                    },
+                    dm: {
+                      type: "object",
+                      properties: {
+                        enabled: {
+                          type: "boolean",
+                        },
+                        policy: {
+                          type: "string",
+                          enum: ["pairing", "allowlist", "open", "disabled"],
+                        },
+                        allowFrom: {
+                          type: "array",
+                          items: {
+                            anyOf: [
+                              {
+                                type: "string",
+                              },
+                              {
+                                type: "number",
+                              },
+                            ],
+                          },
+                        },
+                        groupEnabled: {
+                          type: "boolean",
+                        },
+                        groupChannels: {
+                          type: "array",
+                          items: {
+                            anyOf: [
+                              {
+                                type: "string",
+                              },
+                              {
+                                type: "number",
+                              },
+                            ],
+                          },
+                        },
+                        replyToMode: {
+                          anyOf: [
+                            {
+                              type: "string",
+                              const: "off",
+                            },
+                            {
+                              type: "string",
+                              const: "first",
+                            },
+                            {
+                              type: "string",
+                              const: "all",
+                            },
+                          ],
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    channels: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "object",
+                        properties: {
+                          enabled: {
+                            type: "boolean",
+                          },
+                          allow: {
+                            type: "boolean",
+                          },
+                          requireMention: {
+                            type: "boolean",
+                          },
+                          tools: {
+                            type: "object",
+                            properties: {
+                              allow: {
+                                type: "array",
+                                items: {
+                                  type: "string",
+                                },
+                              },
+                              alsoAllow: {
+                                type: "array",
+                                items: {
+                                  type: "string",
+                                },
+                              },
+                              deny: {
+                                type: "array",
+                                items: {
+                                  type: "string",
+                                },
+                              },
+                            },
+                            additionalProperties: false,
+                          },
+                          toolsBySender: {
+                            type: "object",
+                            propertyNames: {
+                              type: "string",
+                            },
+                            additionalProperties: {
+                              type: "object",
+                              properties: {
+                                allow: {
+                                  type: "array",
+                                  items: {
+                                    type: "string",
+                                  },
+                                },
+                                alsoAllow: {
+                                  type: "array",
+                                  items: {
+                                    type: "string",
+                                  },
+                                },
+                                deny: {
+                                  type: "array",
+                                  items: {
+                                    type: "string",
+                                  },
+                                },
+                              },
+                              additionalProperties: false,
+                            },
+                          },
+                          allowBots: {
+                            type: "boolean",
+                          },
+                          users: {
+                            type: "array",
+                            items: {
+                              anyOf: [
+                                {
+                                  type: "string",
+                                },
+                                {
+                                  type: "number",
+                                },
+                              ],
+                            },
+                          },
+                          skills: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                          },
+                          systemPrompt: {
+                            type: "string",
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                    },
+                    heartbeat: {
+                      type: "object",
+                      properties: {
+                        showOk: {
+                          type: "boolean",
+                        },
+                        showAlerts: {
+                          type: "boolean",
+                        },
+                        useIndicator: {
+                          type: "boolean",
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    healthMonitor: {
+                      type: "object",
+                      properties: {
+                        enabled: {
+                          type: "boolean",
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    responsePrefix: {
+                      type: "string",
+                    },
+                    ackReaction: {
+                      type: "string",
+                    },
+                    typingReaction: {
+                      type: "string",
+                    },
+                  },
+                  required: ["userTokenReadOnly"],
+                  additionalProperties: false,
+                },
+              },
+              defaultAccount: {
+                type: "string",
+              },
+            },
+            required: ["mode", "webhookPath", "userTokenReadOnly", "groupPolicy"],
+            additionalProperties: false,
+          },
+          uiHints: {
+            "": {
+              label: "Slack",
+              help: "Slack channel provider configuration for bot/app tokens, streaming behavior, and DM policy controls. Keep token handling and thread behavior explicit to avoid noisy workspace interactions.",
+            },
+            "dm.policy": {
+              label: "Slack DM Policy",
+              help: 'Direct message access control ("pairing" recommended). "open" requires channels.slack.allowFrom=["*"] (legacy: channels.slack.dm.allowFrom).',
+            },
+            dmPolicy: {
+              label: "Slack DM Policy",
+              help: 'Direct message access control ("pairing" recommended). "open" requires channels.slack.allowFrom=["*"].',
+            },
+            configWrites: {
+              label: "Slack Config Writes",
+              help: "Allow Slack to write config in response to channel events/commands (default: true).",
+            },
+            "commands.native": {
+              label: "Slack Native Commands",
+              help: 'Override native commands for Slack (bool or "auto").',
+            },
+            "commands.nativeSkills": {
+              label: "Slack Native Skill Commands",
+              help: 'Override native skill commands for Slack (bool or "auto").',
+            },
+            allowBots: {
+              label: "Slack Allow Bot Messages",
+              help: "Allow bot-authored messages to trigger Slack replies (default: false).",
+            },
+            botToken: {
+              label: "Slack Bot Token",
+              help: "Slack bot token used for standard chat actions in the configured workspace. Keep this credential scoped and rotate if workspace app permissions change.",
+            },
+            appToken: {
+              label: "Slack App Token",
+              help: "Slack app-level token used for Socket Mode connections and event transport when enabled. Use least-privilege app scopes and store this token as a secret.",
+            },
+            userToken: {
+              label: "Slack User Token",
+              help: "Optional Slack user token for workflows requiring user-context API access beyond bot permissions. Use sparingly and audit scopes because this token can carry broader authority.",
+            },
+            userTokenReadOnly: {
+              label: "Slack User Token Read Only",
+              help: "When true, treat configured Slack user token usage as read-only helper behavior where possible. Keep enabled if you only need supplemental reads without user-context writes.",
+            },
+            "capabilities.interactiveReplies": {
+              label: "Slack Interactive Replies",
+              help: "Enable agent-authored Slack interactive reply directives (`[[slack_buttons: ...]]`, `[[slack_select: ...]]`). Default: false.",
+            },
+            streaming: {
+              label: "Slack Streaming Mode",
+              help: 'Unified Slack stream preview mode: "off" | "partial" | "block" | "progress". Legacy boolean/streamMode keys are auto-mapped.',
+            },
+            nativeStreaming: {
+              label: "Slack Native Streaming",
+              help: "Enable native Slack text streaming (chat.startStream/chat.appendStream/chat.stopStream) when channels.slack.streaming is partial (default: true).",
+            },
+            streamMode: {
+              label: "Slack Stream Mode (Legacy)",
+              help: "Legacy Slack preview mode alias (replace | status_final | append); auto-migrated to channels.slack.streaming.",
+            },
+            "thread.historyScope": {
+              label: "Slack Thread History Scope",
+              help: 'Scope for Slack thread history context ("thread" isolates per thread; "channel" reuses channel history).',
+            },
+            "thread.inheritParent": {
+              label: "Slack Thread Parent Inheritance",
+              help: "If true, Slack thread sessions inherit the parent channel transcript (default: false).",
+            },
+            "thread.initialHistoryLimit": {
+              label: "Slack Thread Initial History Limit",
+              help: "Maximum number of existing Slack thread messages to fetch when starting a new thread session (default: 20, set to 0 to disable).",
+            },
+          },
+          label: "Slack",
+          description: "supported (Socket Mode).",
+        },
+      },
     },
   },
   {
@@ -2901,8 +14364,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./setup-entry.ts",
       built: "setup-entry.js",
     },
+    publicSurfaceArtifacts: ["setup-api.js"],
     packageName: "@openclaw/synology-chat",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "Synology Chat channel plugin for OpenClaw",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -2920,7 +14384,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         npmSpec: "@openclaw/synology-chat",
         localPath: "extensions/synology-chat",
         defaultChoice: "npm",
-        minHostVersion: ">=2026.3.22",
+        minHostVersion: ">=2026.3.27",
       },
     },
     manifest: {
@@ -2931,6 +14395,25 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         properties: {},
       },
       channels: ["synology-chat"],
+      channelConfigs: {
+        "synology-chat": {
+          schema: {
+            $schema: "http://json-schema.org/draft-07/schema#",
+            type: "object",
+            properties: {
+              dangerouslyAllowNameMatching: {
+                type: "boolean",
+              },
+              dangerouslyAllowInheritedWebhookPath: {
+                type: "boolean",
+              },
+            },
+            additionalProperties: {},
+          },
+          label: "Synology Chat",
+          description: "Connect your Synology NAS Chat to OpenClaw with full agent capabilities.",
+        },
+      },
     },
   },
   {
@@ -2940,8 +14423,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: ["api.js", "models.js", "onboard.js", "provider-catalog.js"],
     packageName: "@openclaw/synthetic-provider",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw Synthetic provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -2953,6 +14437,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         additionalProperties: false,
         properties: {},
       },
+      enabledByDefault: true,
       providers: ["synthetic"],
       providerAuthEnvVars: {
         synthetic: ["SYNTHETIC_API_KEY"],
@@ -2981,8 +14466,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: ["web-search-provider.js"],
     packageName: "@openclaw/tavily-plugin",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw Tavily plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -3023,6 +14509,10 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           help: "Tavily API base URL override.",
         },
       },
+      contracts: {
+        webSearchProviders: ["tavily"],
+        tools: ["tavily_search", "tavily_extract"],
+      },
     },
   },
   {
@@ -3036,8 +14526,16 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./setup-entry.ts",
       built: "setup-entry.js",
     },
+    publicSurfaceArtifacts: [
+      "allow-from.js",
+      "api.js",
+      "channel-config-api.js",
+      "runtime-api.js",
+      "update-offset-runtime-api.js",
+    ],
+    runtimeSidecarArtifacts: ["runtime-api.js"],
     packageName: "@openclaw/telegram",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw Telegram channel plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -3061,6 +14559,2049 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         properties: {},
       },
       channels: ["telegram"],
+      channelConfigs: {
+        telegram: {
+          schema: {
+            $schema: "http://json-schema.org/draft-07/schema#",
+            type: "object",
+            properties: {
+              name: {
+                type: "string",
+              },
+              capabilities: {
+                anyOf: [
+                  {
+                    type: "array",
+                    items: {
+                      type: "string",
+                    },
+                  },
+                  {
+                    type: "object",
+                    properties: {
+                      inlineButtons: {
+                        type: "string",
+                        enum: ["off", "dm", "group", "all", "allowlist"],
+                      },
+                    },
+                    additionalProperties: false,
+                  },
+                ],
+              },
+              execApprovals: {
+                type: "object",
+                properties: {
+                  enabled: {
+                    type: "boolean",
+                  },
+                  approvers: {
+                    type: "array",
+                    items: {
+                      anyOf: [
+                        {
+                          type: "string",
+                        },
+                        {
+                          type: "number",
+                        },
+                      ],
+                    },
+                  },
+                  agentFilter: {
+                    type: "array",
+                    items: {
+                      type: "string",
+                    },
+                  },
+                  sessionFilter: {
+                    type: "array",
+                    items: {
+                      type: "string",
+                    },
+                  },
+                  target: {
+                    type: "string",
+                    enum: ["dm", "channel", "both"],
+                  },
+                },
+                additionalProperties: false,
+              },
+              markdown: {
+                type: "object",
+                properties: {
+                  tables: {
+                    type: "string",
+                    enum: ["off", "bullets", "code"],
+                  },
+                },
+                additionalProperties: false,
+              },
+              enabled: {
+                type: "boolean",
+              },
+              commands: {
+                type: "object",
+                properties: {
+                  native: {
+                    anyOf: [
+                      {
+                        type: "boolean",
+                      },
+                      {
+                        type: "string",
+                        const: "auto",
+                      },
+                    ],
+                  },
+                  nativeSkills: {
+                    anyOf: [
+                      {
+                        type: "boolean",
+                      },
+                      {
+                        type: "string",
+                        const: "auto",
+                      },
+                    ],
+                  },
+                },
+                additionalProperties: false,
+              },
+              customCommands: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    command: {
+                      type: "string",
+                    },
+                    description: {
+                      type: "string",
+                    },
+                  },
+                  required: ["command", "description"],
+                  additionalProperties: false,
+                },
+              },
+              configWrites: {
+                type: "boolean",
+              },
+              dmPolicy: {
+                default: "pairing",
+                type: "string",
+                enum: ["pairing", "allowlist", "open", "disabled"],
+              },
+              botToken: {
+                anyOf: [
+                  {
+                    type: "string",
+                  },
+                  {
+                    oneOf: [
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "env",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "file",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "exec",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                    ],
+                  },
+                ],
+              },
+              tokenFile: {
+                type: "string",
+              },
+              replyToMode: {
+                anyOf: [
+                  {
+                    type: "string",
+                    const: "off",
+                  },
+                  {
+                    type: "string",
+                    const: "first",
+                  },
+                  {
+                    type: "string",
+                    const: "all",
+                  },
+                ],
+              },
+              groups: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    requireMention: {
+                      type: "boolean",
+                    },
+                    disableAudioPreflight: {
+                      type: "boolean",
+                    },
+                    groupPolicy: {
+                      type: "string",
+                      enum: ["open", "disabled", "allowlist"],
+                    },
+                    tools: {
+                      type: "object",
+                      properties: {
+                        allow: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                        alsoAllow: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                        deny: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    toolsBySender: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "object",
+                        properties: {
+                          allow: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                          },
+                          alsoAllow: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                          },
+                          deny: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                    },
+                    skills: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                      },
+                    },
+                    enabled: {
+                      type: "boolean",
+                    },
+                    allowFrom: {
+                      type: "array",
+                      items: {
+                        anyOf: [
+                          {
+                            type: "string",
+                          },
+                          {
+                            type: "number",
+                          },
+                        ],
+                      },
+                    },
+                    systemPrompt: {
+                      type: "string",
+                    },
+                    topics: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "object",
+                        properties: {
+                          requireMention: {
+                            type: "boolean",
+                          },
+                          disableAudioPreflight: {
+                            type: "boolean",
+                          },
+                          groupPolicy: {
+                            type: "string",
+                            enum: ["open", "disabled", "allowlist"],
+                          },
+                          skills: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                          },
+                          enabled: {
+                            type: "boolean",
+                          },
+                          allowFrom: {
+                            type: "array",
+                            items: {
+                              anyOf: [
+                                {
+                                  type: "string",
+                                },
+                                {
+                                  type: "number",
+                                },
+                              ],
+                            },
+                          },
+                          systemPrompt: {
+                            type: "string",
+                          },
+                          agentId: {
+                            type: "string",
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                    },
+                  },
+                  additionalProperties: false,
+                },
+              },
+              allowFrom: {
+                type: "array",
+                items: {
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "number",
+                    },
+                  ],
+                },
+              },
+              defaultTo: {
+                anyOf: [
+                  {
+                    type: "string",
+                  },
+                  {
+                    type: "number",
+                  },
+                ],
+              },
+              groupAllowFrom: {
+                type: "array",
+                items: {
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "number",
+                    },
+                  ],
+                },
+              },
+              groupPolicy: {
+                default: "allowlist",
+                type: "string",
+                enum: ["open", "disabled", "allowlist"],
+              },
+              historyLimit: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+              },
+              dmHistoryLimit: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+              },
+              dms: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    historyLimit: {
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                  },
+                  additionalProperties: false,
+                },
+              },
+              direct: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    dmPolicy: {
+                      type: "string",
+                      enum: ["pairing", "allowlist", "open", "disabled"],
+                    },
+                    tools: {
+                      type: "object",
+                      properties: {
+                        allow: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                        alsoAllow: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                        deny: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    toolsBySender: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "object",
+                        properties: {
+                          allow: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                          },
+                          alsoAllow: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                          },
+                          deny: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                    },
+                    skills: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                      },
+                    },
+                    enabled: {
+                      type: "boolean",
+                    },
+                    allowFrom: {
+                      type: "array",
+                      items: {
+                        anyOf: [
+                          {
+                            type: "string",
+                          },
+                          {
+                            type: "number",
+                          },
+                        ],
+                      },
+                    },
+                    systemPrompt: {
+                      type: "string",
+                    },
+                    topics: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "object",
+                        properties: {
+                          requireMention: {
+                            type: "boolean",
+                          },
+                          disableAudioPreflight: {
+                            type: "boolean",
+                          },
+                          groupPolicy: {
+                            type: "string",
+                            enum: ["open", "disabled", "allowlist"],
+                          },
+                          skills: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                          },
+                          enabled: {
+                            type: "boolean",
+                          },
+                          allowFrom: {
+                            type: "array",
+                            items: {
+                              anyOf: [
+                                {
+                                  type: "string",
+                                },
+                                {
+                                  type: "number",
+                                },
+                              ],
+                            },
+                          },
+                          systemPrompt: {
+                            type: "string",
+                          },
+                          agentId: {
+                            type: "string",
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                    },
+                    requireTopic: {
+                      type: "boolean",
+                    },
+                    autoTopicLabel: {
+                      anyOf: [
+                        {
+                          type: "boolean",
+                        },
+                        {
+                          type: "object",
+                          properties: {
+                            enabled: {
+                              type: "boolean",
+                            },
+                            prompt: {
+                              type: "string",
+                            },
+                          },
+                          additionalProperties: false,
+                        },
+                      ],
+                    },
+                  },
+                  additionalProperties: false,
+                },
+              },
+              textChunkLimit: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+              },
+              chunkMode: {
+                type: "string",
+                enum: ["length", "newline"],
+              },
+              streaming: {
+                anyOf: [
+                  {
+                    type: "boolean",
+                  },
+                  {
+                    type: "string",
+                    enum: ["off", "partial", "block", "progress"],
+                  },
+                ],
+              },
+              blockStreaming: {
+                type: "boolean",
+              },
+              draftChunk: {
+                type: "object",
+                properties: {
+                  minChars: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  maxChars: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  breakPreference: {
+                    anyOf: [
+                      {
+                        type: "string",
+                        const: "paragraph",
+                      },
+                      {
+                        type: "string",
+                        const: "newline",
+                      },
+                      {
+                        type: "string",
+                        const: "sentence",
+                      },
+                    ],
+                  },
+                },
+                additionalProperties: false,
+              },
+              blockStreamingCoalesce: {
+                type: "object",
+                properties: {
+                  minChars: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  maxChars: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  idleMs: {
+                    type: "integer",
+                    minimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                },
+                additionalProperties: false,
+              },
+              streamMode: {
+                type: "string",
+                enum: ["off", "partial", "block"],
+              },
+              mediaMaxMb: {
+                type: "number",
+                exclusiveMinimum: 0,
+              },
+              timeoutSeconds: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+              },
+              retry: {
+                type: "object",
+                properties: {
+                  attempts: {
+                    type: "integer",
+                    minimum: 1,
+                    maximum: 9007199254740991,
+                  },
+                  minDelayMs: {
+                    type: "integer",
+                    minimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  maxDelayMs: {
+                    type: "integer",
+                    minimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  jitter: {
+                    type: "number",
+                    minimum: 0,
+                    maximum: 1,
+                  },
+                },
+                additionalProperties: false,
+              },
+              network: {
+                type: "object",
+                properties: {
+                  autoSelectFamily: {
+                    type: "boolean",
+                  },
+                  dnsResultOrder: {
+                    type: "string",
+                    enum: ["ipv4first", "verbatim"],
+                  },
+                },
+                additionalProperties: false,
+              },
+              proxy: {
+                type: "string",
+              },
+              webhookUrl: {
+                description:
+                  "Public HTTPS webhook URL registered with Telegram for inbound updates. This must be internet-reachable and requires channels.telegram.webhookSecret.",
+                type: "string",
+              },
+              webhookSecret: {
+                description:
+                  "Secret token sent to Telegram during webhook registration and verified on inbound webhook requests. Telegram returns this value for verification; this is not the gateway auth token and not the bot token.",
+                anyOf: [
+                  {
+                    type: "string",
+                  },
+                  {
+                    oneOf: [
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "env",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "file",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "exec",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                    ],
+                  },
+                ],
+              },
+              webhookPath: {
+                description:
+                  "Local webhook route path served by the gateway listener. Defaults to /telegram-webhook.",
+                type: "string",
+              },
+              webhookHost: {
+                description:
+                  "Local bind host for the webhook listener. Defaults to 127.0.0.1; keep loopback unless you intentionally expose direct ingress.",
+                type: "string",
+              },
+              webhookPort: {
+                description:
+                  "Local bind port for the webhook listener. Defaults to 8787; set to 0 to let the OS assign an ephemeral port.",
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+              },
+              webhookCertPath: {
+                description:
+                  "Path to the self-signed certificate (PEM) to upload to Telegram during webhook registration. Required for self-signed certs (direct IP or no domain).",
+                type: "string",
+              },
+              actions: {
+                type: "object",
+                properties: {
+                  reactions: {
+                    type: "boolean",
+                  },
+                  sendMessage: {
+                    type: "boolean",
+                  },
+                  poll: {
+                    type: "boolean",
+                  },
+                  deleteMessage: {
+                    type: "boolean",
+                  },
+                  editMessage: {
+                    type: "boolean",
+                  },
+                  sticker: {
+                    type: "boolean",
+                  },
+                  createForumTopic: {
+                    type: "boolean",
+                  },
+                  editForumTopic: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
+              },
+              threadBindings: {
+                type: "object",
+                properties: {
+                  enabled: {
+                    type: "boolean",
+                  },
+                  idleHours: {
+                    type: "number",
+                    minimum: 0,
+                  },
+                  maxAgeHours: {
+                    type: "number",
+                    minimum: 0,
+                  },
+                  spawnSubagentSessions: {
+                    type: "boolean",
+                  },
+                  spawnAcpSessions: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
+              },
+              reactionNotifications: {
+                type: "string",
+                enum: ["off", "own", "all"],
+              },
+              reactionLevel: {
+                type: "string",
+                enum: ["off", "ack", "minimal", "extensive"],
+              },
+              heartbeat: {
+                type: "object",
+                properties: {
+                  showOk: {
+                    type: "boolean",
+                  },
+                  showAlerts: {
+                    type: "boolean",
+                  },
+                  useIndicator: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
+              },
+              healthMonitor: {
+                type: "object",
+                properties: {
+                  enabled: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
+              },
+              linkPreview: {
+                type: "boolean",
+              },
+              silentErrorReplies: {
+                type: "boolean",
+              },
+              responsePrefix: {
+                type: "string",
+              },
+              ackReaction: {
+                type: "string",
+              },
+              apiRoot: {
+                type: "string",
+                format: "uri",
+              },
+              autoTopicLabel: {
+                anyOf: [
+                  {
+                    type: "boolean",
+                  },
+                  {
+                    type: "object",
+                    properties: {
+                      enabled: {
+                        type: "boolean",
+                      },
+                      prompt: {
+                        type: "string",
+                      },
+                    },
+                    additionalProperties: false,
+                  },
+                ],
+              },
+              accounts: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    name: {
+                      type: "string",
+                    },
+                    capabilities: {
+                      anyOf: [
+                        {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                        {
+                          type: "object",
+                          properties: {
+                            inlineButtons: {
+                              type: "string",
+                              enum: ["off", "dm", "group", "all", "allowlist"],
+                            },
+                          },
+                          additionalProperties: false,
+                        },
+                      ],
+                    },
+                    execApprovals: {
+                      type: "object",
+                      properties: {
+                        enabled: {
+                          type: "boolean",
+                        },
+                        approvers: {
+                          type: "array",
+                          items: {
+                            anyOf: [
+                              {
+                                type: "string",
+                              },
+                              {
+                                type: "number",
+                              },
+                            ],
+                          },
+                        },
+                        agentFilter: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                        sessionFilter: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                        target: {
+                          type: "string",
+                          enum: ["dm", "channel", "both"],
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    markdown: {
+                      type: "object",
+                      properties: {
+                        tables: {
+                          type: "string",
+                          enum: ["off", "bullets", "code"],
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    enabled: {
+                      type: "boolean",
+                    },
+                    commands: {
+                      type: "object",
+                      properties: {
+                        native: {
+                          anyOf: [
+                            {
+                              type: "boolean",
+                            },
+                            {
+                              type: "string",
+                              const: "auto",
+                            },
+                          ],
+                        },
+                        nativeSkills: {
+                          anyOf: [
+                            {
+                              type: "boolean",
+                            },
+                            {
+                              type: "string",
+                              const: "auto",
+                            },
+                          ],
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    customCommands: {
+                      type: "array",
+                      items: {
+                        type: "object",
+                        properties: {
+                          command: {
+                            type: "string",
+                          },
+                          description: {
+                            type: "string",
+                          },
+                        },
+                        required: ["command", "description"],
+                        additionalProperties: false,
+                      },
+                    },
+                    configWrites: {
+                      type: "boolean",
+                    },
+                    dmPolicy: {
+                      default: "pairing",
+                      type: "string",
+                      enum: ["pairing", "allowlist", "open", "disabled"],
+                    },
+                    botToken: {
+                      anyOf: [
+                        {
+                          type: "string",
+                        },
+                        {
+                          oneOf: [
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "env",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                  pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "file",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "exec",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                          ],
+                        },
+                      ],
+                    },
+                    tokenFile: {
+                      type: "string",
+                    },
+                    replyToMode: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "off",
+                        },
+                        {
+                          type: "string",
+                          const: "first",
+                        },
+                        {
+                          type: "string",
+                          const: "all",
+                        },
+                      ],
+                    },
+                    groups: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "object",
+                        properties: {
+                          requireMention: {
+                            type: "boolean",
+                          },
+                          disableAudioPreflight: {
+                            type: "boolean",
+                          },
+                          groupPolicy: {
+                            type: "string",
+                            enum: ["open", "disabled", "allowlist"],
+                          },
+                          tools: {
+                            type: "object",
+                            properties: {
+                              allow: {
+                                type: "array",
+                                items: {
+                                  type: "string",
+                                },
+                              },
+                              alsoAllow: {
+                                type: "array",
+                                items: {
+                                  type: "string",
+                                },
+                              },
+                              deny: {
+                                type: "array",
+                                items: {
+                                  type: "string",
+                                },
+                              },
+                            },
+                            additionalProperties: false,
+                          },
+                          toolsBySender: {
+                            type: "object",
+                            propertyNames: {
+                              type: "string",
+                            },
+                            additionalProperties: {
+                              type: "object",
+                              properties: {
+                                allow: {
+                                  type: "array",
+                                  items: {
+                                    type: "string",
+                                  },
+                                },
+                                alsoAllow: {
+                                  type: "array",
+                                  items: {
+                                    type: "string",
+                                  },
+                                },
+                                deny: {
+                                  type: "array",
+                                  items: {
+                                    type: "string",
+                                  },
+                                },
+                              },
+                              additionalProperties: false,
+                            },
+                          },
+                          skills: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                          },
+                          enabled: {
+                            type: "boolean",
+                          },
+                          allowFrom: {
+                            type: "array",
+                            items: {
+                              anyOf: [
+                                {
+                                  type: "string",
+                                },
+                                {
+                                  type: "number",
+                                },
+                              ],
+                            },
+                          },
+                          systemPrompt: {
+                            type: "string",
+                          },
+                          topics: {
+                            type: "object",
+                            propertyNames: {
+                              type: "string",
+                            },
+                            additionalProperties: {
+                              type: "object",
+                              properties: {
+                                requireMention: {
+                                  type: "boolean",
+                                },
+                                disableAudioPreflight: {
+                                  type: "boolean",
+                                },
+                                groupPolicy: {
+                                  type: "string",
+                                  enum: ["open", "disabled", "allowlist"],
+                                },
+                                skills: {
+                                  type: "array",
+                                  items: {
+                                    type: "string",
+                                  },
+                                },
+                                enabled: {
+                                  type: "boolean",
+                                },
+                                allowFrom: {
+                                  type: "array",
+                                  items: {
+                                    anyOf: [
+                                      {
+                                        type: "string",
+                                      },
+                                      {
+                                        type: "number",
+                                      },
+                                    ],
+                                  },
+                                },
+                                systemPrompt: {
+                                  type: "string",
+                                },
+                                agentId: {
+                                  type: "string",
+                                },
+                              },
+                              additionalProperties: false,
+                            },
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                    },
+                    allowFrom: {
+                      type: "array",
+                      items: {
+                        anyOf: [
+                          {
+                            type: "string",
+                          },
+                          {
+                            type: "number",
+                          },
+                        ],
+                      },
+                    },
+                    defaultTo: {
+                      anyOf: [
+                        {
+                          type: "string",
+                        },
+                        {
+                          type: "number",
+                        },
+                      ],
+                    },
+                    groupAllowFrom: {
+                      type: "array",
+                      items: {
+                        anyOf: [
+                          {
+                            type: "string",
+                          },
+                          {
+                            type: "number",
+                          },
+                        ],
+                      },
+                    },
+                    groupPolicy: {
+                      default: "allowlist",
+                      type: "string",
+                      enum: ["open", "disabled", "allowlist"],
+                    },
+                    historyLimit: {
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    dmHistoryLimit: {
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    dms: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "object",
+                        properties: {
+                          historyLimit: {
+                            type: "integer",
+                            minimum: 0,
+                            maximum: 9007199254740991,
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                    },
+                    direct: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "object",
+                        properties: {
+                          dmPolicy: {
+                            type: "string",
+                            enum: ["pairing", "allowlist", "open", "disabled"],
+                          },
+                          tools: {
+                            type: "object",
+                            properties: {
+                              allow: {
+                                type: "array",
+                                items: {
+                                  type: "string",
+                                },
+                              },
+                              alsoAllow: {
+                                type: "array",
+                                items: {
+                                  type: "string",
+                                },
+                              },
+                              deny: {
+                                type: "array",
+                                items: {
+                                  type: "string",
+                                },
+                              },
+                            },
+                            additionalProperties: false,
+                          },
+                          toolsBySender: {
+                            type: "object",
+                            propertyNames: {
+                              type: "string",
+                            },
+                            additionalProperties: {
+                              type: "object",
+                              properties: {
+                                allow: {
+                                  type: "array",
+                                  items: {
+                                    type: "string",
+                                  },
+                                },
+                                alsoAllow: {
+                                  type: "array",
+                                  items: {
+                                    type: "string",
+                                  },
+                                },
+                                deny: {
+                                  type: "array",
+                                  items: {
+                                    type: "string",
+                                  },
+                                },
+                              },
+                              additionalProperties: false,
+                            },
+                          },
+                          skills: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                          },
+                          enabled: {
+                            type: "boolean",
+                          },
+                          allowFrom: {
+                            type: "array",
+                            items: {
+                              anyOf: [
+                                {
+                                  type: "string",
+                                },
+                                {
+                                  type: "number",
+                                },
+                              ],
+                            },
+                          },
+                          systemPrompt: {
+                            type: "string",
+                          },
+                          topics: {
+                            type: "object",
+                            propertyNames: {
+                              type: "string",
+                            },
+                            additionalProperties: {
+                              type: "object",
+                              properties: {
+                                requireMention: {
+                                  type: "boolean",
+                                },
+                                disableAudioPreflight: {
+                                  type: "boolean",
+                                },
+                                groupPolicy: {
+                                  type: "string",
+                                  enum: ["open", "disabled", "allowlist"],
+                                },
+                                skills: {
+                                  type: "array",
+                                  items: {
+                                    type: "string",
+                                  },
+                                },
+                                enabled: {
+                                  type: "boolean",
+                                },
+                                allowFrom: {
+                                  type: "array",
+                                  items: {
+                                    anyOf: [
+                                      {
+                                        type: "string",
+                                      },
+                                      {
+                                        type: "number",
+                                      },
+                                    ],
+                                  },
+                                },
+                                systemPrompt: {
+                                  type: "string",
+                                },
+                                agentId: {
+                                  type: "string",
+                                },
+                              },
+                              additionalProperties: false,
+                            },
+                          },
+                          requireTopic: {
+                            type: "boolean",
+                          },
+                          autoTopicLabel: {
+                            anyOf: [
+                              {
+                                type: "boolean",
+                              },
+                              {
+                                type: "object",
+                                properties: {
+                                  enabled: {
+                                    type: "boolean",
+                                  },
+                                  prompt: {
+                                    type: "string",
+                                  },
+                                },
+                                additionalProperties: false,
+                              },
+                            ],
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                    },
+                    textChunkLimit: {
+                      type: "integer",
+                      exclusiveMinimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    chunkMode: {
+                      type: "string",
+                      enum: ["length", "newline"],
+                    },
+                    streaming: {
+                      anyOf: [
+                        {
+                          type: "boolean",
+                        },
+                        {
+                          type: "string",
+                          enum: ["off", "partial", "block", "progress"],
+                        },
+                      ],
+                    },
+                    blockStreaming: {
+                      type: "boolean",
+                    },
+                    draftChunk: {
+                      type: "object",
+                      properties: {
+                        minChars: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                        maxChars: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                        breakPreference: {
+                          anyOf: [
+                            {
+                              type: "string",
+                              const: "paragraph",
+                            },
+                            {
+                              type: "string",
+                              const: "newline",
+                            },
+                            {
+                              type: "string",
+                              const: "sentence",
+                            },
+                          ],
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    blockStreamingCoalesce: {
+                      type: "object",
+                      properties: {
+                        minChars: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                        maxChars: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                        idleMs: {
+                          type: "integer",
+                          minimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    streamMode: {
+                      type: "string",
+                      enum: ["off", "partial", "block"],
+                    },
+                    mediaMaxMb: {
+                      type: "number",
+                      exclusiveMinimum: 0,
+                    },
+                    timeoutSeconds: {
+                      type: "integer",
+                      exclusiveMinimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    retry: {
+                      type: "object",
+                      properties: {
+                        attempts: {
+                          type: "integer",
+                          minimum: 1,
+                          maximum: 9007199254740991,
+                        },
+                        minDelayMs: {
+                          type: "integer",
+                          minimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                        maxDelayMs: {
+                          type: "integer",
+                          minimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                        jitter: {
+                          type: "number",
+                          minimum: 0,
+                          maximum: 1,
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    network: {
+                      type: "object",
+                      properties: {
+                        autoSelectFamily: {
+                          type: "boolean",
+                        },
+                        dnsResultOrder: {
+                          type: "string",
+                          enum: ["ipv4first", "verbatim"],
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    proxy: {
+                      type: "string",
+                    },
+                    webhookUrl: {
+                      description:
+                        "Public HTTPS webhook URL registered with Telegram for inbound updates. This must be internet-reachable and requires channels.telegram.webhookSecret.",
+                      type: "string",
+                    },
+                    webhookSecret: {
+                      description:
+                        "Secret token sent to Telegram during webhook registration and verified on inbound webhook requests. Telegram returns this value for verification; this is not the gateway auth token and not the bot token.",
+                      anyOf: [
+                        {
+                          type: "string",
+                        },
+                        {
+                          oneOf: [
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "env",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                  pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "file",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "exec",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                          ],
+                        },
+                      ],
+                    },
+                    webhookPath: {
+                      description:
+                        "Local webhook route path served by the gateway listener. Defaults to /telegram-webhook.",
+                      type: "string",
+                    },
+                    webhookHost: {
+                      description:
+                        "Local bind host for the webhook listener. Defaults to 127.0.0.1; keep loopback unless you intentionally expose direct ingress.",
+                      type: "string",
+                    },
+                    webhookPort: {
+                      description:
+                        "Local bind port for the webhook listener. Defaults to 8787; set to 0 to let the OS assign an ephemeral port.",
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    webhookCertPath: {
+                      description:
+                        "Path to the self-signed certificate (PEM) to upload to Telegram during webhook registration. Required for self-signed certs (direct IP or no domain).",
+                      type: "string",
+                    },
+                    actions: {
+                      type: "object",
+                      properties: {
+                        reactions: {
+                          type: "boolean",
+                        },
+                        sendMessage: {
+                          type: "boolean",
+                        },
+                        poll: {
+                          type: "boolean",
+                        },
+                        deleteMessage: {
+                          type: "boolean",
+                        },
+                        editMessage: {
+                          type: "boolean",
+                        },
+                        sticker: {
+                          type: "boolean",
+                        },
+                        createForumTopic: {
+                          type: "boolean",
+                        },
+                        editForumTopic: {
+                          type: "boolean",
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    threadBindings: {
+                      type: "object",
+                      properties: {
+                        enabled: {
+                          type: "boolean",
+                        },
+                        idleHours: {
+                          type: "number",
+                          minimum: 0,
+                        },
+                        maxAgeHours: {
+                          type: "number",
+                          minimum: 0,
+                        },
+                        spawnSubagentSessions: {
+                          type: "boolean",
+                        },
+                        spawnAcpSessions: {
+                          type: "boolean",
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    reactionNotifications: {
+                      type: "string",
+                      enum: ["off", "own", "all"],
+                    },
+                    reactionLevel: {
+                      type: "string",
+                      enum: ["off", "ack", "minimal", "extensive"],
+                    },
+                    heartbeat: {
+                      type: "object",
+                      properties: {
+                        showOk: {
+                          type: "boolean",
+                        },
+                        showAlerts: {
+                          type: "boolean",
+                        },
+                        useIndicator: {
+                          type: "boolean",
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    healthMonitor: {
+                      type: "object",
+                      properties: {
+                        enabled: {
+                          type: "boolean",
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    linkPreview: {
+                      type: "boolean",
+                    },
+                    silentErrorReplies: {
+                      type: "boolean",
+                    },
+                    responsePrefix: {
+                      type: "string",
+                    },
+                    ackReaction: {
+                      type: "string",
+                    },
+                    apiRoot: {
+                      type: "string",
+                      format: "uri",
+                    },
+                    autoTopicLabel: {
+                      anyOf: [
+                        {
+                          type: "boolean",
+                        },
+                        {
+                          type: "object",
+                          properties: {
+                            enabled: {
+                              type: "boolean",
+                            },
+                            prompt: {
+                              type: "string",
+                            },
+                          },
+                          additionalProperties: false,
+                        },
+                      ],
+                    },
+                  },
+                  required: ["dmPolicy", "groupPolicy"],
+                  additionalProperties: false,
+                },
+              },
+              defaultAccount: {
+                type: "string",
+              },
+            },
+            required: ["dmPolicy", "groupPolicy"],
+            additionalProperties: false,
+          },
+          uiHints: {
+            "": {
+              label: "Telegram",
+              help: "Telegram channel provider configuration including auth tokens, retry behavior, and message rendering controls. Use this section to tune bot behavior for Telegram-specific API semantics.",
+            },
+            customCommands: {
+              label: "Telegram Custom Commands",
+              help: "Additional Telegram bot menu commands (merged with native; conflicts ignored).",
+            },
+            botToken: {
+              label: "Telegram Bot Token",
+              help: "Telegram bot token used to authenticate Bot API requests for this account/provider config. Use secret/env substitution and rotate tokens if exposure is suspected.",
+            },
+            dmPolicy: {
+              label: "Telegram DM Policy",
+              help: 'Direct message access control ("pairing" recommended). "open" requires channels.telegram.allowFrom=["*"].',
+            },
+            configWrites: {
+              label: "Telegram Config Writes",
+              help: "Allow Telegram to write config in response to channel events/commands (default: true).",
+            },
+            "commands.native": {
+              label: "Telegram Native Commands",
+              help: 'Override native commands for Telegram (bool or "auto").',
+            },
+            "commands.nativeSkills": {
+              label: "Telegram Native Skill Commands",
+              help: 'Override native skill commands for Telegram (bool or "auto").',
+            },
+            streaming: {
+              label: "Telegram Streaming Mode",
+              help: 'Unified Telegram stream preview mode: "off" | "partial" | "block" | "progress" (default: "partial"). "progress" maps to "partial" on Telegram. Legacy boolean/streamMode keys are auto-mapped.',
+            },
+            "retry.attempts": {
+              label: "Telegram Retry Attempts",
+              help: "Max retry attempts for outbound Telegram API calls (default: 3).",
+            },
+            "retry.minDelayMs": {
+              label: "Telegram Retry Min Delay (ms)",
+              help: "Minimum retry delay in ms for Telegram outbound calls.",
+            },
+            "retry.maxDelayMs": {
+              label: "Telegram Retry Max Delay (ms)",
+              help: "Maximum retry delay cap in ms for Telegram outbound calls.",
+            },
+            "retry.jitter": {
+              label: "Telegram Retry Jitter",
+              help: "Jitter factor (0-1) applied to Telegram retry delays.",
+            },
+            "network.autoSelectFamily": {
+              label: "Telegram autoSelectFamily",
+              help: "Override Node autoSelectFamily for Telegram (true=enable, false=disable).",
+            },
+            timeoutSeconds: {
+              label: "Telegram API Timeout (seconds)",
+              help: "Max seconds before Telegram API requests are aborted (default: 500 per grammY).",
+            },
+            silentErrorReplies: {
+              label: "Telegram Silent Error Replies",
+              help: "When true, Telegram bot replies marked as errors are sent silently (no notification sound). Default: false.",
+            },
+            apiRoot: {
+              label: "Telegram API Root URL",
+              help: "Custom Telegram Bot API root URL. Use for self-hosted Bot API servers (https://github.com/tdlib/telegram-bot-api) or reverse proxies in regions where api.telegram.org is blocked.",
+            },
+            autoTopicLabel: {
+              label: "Telegram Auto Topic Label",
+              help: "Auto-rename DM forum topics on first message using LLM. Default: true. Set to false to disable, or use object form { enabled: true, prompt: '...' } for custom prompt.",
+            },
+            "autoTopicLabel.enabled": {
+              label: "Telegram Auto Topic Label Enabled",
+              help: "Whether auto topic labeling is enabled. Default: true.",
+            },
+            "autoTopicLabel.prompt": {
+              label: "Telegram Auto Topic Label Prompt",
+              help: "Custom prompt for LLM-based topic naming. The user message is appended after the prompt.",
+            },
+            "capabilities.inlineButtons": {
+              label: "Telegram Inline Buttons",
+              help: "Enable Telegram inline button components for supported command and interaction surfaces. Disable if your deployment needs plain-text-only compatibility behavior.",
+            },
+            execApprovals: {
+              label: "Telegram Exec Approvals",
+              help: "Telegram-native exec approval routing and approver authorization. Enable this only when Telegram should act as an explicit exec-approval client for the selected bot account.",
+            },
+            "execApprovals.enabled": {
+              label: "Telegram Exec Approvals Enabled",
+              help: "Enable Telegram exec approvals for this account. When false or unset, Telegram messages/buttons cannot approve exec requests.",
+            },
+            "execApprovals.approvers": {
+              label: "Telegram Exec Approval Approvers",
+              help: "Telegram user IDs allowed to approve exec requests for this bot account. Use numeric Telegram user IDs; prompts are only delivered to these approvers when target includes dm.",
+            },
+            "execApprovals.agentFilter": {
+              label: "Telegram Exec Approval Agent Filter",
+              help: 'Optional allowlist of agent IDs eligible for Telegram exec approvals, for example `["main", "ops-agent"]`. Use this to keep approval prompts scoped to the agents you actually operate from Telegram.',
+            },
+            "execApprovals.sessionFilter": {
+              label: "Telegram Exec Approval Session Filter",
+              help: "Optional session-key filters matched as substring or regex-style patterns before Telegram approval routing is used. Use narrow patterns so Telegram approvals only appear for intended sessions.",
+            },
+            "execApprovals.target": {
+              label: "Telegram Exec Approval Target",
+              help: 'Controls where Telegram approval prompts are sent: "dm" sends to approver DMs (default), "channel" sends to the originating Telegram chat/topic, and "both" sends to both. Channel delivery exposes the command text to the chat, so only use it in trusted groups/topics.',
+            },
+            "threadBindings.enabled": {
+              label: "Telegram Thread Binding Enabled",
+              help: "Enable Telegram conversation binding features (/focus, /unfocus, /agents, and /session idle|max-age). Overrides session.threadBindings.enabled when set.",
+            },
+            "threadBindings.idleHours": {
+              label: "Telegram Thread Binding Idle Timeout (hours)",
+              help: "Inactivity window in hours for Telegram bound sessions. Set 0 to disable idle auto-unfocus (default: 24). Overrides session.threadBindings.idleHours when set.",
+            },
+            "threadBindings.maxAgeHours": {
+              label: "Telegram Thread Binding Max Age (hours)",
+              help: "Optional hard max age in hours for Telegram bound sessions. Set 0 to disable hard cap (default: 0). Overrides session.threadBindings.maxAgeHours when set.",
+            },
+            "threadBindings.spawnSubagentSessions": {
+              label: "Telegram Thread-Bound Subagent Spawn",
+              help: "Allow subagent spawns with thread=true to auto-bind Telegram current conversations when supported.",
+            },
+            "threadBindings.spawnAcpSessions": {
+              label: "Telegram Thread-Bound ACP Spawn",
+              help: "Allow ACP spawns with thread=true to auto-bind Telegram current conversations when supported.",
+            },
+          },
+          label: "Telegram",
+          description:
+            "simplest way to get started — register a bot with @BotFather and get going.",
+        },
+      },
     },
   },
   {
@@ -3074,8 +16615,10 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./setup-entry.ts",
       built: "setup-entry.js",
     },
+    publicSurfaceArtifacts: ["api.js", "runtime-api.js", "setup-api.js"],
+    runtimeSidecarArtifacts: ["runtime-api.js"],
     packageName: "@openclaw/tlon",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw Tlon/Urbit channel plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -3094,7 +16637,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         npmSpec: "@openclaw/tlon",
         localPath: "extensions/tlon",
         defaultChoice: "npm",
-        minHostVersion: ">=2026.3.22",
+        minHostVersion: ">=2026.3.27",
       },
     },
     manifest: {
@@ -3106,6 +16649,171 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       },
       channels: ["tlon"],
       skills: ["node_modules/@tloncorp/tlon-skill"],
+      channelConfigs: {
+        tlon: {
+          schema: {
+            $schema: "http://json-schema.org/draft-07/schema#",
+            type: "object",
+            properties: {
+              name: {
+                type: "string",
+              },
+              enabled: {
+                type: "boolean",
+              },
+              ship: {
+                type: "string",
+                minLength: 1,
+              },
+              url: {
+                type: "string",
+              },
+              code: {
+                type: "string",
+              },
+              allowPrivateNetwork: {
+                type: "boolean",
+              },
+              groupChannels: {
+                type: "array",
+                items: {
+                  type: "string",
+                  minLength: 1,
+                },
+              },
+              dmAllowlist: {
+                type: "array",
+                items: {
+                  type: "string",
+                  minLength: 1,
+                },
+              },
+              autoDiscoverChannels: {
+                type: "boolean",
+              },
+              showModelSignature: {
+                type: "boolean",
+              },
+              responsePrefix: {
+                type: "string",
+              },
+              autoAcceptDmInvites: {
+                type: "boolean",
+              },
+              autoAcceptGroupInvites: {
+                type: "boolean",
+              },
+              ownerShip: {
+                type: "string",
+                minLength: 1,
+              },
+              authorization: {
+                type: "object",
+                properties: {
+                  channelRules: {
+                    type: "object",
+                    propertyNames: {
+                      type: "string",
+                    },
+                    additionalProperties: {
+                      type: "object",
+                      properties: {
+                        mode: {
+                          type: "string",
+                          enum: ["restricted", "open"],
+                        },
+                        allowedShips: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                            minLength: 1,
+                          },
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                  },
+                },
+                additionalProperties: false,
+              },
+              defaultAuthorizedShips: {
+                type: "array",
+                items: {
+                  type: "string",
+                  minLength: 1,
+                },
+              },
+              accounts: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    name: {
+                      type: "string",
+                    },
+                    enabled: {
+                      type: "boolean",
+                    },
+                    ship: {
+                      type: "string",
+                      minLength: 1,
+                    },
+                    url: {
+                      type: "string",
+                    },
+                    code: {
+                      type: "string",
+                    },
+                    allowPrivateNetwork: {
+                      type: "boolean",
+                    },
+                    groupChannels: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                        minLength: 1,
+                      },
+                    },
+                    dmAllowlist: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                        minLength: 1,
+                      },
+                    },
+                    autoDiscoverChannels: {
+                      type: "boolean",
+                    },
+                    showModelSignature: {
+                      type: "boolean",
+                    },
+                    responsePrefix: {
+                      type: "string",
+                    },
+                    autoAcceptDmInvites: {
+                      type: "boolean",
+                    },
+                    autoAcceptGroupInvites: {
+                      type: "boolean",
+                    },
+                    ownerShip: {
+                      type: "string",
+                      minLength: 1,
+                    },
+                  },
+                  additionalProperties: false,
+                },
+              },
+            },
+            additionalProperties: false,
+          },
+          label: "Tlon",
+          description: "decentralized messaging on Urbit; install the plugin to enable.",
+        },
+      },
     },
   },
   {
@@ -3115,8 +16823,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: ["api.js", "models.js", "onboard.js", "provider-catalog.js"],
     packageName: "@openclaw/together-provider",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw Together provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -3128,6 +16837,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         additionalProperties: false,
         properties: {},
       },
+      enabledByDefault: true,
       providers: ["together"],
       providerAuthEnvVars: {
         together: ["TOGETHER_API_KEY"],
@@ -3156,8 +16866,10 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: ["api.js", "runtime-api.js"],
+    runtimeSidecarArtifacts: ["runtime-api.js"],
     packageName: "@openclaw/twitch",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw Twitch channel plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -3170,7 +16882,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         aliases: ["twitch-chat"],
       },
       install: {
-        minHostVersion: ">=2026.3.22",
+        minHostVersion: ">=2026.3.27",
       },
     },
     manifest: {
@@ -3181,6 +16893,204 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         properties: {},
       },
       channels: ["twitch"],
+      channelConfigs: {
+        twitch: {
+          schema: {
+            $schema: "http://json-schema.org/draft-07/schema#",
+            anyOf: [
+              {
+                allOf: [
+                  {
+                    type: "object",
+                    properties: {
+                      name: {
+                        type: "string",
+                      },
+                      enabled: {
+                        type: "boolean",
+                      },
+                      markdown: {
+                        type: "object",
+                        properties: {
+                          tables: {
+                            type: "string",
+                            enum: ["off", "bullets", "code"],
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                    },
+                    additionalProperties: false,
+                  },
+                  {
+                    type: "object",
+                    properties: {
+                      username: {
+                        type: "string",
+                      },
+                      accessToken: {
+                        type: "string",
+                      },
+                      clientId: {
+                        type: "string",
+                      },
+                      channel: {
+                        type: "string",
+                        minLength: 1,
+                      },
+                      enabled: {
+                        type: "boolean",
+                      },
+                      allowFrom: {
+                        type: "array",
+                        items: {
+                          type: "string",
+                        },
+                      },
+                      allowedRoles: {
+                        type: "array",
+                        items: {
+                          type: "string",
+                          enum: ["moderator", "owner", "vip", "subscriber", "all"],
+                        },
+                      },
+                      requireMention: {
+                        type: "boolean",
+                      },
+                      responsePrefix: {
+                        type: "string",
+                      },
+                      clientSecret: {
+                        type: "string",
+                      },
+                      refreshToken: {
+                        type: "string",
+                      },
+                      expiresIn: {
+                        anyOf: [
+                          {
+                            type: "number",
+                          },
+                          {
+                            type: "null",
+                          },
+                        ],
+                      },
+                      obtainmentTimestamp: {
+                        type: "number",
+                      },
+                    },
+                    required: ["username", "accessToken", "channel"],
+                    additionalProperties: false,
+                  },
+                ],
+              },
+              {
+                allOf: [
+                  {
+                    type: "object",
+                    properties: {
+                      name: {
+                        type: "string",
+                      },
+                      enabled: {
+                        type: "boolean",
+                      },
+                      markdown: {
+                        type: "object",
+                        properties: {
+                          tables: {
+                            type: "string",
+                            enum: ["off", "bullets", "code"],
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                    },
+                    additionalProperties: false,
+                  },
+                  {
+                    type: "object",
+                    properties: {
+                      accounts: {
+                        type: "object",
+                        propertyNames: {
+                          type: "string",
+                        },
+                        additionalProperties: {
+                          type: "object",
+                          properties: {
+                            username: {
+                              type: "string",
+                            },
+                            accessToken: {
+                              type: "string",
+                            },
+                            clientId: {
+                              type: "string",
+                            },
+                            channel: {
+                              type: "string",
+                              minLength: 1,
+                            },
+                            enabled: {
+                              type: "boolean",
+                            },
+                            allowFrom: {
+                              type: "array",
+                              items: {
+                                type: "string",
+                              },
+                            },
+                            allowedRoles: {
+                              type: "array",
+                              items: {
+                                type: "string",
+                                enum: ["moderator", "owner", "vip", "subscriber", "all"],
+                              },
+                            },
+                            requireMention: {
+                              type: "boolean",
+                            },
+                            responsePrefix: {
+                              type: "string",
+                            },
+                            clientSecret: {
+                              type: "string",
+                            },
+                            refreshToken: {
+                              type: "string",
+                            },
+                            expiresIn: {
+                              anyOf: [
+                                {
+                                  type: "number",
+                                },
+                                {
+                                  type: "null",
+                                },
+                              ],
+                            },
+                            obtainmentTimestamp: {
+                              type: "number",
+                            },
+                          },
+                          required: ["username", "accessToken", "channel"],
+                          additionalProperties: false,
+                        },
+                      },
+                    },
+                    required: ["accounts"],
+                    additionalProperties: false,
+                  },
+                ],
+              },
+            ],
+          },
+          label: "Twitch",
+          description: "Twitch chat integration",
+        },
+      },
     },
   },
   {
@@ -3190,8 +17100,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: ["api.js", "models.js", "onboard.js", "provider-catalog.js"],
     packageName: "@openclaw/venice-provider",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw Venice provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -3203,6 +17114,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         additionalProperties: false,
         properties: {},
       },
+      enabledByDefault: true,
       providers: ["venice"],
       providerAuthEnvVars: {
         venice: ["VENICE_API_KEY"],
@@ -3231,8 +17143,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: ["api.js", "models.js", "onboard.js", "provider-catalog.js"],
     packageName: "@openclaw/vercel-ai-gateway-provider",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw Vercel AI Gateway provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -3244,6 +17157,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         additionalProperties: false,
         properties: {},
       },
+      enabledByDefault: true,
       providers: ["vercel-ai-gateway"],
       providerAuthEnvVars: {
         "vercel-ai-gateway": ["AI_GATEWAY_API_KEY"],
@@ -3272,8 +17186,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: ["api.js", "defaults.js", "models.js"],
     packageName: "@openclaw/vllm-provider",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw vLLM provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -3285,6 +17200,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         additionalProperties: false,
         properties: {},
       },
+      enabledByDefault: true,
       providers: ["vllm"],
       providerAuthEnvVars: {
         vllm: ["VLLM_API_KEY"],
@@ -3310,13 +17226,15 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: ["api.js", "runtime-api.js", "runtime-entry.js"],
+    runtimeSidecarArtifacts: ["runtime-api.js"],
     packageName: "@openclaw/voice-call",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw voice-call plugin",
     packageManifest: {
       extensions: ["./index.ts"],
       install: {
-        minHostVersion: ">=2026.3.22",
+        minHostVersion: ">=2026.3.27",
       },
     },
     manifest: {
@@ -3937,8 +17855,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: ["api.js", "models.js", "provider-catalog.js"],
     packageName: "@openclaw/volcengine-provider",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw Volcengine provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -3950,6 +17869,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         additionalProperties: false,
         properties: {},
       },
+      enabledByDefault: true,
       providers: ["volcengine", "volcengine-plan"],
       providerAuthEnvVars: {
         volcengine: ["VOLCANO_ENGINE_API_KEY"],
@@ -3982,8 +17902,19 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./setup-entry.ts",
       built: "setup-entry.js",
     },
+    publicSurfaceArtifacts: [
+      "action-runtime-api.js",
+      "action-runtime.runtime.js",
+      "api.js",
+      "auth-presence.js",
+      "channel-config-api.js",
+      "light-runtime-api.js",
+      "login-qr-api.js",
+      "runtime-api.js",
+    ],
+    runtimeSidecarArtifacts: ["light-runtime-api.js", "runtime-api.js"],
     packageName: "@openclaw/whatsapp",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw WhatsApp channel plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -4002,7 +17933,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         npmSpec: "@openclaw/whatsapp",
         localPath: "extensions/whatsapp",
         defaultChoice: "npm",
-        minHostVersion: ">=2026.3.22",
+        minHostVersion: ">=2026.3.27",
       },
     },
     manifest: {
@@ -4013,6 +17944,564 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         properties: {},
       },
       channels: ["whatsapp"],
+      channelConfigs: {
+        whatsapp: {
+          schema: {
+            $schema: "http://json-schema.org/draft-07/schema#",
+            type: "object",
+            properties: {
+              enabled: {
+                type: "boolean",
+              },
+              capabilities: {
+                type: "array",
+                items: {
+                  type: "string",
+                },
+              },
+              markdown: {
+                type: "object",
+                properties: {
+                  tables: {
+                    type: "string",
+                    enum: ["off", "bullets", "code"],
+                  },
+                },
+                additionalProperties: false,
+              },
+              configWrites: {
+                type: "boolean",
+              },
+              sendReadReceipts: {
+                type: "boolean",
+              },
+              messagePrefix: {
+                type: "string",
+              },
+              responsePrefix: {
+                type: "string",
+              },
+              dmPolicy: {
+                default: "pairing",
+                type: "string",
+                enum: ["pairing", "allowlist", "open", "disabled"],
+              },
+              selfChatMode: {
+                type: "boolean",
+              },
+              allowFrom: {
+                type: "array",
+                items: {
+                  type: "string",
+                },
+              },
+              defaultTo: {
+                type: "string",
+              },
+              groupAllowFrom: {
+                type: "array",
+                items: {
+                  type: "string",
+                },
+              },
+              groupPolicy: {
+                default: "allowlist",
+                type: "string",
+                enum: ["open", "disabled", "allowlist"],
+              },
+              historyLimit: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+              },
+              dmHistoryLimit: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+              },
+              dms: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    historyLimit: {
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                  },
+                  additionalProperties: false,
+                },
+              },
+              textChunkLimit: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+              },
+              chunkMode: {
+                type: "string",
+                enum: ["length", "newline"],
+              },
+              blockStreaming: {
+                type: "boolean",
+              },
+              blockStreamingCoalesce: {
+                type: "object",
+                properties: {
+                  minChars: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  maxChars: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  idleMs: {
+                    type: "integer",
+                    minimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                },
+                additionalProperties: false,
+              },
+              groups: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    requireMention: {
+                      type: "boolean",
+                    },
+                    tools: {
+                      type: "object",
+                      properties: {
+                        allow: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                        alsoAllow: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                        deny: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    toolsBySender: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "object",
+                        properties: {
+                          allow: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                          },
+                          alsoAllow: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                          },
+                          deny: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                    },
+                  },
+                  additionalProperties: false,
+                },
+              },
+              ackReaction: {
+                type: "object",
+                properties: {
+                  emoji: {
+                    type: "string",
+                  },
+                  direct: {
+                    default: true,
+                    type: "boolean",
+                  },
+                  group: {
+                    default: "mentions",
+                    type: "string",
+                    enum: ["always", "mentions", "never"],
+                  },
+                },
+                required: ["direct", "group"],
+                additionalProperties: false,
+              },
+              debounceMs: {
+                default: 0,
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+              },
+              heartbeat: {
+                type: "object",
+                properties: {
+                  showOk: {
+                    type: "boolean",
+                  },
+                  showAlerts: {
+                    type: "boolean",
+                  },
+                  useIndicator: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
+              },
+              healthMonitor: {
+                type: "object",
+                properties: {
+                  enabled: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
+              },
+              accounts: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    enabled: {
+                      type: "boolean",
+                    },
+                    capabilities: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                      },
+                    },
+                    markdown: {
+                      type: "object",
+                      properties: {
+                        tables: {
+                          type: "string",
+                          enum: ["off", "bullets", "code"],
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    configWrites: {
+                      type: "boolean",
+                    },
+                    sendReadReceipts: {
+                      type: "boolean",
+                    },
+                    messagePrefix: {
+                      type: "string",
+                    },
+                    responsePrefix: {
+                      type: "string",
+                    },
+                    dmPolicy: {
+                      default: "pairing",
+                      type: "string",
+                      enum: ["pairing", "allowlist", "open", "disabled"],
+                    },
+                    selfChatMode: {
+                      type: "boolean",
+                    },
+                    allowFrom: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                      },
+                    },
+                    defaultTo: {
+                      type: "string",
+                    },
+                    groupAllowFrom: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                      },
+                    },
+                    groupPolicy: {
+                      default: "allowlist",
+                      type: "string",
+                      enum: ["open", "disabled", "allowlist"],
+                    },
+                    historyLimit: {
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    dmHistoryLimit: {
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    dms: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "object",
+                        properties: {
+                          historyLimit: {
+                            type: "integer",
+                            minimum: 0,
+                            maximum: 9007199254740991,
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                    },
+                    textChunkLimit: {
+                      type: "integer",
+                      exclusiveMinimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    chunkMode: {
+                      type: "string",
+                      enum: ["length", "newline"],
+                    },
+                    blockStreaming: {
+                      type: "boolean",
+                    },
+                    blockStreamingCoalesce: {
+                      type: "object",
+                      properties: {
+                        minChars: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                        maxChars: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                        idleMs: {
+                          type: "integer",
+                          minimum: 0,
+                          maximum: 9007199254740991,
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    groups: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "object",
+                        properties: {
+                          requireMention: {
+                            type: "boolean",
+                          },
+                          tools: {
+                            type: "object",
+                            properties: {
+                              allow: {
+                                type: "array",
+                                items: {
+                                  type: "string",
+                                },
+                              },
+                              alsoAllow: {
+                                type: "array",
+                                items: {
+                                  type: "string",
+                                },
+                              },
+                              deny: {
+                                type: "array",
+                                items: {
+                                  type: "string",
+                                },
+                              },
+                            },
+                            additionalProperties: false,
+                          },
+                          toolsBySender: {
+                            type: "object",
+                            propertyNames: {
+                              type: "string",
+                            },
+                            additionalProperties: {
+                              type: "object",
+                              properties: {
+                                allow: {
+                                  type: "array",
+                                  items: {
+                                    type: "string",
+                                  },
+                                },
+                                alsoAllow: {
+                                  type: "array",
+                                  items: {
+                                    type: "string",
+                                  },
+                                },
+                                deny: {
+                                  type: "array",
+                                  items: {
+                                    type: "string",
+                                  },
+                                },
+                              },
+                              additionalProperties: false,
+                            },
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                    },
+                    ackReaction: {
+                      type: "object",
+                      properties: {
+                        emoji: {
+                          type: "string",
+                        },
+                        direct: {
+                          default: true,
+                          type: "boolean",
+                        },
+                        group: {
+                          default: "mentions",
+                          type: "string",
+                          enum: ["always", "mentions", "never"],
+                        },
+                      },
+                      required: ["direct", "group"],
+                      additionalProperties: false,
+                    },
+                    debounceMs: {
+                      default: 0,
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    heartbeat: {
+                      type: "object",
+                      properties: {
+                        showOk: {
+                          type: "boolean",
+                        },
+                        showAlerts: {
+                          type: "boolean",
+                        },
+                        useIndicator: {
+                          type: "boolean",
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    healthMonitor: {
+                      type: "object",
+                      properties: {
+                        enabled: {
+                          type: "boolean",
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    name: {
+                      type: "string",
+                    },
+                    authDir: {
+                      type: "string",
+                    },
+                    mediaMaxMb: {
+                      type: "integer",
+                      exclusiveMinimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                  },
+                  required: ["dmPolicy", "groupPolicy", "debounceMs"],
+                  additionalProperties: false,
+                },
+              },
+              defaultAccount: {
+                type: "string",
+              },
+              mediaMaxMb: {
+                default: 50,
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+              },
+              actions: {
+                type: "object",
+                properties: {
+                  reactions: {
+                    type: "boolean",
+                  },
+                  sendMessage: {
+                    type: "boolean",
+                  },
+                  polls: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
+              },
+            },
+            required: ["dmPolicy", "groupPolicy", "debounceMs", "mediaMaxMb"],
+            additionalProperties: false,
+          },
+          uiHints: {
+            "": {
+              label: "WhatsApp",
+              help: "WhatsApp channel provider configuration for access policy and message batching behavior. Use this section to tune responsiveness and direct-message routing safety for WhatsApp chats.",
+            },
+            dmPolicy: {
+              label: "WhatsApp DM Policy",
+              help: 'Direct message access control ("pairing" recommended). "open" requires channels.whatsapp.allowFrom=["*"].',
+            },
+            selfChatMode: {
+              label: "WhatsApp Self-Phone Mode",
+              help: "Same-phone setup (bot uses your personal WhatsApp number).",
+            },
+            debounceMs: {
+              label: "WhatsApp Message Debounce (ms)",
+              help: "Debounce window (ms) for batching rapid consecutive messages from the same sender (0 to disable).",
+            },
+            configWrites: {
+              label: "WhatsApp Config Writes",
+              help: "Allow WhatsApp to write config in response to channel events/commands (default: true).",
+            },
+          },
+          label: "WhatsApp",
+          description: "works with your own number; recommend a separate phone + eSIM.",
+        },
+      },
     },
   },
   {
@@ -4022,8 +18511,18 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: [
+      "api.js",
+      "model-definitions.js",
+      "model-id.js",
+      "onboard.js",
+      "provider-catalog.js",
+      "provider-models.js",
+      "stream.js",
+      "web-search.js",
+    ],
     packageName: "@openclaw/xai-plugin",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw xAI plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -4051,6 +18550,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           },
         },
       },
+      enabledByDefault: true,
       providers: ["xai"],
       providerAuthEnvVars: {
         xai: ["XAI_API_KEY"],
@@ -4085,6 +18585,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           help: "Include inline markdown citations in Grok responses.",
         },
       },
+      contracts: {
+        webSearchProviders: ["grok"],
+      },
     },
   },
   {
@@ -4094,8 +18597,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: ["api.js", "onboard.js", "provider-catalog.js"],
     packageName: "@openclaw/xiaomi-provider",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw Xiaomi provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -4107,6 +18611,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         additionalProperties: false,
         properties: {},
       },
+      enabledByDefault: true,
       providers: ["xiaomi"],
       providerAuthEnvVars: {
         xiaomi: ["XIAOMI_API_KEY"],
@@ -4135,8 +18640,17 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./index.ts",
       built: "index.js",
     },
+    publicSurfaceArtifacts: [
+      "api.js",
+      "detect.js",
+      "media-understanding-provider.js",
+      "model-definitions.js",
+      "onboard.js",
+      "runtime-api.js",
+    ],
+    runtimeSidecarArtifacts: ["runtime-api.js"],
     packageName: "@openclaw/zai-provider",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw Z.AI provider plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -4148,8 +18662,8 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         additionalProperties: false,
         properties: {},
       },
+      enabledByDefault: true,
       providers: ["zai"],
-      mediaUnderstandingProviders: ["zai"],
       providerAuthEnvVars: {
         zai: ["ZAI_API_KEY", "Z_AI_API_KEY"],
       },
@@ -4224,6 +18738,9 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
           cliDescription: "Z.AI API key",
         },
       ],
+      contracts: {
+        mediaUnderstandingProviders: ["zai"],
+      },
     },
   },
   {
@@ -4237,8 +18754,10 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./setup-entry.ts",
       built: "setup-entry.js",
     },
+    publicSurfaceArtifacts: ["api.js", "runtime-api.js"],
+    runtimeSidecarArtifacts: ["runtime-api.js"],
     packageName: "@openclaw/zalo",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw Zalo channel plugin",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -4258,7 +18777,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         npmSpec: "@openclaw/zalo",
         localPath: "extensions/zalo",
         defaultChoice: "npm",
-        minHostVersion: ">=2026.3.22",
+        minHostVersion: ">=2026.3.27",
       },
     },
     manifest: {
@@ -4269,6 +18788,432 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         properties: {},
       },
       channels: ["zalo"],
+      channelConfigs: {
+        zalo: {
+          schema: {
+            $schema: "http://json-schema.org/draft-07/schema#",
+            type: "object",
+            properties: {
+              name: {
+                type: "string",
+              },
+              enabled: {
+                type: "boolean",
+              },
+              markdown: {
+                type: "object",
+                properties: {
+                  tables: {
+                    type: "string",
+                    enum: ["off", "bullets", "code"],
+                  },
+                },
+                additionalProperties: false,
+              },
+              botToken: {
+                anyOf: [
+                  {
+                    type: "string",
+                  },
+                  {
+                    oneOf: [
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "env",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "file",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "exec",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                    ],
+                  },
+                ],
+              },
+              tokenFile: {
+                type: "string",
+              },
+              webhookUrl: {
+                type: "string",
+              },
+              webhookSecret: {
+                anyOf: [
+                  {
+                    type: "string",
+                  },
+                  {
+                    oneOf: [
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "env",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "file",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "exec",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                    ],
+                  },
+                ],
+              },
+              webhookPath: {
+                type: "string",
+              },
+              dmPolicy: {
+                type: "string",
+                enum: ["pairing", "allowlist", "open", "disabled"],
+              },
+              allowFrom: {
+                type: "array",
+                items: {
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "number",
+                    },
+                  ],
+                },
+              },
+              groupPolicy: {
+                type: "string",
+                enum: ["open", "disabled", "allowlist"],
+              },
+              groupAllowFrom: {
+                type: "array",
+                items: {
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "number",
+                    },
+                  ],
+                },
+              },
+              mediaMaxMb: {
+                type: "number",
+              },
+              proxy: {
+                type: "string",
+              },
+              responsePrefix: {
+                type: "string",
+              },
+              accounts: {
+                type: "object",
+                properties: {},
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    name: {
+                      type: "string",
+                    },
+                    enabled: {
+                      type: "boolean",
+                    },
+                    markdown: {
+                      type: "object",
+                      properties: {
+                        tables: {
+                          type: "string",
+                          enum: ["off", "bullets", "code"],
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    botToken: {
+                      anyOf: [
+                        {
+                          type: "string",
+                        },
+                        {
+                          oneOf: [
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "env",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                  pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "file",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "exec",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                          ],
+                        },
+                      ],
+                    },
+                    tokenFile: {
+                      type: "string",
+                    },
+                    webhookUrl: {
+                      type: "string",
+                    },
+                    webhookSecret: {
+                      anyOf: [
+                        {
+                          type: "string",
+                        },
+                        {
+                          oneOf: [
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "env",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                  pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "file",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "exec",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                          ],
+                        },
+                      ],
+                    },
+                    webhookPath: {
+                      type: "string",
+                    },
+                    dmPolicy: {
+                      type: "string",
+                      enum: ["pairing", "allowlist", "open", "disabled"],
+                    },
+                    allowFrom: {
+                      type: "array",
+                      items: {
+                        anyOf: [
+                          {
+                            type: "string",
+                          },
+                          {
+                            type: "number",
+                          },
+                        ],
+                      },
+                    },
+                    groupPolicy: {
+                      type: "string",
+                      enum: ["open", "disabled", "allowlist"],
+                    },
+                    groupAllowFrom: {
+                      type: "array",
+                      items: {
+                        anyOf: [
+                          {
+                            type: "string",
+                          },
+                          {
+                            type: "number",
+                          },
+                        ],
+                      },
+                    },
+                    mediaMaxMb: {
+                      type: "number",
+                    },
+                    proxy: {
+                      type: "string",
+                    },
+                    responsePrefix: {
+                      type: "string",
+                    },
+                  },
+                  additionalProperties: false,
+                },
+              },
+              defaultAccount: {
+                type: "string",
+              },
+            },
+            additionalProperties: false,
+          },
+          label: "Zalo",
+          description: "Vietnam-focused messaging platform with Bot API.",
+        },
+      },
     },
   },
   {
@@ -4282,8 +19227,10 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       source: "./setup-entry.ts",
       built: "setup-entry.js",
     },
+    publicSurfaceArtifacts: ["api.js", "runtime-api.js"],
+    runtimeSidecarArtifacts: ["runtime-api.js"],
     packageName: "@openclaw/zalouser",
-    packageVersion: "2026.3.22",
+    packageVersion: "2026.3.27",
     packageDescription: "OpenClaw Zalo Personal Account plugin via native zca-js integration",
     packageManifest: {
       extensions: ["./index.ts"],
@@ -4303,7 +19250,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         npmSpec: "@openclaw/zalouser",
         localPath: "extensions/zalouser",
         defaultChoice: "npm",
-        minHostVersion: ">=2026.3.22",
+        minHostVersion: ">=2026.3.27",
       },
     },
     manifest: {
@@ -4314,6 +19261,256 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
         properties: {},
       },
       channels: ["zalouser"],
+      channelConfigs: {
+        zalouser: {
+          schema: {
+            $schema: "http://json-schema.org/draft-07/schema#",
+            type: "object",
+            properties: {
+              name: {
+                type: "string",
+              },
+              enabled: {
+                type: "boolean",
+              },
+              markdown: {
+                type: "object",
+                properties: {
+                  tables: {
+                    type: "string",
+                    enum: ["off", "bullets", "code"],
+                  },
+                },
+                additionalProperties: false,
+              },
+              profile: {
+                type: "string",
+              },
+              dangerouslyAllowNameMatching: {
+                type: "boolean",
+              },
+              dmPolicy: {
+                type: "string",
+                enum: ["pairing", "allowlist", "open", "disabled"],
+              },
+              allowFrom: {
+                type: "array",
+                items: {
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "number",
+                    },
+                  ],
+                },
+              },
+              historyLimit: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+              },
+              groupAllowFrom: {
+                type: "array",
+                items: {
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "number",
+                    },
+                  ],
+                },
+              },
+              groupPolicy: {
+                default: "allowlist",
+                type: "string",
+                enum: ["open", "disabled", "allowlist"],
+              },
+              groups: {
+                type: "object",
+                properties: {},
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    allow: {
+                      type: "boolean",
+                    },
+                    enabled: {
+                      type: "boolean",
+                    },
+                    requireMention: {
+                      type: "boolean",
+                    },
+                    tools: {
+                      type: "object",
+                      properties: {
+                        allow: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                        alsoAllow: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                        deny: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                  },
+                  additionalProperties: false,
+                },
+              },
+              messagePrefix: {
+                type: "string",
+              },
+              responsePrefix: {
+                type: "string",
+              },
+              accounts: {
+                type: "object",
+                properties: {},
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    name: {
+                      type: "string",
+                    },
+                    enabled: {
+                      type: "boolean",
+                    },
+                    markdown: {
+                      type: "object",
+                      properties: {
+                        tables: {
+                          type: "string",
+                          enum: ["off", "bullets", "code"],
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    profile: {
+                      type: "string",
+                    },
+                    dangerouslyAllowNameMatching: {
+                      type: "boolean",
+                    },
+                    dmPolicy: {
+                      type: "string",
+                      enum: ["pairing", "allowlist", "open", "disabled"],
+                    },
+                    allowFrom: {
+                      type: "array",
+                      items: {
+                        anyOf: [
+                          {
+                            type: "string",
+                          },
+                          {
+                            type: "number",
+                          },
+                        ],
+                      },
+                    },
+                    historyLimit: {
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    groupAllowFrom: {
+                      type: "array",
+                      items: {
+                        anyOf: [
+                          {
+                            type: "string",
+                          },
+                          {
+                            type: "number",
+                          },
+                        ],
+                      },
+                    },
+                    groupPolicy: {
+                      default: "allowlist",
+                      type: "string",
+                      enum: ["open", "disabled", "allowlist"],
+                    },
+                    groups: {
+                      type: "object",
+                      properties: {},
+                      additionalProperties: {
+                        type: "object",
+                        properties: {
+                          allow: {
+                            type: "boolean",
+                          },
+                          enabled: {
+                            type: "boolean",
+                          },
+                          requireMention: {
+                            type: "boolean",
+                          },
+                          tools: {
+                            type: "object",
+                            properties: {
+                              allow: {
+                                type: "array",
+                                items: {
+                                  type: "string",
+                                },
+                              },
+                              alsoAllow: {
+                                type: "array",
+                                items: {
+                                  type: "string",
+                                },
+                              },
+                              deny: {
+                                type: "array",
+                                items: {
+                                  type: "string",
+                                },
+                              },
+                            },
+                            additionalProperties: false,
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                    },
+                    messagePrefix: {
+                      type: "string",
+                    },
+                    responsePrefix: {
+                      type: "string",
+                    },
+                  },
+                  required: ["groupPolicy"],
+                  additionalProperties: false,
+                },
+              },
+              defaultAccount: {
+                type: "string",
+              },
+            },
+            required: ["groupPolicy"],
+            additionalProperties: false,
+          },
+          label: "Zalo Personal",
+          description: "Zalo personal account via QR code login.",
+        },
+      },
     },
   },
 ] as const;

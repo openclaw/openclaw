@@ -155,6 +155,11 @@ function emitSessionsChanged(
             chatType: sessionRow.chatType,
             origin: sessionRow.origin,
             spawnedBy: sessionRow.spawnedBy,
+            spawnedWorkspaceDir: sessionRow.spawnedWorkspaceDir,
+            forkedFromParent: sessionRow.forkedFromParent,
+            spawnDepth: sessionRow.spawnDepth,
+            subagentRole: sessionRow.subagentRole,
+            subagentControlScope: sessionRow.subagentControlScope,
             label: sessionRow.label,
             displayName: sessionRow.displayName,
             deliveryContext: sessionRow.deliveryContext,
@@ -173,6 +178,7 @@ function emitSessionsChanged(
             lastChannel: sessionRow.lastChannel,
             lastTo: sessionRow.lastTo,
             lastAccountId: sessionRow.lastAccountId,
+            lastThreadId: sessionRow.lastThreadId,
             totalTokens: sessionRow.totalTokens,
             totalTokensFresh: sessionRow.totalTokensFresh,
             contextTokens: sessionRow.contextTokens,
@@ -739,12 +745,31 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
 
+    const createdEntry =
+      created.entry.sessionFile === ensured.transcriptPath
+        ? created.entry
+        : {
+            ...created.entry,
+            sessionFile: ensured.transcriptPath,
+          };
+    if (createdEntry !== created.entry) {
+      await updateSessionStore(target.storePath, (store) => {
+        const existing = store[target.canonicalKey];
+        if (existing) {
+          store[target.canonicalKey] = {
+            ...existing,
+            sessionFile: ensured.transcriptPath,
+          };
+        }
+      });
+    }
+
     const initialMessage = resolveOptionalInitialSessionMessage(p);
     let runPayload: Record<string, unknown> | undefined;
     let runError: unknown;
     let runMeta: Record<string, unknown> | undefined;
     const messageSeq = initialMessage
-      ? readSessionMessages(created.entry.sessionId, target.storePath, created.entry.sessionFile)
+      ? readSessionMessages(createdEntry.sessionId, target.storePath, createdEntry.sessionFile)
           .length + 1
       : undefined;
 
@@ -782,8 +807,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       {
         ok: true,
         key: target.canonicalKey,
-        sessionId: created.entry.sessionId,
-        entry: created.entry,
+        sessionId: createdEntry.sessionId,
+        entry: createdEntry,
         runStarted,
         ...(runPayload ? runPayload : {}),
         ...(runStarted && typeof messageSeq === "number" ? { messageSeq } : {}),

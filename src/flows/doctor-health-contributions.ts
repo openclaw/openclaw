@@ -10,7 +10,7 @@ import {
 import { formatCliCommand } from "../cli/command-format.js";
 import {
   maybeRemoveDeprecatedCliAuthProfiles,
-  maybeRepairAnthropicOAuthProfileId,
+  maybeRepairLegacyOAuthProfileIds,
   noteAuthProfileHealth,
 } from "../commands/doctor-auth.js";
 import { noteBootstrapFileSize } from "../commands/doctor-bootstrap-size.js";
@@ -28,6 +28,7 @@ import {
   noteMacLaunchAgentOverrides,
   noteMacLaunchctlGatewayEnvOverrides,
 } from "../commands/doctor-platform-notes.js";
+import { maybeRepairLegacyPluginManifestContracts } from "../commands/doctor-plugin-manifests.js";
 import type { DoctorOptions, DoctorPrompter } from "../commands/doctor-prompter.js";
 import { maybeRepairSandboxImages, noteSandboxScopeWarnings } from "../commands/doctor-sandbox.js";
 import { noteSecurityWarnings } from "../commands/doctor-security.js";
@@ -135,7 +136,7 @@ async function runGatewayConfigHealth(ctx: DoctorHealthFlowContext): Promise<voi
 }
 
 async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  ctx.cfg = await maybeRepairAnthropicOAuthProfileId(ctx.cfg, ctx.prompter);
+  ctx.cfg = await maybeRepairLegacyOAuthProfileIds(ctx.cfg, ctx.prompter);
   ctx.cfg = await maybeRemoveDeprecatedCliAuthProfiles(ctx.cfg, ctx.prompter);
   await noteAuthProfileHealth({
     cfg: ctx.cfg,
@@ -232,6 +233,14 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
   if (migrated.warnings.length > 0) {
     note(migrated.warnings.join("\n"), "Doctor warnings");
   }
+}
+
+async function runLegacyPluginManifestHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  await maybeRepairLegacyPluginManifestContracts({
+    env: process.env,
+    runtime: ctx.runtime,
+    prompter: ctx.prompter,
+  });
 }
 
 async function runStateIntegrityHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -480,6 +489,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:legacy-state",
       label: "Legacy state",
       run: runLegacyStateHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:legacy-plugin-manifests",
+      label: "Legacy plugin manifests",
+      run: runLegacyPluginManifestHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:state-integrity",

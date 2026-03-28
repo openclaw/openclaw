@@ -4,13 +4,18 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import "./test-runtime-mocks.js";
 import type { MemoryIndexManager } from "./index.js";
+import "./test-runtime-mocks.js";
+import { registerBuiltInMemoryEmbeddingProviders } from "./provider-adapters.js";
 
 type MemoryIndexModule = typeof import("./index.js");
+type MemoryEmbeddingProvidersModule =
+  typeof import("../../../../src/plugins/memory-embedding-providers.js");
 
 let getMemorySearchManager: MemoryIndexModule["getMemorySearchManager"];
 let closeAllMemorySearchManagers: MemoryIndexModule["closeAllMemorySearchManagers"];
+let clearRegistry: MemoryEmbeddingProvidersModule["clearMemoryEmbeddingProviders"];
+let registerAdapter: MemoryEmbeddingProvidersModule["registerMemoryEmbeddingProvider"];
 
 let embedBatchCalls = 0;
 let embedBatchInputCalls = 0;
@@ -134,6 +139,10 @@ describe("memory index", () => {
     vi.resetModules();
     await import("./test-runtime-mocks.js");
     ({ getMemorySearchManager, closeAllMemorySearchManagers } = await import("./index.js"));
+    ({
+      clearMemoryEmbeddingProviders: clearRegistry,
+      registerMemoryEmbeddingProvider: registerAdapter,
+    } = await import("../../../../src/plugins/memory-embedding-providers.js"));
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-fixtures-"));
     workspaceDir = path.join(fixtureRoot, "workspace");
     memoryDir = path.join(workspaceDir, "memory");
@@ -161,6 +170,7 @@ describe("memory index", () => {
 
   afterEach(async () => {
     await closeAllMemorySearchManagers();
+    clearRegistry();
     managersForCleanup.clear();
   });
 
@@ -168,6 +178,8 @@ describe("memory index", () => {
     // Perf: most suites don't need atomic swap behavior for full reindexes.
     // Keep atomic reindex tests on the safe path.
     vi.stubEnv("OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX", "1");
+    clearRegistry();
+    registerBuiltInMemoryEmbeddingProviders({ registerMemoryEmbeddingProvider: registerAdapter });
     embedBatchCalls = 0;
     embedBatchInputCalls = 0;
     providerCalls = [];

@@ -1,6 +1,6 @@
+import type { EmbeddingInput } from "../../packages/memory-host-sdk/src/host/embedding-inputs.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SecretInput } from "../config/types.secrets.js";
-import type { EmbeddingInput } from "./memory-host/embedding-inputs.js";
 
 export type MemoryEmbeddingBatchChunk = {
   text: string;
@@ -67,29 +67,72 @@ export type MemoryEmbeddingProviderAdapter = {
   shouldContinueAutoSelection?: (err: unknown) => boolean;
 };
 
-const memoryEmbeddingProviders = new Map<string, MemoryEmbeddingProviderAdapter>();
+export type RegisteredMemoryEmbeddingProvider = {
+  adapter: MemoryEmbeddingProviderAdapter;
+  ownerPluginId?: string;
+};
 
-export function registerMemoryEmbeddingProvider(adapter: MemoryEmbeddingProviderAdapter): void {
-  memoryEmbeddingProviders.set(adapter.id, adapter);
+const MEMORY_EMBEDDING_PROVIDERS_KEY = Symbol.for("openclaw.memoryEmbeddingProviders");
+
+function getMemoryEmbeddingProviders(): Map<string, RegisteredMemoryEmbeddingProvider> {
+  const globalStore = globalThis as Record<PropertyKey, unknown>;
+  const existing = globalStore[MEMORY_EMBEDDING_PROVIDERS_KEY];
+  if (existing instanceof Map) {
+    return existing as Map<string, RegisteredMemoryEmbeddingProvider>;
+  }
+  const created = new Map<string, RegisteredMemoryEmbeddingProvider>();
+  globalStore[MEMORY_EMBEDDING_PROVIDERS_KEY] = created;
+  return created;
+}
+
+export function registerMemoryEmbeddingProvider(
+  adapter: MemoryEmbeddingProviderAdapter,
+  options?: { ownerPluginId?: string },
+): void {
+  getMemoryEmbeddingProviders().set(adapter.id, {
+    adapter,
+    ownerPluginId: options?.ownerPluginId,
+  });
+}
+
+export function getRegisteredMemoryEmbeddingProvider(
+  id: string,
+): RegisteredMemoryEmbeddingProvider | undefined {
+  return getMemoryEmbeddingProviders().get(id);
 }
 
 export function getMemoryEmbeddingProvider(id: string): MemoryEmbeddingProviderAdapter | undefined {
-  return memoryEmbeddingProviders.get(id);
+  return getMemoryEmbeddingProviders().get(id)?.adapter;
+}
+
+export function listRegisteredMemoryEmbeddingProviders(): RegisteredMemoryEmbeddingProvider[] {
+  return Array.from(getMemoryEmbeddingProviders().values());
 }
 
 export function listMemoryEmbeddingProviders(): MemoryEmbeddingProviderAdapter[] {
-  return Array.from(memoryEmbeddingProviders.values());
+  return listRegisteredMemoryEmbeddingProviders().map((entry) => entry.adapter);
 }
 
 export function restoreMemoryEmbeddingProviders(adapters: MemoryEmbeddingProviderAdapter[]): void {
-  memoryEmbeddingProviders.clear();
+  getMemoryEmbeddingProviders().clear();
   for (const adapter of adapters) {
-    memoryEmbeddingProviders.set(adapter.id, adapter);
+    registerMemoryEmbeddingProvider(adapter);
+  }
+}
+
+export function restoreRegisteredMemoryEmbeddingProviders(
+  entries: RegisteredMemoryEmbeddingProvider[],
+): void {
+  getMemoryEmbeddingProviders().clear();
+  for (const entry of entries) {
+    registerMemoryEmbeddingProvider(entry.adapter, {
+      ownerPluginId: entry.ownerPluginId,
+    });
   }
 }
 
 export function clearMemoryEmbeddingProviders(): void {
-  memoryEmbeddingProviders.clear();
+  getMemoryEmbeddingProviders().clear();
 }
 
 export const _resetMemoryEmbeddingProviders = clearMemoryEmbeddingProviders;

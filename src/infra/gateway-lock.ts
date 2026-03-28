@@ -3,8 +3,10 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
+import { z } from "zod";
 import { resolveConfigPath, resolveGatewayLockDir, resolveStateDir } from "../config/paths.js";
 import { isPidAlive } from "../shared/pid-alive.js";
+import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
 import { isGatewayArgv, parseProcCmdline } from "./gateway-process-argv.js";
 
 const DEFAULT_TIMEOUT_MS = 5000;
@@ -18,6 +20,13 @@ type LockPayload = {
   configPath: string;
   startTime?: number;
 };
+
+const LockPayloadSchema = z.object({
+  pid: z.number(),
+  createdAt: z.string(),
+  configPath: z.string(),
+  startTime: z.number().optional(),
+}) as z.ZodType<LockPayload>;
 
 export type GatewayLockHandle = {
   lockPath: string;
@@ -142,23 +151,7 @@ async function resolveGatewayOwnerStatus(
 async function readLockPayload(lockPath: string): Promise<LockPayload | null> {
   try {
     const raw = await fs.readFile(lockPath, "utf8");
-    const parsed = JSON.parse(raw) as Partial<LockPayload>;
-    if (typeof parsed.pid !== "number") {
-      return null;
-    }
-    if (typeof parsed.createdAt !== "string") {
-      return null;
-    }
-    if (typeof parsed.configPath !== "string") {
-      return null;
-    }
-    const startTime = typeof parsed.startTime === "number" ? parsed.startTime : undefined;
-    return {
-      pid: parsed.pid,
-      createdAt: parsed.createdAt,
-      configPath: parsed.configPath,
-      startTime,
-    };
+    return safeParseJsonWithSchema(LockPayloadSchema, raw);
   } catch {
     return null;
   }

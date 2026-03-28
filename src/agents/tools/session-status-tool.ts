@@ -242,21 +242,19 @@ export function createSessionStatusTool(opts?: {
         }
         return trimmed;
       };
-      const visibilityGuard =
-        opts?.sandboxed === true
-          ? await createSessionVisibilityGuard({
-              action: "status",
-              requesterSessionKey: visibilityRequesterKey,
-              visibility: resolveEffectiveSessionToolsVisibility({
-                cfg,
-                sandboxed: true,
-              }),
-              a2aPolicy,
-            })
-          : null;
+      const visibilityGuard = await createSessionVisibilityGuard({
+        action: "status",
+        requesterSessionKey: visibilityRequesterKey,
+        visibility: resolveEffectiveSessionToolsVisibility({
+          cfg,
+          sandboxed: opts?.sandboxed === true,
+        }),
+        a2aPolicy,
+      });
 
       const requestedKeyParam = readStringParam(params, "sessionKey");
       let requestedKeyRaw = requestedKeyParam ?? opts?.agentSessionKey;
+      let resolvedTargetViaSessionId = false;
       if (!requestedKeyRaw?.trim()) {
         throw new Error("sessionKey required");
       }
@@ -278,10 +276,10 @@ export function createSessionStatusTool(opts?: {
       if (requestedKeyRaw.startsWith("agent:")) {
         const requestedAgentId = resolveAgentIdFromSessionKey(requestedKeyRaw);
         ensureAgentAccess(requestedAgentId);
-        const access = visibilityGuard?.check(
+        const access = visibilityGuard.check(
           normalizeVisibilityTargetSessionKey(requestedKeyRaw, requestedAgentId),
         );
-        if (access && !access.allowed) {
+        if (!access.allowed) {
           throw new Error(access.error);
         }
       }
@@ -331,6 +329,7 @@ export function createSessionStatusTool(opts?: {
           }
           // If resolution points at another agent, enforce A2A policy before switching stores.
           ensureAgentAccess(resolveAgentIdFromSessionKey(visibleSession.key));
+          resolvedTargetViaSessionId = true;
           requestedKeyRaw = visibleSession.key;
           agentId = resolveAgentIdFromSessionKey(visibleSession.key);
           storePath = resolveStorePath(cfg.session?.store, { agentId });
@@ -368,7 +367,7 @@ export function createSessionStatusTool(opts?: {
         throw new Error(`Unknown ${kind}: ${requestedKeyRaw}`);
       }
 
-      if (visibilityGuard && !isExplicitAgentKey) {
+      if (resolvedTargetViaSessionId || (opts?.sandboxed === true && !isExplicitAgentKey)) {
         const access = visibilityGuard.check(
           normalizeVisibilityTargetSessionKey(resolved.key, agentId),
         );
@@ -475,7 +474,11 @@ export function createSessionStatusTool(opts?: {
 
       const queueSettings = resolveQueueSettings({
         cfg,
-        channel: resolved.entry.channel ?? resolved.entry.lastChannel ?? "unknown",
+        channel:
+          resolved.entry.channel ??
+          resolved.entry.lastChannel ??
+          resolved.entry.origin?.provider ??
+          "unknown",
         sessionEntry: resolved.entry,
       });
       const queueKey = resolved.key ?? resolved.entry.sessionId;

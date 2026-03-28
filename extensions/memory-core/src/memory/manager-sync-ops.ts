@@ -7,43 +7,45 @@ import chokidar, { FSWatcher } from "chokidar";
 import {
   buildCaseInsensitiveExtensionGlob,
   classifyMemoryMultimodalPath,
-  createSubsystemLogger,
-  ensureDir,
-  ensureMemoryIndexSchema,
   getMemoryMultimodalExtensions,
-  hashText,
-  isFileMissingError,
-  listMemoryFiles,
-  listSessionFilesForAgent,
-  normalizeExtraMemoryPaths,
+} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import {
+  createSubsystemLogger,
   onSessionTranscriptUpdate,
   resolveAgentDir,
   resolveSessionTranscriptsDirForAgent,
   resolveUserPath,
-  runWithConcurrency,
+  type OpenClawConfig,
+  type ResolvedMemorySearchConfig,
+} from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import {
+  buildSessionEntry,
+  listSessionFilesForAgent,
   sessionPathForFile,
+  type SessionFileEntry,
+} from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
+import {
+  buildFileEntry,
+  ensureDir,
+  ensureMemoryIndexSchema,
+  hashText,
+  isFileMissingError,
+  listMemoryFiles,
+  loadSqliteVecExtension,
+  normalizeExtraMemoryPaths,
+  requireNodeSqlite,
+  runWithConcurrency,
   type MemoryFileEntry,
   type MemorySource,
   type MemorySyncProgressUpdate,
-  type OpenClawConfig,
-  type ResolvedMemorySearchConfig,
-  type SessionFileEntry,
-  buildSessionEntry,
-} from "../engine-host-api.js";
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   createEmbeddingProvider,
-  DEFAULT_GEMINI_EMBEDDING_MODEL,
-  DEFAULT_MISTRAL_EMBEDDING_MODEL,
-  DEFAULT_OLLAMA_EMBEDDING_MODEL,
-  DEFAULT_OPENAI_EMBEDDING_MODEL,
-  DEFAULT_VOYAGE_EMBEDDING_MODEL,
   type EmbeddingProvider,
   type EmbeddingProviderId,
   type EmbeddingProviderRuntime,
+  resolveEmbeddingProviderFallbackModel,
 } from "./embeddings.js";
-import { buildFileEntry } from "./internal.js";
-import { loadSqliteVecExtension } from "./sqlite-vec.js";
-import { requireNodeSqlite } from "./sqlite.js";
 
 type MemoryIndexMeta = {
   model: string;
@@ -1119,18 +1121,7 @@ export abstract class MemoryManagerSyncOps {
     }
     const fallbackFrom = this.provider.id as EmbeddingProviderId;
 
-    const fallbackModel =
-      fallback === "gemini"
-        ? DEFAULT_GEMINI_EMBEDDING_MODEL
-        : fallback === "openai"
-          ? DEFAULT_OPENAI_EMBEDDING_MODEL
-          : fallback === "voyage"
-            ? DEFAULT_VOYAGE_EMBEDDING_MODEL
-            : fallback === "mistral"
-              ? DEFAULT_MISTRAL_EMBEDDING_MODEL
-              : fallback === "ollama"
-                ? DEFAULT_OLLAMA_EMBEDDING_MODEL
-                : this.settings.model;
+    const fallbackModel = resolveEmbeddingProviderFallbackModel(fallback, this.settings.model);
 
     const fallbackResult = await createEmbeddingProvider({
       config: this.cfg,

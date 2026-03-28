@@ -304,6 +304,7 @@ describe("gateway server sessions", () => {
         providerOverride?: string;
         modelOverride?: string;
         parentSessionKey?: string;
+        sessionFile?: string;
       };
     }>(ws, "sessions.create", {
       agentId: "ops",
@@ -318,6 +319,7 @@ describe("gateway server sessions", () => {
     expect(created.payload?.entry?.providerOverride).toBe("openai");
     expect(created.payload?.entry?.modelOverride).toBe("gpt-test-a");
     expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:main");
+    expect(created.payload?.entry?.sessionFile).toBeTruthy();
     expect(created.payload?.sessionId).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
     );
@@ -330,6 +332,7 @@ describe("gateway server sessions", () => {
         providerOverride?: string;
         modelOverride?: string;
         parentSessionKey?: string;
+        sessionFile?: string;
       }
     >;
     const key = created.payload?.key as string;
@@ -340,6 +343,7 @@ describe("gateway server sessions", () => {
       modelOverride: "gpt-test-a",
       parentSessionKey: "agent:main:main",
     });
+    expect(created.payload?.entry?.sessionFile).toBe(rawStore[key]?.sessionFile);
 
     const transcriptPath = path.join(dir, `${created.payload?.sessionId}.jsonl`);
     const transcript = await fs.readFile(transcriptPath, "utf-8");
@@ -603,6 +607,10 @@ describe("gateway server sessions", () => {
           verboseLevel: "on",
           responseUsage: "full",
           fastMode: true,
+          lastChannel: "telegram",
+          lastTo: "-100123",
+          lastAccountId: "acct-1",
+          lastThreadId: 42,
         },
       },
     });
@@ -639,6 +647,10 @@ describe("gateway server sessions", () => {
         verboseLevel: "on",
         responseUsage: "full",
         fastMode: true,
+        lastChannel: "telegram",
+        lastTo: "-100123",
+        lastAccountId: "acct-1",
+        lastThreadId: 42,
       }),
       new Set(["conn-1"]),
       { dropIfSlow: true },
@@ -687,6 +699,64 @@ describe("gateway server sessions", () => {
         sessionKey: "agent:main:main",
         reason: "patch",
         sendPolicy: "deny",
+      }),
+      new Set(["conn-1"]),
+      { dropIfSlow: true },
+    );
+  });
+
+  test("sessions.changed mutation events include subagent ownership metadata", async () => {
+    await createSessionStoreDir();
+    await writeSessionStore({
+      entries: {
+        "subagent:child": {
+          sessionId: "sess-child",
+          updatedAt: Date.now(),
+          spawnedBy: "agent:main:main",
+          spawnedWorkspaceDir: "/tmp/subagent-workspace",
+          forkedFromParent: true,
+          spawnDepth: 2,
+          subagentRole: "orchestrator",
+          subagentControlScope: "children",
+        },
+      },
+    });
+
+    const broadcastToConnIds = vi.fn();
+    const respond = vi.fn();
+    const sessionsHandlers = await getSessionsHandlers();
+    await sessionsHandlers["sessions.patch"]({
+      req: {} as never,
+      params: {
+        key: "subagent:child",
+        label: "Child",
+      },
+      respond,
+      context: {
+        broadcastToConnIds,
+        getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+        loadGatewayModelCatalog: async () => ({ providers: [] }),
+      } as never,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ ok: true, key: "agent:main:subagent:child" }),
+      undefined,
+    );
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "sessions.changed",
+      expect.objectContaining({
+        sessionKey: "agent:main:subagent:child",
+        reason: "patch",
+        spawnedBy: "agent:main:main",
+        spawnedWorkspaceDir: "/tmp/subagent-workspace",
+        forkedFromParent: true,
+        spawnDepth: 2,
+        subagentRole: "orchestrator",
+        subagentControlScope: "children",
       }),
       new Set(["conn-1"]),
       { dropIfSlow: true },
@@ -1091,25 +1161,38 @@ describe("gateway server sessions", () => {
     const reset = await rpcReq<{
       ok: true;
       key: string;
-      entry: { sessionId: string; modelProvider?: string; model?: string; contextTokens?: number };
+      entry: {
+        sessionId: string;
+        sessionFile?: string;
+        modelProvider?: string;
+        model?: string;
+        contextTokens?: number;
+      };
     }>(ws, "sessions.reset", { key: "main" });
 
     expect(reset.ok).toBe(true);
     expect(reset.payload?.key).toBe("agent:main:main");
     expect(reset.payload?.entry.sessionId).not.toBe("sess-stale-model");
+    expect(reset.payload?.entry.sessionFile).toBeTruthy();
     expect(reset.payload?.entry.modelProvider).toBe("openai");
     expect(reset.payload?.entry.model).toBe("gpt-test-a");
     expect(reset.payload?.entry.contextTokens).toBeUndefined();
+    await expect(fs.stat(reset.payload?.entry.sessionFile as string)).resolves.toBeTruthy();
 
     ws.close();
   });
 
   test("sessions.reset preserves spawned session ownership metadata", async () => {
     const { storePath } = await createSessionStoreDir();
+    const customSessionFile = path.join(
+      await fs.realpath(path.dirname(storePath)),
+      "custom-owned-child-transcript.jsonl",
+    );
     await writeSessionStore({
       entries: {
         "subagent:child": {
           sessionId: "sess-owned-child",
+          sessionFile: customSessionFile,
           updatedAt: Date.now(),
           chatType: "group",
           channel: "discord",
@@ -1146,6 +1229,13 @@ describe("gateway server sessions", () => {
           cliSessionIds: {
             "claude-cli": "cli-session-123",
           },
+          cliSessionBindings: {
+            "claude-cli": {
+              sessionId: "cli-session-123",
+              authProfileId: "anthropic:work",
+              extraSystemPromptHash: "prompt-hash",
+            },
+          },
           claudeCliSessionId: "cli-session-123",
           deliveryContext: {
             channel: "discord",
@@ -1163,6 +1253,7 @@ describe("gateway server sessions", () => {
       ok: true;
       key: string;
       entry: {
+        sessionFile?: string;
         chatType?: string;
         channel?: string;
         groupId?: string;
@@ -1195,6 +1286,15 @@ describe("gateway server sessions", () => {
         execAsk?: string;
         execNode?: string;
         displayName?: string;
+        cliSessionBindings?: Record<
+          string,
+          {
+            sessionId?: string;
+            authProfileId?: string;
+            extraSystemPromptHash?: string;
+            mcpConfigHash?: string;
+          }
+        >;
         cliSessionIds?: Record<string, string>;
         claudeCliSessionId?: string;
         deliveryContext?: {
@@ -1208,6 +1308,7 @@ describe("gateway server sessions", () => {
     }>(ws, "sessions.reset", { key: "subagent:child" });
 
     expect(reset.ok).toBe(true);
+    expect(reset.payload?.entry.sessionFile).toBe(customSessionFile);
     expect(reset.payload?.entry.chatType).toBe("group");
     expect(reset.payload?.entry.channel).toBe("discord");
     expect(reset.payload?.entry.groupId).toBe("group-1");
@@ -1240,8 +1341,17 @@ describe("gateway server sessions", () => {
     expect(reset.payload?.entry.execAsk).toBe("on-miss");
     expect(reset.payload?.entry.execNode).toBe("mac-mini");
     expect(reset.payload?.entry.displayName).toBe("Ops Child");
-    expect(reset.payload?.entry.cliSessionIds).toBeUndefined();
-    expect(reset.payload?.entry.claudeCliSessionId).toBeUndefined();
+    expect(reset.payload?.entry.cliSessionBindings).toEqual({
+      "claude-cli": {
+        sessionId: "cli-session-123",
+        authProfileId: "anthropic:work",
+        extraSystemPromptHash: "prompt-hash",
+      },
+    });
+    expect(reset.payload?.entry.cliSessionIds).toEqual({
+      "claude-cli": "cli-session-123",
+    });
+    expect(reset.payload?.entry.claudeCliSessionId).toBe("cli-session-123");
     expect(reset.payload?.entry.deliveryContext).toEqual({
       channel: "discord",
       to: "discord:child",
@@ -1253,6 +1363,7 @@ describe("gateway server sessions", () => {
     const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
       string,
       {
+        sessionFile?: string;
         chatType?: string;
         channel?: string;
         groupId?: string;
@@ -1285,6 +1396,15 @@ describe("gateway server sessions", () => {
         execAsk?: string;
         execNode?: string;
         displayName?: string;
+        cliSessionBindings?: Record<
+          string,
+          {
+            sessionId?: string;
+            authProfileId?: string;
+            extraSystemPromptHash?: string;
+            mcpConfigHash?: string;
+          }
+        >;
         cliSessionIds?: Record<string, string>;
         claudeCliSessionId?: string;
         deliveryContext?: {
@@ -1296,6 +1416,7 @@ describe("gateway server sessions", () => {
         label?: string;
       }
     >;
+    expect(store["agent:main:subagent:child"]?.sessionFile).toBe(customSessionFile);
     expect(store["agent:main:subagent:child"]?.chatType).toBe("group");
     expect(store["agent:main:subagent:child"]?.channel).toBe("discord");
     expect(store["agent:main:subagent:child"]?.groupId).toBe("group-1");
@@ -1328,8 +1449,17 @@ describe("gateway server sessions", () => {
     expect(store["agent:main:subagent:child"]?.execAsk).toBe("on-miss");
     expect(store["agent:main:subagent:child"]?.execNode).toBe("mac-mini");
     expect(store["agent:main:subagent:child"]?.displayName).toBe("Ops Child");
-    expect(store["agent:main:subagent:child"]?.cliSessionIds).toBeUndefined();
-    expect(store["agent:main:subagent:child"]?.claudeCliSessionId).toBeUndefined();
+    expect(store["agent:main:subagent:child"]?.cliSessionBindings).toEqual({
+      "claude-cli": {
+        sessionId: "cli-session-123",
+        authProfileId: "anthropic:work",
+        extraSystemPromptHash: "prompt-hash",
+      },
+    });
+    expect(store["agent:main:subagent:child"]?.cliSessionIds).toEqual({
+      "claude-cli": "cli-session-123",
+    });
+    expect(store["agent:main:subagent:child"]?.claudeCliSessionId).toBe("cli-session-123");
     expect(store["agent:main:subagent:child"]?.deliveryContext).toEqual({
       channel: "discord",
       to: "discord:child",

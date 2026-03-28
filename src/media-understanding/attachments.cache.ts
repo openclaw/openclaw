@@ -39,10 +39,15 @@ type AttachmentCacheEntry = {
   tempCleanup?: () => Promise<void>;
 };
 
-const DEFAULT_LOCAL_PATH_ROOTS = mergeInboundPathRoots(
-  getDefaultMediaLocalRoots(),
-  DEFAULT_IMESSAGE_ATTACHMENT_ROOTS,
-);
+let defaultLocalPathRoots: readonly string[] | undefined;
+
+function getDefaultLocalPathRoots(): readonly string[] {
+  defaultLocalPathRoots ??= mergeInboundPathRoots(
+    getDefaultMediaLocalRoots(),
+    DEFAULT_IMESSAGE_ATTACHMENT_ROOTS,
+  );
+  return defaultLocalPathRoots;
+}
 
 export type MediaAttachmentCacheOptions = {
   localPathRoots?: readonly string[];
@@ -66,7 +71,10 @@ export class MediaAttachmentCache {
 
   constructor(attachments: MediaAttachment[], options?: MediaAttachmentCacheOptions) {
     this.attachments = attachments;
-    this.localPathRoots = mergeInboundPathRoots(options?.localPathRoots, DEFAULT_LOCAL_PATH_ROOTS);
+    this.localPathRoots = mergeInboundPathRoots(
+      options?.localPathRoots,
+      getDefaultLocalPathRoots(),
+    );
     for (const attachment of attachments) {
       this.entries.set(attachment.index, { attachment });
     }

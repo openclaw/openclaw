@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   createExecutionArtifacts,
   resolvePnpmCommandInvocation,
+  resolveVitestFsModuleCachePath,
 } from "../../scripts/test-planner/executor.mjs";
 import {
   buildCIExecutionManifest,
@@ -39,6 +40,7 @@ describe("test planner", () => {
     );
 
     expect(plan.runtimeCapabilities.runtimeProfileName).toBe("local-darwin");
+    expect(plan.failurePolicy).toBe("fail-fast");
     expect(plan.runtimeCapabilities.memoryBand).toBe("mid");
     expect(plan.executionBudget.unitSharedWorkers).toBe(4);
     expect(plan.executionBudget.topLevelParallelLimitNoIsolate).toBe(8);
@@ -46,6 +48,38 @@ describe("test planner", () => {
     expect(plan.selectedUnits.some((unit) => unit.id.startsWith("unit-fast"))).toBe(true);
     expect(plan.selectedUnits.some((unit) => unit.id.startsWith("extensions"))).toBe(true);
     expect(plan.topLevelParallelLimit).toBe(8);
+    artifacts.cleanupTempArtifacts();
+  });
+
+  it("uses smaller shared extension batches on constrained local hosts", () => {
+    const env = {
+      RUNNER_OS: "macOS",
+      OPENCLAW_TEST_HOST_CPU_COUNT: "8",
+      OPENCLAW_TEST_HOST_MEMORY_GIB: "16",
+      OPENCLAW_TEST_LOAD_AWARE: "0",
+    };
+    const artifacts = createExecutionArtifacts(env);
+    const plan = buildExecutionPlan(
+      {
+        profile: null,
+        mode: "local",
+        surfaces: ["extensions"],
+        passthroughArgs: [],
+      },
+      {
+        env,
+        platform: "darwin",
+        writeTempJsonArtifact: artifacts.writeTempJsonArtifact,
+      },
+    );
+
+    const sharedExtensionBatches = plan.selectedUnits.filter((unit) =>
+      unit.id.startsWith("extensions-batch-"),
+    );
+
+    expect(plan.runtimeCapabilities.memoryBand).toBe("constrained");
+    expect(plan.executionBudget.extensionsBatchTargetMs).toBe(60_000);
+    expect(sharedExtensionBatches.length).toBeGreaterThan(3);
     artifacts.cleanupTempArtifacts();
   });
 
@@ -141,6 +175,25 @@ describe("test planner", () => {
         .map((unit) => unit.surface)
         .toSorted((left, right) => left.localeCompare(right)),
     ).toEqual(["base", "channels"]);
+    artifacts.cleanupTempArtifacts();
+  });
+
+  it("normalizes --bail=0 into collect-all failure policy", () => {
+    const artifacts = createExecutionArtifacts({});
+    const plan = buildExecutionPlan(
+      {
+        mode: "local",
+        surfaces: ["unit"],
+        passthroughArgs: ["--bail=0"],
+      },
+      {
+        env: {},
+        writeTempJsonArtifact: artifacts.writeTempJsonArtifact,
+      },
+    );
+
+    expect(plan.failurePolicy).toBe("collect-all");
+    expect(plan.passthroughOptionArgs).not.toContain("--bail=0");
     artifacts.cleanupTempArtifacts();
   });
 
@@ -323,7 +376,7 @@ describe("test planner", () => {
     expect(manifest.jobs.checkDocs.enabled).toBe(true);
   });
 
-  it("adds push-only compat and release lanes to push manifests", () => {
+  it("adds the push-only compat lane to push manifests", () => {
     const manifest = buildCIExecutionManifest(
       {
         eventName: "push",
@@ -341,7 +394,6 @@ describe("test planner", () => {
       },
     );
 
-    expect(manifest.jobs.releaseCheck.enabled).toBe(true);
     expect(
       manifest.jobs.checks.matrix.include.some((entry) => entry.task === "compat-node22"),
     ).toBe(true);
@@ -373,5 +425,57 @@ describe("resolvePnpmCommandInvocation", () => {
       command: "C:\\Windows\\System32\\cmd.exe",
       args: ["/d", "/s", "/c", "pnpm.cmd"],
     });
+  });
+});
+
+describe("resolveVitestFsModuleCachePath", () => {
+  it("uses a lane-local cache path by default on non-Windows hosts", () => {
+    expect(
+      resolveVitestFsModuleCachePath({
+        cwd: "/repo",
+        env: {},
+        platform: "linux",
+        unitId: "unit-fast-1",
+      }),
+    ).toBe("/repo/node_modules/.experimental-vitest-cache/unit-fast-1");
+  });
+
+  it("honors the requested Windows platform when building the cache path", () => {
+    expect(
+      resolveVitestFsModuleCachePath({
+        cwd: "/repo",
+        env: {
+          OPENCLAW_VITEST_FS_MODULE_CACHE: "1",
+        },
+        platform: "win32",
+        unitId: "unit-fast-1",
+      }),
+    ).toBe("\\repo\\node_modules\\.experimental-vitest-cache\\unit-fast-1");
+  });
+
+  it("respects an explicit cache path override", () => {
+    expect(
+      resolveVitestFsModuleCachePath({
+        cwd: "/repo",
+        env: {
+          OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: "/tmp/custom-vitest-cache",
+        },
+        platform: "linux",
+        unitId: "unit-fast-1",
+      }),
+    ).toBe("/tmp/custom-vitest-cache");
+  });
+
+  it("does not force a cache path when the cache is disabled", () => {
+    expect(
+      resolveVitestFsModuleCachePath({
+        cwd: "/repo",
+        env: {
+          OPENCLAW_VITEST_FS_MODULE_CACHE: "0",
+        },
+        platform: "linux",
+        unitId: "unit-fast-1",
+      }),
+    ).toBeUndefined();
   });
 });

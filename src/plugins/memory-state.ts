@@ -4,7 +4,7 @@ import type {
   MemoryEmbeddingProbeResult,
   MemoryProviderStatus,
   MemorySyncProgressUpdate,
-} from "../plugins/memory-host/types.js";
+} from "../plugin-sdk/memory-core-host-engine-storage.js";
 
 export type MemoryPromptSectionBuilder = (params: {
   availableTools: Set<string>;
@@ -103,6 +103,10 @@ export function registerMemoryRuntime(runtime: MemoryPluginRuntime): void {
 
 export function getMemoryRuntime(): MemoryPluginRuntime | undefined {
   return memoryPluginState.runtime;
+}
+
+export function hasMemoryRuntime(): boolean {
+  return memoryPluginState.runtime !== undefined;
 }
 
 export function restoreMemoryPluginState(state: MemoryPluginState): void {
