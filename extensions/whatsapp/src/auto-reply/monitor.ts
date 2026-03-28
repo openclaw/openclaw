@@ -3,7 +3,6 @@ import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import { waitForever } from "openclaw/plugin-sdk/cli-runtime";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
 import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
-import { formatDurationPrecise } from "openclaw/plugin-sdk/infra-runtime";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-history";
 import { getReplyFromConfig } from "openclaw/plugin-sdk/reply-runtime";
@@ -11,7 +10,11 @@ import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { registerUnhandledRejectionHandler } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
-import { defaultRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import {
+  defaultRuntime,
+  formatDurationPrecise,
+  type RuntimeEnv,
+} from "openclaw/plugin-sdk/runtime-env";
 import { resolveWhatsAppAccount, resolveWhatsAppMediaMaxBytes } from "../accounts.js";
 import { setActiveWebListener } from "../active-listener.js";
 import { monitorWebInbox } from "../inbound.js";
