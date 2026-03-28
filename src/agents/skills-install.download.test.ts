@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createSyntheticSourceInfo } from "@mariozechner/pi-coding-agent";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { installDownloadSpec } from "./skills-install-download.js";
 import { setTempStateDir } from "./skills-install.download-test-utils.js";
@@ -80,10 +79,7 @@ function createFixtureSkill(params: {
     description: params.description,
     filePath: params.filePath,
     baseDir: params.baseDir,
-    sourceInfo: createSyntheticSourceInfo(params.filePath, {
-      source: params.source,
-      baseDir: params.baseDir,
-    }),
+    source: params.source,
     disableModelInvocation: false,
   };
 }
