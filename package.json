@@ -200,6 +200,10 @@
       "types": "./dist/plugin-sdk/hook-runtime.d.ts",
       "default": "./dist/plugin-sdk/hook-runtime.js"
     },
+    "./plugin-sdk/host-runtime": {
+      "types": "./dist/plugin-sdk/host-runtime.d.ts",
+      "default": "./dist/plugin-sdk/host-runtime.js"
+    },
     "./plugin-sdk/process-runtime": {
       "types": "./dist/plugin-sdk/process-runtime.d.ts",
       "default": "./dist/plugin-sdk/process-runtime.js"
@@ -303,6 +307,10 @@
     "./plugin-sdk/command-auth": {
       "types": "./dist/plugin-sdk/command-auth.d.ts",
       "default": "./dist/plugin-sdk/command-auth.js"
+    },
+    "./plugin-sdk/collection-runtime": {
+      "types": "./dist/plugin-sdk/collection-runtime.d.ts",
+      "default": "./dist/plugin-sdk/collection-runtime.js"
     },
     "./plugin-sdk/compat": {
       "types": "./dist/plugin-sdk/compat.d.ts",
