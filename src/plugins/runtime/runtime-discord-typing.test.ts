@@ -4,6 +4,7 @@ import {
   type CreateDiscordTypingLeaseParams,
 } from "./runtime-discord-typing.js";
 import {
+  createPulseWithBackgroundFailure,
   expectBackgroundTypingPulseFailuresAreSwallowed,
   expectIndependentTypingLeases,
 } from "./typing-lease.test-support.js";
@@ -33,10 +34,10 @@ describe("createDiscordTypingLease", () => {
   });
 
   it("swallows background pulse failures", async () => {
-    const pulse = vi
-      .fn<(params: { channelId: string; accountId?: string; cfg?: unknown }) => Promise<void>>()
-      .mockResolvedValueOnce(undefined)
-      .mockRejectedValueOnce(new Error("boom"));
+    const pulse =
+      createPulseWithBackgroundFailure<
+        (params: { channelId: string; accountId?: string; cfg?: unknown }) => Promise<void>
+      >();
 
     await expectBackgroundTypingPulseFailuresAreSwallowed({
       createLease: createDiscordTypingLease,
