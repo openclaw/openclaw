@@ -8,6 +8,8 @@ const buildSessionLookup = (
     sessionId?: string;
     lastChannel?: string;
     lastTo?: string;
+    lastAccountId?: string;
+    lastThreadId?: string | number;
     updatedAt?: number;
     label?: string;
     spawnedBy?: string;
@@ -22,6 +24,8 @@ const buildSessionLookup = (
     updatedAt: entry.updatedAt ?? Date.now(),
     lastChannel: entry.lastChannel,
     lastTo: entry.lastTo,
+    lastAccountId: entry.lastAccountId,
+    lastThreadId: entry.lastThreadId,
     label: entry.label,
     spawnedBy: entry.spawnedBy,
     parentSessionKey: entry.parentSessionKey,
@@ -478,6 +482,8 @@ describe("voice transcript events", () => {
         parentSessionKey: "agent:main:parent",
         lastChannel: "discord",
         lastTo: "thread-1",
+        lastAccountId: "acct-1",
+        lastThreadId: 42,
       }),
     );
 
@@ -492,6 +498,8 @@ describe("voice transcript events", () => {
           parentSessionKey: "agent:main:parent",
           lastChannel: "discord",
           lastTo: "thread-1",
+          lastAccountId: "acct-1",
+          lastThreadId: 42,
         },
       };
       update(store);
@@ -515,6 +523,8 @@ describe("voice transcript events", () => {
         parentSessionKey: "agent:main:parent",
         lastChannel: "discord",
         lastTo: "thread-1",
+        lastAccountId: "acct-1",
+        lastThreadId: 42,
       },
     });
   });
