@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
-import { loadOpenClawPlugins } from "./loader.js";
+import { resolveRuntimePluginRegistry } from "./loader.js";
 import { getMemoryRuntime } from "./memory-state.js";
 
 function ensureMemoryRuntime(cfg?: OpenClawConfig) {
@@ -9,7 +9,7 @@ function ensureMemoryRuntime(cfg?: OpenClawConfig) {
     return current;
   }
   const resolvedConfig = applyPluginAutoEnable({ config: cfg, env: process.env }).config;
-  loadOpenClawPlugins({ config: resolvedConfig });
+  resolveRuntimePluginRegistry({ config: resolvedConfig });
   return getMemoryRuntime();
 }
 
