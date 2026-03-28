@@ -111,18 +111,16 @@ describe("provider auth-choice contract", () => {
       },
     ];
 
-    await Promise.all(
-      pluginFallbackScenarios.map(async (provider) => {
-        resolvePluginProvidersMock.mockClear();
-        resolvePluginProvidersMock.mockReturnValue([provider]);
-        await expect(
-          resolvePreferredProviderForAuthChoice({
-            choice: buildProviderPluginMethodChoice(provider.id, provider.auth[0]?.id ?? "default"),
-          }),
-        ).resolves.toBe(provider.id);
-        expect(resolvePluginProvidersMock).toHaveBeenCalled();
-      }),
-    );
+    for (const provider of pluginFallbackScenarios) {
+      resolvePluginProvidersMock.mockClear();
+      resolvePluginProvidersMock.mockReturnValue([provider]);
+      await expect(
+        resolvePreferredProviderForAuthChoice({
+          choice: buildProviderPluginMethodChoice(provider.id, provider.auth[0]?.id ?? "default"),
+        }),
+      ).resolves.toBe(provider.id);
+      expect(resolvePluginProvidersMock).toHaveBeenCalled();
+    }
 
     resolvePluginProvidersMock.mockClear();
     await expect(resolvePreferredProviderForAuthChoice({ choice: "unknown" })).resolves.toBe(
