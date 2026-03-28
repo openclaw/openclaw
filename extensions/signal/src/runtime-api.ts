@@ -2,8 +2,12 @@
 // Prefer narrower SDK subpaths plus local extension seams over the legacy signal barrel.
 
 export type { ChannelMessageActionAdapter } from "openclaw/plugin-sdk/channel-contract";
-export type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+export { SignalConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
+export { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
+import type { OpenClawConfig as RuntimeOpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+export type { RuntimeOpenClawConfig as OpenClawConfig };
 export type { OpenClawPluginApi, PluginRuntime } from "openclaw/plugin-sdk/core";
+export type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 export {
   DEFAULT_ACCOUNT_ID,
   applyAccountNameToChannelSection,
@@ -16,18 +20,9 @@ export {
   normalizeAccountId,
   setAccountEnabledInConfigSection,
 } from "openclaw/plugin-sdk/core";
+export { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/media-runtime";
 export { formatCliCommand, formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 export { chunkText } from "openclaw/plugin-sdk/reply-runtime";
-export {
-  ChannelPlugin,
-  PAIRING_APPROVED_MESSAGE,
-  SignalAccountConfig,
-  SignalConfigSchema,
-  looksLikeSignalTargetId,
-  normalizeE164,
-  normalizeSignalMessagingTarget,
-  resolveChannelMediaMaxBytes,
-} from "openclaw/plugin-sdk/signal-core";
 export { detectBinary, installSignalCli } from "openclaw/plugin-sdk/setup-tools";
 export {
   resolveAllowlistProviderRuntimeGroupPolicy,
@@ -39,6 +34,8 @@ export {
   collectStatusIssuesFromLastError,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
+export { normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
+export { looksLikeSignalTargetId, normalizeSignalMessagingTarget } from "./normalize.js";
 export {
   listEnabledSignalAccounts,
   listSignalAccountIds,
@@ -52,3 +49,7 @@ export { removeReactionSignal, sendReactionSignal } from "./send-reactions.js";
 export { sendMessageSignal } from "./send.js";
 export { signalMessageActions } from "./message-actions.js";
 export type { ResolvedSignalAccount } from "./accounts.js";
+export type SignalAccountConfig = Omit<
+  Exclude<NonNullable<RuntimeOpenClawConfig["channels"]>["signal"], undefined>,
+  "accounts"
+>;
