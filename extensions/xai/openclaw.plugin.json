@@ -36,7 +36,8 @@
     }
   },
   "contracts": {
-    "webSearchProviders": ["grok"]
+    "webSearchProviders": ["grok"],
+    "tools": ["x_search"]
   },
   "configSchema": {
     "type": "object",

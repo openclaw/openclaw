@@ -18640,6 +18640,7 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       },
       contracts: {
         webSearchProviders: ["grok"],
+        tools: ["x_search"],
       },
     },
   },
