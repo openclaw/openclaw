@@ -3,6 +3,7 @@ import { streamSimple } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { usesMoonshotThinkingPayloadCompatStatic } from "../moonshot-provider-compat.js";
 import { normalizeProviderId } from "../provider-id.js";
+import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
 export {
   createMoonshotThinkingWrapper,
@@ -41,19 +42,10 @@ export function shouldApplyMoonshotPayloadCompat(params: {
 
 export function createSiliconFlowThinkingWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
-  return (model, context, options) => {
-    const originalOnPayload = options?.onPayload;
-    return underlying(model, context, {
-      ...options,
-      onPayload: (payload) => {
-        if (payload && typeof payload === "object") {
-          const payloadObj = payload as Record<string, unknown>;
-          if (payloadObj.thinking === "off") {
-            payloadObj.thinking = null;
-          }
-        }
-        return originalOnPayload?.(payload, model);
-      },
+  return (model, context, options) =>
+    streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
+      if (payloadObj.thinking === "off") {
+        payloadObj.thinking = null;
+      }
     });
-  };
 }
