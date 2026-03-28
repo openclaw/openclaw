@@ -33,6 +33,12 @@ let SafeOpenError: typeof import("../infra/fs-safe.js").SafeOpenError;
 let startMediaServer: typeof import("./server.js").startMediaServer;
 let realFetch: typeof import("undici").fetch;
 
+async function expectOutsideWorkspaceServerResponse(url: string) {
+  const response = await realFetch(url);
+  expect(response.status).toBe(400);
+  expect(await response.text()).toBe("file is outside workspace root");
+}
+
 describe("media server outside-workspace mapping", () => {
   let server: Awaited<ReturnType<typeof startMediaServer>>;
   let port = 0;
@@ -66,8 +72,6 @@ describe("media server outside-workspace mapping", () => {
       new SafeOpenError("outside-workspace", "file is outside workspace root"),
     );
 
-    const response = await realFetch(`http://127.0.0.1:${port}/media/ok-id`);
-    expect(response.status).toBe(400);
-    expect(await response.text()).toBe("file is outside workspace root");
+    await expectOutsideWorkspaceServerResponse(`http://127.0.0.1:${port}/media/ok-id`);
   });
 });
