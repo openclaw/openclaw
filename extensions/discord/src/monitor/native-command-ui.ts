@@ -28,7 +28,6 @@ import {
 import type { OpenClawConfig, loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import { loadSessionStore, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { chunkItems, withTimeout } from "openclaw/plugin-sdk/text-runtime";
 import { resolveDiscordChannelConfigWithFallback, resolveDiscordGuildEntry } from "./allow-list.js";
 import { resolveDiscordChannelInfo } from "./message-utils.js";
@@ -804,36 +803,20 @@ export async function handleDiscordModelPickerInteraction(params: {
       return;
     }
 
-    await new Promise((resolve) => setTimeout(resolve, 250));
-
-    const effectiveModelRef = resolveDiscordModelPickerCurrentModel({
-      cfg: ctx.cfg,
-      route,
-      data: pickerData,
-    });
-    const persisted = effectiveModelRef === resolvedModelRef;
-
-    if (!persisted) {
-      logVerbose(
-        `discord: model picker override mismatch — expected ${resolvedModelRef} but read ${effectiveModelRef} from session key ${route.sessionKey}`,
-      );
-    }
-
-    if (persisted) {
-      await recordDiscordModelPickerRecentModel({
-        scope: preferenceScope,
-        modelRef: resolvedModelRef,
-        limit: 5,
-      }).catch(() => undefined);
-    }
+    // The dispatch completed successfully — the override is applied.
+    // Record the model as recently used and confirm to the user.
+    // Note: reading the session store back to verify can false-negative when the
+    // picker route session key differs from the dispatch session key (e.g. in
+    // server channels), so we trust the successful dispatch result.
+    await recordDiscordModelPickerRecentModel({
+      scope: preferenceScope,
+      modelRef: resolvedModelRef,
+      limit: 5,
+    }).catch(() => undefined);
 
     await params.safeInteractionCall("model picker follow-up", () =>
       interaction.followUp({
-        ...buildDiscordModelPickerNoticePayload(
-          persisted
-            ? `✅ Model set to ${resolvedModelRef}.`
-            : `⚠️ Tried to set ${resolvedModelRef}, but current model is ${effectiveModelRef}.`,
-        ),
+        ...buildDiscordModelPickerNoticePayload(`✅ Model set to ${resolvedModelRef}.`),
         ephemeral: true,
       }),
     );

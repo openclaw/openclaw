@@ -8,7 +8,6 @@ import type {
 import type { ModelsProviderData } from "../../../../src/auto-reply/reply/commands-models.js";
 import * as dispatcherModule from "../../../../src/auto-reply/reply/provider-dispatcher.js";
 import type { OpenClawConfig } from "../../../../src/config/config.js";
-import * as globalsModule from "../../../../src/globals.js";
 import * as timeoutModule from "../../../../src/utils/with-timeout.js";
 import * as modelPickerPreferencesModule from "./model-picker-preferences.js";
 import * as modelPickerModule from "./model-picker.js";
@@ -425,7 +424,7 @@ describe("Discord model picker interactions", () => {
     expectDispatchedModelSelection({ dispatchSpy, model: "openai/gpt-4o" });
   });
 
-  it("verifies model state against the bound thread session", async () => {
+  it("shows success confirmation for bound thread session model switch", async () => {
     const context = createModelPickerContext();
     context.threadBindings = createBoundThreadBindingManager({
       accountId: "default",
@@ -439,7 +438,6 @@ describe("Discord model picker interactions", () => {
     vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(pickerData);
     mockModelCommandPipeline(modelCommand);
     createDispatchSpy();
-    const verboseSpy = vi.spyOn(globalsModule, "logVerbose").mockImplementation(() => {});
 
     const select = createDiscordModelPickerFallbackSelect(context);
     const selectInteraction = createInteraction({
@@ -463,10 +461,14 @@ describe("Discord model picker interactions", () => {
 
     await button.run(submitInteraction as unknown as PickerButtonInteraction, submitData);
 
-    const mismatchLog = verboseSpy.mock.calls.find((call) =>
-      String(call[0] ?? "").includes("model picker override mismatch"),
-    )?.[0];
-    expect(mismatchLog).toContain("session key agent:worker:subagent:bound");
+    // After a successful dispatch, the picker should confirm success without
+    // a misleading mismatch warning (the picker route session key can differ
+    // from the dispatch session key in server channels).
+    const followUpCalls = (submitInteraction.followUp as ReturnType<typeof vi.fn>).mock.calls;
+    const successCall = followUpCalls.find((call) =>
+      String(call[0]?.content ?? "").includes("Model set to"),
+    );
+    expect(successCall).toBeDefined();
   });
 
   it("loads model picker data from the effective bound route", async () => {
