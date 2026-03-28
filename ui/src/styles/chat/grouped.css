@@ -429,7 +429,7 @@ img.chat-avatar {
   margin: 0 0 8px;
   font-size: 13px;
   font-weight: 500;
-  color: var(--fg, #fff);
+  color: var(--card-foreground, #1a1a1e);
 }
 
 .chat-delete-confirm__remember {

@@ -163,6 +163,15 @@ export const SessionsCompactParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const SessionsTruncateParamsSchema = Type.Object(
+  {
+    key: NonEmptyString,
+    /** 1-based sequence number; the message at this seq and all following messages are removed. */
+    seq: Type.Integer({ minimum: 1 }),
+  },
+  { additionalProperties: false },
+);
+
 export const SessionsUsageParamsSchema = Type.Object(
   {
     /** Specific session key to analyze; if omitted returns all sessions. */

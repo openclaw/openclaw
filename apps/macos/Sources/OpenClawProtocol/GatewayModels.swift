@@ -1593,6 +1593,24 @@ public struct SessionsCompactParams: Codable, Sendable {
     }
 }
 
+public struct SessionsTruncateParams: Codable, Sendable {
+    public let key: String
+    public let seq: Int
+
+    public init(
+        key: String,
+        seq: Int)
+    {
+        self.key = key
+        self.seq = seq
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case key
+        case seq
+    }
+}
+
 public struct SessionsUsageParams: Codable, Sendable {
     public let key: String?
     public let startdate: String?

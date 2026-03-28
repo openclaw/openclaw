@@ -1500,6 +1500,44 @@ export function renderApp(state: AppViewState) {
                 void loadChatHistory(state);
                 void state.loadAssistantIdentity();
               },
+              onTruncateHistory: (seq: number, onFail: () => void): boolean => {
+                if (!state.client || !state.connected) {
+                  return false;
+                }
+                const truncatingKey = state.sessionKey;
+                const truncatingRunId = state.chatRunId;
+                void state.client
+                  .request<{ truncated: boolean }>("sessions.truncate", { key: truncatingKey, seq })
+                  .then(async (result) => {
+                    if (!result.truncated) {
+                      onFail();
+                    }
+                    if (state.sessionKey !== truncatingKey) {
+                      return;
+                    }
+                    if (state.chatRunId !== null && state.chatRunId !== truncatingRunId) {
+                      await loadChatHistory(state);
+                      return;
+                    }
+                    if (result.truncated) {
+                      state.chatMessages = [];
+                      state.chatStream = null;
+                      state.chatRunId = null;
+                    }
+                    await loadChatHistory(state);
+                  })
+                  .catch((err: unknown) => {
+                    onFail();
+                    if (state.sessionKey !== truncatingKey) {
+                      return;
+                    }
+                    if (state.chatRunId !== null && state.chatRunId !== truncatingRunId) {
+                      return;
+                    }
+                    state.lastError = String(err);
+                  });
+                return true;
+              },
               onNavigateToAgent: () => {
                 state.agentsSelectedId = resolvedAgentId;
                 state.setTab("agents" as import("./navigation.ts").Tab);

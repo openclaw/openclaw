@@ -8,6 +8,7 @@ import {
   isEmbeddedPiRunActive,
   waitForEmbeddedPiRunEnd,
 } from "../../agents/pi-embedded-runner/runs.js";
+import { acquireSessionWriteLock } from "../../agents/session-write-lock.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import { loadConfig } from "../../config/config.js";
 import {
@@ -35,6 +36,7 @@ import {
   errorShape,
   validateSessionsAbortParams,
   validateSessionsCompactParams,
+  validateSessionsTruncateParams,
   validateSessionsCreateParams,
   validateSessionsDeleteParams,
   validateSessionsListParams,
@@ -1205,6 +1207,261 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       sessionKey: target.canonicalKey,
       reason: "compact",
       compacted: true,
+    });
+  },
+  "sessions.truncate": async ({ params, respond, client, isWebchatConnect, context }) => {
+    if (!assertValidParams(params, validateSessionsTruncateParams, "sessions.truncate", respond)) {
+      return;
+    }
+    const p = params;
+    const key = requireSessionKey(p.key, respond);
+    if (!key) {
+      return;
+    }
+    if (rejectWebchatSessionMutation({ action: "delete", client, isWebchatConnect, respond })) {
+      return;
+    }
+
+    const { cfg, target, storePath } = resolveGatewaySessionTargetFromKey(key);
+    const truncateTarget = await updateSessionStore(storePath, (store) => {
+      const { entry, primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+        cfg,
+        key,
+        store,
+      });
+      return { entry, primaryKey };
+    });
+    const entry = truncateTarget.entry;
+    const legacyKey = truncateTarget.primaryKey;
+    const canonicalKey = target.canonicalKey;
+
+    // Check prerequisites before calling cleanupSessionBeforeMutation so that
+    // no-op truncate requests do not abort active runs unnecessarily.
+    const sessionId = entry?.sessionId;
+    if (!sessionId) {
+      respond(
+        true,
+        { ok: true, key: target.canonicalKey, truncated: false, reason: "no sessionId" },
+        undefined,
+      );
+      return;
+    }
+
+    const filePath = resolveSessionTranscriptCandidates(
+      sessionId,
+      storePath,
+      entry?.sessionFile,
+      target.agentId,
+    ).find((candidate) => fs.existsSync(candidate));
+    if (!filePath) {
+      respond(
+        true,
+        { ok: true, key: target.canonicalKey, truncated: false, reason: "no transcript" },
+        undefined,
+      );
+      return;
+    }
+
+    // Phase 1: read-only scan under the write lock to locate the cut point.
+    // Do NOT abort active runs yet; only do so after confirming a valid cut exists.
+    let cutLineIndex = -1;
+    {
+      const scanLock = await acquireSessionWriteLock({ sessionFile: filePath });
+      try {
+        let raw: string;
+        try {
+          raw = fs.readFileSync(filePath, "utf-8");
+        } catch (readErr: unknown) {
+          if (readErr instanceof Error && "code" in readErr && readErr.code === "ENOENT") {
+            // File removed/moved by a concurrent operation between existsSync and here.
+            // Fall through with empty content so cutLineIndex stays -1 → truncated: false.
+            raw = "";
+          } else {
+            throw readErr;
+          }
+        }
+        const allLines = raw.split(/\r?\n/).filter((l) => l.trim().length > 0);
+        // Walk lines to find the JSONL line that corresponds to the requested seq (p.seq).
+        let seq = 0;
+        for (let i = 0; i < allLines.length; i++) {
+          try {
+            const parsed = JSON.parse(allLines[i]) as Record<string, unknown>;
+            if (parsed?.message || parsed?.type === "compaction") {
+              seq += 1;
+              if (seq === p.seq) {
+                cutLineIndex = i;
+                break;
+              }
+            }
+          } catch {
+            // skip malformed lines
+          }
+        }
+      } finally {
+        await scanLock.release();
+      }
+    }
+
+    if (cutLineIndex < 0) {
+      respond(
+        true,
+        { ok: true, key: target.canonicalKey, truncated: false, reason: "seq not found" },
+        undefined,
+      );
+      return;
+    }
+
+    // Phase 2: abort any active run BEFORE writing the truncated transcript.
+    // Phase 1 confirmed a real cut exists so this is not a no-op request.
+    // Active runs must be stopped first; otherwise a still-running agent can continue
+    // appending output from pre-truncate context back into the transcript after the rewrite.
+    const mutationCleanupError = await cleanupSessionBeforeMutation({
+      cfg,
+      key,
+      target,
+      entry,
+      legacyKey,
+      canonicalKey,
+      reason: "session-delete",
+    });
+    if (mutationCleanupError) {
+      respond(false, undefined, mutationCleanupError);
+      return;
+    }
+
+    // Phase 3c: re-acquire the write lock and perform the actual file write.
+    // Re-scan for p.seq under the lock: sessions.compact can rewrite the transcript
+    // (without holding acquireSessionWriteLock) so line indices from Phase 1 may be stale.
+    let keptLines: string[] = [];
+    let archived = "";
+    let seqFoundInPhase3c = false;
+    const writeLock = await acquireSessionWriteLock({ sessionFile: filePath });
+    try {
+      let raw: string;
+      try {
+        raw = fs.readFileSync(filePath, "utf-8");
+      } catch (readErr: unknown) {
+        if (readErr instanceof Error && "code" in readErr && readErr.code === "ENOENT") {
+          // File was removed or moved by a concurrent operation (e.g. sessions.delete).
+          // Nothing to truncate; treat as a no-op and fall through to the not-found return.
+          raw = "";
+        } else {
+          throw readErr;
+        }
+      }
+      const allLines = raw.split(/\r?\n/).filter((l) => l.trim().length > 0);
+      // Re-walk lines to find the fresh cut point for the requested seq.
+      let freshCutLineIndex = -1;
+      let seq = 0;
+      for (let i = 0; i < allLines.length; i++) {
+        try {
+          const parsed = JSON.parse(allLines[i]) as Record<string, unknown>;
+          if (parsed?.message || parsed?.type === "compaction") {
+            seq += 1;
+            if (seq === p.seq) {
+              freshCutLineIndex = i;
+              break;
+            }
+          }
+        } catch {
+          // skip malformed lines
+        }
+      }
+      if (freshCutLineIndex >= 0) {
+        atomicWrite: {
+          keptLines = allLines.slice(0, freshCutLineIndex);
+          const newContent = keptLines.length > 0 ? `${keptLines.join("\n")}\n` : "";
+          // Write-then-rename: write to a temp file first so the original is untouched if writeFileSync throws.
+          const ts = new Date().toISOString().replaceAll(":", "-");
+          const tmpPath = `${filePath}.tmp.${ts}`;
+          const bakPath = `${filePath}.bak.${ts}`;
+          // Preserve original file permissions (typically 0o600) so the replacement does not
+          // weaken transcript privacy on shared hosts. Guard against concurrent deletion
+          // (sessions.delete does not hold acquireSessionWriteLock).
+          let originalMode: number;
+          try {
+            originalMode = fs.statSync(filePath).mode & 0o777;
+          } catch (statErr: unknown) {
+            if (statErr instanceof Error && "code" in statErr && statErr.code === "ENOENT") {
+              // File removed by concurrent sessions.delete; nothing to truncate.
+              break atomicWrite;
+            }
+            throw statErr;
+          }
+          fs.writeFileSync(tmpPath, newContent, { encoding: "utf-8", mode: originalMode });
+          try {
+            fs.renameSync(filePath, bakPath);
+          } catch (renameErr: unknown) {
+            // Original disappeared between stat and rename (concurrent delete).
+            // Clean up the temp file and treat as a no-op.
+            try {
+              fs.unlinkSync(tmpPath);
+            } catch {
+              // best-effort cleanup
+            }
+            if (renameErr instanceof Error && "code" in renameErr && renameErr.code === "ENOENT") {
+              break atomicWrite;
+            }
+            throw renameErr;
+          }
+          try {
+            fs.renameSync(tmpPath, filePath);
+          } catch (finalRenameErr: unknown) {
+            // Restore the original from backup so the transcript is not left missing.
+            try {
+              fs.renameSync(bakPath, filePath);
+            } catch {
+              // best-effort restore; original lives in bakPath
+            }
+            throw finalRenameErr;
+          }
+          seqFoundInPhase3c = true;
+          archived = bakPath;
+        }
+      }
+    } finally {
+      await writeLock.release();
+    }
+
+    if (!seqFoundInPhase3c) {
+      // seq disappeared between Phase 1 and Phase 3c (concurrent compact or sessions.delete).
+      // No file write was performed. The active run was already aborted above (Phase 2);
+      // that is acceptable since the seq genuinely existed at Phase 1 scan time.
+      respond(
+        true,
+        { ok: true, key: target.canonicalKey, truncated: false, reason: "seq not found" },
+        undefined,
+      );
+      return;
+    }
+
+    await updateSessionStore(storePath, (store) => {
+      const entryKey = truncateTarget.primaryKey;
+      const entryToUpdate = store[entryKey];
+      if (!entryToUpdate) {
+        return;
+      }
+      delete entryToUpdate.inputTokens;
+      delete entryToUpdate.outputTokens;
+      delete entryToUpdate.totalTokens;
+      delete entryToUpdate.totalTokensFresh;
+      entryToUpdate.updatedAt = Date.now();
+    });
+
+    respond(
+      true,
+      {
+        ok: true,
+        key: target.canonicalKey,
+        truncated: true,
+        archived,
+        kept: keptLines.length,
+      },
+      undefined,
+    );
+    emitSessionsChanged(context, {
+      sessionKey: target.canonicalKey,
+      reason: "truncate",
     });
   },
 };
