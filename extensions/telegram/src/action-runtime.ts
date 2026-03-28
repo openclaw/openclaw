@@ -68,6 +68,11 @@ const TELEGRAM_ACTION_ALIASES = {
 } as const;
 
 type TelegramActionName = (typeof TELEGRAM_ACTION_ALIASES)[keyof typeof TELEGRAM_ACTION_ALIASES];
+type RawTelegramButton = {
+  callback_data?: unknown;
+  style?: unknown;
+  text?: unknown;
+};
 
 function resolveTelegramPollVisibility(params: {
   pollAnonymous?: boolean;
@@ -103,14 +108,10 @@ export function readTelegramButtons(
       if (!button || typeof button !== "object") {
         throw new Error(`buttons[${rowIndex}][${buttonIndex}] must be an object`);
       }
-      const text =
-        typeof (button as { text?: unknown }).text === "string"
-          ? (button as { text: string }).text.trim()
-          : "";
+      const rawButton = button as RawTelegramButton;
+      const text = typeof rawButton.text === "string" ? rawButton.text.trim() : "";
       const callbackData =
-        typeof (button as { callback_data?: unknown }).callback_data === "string"
-          ? (button as { callback_data: string }).callback_data.trim()
-          : "";
+        typeof rawButton.callback_data === "string" ? rawButton.callback_data.trim() : "";
       if (!text || !callbackData) {
         throw new Error(`buttons[${rowIndex}][${buttonIndex}] requires text and callback_data`);
       }
@@ -119,7 +120,7 @@ export function readTelegramButtons(
           `buttons[${rowIndex}][${buttonIndex}] callback_data too long (max 64 chars)`,
         );
       }
-      const styleRaw = (button as { style?: unknown }).style;
+      const styleRaw = rawButton.style;
       const style = typeof styleRaw === "string" ? styleRaw.trim().toLowerCase() : undefined;
       if (styleRaw !== undefined && !style) {
         throw new Error(`buttons[${rowIndex}][${buttonIndex}] style must be string`);
