@@ -3,6 +3,7 @@ import type { ModelCompatConfig } from "openclaw/plugin-sdk/provider-model-share
 import { XAI_UNSUPPORTED_SCHEMA_KEYWORDS } from "openclaw/plugin-sdk/provider-tools";
 
 export { buildXaiProvider } from "./provider-catalog.js";
+export { applyXaiConfig, applyXaiProviderConfig } from "./onboard.js";
 export {
   buildXaiCatalogModels,
   buildXaiModelDefinition,

@@ -3,46 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
-import { applyLitellmProviderConfig } from "../../extensions/litellm/onboard.js";
-import {
-  applyMinimaxApiConfig,
-  applyMinimaxApiProviderConfig,
-} from "../../extensions/minimax/onboard.js";
-import { buildMistralModelDefinition as buildBundledMistralModelDefinition } from "../../extensions/mistral/model-definitions.js";
-import {
-  applyMistralConfig,
-  applyMistralProviderConfig,
-  MISTRAL_DEFAULT_MODEL_REF,
-} from "../../extensions/mistral/onboard.js";
-import {
-  applyOpencodeGoConfig,
-  applyOpencodeGoProviderConfig,
-} from "../../extensions/opencode-go/onboard.js";
-import {
-  applyOpencodeZenConfig,
-  applyOpencodeZenProviderConfig,
-} from "../../extensions/opencode/onboard.js";
-import {
-  applyOpenrouterConfig,
-  applyOpenrouterProviderConfig,
-  OPENROUTER_DEFAULT_MODEL_REF,
-} from "../../extensions/openrouter/onboard.js";
-import {
-  applySyntheticConfig,
-  applySyntheticProviderConfig,
-  SYNTHETIC_DEFAULT_MODEL_REF,
-} from "../../extensions/synthetic/onboard.js";
-import {
-  applyXaiConfig,
-  applyXaiProviderConfig,
-  XAI_DEFAULT_MODEL_REF,
-} from "../../extensions/xai/onboard.js";
-import { applyXiaomiConfig, applyXiaomiProviderConfig } from "../../extensions/xiaomi/onboard.js";
-import {
-  ZAI_CODING_CN_BASE_URL,
-  ZAI_GLOBAL_BASE_URL,
-} from "../../extensions/zai/model-definitions.js";
-import { applyZaiConfig, applyZaiProviderConfig } from "../../extensions/zai/onboard.js";
 import {
   createConfigWithFallbacks,
   createLegacyProviderConfig,
@@ -54,6 +14,34 @@ import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
+import { applyLitellmProviderConfig } from "../plugin-sdk/litellm.js";
+import { applyMinimaxApiConfig, applyMinimaxApiProviderConfig } from "../plugin-sdk/minimax.js";
+import { buildMistralModelDefinition as buildBundledMistralModelDefinition } from "../plugin-sdk/mistral.js";
+import {
+  applyMistralConfig,
+  applyMistralProviderConfig,
+  MISTRAL_DEFAULT_MODEL_REF,
+} from "../plugin-sdk/mistral.js";
+import { applyOpencodeGoConfig, applyOpencodeGoProviderConfig } from "../plugin-sdk/opencode-go.js";
+import { applyOpencodeZenConfig, applyOpencodeZenProviderConfig } from "../plugin-sdk/opencode.js";
+import {
+  applyOpenrouterConfig,
+  applyOpenrouterProviderConfig,
+  OPENROUTER_DEFAULT_MODEL_REF,
+} from "../plugin-sdk/openrouter.js";
+import {
+  applySyntheticConfig,
+  applySyntheticProviderConfig,
+  SYNTHETIC_DEFAULT_MODEL_REF,
+} from "../plugin-sdk/synthetic.js";
+import {
+  applyXaiConfig,
+  applyXaiProviderConfig,
+  XAI_DEFAULT_MODEL_REF,
+} from "../plugin-sdk/xai.js";
+import { applyXiaomiConfig, applyXiaomiProviderConfig } from "../plugin-sdk/xiaomi.js";
+import { ZAI_CODING_CN_BASE_URL, ZAI_GLOBAL_BASE_URL } from "../plugin-sdk/zai.js";
+import { applyZaiConfig, applyZaiProviderConfig } from "../plugin-sdk/zai.js";
 import { applyAuthProfileConfig } from "../plugins/provider-auth-helpers.js";
 import { setMinimaxApiKey, writeOAuthCredentials } from "../plugins/provider-auth-storage.js";
 import {
