@@ -418,6 +418,86 @@ describe("tryDispatchAcpReply", () => {
     }
   });
 
+  it("includes InboundHistory in the ACP prompt text", async () => {
+    setReadyAcpResolution();
+    managerMocks.runTurn.mockResolvedValue(undefined);
+
+    await runDispatch({
+      bodyForAgent: "what did she say?",
+      ctxOverrides: {
+        ChatType: "group",
+        InboundHistory: [{ sender: "Alice", body: "hey there", timestamp: 1711580400000 }],
+      },
+    });
+
+    expect(managerMocks.runTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.stringContaining("Chat history since last reply"),
+      }),
+    );
+    expect(managerMocks.runTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.stringContaining("what did she say?"),
+      }),
+    );
+  });
+
+  it("does not skip ACP turn when only InboundHistory is present with no body", async () => {
+    setReadyAcpResolution();
+    managerMocks.runTurn.mockResolvedValue(undefined);
+    const onReplyStart = vi.fn();
+
+    await runDispatch({
+      bodyForAgent: "   ",
+      onReplyStart,
+      ctxOverrides: {
+        ChatType: "group",
+        InboundHistory: [{ sender: "Bob", body: "hello group", timestamp: 1711580400000 }],
+      },
+    });
+
+    expect(managerMocks.runTurn).toHaveBeenCalled();
+  });
+
+  it("includes InboundHistory images as ACP attachments when mediaPath is present", async () => {
+    setReadyAcpResolution();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-"));
+    const historyImagePath = path.join(tempDir, "history.jpg");
+    try {
+      await fs.writeFile(historyImagePath, "history-image-bytes");
+      managerMocks.runTurn.mockResolvedValue(undefined);
+
+      await runDispatch({
+        bodyForAgent: "nice pic",
+        ctxOverrides: {
+          ChatType: "group",
+          InboundHistory: [
+            {
+              sender: "Alice",
+              body: "<media:image>",
+              timestamp: 1711580400000,
+              mediaPath: historyImagePath,
+              mediaType: "image/jpeg",
+            },
+          ],
+        },
+      });
+
+      expect(managerMocks.runTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          attachments: expect.arrayContaining([
+            {
+              mediaType: "image/jpeg",
+              data: Buffer.from("history-image-bytes").toString("base64"),
+            },
+          ]),
+        }),
+      );
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("skips ACP turns for non-image attachments when there is no text prompt", async () => {
     setReadyAcpResolution();
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-"));

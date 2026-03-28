@@ -26,6 +26,10 @@ export type MsgContext = {
     sender: string;
     body: string;
     timestamp?: number;
+    /** Local file path for a downloaded media attachment in this history entry. */
+    mediaPath?: string;
+    /** MIME type of the media attachment, if present. */
+    mediaType?: string;
   }>;
   /**
    * Raw message body without structural context (history, sender labels).

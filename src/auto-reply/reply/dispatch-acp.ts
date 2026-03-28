@@ -34,6 +34,7 @@ import {
   createAcpDispatchDeliveryCoordinator,
   type AcpDispatchDeliveryCoordinator,
 } from "./dispatch-acp-delivery.js";
+import { buildInboundUserContextPrefix } from "./inbound-meta.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 
 type DispatchProcessedRecorder = (
@@ -57,29 +58,28 @@ function resolveFirstContextText(
   return "";
 }
 
-function resolveAcpPromptText(ctx: FinalizedMsgContext): string {
-  return resolveFirstContextText(ctx, [
+function buildAcpPromptText(ctx: FinalizedMsgContext): string {
+  const bodyText = resolveFirstContextText(ctx, [
     "BodyForAgent",
     "BodyForCommands",
     "CommandBody",
     "RawBody",
     "Body",
   ]).trim();
+  // Prepend group chat history (non-mentioned messages stored for context)
+  // so the ACP session sees the same conversation window as the embedded path.
+  const inboundContext = buildInboundUserContextPrefix(ctx).trim();
+  return [inboundContext, bodyText].filter(Boolean).join("\n\n");
 }
 
 const ACP_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024;
 
 async function resolveAcpAttachments(ctx: FinalizedMsgContext): Promise<AcpTurnAttachment[]> {
-  const mediaAttachments = normalizeAttachments(ctx);
   const results: AcpTurnAttachment[] = [];
-  for (const attachment of mediaAttachments) {
-    const mediaType = attachment.mime ?? "application/octet-stream";
+
+  async function tryAddImageFile(filePath: string, mediaType: string): Promise<void> {
     if (!mediaType.startsWith("image/")) {
-      continue;
-    }
-    const filePath = normalizeAttachmentPath(attachment.path);
-    if (!filePath) {
-      continue;
+      return;
     }
     try {
       const stat = await fs.stat(filePath);
@@ -87,17 +87,36 @@ async function resolveAcpAttachments(ctx: FinalizedMsgContext): Promise<AcpTurnA
         logVerbose(
           `dispatch-acp: skipping attachment ${filePath} (${stat.size} bytes exceeds ${ACP_ATTACHMENT_MAX_BYTES} byte limit)`,
         );
-        continue;
+        return;
       }
       const buf = await fs.readFile(filePath);
-      results.push({
-        mediaType,
-        data: buf.toString("base64"),
-      });
+      results.push({ mediaType, data: buf.toString("base64") });
     } catch {
       // Skip unreadable files. Text content should still be delivered.
     }
   }
+
+  // Current message attachments
+  const mediaAttachments = normalizeAttachments(ctx);
+  for (const attachment of mediaAttachments) {
+    const mediaType = attachment.mime ?? "application/octet-stream";
+    const filePath = normalizeAttachmentPath(attachment.path);
+    if (filePath) {
+      await tryAddImageFile(filePath, mediaType);
+    }
+  }
+
+  // Group history images — include downloaded media from recent history entries so the
+  // ACP session can see images shared by other participants before the trigger message.
+  if (Array.isArray(ctx.InboundHistory)) {
+    for (const entry of ctx.InboundHistory) {
+      const filePath = normalizeAttachmentPath(entry.mediaPath);
+      if (filePath && entry.mediaType) {
+        await tryAddImageFile(filePath, entry.mediaType);
+      }
+    }
+  }
+
   return results;
 }
 
@@ -369,7 +388,7 @@ export async function tryDispatchAcpReply(params: {
       }
     }
 
-    const promptText = resolveAcpPromptText(params.ctx);
+    const promptText = buildAcpPromptText(params.ctx);
     const attachments = await resolveAcpAttachments(params.ctx);
     if (!promptText && attachments.length === 0) {
       const counts = params.dispatcher.getQueuedCounts();

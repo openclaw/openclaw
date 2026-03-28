@@ -24,6 +24,10 @@ export type GroupHistoryEntry = {
   timestamp?: number;
   id?: string;
   senderJid?: string;
+  /** Local file path for a downloaded media attachment (image, audio, video). */
+  mediaPath?: string;
+  /** MIME type of the media, if present. */
+  mediaType?: string;
 };
 
 type ApplyGroupGatingParams = {
@@ -75,6 +79,8 @@ function recordPendingGroupHistoryEntry(params: {
       timestamp: params.msg.timestamp,
       id: params.msg.id,
       senderJid: senderIdentity.jid ?? params.msg.senderJid,
+      mediaPath: params.msg.mediaPath,
+      mediaType: params.msg.mediaType,
     },
   });
 }

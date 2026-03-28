@@ -351,4 +351,33 @@ describe("buildInboundUserContextPrefix", () => {
     const conversationInfo = parseConversationInfoPayload(text);
     expect(conversationInfo["sender"]).toBe("user@example.com");
   });
+
+  it("replaces <media:image> placeholder with media path reference when mediaPath is available", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      InboundHistory: [
+        {
+          sender: "Alice",
+          body: "<media:image>",
+          timestamp: 1711580400000,
+          mediaPath: "/home/.openclaw/media/inbound/abc123.jpg",
+          mediaType: "image/jpeg",
+        },
+      ],
+    } as TemplateContext);
+
+    expect(text).toContain(
+      "[media attached: /home/.openclaw/media/inbound/abc123.jpg (image/jpeg)]",
+    );
+    expect(text).not.toContain("<media:image>");
+  });
+
+  it("keeps <media:image> placeholder verbatim when no mediaPath is available", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      InboundHistory: [{ sender: "Bob", body: "<media:image>", timestamp: 1711580400000 }],
+    } as TemplateContext);
+
+    expect(text).toContain('"body": "<media:image>"');
+  });
 });

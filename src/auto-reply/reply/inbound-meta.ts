@@ -210,11 +210,26 @@ export function buildInboundUserContextPrefix(
         "Chat history since last reply (untrusted, for context):",
         "```json",
         JSON.stringify(
-          ctx.InboundHistory.map((entry) => ({
-            sender: entry.sender,
-            timestamp_ms: entry.timestamp,
-            body: entry.body,
-          })),
+          ctx.InboundHistory.map((entry) => {
+            const base = {
+              sender: entry.sender,
+              timestamp_ms: entry.timestamp,
+              body: entry.body,
+            };
+            // When a media placeholder is the entire body and a local file is available,
+            // replace the placeholder with a readable path reference so the ACP agent
+            // can resolve the image instead of seeing a raw tag.
+            if (
+              entry.mediaPath &&
+              /^<media:(image|video|audio|document|sticker)>$/.test(entry.body.trim())
+            ) {
+              return {
+                ...base,
+                body: `[media attached: ${entry.mediaPath}${entry.mediaType ? ` (${entry.mediaType})` : ""}]`,
+              };
+            }
+            return base;
+          }),
           null,
           2,
         ),
