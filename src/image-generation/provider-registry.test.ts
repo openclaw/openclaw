@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 
 const { resolveRuntimePluginRegistryMock } = vi.hoisted(() => ({
   resolveRuntimePluginRegistryMock: vi.fn<
@@ -19,7 +18,6 @@ describe("image-generation provider registry", () => {
   afterEach(() => {
     resolveRuntimePluginRegistryMock.mockReset();
     resolveRuntimePluginRegistryMock.mockReturnValue(undefined);
-    resetPluginRuntimeStateForTest();
   });
 
   beforeEach(async () => {
@@ -51,7 +49,6 @@ describe("image-generation provider registry", () => {
         }),
       },
     });
-    setActivePluginRegistry(registry);
     resolveRuntimePluginRegistryMock.mockReturnValue(registry);
 
     const provider = getImageGenerationProvider("custom-image");
@@ -96,7 +93,6 @@ describe("image-generation provider registry", () => {
         },
       },
     );
-    setActivePluginRegistry(registry);
     resolveRuntimePluginRegistryMock.mockReturnValue(registry);
 
     expect(listImageGenerationProviders().map((provider) => provider.id)).toEqual(["safe-image"]);

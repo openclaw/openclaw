@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "./registry.js";
-import { resetPluginRuntimeStateForTest } from "./runtime.js";
 
 type MockManifestRegistry = {
   plugins: Array<Record<string, unknown>>;
@@ -109,7 +108,6 @@ function setBundledCapabilityFixture(contractKey: string) {
 describe("resolvePluginCapabilityProviders", () => {
   beforeEach(async () => {
     vi.resetModules();
-    resetPluginRuntimeStateForTest();
     mocks.resolveRuntimePluginRegistry.mockReset();
     mocks.resolveRuntimePluginRegistry.mockReturnValue(undefined);
     mocks.loadPluginManifestRegistry.mockReset();
