@@ -510,7 +510,44 @@ describe("device-pair /pair approve", () => {
       }),
     );
 
-    expect(vi.mocked(approveDevicePairing)).toHaveBeenCalledWith("req-1");
+    expect(vi.mocked(approveDevicePairing)).toHaveBeenCalledWith("req-1", {
+      callerScopes: ["operator.write", "operator.pairing"],
+    });
     expect(result).toEqual({ text: "✅ Paired Victim Phone (ios)." });
+  });
+
+  it("rejects approving pending scopes above the internal caller scope ceiling", async () => {
+    vi.mocked(listDevicePairing).mockResolvedValueOnce({
+      pending: [
+        {
+          requestId: "req-1",
+          deviceId: "victim-phone",
+          publicKey: "victim-public-key",
+          displayName: "Victim Phone",
+          platform: "ios",
+          ts: Date.now(),
+        },
+      ],
+      paired: [],
+    });
+    vi.mocked(approveDevicePairing).mockResolvedValueOnce({
+      status: "forbidden",
+      missingScope: "operator.admin",
+    });
+
+    const command = registerPairCommand();
+    const result = await command.handler(
+      createCommandContext({
+        channel: "webchat",
+        args: "approve latest",
+        commandBody: "/pair approve latest",
+        gatewayClientScopes: ["operator.write", "operator.pairing"],
+      }),
+    );
+
+    expect(vi.mocked(approveDevicePairing)).toHaveBeenCalledWith("req-1", {
+      callerScopes: ["operator.write", "operator.pairing"],
+    });
+    expect(result).toEqual({ text: "⚠️ missing scope: operator.admin" });
   });
 });
