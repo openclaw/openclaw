@@ -204,13 +204,19 @@ function loadProviderContractEntriesForPluginId(pluginId: string): ProviderContr
   }
 }
 
+function loadProviderContractPluginIdsFromMetadata(): string[] {
+  return BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.filter((entry) => entry.providerIds.length > 0).map(
+    (entry) => entry.pluginId,
+  );
+}
+
 function loadProviderContractRegistry(): ProviderContractEntry[] {
   if (!providerContractRegistryCache) {
     try {
       providerContractLoadError = undefined;
       providerContractRegistryCache = loadBundledCapabilityRuntimeRegistry({
         pluginIds: BUNDLED_PROVIDER_PLUGIN_IDS,
-        pluginSdkResolution: "dist",
+        pluginSdkResolution: process.env.VITEST ? "src" : "dist",
       }).providers.map((entry) => ({
         pluginId: entry.pluginId,
         provider: entry.provider,
@@ -223,6 +229,8 @@ function loadProviderContractRegistry(): ProviderContractEntry[] {
   return providerContractRegistryCache;
 }
 
+export let webSearchProviderContractLoadError: Error | undefined;
+
 function loadUniqueProviderContractProviders(): ProviderPlugin[] {
   return [
     ...new Map(
@@ -232,6 +240,9 @@ function loadUniqueProviderContractProviders(): ProviderPlugin[] {
 }
 
 function loadProviderContractPluginIds(): string[] {
+  if (process.env.VITEST) {
+    return loadProviderContractPluginIdsFromMetadata();
+  }
   return [...BUNDLED_PROVIDER_PLUGIN_IDS];
 }
 
@@ -255,15 +266,22 @@ function resolveWebSearchCredentialValue(provider: WebSearchProviderPlugin): unk
 
 function loadWebSearchProviderContractRegistry(): WebSearchProviderContractEntry[] {
   if (!webSearchProviderContractRegistryCache) {
-    const registry = loadBundledCapabilityRuntimeRegistry({
-      pluginIds: BUNDLED_WEB_SEARCH_PLUGIN_IDS,
-      pluginSdkResolution: "dist",
-    });
-    webSearchProviderContractRegistryCache = registry.webSearchProviders.map((entry) => ({
-      pluginId: entry.pluginId,
-      provider: entry.provider,
-      credentialValue: resolveWebSearchCredentialValue(entry.provider),
-    }));
+    try {
+      webSearchProviderContractLoadError = undefined;
+      const registry = loadBundledCapabilityRuntimeRegistry({
+        pluginIds: BUNDLED_WEB_SEARCH_PLUGIN_IDS,
+        pluginSdkResolution: process.env.VITEST ? "src" : "dist",
+      });
+      webSearchProviderContractRegistryCache = registry.webSearchProviders.map((entry) => ({
+        pluginId: entry.pluginId,
+        provider: entry.provider,
+        credentialValue: resolveWebSearchCredentialValue(entry.provider),
+      }));
+    } catch (error) {
+      webSearchProviderContractLoadError =
+        error instanceof Error ? error : new Error(String(error));
+      webSearchProviderContractRegistryCache = [];
+    }
   }
   return webSearchProviderContractRegistryCache;
 }
