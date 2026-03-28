@@ -35,6 +35,24 @@ function createCatalogContext(params: {
   };
 }
 
+function expectSingleCatalogProvider(
+  result: Awaited<ReturnType<typeof buildSingleProviderApiKeyCatalog>>,
+  expected: ModelProviderConfig & { apiKey: string },
+) {
+  expect(result).toEqual({
+    provider: expected,
+  });
+}
+
+function expectPairedCatalogProviders(
+  result: Awaited<ReturnType<typeof buildPairedProviderApiKeyCatalog>>,
+  expected: Record<string, ModelProviderConfig & { apiKey: string }>,
+) {
+  expect(result).toEqual({
+    providers: expected,
+  });
+}
+
 describe("buildSingleProviderApiKeyCatalog", () => {
   it("matches provider templates case-insensitively", () => {
     const result = findCatalogTemplate({
@@ -134,13 +152,11 @@ describe("buildSingleProviderApiKeyCatalog", () => {
       allowExplicitBaseUrl: true,
     });
 
-    expect(result).toEqual({
-      provider: {
-        api: "openai-completions",
-        baseUrl: "https://api.z.ai/custom",
-        models: [],
-        apiKey: "secret-key",
-      },
+    expectSingleCatalogProvider(result, {
+      api: "openai-completions",
+      baseUrl: "https://api.z.ai/custom",
+      models: [],
+      apiKey: "secret-key",
     });
   });
 
@@ -156,20 +172,18 @@ describe("buildSingleProviderApiKeyCatalog", () => {
       }),
     });
 
-    expect(result).toEqual({
-      providers: {
-        alpha: {
-          api: "openai-completions",
-          baseUrl: "https://default.example/v1",
-          models: [],
-          apiKey: "secret-key",
-        },
-        beta: {
-          api: "openai-completions",
-          baseUrl: "https://default.example/v1",
-          models: [],
-          apiKey: "secret-key",
-        },
+    expectPairedCatalogProviders(result, {
+      alpha: {
+        api: "openai-completions",
+        baseUrl: "https://default.example/v1",
+        models: [],
+        apiKey: "secret-key",
+      },
+      beta: {
+        api: "openai-completions",
+        baseUrl: "https://default.example/v1",
+        models: [],
+        apiKey: "secret-key",
       },
     });
   });

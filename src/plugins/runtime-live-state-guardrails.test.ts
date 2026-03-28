@@ -36,18 +36,16 @@ function guardAssertions() {
 }
 
 describe("runtime live state guardrails", () => {
-  it("keeps split-runtime state holders on explicit direct globals", () => {
-    for (const relativePath of Object.keys(LIVE_RUNTIME_STATE_GUARDS)) {
+  it.each(guardAssertions())(
+    "keeps split-runtime state holders on explicit direct globals: $relativePath $type $needle",
+    ({ relativePath, type, needle, message }) => {
       const source = readFileSync(resolve(repoRoot, relativePath), "utf8");
-      for (const assertion of guardAssertions().filter(
-        (entry) => entry.relativePath === relativePath,
-      )) {
-        if (assertion.type === "required") {
-          expect(source, assertion.message).toContain(assertion.needle);
-        } else {
-          expect(source, assertion.message).not.toContain(assertion.needle);
-        }
+
+      if (type === "required") {
+        expect(source, message).toContain(needle);
+      } else {
+        expect(source, message).not.toContain(needle);
       }
-    }
-  });
+    },
+  );
 });
