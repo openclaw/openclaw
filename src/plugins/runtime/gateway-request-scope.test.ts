@@ -11,18 +11,22 @@ afterEach(() => {
 });
 
 describe("gateway request scope", () => {
+  async function importGatewayRequestScopeModule() {
+    return await import("./gateway-request-scope.js");
+  }
+
   it("reuses AsyncLocalStorage across reloaded module instances", async () => {
-    const first = await import("./gateway-request-scope.js");
+    const first = await importGatewayRequestScopeModule();
 
     await first.withPluginRuntimeGatewayRequestScope(TEST_SCOPE, async () => {
       vi.resetModules();
-      const second = await import("./gateway-request-scope.js");
+      const second = await importGatewayRequestScopeModule();
       expect(second.getPluginRuntimeGatewayRequestScope()).toEqual(TEST_SCOPE);
     });
   });
 
   it("attaches plugin id to the active scope", async () => {
-    const runtimeScope = await import("./gateway-request-scope.js");
+    const runtimeScope = await importGatewayRequestScopeModule();
 
     await runtimeScope.withPluginRuntimeGatewayRequestScope(TEST_SCOPE, async () => {
       await runtimeScope.withPluginRuntimePluginIdScope("voice-call", async () => {
