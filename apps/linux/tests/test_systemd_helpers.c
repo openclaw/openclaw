@@ -198,6 +198,35 @@ static void test_parse_unit_env_null_safe(void) {
     g_assert_null(systemd_helpers_parse_unit_env("Environment=KEY=val", ""));
 }
 
+static void test_parse_unit_env_quoted_with_spaces(void) {
+    const gchar *contents =
+        "[Service]\n"
+        "Environment=\"OPENCLAW_STATE_DIR=/home/user/Open Claw/.openclaw\"\n"
+        "Environment=\"OPENCLAW_CONFIG_PATH=/etc/my configs/openclaw/config.json\"\n";
+
+    gchar *state_dir = systemd_helpers_parse_unit_env(contents, "OPENCLAW_STATE_DIR");
+    g_assert_cmpstr(state_dir, ==, "/home/user/Open Claw/.openclaw");
+    g_free(state_dir);
+
+    gchar *config_path = systemd_helpers_parse_unit_env(contents, "OPENCLAW_CONFIG_PATH");
+    g_assert_cmpstr(config_path, ==, "/etc/my configs/openclaw/config.json");
+    g_free(config_path);
+}
+
+static void test_parse_unit_env_unquoted_multi_assignment(void) {
+    const gchar *contents =
+        "[Service]\n"
+        "Environment=OPENCLAW_STATE_DIR=/home/user/.openclaw OPENCLAW_CONFIG_PATH=/etc/openclaw/config.json\n";
+
+    gchar *state_dir = systemd_helpers_parse_unit_env(contents, "OPENCLAW_STATE_DIR");
+    g_assert_cmpstr(state_dir, ==, "/home/user/.openclaw");
+    g_free(state_dir);
+
+    gchar *config_path = systemd_helpers_parse_unit_env(contents, "OPENCLAW_CONFIG_PATH");
+    g_assert_cmpstr(config_path, ==, "/etc/openclaw/config.json");
+    g_free(config_path);
+}
+
 static void test_parse_unit_env_no_false_prefix_match(void) {
     /* OPENCLAW_STATE_DIR_EXTRA should not match OPENCLAW_STATE_DIR */
     const gchar *contents =
@@ -206,6 +235,62 @@ static void test_parse_unit_env_no_false_prefix_match(void) {
 
     gchar *result = systemd_helpers_parse_unit_env(contents, "OPENCLAW_STATE_DIR");
     g_assert_null(result);
+}
+
+static void test_extract_env_from_strv_basic(void) {
+    const gchar *env[] = {
+        "OPENCLAW_STATE_DIR=/home/user/.openclaw",
+        "OPENCLAW_CONFIG_PATH=/etc/openclaw/config.json",
+        "OTHER_VAR=something",
+        NULL
+    };
+
+    gchar *state_dir = systemd_helpers_extract_env_from_strv(env, "OPENCLAW_STATE_DIR");
+    g_assert_cmpstr(state_dir, ==, "/home/user/.openclaw");
+    g_free(state_dir);
+
+    gchar *config_path = systemd_helpers_extract_env_from_strv(env, "OPENCLAW_CONFIG_PATH");
+    g_assert_cmpstr(config_path, ==, "/etc/openclaw/config.json");
+    g_free(config_path);
+}
+
+static void test_extract_env_from_strv_missing_key(void) {
+    const gchar *env[] = {
+        "OPENCLAW_STATE_DIR=/home/user/.openclaw",
+        NULL
+    };
+
+    gchar *result = systemd_helpers_extract_env_from_strv(env, "OPENCLAW_CONFIG_PATH");
+    g_assert_null(result);
+}
+
+static void test_extract_env_from_strv_no_false_prefix(void) {
+    const gchar *env[] = {
+        "OPENCLAW_STATE_DIR_EXTRA=/wrong/path",
+        NULL
+    };
+
+    gchar *result = systemd_helpers_extract_env_from_strv(env, "OPENCLAW_STATE_DIR");
+    g_assert_null(result);
+}
+
+static void test_extract_env_from_strv_value_with_spaces(void) {
+    const gchar *env[] = {
+        "OPENCLAW_STATE_DIR=/home/user/Open Claw/.openclaw",
+        NULL
+    };
+
+    gchar *state_dir = systemd_helpers_extract_env_from_strv(env, "OPENCLAW_STATE_DIR");
+    g_assert_cmpstr(state_dir, ==, "/home/user/Open Claw/.openclaw");
+    g_free(state_dir);
+}
+
+static void test_extract_env_from_strv_null_safe(void) {
+    g_assert_null(systemd_helpers_extract_env_from_strv(NULL, "KEY"));
+
+    const gchar *env[] = { "KEY=val", NULL };
+    g_assert_null(systemd_helpers_extract_env_from_strv(env, NULL));
+    g_assert_null(systemd_helpers_extract_env_from_strv(env, ""));
 }
 
 static void test_helpers_get_system_unit_paths_contains_all(void) {
@@ -266,7 +351,15 @@ int main(int argc, char **argv) {
     g_test_add_func("/systemd/parse_unit_env_simple", test_parse_unit_env_simple);
     g_test_add_func("/systemd/parse_unit_env_quoted", test_parse_unit_env_quoted);
     g_test_add_func("/systemd/parse_unit_env_null_safe", test_parse_unit_env_null_safe);
+    g_test_add_func("/systemd/parse_unit_env_quoted_with_spaces", test_parse_unit_env_quoted_with_spaces);
+    g_test_add_func("/systemd/parse_unit_env_unquoted_multi_assignment", test_parse_unit_env_unquoted_multi_assignment);
     g_test_add_func("/systemd/parse_unit_env_no_false_prefix_match", test_parse_unit_env_no_false_prefix_match);
+
+    g_test_add_func("/systemd/extract_env_from_strv_basic", test_extract_env_from_strv_basic);
+    g_test_add_func("/systemd/extract_env_from_strv_missing_key", test_extract_env_from_strv_missing_key);
+    g_test_add_func("/systemd/extract_env_from_strv_no_false_prefix", test_extract_env_from_strv_no_false_prefix);
+    g_test_add_func("/systemd/extract_env_from_strv_value_with_spaces", test_extract_env_from_strv_value_with_spaces);
+    g_test_add_func("/systemd/extract_env_from_strv_null_safe", test_extract_env_from_strv_null_safe);
 
     return g_test_run();
 }

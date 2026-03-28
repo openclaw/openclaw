@@ -137,10 +137,11 @@ gchar* systemd_helpers_parse_unit_env(const gchar *unit_contents, const gchar *k
          */
         const gchar *body = line + 12; /* strlen("Environment=") */
 
-        /* Strip optional surrounding quotes */
+        /* Strip optional surrounding quotes, tracking whether they were present */
         gchar *unquoted;
         gsize body_len = strlen(body);
-        if (body_len >= 2 && body[0] == '"' && body[body_len - 1] == '"') {
+        gboolean was_quoted = (body_len >= 2 && body[0] == '"' && body[body_len - 1] == '"');
+        if (was_quoted) {
             unquoted = g_strndup(body + 1, body_len - 2);
         } else {
             unquoted = g_strdup(body);
@@ -153,8 +154,14 @@ gchar* systemd_helpers_parse_unit_env(const gchar *unit_contents, const gchar *k
             if (pos == unquoted || *(pos - 1) == ' ') {
                 const gchar *val_start = pos + search_key_len;
                 const gchar *val_end = val_start;
-                while (*val_end && *val_end != ' ' && *val_end != '"') {
-                    val_end++;
+                if (was_quoted) {
+                    /* Outer-quoted single-assignment: consume to end-of-string */
+                    val_end = val_start + strlen(val_start);
+                } else {
+                    /* Unquoted (possibly multi-assignment): stop at space */
+                    while (*val_end && *val_end != ' ' && *val_end != '"') {
+                        val_end++;
+                    }
                 }
                 if (val_end > val_start) {
                     result = g_strndup(val_start, val_end - val_start);
@@ -169,4 +176,21 @@ gchar* systemd_helpers_parse_unit_env(const gchar *unit_contents, const gchar *k
     g_strfreev(lines);
     g_free(search_key);
     return result;
+}
+
+gchar* systemd_helpers_extract_env_from_strv(const gchar * const *env_array, const gchar *key) {
+    if (!env_array || !key || key[0] == '\0') return NULL;
+
+    g_autofree gchar *prefix = g_strdup_printf("%s=", key);
+    gsize prefix_len = strlen(prefix);
+
+    for (gsize i = 0; env_array[i] != NULL; i++) {
+        if (g_str_has_prefix(env_array[i], prefix)) {
+            const gchar *val = env_array[i] + prefix_len;
+            if (val[0] != '\0') {
+                return g_strdup(val);
+            }
+        }
+    }
+    return NULL;
 }

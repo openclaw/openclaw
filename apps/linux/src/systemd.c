@@ -154,6 +154,113 @@ const gchar* systemd_get_canonical_unit_name(void) {
     return cached_unit_name;
 }
 
+/*
+ * Tri-state result for the D-Bus effective-env query.
+ *
+ * DBUS_ENV_OK:              D-Bus query succeeded; out params are authoritative.
+ * DBUS_ENV_UNIT_NOT_LOADED: GetUnit failed — the unit is not loaded.
+ *                           Expected when the gateway service is stopped.
+ *                           Caller falls back to unit-file-text parsing;
+ *                           this is the normal degraded path.
+ * DBUS_ENV_QUERY_FAILED:    The unit appeared loaded but a subsequent D-Bus
+ *                           step failed (proxy creation, property read, etc.).
+ *                           Caller still falls back to unit-file-text parsing,
+ *                           but this is an unexpected degradation that may mask
+ *                           integration issues and should be investigated.
+ */
+typedef enum {
+    DBUS_ENV_OK,
+    DBUS_ENV_UNIT_NOT_LOADED,
+    DBUS_ENV_QUERY_FAILED
+} DbusEnvResult;
+
+/*
+ * Try to read the effective Environment property of the loaded unit via D-Bus.
+ *
+ * This is the PRIMARY path for runtime-context resolution. When the unit is
+ * loaded, the Environment property reflects the merged result of the main
+ * unit fragment, drop-in overrides, and EnvironmentFile= directives — i.e.
+ * the actual environment the gateway process receives at runtime.
+ *
+ * Returns:
+ *   DBUS_ENV_OK              — success; out_state_dir/out_config_path are set.
+ *   DBUS_ENV_UNIT_NOT_LOADED — expected fallback; unit is not loaded.
+ *   DBUS_ENV_QUERY_FAILED    — degraded fallback; D-Bus query failed after
+ *                              the unit appeared loaded.
+ *
+ * On any non-OK result the caller falls back to unit-file-text parsing,
+ * which is a DEGRADED APPROXIMATION: it reads only the base unit file and
+ * may miss drop-ins, EnvironmentFile=, and layered overrides.
+ *
+ * Scope: only OPENCLAW_STATE_DIR and OPENCLAW_CONFIG_PATH are extracted.
+ * No ExecStart parsing, no CLI argument reconstruction, no other properties.
+ */
+static DbusEnvResult systemd_try_dbus_effective_env(const gchar *unit,
+                                                    gchar **out_state_dir,
+                                                    gchar **out_config_path) {
+    if (!manager_proxy) return DBUS_ENV_QUERY_FAILED;
+
+    /* GetUnit returns the object path for a loaded unit; fails if not loaded */
+    g_autoptr(GError) error = NULL;
+    g_autoptr(GVariant) get_unit_result = g_dbus_proxy_call_sync(
+        manager_proxy, "GetUnit",
+        g_variant_new("(s)", unit),
+        G_DBUS_CALL_FLAGS_NONE, 2000, NULL, &error);
+
+    if (!get_unit_result) {
+        OC_LOG_DEBUG(OPENCLAW_LOG_CAT_SYSTEMD,
+                     "GetUnit failed for '%s' (unit not loaded, expected fallback): %s",
+                     unit, error->message);
+        return DBUS_ENV_UNIT_NOT_LOADED;
+    }
+
+    const gchar *unit_path = NULL;
+    g_variant_get(get_unit_result, "(&o)", &unit_path);
+    if (!unit_path) return DBUS_ENV_QUERY_FAILED;
+
+    /* Create a proxy on the Service interface to read the Environment property */
+    g_autoptr(GDBusProxy) svc_proxy = g_dbus_proxy_new_sync(
+        g_dbus_proxy_get_connection(manager_proxy),
+        G_DBUS_PROXY_FLAGS_NONE, NULL,
+        "org.freedesktop.systemd1",
+        unit_path,
+        "org.freedesktop.systemd1.Service",
+        NULL, &error);
+
+    if (!svc_proxy) {
+        OC_LOG_WARN(OPENCLAW_LOG_CAT_SYSTEMD,
+                    "Degraded fallback: Service proxy creation failed for loaded unit '%s': %s",
+                    unit_path, error->message);
+        return DBUS_ENV_QUERY_FAILED;
+    }
+
+    g_autoptr(GVariant) env_v = g_dbus_proxy_get_cached_property(svc_proxy, "Environment");
+    if (!env_v || !g_variant_is_of_type(env_v, G_VARIANT_TYPE_STRING_ARRAY)) {
+        OC_LOG_WARN(OPENCLAW_LOG_CAT_SYSTEMD,
+                    "Degraded fallback: Environment property unavailable or wrong type "
+                    "for loaded unit '%s'", unit);
+        return DBUS_ENV_QUERY_FAILED;
+    }
+
+    const gchar **env_strv = g_variant_get_strv(env_v, NULL);
+    if (!env_strv) return DBUS_ENV_QUERY_FAILED;
+
+    if (out_state_dir) {
+        *out_state_dir = systemd_helpers_extract_env_from_strv(env_strv, "OPENCLAW_STATE_DIR");
+    }
+    if (out_config_path) {
+        *out_config_path = systemd_helpers_extract_env_from_strv(env_strv, "OPENCLAW_CONFIG_PATH");
+    }
+
+    g_free(env_strv);
+
+    OC_LOG_DEBUG(OPENCLAW_LOG_CAT_SYSTEMD,
+                 "Effective env from D-Bus (authoritative): state_dir=%s config_path=%s",
+                 (out_state_dir && *out_state_dir) ? *out_state_dir : "(null)",
+                 (out_config_path && *out_config_path) ? *out_config_path : "(null)");
+    return DBUS_ENV_OK;
+}
+
 void systemd_get_runtime_context(gchar **out_profile, gchar **out_state_dir, gchar **out_config_path) {
     if (out_profile) *out_profile = NULL;
     if (out_state_dir) *out_state_dir = NULL;
@@ -172,10 +279,49 @@ void systemd_get_runtime_context(gchar **out_profile, gchar **out_state_dir, gch
     }
 
     /*
-     * Read the authoritative runtime context from the unit file's Environment= directives.
-     * This is the same environment the gateway service receives at runtime, set by the
-     * installer (src/daemon/systemd-unit.ts:renderEnvLines).
+     * Runtime-context resolution contract:
+     *
+     * PRIMARY PATH — D-Bus effective environment query.
+     *   When the gateway unit is loaded, we read its Environment property
+     *   via org.freedesktop.systemd1.Service. This is the authoritative
+     *   source because it reflects the merged result of the main unit
+     *   fragment, drop-in overrides, and EnvironmentFile= directives.
+     *
+     * FALLBACK PATH — unit-file-text parsing (DEGRADED APPROXIMATION).
+     *   Used when the primary path is unavailable. Reads only the base
+     *   unit file and extracts Environment= lines directly. This is NOT
+     *   equivalent to the primary path: it may miss drop-ins,
+     *   EnvironmentFile= directives, and layered overrides.
+     *
+     *   Two sub-cases trigger the fallback:
+     *     (a) Unit not loaded (expected): the service is stopped/unloaded,
+     *         so there is no loaded state to query. The base file is the
+     *         best available approximation.
+     *     (b) D-Bus query failed (degraded): the unit appeared loaded but
+     *         a proxy/property step failed. This may mask integration
+     *         issues and should be investigated.
+     *
+     * HTTP/WebSocket remain the sole runtime truth for gateway reachability.
+     * Systemd involvement here is strictly limited to obtaining the
+     * effective runtime context (config path and state dir) for initial
+     * config resolution.
      */
+    DbusEnvResult dbus_result = systemd_try_dbus_effective_env(unit, out_state_dir, out_config_path);
+    if (dbus_result == DBUS_ENV_OK) {
+        return;
+    }
+
+    if (dbus_result == DBUS_ENV_UNIT_NOT_LOADED) {
+        OC_LOG_DEBUG(OPENCLAW_LOG_CAT_SYSTEMD,
+                     "Unit '%s' is not loaded; using unit-file-text fallback "
+                     "(expected for stopped services)", unit);
+    } else {
+        OC_LOG_WARN(OPENCLAW_LOG_CAT_SYSTEMD,
+                    "D-Bus effective-env query failed for '%s'; using degraded "
+                    "unit-file-text fallback (may miss drop-ins and EnvironmentFile= "
+                    "overrides — investigate if the unit should be queryable)", unit);
+    }
+
     const gchar *home_override = g_getenv("OPENCLAW_HOME");
     const gchar *home_dir = (home_override && home_override[0] != '\0') ? home_override : g_get_home_dir();
     g_autofree gchar *unit_file_path = systemd_helpers_find_unit_file(unit, home_dir);

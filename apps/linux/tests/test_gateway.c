@@ -637,19 +637,40 @@ static void test_protocol_parse_response_malformed_auth(void) {
 }
 
 static void test_protocol_parse_response_error(void) {
-    const gchar *json = "{\"type\":\"res\",\"id\":\"req-2\",\"error\":{\"code\":401,\"message\":\"Unauthorized\"}}";
+    const gchar *json = "{\"type\":\"res\",\"id\":\"req-2\",\"error\":{\"code\":\"NOT_LINKED\",\"message\":\"Unauthorized\"}}";
     GatewayFrame *frame = gateway_protocol_parse_frame(json);
     g_assert_nonnull(frame);
     g_assert_cmpint(frame->type, ==, GATEWAY_FRAME_RES);
     g_assert_cmpstr(frame->id, ==, "req-2");
     g_assert_cmpstr(frame->error, ==, "Unauthorized");
-    g_assert_cmpint(frame->code, ==, 401);
+    g_assert_cmpstr(frame->code, ==, "NOT_LINKED");
 
     gchar *auth_source = NULL;
     gboolean ok = gateway_protocol_parse_hello_ok(frame, &auth_source, NULL);
     g_assert_false(ok);
     g_assert_null(auth_source);
 
+    gateway_frame_free(frame);
+}
+
+static void test_protocol_parse_response_error_string_code_preserved(void) {
+    const gchar *json = "{\"type\":\"res\",\"id\":\"req-3\",\"error\":{\"code\":\"AGENT_TIMEOUT\",\"message\":\"Agent timed out\"}}";
+    GatewayFrame *frame = gateway_protocol_parse_frame(json);
+    g_assert_nonnull(frame);
+    g_assert_cmpint(frame->type, ==, GATEWAY_FRAME_RES);
+    g_assert_cmpstr(frame->id, ==, "req-3");
+    g_assert_cmpstr(frame->code, ==, "AGENT_TIMEOUT");
+    g_assert_cmpstr(frame->error, ==, "Agent timed out");
+    gateway_frame_free(frame);
+}
+
+static void test_protocol_parse_response_error_no_code(void) {
+    const gchar *json = "{\"type\":\"res\",\"id\":\"req-4\",\"error\":{\"message\":\"Something failed\"}}";
+    GatewayFrame *frame = gateway_protocol_parse_frame(json);
+    g_assert_nonnull(frame);
+    g_assert_cmpint(frame->type, ==, GATEWAY_FRAME_RES);
+    g_assert_null(frame->code);
+    g_assert_cmpstr(frame->error, ==, "Something failed");
     gateway_frame_free(frame);
 }
 
@@ -838,6 +859,8 @@ int main(int argc, char **argv) {
     g_test_add_func("/gateway/protocol/parse_response_malformed_policy", test_protocol_parse_response_malformed_policy);
     g_test_add_func("/gateway/protocol/parse_response_malformed_auth", test_protocol_parse_response_malformed_auth);
     g_test_add_func("/gateway/protocol/parse_response_error", test_protocol_parse_response_error);
+    g_test_add_func("/gateway/protocol/parse_response_error_string_code_preserved", test_protocol_parse_response_error_string_code_preserved);
+    g_test_add_func("/gateway/protocol/parse_response_error_no_code", test_protocol_parse_response_error_no_code);
     g_test_add_func("/gateway/protocol/parse_request", test_protocol_parse_request);
     g_test_add_func("/gateway/protocol/parse_invalid", test_protocol_parse_invalid);
     g_test_add_func("/gateway/protocol/parse_tick_event", test_protocol_parse_tick_event);

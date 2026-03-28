@@ -29,7 +29,7 @@ typedef struct {
     GatewayFrameType type;
     gchar *id;             /* request/response correlation ID */
     gchar *method;         /* for req frames */
-    gint code;             /* for res frames (0 = success) */
+    gchar *code;            /* for error res frames (string code from protocol) */
     gchar *error;          /* for error res frames */
     JsonNode *payload;     /* parsed payload (owned) */
     gchar *event_type;     /* for event frames (e.g. "connect.challenge", "tick") */

@@ -57,7 +57,7 @@ GatewayFrame* gateway_protocol_parse_frame(const gchar *json_str) {
             JsonObject *err_obj = json_object_get_object_member(obj, "error");
             if (err_obj) {
                 if (json_object_has_member(err_obj, "code"))
-                    frame->code = (gint)json_object_get_int_member(err_obj, "code");
+                    frame->code = g_strdup(json_object_get_string_member(err_obj, "code"));
                 if (json_object_has_member(err_obj, "message"))
                     frame->error = g_strdup(json_object_get_string_member(err_obj, "message"));
             }
@@ -81,6 +81,7 @@ void gateway_frame_free(GatewayFrame *frame) {
     if (!frame) return;
     g_free(frame->id);
     g_free(frame->method);
+    g_free(frame->code);
     g_free(frame->error);
     g_free(frame->event_type);
     if (frame->payload) json_node_unref(frame->payload);
