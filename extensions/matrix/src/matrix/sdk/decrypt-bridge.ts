@@ -1,5 +1,5 @@
-import { MatrixEventEvent, type MatrixEvent } from "matrix-js-sdk";
 import { CryptoEvent } from "matrix-js-sdk/lib/crypto-api/CryptoEvent.js";
+import { MatrixEventEvent, type MatrixEvent } from "matrix-js-sdk/lib/matrix.js";
 import { LogService, noop } from "./logger.js";
 
 type MatrixDecryptIfNeededClient = {
