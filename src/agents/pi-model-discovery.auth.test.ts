@@ -235,18 +235,35 @@ describe("discoverAuthStorage", () => {
             maxTokensField?: string;
           };
         }>;
+        const available = modelRegistry.getAvailable() as Array<{
+          provider?: string;
+          id?: string;
+          api?: string;
+          compat?: {
+            supportsStore?: boolean;
+            supportsReasoningEffort?: boolean;
+            maxTokensField?: string;
+          };
+        }>;
         const fromAll = all.find(
+          (entry) => entry.provider === "mistral" && entry.id === "mistral-large-latest",
+        );
+        const fromAvailable = available.find(
           (entry) => entry.provider === "mistral" && entry.id === "mistral-large-latest",
         );
 
         expect(model?.api).toBe("openai-completions");
         expect(fromAll?.api).toBe("openai-completions");
+        expect(fromAvailable?.api).toBe("openai-completions");
         expect(model?.compat?.supportsStore).toBe(false);
         expect(model?.compat?.supportsReasoningEffort).toBe(false);
         expect(model?.compat?.maxTokensField).toBe("max_tokens");
         expect(fromAll?.compat?.supportsStore).toBe(false);
         expect(fromAll?.compat?.supportsReasoningEffort).toBe(false);
         expect(fromAll?.compat?.maxTokensField).toBe("max_tokens");
+        expect(fromAvailable?.compat?.supportsStore).toBe(false);
+        expect(fromAvailable?.compat?.supportsReasoningEffort).toBe(false);
+        expect(fromAvailable?.compat?.maxTokensField).toBe("max_tokens");
       } finally {
         if (previous === undefined) {
           delete process.env.MISTRAL_API_KEY;
