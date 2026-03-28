@@ -6,6 +6,7 @@ export {
   describeAccountSnapshot,
   listCombinedAccountIds,
   mergeAccountConfig,
+  resolveListedDefaultAccountId,
   resolveMergedAccountConfig,
 } from "../channels/plugins/account-helpers.js";
 export { normalizeChatType } from "../channels/chat-type.js";
