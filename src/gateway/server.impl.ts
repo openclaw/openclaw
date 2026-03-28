@@ -451,8 +451,32 @@ export async function startGatewayServer(
     params: { reason: "startup" | "reload" | "restart-check"; activate: boolean },
   ) =>
     await runWithSecretsActivationLock(async () => {
+      // Retry with exponential backoff at startup to prevent crash-loops that
+      // exhaust secret provider rate limits (e.g. 1Password daily quota).
+      // Without backoff, a transient failure causes: crash → OS restart → crash
+      // → restart, burning N `op read` calls per cycle (#56217).
+      const STARTUP_MAX_RETRIES = 3;
+      const STARTUP_BASE_DELAY_MS = 2_000;
+
+      const attemptResolve = async (attempt: number): Promise<Awaited<ReturnType<typeof prepareSecretsRuntimeSnapshot>>> => {
+        try {
+          return await prepareSecretsRuntimeSnapshot({ config });
+        } catch (err) {
+          if (params.reason !== "startup" || attempt >= STARTUP_MAX_RETRIES) {
+            throw err;
+          }
+          const delayMs = STARTUP_BASE_DELAY_MS * Math.pow(2, attempt);
+          logSecrets.warn(
+            `[SECRETS_STARTUP_RETRY] Attempt ${attempt + 1}/${STARTUP_MAX_RETRIES} failed, ` +
+            `retrying in ${delayMs}ms: ${String(err)}`,
+          );
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+          return attemptResolve(attempt + 1);
+        }
+      };
+
       try {
-        const prepared = await prepareSecretsRuntimeSnapshot({ config });
+        const prepared = await attemptResolve(0);
         if (params.activate) {
           activateSecretsRuntimeSnapshot(prepared);
           logGatewayAuthSurfaceDiagnostics(prepared);
@@ -484,9 +508,12 @@ export async function startGatewayServer(
         }
         secretsDegraded = true;
         if (params.reason === "startup") {
-          throw new Error(`Startup failed: required secrets are unavailable. ${details}`, {
-            cause: err,
-          });
+          throw new Error(
+            `Startup failed: required secrets are unavailable after ${STARTUP_MAX_RETRIES} ` +
+            `retries with exponential backoff. If using 1Password, check that your service ` +
+            `account token is valid and the account has not exceeded its daily rate limit. ${details}`,
+            { cause: err },
+          );
         }
         throw err;
       }
