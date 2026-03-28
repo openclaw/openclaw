@@ -254,6 +254,11 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.web.x_search.maxTurns": "X Search Max Turns",
   "tools.web.x_search.timeoutSeconds": "X Search Timeout (sec)",
   "tools.web.x_search.cacheTtlMinutes": "X Search Cache TTL (min)",
+  "tools.code_execution.enabled": "Enable Code Execution Tool",
+  "tools.code_execution.apiKey": "xAI API Key", // pragma: allowlist secret
+  "tools.code_execution.model": "Code Execution Model",
+  "tools.code_execution.maxTurns": "Code Execution Max Turns",
+  "tools.code_execution.timeoutSeconds": "Code Execution Timeout (sec)",
   "gateway.controlUi.basePath": "Control UI Base Path",
   "gateway.controlUi.root": "Control UI Assets Root",
   "gateway.controlUi.allowedOrigins": "Control UI Allowed Origins",

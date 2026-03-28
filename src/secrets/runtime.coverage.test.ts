@@ -208,6 +208,9 @@ function buildConfigForOpenClawTarget(entry: SecretRegistryEntry, envId: string)
   if (entry.id === "plugins.entries.tavily.config.webSearch.apiKey") {
     setPathCreateStrict(config, ["tools", "web", "search", "provider"], "tavily");
   }
+  if (entry.id === "tools.code_execution.apiKey") {
+    setPathCreateStrict(config, ["tools", "code_execution", "enabled"], true);
+  }
   if (entry.id === "tools.web.x_search.apiKey") {
     setPathCreateStrict(config, ["tools", "web", "x_search", "enabled"], true);
   }

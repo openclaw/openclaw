@@ -282,4 +282,50 @@ describe("openclaw tools runtime web metadata wiring", () => {
       "https://x.com/openclaw/status/1",
     ]);
   });
+
+  it("resolves code_execution SecretRef from the active runtime snapshot", async () => {
+    const snapshot = await prepareAndActivate({
+      config: asConfig({
+        tools: {
+          code_execution: {
+            apiKey: { source: "env", provider: "default", id: "CODE_EXECUTION_RUNTIME_REF" },
+          },
+        },
+      }),
+      env: {
+        CODE_EXECUTION_RUNTIME_REF: "code-execution-runtime-key",
+      },
+    });
+
+    const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
+      Promise.resolve({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            output: [
+              { type: "code_interpreter_call" },
+              {
+                type: "message",
+                content: [{ type: "output_text", text: "runtime code execution ok" }],
+              },
+            ],
+          }),
+      } as Response),
+    );
+    global.fetch = withFetchPreconnect(mockFetch);
+
+    const codeExecution = findTool("code_execution", snapshot.config);
+    const result = await codeExecution.execute("call-runtime-code-execution", {
+      task: "Add 20 + 22",
+    });
+
+    expect(mockFetch).toHaveBeenCalled();
+    expect(String(mockFetch.mock.calls[0]?.[0])).toContain("api.x.ai/v1/responses");
+    const request = mockFetch.mock.calls[0]?.[1] as RequestInit | undefined;
+    const body = JSON.parse(typeof request?.body === "string" ? request.body : "{}") as {
+      tools?: Array<Record<string, unknown>>;
+    };
+    expect(body.tools).toEqual([{ type: "code_interpreter" }]);
+    expect((result.details as { usedCodeExecution?: boolean }).usedCodeExecution).toBe(true);
+  });
 });
