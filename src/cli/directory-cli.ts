@@ -98,10 +98,11 @@ export function registerDirectoryCli(program: Command) {
       .option("--json", "Output JSON", false);
 
   const resolve = async (opts: { channel?: string; account?: string }) => {
-    let cfg = applyPluginAutoEnable({
+    const autoEnabled = applyPluginAutoEnable({
       config: loadConfig(),
       env: process.env,
-    }).config;
+    });
+    let cfg = autoEnabled.config;
     const explicitChannel = opts.channel?.trim();
     const resolvedExplicit = explicitChannel
       ? await resolveInstallableChannelPlugin({
@@ -114,6 +115,8 @@ export function registerDirectoryCli(program: Command) {
       : null;
     if (resolvedExplicit?.configChanged) {
       cfg = resolvedExplicit.cfg;
+      await writeConfigFile(cfg);
+    } else if (autoEnabled.changes.length > 0) {
       await writeConfigFile(cfg);
     }
     const selection = explicitChannel

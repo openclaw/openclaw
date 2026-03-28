@@ -150,5 +150,6 @@ describe("registerDirectoryCli", () => {
         cfg: autoEnabledConfig,
       }),
     );
+    expect(mocks.writeConfigFile).toHaveBeenCalledWith(autoEnabledConfig);
   });
 });
