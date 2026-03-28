@@ -90,6 +90,7 @@ import "./components/dashboard-header.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "./external-link.ts";
 import { icons } from "./icons.ts";
 import { normalizeBasePath, TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
+import { persistChatAttachments, persistChatDraft } from "./storage.ts";
 import { agentLogoUrl } from "./views/agents-utils.ts";
 import {
   resolveAgentConfig,
@@ -1462,10 +1463,18 @@ export function renderApp(state: AppViewState) {
               },
               onChatScroll: (event) => state.handleChatScroll(event),
               getDraft: () => state.chatMessage,
-              onDraftChange: (next) => (state.chatMessage = next),
+              onDraftChange: (next) => {
+                state.chatMessage = next;
+                // Persist draft to sessionStorage for recovery after refresh
+                persistChatDraft(state.settings.gatewayUrl, state.sessionKey, next);
+              },
               onRequestUpdate: requestHostUpdate,
               attachments: state.chatAttachments,
-              onAttachmentsChange: (next) => (state.chatAttachments = next),
+              onAttachmentsChange: (next) => {
+                state.chatAttachments = next;
+                // Persist attachments to sessionStorage for recovery after refresh
+                persistChatAttachments(state.settings.gatewayUrl, state.sessionKey, next);
+              },
               onSend: () => state.handleSendChat(),
               canAbort: Boolean(state.chatRunId),
               onAbort: () => void state.handleAbortChat(),

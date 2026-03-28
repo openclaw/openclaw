@@ -10,6 +10,16 @@ import { loadModels } from "./controllers/models.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import { normalizeBasePath } from "./navigation.ts";
+import {
+  clearPersistedChatComposer,
+  loadPersistedChatAttachments,
+  loadPersistedChatDraft,
+  loadPersistedChatQueue,
+  persistChatAttachments,
+  persistChatDraft,
+  persistChatQueue,
+  type UiSettings,
+} from "./storage.ts";
 import type { ChatModelOverride, ModelCatalogEntry } from "./types.ts";
 import type { ChatAttachment, ChatQueueItem } from "./ui-types.ts";
 import { generateUUID } from "./uuid.ts";
@@ -22,6 +32,7 @@ export type ChatHost = {
   chatMessage: string;
   chatAttachments: ChatAttachment[];
   chatQueue: ChatQueueItem[];
+  settings: UiSettings;
   chatRunId: string | null;
   chatSending: boolean;
   lastError?: string | null;
@@ -82,6 +93,58 @@ export async function handleAbortChat(host: ChatHost) {
   await abortChatRun(host as unknown as OpenClawApp);
 }
 
+// ── Chat State Persistence Helpers ──
+
+function gatewayUrlForHost(host: ChatHost): string {
+  return host.settings.gatewayUrl;
+}
+
+function persistChatQueueState(host: ChatHost) {
+  persistChatQueue(gatewayUrlForHost(host), host.sessionKey, host.chatQueue);
+}
+
+function persistChatComposerState(host: ChatHost) {
+  persistChatDraft(gatewayUrlForHost(host), host.sessionKey, host.chatMessage);
+  persistChatAttachments(gatewayUrlForHost(host), host.sessionKey, host.chatAttachments);
+}
+
+function clearPersistedChatComposerState(host: ChatHost) {
+  clearPersistedChatComposer(gatewayUrlForHost(host), host.sessionKey);
+}
+
+type PersistedChatState = {
+  queue: ChatQueueItem[];
+  draft: string;
+  attachments: ChatAttachment[];
+};
+
+function mergePersistedChatState(host: ChatHost, state: PersistedChatState) {
+  if (state.queue.length > 0 || host.chatQueue.length === 0) {
+    host.chatQueue = state.queue;
+  }
+  // Only restore from storage if in-memory draft is empty; newer in-memory text
+  // (e.g. from slash command insertions) takes precedence over stale storage.
+  if (!host.chatMessage) {
+    host.chatMessage = state.draft;
+  }
+  if (state.attachments.length > 0 || host.chatAttachments.length === 0) {
+    host.chatAttachments = state.attachments;
+  }
+}
+
+export function restorePersistedChatState(
+  host: ChatHost,
+  opts?: { mode?: "merge" | "replace" },
+) {
+  const gatewayUrl = gatewayUrlForHost(host);
+  const queue = loadPersistedChatQueue(gatewayUrl, host.sessionKey);
+  const draft = loadPersistedChatDraft(gatewayUrl, host.sessionKey);
+  const attachments = loadPersistedChatAttachments(gatewayUrl, host.sessionKey);
+  if (opts?.mode === "replace" || queue.length > 0 || draft || attachments.length > 0) {
+    mergePersistedChatState(host, { queue, draft, attachments });
+  }
+}
+
 function enqueueChatMessage(
   host: ChatHost,
   text: string,
@@ -106,6 +169,8 @@ function enqueueChatMessage(
       localCommandName: localCommand?.name,
     },
   ];
+  // Persist queue to localStorage for recovery after refresh
+  persistChatQueueState(host);
 }
 
 async function sendChatMessageNow(
@@ -143,6 +208,9 @@ async function sendChatMessageNow(
   if (ok && opts?.restoreAttachments && opts.previousAttachments?.length) {
     host.chatAttachments = opts.previousAttachments;
   }
+  persistChatComposerState(host);
+  // Persist queue clear so refreshChat doesn't re-display already-sent messages
+  persistChatQueueState(host);
   // Force scroll after sending to ensure viewport is at bottom for incoming stream
   scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0], true);
   if (ok && !host.chatRunId) {
@@ -160,9 +228,13 @@ async function flushChatQueue(host: ChatHost) {
   }
   const [next, ...rest] = host.chatQueue;
   if (!next) {
+    // Queue is empty, clear persisted queue
+    clearPersistedChatQueue(gatewayUrlForHost(host), host.sessionKey);
     return;
   }
   host.chatQueue = rest;
+  // Persist updated queue (without the message being sent)
+  persistChatQueueState(host);
   let ok = false;
   try {
     if (next.localCommandName) {
@@ -179,6 +251,7 @@ async function flushChatQueue(host: ChatHost) {
   }
   if (!ok) {
     host.chatQueue = [next, ...host.chatQueue];
+    persistChatQueueState(host);
   } else if (host.chatQueue.length > 0) {
     // Continue draining — local commands don't block on server response
     void flushChatQueue(host);
@@ -187,6 +260,7 @@ async function flushChatQueue(host: ChatHost) {
 
 export function removeQueuedMessage(host: ChatHost, id: string) {
   host.chatQueue = host.chatQueue.filter((item) => item.id !== id);
+  persistChatQueueState(host);
 }
 
 export async function handleSendChat(
@@ -356,6 +430,8 @@ function injectCommandResult(host: ChatHost, content: string) {
 }
 
 export async function refreshChat(host: ChatHost, opts?: { scheduleScroll?: boolean }) {
+  // Restore persisted chat queue, draft, and attachments before loading history
+  restorePersistedChatState(host);
   await Promise.all([
     loadChatHistory(host as unknown as OpenClawApp),
     loadSessions(host as unknown as OpenClawApp, {
