@@ -1,4 +1,11 @@
-import type { MSTeamsConversationStoreEntry } from "./conversation-store.js";
+import type {
+  MSTeamsConversationStoreEntry,
+  StoredConversationReference,
+} from "./conversation-store.js";
+
+export function normalizeStoredConversationId(raw: string): string {
+  return raw.split(";")[0] ?? raw;
+}
 
 export function parseStoredConversationTimestamp(value: string | undefined): number | null {
   if (!value) {
@@ -11,7 +18,30 @@ export function parseStoredConversationTimestamp(value: string | undefined): num
   return parsed;
 }
 
-export function findPreferredConversationByUserId(
+export function toConversationStoreEntries(
+  entries: Iterable<[string, StoredConversationReference]>,
+): MSTeamsConversationStoreEntry[] {
+  return Array.from(entries, ([conversationId, reference]) => ({
+    conversationId,
+    reference,
+  }));
+}
+
+export function mergeStoredConversationReference(
+  existing: StoredConversationReference | undefined,
+  incoming: StoredConversationReference,
+  nowIso: string,
+): StoredConversationReference {
+  return {
+    // Preserve fields from previous entry that may not be present on every activity
+    // (e.g. timezone is only sent when clientInfo entity is available).
+    ...(existing?.timezone && !incoming.timezone ? { timezone: existing.timezone } : {}),
+    ...incoming,
+    lastSeenAt: nowIso,
+  };
+}
+
+export function findPreferredDmConversationByUserId(
   entries: Iterable<MSTeamsConversationStoreEntry>,
   id: string,
 ): MSTeamsConversationStoreEntry | null {
