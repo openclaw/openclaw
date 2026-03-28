@@ -36,6 +36,10 @@ export function clampProbeTimeoutMs(timeoutMs: number): number {
   return Math.min(MAX_TIMER_DELAY_MS, Math.max(MIN_PROBE_TIMEOUT_MS, timeoutMs));
 }
 
+function formatProbeCloseError(close: GatewayProbeClose): string {
+  return `gateway closed (${close.code}): ${close.reason}`;
+}
+
 export async function probeGateway(opts: {
   url: string;
   auth?: GatewayProbeAuth;
@@ -113,6 +117,18 @@ export async function probeGateway(opts: {
       },
       onClose: (code, reason) => {
         close = { code, reason };
+        if (connectLatencyMs == null) {
+          settle({
+            ok: false,
+            connectLatencyMs,
+            error: formatProbeCloseError(close),
+            close,
+            health: null,
+            status: null,
+            presence: null,
+            configSnapshot: null,
+          });
+        }
       },
       onHelloOk: async () => {
         connectLatencyMs = Date.now() - startedAt;
