@@ -1,5 +1,6 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../config/config.js";
+import { redactSensitiveText } from "../../logging/redact.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   extractLeadingHttpStatus,
@@ -732,11 +733,28 @@ export function formatAssistantErrorText(
     return formatRawAssistantErrorForUi(raw);
   }
 
-  // Never return raw unhandled errors - log for debugging but return safe message
-  if (raw.length > 600) {
-    log.warn(`Long error truncated: ${raw.slice(0, 200)}`);
+  // Preserve actionable error messages instead of swallowing them
+  // into the generic catch-all (these can reach here after retries are exhausted).
+  if (isImageDimensionErrorMessage(raw)) {
+    const parsed = parseImageDimensionError(raw);
+    const limit = parsed?.maxDimensionPx ? ` (max ${parsed.maxDimensionPx}px)` : "";
+    return `Image dimensions exceed the allowed size${limit}. Please resize the image and try again.`;
   }
-  return raw.length > 600 ? `${raw.slice(0, 600)}…` : raw;
+  if (isCliSessionExpiredErrorMessage(raw)) {
+    return "Session expired or not found. Use /new to start a fresh session.";
+  }
+  if (isAuthPermanentErrorMessage(raw) || isAuthErrorMessage(raw)) {
+    return "Authentication failed. Please check your API key or re-authenticate.";
+  }
+  if (isModelNotFoundErrorMessage(raw)) {
+    return "The configured model was not found. Check your model setting or try a different model.";
+  }
+
+  // Never return raw unhandled errors — log a redacted preview for debugging,
+  // but return a safe generic message to the user.
+  const preview = redactSensitiveText(raw.slice(0, 500)).replace(/[\r\n]+/g, " ");
+  log.warn(`Unrecognized error suppressed from user surface: ${preview}`);
+  return "Something went wrong. Please try again, or use /new to start a fresh session.";
 }
 
 export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boolean }): string {
