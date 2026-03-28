@@ -315,7 +315,10 @@ function resetRunOutcomeMocks(): void {
     error: undefined,
   });
   resolveSessionAuthProfileOverrideMock.mockReset();
-  resolveSessionAuthProfileOverrideMock.mockResolvedValue(undefined);
+  resolveSessionAuthProfileOverrideMock.mockResolvedValue({
+    authProfileId: undefined,
+    authProfileIdSource: undefined,
+  });
 }
 
 function resetRunSessionMocks(): void {
