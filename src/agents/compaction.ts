@@ -1,6 +1,9 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { estimateTokens, generateSummary as piGenerateSummary } from "@mariozechner/pi-coding-agent";
+import {
+  estimateTokens,
+  generateSummary as piGenerateSummary,
+} from "@mariozechner/pi-coding-agent";
 import type { AgentCompactionIdentifierPolicy } from "../config/types.agent-defaults.js";
 import { retryAsync } from "../infra/retry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -264,7 +267,7 @@ async function summarizeChunks(params: {
           params.model,
           params.reserveTokens,
           params.apiKey,
-          params.headers,
+          undefined,
           params.signal,
           effectiveInstructions,
           summary,
