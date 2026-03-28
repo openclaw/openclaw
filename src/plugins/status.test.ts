@@ -75,9 +75,14 @@ function setSinglePluginLoadResult(
   });
 }
 
-function expectInspectReport(pluginId: string) {
+function expectInspectReport(
+  pluginId: string,
+): NonNullable<ReturnType<typeof buildPluginInspectReport>> {
   const inspect = buildPluginInspectReport({ id: pluginId });
   expect(inspect).not.toBeNull();
+  if (!inspect) {
+    throw new Error(`expected inspect report for ${pluginId}`);
+  }
   return inspect;
 }
 
@@ -100,11 +105,45 @@ function expectNoCompatibilityWarnings() {
   expect(buildPluginCompatibilityWarnings()).toEqual([]);
 }
 
+function expectCompatibilityOutput(params: { notices?: unknown[]; warnings?: string[] }) {
+  if (params.notices) {
+    expect(buildPluginCompatibilityNotices()).toEqual(params.notices);
+  }
+  if (params.warnings) {
+    expect(buildPluginCompatibilityWarnings()).toEqual(params.warnings);
+  }
+}
+
 function expectCapabilityKinds(
   inspect: NonNullable<ReturnType<typeof buildPluginInspectReport>>,
   kinds: readonly string[],
 ) {
   expect(inspect.capabilities.map((entry) => entry.kind)).toEqual(kinds);
+}
+
+function expectInspectShape(
+  inspect: NonNullable<ReturnType<typeof buildPluginInspectReport>>,
+  params: {
+    shape: string;
+    capabilityMode: string;
+    capabilityKinds: readonly string[];
+  },
+) {
+  expect(inspect.shape).toBe(params.shape);
+  expect(inspect.capabilityMode).toBe(params.capabilityMode);
+  expectCapabilityKinds(inspect, params.capabilityKinds);
+}
+
+function expectBundleInspectState(
+  inspect: NonNullable<ReturnType<typeof buildPluginInspectReport>>,
+  params: {
+    bundleCapabilities: readonly string[];
+    shape: string;
+  },
+) {
+  expect(inspect.bundleCapabilities).toEqual(params.bundleCapabilities);
+  expect(inspect.mcpServers).toEqual([]);
+  expect(inspect.shape).toBe(params.shape);
 }
 
 describe("buildPluginStatusReport", () => {
@@ -313,15 +352,17 @@ describe("buildPluginStatusReport", () => {
     const inspect = buildPluginInspectReport({ id: "google" });
 
     expect(inspect).not.toBeNull();
-    expect(inspect?.shape).toBe("hybrid-capability");
-    expect(inspect?.capabilityMode).toBe("hybrid");
-    expectCapabilityKinds(inspect!, [
-      "cli-backend",
-      "text-inference",
-      "media-understanding",
-      "image-generation",
-      "web-search",
-    ]);
+    expectInspectShape(inspect!, {
+      shape: "hybrid-capability",
+      capabilityMode: "hybrid",
+      capabilityKinds: [
+        "cli-backend",
+        "text-inference",
+        "media-understanding",
+        "image-generation",
+        "web-search",
+      ],
+    });
     expect(inspect?.usesLegacyBeforeAgentStart).toBe(true);
     expect(inspect?.compatibility).toEqual([
       createCompatibilityNotice({ pluginId: "google", code: "legacy-before-agent-start" }),
@@ -378,10 +419,12 @@ describe("buildPluginStatusReport", () => {
 
     const inspect = expectInspectReport("anthropic");
 
-    expect(inspect?.shape).toBe("plain-capability");
-    expect(inspect?.capabilityMode).toBe("plain");
-    expectCapabilityKinds(inspect!, ["cli-backend"]);
-    expect(inspect?.capabilities).toEqual([{ kind: "cli-backend", ids: ["claude-cli"] }]);
+    expectInspectShape(inspect, {
+      shape: "plain-capability",
+      capabilityMode: "plain",
+      capabilityKinds: ["cli-backend"],
+    });
+    expect(inspect.capabilities).toEqual([{ kind: "cli-backend", ids: ["claude-cli"] }]);
   });
 
   it("builds compatibility warnings for legacy compatibility paths", () => {
@@ -397,10 +440,9 @@ describe("buildPluginStatusReport", () => {
       typedHooks: [createTypedHook({ pluginId: "lca", hookName: "before_agent_start" })],
     });
 
-    expect(buildPluginCompatibilityWarnings()).toEqual([
-      `lca ${LEGACY_BEFORE_AGENT_START_MESSAGE}`,
-      `lca ${HOOK_ONLY_MESSAGE}`,
-    ]);
+    expectCompatibilityOutput({
+      warnings: [`lca ${LEGACY_BEFORE_AGENT_START_MESSAGE}`, `lca ${HOOK_ONLY_MESSAGE}`],
+    });
   });
 
   it("builds structured compatibility notices with deterministic ordering", () => {
@@ -422,10 +464,12 @@ describe("buildPluginStatusReport", () => {
       typedHooks: [createTypedHook({ pluginId: "legacy-only", hookName: "before_agent_start" })],
     });
 
-    expect(buildPluginCompatibilityNotices()).toEqual([
-      createCompatibilityNotice({ pluginId: "hook-only", code: "hook-only" }),
-      createCompatibilityNotice({ pluginId: "legacy-only", code: "legacy-before-agent-start" }),
-    ]);
+    expectCompatibilityOutput({
+      notices: [
+        createCompatibilityNotice({ pluginId: "hook-only", code: "hook-only" }),
+        createCompatibilityNotice({ pluginId: "legacy-only", code: "legacy-before-agent-start" }),
+      ],
+    });
   });
 
   it("returns no compatibility warnings for modern capability plugins", () => {
@@ -474,9 +518,10 @@ describe("buildPluginStatusReport", () => {
 
     const inspect = expectInspectReport(expectedId);
 
-    expect(inspect?.bundleCapabilities).toEqual(expectedBundleCapabilities);
-    expect(inspect?.mcpServers).toEqual([]);
-    expect(inspect?.shape).toBe(expectedShape);
+    expectBundleInspectState(inspect, {
+      bundleCapabilities: expectedBundleCapabilities,
+      shape: expectedShape,
+    });
   });
 
   it("formats and summarizes compatibility notices", () => {

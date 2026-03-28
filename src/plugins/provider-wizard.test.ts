@@ -98,12 +98,18 @@ function expectProviderResolutionCall(params?: {
   config?: object;
   env?: NodeJS.ProcessEnv;
   workspaceDir?: string;
+  count?: number;
 }) {
+  expect(resolvePluginProviders).toHaveBeenCalledTimes(params?.count ?? 1);
   expect(resolvePluginProviders).toHaveBeenCalledWith({
     ...createWizardRuntimeParams(params),
     bundledProviderAllowlistCompat: true,
     bundledProviderVitestCompat: true,
   });
+}
+
+function setResolvedProviders(...providers: ProviderPlugin[]) {
+  resolvePluginProviders.mockReturnValue(providers);
 }
 
 function resolveWizardOptionsTwice(params: {
@@ -118,7 +124,7 @@ function resolveWizardOptionsTwice(params: {
 
 function expectWizardProviderCacheMiss(params: { config?: object; env: NodeJS.ProcessEnv }) {
   resolveWizardOptionsTwice(params);
-  expect(resolvePluginProviders).toHaveBeenCalledTimes(2);
+  expectProviderResolutionCall({ ...params, count: 2 });
 }
 
 function expectSingleWizardChoice(params: {
@@ -127,7 +133,7 @@ function expectSingleWizardChoice(params: {
   expectedOption: Record<string, unknown>;
   expectedWizard: unknown;
 }) {
-  resolvePluginProviders.mockReturnValue([params.provider]);
+  setResolvedProviders(params.provider);
   expect(resolveProviderWizardOptions({})).toEqual([params.expectedOption]);
   expect(
     resolveProviderPluginChoice({
@@ -236,7 +242,7 @@ describe("provider wizard boundaries", () => {
         },
       ],
     });
-    resolvePluginProviders.mockReturnValue([provider]);
+    setResolvedProviders(provider);
 
     expect(resolveProviderWizardOptions({})).toEqual([
       {
@@ -299,7 +305,7 @@ describe("provider wizard boundaries", () => {
         },
       },
     });
-    resolvePluginProviders.mockReturnValue([provider]);
+    setResolvedProviders(provider);
 
     expect(resolveProviderModelPickerEntries({})).toEqual([
       {
@@ -314,13 +320,12 @@ describe("provider wizard boundaries", () => {
     const provider = createSglangWizardProvider({ includeModelPicker: true });
     const config = {};
     const env = createHomeEnv();
-    resolvePluginProviders.mockReturnValue([provider]);
+    setResolvedProviders(provider);
 
     const runtimeParams = createWizardRuntimeParams({ config, env });
     expect(resolveProviderWizardOptions(runtimeParams)).toHaveLength(1);
     expect(resolveProviderModelPickerEntries(runtimeParams)).toHaveLength(1);
 
-    expect(resolvePluginProviders).toHaveBeenCalledTimes(1);
     expectProviderResolutionCall({ config, env });
   });
 
@@ -328,7 +333,7 @@ describe("provider wizard boundaries", () => {
     const provider = createSglangSetupProvider();
     const config = createSglangConfig();
     const env = createHomeEnv("-a");
-    resolvePluginProviders.mockReturnValue([provider]);
+    setResolvedProviders(provider);
 
     expect(resolveProviderWizardOptions(createWizardRuntimeParams({ config, env }))).toHaveLength(
       1,
@@ -341,7 +346,7 @@ describe("provider wizard boundaries", () => {
       1,
     );
 
-    expect(resolvePluginProviders).toHaveBeenCalledTimes(2);
+    expectProviderResolutionCall({ config, env, count: 2 });
   });
 
   it.each([
@@ -360,7 +365,7 @@ describe("provider wizard boundaries", () => {
   ] as const)("$name", ({ env }) => {
     const provider = createSglangSetupProvider();
     const config = createSglangConfig();
-    resolvePluginProviders.mockReturnValue([provider]);
+    setResolvedProviders(provider);
 
     expectWizardProviderCacheMiss({ config, env });
   });
@@ -373,7 +378,7 @@ describe("provider wizard boundaries", () => {
       OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS: "5",
       OPENCLAW_PLUGIN_MANIFEST_CACHE_MS: "20",
     });
-    resolvePluginProviders.mockReturnValue([provider]);
+    setResolvedProviders(provider);
     const runtimeParams = createWizardRuntimeParams({ config, env });
 
     resolveProviderWizardOptions(runtimeParams);
@@ -382,7 +387,7 @@ describe("provider wizard boundaries", () => {
     vi.advanceTimersByTime(2);
     resolveProviderWizardOptions(runtimeParams);
 
-    expect(resolvePluginProviders).toHaveBeenCalledTimes(2);
+    expectProviderResolutionCall({ config, env, count: 2 });
   });
 
   it("invalidates provider-wizard snapshots when cache-control env values change in place", () => {
@@ -391,7 +396,7 @@ describe("provider wizard boundaries", () => {
     const env = createHomeEnv("", {
       OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS: "1000",
     });
-    resolvePluginProviders.mockReturnValue([provider]);
+    setResolvedProviders(provider);
 
     resolveProviderWizardOptions(createWizardRuntimeParams({ config, env }));
 
@@ -399,13 +404,13 @@ describe("provider wizard boundaries", () => {
 
     resolveProviderWizardOptions(createWizardRuntimeParams({ config, env }));
 
-    expect(resolvePluginProviders).toHaveBeenCalledTimes(2);
+    expectProviderResolutionCall({ config, env, count: 2 });
   });
 
   it("routes model-selected hooks only to the matching provider", async () => {
     const matchingHook = vi.fn(async () => {});
     const otherHook = vi.fn(async () => {});
-    resolvePluginProviders.mockReturnValue([
+    setResolvedProviders(
       makeProvider({
         id: "ollama",
         label: "Ollama",
@@ -416,7 +421,7 @@ describe("provider wizard boundaries", () => {
         label: "vLLM",
         onModelSelected: matchingHook,
       }),
-    ]);
+    );
 
     const env = createHomeEnv();
     await runProviderModelSelectedHook({

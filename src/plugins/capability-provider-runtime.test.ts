@@ -38,6 +38,10 @@ vi.mock("./bundled-compat.js", () => ({
 
 let resolvePluginCapabilityProviders: typeof import("./capability-provider-runtime.js").resolvePluginCapabilityProviders;
 
+function expectResolvedCapabilityProviderIds(providers: Array<{ id: string }>, expected: string[]) {
+  expect(providers.map((provider) => provider.id)).toEqual(expected);
+}
+
 function expectBundledCompatLoadPath(params: {
   cfg: OpenClawConfig;
   allowlistCompat: { plugins: { allow: string[] } };
@@ -100,6 +104,27 @@ function setBundledCapabilityFixture(contractKey: string) {
   });
 }
 
+function setActiveSpeechCapabilityRegistry(providerId: string) {
+  const active = createEmptyPluginRegistry();
+  active.speechProviders.push({
+    pluginId: providerId,
+    pluginName: "OpenAI",
+    source: "test",
+    provider: {
+      id: providerId,
+      label: "OpenAI",
+      isConfigured: () => true,
+      synthesize: async () => ({
+        audioBuffer: Buffer.from("x"),
+        outputFormat: "mp3",
+        voiceCompatible: false,
+        fileExtension: ".mp3",
+      }),
+    },
+  });
+  setActivePluginRegistry(active);
+}
+
 describe("resolvePluginCapabilityProviders", () => {
   beforeEach(async () => {
     vi.resetModules();
@@ -118,28 +143,11 @@ describe("resolvePluginCapabilityProviders", () => {
   });
 
   it("uses the active registry when capability providers are already loaded", () => {
-    const active = createEmptyPluginRegistry();
-    active.speechProviders.push({
-      pluginId: "openai",
-      pluginName: "OpenAI",
-      source: "test",
-      provider: {
-        id: "openai",
-        label: "OpenAI",
-        isConfigured: () => true,
-        synthesize: async () => ({
-          audioBuffer: Buffer.from("x"),
-          outputFormat: "mp3",
-          voiceCompatible: false,
-          fileExtension: ".mp3",
-        }),
-      },
-    });
-    setActivePluginRegistry(active);
+    setActiveSpeechCapabilityRegistry("openai");
 
     const providers = resolvePluginCapabilityProviders({ key: "speechProviders" });
 
-    expect(providers.map((provider) => provider.id)).toEqual(["openai"]);
+    expectResolvedCapabilityProviderIds(providers, ["openai"]);
     expect(mocks.loadPluginManifestRegistry).not.toHaveBeenCalled();
     expect(mocks.loadOpenClawPlugins).not.toHaveBeenCalled();
   });

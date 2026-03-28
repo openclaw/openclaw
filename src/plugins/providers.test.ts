@@ -19,6 +19,13 @@ vi.mock("./manifest-registry.js", () => ({
 let resolveOwningPluginIdsForProvider: typeof import("./providers.js").resolveOwningPluginIdsForProvider;
 let resolvePluginProviders: typeof import("./providers.runtime.js").resolvePluginProviders;
 
+function setManifestPlugins(plugins: Array<Record<string, unknown>>) {
+  loadPluginManifestRegistryMock.mockReturnValue({
+    plugins,
+    diagnostics: [],
+  });
+}
+
 function getLastLoadPluginsCall(): Record<string, unknown> {
   const call = loadOpenClawPluginsMock.mock.calls.at(-1)?.[0];
   expect(call).toBeDefined();
@@ -27,6 +34,10 @@ function getLastLoadPluginsCall(): Record<string, unknown> {
 
 function cloneOptions<T>(value: T): T {
   return structuredClone(value);
+}
+
+function expectResolvedProviders(providers: unknown, expected: unknown[]) {
+  expect(providers).toEqual(expected);
 }
 
 function expectLastLoadPluginsCall(params?: {
@@ -90,6 +101,10 @@ function expectResolvedAllowlistState(params?: {
   });
 }
 
+function expectOwningPluginIds(provider: string, expectedPluginIds?: string[]) {
+  expect(resolveOwningPluginIdsForProvider({ provider })).toEqual(expectedPluginIds);
+}
+
 describe("resolvePluginProviders", () => {
   beforeEach(async () => {
     vi.resetModules();
@@ -103,17 +118,14 @@ describe("resolvePluginProviders", () => {
       config: params.config,
       changes: [],
     }));
-    loadPluginManifestRegistryMock.mockReturnValue({
-      plugins: [
-        { id: "google", providers: ["google"], origin: "bundled" },
-        { id: "browser", providers: [], origin: "bundled" },
-        { id: "kilocode", providers: ["kilocode"], origin: "bundled" },
-        { id: "moonshot", providers: ["moonshot"], origin: "bundled" },
-        { id: "google-gemini-cli-auth", providers: [], origin: "bundled" },
-        { id: "workspace-provider", providers: ["workspace-provider"], origin: "workspace" },
-      ],
-      diagnostics: [],
-    });
+    setManifestPlugins([
+      { id: "google", providers: ["google"], origin: "bundled" },
+      { id: "browser", providers: [], origin: "bundled" },
+      { id: "kilocode", providers: ["kilocode"], origin: "bundled" },
+      { id: "moonshot", providers: ["moonshot"], origin: "bundled" },
+      { id: "google-gemini-cli-auth", providers: [], origin: "bundled" },
+      { id: "workspace-provider", providers: ["workspace-provider"], origin: "workspace" },
+    ]);
     ({ resolveOwningPluginIdsForProvider } = await import("./providers.js"));
     ({ resolvePluginProviders } = await import("./providers.runtime.js"));
   });
@@ -126,7 +138,7 @@ describe("resolvePluginProviders", () => {
       env,
     });
 
-    expect(providers).toEqual([{ id: "demo-provider", pluginId: "google" }]);
+    expectResolvedProviders(providers, [{ id: "demo-provider", pluginId: "google" }]);
     expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
       expect.objectContaining({
         workspaceDir: "/workspace/explicit",
@@ -267,16 +279,13 @@ describe("resolvePluginProviders", () => {
   });
 
   it("maps provider ids to owning plugin ids via manifests", () => {
-    loadPluginManifestRegistryMock.mockReturnValue({
-      plugins: [
-        { id: "minimax", providers: ["minimax", "minimax-portal"] },
-        { id: "openai", providers: ["openai", "openai-codex"] },
-      ],
-      diagnostics: [],
-    });
+    setManifestPlugins([
+      { id: "minimax", providers: ["minimax", "minimax-portal"] },
+      { id: "openai", providers: ["openai", "openai-codex"] },
+    ]);
 
-    expect(resolveOwningPluginIdsForProvider({ provider: "minimax-portal" })).toEqual(["minimax"]);
-    expect(resolveOwningPluginIdsForProvider({ provider: "openai-codex" })).toEqual(["openai"]);
-    expect(resolveOwningPluginIdsForProvider({ provider: "gemini-cli" })).toBeUndefined();
+    expectOwningPluginIds("minimax-portal", ["minimax"]);
+    expectOwningPluginIds("openai-codex", ["openai"]);
+    expectOwningPluginIds("gemini-cli");
   });
 });

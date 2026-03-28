@@ -37,6 +37,10 @@ function createOwnedAdapterEntry(id: string) {
   };
 }
 
+function expectMemoryEmbeddingProviderIds(expectedIds: readonly string[]) {
+  expect(listMemoryEmbeddingProviders().map((adapter) => adapter.id)).toEqual([...expectedIds]);
+}
+
 afterEach(() => {
   clearMemoryEmbeddingProviders();
 });
@@ -47,7 +51,7 @@ describe("memory embedding provider registry", () => {
     registerMemoryEmbeddingProvider(createAdapter("beta"));
 
     expect(getMemoryEmbeddingProvider("alpha")?.id).toBe("alpha");
-    expect(listMemoryEmbeddingProviders().map((adapter) => adapter.id)).toEqual(["alpha", "beta"]);
+    expectMemoryEmbeddingProviderIds(["alpha", "beta"]);
   });
 
   it("restores a previous snapshot", () => {
@@ -92,7 +96,7 @@ describe("memory embedding provider registry", () => {
 
     clearMemoryEmbeddingProviders();
 
-    expect(listMemoryEmbeddingProviders()).toEqual([]);
+    expectMemoryEmbeddingProviderIds([]);
   });
 
   it("stores adapters in a process-global singleton map", () => {

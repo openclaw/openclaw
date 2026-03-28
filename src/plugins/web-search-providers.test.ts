@@ -58,6 +58,16 @@ function expectResolvedPluginIds(
   expect(providers.map((provider) => provider.pluginId)).toEqual(expectedPluginIds);
 }
 
+function expectResolvedPluginIdsExcluding(
+  providers: ReturnType<typeof resolveBundledPluginWebSearchProviders>,
+  unexpectedPluginIds: readonly string[],
+) {
+  const pluginIds = providers.map((provider) => provider.pluginId);
+  for (const pluginId of unexpectedPluginIds) {
+    expect(pluginIds).not.toContain(pluginId);
+  }
+}
+
 describe("resolveBundledPluginWebSearchProviders", () => {
   it(
     "returns bundled providers in alphabetical order",
@@ -144,7 +154,7 @@ describe("resolveBundledPluginWebSearchProviders", () => {
       },
     });
 
-    expect(providers.map((provider) => provider.pluginId)).not.toContain("perplexity");
+    expectResolvedPluginIdsExcluding(providers, ["perplexity"]);
   });
 
   it("can resolve bundled providers through the manifest-scoped loader path", () => {

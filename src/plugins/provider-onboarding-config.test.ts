@@ -36,6 +36,15 @@ function expectCatalogPrimaryModel(cfg: OpenClawConfig) {
   });
 }
 
+function expectProviderModels(
+  cfg: OpenClawConfig,
+  providerId: string,
+  expected: Record<string, unknown>,
+) {
+  const providers = cfg.models?.providers as Record<string, unknown> | undefined;
+  expect(providers?.[providerId]).toMatchObject(expected);
+}
+
 function createDemoProviderParams(params?: {
   providerId?: string;
   baseUrl?: string;
@@ -119,7 +128,7 @@ describe("provider onboarding preset appliers", () => {
       });
 
       const cfg = appliers.applyConfig({}, "https://alt.test/v1");
-      expect(cfg.models?.providers?.demo).toMatchObject({
+      expectProviderModels(cfg, "demo", {
         baseUrl: "https://alt.test/v1",
         models: [
           { id: "a", name: "Model A" },

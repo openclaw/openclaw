@@ -38,11 +38,13 @@ function expectGroupedProviderIds(
   expected: Record<ProviderDiscoveryOrder | "late", readonly string[]>,
 ) {
   const grouped = groupPluginDiscoveryProvidersByOrder([...providers]);
-
-  expect(grouped.simple.map((provider) => provider.id)).toEqual(expected.simple);
-  expect(grouped.profile.map((provider) => provider.id)).toEqual(expected.profile);
-  expect(grouped.paired.map((provider) => provider.id)).toEqual(expected.paired);
-  expect(grouped.late.map((provider) => provider.id)).toEqual(expected.late);
+  const actual = {
+    simple: grouped.simple.map((provider) => provider.id),
+    profile: grouped.profile.map((provider) => provider.id),
+    paired: grouped.paired.map((provider) => provider.id),
+    late: grouped.late.map((provider) => provider.id),
+  };
+  expect(actual).toEqual(expected);
 }
 
 function createCatalogRuntimeContext() {

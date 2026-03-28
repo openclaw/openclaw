@@ -24,20 +24,27 @@ describe("gateway request scope", () => {
     });
   }
 
+  function expectGatewayScope(
+    runtimeScope: Awaited<ReturnType<typeof importGatewayRequestScopeModule>>,
+    expected: PluginRuntimeGatewayRequestScope,
+  ) {
+    expect(runtimeScope.getPluginRuntimeGatewayRequestScope()).toEqual(expected);
+  }
+
   it("reuses AsyncLocalStorage across reloaded module instances", async () => {
     const first = await importGatewayRequestScopeModule();
 
     await first.withPluginRuntimeGatewayRequestScope(TEST_SCOPE, async () => {
       vi.resetModules();
       const second = await importGatewayRequestScopeModule();
-      expect(second.getPluginRuntimeGatewayRequestScope()).toEqual(TEST_SCOPE);
+      expectGatewayScope(second, TEST_SCOPE);
     });
   });
 
   it("attaches plugin id to the active scope", async () => {
     await withTestGatewayScope(async (runtimeScope) => {
       await runtimeScope.withPluginRuntimePluginIdScope("voice-call", async () => {
-        expect(runtimeScope.getPluginRuntimeGatewayRequestScope()).toEqual({
+        expectGatewayScope(runtimeScope, {
           ...TEST_SCOPE,
           pluginId: "voice-call",
         });
