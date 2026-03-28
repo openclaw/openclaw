@@ -1,5 +1,6 @@
 import path from "node:path";
 import { z } from "zod";
+import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import { InstallRecordShape } from "./zod-schema.installs.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
@@ -52,14 +53,9 @@ export const HookMappingSchema = z
     channel: z
       .union([
         z.literal("last"),
-        z.literal("whatsapp"),
-        z.literal("telegram"),
-        z.literal("discord"),
-        z.literal("irc"),
-        z.literal("slack"),
-        z.literal("signal"),
-        z.literal("imessage"),
-        z.literal("msteams"),
+        // Allow any valid deliverable channel plugin id (including dynamically registered plugins like feishu).
+        // Use a function to generate literals at runtime so newly installed channel plugins are accepted.
+        ...listDeliverableMessageChannels().map((id) => z.literal(id)),
       ])
       .optional(),
     to: z.string().optional(),

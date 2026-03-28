@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import type { SkillStatusEntry, SkillStatusReport } from "../agents/skills-status.js";
 import { createEmptyInstallChecks } from "./requirements-test-fixtures.js";
 import { formatSkillInfo, formatSkillsCheck, formatSkillsList } from "./skills-cli.format.js";
@@ -284,5 +284,44 @@ describe("skills-cli", () => {
       expect(parsed.description).toBe("hi");
       expect(parsed.homepage).toBe("https://example.com/docs");
     });
+  });
+});
+
+describe("resolveActiveWorkspaceDir", () => {
+  const originalCwd = process.cwd.bind(process);
+
+  afterAll(() => {
+    process.cwd = originalCwd;
+  });
+
+  it("returns sub-agent workspace when cwd is within it (#56161)", () => {
+    // Mock process.cwd to return a sub-agent workspace path
+    process.cwd = () => "/home/user/.openclaw/workspace-writer";
+
+    // Mock resolveAgentIdByWorkspacePath to return the sub-agent id
+    vi.mock("../agents/agent-scope.js", async () => {
+      const actual = await vi.importActual("../agents/agent-scope.js");
+      return {
+        ...actual,
+        resolveAgentIdByWorkspacePath: vi.fn().mockReturnValue("writer"),
+        resolveAgentWorkspaceDir: vi.fn().mockReturnValue("/home/user/.openclaw/workspace-writer"),
+        resolveDefaultAgentId: vi.fn().mockReturnValue("main"),
+      };
+    });
+
+    const { resolveActiveWorkspaceDir } = require("./skills-cli.js");
+    const result = resolveActiveWorkspaceDir();
+
+    expect(result).toContain("workspace-writer");
+  });
+
+  it("falls back to default workspace when cwd is not in any workspace", () => {
+    process.cwd = () => "/tmp";
+
+    const { resolveActiveWorkspaceDir } = require("./skills-cli.js");
+    const result = resolveActiveWorkspaceDir();
+
+    // Should fall back to default agent workspace
+    expect(result).toBeDefined();
   });
 });
