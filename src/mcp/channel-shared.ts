@@ -104,6 +104,7 @@ export type QueueEvent =
     };
 
 export type ClaudePermissionRequest = {
+  sessionKey: string;
   toolName: string;
   description: string;
   inputPreview: string;
@@ -118,6 +119,7 @@ export const ClaudePermissionRequestSchema = z.object({
   method: z.literal("notifications/claude/channel/permission_request"),
   params: z.object({
     request_id: z.string(),
+    session_key: z.string(),
     tool_name: z.string(),
     description: z.string(),
     input_preview: z.string(),

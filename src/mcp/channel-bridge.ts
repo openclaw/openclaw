@@ -278,11 +278,13 @@ export class OpenClawChannelBridge {
 
   async handleClaudePermissionRequest(params: {
     requestId: string;
+    sessionKey: string;
     toolName: string;
     description: string;
     inputPreview: string;
   }): Promise<void> {
     this.pendingClaudePermissions.set(params.requestId, {
+      sessionKey: params.sessionKey,
       toolName: params.toolName,
       description: params.description,
       inputPreview: params.inputPreview,
@@ -461,7 +463,10 @@ export class OpenClawChannelBridge {
     const permissionMatch = text ? CLAUDE_PERMISSION_REPLY_RE.exec(text) : null;
     if (permissionMatch) {
       const requestId = permissionMatch[2]?.toLowerCase();
-      if (requestId && this.pendingClaudePermissions.has(requestId)) {
+      const pendingPermission = requestId
+        ? this.pendingClaudePermissions.get(requestId)
+        : undefined;
+      if (requestId && pendingPermission?.sessionKey === sessionKey) {
         this.pendingClaudePermissions.delete(requestId);
         await this.sendNotification({
           method: "notifications/claude/channel/permission",

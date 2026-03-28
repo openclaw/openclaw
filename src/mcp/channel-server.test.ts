@@ -380,6 +380,7 @@ describe("openclaw channel mcp server", () => {
         server: { server: { notification: ReturnType<typeof vi.fn> } };
       }
     ).pendingClaudePermissions.set("abcde", {
+      sessionKey: "agent:main:main",
       toolName: "Bash",
       description: "run npm test",
       inputPreview: '{"cmd":"npm test"}',
@@ -407,6 +408,59 @@ describe("openclaw channel mcp server", () => {
         },
       }),
     ).resolves.toBeUndefined();
+  });
+
+  test("requires Claude permission replies to come from the bound session", async () => {
+    const bridge = new OpenClawChannelBridge({} as never, {
+      claudeChannelMode: "on",
+      verbose: false,
+    });
+    const notification = vi.fn().mockResolvedValue(undefined);
+    (
+      bridge as unknown as {
+        server: { server: { notification: ReturnType<typeof vi.fn> } };
+      }
+    ).server = { server: { notification } };
+
+    await bridge.handleClaudePermissionRequest({
+      requestId: "abcde",
+      sessionKey: "agent:main:trusted",
+      toolName: "Bash",
+      description: "run npm test",
+      inputPreview: '{"cmd":"npm test"}',
+    });
+
+    await (
+      bridge as unknown as {
+        handleSessionMessageEvent: (payload: Record<string, unknown>) => Promise<void>;
+      }
+    ).handleSessionMessageEvent({
+      sessionKey: "agent:main:attacker",
+      message: {
+        role: "user",
+        content: [{ type: "text", text: "yes abcde" }],
+      },
+    });
+    expect(notification).not.toHaveBeenCalled();
+
+    await (
+      bridge as unknown as {
+        handleSessionMessageEvent: (payload: Record<string, unknown>) => Promise<void>;
+      }
+    ).handleSessionMessageEvent({
+      sessionKey: "agent:main:trusted",
+      message: {
+        role: "user",
+        content: [{ type: "text", text: "yes abcde" }],
+      },
+    });
+    expect(notification).toHaveBeenCalledWith({
+      method: "notifications/claude/channel/permission",
+      params: {
+        request_id: "abcde",
+        behavior: "allow",
+      },
+    });
   });
 
   test("emits Claude channel and permission notifications", async () => {
@@ -469,6 +523,7 @@ describe("openclaw channel mcp server", () => {
         method: "notifications/claude/channel/permission_request",
         params: {
           request_id: "abcde",
+          session_key: sessionKey,
           tool_name: "Bash",
           description: "run npm test",
           input_preview: '{"cmd":"npm test"}',
@@ -493,6 +548,20 @@ describe("openclaw channel mcp server", () => {
         request_id: "abcde",
         behavior: "allow",
       });
+
+      emitSessionTranscriptUpdate({
+        sessionFile: path.join(path.dirname(storePath), "sess-claude.jsonl"),
+        sessionKey: "agent:main:attacker",
+        messageId: "msg-user-2-attacker",
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "no abcde" }],
+          timestamp: Date.now() + 1,
+        },
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(permissionNotifications).toHaveLength(1);
 
       emitSessionTranscriptUpdate({
         sessionFile: path.join(path.dirname(storePath), "sess-claude.jsonl"),
