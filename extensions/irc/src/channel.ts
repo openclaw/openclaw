@@ -45,6 +45,7 @@ import {
   PAIRING_APPROVED_MESSAGE,
   type ChannelPlugin,
 } from "./runtime-api.js";
+import { chunk as ircChunk } from "./chunker.js";
 import { getIrcRuntime } from "./runtime.js";
 import { sendMessageIrc } from "./send.js";
 import { ircSetupAdapter } from "./setup-core.js";
@@ -333,7 +334,7 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChat
   outbound: {
     base: {
       deliveryMode: "direct",
-      chunker: (text, limit) => getIrcRuntime().channel.text.chunkMarkdownText(text, limit),
+      chunker: (text, limit) => ircChunk(text, limit),
       chunkerMode: "markdown",
       textChunkLimit: 16384,
     },

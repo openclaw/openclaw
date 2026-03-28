@@ -321,6 +321,7 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
           sendRaw(`CAP REQ :draft/multiline`);
         } else {
           resolveCapComplete?.();
+          resolveCapComplete = null;
           sendRaw(`CAP END`);
         }
         continue;
@@ -333,6 +334,7 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
           multilineCap = true;
         }
         resolveCapComplete?.();
+        resolveCapComplete = null;
         sendRaw(`CAP END`);
         continue;
       }
@@ -340,6 +342,7 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
       if (line.command === "CAP" && line.params[1] === "NAK") {
         // Server rejected our CAP request, end negotiation
         resolveCapComplete?.();
+        resolveCapComplete = null;
         sendRaw(`CAP END`);
         continue;
       }
@@ -382,6 +385,7 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
         // Fallback: if CAP negotiation didn't complete, resolve it now
         // (non-CAP servers won't respond to CAP LS)
         resolveCapComplete?.();
+        resolveCapComplete = null;
         const nickParam = line.params[0];
         if (nickParam && nickParam.trim()) {
           currentNick = nickParam.trim();
