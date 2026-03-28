@@ -117,10 +117,22 @@ export function resolveSessionDeliveryTarget(params: {
   // When a turn-source channel is provided, use only turn-scoped metadata.
   // Falling back to mutable session fields would re-introduce routing races.
   const hasTurnSourceChannel = params.turnSourceChannel != null;
+  const hasTurnSourceThreadId =
+    params.turnSourceThreadId != null && params.turnSourceThreadId !== "";
   const lastChannel = hasTurnSourceChannel ? params.turnSourceChannel : sessionLastChannel;
   const lastTo = hasTurnSourceChannel ? params.turnSourceTo : context?.to;
   const lastAccountId = hasTurnSourceChannel ? params.turnSourceAccountId : context?.accountId;
-  const lastThreadId = hasTurnSourceChannel ? params.turnSourceThreadId : context?.threadId;
+  // For threadId, fall back to the session's stored threadId even when a turn-source channel is
+  // set, provided no explicit turn-source threadId was given AND the turn-source channel matches
+  // the session's last channel. Channel, to, and accountId must not fall back (mutable, can race).
+  // ThreadId is stamped at inbound-message time and tied to the forum topic — it does not change
+  // between concurrent messages on the same channel, so falling back here is safe and required to
+  // reply into the correct Telegram forum topic thread.
+  const lastThreadId = hasTurnSourceThreadId
+    ? params.turnSourceThreadId
+    : hasTurnSourceChannel && params.turnSourceChannel !== sessionLastChannel
+      ? undefined
+      : context?.threadId;
 
   const rawRequested = params.requestedChannel ?? "last";
   const requested = rawRequested === "last" ? "last" : normalizeMessageChannel(rawRequested);
@@ -166,8 +178,6 @@ export function resolveSessionDeliveryTarget(params: {
 
   const mode = params.mode ?? (explicitTo ? "explicit" : "implicit");
   const accountId = channel && channel === lastChannel ? lastAccountId : undefined;
-  const hasTurnSourceThreadId =
-    params.turnSourceThreadId != null && params.turnSourceThreadId !== "";
   const threadId =
     channel && channel === lastChannel
       ? mode === "heartbeat"

@@ -909,6 +909,66 @@ describe("resolveSessionDeliveryTarget — cross-channel reply guard (#24152)", 
         to: "+15550000000",
       },
     },
+    {
+      name: "falls back to session lastThreadId when turnSourceChannel matches and no explicit turnSourceThreadId",
+      request: {
+        entry: {
+          sessionId: "sess-forum-topic",
+          updatedAt: 1,
+          lastChannel: "telegram",
+          lastTo: "-1001234567890",
+          lastThreadId: 1122,
+        },
+        requestedChannel: "last",
+        turnSourceChannel: "telegram",
+        turnSourceTo: "-1001234567890",
+      },
+      expected: {
+        channel: "telegram",
+        to: "-1001234567890",
+        threadId: 1122,
+      },
+    },
+    {
+      name: "does not fall back to session lastThreadId when turnSourceChannel differs from session channel",
+      request: {
+        entry: {
+          sessionId: "sess-cross-channel-no-thread",
+          updatedAt: 1,
+          lastChannel: "slack",
+          lastTo: "U_SLACK",
+          lastThreadId: "1739142736.000100",
+        },
+        requestedChannel: "last",
+        turnSourceChannel: "telegram",
+        turnSourceTo: "-1001234567890",
+      },
+      expected: {
+        channel: "telegram",
+        threadId: undefined,
+      },
+    },
+    {
+      name: "prefers explicit turnSourceThreadId over session lastThreadId on same channel",
+      request: {
+        entry: {
+          sessionId: "sess-explicit-thread-override",
+          updatedAt: 1,
+          lastChannel: "telegram",
+          lastTo: "-1001234567890",
+          lastThreadId: 1122,
+        },
+        requestedChannel: "last",
+        turnSourceChannel: "telegram",
+        turnSourceTo: "-1001234567890",
+        turnSourceThreadId: 9999,
+      },
+      expected: {
+        channel: "telegram",
+        to: "-1001234567890",
+        threadId: 9999,
+      },
+    },
   ] satisfies Array<{
     name: string;
     request: Parameters<typeof resolveSessionDeliveryTarget>[0];
