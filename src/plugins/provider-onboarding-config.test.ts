@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import {
   createDefaultModelPresetAppliers,
@@ -22,6 +23,19 @@ function createModel(id: string, name: string): ModelDefinitionConfig {
     maxTokens: 8_192,
   };
 }
+
+function expectPrimaryModel(cfg: OpenClawConfig) {
+  expect(cfg.agents?.defaults?.model).toEqual({
+    primary: "demo/demo-default",
+  });
+}
+
+function expectCatalogPrimaryModel(cfg: OpenClawConfig) {
+  expect(cfg.agents?.defaults?.model).toEqual({
+    primary: "catalog/default",
+  });
+}
+
 describe("provider onboarding preset appliers", () => {
   it.each([
     {
@@ -59,9 +73,7 @@ describe("provider onboarding preset appliers", () => {
       expect(providerOnly.agents?.defaults?.model).toBeUndefined();
 
       const withPrimary = appliers.applyConfig({});
-      expect(withPrimary.agents?.defaults?.model).toEqual({
-        primary: "demo/demo-default",
-      });
+      expectPrimaryModel(withPrimary);
       return;
     }
 
@@ -122,8 +134,6 @@ describe("provider onboarding preset appliers", () => {
         alias: "Existing Alias",
       },
     });
-    expect(cfg.agents?.defaults?.model).toEqual({
-      primary: "catalog/default",
-    });
+    expectCatalogPrimaryModel(cfg);
   });
 });

@@ -21,6 +21,15 @@ function makeProvider(overrides: Partial<ProviderPlugin>): ProviderPlugin {
   };
 }
 
+function expectDiagnosticMessages(
+  diagnostics: PluginDiagnostic[],
+  expectedDiagnostics: ReadonlyArray<{ level: PluginDiagnostic["level"]; message: string }>,
+) {
+  expect(diagnostics.map((diag) => ({ level: diag.level, message: diag.message }))).toEqual(
+    expectedDiagnostics,
+  );
+}
+
 describe("normalizeRegisteredProvider", () => {
   it.each([
     {
@@ -155,9 +164,7 @@ describe("normalizeRegisteredProvider", () => {
       }
 
       expect(provider).toMatchObject(expectedProvider);
-      expect(diagnostics.map((diag) => ({ level: diag.level, message: diag.message }))).toEqual(
-        expectedDiagnostics,
-      );
+      expectDiagnosticMessages(diagnostics, expectedDiagnostics);
     },
   );
 

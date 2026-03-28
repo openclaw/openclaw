@@ -13,6 +13,8 @@ vi.mock("./providers.runtime.js", () => ({
   resolvePluginProviders,
 }));
 
+const DEFAULT_WORKSPACE_DIR = "/tmp/workspace";
+
 function makeProvider(overrides: Partial<ProviderPlugin> & Pick<ProviderPlugin, "id" | "label">) {
   return {
     auth: [],
@@ -43,21 +45,44 @@ function createSglangConfig() {
   };
 }
 
+function createHomeEnv(suffix = "") {
+  return {
+    OPENCLAW_HOME: `/tmp/openclaw-home${suffix}`,
+  } as NodeJS.ProcessEnv;
+}
+
+function createWizardRuntimeParams(params?: {
+  config?: object;
+  env?: NodeJS.ProcessEnv;
+  workspaceDir?: string;
+}) {
+  return {
+    config: params?.config ?? createSglangConfig(),
+    workspaceDir: params?.workspaceDir ?? DEFAULT_WORKSPACE_DIR,
+    env: params?.env ?? createHomeEnv(),
+  };
+}
+
+function expectProviderResolutionCall(params?: {
+  config?: object;
+  env?: NodeJS.ProcessEnv;
+  workspaceDir?: string;
+}) {
+  expect(resolvePluginProviders).toHaveBeenCalledWith({
+    ...createWizardRuntimeParams(params),
+    bundledProviderAllowlistCompat: true,
+    bundledProviderVitestCompat: true,
+  });
+}
+
 function resolveWizardOptionsTwice(params: {
   config?: object;
   env: NodeJS.ProcessEnv;
   workspaceDir?: string;
 }) {
-  resolveProviderWizardOptions({
-    config: params.config ?? createSglangConfig(),
-    workspaceDir: params.workspaceDir ?? "/tmp/workspace",
-    env: params.env,
-  });
-  resolveProviderWizardOptions({
-    config: params.config ?? createSglangConfig(),
-    workspaceDir: params.workspaceDir ?? "/tmp/workspace",
-    env: params.env,
-  });
+  const runtimeParams = createWizardRuntimeParams(params);
+  resolveProviderWizardOptions(runtimeParams);
+  resolveProviderWizardOptions(runtimeParams);
 }
 
 function expectSingleWizardChoice(params: {
@@ -267,58 +292,33 @@ describe("provider wizard boundaries", () => {
       },
     });
     const config = {};
-    const env = { OPENCLAW_HOME: "/tmp/openclaw-home" } as NodeJS.ProcessEnv;
+    const env = createHomeEnv();
     resolvePluginProviders.mockReturnValue([provider]);
 
-    expect(
-      resolveProviderWizardOptions({
-        config,
-        workspaceDir: "/tmp/workspace",
-        env,
-      }),
-    ).toHaveLength(1);
-    expect(
-      resolveProviderModelPickerEntries({
-        config,
-        workspaceDir: "/tmp/workspace",
-        env,
-      }),
-    ).toHaveLength(1);
+    const runtimeParams = createWizardRuntimeParams({ config, env });
+    expect(resolveProviderWizardOptions(runtimeParams)).toHaveLength(1);
+    expect(resolveProviderModelPickerEntries(runtimeParams)).toHaveLength(1);
 
     expect(resolvePluginProviders).toHaveBeenCalledTimes(1);
-    expect(resolvePluginProviders).toHaveBeenCalledWith({
-      config,
-      workspaceDir: "/tmp/workspace",
-      env,
-      bundledProviderAllowlistCompat: true,
-      bundledProviderVitestCompat: true,
-    });
+    expectProviderResolutionCall({ config, env });
   });
 
   it("invalidates the wizard cache when config or env contents change in place", () => {
     const provider = createSglangSetupProvider();
     const config = createSglangConfig();
-    const env = { OPENCLAW_HOME: "/tmp/openclaw-home-a" } as NodeJS.ProcessEnv;
+    const env = createHomeEnv("-a");
     resolvePluginProviders.mockReturnValue([provider]);
 
-    expect(
-      resolveProviderWizardOptions({
-        config,
-        workspaceDir: "/tmp/workspace",
-        env,
-      }),
-    ).toHaveLength(1);
+    expect(resolveProviderWizardOptions(createWizardRuntimeParams({ config, env }))).toHaveLength(
+      1,
+    );
 
     config.plugins.allow = ["vllm"];
     env.OPENCLAW_HOME = "/tmp/openclaw-home-b";
 
-    expect(
-      resolveProviderWizardOptions({
-        config,
-        workspaceDir: "/tmp/workspace",
-        env,
-      }),
-    ).toHaveLength(1);
+    expect(resolveProviderWizardOptions(createWizardRuntimeParams({ config, env }))).toHaveLength(
+      1,
+    );
 
     expect(resolvePluginProviders).toHaveBeenCalledTimes(2);
   });
@@ -353,29 +353,18 @@ describe("provider wizard boundaries", () => {
     const provider = createSglangSetupProvider();
     const config = {};
     const env = {
-      OPENCLAW_HOME: "/tmp/openclaw-home",
+      ...createHomeEnv(),
       OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS: "5",
       OPENCLAW_PLUGIN_MANIFEST_CACHE_MS: "20",
     } as NodeJS.ProcessEnv;
     resolvePluginProviders.mockReturnValue([provider]);
+    const runtimeParams = createWizardRuntimeParams({ config, env });
 
-    resolveProviderWizardOptions({
-      config,
-      workspaceDir: "/tmp/workspace",
-      env,
-    });
+    resolveProviderWizardOptions(runtimeParams);
     vi.advanceTimersByTime(4);
-    resolveProviderWizardOptions({
-      config,
-      workspaceDir: "/tmp/workspace",
-      env,
-    });
+    resolveProviderWizardOptions(runtimeParams);
     vi.advanceTimersByTime(2);
-    resolveProviderWizardOptions({
-      config,
-      workspaceDir: "/tmp/workspace",
-      env,
-    });
+    resolveProviderWizardOptions(runtimeParams);
 
     expect(resolvePluginProviders).toHaveBeenCalledTimes(2);
   });
@@ -384,24 +373,16 @@ describe("provider wizard boundaries", () => {
     const provider = createSglangSetupProvider();
     const config = {};
     const env = {
-      OPENCLAW_HOME: "/tmp/openclaw-home",
+      ...createHomeEnv(),
       OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS: "1000",
     } as NodeJS.ProcessEnv;
     resolvePluginProviders.mockReturnValue([provider]);
 
-    resolveProviderWizardOptions({
-      config,
-      workspaceDir: "/tmp/workspace",
-      env,
-    });
+    resolveProviderWizardOptions(createWizardRuntimeParams({ config, env }));
 
     env.OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS = "5";
 
-    resolveProviderWizardOptions({
-      config,
-      workspaceDir: "/tmp/workspace",
-      env,
-    });
+    resolveProviderWizardOptions(createWizardRuntimeParams({ config, env }));
 
     expect(resolvePluginProviders).toHaveBeenCalledTimes(2);
   });
@@ -422,7 +403,7 @@ describe("provider wizard boundaries", () => {
       }),
     ]);
 
-    const env = { OPENCLAW_HOME: "/tmp/openclaw-home" } as NodeJS.ProcessEnv;
+    const env = createHomeEnv();
     await runProviderModelSelectedHook({
       config: {},
       model: "vllm/qwen3-coder",
@@ -432,12 +413,9 @@ describe("provider wizard boundaries", () => {
       env,
     });
 
-    expect(resolvePluginProviders).toHaveBeenCalledWith({
+    expectProviderResolutionCall({
       config: {},
-      workspaceDir: "/tmp/workspace",
       env,
-      bundledProviderAllowlistCompat: true,
-      bundledProviderVitestCompat: true,
     });
     expect(matchingHook).toHaveBeenCalledWith({
       config: {},
