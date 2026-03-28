@@ -862,6 +862,7 @@ export class AcpSessionManager {
               sessionKey,
               error: acpError,
               sawTurnOutput,
+              backend: meta?.backend ?? resolvedMeta.backend,
             });
             if (retryFreshHandle) {
               continue;
@@ -1576,11 +1577,17 @@ export class AcpSessionManager {
     sessionKey: string;
     error: AcpRuntimeError;
     sawTurnOutput: boolean;
+    backend?: string;
   }): boolean {
     if (params.attempt > 0 || params.sawTurnOutput) {
       return false;
     }
-    if (!this.isRecoverableAcpxExitError(params.error.message)) {
+    if (
+      !this.isRetryableAcpxStartupFailure({
+        backend: params.backend,
+        error: params.error,
+      })
+    ) {
       return false;
     }
     this.clearCachedRuntimeState(params.sessionKey);
@@ -1591,9 +1598,21 @@ export class AcpSessionManager {
   }
 
   private isRecoverableAcpxExitError(message: string): boolean {
-    const normalized = message.trim();
+    return /^acpx exited with code \d+/i.test(message.trim());
+  }
+
+  private isRetryableAcpxStartupFailure(params: {
+    backend: string | undefined;
+    error: AcpRuntimeError;
+  }): boolean {
+    const backend = params.backend?.trim().toLowerCase();
+    if (backend !== "acpx" || params.error.code !== "ACP_TURN_FAILED") {
+      return false;
+    }
+    const normalized = params.error.message.trim();
     return (
-      /^acpx exited with (code \d+|signal [a-z0-9]+)/i.test(normalized) ||
+      this.isRecoverableAcpxExitError(normalized) ||
+      /^acpx exited with signal [a-z0-9]+/i.test(normalized) ||
       /\bqueue owner\b.*\bunavailable\b/i.test(normalized)
     );
   }

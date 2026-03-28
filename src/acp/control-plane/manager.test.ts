@@ -1151,6 +1151,67 @@ describe("AcpSessionManager", () => {
     expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
   });
 
+  it("does not treat queue owner unavailable as backend-unavailable during close", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.close.mockRejectedValueOnce(new Error("queue owner unavailable"));
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+      const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey ?? "";
+      return {
+        sessionKey,
+        storeSessionKey: sessionKey,
+        acp: {
+          ...readySessionMeta(),
+          runtimeSessionName: `runtime:${sessionKey}`,
+        },
+      };
+    });
+    const limitedCfg = {
+      acp: {
+        ...baseCfg.acp,
+        maxConcurrentSessions: 1,
+      },
+    } as OpenClawConfig;
+
+    const manager = new AcpSessionManager();
+    await manager.runTurn({
+      cfg: limitedCfg,
+      sessionKey: "agent:codex:acp:session-a",
+      text: "first",
+      mode: "prompt",
+      requestId: "r1",
+    });
+
+    await expect(
+      manager.closeSession({
+        cfg: limitedCfg,
+        sessionKey: "agent:codex:acp:session-a",
+        reason: "manual-close",
+        allowBackendUnavailable: true,
+      }),
+    ).rejects.toMatchObject({
+      code: "ACP_TURN_FAILED",
+      message: "queue owner unavailable",
+    });
+
+    await expect(
+      manager.runTurn({
+        cfg: limitedCfg,
+        sessionKey: "agent:codex:acp:session-b",
+        text: "second",
+        mode: "prompt",
+        requestId: "r2",
+      }),
+    ).rejects.toMatchObject({
+      code: "ACP_SESSION_INIT_FAILED",
+      message: expect.stringContaining("max concurrent sessions"),
+    });
+    expect(runtimeState.ensureSession).toHaveBeenCalledTimes(1);
+  });
+
   it("evicts idle cached runtimes before enforcing max concurrent limits", async () => {
     vi.useFakeTimers();
     try {
@@ -1583,6 +1644,45 @@ describe("AcpSessionManager", () => {
     expect(states).toContain("running");
     expect(states).toContain("idle");
     expect(states).not.toContain("error");
+  });
+
+  it("does not retry when an early error only contains queue owner unavailable", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:codex:acp:session-1",
+      storeSessionKey: "agent:codex:acp:session-1",
+      acp: readySessionMeta(),
+    });
+    runtimeState.runTurn.mockImplementationOnce(async function* () {
+      yield {
+        type: "error" as const,
+        message: "tool execution failed: queue owner unavailable while replaying command output",
+      };
+    });
+
+    const manager = new AcpSessionManager();
+    await expect(
+      manager.runTurn({
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:session-1",
+        text: "do work",
+        mode: "prompt",
+        requestId: "run-queue-owner-no-retry",
+      }),
+    ).rejects.toMatchObject({
+      code: "ACP_TURN_FAILED",
+      message: "tool execution failed: queue owner unavailable while replaying command output",
+    });
+
+    expect(runtimeState.ensureSession).toHaveBeenCalledTimes(1);
+    expect(runtimeState.runTurn).toHaveBeenCalledTimes(1);
+    const states = extractStatesFromUpserts();
+    expect(states).toContain("running");
+    expect(states.at(-1)).toBe("error");
   });
 
   it("persists runtime mode changes through setSessionRuntimeMode", async () => {
