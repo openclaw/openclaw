@@ -174,6 +174,33 @@ describe("node exec events", () => {
     expect(requestHeartbeatNowMock).toHaveBeenCalledWith({ reason: "exec-event" });
   });
 
+  it("canonicalizes exec session key before enqueue and wake", async () => {
+    loadSessionEntryMock.mockReturnValueOnce({
+      ...buildSessionLookup("node-node-2"),
+      canonicalKey: "agent:main:node-node-2",
+    });
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-2", {
+      event: "exec.finished",
+      payloadJSON: JSON.stringify({
+        runId: "run-2",
+        exitCode: 0,
+        timedOut: false,
+        output: "done",
+      }),
+    });
+
+    expect(loadSessionEntryMock).toHaveBeenCalledWith("node-node-2");
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      "Exec finished (node=node-2 id=run-2, code 0)\ndone",
+      { sessionKey: "agent:main:node-node-2", contextKey: "exec:run-2" },
+    );
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+      reason: "exec-event",
+      sessionKey: "agent:main:node-node-2",
+    });
+  });
+
   it("suppresses noisy exec.finished success events with empty output", async () => {
     const ctx = buildCtx();
     await handleNodeEvent(ctx, "node-2", {
