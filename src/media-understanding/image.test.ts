@@ -1,8 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
   completeMock: vi.fn(),
-  minimaxUnderstandImageMock: vi.fn(),
   ensureOpenClawModelsJsonMock: vi.fn(async () => {}),
   getApiKeyForModelMock: vi.fn(async () => ({
     apiKey: "oauth-test", // pragma: allowlist secret
@@ -17,16 +16,17 @@ const hoisted = vi.hoisted(() => ({
   requireApiKeyMock: vi.fn((auth: { apiKey?: string }) => auth.apiKey ?? ""),
   setRuntimeApiKeyMock: vi.fn(),
   discoverModelsMock: vi.fn(),
+  fetchMock: vi.fn(),
 }));
 const {
   completeMock,
-  minimaxUnderstandImageMock,
   ensureOpenClawModelsJsonMock,
   getApiKeyForModelMock,
   resolveApiKeyForProviderMock,
   requireApiKeyMock,
   setRuntimeApiKeyMock,
   discoverModelsMock,
+  fetchMock,
 } = hoisted;
 
 vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
@@ -36,14 +36,6 @@ vi.mock("@mariozechner/pi-ai", async (importOriginal) => {
     complete: completeMock,
   };
 });
-
-vi.mock("../agents/minimax-vlm.js", () => ({
-  isMinimaxVlmProvider: (provider: string) =>
-    provider === "minimax" || provider === "minimax-portal",
-  isMinimaxVlmModel: (provider: string, modelId: string) =>
-    (provider === "minimax" || provider === "minimax-portal") && modelId === "MiniMax-VL-01",
-  minimaxUnderstandImage: minimaxUnderstandImageMock,
-}));
 
 vi.mock("../agents/models-config.js", () => ({
   ensureOpenClawModelsJson: ensureOpenClawModelsJsonMock,
@@ -65,8 +57,14 @@ vi.mock("../agents/pi-model-discovery-runtime.js", () => ({
 let describeImageWithModel: typeof import("./image.js").describeImageWithModel;
 
 describe("describeImageWithModel", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
   beforeEach(async () => {
     vi.resetModules();
+    vi.stubGlobal("fetch", fetchMock);
     vi.doMock("@mariozechner/pi-ai", async (importOriginal) => {
       const actual = await importOriginal<typeof import("@mariozechner/pi-ai")>();
       return {
@@ -74,13 +72,6 @@ describe("describeImageWithModel", () => {
         complete: completeMock,
       };
     });
-    vi.doMock("../agents/minimax-vlm.js", () => ({
-      isMinimaxVlmProvider: (provider: string) =>
-        provider === "minimax" || provider === "minimax-portal",
-      isMinimaxVlmModel: (provider: string, modelId: string) =>
-        (provider === "minimax" || provider === "minimax-portal") && modelId === "MiniMax-VL-01",
-      minimaxUnderstandImage: minimaxUnderstandImageMock,
-    }));
     vi.doMock("../agents/models-config.js", () => ({
       ensureOpenClawModelsJson: ensureOpenClawModelsJsonMock,
     }));
@@ -97,7 +88,17 @@ describe("describeImageWithModel", () => {
     }));
     ({ describeImageWithModel } = await import("./image.js"));
     vi.clearAllMocks();
-    minimaxUnderstandImageMock.mockResolvedValue("portal ok");
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      headers: { get: vi.fn(() => null) },
+      json: vi.fn(async () => ({
+        base_resp: { status_code: 0 },
+        content: "portal ok",
+      })),
+      text: vi.fn(async () => ""),
+    });
     discoverModelsMock.mockReturnValue({
       find: vi.fn(() => ({
         provider: "minimax-portal",
@@ -129,11 +130,17 @@ describe("describeImageWithModel", () => {
     expect(getApiKeyForModelMock).toHaveBeenCalled();
     expect(requireApiKeyMock).toHaveBeenCalled();
     expect(setRuntimeApiKeyMock).toHaveBeenCalledWith("minimax-portal", "oauth-test");
-    expect(minimaxUnderstandImageMock).toHaveBeenCalledWith({
-      apiKey: "oauth-test", // pragma: allowlist secret
-      prompt: "Describe the image.",
-      imageDataUrl: `data:image/png;base64,${Buffer.from("png-bytes").toString("base64")}`,
-      modelBaseUrl: "https://api.minimax.io/anthropic",
+    expect(fetchMock).toHaveBeenCalledWith("https://api.minimax.io/v1/coding_plan/vlm", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer oauth-test",
+        "Content-Type": "application/json",
+        "MM-API-Source": "OpenClaw",
+      },
+      body: JSON.stringify({
+        prompt: "Describe the image.",
+        image_url: `data:image/png;base64,${Buffer.from("png-bytes").toString("base64")}`,
+      }),
     });
     expect(completeMock).not.toHaveBeenCalled();
   });
@@ -174,7 +181,7 @@ describe("describeImageWithModel", () => {
       model: "custom-vision",
     });
     expect(completeMock).toHaveBeenCalledOnce();
-    expect(minimaxUnderstandImageMock).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("passes image prompt as system instructions for codex image requests", async () => {
