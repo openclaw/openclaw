@@ -20,6 +20,16 @@ function createAdapter(id: string): MemoryEmbeddingProviderAdapter {
   };
 }
 
+function expectRegisteredProviderEntry(
+  id: string,
+  entry: {
+    adapter: MemoryEmbeddingProviderAdapter;
+    ownerPluginId?: string;
+  },
+) {
+  expect(getRegisteredMemoryEmbeddingProvider(id)).toEqual(entry);
+}
+
 afterEach(() => {
   clearMemoryEmbeddingProviders();
 });
@@ -44,36 +54,39 @@ describe("memory embedding provider registry", () => {
     expect(getMemoryEmbeddingProvider("beta")).toBe(beta);
   });
 
-  it("tracks owner plugin ids in registered snapshots", () => {
-    const alpha = createAdapter("alpha");
-    registerMemoryEmbeddingProvider(alpha, { ownerPluginId: "memory-core" });
-
-    expect(getRegisteredMemoryEmbeddingProvider("alpha")).toEqual({
-      adapter: alpha,
+  it.each([
+    {
+      name: "tracks owner plugin ids in registered snapshots",
+      id: "alpha",
+      setup: (adapter: MemoryEmbeddingProviderAdapter) =>
+        registerMemoryEmbeddingProvider(adapter, { ownerPluginId: "memory-core" }),
+      expectList: true,
+    },
+    {
+      name: "restores registered snapshots with owner metadata",
+      id: "beta",
+      setup: (adapter: MemoryEmbeddingProviderAdapter) =>
+        restoreRegisteredMemoryEmbeddingProviders([
+          {
+            adapter,
+            ownerPluginId: "memory-core",
+          },
+        ]),
+      expectList: false,
+    },
+  ] as const)("$name", ({ id, setup, expectList }) => {
+    const adapter = createAdapter(id);
+    const expectedEntry = {
+      adapter,
       ownerPluginId: "memory-core",
-    });
-    expect(listRegisteredMemoryEmbeddingProviders()).toEqual([
-      {
-        adapter: alpha,
-        ownerPluginId: "memory-core",
-      },
-    ]);
-  });
+    };
 
-  it("restores registered snapshots with owner metadata", () => {
-    const beta = createAdapter("beta");
+    setup(adapter);
 
-    restoreRegisteredMemoryEmbeddingProviders([
-      {
-        adapter: beta,
-        ownerPluginId: "memory-core",
-      },
-    ]);
-
-    expect(getRegisteredMemoryEmbeddingProvider("beta")).toEqual({
-      adapter: beta,
-      ownerPluginId: "memory-core",
-    });
+    expectRegisteredProviderEntry(id, expectedEntry);
+    if (expectList) {
+      expect(listRegisteredMemoryEmbeddingProviders()).toEqual([expectedEntry]);
+    }
   });
 
   it("clears the registry", () => {

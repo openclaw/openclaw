@@ -11,6 +11,9 @@ import {
   uninstallPlugin,
 } from "./uninstall.js";
 
+type PluginConfig = NonNullable<OpenClawConfig["plugins"]>;
+type PluginInstallRecord = NonNullable<PluginConfig["installs"]>[string];
+
 async function createInstalledNpmPluginFixture(params: {
   baseDir: string;
   pluginId?: string;
@@ -71,28 +74,84 @@ function createSinglePluginEntries(pluginId = "my-plugin") {
   };
 }
 
-function createSinglePluginWithEmptySlotsConfig(): OpenClawConfig {
+function createNpmInstallRecord(pluginId = "my-plugin", installPath?: string): PluginInstallRecord {
   return {
-    plugins: {
-      entries: createSinglePluginEntries(),
-      slots: {},
-    },
+    source: "npm",
+    spec: `${pluginId}@1.0.0`,
+    ...(installPath ? { installPath } : {}),
   };
 }
 
-function createSingleNpmInstallConfig(installPath: string): OpenClawConfig {
+function createPathInstallRecord(
+  installPath = "/path/to/plugin",
+  sourcePath = installPath,
+): PluginInstallRecord {
   return {
-    plugins: {
-      entries: createSinglePluginEntries(),
-      installs: {
-        "my-plugin": {
-          source: "npm",
-          spec: "my-plugin@1.0.0",
-          installPath,
-        },
-      },
-    },
+    source: "path",
+    sourcePath,
+    installPath,
   };
+}
+
+function createPluginConfig(params: {
+  entries?: Record<string, { enabled: boolean }>;
+  installs?: Record<string, PluginInstallRecord>;
+  allow?: string[];
+  deny?: string[];
+  enabled?: boolean;
+  slots?: PluginConfig["slots"];
+  loadPaths?: string[];
+  channels?: OpenClawConfig["channels"];
+}): OpenClawConfig {
+  const plugins: PluginConfig = {};
+  if (params.entries) {
+    plugins.entries = params.entries;
+  }
+  if (params.installs) {
+    plugins.installs = params.installs;
+  }
+  if (params.allow) {
+    plugins.allow = params.allow;
+  }
+  if (params.deny) {
+    plugins.deny = params.deny;
+  }
+  if (params.enabled !== undefined) {
+    plugins.enabled = params.enabled;
+  }
+  if (params.slots) {
+    plugins.slots = params.slots;
+  }
+  if (params.loadPaths) {
+    plugins.load = { paths: params.loadPaths };
+  }
+  return {
+    ...(Object.keys(plugins).length > 0 ? { plugins } : {}),
+    ...(params.channels ? { channels: params.channels } : {}),
+  };
+}
+
+function expectRemainingChannels(
+  channels: OpenClawConfig["channels"],
+  expected: Record<string, unknown> | undefined,
+) {
+  expect(channels as Record<string, unknown> | undefined).toEqual(expected);
+}
+
+function createSinglePluginWithEmptySlotsConfig(): OpenClawConfig {
+  return createPluginConfig({
+    entries: createSinglePluginEntries(),
+    slots: {},
+  });
+}
+
+function createSingleNpmInstallConfig(installPath: string): OpenClawConfig {
+  return createPluginConfig({
+    entries: createSinglePluginEntries(),
+    installs: {
+      "my-plugin": createNpmInstallRecord("my-plugin", installPath),
+    },
+  });
 }
 
 async function createPluginDirFixture(baseDir: string, pluginId = "my-plugin") {
@@ -122,14 +181,12 @@ describe("resolveUninstallChannelConfigKeys", () => {
 
 describe("removePluginFromConfig", () => {
   it("removes plugin from entries", () => {
-    const config: OpenClawConfig = {
-      plugins: {
-        entries: {
-          "my-plugin": { enabled: true },
-          "other-plugin": { enabled: true },
-        },
+    const config = createPluginConfig({
+      entries: {
+        ...createSinglePluginEntries(),
+        "other-plugin": { enabled: true },
       },
-    };
+    });
 
     const { config: result, actions } = removePluginFromConfig(config, "my-plugin");
 
@@ -138,29 +195,25 @@ describe("removePluginFromConfig", () => {
   });
 
   it("removes plugin from installs", () => {
-    const config: OpenClawConfig = {
-      plugins: {
-        installs: {
-          "my-plugin": { source: "npm", spec: "my-plugin@1.0.0" },
-          "other-plugin": { source: "npm", spec: "other-plugin@1.0.0" },
-        },
+    const config = createPluginConfig({
+      installs: {
+        "my-plugin": createNpmInstallRecord(),
+        "other-plugin": createNpmInstallRecord("other-plugin"),
       },
-    };
+    });
 
     const { config: result, actions } = removePluginFromConfig(config, "my-plugin");
 
     expect(result.plugins?.installs).toEqual({
-      "other-plugin": { source: "npm", spec: "other-plugin@1.0.0" },
+      "other-plugin": createNpmInstallRecord("other-plugin"),
     });
     expect(actions.install).toBe(true);
   });
 
   it("removes plugin from allowlist", () => {
-    const config: OpenClawConfig = {
-      plugins: {
-        allow: ["my-plugin", "other-plugin"],
-      },
-    };
+    const config = createPluginConfig({
+      allow: ["my-plugin", "other-plugin"],
+    });
 
     const { config: result, actions } = removePluginFromConfig(config, "my-plugin");
 
@@ -168,61 +221,40 @@ describe("removePluginFromConfig", () => {
     expect(actions.allowlist).toBe(true);
   });
 
-  it("removes linked path from load.paths", () => {
-    const config: OpenClawConfig = {
-      plugins: {
-        installs: {
-          "my-plugin": {
-            source: "path",
-            sourcePath: "/path/to/plugin",
-            installPath: "/path/to/plugin",
-          },
-        },
-        load: {
-          paths: ["/path/to/plugin", "/other/path"],
-        },
+  it.each([
+    {
+      name: "removes linked path from load.paths",
+      loadPaths: ["/path/to/plugin", "/other/path"],
+      expectedPaths: ["/other/path"],
+    },
+    {
+      name: "cleans up load when removing the only linked path",
+      loadPaths: ["/path/to/plugin"],
+      expectedPaths: undefined,
+    },
+  ])("$name", ({ loadPaths, expectedPaths }) => {
+    const config = createPluginConfig({
+      installs: {
+        "my-plugin": createPathInstallRecord(),
       },
-    };
+      loadPaths,
+    });
 
     const { config: result, actions } = removePluginFromConfig(config, "my-plugin");
 
-    expect(result.plugins?.load?.paths).toEqual(["/other/path"]);
-    expect(actions.loadPath).toBe(true);
-  });
-
-  it("cleans up load when removing the only linked path", () => {
-    const config: OpenClawConfig = {
-      plugins: {
-        installs: {
-          "my-plugin": {
-            source: "path",
-            sourcePath: "/path/to/plugin",
-            installPath: "/path/to/plugin",
-          },
-        },
-        load: {
-          paths: ["/path/to/plugin"],
-        },
-      },
-    };
-
-    const { config: result, actions } = removePluginFromConfig(config, "my-plugin");
-
-    expect(result.plugins?.load).toBeUndefined();
+    expect(result.plugins?.load?.paths).toEqual(expectedPaths);
     expect(actions.loadPath).toBe(true);
   });
 
   it("clears memory slot when uninstalling active memory plugin", () => {
-    const config: OpenClawConfig = {
-      plugins: {
-        entries: {
-          "memory-plugin": { enabled: true },
-        },
-        slots: {
-          memory: "memory-plugin",
-        },
+    const config = createPluginConfig({
+      entries: {
+        "memory-plugin": { enabled: true },
       },
-    };
+      slots: {
+        memory: "memory-plugin",
+      },
+    });
 
     const { config: result, actions } = removePluginFromConfig(config, "memory-plugin");
 
@@ -231,16 +263,12 @@ describe("removePluginFromConfig", () => {
   });
 
   it("does not modify memory slot when uninstalling non-memory plugin", () => {
-    const config: OpenClawConfig = {
-      plugins: {
-        entries: {
-          "my-plugin": { enabled: true },
-        },
-        slots: {
-          memory: "memory-core",
-        },
+    const config = createPluginConfig({
+      entries: createSinglePluginEntries(),
+      slots: {
+        memory: "memory-core",
       },
-    };
+    });
 
     const { config: result, actions } = removePluginFromConfig(config, "my-plugin");
 
@@ -264,63 +292,54 @@ describe("removePluginFromConfig", () => {
     expect(result.plugins).toBeUndefined();
   });
 
-  it("handles plugin that only exists in entries", () => {
-    const config: OpenClawConfig = {
-      plugins: {
-        entries: {
-          "my-plugin": { enabled: true },
-        },
-      },
-    };
-
-    const { config: result, actions } = removePluginFromConfig(config, "my-plugin");
-
-    expect(result.plugins?.entries).toBeUndefined();
-    expect(actions.entry).toBe(true);
-    expect(actions.install).toBe(false);
-  });
-
-  it("handles plugin that only exists in installs", () => {
-    const config: OpenClawConfig = {
-      plugins: {
+  it.each([
+    {
+      name: "handles plugin that only exists in entries",
+      config: createPluginConfig({
+        entries: createSinglePluginEntries(),
+      }),
+      expectedEntries: undefined,
+      expectedInstalls: undefined,
+      entryChanged: true,
+      installChanged: false,
+    },
+    {
+      name: "handles plugin that only exists in installs",
+      config: createPluginConfig({
         installs: {
-          "my-plugin": { source: "npm", spec: "my-plugin@1.0.0" },
+          "my-plugin": createNpmInstallRecord(),
         },
-      },
-    };
-
+      }),
+      expectedEntries: undefined,
+      expectedInstalls: undefined,
+      entryChanged: false,
+      installChanged: true,
+    },
+  ])("$name", ({ config, expectedEntries, expectedInstalls, entryChanged, installChanged }) => {
     const { config: result, actions } = removePluginFromConfig(config, "my-plugin");
 
-    expect(result.plugins?.installs).toBeUndefined();
-    expect(actions.install).toBe(true);
-    expect(actions.entry).toBe(false);
+    expect(result.plugins?.entries).toEqual(expectedEntries);
+    expect(result.plugins?.installs).toEqual(expectedInstalls);
+    expect(actions.entry).toBe(entryChanged);
+    expect(actions.install).toBe(installChanged);
   });
 
   it("cleans up empty plugins object", () => {
-    const config: OpenClawConfig = {
-      plugins: {
-        entries: {
-          "my-plugin": { enabled: true },
-        },
-      },
-    };
+    const config = createPluginConfig({
+      entries: createSinglePluginEntries(),
+    });
 
     const { config: result } = removePluginFromConfig(config, "my-plugin");
 
-    // After removing the only entry, entries should be undefined
     expect(result.plugins?.entries).toBeUndefined();
   });
 
   it("preserves other config values", () => {
-    const config: OpenClawConfig = {
-      plugins: {
-        enabled: true,
-        deny: ["denied-plugin"],
-        entries: {
-          "my-plugin": { enabled: true },
-        },
-      },
-    };
+    const config = createPluginConfig({
+      enabled: true,
+      deny: ["denied-plugin"],
+      entries: createSinglePluginEntries(),
+    });
 
     const { config: result } = removePluginFromConfig(config, "my-plugin");
 
@@ -329,62 +348,59 @@ describe("removePluginFromConfig", () => {
   });
 
   it("removes channel config for installed extension plugin", () => {
-    const config: OpenClawConfig = {
-      plugins: {
-        entries: {
-          timbot: { enabled: true },
-        },
-        installs: {
-          timbot: { source: "npm", spec: "timbot@1.0.0" },
-        },
+    const config = createPluginConfig({
+      entries: {
+        timbot: { enabled: true },
+      },
+      installs: {
+        timbot: createNpmInstallRecord("timbot"),
       },
       channels: {
         timbot: { sdkAppId: "123", secretKey: "abc" },
         telegram: { enabled: true },
       },
-    };
+    });
 
     const { config: result, actions } = removePluginFromConfig(config, "timbot");
 
-    expect((result.channels as Record<string, unknown>)?.timbot).toBeUndefined();
-    expect((result.channels as Record<string, unknown>)?.telegram).toEqual({ enabled: true });
+    expectRemainingChannels(result.channels, {
+      telegram: { enabled: true },
+    });
     expect(actions.channelConfig).toBe(true);
   });
 
   it("does not remove channel config for built-in channel without install record", () => {
-    const config: OpenClawConfig = {
-      plugins: {
-        entries: {
-          telegram: { enabled: true },
-        },
+    const config = createPluginConfig({
+      entries: {
+        telegram: { enabled: true },
       },
       channels: {
         telegram: { enabled: true },
         discord: { enabled: true },
       },
-    };
+    });
 
     const { config: result, actions } = removePluginFromConfig(config, "telegram");
 
-    // Built-in channels have no install record, so channel config must be preserved.
-    expect((result.channels as Record<string, unknown>)?.telegram).toEqual({ enabled: true });
+    expectRemainingChannels(result.channels, {
+      telegram: { enabled: true },
+      discord: { enabled: true },
+    });
     expect(actions.channelConfig).toBe(false);
   });
 
   it("cleans up channels object when removing the only channel config", () => {
-    const config: OpenClawConfig = {
-      plugins: {
-        entries: {
-          timbot: { enabled: true },
-        },
-        installs: {
-          timbot: { source: "npm", spec: "timbot@1.0.0" },
-        },
+    const config = createPluginConfig({
+      entries: {
+        timbot: { enabled: true },
+      },
+      installs: {
+        timbot: createNpmInstallRecord("timbot"),
       },
       channels: {
         timbot: { sdkAppId: "123" },
       },
-    };
+    });
 
     const { config: result, actions } = removePluginFromConfig(config, "timbot");
 
@@ -393,16 +409,12 @@ describe("removePluginFromConfig", () => {
   });
 
   it("does not set channelConfig action when no channel config exists", () => {
-    const config: OpenClawConfig = {
-      plugins: {
-        entries: {
-          "my-plugin": { enabled: true },
-        },
-        installs: {
-          "my-plugin": { source: "npm", spec: "my-plugin@1.0.0" },
-        },
+    const config = createPluginConfig({
+      entries: createSinglePluginEntries(),
+      installs: {
+        "my-plugin": createNpmInstallRecord(),
       },
-    };
+    });
 
     const { actions } = removePluginFromConfig(config, "my-plugin");
 
@@ -410,126 +422,118 @@ describe("removePluginFromConfig", () => {
   });
 
   it("does not remove channel config when plugin has no install record", () => {
-    const config: OpenClawConfig = {
-      plugins: {
-        entries: {
-          discord: { enabled: true },
-        },
+    const config = createPluginConfig({
+      entries: {
+        discord: { enabled: true },
       },
       channels: {
         discord: { enabled: true, token: "abc" },
       },
-    };
+    });
 
     const { config: result, actions } = removePluginFromConfig(config, "discord");
 
-    // No install record means this is a built-in channel; config must stay.
-    expect((result.channels as Record<string, unknown>)?.discord).toEqual({
-      enabled: true,
-      token: "abc",
+    expectRemainingChannels(result.channels, {
+      discord: {
+        enabled: true,
+        token: "abc",
+      },
     });
     expect(actions.channelConfig).toBe(false);
   });
 
   it("removes channel config using explicit channelIds when pluginId differs", () => {
-    const config: OpenClawConfig = {
-      plugins: {
-        entries: {
-          "timbot-plugin": { enabled: true },
-        },
-        installs: {
-          "timbot-plugin": { source: "npm", spec: "timbot-plugin@1.0.0" },
-        },
+    const config = createPluginConfig({
+      entries: {
+        "timbot-plugin": { enabled: true },
+      },
+      installs: {
+        "timbot-plugin": createNpmInstallRecord("timbot-plugin"),
       },
       channels: {
         timbot: { sdkAppId: "123" },
         "timbot-v2": { sdkAppId: "456" },
         telegram: { enabled: true },
       },
-    };
+    });
 
     const { config: result, actions } = removePluginFromConfig(config, "timbot-plugin", {
       channelIds: ["timbot", "timbot-v2"],
     });
 
-    const ch = result.channels as Record<string, unknown> | undefined;
-    expect(ch?.timbot).toBeUndefined();
-    expect(ch?.["timbot-v2"]).toBeUndefined();
-    expect(ch?.telegram).toEqual({ enabled: true });
+    expectRemainingChannels(result.channels, {
+      telegram: { enabled: true },
+    });
     expect(actions.channelConfig).toBe(true);
   });
 
   it("preserves shared channel keys (defaults, modelByChannel)", () => {
-    const config: OpenClawConfig = {
-      plugins: {
-        entries: {
-          timbot: { enabled: true },
-        },
-        installs: {
-          timbot: { source: "npm", spec: "timbot@1.0.0" },
-        },
+    const config = createPluginConfig({
+      entries: {
+        timbot: { enabled: true },
+      },
+      installs: {
+        timbot: createNpmInstallRecord("timbot"),
       },
       channels: {
         defaults: { groupPolicy: "opt-in" },
         modelByChannel: { timbot: "gpt-3.5" } as Record<string, string>,
         timbot: { sdkAppId: "123" },
       } as unknown as OpenClawConfig["channels"],
-    };
+    });
 
     const { config: result, actions } = removePluginFromConfig(config, "timbot");
 
-    const ch = result.channels as Record<string, unknown> | undefined;
-    expect(ch?.timbot).toBeUndefined();
-    expect(ch?.defaults).toEqual({ groupPolicy: "opt-in" });
-    expect(ch?.modelByChannel).toEqual({ timbot: "gpt-3.5" });
+    expectRemainingChannels(result.channels, {
+      defaults: { groupPolicy: "opt-in" },
+      modelByChannel: { timbot: "gpt-3.5" },
+    });
     expect(actions.channelConfig).toBe(true);
   });
 
   it("does not remove shared keys even when passed as channelIds", () => {
-    const config: OpenClawConfig = {
-      plugins: {
-        entries: {
-          "bad-plugin": { enabled: true },
-        },
-        installs: {
-          "bad-plugin": { source: "npm", spec: "bad-plugin@1.0.0" },
-        },
+    const config = createPluginConfig({
+      entries: {
+        "bad-plugin": { enabled: true },
+      },
+      installs: {
+        "bad-plugin": createNpmInstallRecord("bad-plugin"),
       },
       channels: {
         defaults: { groupPolicy: "opt-in" },
       } as unknown as OpenClawConfig["channels"],
-    };
+    });
 
     const { config: result, actions } = removePluginFromConfig(config, "bad-plugin", {
       channelIds: ["defaults"],
     });
 
-    const ch = result.channels as Record<string, unknown> | undefined;
-    expect(ch?.defaults).toEqual({ groupPolicy: "opt-in" });
+    expectRemainingChannels(result.channels, {
+      defaults: { groupPolicy: "opt-in" },
+    });
     expect(actions.channelConfig).toBe(false);
   });
 
   it("skips channel cleanup when channelIds is empty array (non-channel plugin)", () => {
-    const config: OpenClawConfig = {
-      plugins: {
-        entries: {
-          telegram: { enabled: true },
-        },
-        installs: {
-          telegram: { source: "npm", spec: "telegram@1.0.0" },
-        },
+    const config = createPluginConfig({
+      entries: {
+        telegram: { enabled: true },
+      },
+      installs: {
+        telegram: createNpmInstallRecord("telegram"),
       },
       channels: {
         telegram: { enabled: true },
       },
-    };
+    });
 
     const { config: result, actions } = removePluginFromConfig(config, "telegram", {
       channelIds: [],
     });
 
-    // Empty channelIds means the plugin declares no channels, so channel config must stay.
-    expect((result.channels as Record<string, unknown>)?.telegram).toEqual({ enabled: true });
+    expectRemainingChannels(result.channels, {
+      telegram: { enabled: true },
+    });
     expect(actions.channelConfig).toBe(false);
   });
 });
@@ -546,7 +550,7 @@ describe("uninstallPlugin", () => {
   });
 
   it("returns error when plugin not found", async () => {
-    const config: OpenClawConfig = {};
+    const config = createPluginConfig({});
 
     const result = await uninstallPlugin({
       config,
@@ -560,16 +564,12 @@ describe("uninstallPlugin", () => {
   });
 
   it("removes config entries", async () => {
-    const config: OpenClawConfig = {
-      plugins: {
-        entries: {
-          "my-plugin": { enabled: true },
-        },
-        installs: {
-          "my-plugin": { source: "npm", spec: "my-plugin@1.0.0" },
-        },
+    const config = createPluginConfig({
+      entries: createSinglePluginEntries(),
+      installs: {
+        "my-plugin": createNpmInstallRecord(),
       },
-    };
+    });
 
     const result = await uninstallPlugin({
       config,
@@ -603,21 +603,13 @@ describe("uninstallPlugin", () => {
   it("preserves directory for linked plugins", async () => {
     const pluginDir = await createPluginDirFixture(tempDir);
 
-    const config: OpenClawConfig = {
-      plugins: {
-        entries: createSinglePluginEntries(),
-        installs: {
-          "my-plugin": {
-            source: "path",
-            sourcePath: pluginDir,
-            installPath: pluginDir,
-          },
-        },
-        load: {
-          paths: [pluginDir],
-        },
+    const config = createPluginConfig({
+      entries: createSinglePluginEntries(),
+      installs: {
+        "my-plugin": createPathInstallRecord(pluginDir),
       },
-    };
+      loadPaths: [pluginDir],
+    });
 
     const result = await uninstallPlugin({
       config,

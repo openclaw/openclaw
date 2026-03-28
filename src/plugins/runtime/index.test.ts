@@ -24,6 +24,16 @@ function createCommandResult() {
   };
 }
 
+function createGatewaySubagentRuntime() {
+  return {
+    run: vi.fn(),
+    waitForRun: vi.fn(),
+    getSessionMessages: vi.fn(),
+    getSession: vi.fn(),
+    deleteSession: vi.fn(),
+  };
+}
+
 describe("plugin runtime command execution", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -135,13 +145,7 @@ describe("plugin runtime command execution", () => {
 
   it("keeps subagent unavailable by default even after gateway initialization", async () => {
     const runtime = createPluginRuntime();
-    setGatewaySubagentRuntime({
-      run: vi.fn(),
-      waitForRun: vi.fn(),
-      getSessionMessages: vi.fn(),
-      getSession: vi.fn(),
-      deleteSession: vi.fn(),
-    });
+    setGatewaySubagentRuntime(createGatewaySubagentRuntime());
 
     expect(() => runtime.subagent.run({ sessionKey: "s-1", message: "hello" })).toThrow(
       "Plugin runtime subagent methods are only available during a gateway request.",
@@ -153,11 +157,8 @@ describe("plugin runtime command execution", () => {
     const runtime = createPluginRuntime({ allowGatewaySubagentBinding: true });
 
     setGatewaySubagentRuntime({
+      ...createGatewaySubagentRuntime(),
       run,
-      waitForRun: vi.fn(),
-      getSessionMessages: vi.fn(),
-      getSession: vi.fn(),
-      deleteSession: vi.fn(),
     });
 
     await expect(runtime.subagent.run({ sessionKey: "s-2", message: "hello" })).resolves.toEqual({
