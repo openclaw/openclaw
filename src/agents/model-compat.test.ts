@@ -371,6 +371,15 @@ describe("isModernModelRef", () => {
     expect(isModernModelRef({ provider: "opencode-go", id: "minimax-m2.7" })).toBe(true);
   });
 
+  it("matches plugin-advertised modern models across canonical provider aliases", () => {
+    providerRuntimeMocks.resolveProviderModernModelRef.mockImplementation(({ provider, context }) =>
+      provider === "zai" && context.modelId === "glm-5" ? true : undefined,
+    );
+
+    expect(isModernModelRef({ provider: "z.ai", id: "glm-5" })).toBe(true);
+    expect(isModernModelRef({ provider: "z-ai", id: "glm-5" })).toBe(true);
+  });
+
   it("excludes provider-declined modern models", () => {
     providerRuntimeMocks.resolveProviderModernModelRef.mockImplementation(({ provider, context }) =>
       provider === "opencode" && context.modelId === "minimax-m2.7" ? false : undefined,
