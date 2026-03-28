@@ -293,11 +293,16 @@ export async function refreshActiveTab(host: SettingsHost) {
   if (host.tab === "projects") {
     // Parse URL for project name
     const path = window.location.pathname.replace(host.basePath, "");
-    const projectMatch = path.match(/^\/projects\/([^/]+)(?:\/sub\/(.+))?$/);
+    const projectMatch = path.match(/^\/projects\/([^/]+)(?:\/sub\/([^/]+))?(?:\/(board))?$/);
     if (projectMatch) {
       host.projectsView = "dashboard";
       host.projectsName = projectMatch[1];
       host.projectsSubProject = projectMatch[2] ?? null;
+      // Detect board view from URL suffix
+      const boardParam = projectMatch[3];
+      host.projectsSubView = boardParam === "board" ? "board" : "overview";
+      host.projectsBoardExpanded = null;
+      host.projectsCheckpoint = null;
       const fullName = projectMatch[2]
         ? `${projectMatch[1]}/${projectMatch[2]}`
         : projectMatch[1];
