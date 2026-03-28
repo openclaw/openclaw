@@ -15,8 +15,13 @@ vi.mock("node:fs", async (importOriginal) => {
 });
 
 const installPluginFromNpmSpec = vi.fn();
+const applyPluginAutoEnable = vi.fn();
 vi.mock("../../plugins/install.js", () => ({
   installPluginFromNpmSpec: (...args: unknown[]) => installPluginFromNpmSpec(...args),
+}));
+
+vi.mock("../../config/plugin-auto-enable.js", () => ({
+  applyPluginAutoEnable: (...args: unknown[]) => applyPluginAutoEnable(...args),
 }));
 
 const resolveBundledPluginSources = vi.fn();
@@ -89,6 +94,10 @@ const baseEntry: ChannelPluginCatalogEntry = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  applyPluginAutoEnable.mockImplementation((params: { config: unknown }) => ({
+    config: params.config,
+    changes: [],
+  }));
   resolveBundledPluginSources.mockReturnValue(new Map());
   setActivePluginRegistry(createEmptyPluginRegistry());
 });
@@ -352,6 +361,39 @@ describe("ensureChannelSetupPluginInstalled", () => {
     );
     expect(clearPluginDiscoveryCache.mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(loadOpenClawPlugins).mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+  });
+
+  it("loads the setup plugin registry from the auto-enabled config snapshot", () => {
+    const runtime = makeRuntime();
+    const cfg: OpenClawConfig = {
+      plugins: {},
+      channels: { telegram: { enabled: true } } as never,
+    };
+    const autoEnabledConfig = {
+      ...cfg,
+      plugins: {
+        entries: {
+          telegram: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+    applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
+
+    reloadChannelSetupPluginRegistry({
+      cfg,
+      runtime,
+      workspaceDir: "/tmp/openclaw-workspace",
+    });
+
+    expect(applyPluginAutoEnable).toHaveBeenCalledWith({
+      config: cfg,
+      env: process.env,
+    });
+    expect(loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: autoEnabledConfig,
+      }),
     );
   });
 
