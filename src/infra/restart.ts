@@ -6,6 +6,10 @@ import {
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
 } from "../daemon/constants.js";
+import {
+  isCurrentProcessLaunchdServiceLabel,
+  scheduleDetachedLaunchdRestartHandoff,
+} from "../daemon/launchd-restart-handoff.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } from "./restart-stale-pids.js";
 import { relaunchGatewayScheduledTask } from "./windows-task-restart.js";
@@ -345,6 +349,31 @@ export function triggerOpenClawRestart(): RestartAttempt {
   const label =
     process.env.OPENCLAW_LAUNCHD_LABEL ||
     resolveGatewayLaunchAgentLabel(process.env.OPENCLAW_PROFILE);
+
+  // When the current process IS the launchd-managed gateway, a synchronous
+  // `launchctl kickstart -k` would bootout (kill) the caller before the restart
+  // completes, leaving the service unloaded. Use a detached handoff script that
+  // outlives this process, waits for it to exit, then performs the kickstart.
+  // This matches the pattern already used by restartLaunchAgent() in launchd.ts.
+  if (isCurrentProcessLaunchdServiceLabel(label)) {
+    const handoff = scheduleDetachedLaunchdRestartHandoff({
+      env: process.env,
+      mode: "kickstart",
+      waitForPid: process.pid,
+    });
+    tried.push("scheduleDetachedLaunchdRestartHandoff(mode=kickstart)");
+    if (handoff.ok) {
+      return { ok: true, method: "launchctl", tried };
+    }
+    return {
+      ok: false,
+      method: "launchctl",
+      detail: handoff.detail ?? "detached restart handoff failed",
+      tried,
+    };
+  }
+
+  // Not running inside the managed service — safe to use synchronous kickstart.
   const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
   const domain = uid !== undefined ? `gui/${uid}` : "gui/501";
   const target = `${domain}/${label}`;
