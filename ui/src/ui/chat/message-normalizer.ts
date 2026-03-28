@@ -4,6 +4,7 @@
 
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import {
+  isToolCallContentType,
   isToolResultContentType,
   resolveToolBlockArgs,
 } from "../../../../src/chat/tool-content.js";
@@ -26,7 +27,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
     Array.isArray(contentItems) &&
     contentItems.some((item) => {
       const x = item as Record<string, unknown>;
-      return isToolResultContentType(x.type);
+      return isToolResultContentType(x.type) || isToolCallContentType(x.type);
     });
 
   const hasToolName = typeof m.toolName === "string" || typeof m.tool_name === "string";
