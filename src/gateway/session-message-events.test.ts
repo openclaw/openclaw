@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
+import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { testState } from "./test-helpers.mocks.js";
 import {
@@ -80,6 +81,70 @@ async function expectNoMessageWithin(params: {
 }
 
 describe("session.message websocket events", () => {
+  test("includes spawned session ownership metadata on lifecycle sessions.changed events", async () => {
+    const previousMinimalGateway = process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
+    delete process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
+    try {
+      const storePath = await createSessionStoreFile();
+      await writeSessionStore({
+        entries: {
+          child: {
+            sessionId: "sess-child",
+            updatedAt: Date.now(),
+            spawnedBy: "agent:main:parent",
+            spawnedWorkspaceDir: "/tmp/subagent-workspace",
+            forkedFromParent: true,
+            spawnDepth: 2,
+            subagentRole: "orchestrator",
+            subagentControlScope: "children",
+            displayName: "Ops Child",
+          },
+        },
+        storePath,
+      });
+
+      const harness = await createGatewaySuiteHarness();
+      try {
+        await withOperatorSessionSubscriber(harness, async (ws) => {
+          const changedEvent = onceMessage(
+            ws,
+            (message) =>
+              message.type === "event" &&
+              message.event === "sessions.changed" &&
+              (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
+                "agent:main:child",
+          );
+
+          emitSessionLifecycleEvent({
+            sessionKey: "agent:main:child",
+            reason: "reactivated",
+          });
+
+          const event = await changedEvent;
+          expect(event.payload).toMatchObject({
+            sessionKey: "agent:main:child",
+            reason: "reactivated",
+            spawnedBy: "agent:main:parent",
+            spawnedWorkspaceDir: "/tmp/subagent-workspace",
+            forkedFromParent: true,
+            spawnDepth: 2,
+            subagentRole: "orchestrator",
+            subagentControlScope: "children",
+            displayName: "Ops Child",
+          });
+        });
+      } finally {
+        await harness.close();
+      }
+    } finally {
+      if (previousMinimalGateway === undefined) {
+        delete process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
+      } else {
+        process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = previousMinimalGateway;
+      }
+    }
+  });
+
   test("only sends transcript events to subscribed operator clients", async () => {
     const storePath = await createSessionStoreFile();
     await writeSessionStore({
