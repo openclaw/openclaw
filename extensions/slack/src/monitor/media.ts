@@ -1,5 +1,5 @@
 import type { WebClient as SlackWebClient } from "@slack/web-api";
-import { normalizeHostname } from "openclaw/plugin-sdk/infra-runtime";
+import { normalizeHostname } from "openclaw/plugin-sdk/host-runtime";
 import type { FetchLike } from "openclaw/plugin-sdk/media-runtime";
 import { fetchRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
