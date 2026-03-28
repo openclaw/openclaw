@@ -51,6 +51,19 @@ describe("phase hooks merger", () => {
     return await runner.runBeforePromptBuild({ prompt: "test", messages: [] }, {});
   }
 
+  async function expectPhaseHookMerge(params: {
+    hookName: "before_model_resolve" | "before_prompt_build";
+    hooks: ReadonlyArray<{
+      pluginId: string;
+      result: PluginHookBeforeModelResolveResult | PluginHookBeforePromptBuildResult;
+      priority?: number;
+    }>;
+    expected: Record<string, unknown>;
+  }) {
+    const result = await runPhaseHook(params);
+    expect(result).toEqual(expect.objectContaining(params.expected));
+  }
+
   it.each([
     {
       name: "before_model_resolve keeps higher-priority override values",
@@ -118,7 +131,6 @@ describe("phase hooks merger", () => {
       },
     },
   ] as const)("$name", async ({ hookName, hooks, expected }) => {
-    const result = await runPhaseHook({ hookName, hooks });
-    expect(result).toEqual(expect.objectContaining(expected));
+    await expectPhaseHookMerge({ hookName, hooks, expected });
   });
 });
