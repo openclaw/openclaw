@@ -452,7 +452,7 @@ If you want to rely on env keys (e.g. exported in your `~/.profile`), run local 
 These Docker runners split into two buckets:
 
 - Live-model runners: `test:docker:live-models` and `test:docker:live-gateway` run `pnpm test:live` inside the repo Docker image, mounting your local config dir and workspace (and sourcing `~/.profile` if mounted).
-- Container smoke runners: `test:docker:openwebui`, `test:docker:onboard`, `test:docker:gateway-network`, and `test:docker:plugins` boot one or more real containers and verify higher-level integration paths.
+- Container smoke runners: `test:docker:openwebui`, `test:docker:onboard`, `test:docker:gateway-network`, `test:docker:mcp-channels`, and `test:docker:plugins` boot one or more real containers and verify higher-level integration paths.
 
 The live-model Docker runners also bind-mount only the needed CLI auth homes (or all supported ones when the run is not narrowed), then copy them into the container home before the run so external-CLI OAuth can refresh tokens without mutating the host auth store:
 
@@ -462,6 +462,7 @@ The live-model Docker runners also bind-mount only the needed CLI auth homes (or
 - Open WebUI live smoke: `pnpm test:docker:openwebui` (script: `scripts/e2e/openwebui-docker.sh`)
 - Onboarding wizard (TTY, full scaffolding): `pnpm test:docker:onboard` (script: `scripts/e2e/onboard-docker.sh`)
 - Gateway networking (two containers, WS auth + health): `pnpm test:docker:gateway-network` (script: `scripts/e2e/gateway-network-docker.sh`)
+- MCP channel bridge (seeded Gateway + stdio bridge + raw Claude notification-frame smoke): `pnpm test:docker:mcp-channels` (script: `scripts/e2e/mcp-channels-docker.sh`)
 - Plugins (install smoke + `/plugin` alias + Claude-bundle restart semantics): `pnpm test:docker:plugins` (script: `scripts/e2e/plugins-docker.sh`)
 
 The live-model Docker runners also bind-mount the current checkout read-only and
@@ -483,6 +484,14 @@ This lane expects a usable live model key, and `OPENCLAW_PROFILE_FILE`
 (`~/.profile` by default) is the primary way to provide it in Dockerized runs.
 Successful runs print a small JSON payload like `{ "ok": true, "model":
 "openclaw/default", ... }`.
+`test:docker:mcp-channels` is intentionally deterministic and does not need a
+real Telegram, Discord, or iMessage account. It boots a seeded Gateway
+container, starts a second container that spawns `openclaw mcp serve`, then
+verifies routed conversation discovery, transcript reads, attachment metadata,
+live event queue behavior, outbound send routing, and Claude-style channel +
+permission notifications over the real stdio MCP bridge. The notification check
+inspects the raw stdio MCP frames directly so the smoke validates what the
+bridge actually emits, not just what a specific client SDK happens to surface.
 
 Manual ACP plain-language thread smoke (not CI):
 
