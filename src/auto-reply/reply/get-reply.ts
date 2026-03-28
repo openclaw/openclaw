@@ -438,17 +438,22 @@ export async function getReplyFromConfig(
               imageModelDefaultProvider = resolved.ref.provider;
             }
           } else {
-            // Primary is providerless - first try to resolve it (handles aliases)
+            // Primary is providerless - first try to resolve it (handles aliases).
+            // Only use the resolved provider if primary is an alias.
+            // If primary is providerless and NOT an alias (e.g., "gpt-4o"),
+            // resolveModelRefFromString would return defaultProvider which is wrong
+            // in mixed-provider configs. In that case, leave imageModelDefaultProvider
+            // at defaultProvider so fallback derivation can set the correct provider.
             const resolved = resolveModelRefFromString({
               raw: primaryTrimmed,
               defaultProvider,
               aliasIndex: channelAliasIndex,
             });
-            if (resolved?.ref.provider) {
+            if (resolved?.alias && resolved.ref.provider) {
               imageModelDefaultProvider = resolved.ref.provider;
             }
 
-            // If primary resolution didn't determine provider, derive from fallbacks
+            // If primary resolution didn't determine provider (no alias), derive from fallbacks
             if (imageModelDefaultProvider === defaultProvider) {
               // Scan fallbacks for first with explicit provider
               for (const fb of fallbacks) {
@@ -503,12 +508,14 @@ export async function getReplyFromConfig(
           }
         }
         const channelKey = modelKey(channelResolved.ref.provider, channelResolved.ref.model);
-        // Resolve channel override using imageModel's provider for accurate key comparison.
-        // This prevents false matches when raw model strings are providerless but resolve
-        // to different providers in mixed-provider configs.
+        // Resolve channel override using the same provider context as channelResolved.
+        // This ensures providerless channel override models are resolved consistently
+        // with how they're actually applied (using defaultProvider), preventing
+        // false matches in mixed-provider configs where imageModelDefaultProvider
+        // differs from defaultProvider.
         const channelOverrideResolved = resolveModelRefFromString({
           raw: channelModelOverride.model,
-          defaultProvider: imageModelDefaultProvider,
+          defaultProvider,
           aliasIndex: channelAliasIndex,
         });
         // When channel override can't be resolved (no alias match), use the channel's
