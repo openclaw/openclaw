@@ -224,19 +224,26 @@ gboolean gateway_protocol_parse_hello_ok(const GatewayFrame *frame,
 
     JsonObject *obj = json_node_get_object(frame->payload);
 
-    /* A valid connect response must have 'auth' and 'policy' objects */
-    if (!json_object_has_member(obj, "auth") || !json_object_has_member(obj, "policy")) {
+    /* Policy is strictly required and must be an object */
+    JsonNode *policy_node = json_object_get_member(obj, "policy");
+    if (!policy_node || !JSON_NODE_HOLDS_OBJECT(policy_node)) {
         return FALSE;
     }
+    JsonObject *policy = json_node_get_object(policy_node);
 
-    JsonObject *auth = json_object_get_object_member(obj, "auth");
-    JsonObject *policy = json_object_get_object_member(obj, "policy");
-
-    if (!auth || !policy) return FALSE;
+    /* Auth is optional, but if present must be an object */
+    JsonObject *auth = NULL;
+    JsonNode *auth_node = json_object_get_member(obj, "auth");
+    if (auth_node) {
+        if (!JSON_NODE_HOLDS_OBJECT(auth_node)) {
+            return FALSE;
+        }
+        auth = json_node_get_object(auth_node);
+    }
 
     if (out_auth_source) {
         *out_auth_source = NULL;
-        if (json_object_has_member(auth, "source")) {
+        if (auth && json_object_has_member(auth, "source")) {
             *out_auth_source = g_strdup(json_object_get_string_member(auth, "source"));
         }
     }
