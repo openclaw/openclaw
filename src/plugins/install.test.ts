@@ -574,7 +574,7 @@ beforeAll(async () => {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.unstubAllEnvs();
-  resolveCompatibilityHostVersionMock.mockReturnValue("2026.3.28");
+  resolveCompatibilityHostVersionMock.mockReturnValue("2026.3.28-beta.1");
 });
 
 describe("installPluginFromArchive", () => {

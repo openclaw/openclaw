@@ -1472,7 +1472,7 @@
 {"recordType":"path","path":"channels.feishu.webhookHost","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.feishu.webhookPath","kind":"channel","type":"string","required":true,"defaultValue":"/feishu/events","deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.feishu.webhookPort","kind":"channel","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
-{"recordType":"path","path":"channels.googlechat","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"Google Chat","help":"Google Workspace Chat app via HTTP webhooks.","hasChildren":true}
+{"recordType":"path","path":"channels.googlechat","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"Google Chat","help":"Google Workspace Chat app with HTTP webhook.","hasChildren":true}
 {"recordType":"path","path":"channels.googlechat.accounts","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.googlechat.accounts.*","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.googlechat.accounts.*.actions","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
@@ -1868,7 +1868,7 @@
 {"recordType":"path","path":"channels.irc.textChunkLimit","kind":"channel","type":"integer","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.irc.tls","kind":"channel","type":"boolean","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
 {"recordType":"path","path":"channels.irc.username","kind":"channel","type":"string","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":false}
-{"recordType":"path","path":"channels.line","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"LINE","help":"LINE Messaging API bot for Japan/Taiwan/Thailand markets.","hasChildren":true}
+{"recordType":"path","path":"channels.line","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":["channels","network"],"label":"LINE","help":"LINE Messaging API webhook bot.","hasChildren":true}
 {"recordType":"path","path":"channels.line.accounts","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.line.accounts.*","kind":"channel","type":"object","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
 {"recordType":"path","path":"channels.line.accounts.*.allowFrom","kind":"channel","type":"array","required":false,"deprecated":false,"sensitive":false,"tags":[],"hasChildren":true}
