@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveChannelModelOverride } from "./model-overrides.js";
 
 describe("resolveChannelModelOverride", () => {
-  const cases = [
+  it.each([
     {
       name: "matches parent group id when topic suffix is present",
       input: {
@@ -57,13 +57,9 @@ describe("resolveChannelModelOverride", () => {
       },
       expected: { model: "demo-provider/demo-parent-model", matchKey: "123" },
     },
-  ] as const;
-
-  for (const testCase of cases) {
-    it(testCase.name, () => {
-      const resolved = resolveChannelModelOverride(testCase.input);
-      expect(resolved?.model).toBe(testCase.expected.model);
-      expect(resolved?.matchKey).toBe(testCase.expected.matchKey);
-    });
-  }
+  ] as const)("$name", ({ input, expected }) => {
+    const resolved = resolveChannelModelOverride(input);
+    expect(resolved?.model).toBe(expected.model);
+    expect(resolved?.matchKey).toBe(expected.matchKey);
+  });
 });
