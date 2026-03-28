@@ -11,4 +11,14 @@ describe("agent defaults schema", () => {
       }),
     ).not.toThrow();
   });
+
+  it("accepts embeddedPi overloadBackoffMaxMs as a non-negative integer", () => {
+    expect(() =>
+      AgentDefaultsSchema.parse({
+        embeddedPi: {
+          overloadBackoffMaxMs: 500,
+        },
+      }),
+    ).not.toThrow();
+  });
 });

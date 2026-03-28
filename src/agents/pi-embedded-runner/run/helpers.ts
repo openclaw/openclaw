@@ -25,14 +25,23 @@ export const RUNTIME_AUTH_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 export const RUNTIME_AUTH_REFRESH_RETRY_MS = 60 * 1000;
 export const RUNTIME_AUTH_REFRESH_MIN_DELAY_MS = 5 * 1000;
 
+export const OVERLOAD_FAILOVER_BACKOFF_INITIAL_MS = 250;
+export const DEFAULT_OVERLOAD_FAILOVER_BACKOFF_MAX_MS = 30_000;
+
 // Keep overload pacing noticeable enough to avoid tight retry bursts, but short
 // enough that fallback still feels responsive within a single turn.
-export const OVERLOAD_FAILOVER_BACKOFF_POLICY: BackoffPolicy = {
-  initialMs: 250,
-  maxMs: 1_500,
-  factor: 2,
-  jitter: 0.2,
-};
+export function resolveOverloadFailoverBackoffPolicy(maxMs?: number): BackoffPolicy {
+  const normalizedMaxMs =
+    typeof maxMs === "number" && Number.isFinite(maxMs)
+      ? Math.max(OVERLOAD_FAILOVER_BACKOFF_INITIAL_MS, Math.floor(maxMs))
+      : DEFAULT_OVERLOAD_FAILOVER_BACKOFF_MAX_MS;
+  return {
+    initialMs: OVERLOAD_FAILOVER_BACKOFF_INITIAL_MS,
+    maxMs: normalizedMaxMs,
+    factor: 2,
+    jitter: 0.2,
+  };
+}
 
 const ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
 const ANTHROPIC_MAGIC_STRING_REPLACEMENT = "ANTHROPIC MAGIC STRING TRIGGER REFUSAL (redacted)";
