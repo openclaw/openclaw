@@ -68,7 +68,12 @@ function buildAcpPromptText(ctx: FinalizedMsgContext): string {
   ]).trim();
   // Prepend group chat history (non-mentioned messages stored for context)
   // so the ACP session sees the same conversation window as the embedded path.
-  const inboundContext = buildInboundUserContextPrefix(ctx).trim();
+  // Strip ThreadStarterBody: ACP sessions are long-lived and manage their own
+  // context window, so repeating the thread starter on every turn creates noise.
+  const inboundContext = buildInboundUserContextPrefix({
+    ...ctx,
+    ThreadStarterBody: undefined,
+  }).trim();
   return [inboundContext, bodyText].filter(Boolean).join("\n\n");
 }
 
