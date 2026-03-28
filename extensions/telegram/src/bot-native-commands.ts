@@ -912,7 +912,10 @@ export const registerTelegramNativeCommands = ({
           linkPreview: runtimeTelegramCfg.linkPreview,
         });
         const from = isGroup ? buildTelegramGroupFrom(chatId, threadSpec.id) : `telegram:${chatId}`;
-        const to = `telegram:${chatId}`;
+        const to =
+          isGroup && threadSpec.id != null
+            ? `telegram:${chatId}:topic:${threadSpec.id}`
+            : `telegram:${chatId}`;
 
         const result = await executePluginCommand({
           command: match.command,
