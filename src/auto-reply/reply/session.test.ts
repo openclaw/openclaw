@@ -936,6 +936,111 @@ describe("initSessionState RawBody", () => {
     expect(result.sessionId).not.toBe(existingSessionId);
   });
 
+  it("rotates sessionId for bang-prefix reset triggers on Discord sessions (#55474)", async () => {
+    const root = await makeCaseDir("openclaw-rawbody-discord-bang-reset-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:discord:direct:user-1";
+    const existingSessionId = "session-existing";
+    const now = Date.now();
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: now,
+        systemSent: true,
+      },
+    });
+
+    const cfg = {
+      session: {
+        store: storePath,
+        resetTriggers: ["/new", "/reset", "!new", "!reset"],
+      },
+      channels: {
+        discord: {
+          allowFrom: ["*"],
+        },
+      },
+    } as OpenClawConfig;
+
+    for (const trigger of ["!new", "!reset"]) {
+      await writeSessionStoreFast(storePath, {
+        [sessionKey]: {
+          sessionId: existingSessionId,
+          updatedAt: Date.now(),
+          systemSent: true,
+        },
+      });
+
+      const result = await initSessionState({
+        ctx: {
+          RawBody: trigger,
+          CommandBody: trigger,
+          Provider: "discord",
+          Surface: "discord",
+          SenderId: "12345",
+          From: "discord:12345",
+          To: "user:12345",
+          SessionKey: sessionKey,
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.resetTriggered, `trigger=${trigger}`).toBe(true);
+      expect(result.isNewSession, `trigger=${trigger}`).toBe(true);
+      expect(result.sessionId, `trigger=${trigger}`).not.toBe(existingSessionId);
+      expect(result.bodyStripped, `trigger=${trigger}`).toBe("");
+    }
+  });
+
+  it("rotates sessionId for bang-prefix triggers with trailing text on Discord (#55474)", async () => {
+    const root = await makeCaseDir("openclaw-rawbody-discord-bang-reset-tail-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:discord:direct:user-1";
+    const existingSessionId = "session-existing";
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: Date.now(),
+        systemSent: true,
+      },
+    });
+
+    const cfg = {
+      session: {
+        store: storePath,
+        resetTriggers: ["/new", "!new"],
+      },
+      channels: {
+        discord: {
+          allowFrom: ["*"],
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        RawBody: "!new take notes",
+        CommandBody: "!new take notes",
+        Provider: "discord",
+        Surface: "discord",
+        SenderId: "12345",
+        From: "discord:12345",
+        To: "user:12345",
+        SessionKey: sessionKey,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.resetTriggered).toBe(true);
+    expect(result.isNewSession).toBe(true);
+    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.bodyStripped).toBe("take notes");
+  });
+
   it("keeps normal /new behavior for unbound ACP-shaped session keys", async () => {
     const root = await makeCaseDir("openclaw-rawbody-acp-unbound-reset-");
     const storePath = path.join(root, "sessions.json");
