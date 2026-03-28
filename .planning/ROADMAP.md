@@ -163,7 +163,7 @@
 3. `openclaw projects status myproject` shows task counts by status and active agent activity
 4. `openclaw projects reindex` regenerates all .index/ JSON and clears stale locks
 5. `openclaw projects validate` reports frontmatter parse errors across all project files
-   **Plans:** 2 plans
+   **Plans:** 2/2 plans complete
    Plans:
 
 - [x] 08-01-PLAN.md — Create and list commands with route registration for all 5 subcommands
@@ -296,7 +296,7 @@ Phase 1 (Types & Schemas)
 | 5. Context Injection                | 1/2            | In Progress |            |
 | 6. Queue & Heartbeat                | 3/3            | Complete    | 2026-03-27 |
 | 7. Gateway Service                  | 2/2            | Complete    | 2026-03-28 |
-| 8. CLI Commands                     | 2/2            | Complete    | 2026-03-28 |
+| 8. CLI Commands                     | 2/2 | Complete   | 2026-03-28 |
 | 9. Project Views & Dashboard        | 0/?            | Not started | -          |
 | 10. Kanban Board & Agent Indicators | 0/?            | Not started | -          |
 
