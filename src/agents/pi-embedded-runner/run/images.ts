@@ -45,7 +45,7 @@ const PATH_REGEX_SOURCE =
  * The ID segment may contain alphanumerics, hyphens, underscores, and dots
  * (e.g. "1c77ce17-20b9-4546-be64-6e36a9adcb2c.png").
  */
-const MEDIA_URI_REGEX = /\bmedia:\/\/inbound\/([A-Za-z0-9._-]+)/;
+const MEDIA_URI_REGEX = /\bmedia:\/\/inbound\/([^\]\s]+)/;
 
 /**
  * Result of detecting an image reference in text.

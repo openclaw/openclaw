@@ -433,10 +433,10 @@ export async function resolveMediaBufferPath(
   id: string,
   subdir: "inbound" = "inbound",
 ): Promise<string> {
-  // Guard against path traversal: reject any ID containing a separator or
-  // "..". IDs produced by buildSavedMediaId only contain alphanumerics,
-  // dots, hyphens, and underscores — no slashes are ever emitted.
-  if (!id || id.includes("/") || id.includes("\\") || id.includes("..")) {
+  // Guard against path traversal: reject any ID containing a separator.
+  // We allow consecutive dots in legitimate filenames (e.g. "report..draft.png"),
+  // but strictly reject the exact string ".." which acts as a traversal operator.
+  if (!id || id.includes("/") || id.includes("\\") || id === "..") {
     throw new Error(`resolveMediaBufferPath: unsafe media ID: ${id}`);
   }
 
