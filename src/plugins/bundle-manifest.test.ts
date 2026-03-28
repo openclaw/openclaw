@@ -22,6 +22,15 @@ function makeTempDir() {
 
 const mkdirSafe = mkdirSafeDir;
 
+function expectLoadedManifest(rootDir: string, bundleFormat: "codex" | "claude" | "cursor") {
+  const result = loadBundleManifest({ rootDir, bundleFormat });
+  expect(result.ok).toBe(true);
+  if (!result.ok) {
+    throw new Error("expected bundle manifest to load");
+  }
+  return result.manifest;
+}
+
 afterEach(() => {
   cleanupTrackedTempDirs(tempDirs);
 });
@@ -55,12 +64,7 @@ describe("bundle manifest parsing", () => {
     );
 
     expect(detectBundleManifestFormat(rootDir)).toBe("codex");
-    const result = loadBundleManifest({ rootDir, bundleFormat: "codex" });
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      return;
-    }
-    expect(result.manifest).toMatchObject({
+    expect(expectLoadedManifest(rootDir, "codex")).toMatchObject({
       id: "sample-bundle",
       name: "Sample Bundle",
       description: "Codex fixture",
@@ -101,12 +105,7 @@ describe("bundle manifest parsing", () => {
     );
 
     expect(detectBundleManifestFormat(rootDir)).toBe("claude");
-    const result = loadBundleManifest({ rootDir, bundleFormat: "claude" });
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      return;
-    }
-    expect(result.manifest).toMatchObject({
+    expect(expectLoadedManifest(rootDir, "claude")).toMatchObject({
       id: "claude-sample",
       name: "Claude Sample",
       description: "Claude fixture",
@@ -147,12 +146,7 @@ describe("bundle manifest parsing", () => {
     fs.writeFileSync(path.join(rootDir, ".mcp.json"), '{"servers":{}}', "utf-8");
 
     expect(detectBundleManifestFormat(rootDir)).toBe("cursor");
-    const result = loadBundleManifest({ rootDir, bundleFormat: "cursor" });
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      return;
-    }
-    expect(result.manifest).toMatchObject({
+    expect(expectLoadedManifest(rootDir, "cursor")).toMatchObject({
       id: "cursor-sample",
       name: "Cursor Sample",
       description: "Cursor fixture",
@@ -177,82 +171,69 @@ describe("bundle manifest parsing", () => {
     fs.writeFileSync(path.join(rootDir, "settings.json"), '{"hideThinkingBlock":true}', "utf-8");
 
     expect(detectBundleManifestFormat(rootDir)).toBe("claude");
-    const result = loadBundleManifest({ rootDir, bundleFormat: "claude" });
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      return;
-    }
-
-    expect(result.manifest.id).toBe(path.basename(rootDir).toLowerCase());
-    expect(result.manifest.skills).toEqual(["skills", "commands"]);
-    expect(result.manifest.settingsFiles).toEqual(["settings.json"]);
-    expect(result.manifest.capabilities).toEqual(
+    const manifest = expectLoadedManifest(rootDir, "claude");
+    expect(manifest.id).toBe(path.basename(rootDir).toLowerCase());
+    expect(manifest.skills).toEqual(["skills", "commands"]);
+    expect(manifest.settingsFiles).toEqual(["settings.json"]);
+    expect(manifest.capabilities).toEqual(
       expect.arrayContaining(["skills", "commands", "settings"]),
     );
   });
 
-  it("resolves Claude bundle hooks from default and declared paths", () => {
+  it.each([
+    {
+      name: "resolves Claude bundle hooks from default and declared paths",
+      setupKind: "default-hooks",
+      expectedHooks: ["hooks/hooks.json"],
+      hasHooksCapability: true,
+    },
+    {
+      name: "resolves Claude bundle hooks from manifest-declared paths only",
+      setupKind: "custom-hooks",
+      expectedHooks: ["custom-hooks"],
+      hasHooksCapability: true,
+    },
+    {
+      name: "returns empty hooks for Claude bundles with no hooks directory",
+      setupKind: "no-hooks",
+      expectedHooks: [],
+      hasHooksCapability: false,
+    },
+  ] as const)("$name", ({ setupKind, expectedHooks, hasHooksCapability }) => {
     const rootDir = makeTempDir();
     mkdirSafe(path.join(rootDir, ".claude-plugin"));
-    mkdirSafe(path.join(rootDir, "hooks"));
-    fs.writeFileSync(path.join(rootDir, "hooks", "hooks.json"), '{"hooks":[]}', "utf-8");
-    fs.writeFileSync(
-      path.join(rootDir, CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH),
-      JSON.stringify({
-        name: "Hook Plugin",
-        description: "Claude hooks fixture",
-      }),
-      "utf-8",
-    );
-
-    const result = loadBundleManifest({ rootDir, bundleFormat: "claude" });
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      return;
+    if (setupKind === "default-hooks") {
+      mkdirSafe(path.join(rootDir, "hooks"));
+      fs.writeFileSync(path.join(rootDir, "hooks", "hooks.json"), '{"hooks":[]}', "utf-8");
+      fs.writeFileSync(
+        path.join(rootDir, CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH),
+        JSON.stringify({
+          name: "Hook Plugin",
+          description: "Claude hooks fixture",
+        }),
+        "utf-8",
+      );
+    } else if (setupKind === "custom-hooks") {
+      mkdirSafe(path.join(rootDir, "custom-hooks"));
+      fs.writeFileSync(
+        path.join(rootDir, CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH),
+        JSON.stringify({
+          name: "Custom Hook Plugin",
+          hooks: "custom-hooks",
+        }),
+        "utf-8",
+      );
+    } else {
+      mkdirSafe(path.join(rootDir, "skills"));
+      fs.writeFileSync(
+        path.join(rootDir, CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH),
+        JSON.stringify({ name: "No Hooks" }),
+        "utf-8",
+      );
     }
-    expect(result.manifest.hooks).toEqual(["hooks/hooks.json"]);
-    expect(result.manifest.capabilities).toContain("hooks");
-  });
-
-  it("resolves Claude bundle hooks from manifest-declared paths only", () => {
-    const rootDir = makeTempDir();
-    mkdirSafe(path.join(rootDir, ".claude-plugin"));
-    mkdirSafe(path.join(rootDir, "custom-hooks"));
-    fs.writeFileSync(
-      path.join(rootDir, CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH),
-      JSON.stringify({
-        name: "Custom Hook Plugin",
-        hooks: "custom-hooks",
-      }),
-      "utf-8",
-    );
-
-    const result = loadBundleManifest({ rootDir, bundleFormat: "claude" });
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      return;
-    }
-    expect(result.manifest.hooks).toEqual(["custom-hooks"]);
-    expect(result.manifest.capabilities).toContain("hooks");
-  });
-
-  it("returns empty hooks for Claude bundles with no hooks directory", () => {
-    const rootDir = makeTempDir();
-    mkdirSafe(path.join(rootDir, ".claude-plugin"));
-    mkdirSafe(path.join(rootDir, "skills"));
-    fs.writeFileSync(
-      path.join(rootDir, CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH),
-      JSON.stringify({ name: "No Hooks" }),
-      "utf-8",
-    );
-
-    const result = loadBundleManifest({ rootDir, bundleFormat: "claude" });
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      return;
-    }
-    expect(result.manifest.hooks).toEqual([]);
-    expect(result.manifest.capabilities).not.toContain("hooks");
+    const manifest = expectLoadedManifest(rootDir, "claude");
+    expect(manifest.hooks).toEqual(expectedHooks);
+    expect(manifest.capabilities.includes("hooks")).toBe(hasHooksCapability);
   });
 
   it("does not misclassify native index plugins as manifestless Claude bundles", () => {
