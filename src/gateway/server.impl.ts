@@ -912,6 +912,7 @@ export async function startGatewayServer(
             clearAgentRunContext,
             toolEventRecipients,
             sessionEventSubscribers,
+            sessionMessageSubscribers,
           }),
         );
 
@@ -1196,6 +1197,7 @@ export async function startGatewayServer(
       getHealthVersion,
       broadcast,
       broadcastToConnIds,
+      sessionMessageSubscribers,
       nodeSendToSession,
       nodeSendToAllSubscribed,
       nodeSubscribe,
@@ -1244,6 +1246,7 @@ export async function startGatewayServer(
       unsubscribeSessionEvents: sessionEventSubscribers.unsubscribe,
       subscribeSessionMessageEvents: sessionMessageSubscribers.subscribe,
       unsubscribeSessionMessageEvents: sessionMessageSubscribers.unsubscribe,
+      getSessionMessageSubscribers: sessionMessageSubscribers.get,
       unsubscribeAllSessionEvents: (connId: string) => {
         sessionEventSubscribers.unsubscribe(connId);
         sessionMessageSubscribers.unsubscribeAll(connId);

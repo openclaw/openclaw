@@ -9,6 +9,7 @@ import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import type { NodeRegistry } from "../node-registry.js";
 import type { ConnectParams, ErrorShape, RequestFrame } from "../protocol/index.js";
+import type { SessionMessageSubscriberRegistry } from "../server-chat.js";
 import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "../server-broadcast.js";
 import type { ChannelRuntimeSnapshot } from "../server-channels.js";
 import type { DedupeEntry } from "../server-shared.js";
@@ -50,6 +51,7 @@ export type GatewayRequestContext = {
   getHealthVersion: () => number;
   broadcast: GatewayBroadcastFn;
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
+  sessionMessageSubscribers: SessionMessageSubscriberRegistry;
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
   nodeSendToAllSubscribed: (event: string, payload: unknown) => void;
   nodeSubscribe: (nodeId: string, sessionKey: string) => void;
@@ -75,6 +77,7 @@ export type GatewayRequestContext = {
   unsubscribeSessionEvents: (connId: string) => void;
   subscribeSessionMessageEvents: (connId: string, sessionKey: string) => void;
   unsubscribeSessionMessageEvents: (connId: string, sessionKey: string) => void;
+  getSessionMessageSubscribers: (sessionKey: string) => ReadonlySet<string>;
   unsubscribeAllSessionEvents: (connId: string) => void;
   getSessionEventSubscriberConnIds: () => ReadonlySet<string>;
   registerToolEventRecipient: (runId: string, connId: string) => void;

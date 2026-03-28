@@ -19,6 +19,7 @@ import {
   createAgentEventHandler,
   createChatRunState,
   createSessionEventSubscriberRegistry,
+  createSessionMessageSubscriberRegistry,
   createToolEventRecipientRegistry,
 } from "./server-chat.js";
 
@@ -72,6 +73,7 @@ describe("agent event handler", () => {
     const chatRunState = createChatRunState();
     const toolEventRecipients = createToolEventRecipientRegistry();
     const sessionEventSubscribers = createSessionEventSubscriberRegistry();
+    const sessionMessageSubscribers = createSessionMessageSubscriberRegistry();
 
     const handler = createAgentEventHandler({
       broadcast,
@@ -83,6 +85,7 @@ describe("agent event handler", () => {
       clearAgentRunContext: vi.fn(),
       toolEventRecipients,
       sessionEventSubscribers,
+      sessionMessageSubscribers,
     });
 
     return {
