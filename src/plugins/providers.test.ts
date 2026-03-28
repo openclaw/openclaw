@@ -278,6 +278,38 @@ describe("resolvePluginProviders", () => {
     );
   });
 
+  it("uses process env for Vitest compat when no explicit env is passed", () => {
+    const previousVitest = process.env.VITEST;
+    process.env.VITEST = "1";
+    try {
+      resolvePluginProviders({
+        bundledProviderVitestCompat: true,
+        onlyPluginIds: ["google"],
+      });
+
+      expectLastLoadPluginsCall({
+        onlyPluginIds: ["google"],
+      });
+      expect(getLastResolvedPluginConfig()).toEqual(
+        expect.objectContaining({
+          plugins: expect.objectContaining({
+            enabled: true,
+            allow: ["google"],
+            entries: {
+              google: { enabled: true },
+            },
+          }),
+        }),
+      );
+    } finally {
+      if (previousVitest === undefined) {
+        delete process.env.VITEST;
+      } else {
+        process.env.VITEST = previousVitest;
+      }
+    }
+  });
+
   it("does not leak host Vitest env into an explicit non-Vitest env", () => {
     const previousVitest = process.env.VITEST;
     process.env.VITEST = "1";
