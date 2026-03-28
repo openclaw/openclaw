@@ -1,5 +1,5 @@
 import type { SsrFPolicy } from "../../api.js";
-export { ssrfPolicyFromAllowPrivateNetwork } from "openclaw/plugin-sdk/infra-runtime";
+export { ssrfPolicyFromAllowPrivateNetwork } from "openclaw/plugin-sdk/ssrf-runtime";
 import { validateUrbitBaseUrl } from "./base-url.js";
 import { UrbitUrlError } from "./errors.js";
 
