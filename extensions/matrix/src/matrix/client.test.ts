@@ -1,22 +1,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LookupFn } from "../../runtime-api.js";
 import { installMatrixTestRuntime } from "../test-runtime.js";
 import type { CoreConfig } from "../types.js";
-import {
-  getMatrixScopedEnvVarNames,
-  resolveImplicitMatrixAccountId,
-  resolveMatrixConfig,
-  resolveMatrixConfigForAccount,
-  resolveMatrixAuth,
-  resolveMatrixAuthContext,
-  resolveValidatedMatrixHomeserverUrl,
-  validateMatrixHomeserverUrl,
-} from "./client/config.js";
-import * as credentialsReadModule from "./credentials-read.js";
-import * as sdkModule from "./sdk.js";
 
 function createLookupFn(addresses: Array<{ address: string; family: number }>): LookupFn {
   return vi.fn(async (_hostname: string, options?: unknown) => {
@@ -39,6 +27,33 @@ vi.mock("./credentials-write.runtime.js", () => ({
   saveMatrixCredentials: saveMatrixCredentialsMock,
   touchMatrixCredentials: touchMatrixCredentialsMock,
 }));
+
+let getMatrixScopedEnvVarNames: typeof import("./client/config.js").getMatrixScopedEnvVarNames;
+let resolveImplicitMatrixAccountId: typeof import("./client/config.js").resolveImplicitMatrixAccountId;
+let resolveMatrixConfig: typeof import("./client/config.js").resolveMatrixConfig;
+let resolveMatrixConfigForAccount: typeof import("./client/config.js").resolveMatrixConfigForAccount;
+let resolveMatrixAuth: typeof import("./client/config.js").resolveMatrixAuth;
+let resolveMatrixAuthContext: typeof import("./client/config.js").resolveMatrixAuthContext;
+let resolveValidatedMatrixHomeserverUrl: typeof import("./client/config.js").resolveValidatedMatrixHomeserverUrl;
+let validateMatrixHomeserverUrl: typeof import("./client/config.js").validateMatrixHomeserverUrl;
+let credentialsReadModule: typeof import("./credentials-read.js");
+let sdkModule: typeof import("./sdk.js");
+
+beforeEach(async () => {
+  vi.resetModules();
+  ({
+    getMatrixScopedEnvVarNames,
+    resolveImplicitMatrixAccountId,
+    resolveMatrixConfig,
+    resolveMatrixConfigForAccount,
+    resolveMatrixAuth,
+    resolveMatrixAuthContext,
+    resolveValidatedMatrixHomeserverUrl,
+    validateMatrixHomeserverUrl,
+  } = await import("./client/config.js"));
+  credentialsReadModule = await import("./credentials-read.js");
+  sdkModule = await import("./sdk.js");
+});
 
 describe("resolveMatrixConfig", () => {
   it("prefers config over env", () => {
