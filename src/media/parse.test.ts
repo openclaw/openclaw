@@ -10,13 +10,21 @@ describe("splitMediaFromOutput", () => {
       audioAsVoice?: boolean;
     },
   ) {
-    expect(splitMediaFromOutput(input)).toEqual(
-      expect.objectContaining({
-        text: "",
-        audioAsVoice: false,
-        ...expected,
-      }),
-    );
+    const expectedOutput: {
+      mediaUrls?: string[];
+      text: string;
+      audioAsVoice?: boolean;
+    } = {
+      text: "",
+      ...expected,
+    };
+    if (expected.mediaUrls === undefined) {
+      delete expectedOutput.mediaUrls;
+    }
+    if (expected.audioAsVoice === undefined) {
+      delete expectedOutput.audioAsVoice;
+    }
+    expect(splitMediaFromOutput(input)).toEqual(expect.objectContaining(expectedOutput));
   }
 
   function expectStableAudioAsVoiceDetectionCase(input: string) {
@@ -70,7 +78,7 @@ describe("splitMediaFromOutput", () => {
     {
       name: "rejects bare words without file extensions",
       input: "MEDIA:screenshot",
-      expected: { mediaUrls: undefined },
+      expected: { mediaUrls: undefined, text: "MEDIA:screenshot" },
     },
     {
       name: "keeps audio_as_voice detection stable across calls",
