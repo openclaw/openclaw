@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 const repoRoot = path.resolve(import.meta.dirname, "..");
 
 const allowedNonExtensionTests = new Set<string>([
+  "src/agents/bedrock-discovery.test.ts",
   "src/plugins/contracts/discovery.contract.test.ts",
 ]);
 
