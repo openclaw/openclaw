@@ -102,14 +102,15 @@ export async function runExec(
   args: string[],
   opts: number | { timeoutMs?: number; maxBuffer?: number; cwd?: string } = 10_000,
 ): Promise<{ stdout: string; stderr: string }> {
+  const defaultEncoding = process.platform === "win32" ? "gbk" : "utf8";
   const options =
     typeof opts === "number"
-      ? { timeout: opts, encoding: "utf8" as const }
+      ? { timeout: opts, encoding: defaultEncoding as const }
       : {
           timeout: opts.timeoutMs,
           maxBuffer: opts.maxBuffer,
           cwd: opts.cwd,
-          encoding: "utf8" as const,
+          encoding: defaultEncoding as const,
         };
   try {
     const argv = [command, ...args];
@@ -303,11 +304,13 @@ export async function runCommandWithTimeout(
     }
 
     child.stdout?.on("data", (d) => {
-      stdout += d.toString();
+      const defaultEncoding = process.platform === "win32" ? "gbk" : "utf8";
+      stdout += d.toString(defaultEncoding);
       armNoOutputTimer();
     });
     child.stderr?.on("data", (d) => {
-      stderr += d.toString();
+      const defaultEncoding = process.platform === "win32" ? "gbk" : "utf8";
+      stderr += d.toString(defaultEncoding);
       armNoOutputTimer();
     });
     child.on("error", (err) => {
