@@ -571,6 +571,7 @@ export function findGoogleChromeExecutableLinux(): BrowserExecutable | null {
     "/usr/bin/google-chrome-stable",
     "/usr/bin/google-chrome-beta",
     "/usr/bin/google-chrome-unstable",
+    "/opt/google/chrome/chrome",
     "/snap/bin/google-chrome",
   ]);
 }
