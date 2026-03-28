@@ -61,8 +61,7 @@ describe("createHostWorkspaceEditTool host access mapping", () => {
       await expect(
         editTool.execute("tc-edit", {
           path: path.join(workspaceDir, "escape", "secret.txt"),
-          oldText: "secret",
-          newText: "updated",
+          edits: [{ oldText: "secret", newText: "updated" }],
         }),
       ).rejects.toThrow(/outside workspace root|path escapes workspace root|outside-workspace/i);
     },

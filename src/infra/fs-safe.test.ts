@@ -367,6 +367,17 @@ describe("fs-safe", () => {
     await expect(fs.readFile(path.join(root, "nested", "out.txt"), "utf8")).resolves.toBe("hello");
   });
 
+  it("writes a file when the configured root directory does not exist yet", async () => {
+    const parent = await tempDirs.make("openclaw-fs-safe-parent-");
+    const root = path.join(parent, "provisioned-root");
+    await writeFileWithinRoot({
+      rootDir: root,
+      relativePath: "nested/out.txt",
+      data: "hello",
+    });
+    await expect(fs.readFile(path.join(root, "nested", "out.txt"), "utf8")).resolves.toBe("hello");
+  });
+
   it("appends to a file within root safely", async () => {
     const root = await tempDirs.make("openclaw-fs-safe-root-");
     const targetPath = path.join(root, "nested", "out.txt");

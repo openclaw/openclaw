@@ -35,10 +35,26 @@ describe("host fs roots write/edit operations", () => {
 
     await editTool.execute("tc-roots-edit", {
       path: target,
-      oldText: "hello",
-      newText: "updated",
+      edits: [{ oldText: "hello", newText: "updated" }],
     });
     expect(await fs.readFile(target, "utf8")).toBe("updated");
+  });
+
+  it("creates a missing rw directory root on first write", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pi-tools-workspace-"));
+    const rootsParent = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pi-tools-roots-parent-"));
+    tempDirs.push(workspaceDir, rootsParent);
+
+    const allowedDir = path.join(rootsParent, "provisioned-root");
+    const roots = resolveRoots([{ path: allowedDir, kind: "dir", access: "rw" }]);
+    const writeTool = createHostWorkspaceWriteTool(workspaceDir, {
+      workspaceOnly: false,
+      roots,
+    });
+    const target = path.join(allowedDir, "nested", "note.txt");
+
+    await writeTool.execute("tc-roots-create-root", { path: target, content: "hello" });
+    expect(await fs.readFile(target, "utf8")).toBe("hello");
   });
 
   it("preserves exact-match file roots for host write/edit operations", async () => {
@@ -63,8 +79,7 @@ describe("host fs roots write/edit operations", () => {
 
     await editTool.execute("tc-file-root-edit", {
       path: target,
-      oldText: "hello",
-      newText: "updated",
+      edits: [{ oldText: "hello", newText: "updated" }],
     });
     expect(await fs.readFile(target, "utf8")).toBe("updated");
 
