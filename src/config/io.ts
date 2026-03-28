@@ -885,6 +885,14 @@ function readConfigFingerprintForPathSync(
   }
 }
 
+/**
+ * In-process dedup for clobbered config backups. Prevents creating hundreds
+ * of backup files when the on-disk health state (lastObservedSuspiciousSignature)
+ * fails to persist, e.g. during doctor --fix where config is read many times
+ * and each read triggers observeConfigSnapshot.
+ */
+const _clobberedSignatures = new Set<string>();
+
 function formatConfigArtifactTimestamp(ts: string): string {
   return ts.replaceAll(":", "-").replaceAll(".", "-");
 }
@@ -1006,6 +1014,14 @@ async function observeConfigSnapshot(
   if (entry.lastObservedSuspiciousSignature === suspiciousSignature) {
     return;
   }
+
+  // In-process dedup: prevent repeated backup writes when the on-disk
+  // health state fails to persist (e.g. during doctor --fix).
+  const dedupKey = `${snapshot.path}::${suspiciousSignature}`;
+  if (_clobberedSignatures.has(dedupKey)) {
+    return;
+  }
+  _clobberedSignatures.add(dedupKey);
 
   const backup =
     (backupBaseline?.hash ? backupBaseline : null) ??
@@ -1132,6 +1148,14 @@ function observeConfigSnapshotSync(
   if (entry.lastObservedSuspiciousSignature === suspiciousSignature) {
     return;
   }
+
+  // In-process dedup: prevent repeated backup writes when the on-disk
+  // health state fails to persist (e.g. during doctor --fix).
+  const dedupKey = `${snapshot.path}::${suspiciousSignature}`;
+  if (_clobberedSignatures.has(dedupKey)) {
+    return;
+  }
+  _clobberedSignatures.add(dedupKey);
 
   const backup =
     (backupBaseline?.hash ? backupBaseline : null) ??
