@@ -131,7 +131,7 @@ function createPluginRuntimeAliasFixture(params?: { srcBody?: string; distBody?:
   return { root, srcFile, distFile };
 }
 
-function createUserInstalledPluginSdkAliasFixture() {
+function createPluginSdkAliasTargetFixture() {
   const fixture = createPluginSdkAliasFixture({
     srcFile: "channel-runtime.ts",
     distFile: "channel-runtime.js",
@@ -140,7 +140,21 @@ function createUserInstalledPluginSdkAliasFixture() {
     },
   });
   const sourceRootAlias = path.join(fixture.root, "src", "plugin-sdk", "root-alias.cjs");
+  const distRootAlias = path.join(fixture.root, "dist", "plugin-sdk", "root-alias.cjs");
   fs.writeFileSync(sourceRootAlias, "module.exports = {};\n", "utf-8");
+  fs.writeFileSync(distRootAlias, "module.exports = {};\n", "utf-8");
+  return { fixture, sourceRootAlias, distRootAlias };
+}
+
+function writePluginEntry(root: string, relativePath: string) {
+  const pluginEntry = path.join(root, relativePath);
+  fs.mkdirSync(path.dirname(pluginEntry), { recursive: true });
+  fs.writeFileSync(pluginEntry, 'export const plugin = "demo";\n', "utf-8");
+  return pluginEntry;
+}
+
+function createUserInstalledPluginSdkAliasFixture() {
+  const { fixture, sourceRootAlias } = createPluginSdkAliasTargetFixture();
   const externalPluginRoot = path.join(makeTempDir(), ".openclaw", "extensions", "demo");
   const externalPluginEntry = path.join(externalPluginRoot, "index.ts");
   mkdirSafeDir(externalPluginRoot);
@@ -515,20 +529,8 @@ describe("plugin sdk alias helpers", () => {
   });
 
   it("builds plugin-sdk aliases from the module being loaded, not the loader location", () => {
-    const fixture = createPluginSdkAliasFixture({
-      srcFile: "channel-runtime.ts",
-      distFile: "channel-runtime.js",
-      packageExports: {
-        "./plugin-sdk/channel-runtime": { default: "./dist/plugin-sdk/channel-runtime.js" },
-      },
-    });
-    const sourceRootAlias = path.join(fixture.root, "src", "plugin-sdk", "root-alias.cjs");
-    const distRootAlias = path.join(fixture.root, "dist", "plugin-sdk", "root-alias.cjs");
-    fs.writeFileSync(sourceRootAlias, "module.exports = {};\n", "utf-8");
-    fs.writeFileSync(distRootAlias, "module.exports = {};\n", "utf-8");
-    const sourcePluginEntry = path.join(fixture.root, "extensions", "demo", "src", "index.ts");
-    fs.mkdirSync(path.dirname(sourcePluginEntry), { recursive: true });
-    fs.writeFileSync(sourcePluginEntry, 'export const plugin = "demo";\n', "utf-8");
+    const { fixture, sourceRootAlias, distRootAlias } = createPluginSdkAliasTargetFixture();
+    const sourcePluginEntry = writePluginEntry(fixture.root, "extensions/demo/src/index.ts");
 
     const sourceAliases = withEnv({ NODE_ENV: undefined }, () =>
       buildPluginLoaderAliasMap(sourcePluginEntry),
@@ -538,9 +540,7 @@ describe("plugin sdk alias helpers", () => {
       channelRuntimePath: path.join(fixture.root, "src", "plugin-sdk", "channel-runtime.ts"),
     });
 
-    const distPluginEntry = path.join(fixture.root, "dist", "extensions", "demo", "index.js");
-    fs.mkdirSync(path.dirname(distPluginEntry), { recursive: true });
-    fs.writeFileSync(distPluginEntry, 'export const plugin = "demo";\n', "utf-8");
+    const distPluginEntry = writePluginEntry(fixture.root, "dist/extensions/demo/index.js");
 
     const distAliases = withEnv({ NODE_ENV: undefined }, () =>
       buildPluginLoaderAliasMap(distPluginEntry),
@@ -552,20 +552,8 @@ describe("plugin sdk alias helpers", () => {
   });
 
   it("applies explicit dist resolution to plugin-sdk subpath aliases too", () => {
-    const fixture = createPluginSdkAliasFixture({
-      srcFile: "channel-runtime.ts",
-      distFile: "channel-runtime.js",
-      packageExports: {
-        "./plugin-sdk/channel-runtime": { default: "./dist/plugin-sdk/channel-runtime.js" },
-      },
-    });
-    const sourceRootAlias = path.join(fixture.root, "src", "plugin-sdk", "root-alias.cjs");
-    const distRootAlias = path.join(fixture.root, "dist", "plugin-sdk", "root-alias.cjs");
-    fs.writeFileSync(sourceRootAlias, "module.exports = {};\n", "utf-8");
-    fs.writeFileSync(distRootAlias, "module.exports = {};\n", "utf-8");
-    const sourcePluginEntry = path.join(fixture.root, "extensions", "demo", "src", "index.ts");
-    fs.mkdirSync(path.dirname(sourcePluginEntry), { recursive: true });
-    fs.writeFileSync(sourcePluginEntry, 'export const plugin = "demo";\n', "utf-8");
+    const { fixture, distRootAlias } = createPluginSdkAliasTargetFixture();
+    const sourcePluginEntry = writePluginEntry(fixture.root, "extensions/demo/src/index.ts");
 
     const distAliases = withEnv({ NODE_ENV: undefined }, () =>
       buildPluginLoaderAliasMap(sourcePluginEntry, undefined, undefined, "dist"),
