@@ -398,6 +398,91 @@ describe("secrets runtime snapshot", () => {
 
   it.each([
     {
+      name: "channels.matrix.accounts.default.accessToken config",
+      config: {
+        channels: {
+          matrix: {
+            password: {
+              source: "env",
+              provider: "default",
+              id: "MATRIX_PASSWORD",
+            },
+            accounts: {
+              default: {
+                accessToken: "default-token",
+              },
+            },
+          },
+        },
+      },
+      env: {},
+    },
+    {
+      name: "channels.matrix.accounts.default.accessToken SecretRef config",
+      config: {
+        channels: {
+          matrix: {
+            password: {
+              source: "env",
+              provider: "default",
+              id: "MATRIX_PASSWORD",
+            },
+            accounts: {
+              default: {
+                accessToken: {
+                  source: "env",
+                  provider: "default",
+                  id: "MATRIX_DEFAULT_ACCESS_TOKEN_REF",
+                },
+              },
+            },
+          },
+        },
+      },
+      env: {
+        MATRIX_DEFAULT_ACCESS_TOKEN_REF: "default-token",
+      },
+    },
+    {
+      name: "MATRIX_DEFAULT_ACCESS_TOKEN env auth",
+      config: {
+        channels: {
+          matrix: {
+            password: {
+              source: "env",
+              provider: "default",
+              id: "MATRIX_PASSWORD",
+            },
+          },
+        },
+      },
+      env: {
+        MATRIX_DEFAULT_ACCESS_TOKEN: "default-token",
+      },
+    },
+  ])("ignores top-level Matrix password refs shadowed by $name", async ({ config, env }) => {
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig(config),
+      env,
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => ({ version: 1, profiles: {} }),
+    });
+
+    expect(snapshot.config.channels?.matrix?.password).toEqual({
+      source: "env",
+      provider: "default",
+      id: "MATRIX_PASSWORD",
+    });
+    expect(snapshot.warnings).toContainEqual(
+      expect.objectContaining({
+        code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+        path: "channels.matrix.password",
+      }),
+    );
+  });
+
+  it.each([
+    {
       name: "top-level Matrix accessToken config",
       config: {
         channels: {

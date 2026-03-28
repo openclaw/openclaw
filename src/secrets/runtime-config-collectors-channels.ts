@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { coerceSecretRef, resolveSecretInputRef } from "../config/types.secrets.js";
 import { getMatrixScopedEnvVarNames } from "../plugin-sdk/matrix.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/account-id.js";
 import { collectTtsApiKeyAssignments } from "./runtime-config-collectors-tts.js";
 import {
   collectSecretInputAssignment,
@@ -625,6 +626,11 @@ function collectMatrixAssignments(params: {
     normalizeSecretStringValue(
       params.context.env[getMatrixScopedEnvVarNames("default").accessToken],
     ).length > 0;
+  const defaultAccountAccessTokenConfigured = surface.accounts.some(
+    ({ accountId, account }) =>
+      normalizeAccountId(accountId) === DEFAULT_ACCOUNT_ID &&
+      hasConfiguredSecretInputValue(account.accessToken, params.defaults),
+  );
   const baseAccessTokenConfigured = hasConfiguredSecretInputValue(
     matrix.accessToken,
     params.defaults,
@@ -652,9 +658,11 @@ function collectMatrixAssignments(params: {
       !(
         baseAccessTokenConfigured ||
         envAccessTokenConfigured ||
-        defaultScopedAccessTokenConfigured
+        defaultScopedAccessTokenConfigured ||
+        defaultAccountAccessTokenConfigured
       ),
-    inactiveReason: "Matrix channel is disabled or a top-level accessToken is configured.",
+    inactiveReason:
+      "Matrix channel is disabled or access-token auth is configured for the default Matrix account.",
     apply: (value) => {
       matrix.password = value;
     },
@@ -689,7 +697,8 @@ function collectMatrixAssignments(params: {
         params.context.env[getMatrixScopedEnvVarNames(accountId).accessToken],
       ).length > 0;
     const inheritedDefaultAccountAccessTokenConfigured =
-      accountId === "default" && (baseAccessTokenConfigured || envAccessTokenConfigured);
+      normalizeAccountId(accountId) === DEFAULT_ACCOUNT_ID &&
+      (baseAccessTokenConfigured || envAccessTokenConfigured);
     collectSecretInputAssignment({
       value: account.password,
       path: `channels.matrix.accounts.${accountId}.password`,
