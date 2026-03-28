@@ -23,6 +23,7 @@ import type {
 } from "../runtime-api.js";
 import {
   DEFAULT_ACCOUNT_ID,
+  chunkTextForOutbound,
   isDangerousNameMatchingEnabled,
   isNumericTargetId,
   normalizeAccountId,
@@ -509,7 +510,7 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount, ZalouserProb
     },
     outbound: {
       deliveryMode: "direct",
-      chunker: (text, limit) => getZalouserRuntime().channel.text.chunkMarkdownText(text, limit),
+      chunker: chunkTextForOutbound,
       chunkerMode: "markdown",
       sendPayload: async (ctx) =>
         await sendPayloadWithChunkedTextAndMedia({
