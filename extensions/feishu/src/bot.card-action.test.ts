@@ -405,6 +405,8 @@ describe("Card Update Flow", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resetProcessedFeishuCardActionTokensForTests();
+    // Ensure handleFeishuMessage mock returns a resolved promise
+    vi.mocked(handleFeishuMessage).mockResolvedValue(undefined as never);
   });
 
   it("immediately updates card and dispatches for 'update' kind actions", async () => {
