@@ -153,7 +153,7 @@ export function resolveFailureDestination(
   let channel: CronMessageChannel | undefined;
   let to: string | undefined;
   let accountId: string | undefined;
-  let mode: "announce" | "webhook" | undefined;
+  let mode: "announce" | "webhook" | "agent-turn" | undefined;
 
   // Start with global config as base
   if (globalConfig) {
@@ -204,6 +204,11 @@ export function resolveFailureDestination(
   }
 
   const resolvedMode = mode ?? "announce";
+
+  // agent-turn mode is handled directly by timer.ts via enqueueSystemEvent
+  if (resolvedMode === "agent-turn") {
+    return null;
+  }
 
   // Webhook mode requires a URL
   if (resolvedMode === "webhook" && !to) {
