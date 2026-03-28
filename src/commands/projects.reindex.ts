@@ -69,8 +69,7 @@ export async function projectsReindexCommand(
           const content = await fs.readFile(lockPath, "utf-8");
           const lockData = JSON.parse(content) as { pid?: number; timestamp?: number };
 
-          const isStale =
-            !lockData.timestamp || now - lockData.timestamp > staleLockThresholdMs;
+          const isStale = !lockData.timestamp || now - lockData.timestamp > staleLockThresholdMs;
           const isDead = !lockData.pid || !isPidAlive(lockData.pid);
 
           if (isStale || isDead) {
@@ -92,9 +91,7 @@ export async function projectsReindexCommand(
     }
   }
 
-  runtime.log(
-    `Reindexed ${projectDirs.length} project(s). Cleared ${locksCleared} stale lock(s).`,
-  );
+  runtime.log(`Reindexed ${projectDirs.length} project(s). Cleared ${locksCleared} stale lock(s).`);
 
   if (opts.json) {
     runtime.writeJson({ projects: projectDirs.length, locksCleared });
