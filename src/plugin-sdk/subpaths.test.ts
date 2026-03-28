@@ -121,7 +121,6 @@ describe("plugin-sdk subpath exports", () => {
   it("keeps the curated public list free of internal implementation subpaths", () => {
     for (const deniedSubpath of [
       "acpx",
-      "compat",
       "device-pair",
       "lobster",
       "pairing-access",
@@ -188,6 +187,13 @@ describe("plugin-sdk subpath exports", () => {
     ]);
     expectSourceContains("telegram", 'export * from "./telegram-core.js";');
     expectSourceContains("telegram", 'export * from "./telegram-runtime.js";');
+    expectSourceMentions("imessage", [
+      "normalizeIMessageHandle",
+      "parseChatAllowTargetPrefixes",
+      "parseChatTargetPrefixesOrThrow",
+      "resolveServicePrefixedAllowTarget",
+      "resolveServicePrefixedTarget",
+    ]);
     expectSourceMentions("reply-history", [
       "buildPendingHistoryContextFromMap",
       "clearHistoryEntriesIfEnabled",
@@ -203,6 +209,12 @@ describe("plugin-sdk subpath exports", () => {
     });
     expectSourceMentions("account-helpers", ["createAccountListHelpers"]);
     expectSourceMentions("channel-actions", ["optionalStringEnum", "stringEnum"]);
+    expectSourceMentions("compat", [
+      "createPluginRuntimeStore",
+      "createScopedChannelConfigAdapter",
+      "resolveControlCommandGate",
+      "delegateCompactionToRuntime",
+    ]);
     expectSourceMentions("device-bootstrap", [
       "approveDevicePairing",
       "issueDeviceBootstrapToken",
@@ -486,6 +498,12 @@ describe("plugin-sdk subpath exports", () => {
     expectSourceMentions("channel-send-result", [
       "attachChannelToResult",
       "buildChannelSendResult",
+    ]);
+    expectSourceMentions("direct-dm", [
+      "createDirectDmPreCryptoGuardPolicy",
+      "createPreCryptoDirectDmAuthorizer",
+      "dispatchInboundDirectDmWithRuntime",
+      "resolveInboundDirectDmAccessWithRuntime",
     ]);
 
     expectSourceMentions("conversation-runtime", [

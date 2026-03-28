@@ -51,8 +51,9 @@ describe("provider auth choice manifest helpers", () => {
     expect(resolveManifestProviderAuthChoice("openai-api-key")?.providerId).toBe("openai");
   });
 
-  it("deduplicates flag metadata by option key + flag", () => {
-    loadPluginManifestRegistry.mockReturnValue({
+  it.each([
+    {
+      name: "deduplicates flag metadata by option key + flag",
       plugins: [
         {
           id: "moonshot",
@@ -80,21 +81,19 @@ describe("provider auth choice manifest helpers", () => {
           ],
         },
       ],
-    });
-
-    expect(resolveManifestProviderOnboardAuthFlags()).toEqual([
-      {
-        optionKey: "moonshotApiKey",
-        authChoice: "moonshot-api-key",
-        cliFlag: "--moonshot-api-key",
-        cliOption: "--moonshot-api-key <key>",
-        description: "Moonshot API key",
-      },
-    ]);
-  });
-
-  it("resolves deprecated auth-choice aliases through manifest metadata", () => {
-    loadPluginManifestRegistry.mockReturnValue({
+      run: () =>
+        expect(resolveManifestProviderOnboardAuthFlags()).toEqual([
+          {
+            optionKey: "moonshotApiKey",
+            authChoice: "moonshot-api-key",
+            cliFlag: "--moonshot-api-key",
+            cliOption: "--moonshot-api-key <key>",
+            description: "Moonshot API key",
+          },
+        ]),
+    },
+    {
+      name: "resolves deprecated auth-choice aliases through manifest metadata",
       plugins: [
         {
           id: "minimax",
@@ -108,14 +107,20 @@ describe("provider auth choice manifest helpers", () => {
           ],
         },
       ],
+      run: () => {
+        expect(resolveManifestDeprecatedProviderAuthChoice("minimax")?.choiceId).toBe(
+          "minimax-global-api",
+        );
+        expect(resolveManifestDeprecatedProviderAuthChoice("minimax-api")?.choiceId).toBe(
+          "minimax-global-api",
+        );
+        expect(resolveManifestDeprecatedProviderAuthChoice("openai")).toBeUndefined();
+      },
+    },
+  ])("$name", ({ plugins, run }) => {
+    loadPluginManifestRegistry.mockReturnValue({
+      plugins,
     });
-
-    expect(resolveManifestDeprecatedProviderAuthChoice("minimax")?.choiceId).toBe(
-      "minimax-global-api",
-    );
-    expect(resolveManifestDeprecatedProviderAuthChoice("minimax-api")?.choiceId).toBe(
-      "minimax-global-api",
-    );
-    expect(resolveManifestDeprecatedProviderAuthChoice("openai")).toBeUndefined();
+    run();
   });
 });

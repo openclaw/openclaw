@@ -494,6 +494,11 @@ export function createAgentEventHandler({
       chatType: row?.chatType,
       origin: row?.origin,
       spawnedBy: row?.spawnedBy,
+      spawnedWorkspaceDir: row?.spawnedWorkspaceDir,
+      forkedFromParent: row?.forkedFromParent,
+      spawnDepth: row?.spawnDepth,
+      subagentRole: row?.subagentRole,
+      subagentControlScope: row?.subagentControlScope,
       label: row?.label,
       displayName: row?.displayName,
       deliveryContext: row?.deliveryContext,
@@ -775,7 +780,12 @@ export function createAgentEventHandler({
       if (sessionKey) {
         const sessionSubscribers = sessionEventSubscribers.getAll();
         if (sessionSubscribers.size > 0) {
-          broadcastToConnIds("session.tool", toolPayload, sessionSubscribers, { dropIfSlow: true });
+          broadcastToConnIds(
+            "session.tool",
+            { ...toolPayload, ...buildSessionEventSnapshot(sessionKey) },
+            sessionSubscribers,
+            { dropIfSlow: true },
+          );
         }
       }
     } else {
