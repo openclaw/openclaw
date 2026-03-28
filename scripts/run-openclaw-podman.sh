@@ -596,11 +596,11 @@ if match and match.group(1) in VALID:
 PY
 }
 
-# Keep Podman default local-only unless explicitly overridden.
-# Non-loopback binds require gateway.controlUi.allowedOrigins (security hardening).
-# Precedence: explicit env > openclaw.json gateway.bind > loopback default.
+# For bridge-published Podman ports, the gateway must listen on a container-
+# reachable interface unless an explicit override or config bind is set.
+# Precedence: explicit env > openclaw.json gateway.bind > lan default.
 CONFIG_GATEWAY_BIND="$(resolve_config_gateway_bind "$CONFIG_JSON")"
-GATEWAY_BIND="${OPENCLAW_GATEWAY_BIND:-${CONFIG_GATEWAY_BIND:-loopback}}"
+GATEWAY_BIND="${OPENCLAW_GATEWAY_BIND:-${CONFIG_GATEWAY_BIND:-lan}}"
 
 PODMAN_USERNS="${OPENCLAW_PODMAN_USERNS:-keep-id}"
 USERNS_ARGS=()
