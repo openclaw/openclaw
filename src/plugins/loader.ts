@@ -362,8 +362,17 @@ export function resolveRuntimePluginRegistry(
   // (tools.ts, memory-runtime.ts, channel-resolution.ts) share the same
   // workspaceDir, config, and env as the gateway — the only fields that produce
   // a different cache key are the gateway-specific ones that isGatewayScopedLoad
-  // already guards against. If a future multi-workspace model is introduced,
-  // this fallback should be narrowed to also verify workspaceDir/config parity.
+  // already guards against.
+  //
+  // The gateway loads plugins via resolveGatewayStartupPluginIds which scopes
+  // to configured channels, referenced providers, and explicitly enabled plugins.
+  // Bundled plugins outside that set are intentionally inactive in this process —
+  // they have no registered tools, hooks, or providers. A fresh loadOpenClawPlugins
+  // call without onlyPluginIds would create a registry containing those unactivated
+  // plugins AND replace the gateway's fully-initialized one, which is strictly worse.
+  //
+  // If a future multi-workspace model is introduced, this fallback should be
+  // narrowed to also verify workspaceDir/config parity.
   if (!isGatewayScopedLoad(options)) {
     const active = getActivePluginRegistry();
     if (active) {
