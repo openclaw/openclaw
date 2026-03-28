@@ -47,9 +47,15 @@ const loadOrCreateDeviceIdentityMock = vi.hoisted(() =>
 vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent: vi.fn(),
 }));
-vi.mock("../infra/heartbeat-wake.js", () => ({
-  requestHeartbeatNow: vi.fn(),
-}));
+vi.mock("../infra/heartbeat-wake.js", async () => {
+  const actual = await vi.importActual<typeof import("../infra/heartbeat-wake.js")>(
+    "../infra/heartbeat-wake.js",
+  );
+  return {
+    ...actual,
+    requestHeartbeatNow: vi.fn(),
+  };
+});
 vi.mock("../commands/agent.js", () => ({
   agentCommand: ingressAgentCommandMock,
   agentCommandFromIngress: ingressAgentCommandMock,
