@@ -820,6 +820,7 @@ describe("spawnAcpDirect", () => {
   it('starts a completion-only parent relay when parentUpdates="notify" is used without streamTo="parent"', async () => {
     const relayHandle = createRelayHandle();
     hoisted.startAcpSpawnParentStreamRelayMock.mockReset().mockReturnValue(relayHandle);
+    const requesterContext = createRequesterContext();
 
     const result = await spawnAcpDirect(
       {
@@ -827,9 +828,7 @@ describe("spawnAcpDirect", () => {
         agentId: "codex",
         parentUpdates: "notify",
       },
-      {
-        agentSessionKey: "agent:main:main",
-      },
+      requesterContext,
     );
 
     expect(result.status).toBe("accepted");
@@ -838,9 +837,15 @@ describe("spawnAcpDirect", () => {
       expect.objectContaining({
         relayProgressToParent: false,
         parentUpdateMode: "notify",
-        parentSessionKey: "agent:main:main",
+        parentSessionKey: requesterContext.agentSessionKey,
       }),
     );
+    expectAgentGatewayCall({
+      deliver: false,
+      channel: undefined,
+      to: undefined,
+      threadId: undefined,
+    });
   });
 
   it('rejects parentUpdates="notify" for ACP mode="session"', async () => {

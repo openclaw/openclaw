@@ -310,6 +310,7 @@ Interface details:
   - `system` is the default behavior and preserves the current relay path.
   - `notify` is opt-in and changes terminal completion routing so the finished ACP task is announced back into the parent session like a subagent completion.
   - `notify` requires `mode: "run"` and an active requester session context.
+  - When `notify` owns terminal delivery, OpenClaw suppresses child inline external delivery so the parent session remains the only user-facing completion path.
   - `streamTo: "parent"` remains the switch for progress relay. When both are set, progress stays on the lightweight relay path while terminal completion uses the announce path.
   - This split is intentional: progress updates are frequent, best-effort status signals, while announce is better suited to one terminal completion message with final outcome metadata.
   - If the notify path is unavailable, OpenClaw falls back to the normal parent-session system-event completion notice.

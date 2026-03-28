@@ -646,6 +646,7 @@ function resolveAcpSpawnBootstrapDeliveryPlan(params: {
   spawnMode: SpawnAcpMode;
   requestThreadBinding: boolean;
   effectiveStreamToParent: boolean;
+  completionHandledByParent: boolean;
   requester: AcpSpawnRequesterState;
   binding: SessionBindingRecord | null;
 }): AcpSpawnBootstrapDeliveryPlan {
@@ -675,10 +676,12 @@ function resolveAcpSpawnBootstrapDeliveryPlan(params: {
   // Run-mode spawns use stream-to-parent when the requester is a subagent
   // orchestrator with an active heartbeat relay route. For all other run-mode
   // spawns from non-subagent requester sessions, fall back to inline delivery
-  // so the result reaches the originating channel.
+  // so the result reaches the originating channel. When parent notify mode
+  // takes ownership of terminal delivery, suppress the child inline path.
   const useInlineDelivery =
     hasDeliveryTarget &&
     !params.effectiveStreamToParent &&
+    !params.completionHandledByParent &&
     (params.spawnMode === "session" ||
       (!params.requester.isSubagentSession && !params.requestThreadBinding));
 
@@ -864,6 +867,7 @@ export async function spawnAcpDirect(
     spawnMode,
     requestThreadBinding,
     effectiveStreamToParent,
+    completionHandledByParent: effectiveParentUpdates === "notify",
     requester: requesterState,
     binding,
   });
