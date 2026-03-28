@@ -1130,7 +1130,19 @@ export type ProviderPlugin = {
     ctx: ProviderAuthDoctorHintContext,
   ) => string | Promise<string | null | undefined> | null | undefined;
   /**
-   * Provider-owned synthetic auth marker.
+   * Provider-owned config-backed auth resolution.
+   *
+   * Providers own any provider-specific fallback secret rules here so core
+   * auth/discovery code can stay generic and avoid parsing provider-private
+   * config layouts.
+   *
+   * The returned `apiKey` may be:
+   * - a real credential from the active runtime snapshot, suitable for runtime use
+   * - a non-secret marker (for example a managed SecretRef marker), suitable only
+   *   for discovery/bootstrap callers
+   *
+   * Runtime callers must not treat non-secret markers as runnable credentials;
+   * they should retry against the active runtime snapshot when available.
    *
    * This hook is the canonical seam for provider-specific fallback auth
    * derived from plugin/private config. It may return:
