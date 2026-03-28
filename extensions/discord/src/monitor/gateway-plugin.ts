@@ -243,6 +243,18 @@ function createGatewayPlugin(params: {
     constructor() {
       super(params.options);
     }
+    // Add this inside the class SafeGatewayPlugin
+    override async handleReconnectionAttempt() {
+      try {
+        await super.handleReconnectionAttempt();
+      } catch (error) {
+        // This is the "Safety Net"
+        params.runtime?.error?.(
+          danger(`discord: Gateway reconnection exhausted. Gateway will remain offline. Error: ${error instanceof Error ? error.message : String(error)}`)
+        );
+        // We do NOT re-throw the error here. By not throwing, we prevent the crash.
+      }
+    }
 
     override async registerClient(
       client: Parameters<carbonGateway.GatewayPlugin["registerClient"]>[0],
@@ -297,7 +309,7 @@ export function createDiscordGatewayPlugin(params: {
   const intents = resolveDiscordGatewayIntents(params.discordConfig?.intents);
   const proxy = params.discordConfig?.proxy?.trim();
   const options = {
-    reconnect: { maxAttempts: 50 },
+    reconnect: { maxAttempts: 5 },
     intents,
     autoInteractions: true,
   };

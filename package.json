@@ -1205,6 +1205,7 @@
     "cli-highlight": "^2.1.11",
     "commander": "^14.0.3",
     "croner": "^10.0.1",
+    "discord-api-types": "^0.38.42",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
     "file-type": "22.0.0",
