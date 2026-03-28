@@ -22,8 +22,9 @@ export { PAIRING_APPROVED_MESSAGE } from "../channels/plugins/pairing-message.js
 export { patchScopedAccountConfig } from "../channels/plugins/setup-helpers.js";
 export type { BaseProbeResult } from "../channels/plugins/types.js";
 export type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
-export { getChatChannelMeta } from "../channels/registry.js";
+export { getChatChannelMeta } from "./channel-plugin-common.js";
 export { createChannelReplyPipeline } from "./channel-reply-pipeline.js";
+export { chunkTextForOutbound } from "./text-chunking.js";
 export type { OpenClawConfig } from "../config/config.js";
 export { isDangerousNameMatchingEnabled } from "../config/dangerous-name-matching.js";
 export {

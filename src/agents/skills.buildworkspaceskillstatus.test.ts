@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { withEnv, withEnvAsync } from "../test-utils/env.js";
 import { buildWorkspaceSkillStatus } from "./skills-status.js";
 import { writeSkill } from "./skills.e2e-test-helpers.js";
+import { createCanonicalFixtureSkill } from "./skills.test-helpers.js";
 import type { SkillEntry } from "./skills/types.js";
 
 const tempDirs: string[] = [];
@@ -30,12 +31,14 @@ function makeEntry(params: {
     label?: string;
   }>;
 }): SkillEntry {
+  const filePath = `/tmp/${params.name}/SKILL.md`;
+  const baseDir = `/tmp/${params.name}`;
   return {
     skill: createFixtureSkill({
       name: params.name,
       description: `desc:${params.name}`,
-      filePath: `/tmp/${params.name}/SKILL.md`,
-      baseDir: `/tmp/${params.name}`,
+      filePath,
+      baseDir,
       source: params.source ?? "openclaw-workspace",
     }),
     frontmatter: {},
@@ -55,14 +58,7 @@ function createFixtureSkill(params: {
   baseDir: string;
   source: string;
 }): SkillEntry["skill"] {
-  return {
-    name: params.name,
-    description: params.description,
-    filePath: params.filePath,
-    baseDir: params.baseDir,
-    sourceInfo: { source: params.source } as never,
-    disableModelInvocation: false,
-  } as SkillEntry["skill"];
+  return createCanonicalFixtureSkill(params);
 }
 
 describe("buildWorkspaceSkillStatus", () => {

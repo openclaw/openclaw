@@ -193,7 +193,57 @@ describe("plugin-sdk subpath exports", () => {
       "parseChatTargetPrefixesOrThrow",
       "resolveServicePrefixedAllowTarget",
       "resolveServicePrefixedTarget",
+      "chunkTextForOutbound",
     ]);
+    expectSourceMentions("imessage-core", [
+      "normalizeIMessageAcpConversationId",
+      "matchIMessageAcpConversation",
+      "resolveIMessageConversationIdFromTarget",
+      "parseChatAllowTargetPrefixes",
+      "parseChatTargetPrefixesOrThrow",
+      "resolveServicePrefixedAllowTarget",
+      "resolveServicePrefixedTarget",
+    ]);
+    expectSourceMentions("bluebubbles", [
+      "normalizeBlueBubblesAcpConversationId",
+      "matchBlueBubblesAcpConversation",
+      "resolveBlueBubblesConversationIdFromTarget",
+      "resolveAckReaction",
+      "resolveChannelMediaMaxBytes",
+      "collectBlueBubblesStatusIssues",
+      "createChannelPairingController",
+      "createChannelReplyPipeline",
+      "resolveRequestUrl",
+      "buildProbeChannelStatusSummary",
+      "extractToolSend",
+      "createFixedWindowRateLimiter",
+      "withResolvedWebhookRequestPipeline",
+    ]);
+    expectSourceMentions("irc", [
+      "createChannelReplyPipeline",
+      "chunkTextForOutbound",
+      "createChannelPairingController",
+      "createLoggerBackedRuntime",
+      "ircSetupAdapter",
+      "ircSetupWizard",
+    ]);
+    expectSourceMentions("bluebubbles-policy", [
+      "isAllowedBlueBubblesSender",
+      "resolveBlueBubblesGroupRequireMention",
+      "resolveBlueBubblesGroupToolPolicy",
+    ]);
+    for (const subpath of [
+      "feishu",
+      "googlechat",
+      "matrix",
+      "mattermost",
+      "msteams",
+      "zalo",
+      "zalouser",
+    ]) {
+      expectSourceMentions(subpath, ["chunkTextForOutbound"]);
+    }
+    expectSourceMentions("signal", ["chunkText"]);
     expectSourceMentions("reply-history", [
       "buildPendingHistoryContextFromMap",
       "clearHistoryEntriesIfEnabled",
@@ -534,6 +584,7 @@ describe("plugin-sdk subpath exports", () => {
       "closeDispatcher",
       "createPinnedDispatcher",
       "resolvePinnedHostnameWithPolicy",
+      "formatErrorMessage",
       "assertHttpUrlTargetsPrivateNetwork",
       "ssrfPolicyFromAllowPrivateNetwork",
     ]);
@@ -573,6 +624,12 @@ describe("plugin-sdk subpath exports", () => {
       "createDelegatedSetupWizardProxy",
       "createTopLevelChannelDmPolicy",
       "mergeAllowFromEntries",
+    ]);
+    expectSourceMentions("setup-tools", [
+      "formatCliCommand",
+      "detectBinary",
+      "installSignalCli",
+      "formatDocsLink",
     ]);
     expectSourceMentions("lazy-runtime", ["createLazyRuntimeSurface", "createLazyRuntimeModule"]);
     expectSourceMentions("self-hosted-provider-setup", [

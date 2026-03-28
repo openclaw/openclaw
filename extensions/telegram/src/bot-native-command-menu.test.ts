@@ -279,4 +279,32 @@ describe("bot-native-command-menu", () => {
     );
     expect(runtimeError).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { label: "description envelope", error: { description: "BOT_COMMANDS_TOO_MUCH" } },
+    { label: "message envelope", error: { message: "BOT_COMMANDS_TOO_MUCH" } },
+  ])("retries when Telegram returns a plain-object $label error", async ({ error }) => {
+    const deleteMyCommands = vi.fn(async () => undefined);
+    const setMyCommands = vi.fn().mockRejectedValueOnce(error).mockResolvedValue(undefined);
+    const runtimeLog = vi.fn();
+
+    syncMenuCommandsWithMocks({
+      deleteMyCommands,
+      setMyCommands,
+      runtimeLog,
+      commandsToRegister: Array.from({ length: 10 }, (_, i) => ({
+        command: `cmd_${i}`,
+        description: `Command ${i}`,
+      })),
+      accountId: `test-envelope-${Date.now()}`,
+      botIdentity: "bot-a",
+    });
+
+    await vi.waitFor(() => {
+      expect(setMyCommands).toHaveBeenCalledTimes(2);
+    });
+    expect(runtimeLog).toHaveBeenCalledWith(
+      "Telegram rejected 10 commands (BOT_COMMANDS_TOO_MUCH); retrying with 8.",
+    );
+  });
 });

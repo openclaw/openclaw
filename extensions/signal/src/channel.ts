@@ -18,6 +18,7 @@ import { resolveSignalOutboundTarget } from "./outbound-session.js";
 import { probeSignal, type SignalProbe } from "./probe.js";
 import {
   buildBaseChannelStatusSummary,
+  chunkText,
   collectStatusIssuesFromLastError,
   createDefaultChannelRuntimeState,
   DEFAULT_ACCOUNT_ID,
@@ -306,7 +307,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
     outbound: {
       base: {
         deliveryMode: "direct",
-        chunker: (text, limit) => getSignalRuntime().channel.text.chunkText(text, limit),
+        chunker: chunkText,
         chunkerMode: "text",
         textChunkLimit: 4000,
         sendFormattedText: async ({ cfg, to, text, accountId, deps, abortSignal }) =>

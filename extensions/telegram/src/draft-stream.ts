@@ -12,7 +12,7 @@ const DRAFT_METHOD_UNAVAILABLE_RE =
 const DRAFT_CHAT_UNSUPPORTED_RE = /(can't be used|can be used only)/i;
 
 type TelegramSendMessageDraft = (
-  chatId: number,
+  chatId: Parameters<Bot["api"]["sendMessage"]>[0],
   draftId: number,
   text: string,
   params?: {
@@ -20,6 +20,18 @@ type TelegramSendMessageDraft = (
     parse_mode?: "HTML";
   },
 ) => Promise<unknown>;
+
+type TelegramSendMessageParams = Parameters<Bot["api"]["sendMessage"]>[2];
+
+function hasNumericMessageThreadId(
+  params: TelegramSendMessageParams | undefined,
+): params is TelegramSendMessageParams & { message_thread_id: number } {
+  return (
+    typeof params === "object" &&
+    params !== null &&
+    typeof (params as { message_thread_id?: unknown }).message_thread_id === "number"
+  );
+}
 
 /**
  * Keep draft-id allocation shared across bundled chunks so concurrent preview
@@ -103,7 +115,7 @@ type SupersededTelegramPreview = {
 
 export function createTelegramDraftStream(params: {
   api: Bot["api"];
-  chatId: number;
+  chatId: Parameters<Bot["api"]["sendMessage"]>[0];
   maxChars?: number;
   thread?: TelegramThreadSpec | null;
   previewTransport?: "auto" | "message" | "draft";
@@ -177,9 +189,7 @@ export function createTelegramDraftStream(params: {
           parse_mode: sendArgs.renderedParseMode,
         }
       : replyParams;
-    const usedThreadParams =
-      "message_thread_id" in (sendParams ?? {}) &&
-      typeof (sendParams as { message_thread_id?: unknown }).message_thread_id === "number";
+    const usedThreadParams = hasNumericMessageThreadId(sendParams);
     try {
       return {
         sent: await params.api.sendMessage(chatId, sendArgs.renderedText, sendParams),
@@ -189,9 +199,7 @@ export function createTelegramDraftStream(params: {
       if (!usedThreadParams || !THREAD_NOT_FOUND_RE.test(String(err))) {
         throw err;
       }
-      const threadlessParams = {
-        ...(sendParams as Record<string, unknown>),
-      };
+      const threadlessParams: TelegramSendMessageParams = { ...(sendParams ?? {}) };
       delete threadlessParams.message_thread_id;
       params.warn?.(sendArgs.fallbackWarnMessage);
       return {

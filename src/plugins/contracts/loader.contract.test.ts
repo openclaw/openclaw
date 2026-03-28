@@ -26,6 +26,17 @@ function expectPluginAllowlistContains(
   }
 }
 
+function createAllowlistCompatConfig(pluginIds: string[]) {
+  return withBundledPluginAllowlistCompat({
+    config: {
+      plugins: {
+        allow: [demoAllowEntry],
+      },
+    },
+    pluginIds,
+  });
+}
+
 const demoAllowEntry = "demo-allowed";
 
 describe("plugin loader contract", () => {
@@ -48,14 +59,7 @@ describe("plugin loader contract", () => {
         },
       },
     });
-    compatConfig = withBundledPluginAllowlistCompat({
-      config: {
-        plugins: {
-          allow: [demoAllowEntry],
-        },
-      },
-      pluginIds: compatPluginIds,
-    });
+    compatConfig = createAllowlistCompatConfig(compatPluginIds);
     vitestCompatConfig = providerTesting.withBundledProviderVitestCompat({
       config: undefined,
       pluginIds: providerPluginIds,
@@ -65,14 +69,7 @@ describe("plugin loader contract", () => {
       resolveBundledPluginWebSearchProviders({}).map((entry) => entry.pluginId),
     );
     bundledWebSearchPluginIds = uniqueSortedStrings(resolveBundledWebSearchPluginIds({}));
-    webSearchAllowlistCompatConfig = withBundledPluginAllowlistCompat({
-      config: {
-        plugins: {
-          allow: [demoAllowEntry],
-        },
-      },
-      pluginIds: webSearchPluginIds,
-    });
+    webSearchAllowlistCompatConfig = createAllowlistCompatConfig(webSearchPluginIds);
   });
 
   beforeEach(() => {
@@ -81,8 +78,9 @@ describe("plugin loader contract", () => {
 
   it("keeps bundled provider compatibility wired to the provider registry", () => {
     expect(providerPluginIds).toEqual(manifestProviderPluginIds);
-    expect(uniqueSortedStrings(compatPluginIds)).toEqual(manifestProviderPluginIds);
-    expect(uniqueSortedStrings(compatPluginIds)).toEqual(expect.arrayContaining(providerPluginIds));
+    const sortedCompatPluginIds = uniqueSortedStrings(compatPluginIds);
+    expect(sortedCompatPluginIds).toEqual(manifestProviderPluginIds);
+    expect(sortedCompatPluginIds).toEqual(expect.arrayContaining(providerPluginIds));
     expectPluginAllowlistContains(compatConfig?.plugins?.allow, providerPluginIds, demoAllowEntry);
   });
 
@@ -92,23 +90,15 @@ describe("plugin loader contract", () => {
     expectPluginAllowlistContains(vitestCompatConfig?.plugins?.allow, providerPluginIds);
   });
 
-  it.each([
-    {
-      name: "keeps bundled web search loading scoped to the web search registry",
-      actual: bundledWebSearchPluginIds,
-      expected: webSearchPluginIds,
-    },
-    {
-      name: "keeps bundled web search allowlist compatibility wired to the web search registry",
-      actual: webSearchAllowlistCompatConfig?.plugins?.allow,
-      expected: webSearchPluginIds,
-      extraEntry: demoAllowEntry,
-    },
-  ] as const)("$name", ({ actual, expected, extraEntry }) => {
-    if (Array.isArray(actual) && extraEntry == null) {
-      expect(actual).toEqual(expected);
-      return;
-    }
-    expectPluginAllowlistContains(actual, expected, extraEntry);
+  it("keeps bundled web search loading scoped to the web search registry", () => {
+    expect(bundledWebSearchPluginIds).toEqual(webSearchPluginIds);
+  });
+
+  it("keeps bundled web search allowlist compatibility wired to the web search registry", () => {
+    expectPluginAllowlistContains(
+      webSearchAllowlistCompatConfig?.plugins?.allow,
+      webSearchPluginIds,
+      demoAllowEntry,
+    );
   });
 });

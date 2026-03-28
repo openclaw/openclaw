@@ -13,15 +13,36 @@ type GeneratedBundledChannelEntry = {
   };
 };
 
-const generatedBundledChannelEntries =
-  GENERATED_BUNDLED_CHANNEL_ENTRIES as unknown as readonly GeneratedBundledChannelEntry[];
+function isGeneratedBundledChannelEntry(value: unknown): value is GeneratedBundledChannelEntry {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const record = value as {
+    id?: unknown;
+    entry?: {
+      channelPlugin?: { id?: unknown };
+      setChannelRuntime?: unknown;
+    };
+    setupEntry?: { plugin?: { id?: unknown } };
+  };
+  return typeof record.id === "string" && typeof record.entry?.channelPlugin?.id === "string";
+}
+
+const generatedBundledChannelEntries = (
+  Array.isArray(GENERATED_BUNDLED_CHANNEL_ENTRIES)
+    ? GENERATED_BUNDLED_CHANNEL_ENTRIES.filter(isGeneratedBundledChannelEntry)
+    : []
+) as readonly GeneratedBundledChannelEntry[];
 
 export const bundledChannelPlugins = generatedBundledChannelEntries.map(
   ({ entry }) => entry.channelPlugin,
 );
 
-export const bundledChannelSetupPlugins = generatedBundledChannelEntries.flatMap(({ setupEntry }) =>
-  setupEntry ? [setupEntry.plugin] : [],
+export const bundledChannelSetupPlugins = generatedBundledChannelEntries.flatMap(
+  ({ setupEntry }) => {
+    const plugin = setupEntry?.plugin;
+    return plugin ? [plugin] : [];
+  },
 );
 
 function buildBundledChannelPluginsById(plugins: readonly ChannelPlugin[]) {

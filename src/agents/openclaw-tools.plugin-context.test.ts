@@ -1,3 +1,4 @@
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -54,6 +55,53 @@ describe("createOpenClawTools plugin context", () => {
         context: expect.objectContaining({
           sessionKey: "agent:main:telegram:direct:12345",
           sessionId: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+        }),
+      }),
+    );
+  });
+
+  it("infers the default agent workspace for plugin tools when workspaceDir is omitted", () => {
+    const workspaceDir = path.join(process.cwd(), "tmp-main-workspace");
+    createOpenClawTools({
+      config: {
+        agents: {
+          defaults: { workspace: workspaceDir },
+          list: [{ id: "main", default: true }],
+        },
+      } as never,
+      agentSessionKey: "main",
+    });
+
+    expect(resolvePluginToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: expect.objectContaining({
+          agentId: "main",
+          workspaceDir,
+        }),
+      }),
+    );
+  });
+
+  it("infers the session agent workspace for plugin tools when workspaceDir is omitted", () => {
+    const supportWorkspace = path.join(process.cwd(), "tmp-support-workspace");
+    createOpenClawTools({
+      config: {
+        agents: {
+          defaults: { workspace: path.join(process.cwd(), "tmp-default-workspace") },
+          list: [
+            { id: "main", default: true },
+            { id: "support", workspace: supportWorkspace },
+          ],
+        },
+      } as never,
+      agentSessionKey: "agent:support:main",
+    });
+
+    expect(resolvePluginToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: expect.objectContaining({
+          agentId: "support",
+          workspaceDir: supportWorkspace,
         }),
       }),
     );

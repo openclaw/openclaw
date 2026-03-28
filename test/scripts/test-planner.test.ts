@@ -40,6 +40,7 @@ describe("test planner", () => {
     );
 
     expect(plan.runtimeCapabilities.runtimeProfileName).toBe("local-darwin");
+    expect(plan.failurePolicy).toBe("fail-fast");
     expect(plan.runtimeCapabilities.memoryBand).toBe("mid");
     expect(plan.executionBudget.unitSharedWorkers).toBe(4);
     expect(plan.executionBudget.topLevelParallelLimitNoIsolate).toBe(8);
@@ -174,6 +175,25 @@ describe("test planner", () => {
         .map((unit) => unit.surface)
         .toSorted((left, right) => left.localeCompare(right)),
     ).toEqual(["base", "channels"]);
+    artifacts.cleanupTempArtifacts();
+  });
+
+  it("normalizes --bail=0 into collect-all failure policy", () => {
+    const artifacts = createExecutionArtifacts({});
+    const plan = buildExecutionPlan(
+      {
+        mode: "local",
+        surfaces: ["unit"],
+        passthroughArgs: ["--bail=0"],
+      },
+      {
+        env: {},
+        writeTempJsonArtifact: artifacts.writeTempJsonArtifact,
+      },
+    );
+
+    expect(plan.failurePolicy).toBe("collect-all");
+    expect(plan.passthroughOptionArgs).not.toContain("--bail=0");
     artifacts.cleanupTempArtifacts();
   });
 
@@ -318,8 +338,10 @@ describe("test planner", () => {
     expect(manifest.shardCounts.channels).toBe(3);
     expect(manifest.shardCounts.windows).toBe(6);
     expect(manifest.shardCounts.macosNode).toBe(9);
+    expect(manifest.shardCounts.bun).toBe(6);
     expect(manifest.jobs.checks.matrix.include).toHaveLength(7);
     expect(manifest.jobs.checksWindows.matrix.include).toHaveLength(6);
+    expect(manifest.jobs.bunChecks.matrix.include).toHaveLength(6);
     expect(manifest.jobs.macosNode.matrix.include).toHaveLength(9);
     expect(manifest.jobs.macosSwift.enabled).toBe(true);
     expect(manifest.requiredCheckNames).toContain("macos-swift");

@@ -4,6 +4,12 @@ import {
   createAccountScopedAllowlistNameResolver,
   createNestedAllowlistOverrideResolver,
 } from "openclaw/plugin-sdk/allowlist-config-edit";
+import {
+  buildPluginApprovalRequestMessage,
+  buildPluginApprovalResolvedMessage,
+  type PluginApprovalRequest,
+  type PluginApprovalResolved,
+} from "openclaw/plugin-sdk/approval-runtime";
 import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import { createOpenProviderConfiguredRouteWarningCollector } from "openclaw/plugin-sdk/channel-policy";
@@ -14,13 +20,9 @@ import {
   createRuntimeDirectoryLiveAdapter,
 } from "openclaw/plugin-sdk/directory-runtime";
 import {
-  buildPluginApprovalRequestMessage,
-  buildPluginApprovalResolvedMessage,
   createRuntimeOutboundDelegates,
   resolveOutboundSendDep,
-  type PluginApprovalRequest,
-  type PluginApprovalResolved,
-} from "openclaw/plugin-sdk/infra-runtime";
+} from "openclaw/plugin-sdk/outbound-runtime";
 import { normalizeMessageChannel } from "openclaw/plugin-sdk/routing";
 import {
   createComputedAccountStatusAdapter,
@@ -367,6 +369,66 @@ function matchDiscordAcpConversation(params: {
   return null;
 }
 
+function resolveDiscordConversationIdFromTargets(
+  targets: Array<string | undefined>,
+): string | undefined {
+  for (const raw of targets) {
+    const trimmed = raw?.trim();
+    if (!trimmed) {
+      continue;
+    }
+    try {
+      const target = parseDiscordTarget(trimmed, { defaultKind: "channel" });
+      if (target?.normalized) {
+        return target.normalized;
+      }
+    } catch {
+      const mentionMatch = trimmed.match(/^<#(\d+)>$/);
+      if (mentionMatch?.[1]) {
+        return `channel:${mentionMatch[1]}`;
+      }
+      if (/^\d{6,}$/.test(trimmed)) {
+        return normalizeDiscordMessagingTarget(trimmed);
+      }
+    }
+  }
+  return undefined;
+}
+
+function parseDiscordParentChannelFromSessionKey(raw: unknown): string | undefined {
+  const sessionKey = typeof raw === "string" ? raw.trim().toLowerCase() : "";
+  if (!sessionKey) {
+    return undefined;
+  }
+  const match = sessionKey.match(/(?:^|:)channel:([^:]+)$/);
+  return match?.[1] ? `channel:${match[1]}` : undefined;
+}
+
+function resolveDiscordCommandConversation(params: {
+  threadId?: string;
+  threadParentId?: string;
+  parentSessionKey?: string;
+  originatingTo?: string;
+  commandTo?: string;
+  fallbackTo?: string;
+}) {
+  const targets = [params.originatingTo, params.commandTo, params.fallbackTo];
+  if (params.threadId) {
+    const parentConversationId =
+      normalizeDiscordMessagingTarget(params.threadParentId?.trim() ?? "") ||
+      parseDiscordParentChannelFromSessionKey(params.parentSessionKey) ||
+      resolveDiscordConversationIdFromTargets(targets);
+    return {
+      conversationId: params.threadId,
+      ...(parentConversationId && parentConversationId !== params.threadId
+        ? { parentConversationId }
+        : {}),
+    };
+  }
+  const conversationId = resolveDiscordConversationIdFromTargets(targets);
+  return conversationId ? { conversationId } : null;
+}
+
 function parseDiscordExplicitTarget(raw: string) {
   try {
     const target = parseDiscordTarget(raw, { defaultKind: "channel" });
@@ -552,6 +614,22 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
             bindingConversationId: compiledBinding.conversationId,
             conversationId,
             parentConversationId,
+          }),
+        resolveCommandConversation: ({
+          threadId,
+          threadParentId,
+          parentSessionKey,
+          originatingTo,
+          commandTo,
+          fallbackTo,
+        }) =>
+          resolveDiscordCommandConversation({
+            threadId,
+            threadParentId,
+            parentSessionKey,
+            originatingTo,
+            commandTo,
+            fallbackTo,
           }),
       },
       status: createComputedAccountStatusAdapter<ResolvedDiscordAccount, DiscordProbe, unknown>({

@@ -23,6 +23,44 @@ vi.mock("../../plugins/provider-auth-choice.runtime.js", () => ({
   runProviderModelSelectedHook: runProviderModelSelectedHookMock,
 }));
 
+function createAuthChoiceProvider(params: {
+  providerId: string;
+  label: string;
+  methodId: string;
+  methodLabel: string;
+  kind: "oauth" | "api_key" | "custom";
+}) {
+  return {
+    id: params.providerId,
+    label: params.label,
+    auth: [
+      {
+        id: params.methodId,
+        label: params.methodLabel,
+        hint:
+          params.kind === "api_key"
+            ? "Paste key"
+            : params.kind === "custom"
+              ? "No auth"
+              : "Browser sign-in",
+        kind: params.kind,
+        run: runAuthMethodMock,
+      },
+    ],
+  } satisfies ProviderPlugin;
+}
+
+async function expectPreferredProviderFallback(provider: ProviderPlugin) {
+  resolvePluginProvidersMock.mockClear();
+  resolvePluginProvidersMock.mockReturnValue([provider]);
+  await expect(
+    resolvePreferredProviderForAuthChoice({
+      choice: buildProviderPluginMethodChoice(provider.id, provider.auth[0]?.id ?? "default"),
+    }),
+  ).resolves.toBe(provider.id);
+  expect(resolvePluginProvidersMock).toHaveBeenCalled();
+}
+
 describe("provider auth-choice contract", () => {
   beforeEach(() => {
     resolvePluginProvidersMock.mockReset();
@@ -57,72 +95,39 @@ describe("provider auth-choice contract", () => {
 
   it("maps provider-plugin choices through the shared preferred-provider fallback resolver", async () => {
     const pluginFallbackScenarios: ProviderPlugin[] = [
-      {
-        id: "demo-oauth-provider",
+      createAuthChoiceProvider({
+        providerId: "demo-oauth-provider",
         label: "Demo OAuth Provider",
-        auth: [
-          {
-            id: "oauth",
-            label: "OAuth",
-            hint: "Browser sign-in",
-            kind: "oauth",
-            run: runAuthMethodMock,
-          },
-        ],
-      },
-      {
-        id: "demo-browser-provider",
+        methodId: "oauth",
+        methodLabel: "OAuth",
+        kind: "oauth",
+      }),
+      createAuthChoiceProvider({
+        providerId: "demo-browser-provider",
         label: "Demo Browser Provider",
-        auth: [
-          {
-            id: "portal",
-            label: "Portal",
-            hint: "Browser sign-in",
-            kind: "oauth",
-            run: runAuthMethodMock,
-          },
-        ],
-      },
-      {
-        id: "demo-api-key-provider",
+        methodId: "portal",
+        methodLabel: "Portal",
+        kind: "oauth",
+      }),
+      createAuthChoiceProvider({
+        providerId: "demo-api-key-provider",
         label: "Demo API Key Provider",
-        auth: [
-          {
-            id: "api-key",
-            label: "API key",
-            hint: "Paste key",
-            kind: "api_key",
-            run: runAuthMethodMock,
-          },
-        ],
-      },
-      {
-        id: "demo-local-provider",
+        methodId: "api-key",
+        methodLabel: "API key",
+        kind: "api_key",
+      }),
+      createAuthChoiceProvider({
+        providerId: "demo-local-provider",
         label: "Demo Local Provider",
-        auth: [
-          {
-            id: "local",
-            label: "Local",
-            hint: "No auth",
-            kind: "custom",
-            run: runAuthMethodMock,
-          },
-        ],
-      },
+        methodId: "local",
+        methodLabel: "Local",
+        kind: "custom",
+      }),
     ];
 
-    await Promise.all(
-      pluginFallbackScenarios.map(async (provider) => {
-        resolvePluginProvidersMock.mockClear();
-        resolvePluginProvidersMock.mockReturnValue([provider]);
-        await expect(
-          resolvePreferredProviderForAuthChoice({
-            choice: buildProviderPluginMethodChoice(provider.id, provider.auth[0]?.id ?? "default"),
-          }),
-        ).resolves.toBe(provider.id);
-        expect(resolvePluginProvidersMock).toHaveBeenCalled();
-      }),
-    );
+    for (const provider of pluginFallbackScenarios) {
+      await expectPreferredProviderFallback(provider);
+    }
 
     resolvePluginProvidersMock.mockClear();
     await expect(resolvePreferredProviderForAuthChoice({ choice: "unknown" })).resolves.toBe(

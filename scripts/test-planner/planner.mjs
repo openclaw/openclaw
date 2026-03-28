@@ -98,6 +98,7 @@ const normalizeSurfaces = (values = []) => [
 ];
 
 const EXPLICIT_PLAN_SURFACES = new Set(["unit", "extensions", "channels", "contracts", "gateway"]);
+const FAILURE_POLICIES = new Set(["fail-fast", "collect-all"]);
 
 const validateExplicitSurfaces = (surfaces) => {
   const invalidSurfaces = surfaces.filter((surface) => !EXPLICIT_PLAN_SURFACES.has(surface));
@@ -132,6 +133,48 @@ const buildRequestedSurfaces = (request, env) => {
     surfaces.push("gateway");
   }
   return surfaces;
+};
+
+const normalizeFailurePolicy = (requestFailurePolicy, optionArgs) => {
+  if (requestFailurePolicy !== null && requestFailurePolicy !== undefined) {
+    if (!FAILURE_POLICIES.has(requestFailurePolicy)) {
+      throw new Error(
+        `Unsupported failure policy "${String(requestFailurePolicy)}". Supported values: fail-fast, collect-all.`,
+      );
+    }
+    return { failurePolicy: requestFailurePolicy, passthroughOptionArgs: optionArgs };
+  }
+
+  const normalizedOptionArgs = [];
+  let failurePolicy = "fail-fast";
+
+  for (let index = 0; index < optionArgs.length; index += 1) {
+    const arg = optionArgs[index];
+    if (arg === "--bail") {
+      const nextValue = optionArgs[index + 1] ?? "";
+      if (nextValue === "0") {
+        failurePolicy = "collect-all";
+        index += 1;
+        continue;
+      }
+      throw new Error(
+        `Unsupported wrapper-level --bail value: ${String(nextValue || "<missing>")}. Use --bail=0, --collect-failures, or --failure-policy=collect-all.`,
+      );
+    }
+    if (arg.startsWith("--bail=")) {
+      const value = arg.slice("--bail=".length);
+      if (value === "0") {
+        failurePolicy = "collect-all";
+        continue;
+      }
+      throw new Error(
+        `Unsupported wrapper-level --bail value: ${String(value || "<missing>")}. Use --bail=0, --collect-failures, or --failure-policy=collect-all.`,
+      );
+    }
+    normalizedOptionArgs.push(arg);
+  }
+
+  return { failurePolicy, passthroughOptionArgs: normalizedOptionArgs };
 };
 
 const createPlannerContext = (request, options = {}) => {
@@ -1147,14 +1190,7 @@ export function buildCIExecutionManifest(scopeInput = {}, options = {}) {
     minShards: 1,
     maxShards: 9,
   });
-  const bunShardCount = resolveDynamicShardCount({
-    estimatedDurationMs: sumKnownManifestDurationsMs(context.unitTimingManifest),
-    fileCount: context.catalog.allKnownUnitFiles.length,
-    targetDurationMs: 30_000,
-    targetFilesPerShard: 80,
-    minShards: 1,
-    maxShards: 4,
-  });
+  const bunShardCount = windowsShardCount;
 
   const checksFastInclude = nodeEligible
     ? [
@@ -1364,6 +1400,7 @@ export function buildExecutionPlan(request, options = {}) {
   const { fileFilters: passthroughFileFilters, optionArgs } = parsePassthroughArgs(
     request.passthroughArgs ?? [],
   );
+  const normalizedFailurePolicy = normalizeFailurePolicy(request.failurePolicy ?? null, optionArgs);
   const fileFilters = [...explicitFileFilters, ...passthroughFileFilters];
   const passthroughMetadataFlags = new Set(["-h", "--help", "--listTags", "--clearCache"]);
   const passthroughMetadataOnly =
@@ -1376,7 +1413,7 @@ export function buildExecutionPlan(request, options = {}) {
       const [flag] = arg.split("=", 1);
       return passthroughMetadataFlags.has(flag);
     });
-  const passthroughRequiresSingleRun = optionArgs.some((arg) => {
+  const passthroughRequiresSingleRun = normalizedFailurePolicy.passthroughOptionArgs.some((arg) => {
     if (!arg.startsWith("-")) {
       return false;
     }
@@ -1387,7 +1424,7 @@ export function buildExecutionPlan(request, options = {}) {
     {
       ...request,
       fileFilters,
-      passthroughOptionArgs: optionArgs,
+      passthroughOptionArgs: normalizedFailurePolicy.passthroughOptionArgs,
     },
     options,
   );
@@ -1465,7 +1502,8 @@ export function buildExecutionPlan(request, options = {}) {
   return {
     runtimeCapabilities: context.runtime,
     executionBudget: context.executionBudget,
-    passthroughOptionArgs: optionArgs,
+    failurePolicy: normalizedFailurePolicy.failurePolicy,
+    passthroughOptionArgs: normalizedFailurePolicy.passthroughOptionArgs,
     passthroughRequiresSingleRun,
     passthroughMetadataOnly,
     fileFilters,
