@@ -112,6 +112,26 @@ describe("executeZalouserTool", () => {
     });
   });
 
+  it("does not route send actions from foreign ambient thread defaults", async () => {
+    const tool = createZalouserTool({
+      deliveryContext: {
+        channel: "slack",
+        to: "channel:C123",
+        threadId: "1710000000.000100",
+      },
+    });
+
+    const result = await tool.execute("tool-1", {
+      action: "send",
+      message: "hello",
+    });
+
+    expect(mockSendMessage).not.toHaveBeenCalled();
+    expect(extractDetails(result)).toEqual({
+      error: "threadId and message required for send action",
+    });
+  });
+
   it("returns tool error when send action fails", async () => {
     mockSendMessage.mockResolvedValueOnce({ ok: false, error: "blocked" });
     const result = await executeZalouserTool("tool-1", {
