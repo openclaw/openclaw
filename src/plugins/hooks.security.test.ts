@@ -105,6 +105,44 @@ describe("before_tool_call terminal block semantics", () => {
     expectTerminalHookState(result, expected);
   });
 
+  it("allows lower-priority hooks to clear a soft block", async () => {
+    const result = await runBeforeToolCallWithHooks(registry, [
+      {
+        pluginId: "high-soft",
+        result: { block: true, blockMode: "soft", blockReason: "needs-review" },
+        priority: 100,
+      },
+      {
+        pluginId: "low-allow",
+        result: { block: false },
+        priority: 10,
+      },
+    ]);
+
+    expect(result?.block).toBeUndefined();
+    expect(result?.blockMode).toBeUndefined();
+    expect(result?.blockReason).toBeUndefined();
+  });
+
+  it("treats omitted blockMode as hard and remains terminal", async () => {
+    const high = vi.fn().mockReturnValue({ block: true, blockReason: "hard-default" });
+    const low = vi.fn().mockReturnValue({ block: false });
+    const result = await runBeforeToolCallWithHooks(registry, [
+      {
+        pluginId: "high",
+        result: { block: true, blockReason: "hard-default" },
+        priority: 100,
+        handler: high,
+      },
+      { pluginId: "low", result: { block: false }, priority: 10, handler: low },
+    ]);
+
+    expect(result?.block).toBe(true);
+    expect(result?.blockMode).toBeUndefined();
+    expect(high).toHaveBeenCalledTimes(1);
+    expect(low).not.toHaveBeenCalled();
+  });
+
   it("short-circuits lower-priority hooks after block=true", async () => {
     const high = vi.fn().mockReturnValue({ block: true, blockReason: "stop" });
     const low = vi.fn().mockReturnValue({ params: { injected: true } });

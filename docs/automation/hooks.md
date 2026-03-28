@@ -467,6 +467,7 @@ Return fields:
 
 - **`params`**: Override tool parameters (merged with original params)
 - **`block`**: Set to `true` to block the tool call
+- **`blockMode`**: Optional block strength (`"hard"` or `"soft"`; default `"hard"`)
 - **`blockReason`**: Reason shown to the agent when blocked
 - **`requireApproval`**: Pause execution and wait for user approval via channels
 
@@ -491,7 +492,7 @@ The `onResolution` callback is invoked with the final decision string after the 
 
 The `pluginId` field is stamped automatically by the hook runner from the plugin registration. When multiple plugins return `requireApproval`, the first one (highest priority) wins.
 
-`block` takes precedence over `requireApproval`: if the merged hook result has both `block: true` and a `requireApproval` field, the tool call is blocked immediately without triggering the approval flow. This ensures a higher-priority plugin's block cannot be overridden by a lower-priority plugin's approval request.
+A `hard` block takes precedence over `requireApproval`: if the merged hook result has `block: true` with `blockMode: "hard"`, the tool call is blocked immediately without triggering approval. `soft` blocks may be cleared by lower-priority handlers returning `{ block: false }`.
 
 If the gateway is unavailable or does not support plugin approvals, the tool call falls back to a soft block using the `description` as the block reason.
 

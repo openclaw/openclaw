@@ -2144,6 +2144,12 @@ export type PluginApprovalResolution =
 export type PluginHookBeforeToolCallResult = {
   params?: Record<string, unknown>;
   block?: boolean;
+  /**
+   * Block strength for before_tool_call decisions.
+   * - "hard" (default when omitted): terminal; lower-priority handlers are skipped.
+   * - "soft": lower-priority handlers may clear this block by returning { block: false }.
+   */
+  blockMode?: "hard" | "soft";
   blockReason?: string;
   requireApproval?: {
     title: string;

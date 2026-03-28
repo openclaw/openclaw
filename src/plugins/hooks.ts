@@ -181,6 +181,8 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   const lastDefined = <T>(prev: T | undefined, next: T | undefined): T | undefined => next ?? prev;
   const stickyTrue = (prev?: boolean, next?: boolean): true | undefined =>
     prev === true || next === true ? true : undefined;
+  const normalizeBlockMode = (mode: "hard" | "soft" | undefined): "hard" | "soft" =>
+    mode === "soft" ? "soft" : "hard";
 
   const mergeBeforeModelResolve = (
     acc: PluginHookBeforeModelResolveResult | undefined,
@@ -699,18 +701,40 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
       ctx,
       {
         mergeResults: (acc, next, reg) => {
-          if (acc?.block === true) {
+          const currentMode = normalizeBlockMode(acc?.blockMode);
+          if (acc?.block === true && currentMode === "hard") {
             return acc;
           }
+
           const approvalPluginId = acc?.requireApproval?.pluginId;
           const freezeParamsForDifferentPlugin =
             Boolean(approvalPluginId) && approvalPluginId !== reg.pluginId;
+
+          let block = acc?.block;
+          let blockMode = acc?.blockMode;
+          let blockReason = acc?.blockReason;
+
+          if (next.block === true) {
+            block = true;
+            blockMode = normalizeBlockMode(next.blockMode);
+            blockReason = lastDefined(blockReason, next.blockReason);
+          } else if (next.block === false) {
+            if (block === true && normalizeBlockMode(blockMode) === "soft") {
+              block = undefined;
+              blockMode = undefined;
+              blockReason = undefined;
+            }
+          } else {
+            blockReason = lastDefined(blockReason, next.blockReason);
+          }
+
           return {
             params: freezeParamsForDifferentPlugin
               ? acc?.params
               : lastDefined(acc?.params, next.params),
-            block: stickyTrue(acc?.block, next.block),
-            blockReason: lastDefined(acc?.blockReason, next.blockReason),
+            block,
+            blockMode,
+            blockReason,
             requireApproval:
               acc?.requireApproval ??
               (next.requireApproval
@@ -718,8 +742,8 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
                 : undefined),
           };
         },
-        shouldStop: (result) => result.block === true,
-        terminalLabel: "block=true",
+        shouldStop: (result) => result.block === true && normalizeBlockMode(result.blockMode) === "hard",
+        terminalLabel: "block=true(hard)",
       },
     );
   }
