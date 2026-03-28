@@ -51,6 +51,7 @@ export {
 export { IMessageConfigSchema } from "../config/zod-schema.providers-core.js";
 
 export { resolveChannelMediaMaxBytes } from "../channels/plugins/media-limits.js";
+export { chunkTextForOutbound } from "./text-chunking.js";
 export {
   buildComputedAccountStatusSnapshot,
   collectStatusIssuesFromLastError,
