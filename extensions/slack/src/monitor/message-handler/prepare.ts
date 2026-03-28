@@ -11,6 +11,7 @@ import {
   resolveEnvelopeFormatOptions,
   resolveMentionGatingWithBypass,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { enqueueSystemEvent } from "openclaw/plugin-sdk/channel-runtime";
 import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
 import { shouldHandleTextCommands } from "openclaw/plugin-sdk/command-auth";
@@ -19,7 +20,6 @@ import {
   recordInboundSession,
   resolveConversationLabel,
 } from "openclaw/plugin-sdk/conversation-runtime";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
 import {
   buildPendingHistoryContextFromMap,
   recordPendingHistoryEntryIfEnabled,
