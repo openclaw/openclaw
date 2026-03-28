@@ -214,11 +214,14 @@ describe("memory plugin e2e", () => {
       }
       await recallTool.execute("test-call-dims", { query: "hello dimensions" });
 
-      expect(embeddingsCreate).toHaveBeenCalledWith({
-        model: "text-embedding-3-small",
-        input: "hello dimensions",
-        dimensions: 1024,
-      });
+      expect(embeddingsCreate).toHaveBeenCalledWith(
+        {
+          model: "text-embedding-3-small",
+          input: "hello dimensions",
+          dimensions: 1024,
+        },
+        { timeout: 10_000 },
+      );
     } finally {
       vi.doUnmock("openai");
       vi.doUnmock("@lancedb/lancedb");

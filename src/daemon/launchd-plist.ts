@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 
 // launchd applies ThrottleInterval to any rapid relaunch, including
-// intentional gateway restarts. Keep it low so CLI restarts and forced
-// reinstalls do not stall for a full minute.
-export const LAUNCH_AGENT_THROTTLE_INTERVAL_SECONDS = 1;
+// intentional gateway restarts. 10s balances fast CLI restarts against
+// avoiding a respawn storm when the gateway crashes repeatedly.
+export const LAUNCH_AGENT_THROTTLE_INTERVAL_SECONDS = 10;
 // launchd stores plist integer values in decimal; 0o077 renders as 63 (owner-only files).
 export const LAUNCH_AGENT_UMASK_DECIMAL = 0o077;
 
