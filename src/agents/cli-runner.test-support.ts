@@ -6,6 +6,7 @@ import { buildOpenAICodexCliBackend } from "../../extensions/openai/test-api.js"
 import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { mergeMockedModule } from "../test-utils/vitest-module-mocks.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
@@ -43,14 +44,13 @@ vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
 }));
 
-vi.mock("../infra/heartbeat-wake.js", async () => {
-  const actual = await vi.importActual<typeof import("../infra/heartbeat-wake.js")>(
-    "../infra/heartbeat-wake.js",
+vi.mock("../infra/heartbeat-wake.js", async (importOriginal) => {
+  return await mergeMockedModule(
+    await importOriginal<typeof import("../infra/heartbeat-wake.js")>(),
+    () => ({
+      requestHeartbeatNow: (...args: unknown[]) => requestHeartbeatNowMock(...args),
+    }),
   );
-  return {
-    ...actual,
-    requestHeartbeatNow: (...args: unknown[]) => requestHeartbeatNowMock(...args),
-  };
 });
 
 vi.mock("./bootstrap-files.js", () => ({
@@ -166,13 +166,14 @@ export async function setupCliRunnerTestModule() {
     enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
   }));
   vi.doMock("../infra/heartbeat-wake.js", async () => {
-    const actual = await vi.importActual<typeof import("../infra/heartbeat-wake.js")>(
-      "../infra/heartbeat-wake.js",
+    return await mergeMockedModule(
+      await vi.importActual<typeof import("../infra/heartbeat-wake.js")>(
+        "../infra/heartbeat-wake.js",
+      ),
+      () => ({
+        requestHeartbeatNow: (...args: unknown[]) => requestHeartbeatNowMock(...args),
+      }),
     );
-    return {
-      ...actual,
-      requestHeartbeatNow: (...args: unknown[]) => requestHeartbeatNowMock(...args),
-    };
   });
   vi.doMock("./bootstrap-files.js", () => ({
     makeBootstrapWarn: () => () => {},

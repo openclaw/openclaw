@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { mergeMockedModule } from "../test-utils/vitest-module-mocks.js";
 
 const mocks = vi.hoisted(() => ({
   resolveSessionAgentId: vi.fn(() => "agent-from-key"),
@@ -87,14 +88,13 @@ vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent: mocks.enqueueSystemEvent,
 }));
 
-vi.mock("../infra/heartbeat-wake.js", async () => {
-  const actual = await vi.importActual<typeof import("../infra/heartbeat-wake.js")>(
-    "../infra/heartbeat-wake.js",
+vi.mock("../infra/heartbeat-wake.js", async (importOriginal) => {
+  return await mergeMockedModule(
+    await importOriginal<typeof import("../infra/heartbeat-wake.js")>(),
+    () => ({
+      requestHeartbeatNow: mocks.requestHeartbeatNow,
+    }),
   );
-  return {
-    ...actual,
-    requestHeartbeatNow: mocks.requestHeartbeatNow,
-  };
 });
 
 vi.mock("../logging/subsystem.js", () => ({

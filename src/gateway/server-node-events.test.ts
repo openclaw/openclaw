@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { mergeMockedModule } from "../test-utils/vitest-module-mocks.js";
 import type { loadSessionEntry as loadSessionEntryType } from "./session-utils.js";
 
 const buildSessionLookup = (
@@ -43,18 +44,23 @@ const loadOrCreateDeviceIdentityMock = vi.hoisted(() =>
     privateKeyPem: "private",
   })),
 );
+const normalizeChannelIdMock = vi.hoisted(() =>
+  vi.fn((channel?: string | null) => channel ?? null),
+);
 
 vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent: vi.fn(),
 }));
-vi.mock("../infra/heartbeat-wake.js", async () => {
-  const actual = await vi.importActual<typeof import("../infra/heartbeat-wake.js")>(
-    "../infra/heartbeat-wake.js",
+vi.mock("../channels/plugins/index.js", () => ({
+  normalizeChannelId: normalizeChannelIdMock,
+}));
+vi.mock("../infra/heartbeat-wake.js", async (importOriginal) => {
+  return await mergeMockedModule(
+    await importOriginal<typeof import("../infra/heartbeat-wake.js")>(),
+    () => ({
+      requestHeartbeatNow: vi.fn(),
+    }),
   );
-  return {
-    ...actual,
-    requestHeartbeatNow: vi.fn(),
-  };
 });
 vi.mock("../commands/agent.js", () => ({
   agentCommand: ingressAgentCommandMock,
@@ -89,6 +95,7 @@ vi.mock("./session-utils.js", () => ({
   })),
 }));
 
+import { normalizeChannelId } from "../channels/plugins/index.js";
 import type { CliDeps } from "../cli/deps.js";
 import { agentCommand } from "../commands/agent.js";
 import type { HealthSummary } from "../commands/health.js";
@@ -108,6 +115,7 @@ const agentCommandMock = vi.mocked(agentCommand);
 const updateSessionStoreMock = vi.mocked(updateSessionStore);
 const loadSessionEntryMock = vi.mocked(loadSessionEntry);
 const registerApnsRegistrationVi = vi.mocked(registerApnsRegistration);
+const normalizeChannelIdVi = vi.mocked(normalizeChannelId);
 
 function buildCtx(): NodeEventContext {
   return {
@@ -138,6 +146,8 @@ describe("node exec events", () => {
     requestHeartbeatNowMock.mockClear();
     registerApnsRegistrationVi.mockClear();
     loadOrCreateDeviceIdentityMock.mockClear();
+    normalizeChannelIdVi.mockClear();
+    normalizeChannelIdVi.mockImplementation((channel?: string | null) => channel ?? null);
   });
 
   it("enqueues exec.started events", async () => {
@@ -568,6 +578,8 @@ describe("notifications changed events", () => {
     enqueueSystemEventMock.mockClear();
     requestHeartbeatNowMock.mockClear();
     loadSessionEntryMock.mockClear();
+    normalizeChannelIdVi.mockClear();
+    normalizeChannelIdVi.mockImplementation((channel?: string | null) => channel ?? null);
     loadSessionEntryMock.mockImplementation((sessionKey: string) => buildSessionLookup(sessionKey));
     enqueueSystemEventMock.mockReturnValue(true);
   });
@@ -719,6 +731,8 @@ describe("agent request events", () => {
     agentCommandMock.mockClear();
     updateSessionStoreMock.mockClear();
     loadSessionEntryMock.mockClear();
+    normalizeChannelIdVi.mockClear();
+    normalizeChannelIdVi.mockImplementation((channel?: string | null) => channel ?? null);
     agentCommandMock.mockResolvedValue({ status: "ok" } as never);
     updateSessionStoreMock.mockImplementation(async (_storePath, update) => {
       update({});
