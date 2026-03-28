@@ -17,11 +17,7 @@ import {
   buildPluginStatusReport,
   formatPluginCompatibilityNotice,
 } from "../plugins/status.js";
-import {
-  resolveUninstallChannelConfigKeys,
-  resolveUninstallDirectoryTarget,
-  uninstallPlugin,
-} from "../plugins/uninstall.js";
+import { resolveUninstallDirectoryTarget, uninstallPlugin } from "../plugins/uninstall.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
@@ -630,15 +626,6 @@ export function registerPluginsCli(program: Command) {
       if (cfg.plugins?.slots?.memory === pluginId) {
         preview.push(`memory slot (will reset to "memory-core")`);
       }
-      const channelIds = plugin?.status === "loaded" ? plugin.channelIds : undefined;
-      const channels = cfg.channels as Record<string, unknown> | undefined;
-      if (hasInstall && channels) {
-        for (const key of resolveUninstallChannelConfigKeys(pluginId, { channelIds })) {
-          if (Object.hasOwn(channels, key)) {
-            preview.push(`channel config (channels.${key})`);
-          }
-        }
-      }
       const deleteTarget = !keepFiles
         ? resolveUninstallDirectoryTarget({
             pluginId,
@@ -673,7 +660,6 @@ export function registerPluginsCli(program: Command) {
       const result = await uninstallPlugin({
         config: cfg,
         pluginId,
-        channelIds,
         deleteFiles: !keepFiles,
         extensionsDir,
       });
@@ -703,9 +689,6 @@ export function registerPluginsCli(program: Command) {
       }
       if (result.actions.memorySlot) {
         removed.push("memory slot");
-      }
-      if (result.actions.channelConfig) {
-        removed.push("channel config");
       }
       if (result.actions.directory) {
         removed.push("directory");
