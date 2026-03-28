@@ -2059,6 +2059,36 @@ export function renderApp(state: AppViewState) {
                   projectsError: state.projectsError,
                   projectDashboardLoading: state.projectDashboardLoading,
                   projectDashboardError: state.projectDashboardError,
+                  subView: state.projectsSubView,
+                  boardExpanded: state.projectsBoardExpanded,
+                  checkpoint: state.projectsCheckpoint,
+                  checkpointLoading: state.projectsCheckpointLoading,
+                  onSwitchSubView: (subView: "overview" | "board") => {
+                    state.projectsSubView = subView;
+                    state.projectsBoardExpanded = null;
+                    state.projectsCheckpoint = null;
+                    const url = new URL(window.location.href);
+                    const basePath = state.projectsSubProject
+                      ? `${state.basePath}/projects/${state.projectsName}/sub/${state.projectsSubProject}`
+                      : `${state.basePath}/projects/${state.projectsName}`;
+                    url.pathname = subView === "board" ? `${basePath}/board` : basePath;
+                    window.history.pushState({}, "", url.toString());
+                  },
+                  onTogglePeek: (taskId: string) => {
+                    if (state.projectsBoardExpanded === taskId) {
+                      state.projectsBoardExpanded = null;
+                      state.projectsCheckpoint = null;
+                    } else {
+                      state.projectsBoardExpanded = taskId;
+                      void import("./controllers/projects.ts").then((mod) =>
+                        mod.loadTaskCheckpoint(
+                          state as unknown as Parameters<typeof mod.loadTaskCheckpoint>[0],
+                          state.projectsName!,
+                          taskId,
+                        ),
+                      );
+                    }
+                  },
                   onSelectProject: (name: string) => {
                     state.projectsView = "dashboard";
                     const url = new URL(window.location.href);

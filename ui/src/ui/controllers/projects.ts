@@ -20,6 +20,7 @@ export type BoardTaskEntry = {
   status: string;
   priority: string;
   claimed_by: string | null;
+  depends_on: string[];
 };
 
 export type BoardColumn = {
@@ -43,6 +44,25 @@ export type QueueIndex = {
   blocked: QueueEntry[];
   done: QueueEntry[];
   indexedAt: string;
+};
+
+/** Checkpoint data shape returned by the gateway peek RPC. */
+export type CheckpointInfo = {
+  status: string;
+  claimed_by: string;
+  claimed_at: string;
+  last_step: string;
+  next_action: string;
+  progress_pct: number;
+  files_modified: string[];
+  log: Array<{ timestamp: string; agent: string; action: string }>;
+};
+
+/** State slice needed by loadTaskCheckpoint. */
+export type CheckpointState = {
+  client: GatewayBrowserClient | null;
+  projectsCheckpoint: Record<string, unknown> | null;
+  projectsCheckpointLoading: boolean;
 };
 
 // State shape for controller functions
@@ -150,5 +170,26 @@ export async function loadProjectDashboard(
     state.projectDashboardError = String(err);
   } finally {
     state.projectDashboardLoading = false;
+  }
+}
+
+/** Fetch checkpoint data for a single task (used by session peek panel). */
+export async function loadTaskCheckpoint(
+  state: CheckpointState,
+  projectName: string,
+  taskId: string,
+): Promise<void> {
+  if (!state.client) return;
+  state.projectsCheckpointLoading = true;
+  try {
+    const result = await state.client.request<{ checkpoint: Record<string, unknown> | null }>(
+      "projects.task.checkpoint.get",
+      { project: projectName, taskId },
+    );
+    state.projectsCheckpoint = result.checkpoint ?? null;
+  } catch {
+    state.projectsCheckpoint = null;
+  } finally {
+    state.projectsCheckpointLoading = false;
   }
 }
