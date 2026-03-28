@@ -13,6 +13,7 @@ import {
 const parseCliArgs = (args) => {
   const wrapper = {
     ciManifest: false,
+    failurePolicy: null,
     plan: false,
     explain: null,
     mode: null,
@@ -25,6 +26,27 @@ const parseCliArgs = (args) => {
   let passthroughMode = false;
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
+    if (arg === "--collect-failures") {
+      wrapper.failurePolicy = "collect-all";
+      continue;
+    }
+    if (arg === "--failure-policy") {
+      const nextValue = args[index + 1] ?? "";
+      if (nextValue === "fail-fast" || nextValue === "collect-all") {
+        wrapper.failurePolicy = nextValue;
+        index += 1;
+        continue;
+      }
+      throw new Error(`Invalid --failure-policy value: ${String(nextValue || "<missing>")}`);
+    }
+    if (arg.startsWith("--failure-policy=")) {
+      const value = arg.slice("--failure-policy=".length);
+      if (value === "fail-fast" || value === "collect-all") {
+        wrapper.failurePolicy = value;
+        continue;
+      }
+      throw new Error(`Invalid --failure-policy value: ${String(value || "<missing>")}`);
+    }
     if (passthroughMode) {
       wrapper.passthroughArgs.push(arg);
       continue;
@@ -121,12 +143,15 @@ if (rawCli.showHelp) {
       "  --files <pattern>      Add targeted files or path patterns (repeatable)",
       "  --mode <ci|local>      Override runtime mode",
       "  --profile <name>       Override execution intent: normal, max, serial",
+      "  --failure-policy <name> Override execution failure policy: fail-fast, collect-all",
+      "  --collect-failures     Shortcut for --failure-policy collect-all",
       "  --help                 Show this help text",
       "",
       "Examples:",
       "  node scripts/test-parallel.mjs",
       "  node scripts/test-parallel.mjs --plan --surface unit --surface extensions",
       "  node scripts/test-parallel.mjs --explain src/auto-reply/reply/followup-runner.test.ts",
+      "  node scripts/test-parallel.mjs --collect-failures --surface unit",
       "  node scripts/test-parallel.mjs --files src/foo.test.ts -- --reporter=dot",
       "",
       "Environment:",
@@ -138,6 +163,7 @@ if (rawCli.showHelp) {
 }
 
 const request = {
+  failurePolicy: rawCli.failurePolicy,
   mode: rawCli.mode,
   profile: rawCli.profile,
   surfaces: rawCli.surfaces,
@@ -177,5 +203,5 @@ if (process.env.OPENCLAW_TEST_LIST_LANES === "1" || rawCli.plan) {
   exitWithCleanup(artifacts, 0);
 }
 
-const exitCode = await executePlan(plan, { env: process.env, artifacts });
-process.exit(exitCode);
+const result = await executePlan(plan, { env: process.env, artifacts });
+process.exit(typeof result === "number" ? result : result.exitCode);
