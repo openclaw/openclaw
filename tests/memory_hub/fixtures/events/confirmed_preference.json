@@ -1,0 +1,16 @@
+{
+  "event_type": "user_confirmed",
+  "source_host": "claude-code",
+  "source_file": "/Users/mianfeishitou/OpenClaw/state/workspace-daily/.worktrees/memory-hub/tests/memory_hub/fixtures/claude_memory/short_reply.md",
+  "payload": {
+    "memory_type": "feedback",
+    "summary": "用户希望回复尽量短",
+    "content": "优先简短直接",
+    "why": "用户不喜欢冗长回顾",
+    "how_to_apply": "默认短答，不重复总结 diff",
+    "stable": true,
+    "target_memory_file": "/Users/mianfeishitou/OpenClaw/state/workspace-daily/.worktrees/memory-hub/tests/memory_hub/fixtures/claude_memory/short_reply.md",
+    "target_index_file": "/Users/mianfeishitou/OpenClaw/state/workspace-daily/.worktrees/memory-hub/tests/memory_hub/fixtures/claude_memory/MEMORY.md",
+    "title": "短回复偏好"
+  }
+}

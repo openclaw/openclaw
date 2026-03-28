@@ -1,0 +1,5 @@
+任务,状态,验收标准,验证命令,完成时间,重试次数,备注
+创建 worktree 与 truth artifacts,DONE,worktree 可用且任务目录存在,test -d .codex-tasks/20260328-memory-hub,2026-03-28 18:04:04 +0800,0,已创建 .worktrees/memory-hub 并建立 single-full truth artifacts
+实现 memory hub 基础骨架与 schema,DONE,scripts/memory_hub 与基础测试文件存在,python3 -m unittest tests.memory_hub.test_event_schema tests.memory_hub.test_index_db -v,2026-03-28 18:04:04 +0800,0,基础包 schema SQLite FTS event revision 已落地
+实现 merge adapter writeback review rollback,DONE,核心模块与测试存在,python3 -m unittest tests.memory_hub.test_revision tests.memory_hub.test_merge tests.memory_hub.test_writeback tests.memory_hub.test_retriever tests.memory_hub.test_review_and_rollback -v,2026-03-28 18:04:04 +0800,0,merge adapter writeback review rollback 已实现并测试通过
+运行全集验证并修复问题,DONE,全部测试通过且手工验证完成,python3 -m unittest tests.memory_hub.test_event_schema tests.memory_hub.test_revision tests.memory_hub.test_merge tests.memory_hub.test_index_db tests.memory_hub.test_writeback tests.memory_hub.test_retriever tests.memory_hub.test_review_and_rollback -v,2026-03-28 18:04:04 +0800,1,本次 fresh run 为 16 tests OK；hub init 与 direct CLI ingest_event auto_write 手工验证通过

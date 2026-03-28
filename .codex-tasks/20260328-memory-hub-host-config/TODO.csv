@@ -1,0 +1,5 @@
+id,task,status,acceptance_criteria,validation_command,completed_at,retry_count,notes
+1,梳理三端宿主配置现状与部署目标,DONE,明确当前配置文件位置与已接入状态,echo analyzed,2026-03-28 20:40:00 +0800,0,已确认 Claude 有真实 hooks 配置；OpenClaw/Codex 仍为手工 bridge，无自动配置接入
+2,把 Claude hooks 配置纳入 worktree 真源与部署策略,DONE,Claude hooks 配置来源与部署方式清晰,test -f config/host/claude-settings.memory-hub.json,2026-03-28 20:40:00 +0800,0,已建立 config/host/claude-settings.memory-hub.json 与 deploy_memory_hub_host_config.py 预览脚本
+3,给 OpenClaw/Codex 定义最小配置托管方式,DONE,至少形成统一配置说明或模板,test -f config/host/codex-config.memory-hub.md && test -f config/host/openclaw-config.memory-hub.md,2026-03-28 20:40:00 +0800,0,已建立 OpenClaw/Codex 最小配置托管说明，当前策略为脚本真源统一、配置暂保留手工 bridge
+4,验证配置部署策略不破坏当前链路,DONE,当前宿主链路仍可工作,python3 -m unittest tests.memory_hub.test_claude_hook_bridge tests.memory_hub.test_openclaw_hook_bridge tests.memory_hub.test_codex_hook_bridge -v,2026-03-28 20:40:00 +0800,0,已通过 print-only 预览验证 Claude 配置合并结果保留 PreToolUse/UserPromptSubmit/Stop

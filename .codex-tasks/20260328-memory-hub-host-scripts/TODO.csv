@@ -1,0 +1,5 @@
+id,task,status,acceptance_criteria,validation_command,completed_at,retry_count,notes
+1,梳理三端宿主脚本现状与统一目标,DONE,明确当前散落脚本与目标收敛方式,echo analyzed,2026-03-28 20:28:00 +0800,0,已确认三端宿主脚本散落于 ~/.claude/hooks、worktree scripts、~/.codex，需要收回到 worktree 统一真源
+2,将 Claude 宿主脚本纳入 worktree 真源并部署,DONE,Claude hook 脚本由 worktree 真源可同步到 ~/.claude/hooks,test -f scripts/host_hooks/claude_memory_hub_hook.py,2026-03-28 20:33:00 +0800,0,已回收 Claude 宿主脚本到 scripts/host_hooks/ 并验证同步到 ~/.claude/hooks
+3,将 OpenClaw 与 Codex 宿主脚本纳入 worktree 真源并部署,DONE,OpenClaw/Codex 宿主脚本由 worktree 真源可同步到宿主路径,test -f scripts/host_hooks/openclaw_memory_hub_hook.py && test -f scripts/host_hooks/codex_memory_hub_hook.py,2026-03-28 20:33:00 +0800,0,已回收 OpenClaw/Codex 宿主脚本到 scripts/host_hooks/ 并验证 deploy 后宿主脚本同步
+4,验证三端脚本部署后链路仍可用,DONE,至少一条宿主脚本部署结果可验证且未破坏现有链路,python3 -m unittest tests.memory_hub.test_claude_hook_bridge tests.memory_hub.test_openclaw_hook_bridge tests.memory_hub.test_codex_hook_bridge -v,2026-03-28 20:33:00 +0800,0,deploy 后 cmp 校验三端脚本与 worktree 真源一致；此前桥接测试已通过
