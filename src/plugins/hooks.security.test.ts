@@ -138,7 +138,7 @@ describe("before_tool_call terminal block semantics", () => {
     ]);
 
     expect(result?.block).toBe(true);
-    expect(result?.blockMode).toBeUndefined();
+    expect(result?.blockMode).toBe("hard");
     expect(high).toHaveBeenCalledTimes(1);
     expect(low).not.toHaveBeenCalled();
   });
