@@ -15,6 +15,7 @@ import {
   type DeliveryContext,
 } from "../../utils/delivery-context.js";
 import { getFileStatSnapshot } from "../cache-utils.js";
+import type { OpenClawConfig } from "../config.js";
 import { enforceSessionDiskBudget, type SessionDiskBudgetSweepResult } from "./disk-budget.js";
 import { deriveSessionMetaPatch } from "./metadata.js";
 import {
@@ -36,6 +37,7 @@ import {
   type SessionMaintenanceWarning,
 } from "./store-maintenance.js";
 import { applySessionStoreMigrations } from "./store-migrations.js";
+import { validateSessionStore } from "./store-validation.js";
 import {
   mergeSessionEntry,
   mergeSessionEntryPreserveActivity,
@@ -205,7 +207,7 @@ type LoadSessionStoreOptions = {
 
 export function loadSessionStore(
   storePath: string,
-  opts: LoadSessionStoreOptions = {},
+  opts: LoadSessionStoreOptions & { cfg?: OpenClawConfig } = {},
 ): Record<string, SessionEntry> {
   // Check cache first if enabled
   if (!opts.skipCache && isSessionStoreCacheEnabled()) {
@@ -264,6 +266,18 @@ export function loadSessionStore(
   }
 
   applySessionStoreMigrations(store);
+
+  // Validate and sanitize session entries against current configuration.
+  // This prevents stale provider/model references from removed providers
+  // (e.g., openrouter) from causing runtime errors.
+  if (opts.cfg) {
+    const modifiedCount = validateSessionStore(store, opts.cfg);
+    if (modifiedCount > 0) {
+      log.info(
+        `Sanitized ${modifiedCount} session entries with stale provider/model references in ${storePath}`,
+      );
+    }
+  }
 
   // Cache the result if caching is enabled
   if (!opts.skipCache && isSessionStoreCacheEnabled()) {
