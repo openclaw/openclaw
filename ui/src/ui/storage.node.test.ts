@@ -76,6 +76,32 @@ describe("loadSettings default gateway URL derivation", () => {
     expect(loadSettings().gatewayUrl).toBe(expectedGatewayUrl("/apps/openclaw"));
   });
 
+  it("skips node sessionStorage accessors that warn without a storage file", async () => {
+    vi.resetModules();
+    vi.unstubAllGlobals();
+    vi.stubGlobal("localStorage", createStorageMock());
+    vi.stubGlobal("navigator", { language: "en-US" } as Navigator);
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/",
+    });
+    setControlUiBasePath(undefined);
+    const warningSpy = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+
+    const { loadSettings } = await import("./storage.ts");
+
+    expect(loadSettings()).toMatchObject({
+      gatewayUrl: expectedGatewayUrl(""),
+      token: "",
+    });
+    expect(warningSpy).not.toHaveBeenCalledWith(
+      "`--localstorage-file` was provided without a valid path",
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
   it("ignores and scrubs legacy persisted tokens", async () => {
     setTestLocation({
       protocol: "https:",
