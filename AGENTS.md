@@ -205,6 +205,19 @@
 ## Collaboration / Safety Notes
 
 - When working on a GitHub Issue or PR, print the full URL at the end of the task.
+- **GitHub PR workflow (critical):**
+  - Always create branches from `upstream/main`, never from `origin/main` or `fork/main` (your fork may be behind)
+  - Command sequence:
+    ```bash
+    git fetch upstream main
+    git checkout upstream/main
+    git checkout -b <new-branch> upstream/main
+    git cherry-pick <fix-commits>
+    git push -f fork <new-branch>
+    ```
+  - Long-lived PRs (>24h) must be rebased onto `upstream/main` every 2 days to avoid falling behind
+  - If a PR is >100 commits behind main, close it and create a new branch from fresh `upstream/main`
+  - Verify fix is NOT already in `upstream/main` before creating PR (search commit messages and code)
 - When answering questions, respond with high-confidence answers only: verify in code; do not guess.
 - Never update the Carbon dependency.
 - Any dependency with `pnpm.patchedDependencies` must use an exact version (no `^`/`~`).
