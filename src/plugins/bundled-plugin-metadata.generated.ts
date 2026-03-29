@@ -7947,6 +7947,27 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
               webhookPath: {
                 type: "string",
               },
+              threadBindings: {
+                type: "object",
+                properties: {
+                  enabled: {
+                    type: "boolean",
+                  },
+                  idleHours: {
+                    type: "number",
+                  },
+                  maxAgeHours: {
+                    type: "number",
+                  },
+                  spawnSubagentSessions: {
+                    type: "boolean",
+                  },
+                  spawnAcpSessions: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
+              },
               accounts: {
                 type: "object",
                 propertyNames: {
@@ -8017,6 +8038,27 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
                     },
                     webhookPath: {
                       type: "string",
+                    },
+                    threadBindings: {
+                      type: "object",
+                      properties: {
+                        enabled: {
+                          type: "boolean",
+                        },
+                        idleHours: {
+                          type: "number",
+                        },
+                        maxAgeHours: {
+                          type: "number",
+                        },
+                        spawnSubagentSessions: {
+                          type: "boolean",
+                        },
+                        spawnAcpSessions: {
+                          type: "boolean",
+                        },
+                      },
+                      additionalProperties: false,
                     },
                     groups: {
                       type: "object",
