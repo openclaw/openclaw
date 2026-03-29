@@ -90,10 +90,12 @@ function loadProfileEnv(homeDir = os.homedir()): void {
         { encoding: "utf8" },
       );
       const applied = countAppliedEntries(output.split("\0").filter(Boolean));
-      if (applied > 0 && !isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST_QUIET)) {
-        console.log(`[live] loaded ${applied} env vars from ~/.profile`);
+      if (applied > 0) {
+        if (!isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST_QUIET)) {
+          console.log(`[live] loaded ${applied} env vars from ~/.profile`);
+        }
+        return;
       }
-      return;
     } catch {
       // try the next shell candidate, then fall back to static parsing below
     }
