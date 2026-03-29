@@ -1,8 +1,8 @@
 import type { Skill } from "@mariozechner/pi-coding-agent";
 
-export type SkillSourceCompat = Skill & {
+export type SkillSourceCompat = Omit<Skill, "sourceInfo"> & {
   source?: string;
-  sourceInfo?: { source?: string };
+  sourceInfo?: Partial<Skill["sourceInfo"]>;
 };
 
 export type SkillInstallSpec = {
