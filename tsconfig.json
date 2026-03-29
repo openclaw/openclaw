@@ -22,7 +22,6 @@
       "openclaw/plugin-sdk": ["./src/plugin-sdk/index.ts"],
       "openclaw/plugin-sdk/*": ["./src/plugin-sdk/*.ts"],
       "openclaw/plugin-sdk/account-id": ["./src/plugin-sdk/account-id.ts"],
-      "@openclaw/plugin-package-contract": ["./packages/plugin-package-contract/src/index.ts"],
       "@openclaw/*": ["./extensions/*"]
     }
   },
