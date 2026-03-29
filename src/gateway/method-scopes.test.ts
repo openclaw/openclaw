@@ -15,6 +15,8 @@ afterEach(() => {
 
 describe("method scope resolution", () => {
   it.each([
+    ["sessions.search", ["operator.read"]],
+    ["sessions.recall", ["operator.read"]],
     ["sessions.resolve", ["operator.read"]],
     ["config.schema.lookup", ["operator.read"]],
     ["sessions.create", ["operator.write"]],
