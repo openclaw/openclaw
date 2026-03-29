@@ -156,7 +156,11 @@ describe("plugin approval forwarding", () => {
       > = {
         ...createChannelTestPluginBase({ id: "slack" as ChannelPlugin["id"] }),
         execApprovals: {
-          buildPluginPendingPayload: vi.fn().mockReturnValue(mockPayload),
+          render: {
+            plugin: {
+              buildPendingPayload: vi.fn().mockReturnValue(mockPayload),
+            },
+          },
         },
       };
       const registry = createTestRegistry([
@@ -197,7 +201,9 @@ describe("plugin approval forwarding", () => {
       > = {
         ...createChannelTestPluginBase({ id: "slack" as ChannelPlugin["id"] }),
         execApprovals: {
-          beforeDeliverPending,
+          delivery: {
+            beforeDeliverPending,
+          },
         },
       };
       const registry = createTestRegistry([
@@ -222,7 +228,11 @@ describe("plugin approval forwarding", () => {
       > = {
         ...createChannelTestPluginBase({ id: "slack" as ChannelPlugin["id"] }),
         execApprovals: {
-          buildPluginResolvedPayload: vi.fn().mockReturnValue(mockPayload),
+          render: {
+            plugin: {
+              buildResolvedPayload: vi.fn().mockReturnValue(mockPayload),
+            },
+          },
         },
       };
       const registry = createTestRegistry([
