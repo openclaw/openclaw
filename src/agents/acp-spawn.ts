@@ -44,6 +44,7 @@ import {
   isSubagentSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
+  resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
 import {
   normalizeOptionalLowercaseString,
@@ -1108,6 +1109,19 @@ export async function spawnAcpDirect(
           childSessionKey: sessionKey,
         })
       : undefined;
+  // Resolve parent session delivery context so system events route to the
+  // correct thread/topic instead of falling back to the main DM.
+  const parentDeliveryCtx =
+    effectiveStreamToParent && parentSessionKey
+      ? deliveryContextFromSession(
+          loadSessionStore(
+            resolveStorePath(cfg.session?.store, {
+              agentId: resolveAgentIdFromSessionKey(parentSessionKey),
+            }),
+          )[parentSessionKey],
+        )
+      : undefined;
+
   let parentRelay: AcpSpawnParentRelayHandle | undefined;
   if (effectiveStreamToParent && parentSessionKey) {
     // Register relay before dispatch so fast lifecycle failures are not missed.
@@ -1117,6 +1131,7 @@ export async function spawnAcpDirect(
       childSessionKey: sessionKey,
       agentId: targetAgentId,
       logPath: streamLogPath,
+      deliveryContext: parentDeliveryCtx,
       emitStartNotice: false,
     });
   }
@@ -1166,6 +1181,7 @@ export async function spawnAcpDirect(
         childSessionKey: sessionKey,
         agentId: targetAgentId,
         logPath: streamLogPath,
+        deliveryContext: parentDeliveryCtx,
         emitStartNotice: false,
       });
     }
