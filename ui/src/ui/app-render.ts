@@ -1516,12 +1516,16 @@ export function renderApp(state: AppViewState) {
                       return;
                     }
                     if (state.chatRunId !== null && state.chatRunId !== truncatingRunId) {
-                      // A new run started while truncation was in flight; reload but do not
-                      // restore the optimistic delete (backend already truncated).
-                      try {
-                        await loadChatHistory(state);
-                      } catch {
-                        // history reload failed; backend is still truncated, do not call onFail
+                      // A new run started while truncation was in flight.
+                      // Only reload when the backend actually truncated; a no-op (result.truncated
+                      // === false) means no backend mutation occurred and calling loadChatHistory
+                      // would clobber the in-flight streaming state of the newer run.
+                      if (result.truncated) {
+                        try {
+                          await loadChatHistory(state);
+                        } catch {
+                          // history reload failed; backend is still truncated, do not call onFail
+                        }
                       }
                       return;
                     }
