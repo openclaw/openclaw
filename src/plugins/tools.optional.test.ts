@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type MockRegistryToolEntry = {
   pluginId: string;
@@ -210,6 +210,10 @@ describe("resolvePluginTools optional tools", () => {
     ({ resolvePluginTools } = await import("./tools.js"));
     ({ resetPluginRuntimeStateForTest, setActivePluginRegistry } = await import("./runtime.js"));
     resetPluginRuntimeStateForTest();
+  });
+
+  afterEach(() => {
+    resetPluginRuntimeStateForTest?.();
   });
 
   it("skips optional tools without explicit allowlist", () => {
