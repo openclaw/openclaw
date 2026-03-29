@@ -28,6 +28,7 @@ export {
   createZaiToolStreamWrapper,
 } from "../agents/pi-embedded-runner/zai-stream-wrappers.js";
 export {
+  getAllCachedOpenRouterModels,
   getOpenRouterModelCapabilities,
   loadOpenRouterModelCapabilities,
 } from "../agents/pi-embedded-runner/openrouter-model-capabilities.js";

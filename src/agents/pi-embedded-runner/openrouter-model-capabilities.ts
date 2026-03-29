@@ -299,3 +299,12 @@ export function getOpenRouterModelCapabilities(
 
   return result;
 }
+
+/**
+ * Return all cached model capabilities (in-memory or disk).
+ * Returns an empty map if no cache is available yet.
+ */
+export function getAllCachedOpenRouterModels(): ReadonlyMap<string, OpenRouterModelCapabilities> {
+  ensureOpenRouterModelCache();
+  return cache ?? new Map();
+}

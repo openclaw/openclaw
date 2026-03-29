@@ -7,6 +7,7 @@ import {
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { DEFAULT_CONTEXT_TOKENS } from "openclaw/plugin-sdk/provider-model-shared";
 import {
+  getAllCachedOpenRouterModels,
   getOpenRouterModelCapabilities,
   loadOpenRouterModelCapabilities,
   createOpenRouterSystemCacheWrapper,
@@ -137,6 +138,46 @@ export default definePluginEntry({
       },
       normalizeResolvedModel: ({ modelId, model }) =>
         isXaiOpenRouterModel(modelId) ? applyXaiModelCompat(model) : undefined,
+      augmentModelCatalog: (ctx) => {
+        // Surface cached OpenRouter model capabilities in the catalog so that
+        // reasoning/thinking defaults resolve correctly for dynamic models
+        // (e.g. kimi-k2.5) that aren't in the static models.json.
+        const existing = new Set(
+          ctx.entries.filter((e) => e.provider === PROVIDER_ID).map((e) => e.id),
+        );
+        const cached = getAllCachedOpenRouterModels();
+        const supplemental: Array<{
+          id: string;
+          name: string;
+          provider: string;
+          reasoning: boolean;
+          input: Array<"text" | "image">;
+          contextWindow: number;
+        }> = [];
+        for (const [id, caps] of cached) {
+          if (!existing.has(id)) {
+            supplemental.push({
+              id,
+              name: caps.name,
+              provider: PROVIDER_ID,
+              reasoning: caps.reasoning,
+              input: caps.input,
+              contextWindow: caps.contextWindow,
+            });
+          }
+        }
+        return supplemental;
+      },
+      resolveDefaultThinkingLevel: (ctx) => {
+        // Use catalog hint when available.
+        if (ctx.reasoning != null) {
+          return ctx.reasoning ? "low" : undefined;
+        }
+        // Fallback: check the OpenRouter capability cache for dynamic models
+        // that are not yet in the static catalog.
+        const caps = getOpenRouterModelCapabilities(ctx.modelId);
+        return caps?.reasoning ? "low" : undefined;
+      },
       isModernModelRef: () => true,
       wrapStreamFn: (ctx) => {
         let streamFn = ctx.streamFn;
