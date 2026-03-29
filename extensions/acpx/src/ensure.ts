@@ -113,9 +113,10 @@ function isNpmCachePermissionFailure(detail: string): boolean {
 }
 
 function formatAcpxLocalInstallFailure(detail: string): string {
-  const suffix = isNpmCachePermissionFailure(detail)
-    ? " Fix: sudo chown -R $(id -u):$(id -g) ~/.npm"
-    : "";
+  const suffix =
+    process.platform !== "win32" && isNpmCachePermissionFailure(detail)
+      ? " Fix: sudo chown -R $(id -u):$(id -g) ~/.npm"
+      : "";
   return `failed to install plugin-local acpx: ${detail}${suffix}`;
 }
 
