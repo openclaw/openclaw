@@ -1,22 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
 
 describe("web_search shared cache", () => {
-  it("does not expose the cache through a global Symbol.for key", async () => {
+  it("keeps cache entries module-local instead of exposing them on a global symbol", async () => {
     vi.resetModules();
-    const before = (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.web-search.cache")];
     delete (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.web-search.cache")];
 
     const module = await import("./web-search-provider-common.js");
-    module.SEARCH_CACHE.set("query:test", {
-      value: { ok: true },
-      insertedAt: Date.now(),
-      expiresAt: Date.now() + 60_000,
-    });
+    const cacheKey = "query:test";
+    module.writeCachedSearchPayload(cacheKey, { ok: true }, 60_000);
 
-    expect((globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.web-search.cache")]).toBeUndefined();
-
-    if (before !== undefined) {
-      (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.web-search.cache")] = before;
-    }
+    expect(module.readCachedSearchPayload(cacheKey)).toEqual({ ok: true, cached: true });
+    expect(
+      (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.web-search.cache")],
+    ).toBeUndefined();
   });
 });
