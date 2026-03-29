@@ -296,12 +296,25 @@ async function waitForSpawnedSubagentCompletion(params: {
       };
     }
 
-    const capturedReply = await captureSubagentCompletionReply(params.childSessionKey);
-    const reply = capturedReply?.trim() || undefined;
+    let reply: string | undefined;
+    let captureError: string | undefined;
+    try {
+      const capturedReply = await captureSubagentCompletionReply(params.childSessionKey);
+      reply = capturedReply?.trim() || undefined;
+    } catch (err) {
+      // Preserve success status but restore announce fallback if reply capture transport fails.
+      clearSuppressAutoAnnounce(params.runId);
+      captureError = summarizeError(err);
+    }
     return {
       status: "ok",
       waitTimeoutMs: timeoutMs,
       reply,
+      ...(captureError
+        ? {
+            error: `failed to capture completion reply: ${captureError}`,
+          }
+        : {}),
     };
   } catch (err) {
     clearSuppressAutoAnnounce(params.runId);

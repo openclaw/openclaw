@@ -216,6 +216,21 @@ const subagentLifecycleController = createSubagentRegistryLifecycleController({
   resumedRuns,
   subagentAnnounceTimeoutMs: SUBAGENT_ANNOUNCE_TIMEOUT_MS,
   persist: persistSubagentRuns,
+  deleteSubagentSession: async ({ childSessionKey, spawnMode }) => {
+    try {
+      await callGateway({
+        method: "sessions.delete",
+        params: {
+          key: childSessionKey,
+          deleteTranscript: true,
+          emitLifecycleHooks: spawnMode === "session",
+        },
+        timeoutMs: 10_000,
+      });
+    } catch {
+      // Best-effort cleanup only.
+    }
+  },
   clearPendingLifecycleError,
   countPendingDescendantRuns,
   suppressAnnounceForSteerRestart,

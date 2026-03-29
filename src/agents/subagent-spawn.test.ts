@@ -214,4 +214,43 @@ describe("spawnSubagentDirect seam flow", () => {
       },
     });
   });
+
+  it("keeps waitForCompletion successful when reply capture fails", async () => {
+    hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent") {
+        return { runId: "run-1" };
+      }
+      if (request.method === "agent.wait") {
+        return { status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        throw new Error("history unavailable");
+      }
+      if (request.method?.startsWith("sessions.")) {
+        return { ok: true };
+      }
+      return {};
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "wait returns ok but history lookup fails",
+        waitForCompletion: true,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "discord",
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "accepted",
+      runId: "run-1",
+      completion: {
+        status: "ok",
+        error: "failed to capture completion reply: history unavailable",
+      },
+    });
+    expect(result.completion?.reply).toBeUndefined();
+  });
 });

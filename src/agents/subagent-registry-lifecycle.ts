@@ -34,6 +34,10 @@ export function createSubagentRegistryLifecycleController(params: {
   resumedRuns: Set<string>;
   subagentAnnounceTimeoutMs: number;
   persist(): void;
+  deleteSubagentSession(args: {
+    childSessionKey: string;
+    spawnMode?: "run" | "session";
+  }): Promise<void>;
   clearPendingLifecycleError(runId: string): void;
   countPendingDescendantRuns(rootSessionKey: string): number;
   suppressAnnounceForSteerRestart(entry?: SubagentRunRecord): boolean;
@@ -350,8 +354,25 @@ export function createSubagentRegistryLifecycleController(params: {
       return false;
     }
     const requesterOrigin = normalizeDeliveryContext(entry.requesterOrigin);
-    const finalizeAnnounceCleanup = (didAnnounce: boolean) => {
-      void finalizeSubagentCleanup(runId, entry.cleanup, didAnnounce).catch((err) => {
+    const finalizeAnnounceCleanup = (
+      didAnnounce: boolean,
+      opts?: { deleteSuppressedSession?: boolean },
+    ) => {
+      void (async () => {
+        if (opts?.deleteSuppressedSession === true) {
+          try {
+            await params.deleteSubagentSession({
+              childSessionKey: entry.childSessionKey,
+              spawnMode: entry.spawnMode,
+            });
+          } catch (error) {
+            defaultRuntime.log(
+              `[warn] suppressed cleanup delete failed (${runId}): ${String(error)}`,
+            );
+          }
+        }
+        await finalizeSubagentCleanup(runId, entry.cleanup, didAnnounce);
+      })().catch((err) => {
         defaultRuntime.log(`[warn] subagent cleanup finalize failed (${runId}): ${String(err)}`);
         const current = params.runs.get(runId);
         if (!current || current.cleanupCompletedAt) {
@@ -363,7 +384,9 @@ export function createSubagentRegistryLifecycleController(params: {
     };
 
     if (entry.suppressAutoAnnounce === true) {
-      finalizeAnnounceCleanup(true);
+      finalizeAnnounceCleanup(true, {
+        deleteSuppressedSession: entry.cleanup === "delete",
+      });
       return true;
     }
 

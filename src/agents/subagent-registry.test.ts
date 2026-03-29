@@ -203,6 +203,40 @@ describe("subagent registry seam flow", () => {
     expect(mocks.persistSubagentRunsToDisk).toHaveBeenCalled();
   });
 
+  it("preserves delete cleanup when auto-announce is suppressed", async () => {
+    mod.registerSubagentRun({
+      runId: "run-suppress-delete",
+      childSessionKey: "agent:main:subagent:suppress-delete",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "wait inline and delete child session",
+      cleanup: "delete",
+      suppressAutoAnnounce: true,
+      expectsCompletionMessage: true,
+    });
+
+    await vi.waitFor(() => {
+      expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
+      expect(mocks.callGateway).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: "sessions.delete",
+          params: expect.objectContaining({
+            key: "agent:main:subagent:suppress-delete",
+            deleteTranscript: true,
+            emitLifecycleHooks: false,
+          }),
+          timeoutMs: 10_000,
+        }),
+      );
+    });
+
+    expect(
+      mod
+        .listSubagentRunsForRequester("agent:main:main")
+        .find((entry) => entry.runId === "run-suppress-delete"),
+    ).toBeUndefined();
+  });
+
   it("deletes delete-mode completion runs when announce cleanup gives up after retry limit", async () => {
     mocks.runSubagentAnnounceFlow.mockResolvedValue(false);
     const endedAt = Date.parse("2026-03-24T12:00:00Z");
