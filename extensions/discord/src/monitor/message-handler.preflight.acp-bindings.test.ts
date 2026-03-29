@@ -1,11 +1,12 @@
 import * as conversationRuntime from "openclaw/plugin-sdk/conversation-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createConfiguredBindingConversationRuntimeModuleMock } from "../../../../test/helpers/plugins/configured-binding-runtime.js";
 
 const ensureConfiguredBindingRouteReadyMock = vi.hoisted(() => vi.fn());
 const resolveConfiguredBindingRouteMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../../../src/channels/plugins/binding-routing.js", async (importOriginal) => {
+  const { createConfiguredBindingConversationRuntimeModuleMock } =
+    await import("../../../../test/helpers/plugins/configured-binding-runtime.js");
   return await createConfiguredBindingConversationRuntimeModuleMock(
     {
       ensureConfiguredBindingRouteReadyMock,

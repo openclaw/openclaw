@@ -9,7 +9,6 @@ import {
 } from "../../../../src/auto-reply/commands-registry.js";
 import type { OpenClawConfig, loadConfig } from "../../../../src/config/config.js";
 import { clearSessionStoreCacheForTest } from "../../../../src/config/sessions/store.js";
-import { createConfiguredBindingConversationRuntimeModuleMock } from "../../../../test/helpers/plugins/configured-binding-runtime.js";
 import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
 const ensureConfiguredBindingRouteReadyMock = vi.hoisted(() =>
@@ -37,6 +36,8 @@ const resolveConfiguredBindingRouteMock = vi.hoisted(() =>
 );
 
 vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
+  const { createConfiguredBindingConversationRuntimeModuleMock } =
+    await import("../../../../test/helpers/plugins/configured-binding-runtime.js");
   return await createConfiguredBindingConversationRuntimeModuleMock(
     {
       ensureConfiguredBindingRouteReadyMock,
