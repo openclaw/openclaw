@@ -1801,7 +1801,7 @@ export async function runEmbeddedAttempt(
         yieldDetected: yieldDetected || undefined,
       };
     } finally {
-      // Always tear down the session (and release the lock) before we leave this attempt.
+      // Always tear down the session before we leave this attempt.
       //
       // BUGFIX: Wait for the agent to be truly idle before flushing pending tool results.
       // pi-agent-core's auto-retry resolves waitForRetry() on assistant message receipt,
@@ -1809,17 +1809,24 @@ export async function runEmbeddedAttempt(
       // flushPendingToolResults() fires while tools are still executing, inserting
       // synthetic "missing tool result" errors and causing silent agent failures.
       // See: https://github.com/openclaw/openclaw/issues/8643
-      removeToolResultContextGuard?.();
-      await flushPendingToolResultsAfterIdle({
-        agent: session?.agent,
-        sessionManager,
-        clearPendingOnTimeout: true,
-      });
-      session?.dispose();
-      releaseWsSession(params.sessionId);
-      await bundleMcpRuntime?.dispose();
-      await bundleLspRuntime?.dispose();
-      await sessionLock.release();
+      try {
+        removeToolResultContextGuard?.();
+        await flushPendingToolResultsAfterIdle({
+          agent: session?.agent,
+          sessionManager,
+          clearPendingOnTimeout: true,
+        });
+        session?.dispose();
+        releaseWsSession(params.sessionId);
+      } finally {
+        // Release the session lock even when teardown helpers fail.
+        try {
+          await sessionLock.release();
+        } finally {
+          await bundleMcpRuntime?.dispose();
+          await bundleLspRuntime?.dispose();
+        }
+      }
     }
   } finally {
     restoreSkillEnv?.();
