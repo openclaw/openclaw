@@ -214,7 +214,7 @@ dispatch.
       name: "Acme Chat",
       description: "Acme Chat channel plugin",
       plugin: acmeChatPlugin,
-      registerFull(api) {
+      registerCliMetadata(api) {
         api.registerCli(
           ({ program }) => {
             program
@@ -232,11 +232,17 @@ dispatch.
           },
         );
       },
+      registerFull(api) {
+        api.registerGatewayMethod(/* ... */);
+      },
     });
     ```
 
-    `defineChannelPluginEntry` handles the setup/full registration split
-    automatically. See
+    Put channel-owned CLI descriptors in `registerCliMetadata(...)` so OpenClaw
+    can show them in root help without activating the full channel runtime,
+    while normal full loads still pick up the same descriptors for real command
+    registration. Keep `registerFull(...)` for runtime-only work.
+    `defineChannelPluginEntry` handles the registration-mode split automatically. See
     [Entry Points](/plugins/sdk-entrypoints#definechannelpluginentry) for all
     options.
 
