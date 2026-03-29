@@ -52,16 +52,21 @@ function defaultReadPackageJson(manifestPath: string): PackageJsonWithDependenci
 function buildMemoryLanceDbManifestCandidates(modulePath: string): string[] {
   const moduleDir = path.dirname(modulePath);
   const candidates = new Set<string>();
+  // In the bundled (npm) layout the module lives under dist/, and the
+  // extension's own package.json is at dist/extensions/memory-lancedb/package.json.
+  // List this path FIRST so the bundler does not dead-code-eliminate it in
+  // favour of the sibling dist/package.json (which was removed in v2026.3.28).
+  candidates.add(path.join(moduleDir, "extensions", "memory-lancedb", "package.json"));
   candidates.add(path.join(moduleDir, "package.json"));
 
   let cursor = moduleDir;
   while (true) {
-    candidates.add(path.join(cursor, "extensions", "memory-lancedb", "package.json"));
     const parent = path.dirname(cursor);
     if (parent === cursor) {
       break;
     }
     cursor = parent;
+    candidates.add(path.join(cursor, "extensions", "memory-lancedb", "package.json"));
   }
 
   return [...candidates];

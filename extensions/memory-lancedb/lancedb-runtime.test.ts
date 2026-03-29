@@ -71,6 +71,28 @@ describe("resolveLanceDbDependencySpec", () => {
     expect(resolveLanceDbDependencySpec(modulePath, readPackageJson)).toBe("0.27.2");
   });
 
+  it("resolves lancedb spec when dist/package.json is absent (post-v2026.3.28 npm layout)", () => {
+    const modulePath = path.join(
+      "/usr/lib/node_modules/openclaw/dist",
+      "lancedb-runtime-3m75WU-W.js",
+    );
+    const extensionPackagePath = path.join(
+      "/usr/lib/node_modules/openclaw/dist/extensions/memory-lancedb",
+      "package.json",
+    );
+    // dist/package.json was removed; only the extension's own package.json exists
+    const readPackageJson = mapReader([
+      [
+        extensionPackagePath,
+        {
+          dependencies: { "@lancedb/lancedb": "^0.27.1" },
+        },
+      ],
+    ]);
+
+    expect(resolveLanceDbDependencySpec(modulePath, readPackageJson)).toBe("^0.27.1");
+  });
+
   it("throws when no candidate package manifest declares @lancedb/lancedb", () => {
     const modulePath = path.join(
       "/usr/lib/node_modules/openclaw/dist",
