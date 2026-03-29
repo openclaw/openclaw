@@ -94,6 +94,8 @@ type WhatsAppConfigCore = {
   configWrites?: boolean;
   /** Send read receipts for incoming messages (default true). */
   sendReadReceipts?: boolean;
+  /** Broadcast 'available' presence on connect, making the account appear online to contacts (default false). */
+  announcePresence?: boolean;
   /** Inbound message prefix override (WhatsApp only). */
   messagePrefix?: string;
   /** Outbound response prefix override. */

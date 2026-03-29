@@ -42,6 +42,8 @@ export async function monitorWebInbox(options: {
   mediaMaxMb?: number;
   /** Send read receipts for incoming messages (default true). */
   sendReadReceipts?: boolean;
+  /** Broadcast 'available' presence on connect, making the account appear online to contacts (default false). */
+  announcePresence?: boolean;
   /** Debounce window (ms) for batching rapid consecutive messages from the same sender (0 to disable). */
   debounceMs?: number;
   /** Optional debounce gating predicate. */
@@ -68,13 +70,23 @@ export async function monitorWebInbox(options: {
     resolver(reason);
   };
 
-  try {
-    await sock.sendPresenceUpdate("available");
-    if (shouldLogVerbose()) {
-      logVerbose("Sent global 'available' presence on connect");
+  if (options.announcePresence) {
+    try {
+      await sock.sendPresenceUpdate("available");
+      if (shouldLogVerbose()) {
+        logVerbose("Sent global 'available' presence on connect");
+      }
+    } catch (err) {
+      logVerbose(`Failed to send 'available' presence on connect: ${String(err)}`);
     }
-  } catch (err) {
-    logVerbose(`Failed to send 'available' presence on connect: ${String(err)}`);
+  } else {
+    try {
+      // Send 'unavailable' to register push name without marking the account as online.
+      // WhatsApp requires at least one presence update after connect to sync the push name.
+      await sock.sendPresenceUpdate("unavailable");
+    } catch (err) {
+      logVerbose(`Failed to send 'unavailable' presence on connect: ${String(err)}`);
+    }
   }
 
   const self = await readWebSelfIdentity(

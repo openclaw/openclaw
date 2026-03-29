@@ -13590,6 +13590,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         sendReadReceipts: {
           type: "boolean",
         },
+        announcePresence: {
+          type: "boolean",
+        },
         messagePrefix: {
           type: "string",
         },
@@ -13833,6 +13836,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 type: "boolean",
               },
               sendReadReceipts: {
+                type: "boolean",
+              },
+              announcePresence: {
                 type: "boolean",
               },
               messagePrefix: {
