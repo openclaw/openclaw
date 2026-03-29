@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createToolFactoryHarness } from "./tool-factory-test-harness.js";
 import { createTestPluginApi } from "../../../test/helpers/extensions/plugin-api.js";
 import { createPluginRuntimeMock } from "../../../test/helpers/extensions/plugin-runtime-mock.js";
 import type { OpenClawPluginApi } from "../runtime-api.js";
@@ -49,26 +50,20 @@ describe("registerFeishuChatTools", () => {
   });
 
   it("registers feishu_chat and handles info/members actions", async () => {
-    const registerTool = vi.fn();
-    registerFeishuChatTools(
-      createChatToolApi({
-        config: {
-          channels: {
-            feishu: {
-              enabled: true,
-              appId: "app_id",
-              appSecret: "app_secret", // pragma: allowlist secret
-              tools: { chat: true },
-            },
-          },
+    const { api, resolveTool } = createToolFactoryHarness({
+      channels: {
+        feishu: {
+          enabled: true,
+          appId: "app_id",
+          appSecret: "app_secret", // pragma: allowlist secret
+          tools: { chat: true },
         },
-        registerTool,
-      }),
-    );
+      },
+    });
+    registerFeishuChatTools(api);
 
-    expect(registerTool).toHaveBeenCalledTimes(1);
-    const tool = registerTool.mock.calls[0]?.[0];
-    expect(tool?.name).toBe("feishu_chat");
+    const tool = resolveTool("feishu_chat");
+    expect(tool.name).toBe("feishu_chat");
 
     chatGetMock.mockResolvedValueOnce({
       code: 0,
