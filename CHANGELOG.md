@@ -17,6 +17,7 @@ Docs: https://docs.openclaw.ai
 
 - Gateway: `sessions.recall` reads evidence from the **same indexed transcript file** as the FTS hit (optional `transcriptRelPath` on search results) instead of always using the first existing candidate path.
 - Gateway: `sessions.search` session listing uses **`includeGlobal` / `includeUnknown`** so gateway row-kind filters (`global`, `unknown`) can match.
+- Config/legacy cleanup: stop probing obsolete alternate legacy config names and service labels during local config/service detection, while keeping the active `~/.openclaw/openclaw.json` path canonical.
 - ACP/sessions_spawn: register ACP child runs for completion tracking and lifecycle cleanup, and make registration-failure cleanup explicitly best-effort so callers do not assume an already-started ACP turn was fully aborted. (#40885) Thanks @xaeon2026 and @vincentkoc.
 - ACPX/runtime: derive the bundled ACPX expected version from the extension package metadata instead of hardcoding a separate literal, so plugin-local ACPX installs stop drifting out of health-check parity after version bumps. (#49089) Thanks @jiejiesks and @vincentkoc.
 - Gateway/auth: make local-direct `trusted-proxy` fallback require the configured shared token instead of silently authenticating same-host callers, while keeping same-host reverse proxy identity-header flows on the normal trusted-proxy path. Thanks @zhangning-agent and @vincentkoc.
@@ -45,6 +46,7 @@ Docs: https://docs.openclaw.ai
 - Docker/setup: force BuildKit for local image builds (including sandbox image builds) so `./docker-setup.sh` no longer fails on `RUN --mount=...` when hosts default to Docker's legacy builder. (#56681) Thanks @zhanghui-china.
 - Control UI/agents: auto-load agent workspace files on initial Files panel open, and populate overview model/workspace/fallbacks from effective runtime agent metadata so defaulted models no longer show as `Not set`. (#56637) Thanks @dxsx84.
 - Control UI/slash commands: make `/steer` and `/redirect` work from the chat command palette with visible pending state for active-run `/steer`, correct redirected-run tracking, and a single canonical `/steer` entry in the command menu. (#54625) Thanks @fuller-stack-dev.
+- Exec/runtime: default implicit exec to `host=auto`, resolve that target to sandbox only when a sandbox runtime exists, keep explicit `host=sandbox` fail-closed without sandbox, and show `/exec` effective host state in runtime status/docs.
 - Exec: fail closed when the implicit sandbox host has no sandbox runtime, and stop denied async approval followups from reusing prior command output from the same session. (#56800) Thanks @scoootscooob.
 - Exec/node: stop gateway-side workdir fallback from rewriting explicit `host=node` cwd values to the gateway filesystem, so remote node exec approval and runs keep using the intended node-local directory. (#50961) Thanks @openperf.
 - Plugins/ClawHub: sanitize temporary archive filenames for scoped package names and slash-containing skill slugs so `openclaw plugins install @scope/name` no longer fails with `ENOENT` during archive download. (#56452) Thanks @soimy.
