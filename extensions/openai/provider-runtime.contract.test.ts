@@ -1,3 +1,3 @@
-import { describeOpenAIProviderRuntimeContract } from "../../test/helpers/extensions/provider-runtime-contract.js";
+import { describeOpenAIProviderRuntimeContract } from "../../test/helpers/plugins/provider-runtime-contract.js";
 
 describeOpenAIProviderRuntimeContract();

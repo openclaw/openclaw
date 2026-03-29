@@ -7,7 +7,7 @@ import type { RuntimeEnv } from "../../../src/runtime.js";
 import {
   pluginCommandMocks,
   resetPluginCommandMocks,
-} from "../../../test/helpers/extensions/telegram-plugin-command.js";
+} from "../../../test/helpers/plugins/telegram-plugin-command.js";
 
 let registerTelegramNativeCommands: typeof import("./bot-native-commands.js").registerTelegramNativeCommands;
 import {

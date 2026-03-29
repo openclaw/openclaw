@@ -74,7 +74,7 @@ replacement plugin to reuse.
 The bundled browser plugin also owns the browser runtime implementation now.
 Core keeps only shared Plugin SDK helpers plus compatibility re-exports for
 older internal import paths. In practice, removing or replacing
-`extensions/browser` removes the browser feature set instead of leaving a
+Removing the browser plugin package removes the browser feature set instead of leaving a
 second core-owned runtime behind.
 
 Browser config changes still require a Gateway restart so the bundled plugin
