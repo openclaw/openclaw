@@ -26,6 +26,7 @@ import type {
   TaskRuntime,
   TaskSource,
   TaskStatus,
+  TaskTerminalOutcome,
 } from "./task-registry.types.js";
 
 const log = createSubsystemLogger("tasks/registry");
@@ -91,6 +92,12 @@ function ensureNotifyPolicy(params: {
 function normalizeTaskSummary(value: string | null | undefined): string | undefined {
   const normalized = value?.replace(/\s+/g, " ").trim();
   return normalized || undefined;
+}
+
+function normalizeTaskTerminalOutcome(
+  value: TaskTerminalOutcome | null | undefined,
+): TaskTerminalOutcome | undefined {
+  return value === "succeeded" || value === "blocked" ? value : undefined;
 }
 
 const TASK_RECENT_EVENT_LIMIT = 12;
@@ -271,7 +278,8 @@ function mergeExistingTaskForCreate(
 }
 
 function taskTerminalDeliveryIdempotencyKey(task: TaskRecord): string {
-  return `task-terminal:${task.taskId}:${task.status}`;
+  const outcome = task.status === "done" ? (task.terminalOutcome ?? "default") : "default";
+  return `task-terminal:${task.taskId}:${task.status}:${outcome}`;
 }
 
 function restoreTaskRegistryOnce() {
@@ -334,6 +342,11 @@ function formatTaskTerminalEvent(task: TaskRecord): string {
   const runLabel = task.runId ? ` (run ${task.runId.slice(0, 8)})` : "";
   const summary = task.terminalSummary?.trim();
   if (task.status === "done") {
+    if (task.terminalOutcome === "blocked") {
+      return summary
+        ? `Background task blocked: ${title}${runLabel}. ${summary}`
+        : `Background task blocked: ${title}${runLabel}.`;
+    }
     return summary
       ? `Background task done: ${title}${runLabel}. ${summary}`
       : `Background task done: ${title}${runLabel}.`;
@@ -372,6 +385,35 @@ function queueTaskSystemEvent(task: TaskRecord, text: string) {
   });
   requestHeartbeatNow({
     reason: "background-task",
+    sessionKey: requesterSessionKey,
+  });
+  return true;
+}
+
+function queueBlockedTaskFollowup(task: TaskRecord) {
+  if (task.status !== "done" || task.terminalOutcome !== "blocked") {
+    return false;
+  }
+  const requesterSessionKey = task.requesterSessionKey.trim();
+  if (!requesterSessionKey) {
+    return false;
+  }
+  const title =
+    task.label?.trim() ||
+    (task.runtime === "acp"
+      ? "ACP background task"
+      : task.runtime === "subagent"
+        ? "Subagent task"
+        : task.task.trim() || "Background task");
+  const runLabel = task.runId ? ` (run ${task.runId.slice(0, 8)})` : "";
+  const summary = task.terminalSummary?.trim() || "Task is blocked and needs follow-up.";
+  enqueueSystemEvent(`Task needs follow-up: ${title}${runLabel}. ${summary}`, {
+    sessionKey: requesterSessionKey,
+    contextKey: `task:${task.taskId}:blocked-followup`,
+    deliveryContext: task.requesterOrigin,
+  });
+  requestHeartbeatNow({
+    reason: "background-task-blocked",
     sessionKey: requesterSessionKey,
   });
   return true;
@@ -464,6 +506,9 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
     if (!canDeliverTaskToRequesterOrigin(latest)) {
       try {
         queueTaskSystemEvent(latest, eventText);
+        if (latest.terminalOutcome === "blocked") {
+          queueBlockedTaskFollowup(latest);
+        }
         return updateTask(taskId, {
           deliveryStatus: "session_queued",
           lastEventAt: Date.now(),
@@ -498,6 +543,9 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
           idempotencyKey: taskTerminalDeliveryIdempotencyKey(latest),
         },
       });
+      if (latest.terminalOutcome === "blocked") {
+        queueBlockedTaskFollowup(latest);
+      }
       return updateTask(taskId, {
         deliveryStatus: "delivered",
         lastEventAt: Date.now(),
@@ -511,6 +559,9 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
       });
       try {
         queueTaskSystemEvent(latest, eventText);
+        if (latest.terminalOutcome === "blocked") {
+          queueBlockedTaskFollowup(latest);
+        }
       } catch (fallbackError) {
         log.warn("Failed to queue background task fallback event", {
           taskId,
@@ -685,6 +736,7 @@ export function createTaskRecord(params: {
   lastEventAt?: number;
   progressSummary?: string | null;
   terminalSummary?: string | null;
+  terminalOutcome?: TaskTerminalOutcome | null;
   transcriptPath?: string;
   streamLogPath?: string;
   backend?: string;
@@ -725,6 +777,7 @@ export function createTaskRecord(params: {
     lastEventAt,
     progressSummary: normalizeTaskSummary(params.progressSummary),
     terminalSummary: normalizeTaskSummary(params.terminalSummary),
+    terminalOutcome: normalizeTaskTerminalOutcome(params.terminalOutcome),
     recentEvents: appendTaskEvent(
       {
         taskId,
@@ -767,6 +820,7 @@ export function updateTaskStateByRunId(params: {
   error?: string;
   progressSummary?: string | null;
   terminalSummary?: string | null;
+  terminalOutcome?: TaskTerminalOutcome | null;
   eventSummary?: string | null;
 }) {
   ensureTaskRegistryReady();
@@ -803,6 +857,9 @@ export function updateTaskStateByRunId(params: {
     }
     if (params.terminalSummary !== undefined) {
       patch.terminalSummary = normalizeTaskSummary(params.terminalSummary);
+    }
+    if (params.terminalOutcome !== undefined) {
+      patch.terminalOutcome = normalizeTaskTerminalOutcome(params.terminalOutcome);
     }
     const eventSummary =
       normalizeTaskSummary(params.eventSummary) ??

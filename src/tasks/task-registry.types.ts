@@ -21,6 +21,8 @@ export type TaskDeliveryStatus =
 
 export type TaskNotifyPolicy = "done_only" | "state_changes" | "silent";
 
+export type TaskTerminalOutcome = "succeeded" | "blocked";
+
 export type TaskBindingTargetKind = "subagent" | "session";
 
 export type TaskSource = "sessions_spawn" | "background_cli" | "unknown";
@@ -54,6 +56,7 @@ export type TaskRecord = {
   error?: string;
   progressSummary?: string;
   terminalSummary?: string;
+  terminalOutcome?: TaskTerminalOutcome;
   recentEvents?: TaskEventRecord[];
   lastNotifiedEventAt?: number;
   transcriptPath?: string;

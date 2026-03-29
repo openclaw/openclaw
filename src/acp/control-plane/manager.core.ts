@@ -104,6 +104,37 @@ function resolveBackgroundTaskFailureStatus(error: AcpRuntimeError): "failed" | 
   return /\btimed out\b/i.test(error.message) ? "timed_out" : "failed";
 }
 
+function resolveBackgroundTaskTerminalResult(progressSummary: string): {
+  terminalOutcome?: "blocked";
+  terminalSummary?: string;
+} {
+  const normalized = normalizeText(progressSummary)?.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return {};
+  }
+  const permissionDeniedMatch = normalized.match(
+    /\b(?:write failed:\s*)?permission denied(?: for (?<path>\S+))?\.?/i,
+  );
+  if (permissionDeniedMatch) {
+    const path = permissionDeniedMatch.groups?.path?.trim().replace(/[.,;:!?]+$/, "");
+    return {
+      terminalOutcome: "blocked",
+      terminalSummary: path ? `Permission denied for ${path}.` : "Permission denied.",
+    };
+  }
+  if (
+    /\bneed a writable session\b/i.test(normalized) ||
+    /\bfilesystem authorization\b/i.test(normalized) ||
+    /`?apply_patch`?/i.test(normalized)
+  ) {
+    return {
+      terminalOutcome: "blocked",
+      terminalSummary: "Writable session or apply_patch authorization required.",
+    };
+  }
+  return {};
+}
+
 type BackgroundTaskContext = {
   requesterSessionKey: string;
   requesterOrigin?: DeliveryContext;
@@ -800,13 +831,15 @@ export class AcpSessionManager {
               startedAt: turnStartedAt,
             });
             if (taskContext) {
+              const terminalResult = resolveBackgroundTaskTerminalResult(taskProgressSummary);
               this.updateBackgroundTaskState(taskContext.runId, {
                 status: "done",
                 endedAt: Date.now(),
                 lastEventAt: Date.now(),
                 error: undefined,
                 progressSummary: taskProgressSummary || null,
-                terminalSummary: null,
+                terminalSummary: terminalResult.terminalSummary ?? null,
+                terminalOutcome: terminalResult.terminalOutcome,
               });
             }
             await this.setSessionState({
