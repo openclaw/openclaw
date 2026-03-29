@@ -6,11 +6,9 @@ import type {
   SpeechVoiceOption,
 } from "openclaw/plugin-sdk/speech-core";
 import { requireInRange } from "openclaw/plugin-sdk/speech-core";
-import { fishAudioTTS, listFishAudioVoices } from "./tts.js";
+import { DEFAULT_FISH_AUDIO_BASE_URL, fishAudioTTS, listFishAudioVoices, normalizeFishAudioBaseUrl } from "./tts.js";
 
 // ── Defaults ────────────────────────────────────────────────────────────────
-
-const DEFAULT_FISH_AUDIO_BASE_URL = "https://api.fish.audio";
 // No default voice — users must configure one. Fish Audio has no universal
 // "default" voice like ElevenLabs does, and shipping a personal clone ID
 // as default would be wrong for community users.
@@ -54,11 +52,6 @@ function parseNumberValue(value: string): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-function normalizeBaseUrl(baseUrl: string | undefined): string {
-  const trimmed = baseUrl?.trim();
-  return trimmed?.replace(/\/+$/, "") || DEFAULT_FISH_AUDIO_BASE_URL;
-}
-
 function normalizeLatency(value: unknown): "normal" | "balanced" | "low" {
   const s = typeof value === "string" ? value.trim().toLowerCase() : "";
   if (s === "balanced" || s === "low") return s;
@@ -90,7 +83,7 @@ function normalizeFishAudioProviderConfig(
       value: raw?.apiKey,
       path: "messages.tts.providers.fish-audio.apiKey",
     }),
-    baseUrl: normalizeBaseUrl(trimToUndefined(raw?.baseUrl)),
+    baseUrl: normalizeFishAudioBaseUrl(trimToUndefined(raw?.baseUrl)),
     voiceId: trimToUndefined(raw?.voiceId) ?? DEFAULT_VOICE_ID,
     model: normalizeModel(raw?.model),
     latency: normalizeLatency(raw?.latency),
@@ -106,7 +99,7 @@ function readFishAudioProviderConfig(
   const defaults = normalizeFishAudioProviderConfig({});
   return {
     apiKey: trimToUndefined(config.apiKey) ?? defaults.apiKey,
-    baseUrl: normalizeBaseUrl(
+    baseUrl: normalizeFishAudioBaseUrl(
       trimToUndefined(config.baseUrl) ?? defaults.baseUrl,
     ),
     voiceId: trimToUndefined(config.voiceId) ?? defaults.voiceId,
@@ -233,6 +226,9 @@ export function buildFishAudioSpeechProvider(): SpeechProviderPlugin {
   return {
     id: "fish-audio",
     label: "Fish Audio",
+    // Lower = higher priority in auto-detect fallback. Positioned below OpenAI (10)
+    // but above ElevenLabs (20) and Microsoft (30) since Fish Audio requires
+    // explicit configuration (apiKey + voiceId) to pass isConfigured().
     autoSelectOrder: 15,
     models: FISH_AUDIO_MODELS,
 
@@ -255,7 +251,7 @@ export function buildFishAudioSpeechProvider(): SpeechProviderPlugin {
             }),
         ...(trimToUndefined(talkProviderConfig.baseUrl) == null
           ? {}
-          : { baseUrl: normalizeBaseUrl(trimToUndefined(talkProviderConfig.baseUrl)) }),
+          : { baseUrl: normalizeFishAudioBaseUrl(trimToUndefined(talkProviderConfig.baseUrl)) }),
         ...(trimToUndefined(talkProviderConfig.voiceId) == null
           ? {}
           : { voiceId: trimToUndefined(talkProviderConfig.voiceId) }),

@@ -1,6 +1,6 @@
-const DEFAULT_FISH_AUDIO_BASE_URL = "https://api.fish.audio";
+export const DEFAULT_FISH_AUDIO_BASE_URL = "https://api.fish.audio";
 
-function normalizeFishAudioBaseUrl(baseUrl?: string): string {
+export function normalizeFishAudioBaseUrl(baseUrl?: string): string {
   const trimmed = baseUrl?.trim();
   if (!trimmed) {
     return DEFAULT_FISH_AUDIO_BASE_URL;
