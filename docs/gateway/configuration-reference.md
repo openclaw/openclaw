@@ -1125,6 +1125,8 @@ See [Streaming](/concepts/streaming) for behavior + chunking details.
 
 See [Typing Indicators](/concepts/typing-indicators).
 
+<a id="agentsdefaultssandbox"></a>
+
 ### `agents.defaults.sandbox`
 
 Optional sandboxing for the embedded agent. See [Sandboxing](/gateway/sandboxing) for the full guide.
