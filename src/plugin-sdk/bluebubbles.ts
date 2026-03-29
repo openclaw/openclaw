@@ -1,10 +1,10 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
 import {
   parseChatTargetPrefixesOrThrow,
   resolveServicePrefixedTarget,
   type ParsedChatTarget,
-} from "./imessage-targets.js";
+} from "./channel-targets.js";
+import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
 
 // Narrow plugin-sdk surface for the bundled BlueBubbles plugin.
 // Keep this list additive and scoped to the conversation-binding seam only.
@@ -324,7 +324,7 @@ export {
   resolveServicePrefixedAllowTarget,
   resolveServicePrefixedTarget,
   type ParsedChatTarget,
-} from "./imessage-targets.js";
+} from "./channel-targets.js";
 export { stripMarkdown } from "./text-runtime.js";
 export { parseFiniteNumber } from "../infra/parse-finite-number.js";
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
