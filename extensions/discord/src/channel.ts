@@ -344,7 +344,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
           hint: "<channelId|user:ID|channel:ID>",
         },
       },
-      execApprovals: {
+      approvals: {
         auth: discordNativeApprovalAdapter.auth,
         delivery: {
           ...discordNativeApprovalAdapter.delivery,
