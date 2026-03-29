@@ -41,6 +41,7 @@ import {
   isSubagentSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
+  resolveThreadParentSessionKey,
 } from "../routing/session-key.js";
 import {
   deliveryContextFromSession,
@@ -893,6 +894,10 @@ export async function spawnAcpDirect(
           childSessionKey: sessionKey,
         })
       : undefined;
+  const parentSessionIsThreadBound = Boolean(resolveThreadParentSessionKey(parentSessionKey));
+  const suppressIntermediateRelayEvents =
+    ctx.agentChannel === "discord" &&
+    (requesterState.hasThreadContext || parentSessionIsThreadBound);
   let parentRelay: AcpSpawnParentRelayHandle | undefined;
   if (effectiveStreamToParent && parentSessionKey) {
     // Register relay before dispatch so fast lifecycle failures are not missed.
@@ -903,6 +908,7 @@ export async function spawnAcpDirect(
       agentId: targetAgentId,
       logPath: streamLogPath,
       emitStartNotice: false,
+      suppressIntermediateEvents: suppressIntermediateRelayEvents,
     });
   }
   try {
@@ -950,6 +956,7 @@ export async function spawnAcpDirect(
         agentId: targetAgentId,
         logPath: streamLogPath,
         emitStartNotice: false,
+        suppressIntermediateEvents: suppressIntermediateRelayEvents,
       });
     }
     parentRelay?.notifyStarted();

@@ -172,6 +172,50 @@ describe("startAcpSpawnParentStreamRelay", () => {
     relay.dispose();
   });
 
+  it("suppresses intermediate relay events for visible Discord thread sessions", () => {
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-2b",
+      parentSessionKey: "agent:main:discord:channel:thread-1",
+      childSessionKey: "agent:codex:acp:child-2b",
+      agentId: "codex",
+      streamFlushMs: 1,
+      noOutputNoticeMs: 1_000,
+      noOutputPollMs: 250,
+      suppressIntermediateEvents: true,
+    });
+
+    vi.advanceTimersByTime(1_500);
+    expect(collectedTexts().some((text) => text.includes("has produced no output for 1s"))).toBe(
+      false,
+    );
+
+    emitAgentEvent({
+      runId: "run-2b",
+      stream: "assistant",
+      data: {
+        delta: "resumed output",
+      },
+    });
+    vi.advanceTimersByTime(5);
+
+    const texts = collectedTexts();
+    expect(texts.some((text) => text.includes("Started codex session"))).toBe(true);
+    expect(texts.some((text) => text.includes("resumed output."))).toBe(false);
+    expect(texts.some((text) => text.includes("codex: resumed output"))).toBe(false);
+
+    emitAgentEvent({
+      runId: "run-2b",
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        startedAt: 1_000,
+        endedAt: 3_100,
+      },
+    });
+    expect(collectedTexts().some((text) => text.includes("codex run completed in 2s"))).toBe(true);
+    relay.dispose();
+  });
+
   it("auto-disposes stale relays after max lifetime timeout", () => {
     const relay = startAcpSpawnParentStreamRelay({
       runId: "run-3",

@@ -940,6 +940,61 @@ describe("spawnAcpDirect", () => {
     expect(secondHandle.notifyStarted).toHaveBeenCalledTimes(1);
   });
 
+  it("suppresses intermediate relay events when streaming to a Discord thread parent", async () => {
+    const relayHandle = createRelayHandle();
+    hoisted.startAcpSpawnParentStreamRelayMock.mockReset().mockReturnValue(relayHandle);
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        streamTo: "parent",
+      },
+      {
+        agentSessionKey: "agent:main:discord:channel:parent-channel:thread:worker-thread",
+        agentChannel: "discord",
+        agentAccountId: "default",
+        agentTo: "channel:parent-channel",
+        agentThreadId: "worker-thread",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(hoisted.startAcpSpawnParentStreamRelayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        parentSessionKey: "agent:main:discord:channel:parent-channel:thread:worker-thread",
+        suppressIntermediateEvents: true,
+      }),
+    );
+  });
+
+  it("suppresses intermediate relay events for Discord thread parent session keys without thread context", async () => {
+    const relayHandle = createRelayHandle();
+    hoisted.startAcpSpawnParentStreamRelayMock.mockReset().mockReturnValue(relayHandle);
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        streamTo: "parent",
+      },
+      {
+        agentSessionKey: "agent:main:discord:channel:parent-channel:thread:worker-thread",
+        agentChannel: "discord",
+        agentAccountId: "default",
+        agentTo: "channel:parent-channel",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(hoisted.startAcpSpawnParentStreamRelayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        parentSessionKey: "agent:main:discord:channel:parent-channel:thread:worker-thread",
+        suppressIntermediateEvents: true,
+      }),
+    );
+  });
+
   it("implicitly streams mode=run ACP spawns for subagent requester sessions", async () => {
     replaceSpawnConfig({
       ...hoisted.state.cfg,
