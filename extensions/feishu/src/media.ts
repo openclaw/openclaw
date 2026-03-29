@@ -2,7 +2,8 @@ import fs from "fs";
 import path from "path";
 import { Readable } from "stream";
 import type * as Lark from "@larksuiteoapi/node-sdk";
-import { mediaKindFromMime } from "openclaw/plugin-sdk/media-runtime";
+import { mediaKindFromMime, isAudioFileName } from "openclaw/plugin-sdk/media-runtime";
+import { parseBuffer as parseAudioMetadata } from "music-metadata";
 import { withTempDownloadPath, type ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
@@ -12,6 +13,32 @@ import { assertFeishuMessageApiSuccess, toFeishuSendResult } from "./send-result
 import { resolveFeishuSendTarget } from "./send-target.js";
 
 const FEISHU_MEDIA_HTTP_TIMEOUT_MS = 120_000;
+
+/**
+ * Parse media duration in milliseconds using music-metadata.
+ * Works for both audio and video containers (e.g. mp4/mov).
+ * Returns undefined if parsing fails (graceful degradation — Feishu will
+ * still accept the upload, just without a seek bar in the player).
+ */
+async function parseMediaDurationMs(
+  buffer: Buffer,
+  options?: { fileName?: string; contentType?: string },
+): Promise<number | undefined> {
+  try {
+    const metadata = await parseAudioMetadata(
+      buffer,
+      { mimeType: options?.contentType, path: options?.fileName, size: buffer.length },
+      { duration: true, skipCovers: true },
+    );
+    const seconds = metadata.format.duration;
+    if (typeof seconds !== "number" || !Number.isFinite(seconds)) {
+      return undefined;
+    }
+    return Math.max(0, Math.round(seconds * 1000));
+  } catch {
+    return undefined;
+  }
+}
 
 export type DownloadImageResult = {
   buffer: Buffer;
@@ -499,6 +526,13 @@ export function detectFileType(
   switch (ext) {
     case ".opus":
     case ".ogg":
+    case ".mp3":
+    case ".m4a":
+    case ".aac":
+    case ".wav":
+    case ".flac":
+    case ".caf":
+    case ".oga":
       return "opus";
     case ".mp4":
     case ".mov":
@@ -535,12 +569,7 @@ function resolveFeishuOutboundMediaKind(params: { fileName: string; contentType?
     return { msgType: "image" };
   }
 
-  if (
-    ext === ".opus" ||
-    ext === ".ogg" ||
-    contentType === "audio/ogg" ||
-    contentType === "audio/opus"
-  ) {
+  if (isAudioFileName(fileName) || mimeKind === "audio") {
     return { fileType: "opus", msgType: "audio" };
   }
 
@@ -627,11 +656,16 @@ export async function sendMediaFeishu(params: {
     const { imageKey } = await uploadImageFeishu({ cfg, image: buffer, accountId });
     return sendImageFeishu({ cfg, to, imageKey, replyToMessageId, replyInThread, accountId });
   } else {
+    const duration =
+      routing.msgType === "audio" || routing.msgType === "media"
+        ? await parseMediaDurationMs(buffer, { fileName: name, contentType })
+        : undefined;
     const { fileKey } = await uploadFileFeishu({
       cfg,
       file: buffer,
       fileName: name,
       fileType: routing.fileType ?? "stream",
+      duration,
       accountId,
     });
     return sendFileFeishu({
