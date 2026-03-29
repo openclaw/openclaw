@@ -286,6 +286,24 @@ describe("doctor config flow", () => {
     ).toBe("existing-session");
   });
 
+  it("repairs restrictive plugins.allow when browser is referenced via tools.alsoAllow", async () => {
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        tools: {
+          alsoAllow: ["browser"],
+        },
+        plugins: {
+          allow: ["telegram"],
+        },
+      },
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(result.cfg.plugins?.allow).toEqual(["telegram", "browser"]);
+    expect(result.cfg.plugins?.entries?.browser?.enabled).toBe(true);
+  });
+
   it("previews Matrix legacy sync-store migration in read-only mode", async () => {
     const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
     try {
