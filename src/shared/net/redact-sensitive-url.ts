@@ -1,3 +1,7 @@
+import type { ConfigUiHint } from "../config-ui-hints-types.js";
+
+export const SENSITIVE_URL_HINT_TAG = "url-secret";
+
 const SENSITIVE_URL_QUERY_PARAM_NAMES = new Set([
   "token",
   "key",
@@ -14,6 +18,17 @@ const SENSITIVE_URL_QUERY_PARAM_NAMES = new Set([
 
 export function isSensitiveUrlQueryParamName(name: string): boolean {
   return SENSITIVE_URL_QUERY_PARAM_NAMES.has(name.toLowerCase());
+}
+
+export function isSensitiveUrlConfigPath(path: string): boolean {
+  if (path.endsWith(".baseUrl") || path.endsWith(".httpUrl")) {
+    return true;
+  }
+  return /^mcp\.servers\.(?:\*|[^.]+)\.url$/.test(path);
+}
+
+export function hasSensitiveUrlHintTag(hint: Pick<ConfigUiHint, "tags"> | undefined): boolean {
+  return hint?.tags?.includes(SENSITIVE_URL_HINT_TAG) === true;
 }
 
 export function redactSensitiveUrl(value: string): string {

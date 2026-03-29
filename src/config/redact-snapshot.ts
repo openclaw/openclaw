@@ -1,6 +1,10 @@
 import JSON5 from "json5";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { redactSensitiveUrlLikeString } from "../shared/net/redact-sensitive-url.js";
+import {
+  hasSensitiveUrlHintTag,
+  isSensitiveUrlConfigPath,
+  redactSensitiveUrlLikeString,
+} from "../shared/net/redact-sensitive-url.js";
 import {
   replaceSensitiveValuesInRaw,
   shouldFallbackToStructuredRawRedaction,
@@ -30,10 +34,14 @@ function isWholeObjectSensitivePath(path: string): boolean {
 }
 
 function isSensitiveUrlPath(path: string): boolean {
-  if (path.endsWith(".baseUrl") || path.endsWith(".httpUrl")) {
-    return true;
+  return isSensitiveUrlConfigPath(path);
+}
+
+function hasSensitiveUrlHintPath(hints: ConfigUiHints | undefined, paths: string[]): boolean {
+  if (!hints) {
+    return false;
   }
-  return /^mcp\.servers\.[^.]+\.url$/.test(path);
+  return paths.some((path) => hasSensitiveUrlHintTag(hints[path]));
 }
 
 function collectSensitiveStrings(value: unknown, values: string[]): void {
@@ -220,7 +228,11 @@ function redactObjectWithLookup(
           ) {
             // Keep primitives at explicitly-sensitive paths fully redacted.
             result[key] = REDACTED_SENTINEL;
-          } else if (typeof value === "string" && isSensitiveUrlPath(path)) {
+          } else if (
+            typeof value === "string" &&
+            (hasSensitiveUrlHintPath(hints, [candidate, path, wildcardPath]) ||
+              isSensitiveUrlPath(path))
+          ) {
             const scrubbed = redactSensitiveUrlLikeString(value);
             if (scrubbed !== value) {
               values.push(value);
@@ -245,7 +257,10 @@ function redactObjectWithLookup(
         ) {
           result[key] = REDACTED_SENTINEL;
           values.push(value);
-        } else if (typeof value === "string" && isSensitiveUrlPath(path)) {
+        } else if (
+          typeof value === "string" &&
+          (hasSensitiveUrlHintPath(hints, [path, wildcardPath]) || isSensitiveUrlPath(path))
+        ) {
           const scrubbed = redactSensitiveUrlLikeString(value);
           if (scrubbed !== value) {
             values.push(value);
@@ -317,7 +332,10 @@ function redactObjectGuessing(
       ) {
         collectSensitiveStrings(value, values);
         result[key] = REDACTED_SENTINEL;
-      } else if (typeof value === "string" && isSensitiveUrlPath(dotPath)) {
+      } else if (
+        typeof value === "string" &&
+        (hasSensitiveUrlHintPath(hints, [dotPath, wildcardPath]) || isSensitiveUrlPath(dotPath))
+      ) {
         const scrubbed = redactSensitiveUrlLikeString(value);
         if (scrubbed !== value) {
           values.push(value);
@@ -658,7 +676,9 @@ function restoreRedactedValuesWithLookup(
         matched = true;
         if (
           value === REDACTED_SENTINEL &&
-          (hints[candidate]?.sensitive === true || isSensitiveUrlPath(path))
+          (hints[candidate]?.sensitive === true ||
+            hasSensitiveUrlHintPath(hints, [candidate, path, wildcardPath]) ||
+            isSensitiveUrlPath(path))
         ) {
           result[key] = restoreOriginalValueOrThrow({ key, path: candidate, original: orig });
         } else if (typeof value === "object" && value !== null) {
@@ -672,7 +692,9 @@ function restoreRedactedValuesWithLookup(
       if (
         !markedNonSensitive &&
         value === REDACTED_SENTINEL &&
-        (isSensitivePath(path) || isSensitiveUrlPath(path))
+        (isSensitivePath(path) ||
+          hasSensitiveUrlHintPath(hints, [path, wildcardPath]) ||
+          isSensitiveUrlPath(path))
       ) {
         result[key] = restoreOriginalValueOrThrow({ key, path, original: orig });
       } else if (typeof value === "object" && value !== null) {
@@ -714,7 +736,9 @@ function restoreRedactedValuesGuessing(
     if (
       !isExplicitlyNonSensitivePath(hints, [path, wildcardPath]) &&
       value === REDACTED_SENTINEL &&
-      (isSensitivePath(path) || isSensitiveUrlPath(path))
+      (isSensitivePath(path) ||
+        hasSensitiveUrlHintPath(hints, [path, wildcardPath]) ||
+        isSensitiveUrlPath(path))
     ) {
       result[key] = restoreOriginalValueOrThrow({ key, path, original: orig });
     } else if (typeof value === "object" && value !== null) {
