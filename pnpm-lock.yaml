@@ -102,9 +102,6 @@ importers:
       gaxios:
         specifier: 7.1.4
         version: 7.1.4
-      hono:
-        specifier: 4.12.9
-        version: 4.12.9
       ipaddr.js:
         specifier: ^2.3.0
         version: 2.3.0
@@ -120,9 +117,6 @@ importers:
       linkedom:
         specifier: ^0.18.12
         version: 0.18.12
-      long:
-        specifier: ^5.3.2
-        version: 5.3.2
       markdown-it:
         specifier: ^14.1.1
         version: 14.1.1
@@ -162,9 +156,6 @@ importers:
       undici:
         specifier: ^7.24.6
         version: 7.24.6
-      uuid:
-        specifier: ^13.0.0
-        version: 13.0.0
       ws:
         specifier: ^8.20.0
         version: 8.20.0
