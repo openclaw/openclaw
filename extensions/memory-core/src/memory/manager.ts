@@ -490,6 +490,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       ftsTable: FTS_TABLE,
       providerModel,
       query,
+      ftsTokenizer: this.settings.store.fts.tokenizer,
       limit,
       snippetMaxChars: SNIPPET_MAX_CHARS,
       sourceFilter,
