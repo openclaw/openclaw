@@ -117,8 +117,6 @@ export function resolveFallbackRetryPrompt(params: {
   body: string;
   isFallbackRetry: boolean;
   sessionHasHistory?: boolean;
-  primaryProvider?: string;
-  fallbackProvider?: string;
 }): string {
   if (!params.isFallbackRetry) {
     return params.body;
@@ -129,19 +127,6 @@ export function resolveFallbackRetryPrompt(params: {
   // recovery prompt and lose the original task entirely.  Preserve the
   // original body in that case so the fallback model can execute the task.
   if (!params.sessionHasHistory) {
-    // CWE-201: avoid leaking the original (potentially sensitive) prompt to a
-    // different provider.  Only replay when the fallback stays within the same
-    // provider, or when provider information is unavailable (defensive default).
-    if (
-      params.primaryProvider &&
-      params.fallbackProvider &&
-      params.primaryProvider !== params.fallbackProvider
-    ) {
-      throw new FailoverError(
-        "Cannot replay original prompt to a different provider without persisted session history",
-        { reason: "auth" },
-      );
-    }
     return params.body;
   }
   return "Continue where you left off. The previous model attempt failed or timed out.";
@@ -344,14 +329,11 @@ export function runAgentAttempt(params: {
   storePath?: string;
   allowTransientCooldownProbe?: boolean;
   sessionHasHistory?: boolean;
-  primaryProvider?: string;
 }) {
   const effectivePrompt = resolveFallbackRetryPrompt({
     body: params.body,
     isFallbackRetry: params.isFallbackRetry,
     sessionHasHistory: params.sessionHasHistory,
-    primaryProvider: params.primaryProvider,
-    fallbackProvider: params.providerOverride,
   });
   const bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.sessionEntry?.systemPromptReport,

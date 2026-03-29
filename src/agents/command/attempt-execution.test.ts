@@ -63,31 +63,7 @@ describe("resolveFallbackRetryPrompt", () => {
     ).toBe(originalBody);
   });
 
-  it("allows prompt replay when fallback stays within the same provider", () => {
-    expect(
-      resolveFallbackRetryPrompt({
-        body: originalBody,
-        isFallbackRetry: true,
-        sessionHasHistory: false,
-        primaryProvider: "deepseek",
-        fallbackProvider: "deepseek",
-      }),
-    ).toBe(originalBody);
-  });
-
-  it("throws when replaying prompt to a different provider without history", () => {
-    expect(() =>
-      resolveFallbackRetryPrompt({
-        body: originalBody,
-        isFallbackRetry: true,
-        sessionHasHistory: false,
-        primaryProvider: "zai",
-        fallbackProvider: "deepseek",
-      }),
-    ).toThrow("Cannot replay original prompt to a different provider");
-  });
-
-  it("allows prompt replay when provider info is not supplied (defensive default)", () => {
+  it("preserves original body on fallback retry without history", () => {
     expect(
       resolveFallbackRetryPrompt({
         body: originalBody,

@@ -787,7 +787,6 @@ async function agentCommandInternal(
             storePath,
             allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
             sessionHasHistory: !isNewSession || (await sessionFileHasContent(sessionFile)),
-            primaryProvider: provider,
             onAgentEvent: (evt) => {
               // Track lifecycle end for fallback emission below.
               if (
