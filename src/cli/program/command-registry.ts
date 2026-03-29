@@ -208,6 +208,19 @@ const coreEntries: CoreCliEntry[] = [
       mod.registerStatusHealthSessionsCommands(program);
     },
   },
+  {
+    commands: [
+      {
+        name: "arbitrage",
+        description: "Manage Aave flashloan arbitrage bot",
+        hasSubcommands: true,
+      },
+    ],
+    register: async ({ program }) => {
+      const mod = await import("../../commands/arbitrage.js");
+      program.addCommand(mod.createArbitrageCommand());
+    },
+  },
 ];
 
 export function getCoreCliCommandNames(): string[] {
