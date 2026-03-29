@@ -449,8 +449,39 @@ describe("startGatewayConfigReloader", () => {
     }
   });
 
-  it("reuses in-process write notifications and suppresses watcher noise for the same write", async () => {
-    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>();
+  it("reuses in-process write notifications and dedupes watcher rereads by persisted hash", async () => {
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValueOnce(
+        makeSnapshot({
+          sourceConfig: {
+            gateway: { reload: { debounceMs: 0 } },
+          },
+          runtimeConfig: {
+            gateway: { reload: { debounceMs: 0 } },
+            hooks: { enabled: true },
+          },
+          config: {
+            gateway: { reload: { debounceMs: 0 } },
+            hooks: { enabled: true },
+          },
+          hash: "internal-1",
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeSnapshot({
+          sourceConfig: {
+            gateway: { reload: { debounceMs: 0 }, port: 19001 },
+          },
+          runtimeConfig: {
+            gateway: { reload: { debounceMs: 0 }, port: 19001 },
+          },
+          config: {
+            gateway: { reload: { debounceMs: 0 }, port: 19001 },
+          },
+          hash: "external-1",
+        }),
+      );
     const harness = createReloaderHarness(readSnapshot);
 
     harness.emitWrite({
@@ -472,29 +503,15 @@ describe("startGatewayConfigReloader", () => {
     harness.watcher.emit("change");
     await vi.runOnlyPendingTimersAsync();
 
-    expect(readSnapshot).not.toHaveBeenCalled();
+    expect(readSnapshot).toHaveBeenCalledTimes(1);
     expect(harness.onHotReload).toHaveBeenCalledTimes(1);
 
-    await vi.advanceTimersByTimeAsync(400);
-    readSnapshot.mockResolvedValueOnce(
-      makeSnapshot({
-        sourceConfig: {
-          gateway: { reload: { debounceMs: 0 }, port: 19001 },
-        },
-        runtimeConfig: {
-          gateway: { reload: { debounceMs: 0 }, port: 19001 },
-        },
-        config: {
-          gateway: { reload: { debounceMs: 0 }, port: 19001 },
-        },
-        hash: "external-1",
-      }),
-    );
     harness.watcher.emit("change");
     await vi.runOnlyPendingTimersAsync();
 
-    expect(readSnapshot).toHaveBeenCalledTimes(1);
+    expect(readSnapshot).toHaveBeenCalledTimes(2);
     expect(harness.onHotReload).toHaveBeenCalledTimes(1);
+    expect(harness.onRestart).toHaveBeenCalledTimes(1);
 
     await harness.reloader.stop();
   });
