@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- ACP/relay: add persisted ACP child-state fallback for parent completion relays, but only trust persisted terminal state after same-run local activity or a post-start persisted running transition so later turns in the same child session cannot complete the wrong relay. (#54701) Thanks @giulio-leone and @vincentkoc.
 - Gateway/auth: make local-direct `trusted-proxy` fallback require the configured shared token instead of silently authenticating same-host callers, while keeping same-host reverse proxy identity-header flows on the normal trusted-proxy path. Thanks @zhangning-agent and @vincentkoc.
 - Agents/sandbox: honor `tools.sandbox.tools.alsoAllow`, let explicit sandbox re-allows remove matching built-in default-deny tools, and keep sandbox explain/error guidance aligned with the effective sandbox tool policy. (#54492) Thanks @ngutman.
 - LINE/ACP: add current-conversation binding and inbound binding-routing parity so `/acp spawn ... --thread here`, configured ACP bindings, and active conversation-bound ACP sessions work on LINE like the other conversation channels.

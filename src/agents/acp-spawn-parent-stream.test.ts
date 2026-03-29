@@ -285,14 +285,20 @@ describe("startAcpSpawnParentStreamRelay", () => {
     readAcpSessionEntryMock
       .mockReturnValueOnce({
         acp: {
-          state: "running",
+          state: "idle",
           lastActivityAt: Date.now(),
         },
       })
       .mockReturnValueOnce({
         acp: {
-          state: "idle",
+          state: "running",
           lastActivityAt: Date.now() + 250,
+        },
+      })
+      .mockReturnValueOnce({
+        acp: {
+          state: "idle",
+          lastActivityAt: Date.now() + 500,
         },
       });
 
@@ -305,7 +311,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
       noOutputPollMs: 250,
     });
 
-    vi.advanceTimersByTime(500);
+    vi.advanceTimersByTime(750);
 
     expect(collectedTexts().some((text) => text.includes("codex run completed."))).toBe(true);
     relay.dispose();
@@ -315,14 +321,20 @@ describe("startAcpSpawnParentStreamRelay", () => {
     readAcpSessionEntryMock
       .mockReturnValueOnce({
         acp: {
-          state: "running",
+          state: "idle",
           lastActivityAt: Date.now(),
         },
       })
       .mockReturnValueOnce({
         acp: {
-          state: "error",
+          state: "running",
           lastActivityAt: Date.now() + 250,
+        },
+      })
+      .mockReturnValueOnce({
+        acp: {
+          state: "error",
+          lastActivityAt: Date.now() + 500,
           lastError: "provider disconnected",
         },
       });
@@ -336,7 +348,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
       noOutputPollMs: 250,
     });
 
-    vi.advanceTimersByTime(500);
+    vi.advanceTimersByTime(750);
 
     expect(
       collectedTexts().some((text) => text.includes("run failed: provider disconnected")),
@@ -396,11 +408,11 @@ describe("startAcpSpawnParentStreamRelay", () => {
     relay.dispose();
   });
 
-  it("accepts a later idle-state update after ignoring the initial same-millisecond idle snapshot", () => {
+  it("does not trust an initial running snapshot by itself for persisted completion fallback", () => {
     readAcpSessionEntryMock
       .mockReturnValueOnce({
         acp: {
-          state: "idle",
+          state: "running",
           lastActivityAt: Date.now(),
         },
       })
@@ -421,9 +433,10 @@ describe("startAcpSpawnParentStreamRelay", () => {
       maxRelayLifetimeMs: 1_000,
     });
 
-    vi.advanceTimersByTime(500);
+    vi.advanceTimersByTime(750);
 
-    expect(collectedTexts().some((text) => text.includes("codex run completed."))).toBe(true);
+    expect(collectedTexts().some((text) => text.includes("run completed"))).toBe(false);
+    expect(collectedTexts().some((text) => text.includes("run failed"))).toBe(false);
 
     relay.dispose();
   });

@@ -234,7 +234,8 @@ export function startAcpSpawnParentStreamRelay(params: {
   const relayStartedAt = lastProgressAt;
   const initialPersistedRelayState = readPersistedAcpRelayState(params.childSessionKey);
   let stallNotified = false;
-  let sawPersistedRunningState = initialPersistedRelayState?.state === "running";
+  let sawLocalRunActivity = false;
+  let sawPersistedRunningTransition = false;
   let flushTimer: NodeJS.Timeout | undefined;
   let relayLifetimeTimer: NodeJS.Timeout | undefined;
 
@@ -301,12 +302,18 @@ export function startAcpSpawnParentStreamRelay(params: {
     // in-memory event bus may never receive their terminal lifecycle event.
     const persistedRelayState = readPersistedAcpRelayState(params.childSessionKey);
     const persistedStateAdvanced = didPersistedRelayStateAdvance(persistedRelayState);
-    if (persistedRelayState?.state === "running" && persistedStateAdvanced) {
-      sawPersistedRunningState = true;
+    if (
+      persistedRelayState?.state === "running" &&
+      persistedStateAdvanced &&
+      persistedRelayState.lastActivityAt != null &&
+      persistedRelayState.lastActivityAt > relayStartedAt
+    ) {
+      sawPersistedRunningTransition = true;
     }
+    const canTrustPersistedTerminalState = sawLocalRunActivity || sawPersistedRunningTransition;
     if (
       persistedRelayState?.state === "idle" &&
-      (sawPersistedRunningState || persistedStateAdvanced)
+      canTrustPersistedTerminalState
     ) {
       flushPending();
       emit(`${relayLabel} run completed.`, `${contextPrefix}:done:persisted`);
@@ -315,7 +322,7 @@ export function startAcpSpawnParentStreamRelay(params: {
     }
     if (
       persistedRelayState?.state === "error" &&
-      (sawPersistedRunningState || persistedStateAdvanced)
+      canTrustPersistedTerminalState
     ) {
       flushPending();
       const errorText = persistedRelayState.lastError;
@@ -366,6 +373,7 @@ export function startAcpSpawnParentStreamRelay(params: {
     }
 
     if (event.stream === "assistant") {
+      sawLocalRunActivity = true;
       const data = event.data;
       const deltaCandidate =
         (data as { delta?: unknown } | undefined)?.delta ??
@@ -399,6 +407,7 @@ export function startAcpSpawnParentStreamRelay(params: {
     }
 
     const phase = toTrimmedString((event.data as { phase?: unknown } | undefined)?.phase);
+    sawLocalRunActivity = true;
     logEvent("lifecycle", { phase: phase ?? "unknown", data: event.data });
     if (phase === "end") {
       flushPending();
