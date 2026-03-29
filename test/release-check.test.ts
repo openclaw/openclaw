@@ -8,6 +8,7 @@ import {
   collectMissingPackPaths,
   collectPackUnpackedSizeErrors,
 } from "../scripts/release-check.ts";
+import { bundledDistPluginFile, bundledPluginFile } from "./helpers/bundled-plugin-paths.js";
 
 function makeItem(shortVersion: string, sparkleVersion: string): string {
   return `<item><title>${shortVersion}</title><sparkle:shortVersionString>${shortVersion}</sparkle:shortVersionString><sparkle:version>${sparkleVersion}</sparkle:version></item>`;
@@ -113,11 +114,11 @@ describe("collectForbiddenPackPaths", () => {
     expect(
       collectForbiddenPackPaths([
         "dist/index.js",
-        "dist/extensions/discord/node_modules/@buape/carbon/index.js",
-        "extensions/tlon/node_modules/.bin/tlon",
+        bundledDistPluginFile("discord", "node_modules/@buape/carbon/index.js"),
+        bundledPluginFile("tlon", "node_modules/.bin/tlon"),
         "node_modules/.bin/openclaw",
       ]),
-    ).toEqual(["extensions/tlon/node_modules/.bin/tlon", "node_modules/.bin/openclaw"]);
+    ).toEqual([bundledPluginFile("tlon", "node_modules/.bin/tlon"), "node_modules/.bin/openclaw"]);
   });
 });
 
@@ -137,15 +138,15 @@ describe("collectMissingPackPaths", () => {
       expect.arrayContaining([
         "dist/channel-catalog.json",
         "dist/control-ui/index.html",
-        "dist/extensions/matrix/helper-api.js",
-        "dist/extensions/matrix/runtime-api.js",
-        "dist/extensions/matrix/thread-bindings-runtime.js",
-        "dist/extensions/matrix/openclaw.plugin.json",
-        "dist/extensions/matrix/package.json",
-        "dist/extensions/whatsapp/light-runtime-api.js",
-        "dist/extensions/whatsapp/runtime-api.js",
-        "dist/extensions/whatsapp/openclaw.plugin.json",
-        "dist/extensions/whatsapp/package.json",
+        bundledDistPluginFile("matrix", "helper-api.js"),
+        bundledDistPluginFile("matrix", "runtime-api.js"),
+        bundledDistPluginFile("matrix", "thread-bindings-runtime.js"),
+        bundledDistPluginFile("matrix", "openclaw.plugin.json"),
+        bundledDistPluginFile("matrix", "package.json"),
+        bundledDistPluginFile("whatsapp", "light-runtime-api.js"),
+        bundledDistPluginFile("whatsapp", "runtime-api.js"),
+        bundledDistPluginFile("whatsapp", "openclaw.plugin.json"),
+        bundledDistPluginFile("whatsapp", "package.json"),
       ]),
     );
   });
@@ -168,11 +169,11 @@ describe("collectMissingPackPaths", () => {
   it("requires bundled plugin runtime sidecars that dynamic plugin boundaries resolve at runtime", () => {
     expect(requiredBundledPluginPackPaths).toEqual(
       expect.arrayContaining([
-        "dist/extensions/matrix/helper-api.js",
-        "dist/extensions/matrix/runtime-api.js",
-        "dist/extensions/matrix/thread-bindings-runtime.js",
-        "dist/extensions/whatsapp/light-runtime-api.js",
-        "dist/extensions/whatsapp/runtime-api.js",
+        bundledDistPluginFile("matrix", "helper-api.js"),
+        bundledDistPluginFile("matrix", "runtime-api.js"),
+        bundledDistPluginFile("matrix", "thread-bindings-runtime.js"),
+        bundledDistPluginFile("whatsapp", "light-runtime-api.js"),
+        bundledDistPluginFile("whatsapp", "runtime-api.js"),
       ]),
     );
   });
