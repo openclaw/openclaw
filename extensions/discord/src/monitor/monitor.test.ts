@@ -87,11 +87,8 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
 
 // agent-components.ts can bind the core dispatcher via reply-runtime re-exports,
 // so keep this direct mock to avoid hitting real embedded-agent dispatch in tests.
-vi.mock("../../../../src/auto-reply/reply/provider-dispatcher.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<
-      typeof import("../../../../src/auto-reply/reply/provider-dispatcher.js")
-    >();
+vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
   return {
     ...actual,
     dispatchReplyWithBufferedBlockDispatcher: (...args: unknown[]) => dispatchReplyMock(...args),

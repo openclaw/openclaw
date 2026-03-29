@@ -1,5 +1,5 @@
+import { normalizeSlackMessagingTarget } from "openclaw/plugin-sdk/slack";
 import { describe, expect, it } from "vitest";
-import { normalizeSlackMessagingTarget } from "../../../src/channels/plugins/normalize/slack.js";
 import { parseSlackTarget, resolveSlackChannelId } from "./targets.js";
 
 describe("parseSlackTarget", () => {

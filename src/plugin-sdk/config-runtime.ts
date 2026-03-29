@@ -3,9 +3,11 @@
 
 export { resolveDefaultAgentId } from "../agents/agent-scope.js";
 export {
+  clearRuntimeConfigSnapshot,
   getRuntimeConfigSnapshot,
   loadConfig,
   readConfigFileSnapshotForWrite,
+  setRuntimeConfigSnapshot,
   writeConfigFile,
 } from "../config/io.js";
 export { logConfigUpdated } from "../config/logging.js";
@@ -87,9 +89,11 @@ export type {
   TtsProvider,
 } from "../config/types.js";
 export {
+  clearSessionStoreCacheForTest,
   loadSessionStore,
   readSessionUpdatedAt,
   recordSessionMetaFromInbound,
+  saveSessionStore,
   resolveSessionKey,
   resolveStorePath,
   updateLastRoute,
