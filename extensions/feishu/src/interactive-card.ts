@@ -1,6 +1,7 @@
 type InteractiveCardObject = Record<string, unknown>;
 
 const INTERACTIVE_CARD_PLACEHOLDER = "[Interactive Card]";
+const MAX_CARD_PARSE_DEPTH = 20;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -34,7 +35,10 @@ function resolveCardObject(parsed: unknown): InteractiveCardObject | undefined {
     return asRecord.card as InteractiveCardObject;
   }
   if (typeof asRecord.card === "string") {
-    return parseJsonObject(asRecord.card);
+    const parsedCard = parseJsonObject(asRecord.card);
+    if (parsedCard) {
+      return parsedCard;
+    }
   }
 
   if (isRecord(asRecord.raw_card_content)) {
@@ -63,8 +67,8 @@ function pushText(out: string[], value: unknown): void {
   }
 }
 
-function collectElementText(node: unknown, out: string[]): void {
-  if (!node) {
+function collectElementText(node: unknown, out: string[], depth = 0): void {
+  if (!node || depth > MAX_CARD_PARSE_DEPTH) {
     return;
   }
   if (typeof node === "string") {
@@ -95,37 +99,37 @@ function collectElementText(node: unknown, out: string[]): void {
   const note = obj.note;
   if (Array.isArray(note)) {
     for (const item of note) {
-      collectElementText(item, out);
+      collectElementText(item, out, depth + 1);
     }
   } else {
-    collectElementText(note, out);
+    collectElementText(note, out, depth + 1);
   }
 
   const fields = obj.fields;
   if (Array.isArray(fields)) {
     for (const field of fields) {
-      collectElementText(field, out);
+      collectElementText(field, out, depth + 1);
     }
   }
 
   const options = obj.options;
   if (Array.isArray(options)) {
     for (const option of options) {
-      collectElementText(option, out);
+      collectElementText(option, out, depth + 1);
     }
   }
 
   const actions = obj.actions;
   if (Array.isArray(actions)) {
     for (const action of actions) {
-      collectElementText(action, out);
+      collectElementText(action, out, depth + 1);
     }
   }
 
   const children = obj.elements;
   if (Array.isArray(children)) {
     for (const child of children) {
-      collectElementText(child, out);
+      collectElementText(child, out, depth + 1);
     }
   }
 }
@@ -148,7 +152,8 @@ function collectCardText(card: InteractiveCardObject): string[] {
       ? ((card.body as Record<string, unknown>).elements as unknown[])
       : [];
   const i18nElements =
-    isRecord(card.i18n_elements) && isRecord((card.i18n_elements as Record<string, unknown>).zh_cn)
+    isRecord(card.i18n_elements) &&
+    Array.isArray((card.i18n_elements as Record<string, unknown>).zh_cn)
       ? ((card.i18n_elements as Record<string, unknown>).zh_cn as unknown[])
       : [];
 
@@ -210,4 +215,3 @@ export function parseInteractiveCardPayload(rawContent: string): {
 export function isInteractiveCardPlaceholder(value: string): boolean {
   return value.trim() === INTERACTIVE_CARD_PLACEHOLDER;
 }
-
