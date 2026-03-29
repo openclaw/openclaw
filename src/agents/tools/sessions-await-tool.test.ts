@@ -195,6 +195,35 @@ describe("sessions_await tool", () => {
     expect(setSuppressAutoAnnounceMock).toHaveBeenCalledWith("run-x");
   });
 
+  it("preserves waited results when run is evicted after wait", async () => {
+    const evictedRun = makeRun({ runId: "run-evicted" });
+    let lookupCount = 0;
+    getSubagentRunByChildSessionKeyMock.mockImplementation((key: string) => {
+      if (key !== "agent:main:subagent:uuid1") {
+        return null;
+      }
+      lookupCount += 1;
+      return lookupCount === 1 ? evictedRun : null;
+    });
+    callGatewayMock.mockResolvedValue({ status: "ok" });
+    captureSubagentCompletionReplyMock.mockResolvedValue("done");
+
+    const tool = createSessionsAwaitTool({ agentSessionKey: REQUESTER_SESSION_KEY });
+    const result = await tool.execute("call-evicted", {
+      sessionKeys: ["agent:main:subagent:uuid1"],
+    });
+
+    const details = result.details as { status: string; results: Array<Record<string, unknown>> };
+    expect(details.status).toBe("ok");
+    expect(details.results).toHaveLength(1);
+    expect(details.results[0]).toMatchObject({
+      sessionKey: "agent:main:subagent:uuid1",
+      status: "completed",
+      runId: "run-evicted",
+      reply: "done",
+    });
+  });
+
   it("treats agent.wait transport failures as errors", async () => {
     const activeRun = makeRun({ runId: "run-transport-error" });
     getSubagentRunByChildSessionKeyMock.mockImplementation((key: string) =>
@@ -215,6 +244,34 @@ describe("sessions_await tool", () => {
       status: "error",
       runId: "run-transport-error",
       error: "gateway disconnected",
+    });
+  });
+
+  it("returns per-session capture error instead of throwing", async () => {
+    const completedRun = makeRun({
+      runId: "run-capture-fail",
+      childSessionKey: "agent:main:subagent:capture-fail",
+      endedAt: Date.now(),
+      outcome: { status: "ok" },
+    });
+    getSubagentRunByChildSessionKeyMock.mockImplementation((key: string) =>
+      key === "agent:main:subagent:capture-fail" ? completedRun : null,
+    );
+    captureSubagentCompletionReplyMock.mockRejectedValue(new Error("history unavailable"));
+
+    const tool = createSessionsAwaitTool({ agentSessionKey: REQUESTER_SESSION_KEY });
+    const result = await tool.execute("call-capture-fail", {
+      sessionKeys: ["agent:main:subagent:capture-fail"],
+    });
+
+    const details = result.details as { status: string; results: Array<Record<string, unknown>> };
+    expect(details.status).toBe("ok");
+    expect(details.results).toHaveLength(1);
+    expect(details.results[0]).toMatchObject({
+      sessionKey: "agent:main:subagent:capture-fail",
+      status: "completed",
+      runId: "run-capture-fail",
+      error: expect.stringContaining("failed to capture sub-agent completion reply"),
     });
   });
 });

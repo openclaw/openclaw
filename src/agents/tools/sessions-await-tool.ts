@@ -153,23 +153,20 @@ export function createSessionsAwaitTool(opts?: { agentSessionKey?: string }): An
               error: "No registered run found for this session key",
             };
           }
-          const run = getSubagentRunByChildSessionKey(sessionKey);
-          if (!run) {
+          const refreshedRun = getSubagentRunByChildSessionKey(sessionKey);
+          if (refreshedRun && resolveRunOwnerSessionKey(refreshedRun) !== requesterSessionKey) {
             return {
               sessionKey,
               status: "not_found" as const,
               error: "No registered run found for this session key",
             };
           }
-          if (resolveRunOwnerSessionKey(run) !== requesterSessionKey) {
-            return {
-              sessionKey,
-              status: "not_found" as const,
-              error: "No registered run found for this session key",
-            };
-          }
+          // If cleanup evicts the run immediately after wait settles (cleanup=delete),
+          // preserve the run we originally resolved so we can still return a deterministic result.
+          const run = refreshedRun ?? initialRun;
+          const runId = initialRun.runId;
 
-          const waitResp = waitResults.get(run.runId);
+          const waitResp = waitResults.get(runId);
           const waitStatus = waitResp?.status;
           const isTimedOut =
             waitStatus === "timeout" ||
@@ -177,11 +174,11 @@ export function createSessionsAwaitTool(opts?: { agentSessionKey?: string }): An
 
           if (isTimedOut) {
             // Restore auto-announce so the child can still deliver if it completes later.
-            clearSuppressAutoAnnounce(run.runId);
+            clearSuppressAutoAnnounce(runId);
             return {
               sessionKey,
               status: "timeout" as const,
-              runId: run.runId,
+              runId,
               error: "Sub-agent did not complete within the timeout",
             };
           }
@@ -194,11 +191,22 @@ export function createSessionsAwaitTool(opts?: { agentSessionKey?: string }): An
               waitStatus !== "error");
           if (waitErrored && typeof run.endedAt !== "number") {
             // Restore auto-announce so a later completion can still be delivered.
-            clearSuppressAutoAnnounce(run.runId);
+            clearSuppressAutoAnnounce(runId);
           }
           const isError = waitErrored || run.outcome?.status === "error";
-          const reply = await captureSubagentCompletionReply(sessionKey);
-          const replyText = reply?.trim() || run.frozenResultText?.trim() || undefined;
+          let replyText = run.frozenResultText?.trim() || undefined;
+          let replyCaptureError: string | undefined;
+          try {
+            const reply = await captureSubagentCompletionReply(sessionKey);
+            const capturedReply = reply?.trim();
+            if (capturedReply) {
+              replyText = capturedReply;
+            }
+          } catch (err) {
+            replyCaptureError = `failed to capture sub-agent completion reply: ${summarizeTransportError(
+              err,
+            )}`;
+          }
           const errorMessage = waitErrored
             ? waitResp?.error ||
               (waitStatus && waitStatus !== "error"
@@ -206,14 +214,14 @@ export function createSessionsAwaitTool(opts?: { agentSessionKey?: string }): An
                 : "agent.wait failed")
             : run.outcome?.status === "error"
               ? String(run.outcome?.error || "subagent error")
-              : undefined;
+              : replyCaptureError;
 
           return {
             sessionKey,
             status: isError ? ("error" as const) : ("completed" as const),
-            runId: run.runId,
+            runId,
             reply: replyText,
-            ...(isError ? { error: errorMessage } : {}),
+            ...(errorMessage ? { error: errorMessage } : {}),
           };
         }),
       );
