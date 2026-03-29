@@ -1,6 +1,11 @@
 import { isDeepStrictEqual } from "node:util";
 import chokidar from "chokidar";
-import type { OpenClawConfig, ConfigFileSnapshot, GatewayReloadMode } from "../config/config.js";
+import type {
+  OpenClawConfig,
+  ConfigFileSnapshot,
+  ConfigWriteNotification,
+  GatewayReloadMode,
+} from "../config/config.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { isPlainObject } from "../utils.js";
 import { buildGatewayReloadPlan, type GatewayReloadPlan } from "./config-reload-plan.js";
@@ -19,6 +24,7 @@ const DEFAULT_RELOAD_SETTINGS: GatewayReloadSettings = {
 };
 const MISSING_CONFIG_RETRY_DELAY_MS = 150;
 const MISSING_CONFIG_MAX_RETRIES = 2;
+const SELF_WRITE_WATCHER_SUPPRESSION_MS = 350;
 
 export function diffConfigPaths(prev: unknown, next: unknown, prefix = ""): string[] {
   if (prev === next) {
@@ -74,6 +80,7 @@ export function startGatewayConfigReloader(opts: {
   readSnapshot: () => Promise<ConfigFileSnapshot>;
   onHotReload: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => Promise<void>;
   onRestart: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
+  subscribeToWrites?: (listener: (event: ConfigWriteNotification) => void) => () => void;
   log: {
     info: (msg: string) => void;
     warn: (msg: string) => void;
@@ -89,6 +96,9 @@ export function startGatewayConfigReloader(opts: {
   let stopped = false;
   let restartQueued = false;
   let missingConfigRetries = 0;
+  let pendingInProcessConfig: OpenClawConfig | null = null;
+  let lastAppliedWriteHash: string | null = null;
+  let ignoreWatcherEventsUntilMs = 0;
 
   const scheduleAfter = (wait: number) => {
     if (stopped) {
@@ -195,7 +205,22 @@ export function startGatewayConfigReloader(opts: {
       debounceTimer = null;
     }
     try {
+      if (pendingInProcessConfig) {
+        const nextConfig = pendingInProcessConfig;
+        pendingInProcessConfig = null;
+        missingConfigRetries = 0;
+        await applySnapshot(nextConfig);
+        return;
+      }
       const snapshot = await opts.readSnapshot();
+      if (
+        lastAppliedWriteHash &&
+        typeof snapshot.hash === "string" &&
+        snapshot.hash === lastAppliedWriteHash
+      ) {
+        lastAppliedWriteHash = null;
+        return;
+      }
       if (handleMissingSnapshot(snapshot)) {
         return;
       }
@@ -220,9 +245,30 @@ export function startGatewayConfigReloader(opts: {
     usePolling: Boolean(process.env.VITEST),
   });
 
-  watcher.on("add", schedule);
-  watcher.on("change", schedule);
-  watcher.on("unlink", schedule);
+  const scheduleFromWatcher = () => {
+    if (Date.now() < ignoreWatcherEventsUntilMs) {
+      return;
+    }
+    schedule();
+  };
+
+  const unsubscribeFromWrites =
+    opts.subscribeToWrites?.((event) => {
+      if (event.configPath !== opts.watchPath) {
+        return;
+      }
+      pendingInProcessConfig = event.runtimeConfig;
+      lastAppliedWriteHash = event.persistedHash;
+      ignoreWatcherEventsUntilMs = Math.max(
+        ignoreWatcherEventsUntilMs,
+        event.writtenAtMs + SELF_WRITE_WATCHER_SUPPRESSION_MS,
+      );
+      scheduleAfter(0);
+    }) ?? (() => {});
+
+  watcher.on("add", scheduleFromWatcher);
+  watcher.on("change", scheduleFromWatcher);
+  watcher.on("unlink", scheduleFromWatcher);
   let watcherClosed = false;
   watcher.on("error", (err) => {
     if (watcherClosed) {
@@ -241,6 +287,7 @@ export function startGatewayConfigReloader(opts: {
       }
       debounceTimer = null;
       watcherClosed = true;
+      unsubscribeFromWrites();
       await watcher.close().catch(() => {});
     },
   };

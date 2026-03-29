@@ -1,6 +1,7 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import * as subsystemModule from "openclaw/plugin-sdk/logging-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import { withEnv } from "../../../src/test-utils/env.js";
+import { withEnv } from "../../../test/helpers/plugins/env.js";
 import {
   listTelegramAccountIds,
   resetMissingDefaultWarnFlag,
@@ -29,15 +30,16 @@ function resolveAccountWithEnv(
   return withEnv(env, () => resolveTelegramAccount({ cfg, ...(accountId ? { accountId } : {}) }));
 }
 
-vi.mock("../../../src/logging/subsystem.js", () => ({
-  createSubsystemLogger: () => {
+beforeEach(() => {
+  vi.restoreAllMocks();
+  vi.spyOn(subsystemModule, "createSubsystemLogger").mockImplementation(() => {
     const logger = {
       warn: warnMock,
       child: () => logger,
     };
-    return logger;
-  },
-}));
+    return logger as unknown as ReturnType<typeof subsystemModule.createSubsystemLogger>;
+  });
+});
 
 describe("resolveTelegramAccount", () => {
   afterEach(() => {

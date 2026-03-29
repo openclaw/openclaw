@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveEffectiveToolFsWorkspaceOnly } from "./tool-fs-policy.js";
+import {
+  resolveEffectiveToolFsRootExpansionAllowed,
+  resolveEffectiveToolFsWorkspaceOnly,
+} from "./tool-fs-policy.js";
 
 describe("resolveEffectiveToolFsWorkspaceOnly", () => {
   it("returns false by default when tools.fs.workspaceOnly is unset", () => {
@@ -46,5 +49,115 @@ describe("resolveEffectiveToolFsWorkspaceOnly", () => {
       },
     };
     expect(resolveEffectiveToolFsWorkspaceOnly({ cfg, agentId: "main" })).toBe(true);
+  });
+});
+
+describe("resolveEffectiveToolFsRootExpansionAllowed", () => {
+  it("allows root expansion by default when no restrictive profile is configured", () => {
+    expect(resolveEffectiveToolFsRootExpansionAllowed({ cfg: {}, agentId: "main" })).toBe(true);
+  });
+
+  it("disables root expansion for messaging profile agents without filesystem opt-in", () => {
+    const cfg: OpenClawConfig = {
+      tools: { profile: "messaging" },
+    };
+    expect(resolveEffectiveToolFsRootExpansionAllowed({ cfg, agentId: "main" })).toBe(false);
+  });
+
+  it("re-enables root expansion when tools.fs explicitly allows non-workspace reads", () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        profile: "messaging",
+        fs: { workspaceOnly: false },
+      },
+    };
+    expect(resolveEffectiveToolFsRootExpansionAllowed({ cfg, agentId: "main" })).toBe(true);
+  });
+
+  it("treats an explicit tools.fs block as a filesystem opt-in", () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        profile: "messaging",
+        fs: {},
+      },
+    };
+    expect(resolveEffectiveToolFsRootExpansionAllowed({ cfg, agentId: "main" })).toBe(true);
+  });
+
+  it("keeps root expansion disabled when tools.fs only restricts access to the workspace", () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        profile: "messaging",
+        fs: { workspaceOnly: true },
+      },
+    };
+    expect(resolveEffectiveToolFsRootExpansionAllowed({ cfg, agentId: "main" })).toBe(false);
+  });
+
+  it("prefers agent profile overrides over the global profile in both directions", () => {
+    const cfg: OpenClawConfig = {
+      tools: { profile: "messaging" },
+      agents: {
+        list: [
+          { id: "coder", tools: { profile: "coding" } },
+          { id: "messenger", tools: { profile: "messaging" } },
+        ],
+      },
+    };
+
+    expect(resolveEffectiveToolFsRootExpansionAllowed({ cfg, agentId: "coder" })).toBe(true);
+
+    const invertedCfg: OpenClawConfig = {
+      tools: { profile: "coding" },
+      agents: {
+        list: [{ id: "messenger", tools: { profile: "messaging" } }],
+      },
+    };
+
+    expect(
+      resolveEffectiveToolFsRootExpansionAllowed({ cfg: invertedCfg, agentId: "messenger" }),
+    ).toBe(false);
+  });
+
+  it("uses agent alsoAllow in place of global alsoAllow when resolving expansion", () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        profile: "messaging",
+        alsoAllow: ["read"],
+      },
+      agents: {
+        list: [
+          {
+            id: "messenger",
+            tools: {
+              alsoAllow: ["message"],
+            },
+          },
+        ],
+      },
+    };
+
+    expect(resolveEffectiveToolFsRootExpansionAllowed({ cfg, agentId: "messenger" })).toBe(false);
+  });
+
+  it("honors agent workspaceOnly overrides over global fs opt-in", () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        profile: "messaging",
+        fs: { workspaceOnly: false },
+      },
+      agents: {
+        list: [
+          {
+            id: "messenger",
+            tools: {
+              fs: { workspaceOnly: true },
+            },
+          },
+        ],
+      },
+    };
+
+    expect(resolveEffectiveToolFsRootExpansionAllowed({ cfg, agentId: "messenger" })).toBe(false);
   });
 });

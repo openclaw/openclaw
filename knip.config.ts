@@ -1,19 +1,17 @@
+const BUNDLED_PLUGIN_ROOT_DIR = "extensions";
+
+function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""): string {
+  return `${BUNDLED_PLUGIN_ROOT_DIR}/${pluginId}/${relativePath}${suffix}`;
+}
+
 const rootEntries = [
   "openclaw.mjs!",
   "src/index.ts!",
   "src/entry.ts!",
   "src/cli/daemon-cli.ts!",
-  "src/extensionAPI.ts!",
   "src/infra/warning-filter.ts!",
-  "src/channels/plugins/agent-tools/whatsapp-login.ts!",
-  "src/channels/plugins/actions/discord.ts!",
-  "src/channels/plugins/actions/signal.ts!",
-  "src/channels/plugins/actions/telegram.ts!",
-  "extensions/telegram/src/audit.ts!",
-  "extensions/telegram/src/token.ts!",
-  "src/line/accounts.ts!",
-  "src/line/send.ts!",
-  "src/line/template-messages.ts!",
+  bundledPluginFile("telegram", "src/audit.ts", "!"),
+  bundledPluginFile("telegram", "src/token.ts", "!"),
   "src/hooks/bundled/*/handler.ts!",
   "src/hooks/llm-slug-generator.ts!",
   "src/plugin-sdk/*.ts!",
@@ -69,12 +67,12 @@ const config = {
     "src/gateway/live-tool-probe-utils.ts",
     "src/gateway/server.auth.shared.ts",
     "src/shared/text/assistant-visible-text.ts",
-    "extensions/telegram/src/bot/reply-threading.ts",
-    "extensions/telegram/src/draft-chunking.ts",
-    "extensions/msteams/src/conversation-store-memory.ts",
-    "extensions/msteams/src/polls-store-memory.ts",
-    "extensions/voice-call/src/providers/index.ts",
-    "extensions/voice-call/src/providers/tts-openai.ts",
+    bundledPluginFile("telegram", "src/bot/reply-threading.ts"),
+    bundledPluginFile("telegram", "src/draft-chunking.ts"),
+    bundledPluginFile("msteams", "src/conversation-store-memory.ts"),
+    bundledPluginFile("msteams", "src/polls-store-memory.ts"),
+    bundledPluginFile("voice-call", "src/providers/index.ts"),
+    bundledPluginFile("voice-call", "src/providers/tts-openai.ts"),
   ],
   workspaces: {
     ".": {
@@ -94,7 +92,7 @@ const config = {
       entry: ["index.js!", "scripts/postinstall.js!"],
       project: ["index.js!", "scripts/**/*.js!"],
     },
-    "extensions/*": {
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/*`]: {
       entry: ["index.ts!"],
       project: ["index.ts!", "src/**/*.ts!"],
       ignoreDependencies: ["openclaw"],

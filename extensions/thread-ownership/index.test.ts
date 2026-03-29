@@ -39,7 +39,7 @@ describe("thread-ownership plugin", () => {
   });
 
   it("registers message_received and message_sending hooks", () => {
-    register(api as any);
+    register.register(api as any);
 
     expect(api.on).toHaveBeenCalledTimes(2);
     expect(api.on).toHaveBeenCalledWith("message_received", expect.any(Function));
@@ -48,7 +48,7 @@ describe("thread-ownership plugin", () => {
 
   describe("message_sending", () => {
     beforeEach(() => {
-      register(api as any);
+      register.register(api as any);
     });
 
     async function sendSlackThreadMessage() {
@@ -120,7 +120,7 @@ describe("thread-ownership plugin", () => {
 
   describe("message_received @-mention tracking", () => {
     beforeEach(() => {
-      register(api as any);
+      register.register(api as any);
     });
 
     it("tracks @-mentions and skips ownership check for mentioned threads", async () => {

@@ -1,8 +1,139 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Context, Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
-import { describe, expect, it, vi } from "vitest";
-import { applyExtraParamsToAgent, resolveExtraParams } from "./pi-embedded-runner.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createConfiguredOllamaCompatNumCtxWrapper } from "../plugin-sdk/ollama.js";
+import { __testing as extraParamsTesting } from "./pi-embedded-runner/extra-params.js";
+import {
+  createOpenRouterSystemCacheWrapper,
+  createOpenRouterWrapper,
+  isProxyReasoningUnsupported,
+} from "./pi-embedded-runner/proxy-stream-wrappers.js";
+import type { ProviderCapabilities } from "./provider-capabilities.js";
+import { __testing as providerCapabilitiesTesting } from "./provider-capabilities.js";
+
+const resolveProviderCapabilitiesWithPluginMock = vi.fn(
+  (params: {
+    provider: string;
+    config?: import("../config/config.js").OpenClawConfig;
+    workspaceDir?: string;
+    env?: NodeJS.ProcessEnv;
+  }): Partial<ProviderCapabilities> | undefined => {
+    if (
+      params.provider === "workspace-anthropic-proxy" &&
+      params.workspaceDir === "/tmp/workspace-capabilities"
+    ) {
+      return {
+        anthropicToolSchemaMode: "openai-functions",
+        anthropicToolChoiceMode: "openai-string-modes",
+      };
+    }
+    return undefined;
+  },
+);
+
+const XAI_FAST_MODEL_IDS = new Map<string, string>([
+  ["grok-3", "grok-3-fast"],
+  ["grok-3-mini", "grok-3-mini-fast"],
+  ["grok-4", "grok-4-fast"],
+  ["grok-4-0709", "grok-4-fast"],
+]);
+
+function createTestXaiFastModeWrapper(
+  baseStreamFn: StreamFn | undefined,
+  fastMode: boolean,
+): StreamFn {
+  return (model, context, options) => {
+    if (!fastMode || model.api !== "openai-completions" || model.provider !== "xai") {
+      return (
+        baseStreamFn ??
+        (() => {
+          throw new Error("missing stream function");
+        })
+      )(model, context, options);
+    }
+
+    const fastModelId = XAI_FAST_MODEL_IDS.get(String(model.id).trim());
+    return (
+      baseStreamFn ??
+      (() => {
+        throw new Error("missing stream function");
+      })
+    )(fastModelId ? { ...model, id: fastModelId } : model, context, options);
+  };
+}
+
+import {
+  applyExtraParamsToAgent,
+  resolveAgentTransportOverride,
+  resolveExtraParams,
+  resolvePreparedExtraParams,
+} from "./pi-embedded-runner.js";
 import { log } from "./pi-embedded-runner/logger.js";
+
+beforeEach(() => {
+  extraParamsTesting.setProviderRuntimeDepsForTest({
+    prepareProviderExtraParams: (params) => {
+      if (params.provider !== "openai-codex") {
+        return undefined;
+      }
+      const transport = params.context.extraParams?.transport;
+      if (transport === "auto" || transport === "sse" || transport === "websocket") {
+        return params.context.extraParams;
+      }
+      return {
+        ...params.context.extraParams,
+        transport: "auto",
+      };
+    },
+    wrapProviderStreamFn: (params) => {
+      if (params.provider === "ollama") {
+        return createConfiguredOllamaCompatNumCtxWrapper(params.context);
+      }
+      if (params.provider === "xai") {
+        return createTestXaiFastModeWrapper(
+          params.context.streamFn,
+          params.context.extraParams?.fastMode === true,
+        );
+      }
+      if (params.provider !== "openrouter") {
+        return params.context.streamFn;
+      }
+
+      const providerRouting =
+        params.context.extraParams?.provider != null &&
+        typeof params.context.extraParams.provider === "object"
+          ? (params.context.extraParams.provider as Record<string, unknown>)
+          : undefined;
+      let streamFn = params.context.streamFn;
+      if (providerRouting) {
+        const underlying = streamFn;
+        streamFn = (model, context, options) =>
+          (underlying as StreamFn)(
+            {
+              ...model,
+              compat: { ...model.compat, openRouterRouting: providerRouting },
+            },
+            context,
+            options,
+          );
+      }
+
+      const skipReasoningInjection =
+        params.context.modelId === "auto" || isProxyReasoningUnsupported(params.context.modelId);
+      const thinkingLevel = skipReasoningInjection ? undefined : params.context.thinkingLevel;
+      return createOpenRouterSystemCacheWrapper(createOpenRouterWrapper(streamFn, thinkingLevel));
+    },
+  });
+  providerCapabilitiesTesting.setResolveProviderCapabilitiesWithPluginForTest(
+    resolveProviderCapabilitiesWithPluginMock,
+  );
+  resolveProviderCapabilitiesWithPluginMock.mockClear();
+});
+
+afterEach(() => {
+  extraParamsTesting.resetProviderRuntimeDepsForTest();
+  providerCapabilitiesTesting.resetDepsForTests();
+});
 
 describe("resolveExtraParams", () => {
   it("returns undefined with no model config", () => {
@@ -224,6 +355,31 @@ describe("applyExtraParamsToAgent", () => {
     const context: Context = { messages: [] };
     void agent.streamFn?.(params.model, context, params.options ?? {});
     return payload;
+  }
+
+  function runResolvedModelIdCase(params: {
+    applyProvider: string;
+    applyModelId: string;
+    model: Model<"anthropic-messages"> | Model<"openai-completions">;
+    cfg?: Record<string, unknown>;
+    extraParamsOverride?: Record<string, unknown>;
+  }): string {
+    let resolvedModelId = params.model.id;
+    const baseStreamFn: StreamFn = (model) => {
+      resolvedModelId = String(model.id ?? "");
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+    applyExtraParamsToAgent(
+      agent,
+      params.cfg as Parameters<typeof applyExtraParamsToAgent>[1],
+      params.applyProvider,
+      params.applyModelId,
+      params.extraParamsOverride,
+    );
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(params.model, context, {});
+    return resolvedModelId;
   }
 
   function runParallelToolCallsPayloadMutationCase(params: {
@@ -601,7 +757,7 @@ describe("applyExtraParamsToAgent", () => {
       agent,
       undefined,
       "siliconflow",
-      "Pro/MiniMaxAI/MiniMax-M2.5",
+      "Pro/MiniMaxAI/MiniMax-M2.7",
       undefined,
       "off",
     );
@@ -609,7 +765,7 @@ describe("applyExtraParamsToAgent", () => {
     const model = {
       api: "openai-completions",
       provider: "siliconflow",
-      id: "Pro/MiniMaxAI/MiniMax-M2.5",
+      id: "Pro/MiniMaxAI/MiniMax-M2.7",
     } as Model<"openai-completions">;
     const context: Context = { messages: [] };
     void agent.streamFn?.(model, context, {});
@@ -841,7 +997,7 @@ describe("applyExtraParamsToAgent", () => {
     });
   });
 
-  it("does not rewrite tool schema for kimi-coding (native Anthropic format)", () => {
+  it("does not rewrite tool schema for Kimi (native Anthropic format)", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       const payload: Record<string, unknown> = {
@@ -864,12 +1020,12 @@ describe("applyExtraParamsToAgent", () => {
     };
     const agent = { streamFn: baseStreamFn };
 
-    applyExtraParamsToAgent(agent, undefined, "kimi-coding", "k2p5", undefined, "low");
+    applyExtraParamsToAgent(agent, undefined, "kimi", "kimi-code", undefined, "low");
 
     const model = {
       api: "anthropic-messages",
-      provider: "kimi-coding",
-      id: "k2p5",
+      provider: "kimi",
+      id: "kimi-code",
       baseUrl: "https://api.kimi.com/coding/",
     } as Model<"anthropic-messages">;
     const context: Context = { messages: [] };
@@ -980,7 +1136,65 @@ describe("applyExtraParamsToAgent", () => {
     ]);
   });
 
-  it("removes invalid negative Google thinkingBudget and maps Gemini 3.1 to thinkingLevel", () => {
+  it("uses workspace plugin capability metadata for anthropic tool payload normalization", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        tools: [
+          {
+            name: "read",
+            description: "Read file",
+            input_schema: { type: "object", properties: {} },
+          },
+        ],
+        tool_choice: { type: "any" },
+      };
+      options?.onPayload?.(payload, _model);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(
+      agent,
+      { plugins: { enabled: true } },
+      "workspace-anthropic-proxy",
+      "proxy-model",
+      undefined,
+      "low",
+      undefined,
+      "/tmp/workspace-capabilities",
+    );
+
+    const model = {
+      api: "anthropic-messages",
+      provider: "workspace-anthropic-proxy",
+      id: "proxy-model",
+    } as Model<"anthropic-messages">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.tools).toEqual([
+      {
+        type: "function",
+        function: {
+          name: "read",
+          description: "Read file",
+          parameters: { type: "object", properties: {} },
+        },
+      },
+    ]);
+    expect(payloads[0]?.tool_choice).toBe("required");
+    expect(resolveProviderCapabilitiesWithPluginMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "workspace-anthropic-proxy",
+        workspaceDir: "/tmp/workspace-capabilities",
+      }),
+    );
+  });
+
+  it("sanitizes invalid Atproxy Gemini negative thinking budgets", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       const payload: Record<string, unknown> = {
@@ -1093,7 +1307,8 @@ describe("applyExtraParamsToAgent", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]?.headers).toEqual({
       "HTTP-Referer": "https://openclaw.ai",
-      "X-Title": "OpenClaw",
+      "X-OpenRouter-Title": "OpenClaw",
+      "X-OpenRouter-Categories": "cli-agent",
       "X-Custom": "1",
     });
   });
@@ -1104,7 +1319,7 @@ describe("applyExtraParamsToAgent", () => {
       agents: {
         defaults: {
           models: {
-            "openai-codex/gpt-5.3-codex": {
+            "openai-codex/gpt-5.4": {
               params: {
                 transport: "websocket",
               },
@@ -1114,12 +1329,12 @@ describe("applyExtraParamsToAgent", () => {
       },
     };
 
-    applyExtraParamsToAgent(agent, cfg, "openai-codex", "gpt-5.3-codex");
+    applyExtraParamsToAgent(agent, cfg, "openai-codex", "gpt-5.4");
 
     const model = {
       api: "openai-codex-responses",
       provider: "openai-codex",
-      id: "gpt-5.3-codex",
+      id: "gpt-5.4",
     } as Model<"openai-codex-responses">;
     const context: Context = { messages: [] };
     void agent.streamFn?.(model, context, {});
@@ -1161,12 +1376,12 @@ describe("applyExtraParamsToAgent", () => {
   it("defaults Codex transport to auto (WebSocket-first)", () => {
     const { calls, agent } = createOptionsCaptureAgent();
 
-    applyExtraParamsToAgent(agent, undefined, "openai-codex", "gpt-5.3-codex");
+    applyExtraParamsToAgent(agent, undefined, "openai-codex", "gpt-5.4");
 
     const model = {
       api: "openai-codex-responses",
       provider: "openai-codex",
-      id: "gpt-5.3-codex",
+      id: "gpt-5.4",
     } as Model<"openai-codex-responses">;
     const context: Context = { messages: [] };
     void agent.streamFn?.(model, context, {});
@@ -1175,7 +1390,7 @@ describe("applyExtraParamsToAgent", () => {
     expect(calls[0]?.transport).toBe("auto");
   });
 
-  it("defaults OpenAI transport to auto (WebSocket-first)", () => {
+  it("defaults OpenAI transport to auto without websocket warm-up", () => {
     const { calls, agent } = createOptionsCaptureAgent();
 
     applyExtraParamsToAgent(agent, undefined, "openai", "gpt-5");
@@ -1278,7 +1493,7 @@ describe("applyExtraParamsToAgent", () => {
       agents: {
         defaults: {
           models: {
-            "openai-codex/gpt-5.3-codex": {
+            "openai-codex/gpt-5.4": {
               params: {
                 transport: "sse",
               },
@@ -1288,12 +1503,12 @@ describe("applyExtraParamsToAgent", () => {
       },
     };
 
-    applyExtraParamsToAgent(agent, cfg, "openai-codex", "gpt-5.3-codex");
+    applyExtraParamsToAgent(agent, cfg, "openai-codex", "gpt-5.4");
 
     const model = {
       api: "openai-codex-responses",
       provider: "openai-codex",
-      id: "gpt-5.3-codex",
+      id: "gpt-5.4",
     } as Model<"openai-codex-responses">;
     const context: Context = { messages: [] };
     void agent.streamFn?.(model, context, {});
@@ -1308,7 +1523,7 @@ describe("applyExtraParamsToAgent", () => {
       agents: {
         defaults: {
           models: {
-            "openai-codex/gpt-5.3-codex": {
+            "openai-codex/gpt-5.4": {
               params: {
                 transport: "websocket",
               },
@@ -1318,12 +1533,12 @@ describe("applyExtraParamsToAgent", () => {
       },
     };
 
-    applyExtraParamsToAgent(agent, cfg, "openai-codex", "gpt-5.3-codex");
+    applyExtraParamsToAgent(agent, cfg, "openai-codex", "gpt-5.4");
 
     const model = {
       api: "openai-codex-responses",
       provider: "openai-codex",
-      id: "gpt-5.3-codex",
+      id: "gpt-5.4",
     } as Model<"openai-codex-responses">;
     const context: Context = { messages: [] };
     void agent.streamFn?.(model, context, { transport: "sse" });
@@ -1338,7 +1553,7 @@ describe("applyExtraParamsToAgent", () => {
       agents: {
         defaults: {
           models: {
-            "openai-codex/gpt-5.3-codex": {
+            "openai-codex/gpt-5.4": {
               params: {
                 transport: "udp",
               },
@@ -1348,18 +1563,84 @@ describe("applyExtraParamsToAgent", () => {
       },
     };
 
-    applyExtraParamsToAgent(agent, cfg, "openai-codex", "gpt-5.3-codex");
+    applyExtraParamsToAgent(agent, cfg, "openai-codex", "gpt-5.4");
 
     const model = {
       api: "openai-codex-responses",
       provider: "openai-codex",
-      id: "gpt-5.3-codex",
+      id: "gpt-5.4",
     } as Model<"openai-codex-responses">;
     const context: Context = { messages: [] };
     void agent.streamFn?.(model, context, {});
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.transport).toBe("auto");
+  });
+
+  it("returns prepared Codex transport defaults for runtime sessions", () => {
+    const effectiveExtraParams = resolvePreparedExtraParams({
+      cfg: undefined,
+      provider: "openai-codex",
+      modelId: "gpt-5.4",
+    });
+
+    expect(effectiveExtraParams.transport).toBe("auto");
+  });
+
+  it("uses prepared transport when session settings did not explicitly set one", () => {
+    const effectiveExtraParams = resolvePreparedExtraParams({
+      cfg: undefined,
+      provider: "openai-codex",
+      modelId: "gpt-5.4",
+    });
+
+    expect(
+      resolveAgentTransportOverride({
+        settingsManager: {
+          getGlobalSettings: () => ({}),
+          getProjectSettings: () => ({}),
+        },
+        effectiveExtraParams,
+      }),
+    ).toBe("auto");
+  });
+
+  it("keeps explicit session transport over prepared OpenAI defaults", () => {
+    const effectiveExtraParams = resolvePreparedExtraParams({
+      cfg: undefined,
+      provider: "openai",
+      modelId: "gpt-5",
+    });
+
+    expect(
+      resolveAgentTransportOverride({
+        settingsManager: {
+          getGlobalSettings: () => ({ transport: "sse" }),
+          getProjectSettings: () => ({}),
+        },
+        effectiveExtraParams,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("strips prototype pollution keys from extra params overrides", () => {
+    const effectiveExtraParams = resolvePreparedExtraParams({
+      cfg: undefined,
+      provider: "openai",
+      modelId: "gpt-5",
+      extraParamsOverride: {
+        __proto__: { polluted: true },
+        constructor: "blocked",
+        prototype: "blocked",
+        temperature: 0.2,
+      },
+    });
+
+    expect(effectiveExtraParams.temperature).toBe(0.2);
+    expect(Object.hasOwn(effectiveExtraParams, "__proto__")).toBe(false);
+    expect(Object.hasOwn(effectiveExtraParams, "constructor")).toBe(false);
+    expect(Object.hasOwn(effectiveExtraParams, "prototype")).toBe(false);
+    expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
   });
 
   it("disables prompt caching for non-Anthropic Bedrock models", () => {
@@ -1599,6 +1880,33 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.service_tier).toBe("priority");
   });
 
+  it("injects configured OpenAI service_tier into Codex Responses payloads", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "openai-codex",
+      applyModelId: "gpt-5.4",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openai-codex/gpt-5.4": {
+                params: {
+                  serviceTier: "priority",
+                },
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        id: "gpt-5.4",
+        baseUrl: "https://chatgpt.com/backend-api",
+      } as unknown as Model<"openai-codex-responses">,
+    });
+    expect(payload.service_tier).toBe("priority");
+  });
+
   it("preserves caller-provided service_tier values", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "openai",
@@ -1630,7 +1938,7 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.service_tier).toBe("default");
   });
 
-  it("injects fast-mode payload defaults for direct OpenAI Responses", () => {
+  it("maps fast mode to priority service_tier for direct OpenAI Responses", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "openai",
       applyModelId: "gpt-5.4",
@@ -1657,8 +1965,8 @@ describe("applyExtraParamsToAgent", () => {
         store: false,
       },
     });
-    expect(payload.reasoning).toEqual({ effort: "low" });
-    expect(payload.text).toEqual({ verbosity: "low" });
+    expect(payload).not.toHaveProperty("reasoning");
+    expect(payload).not.toHaveProperty("text");
     expect(payload.service_tier).toBe("priority");
   });
 
@@ -1682,6 +1990,86 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.reasoning).toEqual({ effort: "medium" });
     expect(payload.text).toEqual({ verbosity: "high" });
     expect(payload.service_tier).toBe("default");
+  });
+
+  it("maps MiniMax /fast to the matching highspeed model", () => {
+    const resolvedModelId = runResolvedModelIdCase({
+      applyProvider: "minimax",
+      applyModelId: "MiniMax-M2.7",
+      extraParamsOverride: { fastMode: true },
+      model: {
+        api: "anthropic-messages",
+        provider: "minimax",
+        id: "MiniMax-M2.7",
+        baseUrl: "https://api.minimax.io/anthropic",
+      } as Model<"anthropic-messages">,
+    });
+
+    expect(resolvedModelId).toBe("MiniMax-M2.7-highspeed");
+  });
+
+  it("maps MiniMax M2.7 /fast to the matching highspeed model", () => {
+    const resolvedModelId = runResolvedModelIdCase({
+      applyProvider: "minimax",
+      applyModelId: "MiniMax-M2.7",
+      extraParamsOverride: { fastMode: true },
+      model: {
+        api: "anthropic-messages",
+        provider: "minimax",
+        id: "MiniMax-M2.7",
+        baseUrl: "https://api.minimax.io/anthropic",
+      } as Model<"anthropic-messages">,
+    });
+
+    expect(resolvedModelId).toBe("MiniMax-M2.7-highspeed");
+  });
+
+  it("keeps explicit MiniMax highspeed models unchanged when /fast is off", () => {
+    const resolvedModelId = runResolvedModelIdCase({
+      applyProvider: "minimax-portal",
+      applyModelId: "MiniMax-M2.7-highspeed",
+      extraParamsOverride: { fastMode: false },
+      model: {
+        api: "anthropic-messages",
+        provider: "minimax-portal",
+        id: "MiniMax-M2.7-highspeed",
+        baseUrl: "https://api.minimax.io/anthropic",
+      } as unknown as Model<"anthropic-messages">,
+    });
+
+    expect(resolvedModelId).toBe("MiniMax-M2.7-highspeed");
+  });
+
+  it("maps xAI /fast to the current Grok fast model", () => {
+    const resolvedModelId = runResolvedModelIdCase({
+      applyProvider: "xai",
+      applyModelId: "grok-4",
+      extraParamsOverride: { fastMode: true },
+      model: {
+        api: "openai-completions",
+        provider: "xai",
+        id: "grok-4",
+        baseUrl: "https://api.x.ai/v1",
+      } as unknown as Model<"openai-completions">,
+    });
+
+    expect(resolvedModelId).toBe("grok-4-fast");
+  });
+
+  it("keeps explicit xAI fast models unchanged when /fast is off", () => {
+    const resolvedModelId = runResolvedModelIdCase({
+      applyProvider: "xai",
+      applyModelId: "grok-4-1-fast",
+      extraParamsOverride: { fastMode: false },
+      model: {
+        api: "openai-completions",
+        provider: "xai",
+        id: "grok-4-1-fast",
+        baseUrl: "https://api.x.ai/v1",
+      } as Model<"openai-completions">,
+    });
+
+    expect(resolvedModelId).toBe("grok-4-1-fast");
   });
 
   it("injects service_tier=auto for Anthropic fast mode on direct API-key models", () => {
@@ -1734,7 +2122,7 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.service_tier).toBe("standard_only");
   });
 
-  it("does not inject Anthropic fast mode service_tier for OAuth auth", () => {
+  it("injects Anthropic fast mode service_tier for OAuth auth", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "anthropic",
       applyModelId: "claude-sonnet-4-5",
@@ -1750,7 +2138,26 @@ describe("applyExtraParamsToAgent", () => {
       },
       payload: {},
     });
-    expect(payload).not.toHaveProperty("service_tier");
+    expect(payload.service_tier).toBe("auto");
+  });
+
+  it("injects Anthropic standard_only service_tier for OAuth auth when fastMode is false", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "anthropic",
+      applyModelId: "claude-sonnet-4-5",
+      extraParamsOverride: { fastMode: false },
+      model: {
+        api: "anthropic-messages",
+        provider: "anthropic",
+        id: "claude-sonnet-4-5",
+        baseUrl: "https://api.anthropic.com",
+      } as unknown as Model<"anthropic-messages">,
+      options: {
+        apiKey: "sk-ant-oat-test-token",
+      },
+      payload: {},
+    });
+    expect(payload.service_tier).toBe("standard_only");
   });
 
   it("does not inject Anthropic fast mode service_tier for proxied base URLs", () => {
@@ -1769,7 +2176,7 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload).not.toHaveProperty("service_tier");
   });
 
-  it("applies fast-mode defaults for openai-codex responses without service_tier", () => {
+  it("maps fast mode to priority service_tier for openai-codex responses", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "openai-codex",
       applyModelId: "gpt-5.4",
@@ -1784,9 +2191,9 @@ describe("applyExtraParamsToAgent", () => {
         store: false,
       },
     });
-    expect(payload.reasoning).toEqual({ effort: "low" });
-    expect(payload.text).toEqual({ verbosity: "low" });
-    expect(payload).not.toHaveProperty("service_tier");
+    expect(payload).not.toHaveProperty("reasoning");
+    expect(payload).not.toHaveProperty("text");
+    expect(payload.service_tier).toBe("priority");
   });
 
   it("does not inject service_tier for non-openai providers", () => {
@@ -2148,4 +2555,83 @@ describe("applyExtraParamsToAgent", () => {
       expect(run().store).toBe(false);
     },
   );
+
+  it("strips prompt cache fields for non-OpenAI openai-responses endpoints", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "custom-proxy",
+      applyModelId: "some-model",
+      model: {
+        api: "openai-responses",
+        provider: "custom-proxy",
+        id: "some-model",
+        baseUrl: "https://my-proxy.example.com/v1",
+      } as unknown as Model<"openai-responses">,
+      payload: {
+        store: false,
+        prompt_cache_key: "session-xyz",
+        prompt_cache_retention: "24h",
+      },
+    });
+    expect(payload).not.toHaveProperty("prompt_cache_key");
+    expect(payload).not.toHaveProperty("prompt_cache_retention");
+  });
+
+  it("keeps prompt cache fields for direct OpenAI openai-responses endpoints", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "openai",
+      applyModelId: "gpt-5",
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5",
+        baseUrl: "https://api.openai.com/v1",
+      } as unknown as Model<"openai-responses">,
+      payload: {
+        store: false,
+        prompt_cache_key: "session-123",
+        prompt_cache_retention: "24h",
+      },
+    });
+    expect(payload.prompt_cache_key).toBe("session-123");
+    expect(payload.prompt_cache_retention).toBe("24h");
+  });
+
+  it("keeps prompt cache fields for direct Azure OpenAI openai-responses endpoints", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "azure-openai-responses",
+      applyModelId: "gpt-4o",
+      model: {
+        api: "openai-responses",
+        provider: "azure-openai-responses",
+        id: "gpt-4o",
+        baseUrl: "https://example.openai.azure.com/openai/v1",
+      } as unknown as Model<"openai-responses">,
+      payload: {
+        store: false,
+        prompt_cache_key: "session-azure",
+        prompt_cache_retention: "24h",
+      },
+    });
+    expect(payload.prompt_cache_key).toBe("session-azure");
+    expect(payload.prompt_cache_retention).toBe("24h");
+  });
+
+  it("keeps prompt cache fields when openai-responses baseUrl is omitted", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "openai",
+      applyModelId: "gpt-5",
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5",
+      } as unknown as Model<"openai-responses">,
+      payload: {
+        store: false,
+        prompt_cache_key: "session-default",
+        prompt_cache_retention: "24h",
+      },
+    });
+    expect(payload.prompt_cache_key).toBe("session-default");
+    expect(payload.prompt_cache_retention).toBe("24h");
+  });
 });

@@ -1,7 +1,7 @@
 export const FLAG_TERMINATOR = "--";
 
 const ROOT_BOOLEAN_FLAGS = new Set(["--dev", "--no-color"]);
-const ROOT_VALUE_FLAGS = new Set(["--profile", "--log-level"]);
+const ROOT_VALUE_FLAGS = new Set(["--profile", "--log-level", "--container"]);
 
 export function isValueToken(arg: string | undefined): boolean {
   if (!arg || arg === FLAG_TERMINATOR) {
@@ -21,7 +21,11 @@ export function consumeRootOptionToken(args: ReadonlyArray<string>, index: numbe
   if (ROOT_BOOLEAN_FLAGS.has(arg)) {
     return 1;
   }
-  if (arg.startsWith("--profile=") || arg.startsWith("--log-level=")) {
+  if (
+    arg.startsWith("--profile=") ||
+    arg.startsWith("--log-level=") ||
+    arg.startsWith("--container=")
+  ) {
     return 1;
   }
   if (ROOT_VALUE_FLAGS.has(arg)) {

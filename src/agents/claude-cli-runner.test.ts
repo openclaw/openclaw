@@ -1,19 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { runClaudeCliAgent } from "./claude-cli-runner.js";
-
-const mocks = vi.hoisted(() => ({
-  spawn: vi.fn(),
-}));
-
-vi.mock("../process/supervisor/index.js", () => ({
-  getProcessSupervisor: () => ({
-    spawn: (...args: unknown[]) => mocks.spawn(...args),
-    cancel: vi.fn(),
-    cancelScope: vi.fn(),
-    reconcileOrphans: async () => {},
-    getRecord: vi.fn(),
-  }),
-}));
+import {
+  setupClaudeCliRunnerTestModule,
+  supervisorSpawnMock,
+} from "./cli-runner.test-support.js";
 
 function createDeferred<T>() {
   let resolve: (value: T) => void = () => {};
@@ -50,6 +39,12 @@ function createManagedRun(
   };
 }
 
+let runClaudeCliAgent: typeof import("./claude-cli-runner.js").runClaudeCliAgent;
+
+async function loadFreshClaudeCliRunnerModuleForTest() {
+  runClaudeCliAgent = await setupClaudeCliRunnerTestModule();
+}
+
 function successExit(payload: { message: string; session_id: string }) {
   return {
     reason: "exit" as const,
@@ -73,12 +68,13 @@ async function waitForCalls(mockFn: { mock: { calls: unknown[][] } }, count: num
 }
 
 describe("runClaudeCliAgent", () => {
-  beforeEach(() => {
-    mocks.spawn.mockClear();
+  beforeEach(async () => {
+    await loadFreshClaudeCliRunnerModuleForTest();
+    supervisorSpawnMock.mockClear();
   });
 
   it("starts a new session with --session-id when none is provided", async () => {
-    mocks.spawn.mockResolvedValueOnce(
+    supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun(Promise.resolve(successExit({ message: "ok", session_id: "sid-1" }))),
     );
 
@@ -92,16 +88,16 @@ describe("runClaudeCliAgent", () => {
       runId: "run-1",
     });
 
-    expect(mocks.spawn).toHaveBeenCalledTimes(1);
-    const spawnInput = mocks.spawn.mock.calls[0]?.[0] as { argv: string[]; mode: string };
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
+    const spawnInput = supervisorSpawnMock.mock.calls[0]?.[0] as { argv: string[]; mode: string };
     expect(spawnInput.mode).toBe("child");
     expect(spawnInput.argv).toContain("claude");
     expect(spawnInput.argv).toContain("--session-id");
     expect(spawnInput.argv).toContain("hi");
   });
 
-  it("uses --resume when a claude session id is provided", async () => {
-    mocks.spawn.mockResolvedValueOnce(
+  it("starts fresh when only a legacy claude session id is provided", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun(Promise.resolve(successExit({ message: "ok", session_id: "sid-2" }))),
     );
 
@@ -116,11 +112,11 @@ describe("runClaudeCliAgent", () => {
       claudeSessionId: "c9d7b831-1c31-4d22-80b9-1e50ca207d4b",
     });
 
-    expect(mocks.spawn).toHaveBeenCalledTimes(1);
-    const spawnInput = mocks.spawn.mock.calls[0]?.[0] as { argv: string[] };
-    expect(spawnInput.argv).toContain("--resume");
-    expect(spawnInput.argv).toContain("c9d7b831-1c31-4d22-80b9-1e50ca207d4b");
-    expect(spawnInput.argv).not.toContain("--session-id");
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
+    const spawnInput = supervisorSpawnMock.mock.calls[0]?.[0] as { argv: string[] };
+    expect(spawnInput.argv).not.toContain("--resume");
+    expect(spawnInput.argv).not.toContain("c9d7b831-1c31-4d22-80b9-1e50ca207d4b");
+    expect(spawnInput.argv).toContain("--session-id");
     expect(spawnInput.argv).toContain("hi");
   });
 
@@ -128,7 +124,7 @@ describe("runClaudeCliAgent", () => {
     const firstDeferred = createDeferred<ReturnType<typeof successExit>>();
     const secondDeferred = createDeferred<ReturnType<typeof successExit>>();
 
-    mocks.spawn
+    supervisorSpawnMock
       .mockResolvedValueOnce(createManagedRun(firstDeferred.promise))
       .mockResolvedValueOnce(createManagedRun(secondDeferred.promise));
 
@@ -152,11 +148,11 @@ describe("runClaudeCliAgent", () => {
       runId: "run-2",
     });
 
-    await waitForCalls(mocks.spawn, 1);
+    await waitForCalls(supervisorSpawnMock, 1);
 
     firstDeferred.resolve(successExit({ message: "ok", session_id: "sid-1" }));
 
-    await waitForCalls(mocks.spawn, 2);
+    await waitForCalls(supervisorSpawnMock, 2);
 
     secondDeferred.resolve(successExit({ message: "ok", session_id: "sid-2" }));
 

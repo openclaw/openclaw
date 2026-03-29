@@ -25,9 +25,10 @@ Restart the Gateway afterwards.
 ### Option B: copy into your global extensions folder (dev)
 
 ```bash
-mkdir -p ~/.openclaw/extensions
-cp -R extensions/voice-call ~/.openclaw/extensions/voice-call
-cd ~/.openclaw/extensions/voice-call && pnpm install
+PLUGIN_HOME=~/.openclaw/extensions
+mkdir -p "$PLUGIN_HOME"
+cp -R <local-plugin-checkout> "$PLUGIN_HOME/voice-call"
+cd "$PLUGIN_HOME/voice-call" && pnpm install
 ```
 
 ## Config
@@ -98,7 +99,7 @@ See the plugin docs for recommended ranges and production examples:
 
 ## TTS for calls
 
-Voice Call uses the core `messages.tts` configuration (OpenAI or ElevenLabs) for
+Voice Call uses the core `messages.tts` configuration for
 streaming speech on calls. Override examples and provider caveats live here:
 `https://docs.openclaw.ai/plugins/voice-call#tts-for-calls`
 
@@ -140,4 +141,8 @@ Actions:
 - Adds replay protection for Twilio and Plivo webhooks (valid duplicate callbacks are ignored safely).
 - Twilio speech turns include a per-turn token so stale/replayed callbacks cannot complete a newer turn.
 - `responseModel` / `responseSystemPrompt` control AI auto-responses.
+- Voice-call auto-responses enforce a spoken JSON contract (`{"spoken":"..."}`) and filter reasoning/meta output before playback.
+- While a Twilio stream is active, playback does not fall back to TwiML `<Say>`; stream-TTS failures fail the playback request.
+- Outbound conversation calls suppress barge-in only while the initial greeting is actively speaking, then re-enable normal interruption.
+- Twilio stream disconnect auto-end uses a short grace window so quick reconnects do not end the call.
 - Media streaming requires `ws` and OpenAI Realtime API key.

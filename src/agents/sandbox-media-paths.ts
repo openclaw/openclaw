@@ -44,8 +44,10 @@ export async function resolveSandboxedBridgeMediaPath(params: {
     });
   try {
     const resolved = resolveDirect();
-    await enforceWorkspaceBoundary(resolved.hostPath);
-    return { resolved: resolved.hostPath };
+    if (resolved.hostPath) {
+      await enforceWorkspaceBoundary(resolved.hostPath);
+    }
+    return { resolved: resolved.hostPath ?? resolved.containerPath };
   } catch (err) {
     const fallbackDir = params.inboundFallbackDir?.trim();
     if (!fallbackDir) {
@@ -67,7 +69,12 @@ export async function resolveSandboxedBridgeMediaPath(params: {
       filePath: fallbackPath,
       cwd: params.sandbox.root,
     });
-    await enforceWorkspaceBoundary(resolvedFallback.hostPath);
-    return { resolved: resolvedFallback.hostPath, rewrittenFrom: filePath };
+    if (resolvedFallback.hostPath) {
+      await enforceWorkspaceBoundary(resolvedFallback.hostPath);
+    }
+    return {
+      resolved: resolvedFallback.hostPath ?? resolvedFallback.containerPath,
+      rewrittenFrom: filePath,
+    };
   }
 }

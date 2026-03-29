@@ -1,9 +1,13 @@
-import { describe, expect, it } from "vitest";
-import { withFetchPreconnect } from "../../../src/test-utils/fetch-mock.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withFetchPreconnect } from "../../../test/helpers/plugins/fetch-mock.js";
 import { fetchDiscord } from "./api.js";
 import { jsonResponse } from "./test-http-helpers.js";
 
 describe("fetchDiscord", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
   it("formats rate limit payloads without raw JSON", async () => {
     const fetcher = withFetchPreconnect(async () =>
       jsonResponse(

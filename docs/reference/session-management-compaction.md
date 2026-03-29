@@ -23,6 +23,8 @@ If you want a higher-level overview first, start with:
 
 - [/concepts/session](/concepts/session)
 - [/concepts/compaction](/concepts/compaction)
+- [/concepts/memory](/concepts/memory)
+- [/concepts/memory-search](/concepts/memory-search)
 - [/concepts/session-pruning](/concepts/session-pruning)
 - [/reference/transcript-hygiene](/reference/transcript-hygiene)
 
@@ -280,7 +282,7 @@ As of `2026.1.10`, OpenClaw also suppresses **draft/typing streaming** when a pa
 
 ---
 
-## Pre-compaction “memory flush” (implemented)
+## Pre-compaction "memory flush" (implemented)
 
 Goal: before auto-compaction happens, run a silent agentic turn that writes durable
 state to disk (e.g. `memory/YYYY-MM-DD.md` in the agent workspace) so compaction can’t

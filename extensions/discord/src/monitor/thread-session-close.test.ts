@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => {
   const updateSessionStore = vi.fn();
@@ -6,12 +6,16 @@ const hoisted = vi.hoisted(() => {
   return { updateSessionStore, resolveStorePath };
 });
 
-vi.mock("../../../../src/config/sessions.js", () => ({
-  updateSessionStore: hoisted.updateSessionStore,
-  resolveStorePath: hoisted.resolveStorePath,
-}));
+vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
+  return {
+    ...actual,
+    updateSessionStore: hoisted.updateSessionStore,
+    resolveStorePath: hoisted.resolveStorePath,
+  };
+});
 
-const { closeDiscordThreadSessions } = await import("./thread-session-close.js");
+let closeDiscordThreadSessions: typeof import("./thread-session-close.js").closeDiscordThreadSessions;
 
 function setupStore(store: Record<string, { updatedAt: number }>) {
   hoisted.updateSessionStore.mockImplementation(
@@ -26,7 +30,9 @@ const MATCHED_KEY = `agent:main:discord:channel:${THREAD_ID}`;
 const UNMATCHED_KEY = `agent:main:discord:channel:${OTHER_ID}`;
 
 describe("closeDiscordThreadSessions", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ closeDiscordThreadSessions } = await import("./thread-session-close.js"));
     hoisted.updateSessionStore.mockClear();
     hoisted.resolveStorePath.mockClear();
     hoisted.resolveStorePath.mockReturnValue("/tmp/openclaw-sessions.json");
@@ -133,6 +139,24 @@ describe("closeDiscordThreadSessions", () => {
 
     expect(count).toBe(0);
     expect(hoisted.updateSessionStore).not.toHaveBeenCalled();
+  });
+
+  it("does not recount sessions that were already reset", async () => {
+    const store = {
+      [MATCHED_KEY]: { updatedAt: 0 },
+      [UNMATCHED_KEY]: { updatedAt: 1_700_000_000_001 },
+    };
+    setupStore(store);
+
+    const count = await closeDiscordThreadSessions({
+      cfg: {},
+      accountId: "default",
+      threadId: THREAD_ID,
+    });
+
+    expect(count).toBe(0);
+    expect(store[MATCHED_KEY].updatedAt).toBe(0);
+    expect(store[UNMATCHED_KEY].updatedAt).toBe(1_700_000_000_001);
   });
 
   it("resolves the store path using cfg.session.store and accountId", async () => {

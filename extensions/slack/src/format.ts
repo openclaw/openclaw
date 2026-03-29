@@ -1,6 +1,10 @@
-import type { MarkdownTableMode } from "../../../src/config/types.base.js";
-import { chunkMarkdownIR, markdownToIR, type MarkdownLinkSpan } from "../../../src/markdown/ir.js";
-import { renderMarkdownWithMarkers } from "../../../src/markdown/render.js";
+import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+import {
+  markdownToIR,
+  type MarkdownLinkSpan,
+  renderMarkdownIRChunksWithinLimit,
+} from "openclaw/plugin-sdk/text-runtime";
+import { renderMarkdownWithMarkers } from "openclaw/plugin-sdk/text-runtime";
 
 // Escape special characters for Slack mrkdwn format.
 // Preserve Slack's angle-bracket tokens so mentions and links stay intact.
@@ -144,7 +148,11 @@ export function markdownToSlackMrkdwnChunks(
     blockquotePrefix: "> ",
     tableMode: options.tableMode,
   });
-  const chunks = chunkMarkdownIR(ir, limit);
   const renderOptions = buildSlackRenderOptions();
-  return chunks.map((chunk) => renderMarkdownWithMarkers(chunk, renderOptions));
+  return renderMarkdownIRChunksWithinLimit({
+    ir,
+    limit,
+    renderChunk: (chunk) => renderMarkdownWithMarkers(chunk, renderOptions),
+    measureRendered: (rendered) => rendered.length,
+  }).map(({ rendered }) => rendered);
 }

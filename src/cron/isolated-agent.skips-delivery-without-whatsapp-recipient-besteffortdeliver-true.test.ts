@@ -1,8 +1,10 @@
 import "./isolated-agent.mocks.js";
 import fs from "node:fs/promises";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as modelSelection from "../agents/model-selection.js";
 import { runSubagentAnnounceFlow } from "../agents/subagent-announce.js";
 import type { CliDeps } from "../cli/deps.js";
+import { callGateway } from "../gateway/call.js";
 import {
   createCliDeps,
   expectDirectTelegramDelivery,
@@ -242,7 +244,7 @@ async function assertExplicitTelegramTargetDelivery(params: {
   storePath: string;
   deps: CliDeps;
   payloads: Array<Record<string, unknown>>;
-  expectedText: string;
+  expectedTexts: string[];
 }): Promise<void> {
   mockAgentPayloads(params.payloads);
   const res = await runExplicitTelegramAnnounceTurn({
@@ -253,14 +255,27 @@ async function assertExplicitTelegramTargetDelivery(params: {
 
   expectDeliveredOk(res);
   expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
-  expectDirectTelegramDelivery(params.deps, {
-    chatId: "123",
-    text: params.expectedText,
-  });
+  if (params.expectedTexts.length === 1) {
+    expectDirectTelegramDelivery(params.deps, {
+      chatId: "123",
+      text: params.expectedTexts[0] ?? "",
+    });
+    return;
+  }
+  expect(params.deps.sendMessageTelegram).toHaveBeenCalledTimes(params.expectedTexts.length);
+  for (const [index, text] of params.expectedTexts.entries()) {
+    expect(params.deps.sendMessageTelegram).toHaveBeenNthCalledWith(
+      index + 1,
+      "123",
+      text,
+      expect.objectContaining({ cfg: expect.any(Object) }),
+    );
+  }
 }
 
 describe("runCronIsolatedAgentTurn", () => {
   beforeEach(() => {
+    vi.spyOn(modelSelection, "resolveThinkingDefault").mockReturnValue("off");
     setupIsolatedAgentTurnMocks();
   });
 
@@ -271,19 +286,19 @@ describe("runCronIsolatedAgentTurn", () => {
         storePath,
         deps,
         payloads: [{ text: "hello from cron" }],
-        expectedText: "hello from cron",
+        expectedTexts: ["hello from cron"],
       });
     });
   });
 
-  it("delivers explicit targets with final-payload text", async () => {
+  it("delivers explicit targets with all successful payload text", async () => {
     await withTelegramAnnounceFixture(async ({ home, storePath, deps }) => {
       await assertExplicitTelegramTargetDelivery({
         home,
         storePath,
         deps,
         payloads: [{ text: "Working on it..." }, { text: "Final weather summary" }],
-        expectedText: "Final weather summary",
+        expectedTexts: ["Working on it...", "Final weather summary"],
       });
     });
   });
@@ -402,6 +417,60 @@ describe("runCronIsolatedAgentTurn", () => {
       expect(res.status).toBe("ok");
       expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
       expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
+    });
+  });
+
+  it("does not mark NO_REPLY output as delivered when no direct send occurs", async () => {
+    await withTelegramAnnounceFixture(async ({ home, storePath, deps }) => {
+      mockAgentPayloads([{ text: "NO_REPLY" }]);
+      const res = await runTelegramAnnounceTurn({
+        home,
+        storePath,
+        deps,
+        delivery: { mode: "announce", channel: "telegram", to: "123" },
+      });
+
+      expect(res.status).toBe("ok");
+      expect(res.delivered).toBe(false);
+      expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+      expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
+    });
+  });
+
+  it("deletes the isolated cron session after NO_REPLY when deleteAfterRun is enabled", async () => {
+    await withTelegramAnnounceFixture(async ({ home, storePath, deps }) => {
+      mockAgentPayloads([{ text: "NO_REPLY" }]);
+      vi.mocked(callGateway).mockClear();
+
+      const res = await runCronIsolatedAgentTurn({
+        cfg: makeCfg(home, storePath, {
+          channels: { telegram: { botToken: "t-1" } },
+        }),
+        deps,
+        job: {
+          ...makeJob({ kind: "agentTurn", message: "do it" }),
+          deleteAfterRun: true,
+          delivery: { mode: "announce", channel: "telegram", to: "123" },
+        },
+        message: "do it",
+        sessionKey: "cron:job-1",
+        lane: "cron",
+      });
+
+      expect(res.status).toBe("ok");
+      expect(res.delivered).toBe(false);
+      expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      expect(callGateway).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: "sessions.delete",
+          params: expect.objectContaining({
+            key: "agent:main:cron:job-1",
+            deleteTranscript: true,
+            emitLifecycleHooks: false,
+          }),
+        }),
+      );
     });
   });
 

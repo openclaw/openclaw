@@ -22,7 +22,9 @@ type GatewayClientMock = {
 
 const gatewayClientInstances: GatewayClientMock[] = [];
 
-vi.mock("./gateway.ts", () => {
+vi.mock("./gateway.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./gateway.ts")>();
+
   function resolveGatewayErrorDetailCode(
     error: { details?: unknown } | null | undefined,
   ): string | null {
@@ -81,7 +83,7 @@ vi.mock("./gateway.ts", () => {
     }
   }
 
-  return { GatewayBrowserClient, resolveGatewayErrorDetailCode };
+  return { ...actual, GatewayBrowserClient, resolveGatewayErrorDetailCode };
 });
 
 vi.mock("./controllers/chat.ts", async (importOriginal) => {
@@ -105,6 +107,7 @@ function createHost() {
       splitRatio: 0.6,
       navCollapsed: false,
       navGroupsCollapsed: {},
+      borderRadius: 50,
     },
     password: "",
     clientInstanceId: "instance-test",
@@ -128,12 +131,17 @@ function createHost() {
     assistantAgentId: null,
     serverVersion: null,
     sessionKey: "main",
+    basePath: "",
+    chatMessage: "",
     chatMessages: [],
+    chatAttachments: [],
+    chatQueue: [],
     chatToolMessages: [],
     chatStreamSegments: [],
     chatStream: null,
     chatStreamStartedAt: null,
     chatRunId: null,
+    chatSending: false,
     toolStreamById: new Map(),
     toolStreamOrder: [],
     toolStreamSyncTimer: null,
@@ -142,6 +150,33 @@ function createHost() {
     execApprovalError: null,
     updateAvailable: null,
   } as unknown as Parameters<typeof connectGateway>[0];
+}
+
+function connectHostGateway() {
+  const host = createHost();
+  connectGateway(host);
+  const client = gatewayClientInstances[0];
+  expect(client).toBeDefined();
+  return { host, client };
+}
+
+function emitToolResultEvent(client: GatewayClientMock) {
+  client.emitEvent({
+    event: "agent",
+    payload: {
+      runId: "engine-run-1",
+      seq: 1,
+      stream: "tool",
+      ts: 1,
+      sessionKey: "main",
+      data: {
+        toolCallId: "tool-1",
+        name: "fetch",
+        phase: "result",
+        result: { text: "ok" },
+      },
+    },
+  });
 }
 
 describe("connectGateway", () => {
@@ -165,9 +200,9 @@ describe("connectGateway", () => {
     expect(host.lastError).toBeNull();
 
     secondClient.emitGap(20, 24);
-    expect(host.lastError).toBe(
-      "event gap detected (expected seq 20, got 24); refresh recommended",
-    );
+    expect(gatewayClientInstances).toHaveLength(3);
+    expect(secondClient.stop).toHaveBeenCalledTimes(1);
+    expect(host.lastError).toBeNull();
   });
 
   it("ignores stale client onEvent callbacks after reconnect", () => {
@@ -456,33 +491,13 @@ describe("connectGateway", () => {
   });
 
   it("does not reload chat history for each live tool result event", () => {
-    const host = createHost();
-
-    connectGateway(host);
-    const client = gatewayClientInstances[0];
-    expect(client).toBeDefined();
-
-    client.emitEvent({
-      event: "agent",
-      payload: {
-        runId: "engine-run-1",
-        seq: 1,
-        stream: "tool",
-        ts: 1,
-        sessionKey: "main",
-        data: {
-          toolCallId: "tool-1",
-          name: "fetch",
-          phase: "result",
-          result: { text: "ok" },
-        },
-      },
-    });
+    const { client } = connectHostGateway();
+    emitToolResultEvent(client);
 
     expect(loadChatHistoryMock).not.toHaveBeenCalled();
   });
 
-  it("reloads chat history once after the final chat event when tool output was used", () => {
+  it("routes plugin.approval.requested into execApprovalQueue with kind plugin", () => {
     const host = createHost();
 
     connectGateway(host);
@@ -490,21 +505,57 @@ describe("connectGateway", () => {
     expect(client).toBeDefined();
 
     client.emitEvent({
-      event: "agent",
+      event: "plugin.approval.requested",
       payload: {
-        runId: "engine-run-1",
-        seq: 1,
-        stream: "tool",
-        ts: 1,
-        sessionKey: "main",
-        data: {
-          toolCallId: "tool-1",
-          name: "fetch",
-          phase: "result",
-          result: { text: "ok" },
+        id: "plugin-approval-1",
+        createdAtMs: Date.now(),
+        expiresAtMs: Date.now() + 120_000,
+        request: {
+          title: "Dangerous command detected",
+          description: "chmod 777 script.sh",
+          severity: "high",
+          pluginId: "sage",
+          agentId: "agent-1",
+          sessionKey: "main",
         },
       },
     });
+
+    expect(host.execApprovalQueue).toHaveLength(1);
+    expect(host.execApprovalQueue[0]?.id).toBe("plugin-approval-1");
+    expect((host.execApprovalQueue[0] as { kind: string }).kind).toBe("plugin");
+  });
+
+  it("routes plugin.approval.resolved to remove from execApprovalQueue", () => {
+    const host = createHost();
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+
+    // Add a plugin approval first
+    client.emitEvent({
+      event: "plugin.approval.requested",
+      payload: {
+        id: "plugin-approval-2",
+        createdAtMs: Date.now(),
+        expiresAtMs: Date.now() + 120_000,
+        request: { title: "Alert" },
+      },
+    });
+    expect(host.execApprovalQueue).toHaveLength(1);
+
+    // Resolve it
+    client.emitEvent({
+      event: "plugin.approval.resolved",
+      payload: { id: "plugin-approval-2", decision: "allow-once" },
+    });
+    expect(host.execApprovalQueue).toHaveLength(0);
+  });
+
+  it("reloads chat history once after the final chat event when tool output was used", () => {
+    const { client } = connectHostGateway();
+    emitToolResultEvent(client);
 
     client.emitEvent({
       event: "chat",

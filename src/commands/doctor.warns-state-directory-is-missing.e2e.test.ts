@@ -1,17 +1,18 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { beforeAll, describe, expect, it, vi } from "vitest";
-import { createDoctorRuntime, mockDoctorConfigSnapshot, note } from "./doctor.e2e-harness.js";
+import { beforeEach, describe, expect, it } from "vitest";
+import { createDoctorRuntime, mockDoctorConfigSnapshot } from "./doctor.e2e-harness.js";
+import { loadDoctorCommandForTest, terminalNoteMock } from "./doctor.note-test-helpers.js";
 import "./doctor.fast-path-mocks.js";
-
-vi.doUnmock("./doctor-state-integrity.js");
 
 let doctorCommand: typeof import("./doctor.js").doctorCommand;
 
 describe("doctor command", () => {
-  beforeAll(async () => {
-    ({ doctorCommand } = await import("./doctor.js"));
+  beforeEach(async () => {
+    doctorCommand = await loadDoctorCommandForTest({
+      unmockModules: ["./doctor-state-integrity.js"],
+    });
   });
 
   it("warns when the state directory is missing", async () => {
@@ -20,14 +21,14 @@ describe("doctor command", () => {
     const missingDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-missing-state-"));
     fs.rmSync(missingDir, { recursive: true, force: true });
     process.env.OPENCLAW_STATE_DIR = missingDir;
-    note.mockClear();
-
     await doctorCommand(createDoctorRuntime(), {
       nonInteractive: true,
       workspaceSuggestions: false,
     });
 
-    const stateNote = note.mock.calls.find((call) => call[1] === "State integrity");
+    const stateNote = terminalNoteMock.mock.calls.find(([message]) =>
+      String(message).includes("state directory missing"),
+    );
     expect(stateNote).toBeTruthy();
     expect(String(stateNote?.[0])).toContain("CRITICAL");
   });
@@ -55,7 +56,7 @@ describe("doctor command", () => {
       workspaceSuggestions: false,
     });
 
-    const warned = note.mock.calls.some(
+    const warned = terminalNoteMock.mock.calls.some(
       ([message, title]) =>
         title === "OpenCode" &&
         String(message).includes("models.providers.opencode") &&
@@ -73,8 +74,6 @@ describe("doctor command", () => {
 
     const prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
     process.env.OPENCLAW_GATEWAY_TOKEN = "env-token-1234567890";
-    note.mockClear();
-
     try {
       await doctorCommand(createDoctorRuntime(), {
         nonInteractive: true,
@@ -88,7 +87,7 @@ describe("doctor command", () => {
       }
     }
 
-    const warned = note.mock.calls.some(([message]) =>
+    const warned = terminalNoteMock.mock.calls.some(([message]) =>
       String(message).includes("Gateway auth is off or missing a token"),
     );
     expect(warned).toBe(false);
@@ -107,19 +106,64 @@ describe("doctor command", () => {
       },
     });
 
-    note.mockClear();
-
     await doctorCommand(createDoctorRuntime(), {
       nonInteractive: true,
       workspaceSuggestions: false,
     });
 
-    const gatewayAuthNote = note.mock.calls.find((call) => call[1] === "Gateway auth");
+    const gatewayAuthNote = terminalNoteMock.mock.calls.find((call) => call[1] === "Gateway auth");
     expect(gatewayAuthNote).toBeTruthy();
     expect(String(gatewayAuthNote?.[0])).toContain("gateway.auth.mode is unset");
     expect(String(gatewayAuthNote?.[0])).toContain("openclaw config set gateway.auth.mode token");
     expect(String(gatewayAuthNote?.[0])).toContain(
       "openclaw config set gateway.auth.mode password",
+    );
+  });
+
+  it("keeps doctor read-only when gateway token is SecretRef-managed but unresolved", async () => {
+    mockDoctorConfigSnapshot({
+      config: {
+        gateway: {
+          mode: "local",
+          auth: {
+            mode: "token",
+            token: {
+              source: "env",
+              provider: "default",
+              id: "OPENCLAW_GATEWAY_TOKEN",
+            },
+          },
+        },
+        secrets: {
+          providers: {
+            default: { source: "env" },
+          },
+        },
+      },
+    });
+
+    const previousToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    try {
+      await doctorCommand(createDoctorRuntime(), {
+        nonInteractive: true,
+        workspaceSuggestions: false,
+      });
+    } finally {
+      if (previousToken === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      } else {
+        process.env.OPENCLAW_GATEWAY_TOKEN = previousToken;
+      }
+    }
+
+    const gatewayAuthNote = terminalNoteMock.mock.calls.find((call) => call[1] === "Gateway auth");
+    expect(gatewayAuthNote).toBeTruthy();
+    expect(String(gatewayAuthNote?.[0])).toContain(
+      "Gateway token is managed via SecretRef and is currently unavailable.",
+    );
+    expect(String(gatewayAuthNote?.[0])).toContain(
+      "Doctor will not overwrite gateway.auth.token with a plaintext value.",
     );
   });
 });

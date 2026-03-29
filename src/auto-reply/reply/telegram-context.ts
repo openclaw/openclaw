@@ -1,4 +1,4 @@
-import { parseTelegramTarget } from "../../../extensions/telegram/src/targets.js";
+import { parseTelegramTarget } from "../../plugin-sdk/telegram-runtime.js";
 
 type TelegramConversationParams = {
   ctx: {

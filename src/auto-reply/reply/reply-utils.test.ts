@@ -141,9 +141,37 @@ describe("normalizeReplyPayload", () => {
     expect(reasons).toEqual(["silent"]);
   });
 
+  it("suppresses JSON NO_REPLY action payloads", () => {
+    const reasons: string[] = [];
+    const result = normalizeReplyPayload(
+      { text: '{"action":"NO_REPLY"}' },
+      { onSkip: (reason) => reasons.push(reason) },
+    );
+    expect(result).toBeNull();
+    expect(reasons).toEqual(["silent"]);
+  });
+
+  it("does not suppress JSON NO_REPLY objects with extra fields", () => {
+    const result = normalizeReplyPayload({
+      text: '{"action":"NO_REPLY","note":"example"}',
+    });
+    expect(result).not.toBeNull();
+    expect(result!.text).toBe('{"action":"NO_REPLY","note":"example"}');
+  });
+
   it("strips NO_REPLY but keeps media payload", () => {
     const result = normalizeReplyPayload({
       text: "NO_REPLY",
+      mediaUrl: "https://example.com/img.png",
+    });
+    expect(result).not.toBeNull();
+    expect(result!.text).toBe("");
+    expect(result!.mediaUrl).toBe("https://example.com/img.png");
+  });
+
+  it("strips JSON NO_REPLY action text but keeps media payload", () => {
+    const result = normalizeReplyPayload({
+      text: '{"action":"NO_REPLY"}',
       mediaUrl: "https://example.com/img.png",
     });
     expect(result).not.toBeNull();
@@ -158,10 +186,10 @@ describe("normalizeReplyPayload", () => {
 
     expect(result).not.toBeNull();
     expect(result!.text).toBe("hello [[slack_buttons: Retry:retry, Ignore:ignore]]");
-    expect(result!.channelData).toBeUndefined();
+    expect(result!.interactive).toBeUndefined();
   });
 
-  it("applies responsePrefix before compiling Slack directives into blocks", () => {
+  it("applies responsePrefix before compiling Slack directives into shared interactive blocks", () => {
     const result = normalizeReplyPayload(
       {
         text: "hello [[slack_buttons: Retry:retry, Ignore:ignore]]",
@@ -171,45 +199,102 @@ describe("normalizeReplyPayload", () => {
 
     expect(result).not.toBeNull();
     expect(result!.text).toBe("[bot] hello");
-    expect(result!.channelData).toEqual({
-      slack: {
-        blocks: [
-          {
-            type: "section",
-            text: {
-              type: "mrkdwn",
-              text: "[bot] hello",
+    expect(result!.interactive).toEqual({
+      blocks: [
+        {
+          type: "text",
+          text: "[bot] hello",
+        },
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Retry",
+              value: "retry",
             },
-          },
-          {
-            type: "actions",
-            block_id: "openclaw_reply_buttons_1",
-            elements: [
-              {
-                type: "button",
-                action_id: "openclaw:reply_button",
-                text: {
-                  type: "plain_text",
-                  text: "Retry",
-                  emoji: true,
-                },
-                value: "reply_1_retry",
-              },
-              {
-                type: "button",
-                action_id: "openclaw:reply_button",
-                text: {
-                  type: "plain_text",
-                  text: "Ignore",
-                  emoji: true,
-                },
-                value: "reply_2_ignore",
-              },
-            ],
-          },
-        ],
-      },
+            {
+              label: "Ignore",
+              value: "ignore",
+            },
+          ],
+        },
+      ],
     });
+  });
+
+  it("compiles simple trailing Options lines into Slack buttons when interactive replies are enabled", () => {
+    const result = normalizeReplyPayload(
+      {
+        text: "Current verbose level: off.\nOptions: on, full, off.",
+      },
+      { enableSlackInteractiveReplies: true },
+    );
+
+    expect(result).not.toBeNull();
+    expect(result!.text).toBe("Current verbose level: off.");
+    expect(result!.interactive).toEqual({
+      blocks: [
+        {
+          type: "text",
+          text: "Current verbose level: off.",
+        },
+        {
+          type: "buttons",
+          buttons: [
+            { label: "on", value: "on" },
+            { label: "full", value: "full" },
+            { label: "off", value: "off" },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("uses a Slack select when simple Options lines exceed the button row size", () => {
+    const result = normalizeReplyPayload(
+      {
+        text: "Choose a reasoning level.\nOptions: off, minimal, low, medium, high, adaptive.",
+      },
+      { enableSlackInteractiveReplies: true },
+    );
+
+    expect(result).not.toBeNull();
+    expect(result!.text).toBe("Choose a reasoning level.");
+    expect(result!.interactive).toEqual({
+      blocks: [
+        {
+          type: "text",
+          text: "Choose a reasoning level.",
+        },
+        {
+          type: "select",
+          placeholder: "Choose an option",
+          options: [
+            { label: "off", value: "off" },
+            { label: "minimal", value: "minimal" },
+            { label: "low", value: "low" },
+            { label: "medium", value: "medium" },
+            { label: "high", value: "high" },
+            { label: "adaptive", value: "adaptive" },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("leaves complex Options lines as plain text", () => {
+    const result = normalizeReplyPayload(
+      {
+        text: "ACP runtime choices.\nOptions: host=auto|sandbox|gateway|node, security=deny|allowlist|full.",
+      },
+      { enableSlackInteractiveReplies: true },
+    );
+
+    expect(result).not.toBeNull();
+    expect(result!.text).toBe(
+      "ACP runtime choices.\nOptions: host=auto|sandbox|gateway|node, security=deny|allowlist|full.",
+    );
+    expect(result!.interactive).toBeUndefined();
   });
 });
 
@@ -578,6 +663,20 @@ describe("createTypingSignaler", () => {
     expect(typing.startTypingOnText).not.toHaveBeenCalled();
   });
 
+  it("does not start typing for media-only deltas", async () => {
+    const typing = createMockTypingController();
+    const signaler = createTypingSignaler({
+      typing,
+      mode: "message",
+      isHeartbeat: false,
+    });
+
+    await signaler.signalTextDelta(undefined);
+
+    expect(typing.startTypingLoop).not.toHaveBeenCalled();
+    expect(typing.startTypingOnText).not.toHaveBeenCalled();
+  });
+
   it("handles tool-start typing before and after active text mode", async () => {
     const typing = createMockTypingController();
     const signaler = createTypingSignaler({
@@ -689,6 +788,39 @@ describe("block reply coalescer", () => {
     coalescer.enqueue({ text: "Second paragraph" });
 
     await vi.advanceTimersByTimeAsync(100);
+    expect(flushes).toEqual(["First paragraph\n\nSecond paragraph"]);
+    coalescer.stop();
+  });
+
+  it("keeps buffering newline-style chunks until minChars is reached", async () => {
+    vi.useFakeTimers();
+    const { flushes, coalescer } = createBlockCoalescerHarness({
+      minChars: 25,
+      maxChars: 2000,
+      idleMs: 50,
+      joiner: "\n\n",
+    });
+
+    coalescer.enqueue({ text: "First paragraph" });
+    coalescer.enqueue({ text: "Second paragraph" });
+
+    await vi.advanceTimersByTimeAsync(50);
+    expect(flushes).toEqual(["First paragraph\n\nSecond paragraph"]);
+    coalescer.stop();
+  });
+
+  it("force flushes buffered newline-style chunks even below minChars", async () => {
+    const { flushes, coalescer } = createBlockCoalescerHarness({
+      minChars: 100,
+      maxChars: 2000,
+      idleMs: 50,
+      joiner: "\n\n",
+    });
+
+    coalescer.enqueue({ text: "First paragraph" });
+    coalescer.enqueue({ text: "Second paragraph" });
+    await coalescer.flush({ force: true });
+
     expect(flushes).toEqual(["First paragraph\n\nSecond paragraph"]);
     coalescer.stop();
   });

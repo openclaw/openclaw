@@ -165,6 +165,7 @@ export async function upsertAcpSessionMeta(params: {
     },
     {
       activeSessionKey: sessionKey.toLowerCase(),
+      allowDropAcpMetaSessionKeys: [sessionKey],
     },
   );
 }

@@ -15,7 +15,7 @@ export type ExtraGatewayService = {
   label: string;
   detail: string;
   scope: "user" | "system";
-  marker?: "openclaw" | "clawdbot" | "moltbot";
+  marker?: "openclaw" | "clawdbot";
   legacy?: boolean;
 };
 
@@ -23,7 +23,7 @@ export type FindExtraGatewayServicesOptions = {
   deep?: boolean;
 };
 
-const EXTRA_MARKERS = ["openclaw", "clawdbot", "moltbot"] as const;
+const EXTRA_MARKERS = ["openclaw", "clawdbot"] as const;
 
 export function renderGatewayServiceCleanupHints(
   env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
@@ -57,6 +57,22 @@ function detectMarker(content: string): Marker | null {
   for (const marker of EXTRA_MARKERS) {
     if (lower.includes(marker)) {
       return marker;
+    }
+  }
+  return null;
+}
+
+export function detectMarkerLineWithGateway(contents: string): Marker | null {
+  // Join line continuations (trailing backslash) into single lines
+  const lower = contents.replace(/\\\r?\n\s*/g, " ").toLowerCase();
+  for (const line of lower.split(/\r?\n/)) {
+    if (!line.includes("gateway")) {
+      continue;
+    }
+    for (const marker of EXTRA_MARKERS) {
+      if (line.includes(marker)) {
+        return marker;
+      }
     }
   }
   return null;
@@ -126,7 +142,7 @@ function isIgnoredSystemdName(name: string): boolean {
 
 function isLegacyLabel(label: string): boolean {
   const lower = label.toLowerCase();
-  return lower.includes("clawdbot") || lower.includes("moltbot");
+  return lower.includes("clawdbot");
 }
 
 async function readDirEntries(dir: string): Promise<string[]> {
@@ -201,7 +217,7 @@ async function scanLaunchdDir(params: {
         label,
         detail: `plist: ${fullPath}`,
         scope: params.scope,
-        marker: isLegacyLabel(label) ? "clawdbot" : "moltbot",
+        marker: "clawdbot",
         legacy: true,
       });
       continue;
@@ -237,7 +253,7 @@ async function scanSystemdDir(params: {
   });
 
   for (const { entry, name, fullPath, contents } of candidates) {
-    const marker = detectMarker(contents);
+    const marker = detectMarkerLineWithGateway(contents);
     if (!marker) {
       continue;
     }

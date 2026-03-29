@@ -1,9 +1,10 @@
-import type { BaseTokenResolution } from "../../../src/channels/plugins/types.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import { normalizeResolvedSecretInputString } from "../../../src/config/types.secrets.js";
-import type { TelegramAccountConfig } from "../../../src/config/types.telegram.js";
-import { tryReadSecretFileSync } from "../../../src/infra/secret-file.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../../src/routing/session-key.js";
+import { resolveNormalizedAccountEntry } from "openclaw/plugin-sdk/account-core";
+import type { BaseTokenResolution } from "openclaw/plugin-sdk/channel-contract";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { tryReadSecretFileSync } from "openclaw/plugin-sdk/core";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/routing";
+import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
+import type { TelegramAccountConfig } from "openclaw/plugin-sdk/telegram-core";
 
 export type TelegramTokenSource = "env" | "tokenFile" | "config" | "none";
 
@@ -28,22 +29,40 @@ export function resolveTelegramToken(
   // be normalized, so resolve per-account config by matching normalized IDs.
   const resolveAccountCfg = (id: string): TelegramAccountConfig | undefined => {
     const accounts = telegramCfg?.accounts;
-    if (!accounts || typeof accounts !== "object" || Array.isArray(accounts)) {
-      return undefined;
-    }
-    // Direct hit (already normalized key)
-    const direct = accounts[id];
-    if (direct) {
-      return direct;
-    }
-    // Fallback: match by normalized key
-    const matchKey = Object.keys(accounts).find((key) => normalizeAccountId(key) === id);
-    return matchKey ? accounts[matchKey] : undefined;
+    return Array.isArray(accounts)
+      ? undefined
+      : resolveNormalizedAccountEntry(accounts, id, normalizeAccountId);
   };
 
   const accountCfg = resolveAccountCfg(
     accountId !== DEFAULT_ACCOUNT_ID ? accountId : DEFAULT_ACCOUNT_ID,
   );
+
+  // When a non-default accountId is explicitly specified but not found in config,
+  // decide whether to fall through to channel-level defaults based on whether
+  // the config has an explicit accounts section (multi-bot setup).
+  //
+  // Multi-bot: accounts section exists with entries → block fallthrough to prevent
+  // routing via the wrong bot's token.
+  //
+  // Single-bot: no accounts section (or empty) → allow fallthrough so that
+  // binding-created accountIds inherit the channel-level token.
+  // See: https://github.com/openclaw/openclaw/issues/53876
+  if (accountId !== DEFAULT_ACCOUNT_ID && !accountCfg) {
+    const accounts = telegramCfg?.accounts;
+    const hasConfiguredAccounts =
+      !!accounts &&
+      typeof accounts === "object" &&
+      !Array.isArray(accounts) &&
+      Object.keys(accounts).length > 0;
+    if (hasConfiguredAccounts) {
+      opts.logMissingFile?.(
+        `channels.telegram.accounts: unknown accountId "${accountId}" — not found in config, refusing channel-level fallback`,
+      );
+      return { token: "", source: "none" };
+    }
+  }
+
   const accountTokenFile = accountCfg?.tokenFile?.trim();
   if (accountTokenFile) {
     const token = tryReadSecretFileSync(

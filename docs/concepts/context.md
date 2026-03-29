@@ -116,7 +116,7 @@ Large files are truncated per-file using `agents.defaults.bootstrapMaxChars` (de
 
 When truncation occurs, the runtime can inject an in-prompt warning block under Project Context. Configure this with `agents.defaults.bootstrapPromptTruncationWarning` (`off`, `once`, `always`; default `once`).
 
-## Skills: what’s injected vs loaded on-demand
+## Skills: injected vs loaded on-demand
 
 The system prompt includes a compact **skills list** (name + description + location). This list has real overhead.
 
@@ -131,7 +131,7 @@ Tools affect context in two ways:
 
 `/context detail` breaks down the biggest tool schemas so you can see what dominates.
 
-## Commands, directives, and “inline shortcuts”
+## Commands, directives, and "inline shortcuts"
 
 Slash commands are handled by the Gateway. There are a few different behaviors:
 
@@ -157,7 +157,10 @@ By default, OpenClaw uses the built-in `legacy` context engine for assembly and
 compaction. If you install a plugin that provides `kind: "context-engine"` and
 select it with `plugins.slots.contextEngine`, OpenClaw delegates context
 assembly, `/compact`, and related subagent context lifecycle hooks to that
-engine instead.
+engine instead. `ownsCompaction: false` does not auto-fallback to the legacy
+engine; the active engine must still implement `compact()` correctly. See
+[Context Engine](/concepts/context-engine) for the full
+pluggable interface, lifecycle hooks, and configuration.
 
 ## What `/context` actually reports
 

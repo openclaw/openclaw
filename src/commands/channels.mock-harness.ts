@@ -1,6 +1,10 @@
 import { vi } from "vitest";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 
+function buildBundledPluginModuleId(pluginId: string, artifactBasename: string): string {
+  return ["..", "..", "extensions", pluginId, artifactBasename].join("/");
+}
+
 export const configMocks: {
   readConfigFileSnapshot: MockFn;
   writeConfigFile: MockFn;
@@ -24,11 +28,13 @@ vi.mock("../config/config.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../../extensions/telegram/src/update-offset-store.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../extensions/telegram/src/update-offset-store.js")>();
-  return {
-    ...actual,
-    deleteTelegramUpdateOffset: offsetMocks.deleteTelegramUpdateOffset,
-  };
-});
+vi.mock(
+  buildBundledPluginModuleId("telegram", "update-offset-runtime-api.js"),
+  async (importOriginal) => {
+    const actual = (await importOriginal()) as Record<string, unknown>;
+    return {
+      ...actual,
+      deleteTelegramUpdateOffset: offsetMocks.deleteTelegramUpdateOffset,
+    };
+  },
+);

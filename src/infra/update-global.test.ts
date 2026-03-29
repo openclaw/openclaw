@@ -2,18 +2,27 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { bundledDistPluginFile } from "../../test/helpers/bundled-plugin-paths.js";
+import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/public-artifacts.js";
 import { captureEnv } from "../test-utils/env.js";
 import {
+  canResolveRegistryVersionForPackageTarget,
+  collectInstalledGlobalPackageErrors,
   cleanupGlobalRenameDirs,
   detectGlobalInstallManagerByPresence,
   detectGlobalInstallManagerForRoot,
   globalInstallArgs,
   globalInstallFallbackArgs,
+  isExplicitPackageInstallSpec,
+  isMainPackageTarget,
+  OPENCLAW_MAIN_PACKAGE_SPEC,
   resolveGlobalPackageRoot,
   resolveGlobalInstallSpec,
   resolveGlobalRoot,
   type CommandRunner,
 } from "./update-global.js";
+
+const MATRIX_HELPER_API = bundledDistPluginFile("matrix", "helper-api.js");
 
 describe("update global helpers", () => {
   let envSnapshot: ReturnType<typeof captureEnv> | undefined;
@@ -58,6 +67,40 @@ describe("update global helpers", () => {
     await expect(resolveGlobalPackageRoot("npm", runCommand, 1000)).resolves.toBe(
       path.join("/tmp/npm-root", "openclaw"),
     );
+  });
+
+  it("maps main and explicit install specs for global installs", () => {
+    expect(resolveGlobalInstallSpec({ packageName: "openclaw", tag: "main" })).toBe(
+      OPENCLAW_MAIN_PACKAGE_SPEC,
+    );
+    expect(
+      resolveGlobalInstallSpec({
+        packageName: "openclaw",
+        tag: "github:openclaw/openclaw#feature/my-branch",
+      }),
+    ).toBe("github:openclaw/openclaw#feature/my-branch");
+    expect(
+      resolveGlobalInstallSpec({
+        packageName: "openclaw",
+        tag: "https://example.com/openclaw-main.tgz",
+      }),
+    ).toBe("https://example.com/openclaw-main.tgz");
+  });
+
+  it("classifies main and raw install specs separately from registry selectors", () => {
+    expect(isMainPackageTarget("main")).toBe(true);
+    expect(isMainPackageTarget(" MAIN ")).toBe(true);
+    expect(isMainPackageTarget("beta")).toBe(false);
+
+    expect(isExplicitPackageInstallSpec("github:openclaw/openclaw#main")).toBe(true);
+    expect(isExplicitPackageInstallSpec("https://example.com/openclaw-main.tgz")).toBe(true);
+    expect(isExplicitPackageInstallSpec("file:/tmp/openclaw-main.tgz")).toBe(true);
+    expect(isExplicitPackageInstallSpec("beta")).toBe(false);
+
+    expect(canResolveRegistryVersionForPackageTarget("latest")).toBe(true);
+    expect(canResolveRegistryVersionForPackageTarget("2026.3.22")).toBe(true);
+    expect(canResolveRegistryVersionForPackageTarget("main")).toBe(false);
+    expect(canResolveRegistryVersionForPackageTarget("github:openclaw/openclaw#main")).toBe(false);
   });
 
   it("detects install managers from resolved roots and on-disk presence", async () => {
@@ -146,5 +189,26 @@ describe("update global helpers", () => {
     });
     await expect(fs.stat(path.join(root, "openclaw"))).resolves.toBeDefined();
     await expect(fs.stat(path.join(root, ".openclaw-file"))).resolves.toBeDefined();
+  });
+
+  it("checks bundled runtime sidecars, including Matrix helper-api", async () => {
+    const packageRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-global-pkg-"));
+    await fs.writeFile(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "1.0.0" }),
+      "utf-8",
+    );
+    for (const relativePath of BUNDLED_RUNTIME_SIDECAR_PATHS) {
+      const absolutePath = path.join(packageRoot, relativePath);
+      await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+      await fs.writeFile(absolutePath, "export {};\n", "utf-8");
+    }
+
+    await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toEqual([]);
+
+    await fs.rm(path.join(packageRoot, MATRIX_HELPER_API));
+    await expect(collectInstalledGlobalPackageErrors({ packageRoot })).resolves.toContain(
+      `missing bundled runtime sidecar ${MATRIX_HELPER_API}`,
+    );
   });
 });

@@ -13,6 +13,10 @@ export type LegacyConfigMigration = {
   apply: (raw: Record<string, unknown>, changes: string[]) => void;
 };
 
+export type LegacyConfigMigrationSpec = LegacyConfigMigration & {
+  legacyRules?: LegacyConfigRule[];
+};
+
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
 import { isRecord } from "../utils.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
@@ -131,3 +135,7 @@ export const ensureAgentEntry = (list: unknown[], id: string): Record<string, un
   list.push(created);
   return created;
 };
+
+export const defineLegacyConfigMigration = (
+  migration: LegacyConfigMigrationSpec,
+): LegacyConfigMigrationSpec => migration;

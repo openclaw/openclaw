@@ -24,7 +24,6 @@ import ai.openclaw.app.voice.TalkModeManager
 import ai.openclaw.app.voice.VoiceConversationEntry
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -34,7 +33,6 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -43,11 +41,12 @@ import kotlinx.serialization.json.buildJsonObject
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
 
-class NodeRuntime(context: Context) {
+class NodeRuntime(
+  context: Context,
+  val prefs: SecurePrefs = SecurePrefs(context.applicationContext),
+) {
   private val appContext = context.applicationContext
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-
-  val prefs = SecurePrefs(appContext)
   private val deviceAuthStore = DeviceAuthStore(prefs)
   val canvas = CanvasController()
   val camera = CameraCaptureManager(appContext)
@@ -88,6 +87,8 @@ class NodeRuntime(context: Context) {
 
   private val deviceHandler: DeviceHandler = DeviceHandler(
     appContext = appContext,
+    smsEnabled = BuildConfig.OPENCLAW_ENABLE_SMS,
+    callLogEnabled = BuildConfig.OPENCLAW_ENABLE_CALL_LOG,
   )
 
   private val notificationsHandler: NotificationsHandler = NotificationsHandler(
@@ -136,7 +137,9 @@ class NodeRuntime(context: Context) {
     voiceWakeMode = { VoiceWakeMode.Off },
     motionActivityAvailable = { motionHandler.isActivityAvailable() },
     motionPedometerAvailable = { motionHandler.isPedometerAvailable() },
-    smsAvailable = { sms.canSendSms() },
+    sendSmsAvailable = { BuildConfig.OPENCLAW_ENABLE_SMS && sms.canSendSms() },
+    readSmsAvailable = { BuildConfig.OPENCLAW_ENABLE_SMS && sms.canReadSms() },
+    callLogAvailable = { BuildConfig.OPENCLAW_ENABLE_CALL_LOG },
     hasRecordAudioPermission = { hasRecordAudioPermission() },
     manualTls = { manualTls.value },
   )
@@ -159,7 +162,9 @@ class NodeRuntime(context: Context) {
     isForeground = { _isForeground.value },
     cameraEnabled = { cameraEnabled.value },
     locationEnabled = { locationMode.value != LocationMode.Off },
-    smsAvailable = { sms.canSendSms() },
+    sendSmsAvailable = { BuildConfig.OPENCLAW_ENABLE_SMS && sms.canSendSms() },
+    readSmsAvailable = { BuildConfig.OPENCLAW_ENABLE_SMS && sms.canReadSms() },
+    callLogAvailable = { BuildConfig.OPENCLAW_ENABLE_CALL_LOG },
     debugBuild = { BuildConfig.DEBUG },
     refreshNodeCanvasCapability = { nodeSession.refreshNodeCanvasCapability() },
     onCanvasA2uiPush = {
@@ -188,7 +193,12 @@ class NodeRuntime(context: Context) {
   private val _pendingGatewayTrust = MutableStateFlow<GatewayTrustPrompt?>(null)
   val pendingGatewayTrust: StateFlow<GatewayTrustPrompt?> = _pendingGatewayTrust.asStateFlow()
 
-  private val _mainSessionKey = MutableStateFlow("main")
+  private fun resolveNodeMainSessionKey(agentId: String? = gatewayDefaultAgentId): String {
+    val deviceId = identityStore.loadOrCreate().deviceId
+    return buildNodeMainSessionKey(deviceId, agentId)
+  }
+
+  private val _mainSessionKey = MutableStateFlow(resolveNodeMainSessionKey())
   val mainSessionKey: StateFlow<String> = _mainSessionKey.asStateFlow()
 
   private val cameraHudSeq = AtomicLong(0)
@@ -236,7 +246,7 @@ class NodeRuntime(context: Context) {
         _serverName.value = name
         _remoteAddress.value = remote
         _seamColorArgb.value = DEFAULT_SEAM_COLOR_ARGB
-        applyMainSessionKey(mainSessionKey)
+        syncMainSessionKey(resolveAgentIdFromMainSessionKey(mainSessionKey))
         updateStatus()
         micCapture.onGatewayConnectionChanged(true)
         scope.launch {
@@ -252,9 +262,6 @@ class NodeRuntime(context: Context) {
         _serverName.value = null
         _remoteAddress.value = null
         _seamColorArgb.value = DEFAULT_SEAM_COLOR_ARGB
-        if (!isCanonicalMainSessionKey(_mainSessionKey.value)) {
-          _mainSessionKey.value = "main"
-        }
         chat.applyMainSessionKey(resolveMainSessionKey())
         chat.onDisconnected(message)
         updateStatus()
@@ -313,9 +320,11 @@ class NodeRuntime(context: Context) {
       session = operatorSession,
       json = json,
       supportsChatSubscribe = false,
-    )
+    ).also {
+      it.applyMainSessionKey(_mainSessionKey.value)
+    }
   private val voiceReplySpeakerLazy: Lazy<TalkModeManager> = lazy {
-    // Reuse the existing TalkMode speech engine (ElevenLabs + deterministic system-TTS fallback)
+    // Reuse the existing TalkMode speech engine for native Android TTS playback
     // without enabling the legacy talk capture loop.
     TalkModeManager(
       context = appContext,
@@ -397,13 +406,12 @@ class NodeRuntime(context: Context) {
     )
   }
 
-  private fun applyMainSessionKey(candidate: String?) {
-    val trimmed = normalizeMainKey(candidate) ?: return
-    if (isCanonicalMainSessionKey(_mainSessionKey.value)) return
-    if (_mainSessionKey.value == trimmed) return
-    _mainSessionKey.value = trimmed
-    talkMode.setMainSessionKey(trimmed)
-    chat.applyMainSessionKey(trimmed)
+  private fun syncMainSessionKey(agentId: String?) {
+    val resolvedKey = resolveNodeMainSessionKey(agentId)
+    if (_mainSessionKey.value == resolvedKey) return
+    _mainSessionKey.value = resolvedKey
+    talkMode.setMainSessionKey(resolvedKey)
+    chat.applyMainSessionKey(resolvedKey)
     updateHomeCanvasState()
   }
 
@@ -565,43 +573,8 @@ class NodeRuntime(context: Context) {
 
     scope.launch(Dispatchers.Default) {
       gateways.collect { list ->
-        if (list.isNotEmpty()) {
-          // Security: don't let an unauthenticated discovery feed continuously steer autoconnect.
-          // UX parity with iOS: only set once when unset.
-          if (lastDiscoveredStableId.value.trim().isEmpty()) {
-            prefs.setLastDiscoveredStableId(list.first().stableId)
-          }
-        }
-
-        if (didAutoConnect) return@collect
-        if (_isConnected.value) return@collect
-
-        if (manualEnabled.value) {
-          val host = manualHost.value.trim()
-          val port = manualPort.value
-          if (host.isNotEmpty() && port in 1..65535) {
-            // Security: autoconnect only to previously trusted gateways (stored TLS pin).
-            if (!manualTls.value) return@collect
-            val stableId = GatewayEndpoint.manual(host = host, port = port).stableId
-            val storedFingerprint = prefs.loadGatewayTlsFingerprint(stableId)?.trim().orEmpty()
-            if (storedFingerprint.isEmpty()) return@collect
-
-            didAutoConnect = true
-            connect(GatewayEndpoint.manual(host = host, port = port))
-          }
-          return@collect
-        }
-
-        val targetStableId = lastDiscoveredStableId.value.trim()
-        if (targetStableId.isEmpty()) return@collect
-        val target = list.firstOrNull { it.stableId == targetStableId } ?: return@collect
-
-        // Security: autoconnect only to previously trusted gateways (stored TLS pin).
-        val storedFingerprint = prefs.loadGatewayTlsFingerprint(target.stableId)?.trim().orEmpty()
-        if (storedFingerprint.isEmpty()) return@collect
-
-        didAutoConnect = true
-        connect(target)
+        seedLastDiscoveredGateway(list)
+        autoConnectIfNeeded()
       }
     }
 
@@ -626,9 +599,51 @@ class NodeRuntime(context: Context) {
 
   fun setForeground(value: Boolean) {
     _isForeground.value = value
-    if (!value) {
+    if (value) {
+      reconnectPreferredGatewayOnForeground()
+    } else {
       stopActiveVoiceSession()
     }
+  }
+
+  private fun seedLastDiscoveredGateway(list: List<GatewayEndpoint>) {
+    if (list.isEmpty()) return
+    if (lastDiscoveredStableId.value.trim().isNotEmpty()) return
+    prefs.setLastDiscoveredStableId(list.first().stableId)
+  }
+
+  private fun resolvePreferredGatewayEndpoint(): GatewayEndpoint? {
+    if (manualEnabled.value) {
+      val host = manualHost.value.trim()
+      val port = manualPort.value
+      if (host.isEmpty() || port !in 1..65535) return null
+      return GatewayEndpoint.manual(host = host, port = port)
+    }
+
+    val targetStableId = lastDiscoveredStableId.value.trim()
+    if (targetStableId.isEmpty()) return null
+    val endpoint = gateways.value.firstOrNull { it.stableId == targetStableId } ?: return null
+    val storedFingerprint = prefs.loadGatewayTlsFingerprint(endpoint.stableId)?.trim().orEmpty()
+    if (storedFingerprint.isEmpty()) return null
+    return endpoint
+  }
+
+  private fun autoConnectIfNeeded() {
+    if (didAutoConnect) return
+    if (_isConnected.value) return
+    val endpoint = resolvePreferredGatewayEndpoint() ?: return
+    didAutoConnect = true
+    connect(endpoint)
+  }
+
+  private fun reconnectPreferredGatewayOnForeground() {
+    if (_isConnected.value) return
+    if (_pendingGatewayTrust.value != null) return
+    if (connectedEndpoint != null) {
+      refreshGatewayConnection()
+      return
+    }
+    resolvePreferredGatewayEndpoint()?.let(::connect)
   }
 
   fun setDisplayName(value: String) {
@@ -890,6 +905,10 @@ class NodeRuntime(context: Context) {
     }
   }
 
+  fun isTrustedCanvasActionUrl(rawUrl: String?): Boolean {
+    return a2uiHandler.isTrustedCanvasActionUrl(rawUrl)
+  }
+
   fun loadChat(sessionKey: String) {
     val key = sessionKey.trim().ifEmpty { resolveMainSessionKey() }
     chat.load(key)
@@ -942,9 +961,7 @@ class NodeRuntime(context: Context) {
       val config = root?.get("config").asObjectOrNull()
       val ui = config?.get("ui").asObjectOrNull()
       val raw = ui?.get("seamColor").asStringOrNull()?.trim()
-      val sessionCfg = config?.get("session").asObjectOrNull()
-      val mainKey = normalizeMainKey(sessionCfg?.get("mainKey").asStringOrNull())
-      applyMainSessionKey(mainKey)
+      syncMainSessionKey(gatewayDefaultAgentId)
 
       val parsed = parseHexColorArgb(raw)
       _seamColorArgb.value = parsed ?: DEFAULT_SEAM_COLOR_ARGB
@@ -977,7 +994,7 @@ class NodeRuntime(context: Context) {
 
       gatewayDefaultAgentId = defaultAgentId.ifEmpty { null }
       gatewayAgents = agents
-      applyMainSessionKey(mainKey)
+      syncMainSessionKey(resolveAgentIdFromMainSessionKey(mainKey) ?: gatewayDefaultAgentId)
       updateHomeCanvasState()
     } catch (_: Throwable) {
       // ignore

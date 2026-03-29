@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { importFreshModule } from "../../../test/helpers/import-fresh.js";
-import { expectInboundContextContract } from "../../../test/helpers/inbound-contract.js";
+import { expectChannelInboundContextContract as expectInboundContextContract } from "../../channels/plugins/contracts/suites.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { MsgContext } from "../templating.js";
@@ -197,8 +197,8 @@ describe("inbound context contract (providers + extensions)", () => {
 
 const getLineData = (result: ReturnType<typeof parseLineDirectives>) =>
   (result.channelData?.line as Record<string, unknown> | undefined) ?? {};
-const getSlackData = (result: ReturnType<typeof parseSlackDirectives>) =>
-  (result.channelData?.slack as Record<string, unknown> | undefined) ?? {};
+const getSlackInteractive = (result: ReturnType<typeof parseSlackDirectives>) =>
+  result.interactive?.blocks ?? [];
 
 describe("hasLineDirectives", () => {
   it("matches expected detection across directive patterns", () => {
@@ -601,93 +601,52 @@ describe("parseLineDirectives", () => {
 });
 
 describe("parseSlackDirectives", () => {
-  it("builds section and button blocks from slack_buttons directives", () => {
+  it("builds shared text and button blocks from slack_buttons directives", () => {
     const result = parseSlackDirectives({
       text: "Choose an action [[slack_buttons: Approve:approve, Reject:reject]]",
     });
 
     expect(result.text).toBe("Choose an action");
-    expect(getSlackData(result).blocks).toEqual([
+    expect(getSlackInteractive(result)).toEqual([
       {
-        type: "section",
-        text: {
-          type: "mrkdwn",
-          text: "Choose an action",
-        },
+        type: "text",
+        text: "Choose an action",
       },
       {
-        type: "actions",
-        block_id: "openclaw_reply_buttons_1",
-        elements: [
+        type: "buttons",
+        buttons: [
           {
-            type: "button",
-            action_id: "openclaw:reply_button",
-            text: {
-              type: "plain_text",
-              text: "Approve",
-              emoji: true,
-            },
-            value: "reply_1_approve",
+            label: "Approve",
+            value: "approve",
           },
           {
-            type: "button",
-            action_id: "openclaw:reply_button",
-            text: {
-              type: "plain_text",
-              text: "Reject",
-              emoji: true,
-            },
-            value: "reply_2_reject",
+            label: "Reject",
+            value: "reject",
           },
         ],
       },
     ]);
   });
 
-  it("builds static select blocks from slack_select directives", () => {
+  it("builds shared select blocks from slack_select directives", () => {
     const result = parseSlackDirectives({
       text: "[[slack_select: Choose a project | Alpha:alpha, Beta:beta]]",
     });
 
     expect(result.text).toBeUndefined();
-    expect(getSlackData(result).blocks).toEqual([
+    expect(getSlackInteractive(result)).toEqual([
       {
-        type: "actions",
-        block_id: "openclaw_reply_select_1",
-        elements: [
-          {
-            type: "static_select",
-            action_id: "openclaw:reply_select",
-            placeholder: {
-              type: "plain_text",
-              text: "Choose a project",
-              emoji: true,
-            },
-            options: [
-              {
-                text: {
-                  type: "plain_text",
-                  text: "Alpha",
-                  emoji: true,
-                },
-                value: "reply_1_alpha",
-              },
-              {
-                text: {
-                  type: "plain_text",
-                  text: "Beta",
-                  emoji: true,
-                },
-                value: "reply_2_beta",
-              },
-            ],
-          },
+        type: "select",
+        placeholder: "Choose a project",
+        options: [
+          { label: "Alpha", value: "alpha" },
+          { label: "Beta", value: "beta" },
         ],
       },
     ]);
   });
 
-  it("appends Slack interactive blocks to existing slack blocks", () => {
+  it("leaves existing slack blocks in channelData and appends shared interactive blocks", () => {
     const result = parseSlackDirectives({
       text: "Act now [[slack_buttons: Retry:retry]]",
       channelData: {
@@ -698,30 +657,19 @@ describe("parseSlackDirectives", () => {
     });
 
     expect(result.text).toBe("Act now");
-    expect(getSlackData(result).blocks).toEqual([
-      { type: "divider" },
+    expect(result.channelData).toEqual({
+      slack: {
+        blocks: [{ type: "divider" }],
+      },
+    });
+    expect(getSlackInteractive(result)).toEqual([
       {
-        type: "section",
-        text: {
-          type: "mrkdwn",
-          text: "Act now",
-        },
+        type: "text",
+        text: "Act now",
       },
       {
-        type: "actions",
-        block_id: "openclaw_reply_buttons_1",
-        elements: [
-          {
-            type: "button",
-            action_id: "openclaw:reply_button",
-            text: {
-              type: "plain_text",
-              text: "Retry",
-              emoji: true,
-            },
-            value: "reply_1_retry",
-          },
-        ],
+        type: "buttons",
+        buttons: [{ label: "Retry", value: "retry" }],
       },
     ]);
   });
@@ -731,145 +679,69 @@ describe("parseSlackDirectives", () => {
       text: "[[slack_select: Pick one | Alpha:alpha]] then [[slack_buttons: Retry:retry]]",
     });
 
-    expect(getSlackData(result).blocks).toEqual([
+    expect(getSlackInteractive(result)).toEqual([
       {
-        type: "actions",
-        block_id: "openclaw_reply_select_1",
-        elements: [
-          {
-            type: "static_select",
-            action_id: "openclaw:reply_select",
-            placeholder: {
-              type: "plain_text",
-              text: "Pick one",
-              emoji: true,
-            },
-            options: [
-              {
-                text: {
-                  type: "plain_text",
-                  text: "Alpha",
-                  emoji: true,
-                },
-                value: "reply_1_alpha",
-              },
-            ],
-          },
-        ],
+        type: "select",
+        placeholder: "Pick one",
+        options: [{ label: "Alpha", value: "alpha" }],
       },
       {
-        type: "section",
-        text: {
-          type: "mrkdwn",
-          text: "then",
-        },
+        type: "text",
+        text: "then",
       },
       {
-        type: "actions",
-        block_id: "openclaw_reply_buttons_1",
-        elements: [
-          {
-            type: "button",
-            action_id: "openclaw:reply_button",
-            text: {
-              type: "plain_text",
-              text: "Retry",
-              emoji: true,
-            },
-            value: "reply_1_retry",
-          },
-        ],
+        type: "buttons",
+        buttons: [{ label: "Retry", value: "retry" }],
       },
     ]);
   });
 
-  it("truncates Slack interactive reply strings to safe Block Kit limits", () => {
+  it("preserves long Slack directive values in the shared interactive model", () => {
     const long = "x".repeat(120);
     const result = parseSlackDirectives({
       text: `${"y".repeat(3100)} [[slack_select: ${long} | ${long}:${long}]] [[slack_buttons: ${long}:${long}]]`,
     });
 
-    const blocks = getSlackData(result).blocks as Array<Record<string, unknown>>;
-    expect(blocks).toHaveLength(3);
-    expect(((blocks[0]?.text as { text?: string })?.text ?? "").length).toBeLessThanOrEqual(3000);
-    expect(
-      (
-        (
-          (blocks[1]?.elements as Array<Record<string, unknown>>)?.[0]?.placeholder as {
-            text?: string;
-          }
-        )?.text ?? ""
-      ).length,
-    ).toBeLessThanOrEqual(75);
-    expect(
-      (
-        (
-          (
-            (blocks[1]?.elements as Array<Record<string, unknown>>)?.[0]?.options as Array<
-              Record<string, unknown>
-            >
-          )?.[0]?.text as { text?: string }
-        )?.text ?? ""
-      ).length,
-    ).toBeLessThanOrEqual(75);
-    expect(
-      (
-        ((
-          (blocks[1]?.elements as Array<Record<string, unknown>>)?.[0]?.options as Array<
-            Record<string, unknown>
-          >
-        )?.[0]?.value as string | undefined) ?? ""
-      ).length,
-    ).toBeLessThanOrEqual(75);
-    expect(
-      (
-        (
-          (blocks[2]?.elements as Array<Record<string, unknown>>)?.[0]?.text as {
-            text?: string;
-          }
-        )?.text ?? ""
-      ).length,
-    ).toBeLessThanOrEqual(75);
-    expect(
-      (
-        ((blocks[2]?.elements as Array<Record<string, unknown>>)?.[0]?.value as
-          | string
-          | undefined) ?? ""
-      ).length,
-    ).toBeLessThanOrEqual(75);
+    expect(getSlackInteractive(result)).toEqual([
+      {
+        type: "text",
+        text: "y".repeat(3100),
+      },
+      {
+        type: "select",
+        placeholder: long,
+        options: [{ label: long, value: long }],
+      },
+      {
+        type: "buttons",
+        buttons: [{ label: long, value: long }],
+      },
+    ]);
   });
 
-  it("falls back to the original payload when generated blocks would exceed Slack limits", () => {
+  it("keeps existing interactive blocks when compiling additional Slack directives", () => {
     const result = parseSlackDirectives({
       text: "Choose [[slack_buttons: Retry:retry]]",
-      channelData: {
-        slack: {
-          blocks: Array.from({ length: 49 }, () => ({ type: "divider" })),
-        },
+      interactive: {
+        blocks: [{ type: "text", text: "Existing" }],
       },
+    });
+
+    expect(getSlackInteractive(result)).toEqual([
+      { type: "text", text: "Existing" },
+      { type: "text", text: "Choose" },
+      { type: "buttons", buttons: [{ label: "Retry", value: "retry" }] },
+    ]);
+  });
+
+  it("ignores malformed directive choices when none remain", () => {
+    const result = parseSlackDirectives({
+      text: "Choose [[slack_buttons: : , : ]]",
     });
 
     expect(result).toEqual({
-      text: "Choose [[slack_buttons: Retry:retry]]",
-      channelData: {
-        slack: {
-          blocks: Array.from({ length: 49 }, () => ({ type: "divider" })),
-        },
-      },
+      text: "Choose [[slack_buttons: : , : ]]",
     });
-  });
-
-  it("ignores malformed existing Slack blocks during directive compilation", () => {
-    expect(() =>
-      parseSlackDirectives({
-        text: "Choose [[slack_buttons: Retry:retry]]",
-        channelData: {
-          slack: {
-            blocks: "{not json}",
-          },
-        },
-      }),
-    ).not.toThrow();
   });
 });
 
@@ -1582,7 +1454,7 @@ describe("followup queue drain restart after idle window", () => {
     expect(freshCalls[0]?.prompt).toBe("after-empty-schedule");
   });
 
-  it("processes a message enqueued after the drain empties and deletes the queue", async () => {
+  it("processes a message enqueued after the drain empties when enqueue refreshes the callback", async () => {
     const key = `test-idle-window-race-${Date.now()}`;
     const calls: FollowupRun[] = [];
     const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
@@ -1613,10 +1485,16 @@ describe("followup queue drain restart after idle window", () => {
     await new Promise<void>((resolve) => setImmediate(resolve));
 
     // Simulate the race: a new message arrives AFTER the drain finished and
-    // deleted the queue, but WITHOUT calling scheduleFollowupDrain again.
-    enqueueFollowupRun(key, createRun({ prompt: "after-idle" }), settings);
+    // deleted the queue. The next enqueue refreshes the callback and should
+    // kick a new idle drain automatically.
+    enqueueFollowupRun(
+      key,
+      createRun({ prompt: "after-idle" }),
+      settings,
+      "message-id",
+      runFollowup,
+    );
 
-    // kickFollowupDrainIfIdle should have restarted the drain automatically.
     await secondProcessed.promise;
 
     expect(calls).toHaveLength(2);
@@ -1624,7 +1502,80 @@ describe("followup queue drain restart after idle window", () => {
     expect(calls[1]?.prompt).toBe("after-idle");
   });
 
-  it("restarts an idle drain across distinct enqueue and drain module instances", async () => {
+  it("restarts an idle drain with the newest followup callback", async () => {
+    const key = `test-idle-window-fresh-callback-${Date.now()}`;
+    const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
+    const staleCalls: FollowupRun[] = [];
+    const freshCalls: FollowupRun[] = [];
+    const firstProcessed = createDeferred<void>();
+    const secondProcessed = createDeferred<void>();
+
+    const staleFollowup = async (run: FollowupRun) => {
+      staleCalls.push(run);
+      if (staleCalls.length === 1) {
+        firstProcessed.resolve();
+      }
+    };
+    const freshFollowup = async (run: FollowupRun) => {
+      freshCalls.push(run);
+      secondProcessed.resolve();
+    };
+
+    enqueueFollowupRun(key, createRun({ prompt: "before-idle" }), settings);
+    scheduleFollowupDrain(key, staleFollowup);
+    await firstProcessed.promise;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    enqueueFollowupRun(
+      key,
+      createRun({ prompt: "after-idle" }),
+      settings,
+      "message-id",
+      freshFollowup,
+    );
+    await secondProcessed.promise;
+
+    expect(staleCalls).toHaveLength(1);
+    expect(staleCalls[0]?.prompt).toBe("before-idle");
+    expect(freshCalls).toHaveLength(1);
+    expect(freshCalls[0]?.prompt).toBe("after-idle");
+  });
+
+  it("does not auto-start a drain when a busy run only refreshes the callback", async () => {
+    const key = `test-busy-run-refreshes-callback-${Date.now()}`;
+    const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
+    const staleCalls: FollowupRun[] = [];
+    const freshCalls: FollowupRun[] = [];
+
+    const staleFollowup = async (run: FollowupRun) => {
+      staleCalls.push(run);
+    };
+    const freshFollowup = async (run: FollowupRun) => {
+      freshCalls.push(run);
+    };
+
+    enqueueFollowupRun(
+      key,
+      createRun({ prompt: "queued-while-busy" }),
+      settings,
+      "message-id",
+      freshFollowup,
+      false,
+    );
+
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(freshCalls).toHaveLength(0);
+
+    scheduleFollowupDrain(key, staleFollowup);
+    await vi.waitFor(() => {
+      expect(freshCalls).toHaveLength(1);
+    });
+
+    expect(staleCalls).toHaveLength(0);
+    expect(freshCalls[0]?.prompt).toBe("queued-while-busy");
+  });
+
+  it("restarts an idle drain across distinct enqueue and drain module instances when enqueue refreshes the callback", async () => {
     const drainA = await importFreshModule<typeof import("./queue/drain.js")>(
       import.meta.url,
       "./queue/drain.js?scope=restart-a",
@@ -1655,7 +1606,13 @@ describe("followup queue drain restart after idle window", () => {
 
       await new Promise<void>((resolve) => setImmediate(resolve));
 
-      enqueueB.enqueueFollowupRun(key, createRun({ prompt: "after-idle" }), settings);
+      enqueueB.enqueueFollowupRun(
+        key,
+        createRun({ prompt: "after-idle" }),
+        settings,
+        "message-id",
+        runFollowup,
+      );
 
       await vi.waitFor(
         () => {
@@ -1740,6 +1697,33 @@ describe("followup queue drain restart after idle window", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]?.prompt).toBe("before-clear");
   });
+
+  it("clears the remembered callback after a queue drains fully", async () => {
+    const key = `test-auto-clear-callback-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
+    const firstProcessed = createDeferred<void>();
+
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      firstProcessed.resolve();
+    };
+
+    enqueueFollowupRun(key, createRun({ prompt: "before-idle" }), settings);
+    scheduleFollowupDrain(key, runFollowup);
+    await firstProcessed.promise;
+
+    // Let the idle drain finish and clear its callback.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    // Enqueueing after a clean drain should not auto-start anything until a
+    // fresh finalize path supplies a new callback.
+    enqueueFollowupRun(key, createRun({ prompt: "after-idle" }), settings);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.prompt).toBe("before-idle");
+  });
 });
 
 const emptyCfg = {} as OpenClawConfig;
@@ -1796,22 +1780,17 @@ describe("createReplyDispatcher", () => {
     expect(deliver).toHaveBeenCalledTimes(1);
     expect(deliver.mock.calls[0]?.[0]).toMatchObject({
       text: "Choose",
-      channelData: {
-        slack: {
-          blocks: [
-            {
-              type: "section",
-              text: {
-                type: "mrkdwn",
-                text: "Choose",
-              },
-            },
-            {
-              type: "actions",
-              block_id: "openclaw_reply_buttons_1",
-            },
-          ],
-        },
+      interactive: {
+        blocks: [
+          {
+            type: "text",
+            text: "Choose",
+          },
+          {
+            type: "buttons",
+            buttons: [{ label: "Retry", value: "retry" }],
+          },
+        ],
       },
     });
   });

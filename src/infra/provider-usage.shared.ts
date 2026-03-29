@@ -1,4 +1,8 @@
-import { normalizeProviderId } from "../agents/model-selection.js";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { normalizeProviderId } from "../agents/provider-id.js";
+import { resolveRequiredHomeDir } from "./home-dir.js";
 import type { UsageProviderId } from "./provider-usage.types.js";
 
 export const DEFAULT_TIMEOUT_MS = 5000;
@@ -59,3 +63,33 @@ export const withTimeout = async <T>(work: Promise<T>, ms: number, fallback: T):
     }
   }
 };
+
+export function resolveLegacyPiAgentAccessToken(
+  env: NodeJS.ProcessEnv,
+  providerIds: string[],
+): string | undefined {
+  try {
+    const authPath = path.join(
+      resolveRequiredHomeDir(env, os.homedir),
+      ".pi",
+      "agent",
+      "auth.json",
+    );
+    if (!fs.existsSync(authPath)) {
+      return undefined;
+    }
+    const parsed = JSON.parse(fs.readFileSync(authPath, "utf8")) as Record<
+      string,
+      { access?: string }
+    >;
+    for (const providerId of providerIds) {
+      const token = parsed[providerId]?.access;
+      if (typeof token === "string" && token.trim()) {
+        return token;
+      }
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}

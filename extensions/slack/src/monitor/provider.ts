@@ -1,33 +1,38 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import SlackBolt from "@slack/bolt";
-import { resolveTextChunkLimit } from "../../../../src/auto-reply/chunk.js";
-import { DEFAULT_GROUP_HISTORY_LIMIT } from "../../../../src/auto-reply/reply/history.js";
+import SlackBolt, * as SlackBoltNamespace from "@slack/bolt";
 import {
   addAllowlistUserEntriesFromConfigEntry,
   buildAllowlistResolutionSummary,
   mergeAllowlist,
   patchAllowlistUsersInConfigEntries,
   summarizeMapping,
-} from "../../../../src/channels/allowlists/resolve-utils.js";
-import { loadConfig } from "../../../../src/config/config.js";
-import { isDangerousNameMatchingEnabled } from "../../../../src/config/dangerous-name-matching.js";
+} from "openclaw/plugin-sdk/allow-from";
+import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
 import {
   resolveOpenProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
-} from "../../../../src/config/runtime-group-policy.js";
-import type { SessionScope } from "../../../../src/config/sessions.js";
-import { normalizeResolvedSecretInputString } from "../../../../src/config/types.secrets.js";
-import { createConnectedChannelStatusPatch } from "../../../../src/gateway/channel-status-patches.js";
-import { warn } from "../../../../src/globals.js";
-import { computeBackoff, sleepWithAbort } from "../../../../src/infra/backoff.js";
-import { installRequestBodyLimitGuard } from "../../../../src/infra/http-body.js";
-import { normalizeMainKey } from "../../../../src/routing/session-key.js";
-import { createNonExitingRuntime, type RuntimeEnv } from "../../../../src/runtime.js";
-import { normalizeStringEntries } from "../../../../src/shared/string-normalization.js";
+} from "openclaw/plugin-sdk/config-runtime";
+import type { SessionScope } from "openclaw/plugin-sdk/config-runtime";
+import { createConnectedChannelStatusPatch } from "openclaw/plugin-sdk/gateway-runtime";
+import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-history";
+import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
+import { normalizeMainKey } from "openclaw/plugin-sdk/routing";
+import { warn } from "openclaw/plugin-sdk/runtime-env";
+import {
+  computeBackoff,
+  createNonExitingRuntime,
+  sleepWithAbort,
+  type RuntimeEnv,
+} from "openclaw/plugin-sdk/runtime-env";
+import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
+import { normalizeStringEntries } from "openclaw/plugin-sdk/text-runtime";
+import { installRequestBodyLimitGuard } from "openclaw/plugin-sdk/webhook-request-guards";
 import { resolveSlackAccount } from "../accounts.js";
 import { resolveSlackWebClientOptions } from "../client.js";
 import { normalizeSlackWebhookPath, registerSlackHttpHandler } from "../http/index.js";
+import { SLACK_TEXT_LIMIT } from "../limits.js";
 import { resolveSlackChannelAllowlist } from "../resolve-channels.js";
 import { resolveSlackUserAllowlist } from "../resolve-users.js";
 import { resolveSlackAppToken, resolveSlackBotToken } from "../token.js";
@@ -46,14 +51,84 @@ import {
 import { registerSlackMonitorSlashCommands } from "./slash.js";
 import type { MonitorSlackOpts } from "./types.js";
 
-const slackBoltModule = SlackBolt as typeof import("@slack/bolt") & {
-  default?: typeof import("@slack/bolt");
+type SlackAppConstructor = typeof import("@slack/bolt").App;
+type SlackHttpReceiverConstructor = typeof import("@slack/bolt").HTTPReceiver;
+type SlackBoltResolvedExports = {
+  App: SlackAppConstructor;
+  HTTPReceiver: SlackHttpReceiverConstructor;
 };
-// Bun allows named imports from CJS; Node ESM doesn't. Use default+fallback for compatibility.
-// Fix: Check if module has App property directly (Node 25.x ESM/CJS compat issue)
-const slackBolt =
-  (slackBoltModule.App ? slackBoltModule : slackBoltModule.default) ?? slackBoltModule;
-const { App, HTTPReceiver } = slackBolt;
+type Constructor = abstract new (...args: never[]) => unknown;
+
+function isConstructorFunction<T extends Constructor>(value: unknown): value is T {
+  return typeof value === "function";
+}
+
+function resolveSlackBoltModule(value: unknown): SlackBoltResolvedExports | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const app = Reflect.get(value, "App");
+  const httpReceiver = Reflect.get(value, "HTTPReceiver");
+  if (
+    !isConstructorFunction<SlackAppConstructor>(app) ||
+    !isConstructorFunction<SlackHttpReceiverConstructor>(httpReceiver)
+  ) {
+    return null;
+  }
+  return {
+    App: app,
+    HTTPReceiver: httpReceiver,
+  };
+}
+
+function resolveSlackBoltInterop(params: {
+  defaultImport: unknown;
+  namespaceImport: unknown;
+}): SlackBoltResolvedExports {
+  const { defaultImport, namespaceImport } = params;
+  const nestedDefault =
+    defaultImport && typeof defaultImport === "object"
+      ? Reflect.get(defaultImport, "default")
+      : undefined;
+  const namespaceDefault =
+    namespaceImport && typeof namespaceImport === "object"
+      ? Reflect.get(namespaceImport, "default")
+      : undefined;
+  const namespaceReceiver =
+    namespaceImport && typeof namespaceImport === "object"
+      ? Reflect.get(namespaceImport, "HTTPReceiver")
+      : undefined;
+  const directModule =
+    resolveSlackBoltModule(defaultImport) ??
+    resolveSlackBoltModule(nestedDefault) ??
+    resolveSlackBoltModule(namespaceDefault) ??
+    resolveSlackBoltModule(namespaceImport);
+  if (directModule) {
+    return directModule;
+  }
+  if (
+    isConstructorFunction<SlackAppConstructor>(defaultImport) &&
+    isConstructorFunction<SlackHttpReceiverConstructor>(namespaceReceiver)
+  ) {
+    return {
+      App: defaultImport,
+      HTTPReceiver: namespaceReceiver,
+    };
+  }
+  throw new TypeError("Unable to resolve @slack/bolt App/HTTPReceiver exports");
+}
+
+let slackBoltInterop: SlackBoltResolvedExports | undefined;
+
+function getSlackBoltInterop(): SlackBoltResolvedExports {
+  if (!slackBoltInterop) {
+    slackBoltInterop = resolveSlackBoltInterop({
+      defaultImport: SlackBolt,
+      namespaceImport: SlackBoltNamespace,
+    });
+  }
+  return slackBoltInterop;
+}
 
 const SLACK_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const SLACK_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
@@ -179,11 +254,14 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const threadHistoryScope = slackCfg.thread?.historyScope ?? "thread";
   const threadInheritParent = slackCfg.thread?.inheritParent ?? false;
   const slashCommand = resolveSlackSlashCommandConfig(opts.slashCommand ?? slackCfg.slashCommand);
-  const textLimit = resolveTextChunkLimit(cfg, "slack", account.accountId);
+  const textLimit = resolveTextChunkLimit(cfg, "slack", account.accountId, {
+    fallbackLimit: SLACK_TEXT_LIMIT,
+  });
   const ackReactionScope = cfg.messages?.ackReactionScope ?? "group-mentions";
   const typingReaction = slackCfg.typingReaction?.trim() ?? "";
   const mediaMaxBytes = (opts.mediaMaxMb ?? slackCfg.mediaMaxMb ?? 20) * 1024 * 1024;
   const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
+  const { App, HTTPReceiver } = getSlackBoltInterop();
 
   const receiver =
     slackMode === "http"
@@ -510,11 +588,14 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
 
 export { isNonRecoverableSlackAuthError } from "./reconnect-policy.js";
 
+export const resolveSlackRuntimeGroupPolicy = resolveOpenProviderRuntimeGroupPolicy;
+
 export const __testing = {
   publishSlackConnectedStatus,
   publishSlackDisconnectedStatus,
   resolveSlackRuntimeGroupPolicy: resolveOpenProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
+  resolveSlackBoltInterop,
   getSocketEmitter,
   waitForSlackSocketDisconnect,
 };

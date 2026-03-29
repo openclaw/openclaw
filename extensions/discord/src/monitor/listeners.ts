@@ -8,16 +8,19 @@ import {
   ThreadUpdateListener,
   type User,
 } from "@buape/carbon";
-import type { OpenClawConfig } from "../../../../src/config/config.js";
-import { danger, logVerbose } from "../../../../src/globals.js";
-import { formatDurationSeconds } from "../../../../src/infra/format-time/format-duration.ts";
-import { enqueueSystemEvent } from "../../../../src/infra/system-events.js";
-import { createSubsystemLogger } from "../../../../src/logging/subsystem.js";
-import { resolveAgentRoute } from "../../../../src/routing/resolve-route.js";
+import { enqueueSystemEvent } from "openclaw/plugin-sdk/channel-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
+import {
+  createSubsystemLogger,
+  danger,
+  formatDurationSeconds,
+  logVerbose,
+} from "openclaw/plugin-sdk/runtime-env";
 import {
   readStoreAllowFromForDmPolicy,
   resolveDmGroupAccessWithLists,
-} from "../../../../src/security/dm-policy-shared.js";
+} from "openclaw/plugin-sdk/security-runtime";
 import {
   isDiscordGroupAllowedByPolicy,
   normalizeDiscordAllowList,
@@ -36,11 +39,9 @@ import { isThreadArchived } from "./thread-bindings.discord-api.js";
 import { closeDiscordThreadSessions } from "./thread-session-close.js";
 import { normalizeDiscordListenerTimeoutMs, runDiscordTaskWithTimeout } from "./timeouts.js";
 
-type LoadedConfig = ReturnType<typeof import("../../../../src/config/config.js").loadConfig>;
-type RuntimeEnv = import("../../../../src/runtime.js").RuntimeEnv;
-type Logger = ReturnType<
-  typeof import("../../../../src/logging/subsystem.js").createSubsystemLogger
->;
+type LoadedConfig = ReturnType<typeof import("openclaw/plugin-sdk/config-runtime").loadConfig>;
+type RuntimeEnv = import("openclaw/plugin-sdk/runtime-env").RuntimeEnv;
+type Logger = ReturnType<typeof import("openclaw/plugin-sdk/runtime-env").createSubsystemLogger>;
 
 export type DiscordMessageEvent = Parameters<MessageCreateListener["handle"]>[0];
 
@@ -755,14 +756,13 @@ export class DiscordThreadUpdateListener extends ThreadUpdateListener {
           return;
         }
         const logger = this.logger ?? discordEventQueueLog;
-        logger.info("Discord thread archived — resetting session", { threadId });
         const count = await closeDiscordThreadSessions({
           cfg: this.cfg,
           accountId: this.accountId,
           threadId,
         });
         if (count > 0) {
-          logger.info("Discord thread sessions reset after archival", { threadId, count });
+          logger.info("Discord thread archived — reset sessions", { threadId, count });
         }
       },
       onError: (err) => {

@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/openrouter-provider",
+  "version": "2026.3.29",
+  "private": true,
+  "description": "OpenClaw OpenRouter provider plugin",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

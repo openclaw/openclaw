@@ -2,9 +2,12 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
+import { clearAllBootstrapSnapshots } from "../agents/bootstrap-cache.js";
+import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
+import { resetAgentRunContextForTest } from "../infra/agent-events.js";
 import { useFrozenTime, useRealTime } from "../test-utils/frozen-time.js";
-import type { CronService } from "./service.js";
+import { CronService } from "./service.js";
 import type { CronJob, CronJobState } from "./types.js";
 
 const TOP_OF_HOUR_STAGGER_MS = 5 * 60 * 1_000;
@@ -31,6 +34,15 @@ export function setupCronIssueRegressionFixtures() {
     useFrozenTime("2026-02-06T10:05:00.000Z");
   });
 
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.restoreAllMocks();
+    useRealTime();
+    clearSessionStoreCacheForTest();
+    resetAgentRunContextForTest();
+    clearAllBootstrapSnapshots();
+    vi.resetModules();
+  });
   afterAll(async () => {
     useRealTime();
     await fs.rm(fixtureRoot, { recursive: true, force: true });
@@ -150,7 +162,6 @@ export async function startCronForStore(params: {
     params.requestHeartbeatNow ?? (vi.fn() as unknown as CronServiceOptions["requestHeartbeatNow"]);
   const runIsolatedAgentJob = params.runIsolatedAgentJob ?? createDefaultIsolatedRunner();
 
-  const { CronService } = await import("./service.js");
   const cron = new CronService({
     cronEnabled: params.cronEnabled ?? true,
     storePath: params.storePath,

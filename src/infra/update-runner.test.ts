@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { bundledDistPluginFile } from "../../test/helpers/bundled-plugin-paths.js";
+import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/public-artifacts.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { pathExists } from "../utils.js";
 import { resolveStableNodePath } from "./stable-node-path.js";
@@ -9,18 +11,22 @@ import { runGatewayUpdate } from "./update-runner.js";
 
 type CommandResponse = { stdout?: string; stderr?: string; code?: number | null };
 type CommandResult = { stdout: string; stderr: string; code: number | null };
+const WHATSAPP_LIGHT_RUNTIME_API = bundledDistPluginFile("whatsapp", "light-runtime-api.js");
+
+function toCommandResult(response?: CommandResponse): CommandResult {
+  return {
+    stdout: response?.stdout ?? "",
+    stderr: response?.stderr ?? "",
+    code: response?.code ?? 0,
+  };
+}
 
 function createRunner(responses: Record<string, CommandResponse>) {
   const calls: string[] = [];
   const runner = async (argv: string[]) => {
     const key = argv.join(" ");
     calls.push(key);
-    const res = responses[key] ?? {};
-    return {
-      stdout: res.stdout ?? "",
-      stderr: res.stderr ?? "",
-      code: res.code ?? 0,
-    };
+    return toCommandResult(responses[key]);
   };
   return { runner, calls };
 }
@@ -125,6 +131,11 @@ describe("runGatewayUpdate", () => {
     return uiIndexPath;
   }
 
+  async function setupGitPackageManagerFixture(packageManager = "pnpm@8.0.0") {
+    await setupGitCheckout({ packageManager });
+    return await setupUiIndex();
+  }
+
   function buildStableTagResponses(
     stableTag: string,
     options?: { additionalTags?: string[] },
@@ -149,6 +160,36 @@ describe("runGatewayUpdate", () => {
         stdout: options?.status ?? "",
       },
     } satisfies Record<string, CommandResponse>;
+  }
+
+  function createGitInstallRunner(params: {
+    stableTag: string;
+    installCommand: string;
+    buildCommand: string;
+    uiBuildCommand: string;
+    doctorCommand: string;
+    onCommand?: (key: string) => Promise<CommandResponse | undefined> | CommandResponse | undefined;
+  }) {
+    const calls: string[] = [];
+    const responses = {
+      ...buildStableTagResponses(params.stableTag),
+      [params.installCommand]: { stdout: "" },
+      [params.buildCommand]: { stdout: "" },
+      [params.uiBuildCommand]: { stdout: "" },
+      [params.doctorCommand]: { stdout: "" },
+    } satisfies Record<string, CommandResponse>;
+
+    const runCommand = async (argv: string[]) => {
+      const key = argv.join(" ");
+      calls.push(key);
+      const override = await params.onCommand?.(key);
+      if (override) {
+        return toCommandResult(override);
+      }
+      return toCommandResult(responses[key]);
+    };
+
+    return { calls, runCommand };
   }
 
   async function removeControlUiAssets() {
@@ -185,6 +226,7 @@ describe("runGatewayUpdate", () => {
       JSON.stringify({ name: "openclaw", version }),
       "utf-8",
     );
+    await writeBundledRuntimeSidecars(pkgRoot);
   }
 
   async function writeGlobalPackageVersion(pkgRoot: string, version = "2.0.0") {
@@ -193,6 +235,15 @@ describe("runGatewayUpdate", () => {
       JSON.stringify({ name: "openclaw", version }),
       "utf-8",
     );
+    await writeBundledRuntimeSidecars(pkgRoot);
+  }
+
+  async function writeBundledRuntimeSidecars(pkgRoot: string) {
+    for (const relativePath of BUNDLED_RUNTIME_SIDECAR_PATHS) {
+      const absolutePath = path.join(pkgRoot, relativePath);
+      await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+      await fs.writeFile(absolutePath, "export {};\n", "utf-8");
+    }
   }
 
   async function createGlobalPackageFixture(rootDir: string) {
@@ -325,6 +376,82 @@ describe("runGatewayUpdate", () => {
     expect(calls).not.toContain(`git -C ${tempDir} checkout --detach ${betaTag}`);
   });
 
+  it("falls back to npm when pnpm is unavailable for git installs", async () => {
+    await setupGitPackageManagerFixture();
+    const stableTag = "v1.0.1-1";
+    const { calls, runCommand } = createGitInstallRunner({
+      stableTag,
+      installCommand: "npm install --no-package-lock --legacy-peer-deps",
+      buildCommand: "npm run build",
+      uiBuildCommand: "npm run ui:build",
+      doctorCommand: `${process.execPath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive`,
+      onCommand: (key) => {
+        if (key === "pnpm --version") {
+          throw new Error("spawn pnpm ENOENT");
+        }
+        if (key === "npm --version") {
+          return { stdout: "10.0.0" };
+        }
+        return undefined;
+      },
+    });
+
+    const result = await runGatewayUpdate({
+      cwd: tempDir,
+      runCommand: async (argv, _options) => runCommand(argv),
+      timeoutMs: 5000,
+      channel: "stable",
+    });
+
+    expect(result.status).toBe("ok");
+    expect(calls).toContain("pnpm --version");
+    expect(calls).toContain("corepack --version");
+    expect(calls).toContain("npm --version");
+    expect(calls).toContain("npm install --no-package-lock --legacy-peer-deps");
+    expect(calls).not.toContain("pnpm install");
+  });
+
+  it("bootstraps pnpm via corepack when pnpm is missing", async () => {
+    await setupGitPackageManagerFixture();
+    const stableTag = "v1.0.1-1";
+    let pnpmVersionChecks = 0;
+    const { calls, runCommand } = createGitInstallRunner({
+      stableTag,
+      installCommand: "pnpm install",
+      buildCommand: "pnpm build",
+      uiBuildCommand: "pnpm ui:build",
+      doctorCommand: `${process.execPath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive`,
+      onCommand: (key) => {
+        if (key === "pnpm --version") {
+          pnpmVersionChecks += 1;
+          if (pnpmVersionChecks === 1) {
+            throw new Error("spawn pnpm ENOENT");
+          }
+          return { stdout: "10.0.0" };
+        }
+        if (key === "corepack --version") {
+          return { stdout: "0.30.0" };
+        }
+        if (key === "corepack enable") {
+          return { stdout: "" };
+        }
+        return undefined;
+      },
+    });
+
+    const result = await runGatewayUpdate({
+      cwd: tempDir,
+      runCommand: async (argv, _options) => runCommand(argv),
+      timeoutMs: 5000,
+      channel: "stable",
+    });
+
+    expect(result.status).toBe("ok");
+    expect(calls).toContain("corepack enable");
+    expect(calls).toContain("pnpm install");
+    expect(calls).not.toContain("npm install --no-package-lock --legacy-peer-deps");
+  });
+
   it("skips update when no git root", async () => {
     await fs.writeFile(
       path.join(tempDir, "package.json"),
@@ -441,6 +568,20 @@ describe("runGatewayUpdate", () => {
     expect(calls.some((call) => call === expectedInstallCommand)).toBe(true);
   });
 
+  it("updates global npm installs from the GitHub main package spec", async () => {
+    const { calls, result } = await runNpmGlobalUpdateCase({
+      expectedInstallCommand:
+        "npm i -g github:openclaw/openclaw#main --no-fund --no-audit --loglevel=error",
+      tag: "main",
+    });
+
+    expect(result.status).toBe("ok");
+    expect(result.mode).toBe("npm");
+    expect(calls).toContain(
+      "npm i -g github:openclaw/openclaw#main --no-fund --no-audit --loglevel=error",
+    );
+  });
+
   it("falls back to global npm update when git is missing from PATH", async () => {
     const { nodeModules, pkgRoot } = await createGlobalPackageFixture(tempDir);
     const { calls, runCommand } = createGlobalInstallHarness({
@@ -496,11 +637,7 @@ describe("runGatewayUpdate", () => {
         return { stdout: "", stderr: "node-gyp failed", code: 1 };
       },
       onOmitOptionalInstall: async () => {
-        await fs.writeFile(
-          path.join(pkgRoot, "package.json"),
-          JSON.stringify({ name: "openclaw", version: "2.0.0" }),
-          "utf-8",
-        );
+        await writeGlobalPackageVersion(pkgRoot);
         return { stdout: "ok", stderr: "", code: 0 };
       },
     });
@@ -514,6 +651,47 @@ describe("runGatewayUpdate", () => {
       "global update",
       "global update (omit optional)",
     ]);
+  });
+
+  it("fails global npm update when the installed version misses the requested correction", async () => {
+    const { calls, result } = await runNpmGlobalUpdateCase({
+      expectedInstallCommand: "npm i -g openclaw@2026.3.23-2 --no-fund --no-audit --loglevel=error",
+      tag: "2026.3.23-2",
+    });
+
+    expect(result.status).toBe("error");
+    expect(result.reason).toBe("global install verify");
+    expect(result.after?.version).toBe("2.0.0");
+    expect(result.steps.at(-1)?.stderrTail).toContain(
+      "expected installed version 2026.3.23-2, found 2.0.0",
+    );
+    expect(calls).toContain("npm i -g openclaw@2026.3.23-2 --no-fund --no-audit --loglevel=error");
+  });
+
+  it("fails global npm update when bundled runtime sidecars are missing after install", async () => {
+    const { nodeModules, pkgRoot } = await createGlobalPackageFixture(tempDir);
+    const expectedInstallCommand = "npm i -g openclaw@latest --no-fund --no-audit --loglevel=error";
+    const { runCommand } = createGlobalInstallHarness({
+      pkgRoot,
+      npmRootOutput: nodeModules,
+      installCommand: expectedInstallCommand,
+      onInstall: async () => {
+        await fs.writeFile(
+          path.join(pkgRoot, "package.json"),
+          JSON.stringify({ name: "openclaw", version: "2.0.0" }),
+          "utf-8",
+        );
+        await fs.rm(path.join(pkgRoot, "dist"), { recursive: true, force: true });
+      },
+    });
+
+    const result = await runWithCommand(runCommand, { cwd: pkgRoot });
+
+    expect(result.status).toBe("error");
+    expect(result.reason).toBe("global install verify");
+    expect(result.steps.at(-1)?.stderrTail).toContain(
+      `missing bundled runtime sidecar ${WHATSAPP_LIGHT_RUNTIME_API}`,
+    );
   });
 
   it("prepends portable Git PATH for global Windows npm updates", async () => {

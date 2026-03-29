@@ -1,11 +1,15 @@
-import type { ClawdbotConfig, RuntimeEnv } from "openclaw/plugin-sdk/feishu";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { hasControlCommand } from "../../../src/auto-reply/command-detection.js";
+import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
 import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
-} from "../../../src/auto-reply/inbound-debounce.js";
-import { createPluginRuntimeMock } from "../../test-utils/plugin-runtime-mock.js";
+} from "openclaw/plugin-sdk/reply-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createPluginRuntimeMock } from "../../../test/helpers/plugins/plugin-runtime-mock.js";
+import {
+  createNonExitingTypedRuntimeEnv,
+  createRuntimeEnv,
+} from "../../../test/helpers/plugins/runtime-env.js";
+import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
 import { parseFeishuMessageEvent, type FeishuMessageEvent } from "./bot.js";
 import * as dedup from "./dedup.js";
 import { monitorSingleAccount } from "./monitor.account.js";
@@ -172,11 +176,7 @@ async function setupDebounceMonitor(params?: {
   await monitorSingleAccount({
     cfg: buildDebounceConfig(),
     account: buildDebounceAccount(),
-    runtime: {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    } as RuntimeEnv,
+    runtime: createNonExitingTypedRuntimeEnv<RuntimeEnv>(),
     botOpenIdSource: {
       kind: "prefetched",
       botOpenId: params?.botOpenId ?? "ou_bot",
@@ -452,11 +452,7 @@ describe("monitorSingleAccount lifecycle", () => {
     await monitorSingleAccount({
       cfg: buildDebounceConfig(),
       account: buildDebounceAccount(),
-      runtime: {
-        log: vi.fn(),
-        error: vi.fn(),
-        exit: vi.fn(),
-      } as RuntimeEnv,
+      runtime: createNonExitingTypedRuntimeEnv<RuntimeEnv>(),
       botOpenIdSource: {
         kind: "prefetched",
         botOpenId: "ou_bot",
@@ -493,11 +489,7 @@ describe("monitorSingleAccount lifecycle", () => {
       monitorSingleAccount({
         cfg: buildDebounceConfig(),
         account: buildDebounceAccount(),
-        runtime: {
-          log: vi.fn(),
-          error: vi.fn(),
-          exit: vi.fn(),
-        } as RuntimeEnv,
+        runtime: createNonExitingTypedRuntimeEnv<RuntimeEnv>(),
         botOpenIdSource: {
           kind: "prefetched",
           botOpenId: "ou_bot",

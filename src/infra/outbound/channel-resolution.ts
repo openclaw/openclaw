@@ -3,8 +3,11 @@ import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
-import { loadOpenClawPlugins } from "../../plugins/loader.js";
-import { getActivePluginRegistry, getActivePluginRegistryKey } from "../../plugins/runtime.js";
+import { resolveRuntimePluginRegistry } from "../../plugins/loader.js";
+import {
+  getActivePluginRegistry,
+  getActivePluginChannelRegistryVersion,
+} from "../../plugins/runtime.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
@@ -12,6 +15,10 @@ import {
 } from "../../utils/message-channel.js";
 
 const bootstrapAttempts = new Set<string>();
+
+export function resetOutboundChannelResolutionStateForTest(): void {
+  bootstrapAttempts.clear();
+}
 
 export function normalizeDeliverableOutboundChannel(
   raw?: string | null,
@@ -33,12 +40,14 @@ function maybeBootstrapChannelPlugin(params: {
   }
 
   const activeRegistry = getActivePluginRegistry();
-  if ((activeRegistry?.channels?.length ?? 0) > 0) {
+  const activeHasRequestedChannel = activeRegistry?.channels?.some(
+    (entry) => entry?.plugin?.id === params.channel,
+  );
+  if (activeHasRequestedChannel) {
     return;
   }
 
-  const registryKey = getActivePluginRegistryKey() ?? "<none>";
-  const attemptKey = `${registryKey}:${params.channel}`;
+  const attemptKey = `${getActivePluginChannelRegistryVersion()}:${params.channel}`;
   if (bootstrapAttempts.has(attemptKey)) {
     return;
   }
@@ -48,9 +57,12 @@ function maybeBootstrapChannelPlugin(params: {
   const defaultAgentId = resolveDefaultAgentId(autoEnabled);
   const workspaceDir = resolveAgentWorkspaceDir(autoEnabled, defaultAgentId);
   try {
-    loadOpenClawPlugins({
+    resolveRuntimePluginRegistry({
       config: autoEnabled,
       workspaceDir,
+      runtimeOptions: {
+        allowGatewaySubagentBinding: true,
+      },
     });
   } catch {
     // Allow a follow-up resolution attempt if bootstrap failed transiently.

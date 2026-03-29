@@ -1,15 +1,13 @@
 {
   "name": "@openclaw/synology-chat",
-  "version": "2026.3.14",
+  "version": "2026.3.29",
   "description": "Synology Chat channel plugin for OpenClaw",
   "type": "module",
-  "dependencies": {
-    "zod": "^4.3.6"
-  },
   "openclaw": {
     "extensions": [
       "./index.ts"
     ],
+    "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "synology-chat",
       "label": "Synology Chat",
@@ -21,8 +19,8 @@
     },
     "install": {
       "npmSpec": "@openclaw/synology-chat",
-      "localPath": "extensions/synology-chat",
-      "defaultChoice": "npm"
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.3.29"
     }
   }
 }

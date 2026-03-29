@@ -2,6 +2,7 @@
 
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { basename } from "node:path";
 import { pathToFileURL } from "node:url";
 
 type PackageJson = {
@@ -17,28 +18,41 @@ type PackageJson = {
 
 export type ParsedReleaseVersion = {
   version: string;
+  baseVersion: string;
   channel: "stable" | "beta";
   year: number;
   month: number;
   day: number;
   betaNumber?: number;
+  correctionNumber?: number;
   date: Date;
 };
 
 export type ParsedReleaseTag = {
   version: string;
   packageVersion: string;
+  baseVersion: string;
   channel: "stable" | "beta";
   correctionNumber?: number;
   date: Date;
 };
 
+export type NpmPublishPlan = {
+  channel: "stable" | "beta";
+  publishTag: "latest" | "beta";
+  mirrorDistTags: ("latest" | "beta")[];
+};
+
 const STABLE_VERSION_REGEX = /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<day>[1-9]\d?)$/;
 const BETA_VERSION_REGEX =
   /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<day>[1-9]\d?)-beta\.(?<beta>[1-9]\d*)$/;
-const CORRECTION_TAG_REGEX = /^(?<base>\d{4}\.[1-9]\d?\.[1-9]\d?)-(?<correction>[1-9]\d*)$/;
+const CORRECTION_VERSION_REGEX =
+  /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<day>[1-9]\d?)-(?<correction>[1-9]\d*)$/;
 const EXPECTED_REPOSITORY_URL = "https://github.com/openclaw/openclaw";
 const MAX_CALVER_DISTANCE_DAYS = 2;
+const REQUIRED_PACKED_PATHS = ["dist/control-ui/index.html"];
+const CONTROL_UI_ASSET_PREFIX = "dist/control-ui/assets/";
+const NPM_PACK_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 
 function normalizeRepoUrl(value: unknown): string {
   if (typeof value !== "string") {
@@ -88,6 +102,7 @@ function parseDateParts(
 
   return {
     version,
+    baseVersion: `${year}.${month}.${day}`,
     channel,
     year,
     month,
@@ -113,7 +128,83 @@ export function parseReleaseVersion(version: string): ParsedReleaseVersion | nul
     return parseDateParts(trimmed, betaMatch.groups, "beta");
   }
 
+  const correctionMatch = CORRECTION_VERSION_REGEX.exec(trimmed);
+  if (correctionMatch?.groups) {
+    const parsedCorrection = parseDateParts(trimmed, correctionMatch.groups, "stable");
+    const correctionNumber = Number.parseInt(correctionMatch.groups.correction ?? "", 10);
+    if (parsedCorrection === null || !Number.isInteger(correctionNumber) || correctionNumber < 1) {
+      return null;
+    }
+
+    return {
+      ...parsedCorrection,
+      correctionNumber,
+    };
+  }
+
   return null;
+}
+
+export function compareReleaseVersions(left: string, right: string): number | null {
+  const parsedLeft = parseReleaseVersion(left);
+  const parsedRight = parseReleaseVersion(right);
+  if (parsedLeft === null || parsedRight === null) {
+    return null;
+  }
+
+  const dateDelta = parsedLeft.date.getTime() - parsedRight.date.getTime();
+  if (dateDelta !== 0) {
+    return Math.sign(dateDelta);
+  }
+
+  if (parsedLeft.channel !== parsedRight.channel) {
+    return parsedLeft.channel === "stable" ? 1 : -1;
+  }
+
+  if (parsedLeft.channel === "beta" && parsedRight.channel === "beta") {
+    return Math.sign((parsedLeft.betaNumber ?? 0) - (parsedRight.betaNumber ?? 0));
+  }
+
+  return Math.sign((parsedLeft.correctionNumber ?? 0) - (parsedRight.correctionNumber ?? 0));
+}
+
+export function resolveNpmPublishPlan(
+  version: string,
+  currentBetaVersion?: string | null,
+): NpmPublishPlan {
+  const parsedVersion = parseReleaseVersion(version);
+  if (parsedVersion === null) {
+    throw new Error(`Unsupported release version "${version}".`);
+  }
+
+  if (parsedVersion.channel === "beta") {
+    return {
+      channel: "beta",
+      publishTag: "beta",
+      mirrorDistTags: [],
+    };
+  }
+
+  const normalizedCurrentBeta = currentBetaVersion?.trim();
+  if (normalizedCurrentBeta) {
+    const betaVsStable = compareReleaseVersions(normalizedCurrentBeta, version);
+    if (betaVsStable !== null && betaVsStable > 0) {
+      return {
+        channel: "stable",
+        publishTag: "latest",
+        // Keep beta on the newer prerelease train when one already exists.
+        mirrorDistTags: [],
+      };
+    }
+  }
+
+  return {
+    channel: "stable",
+    publishTag: "latest",
+    // Stable promotion keeps beta aligned unless beta already points at a
+    // newer prerelease train.
+    mirrorDistTags: ["beta"],
+  };
 }
 
 export function parseReleaseTagVersion(version: string): ParsedReleaseTag | null {
@@ -127,36 +218,14 @@ export function parseReleaseTagVersion(version: string): ParsedReleaseTag | null
     return {
       version: trimmed,
       packageVersion: parsedVersion.version,
+      baseVersion: parsedVersion.baseVersion,
       channel: parsedVersion.channel,
       date: parsedVersion.date,
-      correctionNumber: undefined,
+      correctionNumber: parsedVersion.correctionNumber,
     };
   }
 
-  const correctionMatch = CORRECTION_TAG_REGEX.exec(trimmed);
-  if (!correctionMatch?.groups) {
-    return null;
-  }
-
-  const baseVersion = correctionMatch.groups.base ?? "";
-  const parsedBaseVersion = parseReleaseVersion(baseVersion);
-  const correctionNumber = Number.parseInt(correctionMatch.groups.correction ?? "", 10);
-  if (
-    parsedBaseVersion === null ||
-    parsedBaseVersion.channel !== "stable" ||
-    !Number.isInteger(correctionNumber) ||
-    correctionNumber < 1
-  ) {
-    return null;
-  }
-
-  return {
-    version: trimmed,
-    packageVersion: parsedBaseVersion.version,
-    channel: "stable",
-    correctionNumber,
-    date: parsedBaseVersion.date,
-  };
+  return null;
 }
 
 function startOfUtcDay(date: Date): number {
@@ -194,9 +263,9 @@ export function collectReleasePackageMetadataErrors(pkg: PackageJson): string[] 
       `package.json bin.openclaw must be "openclaw.mjs"; found "${pkg.bin?.openclaw ?? ""}".`,
     );
   }
-  if (pkg.peerDependencies?.["node-llama-cpp"] !== "3.16.2") {
+  if (pkg.peerDependencies?.["node-llama-cpp"] !== "3.18.1") {
     errors.push(
-      `package.json peerDependencies["node-llama-cpp"] must be "3.16.2"; found "${
+      `package.json peerDependencies["node-llama-cpp"] must be "3.18.1"; found "${
         pkg.peerDependencies?.["node-llama-cpp"] ?? ""
       }".`,
     );
@@ -223,7 +292,7 @@ export function collectReleaseTagErrors(params: {
   const parsedVersion = parseReleaseVersion(packageVersion);
   if (parsedVersion === null) {
     errors.push(
-      `package.json version must match YYYY.M.D or YYYY.M.D-beta.N; found "${packageVersion || "<missing>"}".`,
+      `package.json version must match YYYY.M.D, YYYY.M.D-N, or YYYY.M.D-beta.N; found "${packageVersion || "<missing>"}".`,
     );
   }
 
@@ -240,17 +309,24 @@ export function collectReleaseTagErrors(params: {
   }
 
   const expectedTag = packageVersion ? `v${packageVersion}` : "<missing>";
-  const expectedCorrectionTag = parsedVersion?.channel === "stable" ? `${expectedTag}-N` : null;
   const matchesExpectedTag =
     parsedTag !== null &&
     parsedVersion !== null &&
-    parsedTag.packageVersion === parsedVersion.version &&
-    parsedTag.channel === parsedVersion.channel;
+    parsedTag.channel === parsedVersion.channel &&
+    (parsedTag.packageVersion === parsedVersion.version ||
+      (parsedVersion.channel === "stable" &&
+        parsedVersion.correctionNumber === undefined &&
+        parsedTag.correctionNumber !== undefined &&
+        parsedTag.baseVersion === parsedVersion.baseVersion));
   if (!matchesExpectedTag) {
     errors.push(
       `Release tag ${releaseTag || "<missing>"} does not match package.json version ${
         packageVersion || "<missing>"
-      }; expected ${expectedCorrectionTag ? `${expectedTag} or ${expectedCorrectionTag}` : expectedTag}.`,
+      }; expected ${
+        parsedVersion?.channel === "stable" && parsedVersion.correctionNumber === undefined
+          ? `${expectedTag} or ${expectedTag}-N`
+          : expectedTag
+      }.`,
     );
   }
 
@@ -286,6 +362,161 @@ function loadPackageJson(): PackageJson {
   return JSON.parse(readFileSync("package.json", "utf8")) as PackageJson;
 }
 
+function isNpmExecPath(value: string): boolean {
+  return /^npm(?:-cli)?(?:\.(?:c?js|cmd|exe))?$/.test(basename(value).toLowerCase());
+}
+
+export function resolveNpmCommandInvocation(
+  params: {
+    npmExecPath?: string;
+    nodeExecPath?: string;
+    platform?: NodeJS.Platform;
+  } = {},
+): { command: string; args: string[] } {
+  const npmExecPath = params.npmExecPath ?? process.env.npm_execpath;
+  const nodeExecPath = params.nodeExecPath ?? process.execPath;
+  const npmCommand = (params.platform ?? process.platform) === "win32" ? "npm.cmd" : "npm";
+
+  if (typeof npmExecPath === "string" && npmExecPath.length > 0 && isNpmExecPath(npmExecPath)) {
+    return { command: nodeExecPath, args: [npmExecPath] };
+  }
+
+  return { command: npmCommand, args: [] };
+}
+
+function runNpmCommand(args: string[]): string {
+  const invocation = resolveNpmCommandInvocation();
+  return execFileSync(invocation.command, [...invocation.args, ...args], {
+    encoding: "utf8",
+    maxBuffer: NPM_PACK_MAX_BUFFER_BYTES,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+}
+
+type NpmPackFileEntry = {
+  path?: string;
+};
+
+type NpmPackResult = {
+  filename?: string;
+  files?: NpmPackFileEntry[];
+};
+
+type ExecFailure = Error & {
+  stderr?: string | Uint8Array;
+  stdout?: string | Uint8Array;
+};
+
+function toTrimmedUtf8(value: string | Uint8Array | undefined): string {
+  if (typeof value === "string") {
+    return value.trim();
+  }
+  if (value instanceof Uint8Array) {
+    return new TextDecoder().decode(value).trim();
+  }
+  return "";
+}
+
+function describeExecFailure(error: unknown): string {
+  if (!(error instanceof Error)) {
+    return String(error);
+  }
+  const withStreams = error as ExecFailure;
+  const details: string[] = [error.message];
+  const stderr = toTrimmedUtf8(withStreams.stderr);
+  const stdout = toTrimmedUtf8(withStreams.stdout);
+  if (stderr) {
+    details.push(`stderr: ${stderr}`);
+  }
+  if (stdout) {
+    details.push(`stdout: ${stdout}`);
+  }
+  return details.join(" | ");
+}
+
+export function parseNpmPackJsonOutput(stdout: string): NpmPackResult[] | null {
+  const trimmed = stdout.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const candidates = [trimmed];
+  const trailingArrayStart = trimmed.lastIndexOf("\n[");
+  if (trailingArrayStart !== -1) {
+    candidates.push(trimmed.slice(trailingArrayStart + 1).trim());
+  }
+
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate) as unknown;
+      if (Array.isArray(parsed)) {
+        return parsed as NpmPackResult[];
+      }
+    } catch {
+      // Try the next candidate. npm lifecycle output can prepend non-JSON logs.
+    }
+  }
+
+  return null;
+}
+
+export function collectControlUiPackErrors(paths: Iterable<string>): string[] {
+  const packedPaths = new Set(paths);
+  const assetPaths = [...packedPaths].filter((path) => path.startsWith(CONTROL_UI_ASSET_PREFIX));
+  const errors: string[] = [];
+
+  for (const requiredPath of REQUIRED_PACKED_PATHS) {
+    if (!packedPaths.has(requiredPath)) {
+      errors.push(
+        `npm package is missing required path "${requiredPath}". Ensure UI assets are built and included before publish.`,
+      );
+    }
+  }
+
+  if (assetPaths.length === 0) {
+    errors.push(
+      `npm package is missing Control UI asset payload under "${CONTROL_UI_ASSET_PREFIX}". Refuse release when the dashboard tarball would be empty.`,
+    );
+  }
+
+  return errors;
+}
+
+function collectPackedTarballErrors(): string[] {
+  const errors: string[] = [];
+  let stdout = "";
+  try {
+    stdout = runNpmCommand(["pack", "--json", "--dry-run", "--ignore-scripts"]);
+  } catch (error) {
+    const message = describeExecFailure(error);
+    errors.push(
+      `Failed to inspect npm tarball contents via \`npm pack --json --dry-run --ignore-scripts\`: ${message}`,
+    );
+    return errors;
+  }
+
+  const packResults = parseNpmPackJsonOutput(stdout);
+  if (!packResults) {
+    errors.push("Failed to parse JSON output from `npm pack --json --dry-run --ignore-scripts`.");
+    return errors;
+  }
+  const firstResult = packResults[0];
+  if (!firstResult || !Array.isArray(firstResult.files)) {
+    errors.push(
+      "`npm pack --json --dry-run --ignore-scripts` did not return a files list to validate.",
+    );
+    return errors;
+  }
+
+  const packedPaths = new Set(
+    firstResult.files
+      .map((entry) => entry.path)
+      .filter((path): path is string => typeof path === "string" && path.length > 0),
+  );
+
+  return collectControlUiPackErrors(packedPaths);
+}
+
 function main(): number {
   const pkg = loadPackageJson();
   const now = new Date();
@@ -297,7 +528,8 @@ function main(): number {
     releaseMainRef: process.env.RELEASE_MAIN_REF,
     now,
   });
-  const errors = [...metadataErrors, ...tagErrors];
+  const tarballErrors = collectPackedTarballErrors();
+  const errors = [...metadataErrors, ...tagErrors, ...tarballErrors];
 
   if (errors.length > 0) {
     for (const error of errors) {

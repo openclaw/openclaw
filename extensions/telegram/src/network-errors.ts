@@ -3,7 +3,7 @@ import {
   extractErrorCode,
   formatErrorMessage,
   readErrorName,
-} from "../../../src/infra/errors.js";
+} from "openclaw/plugin-sdk/error-runtime";
 
 const TELEGRAM_NETWORK_ORIGIN = Symbol("openclaw.telegram.network-origin");
 

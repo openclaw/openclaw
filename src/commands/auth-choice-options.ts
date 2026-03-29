@@ -1,21 +1,45 @@
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveProviderWizardOptions } from "../plugins/provider-wizard.js";
 import {
-  AUTH_CHOICE_GROUP_DEFS,
-  BASE_AUTH_CHOICE_OPTIONS,
+  resolveManifestProviderSetupFlowContributions,
+  resolveProviderSetupFlowContributions,
+} from "../flows/provider-flow.js";
+import {
+  CORE_AUTH_CHOICE_OPTIONS,
   type AuthChoiceGroup,
   type AuthChoiceOption,
   formatStaticAuthChoiceChoicesForCli,
 } from "./auth-choice-options.static.js";
 import type { AuthChoice, AuthChoiceGroupId } from "./onboard-types.js";
 
-function resolveDynamicProviderCliChoices(params?: {
+function compareOptionLabels(a: AuthChoiceOption, b: AuthChoiceOption): number {
+  return a.label.localeCompare(b.label);
+}
+
+function compareGroupLabels(a: AuthChoiceGroup, b: AuthChoiceGroup): number {
+  return a.label.localeCompare(b.label);
+}
+
+function resolveProviderChoiceOptions(params?: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
-}): string[] {
-  return [...new Set(resolveProviderWizardOptions(params ?? {}).map((option) => option.value))];
+}): AuthChoiceOption[] {
+  return resolveProviderSetupFlowContributions({
+    ...params,
+    scope: "text-inference",
+  }).map((contribution) => ({
+    value: contribution.option.value as AuthChoice,
+    label: contribution.option.label,
+    ...(contribution.option.hint ? { hint: contribution.option.hint } : {}),
+    ...(contribution.option.group
+      ? {
+          groupId: contribution.option.group.id as AuthChoiceGroupId,
+          groupLabel: contribution.option.group.label,
+          ...(contribution.option.group.hint ? { groupHint: contribution.option.group.hint } : {}),
+        }
+      : {}),
+  }));
 }
 
 export function formatAuthChoiceChoicesForCli(params?: {
@@ -27,10 +51,13 @@ export function formatAuthChoiceChoicesForCli(params?: {
 }): string {
   const values = [
     ...formatStaticAuthChoiceChoicesForCli(params).split("|"),
-    ...resolveDynamicProviderCliChoices(params),
+    ...resolveManifestProviderSetupFlowContributions({
+      ...params,
+      scope: "text-inference",
+    }).map((contribution) => contribution.option.value),
   ];
 
-  return values.join("|");
+  return [...new Set(values)].join("|");
 }
 
 export function buildAuthChoiceOptions(params: {
@@ -41,24 +68,21 @@ export function buildAuthChoiceOptions(params: {
   env?: NodeJS.ProcessEnv;
 }): AuthChoiceOption[] {
   void params.store;
-  const options: AuthChoiceOption[] = [...BASE_AUTH_CHOICE_OPTIONS];
-  const seen = new Set(options.map((option) => option.value));
-
-  for (const option of resolveProviderWizardOptions({
+  const optionByValue = new Map<AuthChoice, AuthChoiceOption>();
+  for (const option of CORE_AUTH_CHOICE_OPTIONS) {
+    optionByValue.set(option.value, option);
+  }
+  for (const option of resolveProviderChoiceOptions({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
   })) {
-    if (seen.has(option.value as AuthChoice)) {
-      continue;
-    }
-    options.push({
-      value: option.value as AuthChoice,
-      label: option.label,
-      hint: option.hint,
-    });
-    seen.add(option.value as AuthChoice);
+    optionByValue.set(option.value, option);
   }
+
+  const options: AuthChoiceOption[] = Array.from(optionByValue.values()).toSorted(
+    compareOptionLabels,
+  );
 
   if (params.includeSkip) {
     options.push({ value: "skip", label: "Skip for now" });
@@ -81,46 +105,30 @@ export function buildAuthChoiceGroups(params: {
     ...params,
     includeSkip: false,
   });
-  const optionByValue = new Map<AuthChoice, AuthChoiceOption>(
-    options.map((opt) => [opt.value, opt]),
-  );
+  const groupsById = new Map<AuthChoiceGroupId, AuthChoiceGroup>();
 
-  const groups: AuthChoiceGroup[] = AUTH_CHOICE_GROUP_DEFS.map((group) => ({
-    ...group,
-    options: group.choices
-      .map((choice) => optionByValue.get(choice))
-      .filter((opt): opt is AuthChoiceOption => Boolean(opt)),
-  }));
-  const staticGroupIds = new Set(groups.map((group) => group.value));
-
-  for (const option of resolveProviderWizardOptions({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-  })) {
-    const existing = groups.find((group) => group.value === option.groupId);
-    const nextOption = optionByValue.get(option.value as AuthChoice) ?? {
-      value: option.value as AuthChoice,
-      label: option.label,
-      hint: option.hint,
-    };
+  for (const option of options) {
+    if (!option.groupId || !option.groupLabel) {
+      continue;
+    }
+    const existing = groupsById.get(option.groupId);
     if (existing) {
-      if (!existing.options.some((candidate) => candidate.value === nextOption.value)) {
-        existing.options.push(nextOption);
-      }
+      existing.options.push(option);
       continue;
     }
-    if (staticGroupIds.has(option.groupId as AuthChoiceGroupId)) {
-      continue;
-    }
-    groups.push({
-      value: option.groupId as AuthChoiceGroupId,
+    groupsById.set(option.groupId, {
+      value: option.groupId,
       label: option.groupLabel,
-      hint: option.groupHint,
-      options: [nextOption],
+      ...(option.groupHint ? { hint: option.groupHint } : {}),
+      options: [option],
     });
-    staticGroupIds.add(option.groupId as AuthChoiceGroupId);
   }
+  const groups = Array.from(groupsById.values())
+    .map((group) => ({
+      ...group,
+      options: [...group.options].toSorted(compareOptionLabels),
+    }))
+    .toSorted(compareGroupLabels);
 
   const skipOption = params.includeSkip
     ? ({ value: "skip", label: "Skip for now" } satisfies AuthChoiceOption)

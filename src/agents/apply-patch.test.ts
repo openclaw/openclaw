@@ -254,7 +254,7 @@ describe("applyPatch", () => {
     });
   });
 
-  it("allows symlinks that resolve within cwd by default", async () => {
+  it("rejects symlinks within cwd by default", async () => {
     // File symlinks require SeCreateSymbolicLinkPrivilege on Windows.
     if (process.platform === "win32") {
       return;
@@ -272,9 +272,11 @@ describe("applyPatch", () => {
 +updated
 *** End Patch`;
 
-      await applyPatch(patch, { cwd: dir });
+      await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(
+        /path is not a regular file under root|symlink open blocked/i,
+      );
       const contents = await fs.readFile(target, "utf8");
-      expect(contents).toBe("updated\n");
+      expect(contents).toBe("initial\n");
     });
   });
 
@@ -359,6 +361,48 @@ describe("applyPatch", () => {
       } finally {
         await fs.rm(outsideDir, { recursive: true, force: true });
       }
+    });
+  });
+
+  it("uses container paths when the sandbox bridge has no local host path", async () => {
+    const files = new Map<string, string>([["/sandbox/source.txt", "before\n"]]);
+    const bridge = {
+      resolvePath: ({ filePath }: { filePath: string }) => ({
+        relativePath: filePath,
+        containerPath: `/sandbox/${filePath}`,
+      }),
+      readFile: vi.fn(async ({ filePath }: { filePath: string }) =>
+        Buffer.from(files.get(filePath) ?? "", "utf8"),
+      ),
+      writeFile: vi.fn(async ({ filePath, data }: { filePath: string; data: Buffer | string }) => {
+        files.set(filePath, Buffer.isBuffer(data) ? data.toString("utf8") : data);
+      }),
+      remove: vi.fn(async ({ filePath }: { filePath: string }) => {
+        files.delete(filePath);
+      }),
+      mkdirp: vi.fn(async () => {}),
+    };
+
+    const patch = `*** Begin Patch
+*** Update File: source.txt
+@@
+-before
++after
+*** End Patch`;
+
+    const result = await applyPatch(patch, {
+      cwd: "/local/workspace",
+      sandbox: {
+        root: "/local/workspace",
+        bridge: bridge as never,
+      },
+    });
+
+    expect(files.get("/sandbox/source.txt")).toBe("after\n");
+    expect(result.summary.modified).toEqual(["source.txt"]);
+    expect(bridge.readFile).toHaveBeenCalledWith({
+      filePath: "/sandbox/source.txt",
+      cwd: "/local/workspace",
     });
   });
 });

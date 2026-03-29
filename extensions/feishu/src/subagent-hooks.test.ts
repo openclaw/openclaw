@@ -1,37 +1,25 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/feishu";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  getRequiredHookHandler,
+  registerHookHandlersForTest,
+} from "../../../test/helpers/plugins/subagent-hooks.js";
+import type { ClawdbotConfig, OpenClawPluginApi } from "../runtime-api.js";
 import { registerFeishuSubagentHooks } from "./subagent-hooks.js";
 import {
   __testing as threadBindingTesting,
   createFeishuThreadBindingManager,
 } from "./thread-bindings.js";
 
-const baseConfig = {
+const baseConfig: ClawdbotConfig = {
   session: { mainKey: "main", scope: "per-sender" },
   channels: { feishu: {} },
 };
 
 function registerHandlersForTest(config: Record<string, unknown> = baseConfig) {
-  const handlers = new Map<string, (event: unknown, ctx: unknown) => unknown>();
-  const api = {
+  return registerHookHandlersForTest<OpenClawPluginApi>({
     config,
-    on: (hookName: string, handler: (event: unknown, ctx: unknown) => unknown) => {
-      handlers.set(hookName, handler);
-    },
-  } as unknown as OpenClawPluginApi;
-  registerFeishuSubagentHooks(api);
-  return handlers;
-}
-
-function getRequiredHandler(
-  handlers: Map<string, (event: unknown, ctx: unknown) => unknown>,
-  hookName: string,
-): (event: unknown, ctx: unknown) => unknown {
-  const handler = handlers.get(hookName);
-  if (!handler) {
-    throw new Error(`expected ${hookName} hook handler`);
-  }
-  return handler;
+    register: registerFeishuSubagentHooks,
+  });
 }
 
 describe("feishu subagent hook handlers", () => {
@@ -49,8 +37,8 @@ describe("feishu subagent hook handlers", () => {
 
   it("binds a Feishu DM conversation on subagent_spawning", async () => {
     const handlers = registerHandlersForTest();
-    const handler = getRequiredHandler(handlers, "subagent_spawning");
-    createFeishuThreadBindingManager({ cfg: baseConfig as any, accountId: "work" });
+    const handler = getRequiredHookHandler(handlers, "subagent_spawning");
+    createFeishuThreadBindingManager({ cfg: baseConfig, accountId: "work" });
 
     const result = await handler(
       {
@@ -70,7 +58,7 @@ describe("feishu subagent hook handlers", () => {
 
     expect(result).toEqual({ status: "ok", threadBindingReady: true });
 
-    const deliveryTargetHandler = getRequiredHandler(handlers, "subagent_delivery_target");
+    const deliveryTargetHandler = getRequiredHookHandler(handlers, "subagent_delivery_target");
     expect(
       deliveryTargetHandler(
         {
@@ -96,8 +84,8 @@ describe("feishu subagent hook handlers", () => {
 
   it("preserves the original Feishu DM delivery target", async () => {
     const handlers = registerHandlersForTest();
-    const deliveryHandler = getRequiredHandler(handlers, "subagent_delivery_target");
-    const manager = createFeishuThreadBindingManager({ cfg: baseConfig as any, accountId: "work" });
+    const deliveryHandler = getRequiredHookHandler(handlers, "subagent_delivery_target");
+    const manager = createFeishuThreadBindingManager({ cfg: baseConfig, accountId: "work" });
 
     manager.bindConversation({
       conversationId: "ou_sender_1",
@@ -134,9 +122,9 @@ describe("feishu subagent hook handlers", () => {
 
   it("binds a Feishu topic conversation and preserves parent context", async () => {
     const handlers = registerHandlersForTest();
-    const spawnHandler = getRequiredHandler(handlers, "subagent_spawning");
-    const deliveryHandler = getRequiredHandler(handlers, "subagent_delivery_target");
-    createFeishuThreadBindingManager({ cfg: baseConfig as any, accountId: "work" });
+    const spawnHandler = getRequiredHookHandler(handlers, "subagent_spawning");
+    const deliveryHandler = getRequiredHookHandler(handlers, "subagent_delivery_target");
+    createFeishuThreadBindingManager({ cfg: baseConfig, accountId: "work" });
 
     const result = await spawnHandler(
       {
@@ -183,9 +171,9 @@ describe("feishu subagent hook handlers", () => {
 
   it("uses the requester session binding to preserve sender-scoped topic conversations", async () => {
     const handlers = registerHandlersForTest();
-    const spawnHandler = getRequiredHandler(handlers, "subagent_spawning");
-    const deliveryHandler = getRequiredHandler(handlers, "subagent_delivery_target");
-    const manager = createFeishuThreadBindingManager({ cfg: baseConfig as any, accountId: "work" });
+    const spawnHandler = getRequiredHookHandler(handlers, "subagent_spawning");
+    const deliveryHandler = getRequiredHookHandler(handlers, "subagent_delivery_target");
+    const manager = createFeishuThreadBindingManager({ cfg: baseConfig, accountId: "work" });
 
     manager.bindConversation({
       conversationId: "oc_group_chat:topic:om_topic_root:sender:ou_sender_1",
@@ -252,9 +240,9 @@ describe("feishu subagent hook handlers", () => {
 
   it("prefers requester-matching bindings when multiple child bindings exist", async () => {
     const handlers = registerHandlersForTest();
-    const spawnHandler = getRequiredHandler(handlers, "subagent_spawning");
-    const deliveryHandler = getRequiredHandler(handlers, "subagent_delivery_target");
-    createFeishuThreadBindingManager({ cfg: baseConfig as any, accountId: "work" });
+    const spawnHandler = getRequiredHookHandler(handlers, "subagent_spawning");
+    const deliveryHandler = getRequiredHookHandler(handlers, "subagent_delivery_target");
+    createFeishuThreadBindingManager({ cfg: baseConfig, accountId: "work" });
 
     await spawnHandler(
       {
@@ -312,9 +300,9 @@ describe("feishu subagent hook handlers", () => {
 
   it("fails closed when requester-session bindings remain ambiguous for the same topic", async () => {
     const handlers = registerHandlersForTest();
-    const spawnHandler = getRequiredHandler(handlers, "subagent_spawning");
-    const deliveryHandler = getRequiredHandler(handlers, "subagent_delivery_target");
-    const manager = createFeishuThreadBindingManager({ cfg: baseConfig as any, accountId: "work" });
+    const spawnHandler = getRequiredHookHandler(handlers, "subagent_spawning");
+    const deliveryHandler = getRequiredHookHandler(handlers, "subagent_delivery_target");
+    const manager = createFeishuThreadBindingManager({ cfg: baseConfig, accountId: "work" });
 
     manager.bindConversation({
       conversationId: "oc_group_chat:topic:om_topic_root:sender:ou_sender_1",
@@ -375,9 +363,9 @@ describe("feishu subagent hook handlers", () => {
 
   it("fails closed when both topic-level and sender-scoped requester bindings exist", async () => {
     const handlers = registerHandlersForTest();
-    const spawnHandler = getRequiredHandler(handlers, "subagent_spawning");
-    const deliveryHandler = getRequiredHandler(handlers, "subagent_delivery_target");
-    const manager = createFeishuThreadBindingManager({ cfg: baseConfig as any, accountId: "work" });
+    const spawnHandler = getRequiredHookHandler(handlers, "subagent_spawning");
+    const deliveryHandler = getRequiredHookHandler(handlers, "subagent_delivery_target");
+    const manager = createFeishuThreadBindingManager({ cfg: baseConfig, accountId: "work" });
 
     manager.bindConversation({
       conversationId: "oc_group_chat:topic:om_topic_root",
@@ -438,9 +426,9 @@ describe("feishu subagent hook handlers", () => {
 
   it("no-ops for non-Feishu channels and non-threaded spawns", async () => {
     const handlers = registerHandlersForTest();
-    const spawnHandler = getRequiredHandler(handlers, "subagent_spawning");
-    const deliveryHandler = getRequiredHandler(handlers, "subagent_delivery_target");
-    const endedHandler = getRequiredHandler(handlers, "subagent_ended");
+    const spawnHandler = getRequiredHookHandler(handlers, "subagent_spawning");
+    const deliveryHandler = getRequiredHookHandler(handlers, "subagent_delivery_target");
+    const endedHandler = getRequiredHookHandler(handlers, "subagent_ended");
 
     await expect(
       spawnHandler(
@@ -506,8 +494,8 @@ describe("feishu subagent hook handlers", () => {
   });
 
   it("returns an error for unsupported non-topic Feishu group conversations", async () => {
-    const handler = getRequiredHandler(registerHandlersForTest(), "subagent_spawning");
-    createFeishuThreadBindingManager({ cfg: baseConfig as any, accountId: "work" });
+    const handler = getRequiredHookHandler(registerHandlersForTest(), "subagent_spawning");
+    createFeishuThreadBindingManager({ cfg: baseConfig, accountId: "work" });
 
     await expect(
       handler(
@@ -532,10 +520,10 @@ describe("feishu subagent hook handlers", () => {
 
   it("unbinds Feishu bindings on subagent_ended", async () => {
     const handlers = registerHandlersForTest();
-    const spawnHandler = getRequiredHandler(handlers, "subagent_spawning");
-    const deliveryHandler = getRequiredHandler(handlers, "subagent_delivery_target");
-    const endedHandler = getRequiredHandler(handlers, "subagent_ended");
-    createFeishuThreadBindingManager({ cfg: baseConfig as any, accountId: "work" });
+    const spawnHandler = getRequiredHookHandler(handlers, "subagent_spawning");
+    const deliveryHandler = getRequiredHookHandler(handlers, "subagent_delivery_target");
+    const endedHandler = getRequiredHookHandler(handlers, "subagent_ended");
+    createFeishuThreadBindingManager({ cfg: baseConfig, accountId: "work" });
 
     await spawnHandler(
       {
@@ -581,8 +569,8 @@ describe("feishu subagent hook handlers", () => {
 
   it("fails closed when the Feishu monitor-owned binding manager is unavailable", async () => {
     const handlers = registerHandlersForTest();
-    const spawnHandler = getRequiredHandler(handlers, "subagent_spawning");
-    const deliveryHandler = getRequiredHandler(handlers, "subagent_delivery_target");
+    const spawnHandler = getRequiredHookHandler(handlers, "subagent_spawning");
+    const deliveryHandler = getRequiredHookHandler(handlers, "subagent_delivery_target");
 
     await expect(
       spawnHandler(

@@ -103,8 +103,8 @@
   right: 8px;
   top: 50%;
   transform: translateY(-50%);
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
   border: none;
   border-radius: var(--radius-full);
   background: var(--bg-hover);
@@ -163,7 +163,7 @@
 .config-mode-toggle__btn.active {
   background: var(--accent);
   color: white;
-  box-shadow: 0 1px 3px rgba(255, 92, 92, 0.2);
+  box-shadow: 0 1px 3px var(--accent-subtle);
 }
 
 /* ===========================================
@@ -261,7 +261,13 @@
   gap: 6px;
   min-width: 0;
   flex: 1 1 auto;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.config-top-tabs__scroller::-webkit-scrollbar {
+  display: none;
 }
 
 .config-top-tabs__tab {
@@ -296,13 +302,6 @@
   color: var(--accent);
   border-color: color-mix(in srgb, var(--accent) 30%, transparent);
   background: var(--accent-subtle);
-}
-
-.config-top-tabs__right {
-  display: flex;
-  justify-content: flex-end;
-  flex-shrink: 0;
-  min-width: 0;
 }
 
 /* Diff Panel */
@@ -554,6 +553,59 @@
   color: var(--text-strong);
 }
 
+/* Roundness options */
+.settings-roundness__options {
+  display: flex;
+  gap: 6px;
+}
+
+.settings-roundness__btn {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  cursor: pointer;
+  transition:
+    background var(--duration-fast) ease,
+    border-color var(--duration-fast) ease;
+}
+
+.settings-roundness__btn:hover {
+  background: var(--bg-hover);
+}
+
+.settings-roundness__btn.active {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+}
+
+.settings-roundness__swatch {
+  width: 28px;
+  height: 20px;
+  background: var(--bg-muted);
+  border: 1.5px solid var(--border-strong);
+  transition: border-radius var(--duration-fast) ease;
+}
+
+.settings-roundness__btn.active .settings-roundness__swatch {
+  border-color: var(--accent);
+}
+
+.settings-roundness__label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.settings-roundness__btn.active .settings-roundness__label {
+  color: var(--accent);
+}
+
 .settings-info-grid {
   display: grid;
   gap: 10px;
@@ -607,6 +659,13 @@
   font-family: var(--mono);
   font-size: 13px;
   line-height: 1.55;
+}
+
+.config-raw-field .config-raw-toggle {
+  width: 32px;
+  height: 32px;
+  padding: 6px;
+  min-width: 32px;
 }
 
 /* Loading State */
@@ -810,6 +869,21 @@
   border: 1px solid rgba(239, 68, 68, 0.3);
 }
 
+.cfg-field--error .cfg-input,
+.cfg-field--error .cfg-textarea,
+.cfg-field--error .cfg-select,
+.cfg-field--error .cfg-number {
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.cfg-field--error .cfg-input:focus,
+.cfg-field--error .cfg-textarea:focus,
+.cfg-field--error .cfg-select:focus {
+  border-color: var(--border);
+  box-shadow: none;
+}
+
 .cfg-field__label {
   font-size: 12.5px;
   font-weight: 600;
@@ -962,6 +1036,13 @@
   font-size: 12px;
 }
 
+/* Redacted (click-to-reveal) */
+.cfg-input--redacted,
+.cfg-textarea--redacted {
+  cursor: pointer;
+  opacity: 0.7;
+}
+
 /* Number Input */
 .cfg-number {
   display: inline-flex;
@@ -1097,7 +1178,7 @@
 .cfg-segmented__btn.active {
   background: var(--accent);
   color: white;
-  box-shadow: 0 1px 3px rgba(255, 92, 92, 0.2);
+  box-shadow: 0 1px 3px var(--accent-subtle);
 }
 
 .cfg-segmented__btn:disabled {
@@ -1602,6 +1683,13 @@
    =========================================== */
 
 @media (max-width: 768px) {
+  .config-layout {
+    height: calc(100vh - 100px);
+    height: calc(100dvh - 100px);
+    margin: 0 -8px -16px;
+    border-radius: var(--radius-md);
+  }
+
   .config-actions {
     flex-wrap: wrap;
     padding: 14px 16px;
@@ -1624,18 +1712,10 @@
   }
 
   .config-top-tabs__scroller {
-    flex: 1 1 100%;
+    flex: 1 1 auto;
   }
 
-  .config-top-tabs__right {
-    flex: 1 1 100%;
-  }
-
-  .config-top-tabs__right .config-mode-toggle {
-    width: 100%;
-  }
-
-  .config-top-tabs__right .config-mode-toggle__btn {
+  .config-actions__left .config-mode-toggle__btn {
     flex: 1 1 50%;
   }
 

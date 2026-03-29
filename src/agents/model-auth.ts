@@ -1,15 +1,17 @@
 import path from "node:path";
-import { type Api, getEnvApiKey, type Model } from "@mariozechner/pi-ai";
+import { type Api, type Model } from "@mariozechner/pi-ai";
 import { formatCliCommand } from "../cli/command-format.js";
-import type { OpenClawConfig } from "../config/config.js";
+import { getRuntimeConfigSnapshot, type OpenClawConfig } from "../config/config.js";
 import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
-  normalizeOptionalSecretInput,
-  normalizeSecretInput,
-} from "../utils/normalize-secret-input.js";
+  buildProviderMissingAuthMessageWithPlugin,
+  resolveProviderSyntheticAuthWithPlugin,
+} from "../plugins/provider-runtime.js";
+import { resolveOwningPluginIdsForProvider } from "../plugins/providers.js";
+import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import {
   type AuthProfileStore,
   ensureAuthProfileStore,
@@ -18,24 +20,42 @@ import {
   resolveAuthProfileOrder,
   resolveAuthStorePathForDisplay,
 } from "./auth-profiles.js";
-import { PROVIDER_ENV_API_KEY_CANDIDATES } from "./model-auth-env-vars.js";
+import { resolveEnvApiKey, type EnvApiKeyResult } from "./model-auth-env.js";
 import {
   CUSTOM_LOCAL_AUTH_MARKER,
   isKnownEnvApiKeyMarker,
   isNonSecretApiKeyMarker,
-  OLLAMA_LOCAL_AUTH_MARKER,
+  NON_ENV_SECRETREF_MARKER,
 } from "./model-auth-markers.js";
+import {
+  requireApiKey,
+  resolveAwsSdkEnvVarName,
+  type ResolvedProviderAuth,
+} from "./model-auth-runtime-shared.js";
 import { normalizeProviderId } from "./model-selection.js";
+import { shouldTraceProviderAuth, summarizeProviderAuthKey } from "./xai-auth-trace.js";
 
 export { ensureAuthProfileStore, resolveAuthProfileOrder } from "./auth-profiles.js";
+export { requireApiKey, resolveAwsSdkEnvVarName } from "./model-auth-runtime-shared.js";
+export type { ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
 
 const log = createSubsystemLogger("model-auth");
 
-const AWS_BEARER_ENV = "AWS_BEARER_TOKEN_BEDROCK";
-const AWS_ACCESS_KEY_ENV = "AWS_ACCESS_KEY_ID";
-const AWS_SECRET_KEY_ENV = "AWS_SECRET_ACCESS_KEY";
-const AWS_PROFILE_ENV = "AWS_PROFILE";
-
+function logProviderAuthDecision(params: {
+  provider: string;
+  stage: string;
+  source?: string;
+  mode?: string;
+  profileId?: string;
+  apiKey?: string;
+}): void {
+  if (!shouldTraceProviderAuth(params.provider)) {
+    return;
+  }
+  log.info(
+    `[xai-auth] ${params.stage}: source=${params.source ?? "unknown"} mode=${params.mode ?? "unknown"} profile=${params.profileId ?? "none"} key=${summarizeProviderAuthKey(params.apiKey)}`,
+  );
+}
 function resolveProviderConfig(
   cfg: OpenClawConfig | undefined,
   provider: string,
@@ -155,10 +175,69 @@ function isCustomLocalProviderConfig(providerConfig: ModelProviderConfig): boole
   );
 }
 
+function isManagedSecretRefApiKeyMarker(apiKey: string | undefined): boolean {
+  return apiKey?.trim() === NON_ENV_SECRETREF_MARKER;
+}
+
+type SyntheticProviderAuthResolution = {
+  auth?: ResolvedProviderAuth;
+  blockedOnManagedSecretRef?: boolean;
+};
+
+function resolveProviderSyntheticRuntimeAuth(params: {
+  cfg: OpenClawConfig | undefined;
+  provider: string;
+}): SyntheticProviderAuthResolution {
+  const resolveFromConfig = (
+    config: OpenClawConfig | undefined,
+  ): ResolvedProviderAuth | undefined => {
+    const providerConfig = resolveProviderConfig(config, params.provider);
+    return resolveProviderSyntheticAuthWithPlugin({
+      provider: params.provider,
+      config,
+      context: {
+        config,
+        provider: params.provider,
+        providerConfig,
+      },
+    });
+  };
+
+  const directAuth = resolveFromConfig(params.cfg);
+  if (!directAuth) {
+    return {};
+  }
+  if (!isManagedSecretRefApiKeyMarker(directAuth.apiKey)) {
+    return { auth: directAuth };
+  }
+
+  const runtimeConfig = getRuntimeConfigSnapshot();
+  if (!runtimeConfig || runtimeConfig === params.cfg) {
+    return { blockedOnManagedSecretRef: true };
+  }
+
+  const runtimeAuth = resolveFromConfig(runtimeConfig);
+  const runtimeApiKey = runtimeAuth?.apiKey;
+  if (!runtimeAuth || !runtimeApiKey || isNonSecretApiKeyMarker(runtimeApiKey)) {
+    return { blockedOnManagedSecretRef: true };
+  }
+  return {
+    auth: runtimeAuth,
+  };
+}
+
 function resolveSyntheticLocalProviderAuth(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
 }): ResolvedProviderAuth | null {
+  const syntheticProviderAuth = resolveProviderSyntheticRuntimeAuth(params);
+  if (syntheticProviderAuth.auth) {
+    return syntheticProviderAuth.auth;
+  }
+  if (syntheticProviderAuth.blockedOnManagedSecretRef) {
+    return null;
+  }
+
   const providerConfig = resolveProviderConfig(params.cfg, params.provider);
   if (!providerConfig) {
     return null;
@@ -170,15 +249,6 @@ function resolveSyntheticLocalProviderAuth(params: {
     (Array.isArray(providerConfig.models) && providerConfig.models.length > 0);
   if (!hasApiConfig) {
     return null;
-  }
-
-  const normalizedProvider = normalizeProviderId(params.provider);
-  if (normalizedProvider === "ollama") {
-    return {
-      apiKey: OLLAMA_LOCAL_AUTH_MARKER,
-      source: "models.providers.ollama (synthetic local key)",
-      mode: "api-key",
-    };
   }
 
   const authOverride = resolveProviderAuthOverride(params.cfg, params.provider);
@@ -194,7 +264,7 @@ function resolveSyntheticLocalProviderAuth(params: {
 
   // Custom providers pointing at a local server (e.g. llama.cpp, vLLM, LocalAI)
   // typically don't require auth. Synthesize a local key so the auth resolver
-  // doesn't reject them when the user left the API key blank during onboarding.
+  // doesn't reject them when the user left the API key blank during setup.
   if (providerConfig.baseUrl && isLocalBaseUrl(providerConfig.baseUrl)) {
     return {
       apiKey: CUSTOM_LOCAL_AUTH_MARKER,
@@ -216,60 +286,40 @@ function resolveEnvSourceLabel(params: {
   return `${prefix}${params.label}`;
 }
 
-export function resolveAwsSdkEnvVarName(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  if (env[AWS_BEARER_ENV]?.trim()) {
-    return AWS_BEARER_ENV;
-  }
-  if (env[AWS_ACCESS_KEY_ENV]?.trim() && env[AWS_SECRET_KEY_ENV]?.trim()) {
-    return AWS_ACCESS_KEY_ENV;
-  }
-  if (env[AWS_PROFILE_ENV]?.trim()) {
-    return AWS_PROFILE_ENV;
-  }
-  return undefined;
-}
-
 function resolveAwsSdkAuthInfo(): { mode: "aws-sdk"; source: string } {
   const applied = new Set(getShellEnvAppliedKeys());
-  if (process.env[AWS_BEARER_ENV]?.trim()) {
+  if (process.env.AWS_BEARER_TOKEN_BEDROCK?.trim()) {
     return {
       mode: "aws-sdk",
       source: resolveEnvSourceLabel({
         applied,
-        envVars: [AWS_BEARER_ENV],
-        label: AWS_BEARER_ENV,
+        envVars: ["AWS_BEARER_TOKEN_BEDROCK"],
+        label: "AWS_BEARER_TOKEN_BEDROCK",
       }),
     };
   }
-  if (process.env[AWS_ACCESS_KEY_ENV]?.trim() && process.env[AWS_SECRET_KEY_ENV]?.trim()) {
+  if (process.env.AWS_ACCESS_KEY_ID?.trim() && process.env.AWS_SECRET_ACCESS_KEY?.trim()) {
     return {
       mode: "aws-sdk",
       source: resolveEnvSourceLabel({
         applied,
-        envVars: [AWS_ACCESS_KEY_ENV, AWS_SECRET_KEY_ENV],
-        label: `${AWS_ACCESS_KEY_ENV} + ${AWS_SECRET_KEY_ENV}`,
+        envVars: ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"],
+        label: "AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY",
       }),
     };
   }
-  if (process.env[AWS_PROFILE_ENV]?.trim()) {
+  if (process.env.AWS_PROFILE?.trim()) {
     return {
       mode: "aws-sdk",
       source: resolveEnvSourceLabel({
         applied,
-        envVars: [AWS_PROFILE_ENV],
-        label: AWS_PROFILE_ENV,
+        envVars: ["AWS_PROFILE"],
+        label: "AWS_PROFILE",
       }),
     };
   }
   return { mode: "aws-sdk", source: "aws-sdk default chain" };
 }
-
-export type ResolvedProviderAuth = {
-  apiKey?: string;
-  profileId?: string;
-  source: string;
-  mode: "api-key" | "oauth" | "token" | "aws-sdk";
-};
 
 export async function resolveApiKeyForProvider(params: {
   provider: string;
@@ -322,12 +372,23 @@ export async function resolveApiKeyForProvider(params: {
       });
       if (resolved) {
         const mode = store.profiles[candidate]?.type;
-        return {
+        const resolvedMode: ResolvedProviderAuth["mode"] =
+          mode === "oauth" ? "oauth" : mode === "token" ? "token" : "api-key";
+        const result: ResolvedProviderAuth = {
           apiKey: resolved.apiKey,
           profileId: candidate,
           source: `profile:${candidate}`,
-          mode: mode === "oauth" ? "oauth" : mode === "token" ? "token" : "api-key",
+          mode: resolvedMode,
         };
+        logProviderAuthDecision({
+          provider,
+          stage: "resolved from profile",
+          source: result.source,
+          mode: result.mode,
+          profileId: result.profileId,
+          apiKey: result.apiKey,
+        });
+        return result;
       }
     } catch (err) {
       log.debug?.(`auth profile "${candidate}" failed for provider "${provider}": ${String(err)}`);
@@ -336,20 +397,46 @@ export async function resolveApiKeyForProvider(params: {
 
   const envResolved = resolveEnvApiKey(provider);
   if (envResolved) {
-    return {
+    const resolvedMode: ResolvedProviderAuth["mode"] = envResolved.source.includes("OAUTH_TOKEN")
+      ? "oauth"
+      : "api-key";
+    const result: ResolvedProviderAuth = {
       apiKey: envResolved.apiKey,
       source: envResolved.source,
-      mode: envResolved.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key",
+      mode: resolvedMode,
     };
+    logProviderAuthDecision({
+      provider,
+      stage: "resolved from env",
+      source: result.source,
+      mode: result.mode,
+      apiKey: result.apiKey,
+    });
+    return result;
   }
 
   const customKey = resolveUsableCustomProviderApiKey({ cfg, provider });
   if (customKey) {
-    return { apiKey: customKey.apiKey, source: customKey.source, mode: "api-key" };
+    const result = { apiKey: customKey.apiKey, source: customKey.source, mode: "api-key" as const };
+    logProviderAuthDecision({
+      provider,
+      stage: "resolved from models.providers",
+      source: result.source,
+      mode: result.mode,
+      apiKey: result.apiKey,
+    });
+    return result;
   }
 
   const syntheticLocalAuth = resolveSyntheticLocalProviderAuth({ cfg, provider });
   if (syntheticLocalAuth) {
+    logProviderAuthDecision({
+      provider,
+      stage: "resolved synthetic auth",
+      source: syntheticLocalAuth.source,
+      mode: syntheticLocalAuth.mode,
+      apiKey: syntheticLocalAuth.apiKey,
+    });
     return syntheticLocalAuth;
   }
 
@@ -358,17 +445,44 @@ export async function resolveApiKeyForProvider(params: {
     return resolveAwsSdkAuthInfo();
   }
 
-  if (provider === "openai") {
-    const hasCodex = listProfilesForProvider(store, "openai-codex").length > 0;
-    if (hasCodex) {
-      throw new Error(
-        'No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai-codex/gpt-5.4 (OAuth) or set OPENAI_API_KEY to use openai/gpt-5.4.',
-      );
+  const providerConfig = resolveProviderConfig(cfg, provider);
+  const hasInlineConfiguredModels =
+    Array.isArray(providerConfig?.models) && providerConfig.models.length > 0;
+  const owningPluginIds = !hasInlineConfiguredModels
+    ? resolveOwningPluginIdsForProvider({
+        provider,
+        config: cfg,
+      })
+    : undefined;
+  if (owningPluginIds?.length) {
+    const pluginMissingAuthMessage = buildProviderMissingAuthMessageWithPlugin({
+      provider,
+      config: cfg,
+      context: {
+        config: cfg,
+        agentDir: params.agentDir,
+        env: process.env,
+        provider,
+        listProfileIds: (providerId) => listProfilesForProvider(store, providerId),
+      },
+    });
+    if (pluginMissingAuthMessage) {
+      logProviderAuthDecision({
+        provider,
+        stage: "plugin missing auth message",
+        source: pluginMissingAuthMessage,
+      });
+      throw new Error(pluginMissingAuthMessage);
     }
   }
 
   const authStorePath = resolveAuthStorePathForDisplay(params.agentDir);
   const resolvedAgentDir = path.dirname(authStorePath);
+  logProviderAuthDecision({
+    provider,
+    stage: "missing auth",
+    source: "no profiles/env/config fallback",
+  });
   throw new Error(
     [
       `No API key found for provider "${provider}".`,
@@ -378,43 +492,10 @@ export async function resolveApiKeyForProvider(params: {
   );
 }
 
-export type EnvApiKeyResult = { apiKey: string; source: string };
 export type ModelAuthMode = "api-key" | "oauth" | "token" | "mixed" | "aws-sdk" | "unknown";
 
-export function resolveEnvApiKey(
-  provider: string,
-  env: NodeJS.ProcessEnv = process.env,
-): EnvApiKeyResult | null {
-  const normalized = normalizeProviderId(provider);
-  const applied = new Set(getShellEnvAppliedKeys());
-  const pick = (envVar: string): EnvApiKeyResult | null => {
-    const value = normalizeOptionalSecretInput(env[envVar]);
-    if (!value) {
-      return null;
-    }
-    const source = applied.has(envVar) ? `shell env: ${envVar}` : `env: ${envVar}`;
-    return { apiKey: value, source };
-  };
-
-  const candidates = PROVIDER_ENV_API_KEY_CANDIDATES[normalized];
-  if (candidates) {
-    for (const envVar of candidates) {
-      const resolved = pick(envVar);
-      if (resolved) {
-        return resolved;
-      }
-    }
-  }
-
-  if (normalized === "google-vertex") {
-    const envKey = getEnvApiKey(normalized);
-    if (!envKey) {
-      return null;
-    }
-    return { apiKey: envKey, source: "gcloud adc" };
-  }
-  return null;
-}
+export { resolveEnvApiKey } from "./model-auth-env.js";
+export type { EnvApiKeyResult } from "./model-auth-env.js";
 
 export function resolveModelAuthMode(
   provider?: string,
@@ -472,6 +553,56 @@ export function resolveModelAuthMode(
   return "unknown";
 }
 
+export async function hasAvailableAuthForProvider(params: {
+  provider: string;
+  cfg?: OpenClawConfig;
+  preferredProfile?: string;
+  store?: AuthProfileStore;
+  agentDir?: string;
+}): Promise<boolean> {
+  const { provider, cfg, preferredProfile } = params;
+  const store = params.store ?? ensureAuthProfileStore(params.agentDir);
+
+  const authOverride = resolveProviderAuthOverride(cfg, provider);
+  if (authOverride === "aws-sdk") {
+    return true;
+  }
+
+  const order = resolveAuthProfileOrder({
+    cfg,
+    store,
+    provider,
+    preferredProfile,
+  });
+  for (const candidate of order) {
+    try {
+      const resolved = await resolveApiKeyForProfile({
+        cfg,
+        store,
+        profileId: candidate,
+        agentDir: params.agentDir,
+      });
+      if (resolved) {
+        return true;
+      }
+    } catch (err) {
+      log.debug?.(`auth profile "${candidate}" failed for provider "${provider}": ${String(err)}`);
+    }
+  }
+
+  if (resolveEnvApiKey(provider)) {
+    return true;
+  }
+  if (resolveUsableCustomProviderApiKey({ cfg, provider })) {
+    return true;
+  }
+  if (resolveSyntheticLocalProviderAuth({ cfg, provider })) {
+    return true;
+  }
+
+  return authOverride === undefined && normalizeProviderId(provider) === "amazon-bedrock";
+}
+
 export async function getApiKeyForModel(params: {
   model: Model<Api>;
   cfg?: OpenClawConfig;
@@ -488,14 +619,6 @@ export async function getApiKeyForModel(params: {
     store: params.store,
     agentDir: params.agentDir,
   });
-}
-
-export function requireApiKey(auth: ResolvedProviderAuth, provider: string): string {
-  const key = normalizeSecretInput(auth.apiKey);
-  if (key) {
-    return key;
-  }
-  throw new Error(`No API key resolved for provider "${provider}" (auth mode: ${auth.mode}).`);
 }
 
 export function applyLocalNoAuthHeaderOverride<T extends Model<Api>>(

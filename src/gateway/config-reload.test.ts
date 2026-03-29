@@ -2,7 +2,7 @@ import chokidar from "chokidar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
-import type { ConfigFileSnapshot } from "../config/config.js";
+import type { ConfigFileSnapshot, ConfigWriteNotification } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
@@ -123,6 +123,13 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.restartReasons).toContain("gateway.port");
   });
 
+  it("restarts the gateway for browser plugin config changes", () => {
+    const plan = buildGatewayReloadPlan(["browser.enabled"]);
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartReasons).toContain("browser.enabled");
+    expect(plan.hotReasons).toEqual([]);
+  });
+
   it("restarts the Gmail watcher for hooks.gmail changes", () => {
     const plan = buildGatewayReloadPlan(["hooks.gmail.account"]);
     expect(plan.restartGateway).toBe(false);
@@ -198,6 +205,11 @@ describe("buildGatewayReloadPlan", () => {
   });
 
   it.each([
+    {
+      path: "browser.enabled",
+      expectRestartGateway: true,
+      expectRestartReason: "browser.enabled",
+    },
     {
       path: "gateway.channelHealthCheckMinutes",
       expectRestartGateway: false,
@@ -280,8 +292,10 @@ function makeSnapshot(partial: Partial<ConfigFileSnapshot> = {}): ConfigFileSnap
     exists: true,
     raw: "{}",
     parsed: {},
+    sourceConfig: {},
     resolved: {},
     valid: true,
+    runtimeConfig: {},
     config: {},
     issues: [],
     warnings: [],
@@ -295,6 +309,15 @@ function createReloaderHarness(readSnapshot: () => Promise<ConfigFileSnapshot>) 
   vi.spyOn(chokidar, "watch").mockReturnValue(watcher as unknown as never);
   const onHotReload = vi.fn(async () => {});
   const onRestart = vi.fn();
+  let writeListener: ((event: ConfigWriteNotification) => void) | null = null;
+  const subscribeToWrites = vi.fn((listener: (event: ConfigWriteNotification) => void) => {
+    writeListener = listener;
+    return () => {
+      if (writeListener === listener) {
+        writeListener = null;
+      }
+    };
+  });
   const log = {
     info: vi.fn(),
     warn: vi.fn(),
@@ -303,12 +326,22 @@ function createReloaderHarness(readSnapshot: () => Promise<ConfigFileSnapshot>) 
   const reloader = startGatewayConfigReloader({
     initialConfig: { gateway: { reload: { debounceMs: 0 } } },
     readSnapshot,
+    subscribeToWrites,
     onHotReload,
     onRestart,
     log,
     watchPath: "/tmp/openclaw.json",
   });
-  return { watcher, onHotReload, onRestart, log, reloader };
+  return {
+    watcher,
+    onHotReload,
+    onRestart,
+    log,
+    reloader,
+    emitWrite(event: ConfigWriteNotification) {
+      writeListener?.(event);
+    },
+  };
 }
 
 describe("startGatewayConfigReloader", () => {
@@ -414,5 +447,55 @@ describe("startGatewayConfigReloader", () => {
       process.off("unhandledRejection", onUnhandled);
       await reloader.stop();
     }
+  });
+
+  it("reuses in-process write notifications and suppresses watcher noise for the same write", async () => {
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>();
+    const harness = createReloaderHarness(readSnapshot);
+
+    harness.emitWrite({
+      configPath: "/tmp/openclaw.json",
+      sourceConfig: { gateway: { reload: { debounceMs: 0 } } },
+      runtimeConfig: {
+        gateway: { reload: { debounceMs: 0 } },
+        hooks: { enabled: true },
+      },
+      persistedHash: "internal-1",
+      writtenAtMs: Date.now(),
+    });
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(readSnapshot).not.toHaveBeenCalled();
+    expect(harness.onHotReload).toHaveBeenCalledTimes(1);
+
+    harness.watcher.emit("change");
+    harness.watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(readSnapshot).not.toHaveBeenCalled();
+    expect(harness.onHotReload).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(400);
+    readSnapshot.mockResolvedValueOnce(
+      makeSnapshot({
+        sourceConfig: {
+          gateway: { reload: { debounceMs: 0 }, port: 19001 },
+        },
+        runtimeConfig: {
+          gateway: { reload: { debounceMs: 0 }, port: 19001 },
+        },
+        config: {
+          gateway: { reload: { debounceMs: 0 }, port: 19001 },
+        },
+        hash: "external-1",
+      }),
+    );
+    harness.watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(readSnapshot).toHaveBeenCalledTimes(1);
+    expect(harness.onHotReload).toHaveBeenCalledTimes(1);
+
+    await harness.reloader.stop();
   });
 });

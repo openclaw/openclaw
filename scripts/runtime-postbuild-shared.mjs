@@ -24,3 +24,12 @@ export function removeFileIfExists(filePath) {
     return false;
   }
 }
+
+export function removePathIfExists(filePath) {
+  try {
+    fs.rmSync(filePath, { recursive: true, force: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
