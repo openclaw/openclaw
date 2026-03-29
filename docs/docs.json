@@ -1033,6 +1033,7 @@
                   "concepts/session-pruning",
                   "concepts/session-tool",
                   "concepts/memory",
+                  "concepts/memory-search",
                   "concepts/compaction"
                 ]
               },
