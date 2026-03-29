@@ -477,3 +477,29 @@ export async function resolveMediaBufferPath(
 
   return resolved;
 }
+
+/**
+ * Deletes a file previously saved by saveMediaBuffer.
+ *
+ * This is used by parseMessageWithAttachments to clean up files that were
+ * successfully offloaded earlier in the same request when a later attachment
+ * fails validation and the entire parse is aborted, preventing orphaned files
+ * from accumulating on disk ahead of the periodic TTL sweep.
+ *
+ * Uses resolveMediaBufferPath to apply the same path-safety guards as the
+ * read path (separator checks, symlink rejection, etc.) before unlinking.
+ *
+ * Errors are intentionally not suppressed — callers that want best-effort
+ * cleanup should catch and discard exceptions themselves (e.g. via
+ * Promise.allSettled).
+ *
+ * @param id     The media ID as returned by SavedMedia.id.
+ * @param subdir The subdirectory the file was saved into (default "inbound").
+ */
+export async function deleteMediaBuffer(
+  id: string,
+  subdir: "inbound" = "inbound",
+): Promise<void> {
+  const physicalPath = await resolveMediaBufferPath(id, subdir);
+  await fs.unlink(physicalPath);
+}
