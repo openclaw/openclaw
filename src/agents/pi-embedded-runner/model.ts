@@ -105,6 +105,36 @@ function sanitizeModelHeaders(
   return Object.keys(next).length > 0 ? next : undefined;
 }
 
+function applyResolvedTransportFallback(params: {
+  provider: string;
+  cfg?: OpenClawConfig;
+  runtimeHooks: ProviderRuntimeHooks;
+  model: Model<Api>;
+}): Model<Api> | undefined {
+  const normalized = params.runtimeHooks.normalizeProviderTransportWithPlugin({
+    provider: params.provider,
+    config: params.cfg,
+    context: {
+      provider: params.provider,
+      api: params.model.api,
+      baseUrl: params.model.baseUrl,
+    },
+  }) as { api?: Api | null; baseUrl?: string } | undefined;
+  if (!normalized) {
+    return undefined;
+  }
+  const nextApi = normalizeResolvedTransportApi(normalized.api) ?? params.model.api;
+  const nextBaseUrl = normalized.baseUrl ?? params.model.baseUrl;
+  if (nextApi === params.model.api && nextBaseUrl === params.model.baseUrl) {
+    return undefined;
+  }
+  return {
+    ...params.model,
+    api: nextApi,
+    baseUrl: nextBaseUrl,
+  };
+}
+
 function normalizeResolvedModel(params: {
   provider: string;
   model: Model<Api>;
@@ -153,9 +183,18 @@ function normalizeResolvedModel(params: {
       model: (compatNormalized ?? pluginNormalized ?? normalizedInputModel) as never,
     },
   }) as Model<Api> | undefined;
+  const fallbackTransportNormalized =
+    transportNormalized ??
+    applyResolvedTransportFallback({
+      provider: params.provider,
+      cfg: params.cfg,
+      runtimeHooks,
+      model: compatNormalized ?? pluginNormalized ?? normalizedInputModel,
+    });
   return normalizeResolvedProviderModel({
     provider: params.provider,
-    model: transportNormalized ?? compatNormalized ?? pluginNormalized ?? normalizedInputModel,
+    model:
+      fallbackTransportNormalized ?? compatNormalized ?? pluginNormalized ?? normalizedInputModel,
   });
 }
 

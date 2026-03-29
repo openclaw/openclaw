@@ -68,10 +68,8 @@ subpaths is in `scripts/lib/plugin-sdk-entrypoints.json`.
     | --- | --- |
     | `plugin-sdk/cli-backend` | CLI backend defaults + watchdog constants |
     | `plugin-sdk/provider-auth` | `createProviderApiKeyAuthMethod`, `ensureApiKeyFromOptionEnvOrPrompt`, `upsertAuthProfile` |
-    | `plugin-sdk/provider-models` | Legacy compat provider model aliases; prefer provider-specific subpaths or `plugin-sdk/provider-model-shared` |
     | `plugin-sdk/provider-model-shared` | `normalizeModelCompat` |
     | `plugin-sdk/provider-catalog-shared` | `findCatalogTemplate`, `buildSingleProviderApiKeyCatalog` |
-    | `plugin-sdk/provider-catalog` | Legacy compat provider builder aliases; prefer provider-specific subpaths or `plugin-sdk/provider-catalog-shared` |
     | `plugin-sdk/provider-usage` | `fetchClaudeUsage` and similar |
     | `plugin-sdk/provider-stream` | Stream wrapper types |
     | `plugin-sdk/provider-onboard` | Onboarding config patch helpers |
@@ -151,6 +149,40 @@ methods:
 | `api.registerService(service)`                 | Background service    |
 | `api.registerInteractiveHandler(registration)` | Interactive handler   |
 
+### CLI registration metadata
+
+`api.registerCli(registrar, opts?)` accepts two kinds of top-level metadata:
+
+- `commands`: explicit command roots owned by the registrar
+- `descriptors`: parse-time command descriptors used for root CLI help,
+  routing, and lazy plugin CLI registration
+
+If you want a plugin command to stay lazy-loaded in the normal root CLI path,
+provide `descriptors` that cover every top-level command root exposed by that
+registrar.
+
+```typescript
+api.registerCli(
+  async ({ program }) => {
+    const { registerMatrixCli } = await import("./src/cli.js");
+    registerMatrixCli({ program });
+  },
+  {
+    descriptors: [
+      {
+        name: "matrix",
+        description: "Manage Matrix accounts, verification, devices, and profile state",
+        hasSubcommands: true,
+      },
+    ],
+  },
+);
+```
+
+Use `commands` by itself only when you do not need lazy root CLI registration.
+That eager compatibility path remains supported, but it does not install
+descriptor-backed placeholders for parse-time lazy loading.
+
 ### CLI backend registration
 
 `api.registerCliBackend(...)` lets a plugin own the default config for a local
@@ -198,6 +230,8 @@ AI CLI backend such as `claude-cli` or `codex-cli`.
 
 - `before_tool_call`: returning `{ block: true }` is terminal. Once any handler sets it, lower-priority handlers are skipped.
 - `before_tool_call`: returning `{ block: false }` is treated as no decision (same as omitting `block`), not as an override.
+- `before_install`: returning `{ block: true }` is terminal. Once any handler sets it, lower-priority handlers are skipped.
+- `before_install`: returning `{ block: false }` is treated as no decision (same as omitting `block`), not as an override.
 - `message_sending`: returning `{ cancel: true }` is terminal. Once any handler sets it, lower-priority handlers are skipped.
 - `message_sending`: returning `{ cancel: false }` is treated as no decision (same as omitting `cancel`), not as an override.
 
