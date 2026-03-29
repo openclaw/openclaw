@@ -83,13 +83,38 @@ describe("plugin approval forwarding", () => {
         expect(deliver).toHaveBeenCalled();
       });
       const deliveryArgs = deliver.mock.calls[0]?.[0] as
-        | { payloads?: Array<{ text?: string }> }
+        | { payloads?: Array<{ text?: string; interactive?: unknown }> }
         | undefined;
-      const text = deliveryArgs?.payloads?.[0]?.text ?? "";
+      const payload = deliveryArgs?.payloads?.[0];
+      const text = payload?.text ?? "";
       expect(text).toContain("Plugin approval required");
       expect(text).toContain("Sensitive tool call");
       expect(text).toContain("plugin-req-1");
       expect(text).toContain("/approve");
+      expect(payload?.interactive).toEqual({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Allow Once",
+                value: "/approve plugin-req-1 allow-once",
+                style: "success",
+              },
+              {
+                label: "Allow Always",
+                value: "/approve plugin-req-1 always",
+                style: "primary",
+              },
+              {
+                label: "Deny",
+                value: "/approve plugin-req-1 deny",
+                style: "danger",
+              },
+            ],
+          },
+        ],
+      });
     });
 
     it("includes severity icon for critical", async () => {
@@ -156,7 +181,11 @@ describe("plugin approval forwarding", () => {
       > = {
         ...createChannelTestPluginBase({ id: "slack" as ChannelPlugin["id"] }),
         execApprovals: {
-          buildPluginPendingPayload: vi.fn().mockReturnValue(mockPayload),
+          render: {
+            plugin: {
+              buildPendingPayload: vi.fn().mockReturnValue(mockPayload),
+            },
+          },
         },
       };
       const registry = createTestRegistry([
@@ -176,19 +205,6 @@ describe("plugin approval forwarding", () => {
       expect(deliveryArgs?.payloads?.[0]?.text).toBe("custom adapter payload");
     });
 
-    it("falls back to plugin text when no adapter exists", async () => {
-      const deliver = vi.fn().mockResolvedValue([]);
-      const { forwarder } = createForwarder({ cfg: PLUGIN_TARGETS_CFG, deliver });
-      await forwarder.handlePluginApprovalRequested!(makePluginRequest());
-      await vi.waitFor(() => {
-        expect(deliver).toHaveBeenCalled();
-      });
-      const text =
-        (deliver.mock.calls[0]?.[0] as { payloads?: Array<{ text?: string }> })?.payloads?.[0]
-          ?.text ?? "";
-      expect(text).toContain("Plugin approval required");
-    });
-
     it("calls beforeDeliverPending before plugin approval delivery", async () => {
       const beforeDeliverPending = vi.fn();
       const adapterPlugin: Pick<
@@ -197,7 +213,9 @@ describe("plugin approval forwarding", () => {
       > = {
         ...createChannelTestPluginBase({ id: "slack" as ChannelPlugin["id"] }),
         execApprovals: {
-          beforeDeliverPending,
+          delivery: {
+            beforeDeliverPending,
+          },
         },
       };
       const registry = createTestRegistry([
@@ -222,7 +240,11 @@ describe("plugin approval forwarding", () => {
       > = {
         ...createChannelTestPluginBase({ id: "slack" as ChannelPlugin["id"] }),
         execApprovals: {
-          buildPluginResolvedPayload: vi.fn().mockReturnValue(mockPayload),
+          render: {
+            plugin: {
+              buildResolvedPayload: vi.fn().mockReturnValue(mockPayload),
+            },
+          },
         },
       };
       const registry = createTestRegistry([

@@ -1,5 +1,5 @@
+import type { OpenClawPluginCommandDefinition } from "openclaw/plugin-sdk/core";
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawPluginCommandDefinition } from "../../test/helpers/plugins/plugin-command.js";
 import { createPluginRuntimeMock } from "../../test/helpers/plugins/plugin-runtime-mock.js";
 import register from "./index.js";
 

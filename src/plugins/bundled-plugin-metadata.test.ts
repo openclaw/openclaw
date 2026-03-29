@@ -78,6 +78,15 @@ describe("bundled plugin metadata", () => {
     );
   });
 
+  it("loads tlon channel config metadata from the lightweight schema surface", () => {
+    const tlon = listBundledPluginMetadata().find((entry) => entry.dirName === "tlon");
+    expect(tlon?.manifest.channelConfigs?.tlon).toEqual(
+      expect.objectContaining({
+        schema: expect.objectContaining({ type: "object" }),
+      }),
+    );
+  });
+
   it("excludes test-only public surface artifacts", () => {
     listBundledPluginMetadata().forEach((entry) =>
       expectTestOnlyArtifactsExcluded(entry.publicSurfaceArtifacts ?? []),
@@ -234,6 +243,10 @@ describe("bundled plugin metadata", () => {
     });
     writeJson(path.join(distRoot, "extensions", "alpha", "openclaw.plugin.json"), {
       id: "alpha",
+      configSchema: {
+        type: "object",
+        properties: {},
+      },
       channels: ["alpha"],
       channelConfigs: {
         alpha: {

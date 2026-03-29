@@ -5,6 +5,7 @@
   "type": "module",
   "dependencies": {
     "@matrix-org/matrix-sdk-crypto-nodejs": "^0.4.0",
+    "@matrix-org/matrix-sdk-crypto-wasm": "18.0.0",
     "fake-indexeddb": "^6.2.5",
     "markdown-it": "14.1.1",
     "matrix-js-sdk": "41.2.0",
@@ -23,8 +24,7 @@
   },
   "openclaw": {
     "extensions": [
-      "./index.ts",
-      "./src/plugin-entry.runtime.ts"
+      "./index.ts"
     ],
     "setupEntry": "./setup-entry.ts",
     "channel": {
@@ -44,9 +44,9 @@
     },
     "releaseChecks": {
       "rootDependencyMirrorAllowlist": [
+        "@matrix-org/matrix-sdk-crypto-wasm",
         "@matrix-org/matrix-sdk-crypto-nodejs",
-        "matrix-js-sdk",
-        "music-metadata"
+        "matrix-js-sdk"
       ]
     }
   }

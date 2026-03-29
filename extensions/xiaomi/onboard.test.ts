@@ -1,5 +1,5 @@
+import { resolveAgentModelPrimaryValue } from "openclaw/plugin-sdk/provider-onboard";
 import { describe, expect, it } from "vitest";
-import { resolveAgentModelPrimaryValue } from "../../src/config/model-input.js";
 import { createLegacyProviderConfig } from "../../test/helpers/plugins/onboard-config.js";
 import { applyXiaomiConfig, applyXiaomiProviderConfig } from "./onboard.js";
 

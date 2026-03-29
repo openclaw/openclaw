@@ -2,8 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { ISyncResponse } from "matrix-js-sdk";
+import * as jsonFiles from "openclaw/plugin-sdk/infra-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import * as jsonFiles from "../../../../../src/infra/json-files.js";
 import { FileBackedMatrixSyncStore } from "./file-sync-store.js";
 
 function createSyncResponse(nextBatch: string): ISyncResponse {
