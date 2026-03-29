@@ -2953,6 +2953,46 @@ module.exports = {
     expect(String(memory?.error ?? "")).toContain('memory slot set to "memory-other"');
   });
 
+  it("re-evaluates memory slot gating after resolving exported plugin kind", async () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "memory-export-only",
+      filename: "memory-export-only.cjs",
+      body: `module.exports = {
+  id: "memory-export-only",
+  kind: "memory",
+  register(api) {
+    api.registerCli(() => {}, {
+      descriptors: [
+        {
+          name: "memory-export-only",
+          description: "Export-only memory CLI metadata",
+          hasSubcommands: true,
+        },
+      ],
+    });
+  },
+};`,
+    });
+
+    const registry = await loadOpenClawPluginCliRegistry({
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["memory-export-only"],
+          slots: { memory: "memory-other" },
+        },
+      },
+    });
+
+    expect(registry.cliRegistrars.flatMap((entry) => entry.commands)).not.toContain(
+      "memory-export-only",
+    );
+    const memory = registry.plugins.find((entry) => entry.id === "memory-export-only");
+    expect(memory?.status).toBe("disabled");
+    expect(String(memory?.error ?? "")).toContain('memory slot set to "memory-other"');
+  });
+
   it("blocks before_prompt_build but preserves legacy model overrides when prompt injection is disabled", async () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
