@@ -6,8 +6,10 @@ import {
   buildComputedAccountStatusSnapshot,
   buildRuntimeAccountStatusSnapshot,
   createComputedAccountStatusAdapter,
+  buildWebhookChannelStatusSummary,
   buildTokenChannelStatusSummary,
   collectStatusIssuesFromLastError,
+  createDependentCredentialStatusIssueCollector,
   createDefaultChannelRuntimeState,
 } from "./status-helpers.js";
 
@@ -348,6 +350,62 @@ describe("buildTokenChannelStatusSummary", () => {
     },
   ])("$name", ({ input, options, expected }) => {
     expect(buildTokenChannelStatusSummary(input, options)).toEqual(expected);
+  });
+});
+
+describe("buildWebhookChannelStatusSummary", () => {
+  it("defaults mode to webhook and keeps supplied extras", () => {
+    expect(
+      buildWebhookChannelStatusSummary(
+        {
+          configured: true,
+          running: true,
+        },
+        {
+          secretSource: "env",
+        },
+      ),
+    ).toEqual({
+      configured: true,
+      running: true,
+      lastStartAt: null,
+      lastStopAt: null,
+      lastError: null,
+      mode: "webhook",
+      secretSource: "env",
+    });
+  });
+});
+
+describe("createDependentCredentialStatusIssueCollector", () => {
+  it("uses source metadata from sanitized snapshots to pick the missing field", () => {
+    const collect = createDependentCredentialStatusIssueCollector({
+      channel: "line",
+      dependencySourceKey: "tokenSource",
+      missingPrimaryMessage: "LINE channel access token not configured",
+      missingDependentMessage: "LINE channel secret not configured",
+    });
+
+    expect(
+      collect([
+        { accountId: "default", configured: false, tokenSource: "none" },
+        { accountId: "work", configured: false, tokenSource: "env" },
+        { accountId: "ok", configured: true, tokenSource: "env" },
+      ]),
+    ).toEqual([
+      {
+        channel: "line",
+        accountId: "default",
+        kind: "config",
+        message: "LINE channel access token not configured",
+      },
+      {
+        channel: "line",
+        accountId: "work",
+        kind: "config",
+        message: "LINE channel secret not configured",
+      },
+    ]);
   });
 });
 
