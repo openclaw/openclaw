@@ -325,6 +325,7 @@ export function resolveExecutionBudget(runtimeCapabilities) {
     vitestMaxWorkers: scaleForLoad(baseBudget.vitestMaxWorkers, runtime.loadBand),
     unitSharedWorkers: scaleForLoad(baseBudget.unitSharedWorkers, runtime.loadBand),
     channelSharedWorkers: scaleForLoad(baseBudget.channelSharedWorkers, runtime.loadBand),
+    unitIsolatedWorkers: scaleForLoad(baseBudget.unitIsolatedWorkers, runtime.loadBand),
     unitHeavyWorkers: scaleForLoad(baseBudget.unitHeavyWorkers, runtime.loadBand),
     extensionWorkers: scaleForLoad(baseBudget.extensionWorkers, runtime.loadBand),
     gatewayWorkers: scaleForLoad(baseBudget.gatewayWorkers, runtime.loadBand),
@@ -340,6 +341,12 @@ export function resolveExecutionBudget(runtimeCapabilities) {
       baseBudget.topLevelParallelLimitIsolated,
       runtime.loadBand,
     ),
+    unitFastBatchTargetMs:
+      runtime.loadBand === "busy"
+        ? Math.max(baseBudget.unitFastBatchTargetMs, 60_000)
+        : runtime.loadBand === "saturated"
+          ? Math.max(baseBudget.unitFastBatchTargetMs, 90_000)
+          : baseBudget.unitFastBatchTargetMs,
     deferredRunConcurrency:
       runtime.loadBand === "busy"
         ? Math.max(1, (baseBudget.deferredRunConcurrency ?? 1) - 1)
