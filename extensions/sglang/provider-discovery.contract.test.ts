@@ -1,3 +1,3 @@
-import { describeSglangProviderDiscoveryContract } from "../../test/helpers/extensions/provider-discovery-contract.js";
+import { describeSglangProviderDiscoveryContract } from "../../test/helpers/plugins/provider-discovery-contract.js";
 
 describeSglangProviderDiscoveryContract();

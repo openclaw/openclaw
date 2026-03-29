@@ -1,5 +1,5 @@
 // Private helper surface for the bundled zalo plugin.
-// Keep this list additive and scoped to symbols used under extensions/zalo.
+// Keep this list additive and scoped to the bundled Zalo surface.
 
 export { jsonResult, readStringParam } from "../agents/tools/common.js";
 export type { ReplyPayload } from "../auto-reply/types.js";

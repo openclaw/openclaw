@@ -19,6 +19,78 @@ export function classifyPortListener(listener: PortListener, port: number): Port
   return "unknown";
 }
 
+function parseListenerAddress(address: string): { host: string; port: number } | null {
+  const trimmed = address.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const normalized = trimmed.replace(/^tcp6?\s+/i, "").replace(/\s*\(listen\)\s*$/i, "");
+  const bracketMatch = normalized.match(/^\[([^\]]+)\]:(\d+)$/);
+  if (bracketMatch) {
+    const port = Number.parseInt(bracketMatch[2], 10);
+    return Number.isFinite(port) ? { host: bracketMatch[1].toLowerCase(), port } : null;
+  }
+  const lastColon = normalized.lastIndexOf(":");
+  if (lastColon <= 0 || lastColon >= normalized.length - 1) {
+    return null;
+  }
+  const host = normalized.slice(0, lastColon).trim().toLowerCase();
+  const portToken = normalized.slice(lastColon + 1).trim();
+  if (!/^\d+$/.test(portToken)) {
+    return null;
+  }
+  const port = Number.parseInt(portToken, 10);
+  return Number.isFinite(port) ? { host, port } : null;
+}
+
+function classifyLoopbackAddressFamily(host: string): "ipv4" | "ipv6" | null {
+  if (host === "127.0.0.1" || host === "localhost") {
+    return "ipv4";
+  }
+  if (host === "::1") {
+    return "ipv6";
+  }
+  if (host.startsWith("::ffff:")) {
+    const mapped = host.slice("::ffff:".length);
+    return mapped === "127.0.0.1" ? "ipv6" : null;
+  }
+  return null;
+}
+
+export function isDualStackLoopbackGatewayListeners(
+  listeners: PortListener[],
+  port: number,
+): boolean {
+  if (listeners.length < 2) {
+    return false;
+  }
+  const pids = new Set<number>();
+  const families = new Set<"ipv4" | "ipv6">();
+  for (const listener of listeners) {
+    if (classifyPortListener(listener, port) !== "gateway") {
+      return false;
+    }
+    const pid = listener.pid;
+    if (typeof pid !== "number" || !Number.isFinite(pid)) {
+      return false;
+    }
+    pids.add(pid);
+    if (typeof listener.address !== "string") {
+      return false;
+    }
+    const parsedAddress = parseListenerAddress(listener.address);
+    if (!parsedAddress || parsedAddress.port !== port) {
+      return false;
+    }
+    const family = classifyLoopbackAddressFamily(parsedAddress.host);
+    if (!family) {
+      return false;
+    }
+    families.add(family);
+  }
+  return pids.size === 1 && families.has("ipv4") && families.has("ipv6");
+}
+
 export function buildPortHints(listeners: PortListener[], port: number): string[] {
   if (listeners.length === 0) {
     return [];
@@ -38,7 +110,7 @@ export function buildPortHints(listeners: PortListener[], port: number): string[
   if (kinds.has("unknown")) {
     hints.push("Another process is listening on this port.");
   }
-  if (listeners.length > 1) {
+  if (listeners.length > 1 && !isDualStackLoopbackGatewayListeners(listeners, port)) {
     hints.push(
       "Multiple listeners detected; ensure only one gateway/tunnel per port unless intentionally running isolated profiles.",
     );

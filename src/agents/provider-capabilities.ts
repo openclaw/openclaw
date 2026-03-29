@@ -119,7 +119,8 @@ export function resolveProviderCapabilities(
   return {
     ...DEFAULT_PROVIDER_CAPABILITIES,
     ...CORE_PROVIDER_CAPABILITIES[normalized],
-    ...(pluginCapabilities ?? PLUGIN_CAPABILITIES_FALLBACKS[normalized]),
+    ...PLUGIN_CAPABILITIES_FALLBACKS[normalized],
+    ...pluginCapabilities,
   };
 }
 

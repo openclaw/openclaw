@@ -33,6 +33,14 @@ afterEach(() => {
   setRegistry(emptyRegistry);
 });
 
+const gatewayCall = () =>
+  callGatewayMock.mock.calls[0]?.[0] as {
+    url?: string;
+    token?: string;
+    timeoutMs?: number;
+    params?: Record<string, unknown>;
+  };
+
 describe("sendMessage channel normalization", () => {
   it("threads resolved cfg through alias + target normalization in outbound dispatch", async () => {
     const resolvedCfg = {
@@ -235,10 +243,7 @@ describe("sendPoll channel normalization", () => {
       channel: "Workspace-Chat",
     });
 
-    const call = callGatewayMock.mock.calls[0]?.[0] as {
-      params?: Record<string, unknown>;
-    };
-    expect(call?.params?.channel).toBe("demo-alias-channel");
+    expect(gatewayCall()?.params?.channel).toBe("demo-alias-channel");
     expect(result.channel).toBe("demo-alias-channel");
   });
 });
@@ -259,50 +264,55 @@ const setMattermostGatewayRegistry = () => {
 };
 
 describe("gateway url override hardening", () => {
-  it("drops gateway url overrides in backend mode (SSRF hardening)", async () => {
+  const sendMattermostGatewayMessage = async (
+    params: Partial<Parameters<typeof sendMessage>[0]> = {},
+  ) => {
     setMattermostGatewayRegistry();
-
-    callGatewayMock.mockResolvedValueOnce({ messageId: "m1" });
+    callGatewayMock.mockResolvedValueOnce({
+      messageId: params.agentId ? "m-agent" : "m1",
+    });
     await sendMessage({
       cfg: {},
       to: "channel:town-square",
       content: "hi",
       channel: "mattermost",
-      gateway: {
-        url: "ws://169.254.169.254:80/latest/meta-data/",
-        token: "t",
-        timeoutMs: 5000,
-        clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-        clientDisplayName: "agent",
-        mode: GATEWAY_CLIENT_MODES.BACKEND,
-      },
+      ...params,
     });
+    return gatewayCall();
+  };
 
-    expect(callGatewayMock).toHaveBeenCalledWith(
-      expect.objectContaining({
+  it.each([
+    {
+      name: "drops gateway url overrides in backend mode (SSRF hardening)",
+      params: {
+        gateway: {
+          url: "ws://169.254.169.254:80/latest/meta-data/",
+          token: "t",
+          timeoutMs: 5000,
+          clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+          clientDisplayName: "agent",
+          mode: GATEWAY_CLIENT_MODES.BACKEND,
+        },
+      },
+      expected: {
         url: undefined,
         token: "t",
         timeoutMs: 5000,
-      }),
-    );
-  });
-
-  it("forwards explicit agentId in gateway send params", async () => {
-    setMattermostGatewayRegistry();
-
-    callGatewayMock.mockResolvedValueOnce({ messageId: "m-agent" });
-    await sendMessage({
-      cfg: {},
-      to: "channel:town-square",
-      content: "hi",
-      channel: "mattermost",
-      agentId: "work",
-    });
-
-    const call = callGatewayMock.mock.calls[0]?.[0] as {
-      params?: Record<string, unknown>;
-    };
-    expect(call.params?.agentId).toBe("work");
+      },
+    },
+    {
+      name: "forwards explicit agentId in gateway send params",
+      params: {
+        agentId: "work",
+      },
+      expected: {
+        params: {
+          agentId: "work",
+        },
+      },
+    },
+  ])("$name", async ({ params, expected }) => {
+    expect(await sendMattermostGatewayMessage(params)).toMatchObject(expected);
   });
 });
 
@@ -311,24 +321,22 @@ const emptyRegistry = createTestRegistry([]);
 const createDemoAliasPlugin = (params?: {
   aliases?: string[];
   outbound?: ChannelOutboundAdapter;
-}): ChannelPlugin => ({
-  ...createChannelTestPluginBase({
+}): ChannelPlugin => {
+  const base = createChannelTestPluginBase({
     id: "demo-alias-channel",
     label: "Demo Alias Channel",
     docsPath: "/channels/demo-alias-channel",
     config: { listAccountIds: () => [], resolveAccount: () => ({}) },
-  }),
-  meta: {
-    ...createChannelTestPluginBase({
-      id: "demo-alias-channel",
-      label: "Demo Alias Channel",
-      docsPath: "/channels/demo-alias-channel",
-      config: { listAccountIds: () => [], resolveAccount: () => ({}) },
-    }).meta,
-    ...(params?.aliases ? { aliases: params.aliases } : {}),
-  },
-  ...(params?.outbound ? { outbound: params.outbound } : {}),
-});
+  });
+  return {
+    ...base,
+    meta: {
+      ...base.meta,
+      ...(params?.aliases ? { aliases: params.aliases } : {}),
+    },
+    ...(params?.outbound ? { outbound: params.outbound } : {}),
+  };
+};
 
 const createDemoAliasOutbound = (opts?: { includePoll?: boolean }): ChannelOutboundAdapter => ({
   deliveryMode: "direct",

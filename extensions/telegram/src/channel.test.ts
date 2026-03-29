@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import type { PluginApprovalRequest } from "../../../src/infra/plugin-approvals.js";
 import type { PluginRuntime } from "../../../src/plugins/runtime/types.js";
-import { createStartAccountContext } from "../../../test/helpers/extensions/start-account-context.js";
+import { createStartAccountContext } from "../../../test/helpers/plugins/start-account-context.js";
 import type { ResolvedTelegramAccount } from "./accounts.js";
 import * as auditModule from "./audit.js";
 import { telegramPlugin } from "./channel.js";
@@ -493,6 +493,34 @@ describe("telegramPlugin duplicate token guard", () => {
       }),
     );
     expect(result).toMatchObject({ channel: "telegram", messageId: "tg-2" });
+  });
+
+  it("preserves accountId for pairing approval sends", async () => {
+    const sendMessageTelegram = vi.fn(async () => ({ messageId: "tg-pair" }));
+    const resolveTelegramToken = vi.fn(() => ({ token: "token-ops", source: "config" }));
+    const cfg = createCfg();
+    installTelegramRuntime({
+      sendMessageTelegram,
+      resolveTelegramToken,
+    });
+
+    await telegramPlugin.pairing?.notifyApproval?.({
+      cfg,
+      id: "12345",
+      accountId: "ops",
+    });
+
+    expect(resolveTelegramToken).toHaveBeenCalledWith(cfg, {
+      accountId: "ops",
+    });
+    expect(sendMessageTelegram).toHaveBeenCalledWith(
+      "12345",
+      expect.any(String),
+      expect.objectContaining({
+        token: "token-ops",
+        accountId: "ops",
+      }),
+    );
   });
 
   it("sends outbound payload media lists and keeps buttons on the first message only", async () => {

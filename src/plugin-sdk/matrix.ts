@@ -1,5 +1,5 @@
 // Private helper surface for the bundled matrix plugin.
-// Keep this list additive and scoped to symbols used under extensions/matrix.
+// Keep this list additive and scoped to the bundled Matrix surface.
 
 import { createOptionalChannelSetupSurface } from "./channel-setup.js";
 
@@ -45,6 +45,7 @@ export {
 } from "../channels/plugins/config-helpers.js";
 export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
 export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
+export { chunkTextForOutbound } from "./text-chunking.js";
 export {
   buildSingleChannelSecretPromptState,
   addWildcardAllowFrom,

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createSendCfgThreadingRuntime } from "../../../test/helpers/extensions/send-config.js";
+import { createSendCfgThreadingRuntime } from "../../../test/helpers/plugins/send-config.js";
 import type { IrcClient } from "./client.js";
 import { setIrcRuntime } from "./runtime.js";
 import type { CoreConfig } from "./types.js";
@@ -37,6 +37,22 @@ vi.mock("./protocol.js", async () => {
   return {
     ...actual,
     makeIrcMessageId: () => "irc-msg-1",
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
+  const original = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...original,
+    resolveMarkdownTableMode: hoisted.resolveMarkdownTableMode,
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/text-runtime", async (importOriginal) => {
+  const original = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...original,
+    convertMarkdownTables: hoisted.convertMarkdownTables,
   };
 });
 
@@ -110,5 +126,34 @@ describe("sendMessageIrc cfg threading", () => {
       accountId: "default",
       direction: "outbound",
     });
+  });
+
+  it("sends with provided cfg even when the runtime store is not initialized", async () => {
+    const providedCfg = {
+      channels: {
+        irc: {
+          host: "irc.example.com",
+          nick: "openclaw",
+        },
+      },
+    } as unknown as CoreConfig;
+    const client = {
+      isReady: vi.fn(() => true),
+      sendPrivmsg: vi.fn(),
+    } as unknown as IrcClient;
+    hoisted.record.mockImplementation(() => {
+      throw new Error("IRC runtime not initialized");
+    });
+
+    const result = await sendMessageIrc("#room", "hello", {
+      cfg: providedCfg,
+      client,
+    });
+
+    expect(hoisted.loadConfig).not.toHaveBeenCalled();
+    expect(client.sendPrivmsg).toHaveBeenCalledWith("#room", "hello");
+    expect(result.target).toBe("#room");
+    expect(result.messageId).toEqual(expect.any(String));
+    expect(result.messageId.length).toBeGreaterThan(0);
   });
 });

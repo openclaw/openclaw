@@ -13,12 +13,16 @@ import {
 } from "./src/embedding-provider.js";
 import { resolveOllamaApiBase } from "./src/provider-models.js";
 import {
-  createConfiguredOllamaCompatNumCtxWrapper,
+  createConfiguredOllamaCompatStreamWrapper,
   createConfiguredOllamaStreamFn,
 } from "./src/stream.js";
 
 const PROVIDER_ID = "ollama";
 const DEFAULT_API_KEY = "ollama-local";
+
+function shouldSkipAmbientOllamaDiscovery(env: NodeJS.ProcessEnv): boolean {
+  return Boolean(env.VITEST) || env.NODE_ENV === "test";
+}
 
 async function loadProviderSetup() {
   return await import("openclaw/plugin-sdk/provider-setup");
@@ -95,6 +99,9 @@ export default definePluginEntry({
               },
             };
           }
+          if (!ollamaKey && !explicit && shouldSkipAmbientOllamaDiscovery(ctx.env)) {
+            return null;
+          }
 
           const providerSetup = await loadProviderSetup();
           const provider = await providerSetup.buildOllamaProvider(explicit?.baseUrl, {
@@ -145,7 +152,7 @@ export default definePluginEntry({
         });
       },
       wrapStreamFn: (ctx) => {
-        return createConfiguredOllamaCompatNumCtxWrapper(ctx);
+        return createConfiguredOllamaCompatStreamWrapper(ctx);
       },
       createEmbeddingProvider: async ({ config, model, remote }) => {
         const { provider, client } = await createOllamaEmbeddingProvider({

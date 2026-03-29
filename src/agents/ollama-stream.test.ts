@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  buildOllamaChatRequest,
   createConfiguredOllamaStreamFn,
   createOllamaStreamFn,
   convertToOllamaMessages,
@@ -8,6 +9,23 @@ import {
   resolveOllamaBaseUrlForRun,
 } from "../plugin-sdk/ollama.js";
 import { applyExtraParamsToAgent } from "./pi-embedded-runner/extra-params.js";
+
+describe("buildOllamaChatRequest", () => {
+  it("omits tools when none are provided", () => {
+    expect(
+      buildOllamaChatRequest({
+        modelId: "qwen3.5:9b",
+        messages: [{ role: "user", content: "hello" }],
+        options: { num_ctx: 65536 },
+      }),
+    ).toEqual({
+      model: "qwen3.5:9b",
+      messages: [{ role: "user", content: "hello" }],
+      stream: true,
+      options: { num_ctx: 65536 },
+    });
+  });
+});
 
 describe("convertToOllamaMessages", () => {
   it("converts user text messages", () => {

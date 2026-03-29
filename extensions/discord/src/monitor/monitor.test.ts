@@ -18,7 +18,7 @@ import {
   resetDiscordComponentRuntimeMocks,
   resolvePluginConversationBindingApprovalMock,
   upsertPairingRequestMock,
-} from "../../../../test/helpers/extensions/discord-component-runtime.js";
+} from "../../../../test/helpers/plugins/discord-component-runtime.js";
 import { type DiscordComponentEntry, type DiscordModalEntry } from "../components.js";
 import type { DiscordChannelConfigResolved } from "./allow-list.js";
 import {
@@ -64,8 +64,8 @@ const resolveStorePathMock = vi.hoisted(() => vi.fn());
 const dispatchPluginInteractiveHandlerMock = vi.hoisted(() => vi.fn());
 let lastDispatchCtx: Record<string, unknown> | undefined;
 
-async function createInfraRuntimeMock(
-  importOriginal: () => Promise<typeof import("openclaw/plugin-sdk/infra-runtime")>,
+async function createChannelRuntimeMock(
+  importOriginal: () => Promise<typeof import("openclaw/plugin-sdk/channel-runtime")>,
 ) {
   const actual = await importOriginal();
   return {
@@ -74,8 +74,8 @@ async function createInfraRuntimeMock(
   };
 }
 
-vi.mock("openclaw/plugin-sdk/infra-runtime", createInfraRuntimeMock);
-vi.mock("openclaw/plugin-sdk/infra-runtime.js", createInfraRuntimeMock);
+vi.mock("openclaw/plugin-sdk/channel-runtime", createChannelRuntimeMock);
+vi.mock("openclaw/plugin-sdk/channel-runtime.js", createChannelRuntimeMock);
 
 vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();

@@ -3,6 +3,7 @@ export {
   PAIRING_APPROVED_MESSAGE,
   buildComputedAccountStatusSnapshot,
   buildChannelConfigSchema,
+  chunkTextForOutbound,
   collectStatusIssuesFromLastError,
   formatTrimmedAllowFromEntries,
   getChatChannelMeta,
