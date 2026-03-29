@@ -177,6 +177,42 @@ function listChildDirectories(dir: string): string[] {
   }
 }
 
+/**
+ * Recursively collect all relative subdirectory paths (from `baseDir`) that
+ * contain a `SKILL.md` file.  A directory that itself has `SKILL.md` is
+ * returned as a candidate; its own children are not descended further (the
+ * caller handles loading the skill from that directory).  Directories without
+ * `SKILL.md` are descended up to `maxDepth` levels so that nested layouts
+ * such as `~/.openclaw/skills/vendor/skill-name/SKILL.md` are discovered.
+ */
+function collectSkillDirsRecursive(
+  baseDir: string,
+  opts: { maxDepth: number; maxTotal: number },
+): string[] {
+  const results: string[] = [];
+
+  function walk(dir: string, depth: number): void {
+    if (results.length >= opts.maxTotal) return;
+    const childNames = listChildDirectories(dir);
+    for (const name of childNames.slice().sort()) {
+      if (results.length >= opts.maxTotal) break;
+      const childPath = path.join(dir, name);
+      const skillMd = path.join(childPath, "SKILL.md");
+      if (fs.existsSync(skillMd)) {
+        // Relative path from baseDir so callers can build absolute paths.
+        results.push(path.relative(baseDir, childPath));
+      } else if (depth < opts.maxDepth) {
+        // Descend into directories that are not themselves skills — they may
+        // be vendor/namespace groupings containing nested skills.
+        walk(childPath, depth + 1);
+      }
+    }
+  }
+
+  walk(baseDir, 0);
+  return results;
+}
+
 function tryRealpath(filePath: string): string | null {
   try {
     return fs.realpathSync(filePath);
@@ -357,7 +393,6 @@ function loadSkillEntries(
     const suspicious = childDirs.length > limits.maxCandidatesPerRoot;
 
     const maxCandidates = Math.max(0, limits.maxSkillsLoadedPerSource);
-    const limitedChildren = childDirs.slice().sort().slice(0, maxCandidates);
 
     if (suspicious) {
       skillsLogger.warn("Skills root looks suspiciously large, truncating discovery.", {
@@ -367,7 +402,19 @@ function loadSkillEntries(
         maxCandidatesPerRoot: limits.maxCandidatesPerRoot,
         maxSkillsLoadedPerSource: limits.maxSkillsLoadedPerSource,
       });
-    } else if (childDirs.length > maxCandidates) {
+    }
+
+    // Recursively discover skill directories (containing SKILL.md) up to
+    // MAX_SKILL_SCAN_DEPTH levels deep.  This allows skills installed in
+    // nested vendor layouts (e.g. ~/.openclaw/skills/coze/skill-name/SKILL.md)
+    // to be discovered in addition to the flat layout (skills/skill-name/SKILL.md).
+    const MAX_SKILL_SCAN_DEPTH = 4;
+    const candidateRelPaths = collectSkillDirsRecursive(baseDir, {
+      maxDepth: MAX_SKILL_SCAN_DEPTH,
+      maxTotal: maxCandidates,
+    });
+
+    if (!suspicious && childDirs.length > maxCandidates) {
       skillsLogger.warn("Skills root has many entries, truncating discovery.", {
         dir: params.dir,
         baseDir,
@@ -378,9 +425,9 @@ function loadSkillEntries(
 
     const loadedSkills: Skill[] = [];
 
-    // Only consider immediate subfolders that look like skills (have SKILL.md) and are under size cap.
-    for (const name of limitedChildren) {
-      const skillDir = path.join(baseDir, name);
+    // Consider all subfolders (at any depth) that contain SKILL.md and are under size cap.
+    for (const relPath of candidateRelPaths) {
+      const skillDir = path.join(baseDir, relPath);
       const skillDirRealPath = resolveContainedSkillPath({
         source: params.source,
         rootDir,
@@ -391,6 +438,7 @@ function loadSkillEntries(
         continue;
       }
       const skillMd = path.join(skillDir, "SKILL.md");
+      // collectSkillDirsRecursive already verified SKILL.md exists; guard defensively.
       if (!fs.existsSync(skillMd)) {
         continue;
       }
@@ -407,7 +455,7 @@ function loadSkillEntries(
         const size = fs.statSync(skillMdRealPath).size;
         if (size > limits.maxSkillFileBytes) {
           skillsLogger.warn("Skipping skill due to oversized SKILL.md.", {
-            skill: name,
+            skill: relPath,
             filePath: skillMd,
             size,
             maxSkillFileBytes: limits.maxSkillFileBytes,

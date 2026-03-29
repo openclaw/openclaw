@@ -91,6 +91,11 @@ function resolveWatchTargets(workspaceDir: string, config?: OpenClawConfig): str
     targets.add(`${globRoot}/SKILL.md`);
     // Standard layout: <skillsRoot>/<skillName>/SKILL.md
     targets.add(`${globRoot}/*/SKILL.md`);
+    // Nested vendor layout: <skillsRoot>/<vendor>/<skillName>/SKILL.md
+    // (and deeper nesting up to 4 levels, matching workspace.ts MAX_SKILL_SCAN_DEPTH)
+    targets.add(`${globRoot}/*/*/SKILL.md`);
+    targets.add(`${globRoot}/*/*/*/SKILL.md`);
+    targets.add(`${globRoot}/*/*/*/*/SKILL.md`);
   }
   return Array.from(targets).toSorted();
 }
