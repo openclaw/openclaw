@@ -171,8 +171,13 @@ const OBFUSCATION_PATTERNS: ObfuscationPattern[] = [
   },
   {
     id: "python-exec-encoded",
-    description: "Python/Perl/Ruby with base64 or encoded execution",
-    regex: /(?:python[23]?|perl|ruby)\s+-[ec]\s+.*(?:base64|b64decode|decode|exec|system|eval)/i,
+    description: "Python/Perl/Ruby with base64-encoded execution (requires encoding+decode combo)",
+    // Narrowed from the original broad keyword list. The prior regex matched many
+    // legitimate one-liners: `python3 -c "data.decode('utf-8')"` (matches "decode"),
+    // `python3 -c "os.system('make test')"` (matches "system"). Require a genuine
+    // encode+decode combination to reduce false positives while still catching
+    // real base64-obfuscated payloads.
+    regex: /(?:python[23]?|perl|ruby)\s+-[ec]\s+.*(?:base64.*b64decode|b64decode|base64\.b64|frombase64|fromb64)/i,
   },
   {
     id: "curl-pipe-shell",
