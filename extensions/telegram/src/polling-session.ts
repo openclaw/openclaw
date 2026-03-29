@@ -7,7 +7,7 @@ import {
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { createTelegramBot } from "./bot.js";
-import { type TelegramTransport } from "./fetch.js";
+import { resolveTelegramApiBase, type TelegramTransport } from "./fetch.js";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 import { TelegramPollingTransportState } from "./polling-transport-state.js";
 
@@ -21,6 +21,10 @@ const TELEGRAM_POLL_RESTART_POLICY = {
 const POLL_STALL_THRESHOLD_MS = 90_000;
 const POLL_WATCHDOG_INTERVAL_MS = 30_000;
 const POLL_STOP_GRACE_MS = 15_000;
+const SUPERVISOR_UPDATES_STALE_THRESHOLD_MS = 90_000;
+const HEARTBEAT_INTERVAL_MS = 30_000;
+const HEARTBEAT_TIMEOUT_MS = 10_000;
+const HEARTBEAT_FAIL_THRESHOLD = 3;
 
 const waitForGracefulStop = async (stop: () => Promise<void>) => {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -56,6 +60,8 @@ type TelegramPollingSessionOpts = {
   telegramTransport?: TelegramTransport;
   /** Rebuild Telegram transport after stall/network recovery when marked dirty. */
   createTelegramTransport?: () => TelegramTransport;
+  /** Pre-resolved API base for lightweight heartbeat probes. */
+  apiBase?: string;
 };
 
 export class TelegramPollingSession {
@@ -215,7 +221,6 @@ export class TelegramPollingSession {
     let lastGetUpdatesError: string | null = null;
     let lastGetUpdatesOffset: number | null = null;
     let inFlightGetUpdates = 0;
-    let stopSequenceLogged = false;
     let stallDiagLoggedAt = 0;
 
     bot.api.config.use(async (prev, method, payload, signal) => {
@@ -334,6 +339,37 @@ export class TelegramPollingSession {
           ? lastApiActivityAt
           : Math.max(lastApiActivityAt, latestInFlightApiStartedAt);
       const apiElapsed = now - apiLivenessAt;
+      const updatesElapsed = now - (lastGetUpdatesFinishedAt ?? lastGetUpdatesAt);
+      const updatesStale =
+        updatesElapsed > SUPERVISOR_UPDATES_STALE_THRESHOLD_MS &&
+        inFlightGetUpdates === 0 &&
+        apiElapsed > SUPERVISOR_UPDATES_STALE_THRESHOLD_MS;
+
+      if (updatesStale && runner.isRunning()) {
+        if (stallDiagLoggedAt && now - stallDiagLoggedAt < POLL_STALL_THRESHOLD_MS / 2) {
+          return;
+        }
+        stallDiagLoggedAt = now;
+        this.#transportState.markDirty();
+        stalledRestart = true;
+        this.opts.log(
+          `[telegram] Polling freshness check failed (no successful getUpdates for ${formatDurationPrecise(updatesElapsed)} with no in-flight request); forcing restart. [diag inFlight=${inFlightGetUpdates} outcome=${lastGetUpdatesOutcome} startedAt=${lastGetUpdatesStartedAt ?? "n/a"} finishedAt=${lastGetUpdatesFinishedAt ?? "n/a"} durationMs=${lastGetUpdatesDurationMs ?? "n/a"} offset=${lastGetUpdatesOffset ?? "n/a"}${lastGetUpdatesError ? ` error=${lastGetUpdatesError}` : ""}]`,
+        );
+        void stopRunner();
+        void stopBot();
+        if (!forceCycleTimer) {
+          forceCycleTimer = setTimeout(() => {
+            if (this.opts.abortSignal?.aborted) {
+              return;
+            }
+            this.opts.log(
+              `[telegram] Polling runner stop timed out after ${formatDurationPrecise(POLL_STOP_GRACE_MS)}; forcing restart cycle.`,
+            );
+            forceCycleResolve?.();
+          }, POLL_STOP_GRACE_MS);
+        }
+        return;
+      }
 
       // Treat recent non-getUpdates success and recent non-getUpdates start as
       // the same liveness signal. Slow delivery should suppress the watchdog,
@@ -373,8 +409,22 @@ export class TelegramPollingSession {
     }, POLL_WATCHDOG_INTERVAL_MS);
 
     this.opts.abortSignal?.addEventListener("abort", stopOnAbort, { once: true });
+
+    // Cycle-scoped abort: cancelled in finally{} so the heartbeat loop
+    // does not leak across polling cycle restarts.
+    const cycleAbort = new AbortController();
+
+    // Start heartbeat supervisor alongside the polling runner.
+    const heartbeatPromise = this.#runHeartbeatSupervisor({
+      runner,
+      stopRunner,
+      stopBot,
+      forceCycleResolve,
+      cycleSignal: cycleAbort.signal,
+    });
+
     try {
-      await Promise.race([runner.task(), forceCyclePromise]);
+      await Promise.race([runner.task(), forceCyclePromise, heartbeatPromise]);
       if (this.opts.abortSignal?.aborted) {
         return "exit";
       }
@@ -417,6 +467,8 @@ export class TelegramPollingSession {
       );
       return shouldRestart ? "continue" : "exit";
     } finally {
+      // Stop the heartbeat supervisor for this cycle.
+      cycleAbort.abort();
       clearInterval(watchdog);
       if (forceCycleTimer) {
         clearTimeout(forceCycleTimer);
@@ -430,6 +482,110 @@ export class TelegramPollingSession {
         this.#activeFetchAbort = undefined;
       }
     }
+  }
+
+  /**
+   * Lightweight heartbeat probe using the same network path as polling
+   * (respects proxy/transport config). Returns true on success, false on failure.
+   */
+  /**
+   * @param cycleSignal - AbortSignal scoped to the current polling cycle;
+   *   aborted when the cycle ends (restart, stall, or session shutdown).
+   */
+  async #probeHeartbeatOnce(cycleSignal: AbortSignal): Promise<boolean> {
+    const apiBase = this.opts.apiBase ?? resolveTelegramApiBase(undefined);
+    const url = `${apiBase}/bot${this.opts.token}/getMe`;
+    // Use the transport-level fetch so heartbeat traverses the same network
+    // path as getUpdates (respects forceIpv4, DNS tuning, proxy, sticky
+    // fallback, etc.).
+    const transport = this.#transportState.currentTransport();
+    const fetchImpl = transport?.fetch ?? this.opts.proxyFetch ?? globalThis.fetch;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), HEARTBEAT_TIMEOUT_MS);
+    timeout.unref?.();
+    const onCycleAbort = () => controller.abort();
+    cycleSignal.addEventListener("abort", onCycleAbort, { once: true });
+    try {
+      const response = await fetchImpl(url, {
+        method: "POST",
+        signal: controller.signal,
+      });
+      return response.ok;
+    } catch {
+      return false;
+    } finally {
+      clearTimeout(timeout);
+      cycleSignal.removeEventListener("abort", onCycleAbort);
+    }
+  }
+
+  /**
+   * Heartbeat supervisor: periodically probes Telegram connectivity.
+   * After HEARTBEAT_FAIL_THRESHOLD consecutive failures, stops the polling
+   * runner and waits for heartbeat recovery before allowing a new cycle.
+   *
+   * Returns "stalled" if polling was stopped due to heartbeat failures,
+   * or resolves to "ok" / "aborted" otherwise. The caller (runPollingCycle)
+   * races this against the runner task.
+   */
+  async #runHeartbeatSupervisor(params: {
+    runner: { isRunning: () => boolean };
+    stopRunner: () => Promise<void>;
+    stopBot: () => Promise<void>;
+    forceCycleResolve: (() => void) | undefined;
+    /** Aborted when the current polling cycle ends — stops this loop cleanly. */
+    cycleSignal: AbortSignal;
+  }): Promise<"stalled" | "aborted"> {
+    let consecutiveFailures = 0;
+    const isAborted = () => this.opts.abortSignal?.aborted || params.cycleSignal.aborted;
+
+    while (!isAborted()) {
+      await sleepWithAbort(HEARTBEAT_INTERVAL_MS, params.cycleSignal).catch(() => {});
+      if (isAborted()) {
+        return "aborted";
+      }
+
+      const ok = await this.#probeHeartbeatOnce(params.cycleSignal);
+      if (ok) {
+        if (consecutiveFailures > 0) {
+          this.opts.log(`[telegram] Heartbeat recovered after ${consecutiveFailures} failure(s).`);
+        }
+        consecutiveFailures = 0;
+        continue;
+      }
+
+      consecutiveFailures += 1;
+      if (consecutiveFailures < HEARTBEAT_FAIL_THRESHOLD) {
+        this.opts.log(
+          `[telegram][diag] Heartbeat failed (${consecutiveFailures}/${HEARTBEAT_FAIL_THRESHOLD}).`,
+        );
+        continue;
+      }
+
+      // Threshold reached — stop polling and wait for recovery.
+      this.opts.log(
+        `[telegram] Heartbeat failed ${consecutiveFailures} consecutive times; stopping polling and waiting for recovery.`,
+      );
+      this.#transportState.markDirty();
+      void params.stopRunner();
+      void params.stopBot();
+      params.forceCycleResolve?.();
+
+      // Wait silently for heartbeat to recover.
+      while (!isAborted()) {
+        await sleepWithAbort(HEARTBEAT_INTERVAL_MS, params.cycleSignal).catch(() => {});
+        if (isAborted()) {
+          return "aborted";
+        }
+        const recovered = await this.#probeHeartbeatOnce(params.cycleSignal);
+        if (recovered) {
+          this.opts.log(`[telegram] Heartbeat recovered; polling will restart on next cycle.`);
+          return "stalled";
+        }
+      }
+      return "aborted";
+    }
+    return "aborted";
   }
 }
 

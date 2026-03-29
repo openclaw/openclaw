@@ -18,6 +18,11 @@ export class TelegramPollingTransportState {
     this.#transportDirty = true;
   }
 
+  /** Returns the current transport without rebuilding (read-only access for heartbeat). */
+  currentTransport(): TelegramTransport | undefined {
+    return this.#telegramTransport;
+  }
+
   acquireForNextCycle(): TelegramTransport | undefined {
     const shouldCreateTransport = this.#transportDirty || !this.#telegramTransport;
     const nextTransport = shouldCreateTransport
