@@ -1,3 +1,4 @@
+import type { proto } from "@whiskeysockets/baileys";
 import { jidToE164, normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
 
 const WHATSAPP_LID_RE = /@(lid|hosted\.lid)$/i;
@@ -20,6 +21,8 @@ export type WhatsAppReplyContext = {
   id?: string;
   body: string;
   sender?: WhatsAppIdentity | null;
+  /** Raw quoted message proto for media download in the monitor. */
+  quotedMediaMessage?: proto.IMessage;
 };
 
 type LegacySenderLike = {
