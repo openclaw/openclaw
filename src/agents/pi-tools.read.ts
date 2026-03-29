@@ -466,9 +466,30 @@ export function wrapToolMutationLock(
  */
 export const APPLY_PATCH_WORKSPACE_LOCK_PREFIX = "apply_patch_ws:";
 
+function extractApplyPatchTouchedPaths(root: string, params: unknown): string[] {
+  const input =
+    params &&
+    typeof params === "object" &&
+    typeof (params as { input?: unknown }).input === "string"
+      ? (params as { input: string }).input
+      : "";
+  if (!input) {
+    return [];
+  }
+
+  const touched = new Set<string>();
+  for (const line of input.split(/\r?\n/)) {
+    const match = line.match(/^\*\*\* (?:Update|Add|Delete) File:\s+(.+)$/);
+    if (!match?.[1]) {
+      continue;
+    }
+    touched.add(path.resolve(root, match[1].trim()));
+  }
+  return [...touched].toSorted();
+}
+
 export function wrapApplyPatchMutationLock(tool: AnyAgentTool, root: string): AnyAgentTool {
   const resolvedRoot = path.resolve(root);
-  const lockKey = resolvedRoot; // Use actual absolute path as lock target
   const queueKey = `${APPLY_PATCH_WORKSPACE_LOCK_PREFIX}${resolvedRoot}`;
 
   return {
@@ -486,20 +507,44 @@ export function wrapApplyPatchMutationLock(tool: AnyAgentTool, root: string): An
         await waitForQueuedMutation(previous, signal);
         ranMutation = true;
         const lockFn = await getWithWorkspaceLock();
-        // Use "dir" kind with the actual workspace root path so the filesystem
-        // lock is deterministic and doesn't depend on cwd.
-        return await lockFn(
-          lockKey,
-          {
-            kind: "dir",
-            timeoutMs: WORKSPACE_MUTATION_LOCK_TIMEOUT_MS,
-            ttlMs: WORKSPACE_MUTATION_LOCK_TTL_MS,
-            signal,
-          },
-          async () => {
-            return await tool.execute(toolCallId, params, signal, onUpdate);
-          },
-        );
+        const touchedPaths = extractApplyPatchTouchedPaths(resolvedRoot, params);
+        const runTool = async (): Promise<ReturnType<typeof tool.execute>> =>
+          await tool.execute(toolCallId, params, signal, onUpdate);
+
+        if (touchedPaths.length === 0) {
+          return await lockFn(
+            resolvedRoot,
+            {
+              kind: "dir",
+              timeoutMs: WORKSPACE_MUTATION_LOCK_TIMEOUT_MS,
+              ttlMs: WORKSPACE_MUTATION_LOCK_TTL_MS,
+              signal,
+            },
+            runTool,
+          );
+        }
+
+        const runWithFileLocks = async (
+          index: number,
+        ): Promise<ReturnType<typeof tool.execute>> => {
+          const target = touchedPaths[index];
+          if (!target) {
+            return await runTool();
+          }
+          const lockKey = await canonicalizeMutationLockKey(target);
+          return await lockFn(
+            lockKey,
+            {
+              kind: "file",
+              timeoutMs: WORKSPACE_MUTATION_LOCK_TIMEOUT_MS,
+              ttlMs: WORKSPACE_MUTATION_LOCK_TTL_MS,
+              signal,
+            },
+            async () => await runWithFileLocks(index + 1),
+          );
+        };
+
+        return await runWithFileLocks(0);
       } finally {
         if (ranMutation) {
           release?.();

@@ -27,7 +27,11 @@ export function isPidAlive(pid: number): boolean {
   }
   try {
     process.kill(pid, 0);
-  } catch {
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    if (code === "EPERM") {
+      return true;
+    }
     return false;
   }
   if (isZombieProcess(pid)) {

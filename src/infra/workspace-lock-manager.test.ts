@@ -821,6 +821,56 @@ describe("workspace lock manager", () => {
     await lock.release();
   });
 
+  it("normalizes unresolved file-path casing on case-insensitive platforms", async () => {
+    const dir = await makeCaseDir();
+    const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+    if (!originalPlatformDescriptor) {
+      throw new Error("missing process.platform descriptor");
+    }
+
+    Object.defineProperty(process, "platform", {
+      ...originalPlatformDescriptor,
+      value: "darwin",
+    });
+
+    try {
+      const upper = await acquireWorkspaceLock(path.join(dir, "New", "State.json"), {
+        kind: "file",
+        timeoutMs: 100,
+        ttlMs: 5_000,
+      });
+      await upper.release();
+
+      const lower = await acquireWorkspaceLock(path.join(dir, "new", "state.json"), {
+        kind: "file",
+        timeoutMs: 100,
+        ttlMs: 5_000,
+      });
+
+      expect(lower.lockPath).toBe(upper.lockPath);
+      await lower.release();
+    } finally {
+      Object.defineProperty(process, "platform", originalPlatformDescriptor);
+    }
+  });
+
+  it("creates cross-user writable lock directories", async () => {
+    const dir = await makeCaseDir();
+    const target = path.join(dir, "permissions.txt");
+    const lock = await acquireWorkspaceLock(target, {
+      kind: "file",
+      timeoutMs: 100,
+      ttlMs: 5_000,
+    });
+
+    if (process.platform !== "win32") {
+      const stat = await fs.stat(path.dirname(lock.lockPath));
+      expect(stat.mode & 0o777).toBe(0o777);
+    }
+
+    await lock.release();
+  });
+
   it("should create lock artifacts but not the target file for missing-file paths", async () => {
     const dir = await makeCaseDir();
     const bogusFile = path.join(dir, "new-subdir", "file.txt");

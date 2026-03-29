@@ -125,21 +125,31 @@ async def login(target_url="https://lcr.churchofjesuschrist.org", cookie_file="/
 async def load_session(cookie_file="/tmp/church_cookies.json"):
     """Create a browser context with saved cookies. Returns (browser, context, page)."""
     state_file = cookie_file.replace(".json", "_state.json")
-    
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=True,
-            executable_path="/usr/bin/google-chrome",
-            args=["--no-sandbox", "--disable-blink-features=AutomationControlled", "--disable-dev-shm-usage"]
-        )
-        context = await browser.new_context(
-            viewport={"width": 1920, "height": 1080},
-            user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-            storage_state=state_file,
-        )
-        page = await context.new_page()
-        await Stealth().apply_stealth_async(page)
-        return browser, context, page
+
+    playwright = await async_playwright().start()
+    browser = await playwright.chromium.launch(
+        headless=True,
+        executable_path="/usr/bin/google-chrome",
+        args=["--no-sandbox", "--disable-blink-features=AutomationControlled", "--disable-dev-shm-usage"]
+    )
+    context = await browser.new_context(
+        viewport={"width": 1920, "height": 1080},
+        user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        storage_state=state_file,
+    )
+    page = await context.new_page()
+    await Stealth().apply_stealth_async(page)
+
+    original_close = browser.close
+
+    async def close_with_playwright(*args, **kwargs):
+        try:
+            return await original_close(*args, **kwargs)
+        finally:
+            await playwright.stop()
+
+    browser.close = close_with_playwright
+    return browser, context, page
 
 
 if __name__ == "__main__":

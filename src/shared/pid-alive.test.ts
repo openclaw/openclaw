@@ -46,6 +46,17 @@ describe("isPidAlive", () => {
     expect(isPidAlive(2 ** 30)).toBe(false);
   });
 
+  it("treats EPERM from signal 0 as process still alive", () => {
+    const err = Object.assign(new Error("operation not permitted"), { code: "EPERM" });
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => {
+      throw err;
+    });
+
+    expect(isPidAlive(42)).toBe(true);
+    expect(killSpy).toHaveBeenCalledWith(42, 0);
+    killSpy.mockRestore();
+  });
+
   it("returns false for invalid PIDs", () => {
     expect(isPidAlive(0)).toBe(false);
     expect(isPidAlive(-1)).toBe(false);

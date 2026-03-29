@@ -244,4 +244,40 @@ describe("FS tools with workspaceOnly=false", () => {
     });
     await expect(fs.readFile(allowedAbsolutePath, "utf-8")).resolves.toBe("seed\nnew note");
   });
+
+  it("allows memory-triggered append-only writes when shared workspace locking is enabled", async () => {
+    const allowedRelativePath = "memory/2026-03-07.md";
+    const allowedAbsolutePath = path.join(workspaceDir, allowedRelativePath);
+    await fs.mkdir(path.dirname(allowedAbsolutePath), { recursive: true });
+    await fs.writeFile(allowedAbsolutePath, "seed");
+
+    const tools = createOpenClawCodingTools({
+      workspaceDir,
+      trigger: "memory",
+      memoryFlushWritePath: allowedRelativePath,
+      config: {
+        agents: {
+          defaults: {
+            sharedWorkspaceLocking: {
+              enabled: true,
+            },
+          },
+        },
+      },
+    });
+
+    const writeTool = tools.find((tool) => tool.name === "write");
+    expect(writeTool).toBeDefined();
+
+    await expect(
+      Promise.race([
+        writeTool!.execute("memory-locking", { path: allowedRelativePath, content: "locked note" }),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("memory flush write timed out")), 1_500),
+        ),
+      ]),
+    ).resolves.toBeDefined();
+
+    await expect(fs.readFile(allowedAbsolutePath, "utf-8")).resolves.toBe("seed\nlocked note");
+  });
 });

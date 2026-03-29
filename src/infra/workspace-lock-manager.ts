@@ -33,6 +33,14 @@ type HeldLock = {
   ttlMs: number;
 };
 
+const CROSS_USER_LOCK_DIR_MODE = 0o777;
+
+function normalizeLockPathCase(value: string): string {
+  return process.platform === "win32" || process.platform === "darwin"
+    ? value.toLowerCase()
+    : value;
+}
+
 export type WorkspaceLockHandle = {
   lockPath: string;
   release: () => Promise<void>;
@@ -63,7 +71,7 @@ async function canonicalizePathViaNearestExistingAncestor(targetPath: string): P
       }
       // Preserve unresolved suffix casing so lock identity remains stable before and
       // after path materialization for the same logical target string.
-      suffix.push(path.basename(cursor));
+      suffix.push(normalizeLockPathCase(path.basename(cursor)));
       cursor = parent;
     }
   }
@@ -95,6 +103,14 @@ async function resolveLockPath(normalizedTarget: string, kind: WorkspaceLockKind
     .digest("hex")
     .slice(0, 24);
   return path.join(lockDir, `${kind}-${digest}.lock`);
+}
+
+async function ensureCrossUserWritableLockDir(lockPath: string): Promise<void> {
+  const lockDir = path.dirname(lockPath);
+  await fs.mkdir(lockDir, { recursive: true, mode: CROSS_USER_LOCK_DIR_MODE });
+  if (process.platform !== "win32") {
+    await fs.chmod(lockDir, CROSS_USER_LOCK_DIR_MODE).catch(() => undefined);
+  }
 }
 
 // resolveLockOwnerScope removed — lock paths are now derived from the target
@@ -233,6 +249,15 @@ async function refreshLock(mapKey: string, token: string): Promise<void> {
   let handle: fs.FileHandle | undefined;
   try {
     handle = await fs.open(held.lockPath, "r+");
+    const previousStat = await handle.stat();
+    const previousBuffer = Buffer.alloc(previousStat.size);
+    const { bytesRead: previousBytesRead } = await handle.read(
+      previousBuffer,
+      0,
+      previousBuffer.length,
+      0,
+    );
+    const previousRaw = previousBuffer.toString("utf8", 0, previousBytesRead);
     const payload = await readPayloadFromHandle(handle);
     if (!payload || payload.token !== held.token || payload.token !== token) {
       return;
@@ -259,6 +284,8 @@ async function refreshLock(mapKey: string, token: string): Promise<void> {
         }
       }
       if (attempt === 2) {
+        await handle.write(Buffer.from(previousRaw, "utf8"), 0, Buffer.byteLength(previousRaw), 0);
+        await handle.truncate(Buffer.byteLength(previousRaw));
         throw new Error(
           `refreshLock: failed to write full payload after 3 attempts; aborting to preserve lock integrity`,
         );
@@ -326,7 +353,7 @@ export async function acquireWorkspaceLock(
   // need both the target's parent chain AND the .openclaw.workspace-locks leaf.
   // Use recursive:true so missing ancestors are created when the write tool
   // locks a file that doesn't exist yet.
-  await fs.mkdir(path.dirname(lockPath), { recursive: true });
+  await ensureCrossUserWritableLockDir(lockPath);
   const mapKey = lockMapKey(kind, normalizedTarget);
 
   // Do not allow implicit same-process reentrancy here. Callers must serialize

@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 
@@ -205,6 +205,14 @@ function resolveEntrypointFromPackageJson(
   };
 
   const wrapperDir = path.dirname(wrapperPath);
+  const linkedPackageDir = path.resolve(wrapperDir, "..", packageName);
+  const linkedRealPath = fsRealpathSafe(linkedPackageDir);
+  if (linkedRealPath) {
+    const entryPath = tryResolveFromPackageJson(path.join(linkedRealPath, "package.json"));
+    if (entryPath) {
+      return entryPath;
+    }
+  }
   const packageDirs = [
     path.resolve(wrapperDir, "..", packageName),
     path.resolve(wrapperDir, "node_modules", packageName),
@@ -250,6 +258,14 @@ function resolveEntrypointFromPackageJson(
   }
 
   return null;
+}
+
+function fsRealpathSafe(candidate: string): string | null {
+  try {
+    return realpathSync(candidate);
+  } catch {
+    return null;
+  }
 }
 
 /** Resolve the safest direct spawn candidate for Windows wrappers, scripts, and binaries. */

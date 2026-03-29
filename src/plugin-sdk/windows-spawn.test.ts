@@ -93,4 +93,62 @@ describe("resolveWindowsSpawnProgramCandidate", () => {
     expect(await fs.realpath(candidate.leadingArgv[0])).toBe(await fs.realpath(correctEntry));
     expect(candidate.resolution).toBe("node-entrypoint");
   });
+
+  it("prefers the wrapper-linked pnpm package instance when multiple versions exist", async () => {
+    const root = await createTempDir();
+    const binDir = path.join(root, "node_modules", ".bin");
+    const linkedPackageDir = path.join(root, "node_modules", "@scope", "tool");
+    const wrongPackageDir = path.join(
+      root,
+      "node_modules",
+      ".pnpm",
+      "@scope+tool@1.0.0",
+      "node_modules",
+      "@scope",
+      "tool",
+    );
+    const correctPackageDir = path.join(
+      root,
+      "node_modules",
+      ".pnpm",
+      "@scope+tool@2.0.0",
+      "node_modules",
+      "@scope",
+      "tool",
+    );
+    const wrongEntry = path.join(wrongPackageDir, "dist", "cli.js");
+    const correctEntry = path.join(correctPackageDir, "dist", "cli.js");
+    const wrapperPath = path.join(binDir, "tool-beta.cmd");
+
+    await fs.mkdir(path.dirname(wrongEntry), { recursive: true });
+    await fs.mkdir(path.dirname(correctEntry), { recursive: true });
+    await fs.mkdir(path.dirname(linkedPackageDir), { recursive: true });
+    await fs.mkdir(binDir, { recursive: true });
+    await fs.writeFile(wrongEntry, "#!/usr/bin/env node\n", "utf8");
+    await fs.writeFile(correctEntry, "#!/usr/bin/env node\n", "utf8");
+    await fs.writeFile(
+      path.join(wrongPackageDir, "package.json"),
+      JSON.stringify({ name: "@scope/tool", bin: { tool: "dist/cli.js" } }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(correctPackageDir, "package.json"),
+      JSON.stringify({ name: "@scope/tool", bin: { tool: "dist/cli.js" } }),
+      "utf8",
+    );
+    await fs.symlink(correctPackageDir, linkedPackageDir, "dir");
+    await fs.writeFile(wrapperPath, "@ECHO off\r\necho wrapper\r\n", "utf8");
+
+    const candidate = resolveWindowsSpawnProgramCandidate({
+      command: wrapperPath,
+      platform: "win32",
+      env: {},
+      execPath: "C:\\node\\node.exe",
+      packageName: "@scope/tool",
+    });
+
+    expect(candidate.command).toBe("C:\\node\\node.exe");
+    expect(candidate.leadingArgv).toHaveLength(1);
+    expect(await fs.realpath(candidate.leadingArgv[0])).toBe(await fs.realpath(correctEntry));
+  });
 });

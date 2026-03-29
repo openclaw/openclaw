@@ -37,4 +37,34 @@ describe("wrapToolMutationLock timeout policy", () => {
     ];
     expect(options.timeoutMs).toBeGreaterThanOrEqual(60_000);
   });
+
+  it("locks each apply_patch target file using absolute workspace paths", async () => {
+    withWorkspaceLockMock.mockClear();
+    const { wrapApplyPatchMutationLock } = await import("./pi-tools.read.js");
+
+    const wrapped = wrapApplyPatchMutationLock(
+      {
+        name: "apply_patch",
+        label: "apply_patch",
+        description: "apply_patch",
+        parameters: {},
+        execute: async (): Promise<AgentToolResult<unknown>> => ({
+          content: [{ type: "text", text: "ok" }],
+          details: undefined,
+        }),
+      },
+      "/tmp/workspace",
+    );
+
+    await wrapped.execute("call-2", {
+      input:
+        "*** Begin Patch\n*** Update File: src/a.ts\n@@\n-a\n+b\n*** Add File: src/b.ts\n+export {}\n*** End Patch",
+    });
+
+    expect(withWorkspaceLockMock).toHaveBeenCalledTimes(2);
+    expect(withWorkspaceLockMock.mock.calls[0]?.[0]).toBe("/tmp/workspace/src/a.ts");
+    expect(withWorkspaceLockMock.mock.calls[0]?.[1]).toMatchObject({ kind: "file" });
+    expect(withWorkspaceLockMock.mock.calls[1]?.[0]).toBe("/tmp/workspace/src/b.ts");
+    expect(withWorkspaceLockMock.mock.calls[1]?.[1]).toMatchObject({ kind: "file" });
+  });
 });

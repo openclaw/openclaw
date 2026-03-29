@@ -38,7 +38,6 @@ import {
   normalizeToolParams,
   patchToolSchemaForClaudeCompatibility,
   wrapToolMemoryFlushAppendOnlyWrite,
-  wrapToolMutationLock,
   wrapApplyPatchMutationLock,
   wrapToolWorkspaceRootGuard,
   wrapToolWorkspaceRootGuardWithOptions,
@@ -613,14 +612,7 @@ export function createOpenClawCodingTools(options?: {
                   ? { root: sandboxRoot, bridge: sandboxFsBridge }
                   : undefined,
             });
-            return [
-              mutationLockingEnabled
-                ? wrapToolMutationLock(memoryFlushWriteTool, sandboxRoot ?? workspaceRoot, {
-                    containerWorkdir: sandbox?.containerWorkdir,
-                    bindMounts: sandboxBindMounts,
-                  })
-                : memoryFlushWriteTool,
-            ];
+            return [memoryFlushWriteTool];
           }
           return [tool];
         })
