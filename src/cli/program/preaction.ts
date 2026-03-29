@@ -66,7 +66,7 @@ function loadPluginRegistryModule() {
 }
 
 function resolvePluginRegistryScope(commandPath: string[]): "channels" | "all" {
-  return commandPath[0] === "status" || commandPath[0] === "health" ? "channels" : "all";
+  return commandPath[0] === "health" ? "channels" : "all";
 }
 
 function shouldLoadPluginsForCommand(commandPath: string[], jsonOutputMode: boolean): boolean {
