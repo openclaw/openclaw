@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import { createMockTypingController } from "./reply.test-helpers.js";
 
 export function registerGetReplyCommonMocks(): void {
   vi.mock("../../agents/agent-scope.js", async (importOriginal) => {
@@ -50,22 +51,13 @@ export function registerGetReplyCommonMocks(): void {
   vi.mock("./inbound-context.js", () => ({
     finalizeInboundContext: vi.fn((ctx: unknown) => ctx),
   }));
-  vi.mock("./session-reset-model.js", () => ({
+  vi.mock("./session-reset-model.runtime.js", () => ({
     applyResetModelOverride: vi.fn(async () => undefined),
   }));
-  vi.mock("./stage-sandbox-media.js", () => ({
+  vi.mock("./stage-sandbox-media.runtime.js", () => ({
     stageSandboxMedia: vi.fn(async () => undefined),
   }));
   vi.mock("./typing.js", () => ({
-    createTypingController: vi.fn(() => ({
-      onReplyStart: async () => undefined,
-      startTypingLoop: async () => undefined,
-      startTypingOnText: async () => undefined,
-      refreshTypingTtl: () => undefined,
-      isActive: () => false,
-      markRunComplete: () => undefined,
-      markDispatchIdle: () => undefined,
-      cleanup: () => undefined,
-    })),
+    createTypingController: vi.fn(() => createMockTypingController()),
   }));
 }

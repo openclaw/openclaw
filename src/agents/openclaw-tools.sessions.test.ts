@@ -161,6 +161,20 @@ describe("sessions tools", () => {
               childSessions: ["agent:main:subagent:worker"],
             },
             {
+              key: "agent:main:dashboard:child",
+              kind: "direct",
+              sessionId: "s-dashboard-child",
+              updatedAt: 12,
+              parentSessionKey: "agent:main:main",
+            },
+            {
+              key: "agent:main:subagent:worker",
+              kind: "direct",
+              sessionId: "s-subagent-worker",
+              updatedAt: 13,
+              spawnedBy: "agent:main:main",
+            },
+            {
               key: "cron:job-1",
               kind: "direct",
               sessionId: "s-cron",
@@ -196,15 +210,17 @@ describe("sessions tools", () => {
       sessions?: Array<{
         key?: string;
         channel?: string;
+        spawnedBy?: string;
         status?: string;
         startedAt?: number;
         runtimeMs?: number;
         estimatedCostUsd?: number;
         childSessions?: string[];
+        parentSessionKey?: string;
         messages?: Array<{ role?: string }>;
       }>;
     };
-    expect(details.sessions).toHaveLength(3);
+    expect(details.sessions).toHaveLength(5);
     const main = details.sessions?.find((s) => s.key === "main");
     expect(main?.channel).toBe("whatsapp");
     expect(main?.messages?.length).toBe(1);
@@ -216,6 +232,12 @@ describe("sessions tools", () => {
     expect(group?.runtimeMs).toBe(42);
     expect(group?.estimatedCostUsd).toBe(0.0042);
     expect(group?.childSessions).toEqual(["agent:main:subagent:worker"]);
+
+    const dashboardChild = details.sessions?.find((s) => s.key === "agent:main:dashboard:child");
+    expect(dashboardChild?.parentSessionKey).toBe("agent:main:main");
+
+    const subagentWorker = details.sessions?.find((s) => s.key === "agent:main:subagent:worker");
+    expect(subagentWorker?.spawnedBy).toBe("agent:main:main");
 
     const cronOnly = await tool.execute("call2", { kinds: ["cron"] });
     const cronDetails = cronOnly.details as {
@@ -1066,6 +1088,94 @@ describe("sessions tools", () => {
     );
     expect(details.text).toContain("active (waiting on 1 child)");
     expect(details.text).not.toContain("active (waiting on 2 children)");
+  });
+
+  it("subagents list does not keep childSessions attached to a stale older parent", async () => {
+    resetSubagentRegistryForTests();
+    const now = Date.now();
+    const oldParentKey = "agent:main:subagent:old-parent";
+    const newParentKey = "agent:main:subagent:new-parent";
+    const childKey = "agent:main:subagent:shared-child";
+
+    addSubagentRunForTests({
+      runId: "run-old-parent",
+      childSessionKey: oldParentKey,
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "old parent task",
+      cleanup: "keep",
+      createdAt: now - 10_000,
+      startedAt: now - 9_000,
+    });
+    addSubagentRunForTests({
+      runId: "run-new-parent",
+      childSessionKey: newParentKey,
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "new parent task",
+      cleanup: "keep",
+      createdAt: now - 8_000,
+      startedAt: now - 7_000,
+    });
+    addSubagentRunForTests({
+      runId: "run-shared-child-stale-parent",
+      childSessionKey: childKey,
+      requesterSessionKey: oldParentKey,
+      requesterDisplayKey: oldParentKey,
+      controllerSessionKey: oldParentKey,
+      task: "shared child stale parent",
+      cleanup: "keep",
+      createdAt: now - 6_000,
+      startedAt: now - 5_000,
+      endedAt: now - 4_000,
+      outcome: { status: "ok" },
+    });
+    addSubagentRunForTests({
+      runId: "run-shared-child-current-parent",
+      childSessionKey: childKey,
+      requesterSessionKey: newParentKey,
+      requesterDisplayKey: newParentKey,
+      controllerSessionKey: newParentKey,
+      task: "shared child current parent",
+      cleanup: "keep",
+      createdAt: now - 2_000,
+      startedAt: now - 1_500,
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: "agent:main:main",
+    }).find((candidate) => candidate.name === "subagents");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing subagents tool");
+    }
+
+    const result = await tool.execute("call-subagents-list-stale-parent", { action: "list" });
+    const details = result.details as {
+      status?: string;
+      active?: Array<{
+        runId?: string;
+        childSessions?: string[];
+        pendingDescendants?: number;
+        status?: string;
+      }>;
+    };
+
+    expect(details.status).toBe("ok");
+    const oldParent = details.active?.find((entry) => entry.runId === "run-old-parent");
+    const newParent = details.active?.find((entry) => entry.runId === "run-new-parent");
+    expect(oldParent).toMatchObject({
+      runId: "run-old-parent",
+      pendingDescendants: 0,
+      status: "running",
+    });
+    expect(oldParent?.childSessions).toBeUndefined();
+    expect(newParent).toMatchObject({
+      runId: "run-new-parent",
+      childSessions: [childKey],
+      pendingDescendants: 1,
+      status: "active (waiting on 1 child)",
+    });
   });
 
   it("subagents list dedupes stale rows for the same child session", async () => {

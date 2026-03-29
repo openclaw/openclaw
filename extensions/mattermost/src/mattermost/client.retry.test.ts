@@ -2,7 +2,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { createMattermostClient, createMattermostDirectChannelWithRetry } from "./client.js";
 
 describe("createMattermostDirectChannelWithRetry", () => {
-  const mockFetch = vi.fn();
+  const mockFetch = vi.fn<typeof fetch>();
 
   beforeEach(() => {
     vi.resetAllMocks();
@@ -12,7 +12,7 @@ describe("createMattermostDirectChannelWithRetry", () => {
     return createMattermostClient({
       baseUrl: "https://mattermost.example.com",
       botToken: "test-token",
-      fetchImpl: mockFetch as unknown as typeof fetch,
+      fetchImpl: mockFetch,
     });
   }
 
@@ -275,7 +275,7 @@ describe("createMattermostDirectChannelWithRetry", () => {
     let abortListenerCalled = false;
 
     mockFetch.mockImplementationOnce((url, init) => {
-      abortSignal = init?.signal;
+      abortSignal = init?.signal ?? undefined;
       if (abortSignal) {
         abortSignal.addEventListener("abort", () => {
           abortListenerCalled = true;
@@ -423,7 +423,7 @@ describe("createMattermostDirectChannelWithRetry", () => {
   it("passes AbortSignal to fetch for timeout support", async () => {
     let capturedSignal: AbortSignal | undefined;
     mockFetch.mockImplementationOnce((url, init) => {
-      capturedSignal = init?.signal;
+      capturedSignal = init?.signal ?? undefined;
       return Promise.resolve({
         ok: true,
         status: 201,

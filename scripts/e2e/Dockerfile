@@ -31,6 +31,7 @@ COPY --chown=appuser:appuser src ./src
 COPY --chown=appuser:appuser test ./test
 COPY --chown=appuser:appuser scripts ./scripts
 COPY --chown=appuser:appuser docs ./docs
+COPY --chown=appuser:appuser packages ./packages
 COPY --chown=appuser:appuser skills ./skills
 COPY --chown=appuser:appuser ui ./ui
 COPY --chown=appuser:appuser extensions ./extensions

@@ -6,7 +6,11 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
-import { deliveryContextFromSession } from "../../utils/delivery-context.js";
+import {
+  deliveryContextFromSession,
+  mergeDeliveryContext,
+  type DeliveryContext,
+} from "../../utils/delivery-context.js";
 import type {
   DeliverableMessageChannel,
   GatewayMessageChannel,
@@ -162,8 +166,16 @@ export function resolveSessionDeliveryTarget(params: {
 
   const mode = params.mode ?? (explicitTo ? "explicit" : "implicit");
   const accountId = channel && channel === lastChannel ? lastAccountId : undefined;
+  const hasTurnSourceThreadId =
+    params.turnSourceThreadId != null && params.turnSourceThreadId !== "";
   const threadId =
-    mode !== "heartbeat" && channel && channel === lastChannel ? lastThreadId : undefined;
+    channel && channel === lastChannel
+      ? mode === "heartbeat"
+        ? hasTurnSourceThreadId
+          ? params.turnSourceThreadId
+          : undefined
+        : lastThreadId
+      : undefined;
 
   const resolvedThreadId = explicitThreadId ?? threadId;
   return {
@@ -254,6 +266,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
   cfg: OpenClawConfig;
   entry?: SessionEntry;
   heartbeat?: AgentDefaultsConfig["heartbeat"];
+  turnSource?: DeliveryContext;
 }): OutboundTarget {
   const { cfg, entry } = params;
   const heartbeat = params.heartbeat ?? cfg.agents?.defaults?.heartbeat;
@@ -277,11 +290,28 @@ export function resolveHeartbeatDeliveryTarget(params: {
     });
   }
 
+  const resolvedTurnSource =
+    target === "last"
+      ? mergeDeliveryContext(params.turnSource, deliveryContextFromSession(entry))
+      : undefined;
+
   const resolvedTarget = resolveSessionDeliveryTarget({
     entry,
     requestedChannel: target === "last" ? "last" : target,
     explicitTo: heartbeat?.to,
     mode: "heartbeat",
+    turnSourceChannel:
+      resolvedTurnSource?.channel && isDeliverableMessageChannel(resolvedTurnSource.channel)
+        ? resolvedTurnSource.channel
+        : undefined,
+    turnSourceTo: resolvedTurnSource?.to,
+    turnSourceAccountId: resolvedTurnSource?.accountId,
+    // Only pass threadId from an explicit turn source (e.g., restart sentinel's
+    // delivery context). Do NOT fall back to session-stored threadId here —
+    // heartbeat mode intentionally drops inherited thread IDs to avoid replying
+    // in stale threads (e.g., Slack thread_ts). The sentinel's delivery context
+    // carries the correct topic/thread ID when present.
+    turnSourceThreadId: params.turnSource?.threadId,
   });
 
   const heartbeatAccountId = heartbeat?.accountId?.trim();

@@ -23,7 +23,6 @@ vi.mock("@mariozechner/pi-ai/oauth", async () => {
 
 vi.mock("../cli-credentials.js", () => ({
   readCodexCliCredentialsCached: () => null,
-  readQwenCliCredentialsCached: () => null,
   readMiniMaxCliCredentialsCached: () => null,
   resetCliCredentialCachesForTest: () => undefined,
 }));

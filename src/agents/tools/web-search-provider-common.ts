@@ -86,6 +86,7 @@ export async function postTrustedWebToolsJson<T>(
     body: Record<string, unknown>;
     errorLabel: string;
     maxErrorBytes?: number;
+    extraHeaders?: Record<string, string>;
   },
   parseResponse: (response: Response) => Promise<T>,
 ): Promise<T> {
@@ -96,6 +97,7 @@ export async function postTrustedWebToolsJson<T>(
       init: {
         method: "POST",
         headers: {
+          ...params.extraHeaders,
           Accept: "application/json",
           Authorization: `Bearer ${params.apiKey}`,
           "Content-Type": "application/json",
@@ -190,6 +192,50 @@ export function normalizeToIsoDate(value: string): string | undefined {
     return isValidIsoDate(iso) ? iso : undefined;
   }
   return undefined;
+}
+
+export function parseIsoDateRange(params: {
+  rawDateAfter?: string;
+  rawDateBefore?: string;
+  invalidDateAfterMessage: string;
+  invalidDateBeforeMessage: string;
+  invalidDateRangeMessage: string;
+  docs?: string;
+}):
+  | { dateAfter?: string; dateBefore?: string }
+  | {
+      error: "invalid_date" | "invalid_date_range";
+      message: string;
+      docs: string;
+    } {
+  const docs = params.docs ?? "https://docs.openclaw.ai/tools/web";
+  const dateAfter = params.rawDateAfter ? normalizeToIsoDate(params.rawDateAfter) : undefined;
+  if (params.rawDateAfter && !dateAfter) {
+    return {
+      error: "invalid_date",
+      message: params.invalidDateAfterMessage,
+      docs,
+    };
+  }
+
+  const dateBefore = params.rawDateBefore ? normalizeToIsoDate(params.rawDateBefore) : undefined;
+  if (params.rawDateBefore && !dateBefore) {
+    return {
+      error: "invalid_date",
+      message: params.invalidDateBeforeMessage,
+      docs,
+    };
+  }
+
+  if (dateAfter && dateBefore && dateAfter > dateBefore) {
+    return {
+      error: "invalid_date_range",
+      message: params.invalidDateRangeMessage,
+      docs,
+    };
+  }
+
+  return { dateAfter, dateBefore };
 }
 
 export function normalizeFreshness(

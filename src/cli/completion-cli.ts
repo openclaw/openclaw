@@ -13,7 +13,11 @@ import {
 } from "./completion-fish.js";
 import { getCoreCliCommandNames, registerCoreCliByName } from "./program/command-registry.js";
 import { getProgramContext } from "./program/program-context.js";
-import { getSubCliEntries, registerSubCliByName } from "./program/register.subclis.js";
+import {
+  getSubCliEntries,
+  loadValidatedConfigForPluginRegistration,
+  registerSubCliByName,
+} from "./program/register.subclis.js";
 
 const COMPLETION_SHELLS = ["zsh", "bash", "powershell", "fish"] as const;
 type CompletionShell = (typeof COMPLETION_SHELLS)[number];
@@ -273,6 +277,12 @@ export function registerCompletionCli(program: Command) {
         await registerSubCliByName(program, entry.name);
       }
 
+      const config = await loadValidatedConfigForPluginRegistration();
+      if (config) {
+        const { registerPluginCliCommands } = await import("../plugins/cli.js");
+        registerPluginCliCommands(program, config);
+      }
+
       if (options.writeState) {
         const writeShells = options.shell ? [shell] : [...COMPLETION_SHELLS];
         await writeCompletionCache({
@@ -401,7 +411,23 @@ _${rootCmd}_root_completion() {
 
 ${generateZshSubcommands(program, rootCmd)}
 
-compdef _${rootCmd}_root_completion ${rootCmd}
+_${rootCmd}_register_completion() {
+  if (( ! $+functions[compdef] )); then
+    return 0
+  fi
+
+  compdef _${rootCmd}_root_completion ${rootCmd}
+  precmd_functions=(\${precmd_functions:#_${rootCmd}_register_completion})
+  unfunction _${rootCmd}_register_completion 2>/dev/null
+}
+
+_${rootCmd}_register_completion
+if (( ! $+functions[compdef] )); then
+  typeset -ga precmd_functions
+  if [[ -z "\${precmd_functions[(r)_${rootCmd}_register_completion]}" ]]; then
+    precmd_functions+=(_${rootCmd}_register_completion)
+  fi
+fi
 `;
   return script;
 }

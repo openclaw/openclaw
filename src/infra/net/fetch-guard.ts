@@ -1,6 +1,6 @@
 import type { Dispatcher } from "undici";
 import { logWarn } from "../../logger.js";
-import { bindAbortRelay } from "../../utils/fetch-timeout.js";
+import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
 import { hasProxyEnvConfigured } from "./proxy-env.js";
 import {
   closeDispatcher,
@@ -125,40 +125,6 @@ function retainSafeHeadersForCrossOriginRedirect(init?: RequestInit): RequestIni
   return { ...init, headers };
 }
 
-function buildAbortSignal(params: { timeoutMs?: number; signal?: AbortSignal }): {
-  signal?: AbortSignal;
-  cleanup: () => void;
-} {
-  const { timeoutMs, signal } = params;
-  if (!timeoutMs && !signal) {
-    return { signal: undefined, cleanup: () => {} };
-  }
-
-  if (!timeoutMs) {
-    return { signal, cleanup: () => {} };
-  }
-
-  const controller = new AbortController();
-  const timeoutId = setTimeout(controller.abort.bind(controller), timeoutMs);
-  const onAbort = bindAbortRelay(controller);
-  if (signal) {
-    if (signal.aborted) {
-      controller.abort();
-    } else {
-      signal.addEventListener("abort", onAbort, { once: true });
-    }
-  }
-
-  const cleanup = () => {
-    clearTimeout(timeoutId);
-    if (signal) {
-      signal.removeEventListener("abort", onAbort);
-    }
-  };
-
-  return { signal: controller.signal, cleanup };
-}
-
 export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<GuardedFetchResult> {
   const fetcher: FetchLike | undefined = params.fetchImpl ?? globalThis.fetch;
   if (!fetcher) {
@@ -171,7 +137,7 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
       : DEFAULT_MAX_REDIRECTS;
   const mode = resolveGuardedFetchMode(params);
 
-  const { signal, cleanup } = buildAbortSignal({
+  const { signal, cleanup } = buildTimeoutAbortSignal({
     timeoutMs: params.timeoutMs,
     signal: params.signal,
   });

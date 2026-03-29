@@ -38,6 +38,7 @@ type EmbeddedRunParams = {
 };
 
 const state = vi.hoisted(() => ({
+  compactEmbeddedPiSessionMock: vi.fn(),
   runEmbeddedPiAgentMock: vi.fn(),
   runCliAgentMock: vi.fn(),
 }));
@@ -71,9 +72,14 @@ vi.mock("../../agents/model-fallback.js", () => ({
     model,
     attempts: [],
   }),
+  isFallbackSummaryError: (err: unknown) =>
+    err instanceof Error &&
+    err.name === "FallbackSummaryError" &&
+    Array.isArray((err as { attempts?: unknown[] }).attempts),
 }));
 
 vi.mock("../../agents/pi-embedded.js", () => ({
+  compactEmbeddedPiSession: (params: unknown) => state.compactEmbeddedPiSessionMock(params),
   queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
   runEmbeddedPiAgent: (params: unknown) => state.runEmbeddedPiAgentMock(params),
 }));
@@ -96,6 +102,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  state.compactEmbeddedPiSessionMock.mockClear();
   state.runEmbeddedPiAgentMock.mockClear();
   state.runCliAgentMock.mockClear();
   vi.mocked(enqueueFollowupRun).mockClear();
@@ -1720,6 +1727,109 @@ describe("runReplyAgent memory flush", () => {
       const call = state.runCliAgentMock.mock.calls[0]?.[0] as { prompt?: string } | undefined;
       expect(call?.prompt).toBe("hello");
       expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("runs preflight compaction when transcript-estimated tokens cross the threshold", async () => {
+    await withTempStore(async (storePath) => {
+      const sessionKey = "main";
+      const sessionFile = "session-relative.jsonl";
+      const workspaceDir = path.dirname(storePath);
+      const transcriptPath = path.join(path.dirname(storePath), sessionFile);
+      await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
+      await fs.writeFile(
+        transcriptPath,
+        `${JSON.stringify({
+          message: {
+            role: "user",
+            content: "x".repeat(320_000),
+            timestamp: Date.now(),
+          },
+        })}\n`,
+        "utf-8",
+      );
+      await fs.writeFile(
+        path.join(workspaceDir, "AGENTS.md"),
+        [
+          "## Session Startup",
+          "Read AGENTS.md before replying.",
+          "",
+          "## Red Lines",
+          "Never skip safety checks.",
+        ].join("\n"),
+        "utf-8",
+      );
+
+      const sessionEntry: SessionEntry = {
+        sessionId: "session",
+        updatedAt: Date.now(),
+        sessionFile,
+        totalTokens: 10,
+        totalTokensFresh: false,
+        compactionCount: 1,
+      };
+
+      await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+
+      state.compactEmbeddedPiSessionMock.mockResolvedValueOnce({
+        ok: true,
+        compacted: true,
+        result: {
+          summary: "compacted",
+          firstKeptEntryId: "first-kept",
+          tokensBefore: 90_000,
+          tokensAfter: 8_000,
+        },
+      });
+      const calls: Array<{ prompt?: string; extraSystemPrompt?: string }> = [];
+      state.runEmbeddedPiAgentMock.mockImplementation(async (params: EmbeddedRunParams) => {
+        calls.push({
+          prompt: params.prompt,
+          extraSystemPrompt: params.extraSystemPrompt,
+        });
+        return {
+          payloads: [{ text: "ok" }],
+          meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+        };
+      });
+
+      const baseRun = createBaseRun({
+        storePath,
+        sessionEntry,
+        runOverrides: { sessionFile, workspaceDir },
+      });
+
+      await runReplyAgentWithBase({
+        baseRun,
+        storePath,
+        sessionKey,
+        sessionEntry,
+        commandBody: "hello",
+      });
+
+      expect(state.compactEmbeddedPiSessionMock).toHaveBeenCalledOnce();
+      const compactionCall = state.compactEmbeddedPiSessionMock.mock.calls[0]?.[0] as
+        | {
+            sessionId?: string;
+            sessionKey?: string;
+            trigger?: string;
+            currentTokenCount?: number;
+            sessionFile?: string;
+          }
+        | undefined;
+      expect(compactionCall?.sessionId).toBe("session");
+      expect(compactionCall?.sessionKey).toBe(sessionKey);
+      expect(compactionCall?.trigger).toBe("budget");
+      expect(compactionCall?.currentTokenCount).toEqual(expect.any(Number));
+      expect(await normalizeComparablePath(compactionCall?.sessionFile ?? "")).toBe(
+        await normalizeComparablePath(transcriptPath),
+      );
+      expect(calls.map((call) => call.prompt)).toEqual(["hello"]);
+      expect(calls[0]?.extraSystemPrompt).toContain("Post-compaction context refresh");
+      expect(calls[0]?.extraSystemPrompt).toContain("Read AGENTS.md before replying.");
+
+      const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+      expect(stored[sessionKey].compactionCount).toBe(2);
     });
   });
 
