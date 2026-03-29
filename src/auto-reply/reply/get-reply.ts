@@ -359,6 +359,7 @@ export async function getReplyFromConfig(
   if (
     !hasResolvedHeartbeatModelOverride &&
     !hasSessionModelOverride() &&
+    !channelModelOverride &&
     !directives.hasModelDirective
   ) {
     const triggerMessage = finalized.Body || triggerBodyNormalized || "";

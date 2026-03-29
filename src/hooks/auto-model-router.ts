@@ -81,9 +81,8 @@ function validateRouterAnalysis(parsed: unknown, _config: RouterConfig): RouterA
   }
 
   if (typeof result.emoji !== "string" || !["🏠", "☁️"].includes(result.emoji)) {
-    throw new Error(
-      `Invalid router output: emoji must be '🏠' or '☁️', got ${String(result.emoji)}`,
-    );
+    log.warn(`Router output missing or invalid emoji field, ignoring: ${String(result.emoji)}`);
+    // emoji is cosmetic; don't throw
   }
 
   return {
