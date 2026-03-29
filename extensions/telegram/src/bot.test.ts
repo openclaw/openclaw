@@ -1,11 +1,11 @@
 import { rm } from "node:fs/promises";
 import type { PluginInteractiveTelegramHandlerContext } from "openclaw/plugin-sdk/core";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { expectChannelInboundContextContract as expectInboundContextContract } from "../../../src/channels/plugins/contracts/suites.js";
 import {
   clearPluginInteractiveHandlers,
   registerPluginInteractiveHandler,
-} from "../../../src/plugins/interactive.js";
+} from "openclaw/plugin-sdk/plugin-runtime";
+import { expectChannelInboundContextContract as expectInboundContextContract } from "openclaw/plugin-sdk/testing";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestamp.js";
 const {
   answerCallbackQuerySpy,
@@ -31,7 +31,7 @@ const {
 let listNativeCommandSpecs: typeof import("../../../src/auto-reply/commands-registry.js").listNativeCommandSpecs;
 let listNativeCommandSpecsForConfig: typeof import("../../../src/auto-reply/commands-registry.js").listNativeCommandSpecsForConfig;
 let loadSessionStore: typeof import("../../../src/config/sessions.js").loadSessionStore;
-let normalizeTelegramCommandName: typeof import("../../../src/config/telegram-custom-commands.js").normalizeTelegramCommandName;
+let normalizeTelegramCommandName: typeof import("openclaw/plugin-sdk/config-runtime").normalizeTelegramCommandName;
 let createTelegramBotBase: typeof import("./bot.js").createTelegramBot;
 let setTelegramBotRuntimeForTest: typeof import("./bot.js").setTelegramBotRuntimeForTest;
 let createTelegramBot: (
@@ -54,8 +54,7 @@ describe("createTelegramBot", () => {
     ({ listNativeCommandSpecs, listNativeCommandSpecsForConfig } =
       await import("../../../src/auto-reply/commands-registry.js"));
     ({ loadSessionStore } = await import("../../../src/config/sessions.js"));
-    ({ normalizeTelegramCommandName } =
-      await import("../../../src/config/telegram-custom-commands.js"));
+    ({ normalizeTelegramCommandName } = await import("openclaw/plugin-sdk/config-runtime"));
     ({ createTelegramBot: createTelegramBotBase, setTelegramBotRuntimeForTest } =
       await import("./bot.js"));
   });

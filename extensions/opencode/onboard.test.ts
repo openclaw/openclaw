@@ -1,8 +1,8 @@
-import { describe, expect, it } from "vitest";
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
-} from "../../src/config/model-input.js";
+} from "openclaw/plugin-sdk/provider-onboard";
+import { describe, expect, it } from "vitest";
 import {
   createConfigWithFallbacks,
   EXPECTED_FALLBACKS,

@@ -1,5 +1,5 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
 import type { SignalDaemonExitEvent } from "./daemon.js";
 import {
   createSignalToolResultConfig,

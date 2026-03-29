@@ -1,5 +1,5 @@
+import type { EnvelopeFormatOptions } from "openclaw/plugin-sdk/channel-inbound";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { EnvelopeFormatOptions } from "../../../src/auto-reply/envelope.js";
 import { createPluginRuntimeMock } from "../../../test/helpers/plugins/plugin-runtime-mock.js";
 import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";

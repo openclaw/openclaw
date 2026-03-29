@@ -1,9 +1,9 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { TELEGRAM_COMMAND_NAME_PATTERN } from "openclaw/plugin-sdk/config-runtime";
+import type { TelegramAccountConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { STATE_DIR } from "openclaw/plugin-sdk/state-paths";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import { STATE_DIR } from "../../../src/config/paths.js";
-import { TELEGRAM_COMMAND_NAME_PATTERN } from "../../../src/config/telegram-custom-commands.js";
-import type { TelegramAccountConfig } from "../../../src/config/types.js";
-import type { RuntimeEnv } from "../../../src/runtime.js";
 import {
   pluginCommandMocks,
   resetPluginCommandMocks,

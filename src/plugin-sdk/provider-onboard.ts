@@ -17,6 +17,10 @@ type NormalizedModelRef = {
 };
 
 export type { OpenClawConfig, ModelApi, ModelDefinitionConfig, ModelProviderConfig };
+export {
+  resolveAgentModelFallbackValues,
+  resolveAgentModelPrimaryValue,
+} from "../config/model-input.js";
 
 export type AgentModelAliasEntry =
   | string

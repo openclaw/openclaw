@@ -1,5 +1,5 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../../src/config/config.js";
 
 const runtimeModule = await import("./runtime.js");
 const handleDiscordActionMock = vi

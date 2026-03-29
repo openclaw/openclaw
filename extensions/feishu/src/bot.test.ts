@@ -1,6 +1,6 @@
 import type * as ConversationRuntime from "openclaw/plugin-sdk/conversation-runtime";
+import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ResolvedAgentRoute } from "../../../src/routing/resolve-route.js";
 import { createPluginRuntimeMock } from "../../../test/helpers/plugins/plugin-runtime-mock.js";
 import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
@@ -259,7 +259,7 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
   };
 });
 
-vi.mock("../../../src/infra/outbound/session-binding-service.js", () => ({
+vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
   getSessionBindingService: () => ({
     resolveByConversation: mockResolveBoundConversation,
     touch: mockTouchBinding,

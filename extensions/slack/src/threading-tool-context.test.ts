@@ -1,5 +1,5 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
 import { buildSlackThreadingToolContext } from "./threading-tool-context.js";
 
 const emptyCfg = {} as OpenClawConfig;

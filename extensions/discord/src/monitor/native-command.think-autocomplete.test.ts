@@ -2,13 +2,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ChannelType, type AutocompleteInteraction } from "@buape/carbon";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   findCommandByNativeName,
   resolveCommandArgChoices,
-} from "../../../../src/auto-reply/commands-registry.js";
-import type { OpenClawConfig, loadConfig } from "../../../../src/config/config.js";
-import { clearSessionStoreCacheForTest } from "../../../../src/config/sessions/store.js";
+} from "openclaw/plugin-sdk/command-auth";
+import type { OpenClawConfig, loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import { clearSessionStoreCacheForTest } from "openclaw/plugin-sdk/config-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
 const ensureConfiguredBindingRouteReadyMock = vi.hoisted(() =>

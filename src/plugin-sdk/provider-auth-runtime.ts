@@ -1,6 +1,7 @@
 // Public runtime auth helpers for provider plugins.
 
 export { resolveEnvApiKey } from "../agents/model-auth-env.js";
+export { NON_ENV_SECRETREF_MARKER } from "../agents/model-auth-markers.js";
 export {
   requireApiKey,
   resolveAwsSdkEnvVarName,

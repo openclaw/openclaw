@@ -1,9 +1,9 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   PluginApprovalRequest,
   PluginApprovalResolved,
-} from "../../../src/infra/plugin-approvals.js";
-import type { PluginRuntime } from "../../../src/plugins/runtime/types.js";
+} from "openclaw/plugin-sdk/infra-runtime";
+import type { PluginRuntime } from "openclaw/plugin-sdk/testing";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStartAccountContext } from "../../../test/helpers/plugins/start-account-context.js";
 import type { ResolvedDiscordAccount } from "./accounts.js";
 import type { OpenClawConfig } from "./runtime-api.js";

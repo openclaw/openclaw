@@ -115,7 +115,7 @@ vi.mock("../../../src/agents/tools/gateway.js", () => gatewayMocks);
 const configMocks = vi.hoisted(() => ({
   loadConfig: vi.fn(() => ({ browser: {} })),
 }));
-vi.mock("../../../src/config/config.js", () => configMocks);
+vi.mock("openclaw/plugin-sdk/config-runtime", () => configMocks);
 
 const sessionTabRegistryMocks = vi.hoisted(() => ({
   trackSessionBrowserTab: vi.fn(),

@@ -1,5 +1,5 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
 const deliveryMocks = vi.hoisted(() => ({
   deliverReplies: vi.fn(async () => ({ delivered: true })),
 }));

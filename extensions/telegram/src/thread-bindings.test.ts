@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveStateDir } from "../../../src/config/paths.js";
-import { getSessionBindingService } from "../../../src/infra/outbound/session-binding-service.js";
 import { importFreshModule } from "../../../test/helpers/import-fresh.js";
 import {
   __testing,

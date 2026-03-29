@@ -1,6 +1,6 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { DiscordActionConfig } from "openclaw/plugin-sdk/config-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../../src/config/config.js";
-import type { DiscordActionConfig } from "../../../../src/config/types.discord.js";
 import { discordGuildActionRuntime, handleDiscordGuildAction } from "./runtime.guild.js";
 import { handleDiscordAction } from "./runtime.js";
 import {

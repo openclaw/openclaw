@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resolvePreferredOpenClawTmpDir } from "../../../src/infra/tmp-openclaw-dir.js";
 import type { ClawdbotConfig } from "../runtime-api.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());

@@ -1,6 +1,6 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { sanitizeTerminalText } from "openclaw/plugin-sdk/testing";
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../../src/config/config.js";
-import { sanitizeTerminalText } from "../../../../src/terminal/safe-text.js";
 import {
   describeIMessageEchoDropLog,
   resolveIMessageInboundDecision,

@@ -1,6 +1,6 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
 import { handleWhatsAppAction, whatsAppActionRuntime } from "./action-runtime.js";
 
 const originalWhatsAppActionRuntime = { ...whatsAppActionRuntime };
