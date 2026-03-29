@@ -52,6 +52,7 @@ import {
   shouldSuppressTelegramExecApprovalForwardingFallback,
 } from "./exec-approval-forwarding.js";
 import {
+  getTelegramExecApprovalApprovers,
   isTelegramExecApprovalClientEnabled,
   resolveTelegramExecApprovalTarget,
 } from "./exec-approvals.js";
@@ -457,7 +458,10 @@ export const telegramPlugin = createChatChannelPlugin({
       },
     },
     execApprovals: {
-      getInitiatingSurfaceState: () => ({ kind: "enabled" }),
+      getInitiatingSurfaceState: ({ cfg, accountId }) =>
+        getTelegramExecApprovalApprovers({ cfg, accountId }).length > 0
+          ? { kind: "enabled" }
+          : { kind: "disabled" },
       hasConfiguredDmRoute: ({ cfg }) => hasTelegramExecApprovalDmRoute(cfg),
       shouldSuppressForwardingFallback: (params) =>
         shouldSuppressTelegramExecApprovalForwardingFallback(params),

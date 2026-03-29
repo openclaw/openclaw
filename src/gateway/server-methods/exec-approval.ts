@@ -191,6 +191,7 @@ export function createExecApprovalHandlers(
       const hasExecApprovalClients = context.hasExecApprovalClients?.(client?.connId) ?? false;
       const hasTurnSourceRoute = hasApprovalTurnSourceRoute({
         turnSourceChannel: record.request.turnSourceChannel,
+        turnSourceAccountId: record.request.turnSourceAccountId,
       });
       let forwarded = false;
       if (opts?.forwarder) {
