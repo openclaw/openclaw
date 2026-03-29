@@ -127,6 +127,17 @@ function extractAllowedValues(error: ErrorObject): unknown[] | null {
   return null;
 }
 
+function extractAdditionalProperty(error: ErrorObject): string | null {
+  if (error.keyword !== "additionalProperties") {
+    return null;
+  }
+  const params = error.params as { additionalProperty?: unknown };
+  const additionalProperty = params?.additionalProperty;
+  return typeof additionalProperty === "string" && additionalProperty.trim()
+    ? additionalProperty
+    : null;
+}
+
 function getAjvAllowedValuesSummary(error: ErrorObject): ReturnType<typeof summarizeAllowedValues> {
   const allowedValues = extractAllowedValues(error);
   if (!allowedValues) {
@@ -141,6 +152,20 @@ function formatAjvErrors(errors: ErrorObject[] | null | undefined): JsonSchemaVa
   }
   return errors.map((error) => {
     const path = resolveAjvErrorPath(error);
+    const additionalProperty = extractAdditionalProperty(error);
+    
+    // Handle additionalProperties error with specific property name
+    if (error.keyword === "additionalProperties" && additionalProperty) {
+      const message = `unexpected property '${additionalProperty}'`;
+      const safePath = sanitizeTerminalText(path);
+      const safeMessage = sanitizeTerminalText(message);
+      return {
+        path,
+        message,
+        text: `${safePath}: ${safeMessage}`,
+      };
+    }
+    
     const baseMessage = error.message ?? "invalid";
     const allowedValuesSummary = getAjvAllowedValuesSummary(error);
     const message = allowedValuesSummary
