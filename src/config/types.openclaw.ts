@@ -85,6 +85,8 @@ export type OpenClawConfig = {
   ui?: {
     /** Accent color for OpenClaw UI chrome (hex). */
     seamColor?: string;
+    /** User avatar override for Control UI (URL, path, or data URI). */
+    userAvatar?: string;
     assistant?: {
       /** Assistant display name for UI surfaces. */
       name?: string;
