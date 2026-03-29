@@ -3,6 +3,7 @@ import type { SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
 import { resolveProviderAttributionHeaders } from "../provider-attribution.js";
 import { log } from "./logger.js";
+import { flattenOpenAiCompletionsTextOnlyUserContentInPayload } from "./openai-completions-plaintext-user-content.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
 type OpenAIServiceTier = "auto" | "default" | "flex" | "priority";
@@ -375,6 +376,21 @@ export function createCodexDefaultTransportWrapper(baseStreamFn: StreamFn | unde
     underlying(model, context, {
       ...options,
       transport: options?.transport ?? "auto",
+    });
+}
+
+/**
+ * Strict OpenAI-compatible servers may reject user `content` sent as a
+ * single-element `[{ type: "text", text }]` array. Flatten to a string when
+ * the model is configured for text input only.
+ */
+export function createOpenAiCompletionsPlainTextUserContentWrapper(
+  baseStreamFn: StreamFn | undefined,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) =>
+    streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
+      flattenOpenAiCompletionsTextOnlyUserContentInPayload(payloadObj, model);
     });
 }
 

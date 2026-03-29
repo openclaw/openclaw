@@ -25,6 +25,7 @@ import {
 } from "./moonshot-stream-wrappers.js";
 import {
   createOpenAIFastModeWrapper,
+  createOpenAiCompletionsPlainTextUserContentWrapper,
   createOpenAIResponsesContextManagementWrapper,
   createOpenAIServiceTierWrapper,
   resolveOpenAIFastMode,
@@ -294,6 +295,8 @@ export function applyExtraParamsToAgent(
     agent.streamFn,
     effectiveExtraParams,
   );
+
+  agent.streamFn = createOpenAiCompletionsPlainTextUserContentWrapper(agent.streamFn);
 
   const rawParallelToolCalls = resolveAliasedParamValue(
     [resolvedExtraParams, override],
