@@ -1159,11 +1159,11 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    // Acquire a non-reentrant write lock before reading/writing the transcript so that:
-    // 1. Concurrent sessions.truncate (which holds the same lock) cannot interleave and
-    //    overwrite compact's output with stale pre-compact content.
-    // 2. Active agent runs holding the lock in the same process are actually blocked
-    //    (allowReentrant: false prevents lock re-entry from this destructive path).
+    // Acquire a non-reentrant write lock before reading/writing the transcript so that
+    // concurrent sessions.truncate (Phase 3c also holds this lock with allowReentrant:false)
+    // cannot interleave and silently overwrite compact's output with stale pre-compact content.
+    // If an active run holds the lock, compact waits up to the lock timeout for the run to
+    // finish before proceeding — this prevents compact from interleaving with appends.
     const compactWriteLock = await acquireSessionWriteLock({
       sessionFile: filePath,
       allowReentrant: false,

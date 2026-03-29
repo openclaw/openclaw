@@ -1516,7 +1516,13 @@ export function renderApp(state: AppViewState) {
                       return;
                     }
                     if (state.chatRunId !== null && state.chatRunId !== truncatingRunId) {
-                      await loadChatHistory(state);
+                      // A new run started while truncation was in flight; reload but do not
+                      // restore the optimistic delete (backend already truncated).
+                      try {
+                        await loadChatHistory(state);
+                      } catch {
+                        // history reload failed; backend is still truncated, do not call onFail
+                      }
                       return;
                     }
                     if (result.truncated) {
@@ -1524,9 +1530,17 @@ export function renderApp(state: AppViewState) {
                       state.chatStream = null;
                       state.chatRunId = null;
                     }
-                    await loadChatHistory(state);
+                    try {
+                      await loadChatHistory(state);
+                    } catch (histErr: unknown) {
+                      // Reload failed but the backend truncate already succeeded; do not restore
+                      // the optimistic delete via onFail — that would cause client/server divergence.
+                      state.lastError = String(histErr);
+                    }
                   })
                   .catch((err: unknown) => {
+                    // Only reached when the sessions.truncate RPC itself fails (network / server error).
+                    // Safe to restore the optimistic delete because no backend mutation occurred.
                     onFail();
                     if (state.sessionKey !== truncatingKey) {
                       return;
