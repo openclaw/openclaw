@@ -62,7 +62,7 @@ describe("config io write", () => {
   }
 
   async function writeTokenAuthAndReadConfig(params: {
-    io: { writeConfigFile: (config: Record<string, unknown>) => Promise<void> };
+    io: { writeConfigFile: (config: Record<string, unknown>) => Promise<unknown> };
     snapshot: { config: Record<string, unknown> };
     configPath: string;
   }) {

@@ -292,8 +292,10 @@ function makeSnapshot(partial: Partial<ConfigFileSnapshot> = {}): ConfigFileSnap
     exists: true,
     raw: "{}",
     parsed: {},
+    sourceConfig: {},
     resolved: {},
     valid: true,
+    runtimeConfig: {},
     config: {},
     issues: [],
     warnings: [],
@@ -458,6 +460,8 @@ describe("startGatewayConfigReloader", () => {
         gateway: { reload: { debounceMs: 0 } },
         hooks: { enabled: true },
       },
+      persistedHash: "internal-1",
+      writtenAtMs: Date.now(),
     });
     await vi.runOnlyPendingTimersAsync();
 
@@ -471,8 +475,15 @@ describe("startGatewayConfigReloader", () => {
     expect(readSnapshot).not.toHaveBeenCalled();
     expect(harness.onHotReload).toHaveBeenCalledTimes(1);
 
+    await vi.advanceTimersByTimeAsync(400);
     readSnapshot.mockResolvedValueOnce(
       makeSnapshot({
+        sourceConfig: {
+          gateway: { reload: { debounceMs: 0 }, port: 19001 },
+        },
+        runtimeConfig: {
+          gateway: { reload: { debounceMs: 0 }, port: 19001 },
+        },
         config: {
           gateway: { reload: { debounceMs: 0 }, port: 19001 },
         },
