@@ -215,6 +215,23 @@ describe("markAuthProfileFailure", () => {
       expect(stats?.cooldownUntil).toBeUndefined();
     });
   });
+  it("disables auth failures without using cooldown escalation", async () => {
+    await withAuthProfileStore(async ({ agentDir, store }) => {
+      await markAuthProfileFailure({
+        store,
+        profileId: "anthropic:default",
+        reason: "auth",
+        agentDir,
+      });
+
+      const stats = store.usageStats?.["anthropic:default"];
+      expect(typeof stats?.disabledUntil).toBe("number");
+      expect(stats?.disabledReason).toBe("auth");
+      expect(stats?.cooldownUntil).toBeUndefined();
+      expect(stats?.failureCounts?.auth).toBe(1);
+      expect(stats?.failureCounts?.rate_limit).toBeUndefined();
+    });
+  });
   it("resets backoff counters outside the failure window", async () => {
     const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-"));
     try {

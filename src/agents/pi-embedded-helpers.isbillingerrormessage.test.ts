@@ -532,6 +532,10 @@ describe("classifyFailoverReasonFromHttpStatus", () => {
     expect(classifyFailoverReasonFromHttpStatus(401, "invalid_api_key")).toBe("auth_permanent");
   });
 
+  it("keeps explicit HTTP 429 in the rate_limit lane even when auth keywords appear", () => {
+    expect(classifyFailoverReasonFromHttpStatus(429, "invalid api key")).toBe("rate_limit");
+  });
+
   it("treats HTTP 422 as format error", () => {
     expect(classifyFailoverReasonFromHttpStatus(422)).toBe("format");
     expect(classifyFailoverReasonFromHttpStatus(422, "check open ai req parameter error")).toBe(
@@ -833,6 +837,14 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("invalid api key")).toBe("auth");
     expect(classifyFailoverReason("no credentials found")).toBe("auth");
     expect(classifyFailoverReason("no api key found")).toBe("auth");
+    expect(classifyFailoverReason("HTTP 429 invalid api key")).toBe("rate_limit");
+    expect(
+      classifyFailoverReason("HTTP 401 rate limit exceeded while validating credentials"),
+    ).toBe("auth");
+    expect(classifyFailoverReason("HTTP 401 insufficient quota")).toBe("auth");
+    expect(classifyFailoverReason("403 quota exceeded: access denied for this API key")).toBe(
+      "auth",
+    );
     expect(
       classifyFailoverReason(
         'No API key found for provider "openai". Auth store: /tmp/openclaw-agent-abc/auth-profiles.json (agentDir: /tmp/openclaw-agent-abc).',
@@ -894,6 +906,12 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("You have hit your ChatGPT usage limit (plus plan)")).toBe(
       "rate_limit",
     );
+  });
+
+  it("keeps message-only classification behavior when no explicit HTTP status is present", () => {
+    expect(classifyFailoverReason("rate limit exceeded")).toBe("rate_limit");
+    expect(classifyFailoverReason("quota exceeded")).toBe("rate_limit");
+    expect(classifyFailoverReason("access denied")).toBe("auth");
   });
   it("classifies AWS Bedrock too-many-tokens-per-day errors as rate_limit", () => {
     expect(
