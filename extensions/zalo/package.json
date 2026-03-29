@@ -37,7 +37,6 @@
     },
     "install": {
       "npmSpec": "@openclaw/zalo",
-      "localPath": "extensions/zalo",
       "defaultChoice": "npm",
       "minHostVersion": ">=2026.3.28"
     },

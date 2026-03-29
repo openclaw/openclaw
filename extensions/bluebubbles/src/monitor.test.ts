@@ -5,7 +5,7 @@ import {
   EMPTY_DISPATCH_RESULT,
   resetBlueBubblesMonitorTestState,
   type DispatchReplyParams,
-} from "../../../test/helpers/extensions/bluebubbles-monitor.js";
+} from "../../../test/helpers/plugins/bluebubbles-monitor.js";
 import type { ResolvedBlueBubblesAccount } from "./accounts.js";
 import { fetchBlueBubblesHistory } from "./history.js";
 import { createBlueBubblesDebounceRegistry } from "./monitor-debounce.js";

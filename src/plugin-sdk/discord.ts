@@ -101,10 +101,7 @@ export {
   setThreadBindingMaxAgeBySessionKey,
   unbindThreadBindingsBySessionKey,
 } from "./discord-thread-bindings.js";
-export {
-  __testing as discordThreadBindingTesting,
-  createThreadBindingManager as createDiscordThreadBindingManager,
-} from "./discord-thread-bindings.js";
+export { createThreadBindingManager as createDiscordThreadBindingManager } from "./discord-thread-bindings.js";
 export { getGateway } from "./discord-runtime-surface.js";
 export { getPresence } from "./discord-runtime-surface.js";
 export { readDiscordComponentSpec } from "./discord-surface.js";

@@ -1,3 +1,3 @@
-import { describeOllamaProviderDiscoveryContract } from "../../test/helpers/extensions/provider-discovery-contract.js";
+import { describeOllamaProviderDiscoveryContract } from "../../test/helpers/plugins/provider-discovery-contract.js";
 
 describeOllamaProviderDiscoveryContract();

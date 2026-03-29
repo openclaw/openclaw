@@ -35,7 +35,6 @@
     },
     "install": {
       "npmSpec": "@openclaw/nextcloud-talk",
-      "localPath": "extensions/nextcloud-talk",
       "defaultChoice": "npm",
       "minHostVersion": ">=2026.3.28"
     },

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
-import { captureEnv } from "../../../test/helpers/extensions/env.js";
+import { captureEnv } from "../../../test/helpers/plugins/env.js";
 import {
   handleTelegramAction,
   readTelegramButtons,

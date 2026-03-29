@@ -5,12 +5,16 @@ import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { resolveGitHead, writeBuildStamp as writeDistBuildStamp } from "./build-stamp.mjs";
+import {
+  BUNDLED_PLUGIN_PATH_PREFIX,
+  BUNDLED_PLUGIN_ROOT_DIR,
+} from "./lib/bundled-plugin-paths.mjs";
 import { runRuntimePostBuild } from "./runtime-postbuild.mjs";
 
 const buildScript = "scripts/tsdown-build.mjs";
 const compilerArgs = [buildScript, "--no-clean"];
 
-const runNodeSourceRoots = ["src", "extensions"];
+const runNodeSourceRoots = ["src", BUNDLED_PLUGIN_ROOT_DIR];
 const runNodeConfigFiles = ["tsconfig.json", "package.json", "tsdown.config.ts"];
 export const runNodeWatchedPaths = [...runNodeSourceRoots, ...runNodeConfigFiles];
 const extensionSourceFilePattern = /\.(?:[cm]?[jt]sx?)$/;
@@ -40,8 +44,8 @@ export const isBuildRelevantRunNodePath = (repoPath) => {
   if (normalizedPath.startsWith("src/")) {
     return !isIgnoredSourcePath(normalizedPath.slice("src/".length));
   }
-  if (normalizedPath.startsWith("extensions/")) {
-    return isBuildRelevantSourcePath(normalizedPath.slice("extensions/".length));
+  if (normalizedPath.startsWith(BUNDLED_PLUGIN_PATH_PREFIX)) {
+    return isBuildRelevantSourcePath(normalizedPath.slice(BUNDLED_PLUGIN_PATH_PREFIX.length));
   }
   return false;
 };
@@ -62,8 +66,8 @@ export const isRestartRelevantRunNodePath = (repoPath) => {
   if (normalizedPath.startsWith("src/")) {
     return !isIgnoredSourcePath(normalizedPath.slice("src/".length));
   }
-  if (normalizedPath.startsWith("extensions/")) {
-    return isRestartRelevantExtensionPath(normalizedPath.slice("extensions/".length));
+  if (normalizedPath.startsWith(BUNDLED_PLUGIN_PATH_PREFIX)) {
+    return isRestartRelevantExtensionPath(normalizedPath.slice(BUNDLED_PLUGIN_PATH_PREFIX.length));
   }
   return false;
 };

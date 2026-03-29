@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { withEnv } from "../../../test/helpers/extensions/env.js";
+import { withEnv } from "../../../test/helpers/plugins/env.js";
 import { __testing } from "./kimi-web-search-provider.js";
 
 const kimiApiKeyEnv = ["KIMI_API", "KEY"].join("_");

@@ -1,11 +1,22 @@
 import { beforeEach } from "vitest";
-import { slackPlugin, setSlackRuntime } from "../../extensions/slack/test-api.js";
-import { telegramPlugin, setTelegramRuntime } from "../../extensions/telegram/test-api.js";
-import { whatsappPlugin, setWhatsAppRuntime } from "../../extensions/whatsapp/test-api.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createPluginRuntime } from "../plugins/runtime/index.js";
+import { createPluginRuntime, type PluginRuntime } from "../plugins/runtime/index.js";
+import { loadBundledPluginTestApiSync } from "../test-utils/bundled-plugin-public-surface.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
+
+const { slackPlugin, setSlackRuntime } = loadBundledPluginTestApiSync<{
+  slackPlugin: ChannelPlugin;
+  setSlackRuntime: (runtime: PluginRuntime) => void;
+}>("slack");
+const { telegramPlugin, setTelegramRuntime } = loadBundledPluginTestApiSync<{
+  telegramPlugin: ChannelPlugin;
+  setTelegramRuntime: (runtime: PluginRuntime) => void;
+}>("telegram");
+const { whatsappPlugin, setWhatsAppRuntime } = loadBundledPluginTestApiSync<{
+  whatsappPlugin: ChannelPlugin;
+  setWhatsAppRuntime: (runtime: PluginRuntime) => void;
+}>("whatsapp");
 
 const slackChannelPlugin = slackPlugin as unknown as ChannelPlugin;
 const telegramChannelPlugin = telegramPlugin as unknown as ChannelPlugin;

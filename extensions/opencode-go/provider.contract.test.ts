@@ -1,3 +1,3 @@
-import { describeProviderContracts } from "../../test/helpers/extensions/provider-contract.js";
+import { describeProviderContracts } from "../../test/helpers/plugins/provider-contract.js";
 
 describeProviderContracts("opencode-go");
