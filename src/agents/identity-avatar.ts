@@ -91,3 +91,5 @@ export function resolveAgentAvatar(cfg: OpenClawConfig, agentId: string): AgentA
   }
   return { kind: "local", filePath: resolved.filePath };
 }
+
+export { resolveLocalAvatarPath };
