@@ -621,30 +621,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       } else {
         void statusReactions.restoreInitial();
       }
-    } else {
-      removeAckReactionAfterReply({
-        removeAfterReply: ctx.removeAckAfterReply,
-        ackReactionPromise: prepared.ackReactionPromise,
-        ackReactionValue: prepared.ackReactionValue,
-        remove: () =>
-          removeSlackReaction(
-            message.channel,
-            prepared.ackReactionMessageTs ?? "",
-            prepared.ackReactionValue,
-            {
-              token: ctx.botToken,
-              client: ctx.app.client,
-            },
-          ),
-        onError: (err) => {
-          logAckFailure({
-            log: logVerbose,
-            channel: "slack",
-            target: `${message.channel}/${message.ts}`,
-            error: err,
-          });
-        },
-      });
     }
   }
 
@@ -687,6 +663,32 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     logVerbose(
       `slack: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${prepared.replyTarget}`,
     );
+  }
+
+  if (!statusReactionsEnabled) {
+    removeAckReactionAfterReply({
+      removeAfterReply: ctx.removeAckAfterReply,
+      ackReactionPromise: prepared.ackReactionPromise,
+      ackReactionValue: prepared.ackReactionValue,
+      remove: () =>
+        removeSlackReaction(
+          message.channel,
+          prepared.ackReactionMessageTs ?? "",
+          prepared.ackReactionValue,
+          {
+            token: ctx.botToken,
+            client: ctx.app.client,
+          },
+        ),
+      onError: (err) => {
+        logAckFailure({
+          log: logVerbose,
+          channel: "slack",
+          target: `${message.channel}/${message.ts}`,
+          error: err,
+        });
+      },
+    });
   }
 
   if (prepared.isRoomish) {

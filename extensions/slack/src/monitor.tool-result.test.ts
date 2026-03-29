@@ -553,6 +553,51 @@ describe("monitorSlackProvider tool results", () => {
     });
   });
 
+  it("keeps ack reaction when no reply is delivered and status reactions are disabled", async () => {
+    replyMock.mockResolvedValue(undefined);
+    slackTestState.config = {
+      messages: {
+        responsePrefix: "PFX",
+        ackReaction: "👀",
+        ackReactionScope: "group-mentions",
+        removeAckAfterReply: true,
+        statusReactions: { enabled: false },
+      },
+      channels: {
+        slack: {
+          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+          groupPolicy: "open",
+        },
+      },
+    };
+    const client = getSlackClient();
+    if (!client) {
+      throw new Error("Slack client not registered");
+    }
+    const conversations = client.conversations as {
+      info: ReturnType<typeof vi.fn>;
+    };
+    conversations.info.mockResolvedValueOnce({
+      channel: { name: "general", is_channel: true },
+    });
+
+    await runSlackMessageOnce(monitorSlackProvider, {
+      event: makeSlackMessageEvent({
+        text: "<@bot-user> hello",
+        ts: "456",
+        channel_type: "channel",
+      }),
+    });
+
+    expect(sendMock).not.toHaveBeenCalled();
+    expect(reactMock).toHaveBeenCalledTimes(1);
+    expect(reactMock).toHaveBeenCalledWith({
+      channel: "C1",
+      timestamp: "456",
+      name: "👀",
+    });
+  });
+
   it("replies with pairing code when dmPolicy is pairing and no allowFrom is set", async () => {
     setPairingOnlyDirectMessages();
 
