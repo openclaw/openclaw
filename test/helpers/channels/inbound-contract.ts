@@ -36,12 +36,24 @@ const { createInboundSlackTestContext, prepareSlackMessage } = loadBundledPlugin
     opts: { source: string };
   }) => Promise<SlackPrepareResult>;
 }>("slack");
-const { buildTelegramMessageContextForTest } = loadBundledPluginTestApiSync<{
-  buildTelegramMessageContextForTest: (params: {
-    cfg: OpenClawConfig;
-    message: Record<string, unknown>;
-  }) => Promise<{ ctxPayload: MsgContext } | null | undefined>;
-}>("telegram");
+const telegramHarnessModuleId = resolveRelativeBundledPluginPublicModuleId({
+  fromModuleUrl: import.meta.url,
+  pluginId: "telegram",
+  artifactBasename: "src/bot-message-context.test-harness.js",
+});
+
+async function buildTelegramMessageContextForTest(params: {
+  cfg: OpenClawConfig;
+  message: Record<string, unknown>;
+}): Promise<{ ctxPayload: MsgContext } | null | undefined> {
+  const telegramHarnessModule = (await import(telegramHarnessModuleId)) as {
+    buildTelegramMessageContextForTest: (params: {
+      cfg: OpenClawConfig;
+      message: Record<string, unknown>;
+    }) => Promise<{ ctxPayload: MsgContext } | null | undefined>;
+  };
+  return await telegramHarnessModule.buildTelegramMessageContextForTest(params);
+}
 
 const signalApiModuleId = resolveRelativeBundledPluginPublicModuleId({
   fromModuleUrl: import.meta.url,
