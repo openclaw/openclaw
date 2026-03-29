@@ -3,9 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { useFrozenTime, useRealTime } from "../../../src/test-utils/frozen-time.js";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestamp.js";
 import { withEnvAsync } from "../../../test/helpers/plugins/env.js";
-import { useFrozenTime, useRealTime } from "../../../test/helpers/plugins/frozen-time.js";
 const harness = await import("./bot.create-telegram-bot.test-harness.js");
 const {
   answerCallbackQuerySpy,

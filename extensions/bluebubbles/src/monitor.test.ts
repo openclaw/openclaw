@@ -1,11 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  createBlueBubblesMonitorTestRuntime,
-  EMPTY_DISPATCH_RESULT,
-  resetBlueBubblesMonitorTestState,
-  type DispatchReplyParams,
-} from "../../../test/helpers/plugins/bluebubbles-monitor.js";
 import type { ResolvedBlueBubblesAccount } from "./accounts.js";
 import { fetchBlueBubblesHistory } from "./history.js";
 import { createBlueBubblesDebounceRegistry } from "./monitor-debounce.js";
@@ -30,6 +24,12 @@ import {
   setBlueBubblesParticipantContactDepsForTest,
 } from "./participant-contact-names.js";
 import type { OpenClawConfig, PluginRuntime } from "./runtime-api.js";
+import {
+  createBlueBubblesMonitorTestRuntime,
+  EMPTY_DISPATCH_RESULT,
+  resetBlueBubblesMonitorTestState,
+  type DispatchReplyParams,
+} from "./test-support/monitor.js";
 
 // Mock dependencies
 vi.mock("./send.js", () => ({
