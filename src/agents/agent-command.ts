@@ -370,6 +370,32 @@ async function agentCommandInternal(
       if (sendPolicy === "deny") {
         throw new Error("send blocked by session policy");
       }
+
+      // Direct delivery mode: bypass the LLM turn entirely and deliver the
+      // original message to the target channel, matching `openclaw message send`
+      // semantics.  This prevents the silent-drop bug where the LLM produces
+      // NO_REPLY and exit 0 makes the caller believe delivery succeeded.
+      //
+      // Guard: when internalEvents are present (e.g. subagent announcements),
+      // the LLM is needed to synthesize a human-readable summary from the
+      // internal context.  Fall through to the normal LLM path in that case.
+      if (!opts.internalEvents || opts.internalEvents.length === 0) {
+        const directPayloads = [{ text: opts.message ?? "" }];
+        const directResult = {
+          payloads: directPayloads,
+          meta: { durationMs: 0 },
+        };
+        return await deliverAgentCommandResult({
+          cfg,
+          deps,
+          runtime,
+          opts,
+          outboundSession,
+          sessionEntry,
+          result: directResult as Parameters<typeof deliverAgentCommandResult>[0]["result"],
+          payloads: directPayloads,
+        });
+      }
     }
 
     if (acpResolution?.kind === "stale") {

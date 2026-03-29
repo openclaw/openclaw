@@ -1190,9 +1190,10 @@ describe("agentCommand", () => {
           deps,
         );
 
+        // Direct delivery: the original message ("hi") is delivered, not the LLM response.
         expect(deps.sendMessageTelegram).toHaveBeenCalledWith(
           "123",
-          "ok",
+          "hi",
           expect.objectContaining({ accountId: undefined, verbose: false }),
         );
       } finally {
@@ -1203,6 +1204,76 @@ describe("agentCommand", () => {
         }
       }
     });
+  });
+
+  it("bypasses LLM turn when --deliver is set", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store, undefined, { botToken: "t-1" });
+      setActivePluginRegistry(
+        createTestRegistry([
+          { pluginId: "telegram", plugin: createTelegramOutboundPlugin(), source: "test" },
+        ]),
+      );
+      const deps = {
+        sendMessageWhatsApp: vi.fn(),
+        sendMessageTelegram: vi.fn().mockResolvedValue({ messageId: "t1", chatId: "123" }),
+        sendMessageSlack: vi.fn(),
+        sendMessageDiscord: vi.fn(),
+        sendMessageSignal: vi.fn(),
+        sendMessageIMessage: vi.fn(),
+      };
+
+      const prevTelegramToken = process.env.TELEGRAM_BOT_TOKEN;
+      process.env.TELEGRAM_BOT_TOKEN = "";
+      const piCallsBefore = vi.mocked(runEmbeddedPiAgent).mock.calls.length;
+      try {
+        await agentCommand(
+          {
+            message: "notification text",
+            to: "123",
+            deliver: true,
+            channel: "telegram",
+          },
+          runtime,
+          deps,
+        );
+
+        // LLM should NOT be invoked for direct delivery.
+        expect(vi.mocked(runEmbeddedPiAgent).mock.calls.length).toBe(piCallsBefore);
+        // The original message should be delivered directly.
+        expect(deps.sendMessageTelegram).toHaveBeenCalledWith(
+          "123",
+          "notification text",
+          expect.objectContaining({}),
+        );
+      } finally {
+        if (prevTelegramToken === undefined) {
+          delete process.env.TELEGRAM_BOT_TOKEN;
+        } else {
+          process.env.TELEGRAM_BOT_TOKEN = prevTelegramToken;
+        }
+      }
+    });
+  });
+
+  it("falls through to LLM when --deliver has internalEvents (subagent announcements)", async () => {
+    const piCallsBefore = vi.mocked(runEmbeddedPiAgent).mock.calls.length;
+
+    // Delivery will fail because no channel plugin is registered, but the
+    // important assertion is that the LLM was invoked (not bypassed).
+    await runEmbeddedWithTempConfig({
+      args: {
+        message: "subagent completed task",
+        to: "+1555",
+        deliver: true,
+        bestEffortDeliver: true,
+        internalEvents: [{ type: "tool_result", tool: "subagent_complete", text: "done" }] as never,
+      },
+    });
+
+    // LLM SHOULD be invoked because internalEvents require LLM summarization.
+    expect(vi.mocked(runEmbeddedPiAgent).mock.calls.length).toBeGreaterThan(piCallsBefore);
   });
 
   it("uses reply channel as the message channel context", async () => {

@@ -138,4 +138,23 @@ describe("agentCliCommand", () => {
       expect(runtime.log).toHaveBeenCalledWith("local");
     });
   });
+
+  it("skips gateway when --deliver is set (direct delivery bypasses LLM)", async () => {
+    await withTempStore(async () => {
+      mockLocalAgentReply();
+
+      await agentCliCommand(
+        {
+          message: "notification",
+          to: "+1555",
+          deliver: true,
+          channel: "signal",
+        },
+        runtime,
+      );
+
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(agentCommand).toHaveBeenCalledTimes(1);
+    });
+  });
 });
