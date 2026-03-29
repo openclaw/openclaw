@@ -64,7 +64,6 @@ Docs: https://docs.openclaw.ai
 - Agents/openai-compatible tool calls: deduplicate repeated tool call ids across live assistant messages and replayed history so OpenAI-compatible backends no longer reject duplicate `tool_call_id` values with HTTP 400. (#40996) Thanks @xaeon2026.
 - Models/openai-completions: default non-native OpenAI-compatible providers to omit tool-definition `strict` fields unless users explicitly opt back in, so tool calling keeps working on providers that reject that option. (#45497) Thanks @sahancava.
 - Subagents/announcements: preserve the requester agent id for inline deterministic tool spawns so named agents without channel bindings can still announce completions through the correct owner session. (#55437) Thanks @kAIborg24.
-- Maintainer follow-up: land the subagent completion announce regression fix on the current mainline path. Thanks @vincentkoc.
 - Plugins/context engines: retry strict legacy `assemble()` calls without the new `prompt` field when older engines reject it, preserving prompt-aware retrieval compatibility for pre-prompt plugins. (#50848) thanks @danhdoan.
 - CLI/update status: explicitly say `up to date` when the local version already matches npm latest, while keeping the availability logic unchanged. (#51409) Thanks @dongzhenye.
 - Daemon/Linux: stop flagging non-gateway systemd services as duplicate gateways just because their unit files mention OpenClaw, reducing false-positive doctor/log noise. (#45328) Thanks @gregretkowski.
