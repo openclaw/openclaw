@@ -186,6 +186,36 @@ describe("applyPluginAutoEnable", () => {
     expect(result.changes).toEqual([]);
   });
 
+  it("skips auto-enable work for configs without channel or plugin-owned surfaces", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        gateway: {
+          auth: {
+            mode: "token",
+            token: "ok",
+          },
+        },
+        agents: {
+          list: [{ id: "pi" }],
+        },
+      },
+      env: {},
+    });
+
+    expect(result.config).toEqual({
+      gateway: {
+        auth: {
+          mode: "token",
+          token: "ok",
+        },
+      },
+      agents: {
+        list: [{ id: "pi" }],
+      },
+    });
+    expect(result.changes).toEqual([]);
+  });
+
   it("ignores channels.modelByChannel for plugin auto-enable", () => {
     const result = applyPluginAutoEnable({
       config: {
