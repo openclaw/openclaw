@@ -6,7 +6,10 @@ import {
 } from "../../../src/plugins/provider-runtime.test-support.js";
 import type { ProviderPlugin } from "../../../src/plugins/types.js";
 import { loadBundledPluginPublicSurfaceSync } from "../../../src/test-utils/bundled-plugin-public-surface.js";
-import { registerProviderPlugin, requireRegisteredProvider } from "./provider-registration.js";
+import {
+  registerProviderPlugin,
+  requireRegisteredProvider,
+} from "../../../test/helpers/plugins/provider-registration.js";
 
 const PROVIDER_CATALOG_CONTRACT_TIMEOUT_MS = 300_000;
 
