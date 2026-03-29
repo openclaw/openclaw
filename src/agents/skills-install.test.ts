@@ -169,7 +169,7 @@ describe("installSkill code safety scanning", () => {
       expect(handler.mock.calls[0]?.[0]).toMatchObject({
         targetName: "policy-skill",
         targetType: "skill",
-        source: "openclaw-workspace",
+        origin: "openclaw-workspace",
         sourcePath: expect.stringContaining("policy-skill"),
         sourcePathKind: "directory",
         request: {
@@ -189,7 +189,7 @@ describe("installSkill code safety scanning", () => {
         },
       });
       expect(handler.mock.calls[0]?.[1]).toEqual({
-        source: "openclaw-workspace",
+        origin: "openclaw-workspace",
         targetType: "skill",
         requestKind: "skill-install",
       });
