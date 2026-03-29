@@ -439,6 +439,23 @@ export async function createBotFrameworkJwtValidator(creds: MSTeamsCredentials):
     },
   });
 
+  async function validateWithFallback(
+    token: string,
+    overrides: { validateServiceUrl: { expectedServiceUrl: string } } | undefined,
+  ): Promise<boolean> {
+    for (const validator of [botFrameworkValidator, entraValidator]) {
+      try {
+        const result = await validator.validateAccessToken(token, overrides);
+        if (result != null) {
+          return true;
+        }
+      } catch {
+        continue;
+      }
+    }
+    return false;
+  }
+
   return {
     async validate(authHeader: string, serviceUrl?: string): Promise<boolean> {
       const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : authHeader;
@@ -449,18 +466,7 @@ export async function createBotFrameworkJwtValidator(creds: MSTeamsCredentials):
       const overrides = serviceUrl
         ? ({ validateServiceUrl: { expectedServiceUrl: serviceUrl } } as const)
         : undefined;
-
-      try {
-        const legacyResult = await botFrameworkValidator.validateAccessToken(token, overrides);
-        if (legacyResult != null) {
-          return true;
-        }
-
-        const entraResult = await entraValidator.validateAccessToken(token, overrides);
-        return entraResult != null;
-      } catch {
-        return false;
-      }
+      return await validateWithFallback(token, overrides);
     },
   };
 }
