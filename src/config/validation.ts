@@ -1,9 +1,7 @@
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { CHANNEL_IDS, normalizeChatChannelId } from "../channels/registry.js";
-import { BUNDLED_AUTO_ENABLE_PROVIDER_PLUGIN_IDS } from "../plugins/bundled-capability-metadata.js";
 import { withBundledPluginAllowlistCompat } from "../plugins/bundled-compat.js";
-import { listBundledWebSearchPluginIds } from "../plugins/bundled-web-search-ids.js";
 import {
   normalizePluginsConfig,
   resolveEffectiveEnableState,
@@ -34,6 +32,14 @@ import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
 const LEGACY_REMOVED_PLUGIN_IDS = new Set(["google-antigravity-auth", "google-gemini-cli-auth"]);
+
+// Keep config validation startup light by avoiding eager imports from
+// bundled-capability metadata in this module.
+const BUNDLED_AUTO_ENABLE_PROVIDER_PLUGIN_IDS = Object.freeze({
+  "copilot-proxy": "copilot-proxy",
+  "google-gemini-cli": "google",
+  "minimax-portal": "minimax",
+} satisfies Record<string, string>);
 
 type UnknownIssueRecord = Record<string, unknown>;
 type ConfigPathSegment = string | number;
@@ -523,7 +529,6 @@ function validateConfigObjectWithPluginsBase(
       return config;
     }
 
-    const bundledWebSearchPluginIds = new Set(listBundledWebSearchPluginIds());
     const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
     const seenCompatPluginIds = new Set<string>();
     const compatPluginIds = loadPluginManifestRegistry({
@@ -536,7 +541,11 @@ function validateConfigObjectWithPluginsBase(
           return false;
         }
         seenCompatPluginIds.add(plugin.id);
-        return plugin.origin === "bundled" && bundledWebSearchPluginIds.has(plugin.id);
+        return (
+          plugin.origin === "bundled" &&
+          Array.isArray(plugin.contracts?.webSearchProviders) &&
+          plugin.contracts.webSearchProviders.length > 0
+        );
       })
       .map((plugin) => plugin.id)
       .toSorted((left, right) => left.localeCompare(right));
