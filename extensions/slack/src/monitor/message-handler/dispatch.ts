@@ -348,6 +348,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   let streamSession: SlackStreamSession | null = null;
   let streamFailed = false;
   let usedReplyThreadTs: string | undefined;
+  let observedReplyDelivery = false;
 
   const deliverNormally = async (payload: ReplyPayload, forcedThreadTs?: string): Promise<void> => {
     const replyThreadTs = forcedThreadTs ?? replyPlan.nextThreadTs();
@@ -362,6 +363,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       replyToMode: prepared.replyToMode,
       ...(slackIdentity ? { identity: slackIdentity } : {}),
     });
+    observedReplyDelivery = true;
     // Record the thread ts only after confirmed delivery success.
     if (replyThreadTs) {
       usedReplyThreadTs ??= replyThreadTs;
@@ -399,6 +401,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           teamId: ctx.teamId,
           userId: message.user,
         });
+        observedReplyDelivery = true;
         usedReplyThreadTs ??= streamThreadTs;
         replyPlan.markSent();
         return;
@@ -455,6 +458,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
               ...(slackBlocks?.length ? { blocks: slackBlocks } : {}),
             },
           );
+          observedReplyDelivery = true;
           return;
         } catch (err) {
           logVerbose(
@@ -620,7 +624,8 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     }
   }
 
-  const anyReplyDelivered = queuedFinal || (counts.block ?? 0) > 0 || (counts.final ?? 0) > 0;
+  const anyReplyDelivered =
+    observedReplyDelivery || queuedFinal || (counts.block ?? 0) > 0 || (counts.final ?? 0) > 0;
 
   if (statusReactionsEnabled) {
     if (dispatchError) {
@@ -628,7 +633,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       if (ctx.removeAckAfterReply) {
         void (async () => {
           await sleep(statusReactionTiming.errorHoldMs);
-          await statusReactions.clear();
+          if (anyReplyDelivered) {
+            await statusReactions.clear();
+            return;
+          }
+          await statusReactions.restoreInitial();
         })();
       } else {
         void statusReactions.restoreInitial();

@@ -648,6 +648,57 @@ describe("monitorSlackProvider tool results", () => {
     });
   });
 
+  it("restores ack reaction when dispatch fails before any reply is delivered", async () => {
+    replyMock.mockRejectedValue(new Error("boom"));
+    slackTestState.config = {
+      messages: {
+        responsePrefix: "PFX",
+        ackReaction: "👀",
+        ackReactionScope: "group-mentions",
+        removeAckAfterReply: true,
+        statusReactions: {
+          enabled: true,
+          timing: { debounceMs: 0, doneHoldMs: 0, errorHoldMs: 0 },
+        },
+      },
+      channels: {
+        slack: {
+          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+          groupPolicy: "open",
+        },
+      },
+    };
+    const client = getSlackClient();
+    if (!client) {
+      throw new Error("Slack client not registered");
+    }
+    const conversations = client.conversations as {
+      info: ReturnType<typeof vi.fn>;
+    };
+    conversations.info.mockResolvedValueOnce({
+      channel: { name: "general", is_channel: true },
+    });
+
+    await runSlackMessageOnce(monitorSlackProvider, {
+      event: makeSlackMessageEvent({
+        text: "<@bot-user> hello",
+        ts: "456",
+        channel_type: "channel",
+      }),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await flush();
+
+    expect(sendMock).not.toHaveBeenCalled();
+    expect(reactMock.mock.calls.map(([args]) => String((args as { name: string }).name))).toEqual([
+      "eyes",
+      "scream",
+      "eyes",
+      "eyes",
+      "scream",
+    ]);
+  });
+
   it("replies with pairing code when dmPolicy is pairing and no allowFrom is set", async () => {
     setPairingOnlyDirectMessages();
 
