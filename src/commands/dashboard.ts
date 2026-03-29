@@ -52,7 +52,7 @@ export async function dashboardCommand(
   options: DashboardOptions = {},
 ) {
   const snapshot = await readConfigFileSnapshot();
-  const cfg = snapshot.valid ? snapshot.config : {};
+  const cfg = snapshot.valid ? (snapshot.sourceConfig ?? snapshot.config) : {};
   const port = resolveGatewayPort(cfg);
   const bind = cfg.gateway?.bind ?? "loopback";
   const basePath = cfg.gateway?.controlUi?.basePath;

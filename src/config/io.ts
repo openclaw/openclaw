@@ -1951,7 +1951,6 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
             exists: true,
             raw: effectiveRaw,
             parsed: effectiveParsed,
-            sourceConfig: coerceConfig(parsedRes.parsed),
             // Keep the recovered root file payload here when read healing kicked in.
             sourceConfig: coerceConfig(effectiveParsed),
             valid: false,
