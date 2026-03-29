@@ -64,7 +64,19 @@ function mergePropertySchemas(existing: unknown, incoming: unknown): unknown {
     return merged;
   }
 
-  return existing;
+  // Preserve Optional annotation when merging schemas
+  // Avoid spreading arbitrary objects to prevent prototype pollution
+  const ex = existing && typeof existing === "object" ? (existing as Record<string, unknown>) : {};
+  const inc = incoming && typeof incoming === "object" ? (incoming as Record<string, unknown>) : {};
+
+  const merged: Record<string, unknown> = {};
+
+  // Only preserve optional annotation; do not copy other properties from untrusted schemas
+  if (ex.optional === true || inc.optional === true) {
+    merged.optional = true;
+  }
+
+  return merged;
 }
 
 export function normalizeToolParameters(
