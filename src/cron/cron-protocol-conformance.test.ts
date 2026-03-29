@@ -2,7 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { MACOS_APP_SOURCES_DIR } from "../compat/legacy-names.js";
-import { CronDeliverySchema, CronJobStateSchema } from "../gateway/protocol/schema.js";
+import {
+  CronDeliverySchema,
+  CronJobPatchSchema,
+  CronJobStateSchema,
+} from "../gateway/protocol/schema.js";
 
 type SchemaLike = {
   anyOf?: Array<SchemaLike>;
@@ -112,5 +116,14 @@ describe("cron protocol conformance", () => {
       "model_not_found",
       "unknown",
     ]);
+  });
+
+  it("cron patch schema keeps derived read-model fields out of writable state", () => {
+    const properties = (CronJobPatchSchema as SchemaLike).properties ?? {};
+    const patchState = properties.state as SchemaLike | undefined;
+    const stateProperties = patchState?.properties ?? {};
+    expect(stateProperties.currentStatus).toBeUndefined();
+    expect(stateProperties.lastCompletedRunStatus).toBeUndefined();
+    expect(stateProperties.lastCompletedStatus).toBeUndefined();
   });
 });

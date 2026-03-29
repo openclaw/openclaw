@@ -1,6 +1,6 @@
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
-import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
+import type { CronJob, CronJobCreate, CronJobPatch, CronReadJob } from "../types.js";
 import { normalizeCronCreateDeliveryInput } from "./initial-delivery.js";
 import {
   applyJobPatch,
@@ -40,7 +40,7 @@ export type CronListPageOptions = {
 };
 
 export type CronListPageResult = {
-  jobs: ReturnType<typeof sortJobs>;
+  jobs: CronReadJob[];
   total: number;
   offset: number;
   limit: number;
@@ -158,8 +158,24 @@ export async function list(state: CronServiceState, opts?: { includeDisabled?: b
     await ensureLoadedForRead(state);
     const includeDisabled = opts?.includeDisabled === true;
     const jobs = (state.store?.jobs ?? []).filter((j) => includeDisabled || j.enabled);
-    return jobs.toSorted((a, b) => (a.state.nextRunAtMs ?? 0) - (b.state.nextRunAtMs ?? 0));
+    return jobs
+      .toSorted((a, b) => (a.state.nextRunAtMs ?? 0) - (b.state.nextRunAtMs ?? 0))
+      .map(presentCronJobForRead);
   });
+}
+
+function presentCronJobForRead(job: CronJob): CronReadJob {
+  return typeof job.state.runningAtMs === "number"
+    ? {
+        ...job,
+        state: {
+          ...job.state,
+          currentStatus: "running",
+          lastCompletedRunStatus: job.state.lastRunStatus,
+          lastCompletedStatus: job.state.lastStatus,
+        },
+      }
+    : job;
 }
 
 function resolveEnabledFilter(opts?: CronListPageOptions): CronJobsEnabledFilter {
@@ -227,7 +243,7 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
     const offset = Math.max(0, Math.min(total, Math.floor(opts?.offset ?? 0)));
     const defaultLimit = total === 0 ? 50 : total;
     const limit = Math.max(1, Math.min(200, Math.floor(opts?.limit ?? defaultLimit)));
-    const jobs = sorted.slice(offset, offset + limit);
+    const jobs = sorted.slice(offset, offset + limit).map(presentCronJobForRead);
     const nextOffset = offset + jobs.length;
     return {
       jobs,
@@ -589,7 +605,14 @@ export async function enqueueRun(state: CronServiceState, id: string, mode?: "du
       "cron: queued manual run background execution failed",
     );
   });
-  return { ok: true, enqueued: true, runId } as const;
+  return {
+    ok: true,
+    enqueued: true,
+    runId,
+    currentStatus: "running",
+    finalStatusAvailable: false,
+    statusText: "Triggered run still running; final status not yet available.",
+  } as const;
 }
 
 export function wakeNow(

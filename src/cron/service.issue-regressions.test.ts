@@ -1587,8 +1587,24 @@ describe("Cron issue regressions", () => {
 
     const firstAck = await enqueueRun(state, first.id, "force");
     const secondAck = await enqueueRun(state, second.id, "force");
-    expect(firstAck).toEqual({ ok: true, enqueued: true, runId: expect.any(String) });
-    expect(secondAck).toEqual({ ok: true, enqueued: true, runId: expect.any(String) });
+    expect(firstAck).toEqual(
+      expect.objectContaining({
+        ok: true,
+        enqueued: true,
+        runId: expect.any(String),
+        currentStatus: "running",
+        finalStatusAvailable: false,
+      }),
+    );
+    expect(secondAck).toEqual(
+      expect.objectContaining({
+        ok: true,
+        enqueued: true,
+        runId: expect.any(String),
+        currentStatus: "running",
+        finalStatusAvailable: false,
+      }),
+    );
 
     await vi.waitFor(() => expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1));
     expect(runIsolatedAgentJob.mock.calls[0]?.[0]).toMatchObject({ job: { id: first.id } });
@@ -1628,7 +1644,15 @@ describe("Cron issue regressions", () => {
     });
 
     const result = await enqueueRun(state, job.id, "force");
-    expect(result).toEqual({ ok: true, enqueued: true, runId: expect.any(String) });
+    expect(result).toEqual(
+      expect.objectContaining({
+        ok: true,
+        enqueued: true,
+        runId: expect.any(String),
+        currentStatus: "running",
+        finalStatusAvailable: false,
+      }),
+    );
 
     await vi.waitFor(() => expect(log.error).toHaveBeenCalledTimes(1));
     expect(log.error.mock.calls[0]?.[1]).toBe(

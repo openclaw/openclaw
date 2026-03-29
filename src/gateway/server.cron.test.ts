@@ -189,7 +189,15 @@ async function writeCronConfig(config: unknown) {
 async function runCronJobForce(ws: WebSocket, id: string) {
   const response = await rpcReq(ws, "cron.run", { id, mode: "force" }, 20_000);
   expect(response.ok).toBe(true);
-  expect(response.payload).toEqual({ ok: true, enqueued: true, runId: expect.any(String) });
+  expect(response.payload).toEqual(
+    expect.objectContaining({
+      ok: true,
+      enqueued: true,
+      runId: expect.any(String),
+      currentStatus: "running",
+      finalStatusAvailable: false,
+    }),
+  );
   return response;
 }
 
@@ -285,7 +293,15 @@ describe("gateway server cron", () => {
 
       const runRes = await rpcReq(ws, "cron.run", { id: routeJobId, mode: "force" }, 20_000);
       expect(runRes.ok).toBe(true);
-      expect(runRes.payload).toEqual({ ok: true, enqueued: true, runId: expect.any(String) });
+      expect(runRes.payload).toEqual(
+        expect.objectContaining({
+          ok: true,
+          enqueued: true,
+          runId: expect.any(String),
+          currentStatus: "running",
+          finalStatusAvailable: false,
+        }),
+      );
       const events = await waitForSystemEvent();
       expect(events.some((event) => event.includes("cron route check"))).toBe(true);
 
@@ -492,7 +508,15 @@ describe("gateway server cron", () => {
       );
       const runRes = await rpcReq(ws, "cron.run", { id: jobId, mode: "force" }, 20_000);
       expect(runRes.ok).toBe(true);
-      expect(runRes.payload).toEqual({ ok: true, enqueued: true, runId: expect.any(String) });
+      expect(runRes.payload).toEqual(
+        expect.objectContaining({
+          ok: true,
+          enqueued: true,
+          runId: expect.any(String),
+          currentStatus: "running",
+          finalStatusAvailable: false,
+        }),
+      );
       const finishedPayload = await finishedRun;
       expect(finishedPayload).toMatchObject({
         jobId,
@@ -601,7 +625,15 @@ describe("gateway server cron", () => {
       );
       const runRes = await rpcReq(ws, "cron.run", { id: jobId, mode: "force" }, 1_000);
       expect(runRes.ok).toBe(true);
-      expect(runRes.payload).toEqual({ ok: true, enqueued: true, runId: expect.any(String) });
+      expect(runRes.payload).toEqual(
+        expect.objectContaining({
+          ok: true,
+          enqueued: true,
+          runId: expect.any(String),
+          currentStatus: "running",
+          finalStatusAvailable: false,
+        }),
+      );
       await startedRun;
       expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
 
@@ -659,7 +691,15 @@ describe("gateway server cron", () => {
       );
       const firstRunRes = await rpcReq(ws, "cron.run", { id: "busy-job", mode: "force" }, 1_000);
       expect(firstRunRes.ok).toBe(true);
-      expect(firstRunRes.payload).toEqual({ ok: true, enqueued: true, runId: expect.any(String) });
+      expect(firstRunRes.payload).toEqual(
+        expect.objectContaining({
+          ok: true,
+          enqueued: true,
+          runId: expect.any(String),
+          currentStatus: "running",
+          finalStatusAvailable: false,
+        }),
+      );
       await startedRun;
       expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
 
@@ -786,7 +826,15 @@ describe("gateway server cron", () => {
         20_000,
       );
       expect(legacyRunRes.ok).toBe(true);
-      expect(legacyRunRes.payload).toEqual({ ok: true, enqueued: true, runId: expect.any(String) });
+      expect(legacyRunRes.payload).toEqual(
+        expect.objectContaining({
+          ok: true,
+          enqueued: true,
+          runId: expect.any(String),
+          currentStatus: "running",
+          finalStatusAvailable: false,
+        }),
+      );
       await legacyFinished;
       const legacyCall = getWebhookCall(1);
       expect(legacyCall.url).toBe("https://legacy.example.invalid/cron-finished");
@@ -815,7 +863,15 @@ describe("gateway server cron", () => {
       );
       const silentRunRes = await rpcReq(ws, "cron.run", { id: silentJobId, mode: "force" }, 20_000);
       expect(silentRunRes.ok).toBe(true);
-      expect(silentRunRes.payload).toEqual({ ok: true, enqueued: true, runId: expect.any(String) });
+      expect(silentRunRes.payload).toEqual(
+        expect.objectContaining({
+          ok: true,
+          enqueued: true,
+          runId: expect.any(String),
+          currentStatus: "running",
+          finalStatusAvailable: false,
+        }),
+      );
       await silentFinished;
       expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
 

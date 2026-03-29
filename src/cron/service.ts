@@ -1,6 +1,6 @@
 import * as ops from "./service/ops.js";
 import { type CronServiceDeps, createCronServiceState } from "./service/state.js";
-import type { CronJob, CronJobCreate, CronJobPatch } from "./types.js";
+import type { CronJob, CronJobCreate, CronJobPatch, CronReadJob } from "./types.js";
 
 export type { CronEvent, CronServiceDeps } from "./service/state.js";
 
@@ -22,11 +22,11 @@ export class CronService {
     return await ops.status(this.state);
   }
 
-  async list(opts?: { includeDisabled?: boolean }) {
+  async list(opts?: { includeDisabled?: boolean }): Promise<CronReadJob[]> {
     return await ops.list(this.state, opts);
   }
 
-  async listPage(opts?: ops.CronListPageOptions) {
+  async listPage(opts?: ops.CronListPageOptions): Promise<ops.CronListPageResult> {
     return await ops.listPage(this.state, opts);
   }
 

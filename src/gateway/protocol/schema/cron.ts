@@ -225,21 +225,32 @@ export const CronDeliveryPatchSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const CronJobStateSchema = Type.Object(
+const CronJobStateProperties = {
+  nextRunAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+  runningAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+  lastRunAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+  lastRunStatus: Type.Optional(CronRunStatusSchema),
+  lastStatus: Type.Optional(CronRunStatusSchema),
+  lastError: Type.Optional(Type.String()),
+  lastErrorReason: Type.Optional(CronFailoverReasonSchema),
+  lastDurationMs: Type.Optional(Type.Integer({ minimum: 0 })),
+  consecutiveErrors: Type.Optional(Type.Integer({ minimum: 0 })),
+  lastDelivered: Type.Optional(Type.Boolean()),
+  lastDeliveryStatus: Type.Optional(CronDeliveryStatusSchema),
+  lastDeliveryError: Type.Optional(Type.String()),
+  lastFailureAlertAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+};
+
+export const CronJobStateSchema = Type.Object(CronJobStateProperties, {
+  additionalProperties: false,
+});
+
+export const CronJobReadStateSchema = Type.Object(
   {
-    nextRunAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
-    runningAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
-    lastRunAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
-    lastRunStatus: Type.Optional(CronRunStatusSchema),
-    lastStatus: Type.Optional(CronRunStatusSchema),
-    lastError: Type.Optional(Type.String()),
-    lastErrorReason: Type.Optional(CronFailoverReasonSchema),
-    lastDurationMs: Type.Optional(Type.Integer({ minimum: 0 })),
-    consecutiveErrors: Type.Optional(Type.Integer({ minimum: 0 })),
-    lastDelivered: Type.Optional(Type.Boolean()),
-    lastDeliveryStatus: Type.Optional(CronDeliveryStatusSchema),
-    lastDeliveryError: Type.Optional(Type.String()),
-    lastFailureAlertAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    ...CronJobStateProperties,
+    currentStatus: Type.Optional(Type.Literal("running")),
+    lastCompletedRunStatus: Type.Optional(CronRunStatusSchema),
+    lastCompletedStatus: Type.Optional(CronRunStatusSchema),
   },
   { additionalProperties: false },
 );
@@ -261,7 +272,7 @@ export const CronJobSchema = Type.Object(
     payload: CronPayloadSchema,
     delivery: Type.Optional(CronDeliverySchema),
     failureAlert: Type.Optional(Type.Union([Type.Literal(false), CronFailureAlertSchema])),
-    state: CronJobStateSchema,
+    state: CronJobReadStateSchema,
   },
   { additionalProperties: false },
 );
