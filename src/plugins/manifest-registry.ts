@@ -195,6 +195,10 @@ function isCompatiblePluginIdHint(idHint: string | undefined, manifestId: string
   if (normalizedHint === manifestId) {
     return true;
   }
+  // Generated idHint for multi-extension plugins takes the form "id/entryBase".
+  if (normalizedHint.startsWith(`${manifestId}/`)) {
+    return true;
+  }
   return (
     normalizedHint === `${manifestId}-provider` ||
     normalizedHint === `${manifestId}-plugin` ||
