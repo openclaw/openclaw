@@ -53,7 +53,8 @@ export function createAcpxRuntimeService(
         queueOwnerTtlSeconds: pluginConfig.queueOwnerTtlSeconds,
         logger: ctx.logger,
       });
-      runtime.setSetupError();
+      const startupRuntime = runtime;
+      startupRuntime.setSetupError();
 
       registerAcpRuntimeBackend({
         id: ACPX_BACKEND_ID,
@@ -84,13 +85,16 @@ export function createAcpxRuntimeService(
           if (currentRevision !== lifecycleRevision) {
             return;
           }
-          await runtime?.probeAvailability();
-          if (runtime?.isHealthy()) {
-            runtime?.setSetupError();
+          await startupRuntime.probeAvailability();
+          if (currentRevision !== lifecycleRevision) {
+            return;
+          }
+          if (startupRuntime.isHealthy()) {
+            startupRuntime.setSetupError();
             ctx.logger.info("acpx runtime backend ready");
           } else {
-            if (!runtime?.getUnhealthyReason()) {
-              runtime?.setSetupError("acpx runtime probe failed after local install");
+            if (!startupRuntime.getUnhealthyReason()) {
+              startupRuntime.setSetupError("acpx runtime probe failed after local install");
             }
             ctx.logger.warn("acpx runtime backend probe failed after local install");
           }
@@ -98,7 +102,7 @@ export function createAcpxRuntimeService(
           if (currentRevision !== lifecycleRevision) {
             return;
           }
-          runtime?.setSetupError(err instanceof Error ? err.message : String(err));
+          startupRuntime.setSetupError(err instanceof Error ? err.message : String(err));
           ctx.logger.warn(
             `acpx runtime setup failed: ${err instanceof Error ? err.message : String(err)}`,
           );
