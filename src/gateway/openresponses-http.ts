@@ -971,20 +971,23 @@ export async function handleOpenResponsesHttpRequest(
 
     if (evt.stream === "thinking-raw") {
       const raw = typeof evt.data?.rawText === "string" ? evt.data.rawText : "";
-      if (!raw) {
+      const rawDelta = typeof evt.data?.rawDelta === "string" ? evt.data.rawDelta : "";
+      if (!raw || !rawDelta) {
         return;
       }
+      let delta = rawDelta;
       if (currentStreamThinkingSegment && !raw.startsWith(currentStreamThinkingSegment)) {
         accumulatedThinking += (accumulatedThinking ? "\n\n" : "") + currentStreamThinkingSegment;
+        // New thinking segment starts; preserve the same separator used in
+        // final aggregated reasoning output.
+        delta = `\n\n${rawDelta}`;
       }
       currentStreamThinkingSegment = raw;
 
       writeSseEvent(res, {
         type: "response.reasoning.delta",
         item_id: reasoningItemId,
-        text: accumulatedThinking
-          ? accumulatedThinking + "\n\n" + currentStreamThinkingSegment
-          : currentStreamThinkingSegment,
+        delta,
       });
       return;
     }
@@ -1102,6 +1105,13 @@ export async function handleOpenResponsesHttpRequest(
           content_index: 0,
           part: { type: "output_text", text: finalText },
         });
+        if (accumulatedThinking) {
+          writeSseEvent(res, {
+            type: "response.reasoning.done",
+            item_id: reasoningItemId,
+            text: accumulatedThinking,
+          });
+        }
 
         const completedItem = createAssistantOutputItem({
           id: outputItemId,
@@ -1154,13 +1164,6 @@ export async function handleOpenResponsesHttpRequest(
           output: toolCallOutput,
           usage,
         });
-        if (accumulatedThinking) {
-          writeSseEvent(res, {
-            type: "response.reasoning.done",
-            item_id: reasoningItemId,
-            text: accumulatedThinking,
-          });
-        }
         closed = true;
         unsubscribe();
         rememberResponseSession();

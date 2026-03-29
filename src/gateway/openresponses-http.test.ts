@@ -790,6 +790,72 @@ describe("OpenResponses HTTP API (e2e)", () => {
     expect(events.some((event) => event.data === "[DONE]")).toBe(true);
   });
 
+  it("streams incremental reasoning deltas and emits reasoning.done before output_item.done in tool-call mode", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommand.mockImplementationOnce((async (opts: unknown) => {
+      const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
+      emitAgentEvent({
+        runId,
+        stream: "thinking-raw",
+        data: { rawText: "First segment", rawDelta: "First segment" },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "thinking-raw",
+        data: { rawText: "Second segment", rawDelta: "Second segment" },
+      });
+      return {
+        payloads: [{ text: "Let me check that." }],
+        meta: {
+          stopReason: "tool_calls",
+          pendingToolCalls: [
+            {
+              id: "call_1",
+              name: "get_weather",
+              arguments: '{"city":"Taipei"}',
+            },
+          ],
+        },
+      };
+    }) as never);
+
+    const res = await postResponses(port, {
+      stream: true,
+      model: "openclaw",
+      input: "check the weather",
+      tools: WEATHER_TOOL,
+    });
+
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    const events = parseSseEvents(text);
+
+    const reasoningDeltas = events
+      .filter((event) => event.event === "response.reasoning.delta")
+      .map((event) => JSON.parse(event.data) as { delta?: string });
+    expect(reasoningDeltas.map((event) => event.delta)).toEqual([
+      "First segment",
+      "\n\nSecond segment",
+    ]);
+
+    const reasoningDoneIndex = events.findIndex(
+      (event) => event.event === "response.reasoning.done",
+    );
+    const firstOutputItemDoneIndex = events.findIndex(
+      (event) => event.event === "response.output_item.done",
+    );
+    expect(reasoningDoneIndex).toBeGreaterThanOrEqual(0);
+    expect(firstOutputItemDoneIndex).toBeGreaterThanOrEqual(0);
+    expect(reasoningDoneIndex).toBeLessThan(firstOutputItemDoneIndex);
+
+    const reasoningDone = events[reasoningDoneIndex];
+    expect((JSON.parse(reasoningDone?.data ?? "{}") as { text?: string }).text).toBe(
+      "First segment\n\nSecond segment",
+    );
+    expect(events.some((event) => event.data === "[DONE]")).toBe(true);
+  });
+
   it("reuses the prior session when previous_response_id is provided", async () => {
     const port = enabledPort;
     agentCommand.mockClear();

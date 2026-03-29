@@ -730,6 +730,7 @@ export function createAgentEventHandler({
     const agentPayload = sessionKey ? { ...eventForClients, sessionKey } : eventForClients;
     const last = agentRunSeq.get(evt.runId) ?? 0;
     const isToolEvent = evt.stream === "tool";
+    const isRawThinkingEvent = evt.stream === "thinking-raw";
     const toolVerbose = isToolEvent ? resolveToolVerboseLevel(evt.runId, sessionKey) : "off";
     // Build tool payload: strip result/partialResult unless verbose=full
     const toolPayload =
@@ -792,7 +793,7 @@ export function createAgentEventHandler({
           );
         }
       }
-    } else {
+    } else if (!isRawThinkingEvent) {
       broadcast("agent", agentPayload);
     }
 
@@ -802,7 +803,7 @@ export function createAgentEventHandler({
     if (isControlUiVisible && sessionKey) {
       // Send tool events to node/channel subscribers only when verbose is enabled;
       // WS clients already received the event above via broadcastToConnIds.
-      if (!isToolEvent || toolVerbose !== "off") {
+      if (!isRawThinkingEvent && (!isToolEvent || toolVerbose !== "off")) {
         nodeSendToSession(
           sessionKey,
           "agent",

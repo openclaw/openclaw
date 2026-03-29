@@ -351,7 +351,7 @@ export const OutputTextDoneEventSchema = z.object({
 export const ReasoningDeltaEventSchema = z.object({
   type: z.literal("response.reasoning.delta"),
   item_id: z.string(),
-  text: z.string(),
+  delta: z.string(),
 });
 
 export const ReasoningDoneEventSchema = z.object({
