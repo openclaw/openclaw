@@ -10,6 +10,7 @@ import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, loadConfig } from "../../config/config.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
+import { getAutoModelForMessage } from "../../hooks/auto-model-router.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
@@ -271,10 +272,11 @@ export async function getReplyFromConfig(
     groupSubject: sessionEntry.subject ?? sessionCtx.GroupSubject ?? finalized.GroupSubject,
     parentSessionKey: sessionCtx.ParentSessionKey,
   });
-  const hasSessionModelOverride = Boolean(
-    sessionEntry.modelOverride?.trim() || sessionEntry.providerOverride?.trim(),
-  );
-  if (!hasResolvedHeartbeatModelOverride && !hasSessionModelOverride && channelModelOverride) {
+
+  const hasSessionModelOverride = () =>
+    Boolean(sessionEntry.modelOverride?.trim() || sessionEntry.providerOverride?.trim());
+
+  if (!hasResolvedHeartbeatModelOverride && !hasSessionModelOverride() && channelModelOverride) {
     const resolved = resolveModelRefFromString({
       raw: channelModelOverride.model,
       defaultProvider,
@@ -347,6 +349,33 @@ export async function getReplyFromConfig(
   } = directiveResult.result;
   provider = resolvedProvider;
   model = resolvedModel;
+
+  // Auto model routing based on message complexity
+  // Skip routing if higher-priority overrides are already resolved
+  // (heartbeat/session/model-directive) to avoid unnecessary router
+  // process execution and latency. This check runs after
+  // resolveReplyDirectives to avoid routing messages that return early
+  // (e.g., control commands, inline-directive error replies).
+  if (
+    !hasResolvedHeartbeatModelOverride &&
+    !hasSessionModelOverride() &&
+    !directives.hasModelDirective
+  ) {
+    const triggerMessage = finalized.Body || triggerBodyNormalized || "";
+    const autoModelResult = await getAutoModelForMessage(triggerMessage, cfg);
+    if (autoModelResult) {
+      const resolved = resolveModelRefFromString({
+        raw: autoModelResult.model,
+        defaultProvider,
+        aliasIndex,
+      });
+      if (resolved) {
+        provider = resolved.ref.provider;
+        model = resolved.ref.model;
+        defaultRuntime.log(`[auto-model-router] Selected model: ${provider}/${model}`);
+      }
+    }
+  }
 
   const maybeEmitMissingResetHooks = async () => {
     if (!resetTriggered || !command.isAuthorizedSender || command.resetHookTriggered) {
