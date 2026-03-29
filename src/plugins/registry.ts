@@ -956,6 +956,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       pluginConfig?: Record<string, unknown>;
       hookPolicy?: PluginTypedHookPolicy;
       registrationMode?: PluginRegistrationMode;
+      shouldActivate?: boolean;
     },
   ): OpenClawPluginApi => {
     const registrationMode = params.registrationMode ?? "full";
@@ -977,7 +978,13 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
           ? {
               registerTool: (tool, opts) => registerTool(record, tool, opts),
               registerHook: (events, handler, opts) =>
-                registerHook(record, events, handler, opts, params.config),
+                registerHook(
+                  record,
+                  events,
+                  handler,
+                  params.shouldActivate === false ? { ...opts, register: false } : opts,
+                  params.config,
+                ),
               registerHttpRoute: (routeParams) => registerHttpRoute(record, routeParams),
               registerProvider: (provider) => registerProvider(record, provider),
               registerSpeechProvider: (provider) => registerSpeechProvider(record, provider),
