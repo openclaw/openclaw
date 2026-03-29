@@ -310,8 +310,9 @@ describe("dispatchReplyFromConfig", () => {
           nativeCommands: true,
         },
       }),
-      execApprovals: {
-        shouldSuppressLocalPrompt: ({ payload }: { payload: ReplyPayload }) =>
+      outbound: {
+        deliveryMode: "direct",
+        shouldSuppressLocalPayloadPrompt: ({ payload }: { payload: ReplyPayload }) =>
           Boolean(
             payload.channelData &&
             typeof payload.channelData === "object" &&

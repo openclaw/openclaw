@@ -559,12 +559,14 @@ function createApprovalHandlers<
         if (!channel) {
           return;
         }
-        await resolveChannelApprovalAdapter(
-          getChannelPlugin(channel),
-        )?.delivery?.beforeDeliverPending?.({
+        await getChannelPlugin(channel)?.outbound?.beforeDeliverPayload?.({
           cfg,
           target,
           payload,
+          hint: {
+            kind: "approval-pending",
+            approvalKind: params.strategy.kind,
+          },
         });
       },
       deliver: params.deliver,
