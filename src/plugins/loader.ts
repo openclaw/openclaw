@@ -128,11 +128,18 @@ const resolvePluginSdkAlias = (params: LoaderModuleResolveParams = {}): string |
     ...params,
   });
 
-function buildPluginLoaderAliasMap(modulePath: string): Record<string, string> {
-  const pluginSdkAlias = resolvePluginSdkAlias({ modulePath });
+function buildPluginLoaderAliasMap(
+  modulePath: string,
+  params: Partial<LoaderModuleResolveParams> = {},
+): Record<string, string> {
+  const resolveParams: LoaderModuleResolveParams = {
+    modulePath,
+    ...params,
+  };
+  const pluginSdkAlias = resolvePluginSdkAlias(resolveParams);
   return {
     ...(pluginSdkAlias ? { "openclaw/plugin-sdk": pluginSdkAlias } : {}),
-    ...resolvePluginSdkScopedAliasMap({ modulePath }),
+    ...resolvePluginSdkScopedAliasMap(resolveParams),
   };
 }
 
@@ -750,7 +757,10 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   const jitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
   const getJiti = (modulePath: string) => {
     const tryNative = shouldPreferNativeJiti(modulePath);
-    const aliasMap = buildPluginLoaderAliasMap(modulePath);
+    const aliasMap = buildPluginLoaderAliasMap(modulePath, {
+      argv1: process.argv[1],
+      moduleUrl: import.meta.url,
+    });
     const cacheKey = JSON.stringify({
       tryNative,
       aliasMap: Object.entries(aliasMap).toSorted(([left], [right]) => left.localeCompare(right)),

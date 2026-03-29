@@ -26,6 +26,8 @@ export { onDiagnosticEvent } from "../infra/diagnostic-events.js";
 export { createAccountStatusSink } from "./channel-lifecycle.js";
 export { createPluginRuntimeStore } from "./runtime-store.js";
 export { KeyedAsyncQueue } from "./keyed-async-queue.js";
+export { createDefaultChannelRuntimeState } from "./status-helpers.js";
+export { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 
 export {
   createHybridChannelConfigAdapter,

@@ -206,9 +206,12 @@ export function resolvePluginSdkAliasFile(params: {
 
 const cachedPluginSdkExportedSubpaths = new Map<string, string[]>();
 
-export function listPluginSdkExportedSubpaths(params: { modulePath?: string } = {}): string[] {
+export function listPluginSdkExportedSubpaths(params: LoaderModuleResolveParams = {}): string[] {
   const modulePath = params.modulePath ?? fileURLToPath(import.meta.url);
-  const packageRoot = resolveLoaderPluginSdkPackageRoot({ modulePath });
+  const packageRoot = resolveLoaderPluginSdkPackageRoot({
+    ...params,
+    modulePath,
+  });
   if (!packageRoot) {
     return [];
   }
@@ -222,14 +225,14 @@ export function listPluginSdkExportedSubpaths(params: { modulePath?: string } = 
 }
 
 export function resolvePluginSdkScopedAliasMap(
-  params: { modulePath?: string } = {},
+  params: LoaderModuleResolveParams = {},
 ): Record<string, string> {
   const aliasMap: Record<string, string> = {};
   for (const subpath of listPluginSdkExportedSubpaths(params)) {
     const resolved = resolvePluginSdkAliasFile({
       srcFile: `${subpath}.ts`,
       distFile: `${subpath}.js`,
-      modulePath: params.modulePath,
+      ...params,
     });
     if (resolved) {
       aliasMap[`openclaw/plugin-sdk/${subpath}`] = resolved;

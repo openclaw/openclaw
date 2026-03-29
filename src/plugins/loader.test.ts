@@ -3521,6 +3521,36 @@ module.exports = {
     );
   });
 
+  it("builds plugin-sdk aliases for external plugins via the running host root", () => {
+    const fixture = createPluginSdkAliasFixture({
+      srcFile: "channel-runtime.ts",
+      distFile: "channel-runtime.js",
+      packageExports: {
+        "./plugin-sdk/channel-runtime": { default: "./dist/plugin-sdk/channel-runtime.js" },
+      },
+    });
+    const sourceRootAlias = path.join(fixture.root, "src", "plugin-sdk", "root-alias.cjs");
+    const distRootAlias = path.join(fixture.root, "dist", "plugin-sdk", "root-alias.cjs");
+    fs.writeFileSync(sourceRootAlias, "module.exports = {};\n", "utf-8");
+    fs.writeFileSync(distRootAlias, "module.exports = {};\n", "utf-8");
+    const externalPluginEntry = path.join(fixture.root, "..", "external-plugin", "index.ts");
+    fs.mkdirSync(path.dirname(externalPluginEntry), { recursive: true });
+    fs.writeFileSync(externalPluginEntry, 'export const plugin = "external";\n', "utf-8");
+
+    const aliases = withEnv({ NODE_ENV: undefined }, () =>
+      __testing.buildPluginLoaderAliasMap(externalPluginEntry, {
+        argv1: path.join(fixture.root, "openclaw.mjs"),
+      }),
+    );
+
+    expect(fs.realpathSync(aliases["openclaw/plugin-sdk"] ?? "")).toBe(
+      fs.realpathSync(sourceRootAlias),
+    );
+    expect(fs.realpathSync(aliases["openclaw/plugin-sdk/channel-runtime"] ?? "")).toBe(
+      fs.realpathSync(path.join(fixture.root, "src", "plugin-sdk", "channel-runtime.ts")),
+    );
+  });
+
   it("does not resolve plugin-sdk alias files from cwd fallback when package root is not an OpenClaw root", () => {
     const fixture = createPluginSdkAliasFixture({
       srcFile: "channel-runtime.ts",

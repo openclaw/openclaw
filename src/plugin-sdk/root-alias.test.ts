@@ -102,6 +102,11 @@ describe("plugin-sdk root alias", () => {
     expect(parsed.success).toBe(false);
   });
 
+  it("exposes compat-backed legacy helpers used by external channel plugins", () => {
+    expect(typeof rootSdk.createDefaultChannelRuntimeState).toBe("function");
+    expect(typeof rootSdk.resolvePreferredOpenClawTmpDir).toBe("function");
+  });
+
   it("does not load the monolithic sdk for fast helpers", () => {
     const lazyModule = loadRootAliasWithStubs();
     const lazyRootSdk = lazyModule.moduleExports;

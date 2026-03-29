@@ -259,6 +259,31 @@ describe("discoverOpenClawPlugins", () => {
     expect(ids).not.toContain("microsoft-speech");
   });
 
+  it("normalizes openclaw-wechat package ids to the canonical wechat plugin id", async () => {
+    const stateDir = makeTempDir();
+    const wechatDir = path.join(path.join(stateDir, "extensions"), "openclaw-wechat-pack");
+
+    mkdirSafe(path.join(wechatDir, "src"));
+
+    writePluginPackageManifest({
+      packageDir: wechatDir,
+      packageName: "@icesword760/openclaw-wechat",
+      extensions: ["./src/index.ts"],
+    });
+
+    fs.writeFileSync(
+      path.join(wechatDir, "src", "index.ts"),
+      "export default function () {}",
+      "utf-8",
+    );
+
+    const { candidates } = await discoverWithStateDir(stateDir, {});
+
+    const ids = candidates.map((c) => c.idHint);
+    expect(ids).toContain("wechat");
+    expect(ids).not.toContain("openclaw-wechat");
+  });
+
   it("treats configured directory paths as plugin packages", async () => {
     const stateDir = makeTempDir();
     const packDir = path.join(stateDir, "packs", "demo-plugin-dir");
