@@ -5,13 +5,8 @@ import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import type { Duplex } from "node:stream";
-import {
-  clearTimeout as clearNativeTimeout,
-  setTimeout as scheduleNativeTimeout,
-} from "node:timers";
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { rawDataToString } from "../infra/ws.js";
 import { defaultRuntime } from "../runtime.js";
 import { A2UI_PATH, CANVAS_HOST_PATH, CANVAS_WS_PATH, injectCanvasLiveReload } from "./a2ui.js";
 
@@ -21,28 +16,8 @@ type MockWatcher = {
   __emit: (event: string, ...args: unknown[]) => void;
 };
 
-const CANVAS_WS_OPEN_TIMEOUT_MS = 4_000;
 const CANVAS_RELOAD_TIMEOUT_MS = 10_000;
 const CANVAS_RELOAD_TEST_TIMEOUT_MS = 20_000;
-
-type TrackingWebSocketServerCtor = {
-  new (...args: unknown[]): {
-    on: (event: string, cb: (...args: unknown[]) => void) => unknown;
-    emit: (event: string, ...args: unknown[]) => void;
-    handleUpgrade: (
-      req: IncomingMessage,
-      socket: Duplex,
-      head: Buffer,
-      cb: (ws: TrackingWebSocket) => void,
-    ) => void;
-    close: (cb?: (err?: Error) => void) => void;
-    connectionCount: number;
-  };
-  latestInstance?: {
-    connectionCount: number;
-  };
-  latestSocket?: TrackingWebSocket;
-};
 
 type TrackingWebSocket = {
   sent: string[];
@@ -90,7 +65,6 @@ describe("canvas host", () => {
   let createCanvasHostHandler: typeof import("./server.js").createCanvasHostHandler;
   let startCanvasHost: typeof import("./server.js").startCanvasHost;
   let realFetch: typeof import("undici").fetch;
-  let WebSocketClient: typeof import("ws").WebSocket;
   let WebSocketServerClass: typeof import("ws").WebSocketServer;
   let watcherState: ReturnType<typeof createMockWatcherState>;
   let fixtureRoot = "";
@@ -132,7 +106,6 @@ describe("canvas host", () => {
     ({ createCanvasHostHandler, startCanvasHost } = await import("./server.js"));
     ({ fetch: realFetch } = require("undici") as typeof import("undici"));
     const wsModule = await vi.importActual<typeof import("ws")>("ws");
-    WebSocketClient = wsModule.WebSocket;
     WebSocketServerClass = wsModule.WebSocketServer;
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-canvas-fixtures-"));
   });
@@ -397,7 +370,7 @@ describe("canvas host", () => {
             }
             void sleep(10).then(poll, reject);
           };
-          void poll();
+          poll();
         });
 
         await fs.writeFile(index, "<html><body>v2</body></html>", "utf8");
