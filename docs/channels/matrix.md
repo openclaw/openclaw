@@ -189,6 +189,8 @@ done:
 
 ## Encryption and verification
 
+In encrypted (E2EE) rooms, outbound image events use `thumbnail_file` so image previews are encrypted alongside the full attachment. Unencrypted rooms still use plain `thumbnail_url`. No configuration is needed — the plugin detects E2EE state automatically.
+
 ### Bot to bot rooms
 
 By default, Matrix messages from other configured OpenClaw Matrix accounts are ignored.
