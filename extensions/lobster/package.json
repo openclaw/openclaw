@@ -4,7 +4,7 @@
   "description": "Lobster workflow tool plugin (typed pipelines + resumable approvals)",
   "type": "module",
   "dependencies": {
-    "@sinclair/typebox": "0.34.48"
+    "@sinclair/typebox": "0.34.49"
   },
   "openclaw": {
     "extensions": [

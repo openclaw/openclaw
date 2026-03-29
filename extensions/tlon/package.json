@@ -6,7 +6,7 @@
   "dependencies": {
     "@aws-sdk/client-s3": "3.1019.0",
     "@aws-sdk/s3-request-presigner": "3.1019.0",
-    "@tloncorp/tlon-skill": "0.3.0",
+    "@tloncorp/tlon-skill": "0.3.1",
     "@urbit/aura": "^3.0.0"
   },
   "devDependencies": {

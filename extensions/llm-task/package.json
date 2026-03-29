@@ -5,7 +5,7 @@
   "description": "OpenClaw JSON-only LLM task plugin",
   "type": "module",
   "dependencies": {
-    "@sinclair/typebox": "0.34.48",
+    "@sinclair/typebox": "0.34.49",
     "ajv": "^8.18.0"
   },
   "openclaw": {
