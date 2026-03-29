@@ -11,19 +11,19 @@ vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
   };
 });
 
-import { __testing as acpManagerTesting } from "../../../../src/acp/control-plane/manager.js";
-import { handleAcpCommand } from "../../../../src/auto-reply/reply/commands-acp.js";
-import { buildCommandTestParams } from "../../../../src/auto-reply/reply/commands-spawn.test-harness.js";
-import { setDefaultChannelPluginRegistryForTests } from "../../../../src/commands/channel-test-helpers.js";
-import type { OpenClawConfig } from "../../../../src/config/config.js";
-import * as gatewayCall from "../../../../src/gateway/call.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   __testing as sessionBindingTesting,
   getSessionBindingService,
   registerSessionBindingAdapter,
   type SessionBindingBindInput,
   type SessionBindingRecord,
-} from "../../../../src/infra/outbound/session-binding-service.js";
+} from "openclaw/plugin-sdk/conversation-runtime";
+import { __testing as acpManagerTesting } from "openclaw/plugin-sdk/testing";
+import { handleAcpCommand } from "openclaw/plugin-sdk/testing";
+import { buildCommandTestParams } from "openclaw/plugin-sdk/testing";
+import { setDefaultChannelPluginRegistryForTests } from "openclaw/plugin-sdk/testing";
+import * as gatewayCall from "openclaw/plugin-sdk/testing";
 import { preflightDiscordMessage } from "./message-handler.preflight.js";
 import {
   createDiscordMessage,
