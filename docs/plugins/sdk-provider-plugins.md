@@ -32,7 +32,15 @@ API key auth, and dynamic model resolution.
       "type": "module",
       "openclaw": {
         "extensions": ["./index.ts"],
-        "providers": ["acme-ai"]
+        "providers": ["acme-ai"],
+        "compat": {
+          "pluginApi": ">=2026.3.24-beta.2",
+          "minGatewayVersion": "2026.3.24-beta.2"
+        },
+        "build": {
+          "openclawVersion": "2026.3.24-beta.2",
+          "pluginSdkVersion": "2026.3.24-beta.2"
+        }
       }
     }
     ```
@@ -68,7 +76,9 @@ API key auth, and dynamic model resolution.
     </CodeGroup>
 
     The manifest declares `providerAuthEnvVars` so OpenClaw can detect
-    credentials without loading your plugin runtime.
+    credentials without loading your plugin runtime. If you publish the
+    provider on ClawHub, those `openclaw.compat` and `openclaw.build` fields
+    are required in `package.json`.
 
   </Step>
 
@@ -382,6 +392,18 @@ API key auth, and dynamic model resolution.
 
   </Step>
 </Steps>
+
+## Publish to ClawHub
+
+Provider plugins publish the same way as any other external code plugin:
+
+```bash
+clawhub package publish your-org/your-plugin --dry-run
+clawhub package publish your-org/your-plugin
+```
+
+Do not use the legacy skill-only publish alias here; plugin packages should use
+`clawhub package publish`.
 
 ## File structure
 

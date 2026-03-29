@@ -8,6 +8,7 @@ const downloadClawHubSkillArchiveMock = vi.fn();
 const listClawHubSkillsMock = vi.fn();
 const resolveClawHubBaseUrlMock = vi.fn(() => "https://clawhub.ai");
 const searchClawHubSkillsMock = vi.fn();
+const archiveCleanupMock = vi.fn();
 const withExtractedArchiveRootMock = vi.fn();
 const installPackageDirMock = vi.fn();
 const fileExistsMock = vi.fn();
@@ -42,6 +43,7 @@ describe("skills-clawhub", () => {
     listClawHubSkillsMock.mockReset();
     resolveClawHubBaseUrlMock.mockReset();
     searchClawHubSkillsMock.mockReset();
+    archiveCleanupMock.mockReset();
     withExtractedArchiveRootMock.mockReset();
     installPackageDirMock.mockReset();
     fileExistsMock.mockReset();
@@ -63,7 +65,9 @@ describe("skills-clawhub", () => {
     downloadClawHubSkillArchiveMock.mockResolvedValue({
       archivePath: "/tmp/agentreceipt.zip",
       integrity: "sha256-test",
+      cleanup: archiveCleanupMock,
     });
+    archiveCleanupMock.mockResolvedValue(undefined);
     searchClawHubSkillsMock.mockResolvedValue([]);
     withExtractedArchiveRootMock.mockImplementation(async (params) => {
       expect(params.rootMarkers).toEqual(["SKILL.md"]);
@@ -97,6 +101,7 @@ describe("skills-clawhub", () => {
       version: "1.0.0",
       targetDir: "/tmp/workspace/skills/agentreceipt",
     });
+    expect(archiveCleanupMock).toHaveBeenCalledTimes(1);
   });
 
   describe("legacy tracked slugs remain updatable", () => {

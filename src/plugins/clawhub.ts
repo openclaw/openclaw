@@ -1,5 +1,3 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import {
   ClawHubRequestError,
   downloadClawHubPackageArchive,
@@ -343,9 +341,6 @@ export async function installPluginFromClawHub(params: {
       },
     };
   } finally {
-    await fs.rm(archive.archivePath, { force: true }).catch(() => undefined);
-    await fs
-      .rm(path.dirname(archive.archivePath), { recursive: true, force: true })
-      .catch(() => undefined);
+    await archive.cleanup().catch(() => undefined);
   }
 }
