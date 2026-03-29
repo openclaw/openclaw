@@ -15,7 +15,7 @@ import {
   resolveDefaultModelForAgent,
 } from "../agents/model-selection.js";
 import {
-  getLatestSubagentRunByChildSessionKey,
+  getSessionDisplaySubagentRunByChildSessionKey,
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
   listSubagentRunsForController,
@@ -269,7 +269,7 @@ function resolveChildSessionKeys(
     if (!childSessionKey) {
       continue;
     }
-    const latest = getLatestSubagentRunByChildSessionKey(childSessionKey);
+    const latest = getSessionDisplaySubagentRunByChildSessionKey(childSessionKey);
     const latestControllerSessionKey =
       latest?.controllerSessionKey?.trim() || latest?.requesterSessionKey?.trim();
     if (latestControllerSessionKey !== controllerSessionKey) {
@@ -286,7 +286,7 @@ function resolveChildSessionKeys(
     if (spawnedBy !== controllerSessionKey && parentSessionKey !== controllerSessionKey) {
       continue;
     }
-    const latest = getLatestSubagentRunByChildSessionKey(key);
+    const latest = getSessionDisplaySubagentRunByChildSessionKey(key);
     if (latest) {
       const latestControllerSessionKey =
         latest.controllerSessionKey?.trim() || latest.requesterSessionKey?.trim();
@@ -1161,7 +1161,7 @@ export function buildGatewaySessionRow(params: {
   const deliveryFields = normalizeSessionDeliveryFields(entry);
   const parsedAgent = parseAgentSessionKey(key);
   const sessionAgentId = normalizeAgentId(parsedAgent?.agentId ?? resolveDefaultAgentId(cfg));
-  const subagentRun = getLatestSubagentRunByChildSessionKey(key);
+  const subagentRun = getSessionDisplaySubagentRunByChildSessionKey(key);
   const subagentOwner =
     subagentRun?.controllerSessionKey?.trim() || subagentRun?.requesterSessionKey?.trim();
   const subagentStatus = subagentRun ? resolveSubagentSessionStatus(subagentRun) : undefined;
@@ -1178,8 +1178,7 @@ export function buildGatewaySessionRow(params: {
     Boolean(entry?.model?.trim()) || Boolean(entry?.modelProvider?.trim());
   const needsTranscriptTotalTokens =
     resolvePositiveNumber(resolveFreshSessionTotalTokens(entry)) === undefined;
-  const needsTranscriptContextTokens =
-    resolvePositiveNumber(entry?.contextTokens) === undefined;
+  const needsTranscriptContextTokens = resolvePositiveNumber(entry?.contextTokens) === undefined;
   const needsTranscriptEstimatedCostUsd =
     resolveEstimatedSessionCostUsd({
       cfg,
@@ -1384,7 +1383,7 @@ export function listSessionsFromStore(params: {
       if (key === "unknown" || key === "global") {
         return false;
       }
-      const latest = getLatestSubagentRunByChildSessionKey(key);
+      const latest = getSessionDisplaySubagentRunByChildSessionKey(key);
       if (latest) {
         const latestControllerSessionKey =
           latest.controllerSessionKey?.trim() || latest.requesterSessionKey?.trim();
