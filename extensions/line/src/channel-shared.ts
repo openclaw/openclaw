@@ -1,3 +1,4 @@
+import { describeWebhookAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import type { ChannelPlugin } from "../api.js";
 import {
   resolveLineAccount,
@@ -37,14 +38,14 @@ export const lineChannelPluginCommon = {
   config: {
     ...lineConfigAdapter,
     isConfigured: (account: ResolvedLineAccount) => hasLineCredentials(account),
-    describeAccount: (account: ResolvedLineAccount) => ({
-      accountId: account.accountId,
-      name: account.name,
-      enabled: account.enabled,
-      configured: hasLineCredentials(account),
-      tokenSource: account.tokenSource ?? undefined,
-      mode: "webhook",
-    }),
+    describeAccount: (account: ResolvedLineAccount) =>
+      describeWebhookAccountSnapshot({
+        account,
+        configured: hasLineCredentials(account),
+        extra: {
+          tokenSource: account.tokenSource ?? undefined,
+        },
+      }),
   },
 } satisfies Pick<
   ChannelPlugin<ResolvedLineAccount>,
