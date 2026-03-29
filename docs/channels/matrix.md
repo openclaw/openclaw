@@ -157,14 +157,39 @@ This is a practical baseline config with DM pairing, room allowlist, and E2EE en
       autoJoinAllowlist: ["!roomid:example.org"],
       threadReplies: "inbound",
       replyToMode: "off",
+      streaming: "partial",
     },
   },
 }
 ```
 
-## E2EE setup
+## Streaming previews
 
-## Bot to bot rooms
+Matrix reply streaming is opt-in.
+
+Set `channels.matrix.streaming` to `"partial"` when you want OpenClaw to send a single draft reply,
+edit that draft in place while the model is generating text, and then finalize it when the reply is
+done:
+
+```json5
+{
+  channels: {
+    matrix: {
+      streaming: "partial",
+    },
+  },
+}
+```
+
+- `streaming: "off"` is the default. OpenClaw waits for the final reply and sends it once.
+- `streaming: "partial"` creates one editable preview message instead of sending multiple partial messages.
+- If the preview no longer fits in one Matrix event, OpenClaw stops preview streaming and falls back to normal final delivery.
+- Media replies still send attachments normally. If a stale preview can no longer be reused safely, OpenClaw redacts it before sending the final media reply.
+- Preview edits cost extra Matrix API calls. Leave streaming off if you want the most conservative rate-limit behavior.
+
+## Encryption and verification
+
+### Bot to bot rooms
 
 By default, Matrix messages from other configured OpenClaw Matrix accounts are ignored.
 
@@ -401,6 +426,19 @@ Planned improvement:
 
 - add SecretRef support for persistent Matrix key material so recovery keys and related store-encryption secrets can be sourced from OpenClaw secrets providers instead of only local files
 
+## Profile management
+
+Update the Matrix self-profile for the selected account with:
+
+```bash
+openclaw matrix profile set --name "OpenClaw Assistant"
+openclaw matrix profile set --avatar-url https://cdn.example.org/avatar.png
+```
+
+Add `--account <id>` when you want to target a named Matrix account explicitly.
+
+Matrix accepts `mxc://` avatar URLs directly. When you pass an `http://` or `https://` avatar URL, OpenClaw uploads it to Matrix first and stores the resolved `mxc://` URL back into `channels.matrix.avatarUrl` (or the selected account override).
+
 ## Automatic verification notices
 
 Matrix now posts verification lifecycle notices directly into the strict DM verification room as `m.notice` messages.
@@ -469,6 +507,23 @@ Matrix supports native Matrix threads for both automatic replies and message-too
 - Runtime thread bindings are supported for Matrix. `/focus`, `/unfocus`, `/agents`, `/session idle`, `/session max-age`, and thread-bound `/acp spawn` now work in Matrix rooms and DMs.
 - Top-level Matrix room/DM `/focus` creates a new Matrix thread and binds it to the target session when `threadBindings.spawnSubagentSessions=true`.
 - Running `/focus` or `/acp spawn --thread here` inside an existing Matrix thread binds that current thread instead.
+
+## ACP conversation bindings
+
+Matrix rooms, DMs, and existing Matrix threads can be turned into durable ACP workspaces without changing the chat surface.
+
+Fast operator flow:
+
+- Run `/acp spawn codex --bind here` inside the Matrix DM, room, or existing thread you want to keep using.
+- In a top-level Matrix DM or room, the current DM/room stays the chat surface and future messages route to the spawned ACP session.
+- Inside an existing Matrix thread, `--bind here` binds that current thread in place.
+- `/new` and `/reset` reset the same bound ACP session in place.
+- `/acp close` closes the ACP session and removes the binding.
+
+Notes:
+
+- `--bind here` does not create a child Matrix thread.
+- `threadBindings.spawnAcpSessions` is only required for `/acp spawn --thread auto|here`, where OpenClaw needs to create or bind a child Matrix thread.
 
 ### Thread Binding Config
 
@@ -644,8 +699,8 @@ Live directory lookup uses the logged-in Matrix account:
 - `homeserver`: homeserver URL, for example `https://matrix.example.org`.
 - `allowPrivateNetwork`: allow this Matrix account to connect to private/internal homeservers. Enable this when the homeserver resolves to `localhost`, a LAN/Tailscale IP, or an internal host such as `matrix-synapse`.
 - `userId`: full Matrix user ID, for example `@bot:example.org`.
-- `accessToken`: access token for token-based auth.
-- `password`: password for password-based login.
+- `accessToken`: access token for token-based auth. Plaintext values and SecretRef values are supported for `channels.matrix.accessToken` and `channels.matrix.accounts.<id>.accessToken` across env/file/exec providers. See [Secrets Management](/gateway/secrets).
+- `password`: password for password-based login. Plaintext values and SecretRef values are supported.
 - `deviceId`: explicit Matrix device ID.
 - `deviceName`: device display name for password login.
 - `avatarUrl`: stored self-avatar URL for profile sync and `set-profile` updates.
@@ -656,6 +711,7 @@ Live directory lookup uses the logged-in Matrix account:
 - `groupAllowFrom`: allowlist of user IDs for room traffic.
 - `groupAllowFrom` entries should be full Matrix user IDs. Unresolved names are ignored at runtime.
 - `replyToMode`: `off`, `first`, or `all`.
+- `streaming`: `off` (default) or `partial`. `partial` enables single-message draft previews with edit-in-place updates.
 - `threadReplies`: `off`, `inbound`, or `always`.
 - `threadBindings`: per-channel overrides for thread-bound session routing and lifecycle.
 - `startupVerification`: automatic self-verification request mode on startup (`if-unverified`, `off`).
@@ -666,7 +722,7 @@ Live directory lookup uses the logged-in Matrix account:
 - `ackReaction`: optional ack reaction override for this channel/account.
 - `ackReactionScope`: optional ack reaction scope override (`group-mentions`, `group-all`, `direct`, `all`, `none`, `off`).
 - `reactionNotifications`: inbound reaction notification mode (`own`, `off`).
-- `mediaMaxMb`: outbound media size cap in MB.
+- `mediaMaxMb`: media size cap in MB for Matrix media handling. It applies to outbound sends and inbound media processing.
 - `autoJoin`: invite auto-join policy (`always`, `allowlist`, `off`). Default: `off`.
 - `autoJoinAllowlist`: rooms/aliases allowed when `autoJoin` is `allowlist`. Alias entries are resolved to room IDs during invite handling; OpenClaw does not trust alias state claimed by the invited room.
 - `dm`: DM policy block (`enabled`, `policy`, `allowFrom`).

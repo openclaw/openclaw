@@ -106,16 +106,6 @@ vi.mock("../../infra/outbound/session-binding-service.js", async (importOriginal
   return patched;
 });
 
-// Prevent transitive import chain from reaching discord/monitor which needs https-proxy-agent.
-vi.mock("../../../extensions/discord/runtime-api.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../../extensions/discord/runtime-api.js")>();
-  return {
-    ...actual,
-    createDiscordGatewayPlugin: () => ({}),
-  };
-});
-
 const { handleAcpCommand } = await import("./commands-acp.js");
 const { buildCommandTestParams } = await import("./commands-spawn.test-harness.js");
 const { __testing: acpManagerTesting } = await import("../../acp/control-plane/manager.js");
@@ -126,7 +116,7 @@ type FakeBinding = {
   targetSessionKey: string;
   targetKind: "subagent" | "session";
   conversation: {
-    channel: "discord" | "matrix" | "telegram" | "feishu";
+    channel: string;
     accountId: string;
     conversationId: string;
     parentConversationId?: string;
@@ -251,7 +241,7 @@ function createSessionBindingCapabilities() {
 type AcpBindInput = {
   targetSessionKey: string;
   conversation: {
-    channel?: "discord" | "matrix" | "telegram" | "feishu";
+    channel?: string;
     accountId: string;
     conversationId: string;
     parentConversationId?: string;
@@ -265,35 +255,16 @@ function createAcpThreadBinding(input: AcpBindInput): FakeBinding {
     input.placement === "child" ? "thread-created" : input.conversation.conversationId;
   const boundBy = typeof input.metadata?.boundBy === "string" ? input.metadata.boundBy : "user-1";
   const channel = input.conversation.channel ?? "discord";
-  const conversation =
-    channel === "discord"
-      ? {
-          channel: "discord" as const,
-          accountId: input.conversation.accountId,
-          conversationId: nextConversationId,
-          parentConversationId: "parent-1",
-        }
-      : channel === "matrix"
-        ? {
-            channel: "matrix" as const,
-            accountId: input.conversation.accountId,
-            conversationId: nextConversationId,
-            parentConversationId:
-              input.placement === "child"
-                ? input.conversation.conversationId
-                : input.conversation.parentConversationId,
-          }
-        : channel === "feishu"
-          ? {
-              channel: "feishu" as const,
-              accountId: input.conversation.accountId,
-              conversationId: nextConversationId,
-            }
-          : {
-              channel: "telegram" as const,
-              accountId: input.conversation.accountId,
-              conversationId: nextConversationId,
-            };
+  const nextParentConversationId =
+    input.placement === "child"
+      ? input.conversation.conversationId
+      : input.conversation.parentConversationId;
+  const conversation = {
+    channel,
+    accountId: input.conversation.accountId,
+    conversationId: nextConversationId,
+    ...(nextParentConversationId ? { parentConversationId: nextParentConversationId } : {}),
+  };
   return createSessionBinding({
     targetSessionKey: input.targetSessionKey,
     conversation,
@@ -335,28 +306,33 @@ function createThreadParams(commandBody: string, cfg: OpenClawConfig = baseCfg) 
   return params;
 }
 
-function createTelegramTopicParams(commandBody: string, cfg: OpenClawConfig = baseCfg) {
-  const params = buildCommandTestParams(commandBody, cfg, {
-    Provider: "telegram",
-    Surface: "telegram",
-    OriginatingChannel: "telegram",
-    OriginatingTo: "telegram:-1003841603622",
-    AccountId: "default",
-    MessageThreadId: "498",
-  });
-  params.command.senderId = "user-1";
-  return params;
-}
+type ConversationCommandFixture = {
+  accountId?: string;
+  channel: string;
+  originatingTo: string;
+  senderId?: string;
+  sessionKey?: string;
+  threadId?: string;
+  threadParentId?: string;
+};
 
-function createTelegramDmParams(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+function createConversationParams(
+  commandBody: string,
+  fixture: ConversationCommandFixture,
+  cfg: OpenClawConfig = baseCfg,
+) {
   const params = buildCommandTestParams(commandBody, cfg, {
-    Provider: "telegram",
-    Surface: "telegram",
-    OriginatingChannel: "telegram",
-    OriginatingTo: "telegram:123456789",
-    AccountId: "default",
+    Provider: fixture.channel,
+    Surface: fixture.channel,
+    OriginatingChannel: fixture.channel,
+    OriginatingTo: fixture.originatingTo,
+    AccountId: fixture.accountId ?? "default",
+    ...(fixture.senderId ? { SenderId: fixture.senderId } : {}),
+    ...(fixture.sessionKey ? { SessionKey: fixture.sessionKey } : {}),
+    ...(fixture.threadId ? { MessageThreadId: fixture.threadId } : {}),
+    ...(fixture.threadParentId ? { ThreadParentId: fixture.threadParentId } : {}),
   });
-  params.command.senderId = "user-1";
+  params.command.senderId = fixture.senderId ?? "user-1";
   return params;
 }
 
@@ -369,54 +345,136 @@ async function runThreadAcpCommand(commandBody: string, cfg: OpenClawConfig = ba
 }
 
 async function runTelegramAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
-  return handleAcpCommand(createTelegramTopicParams(commandBody, cfg), true);
+  return handleAcpCommand(
+    createConversationParams(
+      commandBody,
+      {
+        channel: "telegram",
+        originatingTo: "telegram:-1003841603622",
+        threadId: "498",
+      },
+      cfg,
+    ),
+    true,
+  );
 }
 
 async function runTelegramDmAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
-  return handleAcpCommand(createTelegramDmParams(commandBody, cfg), true);
+  return handleAcpCommand(
+    createConversationParams(
+      commandBody,
+      {
+        channel: "telegram",
+        originatingTo: "telegram:123456789",
+      },
+      cfg,
+    ),
+    true,
+  );
 }
 
-function createMatrixRoomParams(commandBody: string, cfg: OpenClawConfig = baseCfg) {
-  const params = buildCommandTestParams(commandBody, cfg, {
-    Provider: "matrix",
-    Surface: "matrix",
-    OriginatingChannel: "matrix",
-    OriginatingTo: "room:!room:example.org",
-    AccountId: "default",
-  });
-  params.command.senderId = "user-1";
-  return params;
+async function runSlackDmAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+  return handleAcpCommand(
+    createConversationParams(
+      commandBody,
+      {
+        channel: "slack",
+        originatingTo: "user:U123",
+        senderId: "U123",
+      },
+      cfg,
+    ),
+    true,
+  );
 }
 
 function createMatrixThreadParams(commandBody: string, cfg: OpenClawConfig = baseCfg) {
-  const params = createMatrixRoomParams(commandBody, cfg);
+  const params = createConversationParams(
+    commandBody,
+    {
+      channel: "matrix",
+      originatingTo: "room:!room:example.org",
+    },
+    cfg,
+  );
   params.ctx.MessageThreadId = "$thread-root";
   return params;
 }
 
 async function runMatrixAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
-  return handleAcpCommand(createMatrixRoomParams(commandBody, cfg), true);
+  return handleAcpCommand(
+    createConversationParams(
+      commandBody,
+      {
+        channel: "matrix",
+        originatingTo: "room:!room:example.org",
+      },
+      cfg,
+    ),
+    true,
+  );
 }
 
 async function runMatrixThreadAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
   return handleAcpCommand(createMatrixThreadParams(commandBody, cfg), true);
 }
 
-function createFeishuDmParams(commandBody: string, cfg: OpenClawConfig = baseCfg) {
-  const params = buildCommandTestParams(commandBody, cfg, {
-    Provider: "feishu",
-    Surface: "feishu",
-    OriginatingChannel: "feishu",
-    OriginatingTo: "user:ou_sender_1",
-    AccountId: "default",
-    SenderId: "ou_sender_1",
-  });
-  params.command.senderId = "user-1";
-  return params;
+async function runFeishuDmAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+  return handleAcpCommand(
+    createConversationParams(
+      commandBody,
+      {
+        channel: "feishu",
+        originatingTo: "user:ou_sender_1",
+        senderId: "ou_sender_1",
+      },
+      cfg,
+    ),
+    true,
+  );
 }
 
-async function runFeishuDmAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
-  return handleAcpCommand(createFeishuDmParams(commandBody, cfg), true);
+async function runLineDmAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+  return handleAcpCommand(
+    createConversationParams(
+      commandBody,
+      {
+        channel: "line",
+        originatingTo: "U1234567890abcdef1234567890abcdef",
+        senderId: "U1234567890abcdef1234567890abcdef",
+      },
+      cfg,
+    ),
+    true,
+  );
+}
+
+async function runBlueBubblesDmAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+  return handleAcpCommand(
+    createConversationParams(
+      commandBody,
+      {
+        channel: "bluebubbles",
+        originatingTo: "bluebubbles:+15555550123",
+      },
+      cfg,
+    ),
+    true,
+  );
+}
+
+async function runIMessageDmAcpCommand(commandBody: string, cfg: OpenClawConfig = baseCfg) {
+  return handleAcpCommand(
+    createConversationParams(
+      commandBody,
+      {
+        channel: "imessage",
+        originatingTo: "imessage:+15555550123",
+      },
+      cfg,
+    ),
+    true,
+  );
 }
 
 async function runInternalAcpCommand(params: {
@@ -704,7 +762,7 @@ describe("/acp command", () => {
       }),
     );
     expectBoundIntroTextToExclude("session ids: pending (available after the first reply)");
-    expect(hoisted.callGatewayMock).toHaveBeenCalledWith(
+    expect(hoisted.callGatewayMock).not.toHaveBeenCalledWith(
       expect.objectContaining({
         method: "sessions.patch",
       }),
@@ -728,6 +786,19 @@ describe("/acp command", () => {
     expect(seededWithoutEntry?.runtimeSessionName).toContain(":runtime");
   });
 
+  it("persists ACP spawn labels without a nested gateway self-call", async () => {
+    const params = createDiscordParams("/acp spawn codex --bind here --label inbox");
+
+    const result = await handleAcpCommand(params, true);
+
+    expect(result?.reply?.text).toContain("Bound this conversation to");
+    expect(hoisted.callGatewayMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "sessions.patch",
+      }),
+    );
+  });
+
   it("accepts unicode dash option prefixes in /acp spawn args", async () => {
     const result = await runThreadAcpCommand(
       "/acp spawn codex \u2014mode oneshot \u2014thread here \u2014cwd /home/bob/clawd \u2014label jeerreview",
@@ -747,6 +818,82 @@ describe("/acp command", () => {
         placement: "current",
         metadata: expect.objectContaining({
           label: "jeerreview",
+        }),
+      }),
+    );
+  });
+
+  it("binds the current Discord channel with --bind here without creating a child thread", async () => {
+    const cfg = {
+      ...baseCfg,
+      channels: {
+        discord: {
+          threadBindings: {
+            enabled: true,
+            spawnAcpSessions: false,
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const result = await runDiscordAcpCommand("/acp spawn codex --bind here", cfg);
+
+    expect(result?.reply?.text).toContain("Bound this conversation to");
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "current",
+        conversation: expect.objectContaining({
+          channel: "discord",
+          accountId: "default",
+          conversationId: "channel:parent-1",
+        }),
+      }),
+    );
+  });
+
+  it("binds BlueBubbles DMs with --bind here", async () => {
+    const result = await runBlueBubblesDmAcpCommand("/acp spawn codex --bind here");
+
+    expect(result?.reply?.text).toContain("Bound this conversation to");
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "current",
+        conversation: expect.objectContaining({
+          channel: "bluebubbles",
+          accountId: "default",
+          conversationId: "+15555550123",
+        }),
+      }),
+    );
+  });
+
+  it("binds Slack DMs with --bind here through the generic conversation path", async () => {
+    const result = await runSlackDmAcpCommand("/acp spawn codex --bind here");
+
+    expect(result?.reply?.text).toContain("Bound this conversation to");
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "current",
+        conversation: expect.objectContaining({
+          channel: "slack",
+          accountId: "default",
+          conversationId: "user:U123",
+        }),
+      }),
+    );
+  });
+
+  it("binds iMessage DMs with --bind here", async () => {
+    const result = await runIMessageDmAcpCommand("/acp spawn codex --bind here");
+
+    expect(result?.reply?.text).toContain("Bound this conversation to");
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "current",
+        conversation: expect.objectContaining({
+          channel: "imessage",
+          accountId: "default",
+          conversationId: "+15555550123",
         }),
       }),
     );
@@ -783,6 +930,34 @@ describe("/acp command", () => {
           channel: "telegram",
           accountId: "default",
           conversationId: "123456789",
+        }),
+      }),
+    );
+  });
+
+  it("binds Matrix rooms with --bind here without requiring thread spawn", async () => {
+    const cfg = {
+      ...baseCfg,
+      channels: {
+        matrix: {
+          threadBindings: {
+            enabled: true,
+            spawnAcpSessions: false,
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const result = await runMatrixAcpCommand("/acp spawn codex --bind here", cfg);
+
+    expect(result?.reply?.text).toContain("Bound this conversation to");
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "current",
+        conversation: expect.objectContaining({
+          channel: "matrix",
+          accountId: "default",
+          conversationId: "!room:example.org",
         }),
       }),
     );
@@ -849,7 +1024,7 @@ describe("/acp command", () => {
     const result = await runFeishuDmAcpCommand("/acp spawn codex --thread here");
 
     expect(result?.reply?.text).toContain("Spawned ACP session agent:codex:acp:");
-    expect(result?.reply?.text).toContain("Bound this thread to");
+    expect(result?.reply?.text).toContain("Bound this conversation to");
     expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
       expect.objectContaining({
         placement: "current",
@@ -862,11 +1037,36 @@ describe("/acp command", () => {
     );
   });
 
+  it("binds LINE DM ACP spawns to the current conversation", async () => {
+    const result = await runLineDmAcpCommand("/acp spawn codex --thread here");
+
+    expect(result?.reply?.text).toContain("Spawned ACP session agent:codex:acp:");
+    expect(result?.reply?.text).toContain("Bound this conversation to");
+    expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        placement: "current",
+        conversation: expect.objectContaining({
+          channel: "line",
+          accountId: "default",
+          conversationId: "U1234567890abcdef1234567890abcdef",
+        }),
+      }),
+    );
+  });
+
   it("requires explicit ACP target when acp.defaultAgent is not configured", async () => {
     const result = await runDiscordAcpCommand("/acp spawn");
 
     expect(result?.reply?.text).toContain("ACP target harness id is required");
     expect(hoisted.ensureSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects mixing --thread and --bind on the same /acp spawn", async () => {
+    const result = await runDiscordAcpCommand("/acp spawn codex --thread here --bind here");
+
+    expect(result?.reply?.text).toContain("Use either --thread or --bind");
+    expect(hoisted.ensureSessionMock).not.toHaveBeenCalled();
+    expect(hoisted.sessionBindingBindMock).not.toHaveBeenCalled();
   });
 
   it("rejects thread-bound ACP spawn when spawnAcpSessions is disabled", async () => {

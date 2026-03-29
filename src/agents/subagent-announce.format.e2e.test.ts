@@ -15,7 +15,7 @@ import {
 import * as hookRunnerGlobal from "../plugins/hook-runner-global.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import * as piEmbedded from "./pi-embedded.js";
 import * as agentStep from "./tools/agent-step.js";
 
@@ -190,7 +190,6 @@ vi.mock("./subagent-registry-runtime.js", () => subagentRegistryMock);
 describe("subagent announce formatting", () => {
   let previousFastTestEnv: string | undefined;
   let runSubagentAnnounceFlow: (typeof import("./subagent-announce.js"))["runSubagentAnnounceFlow"];
-  let matrixPlugin: (typeof import("../../extensions/matrix/index.js"))["matrixPlugin"];
 
   beforeAll(async () => {
     // Set FAST_TEST_MODE before importing the module to ensure the module-level
@@ -199,7 +198,6 @@ describe("subagent announce formatting", () => {
     // See: https://github.com/openclaw/openclaw/issues/31298
     previousFastTestEnv = process.env.OPENCLAW_TEST_FAST;
     process.env.OPENCLAW_TEST_FAST = "1";
-    ({ matrixPlugin } = await import("../../extensions/matrix/index.js"));
     ({ runSubagentAnnounceFlow } = await import("./subagent-announce.js"));
   });
 
@@ -316,7 +314,13 @@ describe("subagent announce formatting", () => {
     sessionStore = {};
     sessionBindingServiceTesting.resetSessionBindingAdaptersForTests();
     setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "matrix", plugin: matrixPlugin, source: "test" }]),
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          plugin: createChannelTestPluginBase({ id: "matrix", label: "Matrix" }),
+          source: "test",
+        },
+      ]),
     );
     setConfigOverride({
       session: {
@@ -604,6 +608,27 @@ describe("subagent announce formatting", () => {
     });
     expect(msg).toContain("final answer: 2");
     expect(msg).not.toContain("✅ Subagent");
+  });
+
+  it("keeps completion delivery enabled for extension channels captured from requester origin", async () => {
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-direct-completion-bluebubbles",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: { channel: "bluebubbles", to: "+1234567890", accountId: "acct-bb" },
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).not.toHaveBeenCalled();
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    expect(call?.params?.deliver).toBe(true);
+    expect(call?.params?.channel).toBe("bluebubbles");
+    expect(call?.params?.to).toBe("+1234567890");
+    expect(call?.params?.accountId).toBe("acct-bb");
   });
 
   it("keeps direct completion announce delivery immediate even when sibling counters are non-zero", async () => {
@@ -1347,6 +1372,41 @@ describe("subagent announce formatting", () => {
     }
   });
 
+  it("uses hook-provided extension channel targets for completion delivery", async () => {
+    hasSubagentDeliveryTargetHook = true;
+    subagentDeliveryTargetHookMock.mockResolvedValueOnce({
+      origin: {
+        channel: "bluebubbles",
+        accountId: "acct-bb",
+        to: "+1234567890",
+      },
+    });
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-direct-hook-bluebubbles",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: {
+        channel: "discord",
+        to: "channel:12345",
+        accountId: "acct-1",
+      },
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+      spawnMode: "session",
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).not.toHaveBeenCalled();
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    expect(call?.params?.deliver).toBe(true);
+    expect(call?.params?.channel).toBe("bluebubbles");
+    expect(call?.params?.to).toBe("+1234567890");
+    expect(call?.params?.accountId).toBe("acct-bb");
+  });
+
   it.each([
     {
       name: "delivery-target hook returns no override",
@@ -1354,7 +1414,7 @@ describe("subagent announce formatting", () => {
       hookResult: undefined,
     },
     {
-      name: "delivery-target hook returns non-deliverable channel",
+      name: "delivery-target hook returns internal channel",
       childRunId: "run-direct-thread-multi-no-origin",
       hookResult: {
         origin: {
@@ -1956,6 +2016,33 @@ describe("subagent announce formatting", () => {
     };
     expect(call?.params?.channel).toBe(testCase.expectedChannel);
     expect(call?.params?.accountId).toBe(testCase.expectedAccountId);
+    expect(call?.expectFinal).toBe(true);
+  });
+
+  it("keeps direct announce delivery enabled for extension channels", async () => {
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(false);
+    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-direct-bluebubbles",
+      requesterSessionKey: "agent:main:main",
+      requesterOrigin: { channel: "bluebubbles", accountId: "acct-bb", to: "+1234567890" },
+      requesterDisplayKey: "main",
+      ...defaultOutcomeAnnounce,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).not.toHaveBeenCalled();
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    const call = agentSpy.mock.calls[0]?.[0] as {
+      params?: Record<string, unknown>;
+      expectFinal?: boolean;
+    };
+    expect(call?.params?.deliver).toBe(true);
+    expect(call?.params?.channel).toBe("bluebubbles");
+    expect(call?.params?.to).toBe("+1234567890");
+    expect(call?.params?.accountId).toBe("acct-bb");
     expect(call?.expectFinal).toBe(true);
   });
 
@@ -2813,7 +2900,7 @@ describe("subagent announce formatting", () => {
           },
         },
         expectedSessionKey: "agent:main:main",
-        expectedDeliver: true,
+        expectedDeliver: false,
         expectedChannel: "discord",
       },
       {
@@ -2835,7 +2922,7 @@ describe("subagent announce formatting", () => {
           },
         },
         expectedSessionKey: "agent:main:main",
-        expectedDeliver: true,
+        expectedDeliver: false,
         expectedChannel: "discord",
       },
     ] as const;

@@ -26,6 +26,7 @@ import type {
   ModelProviderAuthMode,
   ModelProviderConfig,
 } from "../config/types.js";
+import type { ModelCompatConfig } from "../config/types.models.js";
 import type { OperatorScope } from "../gateway/method-scopes.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hooks.js";
@@ -51,6 +52,7 @@ import type {
   SpeechTelephonySynthesisResult,
   SpeechVoiceOption,
 } from "../tts/provider-types.js";
+import type { DeliveryContext } from "../utils/delivery-context.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { SecretInputMode } from "./provider-auth-types.js";
 import type { createVpsAwareOAuthHandlers } from "./provider-oauth-flow.js";
@@ -113,6 +115,8 @@ export type OpenClawPluginConfigSchema = {
 /** Trusted execution context passed to plugin-owned agent tool factories. */
 export type OpenClawPluginToolContext = {
   config?: OpenClawConfig;
+  /** Active runtime-resolved config snapshot when one is available. */
+  runtimeConfig?: OpenClawConfig;
   workspaceDir?: string;
   agentDir?: string;
   agentId?: string;
@@ -125,6 +129,8 @@ export type OpenClawPluginToolContext = {
   };
   messageChannel?: string;
   agentAccountId?: string;
+  /** Trusted ambient delivery route for the active agent/session. */
+  deliveryContext?: DeliveryContext;
   /** Trusted sender id from inbound context (runtime-provided, not tool args). */
   requesterSenderId?: string;
   /** Whether the trusted sender is an owner. */
@@ -169,6 +175,7 @@ export type ProviderAuthResult = {
 /** Interactive auth context passed to provider login/setup methods. */
 export type ProviderAuthContext = {
   config: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
   agentDir?: string;
   workspaceDir?: string;
   prompter: WizardPrompter;
@@ -357,6 +364,52 @@ export type ProviderNormalizeResolvedModelContext = {
   provider: string;
   modelId: string;
   model: ProviderRuntimeModel;
+};
+
+/**
+ * Provider-owned model-id normalization before config/runtime lookup.
+ *
+ * Use this for provider-specific alias cleanup that should stay with the
+ * plugin rather than in core string tables.
+ */
+export type ProviderNormalizeModelIdContext = {
+  provider: string;
+  modelId: string;
+};
+
+/**
+ * Provider-owned config normalization for `models.providers.<id>` entries.
+ *
+ * Use this for provider-specific config cleanup that should stay with the
+ * plugin rather than in core config-policy tables.
+ */
+export type ProviderNormalizeConfigContext = {
+  provider: string;
+  providerConfig: ModelProviderConfig;
+};
+
+/**
+ * Provider-owned transport normalization for arbitrary provider/model config.
+ *
+ * Use this when transport cleanup depends on API/baseUrl rather than the
+ * owning provider id, for example custom providers that still target a
+ * plugin-owned transport family.
+ */
+export type ProviderNormalizeTransportContext = {
+  provider: string;
+  api?: string | null;
+  baseUrl?: string;
+};
+
+/**
+ * Provider-owned env/config auth marker resolution for `models.providers`.
+ *
+ * Use this when a provider resolves auth from env vars that do not follow the
+ * generic API-key conventions.
+ */
+export type ProviderResolveConfigApiKeyContext = {
+  provider: string;
+  env: NodeJS.ProcessEnv;
 };
 
 /**
@@ -733,6 +786,21 @@ export type ProviderPluginWizard = {
   modelPicker?: ProviderPluginWizardModelPicker;
 };
 
+export type ProviderOAuthProfileIdRepair = {
+  /**
+   * Legacy OAuth profile id to migrate away from.
+   *
+   * When omitted, OpenClaw falls back to `<provider>:default`.
+   */
+  legacyProfileId?: string;
+  /**
+   * Optional custom doctor prompt label.
+   *
+   * Defaults to the provider label when omitted.
+   */
+  promptLabel?: string;
+};
+
 export type ProviderModelSelectedContext = {
   config: OpenClawConfig;
   model: string;
@@ -760,6 +828,14 @@ export type ProviderPlugin = {
   label: string;
   docsPath?: string;
   aliases?: string[];
+  /**
+   * Internal-only aliases used for runtime/config hook lookup.
+   *
+   * Unlike `aliases`, these values are not treated as user-facing provider ids
+   * for auth/setup surfaces. Use them for legacy config keys or compat-only
+   * hook routing.
+   */
+  hookAliases?: string[];
   /**
    * Provider-related env vars shown in setup/search/help surfaces.
    *
@@ -810,6 +886,57 @@ export type ProviderPlugin = {
   normalizeResolvedModel?: (
     ctx: ProviderNormalizeResolvedModelContext,
   ) => ProviderRuntimeModel | null | undefined;
+  /**
+   * Provider-owned compat contribution for resolved models outside direct
+   * provider ownership.
+   *
+   * Use this when a plugin can recognize its vendor's models behind another
+   * OpenAI-compatible transport (for example OpenRouter or a custom base URL)
+   * and needs to contribute compat flags without taking over the provider.
+   */
+  contributeResolvedModelCompat?: (
+    ctx: ProviderNormalizeResolvedModelContext,
+  ) => Partial<ModelCompatConfig> | null | undefined;
+  /**
+   * Provider-owned model-id normalization.
+   *
+   * Runs before model lookup/canonicalization. Use this for alias cleanup such
+   * as provider-owned preview/legacy model ids.
+   */
+  normalizeModelId?: (ctx: ProviderNormalizeModelIdContext) => string | null | undefined;
+  /**
+   * Provider-owned transport-family normalization before generic model
+   * assembly.
+   *
+   * Use this for API/baseUrl cleanup that may apply to custom provider ids
+   * which still target the provider's transport family.
+   */
+  normalizeTransport?: (
+    ctx: ProviderNormalizeTransportContext,
+  ) => { api?: string | null; baseUrl?: string } | null | undefined;
+  /**
+   * Provider-owned config normalization for `models.providers.<id>`.
+   *
+   * Use this for provider-specific baseUrl/model-id cleanup that should stay
+   * with the plugin rather than in core config-policy tables.
+   */
+  normalizeConfig?: (ctx: ProviderNormalizeConfigContext) => ModelProviderConfig | null | undefined;
+  /**
+   * Provider-owned final native-streaming compat pass for config providers.
+   *
+   * Use this when a provider opts specific native base URLs into
+   * `supportsUsageInStreaming` or similar transport compatibility flags.
+   */
+  applyNativeStreamingUsageCompat?: (
+    ctx: ProviderNormalizeConfigContext,
+  ) => ModelProviderConfig | null | undefined;
+  /**
+   * Provider-owned config apiKey/env marker resolution.
+   *
+   * Use this when a provider resolves auth from env vars such as AWS/GCP
+   * markers rather than a normal API-key env var.
+   */
+  resolveConfigApiKey?: (ctx: ProviderResolveConfigApiKeyContext) => string | null | undefined;
   /**
    * Static provider capability overrides consumed by shared transcript/tooling
    * logic.
@@ -990,6 +1117,14 @@ export type ProviderPlugin = {
    */
   deprecatedProfileIds?: string[];
   /**
+   * Legacy OAuth profile-id migrations that `openclaw doctor` should offer.
+   *
+   * Use this when a provider moved from a legacy default OAuth profile id to a
+   * newer identity-based id and wants doctor to own the config rewrite without
+   * another core-specific migration branch.
+   */
+  oauthProfileIdRepairs?: ProviderOAuthProfileIdRepair[];
+  /**
    * Provider-owned OAuth refresh.
    *
    * OpenClaw calls this before falling back to the shared `pi-ai` OAuth
@@ -1009,7 +1144,28 @@ export type ProviderPlugin = {
     ctx: ProviderAuthDoctorHintContext,
   ) => string | Promise<string | null | undefined> | null | undefined;
   /**
-   * Provider-owned synthetic auth marker.
+   * Provider-owned config-backed auth resolution.
+   *
+   * Providers own any provider-specific fallback secret rules here so core
+   * auth/discovery code can stay generic and avoid parsing provider-private
+   * config layouts.
+   *
+   * The returned `apiKey` may be:
+   * - a real credential from the active runtime snapshot, suitable for runtime use
+   * - a non-secret marker (for example a managed SecretRef marker), suitable only
+   *   for discovery/bootstrap callers
+   *
+   * Runtime callers must not treat non-secret markers as runnable credentials;
+   * they should retry against the active runtime snapshot when available.
+   *
+   * This hook is the canonical seam for provider-specific fallback auth
+   * derived from plugin/private config. It may return:
+   * - a runnable literal credential for runtime callers
+   * - a non-secret marker for managed-secret source config, which is still useful
+   *   for discovery/bootstrap callers
+   *
+   * Runtime callers must not treat non-secret markers as runnable credentials;
+   * they should retry against the active runtime snapshot when available.
    *
    * Use this when the provider can operate without a real secret for certain
    * configured local/self-hosted cases and wants auth resolution to treat that
@@ -1048,10 +1204,27 @@ export type WebSearchRuntimeMetadataContext = {
   };
 };
 
+export type WebSearchProviderSetupContext = {
+  config: OpenClawConfig;
+  runtime: RuntimeEnv;
+  prompter: WizardPrompter;
+  quickstartDefaults?: boolean;
+  secretInputMode?: SecretInputMode;
+};
+
 export type WebSearchProviderPlugin = {
   id: WebSearchProviderId;
   label: string;
   hint: string;
+  /**
+   * Interactive onboarding surfaces where this search provider should appear
+   * when OpenClaw has no config-aware runtime context yet.
+   *
+   * Unlike provider auth, search setup historically exposed only a curated
+   * quickstart subset. Keep this plugin-owned so core does not hardcode the
+   * default bundled provider list.
+   */
+  onboardingScopes?: Array<"text-inference">;
   requiresCredential?: boolean;
   credentialLabel?: string;
   envVars: string[];
@@ -1066,6 +1239,7 @@ export type WebSearchProviderPlugin = {
   getConfiguredCredentialValue?: (config?: OpenClawConfig) => unknown;
   setConfiguredCredentialValue?: (configTarget: OpenClawConfig, value: unknown) => void;
   applySelectionConfig?: (config: OpenClawConfig) => OpenClawConfig;
+  runSetup?: (ctx: WebSearchProviderSetupContext) => OpenClawConfig | Promise<OpenClawConfig>;
   resolveRuntimeMetadata?: (
     ctx: WebSearchRuntimeMetadataContext,
   ) => Partial<RuntimeWebSearchMetadata> | Promise<Partial<RuntimeWebSearchMetadata>>;
@@ -1142,6 +1316,8 @@ export type PluginCommandContext = {
   accountId?: string;
   /** Thread/topic id if available */
   messageThreadId?: string | number;
+  /** Parent conversation id for thread-capable channels */
+  threadParentId?: string;
   requestConversationBinding: (
     params?: PluginConversationBindingRequestParams,
   ) => Promise<PluginConversationBindingRequestResult>;
@@ -1966,10 +2142,35 @@ export type PluginHookBeforeToolCallEvent = {
   toolCallId?: string;
 };
 
+export const PluginApprovalResolutions = {
+  ALLOW_ONCE: "allow-once",
+  ALLOW_ALWAYS: "allow-always",
+  DENY: "deny",
+  TIMEOUT: "timeout",
+  CANCELLED: "cancelled",
+} as const;
+
+export type PluginApprovalResolution =
+  (typeof PluginApprovalResolutions)[keyof typeof PluginApprovalResolutions];
+
 export type PluginHookBeforeToolCallResult = {
   params?: Record<string, unknown>;
   block?: boolean;
   blockReason?: string;
+  requireApproval?: {
+    title: string;
+    description: string;
+    severity?: "info" | "warning" | "critical";
+    timeoutMs?: number;
+    timeoutBehavior?: "allow" | "deny";
+    /** Set automatically by the hook runner — plugins should not set this. */
+    pluginId?: string;
+    /**
+     * Best-effort callback invoked with the final outcome after approval resolves, times out, or is cancelled.
+     * OpenClaw does not await this callback before allowing or denying the tool call.
+     */
+    onResolution?: (decision: PluginApprovalResolution) => Promise<void> | void;
+  };
 };
 
 // after_tool_call hook

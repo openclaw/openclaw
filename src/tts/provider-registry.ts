@@ -1,6 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { loadOpenClawPlugins } from "../plugins/loader.js";
-import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { resolvePluginCapabilityProviders } from "../plugins/capability-provider-runtime.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
 import type { SpeechProviderId } from "./provider-types.js";
 
@@ -16,12 +15,10 @@ export function normalizeSpeechProviderId(
 }
 
 function resolveSpeechProviderPluginEntries(cfg?: OpenClawConfig): SpeechProviderPlugin[] {
-  const active = getActivePluginRegistry();
-  const registry =
-    (active?.speechProviders?.length ?? 0) > 0 || !cfg
-      ? active
-      : loadOpenClawPlugins({ config: cfg });
-  return registry?.speechProviders?.map((entry) => entry.provider) ?? [];
+  return resolvePluginCapabilityProviders({
+    key: "speechProviders",
+    cfg,
+  });
 }
 
 function buildProviderMaps(cfg?: OpenClawConfig): {

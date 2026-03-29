@@ -1,9 +1,11 @@
+import { getExecApprovalReplyMetadata } from "openclaw/plugin-sdk/approval-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { TelegramExecApprovalConfig } from "openclaw/plugin-sdk/config-runtime";
-import { getExecApprovalReplyMetadata } from "openclaw/plugin-sdk/infra-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { resolveTelegramAccount } from "./accounts.js";
-import { resolveTelegramTargetChatType } from "./targets.js";
+import { resolveTelegramInlineButtonsConfigScope } from "./inline-buttons.js";
+import { normalizeTelegramChatId, resolveTelegramTargetChatType } from "./targets.js";
 
 function normalizeApproverId(value: string | number): string {
   return String(value).trim();
@@ -46,6 +48,55 @@ export function isTelegramExecApprovalApprover(params: {
   return approvers.includes(senderId);
 }
 
+function isTelegramExecApprovalTargetsMode(cfg: OpenClawConfig): boolean {
+  const execApprovals = cfg.approvals?.exec;
+  if (!execApprovals?.enabled) {
+    return false;
+  }
+  return execApprovals.mode === "targets" || execApprovals.mode === "both";
+}
+
+export function isTelegramExecApprovalTargetRecipient(params: {
+  cfg: OpenClawConfig;
+  senderId?: string | null;
+  accountId?: string | null;
+}): boolean {
+  const senderId = params.senderId?.trim();
+  if (!senderId || !isTelegramExecApprovalTargetsMode(params.cfg)) {
+    return false;
+  }
+  const targets = params.cfg.approvals?.exec?.targets;
+  if (!targets) {
+    return false;
+  }
+  const accountId = params.accountId ? normalizeAccountId(params.accountId) : undefined;
+  return targets.some((target) => {
+    const channel = target.channel?.trim().toLowerCase();
+    if (channel !== "telegram") {
+      return false;
+    }
+    if (accountId && target.accountId && normalizeAccountId(target.accountId) !== accountId) {
+      return false;
+    }
+    const to = target.to ? normalizeTelegramChatId(target.to) : undefined;
+    if (!to || to.startsWith("-")) {
+      return false;
+    }
+    return to === senderId;
+  });
+}
+
+export function isTelegramExecApprovalAuthorizedSender(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  senderId?: string | null;
+}): boolean {
+  return (
+    (isTelegramExecApprovalClientEnabled(params) && isTelegramExecApprovalApprover(params)) ||
+    isTelegramExecApprovalTargetRecipient(params)
+  );
+}
+
 export function resolveTelegramExecApprovalTarget(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
@@ -77,11 +128,7 @@ function resolveExecApprovalButtonsExplicitlyDisabled(params: {
   accountId?: string | null;
 }): boolean {
   const capabilities = resolveTelegramAccount(params).config.capabilities;
-  if (!capabilities || Array.isArray(capabilities) || typeof capabilities !== "object") {
-    return false;
-  }
-  const inlineButtons = (capabilities as { inlineButtons?: unknown }).inlineButtons;
-  return typeof inlineButtons === "string" && inlineButtons.trim().toLowerCase() === "off";
+  return resolveTelegramInlineButtonsConfigScope(capabilities) === "off";
 }
 
 export function shouldEnableTelegramExecApprovalButtons(params: {
