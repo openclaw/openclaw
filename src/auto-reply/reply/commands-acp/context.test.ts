@@ -201,6 +201,24 @@ describe("commands-acp context", () => {
     });
   });
 
+  it("resolves LINE conversation ids from canonical line targets", () => {
+    const params = buildCommandTestParams("/acp status", baseCfg, {
+      Provider: "line",
+      Surface: "line",
+      OriginatingChannel: "line",
+      OriginatingTo: "line:U1234567890abcdef1234567890abcdef",
+      AccountId: "work",
+    });
+
+    expect(resolveAcpCommandBindingContext(params)).toEqual({
+      channel: "line",
+      accountId: "work",
+      threadId: undefined,
+      conversationId: "U1234567890abcdef1234567890abcdef",
+    });
+    expect(resolveAcpCommandConversationId(params)).toBe("U1234567890abcdef1234567890abcdef");
+  });
+
   it("resolves Matrix thread context from the current room and thread root", () => {
     const params = buildCommandTestParams("/acp status", baseCfg, {
       Provider: "matrix",
