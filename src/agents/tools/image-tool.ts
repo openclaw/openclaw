@@ -1,3 +1,4 @@
+import path from "node:path";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import { getMediaUnderstandingProvider } from "../../media-understanding/provider-registry.js";
@@ -403,6 +404,10 @@ export function createImageTool(options?: {
           }
           if (imageRaw.startsWith("~")) {
             return resolveUserPath(imageRaw);
+          }
+          // Resolve relative paths against workspaceDir, matching read tool behavior
+          if (!path.isAbsolute(imageRaw) && options?.workspaceDir) {
+            return path.resolve(options.workspaceDir, imageRaw);
           }
           return imageRaw;
         })();

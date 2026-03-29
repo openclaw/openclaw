@@ -933,6 +933,40 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
+  it("resolves relative image paths against workspaceDir", async () => {
+    await withTempWorkspacePng(async ({ workspaceDir, imagePath }) => {
+      const fetch = stubMinimaxOkFetch();
+      await withTempAgentDir(async (agentDir) => {
+        const cfg = createMinimaxImageConfig();
+        const tool = createRequiredImageTool({ config: cfg, agentDir, workspaceDir });
+
+        // Use a relative path that should resolve against workspaceDir
+        const relativePath = path.relative(workspaceDir, imagePath);
+        await expectImageToolExecOk(tool, relativePath);
+        expect(fetch).toHaveBeenCalledTimes(1);
+      });
+    });
+  });
+
+  it("resolves deeply nested relative image paths against workspaceDir", async () => {
+    await withTempWorkspacePng(async ({ workspaceDir, imagePath }) => {
+      const fetch = stubMinimaxOkFetch();
+      await withTempAgentDir(async (agentDir) => {
+        const cfg = createMinimaxImageConfig();
+        const tool = createRequiredImageTool({ config: cfg, agentDir, workspaceDir });
+
+        // Create a subdirectory and move the image there
+        const subDir = path.join(workspaceDir, "nested", "media", "folder");
+        await fs.mkdir(subDir, { recursive: true });
+        const nestedImage = path.join(subDir, "photo.png");
+        await fs.copyFile(imagePath, nestedImage);
+
+        await expectImageToolExecOk(tool, "nested/media/folder/photo.png");
+        expect(fetch).toHaveBeenCalledTimes(1);
+      });
+    });
+  });
+
   it("allows non-workspace local image paths when workspaceOnly is disabled", async () => {
     const fetch = stubMinimaxOkFetch();
     await withTempAgentDir(async (agentDir) => {
