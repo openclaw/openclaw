@@ -221,4 +221,41 @@ describe("createAcpxRuntimeService", () => {
     expect(startResult).toBe("started");
     expect(getAcpRuntimeBackend("acpx")?.runtime).toBe(runtime);
   });
+
+  it("does not let a stale probe overwrite a newer runtime setup state", async () => {
+    let releaseFirstProbe: (() => void) | undefined;
+    const first = createRuntimeStub(false);
+    first.probeAvailabilitySpy.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseFirstProbe = resolve;
+        }),
+    );
+    const second = createRuntimeStub(true);
+    const runtimeFactory = vi.fn<[AcpxRuntimeFactoryParams], RuntimeStub>()
+      .mockReturnValueOnce(first.runtime)
+      .mockReturnValueOnce(second.runtime);
+    const service = createAcpxRuntimeService({ runtimeFactory });
+    const context = createServiceContext();
+
+    await service.start(context);
+    await vi.waitFor(() => {
+      expect(first.probeAvailabilitySpy).toHaveBeenCalledOnce();
+    });
+
+    await service.stop?.(context);
+    await service.start(context);
+    await vi.waitFor(() => {
+      expect(second.probeAvailabilitySpy).toHaveBeenCalledOnce();
+      expect(getAcpRuntimeBackend("acpx")?.runtime).toBe(second.runtime);
+    });
+
+    releaseFirstProbe?.();
+    await vi.waitFor(() => {
+      expect(second.setSetupErrorSpy).toHaveBeenCalledWith(undefined);
+    });
+    expect(second.setSetupErrorSpy).not.toHaveBeenCalledWith(
+      "acpx runtime probe failed after local install",
+    );
+  });
 });
