@@ -617,7 +617,11 @@ importers:
         specifier: ^8.0.3
         version: 8.0.3(@twurple/auth@8.0.3)
 
-  extensions/venice: {}
+  extensions/venice:
+    dependencies:
+      venice-e2ee:
+        specifier: github:elkimek/venice-e2ee
+        version: https://codeload.github.com/elkimek/venice-e2ee/tar.gz/be02cd50e5d33c736c4d16c1afe42b072e0287f2
 
   extensions/vercel-ai-gateway: {}
 
@@ -2112,6 +2116,9 @@ packages:
   '@noble/hashes@2.0.1':
     resolution: {integrity: sha512-XlOlEbQcE9fmuXxrVTXCTlG2nlRXa9Rj3rr5Ue/+tX+nmkgbX720YHh0VR3hBF9xDvwnb8D2shVGOwNx+ulArw==}
     engines: {node: '>= 20.19.0'}
+
+  '@noble/secp256k1@2.3.0':
+    resolution: {integrity: sha512-0TQed2gcBbIrh7Ccyw+y/uZQvbJwm7Ao4scBUxqpBCcsOlZG0O4KGfjtNAy/li4W8n1xt3dxrwJ0beZ2h2G6Kw==}
 
   '@node-llama-cpp/linux-arm64@3.18.1':
     resolution: {integrity: sha512-rXMgZxUay78FOJV/fJ67apYP9eElH5jd4df5YRKPlLhLHHchuOSyDn+qtyW/L/EnPzpogoLkmULqCkdXU39XsQ==}
@@ -6396,6 +6403,15 @@ packages:
     resolution: {integrity: sha512-BNGbWLfd0eUPabhkXUVm0j8uuvREyTh5ovRa/dyow/BqAbZJyC+5fU+IzQOzmAKzYqYRAISoRhdQr3eIZ/PXqg==}
     engines: {node: '>= 0.8'}
 
+  venice-e2ee@https://codeload.github.com/elkimek/venice-e2ee/tar.gz/be02cd50e5d33c736c4d16c1afe42b072e0287f2:
+    resolution: {tarball: https://codeload.github.com/elkimek/venice-e2ee/tar.gz/be02cd50e5d33c736c4d16c1afe42b072e0287f2}
+    version: 0.1.0
+    peerDependencies:
+      '@phala/dcap-qvl': ^0.3.9
+    peerDependenciesMeta:
+      '@phala/dcap-qvl':
+        optional: true
+
   vfile-message@4.0.3:
     resolution: {integrity: sha512-QTHzsGd1EhbZs4AsQ20JX1rC3cOlt/IWJruk893DfLRr57lcnOeMaWG4K0JrRta4mIJZKth2Au3mM3u03/JWKw==}
 
@@ -8503,6 +8519,8 @@ snapshots:
   '@noble/ed25519@3.0.1': {}
 
   '@noble/hashes@2.0.1': {}
+
+  '@noble/secp256k1@2.3.0': {}
 
   '@node-llama-cpp/linux-arm64@3.18.1':
     optional: true
@@ -13108,6 +13126,11 @@ snapshots:
   validate-npm-package-name@7.0.2: {}
 
   vary@1.1.2: {}
+
+  venice-e2ee@https://codeload.github.com/elkimek/venice-e2ee/tar.gz/be02cd50e5d33c736c4d16c1afe42b072e0287f2:
+    dependencies:
+      '@noble/hashes': 2.0.1
+      '@noble/secp256k1': 2.3.0
 
   vfile-message@4.0.3:
     dependencies:

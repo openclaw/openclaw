@@ -1,5 +1,6 @@
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { applyXaiModelCompat } from "openclaw/plugin-sdk/xai";
+import { createVeniceE2EEStreamWrapper, isVeniceE2EEModel } from "./e2ee-stream-wrapper.js";
 import { applyVeniceConfig, VENICE_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildVeniceProvider } from "./provider-catalog.js";
 
@@ -40,6 +41,10 @@ export default defineSingleProviderPluginEntry({
     ],
     catalog: {
       buildProvider: buildVeniceProvider,
+    },
+    wrapStreamFn: (ctx) => {
+      if (!isVeniceE2EEModel(ctx.modelId)) return undefined;
+      return createVeniceE2EEStreamWrapper(ctx.streamFn);
     },
     normalizeResolvedModel: ({ modelId, model }) =>
       isXaiBackedVeniceModel(modelId) ? applyXaiModelCompat(model) : undefined,
