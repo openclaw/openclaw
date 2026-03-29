@@ -3,11 +3,10 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTempHome } from "./home-env.test-harness.js";
 import {
-  clearConfigCache,
-  clearRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshot,
   loadConfig,
   projectConfigOntoRuntimeSourceSnapshot,
+  resetConfigRuntimeState,
   setRuntimeConfigSnapshotRefreshHandler,
   setRuntimeConfigSnapshot,
   writeConfigFile,
@@ -44,8 +43,7 @@ function createRuntimeConfig(): OpenClawConfig {
 
 function resetRuntimeConfigState(): void {
   setRuntimeConfigSnapshotRefreshHandler(null);
-  clearRuntimeConfigSnapshot();
-  clearConfigCache();
+  resetConfigRuntimeState();
 }
 
 describe("runtime config snapshot writes", () => {
@@ -207,8 +205,7 @@ describe("runtime config snapshot writes", () => {
           id: "OPENAI_API_KEY",
         });
       } finally {
-        clearRuntimeConfigSnapshot();
-        clearConfigCache();
+        resetRuntimeConfigState();
       }
     });
   });

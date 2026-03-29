@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearConfigCache } from "../config/config.js";
+import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { buildSystemRunPreparePayload } from "../test-utils/system-run-prepare-payload.js";
 
 vi.mock("./tools/gateway.js", () => ({
@@ -210,6 +210,7 @@ describe("exec approvals", () => {
 
   afterEach(() => {
     vi.resetAllMocks();
+    clearRuntimeConfigSnapshot();
     clearConfigCache();
     if (previousHome === undefined) {
       delete process.env.HOME;
