@@ -92,6 +92,38 @@ describe("handleToolExecutionStart read path checks", () => {
     expect(String(warn.mock.calls[0]?.[0] ?? "")).toContain("read tool called without path");
   });
 
+  it("does not warn when read tool uses filePath alias", async () => {
+    const { ctx, warn, onBlockReplyFlush } = createTestContext();
+
+    const evt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "read",
+      toolCallId: "tool-3",
+      args: { filePath: "/tmp/example.txt" },
+    };
+
+    await handleToolExecutionStart(ctx, evt);
+
+    expect(onBlockReplyFlush).toHaveBeenCalledTimes(1);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("does not warn when read tool uses file alias", async () => {
+    const { ctx, warn, onBlockReplyFlush } = createTestContext();
+
+    const evt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "read",
+      toolCallId: "tool-4",
+      args: { file: "/tmp/example.txt" },
+    };
+
+    await handleToolExecutionStart(ctx, evt);
+
+    expect(onBlockReplyFlush).toHaveBeenCalledTimes(1);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it("awaits onBlockReplyFlush before continuing tool start processing", async () => {
     const { ctx, onBlockReplyFlush } = createTestContext();
     let releaseFlush: (() => void) | undefined;
