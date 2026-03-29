@@ -9,17 +9,16 @@ import {
   writeCameraClipPayloadToFile,
   writeCameraPayloadToFile,
 } from "../../cli/nodes-camera.js";
-import { parseEnvPairs, parseTimeoutMs } from "../../cli/nodes-run.js";
 import {
   parseScreenRecordPayload,
   screenRecordTempPath,
   writeScreenRecordToFile,
 } from "../../cli/nodes-screen.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
+import { parseTimeoutMs } from "../../cli/parse-timeout.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { OperatorScope } from "../../gateway/method-scopes.js";
 import { NODE_SYSTEM_RUN_COMMANDS } from "../../infra/node-commands.js";
-import { parsePreparedSystemRunPayload } from "../../infra/system-run-approval-context.js";
 import { imageMimeFromFormat } from "../../media/mime.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
@@ -28,7 +27,7 @@ import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
 import { sanitizeToolResultImages } from "../tool-images.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
-import { listNodes, resolveNode, resolveNodeId, resolveNodeIdFromList } from "./nodes-utils.js";
+import { resolveNode, resolveNodeId } from "./nodes-utils.js";
 
 const NODES_TOOL_ACTIONS = [
   "status",
@@ -49,7 +48,6 @@ const NODES_TOOL_ACTIONS = [
   "device_info",
   "device_permissions",
   "device_health",
-  "run",
   "invoke",
 ] as const;
 
@@ -64,6 +62,7 @@ const MEDIA_INVOKE_ACTIONS = {
   "photos.latest": "photos_latest",
   "screen.record": "screen_record",
 } as const;
+const BLOCKED_INVOKE_COMMANDS = new Set(["system.run", "system.run.prepare"]);
 const NODE_READ_ACTION_COMMANDS = {
   camera_list: "camera.list",
   notifications_list: "notifications.list",
@@ -169,16 +168,10 @@ const NodesToolSchema = Type.Object({
   notificationAction: optionalStringEnum(NOTIFICATIONS_ACTIONS),
   notificationKey: Type.Optional(Type.String()),
   notificationReplyText: Type.Optional(Type.String()),
-  // run
-  command: Type.Optional(Type.Array(Type.String())),
-  cwd: Type.Optional(Type.String()),
-  env: Type.Optional(Type.Array(Type.String())),
-  commandTimeoutMs: Type.Optional(Type.Number()),
-  invokeTimeoutMs: Type.Optional(Type.Number()),
-  needsScreenRecording: Type.Optional(Type.Boolean()),
   // invoke
   invokeCommand: Type.Optional(Type.String()),
   invokeParamsJson: Type.Optional(Type.String()),
+  invokeTimeoutMs: Type.Optional(Type.Number()),
 });
 
 export function createNodesTool(options?: {
@@ -191,11 +184,6 @@ export function createNodesTool(options?: {
   modelHasVision?: boolean;
   allowMediaInvokeCommands?: boolean;
 }): AnyAgentTool {
-  const sessionKey = options?.agentSessionKey?.trim() || undefined;
-  const turnSourceChannel = options?.agentChannel?.trim() || undefined;
-  const turnSourceTo = options?.currentChannelId?.trim() || undefined;
-  const turnSourceAccountId = options?.agentAccountId?.trim() || undefined;
-  const turnSourceThreadId = options?.currentThreadTs;
   const agentId = resolveSessionAgentId({
     sessionKey: options?.agentSessionKey,
     config: options?.config,
@@ -206,7 +194,7 @@ export function createNodesTool(options?: {
     name: "nodes",
     ownerOnly: true,
     description:
-      "Discover and control paired nodes (status/describe/pairing/notify/camera/photos/screen/location/notifications/run/invoke).",
+      "Discover and control paired nodes (status/describe/pairing/notify/camera/photos/screen/location/notifications/invoke).",
     parameters: NodesToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -658,151 +646,16 @@ export function createNodesTool(options?: {
             });
             return jsonResult(payload);
           }
-          case "run": {
-            const node = readStringParam(params, "node", { required: true });
-            const nodes = await listNodes(gatewayOpts);
-            if (nodes.length === 0) {
-              throw new Error(
-                "system.run requires a paired companion app or node host (no nodes available).",
-              );
-            }
-            const nodeId = resolveNodeIdFromList(nodes, node);
-            const nodeInfo = nodes.find((entry) => entry.nodeId === nodeId);
-            const supportsSystemRun = Array.isArray(nodeInfo?.commands)
-              ? nodeInfo?.commands?.includes("system.run")
-              : false;
-            if (!supportsSystemRun) {
-              throw new Error(
-                "system.run requires a companion app or node host; the selected node does not support system.run.",
-              );
-            }
-            const commandRaw = params.command;
-            if (!commandRaw) {
-              throw new Error("command required (argv array, e.g. ['echo', 'Hello'])");
-            }
-            if (!Array.isArray(commandRaw)) {
-              throw new Error("command must be an array of strings (argv), e.g. ['echo', 'Hello']");
-            }
-            const command = commandRaw.map((c) => String(c));
-            if (command.length === 0) {
-              throw new Error("command must not be empty");
-            }
-            const cwd =
-              typeof params.cwd === "string" && params.cwd.trim() ? params.cwd.trim() : undefined;
-            const env = parseEnvPairs(params.env);
-            const commandTimeoutMs = parseTimeoutMs(params.commandTimeoutMs);
-            const invokeTimeoutMs = parseTimeoutMs(params.invokeTimeoutMs);
-            const needsScreenRecording =
-              typeof params.needsScreenRecording === "boolean"
-                ? params.needsScreenRecording
-                : undefined;
-            const prepareRaw = await callGatewayTool<{ payload?: unknown }>(
-              "node.invoke",
-              gatewayOpts,
-              {
-                nodeId,
-                command: "system.run.prepare",
-                params: {
-                  command,
-                  cwd,
-                  agentId,
-                  sessionKey,
-                },
-                timeoutMs: invokeTimeoutMs,
-                idempotencyKey: crypto.randomUUID(),
-              },
-            );
-            const prepared = parsePreparedSystemRunPayload(prepareRaw?.payload);
-            if (!prepared) {
-              throw new Error("invalid system.run.prepare response");
-            }
-            const runParams = {
-              command: prepared.plan.argv,
-              rawCommand: prepared.plan.commandText,
-              cwd: prepared.plan.cwd ?? cwd,
-              env,
-              timeoutMs: commandTimeoutMs,
-              needsScreenRecording,
-              agentId: prepared.plan.agentId ?? agentId,
-              sessionKey: prepared.plan.sessionKey ?? sessionKey,
-            };
-
-            // First attempt without approval flags.
-            try {
-              const raw = await callGatewayTool<{ payload?: unknown }>("node.invoke", gatewayOpts, {
-                nodeId,
-                command: "system.run",
-                params: runParams,
-                timeoutMs: invokeTimeoutMs,
-                idempotencyKey: crypto.randomUUID(),
-              });
-              return jsonResult(raw?.payload ?? {});
-            } catch (firstErr) {
-              const msg = firstErr instanceof Error ? firstErr.message : String(firstErr);
-              if (!msg.includes("SYSTEM_RUN_DENIED: approval required")) {
-                throw firstErr;
-              }
-            }
-
-            // Node requires approval – create a pending approval request on
-            // the gateway and wait for the user to approve/deny via the UI.
-            const APPROVAL_TIMEOUT_MS = 120_000;
-            const approvalId = crypto.randomUUID();
-            const approvalResult = await callGatewayTool(
-              "exec.approval.request",
-              { ...gatewayOpts, timeoutMs: APPROVAL_TIMEOUT_MS + 5_000 },
-              {
-                id: approvalId,
-                systemRunPlan: prepared.plan,
-                cwd: prepared.plan.cwd ?? cwd,
-                nodeId,
-                host: "node",
-                agentId: prepared.plan.agentId ?? agentId,
-                sessionKey: prepared.plan.sessionKey ?? sessionKey,
-                turnSourceChannel,
-                turnSourceTo,
-                turnSourceAccountId,
-                turnSourceThreadId,
-                timeoutMs: APPROVAL_TIMEOUT_MS,
-              },
-            );
-            const decisionRaw =
-              approvalResult && typeof approvalResult === "object"
-                ? (approvalResult as { decision?: unknown }).decision
-                : undefined;
-            const approvalDecision =
-              decisionRaw === "allow-once" || decisionRaw === "allow-always" ? decisionRaw : null;
-
-            if (!approvalDecision) {
-              if (decisionRaw === "deny") {
-                throw new Error("exec denied: user denied");
-              }
-              if (decisionRaw === undefined || decisionRaw === null) {
-                throw new Error("exec denied: approval timed out");
-              }
-              throw new Error("exec denied: invalid approval decision");
-            }
-
-            // Retry with the approval decision.
-            const raw = await callGatewayTool<{ payload?: unknown }>("node.invoke", gatewayOpts, {
-              nodeId,
-              command: "system.run",
-              params: {
-                ...runParams,
-                runId: approvalId,
-                approved: true,
-                approvalDecision,
-              },
-              timeoutMs: invokeTimeoutMs,
-              idempotencyKey: crypto.randomUUID(),
-            });
-            return jsonResult(raw?.payload ?? {});
-          }
           case "invoke": {
             const node = readStringParam(params, "node", { required: true });
             const nodeId = await resolveNodeId(gatewayOpts, node);
             const invokeCommand = readStringParam(params, "invokeCommand", { required: true });
             const invokeCommandNormalized = invokeCommand.trim().toLowerCase();
+            if (BLOCKED_INVOKE_COMMANDS.has(invokeCommandNormalized)) {
+              throw new Error(
+                `invokeCommand "${invokeCommand}" is reserved for shell execution; use exec with host=node instead`,
+              );
+            }
             const dedicatedAction =
               MEDIA_INVOKE_ACTIONS[invokeCommandNormalized as keyof typeof MEDIA_INVOKE_ACTIONS];
             if (dedicatedAction && !options?.allowMediaInvokeCommands) {
