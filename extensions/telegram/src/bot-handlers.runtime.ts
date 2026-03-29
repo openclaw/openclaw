@@ -79,7 +79,7 @@ import {
 import { enforceTelegramDmAccess } from "./dm-access.js";
 import {
   isTelegramExecApprovalApprover,
-  isTelegramExecApprovalClientEnabled,
+  isTelegramExecApprovalAuthorizedSender,
   shouldEnableTelegramExecApprovalButtons,
 } from "./exec-approvals.js";
 import {
@@ -98,6 +98,18 @@ import {
   type ProviderInfo,
 } from "./model-buttons.js";
 import { buildInlineKeyboard } from "./send.js";
+
+function parseApprovalCallbackId(data: string): string | null {
+  const trimmed = data.trim();
+  if (!trimmed.startsWith("/approve")) {
+    return null;
+  }
+  const tokens = trimmed.split(/\s+/).filter(Boolean);
+  if (tokens.length < 3) {
+    return null;
+  }
+  return tokens[1] ?? null;
+}
 
 export const registerTelegramHandlers = ({
   cfg,
@@ -1289,12 +1301,20 @@ export const registerTelegramHandlers = ({
 
       const runtimeCfg = telegramDeps.loadConfig();
       if (isApprovalCallback) {
+        const approvalId = parseApprovalCallbackId(data);
+        const isPluginApprovalCallback = approvalId?.startsWith("plugin:") ?? false;
+        if (!isTelegramExecApprovalAuthorizedSender({ cfg: runtimeCfg, accountId, senderId })) {
+          logVerbose(
+            `Blocked telegram exec approval callback from ${senderId || "unknown"} (not an approver)`,
+          );
+          return;
+        }
         if (
-          !isTelegramExecApprovalClientEnabled({ cfg: runtimeCfg, accountId }) ||
+          isPluginApprovalCallback &&
           !isTelegramExecApprovalApprover({ cfg: runtimeCfg, accountId, senderId })
         ) {
           logVerbose(
-            `Blocked telegram exec approval callback from ${senderId || "unknown"} (not an approver)`,
+            `Blocked telegram plugin approval callback from ${senderId || "unknown"} (not an explicit approver)`,
           );
           return;
         }
@@ -1366,7 +1386,7 @@ export const registerTelegramHandlers = ({
           runtimeCfg,
           sessionState.agentId,
         );
-        const { byProvider, providers } = modelData;
+        const { byProvider, providers, modelNames } = modelData;
 
         const editMessageWithButtons = async (
           text: string,
@@ -1441,6 +1461,7 @@ export const registerTelegramHandlers = ({
             currentPage: safePage,
             totalPages,
             pageSize,
+            modelNames,
           });
           const text = formatModelsAvailableHeader({
             provider,

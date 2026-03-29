@@ -115,10 +115,10 @@ and provider plugins have dedicated guides linked above.
 
     OpenClaw checks ClawHub first, then falls back to npm.
 
-    **In-repo plugins:** place under `extensions/` — automatically discovered.
+    **In-repo plugins:** place under the bundled plugin workspace tree — automatically discovered.
 
     ```bash
-    pnpm test -- extensions/my-plugin/
+    pnpm test -- <bundled-plugin-root>/my-plugin/
     ```
 
   </Step>
@@ -222,7 +222,7 @@ internal imports — never import your own plugin through its SDK path.
 <Check>Entry point uses `defineChannelPluginEntry` or `definePluginEntry`</Check>
 <Check>All imports use focused `plugin-sdk/<subpath>` paths</Check>
 <Check>Internal imports use local modules, not SDK self-imports</Check>
-<Check>Tests pass (`pnpm test -- extensions/my-plugin/`)</Check>
+<Check>Tests pass (`pnpm test -- <bundled-plugin-root>/my-plugin/`)</Check>
 <Check>`pnpm check` passes (in-repo plugins)</Check>
 
 ## Beta Release Testing

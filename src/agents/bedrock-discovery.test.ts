@@ -1,7 +1,5 @@
 import type { BedrockClient } from "@aws-sdk/client-bedrock";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawPluginApi } from "../plugin-sdk/plugin-entry.js";
-import type { ProviderPlugin } from "../plugins/types.js";
 
 const sendMock = vi.fn();
 const clientFactory = () => ({ send: sendMock }) as unknown as BedrockClient;
@@ -20,18 +18,6 @@ async function loadDiscovery() {
   const mod = await import("../plugin-sdk/amazon-bedrock.js");
   mod.resetBedrockDiscoveryCacheForTest();
   return mod;
-}
-
-async function loadBedrockPluginProvider(): Promise<ProviderPlugin> {
-  const providers: ProviderPlugin[] = [];
-  const { default: entry } = await import("../../extensions/amazon-bedrock/index.js");
-  void entry.register({
-    registerProvider(provider) {
-      providers.push(provider);
-    },
-  } as Pick<OpenClawPluginApi, "registerProvider"> as OpenClawPluginApi);
-  expect(providers).toHaveLength(1);
-  return providers[0];
 }
 
 function mockSingleActiveSummary(overrides: Partial<typeof baseActiveAnthropicSummary> = {}): void {
@@ -197,9 +183,9 @@ describe("bedrock discovery", () => {
     ).toEqual(["amazon.nova-micro-v1:0"]);
   });
 
-  it("registers implicit Bedrock discovery through the plugin catalog", async () => {
+  it("merges implicit Bedrock discovery into provider catalog config", async () => {
     vi.resetModules();
-    const bedrockApi = await import("../../extensions/amazon-bedrock/api.js");
+    const bedrockApi = await import("../plugin-sdk/amazon-bedrock.js");
     vi.spyOn(bedrockApi, "resolveImplicitBedrockProvider").mockResolvedValue({
       baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
       api: "bedrock-converse-stream",
@@ -226,33 +212,45 @@ describe("bedrock discovery", () => {
             : implicit.models,
       }),
     );
-    const provider = await loadBedrockPluginProvider();
+    const result = await (async () => {
+      const implicit = await bedrockApi.resolveImplicitBedrockProvider({
+        config: {
+          models: {
+            bedrockDiscovery: {
+              enabled: true,
+            },
+          },
+        },
+        env: {
+          AWS_PROFILE: "default",
+        } as NodeJS.ProcessEnv,
+      });
+      if (!implicit) {
+        return null;
+      }
+      return {
+        provider: bedrockApi.mergeImplicitBedrockProvider({
+          existing: {
+            baseUrl: "https://bedrock-runtime.us-west-2.amazonaws.com",
+            headers: { "x-test-header": "1" },
+            models: [],
+          },
+          implicit,
+        }),
+      };
+    })();
 
-    const result = await provider.catalog?.run({
+    expect(bedrockApi.resolveImplicitBedrockProvider).toHaveBeenCalledWith({
       config: {
         models: {
           bedrockDiscovery: {
             enabled: true,
-          },
-          providers: {
-            "amazon-bedrock": {
-              baseUrl: "https://bedrock-runtime.us-west-2.amazonaws.com",
-              headers: { "x-test-header": "1" },
-              models: [],
-            },
           },
         },
       },
       env: {
         AWS_PROFILE: "default",
       } as NodeJS.ProcessEnv,
-      resolveProviderApiKey: () => ({ apiKey: undefined, discoveryApiKey: undefined }),
-      resolveProviderAuth: () => ({
-        apiKey: undefined,
-        discoveryApiKey: undefined,
-        mode: "none",
-        source: "none",
-      }),
     });
 
     expect(result).toMatchObject({

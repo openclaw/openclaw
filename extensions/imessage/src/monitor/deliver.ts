@@ -38,9 +38,6 @@ export async function deliverReplies(params: {
     const reply = resolveSendableOutboundReplyParts(payload, {
       text: convertMarkdownTables(rawText, tableMode),
     });
-    if (!reply.hasMedia && reply.hasText) {
-      sentMessageCache?.remember(scope, { text: reply.text });
-    }
     const delivered = await deliverTextOrMediaReply({
       payload,
       text: reply.text,
@@ -52,7 +49,11 @@ export async function deliverReplies(params: {
           accountId,
           replyToId: payload.replyToId,
         });
-        sentMessageCache?.remember(scope, { text: chunk, messageId: sent.messageId });
+        // Post-send cache population (#47830): caching happens after each chunk is sent,
+        // not before. The window between send completion and cache write is sub-millisecond;
+        // the next SQLite inbound poll is 1-2s away, so no echo can arrive before the
+        // cache entry exists.
+        sentMessageCache?.remember(scope, { text: sent.sentText, messageId: sent.messageId });
       },
       sendMedia: async ({ mediaUrl, caption }) => {
         const sent = await sendMessageIMessage(target, caption ?? "", {
@@ -63,7 +64,7 @@ export async function deliverReplies(params: {
           replyToId: payload.replyToId,
         });
         sentMessageCache?.remember(scope, {
-          text: caption || undefined,
+          text: sent.sentText || undefined,
           messageId: sent.messageId,
         });
       },

@@ -26,6 +26,7 @@ import type {
   ModelProviderAuthMode,
   ModelProviderConfig,
 } from "../config/types.js";
+import type { ModelCompatConfig } from "../config/types.models.js";
 import type { OperatorScope } from "../gateway/method-scopes.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hooks.js";
@@ -114,6 +115,8 @@ export type OpenClawPluginConfigSchema = {
 /** Trusted execution context passed to plugin-owned agent tool factories. */
 export type OpenClawPluginToolContext = {
   config?: OpenClawConfig;
+  /** Active runtime-resolved config snapshot when one is available. */
+  runtimeConfig?: OpenClawConfig;
   workspaceDir?: string;
   agentDir?: string;
   agentId?: string;
@@ -884,6 +887,17 @@ export type ProviderPlugin = {
     ctx: ProviderNormalizeResolvedModelContext,
   ) => ProviderRuntimeModel | null | undefined;
   /**
+   * Provider-owned compat contribution for resolved models outside direct
+   * provider ownership.
+   *
+   * Use this when a plugin can recognize its vendor's models behind another
+   * OpenAI-compatible transport (for example OpenRouter or a custom base URL)
+   * and needs to contribute compat flags without taking over the provider.
+   */
+  contributeResolvedModelCompat?: (
+    ctx: ProviderNormalizeResolvedModelContext,
+  ) => Partial<ModelCompatConfig> | null | undefined;
+  /**
    * Provider-owned model-id normalization.
    *
    * Runs before model lookup/canonicalization. Use this for alias cleanup such
@@ -1130,7 +1144,28 @@ export type ProviderPlugin = {
     ctx: ProviderAuthDoctorHintContext,
   ) => string | Promise<string | null | undefined> | null | undefined;
   /**
-   * Provider-owned synthetic auth marker.
+   * Provider-owned config-backed auth resolution.
+   *
+   * Providers own any provider-specific fallback secret rules here so core
+   * auth/discovery code can stay generic and avoid parsing provider-private
+   * config layouts.
+   *
+   * The returned `apiKey` may be:
+   * - a real credential from the active runtime snapshot, suitable for runtime use
+   * - a non-secret marker (for example a managed SecretRef marker), suitable only
+   *   for discovery/bootstrap callers
+   *
+   * Runtime callers must not treat non-secret markers as runnable credentials;
+   * they should retry against the active runtime snapshot when available.
+   *
+   * This hook is the canonical seam for provider-specific fallback auth
+   * derived from plugin/private config. It may return:
+   * - a runnable literal credential for runtime callers
+   * - a non-secret marker for managed-secret source config, which is still useful
+   *   for discovery/bootstrap callers
+   *
+   * Runtime callers must not treat non-secret markers as runnable credentials;
+   * they should retry against the active runtime snapshot when available.
    *
    * Use this when the provider can operate without a real secret for certain
    * configured local/self-hosted cases and wants auth resolution to treat that
@@ -1169,6 +1204,14 @@ export type WebSearchRuntimeMetadataContext = {
   };
 };
 
+export type WebSearchProviderSetupContext = {
+  config: OpenClawConfig;
+  runtime: RuntimeEnv;
+  prompter: WizardPrompter;
+  quickstartDefaults?: boolean;
+  secretInputMode?: SecretInputMode;
+};
+
 export type WebSearchProviderPlugin = {
   id: WebSearchProviderId;
   label: string;
@@ -1196,6 +1239,7 @@ export type WebSearchProviderPlugin = {
   getConfiguredCredentialValue?: (config?: OpenClawConfig) => unknown;
   setConfiguredCredentialValue?: (configTarget: OpenClawConfig, value: unknown) => void;
   applySelectionConfig?: (config: OpenClawConfig) => OpenClawConfig;
+  runSetup?: (ctx: WebSearchProviderSetupContext) => OpenClawConfig | Promise<OpenClawConfig>;
   resolveRuntimeMetadata?: (
     ctx: WebSearchRuntimeMetadataContext,
   ) => Partial<RuntimeWebSearchMetadata> | Promise<Partial<RuntimeWebSearchMetadata>>;

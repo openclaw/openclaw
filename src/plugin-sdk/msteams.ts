@@ -1,5 +1,5 @@
 // Private helper surface for the bundled msteams plugin.
-// Keep this list additive and scoped to symbols used under extensions/msteams.
+// Keep this list additive and scoped to the bundled Teams surface.
 
 import { createOptionalChannelSetupSurface } from "./channel-setup.js";
 
