@@ -243,6 +243,48 @@ describe("sessions_spawn tool", () => {
     );
   });
 
+  it("rejects waitForCompletion for ACP runtime", async () => {
+    await loadFreshSessionsSpawnToolModuleForTest({ awaitEnabled: true });
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    const result = await tool.execute("call-acp-wait-invalid", {
+      runtime: "acp",
+      task: "investigate in ACP and wait",
+      waitForCompletion: true,
+    });
+
+    expect(result.details).toMatchObject({
+      status: "error",
+    });
+    const details = result.details as { error?: string };
+    expect(details.error).toContain("waitForCompletion/suppressAnnounce are only supported");
+    expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects suppressAnnounce for ACP runtime", async () => {
+    await loadFreshSessionsSpawnToolModuleForTest({ awaitEnabled: true });
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    const result = await tool.execute("call-acp-suppress-invalid", {
+      runtime: "acp",
+      task: "investigate in ACP with suppress",
+      suppressAnnounce: true,
+    });
+
+    expect(result.details).toMatchObject({
+      status: "error",
+    });
+    const details = result.details as { error?: string };
+    expect(details.error).toContain("waitForCompletion/suppressAnnounce are only supported");
+    expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+  });
+
   it("routes to ACP runtime when runtime=acp", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",

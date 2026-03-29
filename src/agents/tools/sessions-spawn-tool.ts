@@ -158,6 +158,13 @@ export function createSessionsSpawnTool(
       }
 
       if (runtime === "acp") {
+        if (params.waitForCompletion === true || params.suppressAnnounce === true) {
+          return jsonResult({
+            status: "error",
+            error:
+              "waitForCompletion/suppressAnnounce are only supported for runtime=subagent; got runtime=acp",
+          });
+        }
         if (Array.isArray(attachments) && attachments.length > 0) {
           return jsonResult({
             status: "error",

@@ -158,6 +158,27 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(operations.indexOf("gateway:agent")).toBeGreaterThan(operations.indexOf("store:update"));
   });
 
+  it('rejects waitForCompletion when mode="session"', async () => {
+    const result = await spawnSubagentDirect(
+      {
+        task: "session mode cannot block inline",
+        mode: "session",
+        thread: true,
+        waitForCompletion: true,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "discord",
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "error",
+      error: 'waitForCompletion=true is only supported for mode="run".',
+    });
+    expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
+  });
+
   it("restores auto-announce when waitForCompletion receives unexpected wait status", async () => {
     const result = await spawnSubagentDirect(
       {

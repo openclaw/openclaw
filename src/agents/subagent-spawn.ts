@@ -433,6 +433,12 @@ export async function spawnSubagentDirect(
       error: 'mode="session" requires thread=true so the subagent can stay bound to a thread.',
     };
   }
+  if (spawnMode === "session" && params.waitForCompletion === true) {
+    return {
+      status: "error",
+      error: 'waitForCompletion=true is only supported for mode="run".',
+    };
+  }
   const cleanup =
     spawnMode === "session"
       ? "keep"
