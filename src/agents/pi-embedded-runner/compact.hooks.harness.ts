@@ -81,6 +81,15 @@ export const sessionMessages: unknown[] = [
 ];
 export const sessionAbortCompactionMock: Mock<(reason?: unknown) => void> = vi.fn();
 export const createOpenClawCodingToolsMock = vi.fn(() => []);
+export const sessionLockReleaseMock: Mock<() => Promise<void>> = vi.fn(async () => {});
+export const acquireSessionWriteLockMock: Mock<
+  (params?: unknown) => Promise<{ release: () => Promise<void> }>
+> = vi.fn(async () => ({ release: sessionLockReleaseMock }));
+export const bundleMcpDisposeMock: Mock<() => Promise<void>> = vi.fn(async () => {});
+export const bundleLspDisposeMock: Mock<() => Promise<void>> = vi.fn(async () => {});
+export const flushPendingToolResultsAfterIdleMock: Mock<() => Promise<void>> = vi.fn(
+  async () => {},
+);
 
 export function resetCompactSessionStateMocks(): void {
   sanitizeSessionHistoryMock.mockReset();
@@ -164,6 +173,16 @@ export function resetCompactHooksHarnessMocks(): void {
   });
 
   triggerInternalHook.mockReset();
+  sessionLockReleaseMock.mockReset();
+  sessionLockReleaseMock.mockResolvedValue(undefined);
+  acquireSessionWriteLockMock.mockReset();
+  acquireSessionWriteLockMock.mockResolvedValue({ release: sessionLockReleaseMock });
+  bundleMcpDisposeMock.mockReset();
+  bundleMcpDisposeMock.mockResolvedValue(undefined);
+  bundleLspDisposeMock.mockReset();
+  bundleLspDisposeMock.mockResolvedValue(undefined);
+  flushPendingToolResultsAfterIdleMock.mockReset();
+  flushPendingToolResultsAfterIdleMock.mockResolvedValue(undefined);
   resetCompactSessionStateMocks();
   createOpenClawCodingToolsMock.mockReset();
   createOpenClawCodingToolsMock.mockReturnValue([]);
@@ -273,7 +292,7 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("../session-write-lock.js", () => ({
-    acquireSessionWriteLock: vi.fn(async () => ({ release: vi.fn(async () => {}) })),
+    acquireSessionWriteLock: acquireSessionWriteLockMock,
     resolveSessionLockMaxHoldFromTimeout: vi.fn(() => 0),
   }));
 
@@ -304,7 +323,7 @@ export async function loadCompactHooksHarness(): Promise<{
   vi.doMock("../pi-bundle-mcp-tools.js", () => ({
     createBundleMcpToolRuntime: vi.fn(async () => ({
       tools: [],
-      dispose: vi.fn(async () => {}),
+      dispose: bundleMcpDisposeMock,
     })),
   }));
 
@@ -312,7 +331,7 @@ export async function loadCompactHooksHarness(): Promise<{
     createBundleLspToolRuntime: vi.fn(async () => ({
       tools: [],
       sessions: [],
-      dispose: vi.fn(async () => {}),
+      dispose: bundleLspDisposeMock,
     })),
   }));
 
@@ -381,7 +400,7 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("./wait-for-idle-before-flush.js", () => ({
-    flushPendingToolResultsAfterIdle: vi.fn(async () => {}),
+    flushPendingToolResultsAfterIdle: flushPendingToolResultsAfterIdleMock,
   }));
 
   vi.doMock("../transcript-policy.js", () => ({

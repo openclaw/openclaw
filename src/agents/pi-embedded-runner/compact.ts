@@ -655,7 +655,7 @@ export async function compactEmbeddedPiSessionDirect(
         timeoutMs: compactionTimeoutMs,
       }),
     });
-    try {
+    {
       await repairSessionFileIfNeeded({
         sessionFile: params.sessionFile,
         warn: (message) => log.warn(message),
@@ -915,17 +915,23 @@ export async function compactEmbeddedPiSessionDirect(
           },
         };
       } finally {
-        await flushPendingToolResultsAfterIdle({
-          agent: session?.agent,
-          sessionManager,
-          clearPendingOnTimeout: true,
-        });
-        session.dispose();
-        await bundleMcpRuntime?.dispose();
-        await bundleLspRuntime?.dispose();
+        try {
+          await flushPendingToolResultsAfterIdle({
+            agent: session?.agent,
+            sessionManager,
+            clearPendingOnTimeout: true,
+          });
+          session.dispose();
+        } finally {
+          // Release the session lock even when teardown helpers fail.
+          try {
+            await sessionLock.release();
+          } finally {
+            await bundleMcpRuntime?.dispose();
+            await bundleLspRuntime?.dispose();
+          }
+        }
       }
-    } finally {
-      await sessionLock.release();
     }
   } catch (err) {
     const reason = resolveCompactionFailureReason({

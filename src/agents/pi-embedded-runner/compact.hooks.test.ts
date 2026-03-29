@@ -3,9 +3,12 @@ import { getApiProvider, unregisterApiProviders } from "@mariozechner/pi-ai";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getCustomApiRegistrySourceId } from "../custom-api-registry.js";
 import {
+  acquireSessionWriteLockMock,
+  bundleMcpDisposeMock,
   contextEngineCompactMock,
   ensureRuntimePluginsLoaded,
   estimateTokensMock,
+  flushPendingToolResultsAfterIdleMock,
   getMemorySearchManagerMock,
   hookRunner,
   loadCompactHooksHarness,
@@ -15,6 +18,7 @@ import {
   resolveSessionAgentIdMock,
   resetCompactHooksHarnessMocks,
   resetCompactSessionStateMocks,
+  sessionLockReleaseMock,
   sessionAbortCompactionMock,
   sessionMessages,
   sessionCompactImpl,
@@ -600,6 +604,39 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
 
     await expect(resultPromise).rejects.toThrow("request timed out");
     expect(sessionAbortCompactionMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases the session lock when teardown idle-wait flush fails", async () => {
+    flushPendingToolResultsAfterIdleMock.mockRejectedValueOnce(new Error("flush failed"));
+
+    const result = await compactEmbeddedPiSessionDirect({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      customInstructions: "focus on decisions",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(acquireSessionWriteLockMock).toHaveBeenCalled();
+    expect(sessionLockReleaseMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases the session lock when bundle runtime disposal fails", async () => {
+    bundleMcpDisposeMock.mockRejectedValueOnce(new Error("bundle mcp dispose failed"));
+
+    const result = await compactEmbeddedPiSessionDirect({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      customInstructions: "focus on decisions",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(acquireSessionWriteLockMock).toHaveBeenCalled();
+    expect(bundleMcpDisposeMock).toHaveBeenCalledTimes(1);
+    expect(sessionLockReleaseMock).toHaveBeenCalledTimes(1);
   });
 });
 
