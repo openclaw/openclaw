@@ -37,6 +37,7 @@ dispatch.
 ## Walkthrough
 
 <Steps>
+  <a id="step-1-package-and-manifest"></a>
   <Step title="Package and manifest">
     Create the standard plugin files. The `channel` field in `package.json` is
     what makes this a channel plugin:
@@ -298,8 +299,9 @@ dispatch.
 
   </Step>
 
-  <Step title="Test">
-    Write colocated tests in `src/channel.test.ts`:
+<a id="step-6-test"></a>
+<Step title="Test">
+Write colocated tests in `src/channel.test.ts`:
 
     ```typescript src/channel.test.ts
     import { describe, it, expect } from "vitest";
