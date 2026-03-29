@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import { resolveRelativeBundledPluginPublicModuleId } from "../../src/test-utils/bundled-plugin-public-surface.js";
 
 export type SearchImpl = () => Promise<unknown[]>;
 export type MemoryReadParams = { relPath: string; from?: number; lines?: number };
@@ -38,15 +39,26 @@ const readAgentMemoryFileMock = vi.fn(
   async (params: MemoryReadParams) => await readFileImpl(params),
 );
 
-vi.mock("../../src/memory/index.js", () => ({
+const memoryIndexModuleId = resolveRelativeBundledPluginPublicModuleId({
+  fromModuleUrl: import.meta.url,
+  pluginId: "memory-core",
+  artifactBasename: "src/memory/index.js",
+});
+const memoryToolsRuntimeModuleId = resolveRelativeBundledPluginPublicModuleId({
+  fromModuleUrl: import.meta.url,
+  pluginId: "memory-core",
+  artifactBasename: "src/tools.runtime.js",
+});
+
+vi.mock(memoryIndexModuleId, () => ({
   getMemorySearchManager: getMemorySearchManagerMock,
 }));
 
-vi.mock("../../src/memory/read-file.js", () => ({
+vi.mock("../../packages/memory-host-sdk/src/host/read-file.js", () => ({
   readAgentMemoryFile: readAgentMemoryFileMock,
 }));
 
-vi.mock("../../src/agents/tools/memory-tool.runtime.js", () => ({
+vi.mock(memoryToolsRuntimeModuleId, () => ({
   resolveMemoryBackendConfig: ({
     cfg,
   }: {

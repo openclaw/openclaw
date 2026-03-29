@@ -254,4 +254,40 @@ describe("resolveSystemNodeInfo", () => {
     expect(warning).toContain("below the required Node 22.14+");
     expect(warning).toContain(darwinNode);
   });
+
+  it("uses validated custom Program Files roots on Windows", async () => {
+    const customNode = "D:\\Programs\\nodejs\\node.exe";
+    mockNodePathPresent(customNode);
+
+    const execFile = vi.fn().mockResolvedValue({ stdout: "24.11.1\n", stderr: "" });
+    const result = await resolveSystemNodeInfo({
+      env: {
+        ProgramFiles: "D:\\Programs",
+        "ProgramFiles(x86)": "E:\\Programs (x86)",
+      },
+      platform: "win32",
+      execFile,
+    });
+
+    expect(result?.path).toBe(customNode);
+  });
+
+  it("prefers ProgramW6432 over ProgramFiles on Windows", async () => {
+    const preferredNode = "D:\\Programs\\nodejs\\node.exe";
+    const x86Node = "E:\\Programs (x86)\\nodejs\\node.exe";
+    mockNodePathPresent(preferredNode, x86Node);
+
+    const execFile = vi.fn().mockResolvedValue({ stdout: "24.11.1\n", stderr: "" });
+    const result = await resolveSystemNodeInfo({
+      env: {
+        ProgramFiles: "E:\\Programs (x86)",
+        "ProgramFiles(x86)": "E:\\Programs (x86)",
+        ProgramW6432: "D:\\Programs",
+      },
+      platform: "win32",
+      execFile,
+    });
+
+    expect(result?.path).toBe(preferredNode);
+  });
 });

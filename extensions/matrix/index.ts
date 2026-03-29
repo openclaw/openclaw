@@ -1,6 +1,5 @@
 import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
 import { matrixPlugin } from "./src/channel.js";
-import { registerMatrixCli } from "./src/cli.js";
 import { setMatrixRuntime } from "./src/runtime.js";
 
 export { matrixPlugin } from "./src/channel.js";
@@ -41,10 +40,19 @@ export default defineChannelPluginEntry({
     });
 
     api.registerCli(
-      ({ program }) => {
+      async ({ program }) => {
+        const { registerMatrixCli } = await import("./src/cli.js");
         registerMatrixCli({ program });
       },
-      { commands: ["matrix"] },
+      {
+        descriptors: [
+          {
+            name: "matrix",
+            description: "Manage Matrix accounts, verification, devices, and profile state",
+            hasSubcommands: true,
+          },
+        ],
+      },
     );
   },
 });

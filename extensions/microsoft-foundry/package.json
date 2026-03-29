@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/microsoft-foundry",
+  "version": "2026.3.29",
+  "private": true,
+  "description": "OpenClaw Microsoft Foundry provider plugin",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

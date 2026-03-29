@@ -119,3 +119,9 @@ export type WhatsAppAccountConfig = WhatsAppConfigCore &
     /** Override auth directory (Baileys multi-file auth state). */
     authDir?: string;
   };
+
+declare module "./types.channels.js" {
+  interface ChannelsConfig {
+    whatsapp?: WhatsAppConfig;
+  }
+}

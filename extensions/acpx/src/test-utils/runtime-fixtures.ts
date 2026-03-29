@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/infra-runtime";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import type { ResolvedAcpxPluginConfig } from "../config.js";
 import { ACPX_PINNED_VERSION } from "../config.js";
 import { AcpxRuntime } from "../runtime.js";
@@ -41,6 +41,9 @@ if (args.includes("--version")) {
 }
 
 if (args.includes("--help")) {
+  if (process.env.MOCK_ACPX_HELP_SIGNAL) {
+    process.kill(process.pid, process.env.MOCK_ACPX_HELP_SIGNAL);
+  }
   process.stdout.write("mock-acpx help\\n");
   process.exit(0);
 }
@@ -184,6 +187,9 @@ if (command === "set") {
 
 if (command === "status") {
   writeLog({ kind: "status", agent, args, sessionName: sessionFromOption });
+  if (process.env.MOCK_ACPX_STATUS_SIGNAL) {
+    process.kill(process.pid, process.env.MOCK_ACPX_STATUS_SIGNAL);
+  }
   const status = process.env.MOCK_ACPX_STATUS_STATUS || (sessionFromOption ? "alive" : "no-session");
   const summary = process.env.MOCK_ACPX_STATUS_SUMMARY || "";
   emitJson({
@@ -270,6 +276,10 @@ if (command === "prompt") {
     process.exit(5);
   }
 
+  if (process.env.MOCK_ACPX_PROMPT_SIGNAL) {
+    process.kill(process.pid, process.env.MOCK_ACPX_PROMPT_SIGNAL);
+  }
+
   if (stdinText.includes("split-spacing")) {
     emitUpdate(sessionFromOption, {
       sessionUpdate: "agent_message_chunk",
@@ -347,6 +357,7 @@ export async function createMockRuntimeFixture(params?: {
     cwd: dir,
     permissionMode: params?.permissionMode ?? "approve-all",
     nonInteractivePermissions: "fail",
+    pluginToolsMcpBridge: false,
     strictWindowsCmdWrapper: true,
     queueOwnerTtlSeconds: params?.queueOwnerTtlSeconds ?? 0.1,
     mcpServers: params?.mcpServers ?? {},

@@ -99,9 +99,30 @@ describe("config schema", () => {
     expect(schema.properties?.$schema).toBeUndefined();
     expect(res.uiHints.gateway?.label).toBe("Gateway");
     expect(res.uiHints["gateway.auth.token"]?.sensitive).toBe(true);
+    expect(res.uiHints["channels.defaults.groupPolicy"]?.label).toBeTruthy();
+    expect(res.uiHints["mcp.servers.*.headers.*"]?.sensitive).toBe(true);
     expect(res.uiHints["channels.discord.threadBindings.spawnAcpSessions"]?.label).toBeTruthy();
     expect(res.version).toBeTruthy();
     expect(res.generatedAt).toBeTruthy();
+  });
+
+  it("includes MCP SSE header schema under mcp.servers entries", () => {
+    const schema = baseSchema.schema as {
+      properties?: Record<string, unknown>;
+    };
+    const mcpNode = schema.properties?.mcp as
+      | {
+          properties?: Record<string, unknown>;
+        }
+      | undefined;
+    const serversNode = mcpNode?.properties?.servers as
+      | {
+          additionalProperties?: {
+            properties?: Record<string, unknown>;
+          };
+        }
+      | undefined;
+    expect(serversNode?.additionalProperties?.properties?.headers).toBeTruthy();
   });
 
   it("merges plugin ui hints", () => {
@@ -142,6 +163,8 @@ describe("config schema", () => {
     const channelSchema = channelsProps?.matrix as Record<string, unknown> | undefined;
     const channelProps = channelSchema?.properties as Record<string, unknown> | undefined;
     expect(channelProps?.accessToken).toBeTruthy();
+    expect(res.uiHints["channels.matrix"]?.label).toBe("Matrix");
+    expect(res.uiHints["channels.matrix.accessToken"]?.sensitive).toBe(true);
   });
 
   it("looks up plugin config paths for slash-delimited plugin ids", () => {
@@ -229,6 +252,18 @@ describe("config schema", () => {
         timeoutSeconds: 15,
       },
     });
+  });
+
+  it("accepts web fetch maxResponseBytes in the runtime zod schema", () => {
+    const parsed = ToolsSchema.parse({
+      web: {
+        fetch: {
+          maxResponseBytes: 2_000_000,
+        },
+      },
+    });
+
+    expect(parsed?.web?.fetch?.maxResponseBytes).toBe(2_000_000);
   });
 
   it("rejects unknown keys inside web fetch firecrawl config", () => {

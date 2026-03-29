@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { normalizeChatType } from "./chat-type.js";
 
 describe("normalizeChatType", () => {
-  const cases: Array<{ name: string; value: string | undefined; expected: string | undefined }> = [
+  it.each([
     { name: "normalizes direct", value: "direct", expected: "direct" },
     { name: "normalizes dm alias", value: "dm", expected: "direct" },
     { name: "normalizes group", value: "group", expected: "group" },
@@ -11,13 +11,12 @@ describe("normalizeChatType", () => {
     { name: "returns undefined for empty", value: "", expected: undefined },
     { name: "returns undefined for unknown value", value: "nope", expected: undefined },
     { name: "returns undefined for unsupported room", value: "room", expected: undefined },
-  ];
-
-  for (const testCase of cases) {
-    it(testCase.name, () => {
-      expect(normalizeChatType(testCase.value)).toBe(testCase.expected);
-    });
-  }
+  ] satisfies Array<{ name: string; value: string | undefined; expected: string | undefined }>)(
+    "$name",
+    ({ value, expected }) => {
+      expect(normalizeChatType(value)).toBe(expected);
+    },
+  );
 
   describe("backward compatibility", () => {
     it("accepts legacy 'dm' value shape variants and normalizes to 'direct'", () => {

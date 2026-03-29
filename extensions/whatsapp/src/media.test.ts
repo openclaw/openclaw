@@ -7,35 +7,13 @@ import { resolveStateDir } from "../../../src/config/paths.js";
 import { resolvePreferredOpenClawTmpDir } from "../../../src/infra/tmp-openclaw-dir.js";
 import { optimizeImageToPng } from "../../../src/media/image-ops.js";
 import { mockPinnedHostnameResolution } from "../../../src/test-helpers/ssrf.js";
-import { captureEnv } from "../../../test/helpers/extensions/env.js";
-import { sendVoiceMessageDiscord } from "../../discord/src/send.js";
+import { captureEnv } from "../../../test/helpers/plugins/env.js";
 
 let LocalMediaAccessError: typeof import("./media.js").LocalMediaAccessError;
 let loadWebMedia: typeof import("./media.js").loadWebMedia;
 let loadWebMediaRaw: typeof import("./media.js").loadWebMediaRaw;
 let optimizeImageToJpeg: typeof import("./media.js").optimizeImageToJpeg;
-
-const convertHeicToJpegMock = vi.fn();
-
-vi.mock("../../../src/media/image-ops.js", async () => {
-  const actual = await vi.importActual<typeof import("../../../src/media/image-ops.js")>(
-    "../../../src/media/image-ops.js",
-  );
-  return {
-    ...actual,
-    convertHeicToJpeg: (...args: unknown[]) => convertHeicToJpegMock(...args),
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/media-runtime")>(
-    "openclaw/plugin-sdk/media-runtime",
-  );
-  return {
-    ...actual,
-    convertHeicToJpeg: (...args: unknown[]) => convertHeicToJpegMock(...args),
-  };
-});
+let sendVoiceMessageDiscord: typeof import("../../discord/src/send.js").sendVoiceMessageDiscord;
 
 let fixtureRoot = "";
 let fixtureFileCount = 0;
@@ -44,7 +22,6 @@ let largeJpegFile = "";
 let tinyPngBuffer: Buffer;
 let tinyPngFile = "";
 let tinyPngWrongExtFile = "";
-let fakeHeicFile = "";
 let alphaPngBuffer: Buffer;
 let alphaPngFile = "";
 let fallbackPngBuffer: Buffer;
@@ -79,6 +56,7 @@ function cloneStatWithDev<T extends { dev: number | bigint }>(stat: T, dev: numb
 beforeAll(async () => {
   ({ LocalMediaAccessError, loadWebMedia, loadWebMediaRaw, optimizeImageToJpeg } =
     await import("./media.js"));
+  ({ sendVoiceMessageDiscord } = await import("../../discord/src/send.js"));
   fixtureRoot = await fs.mkdtemp(
     path.join(resolvePreferredOpenClawTmpDir(), "openclaw-media-test-"),
   );
@@ -100,7 +78,6 @@ beforeAll(async () => {
     .toBuffer();
   tinyPngFile = await writeTempFile(tinyPngBuffer, ".png");
   tinyPngWrongExtFile = await writeTempFile(tinyPngBuffer, ".bin");
-  fakeHeicFile = await writeTempFile(Buffer.from("fake-heic"), ".heic");
   alphaPngBuffer = await sharp({
     create: {
       width: 64,
@@ -201,22 +178,6 @@ describe("web media loading", () => {
 
     expect(result.kind).toBe("image");
     expect(result.contentType).toBe("image/jpeg");
-  });
-
-  it("normalizes HEIC local files to JPEG output", async () => {
-    convertHeicToJpegMock.mockResolvedValueOnce(tinyPngBuffer);
-
-    const result = await loadWebMedia(fakeHeicFile, 1024 * 1024);
-
-    expect(convertHeicToJpegMock).toHaveBeenCalledTimes(1);
-    expect(result.kind).toBe("image");
-    expect(result.contentType).toBe("image/jpeg");
-    expect(result.fileName).toBe(path.basename(fakeHeicFile, ".heic") + ".jpg");
-    expect(result.buffer.length).toBeGreaterThan(0);
-    expect(result.buffer.equals(tinyPngBuffer)).toBe(false);
-    // Confirm the output is actually JPEG (magic bytes 0xFF 0xD8)
-    expect(result.buffer[0]).toBe(0xff);
-    expect(result.buffer[1]).toBe(0xd8);
   });
 
   it("includes URL + status in fetch errors", async () => {

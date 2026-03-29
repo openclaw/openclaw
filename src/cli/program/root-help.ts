@@ -1,4 +1,5 @@
 import { Command } from "commander";
+import { getPluginCliCommandDescriptors } from "../../plugins/cli.js";
 import { VERSION } from "../../version.js";
 import { getCoreCliCommandDescriptors } from "./core-command-descriptors.js";
 import { configureProgramHelp } from "./help.js";
@@ -13,11 +14,24 @@ function buildRootHelpProgram(): Command {
     agentChannelOptions: "",
   });
 
+  const existingCommands = new Set<string>();
   for (const command of getCoreCliCommandDescriptors()) {
     program.command(command.name).description(command.description);
+    existingCommands.add(command.name);
   }
   for (const command of getSubCliEntries()) {
+    if (existingCommands.has(command.name)) {
+      continue;
+    }
     program.command(command.name).description(command.description);
+    existingCommands.add(command.name);
+  }
+  for (const command of getPluginCliCommandDescriptors()) {
+    if (existingCommands.has(command.name)) {
+      continue;
+    }
+    program.command(command.name).description(command.description);
+    existingCommands.add(command.name);
   }
 
   return program;

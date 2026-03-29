@@ -41,6 +41,28 @@ function normalizeOnboardingScopes(
   return normalized.length > 0 ? normalized : undefined;
 }
 
+function normalizeProviderOAuthProfileIdRepairs(
+  values: ProviderPlugin["oauthProfileIdRepairs"],
+): ProviderPlugin["oauthProfileIdRepairs"] {
+  if (!Array.isArray(values)) {
+    return undefined;
+  }
+  const normalized = values
+    .map((value) => {
+      const legacyProfileId = normalizeText(value?.legacyProfileId);
+      const promptLabel = normalizeText(value?.promptLabel);
+      if (!legacyProfileId && !promptLabel) {
+        return null;
+      }
+      return {
+        ...(legacyProfileId ? { legacyProfileId } : {}),
+        ...(promptLabel ? { promptLabel } : {}),
+      };
+    })
+    .filter((value): value is NonNullable<typeof value> => value !== null);
+  return normalized.length > 0 ? normalized : undefined;
+}
+
 function normalizeProviderWizardSetup(params: {
   providerId: string;
   pluginId: string;
@@ -273,6 +295,9 @@ export function normalizeRegisteredProvider(params: {
   const docsPath = normalizeText(params.provider.docsPath);
   const aliases = normalizeTextList(params.provider.aliases);
   const deprecatedProfileIds = normalizeTextList(params.provider.deprecatedProfileIds);
+  const oauthProfileIdRepairs = normalizeProviderOAuthProfileIdRepairs(
+    params.provider.oauthProfileIdRepairs,
+  );
   const envVars = normalizeTextList(params.provider.envVars);
   const wizard = normalizeProviderWizard({
     providerId: id,
@@ -309,6 +334,7 @@ export function normalizeRegisteredProvider(params: {
     ...(docsPath ? { docsPath } : {}),
     ...(aliases ? { aliases } : {}),
     ...(deprecatedProfileIds ? { deprecatedProfileIds } : {}),
+    ...(oauthProfileIdRepairs ? { oauthProfileIdRepairs } : {}),
     ...(envVars ? { envVars } : {}),
     auth,
     ...(catalog ? { catalog } : {}),

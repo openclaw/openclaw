@@ -1,6 +1,6 @@
 import JSON5 from "json5";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { stripUrlUserInfo } from "../shared/net/url-userinfo.js";
+import { redactSensitiveUrlLikeString } from "../shared/net/redact-sensitive-url.js";
 import {
   replaceSensitiveValuesInRaw,
   shouldFallbackToStructuredRawRedaction,
@@ -29,8 +29,11 @@ function isWholeObjectSensitivePath(path: string): boolean {
   return lowered.endsWith("serviceaccount") || lowered.endsWith("serviceaccountref");
 }
 
-function isUserInfoUrlPath(path: string): boolean {
-  return path.endsWith(".baseUrl") || path.endsWith(".httpUrl");
+function isSensitiveUrlPath(path: string): boolean {
+  if (path.endsWith(".baseUrl") || path.endsWith(".httpUrl")) {
+    return true;
+  }
+  return /^mcp\.servers\.[^.]+\.url$/.test(path);
 }
 
 function collectSensitiveStrings(value: unknown, values: string[]): void {
@@ -217,8 +220,8 @@ function redactObjectWithLookup(
           ) {
             // Keep primitives at explicitly-sensitive paths fully redacted.
             result[key] = REDACTED_SENTINEL;
-          } else if (typeof value === "string" && isUserInfoUrlPath(path)) {
-            const scrubbed = stripUrlUserInfo(value);
+          } else if (typeof value === "string" && isSensitiveUrlPath(path)) {
+            const scrubbed = redactSensitiveUrlLikeString(value);
             if (scrubbed !== value) {
               values.push(value);
               result[key] = REDACTED_SENTINEL;
@@ -242,8 +245,8 @@ function redactObjectWithLookup(
         ) {
           result[key] = REDACTED_SENTINEL;
           values.push(value);
-        } else if (typeof value === "string" && isUserInfoUrlPath(path)) {
-          const scrubbed = stripUrlUserInfo(value);
+        } else if (typeof value === "string" && isSensitiveUrlPath(path)) {
+          const scrubbed = redactSensitiveUrlLikeString(value);
           if (scrubbed !== value) {
             values.push(value);
             result[key] = REDACTED_SENTINEL;
@@ -314,8 +317,8 @@ function redactObjectGuessing(
       ) {
         collectSensitiveStrings(value, values);
         result[key] = REDACTED_SENTINEL;
-      } else if (typeof value === "string" && isUserInfoUrlPath(dotPath)) {
-        const scrubbed = stripUrlUserInfo(value);
+      } else if (typeof value === "string" && isSensitiveUrlPath(dotPath)) {
+        const scrubbed = redactSensitiveUrlLikeString(value);
         if (scrubbed !== value) {
           values.push(value);
           result[key] = REDACTED_SENTINEL;
@@ -655,7 +658,7 @@ function restoreRedactedValuesWithLookup(
         matched = true;
         if (
           value === REDACTED_SENTINEL &&
-          (hints[candidate]?.sensitive === true || isUserInfoUrlPath(path))
+          (hints[candidate]?.sensitive === true || isSensitiveUrlPath(path))
         ) {
           result[key] = restoreOriginalValueOrThrow({ key, path: candidate, original: orig });
         } else if (typeof value === "object" && value !== null) {
@@ -669,7 +672,7 @@ function restoreRedactedValuesWithLookup(
       if (
         !markedNonSensitive &&
         value === REDACTED_SENTINEL &&
-        (isSensitivePath(path) || isUserInfoUrlPath(path))
+        (isSensitivePath(path) || isSensitiveUrlPath(path))
       ) {
         result[key] = restoreOriginalValueOrThrow({ key, path, original: orig });
       } else if (typeof value === "object" && value !== null) {
@@ -711,7 +714,7 @@ function restoreRedactedValuesGuessing(
     if (
       !isExplicitlyNonSensitivePath(hints, [path, wildcardPath]) &&
       value === REDACTED_SENTINEL &&
-      (isSensitivePath(path) || isUserInfoUrlPath(path))
+      (isSensitivePath(path) || isSensitiveUrlPath(path))
     ) {
       result[key] = restoreOriginalValueOrThrow({ key, path, original: orig });
     } else if (typeof value === "object" && value !== null) {

@@ -459,6 +459,116 @@ These hooks are not event-stream listeners; they let plugins synchronously adjus
 
 ### Plugin Hook Events
 
+#### before_tool_call
+
+Runs before each tool call. Plugins can modify parameters, block the call, or request user approval.
+
+Return fields:
+
+- **`params`**: Override tool parameters (merged with original params)
+- **`block`**: Set to `true` to block the tool call
+- **`blockReason`**: Reason shown to the agent when blocked
+- **`requireApproval`**: Pause execution and wait for user approval via channels
+
+The `requireApproval` field triggers native platform approval (Telegram buttons, Discord components, `/approve` command) instead of relying on the agent to cooperate:
+
+```typescript
+{
+  requireApproval: {
+    title: "Sensitive operation",
+    description: "This tool call modifies production data",
+    severity: "warning",       // "info" | "warning" | "critical"
+    timeoutMs: 120000,         // default: 120s
+    timeoutBehavior: "deny",   // "allow" | "deny" (default)
+    onResolution: async (decision) => {
+      // Called after the user resolves: "allow-once", "allow-always", "deny", "timeout", or "cancelled"
+    },
+  }
+}
+```
+
+The `onResolution` callback is invoked with the final decision string after the approval resolves, times out, or is cancelled. It runs in-process within the plugin (not sent to the gateway). Use it to persist decisions, update caches, or perform cleanup.
+
+The `pluginId` field is stamped automatically by the hook runner from the plugin registration. When multiple plugins return `requireApproval`, the first one (highest priority) wins.
+
+`block` takes precedence over `requireApproval`: if the merged hook result has both `block: true` and a `requireApproval` field, the tool call is blocked immediately without triggering the approval flow. This ensures a higher-priority plugin's block cannot be overridden by a lower-priority plugin's approval request.
+
+If the gateway is unavailable or does not support plugin approvals, the tool call falls back to a soft block using the `description` as the block reason.
+
+#### before_install
+
+Runs after the built-in install security scan and before installation continues. OpenClaw fires this hook for interactive skill installs as well as plugin bundle, package, and single-file installs.
+
+Return fields:
+
+- **`findings`**: Additional scan findings to surface as warnings
+- **`block`**: Set to `true` to block the install
+- **`blockReason`**: Human-readable reason shown when blocked
+
+Event fields:
+
+- **`targetType`**: Install target category (`skill` or `plugin`)
+- **`targetName`**: Human-readable skill name or plugin id for the install target
+- **`sourcePath`**: Absolute path to the install target content being scanned
+- **`sourcePathKind`**: Whether the scanned content is a `file` or `directory`
+- **`origin`**: Normalized install origin when available (for example `openclaw-bundled`, `openclaw-workspace`, `plugin-bundle`, `plugin-package`, or `plugin-file`)
+- **`request`**: Provenance for the install request, including `kind`, `mode`, and optional `requestedSpecifier`
+- **`builtinScan`**: Structured result of the built-in scanner, including `status`, summary counts, findings, and optional `error`
+- **`skill`**: Skill install metadata when `targetType` is `skill`, including `installId` and the selected `installSpec`
+- **`plugin`**: Plugin install metadata when `targetType` is `plugin`, including the canonical `pluginId`, normalized `contentType`, optional `packageName` / `manifestId` / `version`, and `extensions`
+
+Example event (plugin package install):
+
+```json
+{
+  "targetType": "plugin",
+  "targetName": "acme-audit",
+  "sourcePath": "/var/folders/.../openclaw-plugin-acme-audit/package",
+  "sourcePathKind": "directory",
+  "origin": "plugin-package",
+  "request": {
+    "kind": "plugin-npm",
+    "mode": "install",
+    "requestedSpecifier": "@acme/openclaw-plugin-audit@1.4.2"
+  },
+  "builtinScan": {
+    "status": "ok",
+    "scannedFiles": 12,
+    "critical": 0,
+    "warn": 1,
+    "info": 0,
+    "findings": [
+      {
+        "severity": "warn",
+        "code": "network_fetch",
+        "file": "dist/index.js",
+        "line": 88,
+        "message": "Dynamic network fetch detected during install review."
+      }
+    ]
+  },
+  "plugin": {
+    "pluginId": "acme-audit",
+    "contentType": "package",
+    "packageName": "@acme/openclaw-plugin-audit",
+    "manifestId": "acme-audit",
+    "version": "1.4.2",
+    "extensions": ["./dist/index.js"]
+  }
+}
+```
+
+Skill installs use the same event shape with `targetType: "skill"` and a `skill` object instead of `plugin`.
+
+Decision semantics:
+
+- `before_install`: `{ block: true }` is terminal and stops lower-priority handlers.
+- `before_install`: `{ block: false }` is treated as no decision.
+
+Use this hook for external security scanners, policy engines, or enterprise approval gates that need to audit install sources before they are installed.
+
+#### Compaction lifecycle
+
 Compaction lifecycle hooks exposed through the plugin hook runner:
 
 - **`before_compaction`**: Runs before compaction with count/token metadata
