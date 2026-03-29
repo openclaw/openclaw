@@ -24,7 +24,7 @@ export class TelegramPollingTransportState {
       ? (this.opts.createTelegramTransport?.() ?? this.#telegramTransport)
       : this.#telegramTransport;
     if (this.#transportDirty && nextTransport) {
-      this.opts.log("[telegram][diag] rebuilding transport for next polling cycle");
+      console.debug("[telegram][diag] rebuilding transport for next polling cycle");
     }
     this.#telegramTransport = nextTransport;
     this.#transportDirty = false;
