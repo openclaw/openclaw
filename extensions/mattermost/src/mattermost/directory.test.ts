@@ -14,15 +14,19 @@ const {
   };
 });
 
-vi.mock("./accounts.js", () => {
+vi.mock("./accounts.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./accounts.js")>();
   return {
+    ...actual,
     listMattermostAccountIds: listMattermostAccountIdsMock,
     resolveMattermostAccount: resolveMattermostAccountMock,
   };
 });
 
-vi.mock("./client.js", () => {
+vi.mock("./client.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./client.js")>();
   return {
+    ...actual,
     createMattermostClient: createMattermostClientMock,
     fetchMattermostMe: fetchMattermostMeMock,
   };

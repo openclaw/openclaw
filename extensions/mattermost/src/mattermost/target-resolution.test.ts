@@ -5,15 +5,23 @@ const createMattermostClient = vi.fn();
 const fetchMattermostUser = vi.fn();
 const normalizeMattermostBaseUrl = vi.fn((value: string | undefined) => value?.trim());
 
-vi.mock("./accounts.js", () => ({
-  resolveMattermostAccount,
-}));
+vi.mock("./accounts.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./accounts.js")>();
+  return {
+    ...actual,
+    resolveMattermostAccount,
+  };
+});
 
-vi.mock("./client.js", () => ({
-  createMattermostClient,
-  fetchMattermostUser,
-  normalizeMattermostBaseUrl,
-}));
+vi.mock("./client.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./client.js")>();
+  return {
+    ...actual,
+    createMattermostClient,
+    fetchMattermostUser,
+    normalizeMattermostBaseUrl,
+  };
+});
 
 describe("mattermost target resolution", () => {
   let isExplicitMattermostTarget: typeof import("./target-resolution.js").isExplicitMattermostTarget;

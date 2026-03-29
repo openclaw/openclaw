@@ -6,12 +6,16 @@ const sendMattermostTyping = vi.hoisted(() => vi.fn());
 const updateMattermostPost = vi.hoisted(() => vi.fn());
 const buildButtonProps = vi.hoisted(() => vi.fn());
 
-vi.mock("./client.js", () => ({
-  fetchMattermostChannel,
-  fetchMattermostUser,
-  sendMattermostTyping,
-  updateMattermostPost,
-}));
+vi.mock("./client.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./client.js")>();
+  return {
+    ...actual,
+    fetchMattermostChannel,
+    fetchMattermostUser,
+    sendMattermostTyping,
+    updateMattermostPost,
+  };
+});
 
 vi.mock("./interactions.js", () => ({
   buildButtonProps,

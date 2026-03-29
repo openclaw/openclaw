@@ -10,8 +10,11 @@ const resolveCallbackUrl = vi.hoisted(() => vi.fn());
 const resolveSlashCommandConfig = vi.hoisted(() => vi.fn());
 const activateSlashCommands = vi.hoisted(() => vi.fn());
 
-vi.mock("./runtime-api.js", () => ({
+vi.mock("../../../../src/auto-reply/skill-commands.js", () => ({
   listSkillCommandsForAgents,
+}));
+
+vi.mock("../../../../src/infra/parse-finite-number.js", () => ({
   parseStrictPositiveInteger,
 }));
 

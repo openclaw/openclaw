@@ -39,15 +39,14 @@ const mockState = vi.hoisted(() => ({
   normalizeMattermostAllowList: vi.fn((value: unknown) => value),
 }));
 
-vi.mock("./runtime-api.js", () => {
+vi.mock("./runtime-api.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./runtime-api.js")>();
   return {
+    ...actual,
     buildModelsProviderData: mockState.buildModelsProviderData,
     createChannelReplyPipeline: vi.fn(() => ({
       onModelSelected: vi.fn(),
       typingCallbacks: {},
-    })),
-    createDedupeCache: vi.fn(() => ({
-      check: () => false,
     })),
     createReplyPrefixOptions: vi.fn(() => ({})),
     createTypingCallbacks: vi.fn(() => ({ onReplyStart: vi.fn() })),
@@ -63,28 +62,32 @@ vi.mock("./runtime-api.js", () => {
   };
 });
 
-vi.mock("../runtime.js", () => ({
-  getMattermostRuntime: () => ({
-    channel: {
-      commands: {
-        shouldHandleTextCommands: () => true,
+vi.mock("../runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../runtime.js")>();
+  return {
+    ...actual,
+    getMattermostRuntime: () => ({
+      channel: {
+        commands: {
+          shouldHandleTextCommands: () => true,
+        },
+        text: {
+          hasControlCommand: () => false,
+        },
+        pairing: {
+          readAllowFromStore: vi.fn(async () => []),
+        },
+        routing: {
+          resolveAgentRoute: vi.fn(() => ({
+            agentId: "agent-1",
+            sessionKey: "mattermost:session:1",
+            accountId: "default",
+          })),
+        },
       },
-      text: {
-        hasControlCommand: () => false,
-      },
-      pairing: {
-        readAllowFromStore: vi.fn(async () => []),
-      },
-      routing: {
-        resolveAgentRoute: vi.fn(() => ({
-          agentId: "agent-1",
-          sessionKey: "mattermost:session:1",
-          accountId: "default",
-        })),
-      },
-    },
-  }),
-}));
+    }),
+  };
+});
 
 vi.mock("./client.js", async () => {
   const actual = await vi.importActual<typeof import("./client.js")>("./client.js");
