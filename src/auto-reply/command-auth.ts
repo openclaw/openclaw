@@ -2,6 +2,7 @@ import { getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.
 import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.js";
 import { normalizeAnyChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { readChannelAllowFromStoreSync } from "../pairing/pairing-store.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
@@ -386,12 +387,36 @@ function resolveFallbackAllowFrom(params: {
   const accountCfg =
     resolveFallbackAccountConfig(channelCfg?.accounts, params.accountId) ??
     resolveFallbackDefaultAccountConfig(channelCfg);
-  const allowFrom =
+  const configAllowFrom =
     accountCfg?.allowFrom ??
     accountCfg?.dm?.allowFrom ??
     channelCfg?.allowFrom ??
     channelCfg?.dm?.allowFrom;
-  return Array.isArray(allowFrom) ? allowFrom : [];
+  const configList = Array.isArray(configAllowFrom) ? configAllowFrom : [];
+
+  // Also include paired users from the credentials store so that
+  // successfully paired senders are recognized for group commands
+  // even when config-level allowFrom is not explicitly set.
+  try {
+    const pairedUsers = readChannelAllowFromStoreSync(
+      providerId as "telegram" | "discord",
+      undefined,
+      params.accountId?.trim() || undefined,
+    );
+    if (pairedUsers.length > 0) {
+      const merged = [...configList];
+      for (const user of pairedUsers) {
+        if (!merged.includes(user)) {
+          merged.push(user);
+        }
+      }
+      return merged;
+    }
+  } catch {
+    // Credentials store unavailable — fall back to config only
+  }
+
+  return configList;
 }
 
 function resolveFallbackAccountConfig(
