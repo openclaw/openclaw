@@ -338,4 +338,57 @@ describe("runAgentTurnWithFallback", () => {
     expect(followupRun.run.provider).toBe("openai");
     expect(followupRun.run.model).toBe("gpt-5.4");
   });
+
+  it("throws after exceeding MAX_MODEL_SWITCH_RESTARTS (CWE-835)", async () => {
+    // Simulate a scenario where the session model keeps changing on every
+    // attempt, which would previously cause an unbounded restart loop.
+    let switchCount = 0;
+    state.runWithModelFallbackMock.mockImplementation(
+      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+        result: await params.run("anthropic", "claude"),
+        provider: "anthropic",
+        model: "claude",
+        attempts: [],
+      }),
+    );
+    state.runEmbeddedPiAgentMock.mockImplementation(async () => {
+      switchCount++;
+      throw new LiveSessionModelSwitchError({
+        provider: "openai",
+        model: `gpt-variant-${switchCount}`,
+      });
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const followupRun = createFollowupRun();
+    await expect(
+      runAgentTurnWithFallback({
+        commandBody: "hello",
+        followupRun,
+        sessionCtx: {
+          Provider: "whatsapp",
+          MessageSid: "msg",
+        } as unknown as TemplateContext,
+        opts: {},
+        typingSignals: createMockTypingSignaler(),
+        blockReplyPipeline: null,
+        blockStreamingEnabled: false,
+        resolvedBlockStreamingBreak: "message_end",
+        applyReplyToMode: (payload) => payload,
+        shouldEmitToolResult: () => true,
+        shouldEmitToolOutput: () => false,
+        pendingToolTasks: new Set(),
+        resetSessionAfterCompactionFailure: async () => false,
+        resetSessionAfterRoleOrderingConflict: async () => false,
+        isHeartbeat: false,
+        sessionKey: "main",
+        getActiveSessionEntry: () => undefined,
+        resolvedVerboseLevel: "off",
+      }),
+    ).rejects.toThrow(/Too many model switches/);
+
+    // Should have been called exactly MAX_MODEL_SWITCH_RESTARTS + 1 times
+    // (the initial attempt + 3 restarts, then the 4th switch triggers the cap).
+    expect(state.runEmbeddedPiAgentMock).toHaveBeenCalledTimes(4);
+  });
 });
