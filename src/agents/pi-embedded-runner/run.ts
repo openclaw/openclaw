@@ -673,6 +673,10 @@ export async function runEmbeddedPiAgent(
                   compactionProvider = provider;
                   compactionModelId = modelId;
                 }
+                // Provider changed — drop primary auth profile so getApiKeyForModel
+                // falls back to provider-based key resolution for the override model.
+                const compactionAuthProfileId =
+                  compactionProvider !== provider ? undefined : lastProfileId;
 
                 const timeoutCompactionRuntimeContext = {
                   ...buildEmbeddedCompactionRuntimeContext({
@@ -683,7 +687,7 @@ export async function runEmbeddedPiAgent(
                     currentChannelId: params.currentChannelId,
                     currentThreadTs: params.currentThreadTs,
                     currentMessageId: params.currentMessageId,
-                    authProfileId: lastProfileId,
+                    authProfileId: compactionAuthProfileId,
                     workspaceDir: resolvedWorkspace,
                     agentDir,
                     config: params.config,
@@ -834,6 +838,10 @@ export async function runEmbeddedPiAgent(
                   compactionProvider = provider;
                   compactionModelId = modelId;
                 }
+                // Provider changed — drop primary auth profile so getApiKeyForModel
+                // falls back to provider-based key resolution for the override model.
+                const compactionAuthProfileId =
+                  compactionProvider !== provider ? undefined : lastProfileId;
 
                 const overflowCompactionRuntimeContext = {
                   ...buildEmbeddedCompactionRuntimeContext({
@@ -844,7 +852,7 @@ export async function runEmbeddedPiAgent(
                     currentChannelId: params.currentChannelId,
                     currentThreadTs: params.currentThreadTs,
                     currentMessageId: params.currentMessageId,
-                    authProfileId: lastProfileId,
+                    authProfileId: compactionAuthProfileId,
                     workspaceDir: resolvedWorkspace,
                     agentDir,
                     config: params.config,
