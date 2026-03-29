@@ -120,7 +120,8 @@ export function resolveAssistantIdentity(params: {
 
 /**
  * Resolve user avatar from config.ui.userAvatar.
- * Validates the avatar value using the same policy as assistant avatars.
+ * Only URL-like (http/https/data:image) or path-like values are accepted.
+ * Short text/emojis are rejected to align with UI rendering behavior.
  *
  * @param cfg - OpenClaw configuration
  * @returns User avatar string if valid, otherwise null
@@ -130,7 +131,14 @@ export function resolveUserAvatar(cfg: OpenClawConfig): string | null {
   if (!raw) {
     return null;
   }
-  const coerced = coerceIdentityValue(raw, MAX_USER_AVATAR);
-  const normalized = normalizeAvatarValue(coerced);
-  return normalized ?? null;
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return null;
+  }
+  // Accept only HTTP URLs, data URLs, or file paths (containing path separators or image extensions)
+  if (isAvatarHttpUrl(trimmed) || isAvatarImageDataUrl(trimmed) || looksLikeAvatarPath(trimmed)) {
+    return trimmed;
+  }
+  // Reject short text/emojis
+  return null;
 }

@@ -53,9 +53,9 @@ describe("resolveUserAvatar", () => {
     expect(resolveUserAvatar(cfg)).toBeNull();
   });
 
-  it("keeps valid short text avatar", () => {
+  it("rejects short text avatars (UI cannot render)", () => {
     const cfg: OpenClawConfig = { ui: { userAvatar: "U" } };
-    expect(resolveUserAvatar(cfg)).toBe("U");
+    expect(resolveUserAvatar(cfg)).toBeNull();
   });
 
   it("keeps valid avatar path", () => {
