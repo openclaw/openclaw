@@ -133,6 +133,14 @@ export type MatrixConfig = {
   rooms?: Record<string, MatrixRoomConfig>;
   /** Per-action tool gating (default: true for all). */
   actions?: MatrixActionConfig;
+  /**
+   * Streaming mode for Matrix replies.
+   * - `"partial"`: edit a single message in place as the model generates text.
+   * - `"off"`: deliver the full reply once the model finishes.
+   * - `true` maps to `"partial"`, `false` maps to `"off"`.
+   * Default: `"off"`.
+   */
+  streaming?: "partial" | "off" | boolean;
 };
 
 export type CoreConfig = {

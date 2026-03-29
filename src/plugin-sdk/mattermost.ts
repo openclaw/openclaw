@@ -1,5 +1,5 @@
 // Private helper surface for the bundled mattermost plugin.
-// Keep this list additive and scoped to symbols used under extensions/mattermost.
+// Keep this list additive and scoped to the bundled Mattermost surface.
 
 export { formatInboundFromLabel } from "../auto-reply/envelope.js";
 export type { HistoryEntry } from "../auto-reply/reply/history.js";
@@ -96,4 +96,3 @@ export { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
 export { loadOutboundMediaFromUrl } from "./outbound-media.js";
 export { createChannelPairingController } from "./channel-pairing.js";
 export { isRequestBodyLimitError, readRequestBodyWithLimit } from "../infra/http-body.js";
-export { isMattermostSenderAllowed } from "./mattermost-policy.js";

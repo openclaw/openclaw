@@ -7,7 +7,10 @@ import type {
   ModelRegistry as PiModelRegistry,
 } from "@mariozechner/pi-coding-agent";
 import { normalizeModelCompat } from "../plugins/provider-model-compat.js";
-import { normalizeProviderResolvedModelWithPlugin } from "../plugins/provider-runtime.js";
+import {
+  applyProviderResolvedModelCompatWithPlugins,
+  normalizeProviderResolvedModelWithPlugin,
+} from "../plugins/provider-runtime.js";
 import type { ProviderRuntimeModel } from "../plugins/types.js";
 import { ensureAuthProfileStore } from "./auth-profiles.js";
 import { PROVIDER_ENV_API_KEY_CANDIDATES } from "./model-auth-env-vars.js";
@@ -75,7 +78,17 @@ function normalizeRegistryModel<T>(value: T, agentDir: string): T {
         agentDir,
       },
     }) ?? model;
-  return normalizeModelCompat(pluginNormalized as Model<Api>) as T;
+  const compatNormalized =
+    applyProviderResolvedModelCompatWithPlugins({
+      provider: model.provider,
+      context: {
+        provider: model.provider,
+        modelId: model.id,
+        model: pluginNormalized,
+        agentDir,
+      },
+    }) ?? pluginNormalized;
+  return normalizeModelCompat(compatNormalized as Model<Api>) as T;
 }
 
 class OpenClawModelRegistry extends PiModelRegistryClass {

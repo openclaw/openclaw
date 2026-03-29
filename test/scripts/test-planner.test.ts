@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   createExecutionArtifacts,
+  createTempArtifactWriteStream,
   resolvePnpmCommandInvocation,
   resolveVitestFsModuleCachePath,
 } from "../../scripts/test-planner/executor.mjs";
@@ -11,6 +12,7 @@ import {
   buildExecutionPlan,
   explainExecutionTarget,
 } from "../../scripts/test-planner/planner.mjs";
+import { bundledPluginFile } from "../helpers/bundled-plugin-paths.js";
 
 describe("test planner", () => {
   it("builds a capability-aware plan for mid-memory local runs", () => {
@@ -194,7 +196,10 @@ describe("test planner", () => {
         surfaces: [],
         passthroughArgs: [
           "src/auto-reply/reply/followup-runner.test.ts",
-          "extensions/discord/src/monitor/message-handler.preflight.acp-bindings.test.ts",
+          bundledPluginFile(
+            "discord",
+            "src/monitor/message-handler.preflight.acp-bindings.test.ts",
+          ),
         ],
       },
       {
@@ -345,6 +350,24 @@ describe("test planner", () => {
     const artifactDir = artifacts.ensureTempArtifactDir();
     expect(fs.existsSync(artifactDir)).toBe(true);
     artifacts.cleanupTempArtifacts();
+    expect(fs.existsSync(artifactDir)).toBe(false);
+  });
+
+  it("keeps fd-backed artifact streams writable after temp cleanup", async () => {
+    const artifacts = createExecutionArtifacts({});
+    const artifactDir = artifacts.ensureTempArtifactDir();
+    const logPath = path.join(artifactDir, "lane.log");
+    const stream = createTempArtifactWriteStream(logPath);
+
+    stream.write("before cleanup\n");
+    artifacts.cleanupTempArtifacts();
+
+    await expect(
+      new Promise((resolve, reject) => {
+        stream.on("error", reject);
+        stream.end("after cleanup\n", resolve);
+      }),
+    ).resolves.toBeNull();
     expect(fs.existsSync(artifactDir)).toBe(false);
   });
 
