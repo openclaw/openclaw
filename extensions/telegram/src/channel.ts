@@ -463,7 +463,7 @@ export const telegramPlugin = createChatChannelPlugin({
         await deleteTelegramUpdateOffset({ accountId });
       },
     },
-    execApprovals: {
+    approvals: {
       auth: telegramNativeApprovalAdapter.auth,
       delivery: {
         ...telegramNativeApprovalAdapter.delivery,

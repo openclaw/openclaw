@@ -1,4 +1,4 @@
-import { getChannelPlugin } from "../channels/plugins/index.js";
+import { getChannelPlugin, resolveChannelApprovalAdapter } from "../channels/plugins/index.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 
@@ -14,7 +14,7 @@ export function resolveApprovalCommandAuthorization(params: {
     return { authorized: true };
   }
   return (
-    getChannelPlugin(channel)?.execApprovals?.auth?.authorizeCommand?.({
+    resolveChannelApprovalAdapter(getChannelPlugin(channel))?.auth?.authorizeCommand?.({
       cfg: params.cfg,
       accountId: params.accountId,
       senderId: params.senderId,
