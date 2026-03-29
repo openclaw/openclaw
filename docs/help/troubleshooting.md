@@ -283,6 +283,7 @@ flowchart TD
     Common log signatures:
 
     - `unknown command "browser"` or `unknown command 'browser'` → `plugins.allow` is set and does not include `browser`.
+    - `GatewayClientRequestError: unknown method: browser.request` plus a version mismatch like `Config was last written by a newer OpenClaw ... current version is ...` → the Gateway service may still be installed from an older OpenClaw build than the CLI currently on your PATH. Run `openclaw gateway install --force` (or `openclaw doctor`) before editing LaunchAgent files manually.
     - `Failed to start Chrome CDP on port` → local browser launch failed.
     - `browser.executablePath not found` → configured binary path is wrong.
     - `No Chrome tabs found for profile="user"` → the Chrome MCP attach profile has no open local Chrome tabs.
