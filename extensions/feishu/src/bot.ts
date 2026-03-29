@@ -314,6 +314,7 @@ function parseInteractiveCardContent(parsed: unknown): string {
   const card = parsed as {
     header?: { title?: { content?: unknown } };
     elements?: unknown;
+    body?: { elements?: unknown[] };
   };
 
   const texts: string[] = [];
@@ -323,8 +324,15 @@ function parseInteractiveCardContent(parsed: unknown): string {
     texts.push(headerTitle.trim());
   }
 
-  if (Array.isArray(card.elements)) {
-    for (const element of card.elements) {
+  // Support both schema 1.0 (card.elements) and schema 2.0 (card.body.elements).
+  const cardElements: unknown[] = Array.isArray(card.elements)
+    ? card.elements
+    : Array.isArray(card.body?.elements)
+      ? card.body.elements
+      : [];
+
+  if (cardElements.length > 0) {
+    for (const element of cardElements) {
       if (!element || typeof element !== "object") continue;
       const item = element as {
         tag?: string;
@@ -1614,3 +1622,4 @@ export async function handleFeishuMessage(params: {
     error(`feishu[${account.accountId}]: failed to dispatch message: ${String(err)}`);
   }
 }
+
