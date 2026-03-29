@@ -7,13 +7,19 @@ const MIN_DUPLICATE_TEXT_LENGTH = 10;
  * - Strips emoji (Emoji_Presentation and Extended_Pictographic)
  * - Collapses multiple spaces to single space
  */
+// Pre-compiled Unicode emoji pattern — avoids recompilation per call.
+const EMOJI_PATTERN = /\p{Emoji_Presentation}|\p{Extended_Pictographic}/gu;
+
 export function normalizeTextForComparison(text: string): string {
-  return text
-    .trim()
-    .toLowerCase()
-    .replace(/\p{Emoji_Presentation}|\p{Extended_Pictographic}/gu, "")
-    .replace(/\s+/g, " ")
-    .trim();
+  const trimmed = text.trim().toLowerCase();
+  // Fast path: skip the expensive Unicode emoji regex for ASCII-only text,
+  // which is the common case for code output and most agent responses.
+  // eslint-disable-next-line no-control-regex
+  const needsEmojiStrip = /[^\x00-\x7F]/.test(trimmed);
+  const stripped = needsEmojiStrip
+    ? (EMOJI_PATTERN.lastIndex = 0, trimmed.replace(EMOJI_PATTERN, ""))
+    : trimmed;
+  return stripped.replace(/\s+/g, " ").trim();
 }
 
 export function isMessagingToolDuplicateNormalized(
