@@ -400,6 +400,9 @@ This shared text-command path uses the normal channel auth model for that conver
 originating chat can already send commands and receive replies, approval requests no longer need a
 separate channel-specific approval client just to stay pending.
 
+Discord and Telegram also support same-chat `/approve`, but those channels still use their
+resolved approver list for authorization even when the richer approval client is disabled.
+
 ### Rich approval clients
 
 Discord and Telegram can also act as richer exec approval clients with channel-specific config.
@@ -412,7 +415,9 @@ top of the shared same-chat `/approve` flow.
 
 Shared behavior:
 
-- only resolved approvers can approve or deny
+- Slack, Matrix, Microsoft Teams, and similar deliverable chats use the normal channel auth model
+  for same-chat `/approve`
+- for Discord and Telegram, only resolved approvers can approve or deny
 - Discord and Telegram approvers can be explicit (`execApprovals.approvers`) or inferred from existing owner config (`allowFrom`, plus direct-message `defaultTo` where supported)
 - the requester does not need to be an approver
 - the originating chat can approve directly with `/approve` when that chat already supports commands and replies
