@@ -164,11 +164,15 @@ export async function executePreparedCliRun(
         }
         return next;
       })();
-      const noOutputTimeoutMs = resolveCliNoOutputTimeoutMs({
-        backend,
-        timeoutMs: params.timeoutMs,
-        useResume,
-      });
+      // When input is provided, stdin will be closed after writing, so the process
+      // cannot be waiting for interactive input. Skip the no-output watchdog.
+      const noOutputTimeoutMs = stdinPayload
+        ? undefined
+        : resolveCliNoOutputTimeoutMs({
+            backend,
+            timeoutMs: params.timeoutMs,
+            useResume,
+          });
       const supervisor = getProcessSupervisor();
       const scopeKey = buildCliSupervisorScopeKey({
         backend,
@@ -212,13 +216,13 @@ export async function executePreparedCliRun(
 
       if (result.exitCode !== 0 || result.reason !== "exit") {
         if (result.reason === "no-output-timeout" || result.noOutputTimedOut) {
-          const timeoutReason = `CLI produced no output for ${Math.round(noOutputTimeoutMs / 1000)}s and was terminated.`;
+          const timeoutReason = `CLI produced no output for ${Math.round((noOutputTimeoutMs ?? 0) / 1000)}s and was terminated.`;
           cliBackendLog.warn(
             `cli watchdog timeout: provider=${params.provider} model=${context.modelId} session=${resolvedSessionId ?? params.sessionId} noOutputTimeoutMs=${noOutputTimeoutMs} pid=${managedRun.pid ?? "unknown"}`,
           );
           if (params.sessionKey) {
             const stallNotice = [
-              `CLI agent (${params.provider}) produced no output for ${Math.round(noOutputTimeoutMs / 1000)}s and was terminated.`,
+              `CLI agent (${params.provider}) produced no output for ${Math.round((noOutputTimeoutMs ?? 0) / 1000)}s and was terminated.`,
               "It may have been waiting for interactive input or an approval prompt.",
               "For Claude Code, prefer --permission-mode bypassPermissions --print.",
             ].join(" ");
