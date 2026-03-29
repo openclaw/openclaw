@@ -250,17 +250,9 @@ export async function runCommandWithTimeout(
   );
   // Spawn with inherited stdin (TTY) so tools like `pi` stay interactive when needed.
   return await new Promise((resolve, reject) => {
-    // Create TextDecoder with proper encoding detection and fallback
-    const rawEncoding = process.platform === "win32" ? (resolveWindowsConsoleEncoding() ?? "utf-8") : "utf-8";
-    let encoding: string;
-    try {
-      new TextDecoder(rawEncoding); // probe support
-      encoding = rawEncoding;
-    } catch {
-      encoding = "utf-8";
-    }
-    const stdoutDecoder = new TextDecoder(encoding);
-    const stderrDecoder = new TextDecoder(encoding);
+    // Collect all output as buffers first, then decode using our improved decodeCapturedOutputBuffer
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
     
     let stdout = "";
     let stderr = "";
@@ -321,22 +313,12 @@ export async function runCommandWithTimeout(
     }
 
     child.stdout?.on("data", (d) => {
-      // Stream decoding with { stream: true } to handle multi-byte characters
-      stdout += stdoutDecoder.decode(d, { stream: true });
+      stdoutChunks.push(d as Buffer);
       armNoOutputTimer();
     });
     child.stderr?.on("data", (d) => {
-      // Stream decoding with { stream: true } to handle multi-byte characters
-      stderr += stderrDecoder.decode(d, { stream: true });
+      stderrChunks.push(d as Buffer);
       armNoOutputTimer();
-    });
-    child.stdout?.on("end", () => {
-      // Final decode to flush any remaining bytes
-      stdout += stdoutDecoder.decode();
-    });
-    child.stderr?.on("end", () => {
-      // Final decode to flush any remaining bytes
-      stderr += stderrDecoder.decode();
     });
     child.on("error", (err) => {
       if (settled) {
@@ -384,10 +366,17 @@ export async function runCommandWithTimeout(
             ? 124
             : resolvedCode
           : resolvedCode;
+      
+      // Decode buffers using our improved function
+      const stdoutBuffer = Buffer.concat(stdoutChunks);
+      const stderrBuffer = Buffer.concat(stderrChunks);
+      const decodedStdout = decodeCapturedOutputBuffer({ buffer: stdoutBuffer });
+      const decodedStderr = decodeCapturedOutputBuffer({ buffer: stderrBuffer });
+      
       resolve({
         pid: child.pid ?? undefined,
-        stdout,
-        stderr,
+        stdout: decodedStdout,
+        stderr: decodedStderr,
         code: normalizedCode,
         signal: resolvedSignal,
         killed: child.killed,

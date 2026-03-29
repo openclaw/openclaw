@@ -128,11 +128,20 @@ export function resolveWindowsConsoleEncoding(): string | null {
   try {
     const result = spawnSync("cmd.exe", ["/d", "/s", "/c", "chcp"], {
       windowsHide: true,
-      encoding: "utf8",
+      encoding: "buffer",
       stdio: ["ignore", "pipe", "pipe"],
     });
-    const raw = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
-    const codePage = parseWindowsCodePage(raw);
+    // 先尝试用 GBK 解码 chcp 输出（Windows 中文默认编码）
+    let raw: string;
+    try {
+      raw = new TextDecoder("gbk").decode(result.stdout ?? Buffer.from(""));
+    } catch {
+      // 如果 GBK 解码失败，回退到 UTF-8
+      raw = (result.stdout ?? Buffer.from("")).toString("utf8");
+    }
+    const rawStderr = (result.stderr ?? Buffer.from("")).toString();
+    const fullRaw = `${raw}\n${rawStderr}`;
+    const codePage = parseWindowsCodePage(fullRaw);
     cachedWindowsConsoleEncoding =
       codePage !== null ? (WINDOWS_CODEPAGE_ENCODING_MAP[codePage] ?? null) : null;
   } catch {
@@ -152,13 +161,50 @@ export function decodeCapturedOutputBuffer(params: {
     return utf8;
   }
   const encoding = params.windowsEncoding ?? resolveWindowsConsoleEncoding();
+  
+  // 如果没有获取到编码，或者是 UTF-8，尝试更智能的检测
   if (!encoding || encoding.toLowerCase() === "utf-8") {
-    return utf8;
+    // 检查是否是有效的 UTF-8
+    const isValidUtf8 = isValidUtf8Buffer(params.buffer);
+    if (isValidUtf8) {
+      return utf8;
+    }
+    // 如果不是有效 UTF-8，在中文 Windows 上默认尝试 GBK
+    try {
+      return new TextDecoder("gbk").decode(params.buffer);
+    } catch {
+      return utf8;
+    }
   }
+  
   try {
     return new TextDecoder(encoding).decode(params.buffer);
   } catch {
-    return utf8;
+    // 如果指定编码失败，在中文 Windows 上回退到 GBK
+    try {
+      return new TextDecoder("gbk").decode(params.buffer);
+    } catch {
+      return utf8;
+    }
+  }
+}
+
+// 辅助函数：检查 Buffer 是否是有效的 UTF-8
+function isValidUtf8Buffer(buffer: Buffer): boolean {
+  try {
+    // 尝试用 UTF-8 解码并重新编码，看是否一致
+    const decoded = buffer.toString("utf8");
+    const reencoded = Buffer.from(decoded, "utf8");
+    // 对于短 buffer，精确比较
+    if (buffer.length < 1024) {
+      return buffer.equals(reencoded);
+    }
+    // 对于长 buffer，只比较前 1KB 和后 1KB
+    const prefixMatch = buffer.subarray(0, 1024).equals(reencoded.subarray(0, Math.min(1024, reencoded.length)));
+    const suffixMatch = buffer.subarray(-1024).equals(reencoded.subarray(-1024));
+    return prefixMatch && suffixMatch;
+  } catch {
+    return false;
   }
 }
 
@@ -252,12 +298,16 @@ async function runCommand(
       if (timer) {
         clearTimeout(timer);
       }
+      
+      const stdoutBuffer = Buffer.concat(stdoutChunks);
+      const stderrBuffer = Buffer.concat(stderrChunks);
+      
       const stdout = decodeCapturedOutputBuffer({
-        buffer: Buffer.concat(stdoutChunks),
+        buffer: stdoutBuffer,
         windowsEncoding,
       });
       const stderr = decodeCapturedOutputBuffer({
-        buffer: Buffer.concat(stderrChunks),
+        buffer: stderrBuffer,
         windowsEncoding,
       });
       resolve({
