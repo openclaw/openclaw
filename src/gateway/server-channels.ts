@@ -73,6 +73,24 @@ function cloneDefaultRuntime(channelId: ChannelId, accountId: string): ChannelAc
   return { ...resolveDefaultRuntime(channelId), accountId };
 }
 
+function applyDescribedAccountFields(
+  next: ChannelAccountSnapshot,
+  described: ChannelAccountSnapshot | undefined,
+) {
+  if (!described) {
+    return next;
+  }
+  if (typeof described.configured === "boolean") {
+    next.configured = described.configured;
+  } else {
+    next.configured ??= true;
+  }
+  if (described.mode !== undefined) {
+    next.mode = described.mode;
+  }
+  return next;
+}
+
 type ChannelManagerOptions = {
   loadConfig: () => OpenClawConfig;
   channelLogs: Record<ChannelId, SubsystemLogger>;
@@ -550,14 +568,11 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           ? plugin.config.isEnabled(account, cfg)
           : isAccountEnabled(account);
         const described = plugin.config.describeAccount?.(account, cfg);
-        const configured = described?.configured;
         const current = store.runtimes.get(id) ?? cloneDefaultRuntime(plugin.id, id);
         const next = { ...current, accountId: id };
         next.enabled = enabled;
-        next.configured = typeof configured === "boolean" ? configured : (next.configured ?? true);
-        if (described?.mode !== undefined) {
-          next.mode = described.mode;
-        }
+        applyDescribedAccountFields(next, described);
+        const configured = described?.configured;
         if (!next.running) {
           if (!enabled) {
             next.lastError ??= plugin.config.disabledReason?.(account, cfg) ?? "disabled";
