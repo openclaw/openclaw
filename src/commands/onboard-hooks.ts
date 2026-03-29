@@ -7,6 +7,7 @@ import type { WizardPrompter } from "../wizard/prompts.js";
 
 const SKIP_SELECTION = "__skip__";
 const SELECT_ALL_SELECTION = "__all__";
+const HOOK_OPTION_PREFIX = "hook:";
 
 export async function setupInternalHooks(
   cfg: OpenClawConfig,
@@ -38,6 +39,11 @@ export async function setupInternalHooks(
     return cfg;
   }
 
+  const hookOptionValues = eligibleHooks.map((_, index) => `${HOOK_OPTION_PREFIX}${index}`);
+  const hookNameByOptionValue = new Map(
+    hookOptionValues.map((value, index) => [value, eligibleHooks[index]?.name ?? ""]),
+  );
+
   const toEnable = await prompter.multiselect({
     message: "Enable hooks?",
     options: [
@@ -47,8 +53,8 @@ export async function setupInternalHooks(
         label: "Select all",
         hint: "Enable every hook shown here",
       },
-      ...eligibleHooks.map((hook) => ({
-        value: hook.name,
+      ...eligibleHooks.map((hook, index) => ({
+        value: hookOptionValues[index] ?? `${HOOK_OPTION_PREFIX}${index}`,
         label: `${hook.emoji ?? "🔗"} ${hook.name}`,
         hint: hook.description,
       })),
@@ -57,7 +63,10 @@ export async function setupInternalHooks(
 
   const selected = toEnable.includes(SELECT_ALL_SELECTION)
     ? eligibleHooks.map((hook) => hook.name)
-    : toEnable.filter((name) => name !== SKIP_SELECTION);
+    : toEnable
+        .filter((value) => value !== SKIP_SELECTION)
+        .map((value) => hookNameByOptionValue.get(value))
+        .filter((name): name is string => Boolean(name));
   if (selected.length === 0) {
     return cfg;
   }

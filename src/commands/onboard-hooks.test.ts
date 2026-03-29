@@ -120,10 +120,11 @@ describe("onboard-hooks", () => {
     selected: string[];
     cfg?: OpenClawConfig;
     eligible?: boolean;
+    report?: HookStatusReport;
   }) {
     const { buildWorkspaceHookStatus } = await import("../hooks/hooks-status.js");
     vi.mocked(buildWorkspaceHookStatus).mockReturnValue(
-      createMockHookReport(params.eligible ?? true),
+      params.report ?? createMockHookReport(params.eligible ?? true),
     );
 
     const cfg = params.cfg ?? {};
@@ -136,7 +137,7 @@ describe("onboard-hooks", () => {
   describe("setupInternalHooks", () => {
     it("should enable hooks when user selects them", async () => {
       const { result, prompter } = await runSetupInternalHooks({
-        selected: ["session-memory"],
+        selected: ["hook:0"],
       });
 
       expect(result.hooks?.internal?.enabled).toBe(true);
@@ -154,12 +155,12 @@ describe("onboard-hooks", () => {
             hint: "Enable every hook shown here",
           },
           {
-            value: "session-memory",
+            value: "hook:0",
             label: "💾 session-memory",
             hint: "Save session context to memory when /new or /reset command is issued",
           },
           {
-            value: "command-logger",
+            value: "hook:1",
             label: "📝 command-logger",
             hint: "Log all command events to a centralized audit file",
           },
@@ -176,6 +177,50 @@ describe("onboard-hooks", () => {
       expect(result.hooks?.internal?.entries).toEqual({
         "session-memory": { enabled: true },
         "command-logger": { enabled: true },
+      });
+    });
+
+    it("should allow selecting a real hook named __all__ without enabling every hook", async () => {
+      const report: HookStatusReport = {
+        workspaceDir: "/mock/workspace",
+        managedHooksDir: "/mock/.openclaw/hooks",
+        hooks: [
+          createMockHook(
+            {
+              name: "__all__",
+              description: "A real hook named __all__",
+              filePath: "/mock/workspace/hooks/__all__/HOOK.md",
+              baseDir: "/mock/workspace/hooks/__all__",
+              handlerPath: "/mock/workspace/hooks/__all__/handler.js",
+              hookKey: "__all__",
+              emoji: "🎯",
+              events: ["command:new"],
+            },
+            true,
+          ),
+          createMockHook(
+            {
+              name: "command-logger",
+              description: "Log all command events to a centralized audit file",
+              filePath: "/mock/workspace/hooks/command-logger/HOOK.md",
+              baseDir: "/mock/workspace/hooks/command-logger",
+              handlerPath: "/mock/workspace/hooks/command-logger/handler.js",
+              hookKey: "command-logger",
+              emoji: "📝",
+              events: ["command"],
+            },
+            true,
+          ),
+        ],
+      };
+
+      const { result } = await runSetupInternalHooks({
+        selected: ["hook:0"],
+        report,
+      });
+
+      expect(result.hooks?.internal?.entries).toEqual({
+        __all__: { enabled: true },
       });
     });
 
@@ -211,7 +256,7 @@ describe("onboard-hooks", () => {
         },
       };
       const { result } = await runSetupInternalHooks({
-        selected: ["session-memory"],
+        selected: ["hook:0"],
         cfg,
       });
 
@@ -239,7 +284,7 @@ describe("onboard-hooks", () => {
 
     it("should show informative notes to user", async () => {
       const { prompter } = await runSetupInternalHooks({
-        selected: ["session-memory"],
+        selected: ["hook:0"],
       });
 
       const noteCalls = (prompter.note as ReturnType<typeof vi.fn>).mock.calls;

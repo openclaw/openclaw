@@ -172,7 +172,7 @@ describe("setupSkills", () => {
           hint: "Install every skill dependency shown here",
         },
         {
-          value: "video-frames",
+          value: "skill:0",
           label: "🧩 video-frames",
           hint: "ffmpeg — Install ffmpeg (brew)",
         },
@@ -201,7 +201,7 @@ describe("setupSkills", () => {
       }),
     ]);
 
-    const { prompter, notes } = createPrompter({ multiselect: ["video-frames"] });
+    const { prompter, notes } = createPrompter({ multiselect: ["skill:0"] });
     await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);
 
     const brewNote = notes.find((n) => n.title === "Homebrew recommended");
@@ -232,5 +232,28 @@ describe("setupSkills", () => {
       "video-frames",
       "voice-call",
     ]);
+  });
+
+  it("installs only a real skill named __all__ when that option alone is selected", async () => {
+    mockMissingBrewStatus([
+      createBundledSkill({
+        name: "__all__",
+        description: "A real skill named __all__",
+        bins: ["allctl"],
+        installLabel: "Install allctl (brew)",
+      }),
+      createBundledSkill({
+        name: "voice-call",
+        description: "SIP helper",
+        bins: ["sipctl"],
+        installLabel: "Install sipctl (brew)",
+      }),
+    ]);
+
+    const { prompter } = createPrompter({ multiselect: ["skill:0"] });
+    await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);
+
+    expect(installSkill).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(installSkill).mock.calls[0]?.[0]?.skillName).toBe("__all__");
   });
 });

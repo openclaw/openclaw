@@ -9,6 +9,7 @@ import { detectBinary, resolveNodeManagerOptions } from "./onboard-helpers.js";
 
 const SKIP_SELECTION = "__skip__";
 const SELECT_ALL_SELECTION = "__all__";
+const SKILL_OPTION_PREFIX = "skill:";
 
 function summarizeInstallFailure(message: string): string | undefined {
   const cleaned = message.replace(/^Install failed(?:\s*\([^)]*\))?\s*:?\s*/i, "").trim();
@@ -89,6 +90,11 @@ export async function setupSkills(
   );
   let next: OpenClawConfig = cfg;
   if (installable.length > 0) {
+    const skillOptionValues = installable.map((_, index) => `${SKILL_OPTION_PREFIX}${index}`);
+    const skillNameByOptionValue = new Map(
+      skillOptionValues.map((value, index) => [value, installable[index]?.name ?? ""]),
+    );
+
     const toInstall = await prompter.multiselect({
       message: "Install missing skill dependencies",
       options: [
@@ -102,8 +108,8 @@ export async function setupSkills(
           label: "Select all",
           hint: "Install every skill dependency shown here",
         },
-        ...installable.map((skill) => ({
-          value: skill.name,
+        ...installable.map((skill, index) => ({
+          value: skillOptionValues[index] ?? `${SKILL_OPTION_PREFIX}${index}`,
           label: `${skill.emoji ?? "🧩"} ${skill.name}`,
           hint: formatSkillHint(skill),
         })),
@@ -112,7 +118,10 @@ export async function setupSkills(
 
     const selected = toInstall.includes(SELECT_ALL_SELECTION)
       ? installable.map((skill) => skill.name)
-      : toInstall.filter((name) => name !== SKIP_SELECTION);
+      : toInstall
+          .filter((value) => value !== SKIP_SELECTION)
+          .map((value) => skillNameByOptionValue.get(value))
+          .filter((name): name is string => Boolean(name));
 
     const selectedSkills = selected
       .map((name) => installable.find((s) => s.name === name))
