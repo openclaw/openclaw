@@ -21,6 +21,22 @@ For post-level X metrics such as reposts, replies, bookmarks, or views, prefer
 `x_search` with the exact post URL or status ID instead of a broad search
 query.
 
+## Onboarding and configure
+
+If you choose **Grok** during:
+
+- `openclaw onboard`
+- `openclaw configure --section web`
+
+OpenClaw can show a separate follow-up step to enable `x_search` with the same
+`XAI_API_KEY`. That follow-up:
+
+- only appears after you choose Grok for `web_search`
+- is not a separate top-level web-search provider choice
+- can optionally set the `x_search` model during the same flow
+
+If you skip it, you can enable or change `x_search` later in config.
+
 ## Get an API key
 
 <Steps>
