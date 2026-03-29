@@ -81,6 +81,7 @@ function shouldAttemptMalformedToolCallRepair(partialJson: string, delta: string
 
 type ToolCallArgumentRepair = {
   args: Record<string, unknown>;
+  kind: "preserved" | "repaired";
   leadingPrefix: string;
   trailingSuffix: string;
 };
@@ -98,13 +99,20 @@ function isAllowedToolCallRepairLeadingPrefix(prefix: string): boolean {
   return /^[.:'"`-]/.test(prefix) || /^(?:functions?|tools?)[._:/-]?/i.test(prefix);
 }
 
-function tryParseMalformedToolCallArguments(raw: string): ToolCallArgumentRepair | undefined {
+function tryExtractUsableToolCallArguments(raw: string): ToolCallArgumentRepair | undefined {
   if (!raw.trim()) {
     return undefined;
   }
   try {
-    JSON.parse(raw);
-    return undefined;
+    const parsed = JSON.parse(raw) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? {
+          args: parsed as Record<string, unknown>,
+          kind: "preserved",
+          leadingPrefix: "",
+          trailingSuffix: "",
+        }
+      : undefined;
   } catch {
     const extracted = extractBalancedJsonPrefix(raw);
     if (!extracted) {
@@ -129,6 +137,7 @@ function tryParseMalformedToolCallArguments(raw: string): ToolCallArgumentRepair
       return parsed && typeof parsed === "object" && !Array.isArray(parsed)
         ? {
             args: parsed as Record<string, unknown>,
+            kind: "repaired",
             leadingPrefix,
             trailingSuffix: suffix,
           }
@@ -249,13 +258,16 @@ function wrapStreamRepairMalformedToolCallArguments(
                 return result;
               }
               partialJsonByIndex.set(event.contentIndex, nextPartialJson);
-              if (shouldAttemptMalformedToolCallRepair(nextPartialJson, event.delta)) {
-                const repair = tryParseMalformedToolCallArguments(nextPartialJson);
+              const shouldReevaluateRepair =
+                shouldAttemptMalformedToolCallRepair(nextPartialJson, event.delta) ||
+                repairedArgsByIndex.has(event.contentIndex);
+              if (shouldReevaluateRepair) {
+                const repair = tryExtractUsableToolCallArguments(nextPartialJson);
                 if (repair) {
                   repairedArgsByIndex.set(event.contentIndex, repair.args);
                   repairToolCallArgumentsInMessage(event.partial, event.contentIndex, repair.args);
                   repairToolCallArgumentsInMessage(event.message, event.contentIndex, repair.args);
-                  if (!loggedRepairIndices.has(event.contentIndex)) {
+                  if (!loggedRepairIndices.has(event.contentIndex) && repair.kind === "repaired") {
                     loggedRepairIndices.add(event.contentIndex);
                     log.warn(
                       `repairing Kimi tool call arguments with ${repair.leadingPrefix.length} leading chars and ${repair.trailingSuffix.length} trailing chars`,
