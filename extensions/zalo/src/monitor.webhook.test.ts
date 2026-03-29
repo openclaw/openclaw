@@ -2,14 +2,14 @@ import type { RequestListener } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../../../src/plugins/registry.js";
 import { setActivePluginRegistry } from "../../../src/plugins/runtime.js";
+import { withServer } from "../../../test/helpers/http-test-server.js";
 import {
   createImageLifecycleCore,
   createImageUpdate,
   createTextUpdate,
   expectImageLifecycleDelivery,
   postWebhookReplay,
-} from "../../../test/helpers/extensions/zalo-lifecycle.js";
-import { withServer } from "../../../test/helpers/http-test-server.js";
+} from "../../../test/helpers/plugins/zalo-lifecycle.js";
 import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 import {
   clearZaloWebhookSecurityStateForTest,

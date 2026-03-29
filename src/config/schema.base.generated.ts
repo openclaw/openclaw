@@ -2033,6 +2033,24 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       path: {
                         type: "string",
                       },
+                      fts: {
+                        type: "object",
+                        properties: {
+                          tokenizer: {
+                            anyOf: [
+                              {
+                                type: "string",
+                                const: "unicode61",
+                              },
+                              {
+                                type: "string",
+                                const: "trigram",
+                              },
+                            ],
+                          },
+                        },
+                        additionalProperties: false,
+                      },
                       vector: {
                         type: "object",
                         properties: {
@@ -3595,6 +3613,24 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                         },
                         path: {
                           type: "string",
+                        },
+                        fts: {
+                          type: "object",
+                          properties: {
+                            tokenizer: {
+                              anyOf: [
+                                {
+                                  type: "string",
+                                  const: "unicode61",
+                                },
+                                {
+                                  type: "string",
+                                  const: "trigram",
+                                },
+                              ],
+                            },
+                          },
+                          additionalProperties: false,
                         },
                         vector: {
                           type: "object",
@@ -9316,44 +9352,8 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   type: "boolean",
                 },
                 channel: {
-                  anyOf: [
-                    {
-                      type: "string",
-                      const: "last",
-                    },
-                    {
-                      type: "string",
-                      const: "whatsapp",
-                    },
-                    {
-                      type: "string",
-                      const: "telegram",
-                    },
-                    {
-                      type: "string",
-                      const: "discord",
-                    },
-                    {
-                      type: "string",
-                      const: "irc",
-                    },
-                    {
-                      type: "string",
-                      const: "slack",
-                    },
-                    {
-                      type: "string",
-                      const: "signal",
-                    },
-                    {
-                      type: "string",
-                      const: "imessage",
-                    },
-                    {
-                      type: "string",
-                      const: "msteams",
-                    },
-                  ],
+                  type: "string",
+                  minLength: 1,
                 },
                 to: {
                   type: "string",
@@ -15387,7 +15387,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     },
     "plugins.installs.*.installPath": {
       label: "Plugin Install Path",
-      help: "Resolved install directory (usually ~/.openclaw/extensions/<id>).",
+      help: "Resolved install directory for the installed plugin bundle.",
       tags: ["storage"],
     },
     "plugins.installs.*.version": {
@@ -15510,6 +15510,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       tags: ["security", "auth"],
     },
   },
-  version: "2026.3.28-beta.1",
+  version: "2026.3.29",
   generatedAt: "2026-03-22T21:17:33.302Z",
 } as const satisfies BaseConfigSchemaResponse;

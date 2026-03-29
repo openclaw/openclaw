@@ -337,6 +337,40 @@ describe("exec approvals", () => {
     expect(calls).not.toContain("exec.approval.request");
   });
 
+  it("preserves explicit workdir for node exec", async () => {
+    const remoteWorkdir = "/Users/vv";
+    let prepareCwd: string | undefined;
+
+    vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
+      if (method === "node.invoke") {
+        const invoke = params as { command?: string; params?: { cwd?: string } };
+        if (invoke.command === "system.run.prepare") {
+          prepareCwd = invoke.params?.cwd;
+          return buildPreparedSystemRunPayload(params);
+        }
+        if (invoke.command === "system.run") {
+          return { payload: { success: true, stdout: "ok" } };
+        }
+      }
+      return { ok: true };
+    });
+
+    const tool = createExecTool({
+      host: "node",
+      ask: "off",
+      security: "full",
+      approvalRunningNoticeMs: 0,
+    });
+
+    const result = await tool.execute("call-node-cwd", {
+      command: "/bin/pwd",
+      workdir: remoteWorkdir,
+    });
+
+    expect(result.details.status).toBe("completed");
+    expect(prepareCwd).toBe(remoteWorkdir);
+  });
+
   it("honors ask=off for elevated gateway exec without prompting", async () => {
     const calls: string[] = [];
     vi.mocked(callGatewayTool).mockImplementation(async (method) => {
@@ -445,6 +479,50 @@ describe("exec approvals", () => {
     );
     expect(typeof agentCalls[0]?.message).toBe("string");
     expect(agentCalls[0]?.message).toContain(
+      "An async command the user already approved has completed.",
+    );
+  });
+
+  it("uses a deny-specific followup prompt so prior output is not reused", async () => {
+    const agentCalls: Array<Record<string, unknown>> = [];
+
+    vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
+      if (method === "exec.approval.request") {
+        return acceptedApprovalResponse(params);
+      }
+      if (method === "exec.approval.waitDecision") {
+        return { decision: "deny" };
+      }
+      if (method === "agent") {
+        agentCalls.push(params as Record<string, unknown>);
+        return { status: "ok" };
+      }
+      return { ok: true };
+    });
+
+    const tool = createExecTool({
+      host: "gateway",
+      ask: "always",
+      approvalRunningNoticeMs: 0,
+      sessionKey: "agent:main:main",
+      elevated: { enabled: true, allowed: true, defaultLevel: "ask" },
+    });
+
+    const result = await tool.execute("call-gw-followup-deny", {
+      command: "echo ok",
+      workdir: process.cwd(),
+      gatewayUrl: undefined,
+      gatewayToken: undefined,
+    });
+
+    expect(result.details.status).toBe("approval-pending");
+    await expect.poll(() => agentCalls.length, { timeout: 3_000, interval: 20 }).toBe(1);
+    expect(typeof agentCalls[0]?.message).toBe("string");
+    expect(agentCalls[0]?.message).toContain("An async command did not run.");
+    expect(agentCalls[0]?.message).toContain(
+      "Do not mention, summarize, or reuse output from any earlier run in this session.",
+    );
+    expect(agentCalls[0]?.message).not.toContain(
       "An async command the user already approved has completed.",
     );
   });

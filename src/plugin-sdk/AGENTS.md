@@ -29,8 +29,8 @@ can affect bundled plugins and third-party plugins.
 - Prefer `api.runtime` or a focused SDK facade over telling extensions to reach
   into host internals directly.
 - When core or tests need bundled plugin helpers, expose them through
-  `extensions/<id>/api.ts` and a matching `src/plugin-sdk/<id>.ts` facade
-  instead of importing `extensions/<id>/src/**` or `extensions/<id>/onboard.js`
+  the plugin package `api.ts` and a matching `src/plugin-sdk/<id>.ts` facade
+  instead of importing plugin-private `src/**` files or `onboard.js`
   directly.
 
 ## Expanding The Boundary
