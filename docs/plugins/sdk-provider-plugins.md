@@ -319,10 +319,10 @@ API key auth, and dynamic model resolution.
 
   </Step>
 
-<a id="step-5-add-extra-capabilities"></a>
-<Step title="Add extra capabilities (optional)">
-A provider plugin can register speech, media understanding, image
-generation, and web search alongside text inference:
+  <Step title="Add extra capabilities (optional)">
+    <a id="step-5-add-extra-capabilities"></a>
+    A provider plugin can register speech, media understanding, image
+    generation, and web search alongside text inference:
 
     ```typescript
     register(api) {
@@ -361,12 +361,12 @@ generation, and web search alongside text inference:
 
   </Step>
 
-<a id="step-6-test"></a>
-<Step title="Test">
-```typescript src/provider.test.ts
-import { describe, it, expect } from "vitest";
-// Export your provider config object from index.ts or a dedicated file
-import { acmeProvider } from "./provider.js";
+  <Step title="Test">
+    <a id="step-6-test"></a>
+    ```typescript src/provider.test.ts
+    import { describe, it, expect } from "vitest";
+    // Export your provider config object from index.ts or a dedicated file
+    import { acmeProvider } from "./provider.js";
 
     describe("acme-ai provider", () => {
       it("resolves dynamic models", () => {
