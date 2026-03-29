@@ -242,6 +242,7 @@ export async function runEmbeddedPiAgent(
           defaultProvider: provider,
           defaultModel: modelId,
         });
+      const shouldHonorPersistedLiveSelection = params.ignorePersistedLiveModelSelection !== true;
       const {
         advanceAuthProfile,
         initializeAuthProfile,
@@ -449,7 +450,9 @@ export async function runEmbeddedPiAgent(
             };
           }
           runLoopIterations += 1;
-          const nextSelection = resolvePersistedLiveSelection();
+          const nextSelection = shouldHonorPersistedLiveSelection
+            ? resolvePersistedLiveSelection()
+            : null;
           if (hasDifferentLiveSessionModelSelection(resolveCurrentLiveSelection(), nextSelection)) {
             log.info(
               `live session model switch detected before attempt for ${params.sessionId}: ${provider}/${modelId} -> ${nextSelection.provider}/${nextSelection.model}`,
@@ -604,9 +607,10 @@ export async function runEmbeddedPiAgent(
           }
           const failedOrAbortedAttempt =
             aborted || Boolean(promptError) || Boolean(assistantErrorText) || timedOut;
-          const persistedSelection = failedOrAbortedAttempt
-            ? resolvePersistedLiveSelection()
-            : null;
+          const persistedSelection =
+            failedOrAbortedAttempt && shouldHonorPersistedLiveSelection
+              ? resolvePersistedLiveSelection()
+              : null;
           if (
             failedOrAbortedAttempt &&
             canRestartForLiveSwitch &&

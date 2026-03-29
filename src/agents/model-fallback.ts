@@ -68,6 +68,7 @@ export function isFallbackSummaryError(err: unknown): err is FallbackSummaryErro
 
 export type ModelFallbackRunOptions = {
   allowTransientCooldownProbe?: boolean;
+  ignorePersistedLiveModelSelection?: boolean;
 };
 
 type ModelFallbackRunFn<T> = (
@@ -703,7 +704,10 @@ export async function runWithModelFallback<T>(params: {
             });
             continue;
           }
-          runOptions = { allowTransientCooldownProbe: true };
+          runOptions = {
+            allowTransientCooldownProbe: true,
+            ignorePersistedLiveModelSelection: !isPrimary,
+          };
           if (isTransientCooldownReason) {
             transientProbeProviderForAttempt = candidate.provider;
           }
@@ -728,11 +732,18 @@ export async function runWithModelFallback<T>(params: {
       }
     }
 
+    const mergedRunOptions: ModelFallbackRunOptions | undefined = isPrimary
+      ? runOptions
+      : {
+          ...runOptions,
+          ignorePersistedLiveModelSelection: true,
+        };
+
     const attemptRun = await runFallbackAttempt({
       run: params.run,
       ...candidate,
       attempts,
-      options: runOptions,
+      options: mergedRunOptions,
     });
     if ("success" in attemptRun) {
       if (i > 0 || attempts.length > 0 || attemptedDuringCooldown) {

@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { updateSessionStore } from "../config/sessions.js";
 import type { AuthProfileFailureReason } from "./auth-profiles.js";
 import { runWithModelFallback } from "./model-fallback.js";
 import type { EmbeddedRunAttemptResult } from "./pi-embedded-runner/run/types.js";
@@ -95,9 +96,10 @@ beforeEach(() => {
 const OVERLOADED_ERROR_PAYLOAD =
   '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}';
 
-function makeConfig(): OpenClawConfig {
+function makeConfig(sessionStorePath?: string): OpenClawConfig {
   const apiKeyField = ["api", "Key"].join("");
   return {
+    ...(sessionStorePath ? { session: { store: sessionStorePath } } : {}),
     agents: {
       defaults: {
         model: {
@@ -202,8 +204,9 @@ async function runEmbeddedFallback(params: {
   sessionKey: string;
   runId: string;
   abortSignal?: AbortSignal;
+  cfg?: OpenClawConfig;
 }) {
-  const cfg = makeConfig();
+  const cfg = params.cfg ?? makeConfig();
   return await runWithModelFallback({
     cfg,
     provider: "openai",
@@ -223,6 +226,7 @@ async function runEmbeddedFallback(params: {
         model,
         authProfileIdSource: "auto",
         allowTransientCooldownProbe: options?.allowTransientCooldownProbe,
+        ignorePersistedLiveModelSelection: options?.ignorePersistedLiveModelSelection,
         timeoutMs: 5_000,
         runId: params.runId,
         abortSignal: params.abortSignal,
@@ -323,6 +327,35 @@ describe("runWithModelFallback + runEmbeddedPiAgent overload policy", () => {
       expectOpenAiThenGroqAttemptOrder();
       expect(computeBackoffMock).toHaveBeenCalledTimes(1);
       expect(sleepWithAbortMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("keeps the fallback candidate active when the session store is pinned to the primary model", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeAuthStore(agentDir);
+      const sessionStorePath = path.join(workspaceDir, "sessions.json");
+      const cfg = makeConfig(sessionStorePath);
+      const sessionKey = "agent:test:pinned-primary";
+      await updateSessionStore(sessionStorePath, (store) => {
+        store[sessionKey] = {
+          providerOverride: "openai",
+          modelOverride: "mock-1",
+        } as never;
+      });
+      mockPrimaryOverloadedThenFallbackSuccess();
+
+      const result = await runEmbeddedFallback({
+        agentDir,
+        workspaceDir,
+        sessionKey,
+        runId: "run:pinned-primary-fallback",
+        cfg,
+      });
+
+      expect(result.provider).toBe("groq");
+      expect(result.model).toBe("mock-2");
+      expect(result.result.payloads?.[0]?.text ?? "").toContain("fallback ok");
+      expectOpenAiThenGroqAttemptOrder();
     });
   });
 

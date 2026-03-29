@@ -129,4 +129,13 @@ export type RunEmbeddedPiAgentParams = {
    * where transient service pressure is often model-scoped.
    */
   allowTransientCooldownProbe?: boolean;
+  /**
+   * Preserve the current provider/model candidate even when the session store
+   * is still pinned to a different live selection.
+   *
+   * This is used for explicit fallback candidates so a session's persisted
+   * primary-model preference does not cancel a rate-limit or overload failover
+   * before the fallback attempt executes.
+   */
+  ignorePersistedLiveModelSelection?: boolean;
 };
