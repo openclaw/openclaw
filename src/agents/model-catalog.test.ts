@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
-import { __setModelCatalogImportForTest, loadModelCatalog } from "./model-catalog.js";
+import {
+  __setModelCatalogImportForTest,
+  loadModelCatalog,
+  modelSupportsVision,
+} from "./model-catalog.js";
 import {
   installModelCatalogTestHooks,
   mockCatalogImportFailThenRecover,
@@ -102,5 +106,33 @@ describe("loadModelCatalog", () => {
     const spark = result.find((entry) => entry.id === "gpt-5.3-codex-spark");
     expect(spark?.name).toBe("gpt-5.3-codex-spark");
     expect(spark?.reasoning).toBe(true);
+  });
+
+  it("marks gpt-5.4-mini as vision-capable for openai-codex", async () => {
+    __setModelCatalogImportForTest(
+      async () =>
+        ({
+          AuthStorage: class {},
+          ModelRegistry: class {
+            getAll() {
+              return [
+                {
+                  id: "gpt-5.4-mini",
+                  provider: "openai-codex",
+                  name: "GPT-5.4 Mini",
+                  reasoning: true,
+                  contextWindow: 272000,
+                  input: ["text"],
+                },
+              ];
+            }
+          },
+        }) as unknown as PiSdkModule,
+    );
+
+    const result = await loadModelCatalog({ config: {} as OpenClawConfig });
+    const model = result.find((entry) => entry.id === "gpt-5.4-mini");
+    expect(model?.input).toContain("image");
+    expect(modelSupportsVision(model)).toBe(true);
   });
 });

@@ -59,6 +59,24 @@ function applyOpenAICodexSparkFallback(models: ModelCatalogEntry[]): void {
   });
 }
 
+const OPENAI_CODEX_NATIVE_VISION_MODEL_IDS = new Set(["gpt-5.4", "gpt-5.4-mini"]);
+
+function applyOpenAICodexNativeVisionFallback(models: ModelCatalogEntry[]): void {
+  for (const entry of models) {
+    if (entry.provider !== CODEX_PROVIDER) {
+      continue;
+    }
+    if (!OPENAI_CODEX_NATIVE_VISION_MODEL_IDS.has(entry.id.toLowerCase())) {
+      continue;
+    }
+    const input = new Set(entry.input ?? ["text"]);
+    if (!input.has("image")) {
+      input.add("image");
+      entry.input = Array.from(input) as Array<"text" | "image">;
+    }
+  }
+}
+
 export function resetModelCatalogCacheForTest() {
   modelCatalogPromise = null;
   hasLoggedModelCatalogError = false;
@@ -143,6 +161,7 @@ export async function loadModelCatalog(params?: {
         models.push({ id, name, provider, contextWindow, reasoning, input });
       }
       applyOpenAICodexSparkFallback(models);
+      applyOpenAICodexNativeVisionFallback(models);
 
       if (models.length === 0) {
         // If we found nothing, don't cache this result so we can try again.
