@@ -484,6 +484,10 @@ export const registerTelegramHandlers = ({
     if (!replyMessage || !hasInboundMedia(replyMessage)) {
       return [];
     }
+    // Do not re-ingest media from messages sent by this bot
+    if (isSelfAuthoredTelegramMessage(ctx, replyMessage)) {
+      return [];
+    }
     const replyFileId = resolveInboundMediaFileId(replyMessage);
     if (!replyFileId) {
       return [];

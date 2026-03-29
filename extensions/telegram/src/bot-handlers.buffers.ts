@@ -142,6 +142,10 @@ export function createTelegramInboundBufferRuntime(params: {
     if (!replyMessage || !hasInboundMedia(replyMessage)) {
       return [];
     }
+    // Do not re-ingest media from messages sent by this bot
+    if (ctx.me != null && replyMessage.from?.id === ctx.me.id) {
+      return [];
+    }
     const replyFileId = resolveInboundMediaFileId(replyMessage);
     if (!replyFileId) {
       return [];
