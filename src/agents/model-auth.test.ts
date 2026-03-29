@@ -1,5 +1,6 @@
 import { streamSimpleOpenAICompletions, type Model } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/config.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
@@ -22,8 +23,71 @@ vi.mock("../plugins/provider-runtime.js", () => ({
   buildProviderMissingAuthMessageWithPlugin: () => undefined,
   resolveProviderSyntheticAuthWithPlugin: (params: {
     provider: string;
+    config?: {
+      plugins?: {
+        enabled?: boolean;
+        entries?: {
+          xai?: {
+            enabled?: boolean;
+            config?: {
+              webSearch?: {
+                apiKey?: unknown;
+              };
+            };
+          };
+        };
+      };
+      tools?: {
+        web?: {
+          search?: {
+            grok?: {
+              apiKey?: unknown;
+            };
+          };
+        };
+      };
+    };
     context: { providerConfig?: { api?: string; baseUrl?: string; models?: unknown[] } };
   }) => {
+    if (params.provider === "xai") {
+      if (
+        params.config?.plugins?.enabled === false ||
+        params.config?.plugins?.entries?.xai?.enabled === false
+      ) {
+        return undefined;
+      }
+      const pluginApiKey = params.config?.plugins?.entries?.xai?.config?.webSearch?.apiKey;
+      if (typeof pluginApiKey === "string" && pluginApiKey.trim()) {
+        return {
+          apiKey: pluginApiKey.trim(),
+          source: "plugins.entries.xai.config.webSearch.apiKey",
+          mode: "api-key" as const,
+        };
+      }
+      if (pluginApiKey && typeof pluginApiKey === "object") {
+        return {
+          apiKey: NON_ENV_SECRETREF_MARKER,
+          source: "plugins.entries.xai.config.webSearch.apiKey",
+          mode: "api-key" as const,
+        };
+      }
+      const legacyApiKey = params.config?.tools?.web?.search?.grok?.apiKey;
+      if (typeof legacyApiKey === "string" && legacyApiKey.trim()) {
+        return {
+          apiKey: legacyApiKey.trim(),
+          source: "tools.web.search.grok.apiKey",
+          mode: "api-key" as const,
+        };
+      }
+      if (legacyApiKey && typeof legacyApiKey === "object") {
+        return {
+          apiKey: NON_ENV_SECRETREF_MARKER,
+          source: "tools.web.search.grok.apiKey",
+          mode: "api-key" as const,
+        };
+      }
+      return undefined;
+    }
     if (params.provider !== "ollama") {
       return undefined;
     }
@@ -42,6 +106,24 @@ vi.mock("../plugins/provider-runtime.js", () => ({
     };
   },
 }));
+
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
+});
+
+async function withoutEnv<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const previous = process.env[key];
+  delete process.env[key];
+  try {
+    return await fn();
+  } finally {
+    if (previous === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = previous;
+    }
+  }
+}
 
 function createCustomProviderConfig(
   baseUrl: string,
@@ -313,6 +395,105 @@ describe("resolveUsableCustomProviderApiKey", () => {
         process.env.OPENAI_API_KEY = previous;
       }
     }
+  });
+});
+
+describe("resolveApiKeyForProvider", () => {
+  it("reuses the xai plugin web search key without models.providers.xai", async () => {
+    const resolved = await withoutEnv("XAI_API_KEY", () =>
+      resolveApiKeyForProvider({
+        provider: "xai",
+        cfg: {
+          plugins: {
+            entries: {
+              xai: {
+                config: {
+                  webSearch: {
+                    apiKey: "xai-plugin-fallback-key", // pragma: allowlist secret
+                  },
+                },
+              },
+            },
+          },
+        },
+        store: { version: 1, profiles: {} },
+      }),
+    );
+
+    expect(resolved).toMatchObject({
+      apiKey: "xai-plugin-fallback-key",
+      source: "plugins.entries.xai.config.webSearch.apiKey",
+      mode: "api-key",
+    });
+  });
+
+  it("prefers the active runtime snapshot for SecretRef-backed xai fallback auth", async () => {
+    const sourceConfig = {
+      plugins: {
+        entries: {
+          xai: {
+            config: {
+              webSearch: {
+                apiKey: { source: "file", provider: "vault", id: "/xai/api-key" },
+              },
+            },
+          },
+        },
+      },
+    };
+    const runtimeConfig = {
+      plugins: {
+        entries: {
+          xai: {
+            config: {
+              webSearch: {
+                apiKey: "xai-runtime-key", // pragma: allowlist secret
+              },
+            },
+          },
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+
+    const resolved = await withoutEnv("XAI_API_KEY", () =>
+      resolveApiKeyForProvider({
+        provider: "xai",
+        cfg: sourceConfig,
+        store: { version: 1, profiles: {} },
+      }),
+    );
+
+    expect(resolved).toMatchObject({
+      apiKey: "xai-runtime-key",
+      source: "plugins.entries.xai.config.webSearch.apiKey",
+      mode: "api-key",
+    });
+  });
+
+  it("does not reuse xai fallback auth when the xai plugin is disabled", async () => {
+    await expect(
+      withoutEnv("XAI_API_KEY", () =>
+        resolveApiKeyForProvider({
+          provider: "xai",
+          cfg: {
+            plugins: {
+              entries: {
+                xai: {
+                  enabled: false,
+                  config: {
+                    webSearch: {
+                      apiKey: "xai-plugin-fallback-key", // pragma: allowlist secret
+                    },
+                  },
+                },
+              },
+            },
+          },
+          store: { version: 1, profiles: {} },
+        }),
+      ),
+    ).rejects.toThrow('No API key found for provider "xai"');
   });
 });
 
