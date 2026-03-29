@@ -1,10 +1,10 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ImageContent, TextContent, ToolResultMessage } from "@mariozechner/pi-ai";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { CHARS_PER_TOKEN_ESTIMATE, estimateStringChars } from "../../../utils/cjk-chars.js";
 import type { EffectiveContextPruningSettings } from "./settings.js";
 import { makeToolPrunablePredicate } from "./tools.js";
 
-const CHARS_PER_TOKEN_ESTIMATE = 4;
 const IMAGE_CHAR_ESTIMATE = 8_000;
 const PRUNED_CONTEXT_IMAGE_MARKER = "[image removed during context pruning]";
 
@@ -111,11 +111,15 @@ function hasImageBlocks(content: ReadonlyArray<TextContent | ImageContent>): boo
   return false;
 }
 
+function estimateWeightedTextChars(text: string): number {
+  return estimateStringChars(text);
+}
+
 function estimateTextAndImageChars(content: ReadonlyArray<TextContent | ImageContent>): number {
   let chars = 0;
   for (const block of content) {
     if (block.type === "text") {
-      chars += block.text.length;
+      chars += estimateWeightedTextChars(block.text);
     }
     if (block.type === "image") {
       chars += IMAGE_CHAR_ESTIMATE;
@@ -128,7 +132,7 @@ function estimateMessageChars(message: AgentMessage): number {
   if (message.role === "user") {
     const content = message.content;
     if (typeof content === "string") {
-      return content.length;
+      return estimateWeightedTextChars(content);
     }
     return estimateTextAndImageChars(content);
   }
@@ -140,10 +144,10 @@ function estimateMessageChars(message: AgentMessage): number {
         continue;
       }
       if (b.type === "text" && typeof b.text === "string") {
-        chars += b.text.length;
+        chars += estimateWeightedTextChars(b.text);
       }
       if (b.type === "thinking" && typeof b.thinking === "string") {
-        chars += b.thinking.length;
+        chars += estimateWeightedTextChars(b.thinking);
       }
       if (b.type === "toolCall") {
         try {
