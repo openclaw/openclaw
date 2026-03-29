@@ -65,7 +65,7 @@
     ]
   },
   "tools": {
-    "profile": "coding",
+    "profile": "full",
     "agentToAgent": {
       "enabled": false
     },
