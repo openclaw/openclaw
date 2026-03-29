@@ -532,5 +532,114 @@ async def export_codebase_for_notebooklm() -> str:
     return export_openclaw_codebase()
 
 
+# ---------------------------------------------------------------------------
+# v16.7 — Compact bot-only dump (Python sources only, NotebookLM-compatible)
+# Limit: 500 000 words per NotebookLM source. Full dump (4 400+ files) is 5x
+# over. This export includes ONLY Python files from src/ and src/pipeline/,
+# plus key root docs — keeping the output safely below ~150 000 words.
+# ---------------------------------------------------------------------------
+_BOT_ROOT_DOCS = {
+    "SOUL.md", "IDENTITY.md", "BRAIN.md", "MEMORY.md", "VISION.md",
+    "HEARTBEAT.md", "AGENTS.md", "CONTRIBUTING.md", "SECURITY.md",
+    "README.md", "TROUBLESHOOTING.md", "PROJECT_CONTEXT.md",
+    "pyproject.toml", "requirements.txt", "docker-compose.yml", "Dockerfile",
+}
+
+
+def export_bot_codebase_compact() -> str:
+    """Export only the Python bot sources into a NotebookLM-friendly Markdown.
+
+    Scanned paths:
+      • Root docs/configs listed in _BOT_ROOT_DOCS
+      • src/*.py          — all top-level Python modules
+      • src/pipeline/*.py — pipeline engine modules
+      • tests/*.py        — unit test suite
+
+    Output: OpenClaw_Bot_Dump.md at project root (~100–200 KB, <200 000 words).
+    """
+    py_scan_dirs = [
+        os.path.join(_project_root, "src"),      # top-level .py only (depth=0)
+        os.path.join(_project_root, "src", "pipeline"),
+        os.path.join(_project_root, "tests"),
+    ]
+
+    toc: list[str] = []
+    sections: list[str] = []
+    file_count = 0
+    total_bytes = 0
+
+    def _anchor(rel: str) -> str:
+        return (rel.replace("/", "-").replace("\\", "-")
+                   .replace(".", "-").replace("_", "-").lower())
+
+    def _add_file(abs_path: str, rel_path: str) -> None:
+        nonlocal file_count, total_bytes
+        try:
+            with open(abs_path, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+        except Exception:
+            return
+        rel_unix = rel_path.replace("\\", "/")
+        anchor = _anchor(rel_unix)
+        _, ext = os.path.splitext(rel_unix)
+        lang = _LANG_MAP.get(ext, "")
+        toc.append(f"- [{rel_unix}](#{anchor})")
+        sections.append(f"## File: {rel_unix}\n\n```{lang}\n{content.rstrip()}\n```")
+        file_count += 1
+        total_bytes += len(content)
+
+    # 1. Root docs/configs
+    for name in sorted(os.listdir(_project_root)):
+        full = os.path.join(_project_root, name)
+        if os.path.isfile(full) and name in _BOT_ROOT_DOCS:
+            _add_file(full, name)
+
+    # 2. Python files — top-level src/ only (no recursion into TypeScript subdirs)
+    src_dir = os.path.join(_project_root, "src")
+    if os.path.isdir(src_dir):
+        for fname in sorted(os.listdir(src_dir)):
+            if fname.endswith(".py") and not fname.startswith("__"):
+                _add_file(os.path.join(src_dir, fname), os.path.join("src", fname))
+
+    # 3. src/pipeline/*.py
+    pipeline_dir = os.path.join(_project_root, "src", "pipeline")
+    if os.path.isdir(pipeline_dir):
+        for fname in sorted(os.listdir(pipeline_dir)):
+            if fname.endswith(".py"):
+                rel = os.path.join("src", "pipeline", fname)
+                _add_file(os.path.join(pipeline_dir, fname), rel)
+
+    # 4. tests/*.py
+    tests_dir = os.path.join(_project_root, "tests")
+    if os.path.isdir(tests_dir):
+        for fname in sorted(os.listdir(tests_dir)):
+            if fname.endswith(".py"):
+                rel = os.path.join("tests", fname)
+                _add_file(os.path.join(tests_dir, fname), rel)
+
+    if not sections:
+        return "No source files found."
+
+    header = (
+        "# OpenClaw Bot — Python Source Dump\n\n"
+        "> Auto-generated · NotebookLM-compatible · "
+        f"{file_count} files · {total_bytes:,} bytes\n\n"
+        "## Table of Contents\n\n"
+    )
+    body = header + "\n".join(toc) + "\n\n---\n\n" + "\n\n---\n\n".join(sections) + "\n"
+
+    dump_path = os.path.join(_project_root, "OpenClaw_Bot_Dump.md")
+    with open(dump_path, "w", encoding="utf-8") as f:
+        f.write(body)
+
+    return body
+
+
+@mcp.tool()
+async def export_bot_for_notebooklm() -> str:
+    """Export Python bot sources (compact, <200 000 words) for NotebookLM upload."""
+    return export_bot_codebase_compact()
+
+
 if __name__ == "__main__":
     mcp.run()
