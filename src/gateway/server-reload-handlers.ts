@@ -126,10 +126,12 @@ export function createGatewayReloadHandlers(params: {
         const restartChannel = async (name: ChannelKind) => {
           params.logChannels.info(`restarting ${name} channel`);
           await params.stopChannel(name);
-          // Brief drain pause so polling long-polls fully release before
-          // starting new providers. Prevents 409 getUpdates conflicts when
-          // waitForGracefulStop times out in the polling session.
-          await new Promise<void>((resolve) => setTimeout(resolve, 500));
+          // Brief drain pause for Telegram so polling long-polls fully release
+          // before starting new providers. Prevents 409 getUpdates conflicts
+          // when waitForGracefulStop times out in the polling session.
+          if (name === "telegram") {
+            await new Promise<void>((resolve) => setTimeout(resolve, 500));
+          }
           await params.startChannel(name);
         };
         for (const channel of plan.restartChannels) {

@@ -128,8 +128,8 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
   });
 
   let resolvedToken: string | undefined;
-  let resolvedAccountId: string | undefined;
   let resolvePollerDone: (() => void) | undefined;
+  let pollerDone: Promise<void> | undefined;
 
   try {
     const cfg = opts.config ?? loadConfig();
@@ -145,7 +145,6 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
     }
 
     resolvedToken = token;
-    resolvedAccountId = account.accountId;
 
     // Duplicate-poller guard: if another session is already polling this token,
     // wait for it to release before starting a new one.
@@ -166,7 +165,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
     }
 
     // Register this session in the active poller registry.
-    const pollerDone = new Promise<void>((resolve) => {
+    pollerDone = new Promise<void>((resolve) => {
       resolvePollerDone = resolve;
     });
     activePollers.set(token, {
@@ -264,10 +263,12 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
     await pollingSession.runUntilAbort();
   } finally {
     // Remove this session from the active poller registry and signal completion
-    // so any waiting session can proceed.
-    if (resolvedToken) {
+    // so any waiting session can proceed. Compare by object identity (the done
+    // promise) rather than accountId to avoid a race where session A deletes
+    // session B's entry when both share the same token/account.
+    if (resolvedToken && pollerDone) {
       const entry = activePollers.get(resolvedToken);
-      if (entry && entry.accountId === (resolvedAccountId ?? "default")) {
+      if (entry?.done === pollerDone) {
         activePollers.delete(resolvedToken);
       }
     }
