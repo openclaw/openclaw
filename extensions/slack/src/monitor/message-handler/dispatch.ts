@@ -481,9 +481,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       hasRepliedRef,
       disableBlockStreaming: useStreaming
         ? true
-        : typeof account.config.blockStreaming === "boolean"
-          ? !account.config.blockStreaming
-          : undefined,
+        : previewStreamingEnabled
+          ? true // Mutual exclusion: draft preview ON → disable block streaming
+          : typeof account.config.blockStreaming === "boolean"
+            ? !account.config.blockStreaming
+            : undefined,
       onModelSelected,
       onPartialReply: useStreaming
         ? undefined
@@ -506,7 +508,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   const finalStream = streamSession as SlackStreamSession | null;
   if (finalStream && !finalStream.stopped) {
     try {
-      await stopSlackStream({ session: finalStream });
+      // Guard: only stop if the stream was successfully started (has a streamer).
+      // Prevents stopSlackStream from calling startStream on an unflushed buffer.
+      if (finalStream.streamer) {
+        await stopSlackStream({ session: finalStream });
+      }
     } catch (err) {
       runtime.error?.(danger(`slack-stream: failed to stop stream: ${String(err)}`));
     }
