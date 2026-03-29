@@ -5,7 +5,6 @@ import type { Tone } from "../plugin-sdk/memory-core-host-status.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import type { HealthSummary } from "./health.js";
 import { getDaemonStatusSummary, getNodeDaemonStatusSummary } from "./status.daemon.js";
-import { resolveNodeOnlyGatewayInfo } from "./status.node-mode.js";
 
 let providerUsagePromise: Promise<typeof import("../infra/provider-usage.js")> | undefined;
 let securityAuditModulePromise: Promise<typeof import("../security/audit.runtime.js")> | undefined;
@@ -18,6 +17,7 @@ let statusAllModulePromise: Promise<typeof import("./status-all.js")> | undefine
 let statusCommandTextRuntimePromise:
   | Promise<typeof import("./status.command.text-runtime.js")>
   | undefined;
+let statusNodeModeModulePromise: Promise<typeof import("./status.node-mode.js")> | undefined;
 
 function loadProviderUsage() {
   providerUsagePromise ??= import("../infra/provider-usage.js");
@@ -52,6 +52,11 @@ function loadStatusAllModule() {
 function loadStatusCommandTextRuntime() {
   statusCommandTextRuntimePromise ??= import("./status.command.text-runtime.js");
   return statusCommandTextRuntimePromise;
+}
+
+function loadStatusNodeModeModule() {
+  statusNodeModeModulePromise ??= import("./status.node-mode.js");
+  return statusNodeModeModulePromise;
 }
 
 function resolvePairingRecoveryContext(params: {
@@ -307,10 +312,12 @@ export async function statusCommand(
     getDaemonStatusSummary(),
     getNodeDaemonStatusSummary(),
   ]);
-  const nodeOnlyGateway = await resolveNodeOnlyGatewayInfo({
-    daemon,
-    node: nodeDaemon,
-  });
+  const nodeOnlyGateway = await loadStatusNodeModeModule().then(({ resolveNodeOnlyGatewayInfo }) =>
+    resolveNodeOnlyGatewayInfo({
+      daemon,
+      node: nodeDaemon,
+    }),
+  );
 
   const gatewayValue = (() => {
     if (nodeOnlyGateway) {
