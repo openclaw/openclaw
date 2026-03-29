@@ -550,3 +550,7 @@ If you need per-agent boundaries, use `agents.list[].tools` to deny `exec`.
 For group targeting, use `agents.list[].groupChat.mentionPatterns` so @mentions map cleanly to the intended agent.
 
 See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for detailed examples.
+
+## See also
+
+- [Multi-Agent Results Protocol](/concepts/multi-agent-results-protocol) — how dispatcher agents should scan `agents:results` to close the loop on delegated tasks.

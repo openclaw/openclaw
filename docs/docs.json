@@ -1040,6 +1040,7 @@
                 "group": "Multi-agent",
                 "pages": [
                   "concepts/multi-agent",
+                  "concepts/multi-agent-results-protocol",
                   "concepts/presence",
                   "concepts/delegate-architecture"
                 ]
