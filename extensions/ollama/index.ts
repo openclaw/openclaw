@@ -6,32 +6,17 @@ import {
   type ProviderAuthResult,
   type ProviderDiscoveryContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { OLLAMA_DEFAULT_BASE_URL } from "./src/defaults.js";
 import {
   DEFAULT_OLLAMA_EMBEDDING_MODEL,
   createOllamaEmbeddingProvider,
 } from "./src/embedding-provider.js";
+import { readProviderBaseUrl } from "./src/provider-base-url.js";
 import { resolveOllamaApiBase } from "./src/provider-models.js";
 import {
   createConfiguredOllamaCompatStreamWrapper,
   createConfiguredOllamaStreamFn,
 } from "./src/stream.js";
-
-// Users familiar with the OpenAI SDK often write `baseURL` (uppercase) while
-// the openclaw config schema uses `baseUrl`. Accept both spellings so remote
-// Ollama hosts are not silently ignored and requests do not fall back to
-// localhost:11434.
-function readProviderBaseUrl(
-  provider: ModelProviderConfig | (ModelProviderConfig & { baseURL?: string }) | undefined,
-): string | undefined {
-  if (!provider) return undefined;
-  const url =
-    (typeof provider.baseUrl === "string" && provider.baseUrl.trim()) ||
-    (typeof (provider as { baseURL?: string }).baseURL === "string" &&
-      (provider as { baseURL?: string }).baseURL!.trim());
-  return url || undefined;
-}
 
 const PROVIDER_ID = "ollama";
 const DEFAULT_API_KEY = "ollama-local";
@@ -181,7 +166,7 @@ export default definePluginEntry({
       resolveSyntheticAuth: ({ providerConfig }) => {
         const hasApiConfig =
           Boolean(providerConfig?.api?.trim()) ||
-          Boolean(providerConfig?.baseUrl?.trim()) ||
+          Boolean(readProviderBaseUrl(providerConfig)) ||
           (Array.isArray(providerConfig?.models) && providerConfig.models.length > 0);
         if (!hasApiConfig) {
           return undefined;
