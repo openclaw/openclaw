@@ -52,10 +52,16 @@ const telegramApprovalPlugin: Pick<
 > = {
   ...createChannelTestPluginBase({ id: "telegram" }),
   execApprovals: {
-    shouldSuppressForwardingFallback: (params) =>
-      shouldSuppressTelegramExecApprovalForwardingFallback(params),
-    buildPendingPayload: ({ request, nowMs }) =>
-      buildTelegramExecApprovalPendingPayload({ request, nowMs }),
+    delivery: {
+      shouldSuppressForwardingFallback: (params) =>
+        shouldSuppressTelegramExecApprovalForwardingFallback(params),
+    },
+    render: {
+      exec: {
+        buildPendingPayload: ({ request, nowMs }) =>
+          buildTelegramExecApprovalPendingPayload({ request, nowMs }),
+      },
+    },
   },
 };
 const discordApprovalPlugin: Pick<
@@ -64,9 +70,11 @@ const discordApprovalPlugin: Pick<
 > = {
   ...createChannelTestPluginBase({ id: "discord" }),
   execApprovals: {
-    shouldSuppressForwardingFallback: ({ cfg, target }) =>
-      target.channel === "discord" &&
-      isDiscordExecApprovalClientEnabledForTest({ cfg, accountId: target.accountId }),
+    delivery: {
+      shouldSuppressForwardingFallback: ({ cfg, target }) =>
+        target.channel === "discord" &&
+        isDiscordExecApprovalClientEnabledForTest({ cfg, accountId: target.accountId }),
+    },
   },
 };
 const defaultRegistry = createTestRegistry([
