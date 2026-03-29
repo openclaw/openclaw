@@ -1,6 +1,7 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
 import { EventEmitter } from "node:events";
-import { describe, expect, it } from "vitest";
+import type { IncomingMessage } from "node:http";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createMockServerResponse } from "../test-utils/mock-http-response.js";
 import {
   installRequestBodyLimitGuard,
   isRequestBodyLimitError,
@@ -8,19 +9,82 @@ import {
   readRequestBodyWithLimit,
 } from "./http-body.js";
 
+type MockIncomingMessage = IncomingMessage & {
+  destroyed?: boolean;
+  destroy: (error?: Error) => MockIncomingMessage;
+  __unhandledDestroyError?: unknown;
+};
+
+async function waitForMicrotaskTurn(): Promise<void> {
+  await new Promise<void>((resolve) => queueMicrotask(resolve));
+}
+
+async function expectReadPayloadTooLarge(params: {
+  chunks?: string[];
+  headers?: Record<string, string>;
+  maxBytes: number;
+}) {
+  const req = createMockRequest({
+    chunks: params.chunks,
+    headers: params.headers,
+    emitEnd: false,
+  });
+  await expect(readRequestBodyWithLimit(req, { maxBytes: params.maxBytes })).rejects.toMatchObject({
+    message: "PayloadTooLarge",
+  });
+  await waitForMicrotaskTurn();
+  expect(req.__unhandledDestroyError).toBeUndefined();
+}
+
+async function expectGuardPayloadTooLarge(params: {
+  chunks?: string[];
+  headers?: Record<string, string>;
+  maxBytes: number;
+  responseFormat?: "json" | "text";
+  responseText?: { PAYLOAD_TOO_LARGE?: string };
+}) {
+  const req = createMockRequest({
+    chunks: params.chunks,
+    headers: params.headers,
+    emitEnd: false,
+  });
+  const res = createMockServerResponse();
+  const guard = installRequestBodyLimitGuard(req, res, {
+    maxBytes: params.maxBytes,
+    ...(params.responseFormat ? { responseFormat: params.responseFormat } : {}),
+    ...(params.responseText ? { responseText: params.responseText } : {}),
+  });
+  await waitForMicrotaskTurn();
+  expect(guard.isTripped()).toBe(true);
+  expect(guard.code()).toBe("PAYLOAD_TOO_LARGE");
+  expect(res.statusCode).toBe(413);
+  expect(req.__unhandledDestroyError).toBeUndefined();
+  return { req, res, guard };
+}
+
+async function readJsonBody(params: {
+  chunks?: string[];
+  maxBytes: number;
+  emptyObjectOnEmpty?: boolean;
+}) {
+  const req = createMockRequest({ chunks: params.chunks });
+  return await readJsonBodyWithLimit(req, {
+    maxBytes: params.maxBytes,
+    ...(params.emptyObjectOnEmpty === undefined
+      ? {}
+      : { emptyObjectOnEmpty: params.emptyObjectOnEmpty }),
+  });
+}
+
 function createMockRequest(params: {
   chunks?: string[];
   headers?: Record<string, string>;
   emitEnd?: boolean;
-}): IncomingMessage {
-  const req = new EventEmitter() as IncomingMessage & {
-    destroyed?: boolean;
-    destroy: (error?: Error) => void;
-    __unhandledDestroyError?: unknown;
-  };
+}): MockIncomingMessage {
+  const req = new EventEmitter() as MockIncomingMessage;
   req.destroyed = false;
   req.headers = params.headers ?? {};
-  req.destroy = (error?: Error) => {
+  req.destroy = ((error?: Error) => {
     req.destroyed = true;
     if (error) {
       // Simulate Node's async 'error' emission on destroy(err). If no listener is
@@ -33,7 +97,8 @@ function createMockRequest(params: {
         }
       });
     }
-  };
+    return req;
+  }) as MockIncomingMessage["destroy"];
 
   if (params.chunks) {
     void Promise.resolve().then(() => {
@@ -52,96 +117,122 @@ function createMockRequest(params: {
   return req;
 }
 
-function createMockResponse(): ServerResponse & { body?: string } {
-  const headers: Record<string, string> = {};
-  const res = {
-    headersSent: false,
-    statusCode: 200,
-    setHeader: (key: string, value: string) => {
-      headers[key.toLowerCase()] = value;
-      return res;
-    },
-    end: (body?: string) => {
-      res.headersSent = true;
-      res.body = body;
-      return res;
-    },
-  } as unknown as ServerResponse & { body?: string };
-  return res;
-}
-
 describe("http body limits", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
   it("reads body within max bytes", async () => {
     const req = createMockRequest({ chunks: ['{"ok":true}'] });
     await expect(readRequestBodyWithLimit(req, { maxBytes: 1024 })).resolves.toBe('{"ok":true}');
   });
 
-  it("rejects oversized body", async () => {
-    const req = createMockRequest({ chunks: ["x".repeat(512)] });
-    await expect(readRequestBodyWithLimit(req, { maxBytes: 64 })).rejects.toMatchObject({
-      message: "PayloadTooLarge",
-    });
-    expect(req.__unhandledDestroyError).toBeUndefined();
-  });
-
-  it("returns json parse error when body is invalid", async () => {
-    const req = createMockRequest({ chunks: ["{bad json"] });
-    const result = await readJsonBodyWithLimit(req, { maxBytes: 1024, emptyObjectOnEmpty: false });
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.code).toBe("INVALID_JSON");
-    }
-  });
-
-  it("returns payload-too-large for json body", async () => {
-    const req = createMockRequest({ chunks: ["x".repeat(1024)] });
-    const result = await readJsonBodyWithLimit(req, { maxBytes: 10 });
-    expect(result).toEqual({ ok: false, code: "PAYLOAD_TOO_LARGE", error: "Payload too large" });
-  });
-
-  it("guard rejects oversized declared content-length", () => {
-    const req = createMockRequest({
+  it.each([
+    {
+      name: "rejects oversized streamed body",
+      chunks: ["x".repeat(512)],
+      maxBytes: 64,
+    },
+    {
+      name: "declared oversized content-length does not emit unhandled error",
       headers: { "content-length": "9999" },
-      emitEnd: false,
+      maxBytes: 128,
+    },
+  ])("$name", async ({ chunks, headers, maxBytes }) => {
+    await expectReadPayloadTooLarge({ chunks, headers, maxBytes });
+  });
+
+  it.each([
+    {
+      name: "returns json parse error when body is invalid",
+      params: { chunks: ["{bad json"], maxBytes: 1024, emptyObjectOnEmpty: false },
+      assertResult: (result: Awaited<ReturnType<typeof readJsonBody>>) => {
+        expect(result.ok).toBe(false);
+        if (!result.ok) {
+          expect(result.code).toBe("INVALID_JSON");
+        }
+      },
+    },
+    {
+      name: "returns empty object for an empty body by default",
+      params: { chunks: ["   "], maxBytes: 1024 },
+      assertResult: (result: Awaited<ReturnType<typeof readJsonBody>>) => {
+        expect(result).toEqual({ ok: true, value: {} });
+      },
+    },
+    {
+      name: "returns payload-too-large for json body",
+      params: { chunks: ["x".repeat(1024)], maxBytes: 10 },
+      assertResult: (result: Awaited<ReturnType<typeof readJsonBody>>) => {
+        expect(result).toEqual({
+          ok: false,
+          code: "PAYLOAD_TOO_LARGE",
+          error: "Payload too large",
+        });
+      },
+    },
+  ])("$name", async ({ params, assertResult }) => {
+    const result = await readJsonBody(params);
+    assertResult(result);
+  });
+
+  it.each([
+    {
+      name: "guard rejects oversized declared content-length",
+      headers: { "content-length": "9999" },
+      maxBytes: 128,
+      expectedBody: '{"error":"Payload too large"}',
+    },
+    {
+      name: "guard rejects streamed oversized body",
+      chunks: ["small", "x".repeat(256)],
+      maxBytes: 128,
+      responseFormat: "text" as const,
+      expectedBody: "Payload too large",
+    },
+    {
+      name: "guard uses custom response text for payload-too-large",
+      chunks: ["small", "x".repeat(256)],
+      maxBytes: 128,
+      responseFormat: "text" as const,
+      responseText: { PAYLOAD_TOO_LARGE: "Too much" },
+      expectedBody: "Too much",
+    },
+  ])("$name", async ({ chunks, headers, maxBytes, responseFormat, responseText, expectedBody }) => {
+    const { res } = await expectGuardPayloadTooLarge({
+      chunks,
+      headers,
+      maxBytes,
+      ...(responseFormat ? { responseFormat } : {}),
+      ...(responseText ? { responseText } : {}),
     });
-    const res = createMockResponse();
-    const guard = installRequestBodyLimitGuard(req, res, { maxBytes: 128 });
-    expect(guard.isTripped()).toBe(true);
-    expect(guard.code()).toBe("PAYLOAD_TOO_LARGE");
-    expect(res.statusCode).toBe(413);
+    expect(res.body).toBe(expectedBody);
   });
 
-  it("guard rejects streamed oversized body", async () => {
-    const req = createMockRequest({ chunks: ["small", "x".repeat(256)], emitEnd: false });
-    const res = createMockResponse();
-    const guard = installRequestBodyLimitGuard(req, res, { maxBytes: 128, responseFormat: "text" });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(guard.isTripped()).toBe(true);
-    expect(guard.code()).toBe("PAYLOAD_TOO_LARGE");
-    expect(res.statusCode).toBe(413);
-    expect(res.body).toBe("Payload too large");
-    expect(req.__unhandledDestroyError).toBeUndefined();
-  });
-
-  it("timeout surfaces typed error", async () => {
+  it("timeout surfaces typed error when timeoutMs is clamped", async () => {
     const req = createMockRequest({ emitEnd: false });
-    const promise = readRequestBodyWithLimit(req, { maxBytes: 128, timeoutMs: 10 });
+    const promise = readRequestBodyWithLimit(req, { maxBytes: 128, timeoutMs: 0 });
     await expect(promise).rejects.toSatisfy((error: unknown) =>
       isRequestBodyLimitError(error, "REQUEST_BODY_TIMEOUT"),
     );
     expect(req.__unhandledDestroyError).toBeUndefined();
   });
 
-  it("declared oversized content-length does not emit unhandled error", async () => {
-    const req = createMockRequest({
-      headers: { "content-length": "9999" },
-      emitEnd: false,
+  it("guard clamps invalid maxBytes to one byte", async () => {
+    const { res } = await expectGuardPayloadTooLarge({
+      chunks: ["ab"],
+      maxBytes: Number.NaN,
+      responseFormat: "text",
     });
-    await expect(readRequestBodyWithLimit(req, { maxBytes: 128 })).rejects.toMatchObject({
-      message: "PayloadTooLarge",
-    });
-    // Wait a tick for any async destroy(err) emission.
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(req.__unhandledDestroyError).toBeUndefined();
+    expect(res.body).toBe("Payload too large");
+  });
+
+  it("surfaces connection-closed as a typed limit error", async () => {
+    const req = createMockRequest({ emitEnd: false });
+    const promise = readRequestBodyWithLimit(req, { maxBytes: 128 });
+    queueMicrotask(() => req.emit("close"));
+    await expect(promise).rejects.toSatisfy((error: unknown) =>
+      isRequestBodyLimitError(error, "CONNECTION_CLOSED"),
+    );
   });
 });

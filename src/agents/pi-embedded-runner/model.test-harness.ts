@@ -1,11 +1,13 @@
 import { vi } from "vitest";
-import { discoverModels } from "../pi-model-discovery.js";
+import type { ModelDefinitionConfig } from "../../config/types.js";
 
-export const makeModel = (id: string) => ({
+type DiscoverModelsMock = typeof import("../pi-model-discovery.js").discoverModels;
+
+export const makeModel = (id: string): ModelDefinitionConfig => ({
   id,
   name: id,
   reasoning: false,
-  input: ["text"] as const,
+  input: ["text"],
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 1,
   maxTokens: 1,
@@ -24,23 +26,119 @@ export const OPENAI_CODEX_TEMPLATE_MODEL = {
   maxTokens: 128000,
 };
 
-export function resetMockDiscoverModels(): void {
-  vi.mocked(discoverModels).mockReturnValue({
-    find: vi.fn(() => null),
-  } as unknown as ReturnType<typeof discoverModels>);
+function mockTemplateModel(
+  discoverModelsMock: DiscoverModelsMock,
+  provider: string,
+  modelId: string,
+  templateModel: unknown,
+): void {
+  mockDiscoveredModel(discoverModelsMock, {
+    provider,
+    modelId,
+    templateModel,
+  });
 }
 
-export function mockDiscoveredModel(params: {
+export function mockOpenAICodexTemplateModel(discoverModelsMock: DiscoverModelsMock): void {
+  mockTemplateModel(
+    discoverModelsMock,
+    "openai-codex",
+    "gpt-5.2-codex",
+    OPENAI_CODEX_TEMPLATE_MODEL,
+  );
+}
+
+export function buildOpenAICodexForwardCompatExpectation(
+  id: string = "gpt-5.3-codex",
+): Partial<ModelDefinitionConfig> & {
   provider: string;
-  modelId: string;
-  templateModel: unknown;
-}): void {
-  vi.mocked(discoverModels).mockReturnValue({
+  id: string;
+  api: string;
+  baseUrl: string;
+} {
+  const isGpt54 = id === "gpt-5.4";
+  const isSpark = id === "gpt-5.3-codex-spark";
+  return {
+    provider: "openai-codex",
+    id,
+    api: "openai-codex-responses",
+    baseUrl: "https://chatgpt.com/backend-api",
+    reasoning: true,
+    input: isSpark ? ["text"] : ["text", "image"],
+    cost: isSpark
+      ? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+      : OPENAI_CODEX_TEMPLATE_MODEL.cost,
+    contextWindow: isGpt54 ? 1_050_000 : isSpark ? 128_000 : 272000,
+    maxTokens: 128000,
+  };
+}
+
+export const GOOGLE_GEMINI_CLI_PRO_TEMPLATE_MODEL = {
+  id: "gemini-3-pro-preview",
+  name: "Gemini 3 Pro Preview (Cloud Code Assist)",
+  provider: "google-gemini-cli",
+  api: "google-gemini-cli",
+  baseUrl: "https://cloudcode-pa.googleapis.com",
+  reasoning: true,
+  input: ["text", "image"] as const,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 200000,
+  maxTokens: 64000,
+};
+
+export const GOOGLE_GEMINI_CLI_FLASH_TEMPLATE_MODEL = {
+  id: "gemini-3-flash-preview",
+  name: "Gemini 3 Flash Preview (Cloud Code Assist)",
+  provider: "google-gemini-cli",
+  api: "google-gemini-cli",
+  baseUrl: "https://cloudcode-pa.googleapis.com",
+  reasoning: false,
+  input: ["text", "image"] as const,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 200000,
+  maxTokens: 64000,
+};
+
+export function mockGoogleGeminiCliProTemplateModel(discoverModelsMock: DiscoverModelsMock): void {
+  mockTemplateModel(
+    discoverModelsMock,
+    "google-gemini-cli",
+    "gemini-3-pro-preview",
+    GOOGLE_GEMINI_CLI_PRO_TEMPLATE_MODEL,
+  );
+}
+
+export function mockGoogleGeminiCliFlashTemplateModel(
+  discoverModelsMock: DiscoverModelsMock,
+): void {
+  mockTemplateModel(
+    discoverModelsMock,
+    "google-gemini-cli",
+    "gemini-3-flash-preview",
+    GOOGLE_GEMINI_CLI_FLASH_TEMPLATE_MODEL,
+  );
+}
+
+export function resetMockDiscoverModels(discoverModelsMock: DiscoverModelsMock): void {
+  vi.mocked(discoverModelsMock).mockReturnValue({
+    find: vi.fn(() => null),
+  } as unknown as ReturnType<DiscoverModelsMock>);
+}
+
+export function mockDiscoveredModel(
+  discoverModelsMock: DiscoverModelsMock,
+  params: {
+    provider: string;
+    modelId: string;
+    templateModel: unknown;
+  },
+): void {
+  vi.mocked(discoverModelsMock).mockReturnValue({
     find: vi.fn((provider: string, modelId: string) => {
       if (provider === params.provider && modelId === params.modelId) {
         return params.templateModel;
       }
       return null;
     }),
-  } as unknown as ReturnType<typeof discoverModels>);
+  } as unknown as ReturnType<DiscoverModelsMock>);
 }

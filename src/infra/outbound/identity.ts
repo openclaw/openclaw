@@ -1,11 +1,12 @@
-import type { OpenClawConfig } from "../../config/config.js";
 import { resolveAgentAvatar } from "../../agents/identity-avatar.js";
 import { resolveAgentIdentity } from "../../agents/identity.js";
+import type { OpenClawConfig } from "../../config/config.js";
 
 export type OutboundIdentity = {
   name?: string;
   avatarUrl?: string;
   emoji?: string;
+  theme?: string;
 };
 
 export function normalizeOutboundIdentity(
@@ -17,10 +18,11 @@ export function normalizeOutboundIdentity(
   const name = identity.name?.trim() || undefined;
   const avatarUrl = identity.avatarUrl?.trim() || undefined;
   const emoji = identity.emoji?.trim() || undefined;
-  if (!name && !avatarUrl && !emoji) {
+  const theme = identity.theme?.trim() || undefined;
+  if (!name && !avatarUrl && !emoji && !theme) {
     return undefined;
   }
-  return { name, avatarUrl, emoji };
+  return { name, avatarUrl, emoji, theme };
 }
 
 export function resolveAgentOutboundIdentity(
@@ -33,5 +35,6 @@ export function resolveAgentOutboundIdentity(
     name: agentIdentity?.name,
     emoji: agentIdentity?.emoji,
     avatarUrl: avatar.kind === "remote" ? avatar.url : undefined,
+    theme: agentIdentity?.theme,
   });
 }

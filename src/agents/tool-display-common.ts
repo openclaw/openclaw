@@ -1,3 +1,5 @@
+import { resolveExecDetail } from "./tool-display-exec.js";
+
 export type ToolDisplayActionSpec = {
   label?: string;
   detailKeys?: string[];
@@ -17,6 +19,12 @@ export type CoerceDisplayValueOptions = {
   maxStringChars?: number;
   maxArrayEntries?: number;
 };
+
+type ArgsRecord = Record<string, unknown>;
+
+function asRecord(args: unknown): ArgsRecord | undefined {
+  return args && typeof args === "object" ? (args as ArgsRecord) : undefined;
+}
 
 export function normalizeToolName(name?: string): string {
   return (name ?? "tool").trim();
@@ -43,6 +51,43 @@ export function normalizeVerb(value?: string): string | undefined {
     return undefined;
   }
   return trimmed.replace(/_/g, " ");
+}
+
+export function resolveActionArg(args: unknown): string | undefined {
+  if (!args || typeof args !== "object") {
+    return undefined;
+  }
+  const actionRaw = (args as Record<string, unknown>).action;
+  if (typeof actionRaw !== "string") {
+    return undefined;
+  }
+  const action = actionRaw.trim();
+  return action || undefined;
+}
+
+export function resolveToolVerbAndDetailForArgs(params: {
+  toolKey: string;
+  args?: unknown;
+  meta?: string;
+  spec?: ToolDisplaySpec;
+  fallbackDetailKeys?: string[];
+  detailMode: "first" | "summary";
+  detailCoerce?: CoerceDisplayValueOptions;
+  detailMaxEntries?: number;
+  detailFormatKey?: (raw: string) => string;
+}): { verb?: string; detail?: string } {
+  return resolveToolVerbAndDetail({
+    toolKey: params.toolKey,
+    args: params.args,
+    meta: params.meta,
+    action: resolveActionArg(params.args),
+    spec: params.spec,
+    fallbackDetailKeys: params.fallbackDetailKeys,
+    detailMode: params.detailMode,
+    detailCoerce: params.detailCoerce,
+    detailMaxEntries: params.detailMaxEntries,
+    detailFormatKey: params.detailFormatKey,
+  });
 }
 
 export function coerceDisplayValue(
@@ -127,31 +172,140 @@ export function formatDetailKey(raw: string, overrides: Record<string, string> =
   return spaced.trim().toLowerCase() || last.toLowerCase();
 }
 
-export function resolveReadDetail(args: unknown): string | undefined {
-  if (!args || typeof args !== "object") {
+export function resolvePathArg(args: unknown): string | undefined {
+  const record = asRecord(args);
+  if (!record) {
     return undefined;
   }
-  const record = args as Record<string, unknown>;
-  const path = typeof record.path === "string" ? record.path : undefined;
+  for (const candidate of [record.path, record.file_path, record.filePath]) {
+    if (typeof candidate !== "string") {
+      continue;
+    }
+    const trimmed = candidate.trim();
+    if (trimmed) {
+      return trimmed;
+    }
+  }
+  return undefined;
+}
+
+export function resolveReadDetail(args: unknown): string | undefined {
+  const record = asRecord(args);
+  if (!record) {
+    return undefined;
+  }
+
+  const path = resolvePathArg(record);
   if (!path) {
     return undefined;
   }
-  const offset = typeof record.offset === "number" ? record.offset : undefined;
-  const limit = typeof record.limit === "number" ? record.limit : undefined;
+
+  const offsetRaw =
+    typeof record.offset === "number" && Number.isFinite(record.offset)
+      ? Math.floor(record.offset)
+      : undefined;
+  const limitRaw =
+    typeof record.limit === "number" && Number.isFinite(record.limit)
+      ? Math.floor(record.limit)
+      : undefined;
+
+  const offset = offsetRaw !== undefined ? Math.max(1, offsetRaw) : undefined;
+  const limit = limitRaw !== undefined ? Math.max(1, limitRaw) : undefined;
+
   if (offset !== undefined && limit !== undefined) {
-    return `${path}:${offset}-${offset + limit}`;
+    const unit = limit === 1 ? "line" : "lines";
+    return `${unit} ${offset}-${offset + limit - 1} from ${path}`;
   }
-  return path;
+  if (offset !== undefined) {
+    return `from line ${offset} in ${path}`;
+  }
+  if (limit !== undefined) {
+    const unit = limit === 1 ? "line" : "lines";
+    return `first ${limit} ${unit} of ${path}`;
+  }
+  return `from ${path}`;
 }
 
-export function resolveWriteDetail(args: unknown): string | undefined {
-  if (!args || typeof args !== "object") {
+export function resolveWriteDetail(toolKey: string, args: unknown): string | undefined {
+  const record = asRecord(args);
+  if (!record) {
     return undefined;
   }
-  const record = args as Record<string, unknown>;
-  const path = typeof record.path === "string" ? record.path : undefined;
-  return path;
+
+  const path =
+    resolvePathArg(record) ?? (typeof record.url === "string" ? record.url.trim() : undefined);
+  if (!path) {
+    return undefined;
+  }
+
+  if (toolKey === "attach") {
+    return `from ${path}`;
+  }
+
+  const destinationPrefix = toolKey === "edit" ? "in" : "to";
+  const content =
+    typeof record.content === "string"
+      ? record.content
+      : typeof record.newText === "string"
+        ? record.newText
+        : typeof record.new_string === "string"
+          ? record.new_string
+          : undefined;
+
+  if (content && content.length > 0) {
+    return `${destinationPrefix} ${path} (${content.length} chars)`;
+  }
+
+  return `${destinationPrefix} ${path}`;
 }
+
+export function resolveWebSearchDetail(args: unknown): string | undefined {
+  const record = asRecord(args);
+  if (!record) {
+    return undefined;
+  }
+
+  const query = typeof record.query === "string" ? record.query.trim() : undefined;
+  const count =
+    typeof record.count === "number" && Number.isFinite(record.count) && record.count > 0
+      ? Math.floor(record.count)
+      : undefined;
+
+  if (!query) {
+    return undefined;
+  }
+
+  return count !== undefined ? `for "${query}" (top ${count})` : `for "${query}"`;
+}
+
+export function resolveWebFetchDetail(args: unknown): string | undefined {
+  const record = asRecord(args);
+  if (!record) {
+    return undefined;
+  }
+
+  const url = typeof record.url === "string" ? record.url.trim() : undefined;
+  if (!url) {
+    return undefined;
+  }
+
+  const mode = typeof record.extractMode === "string" ? record.extractMode.trim() : undefined;
+  const maxChars =
+    typeof record.maxChars === "number" && Number.isFinite(record.maxChars) && record.maxChars > 0
+      ? Math.floor(record.maxChars)
+      : undefined;
+
+  const suffix = [
+    mode ? `mode ${mode}` : undefined,
+    maxChars !== undefined ? `max ${maxChars} chars` : undefined,
+  ]
+    .filter((value): value is string => Boolean(value))
+    .join(", ");
+
+  return suffix ? `from ${url} (${suffix})` : `from ${url}`;
+}
+
+export { resolveExecDetail };
 
 export function resolveActionSpec(
   spec: ToolDisplaySpec | undefined,
@@ -218,4 +372,81 @@ export function resolveDetailFromKeys(
     .slice(0, opts.maxEntries ?? 8)
     .map((entry) => `${entry.label} ${entry.value}`)
     .join(" · ");
+}
+
+export function resolveToolVerbAndDetail(params: {
+  toolKey: string;
+  args?: unknown;
+  meta?: string;
+  action?: string;
+  spec?: ToolDisplaySpec;
+  fallbackDetailKeys?: string[];
+  detailMode: "first" | "summary";
+  detailCoerce?: CoerceDisplayValueOptions;
+  detailMaxEntries?: number;
+  detailFormatKey?: (raw: string) => string;
+}): { verb?: string; detail?: string } {
+  const actionSpec = resolveActionSpec(params.spec, params.action);
+  const fallbackVerb =
+    params.toolKey === "web_search"
+      ? "search"
+      : params.toolKey === "web_fetch"
+        ? "fetch"
+        : params.toolKey.replace(/_/g, " ").replace(/\./g, " ");
+  const verb = normalizeVerb(actionSpec?.label ?? params.action ?? fallbackVerb);
+
+  let detail: string | undefined;
+  if (params.toolKey === "exec") {
+    detail = resolveExecDetail(params.args);
+  }
+  if (!detail && params.toolKey === "read") {
+    detail = resolveReadDetail(params.args);
+  }
+  if (
+    !detail &&
+    (params.toolKey === "write" || params.toolKey === "edit" || params.toolKey === "attach")
+  ) {
+    detail = resolveWriteDetail(params.toolKey, params.args);
+  }
+  if (!detail && params.toolKey === "web_search") {
+    detail = resolveWebSearchDetail(params.args);
+  }
+  if (!detail && params.toolKey === "web_fetch") {
+    detail = resolveWebFetchDetail(params.args);
+  }
+
+  const detailKeys =
+    actionSpec?.detailKeys ?? params.spec?.detailKeys ?? params.fallbackDetailKeys ?? [];
+  if (!detail && detailKeys.length > 0) {
+    detail = resolveDetailFromKeys(params.args, detailKeys, {
+      mode: params.detailMode,
+      coerce: params.detailCoerce,
+      maxEntries: params.detailMaxEntries,
+      formatKey: params.detailFormatKey,
+    });
+  }
+  if (!detail && params.meta) {
+    detail = params.meta;
+  }
+  return { verb, detail };
+}
+
+export function formatToolDetailText(
+  detail: string | undefined,
+  opts: { prefixWithWith?: boolean } = {},
+): string | undefined {
+  if (!detail) {
+    return undefined;
+  }
+  const normalized = detail.includes(" · ")
+    ? detail
+        .split(" · ")
+        .map((part) => part.trim())
+        .filter((part) => part.length > 0)
+        .join(", ")
+    : detail;
+  if (!normalized) {
+    return undefined;
+  }
+  return opts.prefixWithWith ? `with ${normalized}` : normalized;
 }

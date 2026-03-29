@@ -3,6 +3,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { isSupportedNodeVersion } from "../infra/runtime-guard.js";
+import { resolveStableNodePath } from "../infra/stable-node-path.js";
+import { getWindowsProgramFilesRoots } from "../infra/windows-install-roots.js";
 
 const VERSION_MANAGER_MARKERS = [
   "/.nvm/",
@@ -17,6 +19,12 @@ const VERSION_MANAGER_MARKERS = [
 
 function getPathModule(platform: NodeJS.Platform) {
   return platform === "win32" ? path.win32 : path.posix;
+}
+
+function isNodeExecPath(execPath: string, platform: NodeJS.Platform): boolean {
+  const pathModule = getPathModule(platform);
+  const base = pathModule.basename(execPath).toLowerCase();
+  return base === "node" || base === "node.exe";
 }
 
 function normalizeForCompare(input: string, platform: NodeJS.Platform): string {
@@ -40,12 +48,9 @@ function buildSystemNodeCandidates(
   }
   if (platform === "win32") {
     const pathModule = getPathModule(platform);
-    const programFiles = env.ProgramFiles ?? "C:\\Program Files";
-    const programFilesX86 = env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)";
-    return [
-      pathModule.join(programFiles, "nodejs", "node.exe"),
-      pathModule.join(programFilesX86, "nodejs", "node.exe"),
-    ];
+    return getWindowsProgramFilesRoots(env).map((root) =>
+      pathModule.join(root, "nodejs", "node.exe"),
+    );
   }
   return [];
 }
@@ -144,18 +149,34 @@ export function renderSystemNodeWarning(
   }
   const versionLabel = systemNode.version ?? "unknown";
   const selectedLabel = selectedNodePath ? ` Using ${selectedNodePath} for the daemon.` : "";
-  return `System Node ${versionLabel} at ${systemNode.path} is below the required Node 22+.${selectedLabel} Install Node 22+ from nodejs.org or Homebrew.`;
+  return `System Node ${versionLabel} at ${systemNode.path} is below the required Node 22.14+.${selectedLabel} Install Node 24 (recommended) or Node 22 LTS from nodejs.org or Homebrew.`;
 }
+export { resolveStableNodePath };
 
 export async function resolvePreferredNodePath(params: {
   env?: Record<string, string | undefined>;
   runtime?: string;
   platform?: NodeJS.Platform;
   execFile?: ExecFileAsync;
+  execPath?: string;
 }): Promise<string | undefined> {
   if (params.runtime !== "node") {
     return undefined;
   }
+
+  // Prefer the node that is currently running `openclaw gateway install`.
+  // This respects the user's active version manager (fnm/nvm/volta/etc.).
+  const platform = params.platform ?? process.platform;
+  const currentExecPath = params.execPath ?? process.execPath;
+  if (currentExecPath && isNodeExecPath(currentExecPath, platform)) {
+    const execFileImpl = params.execFile ?? execFileAsync;
+    const version = await resolveNodeVersion(currentExecPath, execFileImpl);
+    if (isSupportedNodeVersion(version)) {
+      return resolveStableNodePath(currentExecPath);
+    }
+  }
+
+  // Fall back to system node.
   const systemNode = await resolveSystemNodeInfo(params);
   if (!systemNode?.supported) {
     return undefined;

@@ -1,76 +1,39 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CronEvent } from "./service.js";
+import { describe, expect, it, vi } from "vitest";
 import { CronService } from "./service.js";
+import {
+  createStartedCronServiceWithFinishedBarrier,
+  setupCronServiceSuite,
+} from "./service.test-harness.js";
 
-const noopLogger = {
-  debug: vi.fn(),
-  info: vi.fn(),
-  warn: vi.fn(),
-  error: vi.fn(),
-};
+const { logger: noopLogger, makeStorePath } = setupCronServiceSuite({
+  prefix: "openclaw-cron-16156-",
+  baseTimeIso: "2025-12-13T00:00:00.000Z",
+});
 
-async function makeStorePath() {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-16156-"));
-  return {
-    storePath: path.join(dir, "cron", "jobs.json"),
-    cleanup: async () => {
-      await fs.rm(dir, { recursive: true, force: true });
-    },
-  };
+async function writeJobsStore(storePath: string, jobs: unknown[]) {
+  await fs.mkdir(path.dirname(storePath), { recursive: true });
+  await fs.writeFile(storePath, JSON.stringify({ version: 1, jobs }, null, 2), "utf-8");
 }
 
-function createFinishedBarrier() {
-  const resolvers = new Map<string, (evt: CronEvent) => void>();
-  return {
-    waitForOk: (jobId: string) =>
-      new Promise<CronEvent>((resolve) => {
-        resolvers.set(jobId, resolve);
-      }),
-    onEvent: (evt: CronEvent) => {
-      if (evt.action !== "finished" || evt.status !== "ok") {
-        return;
-      }
-      const resolve = resolvers.get(evt.jobId);
-      if (!resolve) {
-        return;
-      }
-      resolvers.delete(evt.jobId);
-      resolve(evt);
-    },
-  };
+function createCronFromStorePath(storePath: string) {
+  return new CronService({
+    storePath,
+    cronEnabled: true,
+    log: noopLogger,
+    enqueueSystemEvent: vi.fn(),
+    requestHeartbeatNow: vi.fn(),
+    runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+  });
 }
 
 describe("#16156: cron.list() must not silently advance past-due recurring jobs", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2025-12-13T00:00:00.000Z"));
-    noopLogger.debug.mockClear();
-    noopLogger.info.mockClear();
-    noopLogger.warn.mockClear();
-    noopLogger.error.mockClear();
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
   it("does not skip a cron job when list() is called while the job is past-due", async () => {
     const store = await makeStorePath();
-    const enqueueSystemEvent = vi.fn();
-    const requestHeartbeatNow = vi.fn();
-    const finished = createFinishedBarrier();
-
-    const cron = new CronService({
+    const { cron, enqueueSystemEvent, finished } = createStartedCronServiceWithFinishedBarrier({
       storePath: store.storePath,
-      cronEnabled: true,
-      log: noopLogger,
-      enqueueSystemEvent,
-      requestHeartbeatNow,
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" })),
-      onEvent: finished.onEvent,
+      logger: noopLogger,
     });
 
     await cron.start();
@@ -119,23 +82,13 @@ describe("#16156: cron.list() must not silently advance past-due recurring jobs"
     expect(updated?.state.nextRunAtMs).toBeGreaterThan(firstDueAt);
 
     cron.stop();
-    await store.cleanup();
   });
 
   it("does not skip a cron job when status() is called while the job is past-due", async () => {
     const store = await makeStorePath();
-    const enqueueSystemEvent = vi.fn();
-    const requestHeartbeatNow = vi.fn();
-    const finished = createFinishedBarrier();
-
-    const cron = new CronService({
+    const { cron, enqueueSystemEvent, finished } = createStartedCronServiceWithFinishedBarrier({
       storePath: store.storePath,
-      cronEnabled: true,
-      log: noopLogger,
-      enqueueSystemEvent,
-      requestHeartbeatNow,
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" })),
-      onEvent: finished.onEvent,
+      logger: noopLogger,
     });
 
     await cron.start();
@@ -172,7 +125,6 @@ describe("#16156: cron.list() must not silently advance past-due recurring jobs"
     expect(updated?.state.lastStatus).toBe("ok");
 
     cron.stop();
-    await store.cleanup();
   });
 
   it("still fills missing nextRunAtMs via list() for enabled jobs", async () => {
@@ -180,41 +132,22 @@ describe("#16156: cron.list() must not silently advance past-due recurring jobs"
     const nowMs = Date.parse("2025-12-13T00:00:00.000Z");
 
     // Write a store file with a cron job that has no nextRunAtMs.
-    await fs.mkdir(path.dirname(store.storePath), { recursive: true });
-    await fs.writeFile(
-      store.storePath,
-      JSON.stringify(
-        {
-          version: 1,
-          jobs: [
-            {
-              id: "missing-next",
-              name: "missing next",
-              enabled: true,
-              createdAtMs: nowMs,
-              updatedAtMs: nowMs,
-              schedule: { kind: "cron", expr: "* * * * *", tz: "UTC" },
-              sessionTarget: "main",
-              wakeMode: "now",
-              payload: { kind: "systemEvent", text: "fill-me" },
-              state: {},
-            },
-          ],
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    await writeJobsStore(store.storePath, [
+      {
+        id: "missing-next",
+        name: "missing next",
+        enabled: true,
+        createdAtMs: nowMs,
+        updatedAtMs: nowMs,
+        schedule: { kind: "cron", expr: "* * * * *", tz: "UTC" },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "systemEvent", text: "fill-me" },
+        state: {},
+      },
+    ]);
 
-    const cron = new CronService({
-      storePath: store.storePath,
-      cronEnabled: true,
-      log: noopLogger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeatNow: vi.fn(),
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" })),
-    });
+    const cron = createCronFromStorePath(store.storePath);
 
     await cron.start();
 
@@ -226,6 +159,5 @@ describe("#16156: cron.list() must not silently advance past-due recurring jobs"
     expect(job?.state.nextRunAtMs).toBeGreaterThan(nowMs);
 
     cron.stop();
-    await store.cleanup();
   });
 });

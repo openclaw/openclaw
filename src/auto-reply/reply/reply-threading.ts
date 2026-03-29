@@ -1,9 +1,8 @@
+import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ReplyToMode } from "../../config/types.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
-import { getChannelDock } from "../../channels/dock.js";
-import { normalizeChannelId } from "../../channels/plugins/index.js";
 
 export function resolveReplyToMode(
   cfg: OpenClawConfig,
@@ -15,7 +14,7 @@ export function resolveReplyToMode(
   if (!provider) {
     return "all";
   }
-  const resolved = getChannelDock(provider)?.threading?.resolveReplyToMode?.({
+  const resolved = getChannelPlugin(provider)?.threading?.resolveReplyToMode?.({
     cfg,
     accountId,
     chatType,
@@ -34,7 +33,12 @@ export function createReplyToModeFilter(
     }
     if (mode === "off") {
       const isExplicit = Boolean(payload.replyToTag) || Boolean(payload.replyToCurrent);
-      if (opts.allowExplicitReplyTagsWhenOff && isExplicit) {
+      // Compaction notices must never be threaded when replyToMode=off — even
+      // if they carry explicit reply tags (replyToCurrent).  Honouring the
+      // explicit tag here would make status notices appear in-thread while
+      // normal assistant replies stay off-thread, contradicting the off-mode
+      // expectation.  Strip replyToId unconditionally for compaction payloads.
+      if (opts.allowExplicitReplyTagsWhenOff && isExplicit && !payload.isCompactionNotice) {
         return payload;
       }
       return { ...payload, replyToId: undefined };
@@ -43,9 +47,21 @@ export function createReplyToModeFilter(
       return payload;
     }
     if (hasThreaded) {
+      // Compaction notices are transient status messages that should always
+      // appear in-thread, even after the first assistant block has already
+      // consumed the "first" slot.  Let them keep their replyToId.
+      if (payload.isCompactionNotice) {
+        return payload;
+      }
       return { ...payload, replyToId: undefined };
     }
-    hasThreaded = true;
+    // Compaction notices are transient status messages — they should be
+    // threaded (so they appear in-context), but they must not consume the
+    // "first" slot of the replyToMode=first filter.  Skip advancing
+    // hasThreaded so the real assistant reply still gets replyToId.
+    if (!payload.isCompactionNotice) {
+      hasThreaded = true;
+    }
     return payload;
   };
 }
@@ -59,9 +75,9 @@ export function createReplyToModeFilterForChannel(
   const isWebchat = normalized === "webchat";
   // Default: allow explicit reply tags/directives even when replyToMode is "off".
   // Unknown channels fail closed; internal webchat stays allowed.
-  const dock = provider ? getChannelDock(provider) : undefined;
+  const threading = provider ? getChannelPlugin(provider)?.threading : undefined;
   const allowExplicitReplyTagsWhenOff = provider
-    ? (dock?.threading?.allowExplicitReplyTagsWhenOff ?? dock?.threading?.allowTagsWhenOff ?? true)
+    ? (threading?.allowExplicitReplyTagsWhenOff ?? threading?.allowTagsWhenOff ?? true)
     : isWebchat;
   return createReplyToModeFilter(mode, {
     allowExplicitReplyTagsWhenOff,

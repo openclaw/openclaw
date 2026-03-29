@@ -1,17 +1,21 @@
-import type { ChannelId, ChannelSetupInput } from "../../channels/plugins/types.js";
-import type { ChannelChoice } from "../onboard-types.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { listChannelPluginCatalogEntries } from "../../channels/plugins/catalog.js";
+import { parseOptionalDelimitedEntries } from "../../channels/plugins/helpers.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+import { moveSingleAccountChannelSectionToDefaultAccount } from "../../channels/plugins/setup-helpers.js";
+import type { ChannelSetupPlugin } from "../../channels/plugins/setup-wizard-types.js";
+import type { ChannelId, ChannelPlugin, ChannelSetupInput } from "../../channels/plugins/types.js";
 import { writeConfigFile, type OpenClawConfig } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
-import { setupChannels } from "../onboard-channels.js";
+import { applyAgentBindings, describeBinding } from "../agents.bindings.js";
+import { isCatalogChannelInstalled } from "../channel-setup/discovery.js";
 import {
-  ensureOnboardingPluginInstalled,
-  reloadOnboardingPluginRegistry,
-} from "../onboarding/plugin-install.js";
+  createChannelOnboardingPostWriteHookCollector,
+  runCollectedChannelOnboardingPostWriteHooks,
+} from "../onboard-channels.js";
+import type { ChannelChoice } from "../onboard-types.js";
 import { applyAccountName, applyChannelAccountConfig } from "./add-mutators.js";
 import { channelLabel, requireValidConfig, shouldUseWizard } from "./shared.js";
 
@@ -22,17 +26,6 @@ export type ChannelsAddOptions = {
   groupChannels?: string;
   dmAllowlist?: string;
 } & Omit<ChannelSetupInput, "groupChannels" | "dmAllowlist" | "initialSyncLimit">;
-
-function parseList(value: string | undefined): string[] | undefined {
-  if (!value?.trim()) {
-    return undefined;
-  }
-  const parsed = value
-    .split(/[\n,;]+/g)
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-  return parsed.length > 0 ? parsed : undefined;
-}
 
 function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | null) {
   const trimmed = raw.trim().toLowerCase();
@@ -61,19 +54,31 @@ export async function channelsAddCommand(
 
   const useWizard = shouldUseWizard(params);
   if (useWizard) {
+    const [{ buildAgentSummaries }, { setupChannels }] = await Promise.all([
+      import("../agents.config.js"),
+      import("../onboard-channels.js"),
+    ]);
     const prompter = createClackPrompter();
+    const postWriteHooks = createChannelOnboardingPostWriteHookCollector();
     let selection: ChannelChoice[] = [];
     const accountIds: Partial<Record<ChannelChoice, string>> = {};
+    const resolvedPlugins = new Map<ChannelChoice, ChannelSetupPlugin>();
     await prompter.intro("Channel setup");
     let nextConfig = await setupChannels(cfg, runtime, prompter, {
       allowDisable: false,
       allowSignalInstall: true,
+      onPostWriteHook: (hook) => {
+        postWriteHooks.collect(hook);
+      },
       promptAccountIds: true,
       onSelection: (value) => {
         selection = value;
       },
       onAccountId: (channel, accountId) => {
         accountIds[channel] = accountId;
+      },
+      onResolvedPlugin: (channel, plugin) => {
+        resolvedPlugins.set(channel, plugin);
       },
     });
     if (selection.length === 0) {
@@ -88,7 +93,7 @@ export async function channelsAddCommand(
     if (wantsNames) {
       for (const channel of selection) {
         const accountId = accountIds[channel] ?? DEFAULT_ACCOUNT_ID;
-        const plugin = getChannelPlugin(channel);
+        const plugin = resolvedPlugins.get(channel) ?? getChannelPlugin(channel);
         const account = plugin?.config.resolveAccount(nextConfig, accountId) as
           | { name?: string }
           | undefined;
@@ -104,12 +109,80 @@ export async function channelsAddCommand(
             channel,
             accountId,
             name,
+            plugin,
           });
         }
       }
     }
 
+    const bindTargets = selection
+      .map((channel) => ({
+        channel,
+        accountId: accountIds[channel]?.trim(),
+      }))
+      .filter(
+        (
+          value,
+        ): value is {
+          channel: ChannelChoice;
+          accountId: string;
+        } => Boolean(value.accountId),
+      );
+    if (bindTargets.length > 0) {
+      const bindNow = await prompter.confirm({
+        message: "Bind configured channel accounts to agents now?",
+        initialValue: true,
+      });
+      if (bindNow) {
+        const agentSummaries = buildAgentSummaries(nextConfig);
+        const defaultAgentId = resolveDefaultAgentId(nextConfig);
+        for (const target of bindTargets) {
+          const targetAgentId = await prompter.select({
+            message: `Route ${target.channel} account "${target.accountId}" to agent`,
+            options: agentSummaries.map((agent) => ({
+              value: agent.id,
+              label: agent.isDefault ? `${agent.id} (default)` : agent.id,
+            })),
+            initialValue: defaultAgentId,
+          });
+          const bindingResult = applyAgentBindings(nextConfig, [
+            {
+              agentId: targetAgentId,
+              match: { channel: target.channel, accountId: target.accountId },
+            },
+          ]);
+          nextConfig = bindingResult.config;
+          if (bindingResult.added.length > 0 || bindingResult.updated.length > 0) {
+            await prompter.note(
+              [
+                ...bindingResult.added.map((binding) => `Added: ${describeBinding(binding)}`),
+                ...bindingResult.updated.map((binding) => `Updated: ${describeBinding(binding)}`),
+              ].join("\n"),
+              "Routing bindings",
+            );
+          }
+          if (bindingResult.conflicts.length > 0) {
+            await prompter.note(
+              [
+                "Skipped bindings already claimed by another agent:",
+                ...bindingResult.conflicts.map(
+                  (conflict) =>
+                    `- ${describeBinding(conflict.binding)} (agent=${conflict.existingAgentId})`,
+                ),
+              ].join("\n"),
+              "Routing bindings",
+            );
+          }
+        }
+      }
+    }
+
     await writeConfigFile(nextConfig);
+    await runCollectedChannelOnboardingPostWriteHooks({
+      hooks: postWriteHooks.drain(),
+      cfg: nextConfig,
+      runtime,
+    });
     await prompter.outro("Channels updated.");
     return;
   }
@@ -117,22 +190,60 @@ export async function channelsAddCommand(
   const rawChannel = String(opts.channel ?? "");
   let channel = normalizeChannelId(rawChannel);
   let catalogEntry = channel ? undefined : resolveCatalogChannelEntry(rawChannel, nextConfig);
+  const resolveWorkspaceDir = () =>
+    resolveAgentWorkspaceDir(nextConfig, resolveDefaultAgentId(nextConfig));
+  // May trigger loadOpenClawPlugins on cache miss (disk scan + jiti import)
+  const loadScopedPlugin = async (
+    channelId: ChannelId,
+    pluginId?: string,
+  ): Promise<ChannelPlugin | undefined> => {
+    const existing = getChannelPlugin(channelId);
+    if (existing) {
+      return existing;
+    }
+    const { loadChannelSetupPluginRegistrySnapshotForChannel } =
+      await import("../channel-setup/plugin-install.js");
+    const snapshot = loadChannelSetupPluginRegistrySnapshotForChannel({
+      cfg: nextConfig,
+      runtime,
+      channel: channelId,
+      ...(pluginId ? { pluginId } : {}),
+      workspaceDir: resolveWorkspaceDir(),
+    });
+    return (
+      snapshot.channels.find((entry) => entry.plugin.id === channelId)?.plugin ??
+      snapshot.channelSetups.find((entry) => entry.plugin.id === channelId)?.plugin
+    );
+  };
 
   if (!channel && catalogEntry) {
-    const prompter = createClackPrompter();
-    const workspaceDir = resolveAgentWorkspaceDir(nextConfig, resolveDefaultAgentId(nextConfig));
-    const result = await ensureOnboardingPluginInstalled({
-      cfg: nextConfig,
-      entry: catalogEntry,
-      prompter,
-      runtime,
-      workspaceDir,
-    });
-    nextConfig = result.cfg;
-    if (!result.installed) {
-      return;
+    const workspaceDir = resolveWorkspaceDir();
+    if (
+      !isCatalogChannelInstalled({
+        cfg: nextConfig,
+        entry: catalogEntry,
+        workspaceDir,
+      })
+    ) {
+      const { ensureChannelSetupPluginInstalled } =
+        await import("../channel-setup/plugin-install.js");
+      const prompter = createClackPrompter();
+      const result = await ensureChannelSetupPluginInstalled({
+        cfg: nextConfig,
+        entry: catalogEntry,
+        prompter,
+        runtime,
+        workspaceDir,
+      });
+      nextConfig = result.cfg;
+      if (!result.installed) {
+        return;
+      }
+      catalogEntry = {
+        ...catalogEntry,
+        ...(result.pluginId ? { pluginId: result.pluginId } : {}),
+      };
     }
-    reloadOnboardingPluginRegistry({ cfg: nextConfig, runtime, workspaceDir });
     channel = normalizeChannelId(catalogEntry.id) ?? (catalogEntry.id as ChannelId);
   }
 
@@ -145,15 +256,12 @@ export async function channelsAddCommand(
     return;
   }
 
-  const plugin = getChannelPlugin(channel);
+  const plugin = await loadScopedPlugin(channel, catalogEntry?.pluginId);
   if (!plugin?.setup?.applyAccountConfig) {
     runtime.error(`Channel ${channel} does not support add.`);
     runtime.exit(1);
     return;
   }
-  const accountId =
-    plugin.setup.resolveAccountId?.({ cfg: nextConfig, accountId: opts.account }) ??
-    normalizeAccountId(opts.account);
   const useEnv = opts.useEnv === true;
   const initialSyncLimit =
     typeof opts.initialSyncLimit === "number"
@@ -161,12 +269,13 @@ export async function channelsAddCommand(
       : typeof opts.initialSyncLimit === "string" && opts.initialSyncLimit.trim()
         ? Number.parseInt(opts.initialSyncLimit, 10)
         : undefined;
-  const groupChannels = parseList(opts.groupChannels);
-  const dmAllowlist = parseList(opts.dmAllowlist);
+  const groupChannels = parseOptionalDelimitedEntries(opts.groupChannels);
+  const dmAllowlist = parseOptionalDelimitedEntries(opts.dmAllowlist);
 
   const input: ChannelSetupInput = {
     name: opts.name,
     token: opts.token,
+    privateKey: opts.privateKey,
     tokenFile: opts.tokenFile,
     botToken: opts.botToken,
     appToken: opts.appToken,
@@ -192,11 +301,18 @@ export async function channelsAddCommand(
     useEnv,
     ship: opts.ship,
     url: opts.url,
+    relayUrls: opts.relayUrls,
     code: opts.code,
     groupChannels,
     dmAllowlist,
     autoDiscoverChannels: opts.autoDiscoverChannels,
   };
+  const accountId =
+    plugin.setup.resolveAccountId?.({
+      cfg: nextConfig,
+      accountId: opts.account,
+      input,
+    }) ?? normalizeAccountId(opts.account);
 
   const validationError = plugin.setup.validateInput?.({
     cfg: nextConfig,
@@ -209,13 +325,50 @@ export async function channelsAddCommand(
     return;
   }
 
+  const prevConfig = nextConfig;
+
+  if (accountId !== DEFAULT_ACCOUNT_ID) {
+    nextConfig = moveSingleAccountChannelSectionToDefaultAccount({
+      cfg: nextConfig,
+      channelKey: channel,
+    });
+  }
+
   nextConfig = applyChannelAccountConfig({
     cfg: nextConfig,
     channel,
     accountId,
     input,
+    plugin,
+  });
+  await plugin.lifecycle?.onAccountConfigChanged?.({
+    prevCfg: prevConfig,
+    nextCfg: nextConfig,
+    accountId,
+    runtime,
   });
 
   await writeConfigFile(nextConfig);
   runtime.log(`Added ${channelLabel(channel)} account "${accountId}".`);
+  const afterAccountConfigWritten = plugin.setup?.afterAccountConfigWritten;
+  if (afterAccountConfigWritten) {
+    await runCollectedChannelOnboardingPostWriteHooks({
+      hooks: [
+        {
+          channel,
+          accountId,
+          run: async ({ cfg: writtenCfg, runtime: hookRuntime }) =>
+            await afterAccountConfigWritten({
+              previousCfg: cfg,
+              cfg: writtenCfg,
+              accountId,
+              input,
+              runtime: hookRuntime,
+            }),
+        },
+      ],
+      cfg: nextConfig,
+      runtime,
+    });
+  }
 }

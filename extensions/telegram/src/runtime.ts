@@ -1,14 +1,9 @@
-import type { PluginRuntime } from "openclaw/plugin-sdk";
+import type { PluginRuntime } from "openclaw/plugin-sdk/core";
+import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 
-let runtime: PluginRuntime | null = null;
-
-export function setTelegramRuntime(next: PluginRuntime) {
-  runtime = next;
-}
-
-export function getTelegramRuntime(): PluginRuntime {
-  if (!runtime) {
-    throw new Error("Telegram runtime not initialized");
-  }
-  return runtime;
-}
+const {
+  setRuntime: setTelegramRuntime,
+  clearRuntime: clearTelegramRuntime,
+  getRuntime: getTelegramRuntime,
+} = createPluginRuntimeStore<PluginRuntime>("Telegram runtime not initialized");
+export { clearTelegramRuntime, getTelegramRuntime, setTelegramRuntime };

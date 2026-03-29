@@ -1,4 +1,5 @@
-import { formatRawAssistantErrorForUi } from "../agents/pi-embedded-helpers.js";
+import { stripLeadingInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
+import { formatRawAssistantErrorForUi } from "../shared/assistant-error-format.js";
 import { stripAnsi } from "../terminal/ansi.js";
 import { formatTokenCount } from "../utils/usage-format.js";
 
@@ -7,6 +8,15 @@ const MAX_TOKEN_CHARS = 32;
 const LONG_TOKEN_RE = /\S{33,}/g;
 const LONG_TOKEN_TEST_RE = /\S{33,}/;
 const BINARY_LINE_REPLACEMENT_THRESHOLD = 12;
+const URL_PREFIX_RE = /^(https?:\/\/|file:\/\/)/i;
+const WINDOWS_DRIVE_RE = /^[a-zA-Z]:[\\/]/;
+const FILE_LIKE_RE = /^[a-zA-Z0-9._-]+$/;
+const EDGE_PUNCTUATION_RE = /^[`"'([{<]+|[`"')\]}>.,:;!?]+$/g;
+const TOKENISH_MIN_LENGTH = 24;
+const RTL_SCRIPT_RE = /[\u0590-\u08ff\ufb1d-\ufdff\ufe70-\ufefc]/;
+const BIDI_CONTROL_RE = /[\u202a-\u202e\u2066-\u2069]/;
+const RTL_ISOLATE_START = "\u2067";
+const RTL_ISOLATE_END = "\u2069";
 
 function hasControlChars(text: string): boolean {
   for (const char of text) {
@@ -47,6 +57,47 @@ function chunkToken(token: string, maxChars: number): string[] {
   return chunks;
 }
 
+function isCopySensitiveToken(token: string): boolean {
+  const coreToken = token.replace(EDGE_PUNCTUATION_RE, "");
+  const candidate = coreToken || token;
+
+  if (URL_PREFIX_RE.test(token)) {
+    return true;
+  }
+  if (
+    token.startsWith("/") ||
+    token.startsWith("~/") ||
+    token.startsWith("./") ||
+    token.startsWith("../")
+  ) {
+    return true;
+  }
+  if (WINDOWS_DRIVE_RE.test(token) || token.startsWith("\\\\")) {
+    return true;
+  }
+  if (token.includes("/") || token.includes("\\")) {
+    return true;
+  }
+  if (token.includes("_") && FILE_LIKE_RE.test(token)) {
+    return true;
+  }
+
+  // Preserve long credential-like tokens (hex/base62/etc.) to avoid introducing
+  // visible spaces that users may copy back into secrets.
+  if (candidate.length >= TOKENISH_MIN_LENGTH && /[a-z]/i.test(candidate) && /\d/.test(candidate)) {
+    return true;
+  }
+  return false;
+}
+
+function normalizeLongTokenForDisplay(token: string): string {
+  // Preserve copy-sensitive tokens exactly (paths/urls/file-like names).
+  if (isCopySensitiveToken(token)) {
+    return token;
+  }
+  return chunkToken(token, MAX_TOKEN_CHARS).join(" ");
+}
+
 function redactBinaryLikeLine(line: string): string {
   const replacementCount = (line.match(REPLACEMENT_CHAR_RE) || []).length;
   if (
@@ -56,6 +107,23 @@ function redactBinaryLikeLine(line: string): string {
     return "[binary data omitted]";
   }
   return line;
+}
+
+function isolateRtlLine(line: string): string {
+  if (!RTL_SCRIPT_RE.test(line) || BIDI_CONTROL_RE.test(line)) {
+    return line;
+  }
+  return `${RTL_ISOLATE_START}${line}${RTL_ISOLATE_END}`;
+}
+
+function applyRtlIsolation(text: string): string {
+  if (!RTL_SCRIPT_RE.test(text)) {
+    return text;
+  }
+  return text
+    .split("\n")
+    .map((line) => isolateRtlLine(line))
+    .join("\n");
 }
 
 export function sanitizeRenderableText(text: string): string {
@@ -68,7 +136,7 @@ export function sanitizeRenderableText(text: string): string {
   const hasLongTokens = LONG_TOKEN_TEST_RE.test(text);
   const hasControls = hasControlChars(text);
   if (!hasAnsi && !hasReplacementChars && !hasLongTokens && !hasControls) {
-    return text;
+    return applyRtlIsolation(text);
   }
 
   const withoutAnsi = hasAnsi ? stripAnsi(text) : text;
@@ -79,14 +147,16 @@ export function sanitizeRenderableText(text: string): string {
         .map((line) => redactBinaryLikeLine(line))
         .join("\n")
     : withoutControlChars;
-  return LONG_TOKEN_TEST_RE.test(redacted)
-    ? redacted.replace(LONG_TOKEN_RE, (token) => chunkToken(token, MAX_TOKEN_CHARS).join(" "))
+  const tokenSafe = LONG_TOKEN_TEST_RE.test(redacted)
+    ? redacted.replace(LONG_TOKEN_RE, normalizeLongTokenForDisplay)
     : redacted;
+  return applyRtlIsolation(tokenSafe);
 }
 
 export function resolveFinalAssistantText(params: {
   finalText?: string | null;
   streamedText?: string | null;
+  errorMessage?: string | null;
 }) {
   const finalText = params.finalText ?? "";
   if (finalText.trim()) {
@@ -95,6 +165,10 @@ export function resolveFinalAssistantText(params: {
   const streamedText = params.streamedText ?? "";
   if (streamedText.trim()) {
     return streamedText;
+  }
+  const errorMessage = params.errorMessage ?? "";
+  if (errorMessage.trim()) {
+    return formatRawAssistantErrorForUi(errorMessage);
   }
   return "(no output)";
 }
@@ -118,33 +192,71 @@ export function composeThinkingAndContent(params: {
   return parts.join("\n\n").trim();
 }
 
+function asMessageRecord(message: unknown): Record<string, unknown> | undefined {
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+  return message as Record<string, unknown>;
+}
+
+function resolveMessageRecord(
+  message: unknown,
+): { record: Record<string, unknown>; content: unknown } | undefined {
+  const record = asMessageRecord(message);
+  if (!record) {
+    return undefined;
+  }
+  return { record, content: record.content };
+}
+
+function formatAssistantErrorFromRecord(record: Record<string, unknown>): string {
+  const stopReason = typeof record.stopReason === "string" ? record.stopReason : "";
+  if (stopReason !== "error") {
+    return "";
+  }
+  const errorMessage = typeof record.errorMessage === "string" ? record.errorMessage : "";
+  return formatRawAssistantErrorForUi(errorMessage);
+}
+
+function collectSanitizedBlockStrings(params: {
+  content: unknown;
+  blockType: "text" | "thinking";
+  valueKey: "text" | "thinking";
+}): string[] {
+  if (!Array.isArray(params.content)) {
+    return [];
+  }
+  const parts: string[] = [];
+  for (const block of params.content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const rec = block as Record<string, unknown>;
+    if (rec.type === params.blockType && typeof rec[params.valueKey] === "string") {
+      parts.push(sanitizeRenderableText(rec[params.valueKey] as string));
+    }
+  }
+  return parts;
+}
+
 /**
  * Extract ONLY thinking blocks from message content.
  * Model-agnostic: returns empty string if no thinking blocks exist.
  */
 export function extractThinkingFromMessage(message: unknown): string {
-  if (!message || typeof message !== "object") {
+  const resolved = resolveMessageRecord(message);
+  if (!resolved) {
     return "";
   }
-  const record = message as Record<string, unknown>;
-  const content = record.content;
+  const { content } = resolved;
   if (typeof content === "string") {
     return "";
   }
-  if (!Array.isArray(content)) {
-    return "";
-  }
-
-  const parts: string[] = [];
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const rec = block as Record<string, unknown>;
-    if (rec.type === "thinking" && typeof rec.thinking === "string") {
-      parts.push(sanitizeRenderableText(rec.thinking));
-    }
-  }
+  const parts = collectSanitizedBlockStrings({
+    content,
+    blockType: "thinking",
+    valueKey: "thinking",
+  });
   return parts.join("\n").trim();
 }
 
@@ -153,47 +265,25 @@ export function extractThinkingFromMessage(message: unknown): string {
  * Model-agnostic: works for any model with text content blocks.
  */
 export function extractContentFromMessage(message: unknown): string {
-  if (!message || typeof message !== "object") {
+  const resolved = resolveMessageRecord(message);
+  if (!resolved) {
     return "";
   }
-  const record = message as Record<string, unknown>;
-  const content = record.content;
+  const { record, content } = resolved;
 
   if (typeof content === "string") {
     return sanitizeRenderableText(content).trim();
   }
 
-  // Check for error BEFORE returning empty for non-array content
-  if (!Array.isArray(content)) {
-    const stopReason = typeof record.stopReason === "string" ? record.stopReason : "";
-    if (stopReason === "error") {
-      const errorMessage = typeof record.errorMessage === "string" ? record.errorMessage : "";
-      return formatRawAssistantErrorForUi(errorMessage);
-    }
-    return "";
+  const parts = collectSanitizedBlockStrings({
+    content,
+    blockType: "text",
+    valueKey: "text",
+  });
+  if (parts.length > 0) {
+    return parts.join("\n").trim();
   }
-
-  const parts: string[] = [];
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const rec = block as Record<string, unknown>;
-    if (rec.type === "text" && typeof rec.text === "string") {
-      parts.push(sanitizeRenderableText(rec.text));
-    }
-  }
-
-  // If no text blocks found, check for error
-  if (parts.length === 0) {
-    const stopReason = typeof record.stopReason === "string" ? record.stopReason : "";
-    if (stopReason === "error") {
-      const errorMessage = typeof record.errorMessage === "string" ? record.errorMessage : "";
-      return formatRawAssistantErrorForUi(errorMessage);
-    }
-  }
-
-  return parts.join("\n").trim();
+  return formatAssistantErrorFromRecord(record);
 }
 
 function extractTextBlocks(content: unknown, opts?: { includeThinking?: boolean }): string {
@@ -204,25 +294,19 @@ function extractTextBlocks(content: unknown, opts?: { includeThinking?: boolean 
     return "";
   }
 
-  const thinkingParts: string[] = [];
-  const textParts: string[] = [];
-
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const record = block as Record<string, unknown>;
-    if (record.type === "text" && typeof record.text === "string") {
-      textParts.push(sanitizeRenderableText(record.text));
-    }
-    if (
-      opts?.includeThinking &&
-      record.type === "thinking" &&
-      typeof record.thinking === "string"
-    ) {
-      thinkingParts.push(sanitizeRenderableText(record.thinking));
-    }
-  }
+  const textParts = collectSanitizedBlockStrings({
+    content,
+    blockType: "text",
+    valueKey: "text",
+  });
+  const thinkingParts =
+    opts?.includeThinking === true
+      ? collectSanitizedBlockStrings({
+          content,
+          blockType: "thinking",
+          valueKey: "thinking",
+        })
+      : [];
 
   return composeThinkingAndContent({
     thinkingText: thinkingParts.join("\n").trim(),
@@ -235,22 +319,23 @@ export function extractTextFromMessage(
   message: unknown,
   opts?: { includeThinking?: boolean },
 ): string {
-  if (!message || typeof message !== "object") {
+  const record = asMessageRecord(message);
+  if (!record) {
     return "";
   }
-  const record = message as Record<string, unknown>;
   const text = extractTextBlocks(record.content, opts);
   if (text) {
+    if (record.role === "user") {
+      return stripLeadingInboundMetadata(text);
+    }
     return text;
   }
 
-  const stopReason = typeof record.stopReason === "string" ? record.stopReason : "";
-  if (stopReason !== "error") {
+  const errorText = formatAssistantErrorFromRecord(record);
+  if (!errorText) {
     return "";
   }
-
-  const errorMessage = typeof record.errorMessage === "string" ? record.errorMessage : "";
-  return formatRawAssistantErrorForUi(errorMessage);
+  return errorText;
 }
 
 export function isCommandMessage(message: unknown): boolean {

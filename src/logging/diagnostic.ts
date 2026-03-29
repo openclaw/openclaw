@@ -1,3 +1,5 @@
+import { loadConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
 import {
   diagnosticSessionStates,
@@ -20,9 +22,32 @@ const webhookStats = {
 };
 
 let lastActivityAt = 0;
+const DEFAULT_STUCK_SESSION_WARN_MS = 120_000;
+const MIN_STUCK_SESSION_WARN_MS = 1_000;
+const MAX_STUCK_SESSION_WARN_MS = 24 * 60 * 60 * 1000;
+let commandPollBackoffRuntimePromise: Promise<
+  typeof import("../agents/command-poll-backoff.runtime.js")
+> | null = null;
+
+function loadCommandPollBackoffRuntime() {
+  commandPollBackoffRuntimePromise ??= import("../agents/command-poll-backoff.runtime.js");
+  return commandPollBackoffRuntimePromise;
+}
 
 function markActivity() {
   lastActivityAt = Date.now();
+}
+
+export function resolveStuckSessionWarnMs(config?: OpenClawConfig): number {
+  const raw = config?.diagnostics?.stuckSessionWarnMs;
+  if (typeof raw !== "number" || !Number.isFinite(raw)) {
+    return DEFAULT_STUCK_SESSION_WARN_MS;
+  }
+  const rounded = Math.floor(raw);
+  if (rounded < MIN_STUCK_SESSION_WARN_MS || rounded > MAX_STUCK_SESSION_WARN_MS) {
+    return DEFAULT_STUCK_SESSION_WARN_MS;
+  }
+  return rounded;
 }
 
 export function logWebhookReceived(params: {
@@ -256,6 +281,42 @@ export function logRunAttempt(params: SessionRef & { runId: string; attempt: num
   markActivity();
 }
 
+export function logToolLoopAction(
+  params: SessionRef & {
+    toolName: string;
+    level: "warning" | "critical";
+    action: "warn" | "block";
+    detector: "generic_repeat" | "known_poll_no_progress" | "global_circuit_breaker" | "ping_pong";
+    count: number;
+    message: string;
+    pairedToolName?: string;
+  },
+) {
+  const payload = `tool loop: sessionId=${params.sessionId ?? "unknown"} sessionKey=${
+    params.sessionKey ?? "unknown"
+  } tool=${params.toolName} level=${params.level} action=${params.action} detector=${
+    params.detector
+  } count=${params.count}${params.pairedToolName ? ` pairedTool=${params.pairedToolName}` : ""} message="${params.message}"`;
+  if (params.level === "critical") {
+    diag.error(payload);
+  } else {
+    diag.warn(payload);
+  }
+  emitDiagnosticEvent({
+    type: "tool.loop",
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    toolName: params.toolName,
+    level: params.level,
+    action: params.action,
+    detector: params.detector,
+    count: params.count,
+    message: params.message,
+    pairedToolName: params.pairedToolName,
+  });
+  markActivity();
+}
+
 export function logActiveRuns() {
   const activeSessions = Array.from(diagnosticSessionStates.entries())
     .filter(([, s]) => s.state === "processing")
@@ -269,11 +330,20 @@ export function logActiveRuns() {
 
 let heartbeatInterval: NodeJS.Timeout | null = null;
 
-export function startDiagnosticHeartbeat() {
+export function startDiagnosticHeartbeat(config?: OpenClawConfig) {
   if (heartbeatInterval) {
     return;
   }
   heartbeatInterval = setInterval(() => {
+    let heartbeatConfig = config;
+    if (!heartbeatConfig) {
+      try {
+        heartbeatConfig = loadConfig();
+      } catch {
+        heartbeatConfig = undefined;
+      }
+    }
+    const stuckSessionWarnMs = resolveStuckSessionWarnMs(heartbeatConfig);
     const now = Date.now();
     pruneDiagnosticSessionStates(now, true);
     const activeCount = Array.from(diagnosticSessionStates.values()).filter(
@@ -314,9 +384,19 @@ export function startDiagnosticHeartbeat() {
       queued: totalQueued,
     });
 
+    void loadCommandPollBackoffRuntime()
+      .then(({ pruneStaleCommandPolls }) => {
+        for (const [, state] of diagnosticSessionStates) {
+          pruneStaleCommandPolls(state);
+        }
+      })
+      .catch((err) => {
+        diag.debug(`command-poll-backoff prune failed: ${String(err)}`);
+      });
+
     for (const [, state] of diagnosticSessionStates) {
       const ageMs = now - state.lastActivity;
-      if (state.state === "processing" && ageMs > 120_000) {
+      if (state.state === "processing" && ageMs > stuckSessionWarnMs) {
         logSessionStuck({
           sessionId: state.sessionId,
           sessionKey: state.sessionKey,

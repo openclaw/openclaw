@@ -1,17 +1,29 @@
 ---
 title: Sandbox CLI
-summary: "Manage sandbox containers and inspect effective sandbox policy"
-read_when: "You are managing sandbox containers or debugging sandbox/tool-policy behavior."
+summary: "Manage sandbox runtimes and inspect effective sandbox policy"
+read_when: "You are managing sandbox runtimes or debugging sandbox/tool-policy behavior."
 status: active
 ---
 
 # Sandbox CLI
 
-Manage Docker-based sandbox containers for isolated agent execution.
+Manage sandbox runtimes for isolated agent execution.
 
 ## Overview
 
-OpenClaw can run agents in isolated Docker containers for security. The `sandbox` commands help you manage these containers, especially after updates or configuration changes.
+OpenClaw can run agents in isolated sandbox runtimes for security. The `sandbox` commands help you inspect and recreate those runtimes after updates or configuration changes.
+
+Today that usually means:
+
+- Docker sandbox containers
+- SSH sandbox runtimes when `agents.defaults.sandbox.backend = "ssh"`
+- OpenShell sandbox runtimes when `agents.defaults.sandbox.backend = "openshell"`
+
+For `ssh` and OpenShell `remote`, recreate matters more than with Docker:
+
+- the remote workspace is canonical after the initial seed
+- `openclaw sandbox recreate` deletes that canonical remote workspace for the selected scope
+- next use seeds it again from the current local workspace
 
 ## Commands
 
@@ -28,7 +40,7 @@ openclaw sandbox explain --json
 
 ### `openclaw sandbox list`
 
-List all sandbox containers with their status and configuration.
+List all sandbox runtimes with their status and configuration.
 
 ```bash
 openclaw sandbox list
@@ -38,15 +50,16 @@ openclaw sandbox list --json     # JSON output
 
 **Output includes:**
 
-- Container name and status (running/stopped)
-- Docker image and whether it matches config
+- Runtime name and status
+- Backend (`docker`, `openshell`, etc.)
+- Config label and whether it matches current config
 - Age (time since creation)
 - Idle time (time since last use)
 - Associated session/agent
 
 ### `openclaw sandbox recreate`
 
-Remove sandbox containers to force recreation with updated images/config.
+Remove sandbox runtimes to force recreation with updated config.
 
 ```bash
 openclaw sandbox recreate --all                # Recreate all containers
@@ -64,11 +77,11 @@ openclaw sandbox recreate --all --force        # Skip confirmation
 - `--browser`: Only recreate browser containers
 - `--force`: Skip confirmation prompt
 
-**Important:** Containers are automatically recreated when the agent is next used.
+**Important:** Runtimes are automatically recreated when the agent is next used.
 
 ## Use Cases
 
-### After updating Docker images
+### After updating a Docker image
 
 ```bash
 # Pull new image
@@ -91,6 +104,37 @@ openclaw sandbox recreate --all
 openclaw sandbox recreate --all
 ```
 
+### After changing SSH target or SSH auth material
+
+```bash
+# Edit config:
+# - agents.defaults.sandbox.backend
+# - agents.defaults.sandbox.ssh.target
+# - agents.defaults.sandbox.ssh.workspaceRoot
+# - agents.defaults.sandbox.ssh.identityFile / certificateFile / knownHostsFile
+# - agents.defaults.sandbox.ssh.identityData / certificateData / knownHostsData
+
+openclaw sandbox recreate --all
+```
+
+For the core `ssh` backend, recreate deletes the per-scope remote workspace root
+on the SSH target. The next run seeds it again from the local workspace.
+
+### After changing OpenShell source, policy, or mode
+
+```bash
+# Edit config:
+# - agents.defaults.sandbox.backend
+# - plugins.entries.openshell.config.from
+# - plugins.entries.openshell.config.mode
+# - plugins.entries.openshell.config.policy
+
+openclaw sandbox recreate --all
+```
+
+For OpenShell `remote` mode, recreate deletes the canonical remote workspace
+for that scope. The next run seeds it again from the local workspace.
+
 ### After changing setupCommand
 
 ```bash
@@ -108,16 +152,16 @@ openclaw sandbox recreate --agent alfred
 
 ## Why is this needed?
 
-**Problem:** When you update sandbox Docker images or configuration:
+**Problem:** When you update sandbox configuration:
 
-- Existing containers continue running with old settings
-- Containers are only pruned after 24h of inactivity
-- Regularly-used agents keep old containers running indefinitely
+- Existing runtimes continue running with old settings
+- Runtimes are only pruned after 24h of inactivity
+- Regularly-used agents keep old runtimes alive indefinitely
 
-**Solution:** Use `openclaw sandbox recreate` to force removal of old containers. They'll be recreated automatically with current settings when next needed.
+**Solution:** Use `openclaw sandbox recreate` to force removal of old runtimes. They'll be recreated automatically with current settings when next needed.
 
-Tip: prefer `openclaw sandbox recreate` over manual `docker rm`. It uses the
-Gateway’s container naming and avoids mismatches when scope/session keys change.
+Tip: prefer `openclaw sandbox recreate` over manual backend-specific cleanup.
+It uses the Gateway’s runtime registry and avoids mismatches when scope/session keys change.
 
 ## Configuration
 
@@ -129,6 +173,7 @@ Sandbox settings live in `~/.openclaw/openclaw.json` under `agents.defaults.sand
     "defaults": {
       "sandbox": {
         "mode": "all", // off, non-main, all
+        "backend": "docker", // docker, ssh, openshell
         "scope": "agent", // session, agent, shared
         "docker": {
           "image": "openclaw-sandbox:bookworm-slim",

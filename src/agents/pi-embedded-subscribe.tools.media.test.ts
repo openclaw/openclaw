@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { extractToolResultMediaPaths } from "./pi-embedded-subscribe.tools.js";
+import {
+  extractToolResultMediaArtifact,
+  extractToolResultMediaPaths,
+  filterToolResultMediaUrls,
+  isToolResultMediaTrusted,
+} from "./pi-embedded-subscribe.tools.js";
 
 describe("extractToolResultMediaPaths", () => {
   it("returns empty array for null/undefined", () => {
@@ -12,12 +17,38 @@ describe("extractToolResultMediaPaths", () => {
     expect(extractToolResultMediaPaths(42)).toEqual([]);
   });
 
-  it("returns empty array when content is missing", () => {
-    expect(extractToolResultMediaPaths({ details: { path: "/tmp/img.png" } })).toEqual([]);
+  it("extracts structured details.media without content blocks", () => {
+    expect(
+      extractToolResultMediaArtifact({
+        details: {
+          media: {
+            mediaUrls: ["/tmp/img.png", "/tmp/img-2.png"],
+          },
+        },
+      }),
+    ).toEqual({
+      mediaUrls: ["/tmp/img.png", "/tmp/img-2.png"],
+    });
   });
 
   it("returns empty array when content has no text or image blocks", () => {
     expect(extractToolResultMediaPaths({ content: [{ type: "other" }] })).toEqual([]);
+  });
+
+  it("extracts structured media with audioAsVoice", () => {
+    expect(
+      extractToolResultMediaArtifact({
+        details: {
+          media: {
+            mediaUrl: "/tmp/reply.opus",
+            audioAsVoice: true,
+          },
+        },
+      }),
+    ).toEqual({
+      mediaUrls: ["/tmp/reply.opus"],
+      audioAsVoice: true,
+    });
   });
 
   it("extracts MEDIA: path from text content block", () => {
@@ -128,5 +159,131 @@ describe("extractToolResultMediaPaths", () => {
       details: { path: "   " },
     };
     expect(extractToolResultMediaPaths(result)).toEqual([]);
+  });
+
+  it("does not match <media:audio> placeholder as a MEDIA: token", () => {
+    const result = {
+      content: [
+        {
+          type: "text",
+          text: "<media:audio> placeholder with successful preflight voice transcript",
+        },
+      ],
+    };
+    expect(extractToolResultMediaPaths(result)).toEqual([]);
+  });
+
+  it("does not match <media:image> placeholder as a MEDIA: token", () => {
+    const result = {
+      content: [{ type: "text", text: "<media:image> (2 images)" }],
+    };
+    expect(extractToolResultMediaPaths(result)).toEqual([]);
+  });
+
+  it("does not match other media placeholder variants", () => {
+    for (const tag of [
+      "<media:video>",
+      "<media:document>",
+      "<media:sticker>",
+      "<media:attachment>",
+    ]) {
+      const result = {
+        content: [{ type: "text", text: `${tag} some context` }],
+      };
+      expect(extractToolResultMediaPaths(result)).toEqual([]);
+    }
+  });
+
+  it("does not match mid-line MEDIA: in documentation text", () => {
+    const result = {
+      content: [
+        {
+          type: "text",
+          text: 'Use MEDIA: "https://example.com/voice.ogg", asVoice: true to send voice',
+        },
+      ],
+    };
+    expect(extractToolResultMediaPaths(result)).toEqual([]);
+  });
+
+  it("does not treat malformed MEDIA:-prefixed prose as a file path", () => {
+    const result = {
+      content: [
+        {
+          type: "text",
+          text: "MEDIA:-prefixed paths (lenient whitespace) when loading outbound media",
+        },
+      ],
+    };
+    expect(extractToolResultMediaPaths(result)).toEqual([]);
+  });
+
+  it("still extracts MEDIA: at line start after other text lines", () => {
+    const result = {
+      content: [
+        {
+          type: "text",
+          text: "Generated screenshot\nMEDIA:/tmp/screenshot.png\nDone",
+        },
+      ],
+    };
+    expect(extractToolResultMediaPaths(result)).toEqual(["/tmp/screenshot.png"]);
+  });
+
+  it("extracts indented MEDIA: line", () => {
+    const result = {
+      content: [{ type: "text", text: "  MEDIA:/tmp/indented.png" }],
+    };
+    expect(extractToolResultMediaPaths(result)).toEqual(["/tmp/indented.png"]);
+  });
+
+  it("extracts valid MEDIA: line while ignoring <media:audio> on another line", () => {
+    const result = {
+      content: [
+        {
+          type: "text",
+          text: "<media:audio> was transcribed\nMEDIA:/tmp/tts-output.opus\nDone",
+        },
+      ],
+    };
+    expect(extractToolResultMediaPaths(result)).toEqual(["/tmp/tts-output.opus"]);
+  });
+
+  it("extracts multiple MEDIA: lines from a single text block", () => {
+    const result = {
+      content: [
+        {
+          type: "text",
+          text: "MEDIA:/tmp/page1.png\nSome text\nMEDIA:/tmp/page2.png",
+        },
+      ],
+    };
+    expect(extractToolResultMediaPaths(result)).toEqual(["/tmp/page1.png", "/tmp/page2.png"]);
+  });
+
+  it("trusts image_generate local MEDIA paths", () => {
+    expect(isToolResultMediaTrusted("image_generate")).toBe(true);
+  });
+
+  it("does not trust local MEDIA paths for MCP-provenance results", () => {
+    expect(
+      filterToolResultMediaUrls("browser", ["/tmp/screenshot.png"], {
+        details: {
+          mcpServer: "probe",
+          mcpTool: "browser",
+        },
+      }),
+    ).toEqual([]);
+  });
+
+  it("still allows remote MEDIA urls for MCP-provenance results", () => {
+    expect(
+      filterToolResultMediaUrls("browser", ["https://example.com/screenshot.png"], {
+        details: {
+          mcpServer: "probe",
+          mcpTool: "browser",
+        },
+      }),
+    ).toEqual(["https://example.com/screenshot.png"]);
   });
 });

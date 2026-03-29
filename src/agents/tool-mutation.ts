@@ -82,6 +82,23 @@ function normalizeFingerprintValue(value: unknown): string | undefined {
   return undefined;
 }
 
+function appendFingerprintAlias(
+  parts: string[],
+  record: Record<string, unknown> | undefined,
+  label: string,
+  keys: string[],
+): boolean {
+  for (const key of keys) {
+    const value = normalizeFingerprintValue(record?.[key]);
+    if (!value) {
+      continue;
+    }
+    parts.push(`${label}=${value}`);
+    return true;
+  }
+  return false;
+}
+
 export function isLikelyMutatingToolName(toolName: string): boolean {
   const normalized = toolName.trim().toLowerCase();
   if (!normalized) {
@@ -151,26 +168,36 @@ export function buildToolActionFingerprint(
   if (action) {
     parts.push(`action=${action}`);
   }
-  for (const key of [
-    "path",
-    "filePath",
-    "oldPath",
-    "newPath",
-    "to",
-    "target",
-    "messageId",
-    "sessionKey",
-    "jobId",
-    "id",
-    "model",
-  ]) {
-    const value = normalizeFingerprintValue(record?.[key]);
-    if (value) {
-      parts.push(`${key.toLowerCase()}=${value}`);
-    }
-  }
+  let hasStableTarget = false;
+  hasStableTarget =
+    appendFingerprintAlias(parts, record, "path", [
+      "path",
+      "file_path",
+      "filePath",
+      "filepath",
+      "file",
+    ]) || hasStableTarget;
+  hasStableTarget =
+    appendFingerprintAlias(parts, record, "oldpath", ["oldPath", "old_path"]) || hasStableTarget;
+  hasStableTarget =
+    appendFingerprintAlias(parts, record, "newpath", ["newPath", "new_path"]) || hasStableTarget;
+  hasStableTarget =
+    appendFingerprintAlias(parts, record, "to", ["to", "target"]) || hasStableTarget;
+  hasStableTarget =
+    appendFingerprintAlias(parts, record, "messageid", ["messageId", "message_id"]) ||
+    hasStableTarget;
+  hasStableTarget =
+    appendFingerprintAlias(parts, record, "sessionkey", ["sessionKey", "session_key"]) ||
+    hasStableTarget;
+  hasStableTarget =
+    appendFingerprintAlias(parts, record, "jobid", ["jobId", "job_id"]) || hasStableTarget;
+  hasStableTarget = appendFingerprintAlias(parts, record, "id", ["id"]) || hasStableTarget;
+  hasStableTarget = appendFingerprintAlias(parts, record, "model", ["model"]) || hasStableTarget;
   const normalizedMeta = meta?.trim().replace(/\s+/g, " ").toLowerCase();
-  if (normalizedMeta) {
+  // Meta text often carries volatile details (for example "N chars").
+  // Prefer stable arg-derived keys for matching; only fall back to meta
+  // when no stable target key is available.
+  if (normalizedMeta && !hasStableTarget) {
     parts.push(`meta=${normalizedMeta}`);
   }
   return parts.join("|");

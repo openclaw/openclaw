@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import os from "node:os";
-import { pickPrimaryLanIPv4 } from "../gateway/net.js";
+import { resolveRuntimeServiceVersion } from "../version.js";
+import { pickBestEffortPrimaryLanIPv4 } from "./network-discovery-display.js";
 
 export type SystemPresence = {
   host?: string;
@@ -44,13 +45,13 @@ function normalizePresenceKey(key: string | undefined): string | undefined {
 }
 
 function resolvePrimaryIPv4(): string | undefined {
-  return pickPrimaryLanIPv4() ?? os.hostname();
+  return pickBestEffortPrimaryLanIPv4() ?? os.hostname();
 }
 
 function initSelfPresence() {
   const host = os.hostname();
   const ip = resolvePrimaryIPv4() ?? undefined;
-  const version = process.env.OPENCLAW_VERSION ?? process.env.npm_package_version ?? "unknown";
+  const version = resolveRuntimeServiceVersion(process.env);
   const modelIdentifier = (() => {
     const p = os.platform();
     if (p === "darwin") {

@@ -2,6 +2,9 @@ export type LegacyConfigRule = {
   path: string[];
   message: string;
   match?: (value: unknown, root: Record<string, unknown>) => boolean;
+  // If true, only report when the legacy value is present in the original parsed
+  // source (not only after include/env resolution).
+  requireSourceLiteral?: boolean;
 };
 
 export type LegacyConfigMigration = {
@@ -10,8 +13,13 @@ export type LegacyConfigMigration = {
   apply: (raw: Record<string, unknown>, changes: string[]) => void;
 };
 
+export type LegacyConfigMigrationSpec = LegacyConfigMigration & {
+  legacyRules?: LegacyConfigRule[];
+};
+
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
 import { isRecord } from "../utils.js";
+import { isBlockedObjectKey } from "./prototype-keys.js";
 export { isRecord };
 
 export const getRecord = (value: unknown): Record<string, unknown> | null =>
@@ -32,7 +40,7 @@ export const ensureRecord = (
 
 export const mergeMissing = (target: Record<string, unknown>, source: Record<string, unknown>) => {
   for (const [key, value] of Object.entries(source)) {
-    if (value === undefined) {
+    if (value === undefined || isBlockedObjectKey(key)) {
       continue;
     }
     const existing = target[key];
@@ -127,3 +135,7 @@ export const ensureAgentEntry = (list: unknown[], id: string): Record<string, un
   list.push(created);
   return created;
 };
+
+export const defineLegacyConfigMigration = (
+  migration: LegacyConfigMigrationSpec,
+): LegacyConfigMigrationSpec => migration;

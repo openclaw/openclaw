@@ -1,8 +1,9 @@
 import type { ExecApprovalManager } from "./exec-approval-manager.js";
-import type { GatewayClient } from "./server-methods/types.js";
 import { sanitizeSystemRunParamsForForwarding } from "./node-invoke-system-run-approval.js";
+import type { GatewayClient } from "./server-methods/types.js";
 
 export function sanitizeNodeInvokeParamsForForwarding(opts: {
+  nodeId: string;
   command: string;
   rawParams: unknown;
   client: GatewayClient | null;
@@ -12,6 +13,7 @@ export function sanitizeNodeInvokeParamsForForwarding(opts: {
   | { ok: false; message: string; details?: Record<string, unknown> } {
   if (opts.command === "system.run") {
     return sanitizeSystemRunParamsForForwarding({
+      nodeId: opts.nodeId,
       rawParams: opts.rawParams,
       client: opts.client,
       execApprovalManager: opts.execApprovalManager,

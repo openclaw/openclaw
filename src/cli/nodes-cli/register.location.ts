@@ -1,9 +1,9 @@
 import type { Command } from "commander";
-import type { NodesRpcOpts } from "./types.js";
 import { randomIdempotencyKey } from "../../gateway/call.js";
 import { defaultRuntime } from "../../runtime.js";
 import { runNodesCommand } from "./cli-utils.js";
 import { callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
+import type { NodesRpcOpts } from "./types.js";
 
 export function registerNodesLocationCommands(nodes: Command) {
   const location = nodes.command("location").description("Fetch location from a paired node");
@@ -61,7 +61,7 @@ export function registerNodesLocationCommands(nodes: Command) {
               : {};
 
           if (opts.json) {
-            defaultRuntime.log(JSON.stringify(payload, null, 2));
+            defaultRuntime.writeJson(payload);
             return;
           }
 
@@ -73,7 +73,7 @@ export function registerNodesLocationCommands(nodes: Command) {
             defaultRuntime.log(`${lat},${lon}${accText}`);
             return;
           }
-          defaultRuntime.log(JSON.stringify(payload));
+          defaultRuntime.writeJson(payload, 0);
         });
       }),
     { timeoutMs: 30_000 },

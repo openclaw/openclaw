@@ -1,45 +1,72 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { DirectoryCache } from "./directory-cache.js";
+import { DirectoryCache, buildDirectoryCacheKey } from "./directory-cache.js";
+import type { DirectoryCacheKey } from "./directory-cache.js";
+
+describe("buildDirectoryCacheKey", () => {
+  it.each([
+    {
+      input: {
+        channel: "slack",
+        kind: "channel",
+        source: "cache",
+      },
+      expected: "slack:default:channel:cache:default",
+    },
+    {
+      input: {
+        channel: "discord",
+        accountId: "work",
+        kind: "user",
+        source: "live",
+        signature: "v2",
+      },
+      expected: "discord:work:user:live:v2",
+    },
+  ] satisfies Array<{ input: DirectoryCacheKey; expected: string }>)(
+    "includes account and signature fallbacks for %j",
+    ({ input, expected }) => {
+      expect(buildDirectoryCacheKey(input)).toBe(expected);
+    },
+  );
+});
 
 describe("DirectoryCache", () => {
-  const cfg = {} as OpenClawConfig;
-
-  it("expires entries after ttl", () => {
+  it("expires entries after ttl and resets when config ref changes", () => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
-    const cache = new DirectoryCache<string>(1000, 10);
+    const cache = new DirectoryCache<string>(1_000);
+    const cfgA = {} as OpenClawConfig;
+    const cfgB = {} as OpenClawConfig;
 
-    cache.set("a", "value-a", cfg);
-    expect(cache.get("a", cfg)).toBe("value-a");
+    cache.set("a", "first", cfgA);
+    expect(cache.get("a", cfgA)).toBe("first");
 
-    vi.setSystemTime(new Date("2026-01-01T00:00:02.000Z"));
-    expect(cache.get("a", cfg)).toBeUndefined();
+    vi.advanceTimersByTime(1_001);
+    expect(cache.get("a", cfgA)).toBeUndefined();
+
+    cache.set("b", "second", cfgA);
+    expect(cache.get("b", cfgB)).toBeUndefined();
 
     vi.useRealTimers();
   });
 
-  it("evicts oldest keys when max size is exceeded", () => {
+  it("evicts least-recent entries, refreshes insertion order, and clears matches", () => {
     const cache = new DirectoryCache<string>(60_000, 2);
-    cache.set("a", "value-a", cfg);
-    cache.set("b", "value-b", cfg);
-    cache.set("c", "value-c", cfg);
+    const cfg = {} as OpenClawConfig;
 
-    expect(cache.get("a", cfg)).toBeUndefined();
-    expect(cache.get("b", cfg)).toBe("value-b");
-    expect(cache.get("c", cfg)).toBe("value-c");
-  });
+    cache.set("a", "A", cfg);
+    cache.set("b", "B", cfg);
+    cache.set("a", "A2", cfg);
+    cache.set("c", "C", cfg);
 
-  it("refreshes insertion order on key updates", () => {
-    const cache = new DirectoryCache<string>(60_000, 2);
-    cache.set("a", "value-a", cfg);
-    cache.set("b", "value-b", cfg);
-    cache.set("a", "value-a2", cfg);
-    cache.set("c", "value-c", cfg);
-
-    // Updating "a" should keep it and evict older "b".
-    expect(cache.get("a", cfg)).toBe("value-a2");
+    expect(cache.get("a", cfg)).toBe("A2");
     expect(cache.get("b", cfg)).toBeUndefined();
-    expect(cache.get("c", cfg)).toBe("value-c");
+    expect(cache.get("c", cfg)).toBe("C");
+
+    cache.clearMatching((key) => key.startsWith("c"));
+    expect(cache.get("c", cfg)).toBeUndefined();
+
+    cache.clear(cfg);
+    expect(cache.get("a", cfg)).toBeUndefined();
   });
 });

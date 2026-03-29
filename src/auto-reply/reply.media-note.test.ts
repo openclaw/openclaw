@@ -1,32 +1,23 @@
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
-import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
-import { getReplyFromConfig } from "./reply.js";
+import type { OpenClawConfig } from "../config/config.js";
+import {
+  createReplyRuntimeMocks,
+  installReplyRuntimeMocks,
+  makeEmbeddedTextResult,
+  resetReplyRuntimeMocks,
+} from "./reply.test-harness.js";
 
-vi.mock("../agents/pi-embedded.js", () => ({
-  abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
-  runEmbeddedPiAgent: vi.fn(),
-  queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
-  resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
-  isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
-  isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
-}));
+let getReplyFromConfig: typeof import("./reply.js").getReplyFromConfig;
+const agentMocks = createReplyRuntimeMocks();
 
-function makeResult(text: string) {
-  return {
-    payloads: [{ text }],
-    meta: {
-      durationMs: 5,
-      agentMeta: { sessionId: "s", provider: "p", model: "m" },
-    },
-  };
-}
+installReplyRuntimeMocks(agentMocks);
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   return withTempHomeBase(
     async (home) => {
-      vi.mocked(runEmbeddedPiAgent).mockReset();
+      agentMocks.runEmbeddedPiAgent.mockClear();
       return await fn(home);
     },
     {
@@ -48,16 +39,26 @@ function makeCfg(home: string) {
     },
     channels: { whatsapp: { allowFrom: ["*"] } },
     session: { store: path.join(home, "sessions.json") },
-  };
+  } as unknown as OpenClawConfig;
 }
 
 describe("getReplyFromConfig media note plumbing", () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    resetReplyRuntimeMocks(agentMocks);
+    ({ getReplyFromConfig } = await import("./reply.js"));
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("includes all MediaPaths in the agent prompt", async () => {
     await withTempHome(async (home) => {
       let seenPrompt: string | undefined;
-      vi.mocked(runEmbeddedPiAgent).mockImplementation(async (params) => {
+      agentMocks.runEmbeddedPiAgent.mockImplementation(async (params) => {
         seenPrompt = params.prompt;
-        return makeResult("ok");
+        return makeEmbeddedTextResult("ok");
       });
 
       const cfg = makeCfg(home);

@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
+import { resolveAgentTimeoutMs, resolveAgentTimeoutSeconds } from "./timeout.js";
 
 describe("getSubagentDepthFromSessionStore", () => {
   it("uses spawnDepth from the session store when available", () => {
@@ -75,6 +76,33 @@ describe("getSubagentDepthFromSessionStore", () => {
     expect(depth).toBe(2);
   });
 
+  it("accepts JSON5 syntax in the on-disk depth store for backward compatibility", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-subagent-depth-json5-"));
+    const storeTemplate = path.join(tmpDir, "sessions-{agentId}.json");
+    const storePath = storeTemplate.replaceAll("{agentId}", "main");
+    fs.writeFileSync(
+      storePath,
+      `{
+        // hand-edited legacy store
+        "agent:main:subagent:flat": {
+          sessionId: "subagent-flat",
+          spawnDepth: 2,
+        },
+      }`,
+      "utf-8",
+    );
+
+    const depth = getSubagentDepthFromSessionStore("subagent:flat", {
+      cfg: {
+        session: {
+          store: storeTemplate,
+        },
+      },
+    });
+
+    expect(depth).toBe(2);
+  });
+
   it("falls back to session-key segment counting when metadata is missing", () => {
     const key = "agent:main:subagent:flat";
     const depth = getSubagentDepthFromSessionStore(key, {
@@ -83,5 +111,22 @@ describe("getSubagentDepthFromSessionStore", () => {
       },
     });
     expect(depth).toBe(1);
+  });
+});
+
+describe("resolveAgentTimeoutMs", () => {
+  it("defaults to 48 hours when config does not override the timeout", () => {
+    expect(resolveAgentTimeoutSeconds()).toBe(48 * 60 * 60);
+    expect(resolveAgentTimeoutMs({})).toBe(48 * 60 * 60 * 1000);
+  });
+
+  it("uses a timer-safe sentinel for no-timeout overrides", () => {
+    expect(resolveAgentTimeoutMs({ overrideSeconds: 0 })).toBe(2_147_000_000);
+    expect(resolveAgentTimeoutMs({ overrideMs: 0 })).toBe(2_147_000_000);
+  });
+
+  it("clamps very large timeout overrides to timer-safe values", () => {
+    expect(resolveAgentTimeoutMs({ overrideSeconds: 9_999_999 })).toBe(2_147_000_000);
+    expect(resolveAgentTimeoutMs({ overrideMs: 9_999_999_999 })).toBe(2_147_000_000);
   });
 });

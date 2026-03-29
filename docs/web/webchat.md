@@ -24,9 +24,24 @@ Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket.
 ## How it works (behavior)
 
 - The UI connects to the Gateway WebSocket and uses `chat.history`, `chat.send`, and `chat.inject`.
+- `chat.history` is bounded for stability: Gateway may truncate long text fields, omit heavy metadata, and replace oversized entries with `[chat.history omitted: message too large]`.
 - `chat.inject` appends an assistant note directly to the transcript and broadcasts it to the UI (no agent run).
+- Aborted runs can keep partial assistant output visible in the UI.
+- Gateway persists aborted partial assistant text into transcript history when buffered output exists, and marks those entries with abort metadata.
 - History is always fetched from the gateway (no local file watching).
 - If the gateway is unreachable, WebChat is read-only.
+
+## Control UI agents tools panel
+
+- The Control UI `/agents` Tools panel has two separate views:
+  - **Available Right Now** uses `tools.effective(sessionKey=...)` and shows what the current
+    session can actually use at runtime, including core, plugin, and channel-owned tools.
+  - **Tool Configuration** uses `tools.catalog` and stays focused on profiles, overrides, and
+    catalog semantics.
+- Runtime availability is session-scoped. Switching sessions on the same agent can change the
+  **Available Right Now** list.
+- The config editor does not imply runtime availability; effective access still follows policy
+  precedence (`allow`/`deny`, per-agent and provider/channel overrides).
 
 ## Remote use
 

@@ -1,8 +1,23 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
 
 export type SessionEntry = { type: string; customType: string; data: unknown };
+export type SanitizeSessionHistoryFn = (params: {
+  messages: AgentMessage[];
+  modelApi: string;
+  provider: string;
+  allowedToolNames?: Iterable<string>;
+  sessionManager: SessionManager;
+  sessionId: string;
+  modelId?: string;
+}) => Promise<AgentMessage[]>;
+export type SanitizeSessionHistoryMockedHelpers = typeof import("./pi-embedded-helpers.js");
+export type SanitizeSessionHistoryHarness = {
+  sanitizeSessionHistory: SanitizeSessionHistoryFn;
+  mockedHelpers: SanitizeSessionHistoryMockedHelpers;
+};
+export const TEST_SESSION_ID = "test-session";
 
 export function makeModelSnapshotEntry(data: {
   timestamp?: number;
@@ -31,6 +46,30 @@ export function makeInMemorySessionManager(entries: SessionEntry[]): SessionMana
   } as unknown as SessionManager;
 }
 
+export function makeMockSessionManager(): SessionManager {
+  return {
+    getEntries: vi.fn().mockReturnValue([]),
+    appendCustomEntry: vi.fn(),
+  } as unknown as SessionManager;
+}
+
+export function makeSimpleUserMessages(): AgentMessage[] {
+  const messages = [{ role: "user", content: "hello" }];
+  return messages as unknown as AgentMessage[];
+}
+
+export async function loadSanitizeSessionHistoryWithCleanMocks(): Promise<SanitizeSessionHistoryHarness> {
+  vi.resetModules();
+  vi.resetAllMocks();
+  const mockedHelpers = await import("./pi-embedded-helpers.js");
+  vi.mocked(mockedHelpers.sanitizeSessionMessagesImages).mockImplementation(async (msgs) => msgs);
+  const mod = await import("./pi-embedded-runner/google.js");
+  return {
+    sanitizeSessionHistory: mod.sanitizeSessionHistory,
+    mockedHelpers,
+  };
+}
+
 export function makeReasoningAssistantMessages(opts?: {
   thinkingSignature?: "object" | "json";
 }): AgentMessage[] {
@@ -55,4 +94,62 @@ export function makeReasoningAssistantMessages(opts?: {
   ];
 
   return messages as unknown as AgentMessage[];
+}
+
+export async function sanitizeWithOpenAIResponses(params: {
+  sanitizeSessionHistory: SanitizeSessionHistoryFn;
+  messages: AgentMessage[];
+  sessionManager: SessionManager;
+  modelId?: string;
+}) {
+  return await params.sanitizeSessionHistory({
+    messages: params.messages,
+    modelApi: "openai-responses",
+    provider: "openai",
+    sessionManager: params.sessionManager,
+    modelId: params.modelId,
+    sessionId: TEST_SESSION_ID,
+  });
+}
+
+export function expectOpenAIResponsesStrictSanitizeCall(
+  sanitizeSessionMessagesImagesMock: unknown,
+  messages: AgentMessage[],
+) {
+  expect(sanitizeSessionMessagesImagesMock).toHaveBeenCalledWith(
+    messages,
+    "session:history",
+    expect.objectContaining({
+      sanitizeMode: "images-only",
+      sanitizeToolCallIds: true,
+      toolCallIdMode: "strict",
+    }),
+  );
+}
+
+export function makeSnapshotChangedOpenAIReasoningScenario() {
+  const sessionEntries = [
+    makeModelSnapshotEntry({
+      provider: "anthropic",
+      modelApi: "anthropic-messages",
+      modelId: "claude-3-7",
+    }),
+  ];
+  return {
+    sessionManager: makeInMemorySessionManager(sessionEntries),
+    messages: makeReasoningAssistantMessages({ thinkingSignature: "object" }),
+    modelId: "gpt-5.2-codex",
+  };
+}
+
+export async function sanitizeSnapshotChangedOpenAIReasoning(params: {
+  sanitizeSessionHistory: SanitizeSessionHistoryFn;
+}) {
+  const { sessionManager, messages, modelId } = makeSnapshotChangedOpenAIReasoningScenario();
+  return await sanitizeWithOpenAIResponses({
+    sanitizeSessionHistory: params.sanitizeSessionHistory,
+    messages,
+    modelId,
+    sessionManager,
+  });
 }

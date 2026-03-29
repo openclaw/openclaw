@@ -1,16 +1,23 @@
 import fs from "node:fs";
+import {
+  hasConfiguredUnavailableCredentialStatus,
+  hasResolvedCredentialValue,
+} from "../../channels/account-snapshot-fields.js";
+import {
+  buildChannelAccountSnapshot,
+  formatChannelAllowFrom,
+  resolveChannelAccountConfigured,
+  resolveChannelAccountEnabled,
+} from "../../channels/account-summary.js";
+import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
+import { listChannelPlugins } from "../../channels/plugins/index.js";
 import type {
   ChannelAccountSnapshot,
   ChannelId,
   ChannelPlugin,
 } from "../../channels/plugins/types.js";
+import { inspectReadOnlyChannelAccount } from "../../channels/read-only-account-inspect.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import {
-  buildChannelAccountSnapshot,
-  formatChannelAllowFrom,
-} from "../../channels/account-summary.js";
-import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
-import { listChannelPlugins } from "../../channels/plugins/index.js";
 import { sha256HexPrefix } from "../../logging/redact-identifier.js";
 import { formatTimeAgo } from "./format.js";
 
@@ -28,6 +35,13 @@ type ChannelAccountRow = {
   enabled: boolean;
   configured: boolean;
   snapshot: ChannelAccountSnapshot;
+};
+
+type ResolvedChannelAccountRowParams = {
+  plugin: ChannelPlugin;
+  cfg: OpenClawConfig;
+  sourceConfig: OpenClawConfig;
+  accountId: string;
 };
 
 const asRecord = (value: unknown): Record<string, unknown> =>
@@ -77,36 +91,71 @@ function formatTokenHint(token: string, opts: { showSecrets: boolean }): string 
   return `${head}…${tail} · len ${t.length}`;
 }
 
+async function inspectChannelAccount(
+  plugin: ChannelPlugin,
+  cfg: OpenClawConfig,
+  accountId: string,
+) {
+  return (
+    plugin.config.inspectAccount?.(cfg, accountId) ??
+    (await inspectReadOnlyChannelAccount({
+      channelId: plugin.id,
+      cfg,
+      accountId,
+    }))
+  );
+}
+
+async function resolveChannelAccountRow(
+  params: ResolvedChannelAccountRowParams,
+): Promise<ChannelAccountRow> {
+  const { plugin, cfg, sourceConfig, accountId } = params;
+  const sourceInspectedAccount = await inspectChannelAccount(plugin, sourceConfig, accountId);
+  const resolvedInspectedAccount = await inspectChannelAccount(plugin, cfg, accountId);
+  const resolvedInspection = resolvedInspectedAccount as {
+    enabled?: boolean;
+    configured?: boolean;
+  } | null;
+  const sourceInspection = sourceInspectedAccount as {
+    enabled?: boolean;
+    configured?: boolean;
+  } | null;
+  const resolvedAccount = resolvedInspectedAccount ?? plugin.config.resolveAccount(cfg, accountId);
+  const useSourceUnavailableAccount = Boolean(
+    sourceInspectedAccount &&
+    hasConfiguredUnavailableCredentialStatus(sourceInspectedAccount) &&
+    (!hasResolvedCredentialValue(resolvedAccount) ||
+      (sourceInspection?.configured === true && resolvedInspection?.configured === false)),
+  );
+  const account = useSourceUnavailableAccount ? sourceInspectedAccount : resolvedAccount;
+  const selectedInspection = useSourceUnavailableAccount ? sourceInspection : resolvedInspection;
+  const enabled =
+    selectedInspection?.enabled ?? resolveChannelAccountEnabled({ plugin, account, cfg });
+  const configured =
+    selectedInspection?.configured ??
+    (await resolveChannelAccountConfigured({
+      plugin,
+      account,
+      cfg,
+      readAccountConfiguredField: true,
+    }));
+  const snapshot = buildChannelAccountSnapshot({
+    plugin,
+    cfg,
+    accountId,
+    account,
+    enabled,
+    configured,
+  });
+  return { accountId, account, enabled, configured, snapshot };
+}
+
 const formatAccountLabel = (params: { accountId: string; name?: string }) => {
   const base = params.accountId || "default";
   if (params.name?.trim()) {
     return `${base} (${params.name.trim()})`;
   }
   return base;
-};
-
-const resolveAccountEnabled = (
-  plugin: ChannelPlugin,
-  account: unknown,
-  cfg: OpenClawConfig,
-): boolean => {
-  if (plugin.config.isEnabled) {
-    return plugin.config.isEnabled(account, cfg);
-  }
-  const enabled = asRecord(account).enabled;
-  return enabled !== false;
-};
-
-const resolveAccountConfigured = async (
-  plugin: ChannelPlugin,
-  account: unknown,
-  cfg: OpenClawConfig,
-): Promise<boolean> => {
-  if (plugin.config.isConfigured) {
-    return await plugin.config.isConfigured(account, cfg);
-  }
-  const configured = asRecord(account).configured;
-  return configured !== false;
 };
 
 const buildAccountNotes = (params: {
@@ -131,6 +180,15 @@ const buildAccountNotes = (params: {
   }
   if (snapshot.appTokenSource && snapshot.appTokenSource !== "none") {
     notes.push(`app:${snapshot.appTokenSource}`);
+  }
+  if (
+    snapshot.signingSecretSource &&
+    snapshot.signingSecretSource !== "none" /* pragma: allowlist secret */
+  ) {
+    notes.push(`signing:${snapshot.signingSecretSource}`);
+  }
+  if (hasConfiguredUnavailableCredentialStatus(entry.account)) {
+    notes.push("secret unavailable in this command path");
   }
   if (snapshot.baseUrl) {
     notes.push(snapshot.baseUrl);
@@ -211,14 +269,92 @@ function summarizeTokenConfig(params: {
   }
 
   const accountRecs = enabled.map((a) => asRecord(a.account));
-  const hasBotOrAppTokenFields = accountRecs.some((r) => "botToken" in r || "appToken" in r);
+  const hasBotTokenField = accountRecs.some((r) => "botToken" in r);
+  const hasAppTokenField = accountRecs.some((r) => "appToken" in r);
+  const hasSigningSecretField = accountRecs.some(
+    (r) => "signingSecret" in r || "signingSecretSource" in r || "signingSecretStatus" in r,
+  );
   const hasTokenField = accountRecs.some((r) => "token" in r);
 
-  if (!hasBotOrAppTokenFields && !hasTokenField) {
+  if (!hasBotTokenField && !hasAppTokenField && !hasSigningSecretField && !hasTokenField) {
     return { state: null, detail: null };
   }
 
-  if (hasBotOrAppTokenFields) {
+  const accountIsHttpMode = (rec: Record<string, unknown>) =>
+    typeof rec.mode === "string" && rec.mode.trim() === "http";
+  const hasCredentialAvailable = (
+    rec: Record<string, unknown>,
+    valueKey: string,
+    statusKey: string,
+  ) => {
+    const value = rec[valueKey];
+    if (typeof value === "string" && value.trim()) {
+      return true;
+    }
+    return rec[statusKey] === "available";
+  };
+
+  if (
+    hasBotTokenField &&
+    hasSigningSecretField &&
+    enabled.every((a) => accountIsHttpMode(asRecord(a.account)))
+  ) {
+    const unavailable = enabled.filter((a) => hasConfiguredUnavailableCredentialStatus(a.account));
+    const ready = enabled.filter((a) => {
+      const rec = asRecord(a.account);
+      return (
+        hasCredentialAvailable(rec, "botToken", "botTokenStatus") &&
+        hasCredentialAvailable(rec, "signingSecret", "signingSecretStatus")
+      );
+    });
+    const partial = enabled.filter((a) => {
+      const rec = asRecord(a.account);
+      const hasBot = hasCredentialAvailable(rec, "botToken", "botTokenStatus");
+      const hasSigning = hasCredentialAvailable(rec, "signingSecret", "signingSecretStatus");
+      return (hasBot && !hasSigning) || (!hasBot && hasSigning);
+    });
+
+    if (unavailable.length > 0) {
+      return {
+        state: "warn",
+        detail: `configured http credentials unavailable in this command path · accounts ${unavailable.length}`,
+      };
+    }
+
+    if (partial.length > 0) {
+      return {
+        state: "warn",
+        detail: `partial credentials (need bot+signing) · accounts ${partial.length}`,
+      };
+    }
+
+    if (ready.length === 0) {
+      return { state: "setup", detail: "no credentials (need bot+signing)" };
+    }
+
+    const botSources = summarizeSources(ready.map((a) => a.snapshot.botTokenSource ?? "none"));
+    const signingSources = summarizeSources(
+      ready.map((a) => a.snapshot.signingSecretSource ?? "none"),
+    );
+    const sample = ready[0]?.account ? asRecord(ready[0].account) : {};
+    const botToken = typeof sample.botToken === "string" ? sample.botToken : "";
+    const signingSecret = typeof sample.signingSecret === "string" ? sample.signingSecret : "";
+    const botHint = botToken.trim()
+      ? formatTokenHint(botToken, { showSecrets: params.showSecrets })
+      : "";
+    const signingHint = signingSecret.trim()
+      ? formatTokenHint(signingSecret, { showSecrets: params.showSecrets })
+      : "";
+    const hint =
+      botHint || signingHint ? ` (bot ${botHint || "?"}, signing ${signingHint || "?"})` : "";
+    return {
+      state: "ok",
+      detail: `credentials ok (bot ${botSources.label}, signing ${signingSources.label})${hint} · accounts ${ready.length}/${enabled.length || 1}`,
+    };
+  }
+
+  if (hasBotTokenField && hasAppTokenField) {
+    const unavailable = enabled.filter((a) => hasConfiguredUnavailableCredentialStatus(a.account));
     const ready = enabled.filter((a) => {
       const rec = asRecord(a.account);
       const bot = typeof rec.botToken === "string" ? rec.botToken.trim() : "";
@@ -238,6 +374,13 @@ function summarizeTokenConfig(params: {
       return {
         state: "warn",
         detail: `partial tokens (need bot+app) · accounts ${partial.length}`,
+      };
+    }
+
+    if (unavailable.length > 0) {
+      return {
+        state: "warn",
+        detail: `configured tokens unavailable in this command path · accounts ${unavailable.length}`,
       };
     }
 
@@ -265,10 +408,49 @@ function summarizeTokenConfig(params: {
     };
   }
 
+  if (hasBotTokenField) {
+    const unavailable = enabled.filter((a) => hasConfiguredUnavailableCredentialStatus(a.account));
+    const ready = enabled.filter((a) => {
+      const rec = asRecord(a.account);
+      const bot = typeof rec.botToken === "string" ? rec.botToken.trim() : "";
+      return Boolean(bot);
+    });
+
+    if (unavailable.length > 0) {
+      return {
+        state: "warn",
+        detail: `configured bot token unavailable in this command path · accounts ${unavailable.length}`,
+      };
+    }
+
+    if (ready.length === 0) {
+      return { state: "setup", detail: "no bot token" };
+    }
+
+    const sample = ready[0]?.account ? asRecord(ready[0].account) : {};
+    const botToken = typeof sample.botToken === "string" ? sample.botToken : "";
+    const botHint = botToken.trim()
+      ? formatTokenHint(botToken, { showSecrets: params.showSecrets })
+      : "";
+    const hint = botHint ? ` (${botHint})` : "";
+
+    return {
+      state: "ok",
+      detail: `bot token config${hint} · accounts ${ready.length}/${enabled.length || 1}`,
+    };
+  }
+
+  const unavailable = enabled.filter((a) => hasConfiguredUnavailableCredentialStatus(a.account));
   const ready = enabled.filter((a) => {
     const rec = asRecord(a.account);
     return typeof rec.token === "string" ? Boolean(rec.token.trim()) : false;
   });
+  if (unavailable.length > 0) {
+    return {
+      state: "warn",
+      detail: `configured token unavailable in this command path · accounts ${unavailable.length}`,
+    };
+  }
   if (ready.length === 0) {
     return { state: "setup", detail: "no token" };
   }
@@ -289,7 +471,7 @@ function summarizeTokenConfig(params: {
 // Keep this generic: channel-specific rules belong in the channel plugin.
 export async function buildChannelsTable(
   cfg: OpenClawConfig,
-  opts?: { showSecrets?: boolean },
+  opts?: { showSecrets?: boolean; sourceConfig?: OpenClawConfig },
 ): Promise<{
   rows: ChannelRow[];
   details: Array<{
@@ -316,24 +498,24 @@ export async function buildChannelsTable(
     const resolvedAccountIds = accountIds.length > 0 ? accountIds : [defaultAccountId];
 
     const accounts: ChannelAccountRow[] = [];
+    const sourceConfig = opts?.sourceConfig ?? cfg;
     for (const accountId of resolvedAccountIds) {
-      const account = plugin.config.resolveAccount(cfg, accountId);
-      const enabled = resolveAccountEnabled(plugin, account, cfg);
-      const configured = await resolveAccountConfigured(plugin, account, cfg);
-      const snapshot = buildChannelAccountSnapshot({
-        plugin,
-        cfg,
-        accountId,
-        account,
-        enabled,
-        configured,
-      });
-      accounts.push({ accountId, account, enabled, configured, snapshot });
+      accounts.push(
+        await resolveChannelAccountRow({
+          plugin,
+          cfg,
+          sourceConfig,
+          accountId,
+        }),
+      );
     }
 
     const anyEnabled = accounts.some((a) => a.enabled);
     const enabledAccounts = accounts.filter((a) => a.enabled);
     const configuredAccounts = enabledAccounts.filter((a) => a.configured);
+    const unavailableConfiguredAccounts = enabledAccounts.filter((a) =>
+      hasConfiguredUnavailableCredentialStatus(a.account),
+    );
     const defaultEntry = accounts.find((a) => a.accountId === defaultAccountId) ?? accounts[0];
 
     const summary = plugin.status?.buildChannelSummary
@@ -369,6 +551,9 @@ export async function buildChannelsTable(
         return "warn";
       }
       if (issues.length > 0) {
+        return "warn";
+      }
+      if (unavailableConfiguredAccounts.length > 0) {
         return "warn";
       }
       if (link.linked === false) {
@@ -415,6 +600,13 @@ export async function buildChannelsTable(
         return extra.length > 0 ? `${base} · ${extra.join(" · ")}` : base;
       }
 
+      if (unavailableConfiguredAccounts.length > 0) {
+        if (tokenSummary.detail?.includes("unavailable")) {
+          return tokenSummary.detail;
+        }
+        return `configured credentials unavailable in this command path · accounts ${unavailableConfiguredAccounts.length}`;
+      }
+
       if (tokenSummary.detail) {
         return tokenSummary.detail;
       }
@@ -453,7 +645,10 @@ export async function buildChannelsTable(
               accountId: entry.accountId,
               name: entry.snapshot.name,
             }),
-            Status: entry.enabled ? "OK" : "WARN",
+            Status:
+              entry.enabled && !hasConfiguredUnavailableCredentialStatus(entry.account)
+                ? "OK"
+                : "WARN",
             Notes: notes.join(" · "),
           };
         }),

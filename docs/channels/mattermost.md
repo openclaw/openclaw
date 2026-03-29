@@ -28,7 +28,7 @@ Local checkout (when running from a git repo):
 openclaw plugins install ./extensions/mattermost
 ```
 
-If you choose Mattermost during configure/onboarding and a git checkout is detected,
+If you choose Mattermost during setup and a git checkout is detected,
 OpenClaw will offer the local install path automatically.
 
 Details: [Plugins](/tools/plugin)
@@ -54,6 +54,45 @@ Minimal config:
   },
 }
 ```
+
+## Native slash commands
+
+Native slash commands are opt-in. When enabled, OpenClaw registers `oc_*` slash commands via
+the Mattermost API and receives callback POSTs on the gateway HTTP server.
+
+```json5
+{
+  channels: {
+    mattermost: {
+      commands: {
+        native: true,
+        nativeSkills: true,
+        callbackPath: "/api/channels/mattermost/command",
+        // Use when Mattermost cannot reach the gateway directly (reverse proxy/public URL).
+        callbackUrl: "https://gateway.example.com/api/channels/mattermost/command",
+      },
+    },
+  },
+}
+```
+
+Notes:
+
+- `native: "auto"` defaults to disabled for Mattermost. Set `native: true` to enable.
+- If `callbackUrl` is omitted, OpenClaw derives one from gateway host/port + `callbackPath`.
+- For multi-account setups, `commands` can be set at the top level or under
+  `channels.mattermost.accounts.<id>.commands` (account values override top-level fields).
+- Command callbacks are validated with per-command tokens and fail closed when token checks fail.
+- Reachability requirement: the callback endpoint must be reachable from the Mattermost server.
+  - Do not set `callbackUrl` to `localhost` unless Mattermost runs on the same host/network namespace as OpenClaw.
+  - Do not set `callbackUrl` to your Mattermost base URL unless that URL reverse-proxies `/api/channels/mattermost/command` to OpenClaw.
+  - A quick check is `curl https://<gateway-host>/api/channels/mattermost/command`; a GET should return `405 Method Not Allowed` from OpenClaw, not `404`.
+- Mattermost egress allowlist requirement:
+  - If your callback targets private/tailnet/internal addresses, set Mattermost
+    `ServiceSettings.AllowedUntrustedInternalConnections` to include the callback host/domain.
+  - Use host/domain entries, not full URLs.
+    - Good: `gateway.tailnet-name.ts.net`
+    - Bad: `https://gateway.tailnet-name.ts.net`
 
 ## Environment variables (default account)
 
@@ -90,6 +129,35 @@ Notes:
 - `onchar` still responds to explicit @mentions.
 - `channels.mattermost.requireMention` is honored for legacy configs but `chatmode` is preferred.
 
+## Threading and sessions
+
+Use `channels.mattermost.replyToMode` to control whether channel and group replies stay in the
+main channel or start a thread under the triggering post.
+
+- `off` (default): only reply in a thread when the inbound post is already in one.
+- `first`: for top-level channel/group posts, start a thread under that post and route the
+  conversation to a thread-scoped session.
+- `all`: same behavior as `first` for Mattermost today.
+- Direct messages ignore this setting and stay non-threaded.
+
+Config example:
+
+```json5
+{
+  channels: {
+    mattermost: {
+      replyToMode: "all",
+    },
+  },
+}
+```
+
+Notes:
+
+- Thread-scoped sessions use the triggering post id as the thread root.
+- `first` and `all` are currently equivalent because once Mattermost has a thread root,
+  follow-up chunks and media continue in that same thread.
+
 ## Access control (DMs)
 
 - Default: `channels.mattermost.dmPolicy = "pairing"` (unknown senders get a pairing code).
@@ -101,8 +169,10 @@ Notes:
 ## Channels (groups)
 
 - Default: `channels.mattermost.groupPolicy = "allowlist"` (mention-gated).
-- Allowlist senders with `channels.mattermost.groupAllowFrom` (user IDs or `@username`).
+- Allowlist senders with `channels.mattermost.groupAllowFrom` (user IDs recommended).
+- `@username` matching is mutable and only enabled when `channels.mattermost.dangerouslyAllowNameMatching: true`.
 - Open channels: `channels.mattermost.groupPolicy="open"` (mention-gated).
+- Runtime note: if `channels.mattermost` is completely missing, runtime falls back to `groupPolicy="allowlist"` for group checks (even if `channels.defaults.groupPolicy` is set).
 
 ## Targets for outbound delivery
 
@@ -112,7 +182,219 @@ Use these target formats with `openclaw message send` or cron/webhooks:
 - `user:<id>` for a DM
 - `@username` for a DM (resolved via the Mattermost API)
 
-Bare IDs are treated as channels.
+Bare opaque IDs (like `64ifufp...`) are **ambiguous** in Mattermost (user ID vs channel ID).
+
+OpenClaw resolves them **user-first**:
+
+- If the ID exists as a user (`GET /api/v4/users/<id>` succeeds), OpenClaw sends a **DM** by resolving the direct channel via `/api/v4/channels/direct`.
+- Otherwise the ID is treated as a **channel ID**.
+
+If you need deterministic behavior, always use the explicit prefixes (`user:<id>` / `channel:<id>`).
+
+## DM channel retry
+
+When OpenClaw sends to a Mattermost DM target and needs to resolve the direct channel first, it
+retries transient direct-channel creation failures by default.
+
+Use `channels.mattermost.dmChannelRetry` to tune that behavior globally for the Mattermost plugin,
+or `channels.mattermost.accounts.<id>.dmChannelRetry` for one account.
+
+```json5
+{
+  channels: {
+    mattermost: {
+      dmChannelRetry: {
+        maxRetries: 3,
+        initialDelayMs: 1000,
+        maxDelayMs: 10000,
+        timeoutMs: 30000,
+      },
+    },
+  },
+}
+```
+
+Notes:
+
+- This applies only to DM channel creation (`/api/v4/channels/direct`), not every Mattermost API call.
+- Retries apply to transient failures such as rate limits, 5xx responses, and network or timeout errors.
+- 4xx client errors other than `429` are treated as permanent and are not retried.
+
+## Reactions (message tool)
+
+- Use `message action=react` with `channel=mattermost`.
+- `messageId` is the Mattermost post id.
+- `emoji` accepts names like `thumbsup` or `:+1:` (colons are optional).
+- Set `remove=true` (boolean) to remove a reaction.
+- Reaction add/remove events are forwarded as system events to the routed agent session.
+
+Examples:
+
+```
+message action=react channel=mattermost target=channel:<channelId> messageId=<postId> emoji=thumbsup
+message action=react channel=mattermost target=channel:<channelId> messageId=<postId> emoji=thumbsup remove=true
+```
+
+Config:
+
+- `channels.mattermost.actions.reactions`: enable/disable reaction actions (default true).
+- Per-account override: `channels.mattermost.accounts.<id>.actions.reactions`.
+
+## Interactive buttons (message tool)
+
+Send messages with clickable buttons. When a user clicks a button, the agent receives the
+selection and can respond.
+
+Enable buttons by adding `inlineButtons` to the channel capabilities:
+
+```json5
+{
+  channels: {
+    mattermost: {
+      capabilities: ["inlineButtons"],
+    },
+  },
+}
+```
+
+Use `message action=send` with a `buttons` parameter. Buttons are a 2D array (rows of buttons):
+
+```
+message action=send channel=mattermost target=channel:<channelId> buttons=[[{"text":"Yes","callback_data":"yes"},{"text":"No","callback_data":"no"}]]
+```
+
+Button fields:
+
+- `text` (required): display label.
+- `callback_data` (required): value sent back on click (used as the action ID).
+- `style` (optional): `"default"`, `"primary"`, or `"danger"`.
+
+When a user clicks a button:
+
+1. All buttons are replaced with a confirmation line (e.g., "✓ **Yes** selected by @user").
+2. The agent receives the selection as an inbound message and responds.
+
+Notes:
+
+- Button callbacks use HMAC-SHA256 verification (automatic, no config needed).
+- Mattermost strips callback data from its API responses (security feature), so all buttons
+  are removed on click — partial removal is not possible.
+- Action IDs containing hyphens or underscores are sanitized automatically
+  (Mattermost routing limitation).
+
+Config:
+
+- `channels.mattermost.capabilities`: array of capability strings. Add `"inlineButtons"` to
+  enable the buttons tool description in the agent system prompt.
+- `channels.mattermost.interactions.callbackBaseUrl`: optional external base URL for button
+  callbacks (for example `https://gateway.example.com`). Use this when Mattermost cannot
+  reach the gateway at its bind host directly.
+- In multi-account setups, you can also set the same field under
+  `channels.mattermost.accounts.<id>.interactions.callbackBaseUrl`.
+- If `interactions.callbackBaseUrl` is omitted, OpenClaw derives the callback URL from
+  `gateway.customBindHost` + `gateway.port`, then falls back to `http://localhost:<port>`.
+- Reachability rule: the button callback URL must be reachable from the Mattermost server.
+  `localhost` only works when Mattermost and OpenClaw run on the same host/network namespace.
+- If your callback target is private/tailnet/internal, add its host/domain to Mattermost
+  `ServiceSettings.AllowedUntrustedInternalConnections`.
+
+### Direct API integration (external scripts)
+
+External scripts and webhooks can post buttons directly via the Mattermost REST API
+instead of going through the agent's `message` tool. Use `buildButtonAttachments()` from
+the extension when possible; if posting raw JSON, follow these rules:
+
+**Payload structure:**
+
+```json5
+{
+  channel_id: "<channelId>",
+  message: "Choose an option:",
+  props: {
+    attachments: [
+      {
+        actions: [
+          {
+            id: "mybutton01", // alphanumeric only — see below
+            type: "button", // required, or clicks are silently ignored
+            name: "Approve", // display label
+            style: "primary", // optional: "default", "primary", "danger"
+            integration: {
+              url: "https://gateway.example.com/mattermost/interactions/default",
+              context: {
+                action_id: "mybutton01", // must match button id (for name lookup)
+                action: "approve",
+                // ... any custom fields ...
+                _token: "<hmac>", // see HMAC section below
+              },
+            },
+          },
+        ],
+      },
+    ],
+  },
+}
+```
+
+**Critical rules:**
+
+1. Attachments go in `props.attachments`, not top-level `attachments` (silently ignored).
+2. Every action needs `type: "button"` — without it, clicks are swallowed silently.
+3. Every action needs an `id` field — Mattermost ignores actions without IDs.
+4. Action `id` must be **alphanumeric only** (`[a-zA-Z0-9]`). Hyphens and underscores break
+   Mattermost's server-side action routing (returns 404). Strip them before use.
+5. `context.action_id` must match the button's `id` so the confirmation message shows the
+   button name (e.g., "Approve") instead of a raw ID.
+6. `context.action_id` is required — the interaction handler returns 400 without it.
+
+**HMAC token generation:**
+
+The gateway verifies button clicks with HMAC-SHA256. External scripts must generate tokens
+that match the gateway's verification logic:
+
+1. Derive the secret from the bot token:
+   `HMAC-SHA256(key="openclaw-mattermost-interactions", data=botToken)`
+2. Build the context object with all fields **except** `_token`.
+3. Serialize with **sorted keys** and **no spaces** (the gateway uses `JSON.stringify`
+   with sorted keys, which produces compact output).
+4. Sign: `HMAC-SHA256(key=secret, data=serializedContext)`
+5. Add the resulting hex digest as `_token` in the context.
+
+Python example:
+
+```python
+import hmac, hashlib, json
+
+secret = hmac.new(
+    b"openclaw-mattermost-interactions",
+    bot_token.encode(), hashlib.sha256
+).hexdigest()
+
+ctx = {"action_id": "mybutton01", "action": "approve"}
+payload = json.dumps(ctx, sort_keys=True, separators=(",", ":"))
+token = hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
+
+context = {**ctx, "_token": token}
+```
+
+Common HMAC pitfalls:
+
+- Python's `json.dumps` adds spaces by default (`{"key": "val"}`). Use
+  `separators=(",", ":")` to match JavaScript's compact output (`{"key":"val"}`).
+- Always sign **all** context fields (minus `_token`). The gateway strips `_token` then
+  signs everything remaining. Signing a subset causes silent verification failure.
+- Use `sort_keys=True` — the gateway sorts keys before signing, and Mattermost may
+  reorder context fields when storing the payload.
+- Derive the secret from the bot token (deterministic), not random bytes. The secret
+  must be the same across the process that creates buttons and the gateway that verifies.
+
+## Directory adapter
+
+The Mattermost plugin includes a directory adapter that resolves channel and user names
+via the Mattermost API. This enables `#channel-name` and `@username` targets in
+`openclaw message send` and cron/webhook deliveries.
+
+No configuration is needed — the adapter uses the bot token from the account config.
 
 ## Multi-account
 
@@ -136,3 +418,10 @@ Mattermost supports multiple accounts under `channels.mattermost.accounts`:
 - No replies in channels: ensure the bot is in the channel and mention it (oncall), use a trigger prefix (onchar), or set `chatmode: "onmessage"`.
 - Auth errors: check the bot token, base URL, and whether the account is enabled.
 - Multi-account issues: env vars only apply to the `default` account.
+- Buttons appear as white boxes: the agent may be sending malformed button data. Check that each button has both `text` and `callback_data` fields.
+- Buttons render but clicks do nothing: verify `AllowedUntrustedInternalConnections` in Mattermost server config includes `127.0.0.1 localhost`, and that `EnablePostActionIntegration` is `true` in ServiceSettings.
+- Buttons return 404 on click: the button `id` likely contains hyphens or underscores. Mattermost's action router breaks on non-alphanumeric IDs. Use `[a-zA-Z0-9]` only.
+- Gateway logs `invalid _token`: HMAC mismatch. Check that you sign all context fields (not a subset), use sorted keys, and use compact JSON (no spaces). See the HMAC section above.
+- Gateway logs `missing _token in context`: the `_token` field is not in the button's context. Ensure it is included when building the integration payload.
+- Confirmation shows raw ID instead of button name: `context.action_id` does not match the button's `id`. Set both to the same sanitized value.
+- Agent doesn't know about buttons: add `capabilities: ["inlineButtons"]` to the Mattermost channel config.

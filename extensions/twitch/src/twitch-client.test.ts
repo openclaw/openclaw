@@ -9,9 +9,10 @@
  * - Error handling and edge cases
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelLogSink, TwitchAccountConfig, TwitchChatMessage } from "./types.js";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveTwitchToken } from "./token.js";
 import { TwitchClientManager } from "./twitch-client.js";
+import type { ChannelLogSink, TwitchAccountConfig, TwitchChatMessage } from "./types.js";
 
 // Mock @twurple dependencies
 const mockConnect = vi.fn().mockResolvedValue(undefined);
@@ -83,10 +84,11 @@ vi.mock("./token.js", () => ({
 describe("TwitchClientManager", () => {
   let manager: TwitchClientManager;
   let mockLogger: ChannelLogSink;
+  let resolveTwitchTokenMock: ReturnType<typeof vi.mocked<typeof resolveTwitchToken>>;
 
   const testAccount: TwitchAccountConfig = {
     username: "testbot",
-    token: "oauth:test123456",
+    accessToken: "test123456",
     clientId: "test-client-id",
     channel: "testchannel",
     enabled: true,
@@ -94,13 +96,17 @@ describe("TwitchClientManager", () => {
 
   const testAccount2: TwitchAccountConfig = {
     username: "testbot2",
-    token: "oauth:test789",
+    accessToken: "test789",
     clientId: "test-client-id-2",
     channel: "testchannel2",
     enabled: true,
   };
 
-  beforeEach(async () => {
+  beforeAll(() => {
+    resolveTwitchTokenMock = vi.mocked(resolveTwitchToken);
+  });
+
+  beforeEach(() => {
     // Clear all mocks first
     vi.clearAllMocks();
 
@@ -108,8 +114,7 @@ describe("TwitchClientManager", () => {
     messageHandlers.length = 0;
 
     // Re-set up the default token mock implementation after clearing
-    const { resolveTwitchToken } = await import("./token.js");
-    vi.mocked(resolveTwitchToken).mockReturnValue({
+    resolveTwitchTokenMock.mockReturnValue({
       token: "oauth:mock-token-from-tests",
       source: "config" as const,
     });
@@ -145,8 +150,8 @@ describe("TwitchClientManager", () => {
     it("should use account username as default channel when channel not specified", async () => {
       const accountWithoutChannel: TwitchAccountConfig = {
         ...testAccount,
-        channel: undefined,
-      };
+        channel: "",
+      } as unknown as TwitchAccountConfig;
 
       await manager.getClient(accountWithoutChannel);
 
@@ -172,12 +177,11 @@ describe("TwitchClientManager", () => {
     it("should normalize token by removing oauth: prefix", async () => {
       const accountWithPrefix: TwitchAccountConfig = {
         ...testAccount,
-        token: "oauth:actualtoken123",
+        accessToken: "oauth:actualtoken123",
       };
 
       // Override the mock to return a specific token for this test
-      const { resolveTwitchToken } = await import("./token.js");
-      vi.mocked(resolveTwitchToken).mockReturnValue({
+      resolveTwitchTokenMock.mockReturnValue({
         token: "oauth:actualtoken123",
         source: "config" as const,
       });
@@ -189,8 +193,7 @@ describe("TwitchClientManager", () => {
 
     it("should use token directly when no oauth: prefix", async () => {
       // Override the mock to return a token without oauth: prefix
-      const { resolveTwitchToken } = await import("./token.js");
-      vi.mocked(resolveTwitchToken).mockReturnValue({
+      resolveTwitchTokenMock.mockReturnValue({
         token: "oauth:mock-token-from-tests",
         source: "config" as const,
       });
@@ -207,8 +210,8 @@ describe("TwitchClientManager", () => {
     it("should throw error when clientId is missing", async () => {
       const accountWithoutClientId: TwitchAccountConfig = {
         ...testAccount,
-        clientId: undefined,
-      };
+        clientId: "" as unknown as string,
+      } as unknown as TwitchAccountConfig;
 
       await expect(manager.getClient(accountWithoutClientId)).rejects.toThrow(
         "Missing Twitch client ID",
@@ -221,8 +224,7 @@ describe("TwitchClientManager", () => {
 
     it("should throw error when token is missing", async () => {
       // Override the mock to return empty token
-      const { resolveTwitchToken } = await import("./token.js");
-      vi.mocked(resolveTwitchToken).mockReturnValue({
+      resolveTwitchTokenMock.mockReturnValue({
         token: "",
         source: "none" as const,
       });
@@ -348,8 +350,10 @@ describe("TwitchClientManager", () => {
     it("should send message successfully", async () => {
       const result = await manager.sendMessage(testAccount, "testchannel", "Hello, world!");
 
-      expect(result.ok).toBe(true);
-      expect(result.messageId).toBeDefined();
+      expect(result).toMatchObject({ ok: true });
+      expect(result.messageId).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+      );
       expect(mockSay).toHaveBeenCalledWith("testchannel", "Hello, world!");
     });
 

@@ -8,8 +8,13 @@
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { readJsonBodyWithLimit, requestBodyErrorToText } from "openclaw/plugin-sdk";
-import { z } from "zod";
+import { z } from "openclaw/plugin-sdk/zod";
+import {
+  createFixedWindowRateLimiter,
+  isBlockedHostnameOrIp,
+  readJsonBodyWithLimit,
+  requestBodyErrorToText,
+} from "../api.js";
 import { publishNostrProfile, getNostrProfileState } from "./channel.js";
 import { NostrProfileSchema, type NostrProfile } from "./config-schema.js";
 import { importProfileFromRelays, mergeProfiles } from "./nostr-profile-import.js";
@@ -37,30 +42,29 @@ export interface NostrProfileHttpContext {
 // Rate Limiting
 // ============================================================================
 
-interface RateLimitEntry {
-  count: number;
-  windowStart: number;
-}
-
-const rateLimitMap = new Map<string, RateLimitEntry>();
 const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
 const RATE_LIMIT_MAX_REQUESTS = 5; // 5 requests per minute
+const RATE_LIMIT_MAX_TRACKED_KEYS = 2_048;
+const profileRateLimiter = createFixedWindowRateLimiter({
+  windowMs: RATE_LIMIT_WINDOW_MS,
+  maxRequests: RATE_LIMIT_MAX_REQUESTS,
+  maxTrackedKeys: RATE_LIMIT_MAX_TRACKED_KEYS,
+});
+
+export function clearNostrProfileRateLimitStateForTest(): void {
+  profileRateLimiter.clear();
+}
+
+export function getNostrProfileRateLimitStateSizeForTest(): number {
+  return profileRateLimiter.size();
+}
+
+export function isNostrProfileRateLimitedForTest(accountId: string, nowMs: number): boolean {
+  return profileRateLimiter.isRateLimited(accountId, nowMs);
+}
 
 function checkRateLimit(accountId: string): boolean {
-  const now = Date.now();
-  const entry = rateLimitMap.get(accountId);
-
-  if (!entry || now - entry.windowStart > RATE_LIMIT_WINDOW_MS) {
-    rateLimitMap.set(accountId, { count: 1, windowStart: now });
-    return true;
-  }
-
-  if (entry.count >= RATE_LIMIT_MAX_REQUESTS) {
-    return false;
-  }
-
-  entry.count++;
-  return true;
+  return !profileRateLimiter.isRateLimited(accountId);
 }
 
 // ============================================================================
@@ -98,72 +102,6 @@ async function withPublishLock<T>(accountId: string, fn: () => Promise<T>): Prom
 // SSRF Protection
 // ============================================================================
 
-// Block common private/internal hostnames (quick string check)
-const BLOCKED_HOSTNAMES = new Set([
-  "localhost",
-  "localhost.localdomain",
-  "127.0.0.1",
-  "::1",
-  "[::1]",
-  "0.0.0.0",
-]);
-
-// Check if an IP address (resolved) is in a private range
-function isPrivateIp(ip: string): boolean {
-  // Handle IPv4
-  const ipv4Match = ip.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
-  if (ipv4Match) {
-    const [, a, b] = ipv4Match.map(Number);
-    // 127.0.0.0/8 (loopback)
-    if (a === 127) {
-      return true;
-    }
-    // 10.0.0.0/8 (private)
-    if (a === 10) {
-      return true;
-    }
-    // 172.16.0.0/12 (private)
-    if (a === 172 && b >= 16 && b <= 31) {
-      return true;
-    }
-    // 192.168.0.0/16 (private)
-    if (a === 192 && b === 168) {
-      return true;
-    }
-    // 169.254.0.0/16 (link-local)
-    if (a === 169 && b === 254) {
-      return true;
-    }
-    // 0.0.0.0/8
-    if (a === 0) {
-      return true;
-    }
-    return false;
-  }
-
-  // Handle IPv6
-  const ipLower = ip.toLowerCase().replace(/^\[|\]$/g, "");
-  // ::1 (loopback)
-  if (ipLower === "::1") {
-    return true;
-  }
-  // fe80::/10 (link-local)
-  if (ipLower.startsWith("fe80:")) {
-    return true;
-  }
-  // fc00::/7 (unique local)
-  if (ipLower.startsWith("fc") || ipLower.startsWith("fd")) {
-    return true;
-  }
-  // ::ffff:x.x.x.x (IPv4-mapped IPv6) - extract and check IPv4
-  const v4Mapped = ipLower.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-  if (v4Mapped) {
-    return isPrivateIp(v4Mapped[1]);
-  }
-
-  return false;
-}
-
 function validateUrlSafety(urlStr: string): { ok: true } | { ok: false; error: string } {
   try {
     const url = new URL(urlStr);
@@ -174,18 +112,7 @@ function validateUrlSafety(urlStr: string): { ok: true } | { ok: false; error: s
 
     const hostname = url.hostname.toLowerCase();
 
-    // Quick hostname block check
-    if (BLOCKED_HOSTNAMES.has(hostname)) {
-      return { ok: false, error: "URL must not point to private/internal addresses" };
-    }
-
-    // Check if hostname is an IP address directly
-    if (isPrivateIp(hostname)) {
-      return { ok: false, error: "URL must not point to private/internal addresses" };
-    }
-
-    // Block suspicious TLDs that resolve to localhost
-    if (hostname.endsWith(".localhost") || hostname.endsWith(".local")) {
+    if (isBlockedHostnameOrIp(hostname)) {
       return { ok: false, error: "URL must not point to private/internal addresses" };
     }
 
@@ -297,6 +224,51 @@ function isLoopbackOriginLike(value: string): boolean {
   }
 }
 
+function firstHeaderValue(value: string | string[] | undefined): string | undefined {
+  if (Array.isArray(value)) {
+    return value[0];
+  }
+  return typeof value === "string" ? value : undefined;
+}
+
+function normalizeIpCandidate(raw: string): string {
+  const unquoted = raw.trim().replace(/^"|"$/g, "");
+  const bracketedWithOptionalPort = unquoted.match(/^\[([^[\]]+)\](?::\d+)?$/);
+  if (bracketedWithOptionalPort) {
+    return bracketedWithOptionalPort[1] ?? "";
+  }
+  const ipv4WithPort = unquoted.match(/^(\d+\.\d+\.\d+\.\d+):\d+$/);
+  if (ipv4WithPort) {
+    return ipv4WithPort[1] ?? "";
+  }
+  return unquoted;
+}
+
+function hasNonLoopbackForwardedClient(req: IncomingMessage): boolean {
+  const forwardedFor = firstHeaderValue(req.headers["x-forwarded-for"]);
+  if (forwardedFor) {
+    for (const hop of forwardedFor.split(",")) {
+      const candidate = normalizeIpCandidate(hop);
+      if (!candidate) {
+        continue;
+      }
+      if (!isLoopbackRemoteAddress(candidate)) {
+        return true;
+      }
+    }
+  }
+
+  const realIp = firstHeaderValue(req.headers["x-real-ip"]);
+  if (realIp) {
+    const candidate = normalizeIpCandidate(realIp);
+    if (candidate && !isLoopbackRemoteAddress(candidate)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 function enforceLoopbackMutationGuards(
   ctx: NostrProfileHttpContext,
   req: IncomingMessage,
@@ -310,15 +282,30 @@ function enforceLoopbackMutationGuards(
     return false;
   }
 
+  // If a proxy exposes client-origin headers showing a non-loopback client,
+  // treat this as a remote request and deny mutation.
+  if (hasNonLoopbackForwardedClient(req)) {
+    ctx.log?.warn?.("Rejected mutation with non-loopback forwarded client headers");
+    sendJson(res, 403, { ok: false, error: "Forbidden" });
+    return false;
+  }
+
+  const secFetchSite = firstHeaderValue(req.headers["sec-fetch-site"])?.trim().toLowerCase();
+  if (secFetchSite === "cross-site") {
+    ctx.log?.warn?.("Rejected mutation with cross-site sec-fetch-site header");
+    sendJson(res, 403, { ok: false, error: "Forbidden" });
+    return false;
+  }
+
   // CSRF guard: browsers send Origin/Referer on cross-site requests.
-  const origin = req.headers.origin;
+  const origin = firstHeaderValue(req.headers.origin);
   if (typeof origin === "string" && !isLoopbackOriginLike(origin)) {
     ctx.log?.warn?.(`Rejected mutation with non-loopback origin=${origin}`);
     sendJson(res, 403, { ok: false, error: "Forbidden" });
     return false;
   }
 
-  const referer = req.headers.referer ?? req.headers.referrer;
+  const referer = firstHeaderValue(req.headers.referer ?? req.headers.referrer);
   if (typeof referer === "string" && !isLoopbackOriginLike(referer)) {
     ctx.log?.warn?.(`Rejected mutation with non-loopback referer=${referer}`);
     sendJson(res, 403, { ok: false, error: "Forbidden" });

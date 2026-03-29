@@ -1,16 +1,10 @@
-import type { ElevatedLevel, ReasoningLevel } from "./directives.js";
 import { formatCliCommand } from "../../cli/command-format.js";
-
-export const SYSTEM_MARK = "⚙️";
+import { SYSTEM_MARK, prefixSystemMessage } from "../../infra/system-message.js";
+import { isInternalMessageChannel } from "../../utils/message-channel.js";
+import type { ElevatedLevel, ReasoningLevel } from "./directives.js";
 
 export const formatDirectiveAck = (text: string): string => {
-  if (!text) {
-    return text;
-  }
-  if (text.startsWith(SYSTEM_MARK)) {
-    return text;
-  }
-  return `${SYSTEM_MARK} ${text}`;
+  return prefixSystemMessage(text);
 };
 
 export const formatOptionsLine = (options: string) => `Options: ${options}.`;
@@ -19,6 +13,33 @@ export const withOptions = (line: string, options: string) =>
 
 export const formatElevatedRuntimeHint = () =>
   `${SYSTEM_MARK} Runtime is direct; sandboxing does not apply.`;
+
+export const formatInternalExecPersistenceDeniedText = () =>
+  "Exec defaults require operator.admin for internal gateway callers; skipped persistence.";
+
+export const formatInternalVerbosePersistenceDeniedText = () =>
+  "Verbose defaults require operator.admin for internal gateway callers; skipped persistence.";
+
+export const formatInternalVerboseCurrentReplyOnlyText = () =>
+  "Verbose logging set for the current reply only.";
+
+function canPersistInternalDirective(params: {
+  messageProvider?: string;
+  surface?: string;
+  gatewayClientScopes?: string[];
+}): boolean {
+  const authoritativeChannel = isInternalMessageChannel(params.messageProvider)
+    ? params.messageProvider
+    : params.surface;
+  if (!isInternalMessageChannel(authoritativeChannel)) {
+    return true;
+  }
+  const scopes = params.gatewayClientScopes ?? [];
+  return scopes.includes("operator.admin");
+}
+
+export const canPersistInternalExecDirective = canPersistInternalDirective;
+export const canPersistInternalVerboseDirective = canPersistInternalDirective;
 
 export const formatElevatedEvent = (level: ElevatedLevel) => {
   if (level === "full") {
@@ -39,6 +60,29 @@ export const formatReasoningEvent = (level: ReasoningLevel) => {
   }
   return "Reasoning OFF — hide <think>.";
 };
+
+export function enqueueModeSwitchEvents(params: {
+  enqueueSystemEvent: (text: string, meta: { sessionKey: string; contextKey: string }) => void;
+  sessionEntry: { elevatedLevel?: string | null; reasoningLevel?: string | null };
+  sessionKey: string;
+  elevatedChanged?: boolean;
+  reasoningChanged?: boolean;
+}): void {
+  if (params.elevatedChanged) {
+    const nextElevated = (params.sessionEntry.elevatedLevel ?? "off") as ElevatedLevel;
+    params.enqueueSystemEvent(formatElevatedEvent(nextElevated), {
+      sessionKey: params.sessionKey,
+      contextKey: "mode:elevated",
+    });
+  }
+  if (params.reasoningChanged) {
+    const nextReasoning = (params.sessionEntry.reasoningLevel ?? "off") as ReasoningLevel;
+    params.enqueueSystemEvent(formatReasoningEvent(nextReasoning), {
+      sessionKey: params.sessionKey,
+      contextKey: "mode:reasoning",
+    });
+  }
+}
 
 export function formatElevatedUnavailableText(params: {
   runtimeSandboxed: boolean;

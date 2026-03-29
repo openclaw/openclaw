@@ -1,15 +1,102 @@
 import type { Command } from "commander";
 import JSON5 from "json5";
-import type { RuntimeEnv } from "../runtime.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
-import { danger, info } from "../globals.js";
+import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
+import { CONFIG_PATH } from "../config/paths.js";
+import { isBlockedObjectKey } from "../config/prototype-keys.js";
+import { redactConfigObject } from "../config/redact-snapshot.js";
+import { readBestEffortRuntimeConfigSchema } from "../config/runtime-schema.js";
+import {
+  coerceSecretRef,
+  isValidEnvSecretRefId,
+  resolveSecretInputRef,
+  type SecretProviderConfig,
+  type SecretRef,
+  type SecretRefSource,
+} from "../config/types.secrets.js";
+import { validateConfigObjectRaw } from "../config/validation.js";
+import { SecretProviderSchema } from "../config/zod-schema.core.js";
+import { danger, info, success } from "../globals.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
+import {
+  formatExecSecretRefIdValidationMessage,
+  isValidExecSecretRefId,
+  isValidFileSecretRefId,
+  isValidSecretProviderAlias,
+  secretRefKey,
+  validateExecSecretRefId,
+} from "../secrets/ref-contract.js";
+import { resolveSecretRefValue } from "../secrets/resolve.js";
+import {
+  discoverConfigSecretTargets,
+  resolveConfigSecretTargetByPath,
+} from "../secrets/target-registry.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
+import type {
+  ConfigSetDryRunError,
+  ConfigSetDryRunInputMode,
+  ConfigSetDryRunResult,
+} from "./config-set-dryrun.js";
+import {
+  hasBatchMode,
+  hasProviderBuilderOptions,
+  hasRefBuilderOptions,
+  parseBatchSource,
+  type ConfigSetBatchEntry,
+  type ConfigSetOptions,
+} from "./config-set-input.js";
+import { resolveConfigSetMode } from "./config-set-parser.js";
+import { setCommandJsonMode } from "./program/json-mode.js";
 
 type PathSegment = string;
+type ConfigSetParseOpts = {
+  strictJson?: boolean;
+};
+type ConfigSetInputMode = ConfigSetDryRunInputMode;
+type ConfigSetOperation = {
+  inputMode: ConfigSetInputMode;
+  requestedPath: PathSegment[];
+  setPath: PathSegment[];
+  value: unknown;
+  touchedSecretTargetPath?: string;
+  touchedProviderAlias?: string;
+  assignedRef?: SecretRef;
+};
+
+const GATEWAY_AUTH_MODE_PATH: PathSegment[] = ["gateway", "auth", "mode"];
+const SECRET_PROVIDER_PATH_PREFIX: PathSegment[] = ["secrets", "providers"];
+const CONFIG_SET_EXAMPLE_VALUE = formatCliCommand(
+  "openclaw config set gateway.port 19001 --strict-json",
+);
+const CONFIG_SET_EXAMPLE_REF = formatCliCommand(
+  "openclaw config set channels.discord.token --ref-provider default --ref-source env --ref-id DISCORD_BOT_TOKEN",
+);
+const CONFIG_SET_EXAMPLE_PROVIDER = formatCliCommand(
+  "openclaw config set secrets.providers.vault --provider-source file --provider-path /etc/openclaw/secrets.json --provider-mode json",
+);
+const CONFIG_SET_EXAMPLE_BATCH = formatCliCommand(
+  "openclaw config set --batch-file ./config-set.batch.json --dry-run",
+);
+const CONFIG_SET_DESCRIPTION = [
+  "Set config values by path (value mode, ref/provider builder mode, or batch JSON mode).",
+  "Examples:",
+  CONFIG_SET_EXAMPLE_VALUE,
+  CONFIG_SET_EXAMPLE_REF,
+  CONFIG_SET_EXAMPLE_PROVIDER,
+  CONFIG_SET_EXAMPLE_BATCH,
+].join("\n");
+
+class ConfigSetDryRunValidationError extends Error {
+  constructor(readonly result: ConfigSetDryRunResult) {
+    super("config set dry-run validation failed");
+    this.name = "ConfigSetDryRunValidationError";
+  }
+}
 
 function isIndexSegment(raw: string): boolean {
   return /^[0-9]+$/.test(raw);
@@ -67,13 +154,13 @@ function parsePath(raw: string): PathSegment[] {
   return parts.map((part) => part.trim()).filter(Boolean);
 }
 
-function parseValue(raw: string, opts: { json?: boolean }): unknown {
+function parseValue(raw: string, opts: ConfigSetParseOpts): unknown {
   const trimmed = raw.trim();
-  if (opts.json) {
+  if (opts.strictJson) {
     try {
-      return JSON5.parse(trimmed);
+      return JSON.parse(trimmed);
     } catch (err) {
-      throw new Error(`Failed to parse JSON5 value: ${String(err)}`, { cause: err });
+      throw new Error(`Failed to parse JSON value: ${String(err)}`, { cause: err });
     }
   }
 
@@ -81,6 +168,22 @@ function parseValue(raw: string, opts: { json?: boolean }): unknown {
     return JSON5.parse(trimmed);
   } catch {
     return raw;
+  }
+}
+
+function hasOwnPathKey(value: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function formatDoctorHint(message: string): string {
+  return `Run \`${formatCliCommand("openclaw doctor")}\` ${message}`;
+}
+
+function validatePathSegments(path: PathSegment[]): void {
+  for (const segment of path) {
+    if (!isIndexSegment(segment) && isBlockedObjectKey(segment)) {
+      throw new Error(`Invalid path segment: ${segment}`);
+    }
   }
 }
 
@@ -102,7 +205,7 @@ function getAtPath(root: unknown, path: PathSegment[]): { found: boolean; value?
       continue;
     }
     const record = current as Record<string, unknown>;
-    if (!(segment in record)) {
+    if (!hasOwnPathKey(record, segment)) {
       return { found: false };
     }
     current = record[segment];
@@ -132,7 +235,7 @@ function setAtPath(root: Record<string, unknown>, path: PathSegment[], value: un
       throw new Error(`Cannot traverse into "${segment}" (not an object)`);
     }
     const record = current as Record<string, unknown>;
-    const existing = record[segment];
+    const existing = hasOwnPathKey(record, segment) ? record[segment] : undefined;
     if (!existing || typeof existing !== "object") {
       record[segment] = nextIsIndex ? [] : {};
     }
@@ -173,7 +276,7 @@ function unsetAtPath(root: Record<string, unknown>, path: PathSegment[]): boolea
       continue;
     }
     const record = current as Record<string, unknown>;
-    if (!(segment in record)) {
+    if (!hasOwnPathKey(record, segment)) {
       return false;
     }
     current = record[segment];
@@ -195,7 +298,7 @@ function unsetAtPath(root: Record<string, unknown>, path: PathSegment[]): boolea
     return false;
   }
   const record = current as Record<string, unknown>;
-  if (!(last in record)) {
+  if (!hasOwnPathKey(record, last)) {
     return false;
   }
   delete record[last];
@@ -208,10 +311,10 @@ async function loadValidConfig(runtime: RuntimeEnv = defaultRuntime) {
     return snapshot;
   }
   runtime.error(`Config invalid at ${shortenHomePath(snapshot.path)}.`);
-  for (const issue of snapshot.issues) {
-    runtime.error(`- ${issue.path || "<root>"}: ${issue.message}`);
+  for (const line of formatConfigIssueLines(snapshot.issues, "-", { normalizeRoot: true })) {
+    runtime.error(line);
   }
-  runtime.error(`Run \`${formatCliCommand("openclaw doctor")}\` to repair, then retry.`);
+  runtime.error(formatDoctorHint("to repair, then retry."));
   runtime.exit(1);
   return snapshot;
 }
@@ -221,7 +324,789 @@ function parseRequiredPath(path: string): PathSegment[] {
   if (parsedPath.length === 0) {
     throw new Error("Path is empty.");
   }
+  validatePathSegments(parsedPath);
   return parsedPath;
+}
+
+function pathEquals(path: PathSegment[], expected: PathSegment[]): boolean {
+  return (
+    path.length === expected.length && path.every((segment, index) => segment === expected[index])
+  );
+}
+
+function pruneInactiveGatewayAuthCredentials(params: {
+  root: Record<string, unknown>;
+  operations: ConfigSetOperation[];
+}): string[] {
+  const touchedGatewayAuthMode = params.operations.some((operation) =>
+    pathEquals(operation.requestedPath, GATEWAY_AUTH_MODE_PATH),
+  );
+  if (!touchedGatewayAuthMode) {
+    return [];
+  }
+
+  const gatewayRaw = params.root.gateway;
+  if (!gatewayRaw || typeof gatewayRaw !== "object" || Array.isArray(gatewayRaw)) {
+    return [];
+  }
+  const gateway = gatewayRaw as Record<string, unknown>;
+  const authRaw = gateway.auth;
+  if (!authRaw || typeof authRaw !== "object" || Array.isArray(authRaw)) {
+    return [];
+  }
+  const auth = authRaw as Record<string, unknown>;
+  const mode = typeof auth.mode === "string" ? auth.mode.trim() : "";
+
+  const removedPaths: string[] = [];
+  const remove = (key: "token" | "password") => {
+    if (Object.hasOwn(auth, key)) {
+      delete auth[key];
+      removedPaths.push(`gateway.auth.${key}`);
+    }
+  };
+
+  if (mode === "token") {
+    remove("password");
+  } else if (mode === "password") {
+    remove("token");
+  } else if (mode === "trusted-proxy") {
+    remove("token");
+    remove("password");
+  }
+  return removedPaths;
+}
+
+function toDotPath(path: PathSegment[]): string {
+  return path.join(".");
+}
+
+function parseSecretRefSource(raw: string, label: string): SecretRefSource {
+  const source = raw.trim();
+  if (source === "env" || source === "file" || source === "exec") {
+    return source;
+  }
+  throw new Error(`${label} must be one of: env, file, exec.`);
+}
+
+function parseSecretRefBuilder(params: {
+  provider: string;
+  source: string;
+  id: string;
+  fieldPrefix: string;
+}): SecretRef {
+  const provider = params.provider.trim();
+  if (!provider) {
+    throw new Error(`${params.fieldPrefix}.provider is required.`);
+  }
+  if (!isValidSecretProviderAlias(provider)) {
+    throw new Error(
+      `${params.fieldPrefix}.provider must match /^[a-z][a-z0-9_-]{0,63}$/ (example: "default").`,
+    );
+  }
+
+  const source = parseSecretRefSource(params.source, `${params.fieldPrefix}.source`);
+  const id = params.id.trim();
+  if (!id) {
+    throw new Error(`${params.fieldPrefix}.id is required.`);
+  }
+  if (source === "env" && !isValidEnvSecretRefId(id)) {
+    throw new Error(`${params.fieldPrefix}.id must match /^[A-Z][A-Z0-9_]{0,127}$/ for env refs.`);
+  }
+  if (source === "file" && !isValidFileSecretRefId(id)) {
+    throw new Error(
+      `${params.fieldPrefix}.id must be an absolute JSON pointer (or "value" for singleValue mode).`,
+    );
+  }
+  if (source === "exec") {
+    const validated = validateExecSecretRefId(id);
+    if (!validated.ok) {
+      throw new Error(formatExecSecretRefIdValidationMessage());
+    }
+  }
+  return { source, provider, id };
+}
+
+function parseOptionalPositiveInteger(raw: string | undefined, flag: string): number | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    throw new Error(`${flag} must not be empty.`);
+  }
+  const parsed = Number(trimmed);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`${flag} must be a positive integer.`);
+  }
+  return parsed;
+}
+
+function parseProviderEnvEntries(
+  entries: string[] | undefined,
+): Record<string, string> | undefined {
+  if (!entries || entries.length === 0) {
+    return undefined;
+  }
+  const env: Record<string, string> = {};
+  for (const entry of entries) {
+    const separator = entry.indexOf("=");
+    if (separator <= 0) {
+      throw new Error(`--provider-env expects KEY=VALUE entries (received: "${entry}").`);
+    }
+    const key = entry.slice(0, separator).trim();
+    if (!key) {
+      throw new Error(`--provider-env key must not be empty (received: "${entry}").`);
+    }
+    env[key] = entry.slice(separator + 1);
+  }
+  return Object.keys(env).length > 0 ? env : undefined;
+}
+
+function parseProviderAliasPath(path: PathSegment[]): string {
+  const expectedPrefixMatches =
+    path.length === 3 &&
+    path[0] === SECRET_PROVIDER_PATH_PREFIX[0] &&
+    path[1] === SECRET_PROVIDER_PATH_PREFIX[1];
+  if (!expectedPrefixMatches) {
+    throw new Error(
+      'Provider builder mode requires path "secrets.providers.<alias>" (example: secrets.providers.vault).',
+    );
+  }
+  const alias = path[2] ?? "";
+  if (!isValidSecretProviderAlias(alias)) {
+    throw new Error(
+      `Provider alias "${alias}" must match /^[a-z][a-z0-9_-]{0,63}$/ (example: "default").`,
+    );
+  }
+  return alias;
+}
+
+function buildProviderFromBuilder(opts: ConfigSetOptions): SecretProviderConfig {
+  const sourceRaw = opts.providerSource?.trim();
+  if (!sourceRaw) {
+    throw new Error("--provider-source is required in provider builder mode.");
+  }
+  const source = parseSecretRefSource(sourceRaw, "--provider-source");
+  const timeoutMs = parseOptionalPositiveInteger(opts.providerTimeoutMs, "--provider-timeout-ms");
+  const maxBytes = parseOptionalPositiveInteger(opts.providerMaxBytes, "--provider-max-bytes");
+  const noOutputTimeoutMs = parseOptionalPositiveInteger(
+    opts.providerNoOutputTimeoutMs,
+    "--provider-no-output-timeout-ms",
+  );
+  const maxOutputBytes = parseOptionalPositiveInteger(
+    opts.providerMaxOutputBytes,
+    "--provider-max-output-bytes",
+  );
+  const providerEnv = parseProviderEnvEntries(opts.providerEnv);
+
+  let provider: SecretProviderConfig;
+  if (source === "env") {
+    const allowlist = (opts.providerAllowlist ?? []).map((entry) => entry.trim()).filter(Boolean);
+    for (const envName of allowlist) {
+      if (!isValidEnvSecretRefId(envName)) {
+        throw new Error(
+          `--provider-allowlist entry "${envName}" must match /^[A-Z][A-Z0-9_]{0,127}$/.`,
+        );
+      }
+    }
+    provider = {
+      source: "env",
+      ...(allowlist.length > 0 ? { allowlist } : {}),
+    };
+  } else if (source === "file") {
+    const filePath = opts.providerPath?.trim();
+    if (!filePath) {
+      throw new Error("--provider-path is required when --provider-source file is used.");
+    }
+    const modeRaw = opts.providerMode?.trim();
+    if (modeRaw && modeRaw !== "singleValue" && modeRaw !== "json") {
+      throw new Error("--provider-mode must be one of: singleValue, json.");
+    }
+    const mode = modeRaw === "singleValue" || modeRaw === "json" ? modeRaw : undefined;
+    provider = {
+      source: "file",
+      path: filePath,
+      ...(mode ? { mode } : {}),
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+      ...(maxBytes !== undefined ? { maxBytes } : {}),
+    };
+  } else {
+    const command = opts.providerCommand?.trim();
+    if (!command) {
+      throw new Error("--provider-command is required when --provider-source exec is used.");
+    }
+    provider = {
+      source: "exec",
+      command,
+      ...(opts.providerArg && opts.providerArg.length > 0
+        ? { args: opts.providerArg.map((entry) => entry.trim()) }
+        : {}),
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+      ...(noOutputTimeoutMs !== undefined ? { noOutputTimeoutMs } : {}),
+      ...(maxOutputBytes !== undefined ? { maxOutputBytes } : {}),
+      ...(opts.providerJsonOnly ? { jsonOnly: true } : {}),
+      ...(providerEnv ? { env: providerEnv } : {}),
+      ...(opts.providerPassEnv && opts.providerPassEnv.length > 0
+        ? { passEnv: opts.providerPassEnv.map((entry) => entry.trim()).filter(Boolean) }
+        : {}),
+      ...(opts.providerTrustedDir && opts.providerTrustedDir.length > 0
+        ? { trustedDirs: opts.providerTrustedDir.map((entry) => entry.trim()).filter(Boolean) }
+        : {}),
+      ...(opts.providerAllowInsecurePath ? { allowInsecurePath: true } : {}),
+      ...(opts.providerAllowSymlinkCommand ? { allowSymlinkCommand: true } : {}),
+    };
+  }
+
+  const validated = SecretProviderSchema.safeParse(provider);
+  if (!validated.success) {
+    const issue = validated.error.issues[0];
+    const issuePath = issue?.path?.join(".") ?? "<provider>";
+    const issueMessage = issue?.message ?? "Invalid provider config.";
+    throw new Error(`Provider builder config invalid at ${issuePath}: ${issueMessage}`);
+  }
+  return validated.data;
+}
+
+function parseSecretRefFromUnknown(value: unknown, label: string): SecretRef {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${label} must be an object with source/provider/id.`);
+  }
+  const candidate = value as Record<string, unknown>;
+  if (
+    typeof candidate.provider !== "string" ||
+    typeof candidate.source !== "string" ||
+    typeof candidate.id !== "string"
+  ) {
+    throw new Error(`${label} must include string fields: source, provider, id.`);
+  }
+  return parseSecretRefBuilder({
+    provider: candidate.provider,
+    source: candidate.source,
+    id: candidate.id,
+    fieldPrefix: label,
+  });
+}
+
+function buildRefAssignmentOperation(params: {
+  requestedPath: PathSegment[];
+  ref: SecretRef;
+  inputMode: ConfigSetInputMode;
+}): ConfigSetOperation {
+  const resolved = resolveConfigSecretTargetByPath(params.requestedPath);
+  if (resolved?.entry.secretShape === "sibling_ref" && resolved.refPathSegments) {
+    return {
+      inputMode: params.inputMode,
+      requestedPath: params.requestedPath,
+      setPath: resolved.refPathSegments,
+      value: params.ref,
+      touchedSecretTargetPath: toDotPath(resolved.pathSegments),
+      assignedRef: params.ref,
+      ...(resolved.providerId ? { touchedProviderAlias: resolved.providerId } : {}),
+    };
+  }
+  return {
+    inputMode: params.inputMode,
+    requestedPath: params.requestedPath,
+    setPath: params.requestedPath,
+    value: params.ref,
+    touchedSecretTargetPath: resolved
+      ? toDotPath(resolved.pathSegments)
+      : toDotPath(params.requestedPath),
+    assignedRef: params.ref,
+    ...(resolved?.providerId ? { touchedProviderAlias: resolved.providerId } : {}),
+  };
+}
+
+function parseProviderAliasFromTargetPath(path: PathSegment[]): string | null {
+  if (
+    path.length >= 3 &&
+    path[0] === SECRET_PROVIDER_PATH_PREFIX[0] &&
+    path[1] === SECRET_PROVIDER_PATH_PREFIX[1]
+  ) {
+    return path[2] ?? null;
+  }
+  return null;
+}
+
+function buildValueAssignmentOperation(params: {
+  requestedPath: PathSegment[];
+  value: unknown;
+  inputMode: ConfigSetInputMode;
+}): ConfigSetOperation {
+  const resolved = resolveConfigSecretTargetByPath(params.requestedPath);
+  const providerAlias = parseProviderAliasFromTargetPath(params.requestedPath);
+  const coercedRef = coerceSecretRef(params.value);
+  return {
+    inputMode: params.inputMode,
+    requestedPath: params.requestedPath,
+    setPath: params.requestedPath,
+    value: params.value,
+    ...(resolved ? { touchedSecretTargetPath: toDotPath(resolved.pathSegments) } : {}),
+    ...(providerAlias ? { touchedProviderAlias: providerAlias } : {}),
+    ...(coercedRef ? { assignedRef: coercedRef } : {}),
+  };
+}
+
+function parseBatchOperations(entries: ConfigSetBatchEntry[]): ConfigSetOperation[] {
+  const operations: ConfigSetOperation[] = [];
+  for (const [index, entry] of entries.entries()) {
+    const path = parseRequiredPath(entry.path);
+    if (entry.ref !== undefined) {
+      const ref = parseSecretRefFromUnknown(entry.ref, `batch[${index}].ref`);
+      operations.push(
+        buildRefAssignmentOperation({
+          requestedPath: path,
+          ref,
+          inputMode: "json",
+        }),
+      );
+      continue;
+    }
+    if (entry.provider !== undefined) {
+      const alias = parseProviderAliasPath(path);
+      const validated = SecretProviderSchema.safeParse(entry.provider);
+      if (!validated.success) {
+        const issue = validated.error.issues[0];
+        const issuePath = issue?.path?.join(".") ?? "<provider>";
+        throw new Error(
+          `batch[${index}].provider invalid at ${issuePath}: ${issue?.message ?? ""}`,
+        );
+      }
+      operations.push({
+        inputMode: "json",
+        requestedPath: path,
+        setPath: path,
+        value: validated.data,
+        touchedProviderAlias: alias,
+      });
+      continue;
+    }
+    operations.push(
+      buildValueAssignmentOperation({
+        requestedPath: path,
+        value: entry.value,
+        inputMode: "json",
+      }),
+    );
+  }
+  return operations;
+}
+
+function modeError(message: string): Error {
+  return new Error(`config set mode error: ${message}`);
+}
+
+function buildSingleSetOperations(params: {
+  path?: string;
+  value?: string;
+  opts: ConfigSetOptions;
+}): ConfigSetOperation[] {
+  const pathProvided = typeof params.path === "string" && params.path.trim().length > 0;
+  const parsedPath = pathProvided ? parseRequiredPath(params.path as string) : null;
+  const strictJson = Boolean(params.opts.strictJson || params.opts.json);
+  const modeResolution = resolveConfigSetMode({
+    hasBatchMode: false,
+    hasRefBuilderOptions: hasRefBuilderOptions(params.opts),
+    hasProviderBuilderOptions: hasProviderBuilderOptions(params.opts),
+    strictJson,
+  });
+  if (!modeResolution.ok) {
+    throw modeError(modeResolution.error);
+  }
+
+  if (modeResolution.mode === "ref_builder") {
+    if (!pathProvided || !parsedPath) {
+      throw modeError("ref builder mode requires <path>.");
+    }
+    if (params.value !== undefined) {
+      throw modeError("ref builder mode does not accept <value>.");
+    }
+    if (!params.opts.refProvider || !params.opts.refSource || !params.opts.refId) {
+      throw modeError(
+        "ref builder mode requires --ref-provider <alias>, --ref-source <env|file|exec>, and --ref-id <id>.",
+      );
+    }
+    const ref = parseSecretRefBuilder({
+      provider: params.opts.refProvider,
+      source: params.opts.refSource,
+      id: params.opts.refId,
+      fieldPrefix: "ref",
+    });
+    return [
+      buildRefAssignmentOperation({
+        requestedPath: parsedPath,
+        ref,
+        inputMode: "builder",
+      }),
+    ];
+  }
+
+  if (modeResolution.mode === "provider_builder") {
+    if (!pathProvided || !parsedPath) {
+      throw modeError("provider builder mode requires <path>.");
+    }
+    if (params.value !== undefined) {
+      throw modeError("provider builder mode does not accept <value>.");
+    }
+    const alias = parseProviderAliasPath(parsedPath);
+    const provider = buildProviderFromBuilder(params.opts);
+    return [
+      {
+        inputMode: "builder",
+        requestedPath: parsedPath,
+        setPath: parsedPath,
+        value: provider,
+        touchedProviderAlias: alias,
+      },
+    ];
+  }
+
+  if (!pathProvided || !parsedPath) {
+    throw modeError("value/json mode requires <path> when batch mode is not used.");
+  }
+  if (params.value === undefined) {
+    throw modeError("value/json mode requires <value>.");
+  }
+  const parsedValue = parseValue(params.value, { strictJson });
+  return [
+    buildValueAssignmentOperation({
+      requestedPath: parsedPath,
+      value: parsedValue,
+      inputMode: modeResolution.mode === "json" ? "json" : "value",
+    }),
+  ];
+}
+
+function collectDryRunRefs(params: {
+  config: OpenClawConfig;
+  operations: ConfigSetOperation[];
+}): SecretRef[] {
+  const refsByKey = new Map<string, SecretRef>();
+  const targetPaths = new Set<string>();
+  const providerAliases = new Set<string>();
+
+  for (const operation of params.operations) {
+    if (operation.assignedRef) {
+      refsByKey.set(secretRefKey(operation.assignedRef), operation.assignedRef);
+    }
+    if (operation.touchedSecretTargetPath) {
+      targetPaths.add(operation.touchedSecretTargetPath);
+    }
+    if (operation.touchedProviderAlias) {
+      providerAliases.add(operation.touchedProviderAlias);
+    }
+  }
+
+  if (targetPaths.size === 0 && providerAliases.size === 0) {
+    return [...refsByKey.values()];
+  }
+
+  const defaults = params.config.secrets?.defaults;
+  for (const target of discoverConfigSecretTargets(params.config)) {
+    const { ref } = resolveSecretInputRef({
+      value: target.value,
+      refValue: target.refValue,
+      defaults,
+    });
+    if (!ref) {
+      continue;
+    }
+    if (targetPaths.has(target.path) || providerAliases.has(ref.provider)) {
+      refsByKey.set(secretRefKey(ref), ref);
+    }
+  }
+  return [...refsByKey.values()];
+}
+
+async function collectDryRunResolvabilityErrors(params: {
+  refs: SecretRef[];
+  config: OpenClawConfig;
+}): Promise<ConfigSetDryRunError[]> {
+  const failures: ConfigSetDryRunError[] = [];
+  for (const ref of params.refs) {
+    try {
+      await resolveSecretRefValue(ref, {
+        config: params.config,
+        env: process.env,
+      });
+    } catch (err) {
+      failures.push({
+        kind: "resolvability",
+        message: String(err),
+        ref: `${ref.source}:${ref.provider}:${ref.id}`,
+      });
+    }
+  }
+  return failures;
+}
+
+function collectDryRunStaticErrorsForSkippedExecRefs(params: {
+  refs: SecretRef[];
+  config: OpenClawConfig;
+}): ConfigSetDryRunError[] {
+  const failures: ConfigSetDryRunError[] = [];
+  for (const ref of params.refs) {
+    const id = ref.id.trim();
+    const refLabel = `${ref.source}:${ref.provider}:${id}`;
+    if (!id) {
+      failures.push({
+        kind: "resolvability",
+        message: "Error: Secret reference id is empty.",
+        ref: refLabel,
+      });
+      continue;
+    }
+    if (!isValidExecSecretRefId(id)) {
+      failures.push({
+        kind: "resolvability",
+        message: `Error: ${formatExecSecretRefIdValidationMessage()} (ref: ${refLabel}).`,
+        ref: refLabel,
+      });
+      continue;
+    }
+    const providerConfig = params.config.secrets?.providers?.[ref.provider];
+    if (!providerConfig) {
+      failures.push({
+        kind: "resolvability",
+        message: `Error: Secret provider "${ref.provider}" is not configured (ref: ${refLabel}).`,
+        ref: refLabel,
+      });
+      continue;
+    }
+    if (providerConfig.source !== ref.source) {
+      failures.push({
+        kind: "resolvability",
+        message: `Error: Secret provider "${ref.provider}" has source "${providerConfig.source}" but ref requests "${ref.source}".`,
+        ref: refLabel,
+      });
+    }
+  }
+  return failures;
+}
+
+function selectDryRunRefsForResolution(params: { refs: SecretRef[]; allowExecInDryRun: boolean }): {
+  refsToResolve: SecretRef[];
+  skippedExecRefs: SecretRef[];
+} {
+  const refsToResolve: SecretRef[] = [];
+  const skippedExecRefs: SecretRef[] = [];
+  for (const ref of params.refs) {
+    if (ref.source === "exec" && !params.allowExecInDryRun) {
+      skippedExecRefs.push(ref);
+      continue;
+    }
+    refsToResolve.push(ref);
+  }
+  return { refsToResolve, skippedExecRefs };
+}
+
+function collectDryRunSchemaErrors(config: OpenClawConfig): ConfigSetDryRunError[] {
+  const validated = validateConfigObjectRaw(config);
+  if (validated.ok) {
+    return [];
+  }
+  return formatConfigIssueLines(validated.issues, "-", { normalizeRoot: true }).map((message) => ({
+    kind: "schema",
+    message,
+  }));
+}
+
+function formatDryRunFailureMessage(params: {
+  errors: ConfigSetDryRunError[];
+  skippedExecRefs: number;
+}): string {
+  const { errors, skippedExecRefs } = params;
+  const schemaErrors = errors.filter((error) => error.kind === "schema");
+  const resolveErrors = errors.filter((error) => error.kind === "resolvability");
+  const lines: string[] = [];
+  if (schemaErrors.length > 0) {
+    lines.push("Dry run failed: config schema validation failed.");
+    lines.push(...schemaErrors.map((error) => `- ${error.message}`));
+  }
+  if (resolveErrors.length > 0) {
+    lines.push(
+      `Dry run failed: ${resolveErrors.length} SecretRef assignment(s) could not be resolved.`,
+    );
+    lines.push(
+      ...resolveErrors
+        .slice(0, 5)
+        .map((error) => `- ${error.ref ?? "<unknown-ref>"} -> ${error.message}`),
+    );
+    if (resolveErrors.length > 5) {
+      lines.push(`- ... ${resolveErrors.length - 5} more`);
+    }
+  }
+  if (skippedExecRefs > 0) {
+    lines.push(
+      `Dry run note: skipped ${skippedExecRefs} exec SecretRef resolvability check(s). Re-run with --allow-exec to execute exec providers during dry-run.`,
+    );
+  }
+  return lines.join("\n");
+}
+
+export async function runConfigSet(opts: {
+  path?: string;
+  value?: string;
+  cliOptions: ConfigSetOptions;
+  runtime?: RuntimeEnv;
+}) {
+  const runtime = opts.runtime ?? defaultRuntime;
+  try {
+    const isBatchMode = hasBatchMode(opts.cliOptions);
+    const modeResolution = resolveConfigSetMode({
+      hasBatchMode: isBatchMode,
+      hasRefBuilderOptions: hasRefBuilderOptions(opts.cliOptions),
+      hasProviderBuilderOptions: hasProviderBuilderOptions(opts.cliOptions),
+      strictJson: Boolean(opts.cliOptions.strictJson || opts.cliOptions.json),
+    });
+    if (!modeResolution.ok) {
+      throw modeError(modeResolution.error);
+    }
+    if (opts.cliOptions.allowExec && !opts.cliOptions.dryRun) {
+      throw modeError("--allow-exec requires --dry-run.");
+    }
+
+    const batchEntries = parseBatchSource(opts.cliOptions);
+    if (batchEntries) {
+      if (opts.path !== undefined || opts.value !== undefined) {
+        throw modeError("batch mode does not accept <path> or <value> arguments.");
+      }
+    }
+    const operations = batchEntries
+      ? parseBatchOperations(batchEntries)
+      : buildSingleSetOperations({
+          path: opts.path,
+          value: opts.value,
+          opts: opts.cliOptions,
+        });
+    const snapshot = await loadValidConfig(runtime);
+    // Use snapshot.resolved (config after $include and ${ENV} resolution, but BEFORE runtime defaults)
+    // instead of snapshot.config (runtime-merged with defaults).
+    // This prevents runtime defaults from leaking into the written config file (issue #6070)
+    const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
+    for (const operation of operations) {
+      setAtPath(next, operation.setPath, operation.value);
+    }
+    const removedGatewayAuthPaths = pruneInactiveGatewayAuthCredentials({
+      root: next,
+      operations,
+    });
+    const nextConfig = next as OpenClawConfig;
+
+    if (opts.cliOptions.dryRun) {
+      const hasJsonMode = operations.some((operation) => operation.inputMode === "json");
+      const hasBuilderMode = operations.some((operation) => operation.inputMode === "builder");
+      const refs =
+        hasJsonMode || hasBuilderMode
+          ? collectDryRunRefs({
+              config: nextConfig,
+              operations,
+            })
+          : [];
+      const selectedDryRunRefs = selectDryRunRefsForResolution({
+        refs,
+        allowExecInDryRun: Boolean(opts.cliOptions.allowExec),
+      });
+      const errors: ConfigSetDryRunError[] = [];
+      if (hasJsonMode) {
+        errors.push(...collectDryRunSchemaErrors(nextConfig));
+      }
+      if (hasJsonMode || hasBuilderMode) {
+        errors.push(
+          ...collectDryRunStaticErrorsForSkippedExecRefs({
+            refs: selectedDryRunRefs.skippedExecRefs,
+            config: nextConfig,
+          }),
+        );
+        errors.push(
+          ...(await collectDryRunResolvabilityErrors({
+            refs: selectedDryRunRefs.refsToResolve,
+            config: nextConfig,
+          })),
+        );
+      }
+      const dryRunResult: ConfigSetDryRunResult = {
+        ok: errors.length === 0,
+        operations: operations.length,
+        configPath: shortenHomePath(snapshot.path),
+        inputModes: [...new Set(operations.map((operation) => operation.inputMode))],
+        checks: {
+          schema: hasJsonMode,
+          resolvability: hasJsonMode || hasBuilderMode,
+          resolvabilityComplete:
+            (hasJsonMode || hasBuilderMode) && selectedDryRunRefs.skippedExecRefs.length === 0,
+        },
+        refsChecked: selectedDryRunRefs.refsToResolve.length,
+        skippedExecRefs: selectedDryRunRefs.skippedExecRefs.length,
+        ...(errors.length > 0 ? { errors } : {}),
+      };
+      if (errors.length > 0) {
+        if (opts.cliOptions.json) {
+          throw new ConfigSetDryRunValidationError(dryRunResult);
+        }
+        throw new Error(
+          formatDryRunFailureMessage({
+            errors,
+            skippedExecRefs: selectedDryRunRefs.skippedExecRefs.length,
+          }),
+        );
+      }
+      if (opts.cliOptions.json) {
+        writeRuntimeJson(runtime, dryRunResult);
+      } else {
+        if (!dryRunResult.checks.schema && !dryRunResult.checks.resolvability) {
+          runtime.log(
+            info(
+              "Dry run note: value mode does not run schema/resolvability checks. Use --strict-json, builder flags, or batch mode to enable validation checks.",
+            ),
+          );
+        }
+        if (dryRunResult.skippedExecRefs > 0) {
+          runtime.log(
+            info(
+              `Dry run note: skipped ${dryRunResult.skippedExecRefs} exec SecretRef resolvability check(s). Re-run with --allow-exec to execute exec providers during dry-run.`,
+            ),
+          );
+        }
+        runtime.log(
+          info(
+            `Dry run successful: ${operations.length} update(s) validated against ${shortenHomePath(snapshot.path)}.`,
+          ),
+        );
+      }
+      return;
+    }
+
+    await writeConfigFile(next);
+    if (removedGatewayAuthPaths.length > 0) {
+      runtime.log(
+        info(
+          `Removed inactive ${removedGatewayAuthPaths.join(", ")} for gateway.auth.mode=${String(nextConfig.gateway?.auth?.mode ?? "<unset>")}.`,
+        ),
+      );
+    }
+    if (operations.length === 1) {
+      runtime.log(
+        info(
+          `Updated ${toDotPath(operations[0]?.requestedPath ?? [])}. Restart the gateway to apply.`,
+        ),
+      );
+      return;
+    }
+    runtime.log(info(`Updated ${operations.length} config paths. Restart the gateway to apply.`));
+  } catch (err) {
+    if (
+      opts.cliOptions.dryRun &&
+      opts.cliOptions.json &&
+      err instanceof ConfigSetDryRunValidationError
+    ) {
+      writeRuntimeJson(runtime, err.result);
+      runtime.exit(1);
+      return;
+    }
+    runtime.error(danger(String(err)));
+    runtime.exit(1);
+  }
 }
 
 export async function runConfigGet(opts: { path: string; json?: boolean; runtime?: RuntimeEnv }) {
@@ -229,14 +1114,15 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
   try {
     const parsedPath = parseRequiredPath(opts.path);
     const snapshot = await loadValidConfig(runtime);
-    const res = getAtPath(snapshot.config, parsedPath);
+    const redacted = redactConfigObject(snapshot.config);
+    const res = getAtPath(redacted, parsedPath);
     if (!res.found) {
       runtime.error(danger(`Config path not found: ${opts.path}`));
       runtime.exit(1);
       return;
     }
     if (opts.json) {
-      runtime.log(JSON.stringify(res.value ?? null, null, 2));
+      writeRuntimeJson(runtime, res.value ?? null);
       return;
     }
     if (
@@ -247,7 +1133,7 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
       runtime.log(String(res.value));
       return;
     }
-    runtime.log(JSON.stringify(res.value ?? null, null, 2));
+    writeRuntimeJson(runtime, res.value ?? null);
   } catch (err) {
     runtime.error(danger(String(err)));
     runtime.exit(1);
@@ -269,7 +1155,7 @@ export async function runConfigUnset(opts: { path: string; runtime?: RuntimeEnv 
       runtime.exit(1);
       return;
     }
-    await writeConfigFile(next);
+    await writeConfigFile(next, { unsetPaths: [parsedPath] });
     runtime.log(info(`Removed ${opts.path}. Restart the gateway to apply.`));
   } catch (err) {
     runtime.error(danger(String(err)));
@@ -277,10 +1163,98 @@ export async function runConfigUnset(opts: { path: string; runtime?: RuntimeEnv 
   }
 }
 
+export async function runConfigFile(opts: { runtime?: RuntimeEnv }) {
+  const runtime = opts.runtime ?? defaultRuntime;
+  try {
+    const snapshot = await readConfigFileSnapshot();
+    runtime.log(shortenHomePath(snapshot.path));
+  } catch (err) {
+    runtime.error(danger(String(err)));
+    runtime.exit(1);
+  }
+}
+
+async function buildCliConfigSchema(): Promise<Record<string, unknown>> {
+  const schema = structuredClone((await readBestEffortRuntimeConfigSchema()).schema) as {
+    properties?: Record<string, unknown>;
+    required?: string[];
+  };
+
+  schema.properties = {
+    $schema: { type: "string" },
+    ...schema.properties,
+  };
+
+  return schema;
+}
+
+export async function runConfigSchema(opts: { runtime?: RuntimeEnv } = {}) {
+  const runtime = opts.runtime ?? defaultRuntime;
+  try {
+    writeRuntimeJson(runtime, await buildCliConfigSchema());
+  } catch (err) {
+    runtime.error(danger(`Config schema error: ${String(err)}`));
+    runtime.exit(1);
+  }
+}
+
+export async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } = {}) {
+  const runtime = opts.runtime ?? defaultRuntime;
+  let outputPath = CONFIG_PATH ?? "openclaw.json";
+
+  try {
+    const snapshot = await readConfigFileSnapshot();
+    outputPath = snapshot.path;
+    const shortPath = shortenHomePath(outputPath);
+
+    if (!snapshot.exists) {
+      if (opts.json) {
+        writeRuntimeJson(runtime, { valid: false, path: outputPath, error: "file not found" }, 0);
+      } else {
+        runtime.error(danger(`Config file not found: ${shortPath}`));
+      }
+      runtime.exit(1);
+      return;
+    }
+
+    if (!snapshot.valid) {
+      const issues = normalizeConfigIssues(snapshot.issues);
+
+      if (opts.json) {
+        writeRuntimeJson(runtime, { valid: false, path: outputPath, issues });
+      } else {
+        runtime.error(danger(`Config invalid at ${shortPath}:`));
+        for (const line of formatConfigIssueLines(issues, danger("×"), { normalizeRoot: true })) {
+          runtime.error(`  ${line}`);
+        }
+        runtime.error("");
+        runtime.error(formatDoctorHint("to repair, or fix the keys above manually."));
+      }
+      runtime.exit(1);
+      return;
+    }
+
+    if (opts.json) {
+      writeRuntimeJson(runtime, { valid: true, path: outputPath }, 0);
+    } else {
+      runtime.log(success(`Config valid: ${shortPath}`));
+    }
+  } catch (err) {
+    if (opts.json) {
+      writeRuntimeJson(runtime, { valid: false, path: outputPath, error: String(err) }, 0);
+    } else {
+      runtime.error(danger(`Config validation error: ${String(err)}`));
+    }
+    runtime.exit(1);
+  }
+}
+
 export function registerConfigCli(program: Command) {
   const cmd = program
     .command("config")
-    .description("Config helpers (get/set/unset). Run without subcommand for the wizard.")
+    .description(
+      "Non-interactive config helpers (get/set/unset/file/schema/validate). Run without subcommand for guided setup.",
+    )
     .addHelpText(
       "after",
       () =>
@@ -288,32 +1262,13 @@ export function registerConfigCli(program: Command) {
     )
     .option(
       "--section <section>",
-      "Configure wizard sections (repeatable). Use with no subcommand.",
+      "Configuration sections for guided setup (repeatable). Use with no subcommand.",
       (value: string, previous: string[]) => [...previous, value],
       [] as string[],
     )
     .action(async (opts) => {
-      const {
-        CONFIGURE_WIZARD_SECTIONS,
-        configureCommand,
-        configureCommandWithSections,
-        parseConfigureWizardSections,
-      } = await import("../commands/configure.js");
-      const { sections, invalid } = parseConfigureWizardSections(opts.section);
-      if (sections.length === 0) {
-        await configureCommand(defaultRuntime);
-        return;
-      }
-
-      if (invalid.length > 0) {
-        defaultRuntime.error(
-          `Invalid --section: ${invalid.join(", ")}. Expected one of: ${CONFIGURE_WIZARD_SECTIONS.join(", ")}.`,
-        );
-        defaultRuntime.exit(1);
-        return;
-      }
-
-      await configureCommandWithSections(sections as never, defaultRuntime);
+      const { configureCommandFromSectionsArg } = await import("../commands/configure.js");
+      await configureCommandFromSectionsArg(opts.section, defaultRuntime);
     });
 
   cmd
@@ -325,31 +1280,82 @@ export function registerConfigCli(program: Command) {
       await runConfigGet({ path, json: Boolean(opts.json) });
     });
 
-  cmd
-    .command("set")
-    .description("Set a config value by dot path")
-    .argument("<path>", "Config path (dot or bracket notation)")
-    .argument("<value>", "Value (JSON5 or raw string)")
-    .option("--json", "Parse value as JSON5 (required)", false)
-    .action(async (path: string, value: string, opts) => {
-      try {
-        const parsedPath = parsePath(path);
-        if (parsedPath.length === 0) {
-          throw new Error("Path is empty.");
-        }
-        const parsedValue = parseValue(value, opts);
-        const snapshot = await loadValidConfig();
-        // Use snapshot.resolved (config after $include and ${ENV} resolution, but BEFORE runtime defaults)
-        // instead of snapshot.config (runtime-merged with defaults).
-        // This prevents runtime defaults from leaking into the written config file (issue #6070)
-        const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
-        setAtPath(next, parsedPath, parsedValue);
-        await writeConfigFile(next);
-        defaultRuntime.log(info(`Updated ${path}. Restart the gateway to apply.`));
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
+  setCommandJsonMode(cmd.command("set"), "parse-only")
+    .description(CONFIG_SET_DESCRIPTION)
+    .argument("[path]", "Config path (dot or bracket notation)")
+    .argument("[value]", "Value (JSON/JSON5 or raw string)")
+    .option("--strict-json", "Strict JSON parsing (error instead of raw string fallback)", false)
+    .option("--json", "Legacy alias for --strict-json", false)
+    .option(
+      "--dry-run",
+      "Validate changes without writing openclaw.json (checks run in builder/json/batch modes; exec SecretRefs are skipped unless --allow-exec is set)",
+      false,
+    )
+    .option(
+      "--allow-exec",
+      "Dry-run only: allow exec SecretRef resolvability checks (may execute provider commands)",
+      false,
+    )
+    .option("--ref-provider <alias>", "SecretRef builder: provider alias")
+    .option("--ref-source <source>", "SecretRef builder: source (env|file|exec)")
+    .option("--ref-id <id>", "SecretRef builder: ref id")
+    .option("--provider-source <source>", "Provider builder: source (env|file|exec)")
+    .option(
+      "--provider-allowlist <envVar>",
+      "Provider builder (env): allowlist entry (repeatable)",
+      (value: string, previous: string[]) => [...previous, value],
+      [] as string[],
+    )
+    .option("--provider-path <path>", "Provider builder (file): path")
+    .option("--provider-mode <mode>", "Provider builder (file): mode (singleValue|json)")
+    .option("--provider-timeout-ms <ms>", "Provider builder (file|exec): timeout ms")
+    .option("--provider-max-bytes <bytes>", "Provider builder (file): max bytes")
+    .option("--provider-command <path>", "Provider builder (exec): absolute command path")
+    .option(
+      "--provider-arg <arg>",
+      "Provider builder (exec): command arg (repeatable)",
+      (value: string, previous: string[]) => [...previous, value],
+      [] as string[],
+    )
+    .option("--provider-no-output-timeout-ms <ms>", "Provider builder (exec): no-output timeout ms")
+    .option("--provider-max-output-bytes <bytes>", "Provider builder (exec): max output bytes")
+    .option("--provider-json-only", "Provider builder (exec): require JSON output", false)
+    .option(
+      "--provider-env <key=value>",
+      "Provider builder (exec): env assignment (repeatable)",
+      (value: string, previous: string[]) => [...previous, value],
+      [] as string[],
+    )
+    .option(
+      "--provider-pass-env <envVar>",
+      "Provider builder (exec): pass host env var (repeatable)",
+      (value: string, previous: string[]) => [...previous, value],
+      [] as string[],
+    )
+    .option(
+      "--provider-trusted-dir <path>",
+      "Provider builder (exec): trusted directory (repeatable)",
+      (value: string, previous: string[]) => [...previous, value],
+      [] as string[],
+    )
+    .option(
+      "--provider-allow-insecure-path",
+      "Provider builder (exec): bypass strict path permission checks",
+      false,
+    )
+    .option(
+      "--provider-allow-symlink-command",
+      "Provider builder (exec): allow command symlink path",
+      false,
+    )
+    .option("--batch-json <json>", "Batch mode: JSON array of set operations")
+    .option("--batch-file <path>", "Batch mode: read JSON array of set operations from file")
+    .action(async (path: string | undefined, value: string | undefined, opts: ConfigSetOptions) => {
+      await runConfigSet({
+        path,
+        value,
+        cliOptions: opts,
+      });
     });
 
   cmd
@@ -358,5 +1364,27 @@ export function registerConfigCli(program: Command) {
     .argument("<path>", "Config path (dot or bracket notation)")
     .action(async (path: string) => {
       await runConfigUnset({ path });
+    });
+
+  cmd
+    .command("file")
+    .description("Print the active config file path")
+    .action(async () => {
+      await runConfigFile({});
+    });
+
+  cmd
+    .command("schema")
+    .description("Print the JSON schema for openclaw.json")
+    .action(async () => {
+      await runConfigSchema({});
+    });
+
+  cmd
+    .command("validate")
+    .description("Validate the current config against the schema without starting the gateway")
+    .option("--json", "Output validation result as JSON", false)
+    .action(async (opts) => {
+      await runConfigValidate({ json: Boolean(opts.json) });
     });
 }

@@ -1,15 +1,19 @@
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
-import type { HookEligibilityContext, HookEntry, HookInstallSpec } from "./types.js";
-import { evaluateRequirementsFromMetadata } from "../shared/requirements.js";
+import { evaluateEntryRequirementsForCurrentPlatform } from "../shared/entry-status.js";
+import type { RequirementConfigCheck, Requirements } from "../shared/requirements.js";
 import { CONFIG_DIR } from "../utils.js";
-import { hasBinary, isConfigPathTruthy, resolveHookConfig } from "./config.js";
+import { hasBinary, isConfigPathTruthy } from "./config.js";
+import {
+  resolveHookConfig,
+  resolveHookEnableState,
+  resolveHookEntries,
+  type HookEnableStateReason,
+} from "./policy.js";
+import type { HookEligibilityContext, HookEntry, HookInstallSpec } from "./types.js";
 import { loadWorkspaceHookEntries } from "./workspace.js";
 
-export type HookStatusConfigCheck = {
-  path: string;
-  satisfied: boolean;
-};
+export type HookStatusConfigCheck = RequirementConfigCheck;
 
 export type HookInstallOption = {
   id: string;
@@ -31,23 +35,13 @@ export type HookStatusEntry = {
   homepage?: string;
   events: string[];
   always: boolean;
-  disabled: boolean;
-  eligible: boolean;
+  enabledByConfig: boolean;
+  requirementsSatisfied: boolean;
+  loadable: boolean;
+  blockedReason?: HookEnableStateReason | "missing requirements";
   managedByPlugin: boolean;
-  requirements: {
-    bins: string[];
-    anyBins: string[];
-    env: string[];
-    config: string[];
-    os: string[];
-  };
-  missing: {
-    bins: string[];
-    anyBins: string[];
-    env: string[];
-    config: string[];
-    os: string[];
-  };
+  requirements: Requirements;
+  missing: Requirements;
   configChecks: HookStatusConfigCheck[];
   install: HookInstallOption[];
 };
@@ -98,35 +92,27 @@ function buildHookStatus(
   const hookKey = resolveHookKey(entry);
   const hookConfig = resolveHookConfig(config, hookKey);
   const managedByPlugin = entry.hook.source === "openclaw-plugin";
-  const disabled = managedByPlugin ? false : hookConfig?.enabled === false;
+  const enableState = resolveHookEnableState({ entry, config, hookConfig });
   const always = entry.metadata?.always === true;
-  const emoji = entry.metadata?.emoji ?? entry.frontmatter.emoji;
-  const homepageRaw =
-    entry.metadata?.homepage ??
-    entry.frontmatter.homepage ??
-    entry.frontmatter.website ??
-    entry.frontmatter.url;
-  const homepage = homepageRaw?.trim() ? homepageRaw.trim() : undefined;
   const events = entry.metadata?.events ?? [];
+  const isEnvSatisfied = (envName: string) =>
+    Boolean(process.env[envName] || hookConfig?.env?.[envName]);
+  const isConfigSatisfied = (pathStr: string) => isConfigPathTruthy(config, pathStr);
 
-  const {
-    required,
-    missing,
-    eligible: requirementsSatisfied,
-    configChecks,
-  } = evaluateRequirementsFromMetadata({
-    always,
-    metadata: entry.metadata,
-    hasLocalBin: hasBinary,
-    hasRemoteBin: eligibility?.remote?.hasBin,
-    hasRemoteAnyBin: eligibility?.remote?.hasAnyBin,
-    localPlatform: process.platform,
-    remotePlatforms: eligibility?.remote?.platforms,
-    isEnvSatisfied: (envName) => Boolean(process.env[envName] || hookConfig?.env?.[envName]),
-    isConfigSatisfied: (pathStr) => isConfigPathTruthy(config, pathStr),
-  });
+  const { emoji, homepage, required, missing, requirementsSatisfied, configChecks } =
+    evaluateEntryRequirementsForCurrentPlatform({
+      always,
+      entry,
+      hasLocalBin: hasBinary,
+      remote: eligibility?.remote,
+      isEnvSatisfied,
+      isConfigSatisfied,
+    });
 
-  const eligible = !disabled && requirementsSatisfied;
+  const enabledByConfig = enableState.enabled;
+  const loadable = enabledByConfig && requirementsSatisfied;
+  const blockedReason =
+    enableState.reason ?? (requirementsSatisfied ? undefined : "missing requirements");
 
   return {
     name: entry.hook.name,
@@ -141,8 +127,10 @@ function buildHookStatus(
     homepage,
     events,
     always,
-    disabled,
-    eligible,
+    enabledByConfig,
+    requirementsSatisfied,
+    loadable,
+    blockedReason,
     managedByPlugin,
     requirements: required,
     missing,
@@ -161,7 +149,9 @@ export function buildWorkspaceHookStatus(
   },
 ): HookStatusReport {
   const managedHooksDir = opts?.managedHooksDir ?? path.join(CONFIG_DIR, "hooks");
-  const hookEntries = opts?.entries ?? loadWorkspaceHookEntries(workspaceDir, opts);
+  const hookEntries = resolveHookEntries(
+    opts?.entries ?? loadWorkspaceHookEntries(workspaceDir, opts),
+  );
 
   return {
     workspaceDir,

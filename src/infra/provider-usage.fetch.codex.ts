@@ -1,6 +1,6 @@
-import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
-import { fetchJson } from "./provider-usage.fetch.shared.js";
+import { buildUsageHttpErrorSnapshot, fetchJson } from "./provider-usage.fetch.shared.js";
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
+import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
 
 type CodexUsageResponse = {
   rate_limit?: {
@@ -18,6 +18,31 @@ type CodexUsageResponse = {
   plan_type?: string;
   credits?: { balance?: number | string | null };
 };
+
+const WEEKLY_RESET_GAP_SECONDS = 3 * 24 * 60 * 60;
+
+function resolveSecondaryWindowLabel(params: {
+  windowHours: number;
+  secondaryResetAt?: number;
+  primaryResetAt?: number;
+}): string {
+  if (params.windowHours >= 168) {
+    return "Week";
+  }
+  if (params.windowHours < 24) {
+    return `${params.windowHours}h`;
+  }
+  // Codex occasionally reports a 24h secondary window while exposing a
+  // weekly reset cadence in reset timestamps. Prefer cadence in that case.
+  if (
+    typeof params.secondaryResetAt === "number" &&
+    typeof params.primaryResetAt === "number" &&
+    params.secondaryResetAt - params.primaryResetAt >= WEEKLY_RESET_GAP_SECONDS
+  ) {
+    return "Week";
+  }
+  return "Day";
+}
 
 export async function fetchCodexUsage(
   token: string,
@@ -41,22 +66,12 @@ export async function fetchCodexUsage(
     fetchFn,
   );
 
-  if (res.status === 401 || res.status === 403) {
-    return {
-      provider: "openai-codex",
-      displayName: PROVIDER_LABELS["openai-codex"],
-      windows: [],
-      error: "Token expired",
-    };
-  }
-
   if (!res.ok) {
-    return {
+    return buildUsageHttpErrorSnapshot({
       provider: "openai-codex",
-      displayName: PROVIDER_LABELS["openai-codex"],
-      windows: [],
-      error: `HTTP ${res.status}`,
-    };
+      status: res.status,
+      tokenExpiredStatuses: [401, 403],
+    });
   }
 
   const data = (await res.json()) as CodexUsageResponse;
@@ -75,7 +90,11 @@ export async function fetchCodexUsage(
   if (data.rate_limit?.secondary_window) {
     const sw = data.rate_limit.secondary_window;
     const windowHours = Math.round((sw.limit_window_seconds || 86400) / 3600);
-    const label = windowHours >= 24 ? "Day" : `${windowHours}h`;
+    const label = resolveSecondaryWindowLabel({
+      windowHours,
+      primaryResetAt: data.rate_limit?.primary_window?.reset_at,
+      secondaryResetAt: sw.reset_at,
+    });
     windows.push({
       label,
       usedPercent: clampPercent(sw.used_percent || 0),

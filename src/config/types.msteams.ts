@@ -4,8 +4,12 @@ import type {
   GroupPolicy,
   MarkdownConfig,
 } from "./types.base.js";
-import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
+import type {
+  ChannelHealthMonitorConfig,
+  ChannelHeartbeatVisibilityConfig,
+} from "./types.channels.js";
 import type { DmConfig } from "./types.messages.js";
+import type { SecretInput } from "./types.secrets.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 export type MSTeamsWebhookConfig = {
@@ -47,6 +51,11 @@ export type MSTeamsConfig = {
   enabled?: boolean;
   /** Optional provider capability tags used for agent/runtime guidance. */
   capabilities?: string[];
+  /**
+   * Break-glass override: allow mutable identity matching (display names/UPNs) in allowlists.
+   * Default behavior is ID-only matching.
+   */
+  dangerouslyAllowNameMatching?: boolean;
   /** Markdown formatting overrides (tables). */
   markdown?: MarkdownConfig;
   /** Allow channel-initiated config writes (default: true). */
@@ -54,7 +63,7 @@ export type MSTeamsConfig = {
   /** Azure Bot App ID (from Azure Bot registration). */
   appId?: string;
   /** Azure Bot App Password / Client Secret. */
-  appPassword?: string;
+  appPassword?: SecretInput;
   /** Azure AD Tenant ID (for single-tenant bots). */
   tenantId?: string;
   /** Webhook server configuration. */
@@ -63,6 +72,8 @@ export type MSTeamsConfig = {
   dmPolicy?: DmPolicy;
   /** Allowlist for DM senders (AAD object IDs or UPNs). */
   allowFrom?: Array<string>;
+  /** Default delivery target for CLI --deliver when no explicit --reply-to is provided. */
+  defaultTo?: string;
   /** Optional allowlist for group/channel senders (AAD object IDs or UPNs). */
   groupAllowFrom?: Array<string>;
   /**
@@ -76,6 +87,8 @@ export type MSTeamsConfig = {
   textChunkLimit?: number;
   /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
   chunkMode?: "length" | "newline";
+  /** Enable progressive block-by-block message delivery instead of a single reply. */
+  blockStreaming?: boolean;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
   /**
@@ -106,6 +119,26 @@ export type MSTeamsConfig = {
   sharePointSiteId?: string;
   /** Heartbeat visibility settings for this channel. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /** Channel health monitor overrides for this channel. */
+  healthMonitor?: ChannelHealthMonitorConfig;
   /** Outbound response prefix override for this channel/account. */
   responsePrefix?: string;
+  /** Show a welcome Adaptive Card when the bot is added to a 1:1 chat. Default: true. */
+  welcomeCard?: boolean;
+  /** Custom prompt starter labels shown on the welcome card. */
+  promptStarters?: string[];
+  /** Show a welcome message when the bot is added to a group chat. Default: false. */
+  groupWelcomeCard?: boolean;
+  /** Enable the Teams feedback loop (thumbs up/down) on AI-generated messages. Default: true. */
+  feedbackEnabled?: boolean;
+  /** Enable background reflection when a user gives negative feedback. Default: true. */
+  feedbackReflection?: boolean;
+  /** Minimum interval (ms) between reflections per session. Default: 300000 (5 min). */
+  feedbackReflectionCooldownMs?: number;
 };
+
+declare module "./types.channels.js" {
+  interface ChannelsConfig {
+    msteams?: MSTeamsConfig;
+  }
+}

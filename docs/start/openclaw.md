@@ -8,13 +8,13 @@ title: "Personal Assistant Setup"
 
 # Building a personal assistant with OpenClaw
 
-OpenClaw is a WhatsApp + Telegram + Discord + iMessage gateway for **Pi** agents. Plugins add Mattermost. This guide is the "personal assistant" setup: one dedicated WhatsApp number that behaves like your always-on agent.
+OpenClaw is a self-hosted gateway that connects WhatsApp, Telegram, Discord, iMessage, and more to AI agents. This guide covers the "personal assistant" setup: a dedicated WhatsApp number that behaves like your always-on AI assistant.
 
 ## ⚠️ Safety first
 
 You’re putting an agent in a position to:
 
-- run commands on your machine (depending on your Pi tool setup)
+- run commands on your machine (depending on your tool policy)
 - read/write files in your workspace
 - send messages back out via WhatsApp/Telegram/Discord/Mattermost (plugin)
 
@@ -36,7 +36,7 @@ You want this:
 ```mermaid
 flowchart TB
     A["<b>Your Phone (personal)<br></b><br>Your WhatsApp<br>+1-555-YOU"] -- message --> B["<b>Second Phone (assistant)<br></b><br>Assistant WA<br>+1-555-ASSIST"]
-    B -- linked via QR --> C["<b>Your Mac (openclaw)<br></b><br>Pi agent"]
+    B -- linked via QR --> C["<b>Your Mac (openclaw)<br></b><br>AI agent"]
 ```
 
 If you link your personal WhatsApp to OpenClaw, every message to you becomes “agent input”. That’s rarely what you want.
@@ -102,7 +102,7 @@ If you already ship your own workspace files from a repo, you can disable bootst
 }
 ```
 
-## The config that turns it into “an assistant”
+## The config that turns it into "an assistant"
 
 OpenClaw defaults to a good assistant setup, but you’ll usually want to tune:
 
@@ -164,6 +164,7 @@ Set `agents.defaults.heartbeat.every: "0m"` to disable.
 - If `HEARTBEAT.md` exists but is effectively empty (only blank lines and markdown headers like `# Heading`), OpenClaw skips the heartbeat run to save API calls.
 - If the file is missing, the heartbeat still runs and the model decides what to do.
 - If the agent replies with `HEARTBEAT_OK` (optionally with short padding; see `agents.defaults.heartbeat.ackMaxChars`), OpenClaw suppresses outbound delivery for that heartbeat.
+- By default, heartbeat delivery to DM-style `user:<id>` targets is allowed. Set `agents.defaults.heartbeat.directPolicy: "block"` to suppress direct-target delivery while keeping heartbeat runs active.
 - Heartbeats run full agent turns — shorter intervals burn more tokens.
 
 ```json5
@@ -190,6 +191,11 @@ MEDIA:https://example.com/screenshot.png
 ```
 
 OpenClaw extracts these and sends them as media alongside the text.
+
+For local paths, the default allowlist is intentionally narrow: the OpenClaw temp
+root, the media cache, agent workspace paths, and sandbox-generated files. If you
+need broader local-file attachment roots, configure an explicit channel/plugin
+allowlist instead of relying on arbitrary host paths.
 
 ## Operations checklist
 

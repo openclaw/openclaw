@@ -1,7 +1,80 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "../sandbox/fs-bridge.js";
 import { resolveSandboxPath } from "../sandbox-paths.js";
+import type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "../sandbox/fs-bridge.js";
+
+export function createSandboxFsBridgeFromResolver(
+  resolvePath: (filePath: string, cwd?: string) => SandboxResolvedPath,
+): SandboxFsBridge {
+  return {
+    resolvePath: ({ filePath, cwd }) => resolvePath(filePath, cwd),
+    readFile: async ({ filePath, cwd }) => {
+      const target = resolvePath(filePath, cwd);
+      if (!target.hostPath) {
+        throw new Error(`Expected hostPath for ${target.containerPath}`);
+      }
+      return fs.readFile(target.hostPath);
+    },
+    writeFile: async ({ filePath, cwd, data, mkdir = true }) => {
+      const target = resolvePath(filePath, cwd);
+      if (!target.hostPath) {
+        throw new Error(`Expected hostPath for ${target.containerPath}`);
+      }
+      if (mkdir) {
+        await fs.mkdir(path.dirname(target.hostPath), { recursive: true });
+      }
+      const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
+      await fs.writeFile(target.hostPath, buffer);
+    },
+    mkdirp: async ({ filePath, cwd }) => {
+      const target = resolvePath(filePath, cwd);
+      if (!target.hostPath) {
+        throw new Error(`Expected hostPath for ${target.containerPath}`);
+      }
+      await fs.mkdir(target.hostPath, { recursive: true });
+    },
+    remove: async ({ filePath, cwd, recursive, force }) => {
+      const target = resolvePath(filePath, cwd);
+      if (!target.hostPath) {
+        throw new Error(`Expected hostPath for ${target.containerPath}`);
+      }
+      await fs.rm(target.hostPath, {
+        recursive: recursive ?? false,
+        force: force ?? false,
+      });
+    },
+    rename: async ({ from, to, cwd }) => {
+      const source = resolvePath(from, cwd);
+      const target = resolvePath(to, cwd);
+      if (!source.hostPath || !target.hostPath) {
+        throw new Error(
+          `Expected hostPath for rename: ${source.containerPath} -> ${target.containerPath}`,
+        );
+      }
+      await fs.mkdir(path.dirname(target.hostPath), { recursive: true });
+      await fs.rename(source.hostPath, target.hostPath);
+    },
+    stat: async ({ filePath, cwd }) => {
+      try {
+        const target = resolvePath(filePath, cwd);
+        if (!target.hostPath) {
+          throw new Error(`Expected hostPath for ${target.containerPath}`);
+        }
+        const stats = await fs.stat(target.hostPath);
+        return {
+          type: stats.isDirectory() ? "directory" : stats.isFile() ? "file" : "other",
+          size: stats.size,
+          mtimeMs: stats.mtimeMs,
+        } satisfies SandboxFsStat;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          return null;
+        }
+        throw error;
+      }
+    },
+  };
+}
 
 export function createHostSandboxFsBridge(rootDir: string): SandboxFsBridge {
   const root = path.resolve(rootDir);
@@ -23,52 +96,5 @@ export function createHostSandboxFsBridge(rootDir: string): SandboxFsBridge {
     };
   };
 
-  return {
-    resolvePath: ({ filePath, cwd }) => resolvePath(filePath, cwd),
-    readFile: async ({ filePath, cwd }) => {
-      const target = resolvePath(filePath, cwd);
-      return fs.readFile(target.hostPath);
-    },
-    writeFile: async ({ filePath, cwd, data, mkdir = true }) => {
-      const target = resolvePath(filePath, cwd);
-      if (mkdir) {
-        await fs.mkdir(path.dirname(target.hostPath), { recursive: true });
-      }
-      const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
-      await fs.writeFile(target.hostPath, buffer);
-    },
-    mkdirp: async ({ filePath, cwd }) => {
-      const target = resolvePath(filePath, cwd);
-      await fs.mkdir(target.hostPath, { recursive: true });
-    },
-    remove: async ({ filePath, cwd, recursive, force }) => {
-      const target = resolvePath(filePath, cwd);
-      await fs.rm(target.hostPath, {
-        recursive: recursive ?? false,
-        force: force ?? false,
-      });
-    },
-    rename: async ({ from, to, cwd }) => {
-      const source = resolvePath(from, cwd);
-      const target = resolvePath(to, cwd);
-      await fs.mkdir(path.dirname(target.hostPath), { recursive: true });
-      await fs.rename(source.hostPath, target.hostPath);
-    },
-    stat: async ({ filePath, cwd }) => {
-      try {
-        const target = resolvePath(filePath, cwd);
-        const stats = await fs.stat(target.hostPath);
-        return {
-          type: stats.isDirectory() ? "directory" : stats.isFile() ? "file" : "other",
-          size: stats.size,
-          mtimeMs: stats.mtimeMs,
-        } satisfies SandboxFsStat;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-          return null;
-        }
-        throw error;
-      }
-    },
-  };
+  return createSandboxFsBridgeFromResolver(resolvePath);
 }

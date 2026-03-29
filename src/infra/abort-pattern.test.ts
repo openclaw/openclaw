@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { bindAbortRelay } from "../utils/fetch-timeout.js";
 
 /**
@@ -16,6 +16,11 @@ import { bindAbortRelay } from "../utils/fetch-timeout.js";
  */
 
 describe("abort pattern: .bind() vs arrow closure (#7174)", () => {
+  function expectDefaultAbortReason(controller: AbortController): void {
+    expect(controller.signal.reason).toBeInstanceOf(DOMException);
+    expect(controller.signal.reason.name).toBe("AbortError");
+  }
+
   it("controller.abort.bind(controller) aborts the signal", () => {
     const controller = new AbortController();
     const boundAbort = controller.abort.bind(controller);
@@ -25,12 +30,17 @@ describe("abort pattern: .bind() vs arrow closure (#7174)", () => {
   });
 
   it("bound abort works with setTimeout", async () => {
-    const controller = new AbortController();
-    const timer = setTimeout(controller.abort.bind(controller), 10);
-    expect(controller.signal.aborted).toBe(false);
-    await new Promise((r) => setTimeout(r, 50));
-    expect(controller.signal.aborted).toBe(true);
-    clearTimeout(timer);
+    vi.useFakeTimers();
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(controller.abort.bind(controller), 10);
+      expect(controller.signal.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(10);
+      expect(controller.signal.aborted).toBe(true);
+      clearTimeout(timer);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("bindAbortRelay() preserves default AbortError reason when used as event listener", () => {
@@ -42,9 +52,7 @@ describe("abort pattern: .bind() vs arrow closure (#7174)", () => {
     parent.abort();
 
     expect(child.signal.aborted).toBe(true);
-    // The reason must be the default AbortError, not the Event object
-    expect(child.signal.reason).toBeInstanceOf(DOMException);
-    expect(child.signal.reason.name).toBe("AbortError");
+    expectDefaultAbortReason(child);
   });
 
   it("raw .abort.bind() leaks Event as reason — bindAbortRelay() does not", () => {
@@ -61,9 +69,7 @@ describe("abort pattern: .bind() vs arrow closure (#7174)", () => {
     const childB = new AbortController();
     parentB.signal.addEventListener("abort", bindAbortRelay(childB), { once: true });
     parentB.abort();
-    // childB.signal.reason IS the default AbortError
-    expect(childB.signal.reason).toBeInstanceOf(DOMException);
-    expect(childB.signal.reason.name).toBe("AbortError");
+    expectDefaultAbortReason(childB);
   });
 
   it("removeEventListener works with saved bindAbortRelay() reference", () => {
@@ -90,7 +96,6 @@ describe("abort pattern: .bind() vs arrow closure (#7174)", () => {
     expect(combined.signal.aborted).toBe(false);
     signalA.abort();
     expect(combined.signal.aborted).toBe(true);
-    expect(combined.signal.reason).toBeInstanceOf(DOMException);
-    expect(combined.signal.reason.name).toBe("AbortError");
+    expectDefaultAbortReason(combined);
   });
 });

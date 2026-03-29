@@ -1,6 +1,6 @@
 import type { AgentTool } from "@mariozechner/pi-agent-core";
-import path from "node:path";
 import type { SessionSystemPromptReport } from "../config/sessions/types.js";
+import { buildBootstrapInjectionStats } from "./bootstrap-budget.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
@@ -34,39 +34,6 @@ function parseSkillBlocks(skillsPrompt: string): Array<{ name: string; blockChar
       return { name, blockChars: block.length };
     })
     .filter((b) => b.blockChars > 0);
-}
-
-function buildInjectedWorkspaceFiles(params: {
-  bootstrapFiles: WorkspaceBootstrapFile[];
-  injectedFiles: EmbeddedContextFile[];
-  bootstrapMaxChars: number;
-}): SessionSystemPromptReport["injectedWorkspaceFiles"] {
-  const injectedByPath = new Map(params.injectedFiles.map((f) => [f.path, f.content]));
-  const injectedByBaseName = new Map<string, string>();
-  for (const file of params.injectedFiles) {
-    const normalizedPath = file.path.replace(/\\/g, "/");
-    const baseName = path.posix.basename(normalizedPath);
-    if (!injectedByBaseName.has(baseName)) {
-      injectedByBaseName.set(baseName, file.content);
-    }
-  }
-  return params.bootstrapFiles.map((file) => {
-    const rawChars = file.missing ? 0 : (file.content ?? "").trimEnd().length;
-    const injected =
-      injectedByPath.get(file.path) ??
-      injectedByPath.get(file.name) ??
-      injectedByBaseName.get(file.name);
-    const injectedChars = injected ? injected.length : 0;
-    const truncated = !file.missing && rawChars > params.bootstrapMaxChars;
-    return {
-      name: file.name,
-      path: file.path,
-      missing: file.missing,
-      rawChars,
-      injectedChars,
-      truncated,
-    };
-  });
 }
 
 function buildToolsEntries(tools: AgentTool[]): SessionSystemPromptReport["tools"]["entries"] {
@@ -119,6 +86,8 @@ export function buildSystemPromptReport(params: {
   model?: string;
   workspaceDir?: string;
   bootstrapMaxChars: number;
+  bootstrapTotalMaxChars?: number;
+  bootstrapTruncation?: SessionSystemPromptReport["bootstrapTruncation"];
   sandbox?: SessionSystemPromptReport["sandbox"];
   systemPrompt: string;
   bootstrapFiles: WorkspaceBootstrapFile[];
@@ -148,16 +117,17 @@ export function buildSystemPromptReport(params: {
     model: params.model,
     workspaceDir: params.workspaceDir,
     bootstrapMaxChars: params.bootstrapMaxChars,
+    bootstrapTotalMaxChars: params.bootstrapTotalMaxChars,
+    ...(params.bootstrapTruncation ? { bootstrapTruncation: params.bootstrapTruncation } : {}),
     sandbox: params.sandbox,
     systemPrompt: {
       chars: systemPrompt.length,
       projectContextChars,
       nonProjectContextChars: Math.max(0, systemPrompt.length - projectContextChars),
     },
-    injectedWorkspaceFiles: buildInjectedWorkspaceFiles({
+    injectedWorkspaceFiles: buildBootstrapInjectionStats({
       bootstrapFiles: params.bootstrapFiles,
       injectedFiles: params.injectedFiles,
-      bootstrapMaxChars: params.bootstrapMaxChars,
     }),
     skills: {
       promptChars: params.skillsPrompt.length,

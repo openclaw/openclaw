@@ -1,8 +1,16 @@
 import type { Command } from "commander";
+import { getPrimaryCommand, hasHelpOrVersion } from "../argv.js";
+import { reparseProgramFromActionArgs } from "./action-reparse.js";
+import { removeCommandByName } from "./command-tree.js";
 import type { ProgramContext } from "./context.js";
-import { buildParseArgv, getPrimaryCommand, hasHelpOrVersion } from "../argv.js";
-import { resolveActionArgs } from "./helpers.js";
+import {
+  type CoreCliCommandDescriptor,
+  getCoreCliCommandDescriptors,
+  getCoreCliCommandsWithSubcommands,
+} from "./core-command-descriptors.js";
 import { registerSubCliCommands } from "./register.subclis.js";
+
+export { getCoreCliCommandDescriptors, getCoreCliCommandsWithSubcommands };
 
 type CommandRegisterParams = {
   program: Command;
@@ -16,7 +24,7 @@ export type CommandRegistration = {
 };
 
 type CoreCliEntry = {
-  commands: Array<{ name: string; description: string }>;
+  commands: CoreCliCommandDescriptor[];
   register: (params: CommandRegisterParams) => Promise<void> | void;
 };
 
@@ -27,30 +35,59 @@ const shouldRegisterCorePrimaryOnly = (argv: string[]) => {
   return true;
 };
 
+// Note for humans and agents:
+// If you update the list of commands, also check whether they have subcommands
+// and set the flag accordingly.
 const coreEntries: CoreCliEntry[] = [
   {
-    commands: [{ name: "setup", description: "Setup helpers" }],
+    commands: [
+      {
+        name: "setup",
+        description: "Initialize local config and agent workspace",
+        hasSubcommands: false,
+      },
+    ],
     register: async ({ program }) => {
       const mod = await import("./register.setup.js");
       mod.registerSetupCommand(program);
     },
   },
   {
-    commands: [{ name: "onboard", description: "Onboarding helpers" }],
+    commands: [
+      {
+        name: "onboard",
+        description: "Interactive onboarding for gateway, workspace, and skills",
+        hasSubcommands: false,
+      },
+    ],
     register: async ({ program }) => {
       const mod = await import("./register.onboard.js");
       mod.registerOnboardCommand(program);
     },
   },
   {
-    commands: [{ name: "configure", description: "Configure wizard" }],
+    commands: [
+      {
+        name: "configure",
+        description:
+          "Interactive configuration for credentials, channels, gateway, and agent defaults",
+        hasSubcommands: false,
+      },
+    ],
     register: async ({ program }) => {
       const mod = await import("./register.configure.js");
       mod.registerConfigureCommand(program);
     },
   },
   {
-    commands: [{ name: "config", description: "Config helpers" }],
+    commands: [
+      {
+        name: "config",
+        description:
+          "Non-interactive config helpers (get/set/unset/file/validate). Default: starts guided setup.",
+        hasSubcommands: true,
+      },
+    ],
     register: async ({ program }) => {
       const mod = await import("../config-cli.js");
       mod.registerConfigCli(program);
@@ -58,12 +95,38 @@ const coreEntries: CoreCliEntry[] = [
   },
   {
     commands: [
-      { name: "doctor", description: "Health checks + quick fixes for the gateway and channels" },
-      { name: "dashboard", description: "Open the Control UI with your current token" },
-      { name: "reset", description: "Reset local config/state (keeps the CLI installed)" },
+      {
+        name: "backup",
+        description: "Create and verify local backup archives for OpenClaw state",
+        hasSubcommands: true,
+      },
+    ],
+    register: async ({ program }) => {
+      const mod = await import("./register.backup.js");
+      mod.registerBackupCommand(program);
+    },
+  },
+  {
+    commands: [
+      {
+        name: "doctor",
+        description: "Health checks + quick fixes for the gateway and channels",
+        hasSubcommands: false,
+      },
+      {
+        name: "dashboard",
+        description: "Open the Control UI with your current token",
+        hasSubcommands: false,
+      },
+      {
+        name: "reset",
+        description: "Reset local config/state (keeps the CLI installed)",
+        hasSubcommands: false,
+      },
       {
         name: "uninstall",
         description: "Uninstall the gateway service + local data (CLI remains)",
+        hasSubcommands: false,
       },
     ],
     register: async ({ program }) => {
@@ -72,69 +135,85 @@ const coreEntries: CoreCliEntry[] = [
     },
   },
   {
-    commands: [{ name: "message", description: "Send, read, and manage messages" }],
+    commands: [
+      {
+        name: "message",
+        description: "Send, read, and manage messages",
+        hasSubcommands: true,
+      },
+    ],
     register: async ({ program, ctx }) => {
       const mod = await import("./register.message.js");
       mod.registerMessageCommands(program, ctx);
     },
   },
   {
-    commands: [{ name: "memory", description: "Memory commands" }],
+    commands: [
+      {
+        name: "mcp",
+        description: "Manage OpenClaw MCP config and channel bridge",
+        hasSubcommands: true,
+      },
+    ],
     register: async ({ program }) => {
-      const mod = await import("../memory-cli.js");
-      mod.registerMemoryCli(program);
+      const mod = await import("../mcp-cli.js");
+      mod.registerMcpCli(program);
     },
   },
   {
     commands: [
-      { name: "agent", description: "Agent commands" },
-      { name: "agents", description: "Manage isolated agents" },
+      {
+        name: "agent",
+        description: "Run one agent turn via the Gateway",
+        hasSubcommands: false,
+      },
+      {
+        name: "agents",
+        description: "Manage isolated agents (workspaces, auth, routing)",
+        hasSubcommands: true,
+      },
     ],
     register: async ({ program, ctx }) => {
       const mod = await import("./register.agent.js");
-      mod.registerAgentCommands(program, { agentChannelOptions: ctx.agentChannelOptions });
+      mod.registerAgentCommands(program, {
+        agentChannelOptions: ctx.agentChannelOptions,
+      });
     },
   },
   {
     commands: [
-      { name: "status", description: "Gateway status" },
-      { name: "health", description: "Gateway health" },
-      { name: "sessions", description: "Session management" },
+      {
+        name: "status",
+        description: "Show channel health and recent session recipients",
+        hasSubcommands: false,
+      },
+      {
+        name: "health",
+        description: "Fetch health from the running gateway",
+        hasSubcommands: false,
+      },
+      {
+        name: "sessions",
+        description: "List stored conversation sessions",
+        hasSubcommands: true,
+      },
     ],
     register: async ({ program }) => {
       const mod = await import("./register.status-health-sessions.js");
       mod.registerStatusHealthSessionsCommands(program);
     },
   },
-  {
-    commands: [{ name: "browser", description: "Browser tools" }],
-    register: async ({ program }) => {
-      const mod = await import("../browser-cli.js");
-      mod.registerBrowserCli(program);
-    },
-  },
 ];
 
 export function getCoreCliCommandNames(): string[] {
-  const seen = new Set<string>();
-  const names: string[] = [];
-  for (const entry of coreEntries) {
-    for (const cmd of entry.commands) {
-      if (seen.has(cmd.name)) {
-        continue;
-      }
-      seen.add(cmd.name);
-      names.push(cmd.name);
-    }
-  }
-  return names;
+  return getCoreCliCommandDescriptors().map((command) => command.name);
 }
 
-function removeCommand(program: Command, command: Command) {
-  const commands = program.commands as Command[];
-  const index = commands.indexOf(command);
-  if (index >= 0) {
-    commands.splice(index, 1);
+function removeEntryCommands(program: Command, entry: CoreCliEntry) {
+  // Some registrars install multiple top-level commands (e.g. status/health/sessions).
+  // Remove placeholders/old registrations for all names in the entry before re-registering.
+  for (const cmd of entry.commands) {
+    removeCommandByName(program, cmd.name);
   }
 }
 
@@ -142,34 +221,15 @@ function registerLazyCoreCommand(
   program: Command,
   ctx: ProgramContext,
   entry: CoreCliEntry,
-  command: { name: string; description: string },
+  command: CoreCliCommandDescriptor,
 ) {
   const placeholder = program.command(command.name).description(command.description);
   placeholder.allowUnknownOption(true);
   placeholder.allowExcessArguments(true);
   placeholder.action(async (...actionArgs) => {
-    // Some registrars install multiple top-level commands (e.g. status/health/sessions).
-    // Remove placeholders/old registrations for all names in the entry before re-registering.
-    for (const cmd of entry.commands) {
-      const existing = program.commands.find((c) => c.name() === cmd.name);
-      if (existing) {
-        removeCommand(program, existing);
-      }
-    }
+    removeEntryCommands(program, entry);
     await entry.register({ program, ctx, argv: process.argv });
-    const actionCommand = actionArgs.at(-1) as Command | undefined;
-    const root = actionCommand?.parent ?? program;
-    const rawArgs = (root as Command & { rawArgs?: string[] }).rawArgs;
-    const actionArgsList = resolveActionArgs(actionCommand);
-    const fallbackArgv = actionCommand?.name()
-      ? [actionCommand.name(), ...actionArgsList]
-      : actionArgsList;
-    const parseArgv = buildParseArgv({
-      programName: program.name(),
-      rawArgs,
-      fallbackArgv,
-    });
-    await program.parseAsync(parseArgv);
+    await reparseProgramFromActionArgs(program, actionArgs);
   });
 }
 
@@ -186,14 +246,7 @@ export async function registerCoreCliByName(
     return false;
   }
 
-  // Some registrars install multiple top-level commands (e.g. status/health/sessions).
-  // Remove placeholders/old registrations for all names in the entry before re-registering.
-  for (const cmd of entry.commands) {
-    const existing = program.commands.find((c) => c.name() === cmd.name);
-    if (existing) {
-      removeCommand(program, existing);
-    }
-  }
+  removeEntryCommands(program, entry);
   await entry.register({ program, ctx, argv });
   return true;
 }

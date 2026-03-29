@@ -5,11 +5,14 @@ vi.mock("../../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
 
-import { readLatestAssistantReply } from "./agent-step.js";
+import { __testing, readLatestAssistantReply } from "./agent-step.js";
 
 describe("readLatestAssistantReply", () => {
   beforeEach(() => {
-    callGatewayMock.mockReset();
+    callGatewayMock.mockClear();
+    __testing.setDepsForTest({
+      callGateway: async (opts) => await callGatewayMock(opts),
+    });
   });
 
   it("returns the most recent assistant message when compaction markers trail history", async () => {

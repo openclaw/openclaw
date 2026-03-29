@@ -2,66 +2,55 @@ import { describe, expect, it } from "vitest";
 import { validateConfigObject } from "./config.js";
 
 describe("config discord presence", () => {
-  it("accepts status-only presence", () => {
-    const res = validateConfigObject({
-      channels: {
+  it.each([
+    { name: "status-only presence", config: { discord: { status: "idle" } } },
+    {
+      name: "custom activity when type is omitted",
+      config: { discord: { activity: "Focus time" } },
+    },
+    {
+      name: "custom activity type",
+      config: { discord: { activity: "Chilling", activityType: 4 } },
+    },
+    {
+      name: "auto presence config",
+      config: {
         discord: {
-          status: "idle",
+          autoPresence: {
+            enabled: true,
+            intervalMs: 30000,
+            minUpdateIntervalMs: 15000,
+            exhaustedText: "token exhausted",
+          },
         },
       },
-    });
-
-    expect(res.ok).toBe(true);
+    },
+  ] as const)("accepts $name", ({ config }) => {
+    expect(validateConfigObject({ channels: config }).ok).toBe(true);
   });
 
-  it("accepts custom activity when type is omitted", () => {
-    const res = validateConfigObject({
-      channels: {
+  it.each([
+    {
+      name: "streaming activity without url",
+      config: { discord: { activity: "Live", activityType: 1 } },
+    },
+    {
+      name: "activityUrl without streaming type",
+      config: { discord: { activity: "Live", activityUrl: "https://twitch.tv/openclaw" } },
+    },
+    {
+      name: "auto presence min update interval above check interval",
+      config: {
         discord: {
-          activity: "Focus time",
+          autoPresence: {
+            enabled: true,
+            intervalMs: 5000,
+            minUpdateIntervalMs: 6000,
+          },
         },
       },
-    });
-
-    expect(res.ok).toBe(true);
-  });
-
-  it("accepts custom activity type", () => {
-    const res = validateConfigObject({
-      channels: {
-        discord: {
-          activity: "Chilling",
-          activityType: 4,
-        },
-      },
-    });
-
-    expect(res.ok).toBe(true);
-  });
-
-  it("rejects streaming activity without url", () => {
-    const res = validateConfigObject({
-      channels: {
-        discord: {
-          activity: "Live",
-          activityType: 1,
-        },
-      },
-    });
-
-    expect(res.ok).toBe(false);
-  });
-
-  it("rejects activityUrl without streaming type", () => {
-    const res = validateConfigObject({
-      channels: {
-        discord: {
-          activity: "Live",
-          activityUrl: "https://twitch.tv/openclaw",
-        },
-      },
-    });
-
-    expect(res.ok).toBe(false);
+    },
+  ] as const)("rejects $name", ({ config }) => {
+    expect(validateConfigObject({ channels: config }).ok).toBe(false);
   });
 });

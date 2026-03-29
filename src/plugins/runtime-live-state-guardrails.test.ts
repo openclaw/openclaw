@@ -1,0 +1,67 @@
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { describe, expect, it } from "vitest";
+
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+
+const LIVE_RUNTIME_STATE_GUARDS: Record<
+  string,
+  {
+    required: readonly string[];
+    forbidden: readonly string[];
+  }
+> = {
+  "extensions/whatsapp/src/active-listener.ts": {
+    required: ["globalThis", 'Symbol.for("openclaw.whatsapp.activeListenerState")'],
+    forbidden: ["resolveGlobalSingleton"],
+  },
+};
+
+function guardAssertions() {
+  return Object.entries(LIVE_RUNTIME_STATE_GUARDS).flatMap(([relativePath, guard]) => [
+    ...guard.required.map((needle) => ({
+      relativePath,
+      type: "required" as const,
+      needle,
+      message: `${relativePath} missing ${needle}`,
+    })),
+    ...guard.forbidden.map((needle) => ({
+      relativePath,
+      type: "forbidden" as const,
+      needle,
+      message: `${relativePath} must not contain ${needle}`,
+    })),
+  ]);
+}
+
+function expectGuardState(params: {
+  source: string;
+  type: "required" | "forbidden";
+  needle: string;
+  message: string;
+}) {
+  if (params.type === "required") {
+    expect(params.source, params.message).toContain(params.needle);
+    return;
+  }
+  expect(params.source, params.message).not.toContain(params.needle);
+}
+
+function readGuardrailSource(relativePath: string) {
+  return readFileSync(resolve(repoRoot, relativePath), "utf8");
+}
+
+describe("runtime live state guardrails", () => {
+  it.each(guardAssertions())(
+    "keeps split-runtime state holders on explicit direct globals: $relativePath $type $needle",
+    ({ relativePath, type, needle, message }) => {
+      expectGuardState({
+        source: readGuardrailSource(relativePath),
+        type,
+        needle,
+        message,
+      });
+    },
+  );
+});

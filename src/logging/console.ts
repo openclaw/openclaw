@@ -1,12 +1,14 @@
-import { createRequire } from "node:module";
 import util from "node:util";
 import type { OpenClawConfig } from "../config/types.js";
-import { isVerbose } from "../globals.js";
+import { isVerbose } from "../global-state.js";
 import { stripAnsi } from "../terminal/ansi.js";
-import { readLoggingConfig } from "./config.js";
+import { readLoggingConfig, shouldSkipMutatingLoggingConfigRead } from "./config.js";
+import { resolveEnvLogLevelOverride } from "./env-log-level.js";
 import { type LogLevel, normalizeLogLevel } from "./levels.js";
 import { getLogger, type LoggerSettings } from "./logger.js";
+import { resolveNodeRequireFromMeta } from "./node-require.js";
 import { loggingState } from "./state.js";
+import { formatLocalIsoWithOffset, formatTimestamp } from "./timestamps.js";
 
 export type ConsoleStyle = "pretty" | "compact" | "json";
 type ConsoleSettings = {
@@ -15,14 +17,16 @@ type ConsoleSettings = {
 };
 export type ConsoleLoggerSettings = ConsoleSettings;
 
-const requireConfig = createRequire(import.meta.url);
+const requireConfig = resolveNodeRequireFromMeta(import.meta.url);
 type ConsoleConfigLoader = () => OpenClawConfig["logging"] | undefined;
 const loadConfigFallbackDefault: ConsoleConfigLoader = () => {
   try {
-    const loaded = requireConfig("../config/config.js") as {
-      loadConfig?: () => OpenClawConfig;
-    };
-    return loaded.loadConfig?.().logging;
+    const loaded = requireConfig?.("../config/config.js") as
+      | {
+          loadConfig?: () => OpenClawConfig;
+        }
+      | undefined;
+    return loaded?.loadConfig?.().logging;
   } catch {
     return undefined;
   }
@@ -54,9 +58,22 @@ function normalizeConsoleStyle(style?: string): ConsoleStyle {
 }
 
 function resolveConsoleSettings(): ConsoleSettings {
+  const envLevel = resolveEnvLogLevelOverride();
+  // Test runs default to silent console logging unless explicitly overridden.
+  // Skip config-file and full config fallback reads in this fast path.
+  if (
+    process.env.VITEST === "true" &&
+    process.env.OPENCLAW_TEST_CONSOLE !== "1" &&
+    !isVerbose() &&
+    !envLevel &&
+    !loggingState.overrideSettings
+  ) {
+    return { level: "silent", style: normalizeConsoleStyle(undefined) };
+  }
+
   let cfg: OpenClawConfig["logging"] | undefined =
     (loggingState.overrideSettings as LoggerSettings | null) ?? readLoggingConfig();
-  if (!cfg) {
+  if (!cfg && !shouldSkipMutatingLoggingConfigRead()) {
     if (loggingState.resolvingConsoleSettings) {
       cfg = undefined;
     } else {
@@ -68,7 +85,7 @@ function resolveConsoleSettings(): ConsoleSettings {
       }
     }
   }
-  const level = normalizeConsoleLevel(cfg?.consoleLevel);
+  const level = envLevel ?? normalizeConsoleLevel(cfg?.consoleLevel);
   const style = normalizeConsoleStyle(cfg?.consoleStyle);
   return { level, style };
 }
@@ -128,6 +145,12 @@ const SUPPRESSED_CONSOLE_PREFIXES = [
   "Session already open",
 ] as const;
 
+const SUPPRESSED_DISCORD_EVENTQUEUE_LISTENERS = [
+  "DiscordMessageListener",
+  "DiscordReactionListener",
+  "DiscordReactionRemoveListener",
+] as const;
+
 function shouldSuppressConsoleMessage(message: string): boolean {
   if (isVerbose()) {
     return false;
@@ -137,7 +160,7 @@ function shouldSuppressConsoleMessage(message: string): boolean {
   }
   if (
     message.startsWith("[EventQueue] Slow listener detected") &&
-    message.includes("DiscordMessageListener")
+    SUPPRESSED_DISCORD_EVENTQUEUE_LISTENERS.some((listener) => message.includes(listener))
   ) {
     return true;
   }
@@ -152,42 +175,15 @@ function isEpipeError(err: unknown): boolean {
 export function formatConsoleTimestamp(style: ConsoleStyle): string {
   const now = new Date();
   if (style === "pretty") {
-    const h = String(now.getHours()).padStart(2, "0");
-    const m = String(now.getMinutes()).padStart(2, "0");
-    const s = String(now.getSeconds()).padStart(2, "0");
-    return `${h}:${m}:${s}`;
+    return formatTimestamp(now, { style: "short" });
   }
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, "0");
-  const day = String(now.getDate()).padStart(2, "0");
-  const h = String(now.getHours()).padStart(2, "0");
-  const m = String(now.getMinutes()).padStart(2, "0");
-  const s = String(now.getSeconds()).padStart(2, "0");
-  const ms = String(now.getMilliseconds()).padStart(3, "0");
-  const tzOffset = now.getTimezoneOffset();
-  const tzSign = tzOffset <= 0 ? "+" : "-";
-  const tzHours = String(Math.floor(Math.abs(tzOffset) / 60)).padStart(2, "0");
-  const tzMinutes = String(Math.abs(tzOffset) % 60).padStart(2, "0");
-  return `${year}-${month}-${day}T${h}:${m}:${s}.${ms}${tzSign}${tzHours}:${tzMinutes}`;
+  return formatLocalIsoWithOffset(now);
 }
 
 function hasTimestampPrefix(value: string): boolean {
   return /^(?:\d{2}:\d{2}:\d{2}|\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?)/.test(
     value,
   );
-}
-
-function isJsonPayload(value: string): boolean {
-  const trimmed = value.trim();
-  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) {
-    return false;
-  }
-  try {
-    JSON.parse(trimmed);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 /**
@@ -250,10 +246,7 @@ export function enableConsoleCapture(): void {
       }
       const trimmed = stripAnsi(formatted).trimStart();
       const shouldPrefixTimestamp =
-        loggingState.consoleTimestampPrefix &&
-        trimmed.length > 0 &&
-        !hasTimestampPrefix(trimmed) &&
-        !isJsonPayload(trimmed);
+        loggingState.consoleTimestampPrefix && trimmed.length > 0 && !hasTimestampPrefix(trimmed);
       const timestamp = shouldPrefixTimestamp
         ? formatConsoleTimestamp(getConsoleSettings().style)
         : "";
@@ -277,7 +270,7 @@ export function enableConsoleCapture(): void {
         // never block console output on logging failures
       }
       if (loggingState.forceConsoleToStderr) {
-        // in RPC/JSON mode, keep stdout clean
+        // In --json mode, all console.* writes are diagnostics and should stay off stdout.
         try {
           const line = timestamp ? `${timestamp} ${formatted}` : formatted;
           process.stderr.write(`${line}\n`);

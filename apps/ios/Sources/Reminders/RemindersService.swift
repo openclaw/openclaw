@@ -6,7 +6,7 @@ final class RemindersService: RemindersServicing {
     func list(params: OpenClawRemindersListParams) async throws -> OpenClawRemindersListPayload {
         let store = EKEventStore()
         let status = EKEventStore.authorizationStatus(for: .reminder)
-        let authorized = await Self.ensureAuthorization(store: store, status: status)
+        let authorized = EventKitAuthorization.allowsRead(status: status)
         guard authorized else {
             throw NSError(domain: "Reminders", code: 1, userInfo: [
                 NSLocalizedDescriptionKey: "REMINDERS_PERMISSION_REQUIRED: grant Reminders permission",
@@ -17,7 +17,7 @@ final class RemindersService: RemindersServicing {
         let statusFilter = params.status ?? .incomplete
 
         let predicate = store.predicateForReminders(in: nil)
-        let payload = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<[OpenClawReminderPayload], Error>) in
+        let payload: [OpenClawReminderPayload] = try await withCheckedThrowingContinuation { cont in
             store.fetchReminders(matching: predicate) { items in
                 let formatter = ISO8601DateFormatter()
                 let filtered = (items ?? []).filter { reminder in
@@ -50,7 +50,7 @@ final class RemindersService: RemindersServicing {
     func add(params: OpenClawRemindersAddParams) async throws -> OpenClawRemindersAddPayload {
         let store = EKEventStore()
         let status = EKEventStore.authorizationStatus(for: .reminder)
-        let authorized = await Self.ensureWriteAuthorization(store: store, status: status)
+        let authorized = EventKitAuthorization.allowsWrite(status: status)
         guard authorized else {
             throw NSError(domain: "Reminders", code: 2, userInfo: [
                 NSLocalizedDescriptionKey: "REMINDERS_PERMISSION_REQUIRED: grant Reminders permission",
@@ -98,38 +98,6 @@ final class RemindersService: RemindersServicing {
             listName: reminder.calendar.title)
 
         return OpenClawRemindersAddPayload(reminder: payload)
-    }
-
-    private static func ensureAuthorization(store: EKEventStore, status: EKAuthorizationStatus) async -> Bool {
-        switch status {
-        case .authorized:
-            return true
-        case .notDetermined:
-            // Don’t prompt during node.invoke; prompts block the invoke and lead to timeouts.
-            return false
-        case .restricted, .denied:
-            return false
-        case .fullAccess:
-            return true
-        case .writeOnly:
-            return false
-        @unknown default:
-            return false
-        }
-    }
-
-    private static func ensureWriteAuthorization(store: EKEventStore, status: EKAuthorizationStatus) async -> Bool {
-        switch status {
-        case .authorized, .fullAccess, .writeOnly:
-            return true
-        case .notDetermined:
-            // Don’t prompt during node.invoke; prompts block the invoke and lead to timeouts.
-            return false
-        case .restricted, .denied:
-            return false
-        @unknown default:
-            return false
-        }
     }
 
     private static func resolveList(

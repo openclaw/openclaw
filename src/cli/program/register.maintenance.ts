@@ -36,6 +36,7 @@ export function registerMaintenanceCommands(program: Command) {
           generateGatewayToken: Boolean(opts.generateGatewayToken),
           deep: Boolean(opts.deep),
         });
+        defaultRuntime.exit(0);
       });
     });
 
@@ -47,11 +48,11 @@ export function registerMaintenanceCommands(program: Command) {
       () =>
         `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/dashboard", "docs.openclaw.ai/cli/dashboard")}\n`,
     )
-    .option("--no-open", "Print URL but do not launch a browser", false)
+    .option("--no-open", "Print URL but do not launch a browser")
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         await dashboardCommand(defaultRuntime, {
-          noOpen: Boolean(opts.noOpen),
+          noOpen: opts.open === false,
         });
       });
     });

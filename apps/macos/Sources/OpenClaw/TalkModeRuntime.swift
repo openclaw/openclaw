@@ -8,9 +8,16 @@ import Speech
 actor TalkModeRuntime {
     static let shared = TalkModeRuntime()
 
+    enum PlaybackPlan: Equatable {
+        case elevenLabsThenSystemVoice(apiKey: String, voiceId: String)
+        case systemVoiceOnly
+    }
+
     private let logger = Logger(subsystem: "ai.openclaw", category: "talk.runtime")
     private let ttsLogger = Logger(subsystem: "ai.openclaw", category: "talk.tts")
     private static let defaultModelIdFallback = "eleven_v3"
+    private static let defaultTalkProvider = "elevenlabs"
+    private static let defaultSilenceTimeoutMs = TalkDefaults.silenceTimeoutMs
 
     private final class RMSMeter: @unchecked Sendable {
         private let lock = NSLock()
@@ -65,9 +72,14 @@ actor TalkModeRuntime {
     private var fallbackVoiceId: String?
     private var lastPlaybackWasPCM: Bool = false
 
-    private let silenceWindow: TimeInterval = 0.7
+    private var silenceWindow: TimeInterval = .init(TalkModeRuntime.defaultSilenceTimeoutMs) / 1000
     private let minSpeechRMS: Double = 1e-3
     private let speechBoostFactor: Double = 6.0
+
+    static func configureRecognitionRequest(_ request: SFSpeechAudioBufferRecognitionRequest) {
+        request.shouldReportPartialResults = true
+        request.taskHint = .dictation
+    }
 
     // MARK: - Lifecycle
 
@@ -175,14 +187,20 @@ actor TalkModeRuntime {
             return
         }
 
-        self.recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
-        self.recognitionRequest?.shouldReportPartialResults = true
-        guard let request = self.recognitionRequest else { return }
+        let request = SFSpeechAudioBufferRecognitionRequest()
+        Self.configureRecognitionRequest(request)
+        self.recognitionRequest = request
 
         if self.audioEngine == nil {
             self.audioEngine = AVAudioEngine()
         }
         guard let audioEngine = self.audioEngine else { return }
+
+        guard AudioInputDeviceObserver.hasUsableDefaultInputDevice() else {
+            self.audioEngine = nil
+            self.logger.error("talk mode: no usable audio input device")
+            return
+        }
 
         let input = audioEngine.inputNode
         let format = input.outputFormat(forBus: 0)
@@ -438,17 +456,22 @@ actor TalkModeRuntime {
 
     private func playAssistant(text: String) async {
         guard let input = await self.preparePlaybackInput(text: text) else { return }
-        do {
-            if let apiKey = input.apiKey, !apiKey.isEmpty, let voiceId = input.voiceId {
+        switch Self.playbackPlan(apiKey: input.apiKey, voiceId: input.voiceId) {
+        case let .elevenLabsThenSystemVoice(apiKey, voiceId):
+            do {
                 try await self.playElevenLabs(input: input, apiKey: apiKey, voiceId: voiceId)
-            } else {
-                try await self.playSystemVoice(input: input)
+            } catch {
+                self.ttsLogger
+                    .error(
+                        "talk TTS failed: \(error.localizedDescription, privacy: .public); " +
+                            "falling back to system voice")
+                do {
+                    try await self.playSystemVoice(input: input)
+                } catch {
+                    self.ttsLogger.error("talk system voice failed: \(error.localizedDescription, privacy: .public)")
+                }
             }
-        } catch {
-            self.ttsLogger
-                .error(
-                    "talk TTS failed: \(error.localizedDescription, privacy: .public); " +
-                        "falling back to system voice")
+        case .systemVoiceOnly:
             do {
                 try await self.playSystemVoice(input: input)
             } catch {
@@ -460,6 +483,13 @@ actor TalkModeRuntime {
             self.phase = .thinking
             await MainActor.run { TalkModeController.shared.updatePhase(.thinking) }
         }
+    }
+
+    static func playbackPlan(apiKey: String?, voiceId: String?) -> PlaybackPlan {
+        guard let apiKey, !apiKey.isEmpty, let voiceId else {
+            return .systemVoiceOnly
+        }
+        return .elevenLabsThenSystemVoice(apiKey: apiKey, voiceId: voiceId)
     }
 
     private struct TalkPlaybackInput {
@@ -651,9 +681,12 @@ actor TalkModeRuntime {
         await MainActor.run { TalkModeController.shared.updatePhase(.speaking) }
         self.phase = .speaking
         await TalkSystemSpeechSynthesizer.shared.stop()
+        // Use app locale as fallback when no explicit language is set (e.g. system voice without ElevenLabs directive).
+        let appLocale = await MainActor.run { AppStateStore.shared.voiceWakeLocaleID }
+        let ttsLanguage = input.language ?? appLocale
         try await TalkSystemSpeechSynthesizer.shared.speak(
             text: input.cleanedText,
-            language: input.language)
+            language: ttsLanguage)
         self.ttsLogger.info("talk system voice done")
     }
 
@@ -771,6 +804,7 @@ extension TalkModeRuntime {
         }
         self.defaultOutputFormat = cfg.outputFormat
         self.interruptOnSpeech = cfg.interruptOnSpeech
+        self.silenceWindow = TimeInterval(cfg.silenceTimeoutMs) / 1000
         self.apiKey = cfg.apiKey
         let hasApiKey = (cfg.apiKey?.isEmpty == false)
         let voiceLabel = (cfg.voiceId?.isEmpty == false) ? cfg.voiceId! : "none"
@@ -780,19 +814,21 @@ extension TalkModeRuntime {
                 "talk config voiceId=\(voiceLabel, privacy: .public) " +
                     "modelId=\(modelLabel, privacy: .public) " +
                     "apiKey=\(hasApiKey, privacy: .public) " +
-                    "interrupt=\(cfg.interruptOnSpeech, privacy: .public)")
+                    "interrupt=\(cfg.interruptOnSpeech, privacy: .public) " +
+                    "silenceTimeoutMs=\(cfg.silenceTimeoutMs, privacy: .public)")
     }
 
-    private struct TalkRuntimeConfig {
-        let voiceId: String?
-        let voiceAliases: [String: String]
-        let modelId: String?
-        let outputFormat: String?
-        let interruptOnSpeech: Bool
-        let apiKey: String?
+    static func selectTalkProviderConfig(
+        _ talk: [String: AnyCodable]?) -> TalkProviderConfigSelection?
+    {
+        TalkConfigParsing.selectProviderConfig(talk, defaultProvider: self.defaultTalkProvider)
     }
 
-    private func fetchTalkConfig() async -> TalkRuntimeConfig {
+    static func resolvedSilenceTimeoutMs(_ talk: [String: AnyCodable]?) -> Int {
+        TalkConfigParsing.resolvedSilenceTimeoutMs(talk, fallback: self.defaultSilenceTimeoutMs)
+    }
+
+    private func fetchTalkConfig() async -> TalkModeGatewayConfigState {
         let env = ProcessInfo.processInfo.environment
         let envVoice = env["ELEVENLABS_VOICE_ID"]?.trimmingCharacters(in: .whitespacesAndNewlines)
         let sagVoice = env["SAG_VOICE_ID"]?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -803,52 +839,34 @@ extension TalkModeRuntime {
                 method: .talkConfig,
                 params: ["includeSecrets": AnyCodable(true)],
                 timeoutMs: 8000)
-            let talk = snap.config?["talk"]?.dictionaryValue
-            let ui = snap.config?["ui"]?.dictionaryValue
-            let rawSeam = ui?["seamColor"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            await MainActor.run {
-                AppStateStore.shared.seamColorHex = rawSeam.isEmpty ? nil : rawSeam
+            let parsed = TalkModeGatewayConfigParser.parse(
+                snapshot: snap,
+                defaultProvider: Self.defaultTalkProvider,
+                defaultModelIdFallback: Self.defaultModelIdFallback,
+                defaultSilenceTimeoutMs: Self.defaultSilenceTimeoutMs,
+                envVoice: envVoice,
+                sagVoice: sagVoice,
+                envApiKey: envApiKey)
+            if parsed.missingResolvedPayload {
+                self.ttsLogger.info("talk config ignored: normalized payload missing talk.resolved")
             }
-            let voice = talk?["voiceId"]?.stringValue
-            let rawAliases = talk?["voiceAliases"]?.dictionaryValue
-            let resolvedAliases: [String: String] =
-                rawAliases?.reduce(into: [:]) { acc, entry in
-                    let key = entry.key.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                    let value = entry.value.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                    guard !key.isEmpty, !value.isEmpty else { return }
-                    acc[key] = value
-                } ?? [:]
-            let model = talk?["modelId"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
-            let resolvedModel = (model?.isEmpty == false) ? model! : Self.defaultModelIdFallback
-            let outputFormat = talk?["outputFormat"]?.stringValue
-            let interrupt = talk?["interruptOnSpeech"]?.boolValue
-            let apiKey = talk?["apiKey"]?.stringValue
-            let resolvedVoice =
-                (voice?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? voice : nil) ??
-                (envVoice?.isEmpty == false ? envVoice : nil) ??
-                (sagVoice?.isEmpty == false ? sagVoice : nil)
-            let resolvedApiKey =
-                (envApiKey?.isEmpty == false ? envApiKey : nil) ??
-                (apiKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? apiKey : nil)
-            return TalkRuntimeConfig(
-                voiceId: resolvedVoice,
-                voiceAliases: resolvedAliases,
-                modelId: resolvedModel,
-                outputFormat: outputFormat,
-                interruptOnSpeech: interrupt ?? true,
-                apiKey: resolvedApiKey)
+            await MainActor.run {
+                AppStateStore.shared.seamColorHex = parsed.seamColorHex
+            }
+            if parsed.activeProvider != Self.defaultTalkProvider {
+                self.ttsLogger
+                    .info("talk provider \(parsed.activeProvider, privacy: .public) unsupported; using system voice")
+            } else if parsed.normalizedPayload {
+                self.ttsLogger.info("talk config provider from talk.resolved")
+            }
+            return parsed
         } catch {
-            let resolvedVoice =
-                (envVoice?.isEmpty == false ? envVoice : nil) ??
-                (sagVoice?.isEmpty == false ? sagVoice : nil)
-            let resolvedApiKey = envApiKey?.isEmpty == false ? envApiKey : nil
-            return TalkRuntimeConfig(
-                voiceId: resolvedVoice,
-                voiceAliases: [:],
-                modelId: Self.defaultModelIdFallback,
-                outputFormat: nil,
-                interruptOnSpeech: true,
-                apiKey: resolvedApiKey)
+            return TalkModeGatewayConfigParser.fallback(
+                defaultModelIdFallback: Self.defaultModelIdFallback,
+                defaultSilenceTimeoutMs: Self.defaultSilenceTimeoutMs,
+                envVoice: envVoice,
+                sagVoice: sagVoice,
+                envApiKey: envApiKey)
         }
     }
 
