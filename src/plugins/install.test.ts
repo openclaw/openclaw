@@ -19,6 +19,7 @@ import * as installSecurityScan from "./install-security-scan.js";
 import {
   installPluginFromArchive,
   installPluginFromDir,
+  installPluginFromFile,
   installPluginFromNpmSpec,
   installPluginFromPath,
   PLUGIN_INSTALL_ERROR_CODE,
@@ -44,6 +45,9 @@ vi.mock("./install.runtime.js", async () => {
     scanPackageInstallSource: (
       ...args: Parameters<typeof installSecurityScan.scanPackageInstallSource>
     ) => installSecurityScan.scanPackageInstallSource(...args),
+    scanFileInstallSource: (
+      ...args: Parameters<typeof installSecurityScan.scanFileInstallSource>
+    ) => installSecurityScan.scanFileInstallSource(...args),
   };
 });
 
@@ -774,9 +778,29 @@ describe("installPluginFromArchive", () => {
       targetName: "hook-findings-plugin",
       targetType: "plugin",
       source: "plugin-package",
-      builtinFindings: [],
+      sourcePath: pluginDir,
+      sourcePathKind: "directory",
+      request: {
+        kind: "plugin-dir",
+        mode: "install",
+      },
+      builtinScan: {
+        status: "ok",
+        findings: [],
+      },
+      plugin: {
+        contentType: "package",
+        pluginId: "hook-findings-plugin",
+        packageName: "hook-findings-plugin",
+        version: "1.0.0",
+        extensions: ["index.js"],
+      },
     });
-    expect(handler.mock.calls[0]?.[1]).toEqual({ source: "plugin-package", targetType: "plugin" });
+    expect(handler.mock.calls[0]?.[1]).toEqual({
+      source: "plugin-package",
+      targetType: "plugin",
+      requestKind: "plugin-dir",
+    });
     expect(
       warnings.some((w) =>
         w.includes("Plugin scanner: External scanner requires review (policy.json:2)"),
@@ -817,11 +841,25 @@ describe("installPluginFromArchive", () => {
       targetName: "dangerous-blocked-plugin",
       targetType: "plugin",
       source: "plugin-package",
-      builtinFindings: [
-        expect.objectContaining({
-          severity: "critical",
-        }),
-      ],
+      request: {
+        kind: "plugin-dir",
+        mode: "install",
+      },
+      builtinScan: {
+        status: "ok",
+        findings: [
+          expect.objectContaining({
+            severity: "critical",
+          }),
+        ],
+      },
+      plugin: {
+        contentType: "package",
+        pluginId: "dangerous-blocked-plugin",
+        packageName: "dangerous-blocked-plugin",
+        version: "1.0.0",
+        extensions: ["index.js"],
+      },
     });
     expect(warnings.some((w) => w.includes("dangerous code pattern"))).toBe(true);
     expect(
@@ -1133,6 +1171,61 @@ describe("installPluginFromDir", () => {
 });
 
 describe("installPluginFromPath", () => {
+  it("runs before_install for plain file plugins with file provenance metadata", async () => {
+    const handler = vi.fn().mockReturnValue({
+      findings: [
+        {
+          ruleId: "manual-review",
+          severity: "warn",
+          file: "payload.js",
+          line: 1,
+          message: "Review single-file plugin before install",
+        },
+      ],
+    });
+    initializeGlobalHookRunner(createMockPluginRegistry([{ hookName: "before_install", handler }]));
+
+    const baseDir = makeTempDir();
+    const extensionsDir = path.join(baseDir, "extensions");
+    fs.mkdirSync(extensionsDir, { recursive: true });
+
+    const sourcePath = path.join(baseDir, "payload.js");
+    fs.writeFileSync(sourcePath, "console.log('SAFE');\n", "utf-8");
+
+    const result = await installPluginFromFile({
+      filePath: sourcePath,
+      extensionsDir,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0]?.[0]).toMatchObject({
+      targetName: "payload",
+      targetType: "plugin",
+      source: "plugin-file",
+      sourcePath,
+      sourcePathKind: "file",
+      request: {
+        kind: "plugin-file",
+        mode: "install",
+        requestedSpecifier: sourcePath,
+      },
+      builtinScan: {
+        status: "ok",
+      },
+      plugin: {
+        contentType: "file",
+        pluginId: "payload",
+        extensions: ["payload.js"],
+      },
+    });
+    expect(handler.mock.calls[0]?.[1]).toEqual({
+      source: "plugin-file",
+      targetType: "plugin",
+      requestKind: "plugin-file",
+    });
+  });
+
   it("blocks hardlink alias overwrites when installing a plain file plugin", async () => {
     const baseDir = makeTempDir();
     const extensionsDir = path.join(baseDir, "extensions");
