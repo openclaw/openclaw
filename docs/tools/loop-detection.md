@@ -1,6 +1,6 @@
 ---
 title: "Tool-loop detection"
-summary: "How to enable and tune guardrails that detect repetitive tool-call loops"
+summary: "How to tune or disable the built-in guardrails that detect repetitive tool-call loops"
 read_when:
   - A user reports agents getting stuck repeating tool calls
   - You need to tune repetitive-call protection
@@ -10,9 +10,9 @@ read_when:
 # Tool-loop detection
 
 OpenClaw can keep agents from getting stuck in repeated tool-call patterns.
-The guard is **disabled by default**.
+The guard is **enabled by default**.
 
-Enable it only where needed, because it can block legitimate repeated calls with strict settings.
+It uses gradual escalation — warning at 10 identical calls, blocking at 30 — so legitimate varied tool use is unaffected.
 
 ## Why this exists
 
@@ -28,7 +28,7 @@ Global defaults:
 {
   tools: {
     loopDetection: {
-      enabled: false,
+      enabled: true,
       historySize: 30,
       warningThreshold: 10,
       criticalThreshold: 20,
@@ -64,9 +64,21 @@ Per-agent override (optional):
 }
 ```
 
+To disable loop detection entirely:
+
+```json5
+{
+  tools: {
+    loopDetection: {
+      enabled: false,
+    },
+  },
+}
+```
+
 ### Field behavior
 
-- `enabled`: Master switch. `false` means no loop detection is performed.
+- `enabled`: Master switch (default: `true`). Set to `false` to disable all loop detection.
 - `historySize`: number of recent tool calls kept for analysis.
 - `warningThreshold`: threshold before classifying a pattern as warning-only.
 - `criticalThreshold`: threshold for blocking repetitive loop patterns.
@@ -77,7 +89,7 @@ Per-agent override (optional):
 
 ## Recommended setup
 
-- Start with `enabled: true`, defaults unchanged.
+- Keep defaults — loop detection is already enabled with safe thresholds.
 - Keep thresholds ordered as `warningThreshold < criticalThreshold < globalCircuitBreakerThreshold`.
 - If false positives occur:
   - raise `warningThreshold` and/or `criticalThreshold`
@@ -97,4 +109,4 @@ This protects users from runaway token spend and lockups while preserving normal
 
 - `tools.loopDetection` is merged with agent-level overrides.
 - Per-agent config fully overrides or extends global values.
-- If no config exists, guardrails stay off.
+- If no config exists, loop detection runs with built-in defaults (`enabled: true`).
