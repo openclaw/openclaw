@@ -1314,17 +1314,13 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
   }
 
-  private isToolNotFoundError(err: unknown): boolean {
+  private isQueryToolNotFoundError(err: unknown): boolean {
     const message = err instanceof Error ? err.message : String(err);
-    // Match the specific MCP error pattern for missing tools.
-    // Be strict to avoid false-positives when user query text appears
-    // in the error (the full mcporter command + args is in the message).
-    // Known patterns from MCP servers:
-    //   "MCP error -32602: Tool query not found"
-    //   "Tool 'query' not found"
-    //   "tool not found: query"
-    // Require "Tool" near "not found" with no sentence boundary between them.
-    return /\bTool\b[^.!?\n]{0,40}\bnot found\b/i.test(message);
+    // Match only the specific v2-query missing-tool signatures emitted by MCP.
+    // The full mcporter command (including user query text) is included in the
+    // error, so generic /tool.*not found/i matching can false-positive when the
+    // user's search text literally contains "tool query not found".
+    return /(?:^|\n|:\s)(?:MCP error [^:\n]+:\s*)?Tool ['"]?query['"]? not found\b/i.test(message);
   }
 
   private async ensureMcporterDaemonStarted(mcporter: ResolvedQmdMcporterConfig): Promise<void> {
@@ -1414,7 +1410,11 @@ export class QmdMemoryManager implements MemorySearchManager {
             minScore: params.minScore,
           };
     if (params.collection) {
-      callArgs.collection = params.collection;
+      if (effectiveTool === "query") {
+        callArgs.collections = [params.collection];
+      } else {
+        callArgs.collection = params.collection;
+      }
     }
 
     let result: { stdout: string };
@@ -1446,7 +1446,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       // race condition where concurrent searches both probe with "query" while
       // the version is null — the second call would otherwise fail after the
       // first sets the version to "v1".
-      if (effectiveTool === "query" && this.isToolNotFoundError(err)) {
+      if (effectiveTool === "query" && this.isQueryToolNotFoundError(err)) {
         this.markQmdV1Fallback();
         const v1Tool = this.resolveQmdMcpTool(params.searchCommand ?? "query");
         return this.runQmdSearchViaMcporter({

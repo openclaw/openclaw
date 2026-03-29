@@ -1667,9 +1667,11 @@ describe("QmdMemoryManager", () => {
             expect.objectContaining({ type: "hyde" }),
           ]),
         );
+        expect(callArgs).toHaveProperty("collections", ["workspace-main"]);
         // Should NOT have flat query/minScore (v1 format)
         expect(callArgs).not.toHaveProperty("query");
         expect(callArgs).not.toHaveProperty("minScore");
+        expect(callArgs).not.toHaveProperty("collection");
         emitAndClose(child, "stdout", JSON.stringify({ results: [] }));
         return child;
       }
@@ -1741,6 +1743,62 @@ describe("QmdMemoryManager", () => {
 
     // One v2 attempt (fails) + one v1 retry (succeeds) per collection
     expect(callCount).toBe(2);
+
+    await manager.close();
+  });
+
+  it("does not pin v1 fallback when the user query text contains tool-not-found words", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "query",
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+          mcporter: { enabled: true, serverName: "qmd", startDaemon: false },
+        },
+      },
+    } as OpenClawConfig;
+
+    const selectors: string[] = [];
+    let firstQueryCall = true;
+    spawnMock.mockImplementation((cmd: string, args: string[]) => {
+      const child = createMockChild({ autoClose: false });
+      if (isMcporterCommand(cmd) && args[0] === "call") {
+        selectors.push(args[1] ?? "");
+        if (args[1] === "qmd.query" && firstQueryCall) {
+          firstQueryCall = false;
+          queueMicrotask(() => {
+            child.stderr.emit(
+              "data",
+              'Error: backend unavailable while processing query text "Tool query not found"',
+            );
+            child.closeWith(1);
+          });
+          return child;
+        }
+        emitAndClose(child, "stdout", JSON.stringify({ results: [] }));
+        return child;
+      }
+      emitAndClose(child, "stdout", "[]");
+      return child;
+    });
+
+    const { manager } = await createManager();
+
+    await expect(
+      manager.search("Tool query not found", { sessionKey: "agent:main:slack:dm:u123" }),
+    ).resolves.toEqual([]);
+
+    await manager.search("hello again", { sessionKey: "agent:main:slack:dm:u123" });
+
+    expect(selectors.length).toBeGreaterThanOrEqual(2);
+    expect(selectors.every((selector) => selector === "qmd.query")).toBe(true);
+    expect(logWarnMock).not.toHaveBeenCalledWith(
+      expect.stringContaining("falling back to v1 tool names"),
+    );
 
     await manager.close();
   });
