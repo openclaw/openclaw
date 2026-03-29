@@ -90,6 +90,32 @@ describe("live model switch", () => {
     });
   });
 
+  it("falls back to persisted runtime model fields when override fields are absent", async () => {
+    state.loadSessionStoreMock.mockReturnValue({
+      "agent:main:cron:test": {
+        modelProvider: "anthropic",
+        model: "claude-sonnet-4-6",
+      },
+    });
+
+    const { resolveLiveSessionModelSelection } = await loadModule();
+
+    expect(
+      resolveLiveSessionModelSelection({
+        cfg: { session: { store: "/tmp/custom-store.json" } },
+        sessionKey: "agent:main:cron:test",
+        agentId: "main",
+        defaultProvider: "anthropic",
+        defaultModel: "claude-opus-4-6",
+      }),
+    ).toEqual({
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      authProfileId: undefined,
+      authProfileIdSource: undefined,
+    });
+  });
+
   it("queues a live switch only when an active run was aborted", async () => {
     state.abortEmbeddedPiRunMock.mockReturnValue(true);
 

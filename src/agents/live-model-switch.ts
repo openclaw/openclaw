@@ -48,8 +48,9 @@ export function resolveLiveSessionModelSelection(params: {
     agentId,
   });
   const entry = loadSessionStore(storePath, { skipCache: true })[sessionKey];
-  const provider = entry?.providerOverride?.trim() || defaultModelRef.provider;
-  const model = entry?.modelOverride?.trim() || defaultModelRef.model;
+  const provider =
+    entry?.providerOverride?.trim() || entry?.modelProvider?.trim() || defaultModelRef.provider;
+  const model = entry?.modelOverride?.trim() || entry?.model?.trim() || defaultModelRef.model;
   const authProfileId = entry?.authProfileOverride?.trim() || undefined;
   return {
     provider,
