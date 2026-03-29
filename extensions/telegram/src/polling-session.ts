@@ -205,6 +205,7 @@ export class TelegramPollingSession {
 
     let lastGetUpdatesAt = Date.now();
     let lastApiActivityAt = Date.now();
+    let oldestInFlightApiStartedAt: number | null = null;
     let inFlightApiCalls = 0;
     let lastGetUpdatesStartedAt: number | null = null;
     let lastGetUpdatesFinishedAt: number | null = null;
@@ -218,19 +219,20 @@ export class TelegramPollingSession {
 
     bot.api.config.use(async (prev, method, payload, signal) => {
       if (method !== "getUpdates") {
-        // Track in-flight non-getUpdates API calls so the watchdog can
-        // distinguish "network dead" from "delivery in progress".
+        const startedAt = Date.now();
+        if (inFlightApiCalls === 0) {
+          oldestInFlightApiStartedAt = startedAt;
+        }
         inFlightApiCalls += 1;
         try {
           const result = await prev(method, payload, signal);
-          // Any successful non-getUpdates API call (sendMessage, sendChatAction, …)
-          // proves the network is alive. Update the activity timestamp so the
-          // polling-stall watchdog does not misinterpret slow message processing
-          // as a network stall.
           lastApiActivityAt = Date.now();
           return result;
         } finally {
           inFlightApiCalls = Math.max(0, inFlightApiCalls - 1);
+          if (inFlightApiCalls === 0) {
+            oldestInFlightApiStartedAt = null;
+          }
         }
       }
 
@@ -316,17 +318,18 @@ export class TelegramPollingSession {
       const idleElapsed =
         inFlightGetUpdates > 0 ? 0 : now - (lastGetUpdatesFinishedAt ?? lastGetUpdatesAt);
       const elapsed = inFlightGetUpdates > 0 ? activeElapsed : idleElapsed;
-      const apiIdle = now - lastApiActivityAt;
+      const apiLivenessAt =
+        oldestInFlightApiStartedAt == null
+          ? lastApiActivityAt
+          : Math.max(lastApiActivityAt, oldestInFlightApiStartedAt);
+      const apiElapsed = now - apiLivenessAt;
 
-      // Only treat as a stall if BOTH getUpdates and all other API activity
-      // (sendMessage, sendChatAction, …) have been silent beyond the threshold,
-      // AND no non-getUpdates API call is currently in-flight.
-      // This prevents the watchdog from aborting in-flight sendMessage calls
-      // when the agent is simply taking a long time to process a message.
+      // Treat recent non-getUpdates success and recent non-getUpdates start as
+      // the same liveness signal. Slow delivery should suppress the watchdog,
+      // but only for the same bounded window as recent successful API traffic.
       if (
         elapsed > POLL_STALL_THRESHOLD_MS &&
-        apiIdle > POLL_STALL_THRESHOLD_MS &&
-        inFlightApiCalls === 0 &&
+        apiElapsed > POLL_STALL_THRESHOLD_MS &&
         runner.isRunning()
       ) {
         if (stallDiagLoggedAt && now - stallDiagLoggedAt < POLL_STALL_THRESHOLD_MS / 2) {
