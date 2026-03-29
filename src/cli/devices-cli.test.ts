@@ -298,6 +298,19 @@ describe("devices cli local fallback", () => {
 });
 
 describe("devices cli list", () => {
+  it("uses an extended default gateway RPC timeout for pairing-heavy calls", async () => {
+    callGateway.mockResolvedValueOnce({ pending: [], paired: [] });
+
+    await runDevicesCommand(["list"]);
+
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "device.pair.list",
+        timeoutMs: 30_000,
+      }),
+    );
+  });
+
   it("renders pending scopes when present", async () => {
     callGateway.mockResolvedValueOnce({
       pending: [

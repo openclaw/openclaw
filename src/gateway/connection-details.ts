@@ -70,6 +70,13 @@ export function buildGatewayConnectionDetailsWithResolvers(
   const remoteFallbackNote = remoteMisconfigured
     ? "Warn: gateway.mode=remote but gateway.remote.url is missing; set gateway.remote.url or switch gateway.mode=local."
     : undefined;
+  // Local mode always targets 127.0.0.1 on *this* OS instance. When the gateway is bound beyond
+  // loopback (LAN/custom/tailnet/auto), operators often run the CLI in Docker or on another host
+  // and hit confusing pairing or RPC timeouts (issue #45753).
+  const loopbackTargetHint =
+    !urlOverride && !remoteUrl && bindMode !== "loopback"
+      ? "Note: local-mode CLI uses 127.0.0.1 on this machine. If the gateway runs on the Docker host or another host, set OPENCLAW_GATEWAY_URL (or pass --url)."
+      : undefined;
 
   const allowPrivateWs = process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS === "1";
   if (!isSecureWebSocketUrl(url, { allowPrivateWs })) {
@@ -98,6 +105,7 @@ export function buildGatewayConnectionDetailsWithResolvers(
     `Config: ${configPath}`,
     bindDetail,
     remoteFallbackNote,
+    loopbackTargetHint,
   ]
     .filter(Boolean)
     .join("\n");
