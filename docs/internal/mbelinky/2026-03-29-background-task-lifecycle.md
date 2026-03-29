@@ -1,12 +1,12 @@
 ---
-title: "Background Task Lifecycle Tracking (PR #52518)"
-summary: "Plain-language outline of the durable task registry, quieter background ACP delivery, and new task inspection commands from PR #52518"
+title: "Background Task Lifecycle Tracking"
+summary: "Plain-language outline of the durable task registry, quieter background ACP delivery, and new task inspection commands"
 author: "Mariano Belinky <mbelinky@gmail.com>"
 github_username: "mbelinky"
 created: "2026-03-29"
 ---
 
-# Feature Outline: Background Task Lifecycle Tracking (PR #52518)
+# Feature Outline: Background Task Lifecycle Tracking
 
 ## TL;DR
 
