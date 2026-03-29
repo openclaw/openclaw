@@ -82,18 +82,14 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
     getChannelPluginMock.mockImplementation((channel: string) =>
       channel === "telegram"
         ? {
-            execApprovals: {
-              auth: {
-                getInitiatingSurfaceState: () => ({ kind: "enabled" }),
-              },
+            auth: {
+              getActionAvailabilityState: () => ({ kind: "enabled" }),
             },
           }
         : channel === "discord"
           ? {
-              execApprovals: {
-                auth: {
-                  getInitiatingSurfaceState: () => ({ kind: "disabled" }),
-                },
+              auth: {
+                getActionAvailabilityState: () => ({ kind: "disabled" }),
               },
             }
           : undefined,
@@ -131,10 +127,8 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
     getChannelPluginMock.mockImplementation((channel: string) =>
       channel === "telegram"
         ? {
-            execApprovals: {
-              auth: {
-                getInitiatingSurfaceState: () => ({ kind: "disabled" }),
-              },
+            auth: {
+              getActionAvailabilityState: () => ({ kind: "disabled" }),
             },
           }
         : undefined,
@@ -177,14 +171,14 @@ describe("hasConfiguredExecApprovalDmRoute", () => {
     {
       plugins: [
         {
-          execApprovals: {
+          approvals: {
             delivery: {
               hasConfiguredDmRoute: () => false,
             },
           },
         },
         {
-          execApprovals: {
+          approvals: {
             delivery: {
               hasConfiguredDmRoute: () => true,
             },
@@ -196,21 +190,21 @@ describe("hasConfiguredExecApprovalDmRoute", () => {
     {
       plugins: [
         {
-          execApprovals: {
+          approvals: {
             delivery: {
               hasConfiguredDmRoute: () => false,
             },
           },
         },
         {
-          execApprovals: {
+          approvals: {
             delivery: {
               hasConfiguredDmRoute: () => false,
             },
           },
         },
         {
-          execApprovals: undefined,
+          approvals: undefined,
         },
       ],
       expected: false,

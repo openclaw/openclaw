@@ -177,10 +177,10 @@ describe("plugin approval forwarding", () => {
       const mockPayload = { text: "custom adapter payload" };
       const adapterPlugin: Pick<
         ChannelPlugin,
-        "id" | "meta" | "capabilities" | "config" | "execApprovals"
+        "id" | "meta" | "capabilities" | "config" | "approvals"
       > = {
         ...createChannelTestPluginBase({ id: "slack" as ChannelPlugin["id"] }),
-        execApprovals: {
+        approvals: {
           render: {
             plugin: {
               buildPendingPayload: vi.fn().mockReturnValue(mockPayload),
@@ -205,17 +205,16 @@ describe("plugin approval forwarding", () => {
       expect(deliveryArgs?.payloads?.[0]?.text).toBe("custom adapter payload");
     });
 
-    it("calls beforeDeliverPending before plugin approval delivery", async () => {
-      const beforeDeliverPending = vi.fn();
+    it("calls outbound beforeDeliverPayload before plugin approval delivery", async () => {
+      const beforeDeliverPayload = vi.fn();
       const adapterPlugin: Pick<
         ChannelPlugin,
-        "id" | "meta" | "capabilities" | "config" | "execApprovals"
+        "id" | "meta" | "capabilities" | "config" | "outbound"
       > = {
         ...createChannelTestPluginBase({ id: "slack" as ChannelPlugin["id"] }),
-        execApprovals: {
-          delivery: {
-            beforeDeliverPending,
-          },
+        outbound: {
+          deliveryMode: "direct",
+          beforeDeliverPayload,
         },
       };
       const registry = createTestRegistry([
@@ -229,17 +228,17 @@ describe("plugin approval forwarding", () => {
       await vi.waitFor(() => {
         expect(deliver).toHaveBeenCalled();
       });
-      expect(beforeDeliverPending).toHaveBeenCalled();
+      expect(beforeDeliverPayload).toHaveBeenCalled();
     });
 
     it("uses buildPluginResolvedPayload from channel adapter for resolved messages", async () => {
       const mockPayload = { text: "custom resolved payload" };
       const adapterPlugin: Pick<
         ChannelPlugin,
-        "id" | "meta" | "capabilities" | "config" | "execApprovals"
+        "id" | "meta" | "capabilities" | "config" | "approvals"
       > = {
         ...createChannelTestPluginBase({ id: "slack" as ChannelPlugin["id"] }),
-        execApprovals: {
+        approvals: {
           render: {
             plugin: {
               buildResolvedPayload: vi.fn().mockReturnValue(mockPayload),
