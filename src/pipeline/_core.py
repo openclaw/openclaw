@@ -77,6 +77,14 @@ from src.safety.mac_constitution import MACConstitution
 from src.pipeline._counterfactual import CounterfactualCredit
 from src.pipeline._prorl import ProRLEngine
 
+# v14.2: Tool Call Text Parser — intercept XML/MD tool leakage from free models
+from src.pipeline._tool_call_parser import (
+    parse_tool_calls,
+    strip_tool_calls,
+    execute_parsed_tool_calls,
+    format_observations,
+)
+
 logger = structlog.get_logger(__name__)
 
 
@@ -407,6 +415,23 @@ class PipelineExecutor:
 
         memory_context = await self._recall_memory_context(prompt)
 
+        # v14.2: YouTube — если в промпте есть YouTube URL, извлекаем транскрипт
+        try:
+            from src.tools.youtube_parser import is_youtube_url, analyze_youtube_video
+            if is_youtube_url(prompt):
+                logger.info("YouTube URL detected in prompt, fetching transcript")
+                if status_callback:
+                    await status_callback("System", "youtube", "🎥 YouTube: извлекаю транскрипт видео...")
+                yt_result = await analyze_youtube_video(prompt)
+                if yt_result.success:
+                    _yt_ctx = yt_result.to_context()
+                    memory_context = (_yt_ctx + "\n\n" + memory_context) if memory_context else _yt_ctx
+                    logger.info("YouTube transcript injected", video_id=yt_result.video_id, chars=len(yt_result.transcript))
+                else:
+                    logger.warning("YouTube fetch failed", error=yt_result.error)
+        except Exception as _yt_err:
+            logger.debug("YouTube detection failed (non-fatal)", error=str(_yt_err))
+
         # v14.0: Complementary RL — инжекция few-shot траекторий в начальный контекст
         if _traj_context and memory_context:
             memory_context = _traj_context + "\n\n" + memory_context
@@ -554,6 +579,43 @@ class PipelineExecutor:
                         model, system_prompt, step_prompt, role_name, role_config, active_mcp,
                         preserve_think=preserve_think, json_schema=role_schema
                     )
+
+                # --- v14.2: TOOL CALL TEXT INTERCEPTION ---
+                # Free models may emit raw XML/MD tool calls instead of native JSON.
+                # Parse them, execute, inject Observation, strip raw tags from response.
+                try:
+                    _parsed_calls = parse_tool_calls(response)
+                    if _parsed_calls:
+                        logger.info(
+                            "Tool leakage intercepted",
+                            role=role_name, n_calls=len(_parsed_calls),
+                            tools=[c.name for c in _parsed_calls],
+                        )
+                        if status_callback:
+                            await status_callback(
+                                role_name, display_model,
+                                f"🔧 Перехвачен вызов инструмента: {_parsed_calls[0].name}. Выполняю...",
+                            )
+                        _tc_results = await execute_parsed_tool_calls(
+                            _parsed_calls, active_mcp, self._sandbox,
+                        )
+                        _observation = format_observations(_tc_results)
+                        # Strip raw tool-call XML from response so user never sees it
+                        response = strip_tool_calls(response, _parsed_calls)
+                        # Re-query the model with Observation context for a clean answer
+                        _tc_followup = (
+                            f"{step_prompt}\n\n"
+                            f"[TOOL RESULTS]\n{_observation}\n\n"
+                            "Используй результаты инструментов выше для финального ответа. "
+                            "Не выводи XML-теги tool_call."
+                        )
+                        response = await self._call_vllm(
+                            model, system_prompt, _tc_followup, role_name,
+                            role_config, active_mcp,
+                            preserve_think=preserve_think, json_schema=role_schema,
+                        )
+                except Exception as _tc_err:
+                    logger.debug("Tool call interception failed (non-fatal)", error=str(_tc_err))
 
                 # --- GUARDRAIL VALIDATION WITH RETRY ---
                 guardrail_fn = ROLE_GUARDRAILS.get(role_name)

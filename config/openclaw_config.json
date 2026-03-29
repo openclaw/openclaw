@@ -76,22 +76,22 @@
       "fallback_to_vllm": false,
       "force_cloud": true,
       "use_local_models": false,
-      "intent_model": "stepfun/step-3.5-flash:free",
+      "intent_model": "arcee-ai/trinity-mini:free",
       "max_retries": 3,
       "retry_backoff_base": 2,
       "notes": "Cloud-Only mode. use_local_models=false disables ALL local inference (vLLM/WSL/Ollama). Set use_local_models=true to re-enable local cold reserve."
     },
     "model_router": {
-      "risk_analysis": "google/gemma-3-27b-it:free",
-      "tool_execution": "google/gemma-3-12b-it:free",
-      "data_parsing": "google/gemma-3-12b-it:free",
+      "risk_analysis": "nvidia/nemotron-3-super-120b-a12b:free",
+      "tool_execution": "arcee-ai/trinity-large-preview:free",
+      "data_parsing": "arcee-ai/trinity-mini:free",
       "general": "nvidia/nemotron-3-super-120b-a12b:free",
-      "code": "qwen/qwen3-coder:free",
-      "research": "nousresearch/hermes-3-llama-3.1-405b:free",
+      "code": "nvidia/nemotron-3-super-120b-a12b:free",
+      "research": "arcee-ai/trinity-large-preview:free",
       "vision": "nvidia/nemotron-nano-12b-v2-vl:free",
       "video_analyst": "nvidia/nemotron-nano-12b-v2-vl:free",
-      "intent": "stepfun/step-3.5-flash:free",
-      "expand": "google/gemma-3-12b-it:free"
+      "intent": "arcee-ai/trinity-mini:free",
+      "expand": "arcee-ai/trinity-mini:free"
     },
     "aflow": {
       "enabled": true,
@@ -125,7 +125,7 @@
         "Planner": {
           "model": "nvidia/nemotron-3-super-120b-a12b:free",
           "openrouter_model": "nvidia/nemotron-3-super-120b-a12b:free",
-          "fallback_model": "stepfun/step-3.5-flash:free",
+          "fallback_model": "arcee-ai/trinity-large-preview:free",
           "num_ctx": 32768,
           "temperature": 0.1,
           "timeout_sec": 120,
@@ -133,9 +133,9 @@
           "description": "Reads prompt, creates plan for Dmarket trading tasks."
         },
         "Coder": {
-          "model": "qwen/qwen3-coder:free",
-          "openrouter_model": "qwen/qwen3-coder:free",
-          "fallback_model": "nvidia/nemotron-3-super-120b-a12b:free",
+          "model": "nvidia/nemotron-3-super-120b-a12b:free",
+          "openrouter_model": "nvidia/nemotron-3-super-120b-a12b:free",
+          "fallback_model": "arcee-ai/trinity-large-preview:free",
           "num_ctx": 32768,
           "temperature": 0.2,
           "timeout_sec": 120,
@@ -143,9 +143,9 @@
           "description": "Writes all Dmarket code: API, parsers, strategies, optimizations."
         },
         "Auditor": {
-          "model": "google/gemma-3-27b-it:free",
-          "openrouter_model": "google/gemma-3-27b-it:free",
-          "fallback_model": "google/gemma-3-12b-it:free",
+          "model": "nvidia/nemotron-3-super-120b-a12b:free",
+          "openrouter_model": "nvidia/nemotron-3-super-120b-a12b:free",
+          "fallback_model": "arcee-ai/trinity-large-preview:free",
           "num_ctx": 32768,
           "temperature": 0.1,
           "timeout_sec": 120,
@@ -160,8 +160,8 @@
       "roles": {
         "Planner": {
           "model": "nvidia/nemotron-3-super-120b-a12b:free",
-          "openrouter_model": "stepfun/step-3.5-flash:free",
-          "fallback_model": "google/gemma-3-12b-it:free",
+          "openrouter_model": "nvidia/nemotron-3-super-120b-a12b:free",
+          "fallback_model": "arcee-ai/trinity-large-preview:free",
           "num_ctx": 32768,
           "temperature": 0.1,
           "timeout_sec": 120,
@@ -170,8 +170,8 @@
         },
         "Foreman": {
           "model": "nvidia/nemotron-3-super-120b-a12b:free",
-          "openrouter_model": "stepfun/step-3.5-flash:free",
-          "fallback_model": "google/gemma-3-12b-it:free",
+          "openrouter_model": "nvidia/nemotron-3-super-120b-a12b:free",
+          "fallback_model": "arcee-ai/trinity-large-preview:free",
           "num_ctx": 32768,
           "temperature": 0.1,
           "timeout_sec": 90,
@@ -181,7 +181,7 @@
         "Executor_Architect": {
           "model": "nvidia/nemotron-3-super-120b-a12b:free",
           "openrouter_model": "nvidia/nemotron-3-super-120b-a12b:free",
-          "fallback_model": "google/gemma-3-12b-it:free",
+          "fallback_model": "arcee-ai/trinity-large-preview:free",
           "num_ctx": 32768,
           "temperature": 0.2,
           "timeout_sec": 90,
@@ -191,7 +191,7 @@
         "Executor_Tools": {
           "model": "nvidia/nemotron-3-super-120b-a12b:free",
           "openrouter_model": "nvidia/nemotron-3-super-120b-a12b:free",
-          "fallback_model": "google/gemma-3-12b-it:free",
+          "fallback_model": "arcee-ai/trinity-large-preview:free",
           "num_ctx": 32768,
           "temperature": 0.2,
           "timeout_sec": 90,
@@ -201,7 +201,7 @@
         "Executor_Integration": {
           "model": "nvidia/nemotron-3-super-120b-a12b:free",
           "openrouter_model": "arcee-ai/trinity-large-preview:free",
-          "fallback_model": "google/gemma-3-12b-it:free",
+          "fallback_model": "arcee-ai/trinity-large-preview:free",
           "num_ctx": 32768,
           "temperature": 0.3,
           "timeout_sec": 60,
@@ -209,9 +209,9 @@
           "description": "Integrates framework components, optimizes module interaction and prompt chains."
         },
         "Auditor": {
-          "model": "google/gemma-3-27b-it:free",
-          "openrouter_model": "google/gemma-3-27b-it:free",
-          "fallback_model": "google/gemma-3-12b-it:free",
+          "model": "nvidia/nemotron-3-super-120b-a12b:free",
+          "openrouter_model": "nvidia/nemotron-3-super-120b-a12b:free",
+          "fallback_model": "arcee-ai/trinity-large-preview:free",
           "num_ctx": 32768,
           "temperature": 0.1,
           "timeout_sec": 120,
@@ -219,9 +219,9 @@
           "description": "Checks the framework code for stability and vulnerabilities."
         },
         "Archivist": {
-          "model": "google/gemma-3-12b-it:free",
+          "model": "arcee-ai/trinity-mini:free",
           "openrouter_model": "arcee-ai/trinity-mini:free",
-          "fallback_model": "google/gemma-3-12b-it:free",
+          "fallback_model": "arcee-ai/trinity-large-preview:free",
           "num_ctx": 32768,
           "temperature": 0.5,
           "timeout_sec": 60,
@@ -229,9 +229,9 @@
           "description": "Creates system updates, readmes, and git commits."
         },
         "State_Manager": {
-          "model": "google/gemma-3-12b-it:free",
+          "model": "arcee-ai/trinity-mini:free",
           "openrouter_model": "arcee-ai/trinity-mini:free",
-          "fallback_model": "google/gemma-3-12b-it:free",
+          "fallback_model": "arcee-ai/trinity-large-preview:free",
           "num_ctx": 32768,
           "temperature": 0.2,
           "timeout_sec": 90,
@@ -241,7 +241,7 @@
         "Test_Writer": {
           "model": "nvidia/nemotron-3-super-120b-a12b:free",
           "openrouter_model": "nvidia/nemotron-3-super-120b-a12b:free",
-          "fallback_model": "google/gemma-3-12b-it:free",
+          "fallback_model": "arcee-ai/trinity-large-preview:free",
           "num_ctx": 32768,
           "temperature": 0.2,
           "timeout_sec": 90,
@@ -255,9 +255,9 @@
       "description": "Deep research, analysis, and knowledge synthesis brigade.",
       "roles": {
         "Researcher": {
-          "model": "nousresearch/hermes-3-llama-3.1-405b:free",
-          "openrouter_model": "nousresearch/hermes-3-llama-3.1-405b:free",
-          "fallback_model": "stepfun/step-3.5-flash:free",
+          "model": "arcee-ai/trinity-large-preview:free",
+          "openrouter_model": "arcee-ai/trinity-large-preview:free",
+          "fallback_model": "arcee-ai/trinity-mini:free",
           "num_ctx": 32768,
           "temperature": 0.3,
           "timeout_sec": 300,
@@ -267,7 +267,7 @@
         "Analyst": {
           "model": "nvidia/nemotron-3-super-120b-a12b:free",
           "openrouter_model": "nvidia/nemotron-3-super-120b-a12b:free",
-          "fallback_model": "google/gemma-3-12b-it:free",
+          "fallback_model": "arcee-ai/trinity-large-preview:free",
           "num_ctx": 32768,
           "temperature": 0.1,
           "timeout_sec": 120,
@@ -275,9 +275,9 @@
           "description": "Analyzes data, identifies patterns and anomalies, produces numerical reports."
         },
         "Summarizer": {
-          "model": "google/gemma-3-12b-it:free",
+          "model": "arcee-ai/trinity-mini:free",
           "openrouter_model": "arcee-ai/trinity-mini:free",
-          "fallback_model": "google/gemma-3-12b-it:free",
+          "fallback_model": "arcee-ai/trinity-large-preview:free",
           "num_ctx": 32768,
           "temperature": 0.5,
           "timeout_sec": 60,

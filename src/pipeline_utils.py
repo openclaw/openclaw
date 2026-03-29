@@ -35,6 +35,12 @@ def clean_response_for_user(text: str) -> str:
     """Strip internal STAR markup, <think> blocks, MCP artifacts, and process confidence tags."""
     # Remove <think>...</think> blocks
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    # v14.2: Remove leaked tool-call XML/MD tags that free models emit
+    text = re.sub(r"<tool_call>.*?</tool_call>", "", text, flags=re.DOTALL)
+    text = re.sub(r"<function=\w+>.*?</function>", "", text, flags=re.DOTALL)
+    text = re.sub(r"\[TOOL_CALL\].*?\[/TOOL_CALL\]", "", text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r"<\|tool_call\|>.*?<\|/tool_call\|>", "", text, flags=re.DOTALL)
+    text = re.sub(r"```tool_call\s*\n.*?\n```", "", text, flags=re.DOTALL)
     # Remove STAR labels (SITUATION:, TASK:, ACTION:, RESULT: at line start)
     text = re.sub(r"^\s*(SITUATION|TASK|ACTION|RESULT)\s*:\s*", "", text, flags=re.MULTILINE)
     # Remove [MCP ...], [Proof of Work ...], [Correction], [PIPELINE CONTEXT ...] blocks

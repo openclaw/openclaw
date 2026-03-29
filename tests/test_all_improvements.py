@@ -1769,3 +1769,283 @@ class TestProRL:
             complexity="simple",
         )
         assert result.selected_source == "llm"
+
+
+# ===========================================================================
+# v14.2 — Tool Call Text Parser
+# ===========================================================================
+from src.pipeline._tool_call_parser import (
+    ParsedToolCall,
+    parse_tool_calls,
+    strip_tool_calls,
+    has_tool_calls,
+    format_observations,
+    execute_parsed_tool_calls,
+)
+
+
+class TestToolCallParser:
+    """Tests for _tool_call_parser.py — parse & strip leaked tool-call XML/MD."""
+
+    # --- parse_tool_calls ---
+
+    def test_parse_xml_function_tag(self):
+        text = 'Here is the result: <tool_call><function=web_search>{"query":"python async"}</function></tool_call> done.'
+        calls = parse_tool_calls(text)
+        assert len(calls) == 1
+        assert calls[0].name == "web_search"
+        assert calls[0].arguments == {"query": "python async"}
+
+    def test_parse_bare_function_tag(self):
+        text = '<function=read_file>{"path": "/tmp/x.txt"}</function>'
+        calls = parse_tool_calls(text)
+        assert len(calls) == 1
+        assert calls[0].name == "read_file"
+        assert calls[0].arguments["path"] == "/tmp/x.txt"
+
+    def test_parse_xml_json_tag(self):
+        text = '<tool_call>{"name": "list_tables", "arguments": {}}</tool_call>'
+        calls = parse_tool_calls(text)
+        assert len(calls) == 1
+        assert calls[0].name == "list_tables"
+        assert calls[0].arguments == {}
+
+    def test_parse_bracket_tag(self):
+        text = '[TOOL_CALL] {"name": "write_query", "arguments": {"query": "SELECT 1"}} [/TOOL_CALL]'
+        calls = parse_tool_calls(text)
+        assert len(calls) == 1
+        assert calls[0].name == "write_query"
+
+    def test_parse_codeblock_tag(self):
+        text = '```tool_call\n{"name": "execute_command", "arguments": {"cmd": "ls"}}\n```'
+        calls = parse_tool_calls(text)
+        assert len(calls) == 1
+        assert calls[0].name == "execute_command"
+
+    def test_parse_hermes_tag(self):
+        text = '<|tool_call|>{"name": "web_search", "arguments": {"query": "test"}}<|/tool_call|>'
+        calls = parse_tool_calls(text)
+        assert len(calls) == 1
+        assert calls[0].name == "web_search"
+
+    def test_parse_no_tool_calls(self):
+        text = "This is a normal response with no tool calls."
+        calls = parse_tool_calls(text)
+        assert len(calls) == 0
+
+    def test_parse_multiple_calls(self):
+        text = (
+            '<tool_call><function=web_search>{"query":"a"}</function></tool_call> '
+            '<tool_call><function=read_file>{"path":"b"}</function></tool_call>'
+        )
+        calls = parse_tool_calls(text)
+        assert len(calls) == 2
+        assert calls[0].name == "web_search"
+        assert calls[1].name == "read_file"
+
+    def test_parse_malformed_json(self):
+        text = "<tool_call><function=web_search>{bad json}</function></tool_call>"
+        calls = parse_tool_calls(text)
+        assert len(calls) == 1
+        assert calls[0].name == "web_search"
+        assert calls[0].arguments == {}
+
+    # --- strip_tool_calls ---
+
+    def test_strip_tool_calls_removes_raw(self):
+        text = "Before <tool_call><function=x>{}</function></tool_call> After"
+        calls = parse_tool_calls(text)
+        stripped = strip_tool_calls(text, calls)
+        assert "<tool_call>" not in stripped
+        assert "Before" in stripped
+        assert "After" in stripped
+
+    def test_strip_empty_list(self):
+        text = "No tools here"
+        stripped = strip_tool_calls(text, [])
+        assert stripped == text
+
+    # --- has_tool_calls ---
+
+    def test_has_tool_calls_true(self):
+        assert has_tool_calls('<tool_call><function=x>{}</function></tool_call>')
+
+    def test_has_tool_calls_false(self):
+        assert not has_tool_calls("Normal text without tool calls")
+
+    # --- format_observations ---
+
+    def test_format_observations(self):
+        results = [
+            {"tool": "web_search", "success": True, "output": "Found 3 results"},
+            {"tool": "bad_tool", "success": False, "output": "Error: not found"},
+        ]
+        formatted = format_observations(results)
+        assert "✅" in formatted
+        assert "❌" in formatted
+        assert "web_search" in formatted
+
+    # --- execute_parsed_tool_calls (async, no MCP) ---
+
+    @pytest.mark.asyncio
+    async def test_execute_no_handler(self):
+        calls = [ParsedToolCall(name="nonexistent", arguments={}, raw_match="")]
+        results = await execute_parsed_tool_calls(calls, mcp_client=None, sandbox=None)
+        assert len(results) == 1
+        assert not results[0]["success"]
+        assert "No handler" in results[0]["output"]
+
+
+# ===========================================================================
+# v14.2 — YouTube Parser
+# ===========================================================================
+from src.tools.youtube_parser import (
+    extract_video_id,
+    is_youtube_url,
+    YouTubeResult,
+    _parse_vtt,
+)
+
+
+class TestYouTubeParser:
+    """Tests for youtube_parser.py — URL extraction, VTT parsing, result formatting."""
+
+    # --- extract_video_id ---
+
+    def test_extract_standard_url(self):
+        assert extract_video_id("https://www.youtube.com/watch?v=dQw4w9WgXcQ") == "dQw4w9WgXcQ"
+
+    def test_extract_short_url(self):
+        assert extract_video_id("https://youtu.be/dQw4w9WgXcQ") == "dQw4w9WgXcQ"
+
+    def test_extract_shorts_url(self):
+        assert extract_video_id("https://youtube.com/shorts/dQw4w9WgXcQ") == "dQw4w9WgXcQ"
+
+    def test_extract_from_text(self):
+        text = "Check this video: https://www.youtube.com/watch?v=abc123def45 it's great"
+        assert extract_video_id(text) == "abc123def45"
+
+    def test_extract_no_url(self):
+        assert extract_video_id("No YouTube URL here") is None
+
+    # --- is_youtube_url ---
+
+    def test_is_youtube_true(self):
+        assert is_youtube_url("https://youtube.com/watch?v=dQw4w9WgXcQ")
+
+    def test_is_youtube_false(self):
+        assert not is_youtube_url("https://example.com/video")
+
+    # --- YouTubeResult ---
+
+    def test_result_to_context(self):
+        r = YouTubeResult(
+            video_id="abc",
+            title="Test Video",
+            channel="TestChan",
+            duration_sec=125,
+            transcript="This is a test transcript.",
+            language="en",
+            success=True,
+        )
+        ctx = r.to_context()
+        assert "Test Video" in ctx
+        assert "TestChan" in ctx
+        assert "2m 5s" in ctx
+        assert "test transcript" in ctx
+
+    def test_result_to_context_no_transcript(self):
+        r = YouTubeResult(video_id="abc", title="Test", success=True)
+        ctx = r.to_context()
+        assert "Субтитры недоступны" in ctx
+
+    def test_result_to_context_truncation(self):
+        r = YouTubeResult(
+            video_id="abc", title="T",
+            transcript="x" * 10000,
+            language="ru", success=True,
+        )
+        ctx = r.to_context(max_transcript_chars=100)
+        assert "транскрипт обрезан" in ctx
+
+    # --- _parse_vtt ---
+
+    def test_parse_vtt(self):
+        import tempfile, os
+        vtt_content = (
+            "WEBVTT\n\n"
+            "1\n"
+            "00:00:01.000 --> 00:00:03.000\n"
+            "Hello world\n\n"
+            "2\n"
+            "00:00:04.000 --> 00:00:06.000\n"
+            "This is a test\n"
+        )
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".en.vtt", delete=False, encoding="utf-8") as f:
+            f.write(vtt_content)
+            path = f.name
+        try:
+            text, lang = _parse_vtt(path)
+            assert "Hello world" in text
+            assert "This is a test" in text
+            assert lang == "en"
+        finally:
+            os.unlink(path)
+
+    def test_parse_vtt_dedup(self):
+        import tempfile, os
+        vtt_content = (
+            "WEBVTT\n\n"
+            "00:00:01.000 --> 00:00:03.000\n"
+            "Same line\n\n"
+            "00:00:03.000 --> 00:00:05.000\n"
+            "Same line\n\n"
+            "00:00:05.000 --> 00:00:07.000\n"
+            "Different line\n"
+        )
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".ru.vtt", delete=False, encoding="utf-8") as f:
+            f.write(vtt_content)
+            path = f.name
+        try:
+            text, lang = _parse_vtt(path)
+            # "Same line" should appear only once due to dedup
+            assert text.count("Same line") == 1
+            assert "Different line" in text
+        finally:
+            os.unlink(path)
+
+
+# ===========================================================================
+# v14.2 — clean_response_for_user tool-call stripping
+# ===========================================================================
+from src.pipeline_utils import clean_response_for_user
+
+
+class TestCleanResponseToolStripping:
+    """Tests that clean_response_for_user strips leaked XML/MD tool calls."""
+
+    def test_strips_tool_call_xml(self):
+        text = "Result: <tool_call><function=web_search>{}</function></tool_call> Done."
+        cleaned = clean_response_for_user(text)
+        assert "<tool_call>" not in cleaned
+        assert "<function=" not in cleaned
+
+    def test_strips_bracket_tool_call(self):
+        text = "Before [TOOL_CALL] {stuff} [/TOOL_CALL] After"
+        cleaned = clean_response_for_user(text)
+        assert "[TOOL_CALL]" not in cleaned
+
+    def test_strips_hermes_tool_call(self):
+        text = "Ans: <|tool_call|>{json}<|/tool_call|> end"
+        cleaned = clean_response_for_user(text)
+        assert "<|tool_call|>" not in cleaned
+
+    def test_strips_codeblock_tool_call(self):
+        text = "Look:\n```tool_call\n{json}\n```\nDone"
+        cleaned = clean_response_for_user(text)
+        assert "```tool_call" not in cleaned
+
+    def test_preserves_normal_text(self):
+        text = "This is a normal response with no tool calls."
+        cleaned = clean_response_for_user(text)
+        assert cleaned == text

@@ -366,7 +366,7 @@ async def route_llm(
             or _gateway_config.get("system", {}).get("model_router", {}).get("general", "")
         )
 
-    # --- Route: OpenRouter (primary) → vLLM (fallback) ---
+    # --- Route: OpenRouter (primary) → fallback model → vLLM (fallback) ---
     t0 = time.monotonic()
     result = ""
     used_provider = "none"
@@ -376,6 +376,21 @@ async def route_llm(
         result = await _call_openrouter(messages, selected_model, max_tokens, temperature)
         if result:
             used_provider = "openrouter"
+
+        # NoneType / empty guard: retry with a fallback model from config
+        if not result:
+            fallback_model = (
+                _gateway_config.get("system", {}).get("model_router", {}).get("general", "")
+            )
+            if fallback_model and fallback_model != selected_model:
+                logger.info(
+                    "Primary model returned empty, retrying with fallback",
+                    primary=selected_model,
+                    fallback=fallback_model,
+                )
+                result = await _call_openrouter(messages, fallback_model, max_tokens, temperature)
+                if result:
+                    used_provider = "openrouter"
 
     if not result and not _force_cloud:
         result = await _call_vllm_local(messages, selected_model, max_tokens, temperature)
@@ -497,13 +512,25 @@ async def _call_openrouter(
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.post(endpoint, json=payload, headers=headers) as resp:
                     if resp.status == 200:
-                        _record_success(model)
                         data = await resp.json()
                         content = (
                             data.get("choices", [{}])[0]
                             .get("message", {})
-                            .get("content", "")
+                            .get("content")
                         )
+                        if content is None or not content.strip():
+                            # NoneType / empty response — treat as transient failure, retry
+                            logger.warning(
+                                "OpenRouter returned empty/None content",
+                                model=model,
+                                attempt=f"{attempt + 1}/{retries}",
+                            )
+                            _record_failure(model)
+                            if attempt < retries - 1:
+                                await asyncio.sleep(2 ** attempt)
+                                continue
+                            return ""
+                        _record_success(model)
                         return content.strip()
 
                     # Capture full error details for debug reporting

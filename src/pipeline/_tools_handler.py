@@ -69,6 +69,12 @@ async def handle_planner_handoff(
         "description": "List all saved sandbox skills/tools available for reuse.",
     })
 
+    # Phase 8: register YouTube analyzer for ReAct
+    react_tools.append({
+        "name": "analyze_youtube_video",
+        "description": "Extract transcript and metadata from a YouTube video. Input: JSON with 'url' (YouTube URL or video ID). Returns title, description, transcript text.",
+    })
+
     executor_response = await _react_execution(
         executor, executor_prompt, react_tools, executor_model, active_mcp,
     )
@@ -129,6 +135,12 @@ async def _react_execution(executor, executor_prompt, react_tools, executor_mode
                             )
                     elif step.action == "sandbox_list_skills":
                         step.observation = str(executor._sandbox.skill_library.list_skills())[:2000]
+                    elif step.action == "analyze_youtube_video":
+                        from src.tools.youtube_parser import analyze_youtube_video
+                        payload = json.loads(step.action_input) if step.action_input else {}
+                        url_or_id = payload.get("url", payload.get("query", step.action_input or ""))
+                        yt_result = await analyze_youtube_video(url_or_id)
+                        step.observation = yt_result.to_context()[:2000]
                     elif active_mcp:
                         tool_output = await active_mcp.call_tool(
                             step.action, {"query": step.action_input} if step.action_input else {},
