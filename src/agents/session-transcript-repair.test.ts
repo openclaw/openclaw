@@ -235,6 +235,32 @@ describe("sanitizeToolUseResultPairing", () => {
     expect(result.messages[2]?.role).toBe("user");
     expect(result.added).toHaveLength(0);
   });
+
+  it("drops matching tool results for aborted assistant messages when requested", () => {
+    const input = castAgentMessages([
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_aborted", name: "exec", arguments: {} }],
+        stopReason: "aborted",
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_aborted",
+        toolName: "exec",
+        content: [{ type: "text", text: "partial result" }],
+        isError: false,
+      },
+      { role: "user", content: "retrying" },
+    ]);
+
+    const result = repairToolUseResultPairing(input, { dropErroredAssistantResults: true });
+
+    expect(result.droppedOrphanCount).toBe(0);
+    expect(result.messages).toHaveLength(2);
+    expect(result.messages[0]?.role).toBe("assistant");
+    expect(result.messages[1]?.role).toBe("user");
+    expect(result.added).toHaveLength(0);
+  });
 });
 
 describe("sanitizeToolCallInputs", () => {
