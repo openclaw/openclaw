@@ -58,6 +58,18 @@ describe("web outbound", () => {
     expect(sendMessage).toHaveBeenCalledWith("+1555", "hi", undefined, undefined);
   });
 
+  it("forwards replyToId to the active listener", async () => {
+    await sendMessageWhatsApp("+1555", "reply", {
+      verbose: false,
+      replyToId: "wa-msg-1",
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith("+1555", "reply", undefined, undefined, {
+      replyToId: "wa-msg-1",
+      accountId: undefined,
+    });
+  });
+
   it("trims leading whitespace before sending text and captions", async () => {
     await sendMessageWhatsApp("+1555", "\n \thello", { verbose: false });
     expect(sendMessage).toHaveBeenLastCalledWith("+1555", "hello", undefined, undefined);

@@ -20,6 +20,26 @@ describe("whatsappOutbound sendPayload", () => {
     });
   });
 
+  it("forwards replyToId for direct text sends", async () => {
+    const sendWhatsApp = vi.fn(async () => ({ messageId: "wa-1", toJid: "jid" }));
+
+    await whatsappOutbound.sendText!({
+      cfg: {},
+      to: "5511999999999@c.us",
+      text: "hello",
+      replyToId: "wa-msg-1",
+      deps: { sendWhatsApp },
+    });
+
+    expect(sendWhatsApp).toHaveBeenCalledWith("5511999999999@c.us", "hello", {
+      verbose: false,
+      cfg: {},
+      accountId: undefined,
+      gifPlayback: undefined,
+      replyToId: "wa-msg-1",
+    });
+  });
+
   it("trims leading whitespace for direct media captions", async () => {
     const sendWhatsApp = vi.fn(async () => ({ messageId: "wa-1", toJid: "jid" }));
 

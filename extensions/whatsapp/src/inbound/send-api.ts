@@ -1,4 +1,4 @@
-import type { AnyMessageContent, WAPresence } from "@whiskeysockets/baileys";
+import type { AnyMessageContent, WAMessage, WAPresence } from "@whiskeysockets/baileys";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-runtime";
 import { toWhatsappJid } from "openclaw/plugin-sdk/text-runtime";
 import type { ActiveWebSendOptions } from "../active-listener.js";
@@ -19,11 +19,39 @@ function resolveOutboundMessageId(result: unknown): string {
 
 export function createWebSendApi(params: {
   sock: {
-    sendMessage: (jid: string, content: AnyMessageContent) => Promise<unknown>;
+    sendMessage: (
+      jid: string,
+      content: AnyMessageContent,
+      options?: { quoted?: WAMessage },
+    ) => Promise<unknown>;
     sendPresenceUpdate: (presence: WAPresence, jid?: string) => Promise<unknown>;
   };
   defaultAccountId: string;
+  resolveQuotedMessage?: (params: {
+    accountId: string;
+    remoteJid: string;
+    messageId: string;
+  }) => WAMessage | null;
+  rememberMessage?: (params: { accountId: string; remoteJid: string; message: WAMessage }) => void;
 }) {
+  function coerceTrackedMessage(result: unknown, remoteJid: string): WAMessage | null {
+    if (!result || typeof result !== "object") {
+      return null;
+    }
+    const message = result as WAMessage;
+    const messageId = message.key?.id?.trim();
+    if (!messageId || !message.message) {
+      return null;
+    }
+    return {
+      ...message,
+      key: {
+        ...message.key,
+        remoteJid: message.key?.remoteJid ?? remoteJid,
+      },
+    } satisfies WAMessage;
+  }
+
   return {
     sendMessage: async (
       to: string,
@@ -63,8 +91,26 @@ export function createWebSendApi(params: {
       } else {
         payload = { text };
       }
-      const result = await params.sock.sendMessage(jid, payload);
       const accountId = sendOptions?.accountId ?? params.defaultAccountId;
+      const replyToId = sendOptions?.replyToId?.trim() || undefined;
+      const quoted =
+        replyToId &&
+        params.resolveQuotedMessage?.({
+          accountId,
+          remoteJid: jid,
+          messageId: replyToId,
+        });
+      const result = quoted
+        ? await params.sock.sendMessage(jid, payload, { quoted })
+        : await params.sock.sendMessage(jid, payload);
+      const trackedMessage = coerceTrackedMessage(result, jid);
+      if (trackedMessage) {
+        params.rememberMessage?.({
+          accountId,
+          remoteJid: jid,
+          message: trackedMessage,
+        });
+      }
       recordWhatsAppOutbound(accountId);
       const messageId = resolveOutboundMessageId(result);
       return { messageId };

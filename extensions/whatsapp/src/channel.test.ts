@@ -164,6 +164,40 @@ describe("whatsappPlugin outbound sendMedia", () => {
     );
     expect(result).toMatchObject({ channel: "whatsapp", messageId: "msg-1" });
   });
+
+  it("forwards replyToId to sendMessageWhatsApp", async () => {
+    const sendWhatsApp = vi.fn(async () => ({
+      messageId: "msg-1",
+      toJid: "15551234567@s.whatsapp.net",
+    }));
+
+    const outbound = whatsappPlugin.outbound;
+    if (!outbound?.sendText) {
+      throw new Error("whatsapp outbound sendText is unavailable");
+    }
+
+    const result = await outbound.sendText({
+      cfg: {} as never,
+      to: "whatsapp:+15551234567",
+      text: "reply body",
+      replyToId: "wa-msg-1",
+      accountId: "default",
+      deps: { sendWhatsApp },
+      gifPlayback: false,
+    });
+
+    expect(sendWhatsApp).toHaveBeenCalledWith(
+      "whatsapp:+15551234567",
+      "reply body",
+      expect.objectContaining({
+        verbose: false,
+        accountId: "default",
+        gifPlayback: false,
+        replyToId: "wa-msg-1",
+      }),
+    );
+    expect(result).toMatchObject({ channel: "whatsapp", messageId: "msg-1" });
+  });
 });
 
 describe("whatsappPlugin outbound sendPoll", () => {
