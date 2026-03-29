@@ -59,6 +59,18 @@ while reducing token usage.
 openclaw plugins install @martian-engineering/lossless-claw
 ```
 
+### MCP Bridge
+
+Connect any MCP server to OpenClaw. Supports stdio, SSE, and streamable-http
+transports with a built-in server catalog for one-command setup.
+
+- **npm:** `@aiwerk/openclaw-mcp-bridge`
+- **repo:** [github.com/AIWerk/openclaw-mcp-bridge](https://github.com/AIWerk/openclaw-mcp-bridge)
+
+```bash
+openclaw plugins install @aiwerk/openclaw-mcp-bridge
+```
+
 ### Opik
 
 Official plugin that exports agent traces to Opik. Monitor agent behavior,
