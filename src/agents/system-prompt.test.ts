@@ -259,10 +259,7 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("sessions_spawn");
-    expect(prompt).toContain(
-      'runtime="acp" requires `agentId` unless `acp.defaultAgent` is configured',
-    );
-    expect(prompt).toContain("not agents_list");
+    expect(prompt).toContain("Spawn an isolated sub-agent or ACP coding session.");
   });
 
   it("guides harness requests to ACP thread-bound spawns", () => {
@@ -272,7 +269,7 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain(
-      'For requests like "do this in codex/claude code/gemini", treat it as ACP harness intent',
+      'For requests like "do this in codex/claude code/cursor/gemini" or similar ACP harnesses, treat it as ACP harness intent',
     );
     expect(prompt).toContain(
       'On Discord, default ACP harness requests to thread-bound persistent sessions (`thread: true`, `mode: "session"`)',
@@ -293,12 +290,12 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).not.toContain(
-      'For requests like "do this in codex/claude code/gemini", treat it as ACP harness intent',
+      'For requests like "do this in codex/claude code/cursor/gemini" or similar ACP harnesses, treat it as ACP harness intent',
     );
     expect(prompt).not.toContain('runtime="acp" requires `agentId`');
     expect(prompt).not.toContain("not ACP harness ids");
-    expect(prompt).toContain("- sessions_spawn: Spawn an isolated sub-agent session");
-    expect(prompt).toContain("- agents_list: List OpenClaw agent ids allowed for sessions_spawn");
+    expect(prompt).toContain("- sessions_spawn: Spawn an isolated sub-agent session.");
+    expect(prompt).toContain("- agents_list: List OpenClaw agent ids allowed for sessions_spawn.");
   });
 
   it("omits ACP harness spawn guidance for sandboxed sessions and shows ACP block note", () => {
