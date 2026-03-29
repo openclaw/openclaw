@@ -258,4 +258,60 @@ describe("memorySearch.extraPaths integration", () => {
     expect(paths.filter((collectionPath) => collectionPath === "/shared/path")).toHaveLength(1);
     expect(paths).toContain("/agent-only");
   });
+
+  it("matches per-agent memorySearch.extraPaths using normalized agent ids", () => {
+    const cfg = {
+      memory: { backend: "qmd" },
+      agents: {
+        defaults: {
+          workspace: "/workspace/root",
+        },
+        list: [
+          {
+            id: "My-Agent",
+            memorySearch: {
+              extraPaths: ["/agent/mixed-case"],
+            },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    const result = resolveMemoryBackendConfig({ cfg, agentId: "my-agent" });
+    const customCollections = (result.qmd?.collections ?? []).filter(
+      (collection) => collection.kind === "custom",
+    );
+
+    expect(customCollections.map((collection) => collection.path)).toContain("/agent/mixed-case");
+  });
+
+  it("deduplicates identical roots shared by memory.qmd.paths and memorySearch.extraPaths", () => {
+    const cfg = {
+      memory: {
+        backend: "qmd",
+        qmd: {
+          paths: [{ path: "docs", pattern: "**/*.md", name: "workspace-docs" }],
+        },
+      },
+      agents: {
+        defaults: {
+          workspace: "/workspace/root",
+          memorySearch: {
+            extraPaths: ["./docs"],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveMemoryBackendConfig({ cfg, agentId: "main" });
+    const customCollections = (result.qmd?.collections ?? []).filter(
+      (collection) => collection.kind === "custom",
+    );
+    const docsCollections = customCollections.filter(
+      (collection) =>
+        collection.path === "/workspace/root/docs" && collection.pattern === "**/*.md",
+    );
+
+    expect(docsCollections).toHaveLength(1);
+  });
 });
