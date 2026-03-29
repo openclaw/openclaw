@@ -1,5 +1,4 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { discoverOpenAICompatibleLocalModels } from "openclaw/plugin-sdk/provider-setup";
 import { VLLM_DEFAULT_BASE_URL, VLLM_PROVIDER_LABEL } from "./defaults.js";
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
@@ -9,6 +8,10 @@ export async function buildVllmProvider(params?: {
   baseUrl?: string;
   apiKey?: string;
 }): Promise<ProviderConfig> {
+  // Dynamic import avoids a circular load-time dependency:
+  // vllm/models.ts -> provider-setup -> vllm facade -> loadBundledPlugin(vllm/api.ts) -> vllm/models.ts
+  const { discoverOpenAICompatibleLocalModels } =
+    await import("openclaw/plugin-sdk/provider-setup");
   const baseUrl = (params?.baseUrl?.trim() || VLLM_DEFAULT_BASE_URL).replace(/\/+$/, "");
   const models = await discoverOpenAICompatibleLocalModels({
     baseUrl,
