@@ -61,7 +61,7 @@ import {
 import {
   consumeCompactionSafeguardCancelReason,
   setCompactionSafeguardCancelReason,
-} from "../pi-extensions/compaction-safeguard-runtime.js";
+} from "../pi-hooks/compaction-safeguard-runtime.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../pi-project-settings.js";
 import { createOpenClawCodingTools } from "../pi-tools.js";
 import { registerProviderStreamForModel } from "../provider-stream.js";
@@ -762,7 +762,7 @@ export async function compactEmbeddedPiSessionDirect(
         // limitHistoryTurns can orphan tool_result blocks by removing the
         // assistant message that contained the matching tool_use.
         const limited = transcriptPolicy.repairToolUseResultPairing
-          ? sanitizeToolUseResultPairing(truncated)
+          ? sanitizeToolUseResultPairing(truncated, { dropErroredAssistantResults: true })
           : truncated;
         if (limited.length > 0) {
           session.agent.replaceMessages(limited);

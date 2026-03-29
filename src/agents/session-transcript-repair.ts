@@ -2,7 +2,7 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
 
 const TOOL_CALL_NAME_MAX_CHARS = 64;
-const TOOL_CALL_NAME_RE = /^[A-Za-z0-9_-]+$/;
+const TOOL_CALL_NAME_RE = /^[A-Za-z0-9_:.-]+$/;
 
 type RawToolCallBlock = {
   type?: unknown;
@@ -196,7 +196,7 @@ export type ToolCallInputRepairOptions = {
 };
 
 export type ToolUseResultPairingOptions = {
-  preserveErroredAssistantResults?: boolean;
+  dropErroredAssistantResults?: boolean;
 };
 
 export function stripToolResultDetails(messages: AgentMessage[]): AgentMessage[] {
@@ -463,7 +463,7 @@ export function repairToolUseResultPairing(
     const stopReason = (assistant as { stopReason?: string }).stopReason;
     if (stopReason === "error" || stopReason === "aborted") {
       out.push(msg);
-      if (options?.preserveErroredAssistantResults) {
+      if (!options?.dropErroredAssistantResults) {
         for (const toolCall of toolCalls) {
           const result = spanResultsById.get(toolCall.id);
           if (!result) {
@@ -471,6 +471,8 @@ export function repairToolUseResultPairing(
           }
           pushToolResult(result);
         }
+      } else if (spanResultsById.size > 0) {
+        changed = true;
       }
       for (const rem of remainder) {
         out.push(rem);

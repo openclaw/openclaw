@@ -2070,43 +2070,15 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
 // NOTE: These wrappers intentionally do *not* cache the resolved config path at
 // module scope. `OPENCLAW_CONFIG_PATH` (and friends) are expected to work even
 // when set after the module has been imported (tests, one-off scripts, etc.).
-const DEFAULT_CONFIG_CACHE_MS = 200;
 const AUTO_OWNER_DISPLAY_SECRET_BY_PATH = new Map<string, string>();
 const AUTO_OWNER_DISPLAY_SECRET_PERSIST_IN_FLIGHT = new Set<string>();
 const AUTO_OWNER_DISPLAY_SECRET_PERSIST_WARNED = new Set<string>();
-let configCache: {
-  configPath: string;
-  expiresAt: number;
-  config: OpenClawConfig;
-} | null = null;
 let runtimeConfigSnapshot: OpenClawConfig | null = null;
 let runtimeConfigSourceSnapshot: OpenClawConfig | null = null;
 let runtimeConfigSnapshotRefreshHandler: RuntimeConfigSnapshotRefreshHandler | null = null;
 
-function resolveConfigCacheMs(env: NodeJS.ProcessEnv): number {
-  const raw = env.OPENCLAW_CONFIG_CACHE_MS?.trim();
-  if (raw === "" || raw === "0") {
-    return 0;
-  }
-  if (!raw) {
-    return DEFAULT_CONFIG_CACHE_MS;
-  }
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed)) {
-    return DEFAULT_CONFIG_CACHE_MS;
-  }
-  return Math.max(0, parsed);
-}
-
-function shouldUseConfigCache(env: NodeJS.ProcessEnv): boolean {
-  if (env.OPENCLAW_DISABLE_CONFIG_CACHE?.trim()) {
-    return false;
-  }
-  return resolveConfigCacheMs(env) > 0;
-}
-
 export function clearConfigCache(): void {
-  configCache = null;
+  // Compat shim: runtime snapshot is the only in-process cache now.
 }
 
 export function setRuntimeConfigSnapshot(
@@ -2115,13 +2087,15 @@ export function setRuntimeConfigSnapshot(
 ): void {
   runtimeConfigSnapshot = config;
   runtimeConfigSourceSnapshot = sourceConfig ?? null;
-  clearConfigCache();
+}
+
+export function resetConfigRuntimeState(): void {
+  runtimeConfigSnapshot = null;
+  runtimeConfigSourceSnapshot = null;
 }
 
 export function clearRuntimeConfigSnapshot(): void {
-  runtimeConfigSnapshot = null;
-  runtimeConfigSourceSnapshot = null;
-  clearConfigCache();
+  resetConfigRuntimeState();
 }
 
 export function getRuntimeConfigSnapshot(): OpenClawConfig | null {
@@ -2194,27 +2168,12 @@ export function loadConfig(): OpenClawConfig {
   if (runtimeConfigSnapshot) {
     return runtimeConfigSnapshot;
   }
-  const io = createConfigIO();
-  const configPath = io.configPath;
-  const now = Date.now();
-  if (shouldUseConfigCache(process.env)) {
-    const cached = configCache;
-    if (cached && cached.configPath === configPath && cached.expiresAt > now) {
-      return cached.config;
-    }
-  }
-  const config = io.loadConfig();
-  if (shouldUseConfigCache(process.env)) {
-    const cacheMs = resolveConfigCacheMs(process.env);
-    if (cacheMs > 0) {
-      configCache = {
-        configPath,
-        expiresAt: now + cacheMs,
-        config,
-      };
-    }
-  }
-  return config;
+  const config = createConfigIO().loadConfig();
+  // First successful load becomes the process snapshot. Long-lived runtimes
+  // should swap this snapshot via explicit reload/watcher paths instead of
+  // reparsing openclaw.json on hot code paths.
+  setRuntimeConfigSnapshot(config);
+  return runtimeConfigSnapshot ?? config;
 }
 
 export async function readBestEffortConfig(): Promise<OpenClawConfig> {
@@ -2278,8 +2237,9 @@ export async function writeConfigFile(
     return;
   }
   if (hadRuntimeSnapshot) {
-    clearRuntimeConfigSnapshot();
+    const fresh = io.loadConfig();
+    setRuntimeConfigSnapshot(fresh);
+    return;
   }
-  // When we had no runtime snapshot, keep callers reading from disk/cache so external/manual
-  // edits to openclaw.json remain visible (no stale snapshot).
+  setRuntimeConfigSnapshot(io.loadConfig());
 }

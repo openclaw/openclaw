@@ -1,3 +1,6 @@
+import type { OpenClawConfig } from "../config/config.js";
+import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
+
 export type { IMessageAccountConfig } from "../config/types.js";
 export type { IMessageProbe } from "./imessage-runtime.js";
 export type { OpenClawConfig } from "../config/config.js";
@@ -32,12 +35,16 @@ export {
   normalizeIMessageMessagingTarget,
 } from "../channels/plugins/normalize/imessage.js";
 export {
+  createAllowedChatSenderMatcher,
   parseChatAllowTargetPrefixes,
   parseChatTargetPrefixesOrThrow,
   resolveServicePrefixedAllowTarget,
+  resolveServicePrefixedChatTarget,
+  resolveServicePrefixedOrChatAllowTarget,
   resolveServicePrefixedTarget,
+  type ChatSenderAllowParams,
   type ParsedChatTarget,
-} from "./imessage-targets.js";
+} from "./channel-targets.js";
 
 export {
   resolveAllowlistProviderRuntimeGroupPolicy,
@@ -57,3 +64,51 @@ export {
   collectStatusIssuesFromLastError,
 } from "./status-helpers.js";
 export { monitorIMessageProvider, probeIMessage, sendMessageIMessage } from "./imessage-runtime.js";
+
+export type IMessageConversationBindingManager = {
+  stop: () => void;
+};
+
+type IMessageFacadeModule = {
+  createIMessageConversationBindingManager: (params: {
+    accountId?: string;
+    cfg: OpenClawConfig;
+  }) => IMessageConversationBindingManager;
+  matchIMessageAcpConversation: (params: {
+    bindingConversationId: string;
+    conversationId: string;
+  }) => { conversationId: string; matchPriority: number } | null;
+  normalizeIMessageAcpConversationId: (conversationId: string) => { conversationId: string } | null;
+  resolveIMessageConversationIdFromTarget: (target: string) => string | undefined;
+};
+
+function loadIMessageFacadeModule(): IMessageFacadeModule {
+  return loadBundledPluginPublicSurfaceModuleSync<IMessageFacadeModule>({
+    dirName: "imessage",
+    artifactBasename: "api.js",
+  });
+}
+
+export function createIMessageConversationBindingManager(params: {
+  accountId?: string;
+  cfg: OpenClawConfig;
+}): IMessageConversationBindingManager {
+  return loadIMessageFacadeModule().createIMessageConversationBindingManager(params);
+}
+
+export function normalizeIMessageAcpConversationId(
+  conversationId: string,
+): { conversationId: string } | null {
+  return loadIMessageFacadeModule().normalizeIMessageAcpConversationId(conversationId);
+}
+
+export function matchIMessageAcpConversation(params: {
+  bindingConversationId: string;
+  conversationId: string;
+}): { conversationId: string; matchPriority: number } | null {
+  return loadIMessageFacadeModule().matchIMessageAcpConversation(params);
+}
+
+export function resolveIMessageConversationIdFromTarget(target: string): string | undefined {
+  return loadIMessageFacadeModule().resolveIMessageConversationIdFromTarget(target);
+}

@@ -1,5 +1,5 @@
 // Private helper surface for the bundled irc plugin.
-// Keep this list additive and scoped to symbols used under extensions/irc.
+// Keep this list additive and scoped to the bundled IRC surface.
 
 export { resolveControlCommandGate } from "../channels/command-gating.js";
 export { logInboundDrop } from "../channels/logging.js";

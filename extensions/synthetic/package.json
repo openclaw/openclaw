@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/synthetic-provider",
-  "version": "2026.3.27",
+  "version": "2026.3.29",
   "private": true,
   "description": "OpenClaw Synthetic provider plugin",
   "type": "module",

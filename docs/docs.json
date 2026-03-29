@@ -1033,6 +1033,9 @@
                   "concepts/session-pruning",
                   "concepts/session-tool",
                   "concepts/memory",
+                  "concepts/memory-builtin",
+                  "concepts/memory-qmd",
+                  "concepts/memory-search",
                   "concepts/compaction"
                 ]
               },
@@ -1146,6 +1149,7 @@
                     ]
                   },
                   "tools/btw",
+                  "tools/code-execution",
                   "tools/diffs",
                   "tools/elevated",
                   "tools/exec",

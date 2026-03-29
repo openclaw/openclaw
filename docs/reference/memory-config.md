@@ -11,8 +11,9 @@ read_when:
 # Memory configuration reference
 
 This page covers the full configuration surface for OpenClaw memory search. For
-the conceptual overview (file layout, memory tools, when to write memory, and the
-automatic flush), see [Memory](/concepts/memory).
+the conceptual overview, see [Memory](/concepts/memory). For how the search
+pipeline works (hybrid search, MMR, temporal decay), see
+[Memory Search](/concepts/memory-search).
 
 ## Memory search defaults
 
@@ -50,7 +51,7 @@ local policy).
 When using a custom OpenAI-compatible endpoint,
 set `memorySearch.remote.apiKey` (and optional `memorySearch.remote.headers`).
 
-## QMD backend (experimental)
+## QMD backend
 
 Set `memory.backend = "qmd"` to swap the built-in SQLite indexer for
 [QMD](https://github.com/tobi/qmd): a local-first search sidecar that combines
@@ -422,6 +423,7 @@ Notes:
 - `vectorWeight` + `textWeight` is normalized to 1.0 in config resolution, so weights behave as percentages.
 - If embeddings are unavailable (or the provider returns a zero-vector), we still run BM25 and return keyword matches.
 - If FTS5 can't be created, we keep vector-only search (no hard failure).
+- **CJK support**: FTS5 uses configurable trigram tokenization with a short-substring fallback so Chinese, Japanese, and Korean text is searchable without breaking mixed-length queries. CJK-heavy text is also weighted correctly during chunk size estimation, and surrogate-pair characters are preserved during fine splits.
 
 This isn't "IR-theory perfect", but it's simple, fast, and tends to improve recall/precision on real notes.
 If we want to get fancier later, common next steps are Reciprocal Rank Fusion (RRF) or score normalization
