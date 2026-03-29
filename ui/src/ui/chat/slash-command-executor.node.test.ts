@@ -6,7 +6,7 @@ import {
   OPENAI_GPT5_MINI_MODEL,
 } from "../chat-model.test-helpers.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
-import type { GatewaySessionRow } from "../types.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../types.ts";
 import { executeSlashCommand } from "./slash-command-executor.ts";
 
 function row(key: string, overrides?: Partial<GatewaySessionRow>): GatewaySessionRow {
@@ -616,6 +616,81 @@ describe("executeSlashCommand /steer (soft inject)", () => {
     );
 
     expect(result.content).toBe("Steered `researcher`.");
+    expect(request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({
+        sessionKey: "agent:main:subagent:researcher",
+        message: "try a different approach",
+        deliver: false,
+      }),
+    );
+  });
+
+  it("uses cached sessions to avoid an extra sessions.list round trip", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "chat.send") {
+        return { status: "started", runId: "run-2", messageSeq: 1 };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "steer",
+      "researcher try a different approach",
+      {
+        sessionsResult: {
+          sessions: [
+            row("agent:main:main"),
+            row("agent:main:subagent:researcher", {
+              spawnedBy: "agent:main:main",
+              status: "running",
+            }),
+          ],
+        } as SessionsListResult,
+      },
+    );
+
+    expect(result.content).toBe("Steered `researcher`.");
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({
+        sessionKey: "agent:main:subagent:researcher",
+        message: "try a different approach",
+        deliver: false,
+      }),
+    );
+  });
+
+  it("matches an explicit full subagent session key", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.list") {
+        return {
+          sessions: [
+            row("agent:main:main"),
+            row("agent:main:subagent:researcher", {
+              spawnedBy: "agent:main:main",
+              status: "running",
+            }),
+          ],
+        };
+      }
+      if (method === "chat.send") {
+        return { status: "started", runId: "run-2", messageSeq: 1 };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "steer",
+      "agent:main:subagent:researcher try a different approach",
+    );
+
+    expect(result.content).toBe("Steered `agent:main:subagent:researcher`.");
     expect(request).toHaveBeenCalledWith(
       "chat.send",
       expect.objectContaining({

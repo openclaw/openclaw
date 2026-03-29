@@ -54,6 +54,7 @@ export type SlashCommandResult = {
 export type SlashCommandContext = {
   chatModelCatalog?: ModelCatalogEntry[];
   modelCatalog?: ModelCatalogEntry[];
+  sessionsResult?: SessionsListResult | null;
 };
 export async function executeSlashCommand(
   client: GatewayBrowserClient,
@@ -94,9 +95,9 @@ export async function executeSlashCommand(
     case "kill":
       return await executeKill(client, sessionKey, args);
     case "steer":
-      return await executeSteer(client, sessionKey, args);
+      return await executeSteer(client, sessionKey, args, context);
     case "redirect":
-      return await executeRedirect(client, sessionKey, args);
+      return await executeRedirect(client, sessionKey, args, context);
     default:
       return { content: `Unknown command: \`/${commandName}\`` };
   }
@@ -659,6 +660,7 @@ function resolveSteerSubagent(
     }
     // P2: match only on subagent key suffix or label, not agent id
     const isMatch =
+      normalizedKey === normalizedTarget ||
       normalizedKey.endsWith(`:subagent:${normalizedTarget}`) ||
       normalizedKey === `subagent:${normalizedTarget}` ||
       (session.label ?? "").toLowerCase() === normalizedTarget;
@@ -678,6 +680,7 @@ async function resolveSteerTarget(
   client: GatewayBrowserClient,
   sessionKey: string,
   args: string,
+  context: SlashCommandContext,
 ): Promise<
   | { key: string; message: string; label?: string; sessions?: SessionsListResult }
   | { error: string }
@@ -693,7 +696,8 @@ async function resolveSteerTarget(
     // Skip "all" — resolveKillTargets treats it as a wildcard, but steer/redirect
     // target a single session, so "all good now" should not match subagents.
     if (rest && maybeTarget.toLowerCase() !== "all") {
-      const sessions = await client.request<SessionsListResult>("sessions.list", {});
+      const sessions =
+        context.sessionsResult ?? (await client.request<SessionsListResult>("sessions.list", {}));
       const matched = resolveSteerSubagent(sessions?.sessions ?? [], sessionKey, maybeTarget);
       if (matched.length === 1) {
         return { key: matched[0], message: rest, label: maybeTarget, sessions };
@@ -715,9 +719,10 @@ async function executeSteer(
   client: GatewayBrowserClient,
   sessionKey: string,
   args: string,
+  context: SlashCommandContext,
 ): Promise<SlashCommandResult> {
   try {
-    const resolved = await resolveSteerTarget(client, sessionKey, args);
+    const resolved = await resolveSteerTarget(client, sessionKey, args, context);
     if ("error" in resolved) {
       return {
         content: resolved.error === "empty" ? "Usage: `/steer [id] <message>`" : resolved.error,
@@ -753,9 +758,10 @@ async function executeRedirect(
   client: GatewayBrowserClient,
   sessionKey: string,
   args: string,
+  context: SlashCommandContext,
 ): Promise<SlashCommandResult> {
   try {
-    const resolved = await resolveSteerTarget(client, sessionKey, args);
+    const resolved = await resolveSteerTarget(client, sessionKey, args, context);
     if ("error" in resolved) {
       return {
         content: resolved.error === "empty" ? "Usage: `/redirect [id] <message>`" : resolved.error,

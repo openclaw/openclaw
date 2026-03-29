@@ -11,6 +11,7 @@ import { loadSessions } from "./controllers/sessions.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import { normalizeBasePath } from "./navigation.ts";
 import type { ChatModelOverride, ModelCatalogEntry } from "./types.ts";
+import type { SessionsListResult } from "./types.ts";
 import type { ChatAttachment, ChatQueueItem } from "./ui-types.ts";
 import { generateUUID } from "./uuid.ts";
 
@@ -32,6 +33,7 @@ export type ChatHost = {
   chatModelOverrides: Record<string, ChatModelOverride | null>;
   chatModelsLoading: boolean;
   chatModelCatalog: ModelCatalogEntry[];
+  sessionsResult?: SessionsListResult | null;
   updateComplete?: Promise<unknown>;
   refreshSessionsAfterChat: Set<string>;
   /** Callback for slash-command side effects that need app-level access. */
@@ -331,6 +333,7 @@ async function dispatchSlashCommand(
   const targetSessionKey = host.sessionKey;
   const result = await executeSlashCommand(host.client, targetSessionKey, name, args, {
     chatModelCatalog: host.chatModelCatalog,
+    sessionsResult: host.sessionsResult,
   });
 
   if (result.content) {
