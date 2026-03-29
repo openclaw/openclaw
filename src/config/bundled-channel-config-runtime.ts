@@ -106,8 +106,16 @@ export function getBundledChannelRuntimeMap(): BundledChannelRuntimeMap {
 }
 
 export function getBundledChannelConfigSchemaMap(): BundledChannelConfigSchemaMap {
-  if (!cachedBundledChannelConfigSchemaMap) {
-    cachedBundledChannelConfigSchemaMap = buildBundledChannelConfigSchemaMap();
+  const plugins = readBundledChannelPlugins();
+  if (plugins && cachedBundledChannelConfigSchemaMap) {
+    return cachedBundledChannelConfigSchemaMap;
   }
-  return cachedBundledChannelConfigSchemaMap;
+
+  const configSchemaMap = buildBundledChannelConfigSchemaMap();
+  // Channel config metadata can be partial while bundled plugin imports are still
+  // stabilizing. Only memoize after the bundled channel list is actually readable.
+  if (plugins) {
+    cachedBundledChannelConfigSchemaMap = configSchemaMap;
+  }
+  return configSchemaMap;
 }
