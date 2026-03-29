@@ -23,6 +23,8 @@ import {
   promoteThinkingTagsToBlocks,
 } from "./pi-embedded-utils.js";
 
+const THINKING_TAG_CHUNK_RE = /<\s*\/?\s*(?:think(?:ing)?|thought|antthinking)\s*>/i;
+
 const stripTrailingDirective = (text: string): string => {
   const openIndex = text.lastIndexOf("[[");
   if (openIndex < 0) {
@@ -252,7 +254,14 @@ export function handleMessageUpdate(
     }
   }
 
-  ctx.emitReasoningStream(extractThinkingFromTaggedStream(ctx.state.deltaBuffer));
+  const chunkMayChangeTaggedThinking = Boolean(chunk && THINKING_TAG_CHUNK_RE.test(chunk));
+  if (
+    ctx.state.streamReasoning ||
+    ctx.state.partialBlockState.thinking ||
+    chunkMayChangeTaggedThinking
+  ) {
+    ctx.emitReasoningStream(extractThinkingFromTaggedStream(ctx.state.deltaBuffer));
+  }
 
   const next = ctx
     .stripBlockTags(ctx.state.deltaBuffer, {

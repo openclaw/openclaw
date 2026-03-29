@@ -899,6 +899,20 @@ export async function handleOpenResponsesHttpRequest(
     });
     reasoningDoneEmitted = true;
   };
+  const buildThinkingTextWithPendingSegment = () =>
+    currentStreamThinkingSegment
+      ? accumulatedThinking
+        ? `${accumulatedThinking}\n\n${currentStreamThinkingSegment}`
+        : currentStreamThinkingSegment
+      : accumulatedThinking;
+  const buildFinalizeText = () =>
+    accumulatedText || buildThinkingTextWithPendingSegment() || "No response from OpenClaw.";
+  const refreshFinalizeText = () => {
+    if (!finalizeRequested) {
+      return;
+    }
+    finalizeRequested.text = buildFinalizeText();
+  };
 
   const maybeFinalize = () => {
     if (closed) {
@@ -910,7 +924,11 @@ export async function handleOpenResponsesHttpRequest(
     if (!finalUsage) {
       return;
     }
+    flushCurrentStreamThinkingSegment();
+    refreshFinalizeText();
+    emitReasoningDoneOnce();
     const usage = finalUsage;
+    const finalText = finalizeRequested.text;
 
     closed = true;
     unsubscribe();
@@ -920,7 +938,7 @@ export async function handleOpenResponsesHttpRequest(
       item_id: outputItemId,
       output_index: 0,
       content_index: 0,
-      text: finalizeRequested.text,
+      text: finalText,
     });
 
     writeSseEvent(res, {
@@ -928,12 +946,12 @@ export async function handleOpenResponsesHttpRequest(
       item_id: outputItemId,
       output_index: 0,
       content_index: 0,
-      part: { type: "output_text", text: finalizeRequested.text },
+      part: { type: "output_text", text: finalText },
     });
 
     const completedItem = createAssistantOutputItem({
       id: outputItemId,
-      text: finalizeRequested.text,
+      text: finalText,
       status: "completed",
     });
 
@@ -1028,6 +1046,7 @@ export async function handleOpenResponsesHttpRequest(
         flushCurrentStreamThinkingSegment();
       }
       currentStreamThinkingSegment = raw;
+      refreshFinalizeText();
 
       let delta = rawDelta ?? raw;
       if (startsNewSegment) {
@@ -1052,6 +1071,7 @@ export async function handleOpenResponsesHttpRequest(
 
       sawAssistantDelta = true;
       accumulatedText += content;
+      refreshFinalizeText();
 
       writeSseEvent(res, {
         type: "response.output_text.delta",
@@ -1066,11 +1086,8 @@ export async function handleOpenResponsesHttpRequest(
     if (evt.stream === "lifecycle") {
       const phase = evt.data?.phase;
       if (phase === "end" || phase === "error") {
-        flushCurrentStreamThinkingSegment();
-        emitReasoningDoneOnce();
-        const fallback = accumulatedText || accumulatedThinking || "No response from OpenClaw.";
         const finalStatus = phase === "error" ? "failed" : "completed";
-        requestFinalize(finalStatus, fallback);
+        requestFinalize(finalStatus, buildFinalizeText());
       }
     }
   });
@@ -1219,6 +1236,7 @@ export async function handleOpenResponsesHttpRequest(
         const fallback = content || accumulatedThinking || "No response from OpenClaw.";
         accumulatedText = fallback;
         sawAssistantDelta = true;
+        refreshFinalizeText();
 
         writeSseEvent(res, {
           type: "response.output_text.delta",

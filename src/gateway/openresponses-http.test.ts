@@ -847,6 +847,12 @@ describe("OpenResponses HTTP API (e2e)", () => {
         stream: "thinking-raw",
         data: { rawText: "Shared prefix", rawDelta: "Shared prefix" },
       });
+      // Simulate providers that emit lifecycle end before the command returns.
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "end" },
+      });
       emitAgentEvent({
         runId,
         stream: "thinking-raw",
@@ -854,12 +860,6 @@ describe("OpenResponses HTTP API (e2e)", () => {
           rawText: "Shared prefix and second segment",
           rawDelta: "Shared prefix and second segment",
         },
-      });
-      // Simulate providers that emit lifecycle end before the command returns.
-      emitAgentEvent({
-        runId,
-        stream: "lifecycle",
-        data: { phase: "end" },
       });
       return {
         payloads: [{ text: "Let me check that." }],
@@ -901,11 +901,17 @@ describe("OpenResponses HTTP API (e2e)", () => {
     const reasoningDoneIndex = events.findIndex(
       (event) => event.event === "response.reasoning.done",
     );
+    const lastReasoningDeltaIndex = events.reduce(
+      (latest, event, index) => (event.event === "response.reasoning.delta" ? index : latest),
+      -1,
+    );
     const firstOutputItemDoneIndex = events.findIndex(
       (event) => event.event === "response.output_item.done",
     );
+    expect(lastReasoningDeltaIndex).toBeGreaterThanOrEqual(0);
     expect(reasoningDoneIndex).toBeGreaterThanOrEqual(0);
     expect(firstOutputItemDoneIndex).toBeGreaterThanOrEqual(0);
+    expect(lastReasoningDeltaIndex).toBeLessThan(reasoningDoneIndex);
     expect(reasoningDoneIndex).toBeLessThan(firstOutputItemDoneIndex);
 
     const reasoningDone = reasoningDoneEvents[0];
