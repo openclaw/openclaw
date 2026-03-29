@@ -13,6 +13,11 @@ const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const REPO_ROOT = resolve(ROOT_DIR, "..");
 const ALLOWED_EXTENSION_PUBLIC_SURFACES = new Set(GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES);
 ALLOWED_EXTENSION_PUBLIC_SURFACES.add("test-api.js");
+const BUNDLED_EXTENSION_IDS = new Set(
+  readdirSync(resolve(REPO_ROOT, "extensions"), { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && entry.name !== "shared")
+    .map((entry) => entry.name),
+);
 const GUARDED_CHANNEL_EXTENSIONS = new Set([
   "bluebubbles",
   "discord",
@@ -455,6 +460,27 @@ function expectNoSiblingExtensionPrivateSrcImports(file: string, imports: string
   }
 }
 
+function expectNoCrossPluginSdkFacadeImports(file: string, imports: string[]): void {
+  const normalizedFile = file.replaceAll("\\", "/");
+  const currentExtensionId =
+    normalizedFile.match(new RegExp(`/${BUNDLED_PLUGIN_ROOT_DIR}/([^/]+)/`))?.[1] ?? null;
+  if (!currentExtensionId) {
+    return;
+  }
+  for (const specifier of imports) {
+    if (!specifier.startsWith("openclaw/plugin-sdk/")) {
+      continue;
+    }
+    const targetSubpath = specifier.slice("openclaw/plugin-sdk/".length);
+    if (!BUNDLED_EXTENSION_IDS.has(targetSubpath) || targetSubpath === currentExtensionId) {
+      continue;
+    }
+    expect.fail(
+      `${file} should not import another bundled plugin facade, got ${specifier}. Promote shared helpers to a neutral plugin-sdk subpath instead.`,
+    );
+  }
+}
+
 describe("channel import guardrails", () => {
   it("keeps channel helper modules off their own SDK barrels", () => {
     for (const source of SAME_CHANNEL_SDK_GUARDS) {
@@ -519,6 +545,12 @@ describe("channel import guardrails", () => {
   it("keeps extension production files off other extensions' private src imports", () => {
     for (const file of collectExtensionSourceFiles()) {
       expectNoSiblingExtensionPrivateSrcImports(file, getSourceAnalysis(file).importSpecifiers);
+    }
+  });
+
+  it("keeps extension production files off other bundled plugin sdk facades", () => {
+    for (const file of collectExtensionSourceFiles()) {
+      expectNoCrossPluginSdkFacadeImports(file, getSourceAnalysis(file).importSpecifiers);
     }
   });
 

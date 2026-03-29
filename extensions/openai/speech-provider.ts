@@ -4,7 +4,7 @@ import type {
   SpeechProviderConfig,
   SpeechProviderOverrides,
   SpeechProviderPlugin,
-} from "openclaw/plugin-sdk/speech-core";
+} from "openclaw/plugin-sdk/speech";
 import {
   DEFAULT_OPENAI_BASE_URL,
   isValidOpenAIModel,

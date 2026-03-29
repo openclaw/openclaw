@@ -5,13 +5,13 @@ import type {
   SpeechProviderOverrides,
   SpeechProviderPlugin,
   SpeechVoiceOption,
-} from "openclaw/plugin-sdk/speech-core";
+} from "openclaw/plugin-sdk/speech";
 import {
   normalizeApplyTextNormalization,
   normalizeLanguageCode,
   normalizeSeed,
   requireInRange,
-} from "openclaw/plugin-sdk/speech-core";
+} from "openclaw/plugin-sdk/speech";
 import { elevenLabsTTS } from "./tts.js";
 
 const DEFAULT_ELEVENLABS_BASE_URL = "https://api.elevenlabs.io";

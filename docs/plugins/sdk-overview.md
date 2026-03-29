@@ -270,6 +270,13 @@ my-plugin/
   `./runtime-api.ts`. The SDK path is the external contract only.
 </Warning>
 
+<Warning>
+  Extension production code should also avoid `openclaw/plugin-sdk/<other-plugin>`
+  imports. If a helper is truly shared, promote it to a neutral SDK subpath
+  such as `openclaw/plugin-sdk/speech`, `.../provider-model-shared`, or another
+  capability-oriented surface instead of coupling two plugins together.
+</Warning>
+
 ## Related
 
 - [Entry Points](/plugins/sdk-entrypoints) — `definePluginEntry` and `defineChannelPluginEntry` options
