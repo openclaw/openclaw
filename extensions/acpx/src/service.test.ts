@@ -23,6 +23,10 @@ type RuntimeStub = AcpRuntime & {
   getUnhealthyReason(): string | undefined;
 };
 
+type RuntimeFactory = NonNullable<
+  NonNullable<Parameters<typeof createAcpxRuntimeService>[0]>["runtimeFactory"]
+>;
+
 function createRuntimeStub(healthy: boolean): {
   runtime: RuntimeStub;
   probeAvailabilitySpy: ReturnType<typeof vi.fn>;
@@ -232,9 +236,12 @@ describe("createAcpxRuntimeService", () => {
         }),
     );
     const second = createRuntimeStub(true);
-    const runtimeFactory = vi.fn<[AcpxRuntimeFactoryParams], RuntimeStub>()
+    const runtimeFactoryMock = vi
+      .fn()
       .mockReturnValueOnce(first.runtime)
       .mockReturnValueOnce(second.runtime);
+    const runtimeFactory: RuntimeFactory = (params: Parameters<RuntimeFactory>[0]) =>
+      runtimeFactoryMock(params);
     const service = createAcpxRuntimeService({ runtimeFactory });
     const context = createServiceContext();
 
