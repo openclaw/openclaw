@@ -37,6 +37,7 @@ export function createCanonicalFixtureSkill(params: {
     description: params.description,
     filePath: params.filePath,
     baseDir: params.baseDir,
+    source: params.source,
     sourceInfo: createSyntheticSourceInfo(params.filePath, {
       source: params.source,
       baseDir: params.baseDir,
