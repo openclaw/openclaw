@@ -559,7 +559,8 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         }
       };
 
-  let dispatchError = false;
+  let dispatchError: unknown;
+  let didAdvanceStatusReaction = false;
   let queuedFinal = false;
   let counts: { final?: number; block?: number } = {};
   try {
@@ -588,11 +589,13 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         onReasoningEnd: onDraftBoundary,
         onReasoningStream: statusReactionsEnabled
           ? async () => {
+              didAdvanceStatusReaction = true;
               await statusReactions.setThinking();
             }
           : undefined,
         onToolStart: statusReactionsEnabled
           ? async (payload) => {
+              didAdvanceStatusReaction = true;
               await statusReactions.setTool(payload.name);
             }
           : undefined,
@@ -601,30 +604,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     queuedFinal = result.queuedFinal;
     counts = result.counts;
   } catch (err) {
-    dispatchError = true;
-    throw err;
+    dispatchError = err;
   } finally {
     await draftStream?.flush();
     draftStream?.stop();
     markDispatchIdle();
-
-    if (statusReactionsEnabled) {
-      if (dispatchError) {
-        await statusReactions.setError();
-      } else {
-        await statusReactions.setDone();
-      }
-      if (ctx.removeAckAfterReply) {
-        void (async () => {
-          await sleep(
-            dispatchError ? statusReactionTiming.errorHoldMs : statusReactionTiming.doneHoldMs,
-          );
-          await statusReactions.clear();
-        })();
-      } else {
-        void statusReactions.restoreInitial();
-      }
-    }
   }
 
   // -----------------------------------------------------------------------
@@ -640,6 +624,38 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   }
 
   const anyReplyDelivered = queuedFinal || (counts.block ?? 0) > 0 || (counts.final ?? 0) > 0;
+
+  if (statusReactionsEnabled) {
+    if (dispatchError) {
+      await statusReactions.setError();
+      if (ctx.removeAckAfterReply) {
+        void (async () => {
+          await sleep(statusReactionTiming.errorHoldMs);
+          await statusReactions.clear();
+        })();
+      } else {
+        void statusReactions.restoreInitial();
+      }
+    } else if (anyReplyDelivered) {
+      await statusReactions.setDone();
+      if (ctx.removeAckAfterReply) {
+        void (async () => {
+          await sleep(statusReactionTiming.doneHoldMs);
+          await statusReactions.clear();
+        })();
+      } else {
+        void statusReactions.restoreInitial();
+      }
+    } else if (didAdvanceStatusReaction) {
+      // Silent success should preserve the original ack instead of looking like
+      // we delivered a visible reply.
+      await statusReactions.restoreInitial();
+    }
+  }
+
+  if (dispatchError) {
+    throw dispatchError;
+  }
 
   // Record thread participation only when we actually delivered a reply and
   // know the thread ts that was used (set by deliverNormally, streaming start,
