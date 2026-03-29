@@ -235,7 +235,7 @@ export function buildMicrosoftSpeechProvider(): SpeechProviderPlugin {
       const fallbackOutputFormat =
         outputFormat !== DEFAULT_EDGE_OUTPUT_FORMAT ? DEFAULT_EDGE_OUTPUT_FORMAT : undefined;
 
-      if (!overrideVoice && voice.startsWith("en-") && isCjkDominant(req.text)) {
+      if (!overrideVoice && voice === DEFAULT_EDGE_VOICE && isCjkDominant(req.text)) {
         voice = DEFAULT_CHINESE_EDGE_VOICE;
         lang = DEFAULT_CHINESE_EDGE_LANG;
       }

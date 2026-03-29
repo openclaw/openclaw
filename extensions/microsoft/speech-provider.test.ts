@@ -1,6 +1,10 @@
 import { writeFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildMicrosoftSpeechProvider, isCjkDominant, listMicrosoftVoices } from "./speech-provider.js";
+import {
+  buildMicrosoftSpeechProvider,
+  isCjkDominant,
+  listMicrosoftVoices,
+} from "./speech-provider.js";
 import * as ttsModule from "./tts.js";
 
 describe("listMicrosoftVoices", () => {
@@ -109,6 +113,37 @@ describe("buildMicrosoftSpeechProvider", () => {
         config: expect.objectContaining({
           voice: "zh-CN-XiaoxiaoNeural",
           lang: "zh-CN",
+        }),
+      }),
+    );
+  });
+
+  it("preserves an explicitly configured English voice for CJK text", async () => {
+    const provider = buildMicrosoftSpeechProvider();
+    const edgeSpy = vi.spyOn(ttsModule, "edgeTTS").mockImplementation(async ({ outputPath }) => {
+      writeFileSync(outputPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    });
+
+    await provider.synthesize({
+      text: "你好，这是一个测试 hello",
+      providerConfig: {
+        enabled: true,
+        voice: "en-US-AvaNeural",
+        lang: "en-US",
+        outputFormat: "audio-24khz-48kbitrate-mono-mp3",
+        outputFormatConfigured: true,
+        saveSubtitles: false,
+      },
+      providerOverrides: {},
+      timeoutMs: 1000,
+      target: "audio",
+    });
+
+    expect(edgeSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          voice: "en-US-AvaNeural",
+          lang: "en-US",
         }),
       }),
     );
