@@ -99,7 +99,7 @@ describe("sessions_spawn tool", () => {
     expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
   });
 
-  it("defaults to waitForCompletion for openresponses sessions", async () => {
+  it("does not default to waitForCompletion when omitted", async () => {
     await loadFreshSessionsSpawnToolModuleForTest({ awaitEnabled: true });
     const tool = createSessionsSpawnTool({
       agentSessionKey: "openresponses-user:alice",
@@ -110,15 +110,14 @@ describe("sessions_spawn tool", () => {
     });
 
     expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        task: "research and report",
+      expect.not.objectContaining({
         waitForCompletion: true,
       }),
       expect.any(Object),
     );
   });
 
-  it("defaults to waitForCompletion for canonical openresponses agent session keys", async () => {
+  it("passes waitForCompletion=true only when explicitly requested", async () => {
     await loadFreshSessionsSpawnToolModuleForTest({ awaitEnabled: true });
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:openresponses-user:alice",
@@ -126,6 +125,7 @@ describe("sessions_spawn tool", () => {
 
     await tool.execute("call-openresponses-canonical-wait", {
       task: "research and report",
+      waitForCompletion: true,
     });
 
     expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
@@ -137,15 +137,14 @@ describe("sessions_spawn tool", () => {
     );
   });
 
-  it("allows overriding waitForCompletion=false for openresponses sessions", async () => {
-    await loadFreshSessionsSpawnToolModuleForTest({ awaitEnabled: true });
+  it("ignores waitForCompletion=true when awaitEnabled is false", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "openresponses-user:alice",
     });
 
     await tool.execute("call-openresponses-no-wait", {
       task: "research and report",
-      waitForCompletion: false,
+      waitForCompletion: true,
     });
 
     expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(

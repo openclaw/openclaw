@@ -25,7 +25,25 @@ type AwaitResult = {
   error?: string;
 };
 
-export function createSessionsAwaitTool(_opts?: { agentSessionKey?: string }): AnyAgentTool {
+function summarizeTransportError(err: unknown): string {
+  if (err instanceof Error && err.message.trim()) {
+    return err.message.trim();
+  }
+  if (typeof err === "string" && err.trim()) {
+    return err.trim();
+  }
+  return "agent.wait transport error";
+}
+
+function resolveRunOwnerSessionKey(run: {
+  controllerSessionKey?: string;
+  requesterSessionKey: string;
+}): string {
+  const controllerSessionKey = run.controllerSessionKey?.trim();
+  return controllerSessionKey || run.requesterSessionKey;
+}
+
+export function createSessionsAwaitTool(opts?: { agentSessionKey?: string }): AnyAgentTool {
   return {
     label: "Sessions",
     name: "sessions_await",
@@ -65,12 +83,27 @@ export function createSessionsAwaitTool(_opts?: { agentSessionKey?: string }): A
           : DEFAULT_TIMEOUT_SECONDS;
       const timeoutMs = timeoutSeconds * 1000;
       const deadline = Date.now() + timeoutMs;
+      const requesterSessionKey = opts?.agentSessionKey?.trim();
+      if (!requesterSessionKey) {
+        return jsonResult({
+          status: "error",
+          error: "sessions_await requires an active requester session context",
+        });
+      }
 
       // Resolve each session key to a registry run entry.
-      const lookups = sessionKeys.map((key) => ({
-        sessionKey: key,
-        run: getSubagentRunByChildSessionKey(key),
-      }));
+      const lookups = sessionKeys.map((key) => {
+        const run = getSubagentRunByChildSessionKey(key);
+        if (!run) {
+          return { sessionKey: key, run: null };
+        }
+        const ownerSessionKey = resolveRunOwnerSessionKey(run);
+        if (ownerSessionKey !== requesterSessionKey) {
+          // Treat cross-session keys as not_found to avoid leaking run existence.
+          return { sessionKey: key, run: null };
+        }
+        return { sessionKey: key, run };
+      });
 
       // Suppress auto-announce for all found runs before filtering by endedAt.
       // This narrows the race window where a run completes and fires announce
@@ -87,24 +120,39 @@ export function createSessionsAwaitTool(_opts?: { agentSessionKey?: string }): A
       const waitResults = new Map<string, { status?: string; error?: string }>();
       if (activeEntries.length > 0) {
         const remainingMs = Math.max(1, deadline - Date.now());
-        const settled = await Promise.allSettled(
+        await Promise.allSettled(
           activeEntries.map(async (e) => {
-            const resp = await callGateway<{ status?: string; error?: string }>({
-              method: "agent.wait",
-              params: { runId: e.run!.runId, timeoutMs: remainingMs },
-              timeoutMs: remainingMs + 10_000,
-            }).catch(() => undefined);
-            waitResults.set(e.run!.runId, resp ?? {});
+            try {
+              const resp = await callGateway<{ status?: string; error?: string }>({
+                method: "agent.wait",
+                params: { runId: e.run!.runId, timeoutMs: remainingMs },
+                timeoutMs: remainingMs + 10_000,
+              });
+              waitResults.set(
+                e.run!.runId,
+                resp ?? { status: "error", error: "agent.wait returned no result" },
+              );
+            } catch (err) {
+              waitResults.set(e.run!.runId, {
+                status: "error",
+                error: summarizeTransportError(err),
+              });
+            }
           }),
         );
-        // Suppress lint for unused settled binding
-        void settled;
       }
 
       // Build results using wait response status (authoritative) with registry
       // fallback for already-completed runs.
       const results: AwaitResult[] = await Promise.all(
-        sessionKeys.map(async (sessionKey) => {
+        lookups.map(async ({ sessionKey, run: initialRun }) => {
+          if (!initialRun) {
+            return {
+              sessionKey,
+              status: "not_found" as const,
+              error: "No registered run found for this session key",
+            };
+          }
           const run = getSubagentRunByChildSessionKey(sessionKey);
           if (!run) {
             return {
@@ -113,10 +161,19 @@ export function createSessionsAwaitTool(_opts?: { agentSessionKey?: string }): A
               error: "No registered run found for this session key",
             };
           }
+          if (resolveRunOwnerSessionKey(run) !== requesterSessionKey) {
+            return {
+              sessionKey,
+              status: "not_found" as const,
+              error: "No registered run found for this session key",
+            };
+          }
 
           const waitResp = waitResults.get(run.runId);
+          const waitStatus = waitResp?.status;
           const isTimedOut =
-            waitResp?.status === "timeout" || (typeof run.endedAt !== "number" && !waitResp);
+            waitStatus === "timeout" ||
+            (typeof run.endedAt !== "number" && typeof waitResp === "undefined");
 
           if (isTimedOut) {
             // Restore auto-announce so the child can still deliver if it completes later.
@@ -129,27 +186,49 @@ export function createSessionsAwaitTool(_opts?: { agentSessionKey?: string }): A
             };
           }
 
-          const isError = waitResp?.status === "error" || run.outcome?.status === "error";
+          const waitErrored =
+            waitStatus === "error" ||
+            (typeof waitResp !== "undefined" &&
+              waitStatus !== "ok" &&
+              waitStatus !== "timeout" &&
+              waitStatus !== "error");
+          if (waitErrored && typeof run.endedAt !== "number") {
+            // Restore auto-announce so a later completion can still be delivered.
+            clearSuppressAutoAnnounce(run.runId);
+          }
+          const isError = waitErrored || run.outcome?.status === "error";
           const reply = await captureSubagentCompletionReply(sessionKey);
           const replyText = reply?.trim() || run.frozenResultText?.trim() || undefined;
+          const errorMessage = waitErrored
+            ? waitResp?.error ||
+              (waitStatus && waitStatus !== "error"
+                ? `unexpected agent.wait status: ${waitStatus}`
+                : "agent.wait failed")
+            : run.outcome?.status === "error"
+              ? String(run.outcome?.error || "subagent error")
+              : undefined;
 
           return {
             sessionKey,
             status: isError ? ("error" as const) : ("completed" as const),
             runId: run.runId,
             reply: replyText,
-            ...(isError
-              ? { error: waitResp?.error || String(run.outcome?.error || "subagent error") }
-              : {}),
+            ...(isError ? { error: errorMessage } : {}),
           };
         }),
       );
 
-      const allSettled = results.every((r) => r.status === "completed" || r.status === "error");
+      const allCompleted = results.every((r) => r.status === "completed");
+      const anyCompleted = results.some((r) => r.status === "completed");
       const anyTimeout = results.some((r) => r.status === "timeout");
+      const status: "ok" | "partial" | "error" = allCompleted
+        ? "ok"
+        : anyCompleted || anyTimeout
+          ? "partial"
+          : "error";
 
       return jsonResult({
-        status: allSettled ? "ok" : anyTimeout ? "partial" : "error",
+        status,
         results,
       });
     },

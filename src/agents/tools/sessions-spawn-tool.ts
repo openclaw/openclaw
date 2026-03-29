@@ -10,7 +10,6 @@ import { jsonResult, readStringParam, ToolInputError } from "./common.js";
 
 const SESSIONS_SPAWN_RUNTIMES = ["subagent", "acp"] as const;
 const SESSIONS_SPAWN_SANDBOX_MODES = ["inherit", "require"] as const;
-const OPENRESPONSES_SESSION_KEY_RE = /(^|:)openresponses(?:[-:]|$)/i;
 const UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS = [
   "target",
   "transport",
@@ -21,14 +20,6 @@ const UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS = [
   "replyTo",
   "reply_to",
 ] as const;
-
-function isOpenResponsesSessionKey(sessionKey: string | undefined): boolean {
-  const key = sessionKey?.trim();
-  if (!key) {
-    return false;
-  }
-  return OPENRESPONSES_SESSION_KEY_RE.test(key);
-}
 
 const SessionsSpawnToolSchema = Type.Object({
   task: Type.String(),
@@ -125,10 +116,7 @@ export function createSessionsSpawnTool(
       const streamTo = params.streamTo === "parent" ? "parent" : undefined;
       const cfg = loadConfig();
       const awaitEnabled = cfg?.agents?.defaults?.subagents?.awaitEnabled === true;
-      const waitForCompletion =
-        typeof params.waitForCompletion === "boolean"
-          ? params.waitForCompletion && awaitEnabled
-          : awaitEnabled && isOpenResponsesSessionKey(opts?.agentSessionKey);
+      const waitForCompletion = params.waitForCompletion === true && awaitEnabled;
       const suppressAnnounce = params.suppressAnnounce === true && awaitEnabled;
       // Back-compat: older callers used timeoutSeconds for this tool.
       const timeoutSecondsCandidate =
