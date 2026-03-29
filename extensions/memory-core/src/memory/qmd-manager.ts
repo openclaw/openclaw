@@ -1316,11 +1316,14 @@ export class QmdMemoryManager implements MemorySearchManager {
 
   private isQueryToolNotFoundError(err: unknown): boolean {
     const message = err instanceof Error ? err.message : String(err);
+    const detail =
+      message.match(/ failed \(code \d+\): ([\s\S]*)$/)?.[1] ??
+      message.match(/ timed out after \d+ms: ([\s\S]*)$/)?.[1] ??
+      message;
     // Match only the specific v2-query missing-tool signatures emitted by MCP.
-    // The full mcporter command (including user query text) is included in the
-    // error, so generic /tool.*not found/i matching can false-positive when the
-    // user's search text literally contains "tool query not found".
-    return /(?:^|\n|:\s)(?:MCP error [^:\n]+:\s*)?Tool ['"]?query['"]? not found\b/i.test(message);
+    // The full mcporter command summary includes the serialized user query, so
+    // parse only the trailing stderr/stdout detail before deciding to pin v1.
+    return /(?:^|\n|:\s)(?:MCP error [^:\n]+:\s*)?Tool ['"]?query['"]? not found\b/i.test(detail);
   }
 
   private async ensureMcporterDaemonStarted(mcporter: ResolvedQmdMcporterConfig): Promise<void> {

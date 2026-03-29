@@ -1747,7 +1747,7 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
-  it("does not pin v1 fallback when the user query text contains tool-not-found words", async () => {
+  it("does not pin v1 fallback when only the serialized query text contains tool-not-found words", async () => {
     cfg = {
       ...cfg,
       memory: {
@@ -1771,10 +1771,7 @@ describe("QmdMemoryManager", () => {
         if (args[1] === "qmd.query" && firstQueryCall) {
           firstQueryCall = false;
           queueMicrotask(() => {
-            child.stderr.emit(
-              "data",
-              'Error: backend unavailable while processing query text "Tool query not found"',
-            );
+            child.stderr.emit("data", "backend unavailable");
             child.closeWith(1);
           });
           return child;
@@ -1789,7 +1786,9 @@ describe("QmdMemoryManager", () => {
     const { manager } = await createManager();
 
     await expect(
-      manager.search("Tool query not found", { sessionKey: "agent:main:slack:dm:u123" }),
+      manager.search("abc: Tool query not found", {
+        sessionKey: "agent:main:slack:dm:u123",
+      }),
     ).resolves.toEqual([]);
 
     await manager.search("hello again", { sessionKey: "agent:main:slack:dm:u123" });
