@@ -46,7 +46,7 @@ describe("exec approval reply helpers", () => {
 
   it("returns the approver DM notice text", () => {
     expect(getExecApprovalApproverDmNoticeText()).toBe(
-      "Approval required. I sent the allowed approvers DMs.",
+      "Approval required. I sent approval DMs to the approvers for this account.",
     );
   });
 
@@ -129,6 +129,19 @@ describe("exec approval reply helpers", () => {
     expect(payload.text).toContain("Expires in: 0s");
   });
 
+  it("formats longer approval windows in minutes", () => {
+    const payload = buildExecApprovalPendingReplyPayload({
+      approvalId: "req-30m",
+      approvalSlug: "slug-30m",
+      command: "echo later",
+      host: "gateway",
+      expiresAtMs: 1_801_000,
+      nowMs: 1_000,
+    });
+
+    expect(payload.text).toContain("Expires in: 30m");
+  });
+
   it("builds unavailable payloads for approver DMs", () => {
     expect(
       buildExecApprovalUnavailableReplyPayload({
@@ -137,7 +150,7 @@ describe("exec approval reply helpers", () => {
         sentApproverDms: true,
       }),
     ).toEqual({
-      text: "Careful.\n\nApproval required. I sent the allowed approvers DMs.",
+      text: "Careful.\n\nApproval required. I sent approval DMs to the approvers for this account.",
     });
   });
 

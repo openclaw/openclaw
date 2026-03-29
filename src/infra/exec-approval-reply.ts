@@ -34,7 +34,29 @@ export type ExecApprovalUnavailableReplyParams = {
 };
 
 export function getExecApprovalApproverDmNoticeText(): string {
-  return "Approval required. I sent the allowed approvers DMs.";
+  return "Approval required. I sent approval DMs to the approvers for this account.";
+}
+
+export function formatExecApprovalExpiresIn(expiresAtMs: number, nowMs: number): string {
+  const totalSeconds = Math.max(0, Math.round((expiresAtMs - nowMs) / 1000));
+  if (totalSeconds < 60) {
+    return `${totalSeconds}s`;
+  }
+
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const parts: string[] = [];
+  if (hours > 0) {
+    parts.push(`${hours}h`);
+  }
+  if (minutes > 0) {
+    parts.push(`${minutes}m`);
+  }
+  if (hours === 0 && minutes < 5 && seconds > 0) {
+    parts.push(`${seconds}s`);
+  }
+  return parts.join(" ");
 }
 
 function buildFence(text: string, language?: string): string {
@@ -106,11 +128,9 @@ export function buildExecApprovalPendingReplyPayload(
     info.push(`CWD: ${params.cwd}`);
   }
   if (typeof params.expiresAtMs === "number" && Number.isFinite(params.expiresAtMs)) {
-    const expiresInSec = Math.max(
-      0,
-      Math.round((params.expiresAtMs - (params.nowMs ?? Date.now())) / 1000),
+    info.push(
+      `Expires in: ${formatExecApprovalExpiresIn(params.expiresAtMs, params.nowMs ?? Date.now())}`,
     );
-    info.push(`Expires in: ${expiresInSec}s`);
   }
   info.push(`Full id: \`${params.approvalId}\``);
   lines.push(info.join("\n"));
@@ -148,21 +168,21 @@ export function buildExecApprovalUnavailableReplyPayload(
       `Exec approval is required, but chat exec approvals are not enabled on ${params.channelLabel ?? "this platform"}.`,
     );
     lines.push(
-      "Approve it from the Web UI or terminal UI, or from Discord or Telegram if those approval clients are enabled.",
+      "Approve it from the Web UI or terminal UI, or enable Discord or Telegram exec approvals. If those accounts already know your owner ID via allowFrom, OpenClaw can infer approvers automatically.",
     );
   } else if (params.reason === "initiating-platform-unsupported") {
     lines.push(
       `Exec approval is required, but ${params.channelLabel ?? "this platform"} does not support chat exec approvals.`,
     );
     lines.push(
-      "Approve it from the Web UI or terminal UI, or from Discord or Telegram if those approval clients are enabled.",
+      "Approve it from the Web UI or terminal UI, or enable Discord or Telegram exec approvals. If those accounts already know your owner ID via allowFrom, OpenClaw can infer approvers automatically.",
     );
   } else {
     lines.push(
       "Exec approval is required, but no interactive approval client is currently available.",
     );
     lines.push(
-      "Open the Web UI or terminal UI, or enable Discord or Telegram exec approvals, then retry the command.",
+      "Open the Web UI or terminal UI, or enable Discord or Telegram exec approvals, then retry the command. If those accounts already know your owner ID via allowFrom, you can usually leave execApprovals.approvers unset.",
     );
   }
 

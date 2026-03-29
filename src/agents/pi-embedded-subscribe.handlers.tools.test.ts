@@ -356,7 +356,7 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
 
     expect(onToolResult).toHaveBeenCalledWith(
       expect.objectContaining({
-        text: "Approval required. I sent the allowed approvers DMs.",
+        text: "Approval required. I sent approval DMs to the approvers for this account.",
       }),
     );
     expect(ctx.state.deterministicApprovalPromptSent).toBe(true);

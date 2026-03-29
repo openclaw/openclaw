@@ -20,7 +20,12 @@ const baseRequest = {
   expiresAtMs: 6000,
 };
 
+const activeForwarders: Array<ReturnType<typeof createExecApprovalForwarder>> = [];
+
 afterEach(() => {
+  for (const forwarder of activeForwarders.splice(0)) {
+    forwarder.stop();
+  }
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
@@ -115,6 +120,7 @@ function createForwarder(params: {
     deps.resolveSessionTarget = params.resolveSessionTarget;
   }
   const forwarder = createExecApprovalForwarder(deps);
+  activeForwarders.push(forwarder);
   return { deliver, forwarder };
 }
 
