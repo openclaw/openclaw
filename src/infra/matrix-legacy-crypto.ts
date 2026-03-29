@@ -7,7 +7,7 @@ import { writeJsonFileAtomically as writeJsonFileAtomicallyImpl } from "../plugi
 import {
   resolveConfiguredMatrixAccountIds,
   resolveMatrixLegacyFlatStoragePaths,
-} from "../plugin-sdk/matrix.js";
+} from "./matrix-config-helpers.js";
 import {
   resolveLegacyMatrixFlatStoreTarget,
   resolveMatrixMigrationAccountTarget,

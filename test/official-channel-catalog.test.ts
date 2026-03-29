@@ -85,7 +85,6 @@ describe("buildOfficialChannelCatalog", () => {
             },
             install: {
               npmSpec: "@openclaw/whatsapp",
-              localPath: bundledPluginRoot("whatsapp"),
               defaultChoice: "npm",
             },
           },

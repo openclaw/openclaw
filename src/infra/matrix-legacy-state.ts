@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
-import { resolveMatrixLegacyFlatStoragePaths } from "../plugin-sdk/matrix.js";
+import { resolveMatrixLegacyFlatStoragePaths } from "./matrix-config-helpers.js";
 import { resolveLegacyMatrixFlatStoreTarget } from "./matrix-migration-config.js";
 
 export type MatrixLegacyStateMigrationResult = {
