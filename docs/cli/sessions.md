@@ -53,6 +53,7 @@ openclaw sessions rename --session "agent:main:main" "My Custom Name"
 - `--session`: required session key.
 - Positional `label`: new label text (omit when using `--clear`).
 - `--clear`: remove the custom label.
+- `--force`: allow patching an unknown key (creates a new entry in the gateway session store). Use with care; typos will create "phantom" sessions.
 - `--json`: print the `sessions.patch` result as JSON.
 - `--url`, `--token`, `--password`, `--timeout`: optional gateway overrides.
 

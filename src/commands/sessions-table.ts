@@ -116,9 +116,14 @@ export function formatSessionLabelCell(
   displayName: string | undefined,
   rich: boolean,
 ): string {
-  const text = (label?.trim() || displayName?.trim() || "").slice(0, SESSION_LABEL_PAD);
-  const padded = text.padEnd(SESSION_LABEL_PAD);
-  if (!text) {
+  const raw = label?.trim() || displayName?.trim() || "";
+  const truncated =
+    raw.length > SESSION_LABEL_PAD && SESSION_LABEL_PAD > 1
+      ? `${raw.slice(0, SESSION_LABEL_PAD - 1)}…`
+      : raw.slice(0, SESSION_LABEL_PAD);
+  const padded = truncated.padEnd(SESSION_LABEL_PAD);
+  const hasValue = raw.length > 0;
+  if (!hasValue) {
     return rich ? theme.muted(padded) : padded;
   }
   return rich ? theme.success(padded) : padded;

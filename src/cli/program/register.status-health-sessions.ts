@@ -52,6 +52,7 @@ function registerSessionsLabelSubcommand(
     .description(description)
     .requiredOption("--session <key>", "Session key (for example agent:main:main)")
     .option("--clear", "Remove the custom label", false)
+    .option("--force", "Allow creating a new entry if the session key is unknown", false)
     .option("--json", "Output JSON", false)
     .option("--url <url>", "Gateway WebSocket URL override")
     .option("--token <token>", "Gateway auth token")
@@ -76,6 +77,7 @@ function registerSessionsLabelSubcommand(
             session: opts.session as string,
             label: typeof label === "string" ? label : undefined,
             clear: Boolean(opts.clear),
+            force: Boolean(opts.force),
             json: Boolean(opts.json),
             url: opts.url as string | undefined,
             token: opts.token as string | undefined,
