@@ -79,13 +79,15 @@ function applyFeishuSDKReconnectPatch(): void {
       }
       if (!isStart) {
         // Exponential backoff: doubles each retry, capped at MAX_RECONNECT_BACKOFF_MS
+        // Add ±20% jitter to avoid synchronized retries across multiple clients
         this._feishuReconnectCount = ((this as Record<string, unknown>)._feishuReconnectCount as number) + 1 || 1;
         const count = (this as Record<string, unknown>)._feishuReconnectCount as number;
         const { reconnectInterval = DEFAULT_RECONNECT_INTERVAL_MS } = this.wsConfig?.getWS?.() ?? {};
-        const backoff = Math.min(reconnectInterval * Math.pow(2, count - 1), MAX_RECONNECT_BACKOFF_MS);
+        const jitter = 1 + (Math.random() - 0.5) * 0.4; // ±20%
+        const backoff = Math.min(reconnectInterval * Math.pow(2, count - 1) * jitter, MAX_RECONNECT_BACKOFF_MS);
         this.logger?.info?.(
           "[feishu-ws-patch]",
-          `reconnect backoff: ${Math.round(backoff / 1000)}s (attempt ${count})`,
+          `reconnect backoff: ${Math.round(backoff / 1000)}s (attempt ${count}, jitter ${Math.round((jitter - 1) * 100)}%)`,
         );
         await new Promise<void>((resolve) => setTimeout(resolve, backoff));
       }
