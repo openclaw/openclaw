@@ -1581,7 +1581,7 @@ describe("isAnthropicBillingError", () => {
 });
 
 describe("LiveSessionModelSwitchError in fallback loop (#57063)", () => {
-  it("rethrows LiveSessionModelSwitchError instead of falling back to next candidate", async () => {
+  it("rethrows LiveSessionModelSwitchError when rethrowLiveSwitch is true", async () => {
     const { LiveSessionModelSwitchError } = await import("./live-model-switch.js");
     const cfg = makeCfg();
     const switchErr = new LiveSessionModelSwitchError({
@@ -1596,6 +1596,7 @@ describe("LiveSessionModelSwitchError in fallback loop (#57063)", () => {
         provider: "anthropic",
         model: "claude-opus-4-6",
         run,
+        rethrowLiveSwitch: true,
       }),
     ).rejects.toThrow(switchErr);
 
@@ -1604,7 +1605,30 @@ describe("LiveSessionModelSwitchError in fallback loop (#57063)", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 
-  it("does not swallow LiveSessionModelSwitchError even with multiple fallback candidates", async () => {
+  it("absorbs LiveSessionModelSwitchError when rethrowLiveSwitch is not set", async () => {
+    const { LiveSessionModelSwitchError } = await import("./live-model-switch.js");
+    const cfg = makeCfg();
+    const switchErr = new LiveSessionModelSwitchError({
+      provider: "openai",
+      model: "gpt-5.4",
+    });
+    const run = vi.fn().mockRejectedValueOnce(switchErr).mockResolvedValueOnce("ok");
+
+    // Without rethrowLiveSwitch, the error is treated as a candidate failure
+    // and the fallback loop continues to the next candidate (the same model
+    // in this single-candidate case resolves via the second mock).
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
+  it("rethrows LiveSessionModelSwitchError with multiple fallback candidates when opt-in", async () => {
     const { LiveSessionModelSwitchError } = await import("./live-model-switch.js");
     const cfg = makeCfg({
       agents: {
@@ -1628,6 +1652,7 @@ describe("LiveSessionModelSwitchError in fallback loop (#57063)", () => {
         provider: "anthropic",
         model: "claude-opus-4-6",
         run,
+        rethrowLiveSwitch: true,
       }),
     ).rejects.toThrow(switchErr);
 

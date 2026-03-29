@@ -163,6 +163,7 @@ async function runFallbackCandidate<T>(params: {
   provider: string;
   model: string;
   options?: ModelFallbackRunOptions;
+  rethrowLiveSwitch?: boolean;
 }): Promise<{ ok: true; result: T } | { ok: false; error: unknown }> {
   try {
     const result = params.options
@@ -180,7 +181,7 @@ async function runFallbackCandidate<T>(params: {
     // the run with the updated model selection.  Letting it fall through here
     // would cause the fallback loop to skip the current candidate and try the
     // next one, effectively inverting the intended model order (#57063).
-    if (err instanceof LiveSessionModelSwitchError) {
+    if (params.rethrowLiveSwitch && err instanceof LiveSessionModelSwitchError) {
       throw err;
     }
     // Normalize abort-wrapped rate-limit errors (e.g. Google Vertex RESOURCE_EXHAUSTED)
@@ -202,12 +203,14 @@ async function runFallbackAttempt<T>(params: {
   model: string;
   attempts: FallbackAttempt[];
   options?: ModelFallbackRunOptions;
+  rethrowLiveSwitch?: boolean;
 }): Promise<{ success: ModelFallbackRunResult<T> } | { error: unknown }> {
   const runResult = await runFallbackCandidate({
     run: params.run,
     provider: params.provider,
     model: params.model,
     options: params.options,
+    rethrowLiveSwitch: params.rethrowLiveSwitch,
   });
   if (runResult.ok) {
     return {
@@ -605,6 +608,14 @@ export async function runWithModelFallback<T>(params: {
   fallbacksOverride?: string[];
   run: ModelFallbackRunFn<T>;
   onError?: ModelFallbackErrorHandler;
+  /**
+   * When true, `LiveSessionModelSwitchError` thrown inside `run` is re-thrown
+   * immediately instead of being treated as a candidate failure.  Only callers
+   * that have their own restart loop (e.g. `agent-runner-execution`) should
+   * enable this; other callers (followup-runner, cron, memory-flush) rely on
+   * the fallback loop absorbing the error gracefully.
+   */
+  rethrowLiveSwitch?: boolean;
 }): Promise<ModelFallbackRunResult<T>> {
   const candidates = resolveFallbackCandidates({
     cfg: params.cfg,
@@ -744,6 +755,7 @@ export async function runWithModelFallback<T>(params: {
       ...candidate,
       attempts,
       options: runOptions,
+      rethrowLiveSwitch: params.rethrowLiveSwitch,
     });
     if ("success" in attemptRun) {
       if (i > 0 || attempts.length > 0 || attemptedDuringCooldown) {
