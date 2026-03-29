@@ -231,7 +231,7 @@ export function resolveTTSConfig(cfg: Record<string, unknown>): TTSConfig | null
 
   // Fall back to framework-level TTS config.
   const msgTts = c?.messages?.tts;
-  if (msgTts && msgTts.auto !== "disabled") {
+  if (msgTts && msgTts.auto !== "off" && msgTts.auto !== "disabled") {
     const providerId: string = msgTts?.provider || "openai";
     const providerBlock = msgTts?.[providerId];
     const providerCfg = c?.models?.providers?.[providerId];
