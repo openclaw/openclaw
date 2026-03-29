@@ -114,37 +114,37 @@
       "nativeStreaming": true,
       "userTokenReadOnly": true,
       "channels": {
-        "${SLACK_CHANNEL_MARKET_SIGNALS}": {
+        "C0APJ5GE8Q2": {
           "allow": true,
           "requireMention": true,
           "allowBots": true
         },
-        "${SLACK_CHANNEL_RESEARCH}": {
+        "C0APEJD4JSZ": {
           "allow": true,
           "requireMention": true,
           "allowBots": true
         },
-        "${SLACK_CHANNEL_QUANT_SIGNALS}": {
+        "C0APBNWUTGB": {
           "allow": true,
           "requireMention": true,
           "allowBots": true
         },
-        "${SLACK_CHANNEL_CONTRARIAN}": {
+        "C0APX22FG9X": {
           "allow": true,
           "requireMention": true,
           "allowBots": true
         },
-        "${SLACK_CHANNEL_DISPATCH}": {
+        "C0APBP8JJSX": {
           "allow": true,
           "requireMention": true,
           "allowBots": true
         },
-        "${SLACK_CHANNEL_PORTFOLIO_DAILY}": {
+        "C0APBP5MS4B": {
           "allow": true,
           "requireMention": true,
           "allowBots": false
         },
-        "${SLACK_CHANNEL_PORTFOLIO_WEEKLY}": {
+        "C0AQCD7Q1U0": {
           "allow": true,
           "requireMention": true,
           "allowBots": false
