@@ -22,6 +22,10 @@ type DynamicModelContext = {
 };
 
 type ResolvedModelLike = Record<string, unknown>;
+type NormalizedTransportLike = {
+  api?: string | null;
+  baseUrl?: string;
+};
 
 type ProviderRuntimeTestMockOptions = {
   clearHookCache?: () => void;
@@ -74,6 +78,42 @@ function normalizeDynamicModel(params: { provider: string; model: ResolvedModelL
       : baseUrl;
   if (nextApi !== params.model.api || nextBaseUrl !== baseUrl) {
     return { ...params.model, api: nextApi, baseUrl: nextBaseUrl };
+  }
+  return undefined;
+}
+
+function normalizeTransport(params: {
+  provider: string;
+  context: { api?: string | null; baseUrl?: string };
+}): NormalizedTransportLike | undefined {
+  const isNativeOpenAiTransport =
+    params.context.api === "openai-completions" &&
+    (params.context.baseUrl === OPENAI_BASE_URL ||
+      (params.provider === "openai" && !params.context.baseUrl));
+  const isNativeXaiTransport =
+    params.context.api === "openai-completions" &&
+    (params.context.baseUrl === XAI_BASE_URL ||
+      (params.provider === "xai" && !params.context.baseUrl));
+  if (
+    params.context.api === "google-generative-ai" &&
+    params.context.baseUrl === "https://generativelanguage.googleapis.com"
+  ) {
+    return {
+      api: params.context.api,
+      baseUrl: GOOGLE_GENERATIVE_AI_BASE_URL,
+    };
+  }
+  if (isNativeOpenAiTransport) {
+    return {
+      api: "openai-responses",
+      baseUrl: params.context.baseUrl,
+    };
+  }
+  if (isNativeXaiTransport) {
+    return {
+      api: "openai-responses",
+      baseUrl: params.context.baseUrl,
+    };
   }
   return undefined;
 }
@@ -384,38 +424,38 @@ export function createProviderRuntimeTestMock(options: ProviderRuntimeTestMockOp
             model: params.context.model as ResolvedModelLike,
           })
         : undefined,
+    applyProviderResolvedTransportWithPlugin: (params: {
+      provider: string;
+      config?: unknown;
+      workspaceDir?: string;
+      env?: NodeJS.ProcessEnv;
+      context: { model: unknown };
+    }) => {
+      const model = params.context.model as ResolvedModelLike;
+      const normalized = normalizeTransport({
+        provider: params.provider,
+        context: {
+          api: model.api as string | null | undefined,
+          baseUrl: model.baseUrl as string | undefined,
+        },
+      });
+      if (!normalized) {
+        return undefined;
+      }
+      const nextApi = normalized.api ?? model.api;
+      const nextBaseUrl = normalized.baseUrl ?? model.baseUrl;
+      if (nextApi === model.api && nextBaseUrl === model.baseUrl) {
+        return undefined;
+      }
+      return {
+        ...model,
+        api: nextApi,
+        baseUrl: nextBaseUrl,
+      };
+    },
     normalizeProviderTransportWithPlugin: (params: {
       provider: string;
       context: { api?: string | null; baseUrl?: string };
-    }) => {
-      if (
-        params.context.api === "google-generative-ai" &&
-        params.context.baseUrl === "https://generativelanguage.googleapis.com"
-      ) {
-        return {
-          api: params.context.api,
-          baseUrl: GOOGLE_GENERATIVE_AI_BASE_URL,
-        };
-      }
-      if (
-        params.context.api === "openai-completions" &&
-        (params.provider === "openai" || params.context.baseUrl === OPENAI_BASE_URL)
-      ) {
-        return {
-          api: "openai-responses",
-          baseUrl: params.context.baseUrl,
-        };
-      }
-      if (
-        params.context.api === "openai-completions" &&
-        (params.provider === "xai" || params.context.baseUrl === XAI_BASE_URL)
-      ) {
-        return {
-          api: "openai-responses",
-          baseUrl: params.context.baseUrl,
-        };
-      }
-      return undefined;
-    },
+    }) => normalizeTransport(params),
   };
 }
