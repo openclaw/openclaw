@@ -29,15 +29,15 @@ describe("resolveReplyRoutingDecision", () => {
   it("does not route external replies from internal webchat without explicit delivery", () => {
     expect(
       resolveReplyRoutingDecision({
-        provider: "internal",
-        surface: "internal",
+        provider: "webchat",
+        surface: "webchat",
         explicitDeliverRoute: false,
         originatingChannel: "telegram",
         originatingTo: "telegram:123",
         isRoutableChannel,
       }),
     ).toMatchObject({
-      currentSurface: "internal",
+      currentSurface: "webchat",
       isInternalWebchatTurn: true,
       shouldRouteToOriginating: false,
     });
@@ -56,7 +56,7 @@ describe("resolveReplyRoutingDecision", () => {
     ).toMatchObject({
       currentSurface: "discord",
       shouldRouteToOriginating: false,
-      shouldSuppressTyping: false,
+      shouldSuppressTyping: true,
     });
   });
 });

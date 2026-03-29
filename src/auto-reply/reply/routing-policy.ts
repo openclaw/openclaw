@@ -30,6 +30,8 @@ export function resolveReplyRoutingDecision(params: {
     isInternalWebchatTurn,
     shouldRouteToOriginating,
     shouldSuppressTyping:
-      shouldRouteToOriginating || originatingChannel === INTERNAL_MESSAGE_CHANNEL,
+      params.suppressDirectUserDelivery === true ||
+      shouldRouteToOriginating ||
+      originatingChannel === INTERNAL_MESSAGE_CHANNEL,
   };
 }

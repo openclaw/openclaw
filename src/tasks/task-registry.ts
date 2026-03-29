@@ -30,7 +30,7 @@ const taskIdsByRunId = new Map<string, Set<string>>();
 const tasksWithPendingDelivery = new Set<string>();
 let listenerStarted = false;
 let listenerStop: (() => void) | null = null;
-var restoreAttempted = false;
+let restoreAttempted = false;
 let deliveryRuntimePromise: Promise<typeof import("./task-registry-delivery-runtime.js")> | null =
   null;
 
