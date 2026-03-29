@@ -17,7 +17,7 @@ Status: experimental. This integration automates a **personal Zalo account** via
 Zalo Personal ships as a plugin and is not bundled with the core install.
 
 - Install via CLI: `openclaw plugins install @openclaw/zalouser`
-- Or from a source checkout: `openclaw plugins install ./extensions/zalouser`
+- Or from a source checkout: `openclaw plugins install ./path/to/local/zalouser-plugin`
 - Details: [Plugins](/tools/plugin)
 
 No external `zca`/`openzca` CLI binary is required.

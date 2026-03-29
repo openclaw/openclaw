@@ -45,7 +45,7 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
 
 - Command: `pnpm test`
 - Config: `scripts/test-parallel.mjs` (runs `vitest.unit.config.ts`, `vitest.extensions.config.ts`, `vitest.gateway.config.ts`)
-- Files: `src/**/*.test.ts`, `extensions/**/*.test.ts`
+- Files: `src/**/*.test.ts`, bundled plugin `**/*.test.ts`
 - Scope:
   - Pure unit tests
   - In-process integration tests (gateway auth, routing, tooling, parsing, config)

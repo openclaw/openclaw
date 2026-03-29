@@ -386,7 +386,7 @@ API key auth, and dynamic model resolution.
 ## File structure
 
 ```
-extensions/acme-ai/
+<bundled-plugin-root>/acme-ai/
 ├── package.json              # openclaw.providers metadata
 ├── openclaw.plugin.json      # Manifest with providerAuthEnvVars
 ├── index.ts                  # definePluginEntry + registerProvider

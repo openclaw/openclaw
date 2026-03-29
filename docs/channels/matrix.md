@@ -24,7 +24,7 @@ openclaw plugins install @openclaw/matrix
 Install from a local checkout:
 
 ```bash
-openclaw plugins install ./extensions/matrix
+openclaw plugins install ./path/to/local/matrix-plugin
 ```
 
 See [Plugins](/tools/plugin) for plugin behavior and install rules.
