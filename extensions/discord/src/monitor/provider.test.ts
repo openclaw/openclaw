@@ -510,14 +510,15 @@ describe("monitorDiscordProvider", () => {
     expect(drained[0]?.message).toContain("4014");
   });
 
-  it("passes default eventQueue.listenerTimeout of 120s to Carbon Client", async () => {
+  it("passes default eventQueue.listenerTimeout to Carbon Client", async () => {
     await monitorDiscordProvider({
       config: baseConfig(),
       runtime: baseRuntime(),
     });
 
     const eventQueue = getConstructedEventQueue();
-    expect(eventQueue).toEqual({ listenerTimeout: 120_000 });
+    expect(eventQueue).toBeDefined();
+    expect(eventQueue?.listenerTimeout).toBe(600_000);
   });
 
   it("forwards custom eventQueue config from discord config to Carbon Client", async () => {
@@ -734,7 +735,7 @@ describe("monitorDiscordProvider", () => {
     });
 
     expect(clientHandleDeployRequestMock).toHaveBeenCalledTimes(1);
-    expect(getConstructedClientOptions().eventQueue?.listenerTimeout).toBe(120_000);
+    expect(getConstructedClientOptions().eventQueue?.listenerTimeout).toBe(600_000);
   });
 
   it("reports connected status on startup and shutdown", async () => {

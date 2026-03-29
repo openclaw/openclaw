@@ -362,7 +362,7 @@ export type DiscordAccountConfig = {
    * It does not control the lifetime of queued inbound agent turns.
    */
   eventQueue?: {
-    /** Max time (ms) a single listener can run before being killed. Default: 120000. */
+    /** Max time (ms) a single listener can run before being killed. Default: 600000. */
     listenerTimeout?: number;
     /** Max events queued before backpressure is applied. Default: 10000. */
     maxQueueSize?: number;

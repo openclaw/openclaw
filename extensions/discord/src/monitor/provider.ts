@@ -79,6 +79,7 @@ import { resolveDiscordRestFetch } from "./rest-fetch.js";
 import { formatDiscordStartupStatusMessage } from "./startup-status.js";
 import type { DiscordMonitorStatusSink } from "./status.js";
 import { formatThreadBindingDurationLabel } from "./thread-bindings.messages.js";
+import { DISCORD_DEFAULT_LISTENER_TIMEOUT_MS } from "./timeouts.js";
 
 export type MonitorDiscordOpts = {
   token?: string;

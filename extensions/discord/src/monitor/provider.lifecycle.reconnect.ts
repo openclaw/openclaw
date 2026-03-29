@@ -12,7 +12,8 @@ const DISCORD_GATEWAY_FORCE_TERMINATE_CLOSE_TIMEOUT_MS = 1_000;
 const DISCORD_GATEWAY_HELLO_TIMEOUT_MS = 30_000;
 const DISCORD_GATEWAY_HELLO_CONNECTED_POLL_MS = 250;
 const DISCORD_GATEWAY_MAX_CONSECUTIVE_HELLO_STALLS = 3;
-const DISCORD_GATEWAY_RECONNECT_STALL_TIMEOUT_MS = 5 * 60_000;
+// Allow slow Discord gateway recovery before force-stopping the monitor (#45485, #44227).
+const DISCORD_GATEWAY_RECONNECT_STALL_TIMEOUT_MS = 10 * 60_000;
 
 type GatewayReadyWaitResult = "ready" | "timeout" | "stopped";
 

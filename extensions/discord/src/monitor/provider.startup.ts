@@ -27,6 +27,7 @@ import {
   registerDiscordListener,
 } from "./listeners.js";
 import { resolveDiscordPresenceUpdate } from "./presence.js";
+import { DISCORD_DEFAULT_LISTENER_TIMEOUT_MS } from "./timeouts.js";
 
 type DiscordAutoPresenceController = ReturnType<typeof createDiscordAutoPresenceController>;
 type DiscordListenerConfig = {
@@ -96,10 +97,9 @@ export function createDiscordMonitorClient(params: {
   }
 
   // Pass eventQueue config to Carbon so the gateway listener budget can be tuned.
-  // Default listenerTimeout is 120s (Carbon defaults to 30s, which is too short for some
-  // Discord normalization/enqueue work).
+  // Carbon's own default is shorter; OpenClaw raises the floor via DISCORD_DEFAULT_LISTENER_TIMEOUT_MS.
   const eventQueueOpts = {
-    listenerTimeout: 120_000,
+    listenerTimeout: DISCORD_DEFAULT_LISTENER_TIMEOUT_MS,
     ...params.discordConfig.eventQueue,
   };
   const readyListener = createDiscordStatusReadyListener({
