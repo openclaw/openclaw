@@ -44,7 +44,8 @@ function createMemoryRuntimeFixture() {
 }
 
 function expectMemoryRuntimeLoaded(autoEnabledConfig: unknown) {
-  expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith({
+  expect(resolveRuntimePluginRegistryMock).toHaveBeenNthCalledWith(1);
+  expect(resolveRuntimePluginRegistryMock).toHaveBeenNthCalledWith(2, {
     config: autoEnabledConfig,
   });
 }
@@ -61,7 +62,10 @@ function setAutoEnabledMemoryRuntime() {
   const { rawConfig, autoEnabledConfig } = createMemoryAutoEnableFixture();
   const runtime = createMemoryRuntimeFixture();
   applyPluginAutoEnableMock.mockReturnValue({ config: autoEnabledConfig, changes: [] });
-  getMemoryRuntimeMock.mockReturnValueOnce(undefined).mockReturnValue(runtime);
+  getMemoryRuntimeMock
+    .mockReturnValueOnce(undefined)
+    .mockReturnValueOnce(undefined)
+    .mockReturnValue(runtime);
   return { rawConfig, autoEnabledConfig, runtime };
 }
 
@@ -161,5 +165,24 @@ describe("memory runtime auto-enable loading", () => {
     },
   ] as const)("$name", async ({ config, setup }) => {
     await expectCloseMemoryRuntimeCase({ config, setup });
+  });
+
+  it("reuses the already active plugin registry before bootstrapping a config-only reload", async () => {
+    const rawConfig = {
+      plugins: {},
+      channels: { memory: { enabled: true } },
+    };
+    const runtime = createMemoryRuntimeFixture();
+    getMemoryRuntimeMock.mockReturnValueOnce(undefined).mockReturnValueOnce(runtime);
+
+    await getActiveMemorySearchManager({
+      cfg: rawConfig as never,
+      agentId: "main",
+      purpose: "status",
+    });
+
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledTimes(1);
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith();
+    expect(applyPluginAutoEnableMock).not.toHaveBeenCalled();
   });
 });

@@ -8,6 +8,15 @@ function ensureMemoryRuntime(cfg?: OpenClawConfig) {
   if (current || !cfg) {
     return current;
   }
+  // In a live gateway process, the active registry may have been loaded with
+  // gateway-specific compatibility inputs (workspace, handlers, subagent mode).
+  // Reuse that registry before attempting a config-only reload, or status probes
+  // can miss the already-registered memory runtime and report a false negative.
+  resolveRuntimePluginRegistry();
+  const active = getMemoryRuntime();
+  if (active) {
+    return active;
+  }
   const resolvedConfig = applyPluginAutoEnable({ config: cfg, env: process.env }).config;
   resolveRuntimePluginRegistry({ config: resolvedConfig });
   return getMemoryRuntime();

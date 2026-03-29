@@ -22,6 +22,7 @@ import {
 } from "./memory-embedding-providers.js";
 import {
   buildMemoryPromptSection,
+  clearMemoryPluginState,
   getMemoryRuntime,
   registerMemoryFlushPlanResolver,
   registerMemoryPromptSection,
@@ -3637,6 +3638,49 @@ describe("resolveRuntimePluginRegistry", () => {
     setActivePluginRegistry(registry, cacheKey);
 
     expect(resolveRuntimePluginRegistry(loadOptions)).toBe(registry);
+  });
+
+  it("restores memory runtime side effects when reusing the active registry", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "runtime-memory",
+      filename: "runtime-memory.cjs",
+      body: `module.exports = {
+  id: "runtime-memory",
+  kind: "memory",
+  register(api) {
+    api.registerMemoryRuntime({
+      async getMemorySearchManager() {
+        return { manager: null };
+      },
+      resolveMemoryBackendConfig() {
+        return { backend: "builtin" };
+      },
+    });
+  },
+};`,
+    });
+    const loadOptions = {
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["runtime-memory"],
+          slots: {
+            memory: "runtime-memory",
+          },
+        },
+      },
+    };
+
+    const registry = loadOpenClawPlugins(loadOptions);
+    expect(getMemoryRuntime()).toBeDefined();
+
+    clearMemoryPluginState();
+    expect(getMemoryRuntime()).toBeUndefined();
+
+    expect(resolveRuntimePluginRegistry(loadOptions)).toBe(registry);
+    expect(getMemoryRuntime()).toBeDefined();
   });
 
   it("falls back to the current active runtime when no explicit load context is provided", () => {

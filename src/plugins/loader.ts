@@ -180,6 +180,27 @@ function getCachedPluginRegistry(cacheKey: string): CachedPluginState | undefine
   return cached;
 }
 
+function restoreCachedPluginState(cached: CachedPluginState): void {
+  restoreRegisteredMemoryEmbeddingProviders(cached.memoryEmbeddingProviders);
+  restoreMemoryPluginState({
+    promptBuilder: cached.memoryPromptBuilder,
+    flushPlanResolver: cached.memoryFlushPlanResolver,
+    runtime: cached.memoryRuntime,
+  });
+}
+
+function restoreActivePluginStateFromCache(): void {
+  const activeCacheKey = getActivePluginRegistryKey();
+  if (!activeCacheKey) {
+    return;
+  }
+  const cached = getCachedPluginRegistry(activeCacheKey);
+  if (!cached) {
+    return;
+  }
+  restoreCachedPluginState(cached);
+}
+
 function setCachedPluginRegistry(cacheKey: string, state: CachedPluginState): void {
   if (registryCache.has(cacheKey)) {
     registryCache.delete(cacheKey);
@@ -328,10 +349,15 @@ function getCompatibleActivePluginRegistry(
 export function resolveRuntimePluginRegistry(
   options?: PluginLoadOptions,
 ): PluginRegistry | undefined {
-  if (!options || !hasExplicitCompatibilityInputs(options)) {
-    return getCompatibleActivePluginRegistry();
+  const activeRegistry = getCompatibleActivePluginRegistry(options ?? {});
+  if (activeRegistry) {
+    restoreActivePluginStateFromCache();
+    return activeRegistry;
   }
-  return getCompatibleActivePluginRegistry(options) ?? loadOpenClawPlugins(options);
+  if (!options || !hasExplicitCompatibilityInputs(options)) {
+    return undefined;
+  }
+  return loadOpenClawPlugins(options);
 }
 
 function validatePluginConfig(params: {
@@ -804,12 +830,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   if (cacheEnabled) {
     const cached = getCachedPluginRegistry(cacheKey);
     if (cached) {
-      restoreRegisteredMemoryEmbeddingProviders(cached.memoryEmbeddingProviders);
-      restoreMemoryPluginState({
-        promptBuilder: cached.memoryPromptBuilder,
-        flushPlanResolver: cached.memoryFlushPlanResolver,
-        runtime: cached.memoryRuntime,
-      });
+      restoreCachedPluginState(cached);
       if (shouldActivate) {
         activatePluginRegistry(cached.registry, cacheKey, runtimeSubagentMode);
       }
