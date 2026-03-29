@@ -33,7 +33,7 @@ function findSessionEntryByKey(store: Record<string, unknown>, sessionKey: strin
 }
 
 function isActiveTask(task: TaskRecord): boolean {
-  return task.status === "accepted" || task.status === "running";
+  return task.status === "queued" || task.status === "running";
 }
 
 function isTerminalTask(task: TaskRecord): boolean {
@@ -81,6 +81,9 @@ function shouldMarkLost(task: TaskRecord, now: number): boolean {
 function shouldPruneTerminalTask(task: TaskRecord, now: number): boolean {
   if (!isTerminalTask(task)) {
     return false;
+  }
+  if (typeof task.cleanupAfter === "number") {
+    return now >= task.cleanupAfter;
   }
   const terminalAt = task.endedAt ?? task.lastEventAt ?? task.createdAt;
   return now - terminalAt >= TASK_RETENTION_MS;

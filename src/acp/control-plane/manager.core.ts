@@ -833,7 +833,7 @@ export class AcpSessionManager {
             if (taskContext) {
               const terminalResult = resolveBackgroundTaskTerminalResult(taskProgressSummary);
               this.updateBackgroundTaskState(taskContext.runId, {
-                status: "done",
+                status: "succeeded",
                 endedAt: Date.now(),
                 lastEventAt: Date.now(),
                 error: undefined,
@@ -1880,13 +1880,12 @@ export class AcpSessionManager {
   private createBackgroundTaskRecord(context: BackgroundTaskContext, startedAt: number): void {
     try {
       createTaskRecord({
-        source: "unknown",
         runtime: "acp",
+        sourceId: context.runId,
         requesterSessionKey: context.requesterSessionKey,
         requesterOrigin: context.requesterOrigin,
         childSessionKey: context.childSessionKey,
         runId: context.runId,
-        bindingTargetKind: "session",
         label: context.label,
         task: context.task,
         status: "running",
