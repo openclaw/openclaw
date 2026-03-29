@@ -18,7 +18,6 @@ describe("createWebSendApi", () => {
   }));
   const sendPresenceUpdate = vi.fn(async () => {});
   const resolveQuotedMessage = vi.fn();
-  const rememberMessage = vi.fn();
   let api: ReturnType<typeof createWebSendApi>;
 
   beforeEach(async () => {
@@ -29,7 +28,6 @@ describe("createWebSendApi", () => {
       sock: { sendMessage, sendPresenceUpdate },
       defaultAccountId: "main",
       resolveQuotedMessage,
-      rememberMessage,
     });
   });
 
@@ -153,23 +151,6 @@ describe("createWebSendApi", () => {
     });
     const res = await api.sendMessage("+1555", "hello");
     expect(res.messageId).toBe("unknown");
-  });
-
-  it("remembers sent messages for later quoted replies", async () => {
-    await api.sendMessage("+1555", "hello");
-
-    expect(rememberMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        accountId: "main",
-        remoteJid: "1555@s.whatsapp.net",
-        message: expect.objectContaining({
-          key: expect.objectContaining({
-            id: "msg-1",
-            remoteJid: "1555@s.whatsapp.net",
-          }),
-        }),
-      }),
-    );
   });
 
   it("sends polls and records outbound activity", async () => {

@@ -155,6 +155,7 @@ export async function monitorWebInbox(options: {
       accountId: options.accountId,
       remoteJid,
       message: result as WAMessage,
+      authDir: options.authDir,
     });
     rememberRecentOutboundMessage({
       accountId: options.accountId,
@@ -489,6 +490,7 @@ export async function monitorWebInbox(options: {
         accountId: options.accountId,
         remoteJid: inbound.remoteJid,
         message: msg,
+        authDir: options.authDir,
       });
 
       await maybeMarkInboundAsRead(inbound);
@@ -559,7 +561,7 @@ export async function monitorWebInbox(options: {
     },
     defaultAccountId: options.accountId,
     resolveQuotedMessage: ({ accountId, remoteJid, messageId }) =>
-      getRecentWhatsAppMessage({ accountId, remoteJid, messageId }),
+      getRecentWhatsAppMessage({ accountId, remoteJid, messageId, authDir: options.authDir }),
   });
 
   return {

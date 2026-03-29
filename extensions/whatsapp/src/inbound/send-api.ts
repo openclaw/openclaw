@@ -32,26 +32,7 @@ export function createWebSendApi(params: {
     remoteJid: string;
     messageId: string;
   }) => WAMessage | null;
-  rememberMessage?: (params: { accountId: string; remoteJid: string; message: WAMessage }) => void;
 }) {
-  function coerceTrackedMessage(result: unknown, remoteJid: string): WAMessage | null {
-    if (!result || typeof result !== "object") {
-      return null;
-    }
-    const message = result as WAMessage;
-    const messageId = message.key?.id?.trim();
-    if (!messageId || !message.message) {
-      return null;
-    }
-    return {
-      ...message,
-      key: {
-        ...message.key,
-        remoteJid: message.key?.remoteJid ?? remoteJid,
-      },
-    } satisfies WAMessage;
-  }
-
   return {
     sendMessage: async (
       to: string,
@@ -93,24 +74,16 @@ export function createWebSendApi(params: {
       }
       const accountId = sendOptions?.accountId ?? params.defaultAccountId;
       const replyToId = sendOptions?.replyToId?.trim() || undefined;
-      const quoted =
-        replyToId &&
-        params.resolveQuotedMessage?.({
-          accountId,
-          remoteJid: jid,
-          messageId: replyToId,
-        });
-      const result = quoted
-        ? await params.sock.sendMessage(jid, payload, { quoted })
+      const resolvedQuoted = replyToId
+        ? (params.resolveQuotedMessage?.({
+            accountId,
+            remoteJid: jid,
+            messageId: replyToId,
+          }) ?? null)
+        : null;
+      const result = resolvedQuoted
+        ? await params.sock.sendMessage(jid, payload, { quoted: resolvedQuoted })
         : await params.sock.sendMessage(jid, payload);
-      const trackedMessage = coerceTrackedMessage(result, jid);
-      if (trackedMessage) {
-        params.rememberMessage?.({
-          accountId,
-          remoteJid: jid,
-          message: trackedMessage,
-        });
-      }
       recordWhatsAppOutbound(accountId);
       const messageId = resolveOutboundMessageId(result);
       return { messageId };

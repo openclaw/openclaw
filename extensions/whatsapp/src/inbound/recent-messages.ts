@@ -1,4 +1,6 @@
 import type { WAMessage } from "@whiskeysockets/baileys";
+import { jidToE164, toWhatsappJid } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeDeviceScopedJid } from "../identity.js";
 
 const RECENT_WHATSAPP_MESSAGE_TTL_MS = 20 * 60_000;
 const RECENT_WHATSAPP_MESSAGE_MAX = 5000;
@@ -25,9 +27,10 @@ function buildMessageKey(params: {
   accountId: string;
   remoteJid: string;
   messageId: string | null | undefined;
+  authDir?: string;
 }): string | null {
   const accountId = params.accountId.trim();
-  const remoteJid = params.remoteJid.trim();
+  const remoteJid = canonicalizeRecentMessageJid(params.remoteJid, params.authDir);
   const messageId = params.messageId?.trim() || "";
   if (!accountId || !remoteJid || !messageId || messageId === "unknown") {
     return null;
@@ -35,12 +38,28 @@ function buildMessageKey(params: {
   return `${accountId}:${remoteJid}:${messageId}`;
 }
 
+function canonicalizeRecentMessageJid(remoteJid: string, authDir?: string): string {
+  const normalizedJid = normalizeDeviceScopedJid(remoteJid)?.trim() || "";
+  if (!normalizedJid) {
+    return "";
+  }
+  const e164 = jidToE164(normalizedJid, authDir ? { authDir } : undefined);
+  return e164 ? toWhatsappJid(e164) : normalizedJid;
+}
+
 function pruneRecentMessages(now: number): void {
-  const cutoff = now - RECENT_WHATSAPP_MESSAGE_TTL_MS;
-  for (const [key, entry] of state.messages) {
-    if (entry.seenAt < cutoff) {
-      state.messages.delete(key);
+  while (true) {
+    const oldest = state.messages.entries().next().value as
+      | [string, RecentMessageEntry]
+      | undefined;
+    if (!oldest) {
+      break;
     }
+    const [oldestKey, oldestEntry] = oldest;
+    if (now - oldestEntry.seenAt < RECENT_WHATSAPP_MESSAGE_TTL_MS) {
+      break;
+    }
+    state.messages.delete(oldestKey);
   }
   while (state.messages.size > RECENT_WHATSAPP_MESSAGE_MAX) {
     const oldestKey = state.messages.keys().next().value;
@@ -55,12 +74,14 @@ export function rememberRecentWhatsAppMessage(params: {
   accountId: string;
   remoteJid: string;
   message: WAMessage | null | undefined;
+  authDir?: string;
   now?: number;
 }): void {
   const key = buildMessageKey({
     accountId: params.accountId,
     remoteJid: params.remoteJid,
     messageId: params.message?.key?.id,
+    authDir: params.authDir,
   });
   if (!key || !params.message?.message) {
     return;
@@ -82,6 +103,7 @@ export function getRecentWhatsAppMessage(params: {
   accountId: string;
   remoteJid: string;
   messageId: string;
+  authDir?: string;
   now?: number;
 }): WAMessage | null {
   const key = buildMessageKey(params);
