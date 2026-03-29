@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   loadNodeHostConfig: vi.fn(),
@@ -11,6 +11,10 @@ vi.mock("../node-host/config.js", () => ({
 import { resolveNodeOnlyGatewayInfo } from "./status.node-mode.js";
 
 describe("resolveNodeOnlyGatewayInfo", () => {
+  beforeEach(() => {
+    mocks.loadNodeHostConfig.mockReset();
+  });
+
   it("returns node-only gateway details when no local gateway is installed", async () => {
     mocks.loadNodeHostConfig.mockResolvedValueOnce({
       version: 1,
@@ -59,5 +63,30 @@ describe("resolveNodeOnlyGatewayInfo", () => {
         },
       }),
     ).resolves.toBeNull();
+  });
+
+  it("falls back to an unknown gateway target when node-only config is missing", async () => {
+    mocks.loadNodeHostConfig.mockResolvedValueOnce(null);
+
+    await expect(
+      resolveNodeOnlyGatewayInfo({
+        daemon: { installed: false },
+        node: {
+          installed: true,
+          loaded: true,
+          externallyManaged: false,
+          runtimeShort: "running (pid 4321)",
+        },
+      }),
+    ).resolves.toEqual({
+      gatewayTarget: "(gateway address unknown)",
+      gatewayValue: "node → (gateway address unknown) · no local gateway",
+      connectionDetails: [
+        "Node-only mode detected",
+        "Local gateway: not expected on this machine",
+        "Remote gateway target: (gateway address unknown)",
+        "Inspect the remote gateway host for live channel and health details.",
+      ].join("\n"),
+    });
   });
 });

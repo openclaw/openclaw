@@ -1,3 +1,4 @@
+import { DEFAULT_GATEWAY_PORT } from "../config/paths.js";
 import { loadNodeHostConfig } from "../node-host/config.js";
 
 type NodeOnlyServiceLike = {
@@ -20,7 +21,9 @@ export type NodeOnlyGatewayInfo = {
 };
 
 function resolveNodeGatewayTarget(gateway?: { host?: string; port?: number }): string {
-  return gateway?.host ? `${gateway.host}:${gateway.port ?? 18789}` : "(gateway address unknown)";
+  return gateway?.host
+    ? `${gateway.host}:${gateway.port ?? DEFAULT_GATEWAY_PORT}`
+    : "(gateway address unknown)";
 }
 
 function hasRunningRuntime(
