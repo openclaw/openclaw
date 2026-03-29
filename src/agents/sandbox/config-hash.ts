@@ -41,12 +41,22 @@ function normalizeForHash(value: unknown): unknown {
   return value;
 }
 
+function resolveWorkspaceMountMode(access: SandboxWorkspaceAccess): "ro" | "rw" {
+  return access === "ro" ? "ro" : "rw";
+}
+
 export function computeSandboxConfigHash(input: SandboxHashInput): string {
-  return computeHash(input);
+  return computeHash({
+    ...input,
+    workspaceMountMode: resolveWorkspaceMountMode(input.workspaceAccess),
+  });
 }
 
 export function computeSandboxBrowserConfigHash(input: SandboxBrowserHashInput): string {
-  return computeHash(input);
+  return computeHash({
+    ...input,
+    workspaceMountMode: resolveWorkspaceMountMode(input.workspaceAccess),
+  });
 }
 
 function computeHash(input: unknown): string {

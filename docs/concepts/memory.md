@@ -88,7 +88,7 @@ Details:
 - **Two prompts**: a user prompt plus a system prompt append the reminder.
 - **One flush per compaction cycle** (tracked in `sessions.json`).
 - **Workspace must be writable**: if the session runs sandboxed with
-  `workspaceAccess: "ro"` or `"none"`, the flush is skipped.
+  `workspaceAccess: "ro"`, the flush is skipped.
 
 For the full compaction lifecycle, see
 [Session management + compaction](/reference/session-management-compaction).

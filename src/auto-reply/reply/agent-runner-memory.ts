@@ -480,7 +480,7 @@ export async function runMemoryFlushIfNeeded(params: {
       return true;
     }
     const sandboxCfg = resolveSandboxConfigForAgent(params.cfg, runtime.agentId);
-    return sandboxCfg.workspaceAccess === "rw";
+    return sandboxCfg.workspaceAccess !== "ro";
   })();
 
   const isCli = isCliProvider(params.followupRun.run.provider, params.cfg);
