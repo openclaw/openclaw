@@ -17,7 +17,7 @@ Use this skill for release and publish-time workflow. Keep ordinary development 
 
 ## Keep release channel naming aligned
 
-- `stable`: tagged releases only, with npm dist-tag `latest`
+- `stable`: tagged releases only, published to npm `latest` and then mirrored onto npm `beta` unless `beta` already points at a newer prerelease
 - `beta`: prerelease tags like `vYYYY.M.D-beta.N`, with npm dist-tag `beta`
 - Prefer `-beta.N`; do not mint new `-1` or `-2` beta suffixes
 - `dev`: moving head on `main`
