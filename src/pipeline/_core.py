@@ -452,7 +452,8 @@ class PipelineExecutor:
         brigade: str = "Dmarket",
         max_steps: int = 5,
         status_callback=None,
-        task_type: Optional[str] = None
+        task_type: Optional[str] = None,
+        shared_observations: dict = None
     ) -> Dict[str, Any]:
         """Execute the full pipeline for a brigade."""
 
@@ -596,13 +597,24 @@ class PipelineExecutor:
                     # П1/П2-fix: субтитры недоступны, но видео существует — сообщаем явно
                     _yt_metadata_only = True
                     _meta_ctx = yt_result.to_context()  # содержит "(Субтитры недоступны)"
+                    
+                    if status_callback:
+                        await status_callback("System", "youtube", "Поиск текстового описания видео в сети...")
+                    
+                    from src.research._searcher import web_search
+                    try:
+                        web_result = await web_search(self.openclaw_mcp or self.dmarket_mcp, yt_result.title + " transcript text")
+                        _meta_ctx += f"\n\n[Web Search Fallback for '{yt_result.title}']:\n{web_result}"
+                    except Exception as e:
+                        logger.warning("web_search fallback failed", error=str(e))
+                        
                     memory_context = (_meta_ctx + "\n\n" + memory_context) if memory_context else _meta_ctx
                     logger.warning("YouTube subtitles unavailable, metadata only",
                                    video_id=yt_result.video_id, title=yt_result.title)
                     if status_callback:
                         await status_callback("System", "youtube",
                             f"⚠️ Субтитры недоступны для видео «{yt_result.title}». "
-                            "Анализ по метаданным.")
+                            "Анализ по метаданным и Web Search.")
                 else:
                     logger.warning("YouTube fetch failed", error=yt_result.error)
         except Exception as _yt_err:
@@ -695,6 +707,10 @@ class PipelineExecutor:
                     f"Based on the above context and the previous step's analysis, "
                     f"perform your role as {role_name}."
                 )
+
+            if shared_observations:
+                shared_str = "\n".join(f"- {k}: {v[:1000]}..." for k, v in shared_observations.items())
+                step_prompt += f"\n\n[SHARED OBSERVATIONS (Parallel Subtasks)]\n{shared_str}"
 
             total_input_chars = len(system_prompt) + len(step_prompt)
             estimated_tokens = total_input_chars // 4
@@ -792,6 +808,9 @@ class PipelineExecutor:
                             _tc_results = await execute_parsed_tool_calls(
                                 _parsed_calls, active_mcp, self._sandbox,
                             )
+                            if shared_observations is not None:
+                                for call, tc_res in zip(_parsed_calls, _tc_results):
+                                    shared_observations[call.name] = (tc_res.output or tc_res.error or "")[:2000]
                             _observation = format_observations(_tc_results)
                             # Strip raw tool-call XML from response so user never sees it
                             response = strip_tool_calls(response, _parsed_calls)
@@ -1374,6 +1393,8 @@ class PipelineExecutor:
         if "[CURRENT TASK]:" in original_prompt:
             _history_block = original_prompt.split("[CURRENT TASK]:")[0] + "[CURRENT TASK]:\n"
 
+        shared_observations = {}
+
         async def _run_one(idx: int, text: str, brigade: str) -> Dict[str, Any]:
             if status_callback:
                 await status_callback(
@@ -1387,6 +1408,7 @@ class PipelineExecutor:
                 brigade=brigade,
                 max_steps=max_steps,
                 status_callback=status_callback,
+                shared_observations=shared_observations,
             )
 
         tasks = [

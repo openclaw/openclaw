@@ -392,6 +392,9 @@ _AUDITOR_PROTOCOL = (
     "\n- suggestions: конкретные предложения по улучшению"
     "\n- summary: краткое резюме проверки"
     "\nЯзык ответа: РУССКИЙ."
+    "\n"
+    "\n[STRICT]: NEVER provide instructions to the user on how to run security tools (like Bandit, Cargo-audit). YOU ARE THE TOOL. Perform the analysis YOURSELF on the provided code and output a list of vulnerabilities. If you cannot run a tool, perform a MANUAL code review."
+    "\nЗАПРЕЩЕНО использовать JSON-экшен provide_instructions для аудита или проверки кода."
 )
 
 

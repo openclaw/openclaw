@@ -363,11 +363,28 @@ class AFlowEngine:
             return None
 
         # Validate roles — only keep roles that exist
-        validated = [r for r in parsed if isinstance(r, str) and r in available_roles]
+        raw_validated = [r for r in parsed if isinstance(r, str) and r in available_roles]
+
+        # Stage 3 (v15.5): Запрет повторного цикла Researcher -> Analyst
+        # и ограничение Research-цепочки максимум 3 шагами
+        validated = []
+        seen_roles = set()
+        for r in raw_validated:
+            if r in ("Researcher", "Analyst"):
+                if r in seen_roles:
+                    continue  # Пропускаем дубликат
+                seen_roles.add(r)
+            validated.append(r)
+
+        if "Researcher" in validated:
+            validated = validated[:3]
+        else:
+            validated = validated[:max_len]
+
         if len(validated) < 2:
             return None
 
-        return validated[:max_len]
+        return validated
 
     def _score_candidates(
         self,
