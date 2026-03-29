@@ -338,6 +338,11 @@ interface TelnyxEvent {
     client_state?: string;
     text?: string;
     transcription?: string;
+    transcription_data?: {
+      transcript?: string;
+      is_final?: boolean;
+      confidence?: number;
+    };
     is_final?: boolean;
     confidence?: number;
     hangup_cause?: string;
