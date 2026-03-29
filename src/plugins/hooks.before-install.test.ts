@@ -29,13 +29,30 @@ function addBeforeInstallHook(
 const stubCtx: PluginHookBeforeInstallContext = {
   source: "openclaw-workspace",
   targetType: "skill",
+  requestKind: "skill-install",
 };
 
 const stubEvent: PluginHookBeforeInstallEvent = {
   targetName: "demo-skill",
   targetType: "skill",
-  sourceDir: "/tmp/demo-skill",
-  builtinFindings: [],
+  sourcePath: "/tmp/demo-skill",
+  sourcePathKind: "directory",
+  source: "openclaw-workspace",
+  request: {
+    kind: "skill-install",
+    mode: "install",
+  },
+  builtinScan: {
+    status: "ok",
+    scannedFiles: 1,
+    critical: 0,
+    warn: 0,
+    info: 0,
+    findings: [],
+  },
+  skill: {
+    installId: "deps",
+  },
 };
 
 describe("before_install hook merger", () => {
