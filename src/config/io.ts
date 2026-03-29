@@ -2075,10 +2075,15 @@ const AUTO_OWNER_DISPLAY_SECRET_PERSIST_IN_FLIGHT = new Set<string>();
 const AUTO_OWNER_DISPLAY_SECRET_PERSIST_WARNED = new Set<string>();
 let runtimeConfigSnapshot: OpenClawConfig | null = null;
 let runtimeConfigSourceSnapshot: OpenClawConfig | null = null;
+let runtimeConfigSnapshotPath: string | null = null;
 let runtimeConfigSnapshotRefreshHandler: RuntimeConfigSnapshotRefreshHandler | null = null;
 
 export function clearConfigCache(): void {
-  // Compat shim: runtime snapshot is the only in-process cache now.
+  resetConfigRuntimeState();
+}
+
+function resolveRuntimeConfigSnapshotPath(): string {
+  return resolveConfigPathForDeps(normalizeDeps({}));
 }
 
 export function setRuntimeConfigSnapshot(
@@ -2087,11 +2092,13 @@ export function setRuntimeConfigSnapshot(
 ): void {
   runtimeConfigSnapshot = config;
   runtimeConfigSourceSnapshot = sourceConfig ?? null;
+  runtimeConfigSnapshotPath = resolveRuntimeConfigSnapshotPath();
 }
 
 export function resetConfigRuntimeState(): void {
   runtimeConfigSnapshot = null;
   runtimeConfigSourceSnapshot = null;
+  runtimeConfigSnapshotPath = null;
 }
 
 export function clearRuntimeConfigSnapshot(): void {
@@ -2165,8 +2172,12 @@ export function setRuntimeConfigSnapshotRefreshHandler(
 }
 
 export function loadConfig(): OpenClawConfig {
-  if (runtimeConfigSnapshot) {
+  const currentSnapshotPath = resolveRuntimeConfigSnapshotPath();
+  if (runtimeConfigSnapshot && runtimeConfigSnapshotPath === currentSnapshotPath) {
     return runtimeConfigSnapshot;
+  }
+  if (runtimeConfigSnapshot) {
+    resetConfigRuntimeState();
   }
   const config = createConfigIO().loadConfig();
   // First successful load becomes the process snapshot. Long-lived runtimes

@@ -100,7 +100,7 @@ describe("nodes run: approval transport timeout (#12098)", () => {
     // parseTimeoutMs returns undefined for garbage input, ?? 0 ensures
     // Math.max picks the approval floor instead of producing NaN
     const transportTimeoutMs = Math.max(parseTimeoutMs("foo") ?? 0, approvalTimeoutMs + 10_000);
-    expect(transportTimeoutMs).toBe(130_000);
+    expect(transportTimeoutMs).toBe(approvalTimeoutMs + 10_000);
 
     await callGatewayCli(
       "exec.approval.request",
@@ -110,6 +110,6 @@ describe("nodes run: approval transport timeout (#12098)", () => {
     );
 
     const callOpts = callGatewaySpy.mock.calls[0][0];
-    expect(callOpts.timeoutMs).toBe(130_000);
+    expect(callOpts.timeoutMs).toBe(approvalTimeoutMs + 10_000);
   });
 });

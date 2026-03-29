@@ -808,6 +808,10 @@ export function createTaskRecord(params: {
     kind: "upserted",
     task: cloneTaskRecord(record),
   }));
+  // New records can already be terminal (for example restored ACP outcomes),
+  // so run the same delivery pipeline that update paths use.
+  void maybeDeliverTaskStateChangeUpdate(taskId);
+  void maybeDeliverTaskTerminalUpdate(taskId);
   return cloneTaskRecord(record);
 }
 

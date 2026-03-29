@@ -4,11 +4,7 @@ import {
   type ProviderAuthResult,
   type ProviderCatalogContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import {
-  MINIMAX_OAUTH_MARKER,
-  ensureAuthProfileStore,
-  listProfilesForProvider,
-} from "openclaw/plugin-sdk/provider-auth";
+import { MINIMAX_OAUTH_MARKER } from "openclaw/plugin-sdk/provider-auth";
 import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { fetchMinimaxUsage } from "openclaw/plugin-sdk/provider-usage";
@@ -68,13 +64,12 @@ function resolveApiCatalog(ctx: ProviderCatalogContext) {
 function resolvePortalCatalog(ctx: ProviderCatalogContext) {
   const explicitProvider = ctx.config.models?.providers?.[PORTAL_PROVIDER_ID];
   const envApiKey = ctx.resolveProviderApiKey(PORTAL_PROVIDER_ID).apiKey;
-  const authStore = ensureAuthProfileStore(ctx.agentDir, {
-    allowKeychainPrompt: false,
+  const resolvedAuth = ctx.resolveProviderAuth(PORTAL_PROVIDER_ID, {
+    oauthMarker: MINIMAX_OAUTH_MARKER,
   });
-  const hasProfiles = listProfilesForProvider(authStore, PORTAL_PROVIDER_ID).length > 0;
   const explicitApiKey =
     typeof explicitProvider?.apiKey === "string" ? explicitProvider.apiKey.trim() : undefined;
-  const apiKey = envApiKey ?? explicitApiKey ?? (hasProfiles ? MINIMAX_OAUTH_MARKER : undefined);
+  const apiKey = envApiKey ?? explicitApiKey ?? resolvedAuth.apiKey;
   if (!apiKey) {
     return null;
   }
