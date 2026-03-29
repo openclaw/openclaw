@@ -406,6 +406,11 @@ export async function runCronIsolatedAgentTurn(params: {
   // must not prevent the actual agent run from executing.
   cronSession.sessionEntry.modelProvider = provider;
   cronSession.sessionEntry.model = model;
+  // Also set providerOverride/modelOverride so live-model-switch detection
+  // sees the cron job's intended model and doesn't fall back to the agent
+  // default (which would cause a false LiveSessionModelSwitchError).
+  cronSession.sessionEntry.providerOverride = provider;
+  cronSession.sessionEntry.modelOverride = model;
   cronSession.sessionEntry.systemSent = true;
   try {
     await persistSessionEntry();

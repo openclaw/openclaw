@@ -128,24 +128,29 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
     expect(cronSession.sessionEntry.model).toBe("claude-sonnet-4-6");
     expect(cronSession.sessionEntry.modelProvider).toBe("anthropic");
     expect(cronSession.sessionEntry.systemSent).toBe(true);
+    // providerOverride/modelOverride must also be set so live-model-switch
+    // detection sees the cron model and doesn't fall back to agent default.
+    expect(cronSession.sessionEntry.providerOverride).toBe("anthropic");
+    expect(cronSession.sessionEntry.modelOverride).toBe("claude-sonnet-4-6");
   });
 
   it("session entry already carries cron model at pre-run persist time (race condition)", async () => {
     // Capture a deep snapshot of the session entry at each persist call so we
     // can inspect what sessions_list would see mid-run — before the post-run
     // persist overwrites the entry with the actual model from agentMeta.
-    const persistedSnapshots: Array<{
+    type SnapshotEntry = {
       model?: string;
       modelProvider?: string;
+      providerOverride?: string;
+      modelOverride?: string;
       systemSent?: boolean;
-    }> = [];
+    };
+    const persistedSnapshots: Array<SnapshotEntry> = [];
     updateSessionStoreMock.mockImplementation(
       async (_path: string, cb: (s: Record<string, unknown>) => void) => {
         const store: Record<string, unknown> = {};
         cb(store);
-        const entry = Object.values(store)[0] as
-          | { model?: string; modelProvider?: string; systemSent?: boolean }
-          | undefined;
+        const entry = Object.values(store)[0] as SnapshotEntry | undefined;
         if (entry) {
           persistedSnapshots.push(JSON.parse(JSON.stringify(entry)));
         }
@@ -164,6 +169,10 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
     expect(preRunSnapshot.model).toBe("claude-sonnet-4-6");
     expect(preRunSnapshot.modelProvider).toBe("anthropic");
     expect(preRunSnapshot.systemSent).toBe(true);
+    // providerOverride/modelOverride must appear before the run starts
+    // so concurrent live-model-switch checks don't trip on a false mismatch.
+    expect(preRunSnapshot.providerOverride).toBe("anthropic");
+    expect(preRunSnapshot.modelOverride).toBe("claude-sonnet-4-6");
   });
 
   it("returns error without persisting model when payload model is disallowed", async () => {
