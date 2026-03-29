@@ -1,3 +1,8 @@
+import {
+  redactSensitiveUrl,
+  redactSensitiveUrlLikeString,
+} from "../shared/net/redact-sensitive-url.js";
+
 type SseMcpServerLaunchConfig = {
   url: string;
   headers?: Record<string, string>;
@@ -51,14 +56,10 @@ export function resolveSseMcpServerLaunchConfig(
   try {
     parsed = new URL(url);
   } catch {
-    // Redact potential credentials and sensitive query params from the invalid URL.
-    const redactedUrl = url
-      .replace(/\/\/([^@]+)@/, "//***:***@")
-      .replace(
-        /([?&])(token|key|api_key|apikey|secret|access_token|password|pass|auth|client_secret|refresh_token)=([^&]*)/gi,
-        "$1$2=***",
-      );
-    return { ok: false, reason: `its url is not a valid URL: ${redactedUrl}` };
+    return {
+      ok: false,
+      reason: `its url is not a valid URL: ${redactSensitiveUrlLikeString(url)}`,
+    };
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     return {
@@ -85,35 +86,7 @@ export function resolveSseMcpServerLaunchConfig(
 }
 
 export function describeSseMcpServerLaunchConfig(config: SseMcpServerLaunchConfig): string {
-  try {
-    const parsed = new URL(config.url);
-    // Redact embedded credentials and query-token auth from log/description output.
-    if (parsed.username || parsed.password) {
-      parsed.username = parsed.username ? "***" : "";
-      parsed.password = parsed.password ? "***" : "";
-    }
-    for (const key of parsed.searchParams.keys()) {
-      const lower = key.toLowerCase();
-      if (
-        lower === "token" ||
-        lower === "key" ||
-        lower === "api_key" ||
-        lower === "apikey" ||
-        lower === "secret" ||
-        lower === "access_token" ||
-        lower === "password" ||
-        lower === "pass" ||
-        lower === "auth" ||
-        lower === "client_secret" ||
-        lower === "refresh_token"
-      ) {
-        parsed.searchParams.set(key, "***");
-      }
-    }
-    return parsed.toString();
-  } catch {
-    return config.url;
-  }
+  return redactSensitiveUrl(config.url);
 }
 
 export type { SseMcpServerLaunchConfig, SseMcpServerLaunchResult };
