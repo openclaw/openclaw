@@ -136,6 +136,29 @@ export function resolveSlackDeliveryThreadTs(params: {
   );
 }
 
+export function resolveTrackedSlackBlockReplyThreadTs(params: {
+  deliveredThreadTs?: string;
+  usedBlockReplyThreadTs?: string;
+  trackBlockReplyThreadTs?: boolean;
+}): string | undefined {
+  if (params.trackBlockReplyThreadTs && params.deliveredThreadTs) {
+    return params.deliveredThreadTs;
+  }
+  return params.usedBlockReplyThreadTs;
+}
+
+export function resolveSlackDraftPreviewThreadTs(params: {
+  replyToMode: "off" | "first" | "all";
+  plannedThreadTs?: string;
+  usedReplyThreadTs?: string;
+}): string | undefined {
+  return resolveSlackDeliveryThreadTs({
+    plannedThreadTs: params.plannedThreadTs,
+    usedReplyThreadTs: params.usedReplyThreadTs,
+    allowUsedReplyThreadTs: params.replyToMode === "all",
+  });
+}
+
 function shouldUseStreaming(params: {
   streamingEnabled: boolean;
   threadTs: string | undefined;
@@ -400,10 +423,12 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     // Record the thread ts only after confirmed delivery success.
     if (effectiveReplyThreadTs) {
       usedReplyThreadTs ??= effectiveReplyThreadTs;
-      if (options?.trackBlockReplyThreadTs) {
-        usedBlockReplyThreadTs ??= effectiveReplyThreadTs;
-      }
     }
+    usedBlockReplyThreadTs = resolveTrackedSlackBlockReplyThreadTs({
+      deliveredThreadTs: effectiveReplyThreadTs,
+      usedBlockReplyThreadTs,
+      trackBlockReplyThreadTs: options?.trackBlockReplyThreadTs,
+    });
     replyPlan.markSent();
   };
 
@@ -557,10 +582,10 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         accountId: account.accountId,
         maxChars: Math.min(ctx.textLimit, SLACK_TEXT_LIMIT),
         resolveThreadTs: () => {
-          const ts = resolveSlackDeliveryThreadTs({
+          const ts = resolveSlackDraftPreviewThreadTs({
+            replyToMode: prepared.replyToMode,
             plannedThreadTs: replyPlan.nextThreadTs(),
             usedReplyThreadTs: usedBlockReplyThreadTs,
-            allowUsedReplyThreadTs: true,
           });
           if (ts) {
             usedReplyThreadTs ??= ts;
