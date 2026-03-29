@@ -308,28 +308,21 @@ export function resolveMemoryBackendConfig(params: {
   const qmdCfg = params.cfg.memory?.qmd;
   const includeDefaultMemory = qmdCfg?.includeDefaultMemory !== false;
   const nameSet = new Set<string>();
-  // Read memorySearch.extraPaths (supports per-agent overrides via agents.list[].memorySearch)
-  // Merge defaults with agent-specific overrides
-  const searchDefaults = params.cfg.agents?.defaults?.memorySearch?.extraPaths ?? [];
-  let searchOverrides: string[] = [];
-  const agentList = params.cfg.agents?.list;
-  if (Array.isArray(agentList)) {
-    const agentEntry = agentList.find((a) => a?.id === params.agentId);
-    if (agentEntry?.memorySearch?.extraPaths) {
-      searchOverrides = agentEntry.memorySearch.extraPaths;
-    }
-  }
-  // Agent-specific overrides take priority
-  const mergedExtraPaths = [...searchDefaults, ...searchOverrides];
-  const searchExtraPaths = mergedExtraPaths
-    .filter((p): p is string => typeof p === "string" && p.trim().length > 0)
-    .map((p): { path: string; pattern?: string; name?: string } => ({ path: p.trim() }));
+  const agentEntry = params.cfg.agents?.list?.find((entry) => entry?.id === params.agentId);
+  const mergedExtraPaths = [
+    ...(params.cfg.agents?.defaults?.memorySearch?.extraPaths ?? []),
+    ...(agentEntry?.memorySearch?.extraPaths ?? []),
+  ]
+    .filter((value): value is string => typeof value === "string")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const dedupedExtraPaths = Array.from(new Set(mergedExtraPaths));
+  const searchExtraPaths = dedupedExtraPaths.map(
+    (pathValue): { path: string; pattern?: string; name?: string } => ({ path: pathValue }),
+  );
 
   // Combine QMD-specific paths with memorySearch extraPaths
-  const allQmdPaths = [
-    ...(qmdCfg?.paths ?? []),
-    ...searchExtraPaths,
-  ];
+  const allQmdPaths = [...(qmdCfg?.paths ?? []), ...searchExtraPaths];
 
   const collections = [
     ...resolveDefaultCollections(includeDefaultMemory, workspaceDir, nameSet, params.agentId),

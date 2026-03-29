@@ -145,33 +145,36 @@ describe("resolveMemoryBackendConfig", () => {
   });
 });
 
-
 describe("memorySearch.extraPaths integration", () => {
   it("maps agents.defaults.memorySearch.extraPaths to QMD collections", () => {
-    const cfg: Record<string, unknown> = {
+    const cfg = {
       memory: { backend: "qmd" },
       agents: {
         defaults: {
+          workspace: "/workspace/root",
           memorySearch: {
             extraPaths: ["/home/user/docs", "/home/user/vault"],
           },
         },
       },
-    };
+    } as OpenClawConfig;
     const result = resolveMemoryBackendConfig({ cfg, agentId: "test-agent" });
     expect(result.backend).toBe("qmd");
-    const qmd = result.qmd as Record<string, unknown>;
-    const customCollections = ((qmd.collections as Array<Record<string, unknown>>) ?? []).filter((c) => c.kind === "custom");
+    const customCollections = (result.qmd?.collections ?? []).filter(
+      (collection) => collection.kind === "custom",
+    );
     expect(customCollections.length).toBeGreaterThanOrEqual(2);
-    const names = customCollections.map((c) => c.name as string);
-    expect(names.some((n: string) => n.includes("custom"))).toBe(true);
+    expect(customCollections.map((collection) => collection.path)).toEqual(
+      expect.arrayContaining(["/home/user/docs", "/home/user/vault"]),
+    );
   });
 
-  it("per-agent memorySearch.extraPaths override takes priority over defaults", () => {
-    const cfg: Record<string, unknown> = {
+  it("merges default and per-agent memorySearch.extraPaths for QMD collections", () => {
+    const cfg = {
       memory: { backend: "qmd" },
       agents: {
         defaults: {
+          workspace: "/workspace/root",
           memorySearch: {
             extraPaths: ["/default/path"],
           },
@@ -185,21 +188,23 @@ describe("memorySearch.extraPaths integration", () => {
           },
         ],
       },
-    };
+    } as OpenClawConfig;
     const result = resolveMemoryBackendConfig({ cfg, agentId: "my-agent" });
     expect(result.backend).toBe("qmd");
-    const qmd = result.qmd as Record<string, unknown>;
-    const customCollections = ((qmd.collections as Array<Record<string, unknown>>) ?? []).filter((c) => c.kind === "custom");
-    const paths = customCollections.map((c) => c.path as string);
+    const customCollections = (result.qmd?.collections ?? []).filter(
+      (collection) => collection.kind === "custom",
+    );
+    const paths = customCollections.map((collection) => collection.path);
     expect(paths).toContain("/agent/specific/path");
-    expect(paths).toContain("/default/path"); // Both defaults and overrides are merged
+    expect(paths).toContain("/default/path");
   });
 
   it("falls back to defaults when agent has no overrides", () => {
-    const cfg: Record<string, unknown> = {
+    const cfg = {
       memory: { backend: "qmd" },
       agents: {
         defaults: {
+          workspace: "/workspace/root",
           memorySearch: {
             extraPaths: ["/default/path"],
           },
@@ -213,12 +218,44 @@ describe("memorySearch.extraPaths integration", () => {
           },
         ],
       },
-    };
+    } as OpenClawConfig;
     const result = resolveMemoryBackendConfig({ cfg, agentId: "my-agent" });
     expect(result.backend).toBe("qmd");
-    const qmd = result.qmd as Record<string, unknown>;
-    const customCollections = ((qmd.collections as Array<Record<string, unknown>>) ?? []).filter((c) => c.kind === "custom");
-    const paths = customCollections.map((c) => c.path as string);
+    const customCollections = (result.qmd?.collections ?? []).filter(
+      (collection) => collection.kind === "custom",
+    );
+    const paths = customCollections.map((collection) => collection.path);
     expect(paths).toContain("/default/path");
+  });
+
+  it("deduplicates merged memorySearch.extraPaths for QMD collections", () => {
+    const cfg = {
+      memory: { backend: "qmd" },
+      agents: {
+        defaults: {
+          workspace: "/workspace/root",
+          memorySearch: {
+            extraPaths: ["/shared/path", " /shared/path "],
+          },
+        },
+        list: [
+          {
+            id: "my-agent",
+            memorySearch: {
+              extraPaths: ["/shared/path", "/agent-only"],
+            },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    const result = resolveMemoryBackendConfig({ cfg, agentId: "my-agent" });
+    const customCollections = (result.qmd?.collections ?? []).filter(
+      (collection) => collection.kind === "custom",
+    );
+    const paths = customCollections.map((collection) => collection.path);
+
+    expect(paths.filter((collectionPath) => collectionPath === "/shared/path")).toHaveLength(1);
+    expect(paths).toContain("/agent-only");
   });
 });
