@@ -56,6 +56,26 @@ const SAME_CHANNEL_SDK_GUARDS: GuardedSource[] = [
     forbiddenPatterns: [/["']openclaw\/plugin-sdk\/telegram["']/, /plugin-sdk-internal\/telegram/],
   },
   {
+    path: bundledPluginFile("telegram", "src/account-inspect.ts"),
+    forbiddenPatterns: [/["']openclaw\/plugin-sdk\/account-resolution["']/],
+  },
+  {
+    path: bundledPluginFile("telegram", "src/accounts.ts"),
+    forbiddenPatterns: [/["']openclaw\/plugin-sdk\/account-resolution["']/],
+  },
+  {
+    path: bundledPluginFile("telegram", "src/token.ts"),
+    forbiddenPatterns: [/["']openclaw\/plugin-sdk\/account-resolution["']/],
+  },
+  {
+    path: bundledPluginFile("telegram", "src/channel.ts"),
+    forbiddenPatterns: [/["']\.\.\/runtime-api\.js["']/],
+  },
+  {
+    path: bundledPluginFile("telegram", "src/action-runtime.ts"),
+    forbiddenPatterns: [/["']\.\.\/runtime-api\.js["']/],
+  },
+  {
     path: bundledPluginFile("imessage", "src/shared.ts"),
     forbiddenPatterns: [/["']openclaw\/plugin-sdk\/imessage["']/, /plugin-sdk-internal\/imessage/],
   },
