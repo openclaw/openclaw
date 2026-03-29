@@ -432,13 +432,14 @@ export function resolveToolPathAgainstWorkspaceRoot(params: {
 }): string {
   const mapped = mapContainerPathToWorkspaceRoot(params);
   const candidate = mapped.startsWith("@") ? mapped.slice(1) : mapped;
-  if (isWindowsDrivePath(candidate)) {
-    return path.win32.normalize(candidate);
+  const expanded = candidate.startsWith("~") ? expandHomePrefix(candidate) : candidate;
+  if (isWindowsDrivePath(expanded)) {
+    return path.win32.normalize(expanded);
   }
-  if (path.isAbsolute(candidate)) {
-    return path.resolve(candidate);
+  if (path.isAbsolute(expanded)) {
+    return path.resolve(expanded);
   }
-  return path.resolve(params.root, candidate || ".");
+  return path.resolve(params.root, expanded || ".");
 }
 
 type MemoryFlushAppendOnlyWriteOptions = {

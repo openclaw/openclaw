@@ -1,13 +1,18 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   assertAliasSafe,
   validatePathAgainstRoots,
   findMatchingRoot,
+  wrapToolMultiRootGuard,
   type FsRootResolved,
 } from "./pi-tools.multi-root-guard.js";
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 function makeRoots(
   ...entries: Array<{ path: string; kind: "dir" | "file"; access: "ro" | "rw" }>
@@ -289,4 +294,39 @@ describe("assertAliasSafe", () => {
       );
     },
   );
+});
+
+describe("wrapToolMultiRootGuard", () => {
+  it("expands home-relative paths before validating fs roots", async () => {
+    await withTempDir({ prefix: "openclaw-fs-roots-", parentDir: process.cwd() }, async (root) => {
+      const homeDir = path.join(root, "home");
+      const workspaceDir = path.join(root, "workspace");
+      const sharedDir = path.join(homeDir, "shared");
+      await fs.mkdir(sharedDir, { recursive: true });
+      await fs.mkdir(workspaceDir, { recursive: true });
+
+      vi.stubEnv("HOME", homeDir);
+      vi.stubEnv("OPENCLAW_HOME", "");
+
+      const execute = vi.fn(async () => ({
+        content: [{ type: "text", text: "ok" }] as const,
+        isError: false,
+      }));
+      const wrapped = wrapToolMultiRootGuard(
+        {
+          name: "read",
+          description: "read",
+          inputSchema: { type: "object" },
+          execute,
+        } as never,
+        workspaceDir,
+        makeRoots({ path: sharedDir, kind: "dir", access: "rw" }),
+      );
+
+      await expect(
+        wrapped.execute("tc-home-root", { path: "~/shared/file.txt" }, undefined, undefined),
+      ).resolves.toMatchObject({ isError: false });
+      expect(execute).toHaveBeenCalledOnce();
+    });
+  });
 });
