@@ -35,7 +35,7 @@ import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { sendJson, setSseHeaders, writeDone } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
-import { getHeader, resolveGatewayRequestContext } from "./http-utils.js";
+import { resolveGatewayRequestContext } from "./http-utils.js";
 import { normalizeInputHostnameAllowlist } from "./input-allowlist.js";
 import {
   CreateResponseBodySchema,
@@ -54,143 +54,11 @@ type OpenResponsesHttpOptions = {
   trustedProxies?: string[];
   allowRealIpFallback?: boolean;
   rateLimiter?: AuthRateLimiter;
+  gatewayMode?: "local" | "remote";
 };
 
 const DEFAULT_BODY_BYTES = 20 * 1024 * 1024;
 const DEFAULT_MAX_URL_PARTS = 8;
-
-// In-memory map from responseId -> sessionKey for previous_response_id continuity.
-// Entries are evicted after 30 minutes to bound memory usage.
-const RESPONSE_SESSION_TTL_MS = 30 * 60 * 1000;
-const MAX_RESPONSE_SESSION_ENTRIES = 500;
-type ResponseSessionScope = {
-  agentId: string;
-  user?: string;
-  requestedSessionKey?: string;
-};
-
-type ResponseSessionEntry = ResponseSessionScope & {
-  sessionKey: string;
-  ts: number;
-};
-
-const responseSessionMap = new Map<string, ResponseSessionEntry>();
-
-function normalizeResponseSessionScope(scope: ResponseSessionScope): ResponseSessionScope {
-  const user = scope.user?.trim();
-  const requestedSessionKey = scope.requestedSessionKey?.trim();
-  return {
-    agentId: scope.agentId,
-    user: user || undefined,
-    requestedSessionKey: requestedSessionKey || undefined,
-  };
-}
-
-function createResponseSessionScope(params: {
-  req: IncomingMessage;
-  agentId: string;
-  user?: string;
-}): ResponseSessionScope {
-  return normalizeResponseSessionScope({
-    agentId: params.agentId,
-    user: params.user,
-    requestedSessionKey: getHeader(params.req, "x-openclaw-session-key"),
-  });
-}
-
-function matchesResponseSessionScope(
-  entry: ResponseSessionEntry,
-  scope: ResponseSessionScope,
-): boolean {
-  return (
-    entry.agentId === scope.agentId &&
-    entry.user === scope.user &&
-    entry.requestedSessionKey === scope.requestedSessionKey
-  );
-}
-
-function pruneExpiredResponseSessions(now: number) {
-  while (responseSessionMap.size > 0) {
-    const oldest = responseSessionMap.entries().next().value;
-    if (!oldest) {
-      return;
-    }
-    const [oldestKey, oldestValue] = oldest;
-    if (now - oldestValue.ts <= RESPONSE_SESSION_TTL_MS) {
-      return;
-    }
-    responseSessionMap.delete(oldestKey);
-  }
-}
-
-function evictOverflowResponseSessions() {
-  while (responseSessionMap.size > MAX_RESPONSE_SESSION_ENTRIES) {
-    const oldestKey = responseSessionMap.keys().next().value;
-    if (!oldestKey) {
-      return;
-    }
-    responseSessionMap.delete(oldestKey);
-  }
-}
-
-function storeResponseSession(
-  responseId: string,
-  sessionKey: string,
-  scope: ResponseSessionScope,
-  now = Date.now(),
-) {
-  // Reinsert existing keys so the map stays ordered by freshest timestamp.
-  responseSessionMap.delete(responseId);
-  responseSessionMap.set(responseId, { ...scope, sessionKey, ts: now });
-  pruneExpiredResponseSessions(now);
-  evictOverflowResponseSessions();
-}
-
-function lookupResponseSession(
-  responseId: string | undefined,
-  scope: ResponseSessionScope,
-  now = Date.now(),
-): string | undefined {
-  if (!responseId) {
-    return undefined;
-  }
-  const entry = responseSessionMap.get(responseId);
-  if (!entry) {
-    return undefined;
-  }
-  if (now - entry.ts > RESPONSE_SESSION_TTL_MS) {
-    responseSessionMap.delete(responseId);
-    return undefined;
-  }
-  if (!matchesResponseSessionScope(entry, scope)) {
-    return undefined;
-  }
-  return entry.sessionKey;
-}
-
-export const __testing = {
-  resetResponseSessionState() {
-    responseSessionMap.clear();
-  },
-  storeResponseSessionAt(
-    responseId: string,
-    sessionKey: string,
-    now: number,
-    scope: ResponseSessionScope = { agentId: "main" },
-  ) {
-    storeResponseSession(responseId, sessionKey, normalizeResponseSessionScope(scope), now);
-  },
-  lookupResponseSessionAt(
-    responseId: string | undefined,
-    now: number,
-    scope: ResponseSessionScope = { agentId: "main" },
-  ) {
-    return lookupResponseSession(responseId, normalizeResponseSessionScope(scope), now);
-  },
-  getResponseSessionIds() {
-    return [...responseSessionMap.keys()];
-  },
-};
 
 function writeSseEvent(res: ServerResponse, event: StreamingEvent) {
   res.write(`event: ${event.type}\n`);
@@ -206,6 +74,7 @@ type ResolvedResponsesLimits = {
 
 function resolveResponsesLimits(
   config: GatewayHttpResponsesConfig | undefined,
+  gatewayMode: "local" | "remote" = "local",
 ): ResolvedResponsesLimits {
   const files = config?.files;
   const images = config?.images;
@@ -218,10 +87,12 @@ function resolveResponsesLimits(
         : DEFAULT_MAX_URL_PARTS,
     files: {
       ...fileLimits,
+      allowPrivateNetwork: files?.allowPrivateNetwork ?? gatewayMode === "local",
       urlAllowlist: normalizeInputHostnameAllowlist(files?.urlAllowlist),
     },
     images: {
       allowUrl: images?.allowUrl ?? true,
+      allowPrivateNetwork: images?.allowPrivateNetwork ?? gatewayMode === "local",
       urlAllowlist: normalizeInputHostnameAllowlist(images?.urlAllowlist),
       allowedMimes: normalizeMimeList(images?.allowedMimes, DEFAULT_INPUT_IMAGE_MIMES),
       maxBytes: images?.maxBytes ?? DEFAULT_INPUT_IMAGE_MAX_BYTES,
@@ -365,23 +236,6 @@ function createAssistantOutputItem(params: {
   };
 }
 
-function createFunctionCallOutputItem(params: {
-  id: string;
-  callId: string;
-  name: string;
-  arguments: string;
-  status?: "in_progress" | "completed";
-}): OutputItem {
-  return {
-    type: "function_call",
-    id: params.id,
-    call_id: params.callId,
-    name: params.name,
-    arguments: params.arguments,
-    status: params.status,
-  };
-}
-
 async function runResponsesAgentCommand(params: {
   message: string;
   images: ImageContent[];
@@ -419,7 +273,7 @@ export async function handleOpenResponsesHttpRequest(
   res: ServerResponse,
   opts: OpenResponsesHttpOptions,
 ): Promise<boolean> {
-  const limits = resolveResponsesLimits(opts.config);
+  const limits = resolveResponsesLimits(opts.config, opts.gatewayMode);
   const maxBodyBytes =
     opts.maxBodyBytes ??
     (opts.config?.maxBodyBytes
@@ -587,7 +441,7 @@ export async function handleOpenResponsesHttpRequest(
     });
     return true;
   }
-  const resolved = resolveGatewayRequestContext({
+  const { sessionKey, messageChannel } = resolveGatewayRequestContext({
     req,
     model,
     user,
@@ -595,19 +449,6 @@ export async function handleOpenResponsesHttpRequest(
     defaultMessageChannel: "webchat",
     useMessageChannelHeader: false,
   });
-  const responseSessionScope = createResponseSessionScope({
-    req,
-    agentId: resolved.agentId,
-    user,
-  });
-  // Resolve session key: reuse previous_response_id only when it matches the
-  // same agent/user/requested-session scope as the current request.
-  const previousSessionKey = lookupResponseSession(
-    payload.previous_response_id,
-    responseSessionScope,
-  );
-  const sessionKey = previousSessionKey ?? resolved.sessionKey;
-  const messageChannel = resolved.messageChannel;
 
   // Build prompt from input
   const prompt = buildAgentPrompt(payload.input);
@@ -636,8 +477,6 @@ export async function handleOpenResponsesHttpRequest(
   }
 
   const responseId = `resp_${randomUUID()}`;
-  const rememberResponseSession = () =>
-    storeResponseSession(responseId, sessionKey, responseSessionScope);
   const outputItemId = `msg_${randomUUID()}`;
   const deps = createDefaultDeps();
   const streamParams =
@@ -664,46 +503,25 @@ export async function handleOpenResponsesHttpRequest(
       const meta = (result as { meta?: unknown } | null)?.meta;
       const { stopReason, pendingToolCalls } = resolveStopReasonAndPendingToolCalls(meta);
 
-      // If agent called a client tool, return function_call (and any assistant text) to caller
+      // If agent called a client tool, return function_call instead of text
       if (stopReason === "tool_calls" && pendingToolCalls && pendingToolCalls.length > 0) {
         const functionCall = pendingToolCalls[0];
         const functionCallItemId = `call_${randomUUID()}`;
-
-        const assistantText =
-          Array.isArray(payloads) && payloads.length > 0
-            ? payloads
-                .map((p) => (typeof p.text === "string" ? p.text : ""))
-                .filter(Boolean)
-                .join("\n\n")
-            : "";
-
-        const output: OutputItem[] = [];
-        if (assistantText) {
-          output.push(
-            createAssistantOutputItem({
-              id: outputItemId,
-              text: assistantText,
-              status: "completed",
-            }),
-          );
-        }
-        output.push(
-          createFunctionCallOutputItem({
-            id: functionCallItemId,
-            callId: functionCall.id,
-            name: functionCall.name,
-            arguments: functionCall.arguments,
-          }),
-        );
-
         const response = createResponseResource({
           id: responseId,
           model,
           status: "incomplete",
-          output,
+          output: [
+            {
+              type: "function_call",
+              id: functionCallItemId,
+              call_id: functionCall.id,
+              name: functionCall.name,
+              arguments: functionCall.arguments,
+            },
+          ],
           usage,
         });
-        rememberResponseSession();
         sendJson(res, 200, response);
         return true;
       }
@@ -726,7 +544,6 @@ export async function handleOpenResponsesHttpRequest(
         usage,
       });
 
-      rememberResponseSession();
       sendJson(res, 200, response);
     } catch (err) {
       logWarn(`openresponses: non-stream response failed: ${String(err)}`);
@@ -737,7 +554,6 @@ export async function handleOpenResponsesHttpRequest(
         output: [],
         error: { code: "api_error", message: "internal error" },
       });
-      rememberResponseSession();
       sendJson(res, 500, response);
     }
     return true;
@@ -807,7 +623,6 @@ export async function handleOpenResponsesHttpRequest(
       usage,
     });
 
-    rememberResponseSession();
     writeSseEvent(res, { type: "response.completed", response: finalResponse });
     writeDone(res);
     res.end();
@@ -911,106 +726,84 @@ export async function handleOpenResponsesHttpRequest(
       });
 
       finalUsage = extractUsageFromResult(result);
-
-      // Check for pending client tool calls BEFORE maybeFinalize() because the
-      // lifecycle:end event may already have requested finalization.
-      const resultAny = result as { payloads?: Array<{ text?: string }>; meta?: unknown };
-      const meta = resultAny.meta;
-      const { stopReason, pendingToolCalls } = resolveStopReasonAndPendingToolCalls(meta);
-
-      if (
-        !closed &&
-        stopReason === "tool_calls" &&
-        pendingToolCalls &&
-        pendingToolCalls.length > 0
-      ) {
-        const functionCall = pendingToolCalls[0];
-        const usage = finalUsage ?? createEmptyUsage();
-        const finalText =
-          accumulatedText ||
-          (Array.isArray(resultAny.payloads)
-            ? resultAny.payloads
-                .map((p) => (typeof p.text === "string" ? p.text : ""))
-                .filter(Boolean)
-                .join("\n\n")
-            : "");
-
-        writeSseEvent(res, {
-          type: "response.output_text.done",
-          item_id: outputItemId,
-          output_index: 0,
-          content_index: 0,
-          text: finalText,
-        });
-        writeSseEvent(res, {
-          type: "response.content_part.done",
-          item_id: outputItemId,
-          output_index: 0,
-          content_index: 0,
-          part: { type: "output_text", text: finalText },
-        });
-
-        const completedItem = createAssistantOutputItem({
-          id: outputItemId,
-          text: finalText,
-          status: "completed",
-        });
-        writeSseEvent(res, {
-          type: "response.output_item.done",
-          output_index: 0,
-          item: completedItem,
-        });
-
-        const functionCallItemId = `call_${randomUUID()}`;
-        const functionCallItem = createFunctionCallOutputItem({
-          id: functionCallItemId,
-          callId: functionCall.id,
-          name: functionCall.name,
-          arguments: functionCall.arguments,
-        });
-        writeSseEvent(res, {
-          type: "response.output_item.added",
-          output_index: 1,
-          item: functionCallItem,
-        });
-        const completedFunctionCallItem = createFunctionCallOutputItem({
-          id: functionCallItemId,
-          callId: functionCall.id,
-          name: functionCall.name,
-          arguments: functionCall.arguments,
-          status: "completed",
-        });
-        writeSseEvent(res, {
-          type: "response.output_item.done",
-          output_index: 1,
-          item: completedFunctionCallItem,
-        });
-
-        const incompleteResponse = createResponseResource({
-          id: responseId,
-          model,
-          status: "incomplete",
-          output: [completedItem, functionCallItem],
-          usage,
-        });
-        closed = true;
-        unsubscribe();
-        rememberResponseSession();
-        writeSseEvent(res, { type: "response.completed", response: incompleteResponse });
-        writeDone(res);
-        res.end();
-        return;
-      }
-
       maybeFinalize();
 
       if (closed) {
         return;
       }
 
-      // Fallback: if no streaming deltas were received, send the full response as text
+      // Fallback: if no streaming deltas were received, send the full response
       if (!sawAssistantDelta) {
+        const resultAny = result as { payloads?: Array<{ text?: string }>; meta?: unknown };
         const payloads = resultAny.payloads;
+        const meta = resultAny.meta;
+        const { stopReason, pendingToolCalls } = resolveStopReasonAndPendingToolCalls(meta);
+
+        // If agent called a client tool, emit function_call instead of text
+        if (stopReason === "tool_calls" && pendingToolCalls && pendingToolCalls.length > 0) {
+          const functionCall = pendingToolCalls[0];
+          const usage = finalUsage ?? createEmptyUsage();
+
+          writeSseEvent(res, {
+            type: "response.output_text.done",
+            item_id: outputItemId,
+            output_index: 0,
+            content_index: 0,
+            text: "",
+          });
+          writeSseEvent(res, {
+            type: "response.content_part.done",
+            item_id: outputItemId,
+            output_index: 0,
+            content_index: 0,
+            part: { type: "output_text", text: "" },
+          });
+
+          const completedItem = createAssistantOutputItem({
+            id: outputItemId,
+            text: "",
+            status: "completed",
+          });
+          writeSseEvent(res, {
+            type: "response.output_item.done",
+            output_index: 0,
+            item: completedItem,
+          });
+
+          const functionCallItemId = `call_${randomUUID()}`;
+          const functionCallItem = {
+            type: "function_call" as const,
+            id: functionCallItemId,
+            call_id: functionCall.id,
+            name: functionCall.name,
+            arguments: functionCall.arguments,
+          };
+          writeSseEvent(res, {
+            type: "response.output_item.added",
+            output_index: 1,
+            item: functionCallItem,
+          });
+          writeSseEvent(res, {
+            type: "response.output_item.done",
+            output_index: 1,
+            item: { ...functionCallItem, status: "completed" as const },
+          });
+
+          const incompleteResponse = createResponseResource({
+            id: responseId,
+            model,
+            status: "incomplete",
+            output: [completedItem, functionCallItem],
+            usage,
+          });
+          closed = true;
+          unsubscribe();
+          writeSseEvent(res, { type: "response.completed", response: incompleteResponse });
+          writeDone(res);
+          res.end();
+          return;
+        }
+
         const content =
           Array.isArray(payloads) && payloads.length > 0
             ? payloads
@@ -1046,7 +839,6 @@ export async function handleOpenResponsesHttpRequest(
         usage: finalUsage,
       });
 
-      rememberResponseSession();
       writeSseEvent(res, { type: "response.failed", response: errorResponse });
       emitAgentEvent({
         runId: responseId,

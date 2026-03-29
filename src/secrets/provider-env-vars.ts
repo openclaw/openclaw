@@ -7,6 +7,7 @@ const CORE_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {
   deepgram: ["DEEPGRAM_API_KEY"],
   cerebras: ["CEREBRAS_API_KEY"],
   litellm: ["LITELLM_API_KEY"],
+  owl: ["OWL_API_KEY"],
 } as const;
 
 const CORE_PROVIDER_SETUP_ENV_VAR_OVERRIDES = {
@@ -40,13 +41,6 @@ export const PROVIDER_ENV_VARS: Record<string, readonly string[]> = {
   ...PROVIDER_AUTH_ENV_VAR_CANDIDATES,
   ...CORE_PROVIDER_SETUP_ENV_VAR_OVERRIDES,
 };
-
-export function getProviderEnvVars(providerId: string): string[] {
-  const envVars = Object.hasOwn(PROVIDER_ENV_VARS, providerId)
-    ? PROVIDER_ENV_VARS[providerId]
-    : undefined;
-  return Array.isArray(envVars) ? [...envVars] : [];
-}
 
 const EXTRA_PROVIDER_AUTH_ENV_VARS = ["MINIMAX_CODE_PLAN_KEY"] as const;
 

@@ -1,19 +1,11 @@
-import type { OpenClawConfig } from "../config/config.js";
-import { coerceSecretRef, resolveSecretInputRef } from "../config/types.secrets.js";
+import { buildAnthropicVertexProvider } from "../../extensions/anthropic-vertex/provider-catalog.js";
 import {
-  buildAnthropicVertexProvider,
-  buildKimiCodingProvider,
-  buildKilocodeProvider,
-  buildModelStudioProvider,
-  buildNvidiaProvider,
   QIANFAN_BASE_URL,
   QIANFAN_DEFAULT_MODEL_ID,
-  buildQianfanProvider,
-  MODELSTUDIO_BASE_URL,
-  MODELSTUDIO_DEFAULT_MODEL_ID,
-  XIAOMI_DEFAULT_MODEL_ID,
-  buildXiaomiProvider,
-} from "../plugin-sdk/provider-catalog.js";
+} from "../../extensions/qianfan/provider-catalog.js";
+import { XIAOMI_DEFAULT_MODEL_ID } from "../../extensions/xiaomi/provider-catalog.js";
+import type { OpenClawConfig } from "../config/config.js";
+import { coerceSecretRef, resolveSecretInputRef } from "../config/types.secrets.js";
 import { isRecord } from "../utils.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { hasAnthropicVertexAvailableAuth } from "./anthropic-vertex-provider.js";
@@ -21,19 +13,29 @@ import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles
 import { discoverBedrockModels } from "./bedrock-discovery.js";
 import { normalizeGoogleModelId, normalizeXaiModelId } from "./model-id-normalization.js";
 import { resolveOllamaApiBase } from "./models-config.providers.discovery.js";
+export { buildKimiCodingProvider } from "../../extensions/kimi-coding/provider-catalog.js";
+export { buildKilocodeProvider } from "../../extensions/kilocode/provider-catalog.js";
 export {
-  buildKimiCodingProvider,
-  buildKilocodeProvider,
   MODELSTUDIO_BASE_URL,
   MODELSTUDIO_DEFAULT_MODEL_ID,
   buildModelStudioProvider,
-  buildNvidiaProvider,
+} from "../../extensions/modelstudio/provider-catalog.js";
+export { buildNvidiaProvider } from "../../extensions/nvidia/provider-catalog.js";
+export {
   QIANFAN_BASE_URL,
   QIANFAN_DEFAULT_MODEL_ID,
   buildQianfanProvider,
+} from "../../extensions/qianfan/provider-catalog.js";
+export {
   XIAOMI_DEFAULT_MODEL_ID,
   buildXiaomiProvider,
-} from "../plugin-sdk/provider-catalog.js";
+} from "../../extensions/xiaomi/provider-catalog.js";
+import {
+  buildOwlProvider,
+  OWL_BASE_URL,
+  OWL_DEFAULT_MODEL_ID,
+} from "./models-config.providers.static.js";
+export { buildOwlProvider, OWL_BASE_URL, OWL_DEFAULT_MODEL_ID };
 import {
   groupPluginDiscoveryProvidersByOrder,
   normalizePluginDiscoveryResult,
@@ -65,8 +67,6 @@ const MOONSHOT_NATIVE_BASE_URLS = new Set([
 const MODELSTUDIO_NATIVE_BASE_URLS = new Set([
   "https://coding-intl.dashscope.aliyuncs.com/v1",
   "https://coding.dashscope.aliyuncs.com/v1",
-  "https://dashscope.aliyuncs.com/compatible-mode/v1",
-  "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
 ]);
 
 const ENV_VAR_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;
@@ -836,6 +836,11 @@ export async function resolveImplicitProviders(
               : implicitAnthropicVertex.models,
         }
       : implicitAnthropicVertex;
+  }
+
+  const owlApiKey = resolveProviderApiKey("owl").apiKey;
+  if (owlApiKey && !providers["owl"]) {
+    providers["owl"] = { ...buildOwlProvider(), apiKey: owlApiKey };
   }
 
   return providers;

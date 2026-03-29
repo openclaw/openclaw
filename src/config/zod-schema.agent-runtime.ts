@@ -268,6 +268,7 @@ export const ToolsWebSearchSchema = z
     timeoutSeconds: z.number().int().positive().optional(),
     cacheTtlMinutes: z.number().nonnegative().optional(),
     apiKey: SecretInputSchema.optional().register(sensitive),
+    allowPrivateNetwork: z.boolean().optional(),
     brave: z
       .object({
         apiKey: SecretInputSchema.optional().register(sensitive),
@@ -288,7 +289,6 @@ export const ToolsWebSearchSchema = z
     gemini: z
       .object({
         apiKey: SecretInputSchema.optional().register(sensitive),
-        baseUrl: z.string().optional(),
         model: z.string().optional(),
       })
       .strict()
@@ -318,6 +318,19 @@ export const ToolsWebSearchSchema = z
       })
       .strict()
       .optional(),
+    tavily: z
+      .object({
+        apiKey: SecretInputSchema.optional().register(sensitive),
+      })
+      .strict()
+      .optional(),
+    searxng: z
+      .object({
+        baseUrl: z.string().optional(),
+        apiKey: SecretInputSchema.optional().register(sensitive),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .optional();
@@ -332,6 +345,7 @@ export const ToolsWebFetchSchema = z
     maxRedirects: z.number().int().nonnegative().optional(),
     userAgent: z.string().optional(),
     readability: z.boolean().optional(),
+    allowPrivateNetwork: z.boolean().optional(),
     firecrawl: z
       .object({
         enabled: z.boolean().optional(),
@@ -423,7 +437,6 @@ const ToolExecBaseShape = {
   node: z.string().optional(),
   pathPrepend: z.array(z.string()).optional(),
   safeBins: z.array(z.string()).optional(),
-  strictInlineEval: z.boolean().optional(),
   safeBinTrustedDirs: z.array(z.string()).optional(),
   safeBinProfiles: z.record(z.string(), ToolExecSafeBinProfileSchema).optional(),
   backgroundMs: z.number().int().positive().optional(),

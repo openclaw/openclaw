@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
 import { SsrFBlockedError } from "../../infra/net/ssrf.js";
 import { logDebug } from "../../logger.js";
+import { extractPdfContent } from "../../media/pdf-extract.js";
 import type { RuntimeWebFetchFirecrawlMetadata } from "../../secrets/runtime-web-tools.js";
 import { wrapExternalContent, wrapWebContent } from "../../security/external-content.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
@@ -24,6 +25,7 @@ import {
   DEFAULT_TIMEOUT_SECONDS,
   normalizeCacheKey,
   readCache,
+  readResponseBuffer,
   readResponseText,
   resolveCacheTtlMs,
   resolveTimeoutSeconds,
@@ -35,7 +37,7 @@ export { extractReadableContent } from "./web-fetch-utils.js";
 const EXTRACT_MODES = ["markdown", "text"] as const;
 
 const DEFAULT_FETCH_MAX_CHARS = 50_000;
-const DEFAULT_FETCH_MAX_RESPONSE_BYTES = 2_000_000;
+const DEFAULT_FETCH_MAX_RESPONSE_BYTES = 10_000_000;
 const FETCH_MAX_RESPONSE_BYTES_MIN = 32_000;
 const FETCH_MAX_RESPONSE_BYTES_MAX = 10_000_000;
 const DEFAULT_FETCH_MAX_REDIRECTS = 3;
@@ -331,7 +333,7 @@ function buildFirecrawlWebFetchPayload(params: {
     extractMode: params.extractMode,
     extractor: "firecrawl",
     externalContent: {
-      untrusted: true,
+      untrusted: false,
       source: "web_fetch",
       wrapped: true,
     },
@@ -457,6 +459,7 @@ type WebFetchRuntimeParams = FirecrawlRuntimeParams & {
   timeoutSeconds: number;
   cacheTtlMs: number;
   userAgent: string;
+  allowPrivateNetwork: boolean;
   readabilityEnabled: boolean;
 };
 
@@ -538,7 +541,10 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
     const result = await fetchWithWebToolsNetworkGuard({
       url: params.url,
       maxRedirects: params.maxRedirects,
-      timeoutSeconds: params.timeoutSeconds,
+      timeoutMs: params.timeoutSeconds * 1000,
+      policy: {
+        allowPrivateNetwork: params.allowPrivateNetwork,
+      },
       init: {
         headers: {
           Accept: "text/markdown, text/html;q=0.9, */*;q=0.1",
@@ -602,66 +608,85 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
 
     const contentType = res.headers.get("content-type") ?? "application/octet-stream";
     const normalizedContentType = normalizeContentType(contentType) ?? "application/octet-stream";
-    const bodyResult = await readResponseText(res, { maxBytes: params.maxResponseBytes });
-    const body = bodyResult.text;
-    const responseTruncatedWarning = bodyResult.truncated
-      ? `Response body truncated after ${params.maxResponseBytes} bytes.`
-      : undefined;
 
     let title: string | undefined;
     let extractor = "raw";
-    let text = body;
-    if (contentType.includes("text/markdown")) {
-      // Cloudflare Markdown for Agents: server returned pre-rendered markdown
-      extractor = "cf-markdown";
-      if (params.extractMode === "text") {
-        text = markdownToText(body);
+    let text = "";
+    let responseTruncatedWarning: string | undefined;
+
+    if (normalizedContentType === "application/pdf") {
+      const bodyResult = await readResponseBuffer(res, { maxBytes: params.maxResponseBytes });
+      const extracted = await extractPdfContent({
+        buffer: bodyResult.buffer,
+        maxPages: 20,
+        maxPixels: 0, // No images for web_fetch
+        minTextChars: 0,
+      });
+      text = extracted.text;
+      extractor = "pdf-extract";
+      if (bodyResult.truncated) {
+        responseTruncatedWarning = `Response body truncated after ${params.maxResponseBytes} bytes. Some PDF pages may be missing.`;
       }
-    } else if (contentType.includes("text/html")) {
-      if (params.readabilityEnabled) {
-        const readable = await extractReadableContent({
-          html: body,
-          url: finalUrl,
-          extractMode: params.extractMode,
-        });
-        if (readable?.text) {
-          text = readable.text;
-          title = readable.title;
-          extractor = "readability";
-        } else {
-          const firecrawl = await tryFirecrawlFallback({ ...params, url: finalUrl });
-          if (firecrawl) {
-            text = firecrawl.text;
-            title = firecrawl.title;
-            extractor = "firecrawl";
+    } else {
+      const bodyResult = await readResponseText(res, { maxBytes: params.maxResponseBytes });
+      const body = bodyResult.text;
+      if (bodyResult.truncated) {
+        responseTruncatedWarning = `Response body truncated after ${params.maxResponseBytes} bytes.`;
+      }
+
+      text = body;
+      if (contentType.includes("text/markdown")) {
+        // Cloudflare Markdown for Agents: server returned pre-rendered markdown
+        extractor = "cf-markdown";
+        if (params.extractMode === "text") {
+          text = markdownToText(body);
+        }
+      } else if (contentType.includes("text/html")) {
+        if (params.readabilityEnabled) {
+          const readable = await extractReadableContent({
+            html: body,
+            url: finalUrl,
+            extractMode: params.extractMode,
+          });
+          if (readable?.text) {
+            text = readable.text;
+            title = readable.title;
+            extractor = "readability";
           } else {
-            const basic = await extractBasicHtmlContent({
-              html: body,
-              extractMode: params.extractMode,
-            });
-            if (basic?.text) {
-              text = basic.text;
-              title = basic.title;
-              extractor = "raw-html";
+            const firecrawl = await tryFirecrawlFallback({ ...params, url: finalUrl });
+            if (firecrawl) {
+              text = firecrawl.text;
+              title = firecrawl.title;
+              extractor = "firecrawl";
             } else {
-              throw new Error(
-                "Web fetch extraction failed: Readability, Firecrawl, and basic HTML cleanup returned no content.",
-              );
+              const basic = await extractBasicHtmlContent({
+                html: body,
+                extractMode: params.extractMode,
+              });
+              if (basic?.text) {
+                text = basic.text;
+                title = basic.title;
+                extractor = "raw-html";
+              } else {
+                throw new Error(
+                  "Web fetch extraction failed: Readability, Firecrawl, and basic HTML cleanup returned no content.",
+                );
+              }
             }
           }
+        } else {
+          throw new Error(
+            "Web fetch extraction failed: Readability disabled and Firecrawl unavailable.",
+          );
         }
-      } else {
-        throw new Error(
-          "Web fetch extraction failed: Readability disabled and Firecrawl unavailable.",
-        );
-      }
-    } else if (contentType.includes("application/json")) {
-      try {
-        text = JSON.stringify(JSON.parse(body), null, 2);
-        extractor = "json";
-      } catch {
-        text = body;
-        extractor = "raw";
+      } else if (contentType.includes("application/json")) {
+        try {
+          text = JSON.stringify(JSON.parse(body), null, 2);
+          extractor = "json";
+        } catch {
+          text = body;
+          extractor = "raw";
+        }
       }
     }
 
@@ -677,7 +702,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       extractMode: params.extractMode,
       extractor,
       externalContent: {
-        untrusted: true,
+        untrusted: false,
         source: "web_fetch",
         wrapped: true,
       },
@@ -760,12 +785,14 @@ export function createWebFetchTool(options?: {
   const userAgent =
     (fetch && "userAgent" in fetch && typeof fetch.userAgent === "string" && fetch.userAgent) ||
     DEFAULT_FETCH_USER_AGENT;
+  const allowPrivateNetwork =
+    fetch?.allowPrivateNetwork ?? options?.config?.gateway?.mode === "local";
   const maxResponseBytes = resolveFetchMaxResponseBytes(fetch);
   return {
     label: "Web Fetch",
     name: "web_fetch",
     description:
-      "Fetch and extract readable content from a URL (HTML → markdown/text). Use for lightweight page access without browser automation.",
+      "Fetch and extract readable content from a URL (HTML or PDF → markdown/text). Use for lightweight page/document access without browser automation.",
     parameters: WebFetchSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -786,6 +813,7 @@ export function createWebFetchTool(options?: {
         timeoutSeconds: resolveTimeoutSeconds(fetch?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS),
         cacheTtlMs: resolveCacheTtlMs(fetch?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
         userAgent,
+        allowPrivateNetwork,
         readabilityEnabled,
         firecrawlEnabled,
         firecrawlApiKey,

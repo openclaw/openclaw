@@ -238,11 +238,6 @@ export type ExecToolConfig = {
   pathPrepend?: string[];
   /** Safe stdin-only binaries that can run without allowlist entries. */
   safeBins?: string[];
-  /**
-   * Require explicit approval for interpreter inline-eval forms (`python -c`, `node -e`, etc.).
-   * Prevents silent allowlist reuse and allow-always persistence for those forms.
-   */
-  strictInlineEval?: boolean;
   /** Extra explicit directories trusted for safeBins path checks (never derived from PATH). */
   safeBinTrustedDirs?: string[];
   /** Optional custom safe-bin profiles for entries in tools.exec.safeBins. */
@@ -492,6 +487,15 @@ export type ToolsConfig = {
       kimi?: WebSearchLegacyProviderConfig;
       /** @deprecated Legacy Perplexity scoped config. */
       perplexity?: WebSearchLegacyProviderConfig;
+      /** Tavily configuration. */
+      tavily?: {
+        apiKey?: SecretInput;
+      };
+      /** SearXNG configuration. */
+      searxng?: {
+        baseUrl?: string;
+        apiKey?: SecretInput;
+      };
     } & Record<string, unknown>;
     fetch?: {
       /** Enable web fetch tool (default: true). */
@@ -508,6 +512,8 @@ export type ToolsConfig = {
       maxRedirects?: number;
       /** Override User-Agent header for fetch requests. */
       userAgent?: string;
+      /** Allow fetches to private/internal IP addresses (default: false). */
+      allowPrivateNetwork?: boolean;
       /** Use Readability to extract main content (default: true). */
       readability?: boolean;
       firecrawl?: {
