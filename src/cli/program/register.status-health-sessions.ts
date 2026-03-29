@@ -224,10 +224,10 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .command("tasks")
     .description("Inspect durable background task state")
     .option("--json", "Output as JSON", false)
-    .option("--runtime <name>", "Filter by runtime (subagent, acp, cli)")
+    .option("--runtime <name>", "Filter by kind (subagent, acp, cron, cli)")
     .option(
       "--status <name>",
-      "Filter by status (accepted, running, done, failed, timed_out, cancelled, lost)",
+      "Filter by status (queued, running, succeeded, failed, timed_out, cancelled, lost)",
     )
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
@@ -247,10 +247,10 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .command("list")
     .description("List tracked background tasks")
     .option("--json", "Output as JSON", false)
-    .option("--runtime <name>", "Filter by runtime (subagent, acp, cli)")
+    .option("--runtime <name>", "Filter by kind (subagent, acp, cron, cli)")
     .option(
       "--status <name>",
-      "Filter by status (accepted, running, done, failed, timed_out, cancelled, lost)",
+      "Filter by status (queued, running, succeeded, failed, timed_out, cancelled, lost)",
     )
     .action(async (opts, command) => {
       const parentOpts = command.parent?.opts() as
