@@ -1,7 +1,8 @@
 ---
 title: "Thread Bound Subagents"
 summary: "Discord thread bound subagent sessions with plugin lifecycle hooks, routing, and config kill switches"
-author: "Onur"
+author: "Onur Solmaz <onur@solmaz.io>"
+github_username: "osolmaz"
 created: "2026-02-21"
 owner: "onutc"
 status: "implemented"

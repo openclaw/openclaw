@@ -1,7 +1,8 @@
 ---
 title: "Unified Runtime Streaming Refactor Plan"
 summary: "Holy grail refactor plan for one unified runtime streaming pipeline across main, subagent, and ACP"
-author: "Onur Solmaz"
+author: "Onur Solmaz <onur@solmaz.io>"
+github_username: "osolmaz"
 created: "2026-02-26"
 status: "draft"
 last_updated: "2026-02-25"

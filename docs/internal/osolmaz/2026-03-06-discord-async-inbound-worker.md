@@ -1,7 +1,8 @@
 ---
 title: "Discord Async Inbound Worker Plan"
 summary: "Status and next steps for decoupling Discord gateway listeners from long-running agent turns with a Discord-specific inbound worker"
-author: "Bob"
+author: "Onur Solmaz <onur@solmaz.io>"
+github_username: "osolmaz"
 created: "2026-03-06"
 status: "in_progress"
 last_updated: "2026-03-05"

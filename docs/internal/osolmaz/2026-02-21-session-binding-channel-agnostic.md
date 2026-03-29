@@ -1,7 +1,8 @@
 ---
 title: "Session Binding Channel Agnostic Plan"
 summary: "Channel agnostic session binding architecture and iteration 1 delivery scope"
-author: "Onur"
+author: "Onur Solmaz <onur@solmaz.io>"
+github_username: "osolmaz"
 created: "2026-02-21"
 read_when:
   - Refactoring channel-agnostic session routing and bindings

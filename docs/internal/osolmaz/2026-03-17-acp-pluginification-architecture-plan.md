@@ -1,7 +1,8 @@
 ---
 title: "Bindings Capability Architecture Plan"
 summary: "Plan for keeping bindings as a small core capability while moving ACP-specific binding policy and app-server policy out of core"
-author: "Bob"
+author: "Onur Solmaz <onur@solmaz.io>"
+github_username: "osolmaz"
 created: "2026-03-17"
 status: "in_progress"
 last_updated: "2026-03-17"

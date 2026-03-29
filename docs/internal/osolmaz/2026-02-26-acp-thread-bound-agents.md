@@ -1,7 +1,8 @@
 ---
 title: "ACP Thread Bound Agents"
 summary: "Integrate ACP coding agents via a first-class ACP control plane in core and plugin-backed runtimes (acpx first)"
-author: "Onur Solmaz"
+author: "Onur Solmaz <onur@solmaz.io>"
+github_username: "osolmaz"
 created: "2026-02-26"
 status: "draft"
 last_updated: "2026-02-25"

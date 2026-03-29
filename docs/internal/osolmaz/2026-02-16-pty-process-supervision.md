@@ -1,7 +1,8 @@
 ---
 title: "PTY and Process Supervision Plan"
 summary: "Production plan for reliable interactive process supervision (PTY + non-PTY) with explicit ownership, unified lifecycle, and deterministic cleanup"
-author: "Onur"
+author: "Onur Solmaz <onur@solmaz.io>"
+github_username: "osolmaz"
 created: "2026-02-16"
 read_when:
   - Working on exec/process lifecycle ownership and cleanup

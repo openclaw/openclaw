@@ -1,7 +1,8 @@
 ---
 title: "ACP Persistent Bindings for Discord Channels and Telegram Topics"
 summary: "Introduce persistent ACP bindings for Discord channels and Telegram topics backed by long-lived ACP session bindings."
-author: "Bob"
+author: "Onur Solmaz <onur@solmaz.io>"
+github_username: "osolmaz"
 created: "2026-03-05"
 status: "draft"
 last_updated: "2026-03-05"

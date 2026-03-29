@@ -1,7 +1,8 @@
 ---
 title: "ACP Bound Command Authorization (Proposal)"
 summary: "Proposal: long-term command authorization model for ACP-bound conversations"
-author: "Bob"
+author: "Onur Solmaz <onur@solmaz.io>"
+github_username: "osolmaz"
 created: "2026-03-05"
 read_when:
   - Designing native command auth behavior in Telegram/Discord ACP-bound channels/topics

@@ -1,7 +1,8 @@
 ---
 title: "Browser Evaluate CDP Refactor"
 summary: "Plan: isolate browser act:evaluate from Playwright queue using CDP, with end-to-end deadlines and safer ref resolution"
-author: "Onur"
+author: "Onur Solmaz <onur@solmaz.io>"
+github_username: "osolmaz"
 created: "2026-02-11"
 read_when:
   - Working on browser `act:evaluate` timeout, abort, or queue blocking issues
