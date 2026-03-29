@@ -65,7 +65,15 @@ for (const item of docsConfig.redirects || []) {
 }
 
 const allFiles = walk(DOCS_DIR);
-const relAllFiles = new Set(allFiles.map((abs) => normalizeSlashes(path.relative(DOCS_DIR, abs))));
+function isIgnoredDocsPath(relPath) {
+  return relPath.startsWith("internal/");
+}
+
+const relAllFiles = new Set(
+  allFiles
+    .map((abs) => normalizeSlashes(path.relative(DOCS_DIR, abs)))
+    .filter((rel) => !isIgnoredDocsPath(rel)),
+);
 
 function isGeneratedTranslatedDoc(relPath) {
   return relPath.startsWith("zh-CN/");
@@ -76,7 +84,7 @@ const markdownFiles = allFiles.filter((abs) => {
     return false;
   }
   const rel = normalizeSlashes(path.relative(DOCS_DIR, abs));
-  return !isGeneratedTranslatedDoc(rel);
+  return !isGeneratedTranslatedDoc(rel) && !isIgnoredDocsPath(rel);
 });
 const routes = new Set();
 
