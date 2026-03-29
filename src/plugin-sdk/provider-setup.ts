@@ -35,5 +35,14 @@ export {
   VLLM_DEFAULT_MAX_TOKENS,
   promptAndConfigureVllm,
 } from "../plugins/provider-vllm-setup.js";
-export { buildVllmProvider } from "../../extensions/vllm/api.js";
-export { buildSglangProvider } from "../../extensions/sglang/api.js";
+
+const VLLM_FACADE_IMPORT = "./vllm.js";
+const SGLANG_FACADE_IMPORT = "./sglang.js";
+
+export async function buildVllmProvider(params?: { baseUrl?: string; apiKey?: string }) {
+  return await (await import(VLLM_FACADE_IMPORT)).buildVllmProvider(params);
+}
+
+export async function buildSglangProvider(params?: { baseUrl?: string; apiKey?: string }) {
+  return await (await import(SGLANG_FACADE_IMPORT)).buildSglangProvider(params);
+}
