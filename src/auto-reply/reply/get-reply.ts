@@ -345,8 +345,10 @@ export async function getReplyFromConfig(
     perMessageQueueMode,
     perMessageQueueOptions,
   } = directiveResult.result;
-  provider = resolvedProvider;
-  model = resolvedModel;
+  if (!hasResolvedHeartbeatModelOverride) {
+    provider = resolvedProvider;
+    model = resolvedModel;
+  }
 
   const maybeEmitMissingResetHooks = async () => {
     if (!resetTriggered || !command.isAuthorizedSender || command.resetHookTriggered) {
