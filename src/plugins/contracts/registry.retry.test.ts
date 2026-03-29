@@ -144,4 +144,37 @@ describe("plugin contract registry scoped retries", () => {
     ).toEqual(["grok"]);
     expect(loadBundledCapabilityRuntimeRegistry).toHaveBeenCalledTimes(2);
   });
+
+  it("reuses the single registered provider contract for paired manifest alias ids", async () => {
+    const loadBundledCapabilityRuntimeRegistry = vi.fn().mockReturnValue(
+      createMockRuntimeRegistry({
+        plugin: {
+          id: "byteplus",
+          status: "loaded",
+          providerIds: ["byteplus"],
+          webSearchProviderIds: [],
+        },
+        providers: [
+          {
+            pluginId: "byteplus",
+            provider: {
+              id: "byteplus",
+              label: "BytePlus",
+              docsPath: "/providers/byteplus",
+              auth: [],
+            } as ProviderPlugin,
+          },
+        ],
+      }),
+    );
+
+    vi.doMock("../bundled-capability-runtime.js", () => ({
+      loadBundledCapabilityRuntimeRegistry,
+    }));
+
+    const { requireProviderContractProvider } = await import("./registry.js");
+
+    expect(requireProviderContractProvider("byteplus-plan").id).toBe("byteplus");
+    expect(loadBundledCapabilityRuntimeRegistry).toHaveBeenCalledTimes(1);
+  });
 });

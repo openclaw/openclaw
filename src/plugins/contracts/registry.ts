@@ -395,10 +395,19 @@ export const providerContractCompatPluginIds: string[] = createLazyArrayView(
 );
 
 export function requireProviderContractProvider(providerId: string): ProviderPlugin {
-  const provider = loadProviderContractEntriesForPluginIds(
-    providerContractPluginIdsByProviderId.get(providerId) ?? [],
-  ).find((entry) => entry.provider.id === providerId)?.provider;
+  const pluginIds = providerContractPluginIdsByProviderId.get(providerId) ?? [];
+  const entries = loadProviderContractEntriesForPluginIds(pluginIds);
+  const provider = entries.find((entry) => entry.provider.id === providerId)?.provider;
   if (!provider) {
+    const pluginScopedProviders = [
+      ...new Map(entries.map((entry) => [entry.provider.id, entry.provider])).values(),
+    ];
+    // Paired catalogs may expose multiple runtime provider ids from one shared
+    // ProviderPlugin contract entry. Reuse that single contract surface for the
+    // manifest-owned alias ids instead of requiring duplicate registration.
+    if (pluginIds.length === 1 && pluginScopedProviders.length === 1) {
+      return pluginScopedProviders[0];
+    }
     if (providerContractLoadError) {
       throw new Error(
         `provider contract entry missing for ${providerId}; bundled provider registry failed to load: ${providerContractLoadError.message}`,
