@@ -4,6 +4,11 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { basename } from "node:path";
 import { pathToFileURL } from "node:url";
+import {
+  compareReleaseVersions as compareReleaseVersionsBase,
+  parseReleaseVersion as parseReleaseVersionBase,
+  resolveNpmPublishPlan as resolveNpmPublishPlanBase,
+} from "./lib/npm-publish-plan.mjs";
 
 type PackageJson = {
   name?: string;
@@ -42,12 +47,6 @@ export type NpmPublishPlan = {
   publishTag: "latest" | "beta";
   mirrorDistTags: ("latest" | "beta")[];
 };
-
-const STABLE_VERSION_REGEX = /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<day>[1-9]\d?)$/;
-const BETA_VERSION_REGEX =
-  /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<day>[1-9]\d?)-beta\.(?<beta>[1-9]\d*)$/;
-const CORRECTION_VERSION_REGEX =
-  /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<day>[1-9]\d?)-(?<correction>[1-9]\d*)$/;
 const EXPECTED_REPOSITORY_URL = "https://github.com/openclaw/openclaw";
 const MAX_CALVER_DISTANCE_DAYS = 2;
 const REQUIRED_PACKED_PATHS = ["dist/control-ui/index.html"];
@@ -66,145 +65,19 @@ function normalizeRepoUrl(value: unknown): string {
     .replace(/\/+$/, "");
 }
 
-function parseDateParts(
-  version: string,
-  groups: Record<string, string | undefined>,
-  channel: "stable" | "beta",
-): ParsedReleaseVersion | null {
-  const year = Number.parseInt(groups.year ?? "", 10);
-  const month = Number.parseInt(groups.month ?? "", 10);
-  const day = Number.parseInt(groups.day ?? "", 10);
-  const betaNumber = channel === "beta" ? Number.parseInt(groups.beta ?? "", 10) : undefined;
-
-  if (
-    !Number.isInteger(year) ||
-    !Number.isInteger(month) ||
-    !Number.isInteger(day) ||
-    month < 1 ||
-    month > 12 ||
-    day < 1 ||
-    day > 31
-  ) {
-    return null;
-  }
-  if (channel === "beta" && (!Number.isInteger(betaNumber) || (betaNumber ?? 0) < 1)) {
-    return null;
-  }
-
-  const date = new Date(Date.UTC(year, month - 1, day));
-  if (
-    date.getUTCFullYear() !== year ||
-    date.getUTCMonth() !== month - 1 ||
-    date.getUTCDate() !== day
-  ) {
-    return null;
-  }
-
-  return {
-    version,
-    baseVersion: `${year}.${month}.${day}`,
-    channel,
-    year,
-    month,
-    day,
-    betaNumber,
-    date,
-  };
-}
-
 export function parseReleaseVersion(version: string): ParsedReleaseVersion | null {
-  const trimmed = version.trim();
-  if (!trimmed) {
-    return null;
-  }
-
-  const stableMatch = STABLE_VERSION_REGEX.exec(trimmed);
-  if (stableMatch?.groups) {
-    return parseDateParts(trimmed, stableMatch.groups, "stable");
-  }
-
-  const betaMatch = BETA_VERSION_REGEX.exec(trimmed);
-  if (betaMatch?.groups) {
-    return parseDateParts(trimmed, betaMatch.groups, "beta");
-  }
-
-  const correctionMatch = CORRECTION_VERSION_REGEX.exec(trimmed);
-  if (correctionMatch?.groups) {
-    const parsedCorrection = parseDateParts(trimmed, correctionMatch.groups, "stable");
-    const correctionNumber = Number.parseInt(correctionMatch.groups.correction ?? "", 10);
-    if (parsedCorrection === null || !Number.isInteger(correctionNumber) || correctionNumber < 1) {
-      return null;
-    }
-
-    return {
-      ...parsedCorrection,
-      correctionNumber,
-    };
-  }
-
-  return null;
+  return parseReleaseVersionBase(version) as ParsedReleaseVersion | null;
 }
 
 export function compareReleaseVersions(left: string, right: string): number | null {
-  const parsedLeft = parseReleaseVersion(left);
-  const parsedRight = parseReleaseVersion(right);
-  if (parsedLeft === null || parsedRight === null) {
-    return null;
-  }
-
-  const dateDelta = parsedLeft.date.getTime() - parsedRight.date.getTime();
-  if (dateDelta !== 0) {
-    return Math.sign(dateDelta);
-  }
-
-  if (parsedLeft.channel !== parsedRight.channel) {
-    return parsedLeft.channel === "stable" ? 1 : -1;
-  }
-
-  if (parsedLeft.channel === "beta" && parsedRight.channel === "beta") {
-    return Math.sign((parsedLeft.betaNumber ?? 0) - (parsedRight.betaNumber ?? 0));
-  }
-
-  return Math.sign((parsedLeft.correctionNumber ?? 0) - (parsedRight.correctionNumber ?? 0));
+  return compareReleaseVersionsBase(left, right);
 }
 
 export function resolveNpmPublishPlan(
   version: string,
   currentBetaVersion?: string | null,
 ): NpmPublishPlan {
-  const parsedVersion = parseReleaseVersion(version);
-  if (parsedVersion === null) {
-    throw new Error(`Unsupported release version "${version}".`);
-  }
-
-  if (parsedVersion.channel === "beta") {
-    return {
-      channel: "beta",
-      publishTag: "beta",
-      mirrorDistTags: [],
-    };
-  }
-
-  const normalizedCurrentBeta = currentBetaVersion?.trim();
-  if (normalizedCurrentBeta) {
-    const betaVsStable = compareReleaseVersions(normalizedCurrentBeta, version);
-    if (betaVsStable !== null && betaVsStable > 0) {
-      return {
-        channel: "stable",
-        publishTag: "latest",
-        // Keep beta on the newer prerelease train when one already exists.
-        mirrorDistTags: [],
-      };
-    }
-  }
-
-  return {
-    channel: "stable",
-    publishTag: "latest",
-    // Stable promotion keeps beta aligned unless beta already points at a
-    // newer prerelease train.
-    mirrorDistTags: ["beta"],
-  };
+  return resolveNpmPublishPlanBase(version, currentBetaVersion) as NpmPublishPlan;
 }
 
 export function parseReleaseTagVersion(version: string): ParsedReleaseTag | null {
