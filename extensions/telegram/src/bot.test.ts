@@ -512,6 +512,54 @@ describe("createTelegramBot", () => {
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-approve-blocked");
   });
 
+  it("keeps plugin approval callback buttons for target-only recipients", async () => {
+    onSpy.mockClear();
+    editMessageReplyMarkupSpy.mockClear();
+    editMessageTextSpy.mockClear();
+
+    loadConfig.mockReturnValue({
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "targets",
+          targets: [{ channel: "telegram", to: "9" }],
+        },
+      },
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          capabilities: ["vision"],
+        },
+      },
+    });
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+    expect(callbackHandler).toBeDefined();
+
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-plugin-approve-blocked",
+        data: "/approve plugin:138e9b8c allow-once",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 24,
+          text: "Plugin approval required.",
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(editMessageReplyMarkupSpy).not.toHaveBeenCalled();
+    expect(editMessageTextSpy).not.toHaveBeenCalled();
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-plugin-approve-blocked");
+  });
+
   it("edits commands list for pagination callbacks", async () => {
     onSpy.mockClear();
     listSkillCommandsForAgents.mockClear();
