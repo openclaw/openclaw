@@ -2341,6 +2341,10 @@ describe("dispatchReplyFromConfig", () => {
       AccountId: "acc-1",
       GroupSpace: "guild-123",
       GroupChannel: "alerts",
+      ReplyToId: "reply-42",
+      ReplyToBody: "quoted text",
+      ReplyToSender: "Bob",
+      ReplyToIsQuote: true,
     });
 
     const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
@@ -2361,6 +2365,10 @@ describe("dispatchReplyFromConfig", () => {
           senderE164: "+15555550123",
           guildId: "guild-123",
           channelName: "alerts",
+          replyToId: "reply-42",
+          replyToBody: "quoted text",
+          replyToSender: "Bob",
+          replyToIsQuote: true,
         }),
       }),
       expect.objectContaining({
@@ -2565,6 +2573,10 @@ describe("dispatchReplyFromConfig", () => {
       Body: "who are you",
       MessageSid: "msg-claim-plugin-1",
       SessionKey: "agent:main:discord:channel:1481858418548412579",
+      ReplyToId: "reply-msg-1",
+      ReplyToBody: "previous question",
+      ReplyToSender: "Grace",
+      ReplyToIsQuote: true,
     });
     const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
 
@@ -2579,6 +2591,12 @@ describe("dispatchReplyFromConfig", () => {
         accountId: "default",
         conversationId: "channel:1481858418548412579",
         content: "who are you",
+        metadata: expect.objectContaining({
+          replyToId: "reply-msg-1",
+          replyToBody: "previous question",
+          replyToSender: "Grace",
+          replyToIsQuote: true,
+        }),
       }),
       expect.objectContaining({
         channelId: "discord",
