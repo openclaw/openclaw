@@ -32,23 +32,50 @@ import {
   resolvePortListeningAddresses,
 } from "./status.gather.js";
 
+function redactControlUiAccessUrlForJson(url: string): string {
+  const hashIdx = url.indexOf("#");
+  if (hashIdx < 0) {
+    return url;
+  }
+  const base = url.slice(0, hashIdx);
+  const frag = url.slice(hashIdx + 1);
+  const params = new URLSearchParams(frag);
+  if (!params.has("token")) {
+    return url;
+  }
+  params.delete("token");
+  const next = params.toString();
+  return next ? `${base}#${next}` : base;
+}
+
 function sanitizeDaemonStatusForJson(status: DaemonStatus): DaemonStatus {
   const command = status.service.command;
-  if (!command?.environment) {
-    return status;
+  let next: DaemonStatus = status;
+  if (command?.environment) {
+    const safeEnv = filterDaemonEnv(command.environment);
+    const nextCommand = {
+      ...command,
+      environment: Object.keys(safeEnv).length > 0 ? safeEnv : undefined,
+    };
+    next = {
+      ...status,
+      service: {
+        ...status.service,
+        command: nextCommand,
+      },
+    };
   }
-  const safeEnv = filterDaemonEnv(command.environment);
-  const nextCommand = {
-    ...command,
-    environment: Object.keys(safeEnv).length > 0 ? safeEnv : undefined,
-  };
-  return {
-    ...status,
-    service: {
-      ...status.service,
-      command: nextCommand,
-    },
-  };
+  const gw = next.gateway?.controlUiAccessUrl;
+  if (gw) {
+    return {
+      ...next,
+      gateway: {
+        ...next.gateway!,
+        controlUiAccessUrl: redactControlUiAccessUrlForJson(gw),
+      },
+    };
+  }
+  return next;
 }
 
 export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean }) {
@@ -159,7 +186,13 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
         customBindHost: status.gateway.customBindHost,
         basePath: status.config?.daemon?.controlUi?.basePath,
       });
-      defaultRuntime.log(`${label("Dashboard:")} ${infoText(links.httpUrl)}`);
+      const dashboardUrl = status.gateway.controlUiAccessUrl ?? links.httpUrl;
+      defaultRuntime.log(`${label("Dashboard:")} ${infoText(dashboardUrl)}`);
+      if (status.gateway.controlUiAccessHint) {
+        defaultRuntime.log(
+          `${label("Dashboard note:")} ${warnText(status.gateway.controlUiAccessHint)}`,
+        );
+      }
     }
     if (status.gateway.probeNote) {
       defaultRuntime.log(`${label("Probe note:")} ${infoText(status.gateway.probeNote)}`);

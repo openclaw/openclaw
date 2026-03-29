@@ -1,3 +1,4 @@
+import { resolveControlUiAccessUrl } from "../../commands/control-ui-access-url.js";
 import {
   createConfigIO,
   resolveConfigPath,
@@ -51,6 +52,9 @@ type GatewayStatusSummary = {
   portSource: "service args" | "env/config";
   probeUrl: string;
   probeNote?: string;
+  /** Dashboard URL with optional `#token=` (matches `openclaw dashboard`). */
+  controlUiAccessUrl?: string;
+  controlUiAccessHint?: string;
 };
 
 type PortStatusSummary = {
@@ -312,13 +316,36 @@ export async function gatherDaemonStatus(
     daemonConfigSummary,
     configMismatch,
   } = await loadDaemonConfigContext(command?.environment);
-  const { gateway, daemonPort, cliPort, probeUrlOverride } = await resolveGatewayStatusSummary({
+  const {
+    gateway: gatewayBase,
+    daemonPort,
+    cliPort,
+    probeUrlOverride,
+  } = await resolveGatewayStatusSummary({
     cliCfg,
     daemonCfg,
     mergedDaemonEnv,
     commandProgramArguments: command?.programArguments,
     rpcUrlOverride: opts.rpc.url,
   });
+  let gateway: GatewayStatusSummary = gatewayBase;
+  try {
+    const access = await resolveControlUiAccessUrl({
+      cfg: daemonCfg,
+      env: mergedDaemonEnv as NodeJS.ProcessEnv,
+    });
+    gateway = {
+      ...gatewayBase,
+      controlUiAccessUrl: access.dashboardUrl,
+      ...(access.unresolvedRefReason
+        ? {
+            controlUiAccessHint: `URL omits token (${access.unresolvedRefReason}). Run \`openclaw dashboard\` with credentials in your shell, or paste the token in Control UI settings.`,
+          }
+        : {}),
+    };
+  } catch {
+    // Keep gateway summary without dashboard URL hints if token resolution fails.
+  }
   const { portStatus, portCliStatus } = await inspectDaemonPortStatuses({
     daemonPort,
     cliPort,
