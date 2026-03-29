@@ -1,0 +1,31 @@
+{
+  "id": "supermemory",
+  "kind": "memory",
+  "uiHints": {
+    "apiKey": {
+      "label": "Supermemory API Key",
+      "sensitive": true,
+      "placeholder": "sm_...",
+      "help": "API key from console.supermemory.ai (or use ${SUPERMEMORY_API_KEY})"
+    },
+    "userId": {
+      "label": "User ID",
+      "placeholder": "user-123",
+      "help": "Optional static containerTag (default: requesterSenderId or agentId)",
+      "advanced": true
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "apiKey": {
+        "type": "string"
+      },
+      "userId": {
+        "type": "string"
+      }
+    },
+    "required": ["apiKey"]
+  }
+}

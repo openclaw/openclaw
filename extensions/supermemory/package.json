@@ -1,0 +1,26 @@
+{
+  "name": "@openclaw/supermemory",
+  "version": "2026.3.9",
+  "private": true,
+  "description": "OpenClaw Supermemory integration — personal assistant memory with semantic search",
+  "type": "module",
+  "dependencies": {
+    "@sinclair/typebox": "0.34.48"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.3.7"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

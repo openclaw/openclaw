@@ -451,6 +451,16 @@ importers:
 
   extensions/slack: {}
 
+  extensions/supermemory:
+    dependencies:
+      '@sinclair/typebox':
+        specifier: 0.34.48
+        version: 0.34.48
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/synology-chat:
     dependencies:
       zod:
