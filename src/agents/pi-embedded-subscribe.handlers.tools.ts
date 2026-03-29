@@ -34,12 +34,16 @@ type ToolStartRecord = {
 /** Track tool execution start data for after_tool_call hook. */
 const toolStartData = new Map<string, ToolStartRecord>();
 
+/** Track last tool-call activity per runId to distinguish active runs from orphaned ones. */
+const lastRunActivity = new Map<string, number>();
+
 /**
- * Maximum age (ms) for entries in toolStartData before they are considered
- * orphaned. Tool calls that start but never complete (abort, crash, network
- * failure) leave entries that would otherwise accumulate indefinitely.
+ * Maximum idle time (ms) for a run before its entries are considered orphaned.
+ * Only entries from runs with no tool-call activity within this window are swept.
+ * This protects long-running tool calls (e.g., exec commands) as long as their
+ * run is still producing new tool calls.
  */
-const TOOL_START_DATA_MAX_AGE_MS = 5 * 60_000; // 5 minutes
+const RUN_IDLE_SWEEP_MS = 5 * 60_000; // 5 minutes
 
 function buildToolStartKey(runId: string, toolCallId: string): string {
   return `${runId}:${toolCallId}`;
@@ -350,14 +354,24 @@ export async function handleToolExecutionStart(
   const runId = ctx.params.runId;
 
   // Track start time and args for after_tool_call hook
-  toolStartData.set(buildToolStartKey(runId, toolCallId), { startTime: Date.now(), args });
+  const now = Date.now();
+  toolStartData.set(buildToolStartKey(runId, toolCallId), { startTime: now, args });
+  lastRunActivity.set(runId, now);
 
-  // Sweep orphaned entries from aborted/crashed tool calls to prevent unbounded growth
+  // Sweep orphaned entries from runs that have gone completely idle.
+  // Only entries whose entire run has had no tool-call activity within the
+  // idle window are removed — this protects long-running tool calls (e.g.,
+  // exec commands that take >5 min) as long as the run is still active.
   if (toolStartData.size > 50) {
-    const now = Date.now();
-    for (const [key, record] of toolStartData) {
-      if (now - record.startTime > TOOL_START_DATA_MAX_AGE_MS) {
-        toolStartData.delete(key);
+    for (const [entryRunId, lastActivity] of lastRunActivity) {
+      if (now - lastActivity > RUN_IDLE_SWEEP_MS) {
+        // Remove all entries for this idle run
+        for (const key of toolStartData.keys()) {
+          if (key.startsWith(entryRunId + ":")) {
+            toolStartData.delete(key);
+          }
+        }
+        lastRunActivity.delete(entryRunId);
       }
     }
   }
