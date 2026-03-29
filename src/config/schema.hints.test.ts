@@ -1,13 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { buildSecretInputSchema } from "../plugin-sdk/secret-input-schema.js";
+import { isSensitiveUrlConfigPath } from "../shared/net/redact-sensitive-url.js";
 import { FIELD_HELP } from "./schema.help.js";
 import { __test__, isPluginOwnedChannelHintPath, isSensitiveConfigPath } from "./schema.hints.js";
 import { FIELD_LABELS } from "./schema.labels.js";
 import { OpenClawSchema } from "./zod-schema.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
-const { mapSensitivePaths } = __test__;
+const { collectMatchingSchemaPaths, mapSensitivePaths } = __test__;
 const BUNDLED_CHANNEL_HINT_PREFIXES = [
   "channels.bluebubbles",
   "channels.discord",
@@ -181,5 +182,14 @@ describe("mapSensitivePaths", () => {
     expect(hints["encryptKey"]?.sensitive).toBe(true);
     expect(hints["appSecret"]?.sensitive).toBe(true);
     expect(hints["nested.verificationToken"]?.sensitive).toBe(true);
+  });
+});
+
+describe("collectMatchingSchemaPaths", () => {
+  it("finds base-config URL fields that may embed secrets", () => {
+    const paths = collectMatchingSchemaPaths(OpenClawSchema, "", isSensitiveUrlConfigPath);
+
+    expect(paths.has("mcp.servers.*.url")).toBe(true);
+    expect(paths.has("models.providers.*.baseUrl")).toBe(true);
   });
 });
