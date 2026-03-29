@@ -495,6 +495,31 @@ The `pluginId` field is stamped automatically by the hook runner from the plugin
 
 If the gateway is unavailable or does not support plugin approvals, the tool call falls back to a soft block using the `description` as the block reason.
 
+#### before_install
+
+Runs after the built-in install security scan and before installation continues. OpenClaw fires this hook for interactive skill installs as well as plugin bundle/package installs.
+
+Return fields:
+
+- **`findings`**: Additional scan findings to surface as warnings
+- **`block`**: Set to `true` to block the install
+- **`blockReason`**: Human-readable reason shown when blocked
+
+Event fields:
+
+- **`targetType`**: Install target category (`skill` or `plugin`)
+- **`targetName`**: Human-readable skill name or plugin id for the install target
+- **`sourceDir`**: Absolute path to the source directory being scanned
+- **`source`**: Install origin when available (for example `openclaw-bundled`, `openclaw-workspace`, `plugin-bundle`, or `plugin-package`)
+- **`builtinFindings`**: Findings already produced by the built-in scanner
+
+Decision semantics:
+
+- `before_install`: `{ block: true }` is terminal and stops lower-priority handlers.
+- `before_install`: `{ block: false }` is treated as no decision.
+
+Use this hook for external security scanners, policy engines, or enterprise approval gates that need to audit install sources before they are installed.
+
 #### Compaction lifecycle
 
 Compaction lifecycle hooks exposed through the plugin hook runner:
