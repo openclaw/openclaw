@@ -99,6 +99,64 @@ def record_learning(task: str, error: str, fix: str):
     except Exception as e:
         logger.error("Failed to append to Learning_Log.md", error=str(e))
 
+# v16.4: Error detection patterns for MCP tool results
+_ERROR_PREFIXES = ("⏳", "🔒", "🛡️", "📁", "❌", "Error:")
+
+
+def is_tool_error(result: str) -> bool:
+    """v16.4: Detect if a tool call result is an error response."""
+    if not result:
+        return False
+    stripped = result.strip()
+    return any(stripped.startswith(p) for p in _ERROR_PREFIXES)
+
+
+async def autonomous_reflection(
+    task: str,
+    code: str,
+    stderr: str,
+    inference_fn=None,
+) -> str:
+    """v16.4: Autonomous Self-Healing Reflection Engine.
+
+    Analyses an error via LLM and records the fix rule to Obsidian Learning_Log.
+    Returns the fix rule text or empty string on failure.
+
+    Args:
+        task: Original user task description.
+        code: Code/context that caused the error.
+        stderr: The captured error text.
+        inference_fn: Async callable(prompt: str) -> str for LLM inference.
+    """
+    if not stderr:
+        return ""
+
+    reflection_prompt = (
+        "Ты — автономный отладчик. Проанализируй ошибку и сформулируй ОДНО конкретное правило-фикс.\n\n"
+        f"**Задача:** {task[:300]}\n\n"
+        f"**Код/контекст:**\n```\n{code[:1000]}\n```\n\n"
+        f"**Ошибка (stderr):**\n```\n{stderr[:1000]}\n```\n\n"
+        "Ответь ТОЛЬКО кратким правилом (1-3 предложения): что пошло не так и как это чинить."
+    )
+
+    fix_rule = ""
+    if inference_fn:
+        try:
+            fix_rule = await inference_fn(reflection_prompt)
+            fix_rule = fix_rule.strip()[:500] if fix_rule else ""
+        except Exception as e:
+            logger.warning("Reflection LLM call failed", error=str(e))
+            fix_rule = f"[auto] Error pattern: {stderr[:200]}"
+    else:
+        fix_rule = f"[auto] Error pattern: {stderr[:200]}"
+
+    if fix_rule:
+        record_learning(task, stderr, fix_rule)
+        logger.info("v16.4 Autonomous reflection recorded", fix_preview=fix_rule[:80])
+
+    return fix_rule
+
+
 def get_instruction_override(prompt: str) -> Tuple[Optional[List[str]], str]:
     """
     Search for dynamic instructions with #instruction tag in Claw_Logic. 

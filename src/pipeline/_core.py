@@ -337,6 +337,49 @@ class PipelineExecutor:
     async def _reflexion_fallback(self, prompt: str, error_response: str) -> Optional[str]:
         return await reflexion_fallback(self.vllm_url, self.config, prompt, error_response)
 
+    async def _quick_inference(self, prompt: str) -> str:
+        """v16.4: Fast LLM inference for autonomous reflection (Self-Healing)."""
+        try:
+            if self.force_cloud and self.openrouter_config:
+                response = await call_openrouter(
+                    openrouter_config=self.openrouter_config,
+                    vllm_url=self.vllm_url,
+                    model="meta-llama/llama-3.3-70b-instruct:free",
+                    fallback_model="meta-llama/llama-3.3-70b-instruct:free",
+                    system_prompt="You are a debugging assistant. Be concise. Answer in Russian.",
+                    user_prompt=prompt,
+                    role_name="Reflection",
+                    role_config={"temperature": 0.3, "max_tokens": 512},
+                    mcp_client=None,
+                    config=self.config,
+                )
+            else:
+                async with aiohttp.ClientSession() as sess:
+                    payload = {
+                        "model": "meta-llama/llama-3.3-70b-instruct",
+                        "messages": [
+                            {"role": "system", "content": "You are a debugging assistant. Be concise. Answer in Russian."},
+                            {"role": "user", "content": prompt},
+                        ],
+                        "stream": False,
+                        "max_tokens": 512,
+                        "temperature": 0.3,
+                    }
+                    async with sess.post(
+                        f"{self.vllm_url}/chat/completions",
+                        json=payload,
+                        timeout=aiohttp.ClientTimeout(total=30),
+                    ) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            response = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                        else:
+                            response = ""
+            return (response or "").strip()
+        except Exception as e:
+            logger.warning("v16.4 quick inference failed", error=str(e))
+            return ""
+
     async def initialize(self):
         """Initializes internal components like MCP.
         MCP failures are non-fatal — pipeline proceeds with reduced capabilities."""
@@ -797,6 +840,7 @@ class PipelineExecutor:
                         logger.info("Context Bridge: context restored for new model")
 
             did_handoff = False
+            _autoheal_used = False  # v16.4: one self-healing retry per step
 
             async with self._vram_protection(model, prev_model):
                 preserve_think = any(role in role_name for role in ["Planner", "Foreman", "Orchestrator", "Auditor"])
@@ -860,6 +904,43 @@ class PipelineExecutor:
                                 for call, tc_res in zip(_parsed_calls, _tc_results):
                                     shared_observations[call.name] = (tc_res.output or tc_res.error or "")[:2000]
                             _observation = format_observations(_tc_results)
+
+                            # --- v16.4: Autonomous Error Catcher + Self-Healing ---
+                            try:
+                                from src.pipeline._logic_provider import is_tool_error, autonomous_reflection
+                                _tool_errors = [
+                                    (c.name, r.output or r.error or "")
+                                    for c, r in zip(_parsed_calls, _tc_results)
+                                    if is_tool_error(r.output or r.error or "")
+                                ]
+                                if _tool_errors and not _autoheal_used:
+                                    _autoheal_used = True
+                                    _err_summary = "; ".join(f"{n}: {e[:200]}" for n, e in _tool_errors)
+                                    logger.warning(
+                                        "v16.4 Self-Healing: tool errors detected",
+                                        errors=len(_tool_errors),
+                                        summary=_err_summary[:200],
+                                    )
+                                    _fix_rule = await autonomous_reflection(
+                                        task=prompt,
+                                        code=response[:500],
+                                        stderr=_err_summary,
+                                        inference_fn=self._quick_inference,
+                                    )
+                                    if _fix_rule:
+                                        _observation += (
+                                            f"\n\n[SELF-HEALING — ОБНАРУЖЕНА ОШИБКА]\n"
+                                            f"Ошибка: {_err_summary[:300]}\n"
+                                            f"Правило фикса: {_fix_rule}"
+                                        )
+                                        if status_callback:
+                                            await status_callback(
+                                                role_name, display_model,
+                                                f"🔄 Self-Healing: {_fix_rule[:80]}...",
+                                            )
+                            except Exception as _heal_err:
+                                logger.debug("v16.4 tool error detection failed (non-fatal)", error=str(_heal_err))
+
                             # Strip raw tool-call XML from response so user never sees it
                             response = strip_tool_calls(response, _parsed_calls)
                             # Re-query the model with Observation context for a clean answer
@@ -923,6 +1004,52 @@ class PipelineExecutor:
                             )
                     except Exception as _cv_err:
                         logger.warning(f"CodeValidator error (skipping): {_cv_err}")
+
+                # --- v16.4: General step error detection + self-healing retry ---
+                if not _autoheal_used and response:
+                    _resp_lower = (response or "").lower()
+                    _has_error_markers = (
+                        response.startswith("⚠️")
+                        or "traceback" in _resp_lower
+                        or "exception:" in _resp_lower
+                        or "error:" in _resp_lower
+                        or "failed to execute" in _resp_lower
+                    )
+                    if _has_error_markers:
+                        _autoheal_used = True
+                        _step_err = response[:500]
+                        logger.warning(
+                            "v16.4 Self-Healing: step error detected",
+                            role=role_name,
+                            error_preview=_step_err[:100],
+                        )
+                        try:
+                            from src.pipeline._logic_provider import autonomous_reflection, get_recent_knowledge
+                            _fix_rule = await autonomous_reflection(
+                                task=prompt,
+                                code=response[:500],
+                                stderr=_step_err,
+                                inference_fn=self._quick_inference,
+                            )
+                            if _fix_rule:
+                                _fresh = get_recent_knowledge(max_age_seconds=60)
+                                _heal_prompt = (
+                                    f"{step_prompt}\n\n"
+                                    f"[SELF-HEALING CONTEXT]\n{_fresh}\n\n"
+                                    f"[FIX RULE]: {_fix_rule}\n\n"
+                                    "Предыдущий ответ содержал ошибку. Используй правило фикса и исправь."
+                                )
+                                response = await self._call_vllm(
+                                    model, system_prompt, _heal_prompt, role_name, role_config,
+                                    active_mcp, preserve_think=preserve_think, json_schema=role_schema,
+                                )
+                                if status_callback:
+                                    await status_callback(
+                                        role_name, display_model,
+                                        f"🔄 Self-Healing retry: {_fix_rule[:60]}...",
+                                    )
+                        except Exception as _heal_step_err:
+                            logger.debug("v16.4 step self-healing failed (non-fatal)", error=str(_heal_step_err))
 
                 self.last_loaded_model = model
 
