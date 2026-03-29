@@ -1,4 +1,7 @@
-import { applyModelCompatPatch } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  applyModelCompatPatch,
+  normalizeProviderId,
+} from "openclaw/plugin-sdk/provider-model-shared";
 import type { ModelCompatConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { XAI_UNSUPPORTED_SCHEMA_KEYWORDS } from "openclaw/plugin-sdk/provider-tools";
 
@@ -34,4 +37,57 @@ export function applyXaiModelCompat<T extends { compat?: unknown }>(model: T): T
     model as T & { compat?: ModelCompatConfig },
     resolveXaiModelCompatPatch(),
   ) as T;
+}
+
+function isXaiBaseUrl(baseUrl: unknown): boolean {
+  if (typeof baseUrl !== "string" || !baseUrl.trim()) {
+    return false;
+  }
+  try {
+    return new URL(baseUrl).hostname.toLowerCase() === "api.x.ai";
+  } catch {
+    return baseUrl.toLowerCase().includes("api.x.ai");
+  }
+}
+
+function isXaiModelHint(modelId: string): boolean {
+  return modelId.trim().toLowerCase().startsWith("x-ai/");
+}
+
+function shouldUseXaiResponsesTransport(params: {
+  provider: string;
+  api?: unknown;
+  baseUrl?: unknown;
+}): boolean {
+  if (params.api !== "openai-completions") {
+    return false;
+  }
+  if (isXaiBaseUrl(params.baseUrl)) {
+    return true;
+  }
+  return normalizeProviderId(params.provider) === "xai" && !params.baseUrl;
+}
+
+export function shouldContributeXaiCompat(params: {
+  modelId: string;
+  model: { api?: unknown; baseUrl?: unknown };
+}): boolean {
+  if (params.model.api !== "openai-completions") {
+    return false;
+  }
+  return isXaiBaseUrl(params.model.baseUrl) || isXaiModelHint(params.modelId);
+}
+
+export function resolveXaiTransport(params: {
+  provider: string;
+  api?: unknown;
+  baseUrl?: unknown;
+}): { api: "openai-responses"; baseUrl?: string } | undefined {
+  if (!shouldUseXaiResponsesTransport(params)) {
+    return undefined;
+  }
+  return {
+    api: "openai-responses",
+    baseUrl: typeof params.baseUrl === "string" ? params.baseUrl : undefined,
+  };
 }
