@@ -2,7 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../../../../src/runtime.js";
 
 const sendMessageIMessageMock = vi.hoisted(() =>
-  vi.fn().mockResolvedValue({ messageId: "imsg-1" }),
+  vi.fn().mockImplementation(async (_to: string, message: string) => ({
+    messageId: "imsg-1",
+    sentText: message,
+  })),
 );
 const chunkTextWithModeMock = vi.hoisted(() => vi.fn((text: string) => [text]));
 const resolveChunkModeMock = vi.hoisted(() => vi.fn(() => "length"));
@@ -142,8 +145,8 @@ describe("deliverReplies", () => {
     const remember = vi.fn();
     chunkTextWithModeMock.mockImplementation((text: string) => text.split("|"));
     sendMessageIMessageMock
-      .mockResolvedValueOnce({ messageId: "imsg-1" })
-      .mockResolvedValueOnce({ messageId: "imsg-2" });
+      .mockResolvedValueOnce({ messageId: "imsg-1", sentText: "first" })
+      .mockResolvedValueOnce({ messageId: "imsg-2", sentText: "second" });
 
     await deliverReplies({
       replies: [{ text: "first|second" }],
@@ -165,6 +168,30 @@ describe("deliverReplies", () => {
     expect(remember).toHaveBeenCalledWith("acct-3:chat_id:30", {
       text: "second",
       messageId: "imsg-2",
+    });
+  });
+
+  it("records the actual sent placeholder for media-only replies", async () => {
+    const remember = vi.fn();
+    sendMessageIMessageMock.mockResolvedValueOnce({
+      messageId: "imsg-media-1",
+      sentText: "<media:image>",
+    });
+
+    await deliverReplies({
+      replies: [{ mediaUrls: ["https://example.com/a.jpg"] }],
+      target: "chat_id:40",
+      client,
+      accountId: "acct-4",
+      runtime,
+      maxBytes: 2048,
+      textLimit: 4000,
+      sentMessageCache: { remember },
+    });
+
+    expect(remember).toHaveBeenCalledWith("acct-4:chat_id:40", {
+      text: "<media:image>",
+      messageId: "imsg-media-1",
     });
   });
 });

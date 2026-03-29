@@ -405,6 +405,38 @@ describe("self-chat is_from_me=true handling (Bruce Phase 2 fix)", () => {
     expect(decision).toEqual({ kind: "drop", reason: "agent echo in self-chat" });
   });
 
+  it("drops attachment-only agent echo in self-chat via bodyText placeholder", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-24T12:00:00Z"));
+
+    const echoCache = createSentMessageCache();
+    const selfChatCache = createSelfChatCache();
+
+    const scope = "default:imessage:+15551234567";
+    echoCache.remember(scope, { text: "<media:image>", messageId: "p:0/GUID-media" });
+
+    vi.advanceTimersByTime(1000);
+
+    const decision = resolveIMessageInboundDecision(
+      createParams({
+        message: {
+          id: 123707,
+          sender: "+15551234567",
+          chat_identifier: "+15551234567",
+          text: "",
+          is_from_me: true,
+          is_group: false,
+        },
+        messageText: "",
+        bodyText: "<media:image>",
+        echoCache,
+        selfChatCache,
+      }),
+    );
+
+    expect(decision).toEqual({ kind: "drop", reason: "agent echo in self-chat" });
+  });
+
   it("drops is_from_me=false reflection via selfChatCache (existing behavior preserved)", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-24T12:00:00Z"));

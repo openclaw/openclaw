@@ -124,6 +124,8 @@ export function resolveIMessageInboundDecision(params: {
   const chatGuid = params.message.chat_guid ?? undefined;
   const chatIdentifier = params.message.chat_identifier ?? undefined;
   const createdAt = params.message.created_at ? Date.parse(params.message.created_at) : undefined;
+  const messageText = params.messageText.trim();
+  const bodyText = params.bodyText.trim();
 
   const groupIdCandidate = chatId !== undefined ? String(chatId) : undefined;
   const groupListPolicy = groupIdCandidate
@@ -151,7 +153,7 @@ export function resolveIMessageInboundDecision(params: {
     isGroup,
     chatId,
     sender,
-    text: params.bodyText,
+    text: bodyText,
     createdAt,
   };
   // Self-chat detection: in self-chat, sender == chat_identifier (both are the
@@ -185,10 +187,10 @@ export function resolveIMessageInboundDecision(params: {
       });
       if (
         params.echoCache &&
-        (params.messageText || inboundMessageId) &&
+        (bodyText || inboundMessageId) &&
         params.echoCache.has(
           echoScope,
-          { text: params.messageText || undefined, messageId: inboundMessageId },
+          { text: bodyText || undefined, messageId: inboundMessageId },
           true, // skipIdShortCircuit
         )
       ) {
@@ -275,8 +277,6 @@ export function resolveIMessageInboundDecision(params: {
     chatId,
   });
   const mentionRegexes = buildMentionRegexes(params.cfg, route.agentId);
-  const messageText = params.messageText.trim();
-  const bodyText = params.bodyText.trim();
   if (!bodyText) {
     return { kind: "drop", reason: "empty body" };
   }
@@ -304,12 +304,12 @@ export function resolveIMessageInboundDecision(params: {
     });
     if (
       params.echoCache.has(echoScope, {
-        text: messageText || undefined,
+        text: bodyText || undefined,
         messageId: inboundMessageId,
       })
     ) {
       params.logVerbose?.(
-        describeIMessageEchoDropLog({ messageText, messageId: inboundMessageId }),
+        describeIMessageEchoDropLog({ messageText: bodyText, messageId: inboundMessageId }),
       );
       return { kind: "drop", reason: "echo" };
     }
