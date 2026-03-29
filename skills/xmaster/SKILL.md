@@ -38,7 +38,7 @@ Use the `xmaster` CLI to interact with X (Twitter): post, reply, search, analyze
 **USE this skill when:**
 
 - Posting tweets, replies, threads, or quote tweets
-- Analyzing a post before publishing (pre-flight scoring with algorithm weights)
+- Analyzing a post before publishing (proxy-signal estimation aligned with 2026 X algorithm, per-goal scoring)
 - Searching X content (structured API search or AI-powered semantic search)
 - Checking engagement metrics, daily/weekly reports, or timing heatmaps
 - Managing DMs (send, inbox, threads)
@@ -143,13 +143,13 @@ xmaster post "Check this out" --media photo.jpg
 
 ### Pre-flight Analysis
 
-Scores your post before publishing. Catches weak hooks, link penalties, engagement bait, and character limits using real weights from the open-source X ranking code.
+Estimates 9 proxy signals aligned with the 2026 X algorithm and scores per goal. Context-aware for replies, quotes, and media posts.
 
 ```bash
-xmaster analyze "your tweet text" --goal replies
+xmaster analyze "your tweet text" --goal replies --json
 ```
 
-Returns a score (0-100), grade (A-F), and actionable issues.
+Returns: proxy scores (reply, quote, profile_click, follow_author, share_via_dm, dwell, media_expand, negative_risk), goal scores (replies, quotes, shares, follows, impressions 0-100), lint issues, and suggestions.
 
 ### Search
 
@@ -276,9 +276,26 @@ xmaster search "query" --json | jq '.data.tweets[].text'
 ### Agent Discovery
 
 ```bash
-# Machine-readable capabilities, version, and algorithm weights
+# Machine-readable capabilities, measurement coverage, workflow handoffs
 xmaster agent-info --json
 ```
+
+Returns: 64 commands, 18 capabilities, 15 algorithm signal weights, measurement coverage (7 measurable, 6 proxy-only, 9 blind signals), 5 workflow handoffs, and writing style config.
+
+### Engagement Intelligence
+
+```bash
+# Find accounts to reply to — scored by opportunity (reciprocity, ROI, size fit)
+xmaster engage recommend --topic "your niche" -c 5
+
+# Fresh posts to reply to now — scored, not just sorted by time
+xmaster engage feed "topic" --min-followers 1000
+
+# Track accounts without following
+xmaster engage watchlist add username --topic "niche"
+```
+
+Reply styles (question, data point, counterpoint, anecdote, humor) are classified and tracked for outcome analysis.
 
 ## Writing Style
 
