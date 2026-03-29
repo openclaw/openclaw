@@ -260,8 +260,11 @@ async function handleImagePayload(ctx: ReplyContext, payload: MediaPayload): Pro
             target.messageId,
           );
         } else if (target.type === "dm" && target.guildId) {
+          // By design: DM only supports text/markdown; use markdown image syntax with the
+          // original path so the QQ client can attempt to render it.
           await sendDmMessage(token, target.guildId, `![](${payload.path})`, target.messageId);
         } else if (target.channelId) {
+          // By design: channel messages only support text/markdown, same approach as DM above.
           await sendChannelMessage(
             token,
             target.channelId,

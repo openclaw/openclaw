@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   createStandardChannelSetupStatus,
   hasConfiguredSecretInput,
@@ -13,6 +14,35 @@ import {
 } from "./config.js";
 
 const channel = "qqbot" as const;
+
+/**
+ * Clear stored credential fields (appId, clientSecret, clientSecretFile) from
+ * an account's config so that resolveQQBotAccount falls through to env-var
+ * resolution.  Used by the "Use env var?" flow.
+ */
+function clearQQBotAccountCredentials(cfg: OpenClawConfig, accountId: string): OpenClawConfig {
+  const next = { ...cfg };
+  const qqbot = { ...((next.channels?.qqbot as Record<string, unknown>) || {}) };
+
+  if (accountId === DEFAULT_ACCOUNT_ID) {
+    delete qqbot.appId;
+    delete qqbot.clientSecret;
+    delete qqbot.clientSecretFile;
+  } else {
+    const accounts = { ...((qqbot.accounts as Record<string, Record<string, unknown>>) || {}) };
+    if (accounts[accountId]) {
+      const entry = { ...accounts[accountId] };
+      delete entry.appId;
+      delete entry.clientSecret;
+      delete entry.clientSecretFile;
+      accounts[accountId] = entry;
+      qqbot.accounts = accounts;
+    }
+  }
+
+  next.channels = { ...next.channels, qqbot };
+  return next;
+}
 
 const QQBOT_SETUP_HELP_LINES = [
   "To create a QQ Bot, visit the QQ Open Platform:",
@@ -72,7 +102,8 @@ export const qqbotSetupWizard: ChannelSetupWizard = {
               : undefined,
         };
       },
-      applyUseEnv: ({ cfg, accountId }) => applyQQBotAccountConfig(cfg, accountId, {}),
+      applyUseEnv: ({ cfg, accountId }) =>
+        clearQQBotAccountCredentials(applyQQBotAccountConfig(cfg, accountId, {}), accountId),
       applySet: ({ cfg, accountId, resolvedValue }) =>
         applyQQBotAccountConfig(cfg, accountId, { appId: resolvedValue }),
     },
@@ -104,7 +135,8 @@ export const qqbotSetupWizard: ChannelSetupWizard = {
               : undefined,
         };
       },
-      applyUseEnv: ({ cfg, accountId }) => applyQQBotAccountConfig(cfg, accountId, {}),
+      applyUseEnv: ({ cfg, accountId }) =>
+        clearQQBotAccountCredentials(applyQQBotAccountConfig(cfg, accountId, {}), accountId),
       applySet: ({ cfg, accountId, resolvedValue }) =>
         applyQQBotAccountConfig(cfg, accountId, { clientSecret: resolvedValue }),
     },

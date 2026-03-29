@@ -115,6 +115,10 @@ export const qqbotSetupPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
         return cfg;
       }
 
+      // When only --token-file is provided, appId will be empty here.
+      // This is by design: --token-file supplies the clientSecret only,
+      // not the appId. The appId is expected to come from the env var
+      // QQBOT_APP_ID or be set separately in the config file.
       return applyQQBotAccountConfig(cfg, accountId, {
         appId,
         clientSecret,
