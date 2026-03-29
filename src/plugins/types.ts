@@ -1803,7 +1803,8 @@ export type PluginHookName =
   | "subagent_ended"
   | "gateway_start"
   | "gateway_stop"
-  | "before_dispatch";
+  | "before_dispatch"
+  | "before_install";
 
 export const PLUGIN_HOOK_NAMES = [
   "before_model_resolve",
@@ -1832,6 +1833,7 @@ export const PLUGIN_HOOK_NAMES = [
   "gateway_start",
   "gateway_stop",
   "before_dispatch",
+  "before_install",
 ] as const satisfies readonly PluginHookName[];
 
 type MissingPluginHookNames = Exclude<PluginHookName, (typeof PLUGIN_HOOK_NAMES)[number]>;
@@ -2337,6 +2339,50 @@ export type PluginHookGatewayStopEvent = {
   reason?: string;
 };
 
+export type PluginInstallTargetType = "skill" | "plugin";
+
+// before_install hook
+export type PluginHookBeforeInstallContext = {
+  /** Category of install target being checked. */
+  targetType: PluginInstallTargetType;
+  /** Origin of the install target (e.g. "openclaw-bundled", "plugin-package"). */
+  source?: string;
+};
+
+export type PluginHookBeforeInstallEvent = {
+  /** Category of install target being checked. */
+  targetType: PluginInstallTargetType;
+  /** Human-readable skill or plugin name. */
+  targetName: string;
+  /** Absolute path to the install target source directory being scanned. */
+  sourceDir: string;
+  /** Origin of the install target (e.g. "openclaw-bundled", "plugin-package"). */
+  source?: string;
+  /** Findings from the built-in scanner, provided for augmentation. */
+  builtinFindings: Array<{
+    ruleId: string;
+    severity: "info" | "warn" | "critical";
+    file: string;
+    line: number;
+    message: string;
+  }>;
+};
+
+export type PluginHookBeforeInstallResult = {
+  /** Additional findings to merge with built-in scanner results. */
+  findings?: Array<{
+    ruleId: string;
+    severity: "info" | "warn" | "critical";
+    file: string;
+    line: number;
+    message: string;
+  }>;
+  /** If true, block the installation entirely. */
+  block?: boolean;
+  /** Human-readable reason for blocking. */
+  blockReason?: string;
+};
+
 // Hook handler types mapped by hook name
 export type PluginHookHandlerMap = {
   before_model_resolve: (
@@ -2443,6 +2489,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookGatewayStopEvent,
     ctx: PluginHookGatewayContext,
   ) => Promise<void> | void;
+  before_install: (
+    event: PluginHookBeforeInstallEvent,
+    ctx: PluginHookBeforeInstallContext,
+  ) => Promise<PluginHookBeforeInstallResult | void> | PluginHookBeforeInstallResult | void;
 };
 
 export type PluginHookRegistration<K extends PluginHookName = PluginHookName> = {
