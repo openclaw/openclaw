@@ -305,7 +305,7 @@ async function resolveTelegramCommandAuth(params: {
     senderUsername,
     resolveGroupPolicy,
     enforcePolicy: useAccessGroups,
-    useTopicAndGroupOverrides: false,
+    useTopicAndGroupOverrides: true,
     enforceAllowlistAuthorization: requireAuth && !commandsAllowFromConfigured,
     allowEmptyAllowlistEntries: true,
     requireSenderForAllowlistAuthorization: true,
