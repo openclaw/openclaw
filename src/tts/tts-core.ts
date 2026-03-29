@@ -106,21 +106,16 @@ export function parseTtsDirectives(
 
   const overrides: TtsDirectiveOverrides = {};
   const warnings: string[] = [];
-  let cleanedText = text;
+  let cleanedText = text.replace(/\s+$/, "");
   let hasDirective = false;
 
-  const blockRegex = /\[\[tts:text\]\]([\s\S]*?)\[\[\/tts:text\]\]/gi;
-  cleanedText = cleanedText.replace(blockRegex, (_match, inner: string) => {
-    hasDirective = true;
-    if (policy.allowText && overrides.ttsText == null) {
-      overrides.ttsText = inner.trim();
+  const consumeDirectiveLine = (): boolean => {
+    const match = /(?:^|\n)([ \t]*)\[\[tts:([^\]]+)\]\][ \t]*$/i.exec(cleanedText);
+    if (!match) {
+      return false;
     }
-    return "";
-  });
-
-  const directiveRegex = /\[\[tts:([^\]]+)\]\]/gi;
-  cleanedText = cleanedText.replace(directiveRegex, (_match, body: string) => {
     hasDirective = true;
+    const body = match[2] ?? "";
     const tokens = body.split(/\s+/).filter(Boolean);
     for (const token of tokens) {
       const eqIndex = token.indexOf("=");
@@ -313,8 +308,35 @@ export function parseTtsDirectives(
         warnings.push((err as Error).message);
       }
     }
-    return "";
-  });
+    cleanedText = cleanedText.slice(0, match.index).replace(/\s+$/, "");
+    return true;
+  };
+
+  const consumeTextBlock = (): boolean => {
+    const closeMatch = /\[\[\/tts:text\]\][ \t]*$/i.exec(cleanedText);
+    if (!closeMatch) {
+      return false;
+    }
+    const beforeClose = cleanedText.slice(0, closeMatch.index);
+    const openIndex = beforeClose.toLowerCase().lastIndexOf("[[tts:text]]");
+    if (openIndex === -1) {
+      return false;
+    }
+    const lineStart = beforeClose.lastIndexOf("\n", openIndex - 1) + 1;
+    if (beforeClose.slice(lineStart, openIndex).trim() !== "") {
+      return false;
+    }
+    hasDirective = true;
+    if (policy.allowText && overrides.ttsText == null) {
+      overrides.ttsText = beforeClose.slice(openIndex + "[[tts:text]]".length).trim();
+    }
+    cleanedText = cleanedText.slice(0, lineStart).replace(/\s+$/, "");
+    return true;
+  };
+
+  while (consumeDirectiveLine() || consumeTextBlock()) {
+    // Consume a trailing standalone TTS directive section only.
+  }
 
   return {
     cleanedText,

@@ -185,14 +185,15 @@ describe("tts", () => {
   });
 
   describe("parseTtsDirectives", () => {
-    it("extracts overrides and strips directives when enabled", () => {
+    it("extracts overrides from a trailing directive section", () => {
       const policy = resolveModelOverridePolicy({ enabled: true });
       const input =
-        "Hello [[tts:provider=elevenlabs voiceId=pMsXgVXv3BLzUgSXRplE stability=0.4 speed=1.1]] world\n\n" +
+        "Hello world\n\n" +
+        "[[tts:provider=elevenlabs voiceId=pMsXgVXv3BLzUgSXRplE stability=0.4 speed=1.1]]\n" +
         "[[tts:text]](laughs) Read the song once more.[[/tts:text]]";
       const result = parseTtsDirectives(input, policy);
 
-      expect(result.cleanedText).not.toContain("[[tts:");
+      expect(result.cleanedText).toBe("Hello world");
       expect(result.ttsText).toBe("(laughs) Read the song once more.");
       expect(result.overrides.provider).toBe("elevenlabs");
       expect(result.overrides.elevenlabs?.voiceId).toBe("pMsXgVXv3BLzUgSXRplE");
@@ -200,12 +201,25 @@ describe("tts", () => {
       expect(result.overrides.elevenlabs?.voiceSettings?.speed).toBe(1.1);
     });
 
-    it("accepts edge as provider override", () => {
+    it("accepts a standalone trailing provider override", () => {
       const policy = resolveModelOverridePolicy({ enabled: true });
-      const input = "Hello [[tts:provider=edge]] world";
+      const input = "Hello world\n\n[[tts:provider=edge]]";
       const result = parseTtsDirectives(input, policy);
 
+      expect(result.cleanedText).toBe("Hello world");
       expect(result.overrides.provider).toBe("edge");
+    });
+
+    it("keeps inline literal directive examples as visible text", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true });
+      const input =
+        "This reply mentions [[tts:voice=alloy]] and [[tts:text]]hello[[/tts:text]] as plain text examples.";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.cleanedText).toBe(input);
+      expect(result.hasDirective).toBe(false);
+      expect(result.ttsText).toBeUndefined();
+      expect(result.overrides.openai?.voice).toBeUndefined();
     });
 
     it("keeps text intact when overrides are disabled", () => {
@@ -586,6 +600,39 @@ describe("tts", () => {
 
       expect(result.mediaUrl).toBeDefined();
       expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      globalThis.fetch = originalFetch;
+      process.env.OPENCLAW_TTS_PREFS = prevPrefs;
+    });
+
+    it("does not trigger tagged auto-TTS for inline literal tag examples", async () => {
+      const prevPrefs = process.env.OPENCLAW_TTS_PREFS;
+      process.env.OPENCLAW_TTS_PREFS = `/tmp/tts-test-${Date.now()}.json`;
+      const originalFetch = globalThis.fetch;
+      const fetchMock = vi.fn(async () => ({
+        ok: true,
+        arrayBuffer: async () => new ArrayBuffer(1),
+      }));
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      const cfg = {
+        ...baseCfg,
+        messages: {
+          ...baseCfg.messages,
+          tts: { ...baseCfg.messages.tts, auto: "tagged" },
+        },
+      };
+
+      const input =
+        "This reply mentions [[tts:voice=alloy]] and [[tts:text]]hello[[/tts:text]] as plain text examples.";
+      const result = await maybeApplyTtsToPayload({
+        payload: { text: input },
+        cfg,
+        kind: "final",
+      });
+
+      expect(result).toEqual({ text: input });
+      expect(fetchMock).not.toHaveBeenCalled();
 
       globalThis.fetch = originalFetch;
       process.env.OPENCLAW_TTS_PREFS = prevPrefs;
