@@ -101,6 +101,7 @@ let registerLogTransportFn: typeof import("../logging/logger.js").registerLogTra
 let resetLoggerFn: typeof import("../logging/logger.js").resetLogger;
 let setLoggerOverrideFn: typeof import("../logging/logger.js").setLoggerOverride;
 const originalFetch = globalThis.fetch;
+const asFetch = <T extends typeof fetch>(fn: T): typeof fetch => fn as unknown as typeof fetch;
 
 beforeAll(async () => {
   vi.resetModules();
@@ -132,10 +133,12 @@ beforeEach(() => {
   resolveCopilotApiTokenMock.mockImplementation(async () => {
     throw new Error("unexpected extra Copilot token refresh");
   });
-  globalThis.fetch = vi.fn(async (input: string | URL | Request) => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-    throw new Error(`Unexpected fetch in test: ${url}`);
-  }) as typeof fetch;
+  globalThis.fetch = asFetch(
+    vi.fn(async (input: string | URL | Request) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      throw new Error(`Unexpected fetch in test: ${url}`);
+    }) as unknown as typeof fetch,
+  );
   computeBackoffMock.mockClear();
   sleepWithAbortMock.mockClear();
 });

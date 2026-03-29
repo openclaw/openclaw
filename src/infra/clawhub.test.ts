@@ -152,7 +152,7 @@ describe("clawhub helpers", () => {
 
   it("injects resolved auth token into ClawHub requests", async () => {
     process.env.OPENCLAW_CLAWHUB_TOKEN = "env-token-123";
-    const fetchImpl = async (input: string | URL | Request, init?: RequestInit) => {
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
       const url = input instanceof Request ? input.url : String(input);
       expect(url).toContain("/api/v1/search");
       expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer env-token-123");
@@ -160,7 +160,7 @@ describe("clawhub helpers", () => {
         status: 200,
         headers: { "content-type": "application/json" },
       });
-    };
+    }) as unknown as typeof fetch;
 
     await expect(searchClawHubSkills({ query: "calendar", fetchImpl })).resolves.toEqual([]);
   });

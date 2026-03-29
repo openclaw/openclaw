@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { twilioApiRequest } from "./api.js";
 
 const originalFetch = globalThis.fetch;
+const asFetch = <T extends typeof fetch>(fn: T): typeof fetch => fn as unknown as typeof fetch;
 
 describe("twilioApiRequest", () => {
   afterEach(() => {
@@ -9,9 +10,11 @@ describe("twilioApiRequest", () => {
   });
 
   it("posts form bodies with basic auth and parses json", async () => {
-    globalThis.fetch = vi.fn(async () => {
-      return new Response(JSON.stringify({ sid: "CA123" }), { status: 200 });
-    }) as typeof fetch;
+    globalThis.fetch = asFetch(
+      vi.fn(async () => {
+        return new Response(JSON.stringify({ sid: "CA123" }), { status: 200 });
+      }) as unknown as typeof fetch,
+    );
 
     await expect(
       twilioApiRequest({
@@ -47,7 +50,7 @@ describe("twilioApiRequest", () => {
       new Response(null, { status: 204 }),
       new Response("missing", { status: 404 }),
     ];
-    globalThis.fetch = vi.fn(async () => responses.shift()!) as typeof fetch;
+    globalThis.fetch = asFetch(vi.fn(async () => responses.shift()!) as unknown as typeof fetch);
 
     await expect(
       twilioApiRequest({
@@ -72,9 +75,9 @@ describe("twilioApiRequest", () => {
   });
 
   it("throws twilio api errors for non-ok responses", async () => {
-    globalThis.fetch = vi.fn(
-      async () => new Response("bad request", { status: 400 }),
-    ) as typeof fetch;
+    globalThis.fetch = asFetch(
+      vi.fn(async () => new Response("bad request", { status: 400 })) as unknown as typeof fetch,
+    );
 
     await expect(
       twilioApiRequest({

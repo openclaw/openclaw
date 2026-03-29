@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const asFetch = <T extends typeof fetch>(fn: T): typeof fetch => fn as unknown as typeof fetch;
+
 const {
   loadMSTeamsSdkWithAuthMock,
   createMSTeamsTokenProviderMock,
@@ -54,12 +56,14 @@ describe("msteams graph helpers", () => {
   });
 
   it("fetches Graph JSON and surfaces Graph errors with response text", async () => {
-    globalThis.fetch = vi.fn(async () => {
-      return new Response(JSON.stringify({ value: [{ id: "group-1" }] }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
-    }) as typeof fetch;
+    globalThis.fetch = asFetch(
+      vi.fn(async () => {
+        return new Response(JSON.stringify({ value: [{ id: "group-1" }] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }) as unknown as typeof fetch,
+    );
 
     await expect(
       fetchGraphJson<{ value: Array<{ id: string }> }>({
@@ -79,9 +83,11 @@ describe("msteams graph helpers", () => {
       },
     );
 
-    globalThis.fetch = vi.fn(async () => {
-      return new Response("forbidden", { status: 403 });
-    }) as typeof fetch;
+    globalThis.fetch = asFetch(
+      vi.fn(async () => {
+        return new Response("forbidden", { status: 403 });
+      }) as unknown as typeof fetch,
+    );
 
     await expect(
       fetchGraphJson({
@@ -132,22 +138,24 @@ describe("msteams graph helpers", () => {
   });
 
   it("builds encoded Graph paths for teams and channels", async () => {
-    globalThis.fetch = vi.fn(async (input) => {
-      const url = typeof input === "string" ? input : String(input);
-      if (url.includes("/groups?")) {
-        return new Response(JSON.stringify({ value: [{ id: "team-1", displayName: "Ops" }] }), {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
-      }
-      return new Response(
-        JSON.stringify({ value: [{ id: "chan-1", displayName: "Deployments" }] }),
-        {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        },
-      );
-    }) as typeof fetch;
+    globalThis.fetch = asFetch(
+      vi.fn(async (input) => {
+        const url = typeof input === "string" ? input : String(input);
+        if (url.includes("/groups?")) {
+          return new Response(JSON.stringify({ value: [{ id: "team-1", displayName: "Ops" }] }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        return new Response(
+          JSON.stringify({ value: [{ id: "chan-1", displayName: "Deployments" }] }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }) as unknown as typeof fetch,
+    );
 
     await expect(listTeamsByName("graph-token", "Bob's Team")).resolves.toEqual([
       { id: "team-1", displayName: "Ops" },
