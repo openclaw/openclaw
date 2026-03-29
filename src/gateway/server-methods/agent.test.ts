@@ -846,7 +846,6 @@ describe("gateway agent handler", () => {
       );
 
       expect(findTaskByRunId("task-registry-agent-run")).toMatchObject({
-        source: "background_cli",
         runtime: "cli",
         childSessionKey: "agent:main:main",
         status: "running",

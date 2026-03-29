@@ -318,13 +318,12 @@ export function createSubagentRunManager(params: {
     });
     try {
       createTaskRecord({
-        source: "sessions_spawn",
         runtime: "subagent",
+        sourceId: registerParams.runId,
         requesterSessionKey: registerParams.requesterSessionKey,
         requesterOrigin,
         childSessionKey: registerParams.childSessionKey,
         runId: registerParams.runId,
-        bindingTargetKind: "subagent",
         label: registerParams.label,
         task: registerParams.task,
         status: "running",
