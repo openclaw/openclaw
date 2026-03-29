@@ -2,16 +2,25 @@ import type { Command } from "commander";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
+import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { loadOpenClawPlugins } from "./loader.js";
+import { loadOpenClawPlugins, type PluginLoadOptions } from "./loader.js";
 import type { OpenClawPluginCliCommandDescriptor } from "./types.js";
 import type { PluginLogger } from "./types.js";
 
 const log = createSubsystemLogger("plugins");
 
-function loadPluginCliRegistry(cfg?: OpenClawConfig, env?: NodeJS.ProcessEnv) {
+function loadPluginCliRegistry(
+  cfg?: OpenClawConfig,
+  env?: NodeJS.ProcessEnv,
+  loaderOptions?: Pick<PluginLoadOptions, "pluginSdkResolution">,
+) {
   const config = cfg ?? loadConfig();
-  const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
+  const resolvedConfig = applyPluginAutoEnable({ config, env: env ?? process.env }).config;
+  const workspaceDir = resolveAgentWorkspaceDir(
+    resolvedConfig,
+    resolveDefaultAgentId(resolvedConfig),
+  );
   const logger: PluginLogger = {
     info: (msg: string) => log.info(msg),
     warn: (msg: string) => log.warn(msg),
@@ -19,14 +28,15 @@ function loadPluginCliRegistry(cfg?: OpenClawConfig, env?: NodeJS.ProcessEnv) {
     debug: (msg: string) => log.debug(msg),
   };
   return {
-    config,
+    config: resolvedConfig,
     workspaceDir,
     logger,
     registry: loadOpenClawPlugins({
-      config,
+      config: resolvedConfig,
       workspaceDir,
       env,
       logger,
+      ...loaderOptions,
     }),
   };
 }
@@ -58,8 +68,9 @@ export function registerPluginCliCommands(
   program: Command,
   cfg?: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
+  loaderOptions?: Pick<PluginLoadOptions, "pluginSdkResolution">,
 ) {
-  const { config, workspaceDir, logger, registry } = loadPluginCliRegistry(cfg, env);
+  const { config, workspaceDir, logger, registry } = loadPluginCliRegistry(cfg, env, loaderOptions);
 
   const existingCommands = new Set(program.commands.map((cmd) => cmd.name()));
 

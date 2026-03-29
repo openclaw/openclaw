@@ -1,10 +1,6 @@
 import crypto from "node:crypto";
 import path from "node:path";
-import {
-  buildTelegramTopicConversationId,
-  normalizeConversationText,
-  parseTelegramChatIdFromTarget,
-} from "../../acp/conversation-id.js";
+import { normalizeConversationText } from "../../acp/conversation-id.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-cache.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
@@ -29,16 +25,17 @@ import {
   type SessionScope,
 } from "../../config/sessions/types.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
-import { resolveConversationIdFromTargets } from "../../infra/outbound/conversation-id.js";
+import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
+import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import { resolveEffectiveResetTargetSessionKey } from "./acp-reset-target.js";
-import { parseDiscordParentChannelFromSessionKey } from "./discord-parent-channel.js";
+import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import {
@@ -78,88 +75,68 @@ export type SessionInitResult = {
   triggerBodyNormalized: string;
 };
 
-function resolveAcpResetBindingContext(ctx: MsgContext): {
+function isResetAuthorizedForContext(params: {
+  ctx: MsgContext;
+  cfg: OpenClawConfig;
+  commandAuthorized: boolean;
+}): boolean {
+  const auth = resolveCommandAuthorization(params);
+  if (!params.commandAuthorized && !auth.isAuthorizedSender) {
+    return false;
+  }
+  const provider = params.ctx.Provider;
+  const internalGatewayCaller = provider
+    ? isInternalMessageChannel(provider)
+    : isInternalMessageChannel(params.ctx.Surface);
+  if (!internalGatewayCaller) {
+    return true;
+  }
+  const scopes = params.ctx.GatewayClientScopes;
+  if (!Array.isArray(scopes) || scopes.length === 0) {
+    return true;
+  }
+  return scopes.includes("operator.admin");
+}
+
+function resolveSessionConversationBindingContext(
+  cfg: OpenClawConfig,
+  ctx: MsgContext,
+): {
   channel: string;
   accountId: string;
   conversationId: string;
   parentConversationId?: string;
 } | null {
-  const channelRaw = normalizeConversationText(
-    ctx.OriginatingChannel ?? ctx.Surface ?? ctx.Provider ?? "",
-  ).toLowerCase();
-  if (!channelRaw) {
-    return null;
-  }
-  const accountId = normalizeConversationText(ctx.AccountId) || "default";
-  const normalizedThreadId =
-    ctx.MessageThreadId != null ? normalizeConversationText(String(ctx.MessageThreadId)) : "";
-
-  if (channelRaw === "telegram") {
-    const parentConversationId =
-      parseTelegramChatIdFromTarget(ctx.OriginatingTo) ?? parseTelegramChatIdFromTarget(ctx.To);
-    let conversationId =
-      resolveConversationIdFromTargets({
-        threadId: normalizedThreadId || undefined,
-        targets: [ctx.OriginatingTo, ctx.To],
-      }) ?? "";
-    if (normalizedThreadId && parentConversationId) {
-      conversationId =
-        buildTelegramTopicConversationId({
-          chatId: parentConversationId,
-          topicId: normalizedThreadId,
-        }) ?? conversationId;
-    }
-    if (!conversationId) {
-      return null;
-    }
-    return {
-      channel: channelRaw,
-      accountId,
-      conversationId,
-      ...(parentConversationId ? { parentConversationId } : {}),
-    };
-  }
-
-  const conversationId = resolveConversationIdFromTargets({
-    threadId: normalizedThreadId || undefined,
-    targets: [ctx.OriginatingTo, ctx.To],
+  const bindingContext = resolveConversationBindingContextFromMessage({
+    cfg,
+    ctx,
   });
-  if (!conversationId) {
+  if (!bindingContext) {
     return null;
-  }
-  let parentConversationId: string | undefined;
-  if (channelRaw === "discord" && normalizedThreadId) {
-    const fromContext = normalizeConversationText(ctx.ThreadParentId);
-    if (fromContext && fromContext !== conversationId) {
-      parentConversationId = fromContext;
-    } else {
-      const fromParentSession = parseDiscordParentChannelFromSessionKey(ctx.ParentSessionKey);
-      if (fromParentSession && fromParentSession !== conversationId) {
-        parentConversationId = fromParentSession;
-      } else {
-        const fromTargets = resolveConversationIdFromTargets({
-          targets: [ctx.OriginatingTo, ctx.To],
-        });
-        if (fromTargets && fromTargets !== conversationId) {
-          parentConversationId = fromTargets;
-        }
-      }
-    }
   }
   return {
-    channel: channelRaw,
-    accountId,
-    conversationId,
-    ...(parentConversationId ? { parentConversationId } : {}),
+    channel: bindingContext.channel,
+    accountId: bindingContext.accountId,
+    conversationId: bindingContext.conversationId,
+    ...(bindingContext.parentConversationId
+      ? { parentConversationId: bindingContext.parentConversationId }
+      : {}),
   };
 }
 
 function resolveBoundAcpSessionForReset(params: {
   cfg: OpenClawConfig;
   ctx: MsgContext;
+  bindingContext?: {
+    channel: string;
+    accountId: string;
+    conversationId: string;
+    parentConversationId?: string;
+  } | null;
 }): string | undefined {
   const activeSessionKey = normalizeConversationText(params.ctx.SessionKey);
-  const bindingContext = resolveAcpResetBindingContext(params.ctx);
+  const bindingContext =
+    params.bindingContext ?? resolveSessionConversationBindingContext(params.cfg, params.ctx);
   return resolveEffectiveResetTargetSessionKey({
     cfg: params.cfg,
     channel: bindingContext?.channel,
@@ -173,16 +150,53 @@ function resolveBoundAcpSessionForReset(params: {
   });
 }
 
+function resolveBoundConversationSessionKey(params: {
+  cfg: OpenClawConfig;
+  ctx: MsgContext;
+  bindingContext?: {
+    channel: string;
+    accountId: string;
+    conversationId: string;
+    parentConversationId?: string;
+  } | null;
+}): string | undefined {
+  const bindingContext =
+    params.bindingContext ?? resolveSessionConversationBindingContext(params.cfg, params.ctx);
+  if (!bindingContext) {
+    return undefined;
+  }
+  const binding = getSessionBindingService().resolveByConversation({
+    channel: bindingContext.channel,
+    accountId: bindingContext.accountId,
+    conversationId: bindingContext.conversationId,
+    ...(bindingContext.parentConversationId
+      ? { parentConversationId: bindingContext.parentConversationId }
+      : {}),
+  });
+  if (!binding?.targetSessionKey) {
+    return undefined;
+  }
+  getSessionBindingService().touch(binding.bindingId);
+  return binding.targetSessionKey;
+}
+
 export async function initSessionState(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
   commandAuthorized: boolean;
 }): Promise<SessionInitResult> {
   const { ctx, cfg, commandAuthorized } = params;
+  const conversationBindingContext = resolveSessionConversationBindingContext(cfg, ctx);
   // Native slash commands (Telegram/Discord/Slack) are delivered on a separate
   // "slash session" key, but should mutate the target chat session.
-  const targetSessionKey =
+  const commandTargetSessionKey =
     ctx.CommandSource === "native" ? ctx.CommandTargetSessionKey?.trim() : undefined;
+  const targetSessionKey =
+    resolveBoundConversationSessionKey({
+      cfg,
+      ctx,
+      bindingContext: conversationBindingContext,
+    }) ?? commandTargetSessionKey;
   const sessionCtxForState =
     targetSessionKey && targetSessionKey !== ctx.SessionKey
       ? { ...ctx, SessionKey: targetSessionKey }
@@ -235,7 +249,18 @@ export async function initSessionState(params: {
   let persistedAuthProfileOverride: string | undefined;
   let persistedAuthProfileOverrideSource: SessionEntry["authProfileOverrideSource"];
   let persistedAuthProfileOverrideCompactionCount: number | undefined;
+  let persistedCliSessionIds: SessionEntry["cliSessionIds"];
+  let persistedCliSessionBindings: SessionEntry["cliSessionBindings"];
+  let persistedClaudeCliSessionId: string | undefined;
   let persistedLabel: string | undefined;
+  let persistedSpawnedBy: SessionEntry["spawnedBy"];
+  let persistedSpawnedWorkspaceDir: SessionEntry["spawnedWorkspaceDir"];
+  let persistedParentSessionKey: SessionEntry["parentSessionKey"];
+  let persistedForkedFromParent: SessionEntry["forkedFromParent"];
+  let persistedSpawnDepth: SessionEntry["spawnDepth"];
+  let persistedSubagentRole: SessionEntry["subagentRole"];
+  let persistedSubagentControlScope: SessionEntry["subagentControlScope"];
+  let persistedDisplayName: SessionEntry["displayName"];
 
   const normalizedChatType = normalizeChatType(ctx.ChatType);
   const isGroup =
@@ -251,11 +276,11 @@ export async function initSessionState(params: {
   // Use CommandBody/RawBody for reset trigger matching (clean message without structural context).
   const rawBody = commandSource;
   const trimmedBody = rawBody.trim();
-  const resetAuthorized = resolveCommandAuthorization({
+  const resetAuthorized = isResetAuthorizedForContext({
     ctx,
     cfg,
     commandAuthorized,
-  }).isAuthorizedSender;
+  });
   // Timestamp/message prefixes (e.g. "[Dec 4 17:35] ") are added by the
   // web inbox before we get here. They prevented reset triggers like "/new"
   // from matching, so strip structural wrappers when checking for resets.
@@ -266,6 +291,7 @@ export async function initSessionState(params: {
     resolveBoundAcpSessionForReset({
       cfg,
       ctx: sessionCtxForState,
+      bindingContext: conversationBindingContext,
     }),
   );
   const shouldBypassAcpResetForTrigger = (triggerLower: string): boolean =>
@@ -393,7 +419,18 @@ export async function initSessionState(params: {
       persistedAuthProfileOverride = entry.authProfileOverride;
       persistedAuthProfileOverrideSource = entry.authProfileOverrideSource;
       persistedAuthProfileOverrideCompactionCount = entry.authProfileOverrideCompactionCount;
+      persistedCliSessionIds = entry.cliSessionIds;
+      persistedCliSessionBindings = entry.cliSessionBindings;
+      persistedClaudeCliSessionId = entry.claudeCliSessionId;
       persistedLabel = entry.label;
+      persistedSpawnedBy = entry.spawnedBy;
+      persistedSpawnedWorkspaceDir = entry.spawnedWorkspaceDir;
+      persistedParentSessionKey = entry.parentSessionKey;
+      persistedForkedFromParent = entry.forkedFromParent;
+      persistedSpawnDepth = entry.spawnDepth;
+      persistedSubagentRole = entry.subagentRole;
+      persistedSubagentControlScope = entry.subagentControlScope;
+      persistedDisplayName = entry.displayName;
     }
   }
 
@@ -449,13 +486,23 @@ export async function initSessionState(params: {
       persistedAuthProfileOverrideSource ?? baseEntry?.authProfileOverrideSource,
     authProfileOverrideCompactionCount:
       persistedAuthProfileOverrideCompactionCount ?? baseEntry?.authProfileOverrideCompactionCount,
+    cliSessionIds: persistedCliSessionIds ?? baseEntry?.cliSessionIds,
+    cliSessionBindings: persistedCliSessionBindings ?? baseEntry?.cliSessionBindings,
+    claudeCliSessionId: persistedClaudeCliSessionId ?? baseEntry?.claudeCliSessionId,
     label: persistedLabel ?? baseEntry?.label,
+    spawnedBy: persistedSpawnedBy ?? baseEntry?.spawnedBy,
+    spawnedWorkspaceDir: persistedSpawnedWorkspaceDir ?? baseEntry?.spawnedWorkspaceDir,
+    parentSessionKey: persistedParentSessionKey ?? baseEntry?.parentSessionKey,
+    forkedFromParent: persistedForkedFromParent ?? baseEntry?.forkedFromParent,
+    spawnDepth: persistedSpawnDepth ?? baseEntry?.spawnDepth,
+    subagentRole: persistedSubagentRole ?? baseEntry?.subagentRole,
+    subagentControlScope: persistedSubagentControlScope ?? baseEntry?.subagentControlScope,
     sendPolicy: baseEntry?.sendPolicy,
     queueMode: baseEntry?.queueMode,
     queueDebounceMs: baseEntry?.queueDebounceMs,
     queueCap: baseEntry?.queueCap,
     queueDrop: baseEntry?.queueDrop,
-    displayName: baseEntry?.displayName,
+    displayName: persistedDisplayName ?? baseEntry?.displayName,
     chatType: baseEntry?.chatType,
     channel: baseEntry?.channel,
     groupId: baseEntry?.groupId,
@@ -551,9 +598,6 @@ export async function initSessionState(params: {
     sessionEntry.outputTokens = undefined;
     sessionEntry.estimatedCostUsd = undefined;
     sessionEntry.contextTokens = undefined;
-    delete sessionEntry.cliSessionIds;
-    delete sessionEntry.cliSessionBindings;
-    delete sessionEntry.claudeCliSessionId;
   }
   // Preserve per-session overrides while resetting compaction state on /new.
   sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...sessionEntry };

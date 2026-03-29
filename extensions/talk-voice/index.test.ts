@@ -179,7 +179,9 @@ describe("talk-voice plugin", () => {
     });
     vi.mocked(runtime.tts.listVoices).mockResolvedValue([{ id: "voice-a", name: "Claudia" }]);
 
-    const result = await command.handler(createCommandContext("set Claudia"));
+    const result = await command.handler(
+      createCommandContext("set Claudia", "webchat", ["operator.admin"]),
+    );
 
     expect(runtime.config.writeConfigFile).toHaveBeenCalledWith({
       talk: {
@@ -209,7 +211,7 @@ describe("talk-voice plugin", () => {
     });
     vi.mocked(runtime.tts.listVoices).mockResolvedValue([{ id: "en-US-AvaNeural", name: "Ava" }]);
 
-    await command.handler(createCommandContext("set Ava"));
+    await command.handler(createCommandContext("set Ava", "webchat", ["operator.admin"]));
 
     expect(runtime.config.writeConfigFile).toHaveBeenCalledWith({
       talk: {
@@ -247,8 +249,16 @@ describe("talk-voice plugin", () => {
     expect(runtime.config.writeConfigFile).not.toHaveBeenCalled();
   });
 
-  it("allows /voice set from non-gateway channels without scope check", async () => {
+  it("allows /voice set from non-gateway channels without operator.admin", async () => {
     const { runtime, run } = createElevenlabsVoiceSetHarness("telegram");
+    const result = await run();
+
+    expect(runtime.config.writeConfigFile).toHaveBeenCalled();
+    expect(result.text).toContain("voice-a");
+  });
+
+  it("allows /voice set when operator.admin is present on a non-webchat channel", async () => {
+    const { runtime, run } = createElevenlabsVoiceSetHarness("telegram", ["operator.admin"]);
     const result = await run();
 
     expect(runtime.config.writeConfigFile).toHaveBeenCalled();

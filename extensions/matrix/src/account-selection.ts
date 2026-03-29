@@ -1,14 +1,14 @@
 import {
-  DEFAULT_ACCOUNT_ID,
-  normalizeAccountId,
-  normalizeOptionalAccountId,
-} from "openclaw/plugin-sdk/account-id";
-import {
   listCombinedAccountIds,
   listConfiguredAccountIds,
   resolveListedDefaultAccountId,
   resolveNormalizedAccountEntry,
-} from "openclaw/plugin-sdk/account-resolution";
+} from "openclaw/plugin-sdk/account-core";
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+  normalizeOptionalAccountId,
+} from "openclaw/plugin-sdk/account-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { listMatrixEnvAccountIds } from "./env-vars.js";
 

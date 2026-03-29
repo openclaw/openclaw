@@ -213,6 +213,45 @@ describe("googlechat inbound access policy", () => {
     });
   });
 
+  it("preserves allowlist group policy when a routed space has no sender allowlist", async () => {
+    primeCommonDefaults();
+    allowInboundGroupTraffic({
+      effectiveGroupAllowFrom: [],
+      effectiveWasMentioned: false,
+    });
+    resolveSenderScopedGroupPolicy.mockReturnValue("open");
+    resolveSenderScopedGroupPolicy.mockClear();
+    resolveDmGroupAccessWithLists.mockClear();
+
+    await expect(
+      applyInboundAccessPolicy({
+        account: {
+          accountId: "default",
+          config: {
+            groups: {
+              "spaces/AAA": {
+                allow: true,
+              },
+            },
+          },
+        } as never,
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      commandAuthorized: undefined,
+      effectiveWasMentioned: false,
+      groupSystemPrompt: undefined,
+    });
+
+    expect(resolveSenderScopedGroupPolicy).not.toHaveBeenCalled();
+    expect(resolveDmGroupAccessWithLists).toHaveBeenCalledWith(
+      expect.objectContaining({
+        groupPolicy: "allowlist",
+        groupAllowFrom: [],
+      }),
+    );
+  });
+
   it("drops unauthorized group control commands", async () => {
     primeCommonDefaults();
     allowInboundGroupTraffic({
