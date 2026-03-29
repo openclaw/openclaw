@@ -100,7 +100,6 @@ describe("buildAgentSystemPrompt", () => {
       ownerNumbers: ["+123"],
       skillsPrompt:
         "<available_skills>\n  <skill>\n    <name>demo</name>\n  </skill>\n</available_skills>",
-      heartbeatPrompt: "ping",
       toolNames: ["message", "memory_search"],
       docsPath: "/tmp/openclaw/docs",
       extraSystemPrompt: "Subagent details",

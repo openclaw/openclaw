@@ -5,6 +5,7 @@ import {
   isRenderablePayload,
   shouldSuppressReasoningPayload,
 } from "../../auto-reply/reply/reply-payloads.js";
+import { SILENT_REPLY_TOKEN, stripSilentToken } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import {
   hasInteractiveReplyBlocks,
@@ -69,6 +70,10 @@ export function normalizeReplyPayloadsForDelivery(
     );
     const hasMultipleMedia = (explicitMediaUrls?.length ?? 0) > 1;
     const resolvedMediaUrl = hasMultipleMedia ? undefined : explicitMediaUrl;
+    let text = parsed.text ?? "";
+    if (text.includes(SILENT_REPLY_TOKEN)) {
+      text = stripSilentToken(text);
+    }
     const next: ReplyPayload = {
       ...payload,
       text:

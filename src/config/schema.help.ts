@@ -1046,7 +1046,7 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.compaction":
     "Compaction tuning for when context nears token limits, including history share, reserve headroom, and pre-compaction memory flush behavior. Use this when long-running sessions need stable continuity under tight context windows.",
   "agents.defaults.compaction.mode":
-    'Compaction strategy mode: "default" uses baseline behavior, while "safeguard" applies stricter guardrails to preserve recent context. Keep "default" unless you observe aggressive history loss near limit boundaries.',
+    'Compaction strategy mode: "default" uses baseline behavior, "safeguard" applies stricter guardrails to preserve recent context, and "agent" lets the agent control compaction via the compact tool (recommended for advanced setups).',
   "agents.defaults.compaction.reserveTokens":
     "Token headroom reserved for reply generation and tool output after compaction runs. Use higher reserves for verbose/tool-heavy sessions, and lower reserves when maximizing retained history matters more.",
   "agents.defaults.compaction.keepRecentTokens":

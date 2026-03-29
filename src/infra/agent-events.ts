@@ -19,6 +19,12 @@ export type AgentRunContext = {
   isHeartbeat?: boolean;
   /** Whether control UI clients should receive chat/agent updates for this run. */
   isControlUiVisible?: boolean;
+  /**
+   * When true, suppress chat delta/final forwarding to node subscribers.
+   * Set for inter-session agent steps and other internal runs that should not
+   * surface as visible chat on mobile nodes.
+   */
+  suppressNodeChat?: boolean;
 };
 
 type AgentEventState = {

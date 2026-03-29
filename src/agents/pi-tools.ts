@@ -267,6 +267,8 @@ export function createOpenClawCodingTools(options?: {
   disableMessageTool?: boolean;
   /** Whether the sender is an owner (required for owner-only tools). */
   senderIsOwner?: boolean;
+  /** Getter for the live SessionManager instance (for compact tool). */
+  getSessionManager?: () => import("@mariozechner/pi-coding-agent").SessionManager | undefined;
   /** Callback invoked when sessions_yield tool is called. */
   onYield?: (message: string) => Promise<void> | void;
 }): AnyAgentTool[] {
@@ -539,6 +541,7 @@ export function createOpenClawCodingTools(options?: {
       requesterSenderId: options?.senderId,
       senderIsOwner: options?.senderIsOwner,
       sessionId: options?.sessionId,
+      getSessionManager: options?.getSessionManager,
       onYield: options?.onYield,
       allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
     }),

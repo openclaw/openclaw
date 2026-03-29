@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { resetPressureTracking } from "../../agents/context-pressure.js";
 import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
@@ -751,6 +752,8 @@ export async function runReplyAgent(params: {
           nextSessionFile: refreshedSessionEntry.sessionFile,
         });
       }
+
+      resetPressureTracking();
 
       // Inject post-compaction workspace context for the next agent turn
       if (sessionKey) {

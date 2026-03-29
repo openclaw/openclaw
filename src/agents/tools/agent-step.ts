@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { isSilentReplyText } from "../../auto-reply/tokens.js";
 import { callGateway } from "../../gateway/call.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { AGENT_LANE_NESTED } from "../lanes.js";
@@ -33,6 +34,9 @@ export async function readLatestAssistantReply(params: {
     }
     const text = extractAssistantText(candidate);
     if (!text?.trim()) {
+      continue;
+    }
+    if (isSilentReplyText(text)) {
       continue;
     }
     return text;

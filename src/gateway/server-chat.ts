@@ -57,6 +57,20 @@ function shouldHideHeartbeatChatOutput(runId: string, sourceRunId?: string): boo
   }
 }
 
+function shouldSuppressNodeChat(runId: string, sourceRunId?: string): boolean {
+  const primary = getAgentRunContext(runId);
+  if (primary?.suppressNodeChat) {
+    return true;
+  }
+  if (sourceRunId && sourceRunId !== runId) {
+    const source = getAgentRunContext(sourceRunId);
+    if (source?.suppressNodeChat) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function normalizeHeartbeatChatFinalText(params: {
   runId: string;
   sourceRunId?: string;
@@ -581,7 +595,9 @@ export function createAgentEventHandler({
       },
     };
     broadcast("chat", payload, { dropIfSlow: true });
-    nodeSendToSession(sessionKey, "chat", payload);
+    if (!shouldSuppressNodeChat(clientRunId, sourceRunId)) {
+      nodeSendToSession(sessionKey, "chat", payload);
+    }
   };
 
   const resolveBufferedChatTextState = (clientRunId: string, sourceRunId: string) => {
@@ -638,7 +654,9 @@ export function createAgentEventHandler({
       },
     };
     broadcast("chat", flushPayload, { dropIfSlow: true });
-    nodeSendToSession(sessionKey, "chat", flushPayload);
+    if (!shouldSuppressNodeChat(clientRunId, sourceRunId)) {
+      nodeSendToSession(sessionKey, "chat", flushPayload);
+    }
     chatRunState.deltaLastBroadcastLen.set(clientRunId, text.length);
     chatRunState.deltaSentAt.set(clientRunId, now);
   };
@@ -678,7 +696,9 @@ export function createAgentEventHandler({
             : undefined,
       };
       broadcast("chat", payload);
+      if (!shouldSuppressNodeChat(clientRunId, sourceRunId)) {
       nodeSendToSession(sessionKey, "chat", payload);
+    }
       return;
     }
     const payload = {
@@ -689,7 +709,9 @@ export function createAgentEventHandler({
       errorMessage: error ? formatForLog(error) : undefined,
     };
     broadcast("chat", payload);
-    nodeSendToSession(sessionKey, "chat", payload);
+    if (!shouldSuppressNodeChat(clientRunId, sourceRunId)) {
+      nodeSendToSession(sessionKey, "chat", payload);
+    }
   };
 
   const resolveToolVerboseLevel = (runId: string, sessionKey?: string) => {

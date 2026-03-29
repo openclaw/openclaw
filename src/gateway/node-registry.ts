@@ -40,9 +40,21 @@ export class NodeRegistry {
   private nodesByConn = new Map<string, string>();
   private pendingInvokes = new Map<string, PendingInvoke>();
 
-  register(client: GatewayWsClient, opts: { remoteIp?: string | undefined }) {
+  register(
+    client: GatewayWsClient,
+    opts: { remoteIp?: string | undefined },
+  ): NodeSession | { rejected: true; reason: "already_connected"; existingConnId: string } {
     const connect = client.connect;
     const nodeId = connect.device?.id ?? connect.client.id;
+
+    const existing = this.nodesById.get(nodeId);
+    if (existing) {
+      return {
+        rejected: true as const,
+        reason: "already_connected",
+        existingConnId: existing.connId,
+      };
+    }
     const caps = Array.isArray(connect.caps) ? connect.caps : [];
     const commands = Array.isArray((connect as { commands?: string[] }).commands)
       ? ((connect as { commands?: string[] }).commands ?? [])

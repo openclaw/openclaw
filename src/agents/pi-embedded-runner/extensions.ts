@@ -57,8 +57,15 @@ function buildContextPruningFactory(params: {
   return contextPruningExtension;
 }
 
-function resolveCompactionMode(cfg?: OpenClawConfig): "default" | "safeguard" {
-  return cfg?.agents?.defaults?.compaction?.mode === "safeguard" ? "safeguard" : "default";
+function resolveCompactionMode(cfg?: OpenClawConfig): "default" | "safeguard" | "agent" {
+  const mode = cfg?.agents?.defaults?.compaction?.mode;
+  if (mode === "safeguard") {
+    return "safeguard";
+  }
+  if (mode === "agent") {
+    return "agent";
+  }
+  return "default";
 }
 
 export function buildEmbeddedExtensionFactories(params: {
@@ -69,7 +76,8 @@ export function buildEmbeddedExtensionFactories(params: {
   model: Model<Api> | undefined;
 }): ExtensionFactory[] {
   const factories: ExtensionFactory[] = [];
-  if (resolveCompactionMode(params.cfg) === "safeguard") {
+  const compactionMode = resolveCompactionMode(params.cfg);
+  if (compactionMode === "safeguard" || compactionMode === "agent") {
     const compactionCfg = params.cfg?.agents?.defaults?.compaction;
     const qualityGuardCfg = compactionCfg?.qualityGuard;
     const contextWindowInfo = resolveContextWindowInfo({
@@ -88,6 +96,7 @@ export function buildEmbeddedExtensionFactories(params: {
       qualityGuardEnabled: qualityGuardCfg?.enabled ?? false,
       qualityGuardMaxRetries: qualityGuardCfg?.maxRetries,
       model: params.model,
+      compactionMode: compactionCfg?.mode,
       recentTurnsPreserve: compactionCfg?.recentTurnsPreserve,
     });
     factories.push(compactionSafeguardExtension);

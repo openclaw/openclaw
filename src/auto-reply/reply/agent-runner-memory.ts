@@ -40,6 +40,7 @@ import {
   shouldRunPreflightCompaction,
 } from "./memory-flush.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
+import { maybeInjectAgentCompactionPressureSignal } from "./agent-compaction-pressure.js";
 import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
 import { incrementCompactionCount } from "./session-updates.js";
 
@@ -468,6 +469,18 @@ export async function runMemoryFlushIfNeeded(params: {
     return params.sessionEntry;
   }
 
+  // Agent-controlled compaction: inject pressure signal instead of running memory flush
+  const compactionMode = params.cfg?.agents?.defaults?.compaction?.mode;
+  if (compactionMode === "agent") {
+    return maybeInjectAgentCompactionPressureSignal({
+      cfg: params.cfg,
+      sessionEntry: params.sessionEntry,
+      sessionKey: params.sessionKey,
+      defaultModel: params.defaultModel,
+      agentCfgContextTokens: params.agentCfgContextTokens,
+    });
+  }
+
   const memoryFlushWritable = (() => {
     if (!params.sessionKey) {
       return true;
@@ -783,3 +796,5 @@ export async function runMemoryFlushIfNeeded(params: {
 
   return activeSessionEntry;
 }
+
+export { maybeInjectAgentCompactionPressureSignal } from "./agent-compaction-pressure.js";

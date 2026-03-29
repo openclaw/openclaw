@@ -82,4 +82,17 @@ describe("ensureSkillsWatcher", () => {
     expect(ignored.some((re) => re.test("/tmp/.hidden/skills/index.md"))).toBe(false);
     expect(ignored.some((re) => re.test("/tmp/workspace/skills/my-skill/SKILL.md"))).toBe(false);
   });
+
+  it("seeds version to 1 on first watcher setup so stale sessions refresh", async () => {
+    const mod = await import("./refresh.js");
+    const workspaceDir = "/tmp/seed-version-test-" + Date.now();
+
+    // Before watcher setup, version should be 0
+    expect(mod.getSkillsSnapshotVersion(workspaceDir)).toBe(0);
+
+    mod.ensureSkillsWatcher({ workspaceDir });
+
+    // After watcher setup, version should be seeded to 1
+    expect(mod.getSkillsSnapshotVersion(workspaceDir)).toBeGreaterThanOrEqual(1);
+  });
 });

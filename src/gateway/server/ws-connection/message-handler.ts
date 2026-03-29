@@ -1081,9 +1081,25 @@ export function attachGatewayWsMessageHandler(params: {
         setHandshakeState("connected");
         if (role === "node") {
           const context = buildRequestContext();
-          const nodeSession = context.nodeRegistry.register(nextClient, {
+          const registerResult = context.nodeRegistry.register(nextClient, {
             remoteIp: reportedClientIp,
           });
+          if ("rejected" in registerResult) {
+            logWs("out", "node-rejected-already-connected", {
+              connId,
+              existingConnId: registerResult.existingConnId,
+            });
+            socket.send(
+              JSON.stringify({
+                type: "error",
+                code: "already_connected",
+                message: "Node already connected from another instance",
+              }),
+            );
+            socket.close(4409, "already_connected");
+            return;
+          }
+          const nodeSession = registerResult;
           const instanceIdRaw = connectParams.client.instanceId;
           const instanceId = typeof instanceIdRaw === "string" ? instanceIdRaw.trim() : "";
           const nodeIdsForPairing = new Set<string>([nodeSession.nodeId]);

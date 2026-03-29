@@ -15,6 +15,7 @@ import type { ToolFsPolicy } from "./tool-fs-policy.js";
 import { createAgentsListTool } from "./tools/agents-list-tool.js";
 import { createCanvasTool } from "./tools/canvas-tool.js";
 import type { AnyAgentTool } from "./tools/common.js";
+import { createCompactTool } from "./tools/compact-tool.js";
 import { createCronTool } from "./tools/cron-tool.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
 import { createImageGenerateTool } from "./tools/image-generate-tool.js";
@@ -88,6 +89,8 @@ export function createOpenClawTools(
     senderIsOwner?: boolean;
     /** Ephemeral session UUID — regenerated on /new and /reset. */
     sessionId?: string;
+    /** Getter for the live SessionManager instance (for compact tool). */
+    getSessionManager?: () => import("@mariozechner/pi-coding-agent").SessionManager | undefined;
     /**
      * Workspace directory to pass to spawned subagents for inheritance.
      * Defaults to workspaceDir. Use this to pass the actual agent workspace when the
@@ -181,6 +184,13 @@ export function createOpenClawTools(
         requireExplicitTarget: options?.requireExplicitMessageTarget,
         requesterSenderId: options?.requesterSenderId ?? undefined,
       });
+  const compactTool = createCompactTool({
+    sessionKey: options?.agentSessionKey,
+    config: options?.config,
+    workspaceDir,
+    getSessionManager: options?.getSessionManager,
+  });
+
   const tools: AnyAgentTool[] = [
     createCanvasTool({ config: options?.config }),
     createNodesTool({
@@ -259,6 +269,10 @@ export function createOpenClawTools(
     ...(imageTool ? [imageTool] : []),
     ...(pdfTool ? [pdfTool] : []),
   ];
+
+  if (compactTool) {
+    tools.push(compactTool);
+  }
 
   const pluginTools = resolvePluginTools({
     context: {
