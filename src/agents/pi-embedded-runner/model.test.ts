@@ -1106,6 +1106,15 @@ describe("resolveModel", () => {
         buildProviderUnknownModelHintWithPlugin: () => undefined,
         prepareProviderDynamicModel: async () => {},
         runProviderDynamicModel: () => undefined,
+        applyProviderResolvedTransportWithPlugin: ({ provider, context }) =>
+          provider === "xai" &&
+          context.model.api === "openai-completions" &&
+          context.model.baseUrl === "https://api.x.ai/v1"
+            ? {
+                ...context.model,
+                api: "openai-responses",
+              }
+            : undefined,
         normalizeProviderResolvedModelWithPlugin: ({ provider, context }) =>
           provider === "xai" ? (context.model as never) : undefined,
         normalizeProviderTransportWithPlugin: () => undefined,
