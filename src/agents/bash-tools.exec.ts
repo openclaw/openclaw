@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { type ExecHost, loadExecApprovals, maxAsk, minSecurity } from "../infra/exec-approvals.js";
@@ -171,6 +172,227 @@ async function validateScriptFileForShellBleed(params: {
       );
     }
   }
+}
+
+const BROAD_FIND_TIMEOUT_SEC = 20;
+const BROAD_FIND_ESCAPE_HATCHES = new Set(["-prune", "-xdev", "-mount"]);
+const FIND_GLOBAL_OPTIONS_NO_ARG = new Set(["-H", "-L", "-P"]);
+const FIND_PREDICATES_WITH_ARG = new Set([
+  "-amin",
+  "-anewer",
+  "-atime",
+  "-cmin",
+  "-cnewer",
+  "-context",
+  "-ctime",
+  "-fstype",
+  "-gid",
+  "-group",
+  "-iname",
+  "-inum",
+  "-ipath",
+  "-iregex",
+  "-iwholename",
+  "-links",
+  "-maxdepth",
+  "-mindepth",
+  "-mmin",
+  "-mtime",
+  "-name",
+  "-newer",
+  "-path",
+  "-perm",
+  "-regex",
+  "-samefile",
+  "-size",
+  "-type",
+  "-uid",
+  "-user",
+  "-wholename",
+]);
+const FIND_SEGMENT_TERMINATORS = new Set(["&", "&&", ";", ";;", "|", "||"]);
+const FIND_EXEC_TOKENS = new Set(["-exec", "-execdir", "-ok", "-okdir"]);
+
+function tokenizeShellWords(command: string): string[] {
+  const tokens: string[] = [];
+  let current = "";
+  let quote: '"' | "'" | null = null;
+  let escaping = false;
+  for (const char of command) {
+    if (escaping) {
+      current += char;
+      escaping = false;
+      continue;
+    }
+    if (quote === "'") {
+      if (char === "'") {
+        quote = null;
+      } else {
+        current += char;
+      }
+      continue;
+    }
+    if (quote === '"') {
+      if (char === '"') {
+        quote = null;
+        continue;
+      }
+      if (char === "\\") {
+        escaping = true;
+        continue;
+      }
+      current += char;
+      continue;
+    }
+    if (char === "\\") {
+      escaping = true;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      if (current) {
+        tokens.push(current);
+        current = "";
+      }
+      continue;
+    }
+    if (char === ";" || char === "|") {
+      if (current) {
+        tokens.push(current);
+        current = "";
+      }
+      tokens.push(char);
+      continue;
+    }
+    if (char === "&") {
+      if (current) {
+        tokens.push(current);
+        current = "";
+      }
+      tokens.push(char);
+      continue;
+    }
+    current += char;
+  }
+  if (current) {
+    tokens.push(current);
+  }
+  return tokens;
+}
+
+function extractFindTraversalTokens(command: string): string[] {
+  const tokens = tokenizeShellWords(command);
+  if (tokens[0] !== "find") {
+    return [];
+  }
+  const findTokens: string[] = [];
+  for (const token of tokens.slice(1)) {
+    if (FIND_SEGMENT_TERMINATORS.has(token) || FIND_EXEC_TOKENS.has(token)) {
+      break;
+    }
+    findTokens.push(token);
+  }
+  return findTokens;
+}
+
+function resolveFindRootToken(rootToken: string, homeDir: string, workdir: string): string {
+  if (rootToken === "~") {
+    return homeDir;
+  }
+  if (rootToken.startsWith("~/")) {
+    return path.resolve(homeDir, rootToken.slice(2));
+  }
+  if (rootToken === "$HOME") {
+    return homeDir;
+  }
+  if (rootToken.startsWith("$HOME/")) {
+    return path.resolve(homeDir, rootToken.slice("$HOME/".length));
+  }
+  return path.resolve(workdir, rootToken);
+}
+
+function tokenLooksLikePath(token: string): boolean {
+  if (!token) {
+    return false;
+  }
+  if (token === "." || token === ".." || token === "/" || token === "~" || token === "$HOME") {
+    return true;
+  }
+  if (
+    token.startsWith("./") ||
+    token.startsWith("../") ||
+    token.startsWith("~/") ||
+    token.startsWith("$HOME/")
+  ) {
+    return true;
+  }
+  return !token.startsWith("-");
+}
+
+export function maybeCapBroadFindTimeoutSec(params: {
+  command: string;
+  workdir: string;
+  explicitTimeoutSec: number | null;
+}): { timeoutSec: number | null; warning?: string } {
+  if (params.explicitTimeoutSec !== null) {
+    return { timeoutSec: null };
+  }
+  const findTokens = extractFindTraversalTokens(params.command);
+  if (findTokens.length === 0) {
+    return { timeoutSec: null };
+  }
+  let rootToken: string | null = null;
+  let hasEscapeHatch = false;
+  for (let i = 0; i < findTokens.length; i += 1) {
+    const token = findTokens[i];
+    if (FIND_GLOBAL_OPTIONS_NO_ARG.has(token)) {
+      continue;
+    }
+    if (token === "-D" || token === "-O") {
+      i += 1;
+      continue;
+    }
+    if (token.startsWith("-D") || token.startsWith("-O")) {
+      continue;
+    }
+    if (BROAD_FIND_ESCAPE_HATCHES.has(token)) {
+      hasEscapeHatch = true;
+      continue;
+    }
+    if (FIND_PREDICATES_WITH_ARG.has(token)) {
+      i += 1;
+      continue;
+    }
+    if (!rootToken && tokenLooksLikePath(token)) {
+      rootToken = token;
+    }
+  }
+  if (hasEscapeHatch) {
+    return { timeoutSec: null };
+  }
+  const homeDir = path.resolve(os.homedir());
+  const resolvedRoot = resolveFindRootToken(rootToken ?? ".", homeDir, params.workdir);
+  const resolvedWorkdir = path.resolve(params.workdir);
+  const filesystemRoot = path.parse(homeDir).root;
+  if (
+    resolvedWorkdir !== filesystemRoot &&
+    (resolvedRoot === resolvedWorkdir || resolvedRoot.startsWith(`${resolvedWorkdir}${path.sep}`))
+  ) {
+    return { timeoutSec: null };
+  }
+  const isBroadRoot = resolvedRoot === homeDir || resolvedRoot === filesystemRoot;
+  if (!isBroadRoot) {
+    return { timeoutSec: null };
+  }
+  return {
+    timeoutSec: BROAD_FIND_TIMEOUT_SEC,
+    warning:
+      "Warning: broad find scans over $HOME or / without pruning are capped at 20s. " +
+      "Narrow the base path, scope to the workspace, or pass an explicit timeout if the long scan is intentional.",
+  };
 }
 
 export function createExecTool(
@@ -518,11 +740,19 @@ export function createExecTool(
       }
 
       const explicitTimeoutSec = typeof params.timeout === "number" ? params.timeout : null;
+      const broadFindTimeout = maybeCapBroadFindTimeoutSec({
+        command: params.command,
+        workdir,
+        explicitTimeoutSec,
+      });
+      if (broadFindTimeout.warning) {
+        warnings.push(broadFindTimeout.warning);
+      }
       const backgroundTimeoutBypass =
         allowBackground && explicitTimeoutSec === null && (backgroundRequested || yieldRequested);
-      const effectiveTimeout = backgroundTimeoutBypass
-        ? null
-        : (explicitTimeoutSec ?? defaultTimeoutSec);
+      const effectiveTimeout =
+        broadFindTimeout.timeoutSec ??
+        (backgroundTimeoutBypass ? null : (explicitTimeoutSec ?? defaultTimeoutSec));
       const getWarningText = () => (warnings.length ? `${warnings.join("\n")}\n\n` : "");
       const usePty = params.pty === true && !sandbox;
 

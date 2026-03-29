@@ -433,6 +433,7 @@ export function buildAgentSystemPrompt(params: {
         ].join("\n"),
     "TOOLS.md does not control tool availability; it is user guidance for how to use external tools.",
     `For long waits, avoid rapid poll loops: use ${execToolName} with enough yieldMs or ${processToolName}(action=poll, timeout=<ms>).`,
+    "For file or directory discovery, prefer scoped searches under the workspace; avoid broad shell `find` scans over $HOME or / without an explicit timeout.",
     "If a task is more complex or takes longer, spawn a sub-agent. Completion is push-based: it will auto-announce when done.",
     ...(acpHarnessSpawnAllowed
       ? [
