@@ -130,6 +130,14 @@ OpenClaw's plugin system has four layers:
    The rest of OpenClaw reads the registry to expose tools, channels, provider
    setup, hooks, HTTP routes, CLI commands, and services.
 
+For plugin CLI specifically, root command discovery is split in two phases:
+
+- parse-time metadata comes from `registerCli(..., { descriptors: [...] })`
+- the real plugin CLI module can stay lazy and register on first invocation
+
+That keeps plugin-owned CLI code inside the plugin while still letting OpenClaw
+reserve root command names before parsing.
+
 The important design boundary:
 
 - discovery + config validation should work from **manifest/schema metadata**
