@@ -65,13 +65,7 @@ describe("sessionsLabelCommand", () => {
   });
 
   it("calls sessions.patch with label", async () => {
-    mocks.callGateway.mockResolvedValueOnce({
-      ts: Date.now(),
-      path: "/p",
-      count: 1,
-      defaults: { modelProvider: null, model: null, contextTokens: null },
-      sessions: [{ key: "agent:main:main", kind: "direct", updatedAt: Date.now() }],
-    });
+    mocks.callGateway.mockResolvedValueOnce({ ok: true, key: "agent:main:main" });
     mocks.callGateway.mockResolvedValueOnce({
       ok: true,
       key: "agent:main:main",
@@ -95,13 +89,7 @@ describe("sessionsLabelCommand", () => {
   });
 
   it("calls sessions.patch with null label when clearing", async () => {
-    mocks.callGateway.mockResolvedValueOnce({
-      ts: Date.now(),
-      path: "/p",
-      count: 1,
-      defaults: { modelProvider: null, model: null, contextTokens: null },
-      sessions: [{ key: "agent:main:main", kind: "direct", updatedAt: Date.now() }],
-    });
+    mocks.callGateway.mockResolvedValueOnce({ ok: true, key: "agent:main:main" });
     mocks.callGateway.mockResolvedValueOnce({
       ok: true,
       key: "agent:main:main",
@@ -120,13 +108,7 @@ describe("sessionsLabelCommand", () => {
   });
 
   it("logs set label even if gateway response omits entry.label", async () => {
-    mocks.callGateway.mockResolvedValueOnce({
-      ts: Date.now(),
-      path: "/p",
-      count: 1,
-      defaults: { modelProvider: null, model: null, contextTokens: null },
-      sessions: [{ key: "agent:main:main", kind: "direct", updatedAt: Date.now() }],
-    });
+    mocks.callGateway.mockResolvedValueOnce({ ok: true, key: "agent:main:main" });
     mocks.callGateway.mockResolvedValueOnce({
       ok: true,
       key: "agent:main:main",
@@ -146,13 +128,7 @@ describe("sessionsLabelCommand", () => {
       entry: { label: "x", sessionId: "s", updatedAt: 1 },
     };
     mocks.callGateway
-      .mockResolvedValueOnce({
-        ts: Date.now(),
-        path: "/p",
-        count: 1,
-        defaults: { modelProvider: null, model: null, contextTokens: null },
-        sessions: [{ key: "agent:main:main", kind: "direct", updatedAt: Date.now() }],
-      })
+      .mockResolvedValueOnce({ ok: true, key: "agent:main:main" })
       .mockResolvedValueOnce(payload);
     const logs: string[] = [];
     const runtime: RuntimeEnv = {
@@ -167,18 +143,47 @@ describe("sessionsLabelCommand", () => {
   });
 
   it("rejects unknown session keys unless forced", async () => {
-    mocks.callGateway.mockResolvedValueOnce({
-      ts: Date.now(),
-      path: "/p",
-      count: 1,
-      defaults: { modelProvider: null, model: null, contextTokens: null },
-      sessions: [{ key: "agent:main:main", kind: "direct", updatedAt: Date.now() }],
-    });
+    mocks.callGateway.mockRejectedValueOnce(new Error("No session found: agent:main:maan"));
     const { runtime, errors, exits } = makeRuntime();
     await sessionsLabelCommand({ session: "agent:main:maan", label: "x", timeout: 5000 }, runtime);
     expect(errors.some((e) => e.toLowerCase().includes("unknown session key"))).toBe(true);
     expect(exits).toContain(1);
     expect(mocks.callGateway).toHaveBeenCalledTimes(1);
+    expect(mocks.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({ method: "sessions.resolve" }),
+    );
+  });
+
+  it("preflights with sessions.resolve so aliases match patch canonicalization", async () => {
+    mocks.callGateway
+      .mockResolvedValueOnce({ ok: true, key: "agent:main:main" })
+      .mockResolvedValueOnce({
+        ok: true,
+        key: "agent:main:main",
+        path: "/p",
+        entry: { label: "Hi", sessionId: "s", updatedAt: 1 },
+      });
+    const { runtime, logs } = makeRuntime();
+    await sessionsLabelCommand({ session: "main", label: "Hi" }, runtime);
+    expect(mocks.callGateway).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        method: "sessions.resolve",
+        params: {
+          key: "main",
+          includeGlobal: true,
+          includeUnknown: true,
+        },
+      }),
+    );
+    expect(mocks.callGateway).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        method: "sessions.patch",
+        params: { key: "main", label: "Hi" },
+      }),
+    );
+    expect(logs.some((l) => l.includes("Set label") && l.includes("Hi"))).toBe(true);
   });
 
   it("allows unknown session keys when forced", async () => {

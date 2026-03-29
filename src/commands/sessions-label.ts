@@ -1,7 +1,6 @@
 import { withProgress } from "../cli/progress.js";
 import { callGateway } from "../gateway/call.js";
-import type { SessionsPatchResult, SessionsListParams } from "../gateway/protocol/index.js";
-import type { SessionsListResult } from "../gateway/session-utils.types.js";
+import type { SessionsPatchResult } from "../gateway/protocol/index.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -50,22 +49,22 @@ export async function sessionsLabelCommand(opts: SessionsLabelCommandOpts, runti
         : DEFAULT_TIMEOUT_MS;
 
   if (opts.force !== true) {
-    const listParams: SessionsListParams = {
-      includeGlobal: true,
-      includeUnknown: true,
-    };
-    const list = await callGateway<SessionsListResult>({
-      method: "sessions.list",
-      params: listParams,
-      clientName: GATEWAY_CLIENT_NAMES.CLI,
-      mode: GATEWAY_CLIENT_MODES.CLI,
-      url: opts.url?.trim() || undefined,
-      token: opts.token?.trim() || undefined,
-      password: opts.password?.trim() || undefined,
-      timeoutMs,
-    });
-    const exists = (list.sessions ?? []).some((row) => row.key === sessionKey);
-    if (!exists) {
+    try {
+      await callGateway<{ ok: true; key: string }>({
+        method: "sessions.resolve",
+        params: {
+          key: sessionKey,
+          includeGlobal: true,
+          includeUnknown: true,
+        },
+        clientName: GATEWAY_CLIENT_NAMES.CLI,
+        mode: GATEWAY_CLIENT_MODES.CLI,
+        url: opts.url?.trim() || undefined,
+        token: opts.token?.trim() || undefined,
+        password: opts.password?.trim() || undefined,
+        timeoutMs,
+      });
+    } catch {
       runtime.error(
         `Unknown session key: ${sessionKey}. Run "openclaw sessions" to find the correct key, or pass --force to create a new entry.`,
       );
