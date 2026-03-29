@@ -11107,6 +11107,25 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   type: "string",
                   format: "uri",
                 },
+                headers: {
+                  type: "object",
+                  propertyNames: {
+                    type: "string",
+                  },
+                  additionalProperties: {
+                    anyOf: [
+                      {
+                        type: "string",
+                      },
+                      {
+                        type: "number",
+                      },
+                      {
+                        type: "boolean",
+                      },
+                    ],
+                  },
+                },
               },
               additionalProperties: {},
             },
@@ -15504,6 +15523,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     "tools.web.search.perplexity.apiKey": {
       sensitive: true,
       tags: ["security", "auth", "tools"],
+    },
+    "mcp.servers.*.headers.*": {
+      sensitive: true,
+      tags: ["security"],
     },
     "skills.entries.*.apiKey": {
       sensitive: true,
