@@ -76,6 +76,19 @@
 - README (GitHub): keep absolute docs URLs (`https://docs.openclaw.ai/...`) so links work on GitHub.
 - Docs content must be generic: no personal device names/hostnames/paths; use placeholders like `user@gateway-host` and “gateway host”.
 
+## Internal Development Docs
+
+- `docs/internal/**` is for internal-only development context that should stay in the repo but not on the public docs site.
+- Automatically create or update a note in `docs/internal/<github-username>/` when starting meaningful implementation work, refactors, migrations, architecture changes, or other development context that would otherwise be lost.
+- Default note types include implementation plans, refactor plans, migration plans, architecture notes, debugging notes, and other development context.
+- Infer `<github-username>` from the current authenticated GitHub user. Prefer the active GitHub login; if that cannot be resolved, fall back to the best available local git identity.
+- Use dated filenames: `YYYY-MM-DD-short-topic.md`.
+- Use YAML frontmatter at minimum: `title`, `summary`, `author`, `github_username`, and `created`.
+- When the author identity is known, prefer `author: "Name <email>"`.
+- Keep these notes in plain language.
+- Do not place internal planning notes in public `docs/**` pages or revive `experiments/`; use `docs/internal/` instead.
+- Read `docs/internal/README.md` before creating or reorganizing internal development notes.
+
 ## Docs i18n (zh-CN)
 
 - `docs/zh-CN/**` is generated; do not edit unless the user explicitly asks.
