@@ -24,7 +24,6 @@ const DEFAULT_RELOAD_SETTINGS: GatewayReloadSettings = {
 };
 const MISSING_CONFIG_RETRY_DELAY_MS = 150;
 const MISSING_CONFIG_MAX_RETRIES = 2;
-const SELF_WRITE_WATCHER_SUPPRESSION_MS = 350;
 
 export function diffConfigPaths(prev: unknown, next: unknown, prefix = ""): string[] {
   if (prev === next) {
@@ -98,7 +97,6 @@ export function startGatewayConfigReloader(opts: {
   let missingConfigRetries = 0;
   let pendingInProcessConfig: OpenClawConfig | null = null;
   let lastAppliedWriteHash: string | null = null;
-  let ignoreWatcherEventsUntilMs = 0;
 
   const scheduleAfter = (wait: number) => {
     if (stopped) {
@@ -213,13 +211,11 @@ export function startGatewayConfigReloader(opts: {
         return;
       }
       const snapshot = await opts.readSnapshot();
-      if (
-        lastAppliedWriteHash &&
-        typeof snapshot.hash === "string" &&
-        snapshot.hash === lastAppliedWriteHash
-      ) {
+      if (lastAppliedWriteHash && typeof snapshot.hash === "string") {
+        if (snapshot.hash === lastAppliedWriteHash) {
+          return;
+        }
         lastAppliedWriteHash = null;
-        return;
       }
       if (handleMissingSnapshot(snapshot)) {
         return;
@@ -246,9 +242,6 @@ export function startGatewayConfigReloader(opts: {
   });
 
   const scheduleFromWatcher = () => {
-    if (Date.now() < ignoreWatcherEventsUntilMs) {
-      return;
-    }
     schedule();
   };
 
@@ -259,10 +252,6 @@ export function startGatewayConfigReloader(opts: {
       }
       pendingInProcessConfig = event.runtimeConfig;
       lastAppliedWriteHash = event.persistedHash;
-      ignoreWatcherEventsUntilMs = Math.max(
-        ignoreWatcherEventsUntilMs,
-        event.writtenAtMs + SELF_WRITE_WATCHER_SUPPRESSION_MS,
-      );
       scheduleAfter(0);
     }) ?? (() => {});
 
