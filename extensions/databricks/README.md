@@ -61,6 +61,9 @@ Environment fallbacks are supported:
 - No Unity Catalog/lineage API integration yet
 - No mutating SQL operations in this iteration
 - Allowlist checks are conservative:
+  - target extraction supports only explicit and safe `FROM`/`JOIN` references in `schema.table` or `catalog.schema.table` form, including backtick-quoted identifiers
+  - queries with leading `WITH` and derived subqueries are supported conservatively: only explicit physical targets are extracted, CTE aliases are never treated as physical tables
   - if an allowlist is configured and query targets cannot be determined safely from SQL, the query is rejected (fail-closed)
+  - malformed quoting, unbalanced parentheses, ambiguous syntax, or unsupported statement shapes resolve to no targets (fail-closed)
   - single-part table references (for example `FROM orders`) are treated as ambiguous when allowlists are active
   - explicit `catalog`/`schema` request parameters do not bypass SQL target validation
