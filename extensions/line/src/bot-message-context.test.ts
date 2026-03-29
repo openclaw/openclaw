@@ -335,6 +335,43 @@ describe("buildLineMessageContext", () => {
     });
   });
 
+  it("normalizes canonical LINE targets through the plugin bindings surface", async () => {
+    const compiled = linePlugin.bindings?.compileConfiguredBinding({
+      binding: {
+        type: "acp",
+        agentId: "codex",
+        match: { channel: "line", accountId: "default", peer: { kind: "direct", id: "unused" } },
+      } as AgentBinding,
+      conversationId: "line:U1234567890abcdef1234567890abcdef",
+    });
+
+    expect(compiled).toEqual({
+      conversationId: "U1234567890abcdef1234567890abcdef",
+    });
+    expect(
+      linePlugin.bindings?.resolveCommandConversation?.({
+        accountId: "default",
+        originatingTo: "line:U1234567890abcdef1234567890abcdef",
+      }),
+    ).toEqual({
+      conversationId: "U1234567890abcdef1234567890abcdef",
+    });
+    expect(
+      linePlugin.bindings?.matchInboundConversation({
+        binding: {
+          type: "acp",
+          agentId: "codex",
+          match: { channel: "line", accountId: "default", peer: { kind: "direct", id: "unused" } },
+        } as AgentBinding,
+        compiledBinding: compiled!,
+        conversationId: "U1234567890abcdef1234567890abcdef",
+      }),
+    ).toEqual({
+      conversationId: "U1234567890abcdef1234567890abcdef",
+      matchPriority: 2,
+    });
+  });
+
   it("routes LINE conversations through active ACP session bindings", async () => {
     const userId = "U1234567890abcdef1234567890abcdef";
     await getSessionBindingService().bind({
