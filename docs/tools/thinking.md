@@ -56,8 +56,8 @@ title: "Thinking Levels"
   5. Fallback: `off`
 - For `openai/*`, fast mode maps to OpenAI priority processing by sending `service_tier=priority` on supported Responses requests.
 - For `openai-codex/*`, fast mode sends the same `service_tier=priority` flag on Codex Responses. OpenClaw keeps one shared `/fast` toggle across both auth paths.
-- For direct `anthropic/*` API-key requests, fast mode maps to Anthropic service tiers: `/fast on` sets `service_tier=auto`, `/fast off` sets `service_tier=standard_only`.
-- Anthropic fast mode is API-key only. OpenClaw skips Anthropic service-tier injection for Claude setup-token / OAuth auth and for non-Anthropic proxy base URLs.
+- For direct public `anthropic/*` requests, including OAuth-authenticated traffic sent to `api.anthropic.com`, fast mode maps to Anthropic service tiers: `/fast on` sets `service_tier=auto`, `/fast off` sets `service_tier=standard_only`.
+- Explicit Anthropic `serviceTier` / `service_tier` model params override the fast-mode default when both are set. OpenClaw still skips Anthropic service-tier injection for non-Anthropic proxy base URLs.
 
 ## Verbose directives (/verbose or /v)
 

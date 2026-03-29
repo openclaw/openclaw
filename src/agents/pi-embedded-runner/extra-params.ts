@@ -12,8 +12,10 @@ import type { ProviderRuntimeModel } from "../../plugins/types.js";
 import {
   createAnthropicBetaHeadersWrapper,
   createAnthropicFastModeWrapper,
+  createAnthropicServiceTierWrapper,
   createAnthropicToolPayloadCompatibilityWrapper,
   resolveAnthropicFastMode,
+  resolveAnthropicServiceTier,
   resolveAnthropicBetas,
   resolveCacheRetention,
 } from "./anthropic-stream-wrappers.js";
@@ -364,6 +366,19 @@ function applyPostPluginStreamWrappers(
   // upstream model-ID heuristics for Gemini 3.1 variants.
   ctx.agent.streamFn = createGoogleThinkingPayloadWrapper(ctx.agent.streamFn, ctx.thinkingLevel);
 
+  if (ctx.provider === "anthropic") {
+    const anthropicServiceTier = resolveAnthropicServiceTier(ctx.effectiveExtraParams);
+    if (anthropicServiceTier) {
+      log.debug(
+        `applying Anthropic service_tier=${anthropicServiceTier} for ${ctx.provider}/${ctx.modelId}`,
+      );
+      ctx.agent.streamFn = createAnthropicServiceTierWrapper(
+        ctx.agent.streamFn,
+        anthropicServiceTier,
+      );
+    }
+  }
+
   const anthropicFastMode = resolveAnthropicFastMode(ctx.effectiveExtraParams);
   if (anthropicFastMode !== undefined) {
     log.debug(
@@ -388,12 +403,14 @@ function applyPostPluginStreamWrappers(
     ctx.agent.streamFn = createOpenAIFastModeWrapper(ctx.agent.streamFn);
   }
 
-  const openAIServiceTier = resolveOpenAIServiceTier(ctx.effectiveExtraParams);
-  if (openAIServiceTier) {
-    log.debug(
-      `applying OpenAI service_tier=${openAIServiceTier} for ${ctx.provider}/${ctx.modelId}`,
-    );
-    ctx.agent.streamFn = createOpenAIServiceTierWrapper(ctx.agent.streamFn, openAIServiceTier);
+  if (ctx.provider === "openai" || ctx.provider === "openai-codex") {
+    const openAIServiceTier = resolveOpenAIServiceTier(ctx.effectiveExtraParams);
+    if (openAIServiceTier) {
+      log.debug(
+        `applying OpenAI service_tier=${openAIServiceTier} for ${ctx.provider}/${ctx.modelId}`,
+      );
+      ctx.agent.streamFn = createOpenAIServiceTierWrapper(ctx.agent.streamFn, openAIServiceTier);
+    }
   }
 
   // Work around upstream pi-ai hardcoding `store: false` for Responses API.
