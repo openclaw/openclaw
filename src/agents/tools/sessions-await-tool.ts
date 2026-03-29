@@ -1,4 +1,5 @@
 import { Type } from "@sinclair/typebox";
+import { loadConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
 import { captureSubagentCompletionReply } from "../subagent-announce.js";
 import {
@@ -8,6 +9,7 @@ import {
 } from "../subagent-registry.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult } from "./common.js";
+import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
 
 const MAX_AWAIT_SESSIONS = 20;
 const DEFAULT_TIMEOUT_SECONDS = 300;
@@ -102,13 +104,20 @@ export function createSessionsAwaitTool(opts?: { agentSessionKey?: string }): An
           : DEFAULT_TIMEOUT_SECONDS;
       const timeoutMs = timeoutSeconds * 1000;
       const deadline = Date.now() + timeoutMs;
-      const requesterSessionKey = opts?.agentSessionKey?.trim();
-      if (!requesterSessionKey) {
+      const requesterSessionKeyRaw = opts?.agentSessionKey?.trim();
+      if (!requesterSessionKeyRaw) {
         return jsonResult({
           status: "error",
           error: "sessions_await requires an active requester session context",
         });
       }
+      const cfg = loadConfig();
+      const { alias, mainKey } = resolveMainSessionAlias(cfg);
+      const requesterSessionKey = resolveInternalSessionKey({
+        key: requesterSessionKeyRaw,
+        alias,
+        mainKey,
+      });
 
       // Resolve each session key to a registry run entry.
       const lookups = sessionKeys.map((key) => {

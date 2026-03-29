@@ -5,6 +5,7 @@ const getSubagentRunByChildSessionKeyMock = vi.fn();
 const captureSubagentCompletionReplyMock = vi.fn();
 const setSuppressAutoAnnounceMock = vi.fn();
 const clearSuppressAutoAnnounceMock = vi.fn();
+const loadConfigMock = vi.fn();
 const REQUESTER_SESSION_KEY = "agent:main:main";
 
 let createSessionsAwaitTool: typeof import("./sessions-await-tool.js").createSessionsAwaitTool;
@@ -13,6 +14,9 @@ async function loadFreshModules() {
   vi.resetModules();
   vi.doMock("../../gateway/call.js", () => ({
     callGateway: (...args: unknown[]) => callGatewayMock(...args),
+  }));
+  vi.doMock("../../config/config.js", () => ({
+    loadConfig: (...args: unknown[]) => loadConfigMock(...args),
   }));
   vi.doMock("../subagent-registry.js", () => ({
     getSubagentRunByChildSessionKey: (...args: unknown[]) =>
@@ -47,6 +51,9 @@ describe("sessions_await tool", () => {
     captureSubagentCompletionReplyMock.mockReset().mockResolvedValue(undefined);
     setSuppressAutoAnnounceMock.mockReset().mockReturnValue(true);
     clearSuppressAutoAnnounceMock.mockReset();
+    loadConfigMock.mockReset().mockReturnValue({
+      session: { mainKey: "main", scope: "per-sender" },
+    });
     await loadFreshModules();
   });
 
@@ -112,6 +119,41 @@ describe("sessions_await tool", () => {
     ]);
     expect(setSuppressAutoAnnounceMock).not.toHaveBeenCalled();
     expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("normalizes requester session key aliases before owner checks", async () => {
+    loadConfigMock.mockReturnValue({
+      session: { mainKey: "main", scope: "global" },
+    });
+    await loadFreshModules();
+    const ownedRun = makeRun({
+      runId: "run-global-owner",
+      childSessionKey: "agent:main:subagent:global-owner",
+      requesterSessionKey: "global",
+      requesterDisplayKey: "main",
+      endedAt: Date.now(),
+      outcome: { status: "ok" },
+    });
+    getSubagentRunByChildSessionKeyMock.mockImplementation((key: string) =>
+      key === "agent:main:subagent:global-owner" ? ownedRun : null,
+    );
+    captureSubagentCompletionReplyMock.mockResolvedValue("done");
+
+    const tool = createSessionsAwaitTool({ agentSessionKey: "main" });
+    const result = await tool.execute("call-global-owner", {
+      sessionKeys: ["agent:main:subagent:global-owner"],
+    });
+
+    const details = result.details as { status: string; results: Array<Record<string, unknown>> };
+    expect(details.status).toBe("ok");
+    expect(details.results).toEqual([
+      {
+        sessionKey: "agent:main:subagent:global-owner",
+        status: "completed",
+        runId: "run-global-owner",
+        reply: "done",
+      },
+    ]);
   });
 
   it("returns immediately for already-completed runs", async () => {
