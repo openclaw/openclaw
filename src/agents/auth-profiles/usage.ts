@@ -662,7 +662,11 @@ function computeNextProfileUsageStats(params: {
     lastFailureAt: params.now,
   };
 
-  if (params.reason === "billing" || params.reason === "auth_permanent") {
+  if (
+    params.reason === "billing" ||
+    params.reason === "auth" ||
+    params.reason === "auth_permanent"
+  ) {
     const billingCount = failureCounts[params.reason] ?? 1;
     const backoffMs = calculateAuthProfileBillingDisableMsWithConfig({
       errorCount: billingCount,
