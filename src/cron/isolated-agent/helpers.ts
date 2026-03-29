@@ -72,12 +72,12 @@ export function pickLastNonEmptyTextFromPayloads(
 }
 
 function isDeliverablePayload(payload: DeliveryPayload | null | undefined): boolean {
-  if (!payload) return false;
+  if (!payload) {
+    return false;
+  }
   const hasInteractive = (payload.interactive?.blocks?.length ?? 0) > 0;
   const hasChannelData = Object.keys(payload.channelData ?? {}).length > 0;
-  return (
-    hasOutboundReplyContent(payload, { trimText: true }) || hasInteractive || hasChannelData
-  );
+  return hasOutboundReplyContent(payload, { trimText: true }) || hasInteractive || hasChannelData;
 }
 
 export function pickLastDeliverablePayload(payloads: DeliveryPayload[]) {
