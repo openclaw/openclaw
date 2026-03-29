@@ -390,21 +390,32 @@ The config shape is identical to `approvals.exec`: `enabled`, `mode`, `agentFilt
 Channels that support interactive exec approval buttons (such as Telegram) also render buttons for
 plugin approvals. Channels without adapter support fall back to plain text with `/approve` instructions.
 
-### Built-in chat approval clients
+### Same-chat approvals on any channel
 
-Discord and Telegram can also act as explicit exec approval clients with channel-specific config.
+When an exec or plugin approval request originates from a deliverable chat surface, the same chat
+can now approve it with `/approve` by default. This applies to channels such as Slack, Matrix, and
+Microsoft Teams in addition to the existing Web UI and terminal UI flows.
+
+This shared text-command path uses the normal channel auth model for that conversation. If the
+originating chat can already send commands and receive replies, approval requests no longer need a
+separate channel-specific approval client just to stay pending.
+
+### Rich approval clients
+
+Discord and Telegram can also act as richer exec approval clients with channel-specific config.
 
 - Discord: `channels.discord.execApprovals.*`
 - Telegram: `channels.telegram.execApprovals.*`
 
-These clients are opt-in. If a channel does not have exec approvals enabled, OpenClaw does not treat
-that channel as an approval surface just because the conversation happened there.
+These richer clients are opt-in. They add native DM routing, channel fanout, and interactive UI on
+top of the shared same-chat `/approve` flow.
 
 Shared behavior:
 
 - only resolved approvers can approve or deny
 - Discord and Telegram approvers can be explicit (`execApprovals.approvers`) or inferred from existing owner config (`allowFrom`, plus direct-message `defaultTo` where supported)
 - the requester does not need to be an approver
+- the originating chat can approve directly with `/approve` when that chat already supports commands and replies
 - when channel delivery is enabled, approval prompts include the command text
 - pending exec approvals expire after 30 minutes by default
 - if no operator UI or configured approval client can accept the request, the prompt falls back to `askFallback`
