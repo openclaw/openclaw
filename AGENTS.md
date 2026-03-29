@@ -86,6 +86,7 @@
 - Use YAML frontmatter at minimum: `title`, `summary`, `author`, `github_username`, and `created`.
 - When the author identity is known, prefer `author: "Name <email>"`.
 - Keep these notes in plain language.
+- Avoid deleting or rewriting someone else's internal notes unless there is a clear valid reason, such as an explicit user request, accidental duplicate content, secret removal, or replacement by a newer note.
 - Do not place internal planning notes in public `docs/**` pages or revive `experiments/`; use `docs/internal/` instead.
 - Read `docs/internal/README.md` before creating or reorganizing internal development notes.
 
