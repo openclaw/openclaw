@@ -161,9 +161,15 @@ function sortRows(
   return [...rows].toSorted((a, b) => {
     let diff = 0;
     switch (column) {
-      case "key":
-        diff = (a.key ?? "").localeCompare(b.key ?? "");
+      case "key": {
+        const titleA = resolveSessionDisplayName(a.key, a);
+        const titleB = resolveSessionDisplayName(b.key, b);
+        diff = titleA.localeCompare(titleB, undefined, { sensitivity: "base" });
+        if (diff === 0) {
+          diff = (a.key ?? "").localeCompare(b.key ?? "");
+        }
         break;
+      }
       case "kind":
         diff = (a.kind ?? "").localeCompare(b.kind ?? "");
         break;

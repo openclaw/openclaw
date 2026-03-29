@@ -171,6 +171,39 @@ describe("sessions view", () => {
     expect(link?.textContent?.trim()).toBe("Main Session");
   });
 
+  it("sorts Key column by resolved display title", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(
+          buildMultiResult([
+            {
+              key: "session:apple",
+              kind: "direct",
+              updatedAt: 100,
+              label: "Zebra",
+            },
+            {
+              key: "session:zebra",
+              kind: "direct",
+              updatedAt: 200,
+              label: "Aardvark",
+            },
+          ]),
+        ),
+        sortColumn: "key",
+        sortDir: "asc",
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const links = container.querySelectorAll(".session-link");
+    expect(links).toHaveLength(2);
+    expect(links[0]?.textContent?.trim()).toBe("Aardvark");
+    expect(links[1]?.textContent?.trim()).toBe("Zebra");
+  });
+
   it("deselects only the current page from the header checkbox", async () => {
     const onSelectPage = vi.fn();
     const onDeselectPage = vi.fn();
