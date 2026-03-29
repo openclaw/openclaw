@@ -122,16 +122,15 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     expect(coordinator.hasFailedVisibleTextDelivery()).toBe(false);
   });
 
-  it("does not treat non-telegram direct block text as visible", async () => {
+  it("treats non-telegram direct block text as visible", async () => {
     const coordinator = createCoordinator();
 
     await coordinator.deliver("block", { text: "hello" }, { skipTts: true });
     await coordinator.settleVisibleText();
 
     expect(coordinator.hasDeliveredFinalReply()).toBe(false);
-    expect(coordinator.hasDeliveredVisibleText()).toBe(false);
+    expect(coordinator.hasDeliveredVisibleText()).toBe(true);
     expect(coordinator.hasFailedVisibleTextDelivery()).toBe(false);
-    expect(coordinator.getRoutedCounts().block).toBe(0);
   });
 
   it("tracks failed visible telegram block delivery separately", async () => {

@@ -39,6 +39,9 @@ function shouldTreatDeliveredTextAsVisible(params: {
   if (params.kind === "final") {
     return true;
   }
+  if (params.kind === "block") {
+    return true;
+  }
   return normalizeDeliveryChannel(params.channel) === "telegram";
 }
 
