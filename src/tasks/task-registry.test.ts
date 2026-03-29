@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { startAcpSpawnParentStreamRelay } from "../agents/acp-spawn-parent-stream.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { resetHeartbeatWakeStateForTests } from "../infra/heartbeat-wake.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
@@ -7,18 +8,57 @@ import {
   createTaskRecord,
   findTaskByRunId,
   listTaskRecords,
+  maybeDeliverTaskStateChangeUpdate,
+  maybeDeliverTaskTerminalUpdate,
   resetTaskRegistryForTests,
   resolveTaskForLookupToken,
+  updateTaskNotifyPolicyById,
   updateTaskRecordById,
+  updateTaskStateByRunId,
 } from "./task-registry.js";
 import { reconcileInspectableTasks, sweepTaskRegistry } from "./task-registry.maintenance.js";
 
 const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
-const sendMessageMock = vi.hoisted(() => vi.fn());
+const hoisted = vi.hoisted(() => {
+  const sendMessageMock = vi.fn();
+  const cancelSessionMock = vi.fn();
+  const killSubagentRunAdminMock = vi.fn();
+  return {
+    sendMessageMock,
+    cancelSessionMock,
+    killSubagentRunAdminMock,
+  };
+});
 
 vi.mock("./task-registry-delivery-runtime.js", () => ({
-  sendMessage: sendMessageMock,
+  sendMessage: hoisted.sendMessageMock,
 }));
+
+vi.mock("../acp/control-plane/manager.js", () => ({
+  getAcpSessionManager: () => ({
+    cancelSession: hoisted.cancelSessionMock,
+  }),
+}));
+
+vi.mock("../agents/subagent-control.js", () => ({
+  killSubagentRunAdmin: (params: unknown) => hoisted.killSubagentRunAdminMock(params),
+}));
+
+async function loadFreshTaskRegistryModulesForControlTest() {
+  vi.resetModules();
+  vi.doMock("./task-registry-delivery-runtime.js", () => ({
+    sendMessage: hoisted.sendMessageMock,
+  }));
+  vi.doMock("../acp/control-plane/manager.js", () => ({
+    getAcpSessionManager: () => ({
+      cancelSession: hoisted.cancelSessionMock,
+    }),
+  }));
+  vi.doMock("../agents/subagent-control.js", () => ({
+    killSubagentRunAdmin: (params: unknown) => hoisted.killSubagentRunAdminMock(params),
+  }));
+  return await import("./task-registry.js");
+}
 
 async function waitForAssertion(assertion: () => void, timeoutMs = 2_000, stepMs = 5) {
   const startedAt = Date.now();
@@ -35,8 +75,15 @@ async function waitForAssertion(assertion: () => void, timeoutMs = 2_000, stepMs
   }
 }
 
+async function flushAsyncWork(times = 4) {
+  for (let index = 0; index < times; index += 1) {
+    await Promise.resolve();
+  }
+}
+
 describe("task-registry", () => {
   afterEach(() => {
+    vi.useRealTimers();
     if (ORIGINAL_STATE_DIR === undefined) {
       delete process.env.OPENCLAW_STATE_DIR;
     } else {
@@ -45,7 +92,9 @@ describe("task-registry", () => {
     resetSystemEventsForTest();
     resetHeartbeatWakeStateForTests();
     resetTaskRegistryForTests();
-    sendMessageMock.mockReset();
+    hoisted.sendMessageMock.mockReset();
+    hoisted.cancelSessionMock.mockReset();
+    hoisted.killSubagentRunAdminMock.mockReset();
   });
 
   it("updates task status from lifecycle events", async () => {
@@ -93,7 +142,7 @@ describe("task-registry", () => {
     await withTempDir({ prefix: "openclaw-task-registry-" }, async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
       resetTaskRegistryForTests();
-      sendMessageMock.mockResolvedValue({
+      hoisted.sendMessageMock.mockResolvedValue({
         channel: "telegram",
         to: "telegram:123",
         via: "direct",
@@ -132,12 +181,12 @@ describe("task-registry", () => {
         }),
       );
       await waitForAssertion(() =>
-        expect(sendMessageMock).toHaveBeenCalledWith(
+        expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
           expect.objectContaining({
             channel: "telegram",
             to: "telegram:123",
             threadId: "321",
-            content: expect.stringContaining("Background task done: Investigate issue"),
+            content: expect.stringContaining("Background task done: ACP background task"),
             mirror: expect.objectContaining({
               sessionKey: "agent:main:main",
             }),
@@ -152,7 +201,7 @@ describe("task-registry", () => {
     await withTempDir({ prefix: "openclaw-task-registry-" }, async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
       resetTaskRegistryForTests();
-      sendMessageMock.mockRejectedValueOnce(new Error("telegram unavailable"));
+      hoisted.sendMessageMock.mockRejectedValueOnce(new Error("telegram unavailable"));
 
       createTaskRecord({
         source: "sessions_spawn",
@@ -189,8 +238,59 @@ describe("task-registry", () => {
       );
       await waitForAssertion(() =>
         expect(peekSystemEvents("agent:main:main")).toEqual([
-          expect.stringContaining("Background task failed: Investigate issue"),
+          expect.stringContaining("Background task failed: ACP background task"),
         ]),
+      );
+    });
+  });
+
+  it("does not include internal progress detail in the terminal channel message", async () => {
+    await withTempDir({ prefix: "openclaw-task-registry-" }, async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      hoisted.sendMessageMock.mockResolvedValue({
+        channel: "telegram",
+        to: "telegram:123",
+        via: "direct",
+      });
+
+      createTaskRecord({
+        source: "sessions_spawn",
+        runtime: "acp",
+        requesterSessionKey: "agent:main:main",
+        requesterOrigin: {
+          channel: "telegram",
+          to: "telegram:123",
+          threadId: "321",
+        },
+        childSessionKey: "agent:main:acp:child",
+        runId: "run-detail-leak",
+        task: "Create the file and verify it",
+        status: "running",
+        deliveryStatus: "pending",
+        startedAt: 100,
+      });
+
+      updateTaskRecordById(findTaskByRunId("run-detail-leak")!.taskId, {
+        progressSummary:
+          "I am loading the local session context and checking helper command availability before writing the file.",
+      });
+
+      emitAgentEvent({
+        runId: "run-detail-leak",
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          endedAt: 250,
+        },
+      });
+
+      await waitForAssertion(() =>
+        expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            content: "Background task done: ACP background task (run run-deta).",
+          }),
+        ),
       );
     });
   });
@@ -227,6 +327,149 @@ describe("task-registry", () => {
         source: "sessions_spawn",
         runtime: "acp",
         task: "Spawn ACP child",
+      });
+    });
+  });
+
+  it("suppresses duplicate ACP delivery when a preferred spawned task shares the runId", async () => {
+    await withTempDir({ prefix: "openclaw-task-registry-" }, async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      hoisted.sendMessageMock.mockResolvedValue({
+        channel: "telegram",
+        to: "telegram:123",
+        via: "direct",
+      });
+
+      const directTask = createTaskRecord({
+        source: "unknown",
+        runtime: "acp",
+        requesterSessionKey: "agent:main:main",
+        requesterOrigin: {
+          channel: "telegram",
+          to: "telegram:123",
+        },
+        childSessionKey: "agent:main:acp:child",
+        runId: "run-shared-delivery",
+        task: "Direct ACP child",
+        status: "done",
+        deliveryStatus: "pending",
+      });
+      const spawnedTask = createTaskRecord({
+        source: "sessions_spawn",
+        runtime: "acp",
+        requesterSessionKey: "agent:main:main",
+        requesterOrigin: {
+          channel: "telegram",
+          to: "telegram:123",
+        },
+        childSessionKey: "agent:main:acp:child",
+        runId: "run-shared-delivery",
+        task: "Spawn ACP child",
+        status: "done",
+        deliveryStatus: "pending",
+      });
+
+      await maybeDeliverTaskTerminalUpdate(directTask.taskId);
+      await maybeDeliverTaskTerminalUpdate(spawnedTask.taskId);
+
+      expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(1);
+      expect(listTaskRecords().filter((task) => task.runId === "run-shared-delivery")).toHaveLength(
+        1,
+      );
+      expect(findTaskByRunId("run-shared-delivery")).toMatchObject({
+        taskId: directTask.taskId,
+        source: "sessions_spawn",
+        deliveryStatus: "delivered",
+      });
+    });
+  });
+
+  it("collapses ACP run-owned task creation onto the existing spawned task", async () => {
+    await withTempDir({ prefix: "openclaw-task-registry-" }, async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+
+      const spawnedTask = createTaskRecord({
+        source: "sessions_spawn",
+        runtime: "acp",
+        requesterSessionKey: "agent:main:main",
+        requesterOrigin: {
+          channel: "telegram",
+          to: "telegram:123",
+        },
+        childSessionKey: "agent:main:acp:child",
+        runId: "run-collapse",
+        task: "Spawn ACP child",
+        status: "running",
+        deliveryStatus: "pending",
+        streamLogPath: "/tmp/stream.jsonl",
+      });
+
+      const directTask = createTaskRecord({
+        source: "unknown",
+        runtime: "acp",
+        requesterSessionKey: "agent:main:main",
+        requesterOrigin: {
+          channel: "telegram",
+          to: "telegram:123",
+        },
+        childSessionKey: "agent:main:acp:child",
+        runId: "run-collapse",
+        task: "Direct ACP child",
+        status: "running",
+      });
+
+      expect(directTask.taskId).toBe(spawnedTask.taskId);
+      expect(listTaskRecords().filter((task) => task.runId === "run-collapse")).toHaveLength(1);
+      expect(findTaskByRunId("run-collapse")).toMatchObject({
+        source: "sessions_spawn",
+        task: "Spawn ACP child",
+        streamLogPath: "/tmp/stream.jsonl",
+      });
+    });
+  });
+
+  it("delivers a terminal ACP update only once when multiple notifiers race", async () => {
+    await withTempDir({ prefix: "openclaw-task-registry-" }, async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      hoisted.sendMessageMock.mockResolvedValue({
+        channel: "telegram",
+        to: "telegram:123",
+        via: "direct",
+      });
+
+      const task = createTaskRecord({
+        source: "sessions_spawn",
+        runtime: "acp",
+        requesterSessionKey: "agent:main:main",
+        requesterOrigin: {
+          channel: "telegram",
+          to: "telegram:123",
+        },
+        childSessionKey: "agent:main:acp:child",
+        runId: "run-racing-delivery",
+        task: "Investigate issue",
+        status: "done",
+        deliveryStatus: "pending",
+      });
+
+      const first = maybeDeliverTaskTerminalUpdate(task.taskId);
+      const second = maybeDeliverTaskTerminalUpdate(task.taskId);
+      await Promise.all([first, second]);
+
+      expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(1);
+      expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          idempotencyKey: `task-terminal:${task.taskId}:done`,
+          mirror: expect.objectContaining({
+            idempotencyKey: `task-terminal:${task.taskId}:done`,
+          }),
+        }),
+      );
+      expect(findTaskByRunId("run-racing-delivery")).toMatchObject({
+        deliveryStatus: "delivered",
       });
     });
   });
@@ -285,7 +528,7 @@ describe("task-registry", () => {
         error: "backing session missing",
       });
       expect(peekSystemEvents("agent:main:main")).toEqual([
-        expect.stringContaining("Background task lost: Missing child"),
+        expect.stringContaining("Background task lost: ACP background task"),
       ]);
     });
   });
@@ -316,6 +559,344 @@ describe("task-registry", () => {
         pruned: 1,
       });
       expect(listTaskRecords()).toEqual([]);
+    });
+  });
+
+  it("delivers concise state-change updates only when notify policy requests them", async () => {
+    await withTempDir({ prefix: "openclaw-task-registry-" }, async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      hoisted.sendMessageMock.mockResolvedValue({
+        channel: "discord",
+        to: "discord:123",
+        via: "direct",
+      });
+
+      const task = createTaskRecord({
+        source: "sessions_spawn",
+        runtime: "acp",
+        requesterSessionKey: "agent:main:main",
+        requesterOrigin: {
+          channel: "discord",
+          to: "discord:123",
+        },
+        childSessionKey: "agent:codex:acp:child",
+        runId: "run-state-change",
+        task: "Investigate issue",
+        status: "accepted",
+        notifyPolicy: "done_only",
+      });
+
+      updateTaskStateByRunId({
+        runId: "run-state-change",
+        status: "running",
+        eventSummary: "Started.",
+      });
+      await waitForAssertion(() => expect(hoisted.sendMessageMock).not.toHaveBeenCalled());
+
+      updateTaskNotifyPolicyById({
+        taskId: task.taskId,
+        notifyPolicy: "state_changes",
+      });
+      updateTaskStateByRunId({
+        runId: "run-state-change",
+        eventSummary: "No output for 60s. It may be waiting for input.",
+      });
+
+      await waitForAssertion(() =>
+        expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            content:
+              "Background task update: ACP background task. No output for 60s. It may be waiting for input.",
+          }),
+        ),
+      );
+      expect(findTaskByRunId("run-state-change")).toMatchObject({
+        notifyPolicy: "state_changes",
+        lastNotifiedEventAt: expect.any(Number),
+        recentEvents: expect.arrayContaining([
+          expect.objectContaining({
+            kind: "progress",
+            summary: "No output for 60s. It may be waiting for input.",
+          }),
+        ]),
+      });
+      await maybeDeliverTaskStateChangeUpdate(task.taskId);
+      expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("keeps background ACP progress off the foreground lane and only sends a terminal notify", async () => {
+    await withTempDir({ prefix: "openclaw-task-registry-" }, async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      resetSystemEventsForTest();
+      hoisted.sendMessageMock.mockResolvedValue({
+        channel: "discord",
+        to: "discord:123",
+        via: "direct",
+      });
+      vi.useFakeTimers();
+
+      createTaskRecord({
+        source: "sessions_spawn",
+        runtime: "acp",
+        requesterSessionKey: "agent:main:main",
+        requesterOrigin: {
+          channel: "discord",
+          to: "discord:123",
+        },
+        childSessionKey: "agent:codex:acp:child",
+        runId: "run-quiet-terminal",
+        task: "Create the file",
+        status: "running",
+        deliveryStatus: "pending",
+      });
+
+      const relay = startAcpSpawnParentStreamRelay({
+        runId: "run-quiet-terminal",
+        parentSessionKey: "agent:main:main",
+        childSessionKey: "agent:codex:acp:child",
+        agentId: "codex",
+        surfaceUpdates: false,
+        streamFlushMs: 1,
+        noOutputNoticeMs: 1_000,
+        noOutputPollMs: 250,
+      });
+
+      relay.notifyStarted();
+      emitAgentEvent({
+        runId: "run-quiet-terminal",
+        stream: "assistant",
+        data: {
+          delta: "working on it",
+        },
+      });
+      vi.advanceTimersByTime(10);
+
+      expect(peekSystemEvents("agent:main:main")).toEqual([]);
+      expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
+
+      emitAgentEvent({
+        runId: "run-quiet-terminal",
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          endedAt: 250,
+        },
+      });
+      await flushAsyncWork();
+
+      expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          channel: "discord",
+          to: "discord:123",
+          content: "Background task done: ACP background task (run run-quie).",
+        }),
+      );
+      expect(peekSystemEvents("agent:main:main")).toEqual([]);
+      relay.dispose();
+      vi.useRealTimers();
+    });
+  });
+
+  it("delivers a concise terminal failure message without internal ACP chatter", async () => {
+    await withTempDir({ prefix: "openclaw-task-registry-" }, async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      resetSystemEventsForTest();
+      hoisted.sendMessageMock.mockResolvedValue({
+        channel: "discord",
+        to: "discord:123",
+        via: "direct",
+      });
+
+      createTaskRecord({
+        source: "sessions_spawn",
+        runtime: "acp",
+        requesterSessionKey: "agent:main:main",
+        requesterOrigin: {
+          channel: "discord",
+          to: "discord:123",
+        },
+        childSessionKey: "agent:codex:acp:child",
+        runId: "run-failure-terminal",
+        task: "Write the file",
+        status: "running",
+        deliveryStatus: "pending",
+        progressSummary:
+          "I am loading session context and checking helper availability before writing the file.",
+      });
+
+      emitAgentEvent({
+        runId: "run-failure-terminal",
+        stream: "lifecycle",
+        data: {
+          phase: "error",
+          endedAt: 250,
+          error: "Permission denied by ACP runtime",
+        },
+      });
+      await flushAsyncWork();
+
+      expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          channel: "discord",
+          to: "discord:123",
+          content:
+            "Background task failed: ACP background task (run run-fail). Permission denied by ACP runtime",
+        }),
+      );
+      expect(peekSystemEvents("agent:main:main")).toEqual([]);
+    });
+  });
+
+  it("emits concise state-change updates without surfacing raw ACP chatter", async () => {
+    await withTempDir({ prefix: "openclaw-task-registry-" }, async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      resetSystemEventsForTest();
+      hoisted.sendMessageMock.mockResolvedValue({
+        channel: "discord",
+        to: "discord:123",
+        via: "direct",
+      });
+      vi.useFakeTimers();
+
+      createTaskRecord({
+        source: "sessions_spawn",
+        runtime: "acp",
+        requesterSessionKey: "agent:main:main",
+        requesterOrigin: {
+          channel: "discord",
+          to: "discord:123",
+        },
+        childSessionKey: "agent:codex:acp:child",
+        runId: "run-state-stream",
+        task: "Create the file",
+        status: "running",
+        deliveryStatus: "pending",
+        notifyPolicy: "state_changes",
+      });
+
+      const relay = startAcpSpawnParentStreamRelay({
+        runId: "run-state-stream",
+        parentSessionKey: "agent:main:main",
+        childSessionKey: "agent:codex:acp:child",
+        agentId: "codex",
+        surfaceUpdates: false,
+        streamFlushMs: 1,
+        noOutputNoticeMs: 1_000,
+        noOutputPollMs: 250,
+      });
+
+      relay.notifyStarted();
+      await flushAsyncWork();
+      expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          content: "Background task update: ACP background task. Started.",
+        }),
+      );
+
+      hoisted.sendMessageMock.mockClear();
+      vi.advanceTimersByTime(1_500);
+      await flushAsyncWork();
+      expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          content:
+            "Background task update: ACP background task. No output for 1s. It may be waiting for input.",
+        }),
+      );
+
+      expect(peekSystemEvents("agent:main:main")).toEqual([]);
+      relay.dispose();
+      vi.useRealTimers();
+    });
+  });
+
+  it("cancels ACP-backed tasks through the ACP session manager", async () => {
+    await withTempDir({ prefix: "openclaw-task-registry-" }, async (root) => {
+      const registry = await loadFreshTaskRegistryModulesForControlTest();
+      process.env.OPENCLAW_STATE_DIR = root;
+      registry.resetTaskRegistryForTests();
+      hoisted.cancelSessionMock.mockResolvedValue(undefined);
+
+      const task = registry.createTaskRecord({
+        source: "sessions_spawn",
+        runtime: "acp",
+        requesterSessionKey: "agent:main:main",
+        childSessionKey: "agent:codex:acp:child",
+        runId: "run-cancel-acp",
+        task: "Investigate issue",
+        status: "running",
+        deliveryStatus: "pending",
+      });
+
+      const result = await registry.cancelTaskById({
+        cfg: {} as never,
+        taskId: task.taskId,
+      });
+
+      expect(hoisted.cancelSessionMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cfg: {},
+          sessionKey: "agent:codex:acp:child",
+          reason: "task-cancel",
+        }),
+      );
+      expect(result).toMatchObject({
+        found: true,
+        cancelled: true,
+        task: expect.objectContaining({
+          taskId: task.taskId,
+          status: "cancelled",
+          error: "Cancelled by operator.",
+        }),
+      });
+    });
+  });
+
+  it("cancels subagent-backed tasks through subagent control", async () => {
+    await withTempDir({ prefix: "openclaw-task-registry-" }, async (root) => {
+      const registry = await loadFreshTaskRegistryModulesForControlTest();
+      process.env.OPENCLAW_STATE_DIR = root;
+      registry.resetTaskRegistryForTests();
+      hoisted.killSubagentRunAdminMock.mockResolvedValue({
+        found: true,
+        killed: true,
+      });
+
+      const task = registry.createTaskRecord({
+        source: "sessions_spawn",
+        runtime: "subagent",
+        requesterSessionKey: "agent:main:main",
+        childSessionKey: "agent:worker:subagent:child",
+        runId: "run-cancel-subagent",
+        task: "Investigate issue",
+        status: "running",
+        deliveryStatus: "pending",
+      });
+
+      const result = await registry.cancelTaskById({
+        cfg: {} as never,
+        taskId: task.taskId,
+      });
+
+      expect(hoisted.killSubagentRunAdminMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cfg: {},
+          sessionKey: "agent:worker:subagent:child",
+        }),
+      );
+      expect(result).toMatchObject({
+        found: true,
+        cancelled: true,
+        task: expect.objectContaining({
+          taskId: task.taskId,
+          status: "cancelled",
+          error: "Cancelled by operator.",
+        }),
+      });
     });
   });
 });

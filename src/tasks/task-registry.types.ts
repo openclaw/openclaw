@@ -18,9 +18,19 @@ export type TaskDeliveryStatus =
   | "parent_missing"
   | "not_applicable";
 
+export type TaskNotifyPolicy = "done_only" | "state_changes" | "silent";
+
 export type TaskBindingTargetKind = "subagent" | "session";
 
 export type TaskSource = "sessions_spawn" | "background_cli" | "unknown";
+
+export type TaskEventKind = TaskStatus | "progress";
+
+export type TaskEventRecord = {
+  at: number;
+  kind: TaskEventKind;
+  summary?: string;
+};
 
 export type TaskRecord = {
   taskId: string;
@@ -35,12 +45,16 @@ export type TaskRecord = {
   task: string;
   status: TaskStatus;
   deliveryStatus: TaskDeliveryStatus;
+  notifyPolicy: TaskNotifyPolicy;
   createdAt: number;
   startedAt?: number;
   endedAt?: number;
   lastEventAt?: number;
   error?: string;
-  resultPreview?: string;
+  progressSummary?: string;
+  terminalSummary?: string;
+  recentEvents?: TaskEventRecord[];
+  lastNotifiedEventAt?: number;
   transcriptPath?: string;
   streamLogPath?: string;
   backend?: string;

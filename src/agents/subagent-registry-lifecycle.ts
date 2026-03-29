@@ -205,13 +205,13 @@ export function createSubagentRegistryLifecycleController(params: {
       }
       const endedAgo = now - (entry.endedAt ?? now);
       if (entry.expectsCompletionMessage !== true && endedAgo > ANNOUNCE_EXPIRY_MS) {
-      if (!beginSubagentCleanup(runId)) {
-        continue;
-      }
-      void finalizeResumedAnnounceGiveUp({
-        runId,
-        entry,
-        reason: "expiry",
+        if (!beginSubagentCleanup(runId)) {
+          continue;
+        }
+        void finalizeResumedAnnounceGiveUp({
+          runId,
+          entry,
+          reason: "expiry",
         }).catch((error) => {
           defaultRuntime.log(
             `[warn] Subagent expiry finalize failed during deferred retry for run ${runId}: ${String(error)}`,
@@ -468,7 +468,8 @@ export function createSubagentRegistryLifecycleController(params: {
       endedAt: entry.endedAt,
       lastEventAt: entry.endedAt ?? Date.now(),
       error: completeParams.outcome.status === "error" ? completeParams.outcome.error : undefined,
-      resultPreview: entry.frozenResultText ?? undefined,
+      progressSummary: entry.frozenResultText ?? undefined,
+      terminalSummary: null,
     });
 
     try {

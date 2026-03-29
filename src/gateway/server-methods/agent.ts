@@ -27,7 +27,10 @@ import { defaultRuntime } from "../../runtime.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { createTaskRecord } from "../../tasks/task-registry.js";
-import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
+import {
+  normalizeDeliveryContext,
+  normalizeSessionDeliveryFields,
+} from "../../utils/delivery-context.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,
@@ -191,7 +194,7 @@ function dispatchAgentRunFromGateway(params: {
         source: "background_cli",
         runtime: "cli",
         requesterSessionKey: params.ingressOpts.sessionKey,
-        requesterOrigin: normalizeSessionDeliveryFields({
+        requesterOrigin: normalizeDeliveryContext({
           channel: params.ingressOpts.channel,
           to: params.ingressOpts.to,
           accountId: params.ingressOpts.accountId,

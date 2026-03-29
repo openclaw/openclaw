@@ -1,10 +1,12 @@
+import { loadConfig } from "../config/config.js";
 import { info } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { cancelTaskById, getTaskById, updateTaskNotifyPolicyById } from "../tasks/task-registry.js";
 import {
   reconcileInspectableTasks,
   reconcileTaskLookupToken,
 } from "../tasks/task-registry.reconcile.js";
-import type { TaskRecord } from "../tasks/task-registry.types.js";
+import type { TaskNotifyPolicy, TaskRecord } from "../tasks/task-registry.types.js";
 import { isRich, theme } from "../terminal/theme.js";
 
 const RUNTIME_PAD = 8;
@@ -60,7 +62,13 @@ function formatTaskRows(tasks: TaskRecord[], rich: boolean) {
   ].join(" ");
   const lines = [rich ? theme.heading(header) : header];
   for (const task of tasks) {
-    const summary = truncate(task.label?.trim() || task.task.trim(), 80);
+    const summary = truncate(
+      task.terminalSummary?.trim() ||
+        task.progressSummary?.trim() ||
+        task.label?.trim() ||
+        task.task.trim(),
+      80,
+    );
     const line = [
       shortToken(task.taskId).padEnd(ID_PAD),
       task.runtime.padEnd(RUNTIME_PAD),
@@ -146,6 +154,7 @@ export async function tasksShowCommand(
     `runtime: ${task.runtime}`,
     `status: ${task.status}`,
     `delivery: ${task.deliveryStatus}`,
+    `notify: ${task.notifyPolicy}`,
     `source: ${task.source}`,
     `requesterSessionKey: ${task.requesterSessionKey}`,
     `childSessionKey: ${task.childSessionKey ?? "n/a"}`,
@@ -158,7 +167,16 @@ export async function tasksShowCommand(
     `endedAt: ${task.endedAt ? new Date(task.endedAt).toISOString() : "n/a"}`,
     `lastEventAt: ${task.lastEventAt ? new Date(task.lastEventAt).toISOString() : "n/a"}`,
     ...(task.error ? [`error: ${task.error}`] : []),
-    ...(task.resultPreview ? [`resultPreview: ${task.resultPreview}`] : []),
+    ...(task.progressSummary ? [`progressSummary: ${task.progressSummary}`] : []),
+    ...(task.terminalSummary ? [`terminalSummary: ${task.terminalSummary}`] : []),
+    ...(task.recentEvents?.length
+      ? task.recentEvents.map(
+          (event, index) =>
+            `recentEvent[${index}]: ${new Date(event.at).toISOString()} ${event.kind}${
+              event.summary ? ` ${event.summary}` : ""
+            }`,
+        )
+      : []),
     ...(task.streamLogPath ? [`streamLogPath: ${task.streamLogPath}`] : []),
     ...(task.transcriptPath ? [`transcriptPath: ${task.transcriptPath}`] : []),
     ...(task.agentSessionId ? [`agentSessionId: ${task.agentSessionId}`] : []),
@@ -167,4 +185,53 @@ export async function tasksShowCommand(
   for (const line of lines) {
     runtime.log(line);
   }
+}
+
+export async function tasksNotifyCommand(
+  opts: { lookup: string; notify: TaskNotifyPolicy },
+  runtime: RuntimeEnv,
+) {
+  const task = reconcileTaskLookupToken(opts.lookup);
+  if (!task) {
+    runtime.error(`Task not found: ${opts.lookup}`);
+    runtime.exit(1);
+    return;
+  }
+  const updated = updateTaskNotifyPolicyById({
+    taskId: task.taskId,
+    notifyPolicy: opts.notify,
+  });
+  if (!updated) {
+    runtime.error(`Task not found: ${opts.lookup}`);
+    runtime.exit(1);
+    return;
+  }
+  runtime.log(`Updated ${updated.taskId} notify policy to ${updated.notifyPolicy}.`);
+}
+
+export async function tasksCancelCommand(opts: { lookup: string }, runtime: RuntimeEnv) {
+  const task = reconcileTaskLookupToken(opts.lookup);
+  if (!task) {
+    runtime.error(`Task not found: ${opts.lookup}`);
+    runtime.exit(1);
+    return;
+  }
+  const result = await cancelTaskById({
+    cfg: loadConfig(),
+    taskId: task.taskId,
+  });
+  if (!result.found) {
+    runtime.error(result.reason ?? `Task not found: ${opts.lookup}`);
+    runtime.exit(1);
+    return;
+  }
+  if (!result.cancelled) {
+    runtime.error(result.reason ?? `Could not cancel task: ${opts.lookup}`);
+    runtime.exit(1);
+    return;
+  }
+  const updated = getTaskById(task.taskId);
+  runtime.log(
+    `Cancelled ${updated?.taskId ?? task.taskId} (${updated?.runtime ?? task.runtime})${updated?.runId ? ` run ${updated.runId}` : ""}.`,
+  );
 }

@@ -3,7 +3,12 @@ import { healthCommand } from "../../commands/health.js";
 import { sessionsCleanupCommand } from "../../commands/sessions-cleanup.js";
 import { sessionsCommand } from "../../commands/sessions.js";
 import { statusCommand } from "../../commands/status.js";
-import { tasksListCommand, tasksShowCommand } from "../../commands/tasks.js";
+import {
+  tasksCancelCommand,
+  tasksListCommand,
+  tasksNotifyCommand,
+  tasksShowCommand,
+} from "../../commands/tasks.js";
 import { setVerbose } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
@@ -279,6 +284,38 @@ export function registerStatusHealthSessionsCommands(program: Command) {
           {
             lookup,
             json: Boolean(opts.json || parentOpts?.json),
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  tasksCmd
+    .command("notify")
+    .description("Set task notify policy")
+    .argument("<lookup>", "Task id, run id, or session key")
+    .argument("<notify>", "Notify policy (done_only, state_changes, silent)")
+    .action(async (lookup, notify) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await tasksNotifyCommand(
+          {
+            lookup,
+            notify: notify as "done_only" | "state_changes" | "silent",
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  tasksCmd
+    .command("cancel")
+    .description("Cancel a running background task")
+    .argument("<lookup>", "Task id, run id, or session key")
+    .action(async (lookup) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await tasksCancelCommand(
+          {
+            lookup,
           },
           defaultRuntime,
         );
