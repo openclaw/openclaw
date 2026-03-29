@@ -29,6 +29,7 @@ let getActiveTaskCount: CommandQueueModule["getActiveTaskCount"];
 let getQueueSize: CommandQueueModule["getQueueSize"];
 let markGatewayDraining: CommandQueueModule["markGatewayDraining"];
 let resetAllLanes: CommandQueueModule["resetAllLanes"];
+let resetCommandQueueStateForTest: CommandQueueModule["resetCommandQueueStateForTest"];
 let setCommandLaneConcurrency: CommandQueueModule["setCommandLaneConcurrency"];
 let waitForActiveTasks: CommandQueueModule["waitForActiveTasks"];
 
@@ -67,10 +68,11 @@ describe("command queue", () => {
       getQueueSize,
       markGatewayDraining,
       resetAllLanes,
+      resetCommandQueueStateForTest,
       setCommandLaneConcurrency,
       waitForActiveTasks,
     } = await import("./command-queue.js"));
-    resetAllLanes();
+    resetCommandQueueStateForTest();
     // Queue state is global across module instances, so reset main lane
     // concurrency explicitly to avoid cross-file leakage.
     setCommandLaneConcurrency(CommandLane.Main, 1);
