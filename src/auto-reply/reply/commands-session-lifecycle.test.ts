@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
+import {
+  resolveThreadBindingIdleTimeoutMs,
+  resolveThreadBindingInactivityExpiresAt,
+  resolveThreadBindingMaxAgeExpiresAt,
+  resolveThreadBindingMaxAgeMs,
+} from "../../plugin-sdk/discord.js";
 
 const hoisted = vi.hoisted(() => {
   const getThreadBindingManagerMock = vi.fn();
@@ -24,20 +30,16 @@ const hoisted = vi.hoisted(() => {
 });
 
 vi.mock("../../plugins/runtime/index.js", async () => {
-  const discordThreadBindings = await vi.importActual<
-    typeof import("../../../extensions/discord/src/monitor/thread-bindings.js")
-  >("../../../extensions/discord/src/monitor/thread-bindings.js");
   return {
     createPluginRuntime: () => ({
       channel: {
         discord: {
           threadBindings: {
             getManager: hoisted.getThreadBindingManagerMock,
-            resolveIdleTimeoutMs: discordThreadBindings.resolveThreadBindingIdleTimeoutMs,
-            resolveInactivityExpiresAt:
-              discordThreadBindings.resolveThreadBindingInactivityExpiresAt,
-            resolveMaxAgeMs: discordThreadBindings.resolveThreadBindingMaxAgeMs,
-            resolveMaxAgeExpiresAt: discordThreadBindings.resolveThreadBindingMaxAgeExpiresAt,
+            resolveIdleTimeoutMs: resolveThreadBindingIdleTimeoutMs,
+            resolveInactivityExpiresAt: resolveThreadBindingInactivityExpiresAt,
+            resolveMaxAgeMs: resolveThreadBindingMaxAgeMs,
+            resolveMaxAgeExpiresAt: resolveThreadBindingMaxAgeExpiresAt,
             setIdleTimeoutBySessionKey: hoisted.setThreadBindingIdleTimeoutBySessionKeyMock,
             setMaxAgeBySessionKey: hoisted.setThreadBindingMaxAgeBySessionKeyMock,
             unbindBySessionKey: vi.fn(),

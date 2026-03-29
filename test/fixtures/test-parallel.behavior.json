@@ -75,6 +75,22 @@
         "reason": "This WhatsApp inbound media suite is green alone but can inherit polluted media and inbound parsing state from the shared channel lane; keep it in its own forked lane for deterministic CI."
       },
       {
+        "file": "extensions/whatsapp/src/monitor-inbox.streams-inbound-messages.test.ts",
+        "reason": "This WhatsApp monitor inbox stream suite is green alone but can fail after the shared channel lane reuses inbound parsing state; keep it in its own forked lane for deterministic reruns and to trim the serial shared channels batch."
+      },
+      {
+        "file": "extensions/whatsapp/src/monitor-inbox.captures-media-path-image-messages.test.ts",
+        "reason": "This WhatsApp inbox media-path suite spends about two seconds in assertions and grows worker RSS near 0.9 GiB alone; keep it in its own forked lane so the shared channels batch shrinks and top-level concurrency can overlap the hotspot."
+      },
+      {
+        "file": "extensions/whatsapp/src/monitor-inbox.blocks-messages-from-unauthorized-senders-not-allowfrom.test.ts",
+        "reason": "This WhatsApp inbox allow-from rejection suite is a heavy shared hotspot with about two seconds of test work and high worker RSS; keep it in its own forked lane so it can overlap instead of extending the serial shared channels batch."
+      },
+      {
+        "file": "extensions/whatsapp/src/monitor-inbox.allows-messages-from-senders-allowfrom-list.test.ts",
+        "reason": "This WhatsApp inbox allow-from acceptance suite is another heavy shared hotspot with about two seconds of test work and high worker RSS; keep it in its own forked lane so it can overlap instead of extending the serial shared channels batch."
+      },
+      {
         "file": "src/browser/chrome.test.ts",
         "reason": "This Chrome helper suite is green alone but can inherit stale fetch, websocket, or timer state from the shared channel lane; keep it isolated so its CDP timeout assertions stay deterministic."
       },
@@ -93,6 +109,10 @@
       {
         "file": "extensions/telegram/src/fetch.test.ts",
         "reason": "This Telegram transport suite measured ~759.3 MiB RSS growth locally; keep it in its own forked channel lane so the shared channels worker can recycle immediately after the hotspot file."
+      },
+      {
+        "file": "extensions/telegram/src/sendchataction-401-backoff.test.ts",
+        "reason": "This Telegram send-chat-action backoff suite hoists infra-runtime sleep mocks and remains a relatively heavy shared hotspot; keep it isolated so top-level concurrency can overlap it instead of extending the shared channels batch."
       },
       {
         "file": "extensions/telegram/src/monitor.test.ts",
@@ -165,6 +185,14 @@
       {
         "file": "extensions/tavily/src/tavily-search-tool.test.ts",
         "reason": "This search-tool suite hoists the Tavily client mock and imports lazily; keep it isolated so shared extension workers do not bypass the mocked client via cached modules."
+      },
+      {
+        "file": "extensions/xai/provider.contract.test.ts",
+        "reason": "This xAI provider contract suite validates the bundled provider registration produced by defineSingleProviderPluginEntry; keep it in its own forked extension lane so shared workers cannot poison that registry with hoisted plugin-sdk mocks from unrelated extension files."
+      },
+      {
+        "file": "extensions/xai/web-search-provider.contract.test.ts",
+        "reason": "This xAI web-search contract suite validates the bundled Grok web-search registration from the same xAI plugin entry; keep it isolated so shared extension workers do not reuse hoisted plugin-sdk web-search mocks from unrelated extension files."
       }
     ]
   },

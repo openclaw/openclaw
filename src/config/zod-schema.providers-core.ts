@@ -1409,6 +1409,7 @@ export const BlueBubblesAccountSchemaBase = z
     mediaMaxMb: z.number().int().positive().optional(),
     mediaLocalRoots: z.array(z.string()).optional(),
     sendReadReceipts: z.boolean().optional(),
+    allowPrivateNetwork: z.boolean().optional(),
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     groups: z.record(z.string(), BlueBubblesGroupConfigSchema.optional()).optional(),
@@ -1516,6 +1517,7 @@ export const MSTeamsConfigSchema = z
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
     textChunkLimit: z.number().int().positive().optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),
+    blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     mediaAllowHosts: z.array(z.string()).optional(),
     mediaAuthAllowHosts: z.array(z.string()).optional(),
@@ -1532,6 +1534,12 @@ export const MSTeamsConfigSchema = z
     heartbeat: ChannelHeartbeatVisibilitySchema,
     healthMonitor: ChannelHealthMonitorSchema,
     responsePrefix: z.string().optional(),
+    welcomeCard: z.boolean().optional(),
+    promptStarters: z.array(z.string()).optional(),
+    groupWelcomeCard: z.boolean().optional(),
+    feedbackEnabled: z.boolean().optional(),
+    feedbackReflection: z.boolean().optional(),
+    feedbackReflectionCooldownMs: z.number().int().min(0).optional(),
   })
   .strict()
   .superRefine((value, ctx) => {

@@ -175,6 +175,42 @@ describe("AcpxRuntime", () => {
     expect(promptArgs).toContain("--approve-all");
   });
 
+  it("surfaces signal-only prompt exits as runtime errors", async () => {
+    const previousSignal = process.env.MOCK_ACPX_PROMPT_SIGNAL;
+    process.env.MOCK_ACPX_PROMPT_SIGNAL = "SIGTERM";
+
+    try {
+      const { runtime } = await createMockRuntimeFixture();
+      const handle = await runtime.ensureSession({
+        sessionKey: "agent:codex:acp:signal-exit",
+        agent: "codex",
+        mode: "persistent",
+      });
+
+      const events = [];
+      for await (const event of runtime.runTurn({
+        handle,
+        text: "signal-only-exit",
+        mode: "prompt",
+        requestId: "req-signal",
+      })) {
+        events.push(event);
+      }
+
+      expect(events).toContainEqual({
+        type: "error",
+        message: "acpx exited with signal SIGTERM",
+      });
+      expect(events.some((event) => event.type === "done")).toBe(false);
+    } finally {
+      if (previousSignal === undefined) {
+        delete process.env.MOCK_ACPX_PROMPT_SIGNAL;
+      } else {
+        process.env.MOCK_ACPX_PROMPT_SIGNAL = previousSignal;
+      }
+    }
+  });
+
   it("uses sessions new with --resume-session when resumeSessionId is provided", async () => {
     const { runtime, logPath } = await createMockRuntimeFixture();
     const resumeSessionId = "sid-resume-123";
@@ -499,6 +535,31 @@ describe("AcpxRuntime", () => {
     expect(logs.find((entry) => entry.kind === "status")).toBeDefined();
   });
 
+  it("surfaces signal-only status exits as control command failures", async () => {
+    const previousSignal = process.env.MOCK_ACPX_STATUS_SIGNAL;
+    process.env.MOCK_ACPX_STATUS_SIGNAL = "SIGTERM";
+
+    try {
+      const { runtime } = await createMockRuntimeFixture();
+      const handle = await runtime.ensureSession({
+        sessionKey: "agent:codex:acp:controls-signal",
+        agent: "codex",
+        mode: "persistent",
+      });
+
+      await expect(runtime.getStatus({ handle })).rejects.toMatchObject({
+        code: "ACP_TURN_FAILED",
+        message: "acpx exited with signal SIGTERM",
+      });
+    } finally {
+      if (previousSignal === undefined) {
+        delete process.env.MOCK_ACPX_STATUS_SIGNAL;
+      } else {
+        process.env.MOCK_ACPX_STATUS_SIGNAL = previousSignal;
+      }
+    }
+  });
+
   it("routes ACPX commands through an MCP proxy agent when MCP servers are configured", async () => {
     process.env.MOCK_ACPX_CONFIG_SHOW_AGENTS = JSON.stringify({
       codex: {
@@ -549,6 +610,31 @@ describe("AcpxRuntime", () => {
     } finally {
       delete process.env.MOCK_ACPX_CONFIG_SHOW_AGENTS;
     }
+  });
+
+  it("does not pass unknown agent ids through acpx --agent when MCP servers are configured", async () => {
+    const { runtime, logPath } = await createMockRuntimeFixture({
+      mcpServers: {
+        canva: {
+          command: "npx",
+          args: ["-y", "mcp-remote@latest", "https://mcp.canva.com/mcp"],
+          env: {
+            CANVA_TOKEN: "secret", // pragma: allowlist secret
+          },
+        },
+      },
+    });
+
+    await runtime.ensureSession({
+      sessionKey: "agent:sh:acp:mcp",
+      agent: "sh -c whoami",
+      mode: "persistent",
+    });
+
+    const logs = await readMockRuntimeLogEntries(logPath);
+    const ensureArgs = (logs.find((entry) => entry.kind === "ensure")?.args as string[]) ?? [];
+    expect(ensureArgs).not.toContain("--agent");
+    expect(ensureArgs).toContain("sh -c whoami");
   });
 
   it("skips prompt execution when runTurn starts with an already-aborted signal", async () => {
@@ -605,6 +691,23 @@ describe("AcpxRuntime", () => {
     }
     await missingCommandRuntime.probeAvailability();
     expect(missingCommandRuntime.isHealthy()).toBe(false);
+  });
+
+  it("marks runtime unhealthy when the help check exits on a signal", async () => {
+    const previousSignal = process.env.MOCK_ACPX_HELP_SIGNAL;
+    process.env.MOCK_ACPX_HELP_SIGNAL = "SIGTERM";
+
+    try {
+      const { runtime } = await createMockRuntimeFixture();
+      await runtime.probeAvailability();
+      expect(runtime.isHealthy()).toBe(false);
+    } finally {
+      if (previousSignal === undefined) {
+        delete process.env.MOCK_ACPX_HELP_SIGNAL;
+      } else {
+        process.env.MOCK_ACPX_HELP_SIGNAL = previousSignal;
+      }
+    }
   });
 
   it("logs ACPX spawn resolution once per command policy", async () => {

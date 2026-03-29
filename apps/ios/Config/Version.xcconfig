@@ -1,8 +1,8 @@
 // Shared iOS version defaults.
 // Generated overrides live in build/Version.xcconfig (git-ignored).
 
-OPENCLAW_GATEWAY_VERSION = 2026.3.24-beta.2
-OPENCLAW_MARKETING_VERSION = 2026.3.24
-OPENCLAW_BUILD_VERSION = 202603240
+OPENCLAW_GATEWAY_VERSION = 2026.3.28
+OPENCLAW_MARKETING_VERSION = 2026.3.28
+OPENCLAW_BUILD_VERSION = 2026032800
 
 #include? "../build/Version.xcconfig"

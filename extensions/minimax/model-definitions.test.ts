@@ -26,14 +26,14 @@ describe("minimax model definitions", () => {
 
   it("builds catalog model with name and reasoning from catalog", () => {
     const model = buildMinimaxModelDefinition({
-      id: "MiniMax-M2.1",
+      id: "MiniMax-M2.7",
       cost: MINIMAX_API_COST,
       contextWindow: DEFAULT_MINIMAX_CONTEXT_WINDOW,
       maxTokens: DEFAULT_MINIMAX_MAX_TOKENS,
     });
     expect(model).toMatchObject({
-      id: "MiniMax-M2.1",
-      name: "MiniMax M2.1",
+      id: "MiniMax-M2.7",
+      name: "MiniMax M2.7",
       reasoning: true,
     });
   });

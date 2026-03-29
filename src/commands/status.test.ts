@@ -222,8 +222,8 @@ vi.mock("../channels/config-presence.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../memory/index.js", () => ({
-  getMemorySearchManager: vi.fn(async ({ agentId }: { agentId: string }) => ({
+vi.mock("../plugins/memory-runtime.js", () => ({
+  getActiveMemorySearchManager: vi.fn(async ({ agentId }: { agentId: string }) => ({
     manager: {
       probeVectorAvailability: vi.fn(async () => true),
       status: () => ({
@@ -316,7 +316,7 @@ vi.mock("../channels/plugins/index.js", () => ({
       },
     ] as unknown,
 }));
-vi.mock("../../extensions/whatsapp/src/session.js", () => ({
+vi.mock("../plugins/runtime/runtime-whatsapp-boundary.js", () => ({
   webAuthExists: mocks.webAuthExists,
   getWebAuthAgeMs: mocks.getWebAuthAgeMs,
   readWebSelfId: mocks.readWebSelfId,
@@ -403,6 +403,12 @@ vi.mock("../daemon/service.js", () => ({
       programArguments: ["node", "dist/entry.js", "gateway"],
       sourcePath: "/tmp/Library/LaunchAgents/ai.openclaw.gateway.plist",
     }),
+  }),
+  readGatewayServiceState: async () => ({
+    installed: true,
+    loaded: true,
+    running: true,
+    runtime: { status: "running", pid: 1234 },
   }),
 }));
 vi.mock("../daemon/node-service.js", () => ({

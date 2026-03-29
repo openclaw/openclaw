@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { safeDirName } from "./install-safe-path.js";
 import { isAtLeast, parseSemver } from "./runtime-guard.js";
 import { compareComparableSemver, parseComparableSemver } from "./semver-compare.js";
 
@@ -159,7 +160,7 @@ export type ClawHubDownloadResult = {
   integrity: string;
 };
 
-type FetchLike = typeof fetch;
+type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
 type ClawHubRequestParams = {
   baseUrl?: string;
@@ -580,7 +581,7 @@ export async function downloadClawHubPackageArchive(params: {
   }
   const bytes = new Uint8Array(await response.arrayBuffer());
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-clawhub-package-"));
-  const archivePath = path.join(tmpDir, `${params.name}.zip`);
+  const archivePath = path.join(tmpDir, `${safeDirName(params.name)}.zip`);
   await fs.writeFile(archivePath, bytes);
   return {
     archivePath,
@@ -618,7 +619,7 @@ export async function downloadClawHubSkillArchive(params: {
   }
   const bytes = new Uint8Array(await response.arrayBuffer());
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-clawhub-skill-"));
-  const archivePath = path.join(tmpDir, `${params.slug}.zip`);
+  const archivePath = path.join(tmpDir, `${safeDirName(params.slug)}.zip`);
   await fs.writeFile(archivePath, bytes);
   return {
     archivePath,

@@ -3,9 +3,11 @@ import {
   buildNestedDmConfigSchema,
   DmPolicySchema,
   GroupPolicySchema,
+  MarkdownConfigSchema,
+  ToolPolicySchema,
 } from "openclaw/plugin-sdk/channel-config-schema";
-import { z } from "zod";
-import { buildSecretInputSchema, MarkdownConfigSchema, ToolPolicySchema } from "./runtime-api.js";
+import { buildSecretInputSchema } from "openclaw/plugin-sdk/secret-input";
+import { z } from "openclaw/plugin-sdk/zod";
 
 const matrixActionSchema = z
   .object({
@@ -52,7 +54,7 @@ export const MatrixConfigSchema = z.object({
   homeserver: z.string().optional(),
   allowPrivateNetwork: z.boolean().optional(),
   userId: z.string().optional(),
-  accessToken: z.string().optional(),
+  accessToken: buildSecretInputSchema().optional(),
   password: buildSecretInputSchema().optional(),
   deviceId: z.string().optional(),
   deviceName: z.string().optional(),
@@ -62,6 +64,7 @@ export const MatrixConfigSchema = z.object({
   allowlistOnly: z.boolean().optional(),
   allowBots: z.union([z.boolean(), z.literal("mentions")]).optional(),
   groupPolicy: GroupPolicySchema.optional(),
+  streaming: z.union([z.enum(["partial", "off"]), z.boolean()]).optional(),
   replyToMode: z.enum(["off", "first", "all"]).optional(),
   threadReplies: z.enum(["off", "inbound", "always"]).optional(),
   textChunkLimit: z.number().optional(),
