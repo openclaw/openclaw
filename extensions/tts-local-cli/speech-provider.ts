@@ -13,10 +13,13 @@ import type {
 
 const log = createSubsystemLogger("tts-local-cli");
 
+const VALID_OUTPUT_FORMATS = ["mp3", "opus", "wav"] as const;
+type OutputFormat = (typeof VALID_OUTPUT_FORMATS)[number];
+
 type CliConfig = {
   command: string;
   args?: string[];
-  outputFormat?: string;
+  outputFormat?: OutputFormat;
   timeoutMs?: number;
   cwd?: string;
   env?: Record<string, string>;
@@ -46,9 +49,18 @@ function asRecord(value: unknown): Record<string, string> | undefined {
   return Object.keys(result).length > 0 ? result : undefined;
 }
 
+function normalizeOutputFormat(value: unknown): OutputFormat {
+  if (typeof value !== "string") return "mp3";
+  const lower = value.toLowerCase().trim();
+  if (VALID_OUTPUT_FORMATS.includes(lower as OutputFormat)) {
+    return lower as OutputFormat;
+  }
+  return "mp3";
+}
+
 function resolveCliProviderConfig(rawConfig: Record<string, unknown>): SpeechProviderConfig {
   const providers = asObject(rawConfig.providers);
-  return asObject(providers?.cli) ?? {};
+  return asObject(providers?.cli) ?? asObject(providers?.["tts-local-cli"]) ?? {};
 }
 
 function getConfig(cfg: SpeechProviderConfig): CliConfig | null {
@@ -57,7 +69,7 @@ function getConfig(cfg: SpeechProviderConfig): CliConfig | null {
   return {
     command,
     args: asStringArray(cfg.args),
-    outputFormat: typeof cfg.outputFormat === "string" ? cfg.outputFormat : "mp3",
+    outputFormat: normalizeOutputFormat(cfg.outputFormat),
     timeoutMs: typeof cfg.timeoutMs === "number" ? cfg.timeoutMs : DEFAULT_TIMEOUT_MS,
     cwd: typeof cfg.cwd === "string" ? cfg.cwd : undefined,
     env: asRecord(cfg.env),
@@ -205,7 +217,10 @@ async function runCli(params: {
       }
 
       const stdout = Buffer.concat(stdoutChunks);
-      if (stdout.length > 0) return resolve({ buffer: stdout, actualFormat: "wav" });
+      if (stdout.length > 0) {
+        // Assume WAV for stdout output; could be MP3 but caller should convert if needed
+        return resolve({ buffer: stdout, actualFormat: "wav" });
+      }
       reject(new Error("CLI TTS produced no output"));
     });
 
@@ -219,24 +234,55 @@ async function runCli(params: {
 async function convertAudio(
   inputPath: string,
   outputDir: string,
-  target: "mp3" | "opus" | "wav" | "pcm",
+  target: OutputFormat,
 ): Promise<Buffer> {
-  const outputPath = path.join(
-    outputDir,
-    `converted${target === "pcm" ? ".wav" : getFileExt(target)}`,
-  );
+  const outputPath = path.join(outputDir, `converted${getFileExt(target)}`);
   const args = ["-y", "-i", inputPath];
   if (target === "opus") args.push("-c:a", "libopus", "-b:a", "64k", outputPath);
   else if (target === "wav") args.push("-c:a", "pcm_s16le", outputPath);
-  else if (target === "pcm") args.push("-c:a", "pcm_s16le", "-ar", "16000", outputPath);
   else args.push("-c:a", "libmp3lame", "-b:a", "128k", outputPath);
   await runFfmpeg(args);
   return readFileSync(outputPath);
 }
 
+async function convertToRawPcm(inputPath: string): Promise<Buffer> {
+  // Output raw 16kHz mono 16-bit little-endian PCM (no WAV headers)
+  const args = [
+    "-y",
+    "-i",
+    inputPath,
+    "-c:a",
+    "pcm_s16le",
+    "-ar",
+    "16000",
+    "-ac",
+    "1",
+    "-f",
+    "s16le",
+    "pipe:1",
+  ];
+  return runFfmpegToBuffer(args);
+}
+
+async function runFfmpegToBuffer(args: string[]): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  return new Promise((resolve, reject) => {
+    const proc = spawn("ffmpeg", args, { stdio: ["ignore", "pipe", "pipe"] });
+    proc.stdout.on("data", (c) => chunks.push(c));
+    proc.on("error", (e) => reject(new Error(`ffmpeg failed: ${e.message}`)));
+    proc.on("close", (code) => {
+      if (code !== 0) {
+        return reject(new Error(`ffmpeg exit ${code}`));
+      }
+      resolve(Buffer.concat(chunks));
+    });
+  });
+}
+
 export function buildCliSpeechProvider(): SpeechProviderPlugin {
   return {
-    id: "cli",
+    id: "tts-local-cli",
+    aliases: ["cli"],
     label: "Local CLI",
     autoSelectOrder: 1000,
 
@@ -271,7 +317,7 @@ export function buildCliSpeechProvider(): SpeechProviderPlugin {
         log.debug(`synthesize: format=${result.actualFormat}, size=${result.buffer.length}`);
 
         let buffer: Buffer;
-        let format: "mp3" | "opus" | "wav";
+        let format: OutputFormat;
 
         if (req.target === "voice-note") {
           if (result.actualFormat !== "opus") {
@@ -285,7 +331,7 @@ export function buildCliSpeechProvider(): SpeechProviderPlugin {
             format = "opus";
           }
         } else {
-          const desired = (config.outputFormat as "mp3" | "opus" | "wav") ?? "mp3";
+          const desired = config.outputFormat ?? "mp3";
           if (result.actualFormat !== desired) {
             const inputFile =
               result.audioPath ?? path.join(tempDir, `input${getFileExt(result.actualFormat)}`);
@@ -336,8 +382,8 @@ export function buildCliSpeechProvider(): SpeechProviderPlugin {
           result.audioPath ?? path.join(tempDir, `input${getFileExt(result.actualFormat)}`);
         if (!result.audioPath) writeFileSync(inputFile, result.buffer);
 
-        // Convert to 16kHz PCM for telephony
-        const pcmBuffer = await convertAudio(inputFile, tempDir, "pcm");
+        // Convert to raw 16kHz mono PCM for telephony (no WAV headers)
+        const pcmBuffer = await convertToRawPcm(inputFile);
 
         return {
           audioBuffer: pcmBuffer,

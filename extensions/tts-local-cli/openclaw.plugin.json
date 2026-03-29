@@ -1,7 +1,7 @@
 {
-  "id": "cli",
+  "id": "tts-local-cli",
   "contracts": {
-    "speechProviders": ["cli"]
+    "speechProviders": ["tts-local-cli", "cli"]
   },
   "configSchema": {
     "type": "object",
