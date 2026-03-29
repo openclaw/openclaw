@@ -5,9 +5,13 @@ const { dispatchInboundMessageMock, sendReactionSignalMock } = vi.hoisted(() => 
   sendReactionSignalMock: vi.fn().mockResolvedValue({ ok: true }),
 }));
 
-vi.mock("../send-reactions.js", () => ({
-  sendReactionSignal: sendReactionSignalMock,
-}));
+vi.mock("../send-reactions.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../send-reactions.js")>();
+  return {
+    ...actual,
+    sendReactionSignal: sendReactionSignalMock,
+  };
+});
 
 vi.mock("../../../../src/auto-reply/dispatch.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../../src/auto-reply/dispatch.js")>();
