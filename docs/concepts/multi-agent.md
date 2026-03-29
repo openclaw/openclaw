@@ -499,6 +499,41 @@ Notes:
 - For stricter gating, set `agents.list[].groupChat.mentionPatterns` and keep
   group allowlists enabled for the channel.
 
+## Per-Agent Memory Search (QMD Extra Collections)
+
+Agents with shared workspaces already share `MEMORY.md` and `memory/*.md` files.
+However, session transcripts are indexed per-agent in separate QMD collections.
+
+To let one agent search another agent's session transcripts, add
+`memorySearch.qmd.extraCollections`:
+
+```json5
+{
+  agents: {
+    list: [
+      {
+        id: "main",
+        memorySearch: {
+          qmd: {
+            extraCollections: [
+              {
+                path: "~/.openclaw/agents/family/qmd/sessions",
+                pattern: "**/*.md",
+              },
+            ],
+          },
+        },
+      },
+      { id: "family" }, // no extraCollections: can only search its own sessions
+    ],
+  },
+}
+```
+
+This gives directional control: each agent opts in to what it can search. The
+family agent above cannot search the main agent's sessions, but main can search
+family's.
+
 ## Per-Agent Sandbox and Tool Configuration
 
 Each agent can have its own sandbox and tool restrictions:

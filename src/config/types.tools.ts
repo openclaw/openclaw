@@ -449,6 +449,14 @@ export type MemorySearchConfig = {
     /** Optional cap on cached embeddings (best-effort). */
     maxEntries?: number;
   };
+  /** Per-agent QMD extra collections. */
+  qmd?: {
+    extraCollections?: Array<{
+      name?: string;
+      path: string;
+      pattern?: string;
+    }>;
+  };
 };
 
 type WebSearchLegacyProviderConfig = {

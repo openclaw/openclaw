@@ -1844,6 +1844,31 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       type: "string",
                     },
                   },
+                  qmd: {
+                    type: "object",
+                    properties: {
+                      extraCollections: {
+                        type: "array",
+                        items: {
+                          type: "object",
+                          properties: {
+                            name: {
+                              type: "string",
+                            },
+                            path: {
+                              type: "string",
+                            },
+                            pattern: {
+                              type: "string",
+                            },
+                          },
+                          required: ["path"],
+                          additionalProperties: false,
+                        },
+                      },
+                    },
+                    additionalProperties: false,
+                  },
                   multimodal: {
                     type: "object",
                     properties: {
@@ -3406,6 +3431,31 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       items: {
                         type: "string",
                       },
+                    },
+                    qmd: {
+                      type: "object",
+                      properties: {
+                        extraCollections: {
+                          type: "array",
+                          items: {
+                            type: "object",
+                            properties: {
+                              name: {
+                                type: "string",
+                              },
+                              path: {
+                                type: "string",
+                              },
+                              pattern: {
+                                type: "string",
+                              },
+                            },
+                            required: ["path"],
+                            additionalProperties: false,
+                          },
+                        },
+                      },
+                      additionalProperties: false,
                     },
                     multimodal: {
                       type: "object",
@@ -13333,6 +13383,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       label: "Extra Memory Paths",
       help: "Adds extra directories or .md files to the memory index beyond default memory files. Use this when key reference docs live elsewhere in your repo; when multimodal memory is enabled, matching image/audio files under these paths are also eligible for indexing.",
       tags: ["storage"],
+    },
+    "agents.list[].memorySearch.qmd.extraCollections": {
+      label: "Agent QMD Extra Collections",
+      help: "Per-agent extra QMD collections to include in memory search.",
+      tags: ["advanced"],
     },
     "agents.defaults.memorySearch.multimodal": {
       label: "Memory Search Multimodal",

@@ -34,6 +34,7 @@ import {
   type MemorySource,
   type MemorySyncProgressUpdate,
   type ResolvedMemoryBackendConfig,
+  type ResolvedQmdCollection,
   type ResolvedQmdConfig,
   type ResolvedQmdMcporterConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
@@ -134,7 +135,7 @@ type ManagedCollection = {
   name: string;
   path: string;
   pattern: string;
-  kind: "memory" | "custom" | "sessions";
+  kind: "memory" | "custom" | "extra" | "sessions";
 };
 
 type QmdManagerMode = "full" | "status";
@@ -166,8 +167,9 @@ export class QmdMemoryManager implements MemorySearchManager {
   private readonly xdgCacheHome: string;
   private readonly indexPath: string;
   private readonly env: NodeJS.ProcessEnv;
-  private readonly managedCollectionNames: string[];
+  private managedCollectionNames: string[];
   private readonly collectionRoots = new Map<string, CollectionRoot>();
+  private readonly collectionAliases = new Map<string, string>();
   private readonly sources = new Set<MemorySource>();
   private readonly docPathCache = new Map<
     string,
@@ -271,6 +273,8 @@ export class QmdMemoryManager implements MemorySearchManager {
     await this.symlinkSharedModels();
 
     await this.ensureCollections();
+    // Recompute after ensureCollections may have set aliases for extra collections.
+    this.managedCollectionNames = this.computeManagedCollectionNames();
 
     if (this.qmd.update.onBoot) {
       const bootRun = this.runUpdate("boot", true);
@@ -302,10 +306,12 @@ export class QmdMemoryManager implements MemorySearchManager {
 
   private bootstrapCollections(): void {
     this.collectionRoots.clear();
+    this.collectionAliases.clear();
     this.sources.clear();
     for (const collection of this.qmd.collections) {
       const kind: MemorySource = collection.kind === "sessions" ? "sessions" : "memory";
       this.collectionRoots.set(collection.name, { path: collection.path, kind });
+      this.collectionAliases.set(collection.name, collection.name);
       this.sources.add(kind);
     }
   }
@@ -343,6 +349,18 @@ export class QmdMemoryManager implements MemorySearchManager {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         if (this.isCollectionAlreadyExistsError(message)) {
+          // Extra collections (cross-agent) prefer non-destructive alias
+          // to avoid removing another agent's collection via rebind.
+          if (collection.kind === "extra") {
+            const aliasTarget = this.findCollectionByPath(collection, existing);
+            if (aliasTarget) {
+              this.collectionAliases.set(collection.name, aliasTarget);
+              log.info(
+                `qmd collection ${collection.name} remapped to existing collection ${aliasTarget} (same path)`,
+              );
+              continue;
+            }
+          }
           const rebound = await this.tryRebindConflictingCollection({
             collection,
             existing,
@@ -391,6 +409,23 @@ export class QmdMemoryManager implements MemorySearchManager {
       return name;
     }
     return null;
+  }
+
+  /** Path-only lookup (ignores pattern) for non-destructive alias mapping. */
+  private findCollectionByPath(
+    target: ResolvedQmdCollection,
+    existing: Map<string, ListedCollection>,
+  ): string | undefined {
+    const normalizedPath = path.resolve(target.path);
+    for (const [name, details] of existing) {
+      if (name === target.name) {
+        continue;
+      }
+      if (details.path && path.resolve(details.path) === normalizedPath) {
+        return name;
+      }
+    }
+    return undefined;
   }
 
   private async tryRebindConflictingCollection(params: {
@@ -508,7 +543,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   private async ensureCollectionPath(collection: {
     path: string;
     pattern: string;
-    kind: "memory" | "custom" | "sessions";
+    kind: "memory" | "custom" | "extra" | "sessions";
   }): Promise<void> {
     if (!this.isDirectoryGlobPattern(collection.pattern)) {
       return;
@@ -2169,12 +2204,13 @@ export class QmdMemoryManager implements MemorySearchManager {
     const seen = new Set<string>();
     const names: string[] = [];
     for (const collection of this.qmd.collections) {
-      const name = collection.name?.trim();
-      if (!name || seen.has(name)) {
+      const configName = collection.name?.trim();
+      if (!configName || seen.has(configName)) {
         continue;
       }
-      seen.add(name);
-      names.push(name);
+      seen.add(configName);
+      const resolved = this.collectionAliases.get(configName) ?? configName;
+      names.push(resolved);
     }
     return names;
   }

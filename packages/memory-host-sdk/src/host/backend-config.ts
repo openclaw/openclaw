@@ -1,5 +1,8 @@
 import path from "node:path";
-import { resolveAgentWorkspaceDir } from "../../../../src/agents/agent-scope.js";
+import {
+  resolveAgentConfig,
+  resolveAgentWorkspaceDir,
+} from "../../../../src/agents/agent-scope.js";
 import { parseDurationMs } from "../../../../src/cli/parse-duration.js";
 import type { OpenClawConfig } from "../../../../src/config/config.js";
 import type { SessionSendPolicyConfig } from "../../../../src/config/types.base.js";
@@ -24,7 +27,7 @@ export type ResolvedQmdCollection = {
   name: string;
   path: string;
   pattern: string;
-  kind: "memory" | "custom" | "sessions";
+  kind: "memory" | "custom" | "extra" | "sessions";
 };
 
 export type ResolvedQmdUpdateConfig = {
@@ -272,6 +275,43 @@ function resolveMcporterConfig(raw?: MemoryQmdMcporterConfig): ResolvedQmdMcport
   return parsed;
 }
 
+function resolveAgentExtraCollections(
+  rawCollections: Array<{ name?: string; path: string; pattern?: string }> | undefined,
+  workspaceDir: string,
+  existing: Set<string>,
+  agentId: string,
+): ResolvedQmdCollection[] {
+  if (!rawCollections?.length) {
+    return [];
+  }
+  const collections: ResolvedQmdCollection[] = [];
+  rawCollections.forEach((entry, index) => {
+    const trimmedPath = entry?.path?.trim();
+    if (!trimmedPath) {
+      return;
+    }
+    let resolved: string;
+    try {
+      resolved = resolvePath(trimmedPath, workspaceDir);
+    } catch {
+      return;
+    }
+    const pattern = entry.pattern?.trim() || "**/*.md";
+    const explicitName = entry.name?.trim();
+    const baseName = explicitName
+      ? sanitizeName(explicitName)
+      : scopeCollectionBase(`agent-extra-${index + 1}`, agentId);
+    const name = ensureUniqueName(baseName, existing);
+    collections.push({
+      name,
+      path: resolved,
+      pattern,
+      kind: "extra",
+    });
+  });
+  return collections;
+}
+
 function resolveDefaultCollections(
   include: boolean,
   workspaceDir: string,
@@ -308,9 +348,17 @@ export function resolveMemoryBackendConfig(params: {
   const qmdCfg = params.cfg.memory?.qmd;
   const includeDefaultMemory = qmdCfg?.includeDefaultMemory !== false;
   const nameSet = new Set<string>();
+  const agentQmdExtraCollections = resolveAgentConfig(params.cfg, params.agentId)?.memorySearch?.qmd
+    ?.extraCollections;
   const collections = [
     ...resolveDefaultCollections(includeDefaultMemory, workspaceDir, nameSet, params.agentId),
     ...resolveCustomPaths(qmdCfg?.paths, workspaceDir, nameSet, params.agentId),
+    ...resolveAgentExtraCollections(
+      agentQmdExtraCollections,
+      workspaceDir,
+      nameSet,
+      params.agentId,
+    ),
   ];
 
   const rawCommand = qmdCfg?.command?.trim() || "qmd";
