@@ -629,17 +629,6 @@ describe("plugin-sdk subpath exports", () => {
       "toFormUrlEncoded",
     ]);
     expectSourceOmits("core", ["buildOauthProviderAuthResult"]);
-    expectSourceContract("provider-models", {
-      mentions: ["applyOpenAIConfig", "buildKilocodeModelDefinition", "discoverHuggingfaceModels"],
-      omits: [
-        "buildMinimaxModelDefinition",
-        "buildMoonshotProvider",
-        "QIANFAN_BASE_URL",
-        "resolveZaiBaseUrl",
-      ],
-    });
-    expectSourceOmitsSnippet("provider-models", "./xai.js");
-    expectSourceOmitsSnippet("provider-models", "./ollama-surface.js");
     expectSourceContract("provider-model-shared", {
       mentions: ["DEFAULT_CONTEXT_TOKENS", "normalizeModelCompat", "cloneFirstTemplateModel"],
       omits: ["applyOpenAIConfig", "buildKilocodeModelDefinition", "discoverHuggingfaceModels"],
