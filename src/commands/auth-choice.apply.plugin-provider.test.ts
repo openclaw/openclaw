@@ -106,7 +106,7 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
     applyAuthProfileConfig.mockImplementation((config) => config);
   });
 
-  it("returns an agent model override when default model application is deferred", async () => {
+  it("does not override agent model when default model application is deferred (issue #24170)", async () => {
     const provider = buildProvider();
     resolvePluginProviders.mockReturnValue([provider]);
     resolveProviderPluginChoice.mockReturnValue({
@@ -120,10 +120,12 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
       }),
     );
 
+    // When setDefaultModel is false, agent should inherit from agents.defaults.model
+    // instead of baking in the provider's defaultModel. See issue #24170.
     expect(result).toEqual({
       config: {},
-      agentModelOverride: "ollama/qwen3:4b",
     });
+    expect(result?.agentModelOverride).toBeUndefined();
     expect(runProviderModelSelectedHook).not.toHaveBeenCalled();
   });
 
@@ -302,7 +304,7 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
     });
   });
 
-  it("returns an agent-scoped override for plugin auth choices when default model application is deferred", async () => {
+  it("does not override agent model for plugin auth choices when default model application is deferred (issue #24170)", async () => {
     const provider = buildProvider();
     resolvePluginProviders.mockReturnValue([provider]);
 
@@ -325,7 +327,9 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
       },
     );
 
-    expect(result?.agentModelOverride).toBe("ollama/qwen3:4b");
+    // When setDefaultModel is false, agent should inherit from agents.defaults.model
+    // instead of baking in the provider's defaultModel. See issue #24170.
+    expect(result?.agentModelOverride).toBeUndefined();
     expect(result?.config.plugins).toEqual({
       entries: {
         ollama: {
@@ -334,7 +338,8 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
       },
     });
     expect(runProviderModelSelectedHook).not.toHaveBeenCalled();
-    expect(note).toHaveBeenCalledWith(
+    // Should not show "Default model set" message when not setting default
+    expect(note).not.toHaveBeenCalledWith(
       'Default model set to ollama/qwen3:4b for agent "worker".',
       "Model configured",
     );

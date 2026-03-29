@@ -1205,7 +1205,9 @@ describe("applyAuthChoice", () => {
     expect(resolveAgentModelPrimaryValue(result.config.agents?.defaults?.model)).toBe(
       "openai/gpt-4o-mini",
     );
-    expect(result.agentModelOverride).toBe(GOOGLE_GEMINI_DEFAULT_MODEL);
+    // When setDefaultModel is false, agent should inherit from agents.defaults.model
+    // instead of baking in the provider's defaultModel. See issue #24170.
+    expect(result.agentModelOverride).toBeUndefined();
     expect((await readAuthProfile("google:default"))?.key).toBe("sk-gemini-test");
   });
 
@@ -1465,7 +1467,6 @@ describe("applyAuthChoice", () => {
       token: string;
       promptMessage: string;
       existingPrimary: string;
-      expectedOverride: string;
       profileId?: string;
       profileProvider?: string;
       extraProfileId?: string;
@@ -1477,7 +1478,6 @@ describe("applyAuthChoice", () => {
         token: "sk-xai-test",
         promptMessage: "Enter xAI API key",
         existingPrimary: "openai/gpt-4o-mini",
-        expectedOverride: "xai/grok-4",
         profileId: "xai:default",
         profileProvider: "xai",
         agentId: "agent-1",
@@ -1487,7 +1487,6 @@ describe("applyAuthChoice", () => {
         token: "sk-opencode-zen-test",
         promptMessage: "Enter OpenCode API key",
         existingPrimary: "anthropic/claude-opus-4-5",
-        expectedOverride: "opencode/claude-opus-4-6",
         profileId: "opencode:default",
         profileProvider: "opencode",
         extraProfileId: "opencode-go:default",
@@ -1498,7 +1497,6 @@ describe("applyAuthChoice", () => {
         token: "sk-opencode-go-test",
         promptMessage: "Enter OpenCode API key",
         existingPrimary: "anthropic/claude-opus-4-5",
-        expectedOverride: "opencode-go/kimi-k2.5",
         profileId: "opencode-go:default",
         profileProvider: "opencode-go",
         extraProfileId: "opencode:default",
@@ -1526,7 +1524,9 @@ describe("applyAuthChoice", () => {
       expect(resolveAgentModelPrimaryValue(result.config.agents?.defaults?.model)).toBe(
         scenario.existingPrimary,
       );
-      expect(result.agentModelOverride).toBe(scenario.expectedOverride);
+      // When setDefaultModel is false, agent should inherit from agents.defaults.model
+      // instead of baking in the provider's defaultModel. See issue #24170.
+      expect(result.agentModelOverride).toBeUndefined();
       if (scenario.profileId && scenario.profileProvider) {
         expect(result.config.auth?.profiles?.[scenario.profileId]).toMatchObject({
           provider: scenario.profileProvider,

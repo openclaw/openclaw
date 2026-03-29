@@ -20,11 +20,13 @@ export async function applyDefaultModelChoice(params: {
     return { config: next };
   }
 
+  // When setDefaultModel is false (e.g., adding a new agent), do not override
+  // the agent's model. Let it inherit from agents.defaults.model instead of
+  // baking in the provider's defaultModel. See issue #24170.
   const next = params.applyProviderConfig(params.config);
   const nextWithModel = ensureModelAllowlistEntry({
     cfg: next,
     modelRef: params.defaultModel,
   });
-  await params.noteAgentModel(params.defaultModel);
-  return { config: nextWithModel, agentModelOverride: params.defaultModel };
+  return { config: nextWithModel };
 }

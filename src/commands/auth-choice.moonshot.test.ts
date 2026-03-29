@@ -78,7 +78,9 @@ describe("applyAuthChoice (moonshot)", () => {
     );
     expect(result.config.models?.providers?.moonshot?.baseUrl).toBe("https://api.moonshot.cn/v1");
     expect(result.config.models?.providers?.moonshot?.models?.[0]?.input).toContain("image");
-    expect(result.agentModelOverride).toBe("moonshot/kimi-k2.5");
+    // When setDefaultModel is false, agent should inherit from agents.defaults.model
+    // instead of baking in the provider's defaultModel. See issue #24170.
+    expect(result.agentModelOverride).toBeUndefined();
 
     const parsed = await readAuthProfiles();
     expect(parsed.profiles?.["moonshot:default"]?.key).toBe("sk-moonshot-cn-test");

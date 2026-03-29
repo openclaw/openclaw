@@ -199,7 +199,6 @@ export async function applyAuthChoiceLoadedPluginProvider(
   });
 
   let nextConfig = applied.config;
-  let agentModelOverride: string | undefined;
   if (applied.defaultModel) {
     if (params.setDefaultModel) {
       nextConfig = applyDefaultModel(nextConfig, applied.defaultModel);
@@ -216,11 +215,13 @@ export async function applyAuthChoiceLoadedPluginProvider(
       );
       return { config: nextConfig };
     }
+    // When setDefaultModel is false (e.g., adding a new agent), do not override
+    // the agent's model. Let it inherit from agents.defaults.model instead of
+    // baking in the provider's defaultModel. See issue #24170.
     nextConfig = restoreConfiguredPrimaryModel(nextConfig, params.config);
-    agentModelOverride = applied.defaultModel;
   }
 
-  return { config: nextConfig, agentModelOverride };
+  return { config: nextConfig };
 }
 
 export async function applyAuthChoicePluginProvider(
@@ -303,14 +304,11 @@ export async function applyAuthChoicePluginProvider(
       );
       return { config: nextConfig };
     }
-    if (params.agentId) {
-      await params.prompter.note(
-        `Default model set to ${applied.defaultModel} for agent "${params.agentId}".`,
-        "Model configured",
-      );
-    }
+    // When setDefaultModel is false (e.g., adding a new agent), do not override
+    // the agent's model. Let it inherit from agents.defaults.model instead of
+    // baking in the provider's defaultModel. See issue #24170.
     nextConfig = restoreConfiguredPrimaryModel(nextConfig, params.config);
-    return { config: nextConfig, agentModelOverride: applied.defaultModel };
+    return { config: nextConfig };
   }
 
   return { config: nextConfig };

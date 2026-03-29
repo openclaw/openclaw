@@ -90,8 +90,10 @@ describe("applyDefaultModelChoice", () => {
       prompter: makePrompter(),
     });
 
-    expect(noteAgentModel).toHaveBeenCalledWith(defaultModel);
-    expect(applied.agentModelOverride).toBe(defaultModel);
+    // When setDefaultModel is false, agent should inherit from agents.defaults.model
+    // instead of baking in the provider's defaultModel. See issue #24170.
+    expect(noteAgentModel).not.toHaveBeenCalled();
+    expect(applied.agentModelOverride).toBeUndefined();
     expect(applied.config.agents?.defaults?.models?.[defaultModel]).toEqual({});
   });
 
