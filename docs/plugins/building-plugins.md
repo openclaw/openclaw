@@ -52,7 +52,15 @@ and provider plugins have dedicated guides linked above.
       "version": "1.0.0",
       "type": "module",
       "openclaw": {
-        "extensions": ["./index.ts"]
+        "extensions": ["./index.ts"],
+        "compat": {
+          "pluginApi": ">=2026.3.24-beta.2",
+          "minGatewayVersion": "2026.3.24-beta.2"
+        },
+        "build": {
+          "openclawVersion": "2026.3.24-beta.2",
+          "pluginSdkVersion": "2026.3.24-beta.2"
+        }
       }
     }
     ```
@@ -71,7 +79,8 @@ and provider plugins have dedicated guides linked above.
     </CodeGroup>
 
     Every plugin needs a manifest, even with no config. See
-    [Manifest](/plugins/manifest) for the full schema.
+    [Manifest](/plugins/manifest) for the full schema. The canonical ClawHub
+    publish snippets live in `docs/snippets/plugin-publish/`.
 
   </Step>
 
@@ -107,13 +116,16 @@ and provider plugins have dedicated guides linked above.
 
   <Step title="Test and publish">
 
-    **External plugins:** publish to [ClawHub](/tools/clawhub) or npm, then install:
+    **External plugins:** validate and publish with ClawHub, then install:
 
     ```bash
-    openclaw plugins install @myorg/openclaw-my-plugin
+    clawhub package publish your-org/your-plugin --dry-run
+    clawhub package publish your-org/your-plugin
+    openclaw plugins install clawhub:@myorg/openclaw-my-plugin
     ```
 
-    OpenClaw checks ClawHub first, then falls back to npm.
+    OpenClaw also checks ClawHub before npm for bare package specs like
+    `@myorg/openclaw-my-plugin`.
 
     **In-repo plugins:** place under the bundled plugin workspace tree — automatically discovered.
 
