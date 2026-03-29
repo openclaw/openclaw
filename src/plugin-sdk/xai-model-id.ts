@@ -1,1 +1,1 @@
-export { normalizeXaiModelId } from "./xai.js";
+export { normalizeXaiModelId } from "../../extensions/xai/model-id.js";
