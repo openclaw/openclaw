@@ -62,6 +62,10 @@ describe("mistral onboard", () => {
       id: bundled.id,
       contextWindow: bundled.contextWindow,
       maxTokens: bundled.maxTokens,
+      compat: {
+        supportsStore: false,
+        maxTokensField: "max_tokens",
+      },
     });
   });
 
