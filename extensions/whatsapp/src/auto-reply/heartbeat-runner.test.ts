@@ -1,7 +1,7 @@
+import { redactIdentifier } from "openclaw/plugin-sdk/logging-core";
+import type { getReplyFromConfig } from "openclaw/plugin-sdk/reply-runtime";
+import { HEARTBEAT_TOKEN } from "openclaw/plugin-sdk/reply-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { getReplyFromConfig } from "../../../../src/auto-reply/reply.js";
-import { HEARTBEAT_TOKEN } from "../../../../src/auto-reply/tokens.js";
-import { redactIdentifier } from "../../../../src/logging/redact-identifier.js";
 import type { sendMessageWhatsApp } from "../send.js";
 
 const state = vi.hoisted(() => ({
@@ -91,11 +91,11 @@ vi.mock("openclaw/plugin-sdk/text-runtime", async (importOriginal) => {
   };
 });
 
-vi.mock("../../../../src/auto-reply/reply.js", () => ({
+vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
   getReplyFromConfig: vi.fn(async () => undefined),
 }));
 
-vi.mock("../../../../src/config/sessions.js", () => ({
+vi.mock("openclaw/plugin-sdk/config-runtime", () => ({
   loadSessionStore: () => state.store,
   resolveSessionKey: () => "k",
   resolveStorePath: () => "/tmp/store.json",

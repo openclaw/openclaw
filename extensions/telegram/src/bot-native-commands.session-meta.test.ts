@@ -1,6 +1,6 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import type { ResolvedAgentRoute } from "../../../src/routing/resolve-route.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import {
   createDeferred,
@@ -126,7 +126,7 @@ vi.mock("../../../src/config/sessions.js", () => ({
 vi.mock("../../../src/pairing/pairing-store.js", () => ({
   readChannelAllowFromStore: vi.fn(async () => []),
 }));
-vi.mock("../../../src/infra/outbound/session-binding-service.js", () => ({
+vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
   getSessionBindingService: () => ({
     bind: vi.fn(),
     getCapabilities: vi.fn(),
