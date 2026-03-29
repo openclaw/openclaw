@@ -34,6 +34,13 @@ type ToolStartRecord = {
 /** Track tool execution start data for after_tool_call hook. */
 const toolStartData = new Map<string, ToolStartRecord>();
 
+/**
+ * Maximum age (ms) for entries in toolStartData before they are considered
+ * orphaned. Tool calls that start but never complete (abort, crash, network
+ * failure) leave entries that would otherwise accumulate indefinitely.
+ */
+const TOOL_START_DATA_MAX_AGE_MS = 5 * 60_000; // 5 minutes
+
 function buildToolStartKey(runId: string, toolCallId: string): string {
   return `${runId}:${toolCallId}`;
 }
@@ -344,6 +351,16 @@ export async function handleToolExecutionStart(
 
   // Track start time and args for after_tool_call hook
   toolStartData.set(buildToolStartKey(runId, toolCallId), { startTime: Date.now(), args });
+
+  // Sweep orphaned entries from aborted/crashed tool calls to prevent unbounded growth
+  if (toolStartData.size > 50) {
+    const now = Date.now();
+    for (const [key, record] of toolStartData) {
+      if (now - record.startTime > TOOL_START_DATA_MAX_AGE_MS) {
+        toolStartData.delete(key);
+      }
+    }
+  }
 
   if (toolName === "read") {
     const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
