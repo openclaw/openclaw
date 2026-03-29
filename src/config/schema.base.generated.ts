@@ -4687,6 +4687,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                                   type: "string",
                                 },
                               },
+                              knownLongFlags: {
+                                type: "array",
+                                items: {
+                                  type: "string",
+                                },
+                              },
                             },
                             additionalProperties: false,
                           },
@@ -7264,6 +7270,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       },
                     },
                     deniedFlags: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                      },
+                    },
+                    knownLongFlags: {
                       type: "array",
                       items: {
                         type: "string",
