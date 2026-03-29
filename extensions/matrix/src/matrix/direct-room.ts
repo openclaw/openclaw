@@ -28,10 +28,12 @@ export function isStrictDirectMembership(params: {
   const joinedMembers = params.joinedMembers ?? [];
 
   // Priority 1: is_direct flag is authoritative (Matrix protocol standard)
+  // Still require exactly 2 members to avoid misclassifying shared rooms as DMs
   if (params.isDirectFlag === true) {
     return Boolean(
       selfUserId &&
       remoteUserId &&
+      joinedMembers.length === 2 &&
       joinedMembers.includes(selfUserId) &&
       joinedMembers.includes(remoteUserId),
     );
