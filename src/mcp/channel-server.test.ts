@@ -14,7 +14,7 @@ import {
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { createOpenClawChannelMcpServer, OpenClawChannelBridge } from "./channel-server.js";
 
-installGatewayTestHooks();
+installGatewayTestHooks({ scope: "suite" });
 
 const ClaudeChannelNotificationSchema = z.object({
   method: z.literal("notifications/claude/channel"),

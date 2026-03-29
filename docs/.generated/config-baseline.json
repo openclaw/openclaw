@@ -2609,6 +2609,26 @@
       "hasChildren": false
     },
     {
+      "path": "agents.defaults.memorySearch.store.fts",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "agents.defaults.memorySearch.store.fts.tokenizer",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "agents.defaults.memorySearch.store.path",
       "kind": "core",
       "type": "string",
@@ -5020,6 +5040,26 @@
     },
     {
       "path": "agents.list.*.memorySearch.store.driver",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "agents.list.*.memorySearch.store.fts",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "agents.list.*.memorySearch.store.fts.tokenizer",
       "kind": "core",
       "type": "string",
       "required": false,
@@ -16723,7 +16763,7 @@
         "network"
       ],
       "label": "Google Chat",
-      "help": "Google Workspace Chat app via HTTP webhooks.",
+      "help": "Google Workspace Chat app with HTTP webhook.",
       "hasChildren": true
     },
     {
@@ -20991,7 +21031,7 @@
         "network"
       ],
       "label": "LINE",
-      "help": "LINE Messaging API bot for Japan/Taiwan/Thailand markets.",
+      "help": "LINE Messaging API webhook bot.",
       "hasChildren": true
     },
     {
@@ -21271,6 +21311,66 @@
         "security",
         "storage"
       ],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.line.accounts.*.threadBindings",
+      "kind": "channel",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.line.accounts.*.threadBindings.enabled",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.line.accounts.*.threadBindings.idleHours",
+      "kind": "channel",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.line.accounts.*.threadBindings.maxAgeHours",
+      "kind": "channel",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.line.accounts.*.threadBindings.spawnAcpSessions",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.line.accounts.*.threadBindings.spawnSubagentSessions",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -21563,6 +21663,66 @@
       "hasChildren": false
     },
     {
+      "path": "channels.line.threadBindings",
+      "kind": "channel",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.line.threadBindings.enabled",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.line.threadBindings.idleHours",
+      "kind": "channel",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.line.threadBindings.maxAgeHours",
+      "kind": "channel",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.line.threadBindings.spawnAcpSessions",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.line.threadBindings.spawnSubagentSessions",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.line.tokenFile",
       "kind": "channel",
       "type": "string",
@@ -21600,7 +21760,10 @@
     {
       "path": "channels.matrix.accessToken",
       "kind": "channel",
-      "type": "string",
+      "type": [
+        "object",
+        "string"
+      ],
       "required": false,
       "deprecated": false,
       "sensitive": true,
@@ -21611,6 +21774,36 @@
         "network",
         "security"
       ],
+      "hasChildren": true
+    },
+    {
+      "path": "channels.matrix.accessToken.id",
+      "kind": "channel",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.matrix.accessToken.provider",
+      "kind": "channel",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.matrix.accessToken.source",
+      "kind": "channel",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
       "hasChildren": false
     },
     {
@@ -22545,6 +22738,23 @@
       "kind": "channel",
       "type": "number",
       "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.matrix.streaming",
+      "kind": "channel",
+      "type": [
+        "boolean",
+        "string"
+      ],
+      "required": false,
+      "enumValues": [
+        "partial",
+        "off"
+      ],
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -23862,6 +24072,16 @@
       "kind": "channel",
       "type": "string",
       "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.msteams.blockStreaming",
+      "kind": "channel",
+      "type": "boolean",
+      "required": false,
       "deprecated": false,
       "sensitive": false,
       "tags": [],
@@ -44772,6 +44992,26 @@
       "hasChildren": false
     },
     {
+      "path": "models.providers.*.models.*.compat.unsupportedToolSchemaKeywords",
+      "kind": "core",
+      "type": "array",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "models.providers.*.models.*.compat.unsupportedToolSchemaKeywords.*",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "models.providers.*.models.*.contextWindow",
       "kind": "core",
       "type": "number",
@@ -57226,6 +57466,72 @@
       "hasChildren": true
     },
     {
+      "path": "plugins.entries.xai.config.codeExecution",
+      "kind": "plugin",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "plugins.entries.xai.config.codeExecution.enabled",
+      "kind": "plugin",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "advanced"
+      ],
+      "label": "Enable Code Execution",
+      "help": "Enable the code_execution tool for remote xAI sandbox analysis.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.xai.config.codeExecution.maxTurns",
+      "kind": "plugin",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "performance"
+      ],
+      "label": "Code Execution Max Turns",
+      "help": "Optional max internal tool turns xAI may use for code_execution.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.xai.config.codeExecution.model",
+      "kind": "plugin",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "models"
+      ],
+      "label": "Code Execution Model",
+      "help": "xAI model override for code_execution.",
+      "hasChildren": false
+    },
+    {
+      "path": "plugins.entries.xai.config.codeExecution.timeoutSeconds",
+      "kind": "plugin",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "performance"
+      ],
+      "label": "Code Execution Timeout",
+      "help": "Timeout in seconds for code_execution requests.",
+      "hasChildren": false
+    },
+    {
       "path": "plugins.entries.xai.config.webSearch",
       "kind": "plugin",
       "type": "object",
@@ -64704,6 +65010,154 @@
       ],
       "label": "Web Search Timeout (sec)",
       "help": "Timeout in seconds for web_search requests.",
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.x_search",
+      "kind": "core",
+      "type": "object",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": true
+    },
+    {
+      "path": "tools.web.x_search.apiKey",
+      "kind": "core",
+      "type": [
+        "object",
+        "string"
+      ],
+      "required": false,
+      "deprecated": false,
+      "sensitive": true,
+      "tags": [
+        "auth",
+        "security",
+        "tools"
+      ],
+      "label": "xAI API Key",
+      "help": "xAI API key for X search (fallback: XAI_API_KEY env var).",
+      "hasChildren": true
+    },
+    {
+      "path": "tools.web.x_search.apiKey.id",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.x_search.apiKey.provider",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.x_search.apiKey.source",
+      "kind": "core",
+      "type": "string",
+      "required": true,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.x_search.cacheTtlMinutes",
+      "kind": "core",
+      "type": "number",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "performance",
+        "storage",
+        "tools"
+      ],
+      "label": "X Search Cache TTL (min)",
+      "help": "Cache TTL in minutes for x_search results.",
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.x_search.enabled",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "tools"
+      ],
+      "label": "Enable X Search Tool",
+      "help": "Enable the x_search tool (requires XAI_API_KEY or tools.web.x_search.apiKey).",
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.x_search.inlineCitations",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "tools"
+      ],
+      "label": "X Search Inline Citations",
+      "help": "Keep inline citations from xAI in x_search responses when available (default: false).",
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.x_search.maxTurns",
+      "kind": "core",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "performance",
+        "tools"
+      ],
+      "label": "X Search Max Turns",
+      "help": "Optional max internal search/tool turns xAI may use per x_search request. Omit to let xAI choose.",
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.x_search.model",
+      "kind": "core",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "models",
+        "tools"
+      ],
+      "label": "X Search Model",
+      "help": "Model to use for X search (default: \"grok-4-1-fast-non-reasoning\").",
+      "hasChildren": false
+    },
+    {
+      "path": "tools.web.x_search.timeoutSeconds",
+      "kind": "core",
+      "type": "integer",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [
+        "performance",
+        "tools"
+      ],
+      "label": "X Search Timeout (sec)",
+      "help": "Timeout in seconds for x_search requests.",
       "hasChildren": false
     },
     {

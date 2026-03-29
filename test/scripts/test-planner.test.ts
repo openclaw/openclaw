@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   createExecutionArtifacts,
+  createTempArtifactWriteStream,
   resolvePnpmCommandInvocation,
   resolveVitestFsModuleCachePath,
 } from "../../scripts/test-planner/executor.mjs";
@@ -11,6 +12,7 @@ import {
   buildExecutionPlan,
   explainExecutionTarget,
 } from "../../scripts/test-planner/planner.mjs";
+import { bundledPluginFile } from "../helpers/bundled-plugin-paths.js";
 
 describe("test planner", () => {
   it("builds a capability-aware plan for mid-memory local runs", () => {
@@ -80,6 +82,40 @@ describe("test planner", () => {
     expect(plan.runtimeCapabilities.memoryBand).toBe("constrained");
     expect(plan.executionBudget.extensionsBatchTargetMs).toBe(60_000);
     expect(sharedExtensionBatches.length).toBeGreaterThan(3);
+    artifacts.cleanupTempArtifacts();
+  });
+
+  it("caps CI extension batch concurrency when multiple shared batches are scheduled", () => {
+    const env = {
+      CI: "true",
+      GITHUB_ACTIONS: "true",
+      RUNNER_OS: "Linux",
+      OPENCLAW_TEST_HOST_CPU_COUNT: "4",
+      OPENCLAW_TEST_HOST_MEMORY_GIB: "16",
+    };
+    const artifacts = createExecutionArtifacts(env);
+    const plan = buildExecutionPlan(
+      {
+        profile: null,
+        mode: "ci",
+        surfaces: ["extensions"],
+        passthroughArgs: [],
+      },
+      {
+        env,
+        platform: "linux",
+        writeTempJsonArtifact: artifacts.writeTempJsonArtifact,
+      },
+    );
+
+    const sharedExtensionBatches = plan.selectedUnits.filter(
+      (unit) => unit.surface === "extensions" && !unit.isolate,
+    );
+
+    expect(plan.runtimeCapabilities.runtimeProfileName).toBe("ci-linux");
+    expect(plan.executionBudget.topLevelParallelLimitNoIsolate).toBe(4);
+    expect(sharedExtensionBatches.length).toBeGreaterThan(1);
+    expect(plan.topLevelParallelLimit).toBe(2);
     artifacts.cleanupTempArtifacts();
   });
 
@@ -160,7 +196,10 @@ describe("test planner", () => {
         surfaces: [],
         passthroughArgs: [
           "src/auto-reply/reply/followup-runner.test.ts",
-          "extensions/discord/src/monitor/message-handler.preflight.acp-bindings.test.ts",
+          bundledPluginFile(
+            "discord",
+            "src/monitor/message-handler.preflight.acp-bindings.test.ts",
+          ),
         ],
       },
       {
@@ -314,6 +353,24 @@ describe("test planner", () => {
     expect(fs.existsSync(artifactDir)).toBe(false);
   });
 
+  it("keeps fd-backed artifact streams writable after temp cleanup", async () => {
+    const artifacts = createExecutionArtifacts({});
+    const artifactDir = artifacts.ensureTempArtifactDir();
+    const logPath = path.join(artifactDir, "lane.log");
+    const stream = createTempArtifactWriteStream(logPath);
+
+    stream.write("before cleanup\n");
+    artifacts.cleanupTempArtifacts();
+
+    await expect(
+      new Promise((resolve, reject) => {
+        stream.on("error", reject);
+        stream.end("after cleanup\n", resolve);
+      }),
+    ).resolves.toBeNull();
+    expect(fs.existsSync(artifactDir)).toBe(false);
+  });
+
   it("builds a CI manifest with planner-owned shard counts and matrices", () => {
     const manifest = buildCIExecutionManifest(
       {
@@ -338,8 +395,10 @@ describe("test planner", () => {
     expect(manifest.shardCounts.channels).toBe(3);
     expect(manifest.shardCounts.windows).toBe(6);
     expect(manifest.shardCounts.macosNode).toBe(9);
+    expect(manifest.shardCounts.bun).toBe(6);
     expect(manifest.jobs.checks.matrix.include).toHaveLength(7);
     expect(manifest.jobs.checksWindows.matrix.include).toHaveLength(6);
+    expect(manifest.jobs.bunChecks.matrix.include).toHaveLength(6);
     expect(manifest.jobs.macosNode.matrix.include).toHaveLength(9);
     expect(manifest.jobs.macosSwift.enabled).toBe(true);
     expect(manifest.requiredCheckNames).toContain("macos-swift");

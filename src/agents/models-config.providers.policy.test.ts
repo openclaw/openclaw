@@ -1,23 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 describe("models-config.providers.policy", () => {
-  beforeEach(() => {
-    vi.resetModules();
-    vi.restoreAllMocks();
-  });
-
-  it("resolves config apiKey markers through provider runtime hooks", async () => {
-    const providerRuntime = await import("../plugins/provider-runtime.js");
-    vi.spyOn(providerRuntime, "resolveProviderRuntimePlugin").mockReturnValue({
-      id: "amazon-bedrock",
-      label: "Amazon Bedrock",
-      auth: [],
-      resolveConfigApiKey: () => "AWS_PROFILE",
-    });
-    const resolveProviderConfigApiKeyWithPluginSpy = vi
-      .spyOn(providerRuntime, "resolveProviderConfigApiKeyWithPlugin")
-      .mockReturnValue("AWS_PROFILE");
-
+  it("resolves config apiKey markers through provider plugin hooks", async () => {
     const { resolveProviderConfigApiKeyResolver } =
       await import("./models-config.providers.policy.js");
     const env = {
@@ -27,13 +11,33 @@ describe("models-config.providers.policy", () => {
 
     expect(resolver).toBeTypeOf("function");
     expect(resolver?.(env)).toBe("AWS_PROFILE");
-    expect(resolveProviderConfigApiKeyWithPluginSpy).toHaveBeenCalledWith({
-      provider: "amazon-bedrock",
-      env,
-      context: {
-        provider: "amazon-bedrock",
-        env,
-      },
+  });
+
+  it("resolves anthropic-vertex ADC markers through provider plugin hooks", async () => {
+    const { resolveProviderConfigApiKeyResolver } =
+      await import("./models-config.providers.policy.js");
+    const resolver = resolveProviderConfigApiKeyResolver("anthropic-vertex");
+
+    expect(resolver).toBeTypeOf("function");
+    expect(
+      resolver?.({
+        ANTHROPIC_VERTEX_USE_GCP_METADATA: "true",
+      } as NodeJS.ProcessEnv),
+    ).toBe("gcp-vertex-credentials");
+  });
+
+  it("normalizes Google provider config through provider plugin hooks", async () => {
+    const { normalizeProviderSpecificConfig } = await import("./models-config.providers.policy.js");
+
+    expect(
+      normalizeProviderSpecificConfig("google", {
+        api: "google-generative-ai",
+        baseUrl: "https://generativelanguage.googleapis.com",
+        models: [],
+      }),
+    ).toMatchObject({
+      api: "google-generative-ai",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
     });
   });
 });

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import ts from "typescript";
+import { bundledPluginFile } from "./lib/bundled-plugin-paths.mjs";
 import { runCallsiteGuard } from "./lib/callsite-guard.mjs";
 import {
   collectCallExpressionLines,
@@ -15,7 +16,7 @@ const sourceRoots = [
   "src/media-understanding",
   "extensions",
 ];
-const allowedRelativePaths = new Set(["extensions/feishu/src/dedup.ts"]);
+const allowedRelativePaths = new Set([bundledPluginFile("feishu", "src/dedup.ts")]);
 
 function collectOsTmpdirImports(sourceFile) {
   const osModuleSpecifiers = new Set(["node:os", "os"]);
