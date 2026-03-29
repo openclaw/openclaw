@@ -78,6 +78,7 @@ import {
 } from "./conversation-route.js";
 import { enforceTelegramDmAccess } from "./dm-access.js";
 import {
+  isTelegramExecApprovalApprover,
   isTelegramExecApprovalAuthorizedSender,
   shouldEnableTelegramExecApprovalButtons,
 } from "./exec-approvals.js";
@@ -97,6 +98,18 @@ import {
   type ProviderInfo,
 } from "./model-buttons.js";
 import { buildInlineKeyboard } from "./send.js";
+
+function parseApprovalCallbackId(data: string): string | null {
+  const trimmed = data.trim();
+  if (!trimmed.startsWith("/approve")) {
+    return null;
+  }
+  const tokens = trimmed.split(/\s+/).filter(Boolean);
+  if (tokens.length < 3) {
+    return null;
+  }
+  return tokens[1] ?? null;
+}
 
 export const registerTelegramHandlers = ({
   cfg,
@@ -1288,9 +1301,20 @@ export const registerTelegramHandlers = ({
 
       const runtimeCfg = telegramDeps.loadConfig();
       if (isApprovalCallback) {
+        const approvalId = parseApprovalCallbackId(data);
+        const isPluginApprovalCallback = approvalId?.startsWith("plugin:") ?? false;
         if (!isTelegramExecApprovalAuthorizedSender({ cfg: runtimeCfg, accountId, senderId })) {
           logVerbose(
             `Blocked telegram exec approval callback from ${senderId || "unknown"} (not an approver)`,
+          );
+          return;
+        }
+        if (
+          isPluginApprovalCallback &&
+          !isTelegramExecApprovalApprover({ cfg: runtimeCfg, accountId, senderId })
+        ) {
+          logVerbose(
+            `Blocked telegram plugin approval callback from ${senderId || "unknown"} (not an explicit approver)`,
           );
           return;
         }
