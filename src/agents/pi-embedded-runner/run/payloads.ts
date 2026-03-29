@@ -21,6 +21,10 @@ import {
 } from "../../pi-embedded-utils.js";
 import { isLikelyMutatingToolName } from "../../tool-mutation.js";
 
+// Pre-compute normalized billing error text — this is a static constant that
+// doesn't need to be re-normalized on every call to buildEmbeddedRunPayloads.
+const NORMALIZED_BILLING_ERROR_TEXT = normalizeTextForComparison(BILLING_ERROR_USER_MESSAGE);
+
 type ToolMetaEntry = { toolName: string; meta?: string };
 type LastToolError = {
   toolName: string;
@@ -156,7 +160,7 @@ export function buildEmbeddedRunPayloads(params: {
     ? normalizeTextForComparison(rawErrorMessage)
     : null;
   const normalizedErrorText = errorText ? normalizeTextForComparison(errorText) : null;
-  const normalizedGenericBillingErrorText = normalizeTextForComparison(BILLING_ERROR_USER_MESSAGE);
+  const normalizedGenericBillingErrorText = NORMALIZED_BILLING_ERROR_TEXT;
   const genericErrorText = "The AI service returned an error. Please try again.";
   if (errorText) {
     replyItems.push({ text: errorText, isError: true });
