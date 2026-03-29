@@ -100,8 +100,29 @@ describe("config schema", () => {
     expect(res.uiHints.gateway?.label).toBe("Gateway");
     expect(res.uiHints["gateway.auth.token"]?.sensitive).toBe(true);
     expect(res.uiHints["channels.defaults.groupPolicy"]?.label).toBeTruthy();
+    expect(res.uiHints["mcp.servers.*.headers.*"]?.sensitive).toBe(true);
+    expect(res.uiHints["channels.discord.threadBindings.spawnAcpSessions"]?.label).toBeTruthy();
     expect(res.version).toBeTruthy();
     expect(res.generatedAt).toBeTruthy();
+  });
+
+  it("includes MCP SSE header schema under mcp.servers entries", () => {
+    const schema = baseSchema.schema as {
+      properties?: Record<string, unknown>;
+    };
+    const mcpNode = schema.properties?.mcp as
+      | {
+          properties?: Record<string, unknown>;
+        }
+      | undefined;
+    const serversNode = mcpNode?.properties?.servers as
+      | {
+          additionalProperties?: {
+            properties?: Record<string, unknown>;
+          };
+        }
+      | undefined;
+    expect(serversNode?.additionalProperties?.properties?.headers).toBeTruthy();
   });
 
   it("merges plugin ui hints", () => {

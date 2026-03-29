@@ -53,4 +53,35 @@ describe("config mcp config", () => {
       expect(loaded.path).toBe(configPath);
     });
   });
+
+  it("accepts SSE MCP configs with headers at the config layer", async () => {
+    await withTempHomeConfig({}, async () => {
+      const setResult = await setConfiguredMcpServer({
+        name: "remote",
+        server: {
+          url: "https://example.com/mcp",
+          headers: {
+            Authorization: "Bearer token123",
+            "X-Retry": 1,
+            "X-Debug": true,
+          },
+        },
+      });
+
+      expect(setResult.ok).toBe(true);
+      const loaded = await listConfiguredMcpServers();
+      expect(loaded.ok).toBe(true);
+      if (!loaded.ok) {
+        throw new Error("expected MCP config to load");
+      }
+      expect(loaded.mcpServers.remote).toEqual({
+        url: "https://example.com/mcp",
+        headers: {
+          Authorization: "Bearer token123",
+          "X-Retry": 1,
+          "X-Debug": true,
+        },
+      });
+    });
+  });
 });
