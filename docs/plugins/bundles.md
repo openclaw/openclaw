@@ -126,7 +126,7 @@ MCP servers can use stdio or HTTP transport:
 }
 ```
 
-**HTTP** connects to a running MCP server over `streamable-http` or `sse`:
+**HTTP** connects to a running MCP server over `sse` by default, or `streamable-http` when requested:
 
 ```json
 {
@@ -145,7 +145,7 @@ MCP servers can use stdio or HTTP transport:
 }
 ```
 
-- `transport` must be `"streamable-http"` or `"sse"`; there is no auto-detection
+- `transport` may be set to `"streamable-http"` or `"sse"`; when omitted, OpenClaw uses `sse`
 - only `http:` and `https:` URL schemes are allowed
 - `headers` values support `${ENV_VAR}` interpolation
 - a server entry with both `command` and `url` is rejected
