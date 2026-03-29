@@ -138,3 +138,6 @@ docs/superpowers
 # Deprecated changelog fragment workflow
 changelog/fragments/
 openclaw-*.log
+
+# Local scratch workspace
+.tmp/
