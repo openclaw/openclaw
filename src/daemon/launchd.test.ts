@@ -11,6 +11,7 @@ import {
   repairLaunchAgentBootstrap,
   restartLaunchAgent,
   resolveLaunchAgentPlistPath,
+  stopLaunchAgent,
 } from "./launchd.js";
 
 const state = vi.hoisted(() => ({
@@ -354,6 +355,27 @@ describe("launchd install", () => {
     expect(state.launchctlCalls).toContainEqual(["kickstart", "-k", serviceId]);
     expect(state.launchctlCalls.some((call) => call[0] === "bootout")).toBe(false);
     expect(state.launchctlCalls.some((call) => call[0] === "bootstrap")).toBe(false);
+  });
+
+  it("stops LaunchAgent without unloading it", async () => {
+    const env = createDefaultLaunchdEnv();
+    const stdout = new PassThrough();
+    let output = "";
+    stdout.on("data", (chunk) => {
+      output += String(chunk);
+    });
+
+    await stopLaunchAgent({
+      env,
+      stdout,
+    });
+
+    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+    const label = "ai.openclaw.gateway";
+
+    expect(state.launchctlCalls).toContainEqual(["stop", `${domain}/${label}`]);
+    expect(state.launchctlCalls.some((call) => call[0] === "bootout")).toBe(false);
+    expect(output).toContain(`Stopped LaunchAgent`);
   });
 
   it("uses the configured gateway port for stale cleanup", async () => {
