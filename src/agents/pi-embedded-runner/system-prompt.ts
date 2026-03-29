@@ -47,6 +47,8 @@ export function buildEmbeddedSystemPrompt(params: {
   sandboxInfo?: EmbeddedSandboxInfo;
   /** When set, only these channels appear in the prompt's channel option list. */
   configuredChannels?: string[];
+  /** When set, only these tools get natural-language descriptions in the prompt. */
+  promptTools?: string[];
   tools: AgentTool[];
   modelAliasLines: string[];
   userTimezone: string;
@@ -76,6 +78,7 @@ export function buildEmbeddedSystemPrompt(params: {
     messageToolHints: params.messageToolHints,
     sandboxInfo: params.sandboxInfo,
     configuredChannels: params.configuredChannels,
+    promptTools: params.promptTools,
     toolNames: params.tools.map((tool) => tool.name),
     toolSummaries: buildToolSummaryMap(params.tools),
     modelAliasLines: params.modelAliasLines,

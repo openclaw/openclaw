@@ -185,6 +185,13 @@ export type AgentDefaultsConfig = {
   };
   /** Vector memory search configuration (per-agent overrides supported). */
   memorySearch?: MemorySearchConfig;
+  /**
+   * When set, only these tools get natural-language descriptions in the system prompt.
+   * Other tools remain callable (their schemas are still sent to the API) but the model
+   * receives no prompt-level description and won't proactively use them.
+   * When unset, all tools get descriptions (backward compatible).
+   */
+  promptTools?: string[];
   /** Default thinking level when no /think directive is present. */
   thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
   /** Default verbose level when no /verbose directive is present. */

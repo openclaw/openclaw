@@ -216,6 +216,9 @@ export function buildAgentSystemPrompt(params: {
   /** When set, only these channels appear in the prompt's channel option list.
    *  When unset, all deliverable channels are listed (backward compatible). */
   configuredChannels?: string[];
+  /** When set, only these tools get natural-language descriptions in the prompt.
+   *  Other tools remain callable but receive no prompt-level description. */
+  promptTools?: string[];
   /** Reaction guidance for the agent (for Telegram minimal/extensive modes). */
   reactionGuidance?: {
     level: "minimal" | "extensive";
@@ -317,14 +320,23 @@ export function buildAgentSystemPrompt(params: {
   const extraTools = Array.from(
     new Set(normalizedTools.filter((tool) => !toolOrder.includes(tool))),
   );
+  const promptToolsWhitelist = params.promptTools
+    ? new Set(params.promptTools.map((t) => t.trim().toLowerCase()).filter(Boolean))
+    : null;
+  const shouldIncludeDescription = (tool: string) =>
+    !promptToolsWhitelist || promptToolsWhitelist.has(tool);
   const enabledTools = toolOrder.filter((tool) => availableTools.has(tool));
   const toolLines = enabledTools.map((tool) => {
-    const summary = coreToolSummaries[tool] ?? externalToolSummaries.get(tool);
+    const summary = shouldIncludeDescription(tool)
+      ? (coreToolSummaries[tool] ?? externalToolSummaries.get(tool))
+      : undefined;
     const name = resolveToolName(tool);
     return summary ? `- ${name}: ${summary}` : `- ${name}`;
   });
   for (const tool of extraTools.toSorted()) {
-    const summary = coreToolSummaries[tool] ?? externalToolSummaries.get(tool);
+    const summary = shouldIncludeDescription(tool)
+      ? (coreToolSummaries[tool] ?? externalToolSummaries.get(tool))
+      : undefined;
     const name = resolveToolName(tool);
     toolLines.push(summary ? `- ${name}: ${summary}` : `- ${name}`);
   }

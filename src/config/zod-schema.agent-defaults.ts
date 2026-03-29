@@ -137,6 +137,7 @@ export const AgentDefaultsSchema = z
       })
       .strict()
       .optional(),
+    promptTools: z.array(z.string()).optional(),
     thinkingDefault: z
       .union([
         z.literal("off"),

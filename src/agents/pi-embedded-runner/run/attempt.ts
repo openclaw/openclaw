@@ -618,6 +618,7 @@ export async function runEmbeddedAttempt(
       messageToolHints,
       sandboxInfo,
       configuredChannels,
+      promptTools: params.config?.agents?.defaults?.promptTools,
       tools: effectiveTools,
       modelAliasLines: buildModelAliasLines(params.config),
       userTimezone,
