@@ -160,27 +160,25 @@ export function decodeCapturedOutputBuffer(params: {
   if (platform !== "win32") {
     return utf8;
   }
-  const encoding = params.windowsEncoding ?? resolveWindowsConsoleEncoding();
   
-  // 如果没有获取到编码，或者是 UTF-8，尝试更智能的检测
-  if (!encoding || encoding.toLowerCase() === "utf-8") {
-    // 检查是否是有效的 UTF-8
-    const isValidUtf8 = isValidUtf8Buffer(params.buffer);
-    if (isValidUtf8) {
-      return utf8;
-    }
-    // 如果不是有效 UTF-8，在中文 Windows 上默认尝试 GBK
-    try {
-      return new TextDecoder("gbk").decode(params.buffer);
-    } catch {
-      return utf8;
-    }
+  // 不管标称编码是什么，先检测是否为有效 UTF-8
+  // 子进程可能自己修改了代码页，缓存的标称编码可能不对
+  const isValidUtf8 = isValidUtf8Buffer(params.buffer);
+  if (isValidUtf8) {
+    return utf8;
   }
   
+  // 不是有效 UTF-8，再用标称编码尝试
+  const encoding = params.windowsEncoding ?? resolveWindowsConsoleEncoding();
+  
   try {
-    return new TextDecoder(encoding).decode(params.buffer);
+    if (encoding) {
+      return new TextDecoder(encoding).decode(params.buffer);
+    }
+    // 没有获取到编码，默认尝试 GBK
+    return new TextDecoder("gbk").decode(params.buffer);
   } catch {
-    // 如果指定编码失败，在中文 Windows 上回退到 GBK
+    // 任何情况失败，都回退到 GBK，再不行就 UTF-8
     try {
       return new TextDecoder("gbk").decode(params.buffer);
     } catch {
