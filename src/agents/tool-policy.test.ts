@@ -129,6 +129,30 @@ describe("tool-policy", () => {
       "nodes",
     ]);
   });
+
+  it("keeps owner-only tools for non-owner when listed in alsoAllow bypass list", async () => {
+    const tools = createOwnerPolicyTools();
+    // gateway is in alsoAllow, so it should survive even for non-owner
+    const filtered = applyOwnerOnlyToolPolicy(tools, false, ["gateway"]);
+    expect(filtered.map((t) => t.name)).toEqual(["read", "gateway"]);
+    // owner sender still works as before
+    const ownerFiltered = applyOwnerOnlyToolPolicy(tools, true, ["gateway"]);
+    expect(ownerFiltered.map((t) => t.name)).toEqual(["read", "cron", "gateway", "whatsapp_login"]);
+  });
+
+  it("alsoAllow bypass works for custom ownerOnly tools not in the fallback list", async () => {
+    const tools = [
+      {
+        name: "custom_admin_tool",
+        ownerOnly: true,
+        // oxlint-disable-next-line typescript/no-explicit-any
+        execute: async () => ({ content: [], details: {} }) as any,
+      },
+    ] as unknown as AnyAgentTool[];
+    // non-owner, but tool is in alsoAllow bypass list
+    const filtered = applyOwnerOnlyToolPolicy(tools, false, ["custom_admin_tool"]);
+    expect(filtered.map((t) => t.name)).toEqual(["custom_admin_tool"]);
+  });
 });
 
 describe("TOOL_POLICY_CONFORMANCE", () => {

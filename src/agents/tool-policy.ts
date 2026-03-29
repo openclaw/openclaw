@@ -43,17 +43,34 @@ function isOwnerOnlyTool(tool: AnyAgentTool) {
   return tool.ownerOnly === true || isOwnerOnlyToolName(tool.name);
 }
 
-export function applyOwnerOnlyToolPolicy(tools: AnyAgentTool[], senderIsOwner: boolean) {
+export function applyOwnerOnlyToolPolicy(
+  tools: AnyAgentTool[],
+  senderIsOwner: boolean,
+  bypassOwnerOnlyTools?: string[],
+) {
+  const bypassSet = new Set((bypassOwnerOnlyTools ?? []).map((name) => normalizeToolName(name)));
+  const bypassed = new Set<string>();
   const withGuard = tools.map((tool) => {
     if (!isOwnerOnlyTool(tool)) {
       return tool;
+    }
+    // Tools explicitly listed in alsoAllow bypass the owner-only restriction
+    // but still get wrapped with the owner-guard so execution is rejected
+    // for non-owners unless alsoAllow separately overrides.
+    if (bypassSet.has(normalizeToolName(tool.name))) {
+      bypassed.add(normalizeToolName(tool.name));
+      return wrapOwnerOnlyToolExecution(tool, true);
     }
     return wrapOwnerOnlyToolExecution(tool, senderIsOwner);
   });
   if (senderIsOwner) {
     return withGuard;
   }
-  return withGuard.filter((tool) => !isOwnerOnlyTool(tool));
+  // When sender is not owner, keep non-owner-only tools plus any tools
+  // that bypassed the owner-only check via alsoAllow.
+  return withGuard.filter(
+    (tool) => !isOwnerOnlyTool(tool) || bypassed.has(normalizeToolName(tool.name)),
+  );
 }
 
 export type ToolPolicyLike = {
