@@ -1,17 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import ts from "typescript";
-import { BUNDLED_PLUGIN_PATH_PREFIX, bundledPluginFile } from "./bundled-plugin-paths.mjs";
+import { bundledPluginFile } from "./bundled-plugin-paths.mjs";
 
 function pluginSource(dirName, artifactBasename = "api.js") {
-  return `openclaw/plugin-source/${dirName}/${artifactBasename}`;
+  return `@openclaw/${dirName}/${artifactBasename}`;
 }
 
 function runtimeApiSourcePath(dirName) {
   return bundledPluginFile(dirName, "runtime-api.ts");
 }
-
-const BUNDLED_PLUGIN_SOURCE_RELATIVE_PREFIX = `../../${BUNDLED_PLUGIN_PATH_PREFIX}`;
 
 export const GENERATED_PLUGIN_SDK_FACADES = [
   {
@@ -1271,13 +1269,6 @@ export const GENERATED_PLUGIN_SDK_FACADE_TYPES_OUTPUT =
   "src/generated/plugin-sdk-facade-type-map.generated.ts";
 
 function rewriteFacadeTypeImportSpecifier(sourcePath) {
-  if (sourcePath.startsWith("openclaw/plugin-source/")) {
-    const { dirName, artifactBasename } = normalizeFacadeSourceParts(sourcePath);
-    return `${BUNDLED_PLUGIN_SOURCE_RELATIVE_PREFIX}${dirName}/${artifactBasename}`;
-  }
-  if (sourcePath.startsWith(BUNDLED_PLUGIN_SOURCE_RELATIVE_PREFIX)) {
-    return sourcePath;
-  }
   return sourcePath;
 }
 
@@ -1325,11 +1316,11 @@ function isArrayTypeLike(checker, type) {
 }
 
 function normalizeFacadeSourceParts(sourcePath) {
-  const pluginSourceMatch = /^openclaw\/plugin-source\/([^/]+)\/([^/]+)$/u.exec(sourcePath);
-  if (pluginSourceMatch) {
+  const packageSourceMatch = /^@openclaw\/([^/]+)\/([^/]+)$/u.exec(sourcePath);
+  if (packageSourceMatch) {
     return {
-      dirName: pluginSourceMatch[1],
-      artifactBasename: pluginSourceMatch[2],
+      dirName: packageSourceMatch[1],
+      artifactBasename: packageSourceMatch[2],
     };
   }
   const match = /^\.\.\/\.\.\/extensions\/([^/]+)\/([^/]+)$/u.exec(sourcePath);
@@ -1382,8 +1373,9 @@ function collectRuntimeApiPreExports(repoRoot, runtimeApiPath) {
 }
 
 function resolveFacadeSourceTypescriptPath(repoRoot, sourcePath) {
-  const absolutePath = sourcePath.startsWith("openclaw/plugin-source/")
-    ? path.resolve(repoRoot, "extensions", sourcePath.slice("openclaw/plugin-source/".length))
+  const packageSourceMatch = /^@openclaw\/([^/]+)\/(.+)$/u.exec(sourcePath);
+  const absolutePath = packageSourceMatch
+    ? path.resolve(repoRoot, "extensions", packageSourceMatch[1], packageSourceMatch[2])
     : path.resolve(repoRoot, "src/plugin-sdk", sourcePath);
   const candidates = [absolutePath.replace(/\.js$/, ".ts"), absolutePath.replace(/\.js$/, ".tsx")];
   return candidates.find((candidate) => fs.existsSync(candidate));
