@@ -82,6 +82,7 @@ export type ChatProps = {
   splitRatio?: number;
   assistantName: string;
   assistantAvatar: string | null;
+  userAvatar?: string | null;
   attachments?: ChatAttachment[];
   onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
   showNewMessages?: boolean;
@@ -1022,6 +1023,7 @@ export function renderChat(props: ChatProps) {
                 showToolCalls: props.showToolCalls,
                 assistantName: props.assistantName,
                 assistantAvatar: assistantIdentity.avatar,
+                userAvatar: props.userAvatar ?? null,
                 basePath: props.basePath,
                 contextWindow:
                   activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null,

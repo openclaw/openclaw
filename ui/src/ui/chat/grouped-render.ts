@@ -118,6 +118,7 @@ export function renderMessageGroup(
     showToolCalls?: boolean;
     assistantName?: string;
     assistantAvatar?: string | null;
+    userAvatar?: string | null;
     basePath?: string;
     contextWindow?: number | null;
     onDelete?: () => void;
@@ -158,6 +159,7 @@ export function renderMessageGroup(
           name: assistantName,
           avatar: opts.assistantAvatar ?? null,
         },
+        opts.userAvatar ?? null,
         opts.basePath,
       )}
       <div class="chat-group-messages">
@@ -437,6 +439,7 @@ function renderTtsButton(group: MessageGroup) {
 function renderAvatar(
   role: string,
   assistant?: Pick<AssistantIdentity, "name" | "avatar">,
+  userAvatar?: string | null,
   basePath?: string,
 ) {
   const normalized = normalizeRoleForGrouping(role);
@@ -487,6 +490,14 @@ function renderAvatar(
         : normalized === "tool"
           ? "tool"
           : "other";
+
+  // User avatar override (from config)
+  if (userAvatar && normalized === "user") {
+    if (isAvatarUrl(userAvatar)) {
+      return html`<img class="chat-avatar ${className}" src="${userAvatar}" alt="You" />`;
+    }
+    // Non-URL avatar: fall back to initial
+  }
 
   if (assistantAvatar && normalized === "assistant") {
     if (isAvatarUrl(assistantAvatar)) {

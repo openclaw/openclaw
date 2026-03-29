@@ -319,10 +319,11 @@ export async function resolveGatewayListenHosts(
 
   const canBind = opts?.canBindToHost ?? canBindToHost;
 
-  // For 0.0.0.0 (bind all IPv4), also try to bind to :: (all IPv6) if available
+  // For 0.0.0.0 (bind all IPv4), if IPv6 is available, bind to :: only.
+  // :: accepts both IPv4 and IPv6 connections on most systems (dual-stack).
   if (bindHost === "0.0.0.0") {
     if (await canBind("::")) {
-      return ["0.0.0.0", "::"];
+      return ["::"];
     }
     return ["0.0.0.0"];
   }
