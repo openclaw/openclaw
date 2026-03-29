@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import fs from "node:fs";
 import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import type { ExecToolDefaults } from "../../agents/bash-tools.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
@@ -60,7 +61,7 @@ let sessionStoreRuntimePromise: Promise<
 
 const FAST_LANE_MAX_PROMPT_CHARS = 80;
 const FAST_LANE_QUICK_MESSAGE_PATTERN =
-  /^(?:yes|no|ok|okay|sure|thanks|thx|got it|cancel|stop|never mind|nevermind|what time is it\??)$/i;
+  /^(?:yes|no|ok|okay|sure|thanks|thx|got it|cancel|stop|never mind|nevermind)$/i;
 const FAST_LANE_SYSTEM_PROMPT =
   "Fast-lane turn: keep response concise and do not call tools unless absolutely required.";
 
@@ -604,26 +605,32 @@ export async function runPreparedReply(
       ...(isReasoningTagProvider(provider) ? { enforceFinalTag: true } : {}),
     },
   };
+  let runQueueKey = queueKey;
+  let fastLaneSessionFileToCleanup: string | undefined;
   const shouldUseFastLane =
     isActive &&
     shouldFollowup &&
+    opts?.isHeartbeat !== true &&
     !isStreaming &&
     isFastLaneCandidateMessage(baseBodyTrimmedRaw, cfg);
   let forceRunNowWhenActive = false;
   if (shouldUseFastLane) {
     const transientSessionId = `fastlane-${crypto.randomUUID()}`;
-    const transientSessionFile = resolveSessionTranscriptPath(
+    const transientSessionFile = resolveSessionFilePath(
       transientSessionId,
-      agentId,
-      ctx.MessageThreadId,
+      undefined,
+      resolveSessionFilePathOptions({ agentId, storePath }),
     );
+    const transientQueueKey = `fastlane:${transientSessionId}`;
+    runQueueKey = transientQueueKey;
+    fastLaneSessionFileToCleanup = transientSessionFile;
     followupRun = {
       ...followupRun,
       run: {
         ...followupRun.run,
         sessionId: transientSessionId,
-        // Empty key forces embedded runner laneing to fall back to transient sessionId.
-        sessionKey: "",
+        // Use isolated key/lane so fast-lane completion cannot drain parent queues.
+        sessionKey: transientQueueKey,
         sessionFile: transientSessionFile,
         extraSystemPrompt: [followupRun.run.extraSystemPrompt, FAST_LANE_SYSTEM_PROMPT]
           .filter(Boolean)
@@ -634,32 +641,42 @@ export async function runPreparedReply(
   }
 
   const { runReplyAgent } = await loadAgentRunnerRuntime();
-  return runReplyAgent({
-    commandBody: prefixedCommandBody,
-    followupRun,
-    queueKey,
-    resolvedQueue,
-    shouldSteer,
-    shouldFollowup,
-    isActive,
-    forceRunNowWhenActive,
-    isRunActive: () => isEmbeddedPiRunActive(sessionIdFinal),
-    isStreaming,
-    opts,
-    typing,
-    sessionEntry,
-    sessionStore,
-    sessionKey,
-    storePath,
-    defaultModel,
-    agentCfgContextTokens: agentCfg?.contextTokens,
-    resolvedVerboseLevel: resolvedVerboseLevel ?? "off",
-    isNewSession,
-    blockStreamingEnabled,
-    blockReplyChunking,
-    resolvedBlockStreamingBreak,
-    sessionCtx,
-    shouldInjectGroupIntro,
-    typingMode,
-  });
+  try {
+    return await runReplyAgent({
+      commandBody: prefixedCommandBody,
+      followupRun,
+      queueKey: runQueueKey,
+      resolvedQueue,
+      shouldSteer,
+      shouldFollowup,
+      isActive,
+      forceRunNowWhenActive,
+      isRunActive: () => isEmbeddedPiRunActive(sessionIdFinal),
+      isStreaming,
+      opts,
+      typing,
+      sessionEntry: shouldUseFastLane ? undefined : sessionEntry,
+      sessionStore: shouldUseFastLane ? undefined : sessionStore,
+      sessionKey: shouldUseFastLane ? undefined : sessionKey,
+      storePath: shouldUseFastLane ? undefined : storePath,
+      defaultModel,
+      agentCfgContextTokens: agentCfg?.contextTokens,
+      resolvedVerboseLevel: resolvedVerboseLevel ?? "off",
+      isNewSession: shouldUseFastLane ? true : isNewSession,
+      blockStreamingEnabled,
+      blockReplyChunking,
+      resolvedBlockStreamingBreak,
+      sessionCtx,
+      shouldInjectGroupIntro,
+      typingMode,
+    });
+  } finally {
+    if (fastLaneSessionFileToCleanup) {
+      try {
+        fs.unlinkSync(fastLaneSessionFileToCleanup);
+      } catch {
+        // Best-effort cleanup for transient fast-lane transcripts.
+      }
+    }
+  }
 }

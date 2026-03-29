@@ -12,11 +12,11 @@ export function resolveActiveRunQueueAction(params: {
   if (!params.isActive) {
     return "run-now";
   }
-  if (params.forceRunNowWhenActive) {
-    return "run-now";
-  }
   if (params.isHeartbeat) {
     return "drop";
+  }
+  if (params.forceRunNowWhenActive) {
+    return "run-now";
   }
   if (params.shouldFollowup || params.queueMode === "steer") {
     return "enqueue-followup";
