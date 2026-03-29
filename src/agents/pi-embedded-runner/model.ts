@@ -2,7 +2,6 @@ import type { Api, Model } from "@mariozechner/pi-ai";
 import type { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ModelDefinitionConfig } from "../../config/types.js";
-import { normalizeModelCompat } from "../../plugins/provider-model-compat.js";
 import {
   buildProviderUnknownModelHintWithPlugin,
   clearProviderRuntimeHookCache,
@@ -122,12 +121,9 @@ function normalizeResolvedModel(params: {
       model: normalizedInputModel,
     },
   }) as Model<Api> | undefined;
-  if (pluginNormalized) {
-    return normalizeModelCompat(pluginNormalized);
-  }
   return normalizeResolvedProviderModel({
     provider: params.provider,
-    model: normalizedInputModel,
+    model: pluginNormalized ?? normalizedInputModel,
   });
 }
 

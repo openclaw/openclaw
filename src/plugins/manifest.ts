@@ -343,12 +343,13 @@ export type PluginPackageChannel = {
   docsLabel?: string;
   blurb?: string;
   order?: number;
-  aliases?: string[];
-  preferOver?: string[];
+  aliases?: readonly string[];
+  preferOver?: readonly string[];
   systemImage?: string;
   selectionDocsPrefix?: string;
   selectionDocsOmitLabel?: boolean;
-  selectionExtras?: string[];
+  selectionExtras?: readonly string[];
+  markdownCapable?: boolean;
   showConfigured?: boolean;
   quickstartAllowFrom?: boolean;
   forceAccountBinding?: boolean;

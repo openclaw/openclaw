@@ -359,6 +359,69 @@ describe("applyPluginAutoEnable", () => {
     expect(result.config.plugins?.entries?.google?.enabled).toBe(true);
   });
 
+  it("auto-enables bundled provider plugins when plugin-owned web search config exists", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        plugins: {
+          entries: {
+            xai: {
+              config: {
+                webSearch: {
+                  apiKey: "xai-plugin-config-key",
+                },
+              },
+            },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(result.config.plugins?.entries?.xai?.enabled).toBe(true);
+    expect(result.changes).toContain("xai web search configured, enabled automatically.");
+  });
+
+  it("auto-enables xai when the plugin-owned x_search tool is configured", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        tools: {
+          web: {
+            x_search: {
+              apiKey: "x-search-runtime-key",
+            },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(result.config.plugins?.entries?.xai?.enabled).toBe(true);
+    expect(result.changes).toContain("xai tool configured, enabled automatically.");
+  });
+
+  it("auto-enables xai when the plugin-owned codeExecution config is configured", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        plugins: {
+          entries: {
+            xai: {
+              config: {
+                codeExecution: {
+                  enabled: true,
+                  model: "grok-4-1-fast",
+                },
+              },
+            },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(result.config.plugins?.entries?.xai?.enabled).toBe(true);
+    expect(result.changes).toContain("xai tool configured, enabled automatically.");
+  });
+
   it("auto-enables minimax when minimax-portal profiles exist", () => {
     const result = applyPluginAutoEnable({
       config: {
@@ -420,6 +483,48 @@ describe("applyPluginAutoEnable", () => {
     });
 
     expect(result.config.plugins?.entries?.acme?.enabled).toBe(true);
+  });
+
+  it("auto-enables third-party provider plugins when manifest-owned web search config exists", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        plugins: {
+          entries: {
+            acme: {
+              config: {
+                webSearch: {
+                  apiKey: "acme-search-key",
+                },
+              },
+            },
+          },
+        },
+      },
+      env: {},
+      manifestRegistry: {
+        plugins: [
+          {
+            id: "acme",
+            channels: [],
+            providers: ["acme-ai"],
+            cliBackends: [],
+            skills: [],
+            hooks: [],
+            origin: "config" as const,
+            rootDir: "/fake/acme",
+            source: "/fake/acme/index.js",
+            manifestPath: "/fake/acme/openclaw.plugin.json",
+            contracts: {
+              webSearchProviders: ["acme-search"],
+            },
+          },
+        ],
+        diagnostics: [],
+      },
+    });
+
+    expect(result.config.plugins?.entries?.acme?.enabled).toBe(true);
+    expect(result.changes).toContain("acme web search configured, enabled automatically.");
   });
 
   it("auto-enables acpx plugin when ACP is configured", () => {

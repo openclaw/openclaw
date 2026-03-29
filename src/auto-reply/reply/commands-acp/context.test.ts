@@ -167,6 +167,58 @@ describe("commands-acp context", () => {
     expect(resolveAcpCommandConversationId(params)).toBe("123456789");
   });
 
+  it("resolves LINE DM conversation ids from raw LINE targets", () => {
+    const params = buildCommandTestParams("/acp status", baseCfg, {
+      Provider: "line",
+      Surface: "line",
+      OriginatingChannel: "line",
+      OriginatingTo: "U1234567890abcdef1234567890abcdef",
+    });
+
+    expect(resolveAcpCommandBindingContext(params)).toEqual({
+      channel: "line",
+      accountId: "default",
+      threadId: undefined,
+      conversationId: "U1234567890abcdef1234567890abcdef",
+    });
+    expect(resolveAcpCommandConversationId(params)).toBe("U1234567890abcdef1234567890abcdef");
+  });
+
+  it("resolves LINE conversation ids from prefixed LINE targets", () => {
+    const params = buildCommandTestParams("/acp status", baseCfg, {
+      Provider: "line",
+      Surface: "line",
+      OriginatingChannel: "line",
+      OriginatingTo: "line:user:U1234567890abcdef1234567890abcdef",
+      AccountId: "work",
+    });
+
+    expect(resolveAcpCommandBindingContext(params)).toEqual({
+      channel: "line",
+      accountId: "work",
+      threadId: undefined,
+      conversationId: "U1234567890abcdef1234567890abcdef",
+    });
+  });
+
+  it("resolves LINE conversation ids from canonical line targets", () => {
+    const params = buildCommandTestParams("/acp status", baseCfg, {
+      Provider: "line",
+      Surface: "line",
+      OriginatingChannel: "line",
+      OriginatingTo: "line:U1234567890abcdef1234567890abcdef",
+      AccountId: "work",
+    });
+
+    expect(resolveAcpCommandBindingContext(params)).toEqual({
+      channel: "line",
+      accountId: "work",
+      threadId: undefined,
+      conversationId: "U1234567890abcdef1234567890abcdef",
+    });
+    expect(resolveAcpCommandConversationId(params)).toBe("U1234567890abcdef1234567890abcdef");
+  });
+
   it("resolves Matrix thread context from the current room and thread root", () => {
     const params = buildCommandTestParams("/acp status", baseCfg, {
       Provider: "matrix",

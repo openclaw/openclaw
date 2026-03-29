@@ -1,4 +1,3 @@
-import type { OpenClawConfig } from "../runtime-api.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import {
   createMattermostClient,
@@ -6,6 +5,7 @@ import {
   type MattermostClient,
   type MattermostFetch,
 } from "./client.js";
+import type { OpenClawConfig } from "./runtime-api.js";
 
 type Result = { ok: true } | { ok: false; error: string };
 type ReactionParams = {
