@@ -33,6 +33,15 @@ function resolveSystemdUnit(env: NodeJS.ProcessEnv): string {
   return `${resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE)}.service`;
 }
 
+async function hasSystemdSystemUnit(unitName: string): Promise<boolean> {
+  try {
+    await fs.access(path.join("/etc", "systemd", "system", unitName));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function resolveLaunchdLabel(env: NodeJS.ProcessEnv): string {
   const override = env.OPENCLAW_LAUNCHD_LABEL?.trim();
   if (override) {
@@ -70,12 +79,13 @@ export async function prepareRestartScript(
     if (platform === "linux") {
       const unitName = resolveSystemdUnit(env);
       const escaped = shellEscape(unitName);
+      const useSystemUnit = await hasSystemdSystemUnit(unitName);
       filename = `openclaw-restart-${timestamp}.sh`;
       scriptContent = `#!/bin/sh
 # Standalone restart script — survives parent process termination.
 # Wait briefly to ensure file locks are released after update.
 sleep 1
-systemctl --user restart '${escaped}'
+${useSystemUnit ? `sudo -n systemctl restart '${escaped}'` : `systemctl --user restart '${escaped}'`}
 # Self-cleanup
 rm -f "$0"
 `;

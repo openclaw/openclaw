@@ -191,6 +191,26 @@ describe("isSystemdServiceEnabled", () => {
     expect(execFileMock).not.toHaveBeenCalled();
   });
 
+  it("checks a system-scoped unit with sudo systemctl when /etc system unit exists", async () => {
+    const { isSystemdServiceEnabled } = await import("./systemd.js");
+    vi.spyOn(fs, "access").mockImplementation(async (pathname) => {
+      const pathValue = pathLikeToString(pathname);
+      if (pathValue === `/etc/systemd/system/${GATEWAY_SERVICE}`) {
+        return undefined;
+      }
+      throw Object.assign(new Error("missing unit"), { code: "ENOENT" });
+    });
+    execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
+      expect(_cmd).toBe("sudo");
+      expect(args).toEqual(["-n", "systemctl", "is-enabled", GATEWAY_SERVICE]);
+      cb(null, "enabled", "");
+    });
+
+    const result = await isSystemdServiceEnabled({ env: { HOME: TEST_MANAGED_HOME } });
+
+    expect(result).toBe(true);
+  });
+
   it("calls systemctl is-enabled when systemctl is present", async () => {
     execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
       assertUserSystemctlArgs(args, "is-enabled", GATEWAY_SERVICE);
@@ -654,6 +674,45 @@ describe("systemd service control", () => {
         cb(null, "", "");
       });
     await assertRestartSuccess({ OPENCLAW_PROFILE: "work" });
+  });
+
+  it("restarts a system-scoped unit with sudo when /etc system unit exists", async () => {
+    vi.spyOn(fs, "access").mockImplementation(async (pathname) => {
+      const pathValue = pathLikeToString(pathname);
+      if (pathValue === `/etc/systemd/system/${GATEWAY_SERVICE}`) {
+        return undefined;
+      }
+      throw Object.assign(new Error("missing unit"), { code: "ENOENT" });
+    });
+    execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
+      expect(_cmd).toBe("sudo");
+      expect(args).toEqual(["-n", "systemctl", "restart", GATEWAY_SERVICE]);
+      cb(null, "", "");
+    });
+
+    await assertRestartSuccess({});
+  });
+
+  it("stops a system-scoped unit with sudo when /etc system unit exists", async () => {
+    vi.spyOn(fs, "access").mockImplementation(async (pathname) => {
+      const pathValue = pathLikeToString(pathname);
+      if (pathValue === `/etc/systemd/system/${GATEWAY_SERVICE}`) {
+        return undefined;
+      }
+      throw Object.assign(new Error("missing unit"), { code: "ENOENT" });
+    });
+    execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
+      expect(_cmd).toBe("sudo");
+      expect(args).toEqual(["-n", "systemctl", "stop", GATEWAY_SERVICE]);
+      cb(null, "", "");
+    });
+    const write = vi.fn();
+    const stdout = { write } as unknown as NodeJS.WritableStream;
+
+    await stopSystemdService({ stdout, env: {} });
+
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(String(write.mock.calls[0]?.[0])).toContain("Stopped systemd service");
   });
 
   it("surfaces stop failures with systemctl detail", async () => {
