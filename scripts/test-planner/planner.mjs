@@ -464,6 +464,12 @@ const buildDefaultUnits = (context, request) => {
   const unitFastCandidateFiles = catalog.allKnownUnitFiles.filter(
     (file) => !new Set(unitFastExcludedFiles).has(file),
   );
+  const shouldPhaseUnitFastBatches =
+    !unitOnlyRun ||
+    catalog.unitForkIsolatedFiles.length > 0 ||
+    unitMemoryIsolatedFiles.length > 0 ||
+    timedHeavyUnitFiles.length > 0 ||
+    catalog.unitThreadPinnedFiles.length > 0;
   const extensionSharedCandidateFiles = catalog.allKnownTestFiles.filter(
     (file) =>
       file.startsWith(BUNDLED_PLUGIN_PATH_PREFIX) &&
@@ -527,7 +533,7 @@ const buildDefaultUnits = (context, request) => {
             id: unitId,
             surface: "unit",
             isolate: false,
-            serialPhase: unitOnlyRun ? undefined : "unit-fast",
+            serialPhase: shouldPhaseUnitFastBatches ? "unit-fast" : undefined,
             includeFiles: batch,
             estimatedDurationMs: estimateEntryFilesDurationMs(
               { args: ["vitest", "run", "--config", "vitest.unit.config.ts"] },
@@ -1363,6 +1369,30 @@ export const formatExecutionUnitSummary = (unit) =>
   )} surface=${unit.surface} isolate=${unit.isolate ? "yes" : "no"} pool=${unit.pool}`;
 
 function resolveSurfaceAwareTopLevelParallelLimit(context, units, defaultLimit) {
+  const sharedUnitBatches = units.filter(
+    (unit) => unit.surface === "unit" && !unit.isolate && unit.id.startsWith("unit-fast"),
+  );
+  const onlyUnitSurface = units.length > 0 && units.every((unit) => unit.surface === "unit");
+
+  if (!context.runtime.isCI && context.noIsolateArgs.length > 0) {
+    if (onlyUnitSurface && sharedUnitBatches.length >= 4) {
+      return Math.min(defaultLimit, 3);
+    }
+  }
+
+  if (
+    !context.runtime.isCI &&
+    context.runtime.loadBand === "saturated" &&
+    context.noIsolateArgs.length > 0
+  ) {
+    if (sharedUnitBatches.length >= 4) {
+      // Saturated local hosts regress when every unit-fast batch fans out at once.
+      // Keep the shared unit phase to a smaller burst and let later isolated lanes
+      // make forward progress instead of waiting behind a thundering herd.
+      return Math.min(defaultLimit, 3);
+    }
+  }
+
   if (!context.runtime.isCI || context.noIsolateArgs.length === 0) {
     return defaultLimit;
   }
