@@ -1,13 +1,17 @@
 import fs from "node:fs/promises";
 import JSON5 from "json5";
 import { z } from "zod";
-import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../agents/workspace.js";
+import {
+  ensureAgentWorkspace,
+  portableDefaultAgentWorkspacePath,
+  workspaceResolvedDirToConfigValue,
+} from "../agents/workspace.js";
 import { type OpenClawConfig, createConfigIO, writeConfigFile } from "../config/config.js";
 import { formatConfigPath, logConfigUpdated } from "../config/logging.js";
 import { resolveSessionTranscriptsDir } from "../config/sessions.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
-import { shortenHomePath } from "../utils.js";
+import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { safeParseWithSchema } from "../utils/zod-parse.js";
 
 const JsonRecordSchema = z.record(z.string(), z.unknown());
@@ -40,7 +44,12 @@ export async function setupCommand(
   const cfg = existingRaw.parsed;
   const defaults = cfg.agents?.defaults ?? {};
 
-  const workspace = desiredWorkspace ?? defaults.workspace ?? DEFAULT_AGENT_WORKSPACE_DIR;
+  const rawWorkspace =
+    desiredWorkspace?.trim() ||
+    (typeof defaults.workspace === "string" ? defaults.workspace.trim() : "") ||
+    portableDefaultAgentWorkspacePath();
+  const resolvedWorkspace = resolveUserPath(rawWorkspace);
+  const workspace = workspaceResolvedDirToConfigValue(resolvedWorkspace);
 
   const next: OpenClawConfig = {
     ...cfg,

@@ -20,6 +20,7 @@ describe("setupCommand", () => {
 
       expect(raw).toContain('"mode": "local"');
       expect(raw).toContain('"workspace"');
+      expect(raw).toContain("~/.openclaw/workspace");
     });
   });
 

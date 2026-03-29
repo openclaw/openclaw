@@ -1,3 +1,4 @@
+import { workspaceResolvedDirToConfigValue } from "../agents/workspace.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type {
   GatewayAuthChoice,
@@ -477,7 +478,10 @@ export async function runSetupWizard(
   const workspaceDir = resolveUserPath(workspaceInput.trim() || onboardHelpers.DEFAULT_WORKSPACE);
 
   const { applyLocalSetupWorkspaceConfig } = await import("../commands/onboard-config.js");
-  let nextConfig: OpenClawConfig = applyLocalSetupWorkspaceConfig(baseConfig, workspaceDir);
+  let nextConfig: OpenClawConfig = applyLocalSetupWorkspaceConfig(
+    baseConfig,
+    workspaceResolvedDirToConfigValue(workspaceDir),
+  );
 
   const { ensureAuthProfileStore } = await import("../agents/auth-profiles.runtime.js");
   const { promptAuthChoiceGrouped } = await import("../commands/auth-choice-prompt.js");

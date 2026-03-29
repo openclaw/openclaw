@@ -1,6 +1,10 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveDefaultAgentWorkspaceDir } from "./workspace.js";
+import {
+  portableDefaultAgentWorkspacePath,
+  resolveDefaultAgentWorkspaceDir,
+  workspaceResolvedDirToConfigValue,
+} from "./workspace.js";
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -14,6 +18,21 @@ describe("DEFAULT_AGENT_WORKSPACE_DIR", () => {
 
     expect(resolveDefaultAgentWorkspaceDir()).toBe(
       path.join(path.resolve(home), ".openclaw", "workspace"),
+    );
+  });
+
+  it("portableDefaultAgentWorkspacePath reflects OPENCLAW_PROFILE", () => {
+    vi.stubEnv("OPENCLAW_PROFILE", "dev");
+    expect(portableDefaultAgentWorkspacePath()).toBe("~/.openclaw/workspace-dev");
+    vi.stubEnv("OPENCLAW_PROFILE", "default");
+    expect(portableDefaultAgentWorkspacePath()).toBe("~/.openclaw/workspace");
+  });
+
+  it("workspaceResolvedDirToConfigValue uses portable path only for the default workspace dir", () => {
+    const def = resolveDefaultAgentWorkspaceDir();
+    expect(workspaceResolvedDirToConfigValue(def)).toBe("~/.openclaw/workspace");
+    expect(workspaceResolvedDirToConfigValue(path.join(def, "extra"))).toBe(
+      path.join(def, "extra"),
     );
   });
 });

@@ -1,3 +1,4 @@
+import { workspaceResolvedDirToConfigValue } from "../../agents/workspace.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveGatewayPort, writeConfigFile } from "../../config/config.js";
@@ -81,7 +82,10 @@ export async function runNonInteractiveLocalSetup(params: {
     defaultWorkspaceDir: DEFAULT_WORKSPACE,
   });
 
-  let nextConfig: OpenClawConfig = applyLocalSetupWorkspaceConfig(baseConfig, workspaceDir);
+  let nextConfig: OpenClawConfig = applyLocalSetupWorkspaceConfig(
+    baseConfig,
+    workspaceResolvedDirToConfigValue(workspaceDir),
+  );
 
   const inferredAuthChoice = inferAuthChoiceFromFlags(opts);
   if (!opts.authChoice && inferredAuthChoice.matches.length > 1) {

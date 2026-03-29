@@ -1,5 +1,6 @@
 import fsPromises from "node:fs/promises";
 import nodePath from "node:path";
+import { workspaceResolvedDirToConfigValue } from "../agents/workspace.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { readConfigFileSnapshot, resolveGatewayPort, writeConfigFile } from "../config/config.js";
@@ -395,7 +396,7 @@ export async function runConfigureWizard(
           ...nextConfig.agents,
           defaults: {
             ...nextConfig.agents?.defaults,
-            workspace: workspaceDir,
+            workspace: workspaceResolvedDirToConfigValue(workspaceDir),
           },
         },
       };
