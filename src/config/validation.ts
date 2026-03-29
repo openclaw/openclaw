@@ -21,6 +21,7 @@ import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "../shared/net
 import { isRecord } from "../utils.js";
 import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-dirs.js";
 import { appendAllowedValuesHint, summarizeAllowedValues } from "./allowed-values.js";
+import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
 import { collectChannelSchemaMetadata } from "./channel-config-metadata.js";
 import {
   listLegacyWebSearchConfigPaths,
@@ -40,8 +41,14 @@ type AllowedValuesCollection = {
   incomplete: boolean;
   hasValues: boolean;
 };
+type JsonSchemaLike = Record<string, unknown>;
 
 const CUSTOM_EXPECTED_ONE_OF_RE = /expected one of ((?:"[^"]+"(?:\|"?[^"]+"?)*)+)/i;
+const bundledChannelSchemaById = new Map<string, unknown>(
+  GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.map(
+    (entry) => [entry.channelId, entry.schema] as const,
+  ),
+);
 
 function toIssueRecord(value: unknown): UnknownIssueRecord | null {
   if (!value || typeof value !== "object") {
@@ -64,6 +71,97 @@ function formatConfigPath(segments: readonly ConfigPathSegment[]): string {
   return segments.join(".");
 }
 
+function asJsonSchemaLike(value: unknown): JsonSchemaLike | null {
+  return value && typeof value === "object" ? (value as JsonSchemaLike) : null;
+}
+
+function lookupJsonSchemaNode(
+  schema: unknown,
+  pathSegments: readonly ConfigPathSegment[],
+): JsonSchemaLike | null {
+  let current = asJsonSchemaLike(schema);
+  for (const segment of pathSegments) {
+    if (!current) {
+      return null;
+    }
+    if (typeof segment === "number") {
+      const items = current.items;
+      if (Array.isArray(items)) {
+        current = asJsonSchemaLike(items[segment] ?? items[0]);
+        continue;
+      }
+      current = asJsonSchemaLike(items);
+      continue;
+    }
+    const properties = asJsonSchemaLike(current.properties);
+    const next =
+      (properties && asJsonSchemaLike(properties[segment])) ||
+      asJsonSchemaLike(current.additionalProperties);
+    current = next;
+  }
+  return current;
+}
+
+function collectAllowedValuesFromJsonSchemaNode(schema: unknown): AllowedValuesCollection {
+  const node = asJsonSchemaLike(schema);
+  if (!node) {
+    return { values: [], incomplete: false, hasValues: false };
+  }
+
+  if (Object.prototype.hasOwnProperty.call(node, "const")) {
+    return { values: [node.const], incomplete: false, hasValues: true };
+  }
+
+  if (Array.isArray(node.enum)) {
+    return { values: node.enum, incomplete: false, hasValues: node.enum.length > 0 };
+  }
+
+  const type = node.type;
+  if (type === "boolean") {
+    return { values: [true, false], incomplete: false, hasValues: true };
+  }
+  if (Array.isArray(type) && type.includes("boolean")) {
+    return { values: [true, false], incomplete: false, hasValues: true };
+  }
+
+  const unionBranches = Array.isArray(node.anyOf)
+    ? node.anyOf
+    : Array.isArray(node.oneOf)
+      ? node.oneOf
+      : null;
+  if (!unionBranches) {
+    return { values: [], incomplete: false, hasValues: false };
+  }
+
+  const collected: unknown[] = [];
+  for (const branch of unionBranches) {
+    const branchCollected = collectAllowedValuesFromJsonSchemaNode(branch);
+    if (branchCollected.incomplete || !branchCollected.hasValues) {
+      return { values: [], incomplete: true, hasValues: false };
+    }
+    collected.push(...branchCollected.values);
+  }
+
+  return { values: collected, incomplete: false, hasValues: collected.length > 0 };
+}
+
+function collectAllowedValuesFromBundledChannelSchemaPath(
+  pathSegments: readonly ConfigPathSegment[],
+): AllowedValuesCollection {
+  if (pathSegments[0] !== "channels" || typeof pathSegments[1] !== "string") {
+    return { values: [], incomplete: false, hasValues: false };
+  }
+  const channelSchema = bundledChannelSchemaById.get(pathSegments[1]);
+  if (!channelSchema) {
+    return { values: [], incomplete: false, hasValues: false };
+  }
+  const targetNode = lookupJsonSchemaNode(channelSchema, pathSegments.slice(2));
+  if (!targetNode) {
+    return { values: [], incomplete: false, hasValues: false };
+  }
+  return collectAllowedValuesFromJsonSchemaNode(targetNode);
+}
+
 function collectAllowedValuesFromCustomIssue(record: UnknownIssueRecord): AllowedValuesCollection {
   const message = typeof record.message === "string" ? record.message : "";
   const expectedMatch = message.match(CUSTOM_EXPECTED_ONE_OF_RE);
@@ -72,10 +170,11 @@ function collectAllowedValuesFromCustomIssue(record: UnknownIssueRecord): Allowe
     return { values, incomplete: false, hasValues: values.length > 0 };
   }
 
-  // Custom Zod issues usually come from superRefine rules, not enum schemas.
-  // Avoid bundled channel schema lookup here: it can pull in runtime plugin
-  // metadata during validation error formatting and hang on some bootstrap paths.
-  return { values: [], incomplete: false, hasValues: false };
+  // Custom Zod issues usually come from superRefine rules, but some normalized
+  // channel unions collapse to a generic custom issue. Use generated channel
+  // config metadata here so we can recover enum hints without touching runtime
+  // plugin registries during validation formatting.
+  return collectAllowedValuesFromBundledChannelSchemaPath(toConfigPathSegments(record.path));
 }
 
 function collectAllowedValuesFromIssue(issue: unknown): AllowedValuesCollection {

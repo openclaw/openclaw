@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { withTempHome } from "./home-env.test-harness.js";
 import {
   getRuntimeConfigSourceSnapshot,
@@ -48,6 +48,14 @@ function resetRuntimeConfigState(): void {
 }
 
 describe("runtime config snapshot writes", () => {
+  beforeEach(() => {
+    resetRuntimeConfigState();
+  });
+
+  afterEach(() => {
+    resetRuntimeConfigState();
+  });
+
   it("returns the source snapshot when runtime snapshot is active", async () => {
     await withTempHome("openclaw-config-runtime-source-", async () => {
       const sourceConfig = createSourceConfig();
