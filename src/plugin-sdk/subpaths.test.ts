@@ -666,7 +666,9 @@ describe("plugin-sdk subpath exports", () => {
     expectSourceOmitsImportPattern("self-hosted-provider-setup", "./sglang.js");
     expectSourceOmitsSnippet("agent-runtime", "./sglang.js");
     expectSourceOmitsSnippet("agent-runtime", "./vllm.js");
+    expectSourceOmitsSnippet("agent-runtime", "../../extensions/");
     expectSourceOmitsSnippet("xai-model-id", "./xai.js");
+    expectSourceOmitsSnippet("xai-model-id", "../../extensions/");
     expectSourceMentions("sandbox", ["registerSandboxBackend", "runPluginCommandWithTimeout"]);
 
     expectSourceMentions("secret-input", [
