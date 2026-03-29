@@ -192,6 +192,7 @@ export const FeishuAccountConfigSchema = z
   .object({
     enabled: z.boolean().optional(),
     name: z.string().optional(), // Display name for this account
+    botName: z.string().optional(), // User-facing bot display name override
     appId: z.string().optional(),
     appSecret: buildSecretInputSchema().optional(),
     encryptKey: buildSecretInputSchema().optional(),
