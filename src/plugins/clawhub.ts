@@ -276,7 +276,7 @@ export async function installPluginFromClawHub(params: {
   if (!versionState.ok) {
     return versionState;
   }
-  const runtimeVersion = resolveRuntimeServiceVersion();
+  const runtimeVersion = resolveCompatibilityHostVersion();
   const validationFailure = validateClawHubPluginPackage({
     detail,
     compatibility: versionState.compatibility,

@@ -76,6 +76,10 @@ describe("config io observe", () => {
       expect(observe?.source).toBe("config-io");
       expect(observe?.configPath).toBe(configPath);
       expect(observe?.valid).toBe(true);
+      expect(observe?.mode).toBeTypeOf("number");
+      expect(observe?.ino).toBeTypeOf("string");
+      expect(observe?.lastKnownGoodMode).toBeTypeOf("number");
+      expect(observe?.backupMode).toBeTypeOf("number");
       expect(observe?.suspicious).toEqual(
         expect.arrayContaining(["gateway-mode-missing-vs-last-good", "update-channel-only-root"]),
       );
@@ -157,6 +161,8 @@ describe("config io observe", () => {
 
       expect(observe).toBeDefined();
       expect(observe?.backupHash).toBeTypeOf("string");
+      expect(observe?.backupIno).toBeTypeOf("string");
+      expect(observe?.lastKnownGoodIno ?? null).toBeNull();
       expect(observe?.suspicious).toEqual(
         expect.arrayContaining(["gateway-mode-missing-vs-last-good", "update-channel-only-root"]),
       );

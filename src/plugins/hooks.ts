@@ -14,6 +14,9 @@ import type {
   PluginHookAgentEndEvent,
   PluginHookBeforeAgentStartEvent,
   PluginHookBeforeAgentStartResult,
+  PluginHookBeforeDispatchContext,
+  PluginHookBeforeDispatchEvent,
+  PluginHookBeforeDispatchResult,
   PluginHookBeforeModelResolveEvent,
   PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildEvent,
@@ -60,6 +63,9 @@ export type {
   PluginHookAgentContext,
   PluginHookBeforeAgentStartEvent,
   PluginHookBeforeAgentStartResult,
+  PluginHookBeforeDispatchContext,
+  PluginHookBeforeDispatchEvent,
+  PluginHookBeforeDispatchResult,
   PluginHookBeforeModelResolveEvent,
   PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildEvent,
@@ -115,7 +121,11 @@ export type HookRunnerOptions = {
 };
 
 type ModifyingHookPolicy<K extends PluginHookName, TResult> = {
-  mergeResults?: (accumulated: TResult | undefined, next: TResult) => TResult;
+  mergeResults?: (
+    accumulated: TResult | undefined,
+    next: TResult,
+    registration: PluginHookRegistration<K>,
+  ) => TResult;
   shouldStop?: (result: TResult) => boolean;
   terminalLabel?: string;
   onTerminal?: (params: { hookName: K; pluginId: string; result: TResult }) => void;
@@ -301,7 +311,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
 
         if (handlerResult !== undefined && handlerResult !== null) {
           if (policy.mergeResults) {
-            result = policy.mergeResults(result, handlerResult);
+            result = policy.mergeResults(result, handlerResult, hook);
           } else {
             result = handlerResult;
           }
@@ -615,6 +625,22 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   }
 
   /**
+   * Run before_dispatch hook.
+   * Allows plugins to inspect or handle a message before model dispatch.
+   * First handler returning { handled: true } wins.
+   */
+  async function runBeforeDispatch(
+    event: PluginHookBeforeDispatchEvent,
+    ctx: PluginHookBeforeDispatchContext,
+  ): Promise<PluginHookBeforeDispatchResult | undefined> {
+    return runClaimingHook<"before_dispatch", PluginHookBeforeDispatchResult>(
+      "before_dispatch",
+      event,
+      ctx,
+    );
+  }
+
+  /**
    * Run message_sending hook.
    * Allows plugins to modify or cancel outgoing messages.
    * Runs sequentially.
@@ -672,14 +698,24 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
       event,
       ctx,
       {
-        mergeResults: (acc, next) => {
+        mergeResults: (acc, next, reg) => {
           if (acc?.block === true) {
             return acc;
           }
+          const approvalPluginId = acc?.requireApproval?.pluginId;
+          const freezeParamsForDifferentPlugin =
+            Boolean(approvalPluginId) && approvalPluginId !== reg.pluginId;
           return {
-            params: lastDefined(acc?.params, next.params),
+            params: freezeParamsForDifferentPlugin
+              ? acc?.params
+              : lastDefined(acc?.params, next.params),
             block: stickyTrue(acc?.block, next.block),
             blockReason: lastDefined(acc?.blockReason, next.blockReason),
+            requireApproval:
+              acc?.requireApproval ??
+              (next.requireApproval
+                ? { ...next.requireApproval, pluginId: reg.pluginId }
+                : undefined),
           };
         },
         shouldStop: (result) => result.block === true,
@@ -975,6 +1011,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     runInboundClaimForPlugin,
     runInboundClaimForPluginOutcome,
     runMessageReceived,
+    runBeforeDispatch,
     runMessageSending,
     runMessageSent,
     // Tool hooks

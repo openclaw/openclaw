@@ -8,12 +8,12 @@ import {
 import {
   createDirectoryTestRuntime,
   expectDirectorySurface,
-} from "../../../test/helpers/extensions/directory.ts";
+} from "../../../test/helpers/plugins/directory.ts";
 import {
   createPluginSetupWizardConfigure,
   createQueuedWizardPrompter,
   runSetupWizardConfigure,
-} from "../../../test/helpers/extensions/setup-wizard.js";
+} from "../../../test/helpers/plugins/setup-wizard.js";
 import { whatsappPlugin } from "./channel.js";
 import {
   resolveWhatsAppGroupRequireMention,
@@ -119,6 +119,15 @@ async function runSeparatePhoneFlow(params: { selectValues: string[]; textValues
 }
 
 describe("whatsappPlugin outbound sendMedia", () => {
+  it("chunks outbound text without requiring WhatsApp runtime initialization", () => {
+    const chunker = whatsappPlugin.outbound?.chunker;
+    if (!chunker) {
+      throw new Error("whatsapp outbound chunker is unavailable");
+    }
+
+    expect(chunker("alpha beta", 5)).toEqual(["alpha", "beta"]);
+  });
+
   it("forwards mediaLocalRoots to sendMessageWhatsApp", async () => {
     const sendWhatsApp = vi.fn(async () => ({
       messageId: "msg-1",

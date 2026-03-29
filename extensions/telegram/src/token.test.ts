@@ -23,6 +23,25 @@ describe("resolveTelegramToken", () => {
     return tokenFile;
   }
 
+  function createUnknownAccountConfig(): OpenClawConfig {
+    return {
+      channels: {
+        telegram: {
+          botToken: "wrong-bot-token",
+          accounts: {
+            knownBot: { botToken: "known-bot-token" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+  }
+
+  function expectNoTokenForUnknownAccount(cfg: OpenClawConfig) {
+    const res = resolveTelegramToken(cfg, { accountId: "unknownBot" });
+    expect(res.token).toBe("");
+    expect(res.source).toBe("none");
+  }
+
   afterEach(() => {
     vi.unstubAllEnvs();
     for (const dir of tempDirs.splice(0)) {
@@ -207,20 +226,7 @@ describe("resolveTelegramToken", () => {
 
   it("does not fall through to channel-level token when non-default accountId is not in config", () => {
     vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
-    const cfg = {
-      channels: {
-        telegram: {
-          botToken: "wrong-bot-token",
-          accounts: {
-            knownBot: { botToken: "known-bot-token" },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    const res = resolveTelegramToken(cfg, { accountId: "unknownBot" });
-    expect(res.token).toBe("");
-    expect(res.source).toBe("none");
+    expectNoTokenForUnknownAccount(createUnknownAccountConfig());
   });
 
   it("throws when botToken is an unresolved SecretRef object", () => {
@@ -235,6 +241,29 @@ describe("resolveTelegramToken", () => {
     expect(() => resolveTelegramToken(cfg)).toThrow(
       /channels\.telegram\.botToken: unresolved SecretRef/i,
     );
+  });
+
+  // Regression: https://github.com/openclaw/openclaw/issues/53876
+  // Binding-created accountIds should inherit the channel-level token in
+  // single-bot setups (no accounts section).
+  it("falls through to channel-level token for binding-created accountId without accounts section", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: "channel-level-token",
+          enabled: true,
+        },
+      },
+    } as OpenClawConfig;
+
+    const res = resolveTelegramToken(cfg, { accountId: "bot-main" });
+    expect(res.token).toBe("channel-level-token");
+    expect(res.source).toBe("config");
+  });
+
+  it("still blocks fallthrough for unknown accountId when accounts section exists", () => {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
+    expectNoTokenForUnknownAccount(createUnknownAccountConfig());
   });
 });
 

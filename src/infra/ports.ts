@@ -86,5 +86,10 @@ export async function handlePortError(
 
 export { PortInUseError };
 export type { PortListener, PortListenerKind, PortUsage, PortUsageStatus };
-export { buildPortHints, classifyPortListener, formatPortDiagnostics } from "./ports-format.js";
+export {
+  buildPortHints,
+  classifyPortListener,
+  formatPortDiagnostics,
+  isDualStackLoopbackGatewayListeners,
+} from "./ports-format.js";
 export { inspectPortUsage } from "./ports-inspect.js";

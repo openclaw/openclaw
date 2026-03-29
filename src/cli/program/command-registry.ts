@@ -150,21 +150,8 @@ const coreEntries: CoreCliEntry[] = [
   {
     commands: [
       {
-        name: "memory",
-        description: "Search and reindex memory files",
-        hasSubcommands: true,
-      },
-    ],
-    register: async ({ program }) => {
-      const mod = await import("../memory-cli.js");
-      mod.registerMemoryCli(program);
-    },
-  },
-  {
-    commands: [
-      {
         name: "mcp",
-        description: "Manage embedded Pi MCP servers",
+        description: "Manage OpenClaw MCP config and channel bridge",
         hasSubcommands: true,
       },
     ],
@@ -210,23 +197,15 @@ const coreEntries: CoreCliEntry[] = [
         description: "List stored conversation sessions",
         hasSubcommands: true,
       },
-    ],
-    register: async ({ program }) => {
-      const mod = await import("./register.status-health-sessions.js");
-      mod.registerStatusHealthSessionsCommands(program);
-    },
-  },
-  {
-    commands: [
       {
-        name: "browser",
-        description: "Manage OpenClaw's dedicated browser (Chrome/Chromium)",
+        name: "tasks",
+        description: "Inspect durable background task state",
         hasSubcommands: true,
       },
     ],
     register: async ({ program }) => {
-      const mod = await import("../browser-cli.js");
-      mod.registerBrowserCli(program);
+      const mod = await import("./register.status-health-sessions.js");
+      mod.registerStatusHealthSessionsCommands(program);
     },
   },
 ];

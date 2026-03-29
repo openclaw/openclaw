@@ -2,11 +2,17 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES } from "../extensions/public-artifacts.js";
+import {
+  BUNDLED_PLUGIN_PATH_PREFIX,
+  BUNDLED_PLUGIN_ROOT_DIR,
+  bundledPluginFile,
+} from "../../test/helpers/bundled-plugin-paths.js";
+import { GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES } from "../plugins/public-artifacts.js";
 
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const REPO_ROOT = resolve(ROOT_DIR, "..");
 const ALLOWED_EXTENSION_PUBLIC_SURFACES = new Set(GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES);
+ALLOWED_EXTENSION_PUBLIC_SURFACES.add("test-api.js");
 const GUARDED_CHANNEL_EXTENSIONS = new Set([
   "bluebubbles",
   "discord",
@@ -38,38 +44,62 @@ type GuardedSource = {
 
 const SAME_CHANNEL_SDK_GUARDS: GuardedSource[] = [
   {
-    path: "extensions/discord/src/shared.ts",
+    path: bundledPluginFile("discord", "src/shared.ts"),
     forbiddenPatterns: [/["']openclaw\/plugin-sdk\/discord["']/, /plugin-sdk-internal\/discord/],
   },
   {
-    path: "extensions/slack/src/shared.ts",
+    path: bundledPluginFile("slack", "src/shared.ts"),
     forbiddenPatterns: [/["']openclaw\/plugin-sdk\/slack["']/, /plugin-sdk-internal\/slack/],
   },
   {
-    path: "extensions/telegram/src/shared.ts",
+    path: bundledPluginFile("telegram", "src/shared.ts"),
     forbiddenPatterns: [/["']openclaw\/plugin-sdk\/telegram["']/, /plugin-sdk-internal\/telegram/],
   },
   {
-    path: "extensions/imessage/src/shared.ts",
+    path: bundledPluginFile("telegram", "src/account-inspect.ts"),
+    forbiddenPatterns: [/["']openclaw\/plugin-sdk\/account-resolution["']/],
+  },
+  {
+    path: bundledPluginFile("telegram", "src/accounts.ts"),
+    forbiddenPatterns: [/["']openclaw\/plugin-sdk\/account-resolution["']/],
+  },
+  {
+    path: bundledPluginFile("telegram", "src/token.ts"),
+    forbiddenPatterns: [/["']openclaw\/plugin-sdk\/account-resolution["']/],
+  },
+  {
+    path: bundledPluginFile("telegram", "src/channel.ts"),
+    forbiddenPatterns: [/["']\.\.\/runtime-api\.js["']/],
+  },
+  {
+    path: bundledPluginFile("telegram", "src/action-runtime.ts"),
+    forbiddenPatterns: [/["']\.\.\/runtime-api\.js["']/],
+  },
+  {
+    path: bundledPluginFile("imessage", "src/shared.ts"),
     forbiddenPatterns: [/["']openclaw\/plugin-sdk\/imessage["']/, /plugin-sdk-internal\/imessage/],
   },
   {
-    path: "extensions/whatsapp/src/shared.ts",
+    path: bundledPluginFile("whatsapp", "src/shared.ts"),
     forbiddenPatterns: [/["']openclaw\/plugin-sdk\/whatsapp["']/, /plugin-sdk-internal\/whatsapp/],
   },
   {
-    path: "extensions/signal/src/shared.ts",
+    path: bundledPluginFile("signal", "src/shared.ts"),
+    forbiddenPatterns: [/["']openclaw\/plugin-sdk\/signal["']/, /plugin-sdk-internal\/signal/],
+  },
+  {
+    path: bundledPluginFile("signal", "src/runtime-api.ts"),
     forbiddenPatterns: [/["']openclaw\/plugin-sdk\/signal["']/, /plugin-sdk-internal\/signal/],
   },
 ];
 
 const SETUP_BARREL_GUARDS: GuardedSource[] = [
   {
-    path: "extensions/signal/src/setup-core.ts",
+    path: bundledPluginFile("signal", "src/setup-core.ts"),
     forbiddenPatterns: [/\bformatCliCommand\b/, /\bformatDocsLink\b/],
   },
   {
-    path: "extensions/signal/src/setup-surface.ts",
+    path: bundledPluginFile("signal", "src/setup-surface.ts"),
     forbiddenPatterns: [
       /\bdetectBinary\b/,
       /\binstallSignalCli\b/,
@@ -78,35 +108,35 @@ const SETUP_BARREL_GUARDS: GuardedSource[] = [
     ],
   },
   {
-    path: "extensions/slack/src/setup-core.ts",
+    path: bundledPluginFile("slack", "src/setup-core.ts"),
     forbiddenPatterns: [/\bformatDocsLink\b/],
   },
   {
-    path: "extensions/slack/src/setup-surface.ts",
+    path: bundledPluginFile("slack", "src/setup-surface.ts"),
     forbiddenPatterns: [/\bformatDocsLink\b/],
   },
   {
-    path: "extensions/discord/src/setup-core.ts",
+    path: bundledPluginFile("discord", "src/setup-core.ts"),
     forbiddenPatterns: [/\bformatDocsLink\b/],
   },
   {
-    path: "extensions/discord/src/setup-surface.ts",
+    path: bundledPluginFile("discord", "src/setup-surface.ts"),
     forbiddenPatterns: [/\bformatDocsLink\b/],
   },
   {
-    path: "extensions/imessage/src/setup-core.ts",
+    path: bundledPluginFile("imessage", "src/setup-core.ts"),
     forbiddenPatterns: [/\bformatDocsLink\b/],
   },
   {
-    path: "extensions/imessage/src/setup-surface.ts",
+    path: bundledPluginFile("imessage", "src/setup-surface.ts"),
     forbiddenPatterns: [/\bdetectBinary\b/, /\bformatDocsLink\b/],
   },
   {
-    path: "extensions/telegram/src/setup-core.ts",
+    path: bundledPluginFile("telegram", "src/setup-core.ts"),
     forbiddenPatterns: [/\bformatCliCommand\b/, /\bformatDocsLink\b/],
   },
   {
-    path: "extensions/whatsapp/src/setup-surface.ts",
+    path: bundledPluginFile("whatsapp", "src/setup-surface.ts"),
     forbiddenPatterns: [/\bformatCliCommand\b/, /\bformatDocsLink\b/],
   },
 ];
@@ -134,7 +164,6 @@ const LOCAL_EXTENSION_API_BARREL_GUARDS = [
   "phone-control",
   "copilot-proxy",
   "zai",
-  "qwen-portal-auth",
   "signal",
   "synology-chat",
   "talk-voice",
@@ -150,8 +179,8 @@ const LOCAL_EXTENSION_API_BARREL_GUARDS = [
 
 const LOCAL_EXTENSION_API_BARREL_EXCEPTIONS = [
   // Direct import avoids a circular init path:
-  // accounts.ts -> runtime-api.ts -> src/plugin-sdk/matrix -> extensions/matrix/api.ts -> accounts.ts
-  "extensions/matrix/src/matrix/accounts.ts",
+  // accounts.ts -> runtime-api.ts -> src/plugin-sdk/matrix -> plugin api barrel -> accounts.ts
+  bundledPluginFile("matrix", "src/matrix/accounts.ts"),
 ] as const;
 
 const sourceTextCache = new Map<string, string>();
@@ -164,6 +193,12 @@ const sourceAnalysisCache = new Map<string, SourceAnalysis>();
 let extensionSourceFilesCache: string[] | null = null;
 let coreSourceFilesCache: string[] | null = null;
 const extensionFilesCache = new Map<string, string[]>();
+
+type SourceFileCollectorOptions = {
+  rootDir: string;
+  shouldSkipPath?: (normalizedFullPath: string) => boolean;
+  shouldSkipEntry?: (params: { entryName: string; normalizedFullPath: string }) => boolean;
+};
 
 function readSource(path: string): string {
   const fullPath = resolve(REPO_ROOT, path);
@@ -178,6 +213,51 @@ function readSource(path: string): string {
 
 function normalizePath(path: string): string {
   return path.replaceAll("\\", "/");
+}
+
+function collectSourceFiles(
+  cached: string[] | undefined | null,
+  options: SourceFileCollectorOptions,
+): string[] {
+  if (cached) {
+    return cached;
+  }
+  const files: string[] = [];
+  const stack = [options.rootDir];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (!current) {
+      continue;
+    }
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      const fullPath = resolve(current, entry.name);
+      const normalizedFullPath = normalizePath(fullPath);
+      if (entry.isDirectory()) {
+        if (entry.name === "node_modules" || entry.name === "dist" || entry.name === "coverage") {
+          continue;
+        }
+        if (options.shouldSkipPath?.(normalizedFullPath)) {
+          continue;
+        }
+        stack.push(fullPath);
+        continue;
+      }
+      if (!entry.isFile() || !/\.(?:[cm]?ts|[cm]?js|tsx|jsx)$/u.test(entry.name)) {
+        continue;
+      }
+      if (entry.name.endsWith(".d.ts")) {
+        continue;
+      }
+      if (
+        options.shouldSkipPath?.(normalizedFullPath) ||
+        options.shouldSkipEntry?.({ entryName: entry.name, normalizedFullPath })
+      ) {
+        continue;
+      }
+      files.push(fullPath);
+    }
+  }
+  return files;
 }
 
 function readSetupBarrelImportBlock(path: string): string {
@@ -196,145 +276,61 @@ function readSetupBarrelImportBlock(path: string): string {
 }
 
 function collectExtensionSourceFiles(): string[] {
-  if (extensionSourceFilesCache) {
-    return extensionSourceFilesCache;
-  }
   const extensionsDir = normalizePath(resolve(ROOT_DIR, "..", "extensions"));
   const sharedExtensionsDir = normalizePath(resolve(extensionsDir, "shared"));
-  const files: string[] = [];
-  const stack = [resolve(ROOT_DIR, "..", "extensions")];
-  while (stack.length > 0) {
-    const current = stack.pop();
-    if (!current) {
-      continue;
-    }
-    for (const entry of readdirSync(current, { withFileTypes: true })) {
-      const fullPath = resolve(current, entry.name);
-      const normalizedFullPath = normalizePath(fullPath);
-      if (entry.isDirectory()) {
-        if (entry.name === "node_modules" || entry.name === "dist" || entry.name === "coverage") {
-          continue;
-        }
-        stack.push(fullPath);
-        continue;
-      }
-      if (!entry.isFile() || !/\.(?:[cm]?ts|[cm]?js|tsx|jsx)$/u.test(entry.name)) {
-        continue;
-      }
-      if (entry.name.endsWith(".d.ts") || normalizedFullPath.includes(sharedExtensionsDir)) {
-        continue;
-      }
-      if (normalizedFullPath.includes(`${extensionsDir}/shared/`)) {
-        continue;
-      }
-      if (
-        normalizedFullPath.includes(".test.") ||
-        normalizedFullPath.includes(".test-") ||
-        normalizedFullPath.includes(".fixture.") ||
-        normalizedFullPath.includes(".snap") ||
-        normalizedFullPath.includes("test-support") ||
-        entry.name === "api.ts" ||
-        entry.name === "runtime-api.ts"
-      ) {
-        continue;
-      }
-      files.push(fullPath);
-    }
-  }
-  extensionSourceFilesCache = files;
-  return files;
+  extensionSourceFilesCache = collectSourceFiles(extensionSourceFilesCache, {
+    rootDir: resolve(ROOT_DIR, "..", "extensions"),
+    shouldSkipPath: (normalizedFullPath) =>
+      normalizedFullPath.includes(sharedExtensionsDir) ||
+      normalizedFullPath.includes(`${extensionsDir}/shared/`),
+    shouldSkipEntry: ({ entryName, normalizedFullPath }) =>
+      normalizedFullPath.includes(".test.") ||
+      normalizedFullPath.includes(".test-") ||
+      normalizedFullPath.includes(".fixture.") ||
+      normalizedFullPath.includes(".snap") ||
+      normalizedFullPath.includes("test-support") ||
+      entryName === "api.ts" ||
+      entryName === "runtime-api.ts",
+  });
+  return extensionSourceFilesCache;
 }
 
 function collectCoreSourceFiles(): string[] {
-  if (coreSourceFilesCache) {
-    return coreSourceFilesCache;
-  }
   const srcDir = resolve(ROOT_DIR, "..", "src");
   const normalizedPluginSdkDir = normalizePath(resolve(ROOT_DIR, "plugin-sdk"));
-  const files: string[] = [];
-  const stack = [srcDir];
-  while (stack.length > 0) {
-    const current = stack.pop();
-    if (!current) {
-      continue;
-    }
-    for (const entry of readdirSync(current, { withFileTypes: true })) {
-      const fullPath = resolve(current, entry.name);
-      const normalizedFullPath = normalizePath(fullPath);
-      if (entry.isDirectory()) {
-        if (entry.name === "node_modules" || entry.name === "dist" || entry.name === "coverage") {
-          continue;
-        }
-        stack.push(fullPath);
-        continue;
-      }
-      if (!entry.isFile() || !/\.(?:[cm]?ts|[cm]?js|tsx|jsx)$/u.test(entry.name)) {
-        continue;
-      }
-      if (entry.name.endsWith(".d.ts")) {
-        continue;
-      }
-      if (
-        normalizedFullPath.includes(".test.") ||
-        normalizedFullPath.includes(".mock-harness.") ||
-        normalizedFullPath.includes(".spec.") ||
-        normalizedFullPath.includes(".fixture.") ||
-        normalizedFullPath.includes(".snap") ||
-        // src/plugin-sdk is the curated bridge layer; validate its contracts with dedicated
-        // plugin-sdk guardrails instead of the generic "core should not touch extensions" rule.
-        normalizedFullPath.includes(`${normalizedPluginSdkDir}/`)
-      ) {
-        continue;
-      }
-      files.push(fullPath);
-    }
-  }
-  coreSourceFilesCache = files;
-  return files;
+  coreSourceFilesCache = collectSourceFiles(coreSourceFilesCache, {
+    rootDir: srcDir,
+    shouldSkipEntry: ({ entryName, normalizedFullPath }) =>
+      normalizedFullPath.includes(".test.") ||
+      normalizedFullPath.includes(".test-utils.") ||
+      normalizedFullPath.includes(".test-harness.") ||
+      normalizedFullPath.includes(".test-helpers.") ||
+      entryName.endsWith("-test-helpers.ts") ||
+      entryName === "test-manager-helpers.ts" ||
+      normalizedFullPath.includes(".mock-harness.") ||
+      normalizedFullPath.includes(".suite.") ||
+      normalizedFullPath.includes(".spec.") ||
+      normalizedFullPath.includes(".fixture.") ||
+      normalizedFullPath.includes(".snap") ||
+      // src/plugin-sdk is the curated bridge layer; validate its contracts with dedicated
+      // plugin-sdk guardrails instead of the generic "core should not touch extensions" rule.
+      normalizedFullPath.includes(`${normalizedPluginSdkDir}/`),
+  });
+  return coreSourceFilesCache;
 }
 
 function collectExtensionFiles(extensionId: string): string[] {
   const cached = extensionFilesCache.get(extensionId);
-  if (cached) {
-    return cached;
-  }
-  const extensionDir = resolve(ROOT_DIR, "..", "extensions", extensionId);
-  const files: string[] = [];
-  const stack = [extensionDir];
-  while (stack.length > 0) {
-    const current = stack.pop();
-    if (!current) {
-      continue;
-    }
-    for (const entry of readdirSync(current, { withFileTypes: true })) {
-      const fullPath = resolve(current, entry.name);
-      const normalizedFullPath = normalizePath(fullPath);
-      if (entry.isDirectory()) {
-        if (entry.name === "node_modules" || entry.name === "dist" || entry.name === "coverage") {
-          continue;
-        }
-        stack.push(fullPath);
-        continue;
-      }
-      if (!entry.isFile() || !/\.(?:[cm]?ts|[cm]?js|tsx|jsx)$/u.test(entry.name)) {
-        continue;
-      }
-      if (entry.name.endsWith(".d.ts")) {
-        continue;
-      }
-      if (
-        normalizedFullPath.includes(".test.") ||
-        normalizedFullPath.includes(".test-") ||
-        normalizedFullPath.includes(".spec.") ||
-        normalizedFullPath.includes(".fixture.") ||
-        normalizedFullPath.includes(".snap") ||
-        entry.name === "runtime-api.ts"
-      ) {
-        continue;
-      }
-      files.push(fullPath);
-    }
-  }
+  const files = collectSourceFiles(cached, {
+    rootDir: resolve(ROOT_DIR, "..", "extensions", extensionId),
+    shouldSkipEntry: ({ entryName, normalizedFullPath }) =>
+      normalizedFullPath.includes(".test.") ||
+      normalizedFullPath.includes(".test-") ||
+      normalizedFullPath.includes(".spec.") ||
+      normalizedFullPath.includes(".fixture.") ||
+      normalizedFullPath.includes(".snap") ||
+      entryName === "runtime-api.ts",
+  });
   extensionFilesCache.set(extensionId, files);
   return files;
 }
@@ -373,7 +369,9 @@ function getSourceAnalysis(path: string): SourceAnalysis {
   const analysis = {
     text,
     importSpecifiers,
-    extensionImports: importSpecifiers.filter((specifier) => specifier.includes("extensions/")),
+    extensionImports: importSpecifiers.filter((specifier) =>
+      specifier.includes(BUNDLED_PLUGIN_PATH_PREFIX),
+    ),
   } satisfies SourceAnalysis;
   sourceAnalysisCache.set(fullPath, analysis);
   return analysis;
@@ -385,7 +383,8 @@ function expectOnlyApprovedExtensionSeams(file: string, imports: string[]): void
     const resolved = specifier.startsWith(".")
       ? resolve(dirname(file), specifier).replaceAll("\\", "/")
       : normalized;
-    const extensionId = resolved.match(/extensions\/([^/]+)\//)?.[1] ?? null;
+    const extensionId =
+      resolved.match(new RegExp(`${BUNDLED_PLUGIN_ROOT_DIR}/([^/]+)/`))?.[1] ?? null;
     if (!extensionId || !GUARDED_CHANNEL_EXTENSIONS.has(extensionId)) {
       continue;
     }
@@ -399,7 +398,8 @@ function expectOnlyApprovedExtensionSeams(file: string, imports: string[]): void
 
 function expectNoSiblingExtensionPrivateSrcImports(file: string, imports: string[]): void {
   const normalizedFile = file.replaceAll("\\", "/");
-  const currentExtensionId = normalizedFile.match(/\/extensions\/([^/]+)\//)?.[1] ?? null;
+  const currentExtensionId =
+    normalizedFile.match(new RegExp(`/${BUNDLED_PLUGIN_ROOT_DIR}/([^/]+)/`))?.[1] ?? null;
   if (!currentExtensionId) {
     return;
   }
@@ -459,10 +459,10 @@ describe("channel import guardrails", () => {
     }
   });
 
-  it("keeps core production files off extension private src imports", () => {
+  it("keeps core production files off plugin-private src imports", () => {
     for (const file of collectCoreSourceFiles()) {
       const analysis = getSourceAnalysis(file);
-      expect(analysis.text, `${file} should not import extensions/*/src`).not.toMatch(
+      expect(analysis.text, `${file} should not import plugin-private src paths`).not.toMatch(
         /["'][^"']*extensions\/[^/"']+\/src\//,
       );
     }

@@ -28,7 +28,7 @@ openclaw plugins install @openclaw/line
 Local checkout (when running from a git repo):
 
 ```bash
-openclaw plugins install ./extensions/line
+openclaw plugins install ./path/to/local/line-plugin
 ```
 
 ## Setup
@@ -183,6 +183,25 @@ The LINE plugin also ships a `/card` command for Flex message presets:
 ```
 /card info "Welcome" "Thanks for joining!"
 ```
+
+## ACP support
+
+LINE supports ACP (Agent Communication Protocol) conversation bindings:
+
+- `/acp spawn <agent> --bind here` binds the current LINE chat to an ACP session without creating a child thread.
+- Configured ACP bindings and active conversation-bound ACP sessions work on LINE like other conversation channels.
+
+See [ACP agents](/tools/acp-agents) for details.
+
+## Outbound media
+
+The LINE plugin supports sending images, videos, and audio files through the agent message tool. Media is sent via the LINE-specific delivery path with appropriate preview and tracking handling:
+
+- **Images**: sent as LINE image messages with automatic preview generation.
+- **Videos**: sent with explicit preview and content-type handling.
+- **Audio**: sent as LINE audio messages.
+
+Generic media sends fall back to the existing image-only route when a LINE-specific path is not available.
 
 ## Troubleshooting
 
