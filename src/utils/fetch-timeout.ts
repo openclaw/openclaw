@@ -37,6 +37,40 @@ export function bindAbortRelay(controller: AbortController): () => void {
   return relayAbort.bind(controller);
 }
 
+export function buildTimeoutAbortSignal(params: { timeoutMs?: number; signal?: AbortSignal }): {
+  signal?: AbortSignal;
+  cleanup: () => void;
+} {
+  const { timeoutMs, signal } = params;
+  if (!timeoutMs && !signal) {
+    return { signal: undefined, cleanup: () => {} };
+  }
+  if (!timeoutMs) {
+    return { signal, cleanup: () => {} };
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(controller.abort.bind(controller), timeoutMs);
+  const onAbort = bindAbortRelay(controller);
+  if (signal) {
+    if (signal.aborted) {
+      controller.abort();
+    } else {
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
+  }
+
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      clearTimeout(timeoutId);
+      if (signal) {
+        signal.removeEventListener("abort", onAbort);
+      }
+    },
+  };
+}
+
 /**
  * Fetch wrapper that adds timeout support via AbortController.
  *
@@ -53,11 +87,12 @@ export async function fetchWithTimeout(
   timeoutMs: number,
   fetchFn: typeof fetch = fetch,
 ): Promise<Response> {
-  const controller = new AbortController();
-  const timer = setTimeout(controller.abort.bind(controller), Math.max(1, timeoutMs));
+  const { signal, cleanup } = buildTimeoutAbortSignal({
+    timeoutMs: Math.max(1, timeoutMs),
+  });
   try {
-    return await fetchFn(url, { ...init, signal: controller.signal });
+    return await fetchFn(url, { ...init, signal });
   } finally {
-    clearTimeout(timer);
+    cleanup();
   }
 }

@@ -1,4 +1,10 @@
-import { requireBundledChannelPlugin } from "../channels/plugins/bundled.js";
+import { googlechatPlugin } from "../../extensions/googlechat/test-api.js";
+import { matrixPlugin, setMatrixRuntime } from "../../extensions/matrix/test-api.js";
+import { msteamsPlugin } from "../../extensions/msteams/test-api.js";
+import { nostrPlugin } from "../../extensions/nostr/test-api.js";
+import { tlonPlugin } from "../../extensions/tlon/test-api.js";
+import { whatsappPlugin } from "../../extensions/whatsapp/test-api.js";
+import { bundledChannelPlugins } from "../channels/plugins/bundled.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { getChannelSetupWizardAdapter } from "./channel-setup/registry.js";
@@ -8,11 +14,16 @@ import type { ChannelChoice } from "./onboard-types.js";
 type ChannelSetupWizardAdapterPatch = Partial<
   Pick<
     ChannelSetupWizardAdapter,
-    "configure" | "configureInteractive" | "configureWhenConfigured" | "getStatus"
+    | "afterConfigWritten"
+    | "configure"
+    | "configureInteractive"
+    | "configureWhenConfigured"
+    | "getStatus"
   >
 >;
 
 type PatchedSetupAdapterFields = {
+  afterConfigWritten?: ChannelSetupWizardAdapter["afterConfigWritten"];
   configure?: ChannelSetupWizardAdapter["configure"];
   configureInteractive?: ChannelSetupWizardAdapter["configureInteractive"];
   configureWhenConfigured?: ChannelSetupWizardAdapter["configureWhenConfigured"];
@@ -20,15 +31,24 @@ type PatchedSetupAdapterFields = {
 };
 
 export function setDefaultChannelPluginRegistryForTests(): void {
+  setMatrixRuntime({
+    state: {
+      resolveStateDir: (_env, homeDir) => (homeDir ?? (() => "/tmp"))(),
+    },
+  } as Parameters<typeof setMatrixRuntime>[0]);
   const channels = [
-    { pluginId: "discord", plugin: requireBundledChannelPlugin("discord"), source: "test" },
-    { pluginId: "feishu", plugin: requireBundledChannelPlugin("feishu"), source: "test" },
-    { pluginId: "slack", plugin: requireBundledChannelPlugin("slack"), source: "test" },
-    { pluginId: "telegram", plugin: requireBundledChannelPlugin("telegram"), source: "test" },
-    { pluginId: "whatsapp", plugin: requireBundledChannelPlugin("whatsapp"), source: "test" },
-    { pluginId: "signal", plugin: requireBundledChannelPlugin("signal"), source: "test" },
-    { pluginId: "imessage", plugin: requireBundledChannelPlugin("imessage"), source: "test" },
-  ] as unknown as Parameters<typeof createTestRegistry>[0];
+    ...bundledChannelPlugins,
+    matrixPlugin,
+    msteamsPlugin,
+    nostrPlugin,
+    tlonPlugin,
+    googlechatPlugin,
+    whatsappPlugin,
+  ].map((plugin) => ({
+    pluginId: plugin.id,
+    plugin,
+    source: "test" as const,
+  })) as unknown as Parameters<typeof createTestRegistry>[0];
   setActivePluginRegistry(createTestRegistry(channels));
 }
 
@@ -47,6 +67,10 @@ export function patchChannelSetupWizardAdapter(
     previous.getStatus = adapter.getStatus;
     adapter.getStatus = patch.getStatus ?? adapter.getStatus;
   }
+  if (Object.prototype.hasOwnProperty.call(patch, "afterConfigWritten")) {
+    previous.afterConfigWritten = adapter.afterConfigWritten;
+    adapter.afterConfigWritten = patch.afterConfigWritten;
+  }
   if (Object.prototype.hasOwnProperty.call(patch, "configure")) {
     previous.configure = adapter.configure;
     adapter.configure = patch.configure ?? adapter.configure;
@@ -64,6 +88,9 @@ export function patchChannelSetupWizardAdapter(
     if (Object.prototype.hasOwnProperty.call(patch, "getStatus")) {
       adapter.getStatus = previous.getStatus!;
     }
+    if (Object.prototype.hasOwnProperty.call(patch, "afterConfigWritten")) {
+      adapter.afterConfigWritten = previous.afterConfigWritten;
+    }
     if (Object.prototype.hasOwnProperty.call(patch, "configure")) {
       adapter.configure = previous.configure!;
     }
@@ -75,3 +102,5 @@ export function patchChannelSetupWizardAdapter(
     }
   };
 }
+
+export const patchChannelOnboardingAdapter = patchChannelSetupWizardAdapter;

@@ -1,5 +1,5 @@
-import { discoverVeniceModels, VENICE_BASE_URL } from "../../src/agents/venice-models.js";
-import type { ModelProviderConfig } from "../../src/config/types.models.js";
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import { discoverVeniceModels, VENICE_BASE_URL } from "./api.js";
 
 export async function buildVeniceProvider(): Promise<ModelProviderConfig> {
   const models = await discoverVeniceModels();

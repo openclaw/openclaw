@@ -1,7 +1,5 @@
-import { slackPlugin } from "../../../extensions/slack/src/channel.js";
-import { setSlackRuntime } from "../../../extensions/slack/src/runtime.js";
-import { telegramPlugin } from "../../../extensions/telegram/src/channel.js";
-import { setTelegramRuntime } from "../../../extensions/telegram/src/runtime.js";
+import { slackPlugin, setSlackRuntime } from "../../../extensions/slack/test-api.js";
+import { telegramPlugin, setTelegramRuntime } from "../../../extensions/telegram/test-api.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createPluginRuntime } from "../../plugins/runtime/index.js";

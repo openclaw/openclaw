@@ -41,6 +41,49 @@ export function buildFeishuConversationId(params: {
   }
 }
 
+export function parseFeishuTargetId(raw: unknown): string | undefined {
+  const target = normalizeText(raw);
+  if (!target) {
+    return undefined;
+  }
+  const withoutProvider = target.replace(/^(feishu|lark):/i, "").trim();
+  if (!withoutProvider) {
+    return undefined;
+  }
+  const lowered = withoutProvider.toLowerCase();
+  for (const prefix of ["chat:", "group:", "channel:", "user:", "dm:", "open_id:"]) {
+    if (lowered.startsWith(prefix)) {
+      return normalizeText(withoutProvider.slice(prefix.length));
+    }
+  }
+  return withoutProvider;
+}
+
+export function parseFeishuDirectConversationId(raw: unknown): string | undefined {
+  const target = normalizeText(raw);
+  if (!target) {
+    return undefined;
+  }
+  const withoutProvider = target.replace(/^(feishu|lark):/i, "").trim();
+  if (!withoutProvider) {
+    return undefined;
+  }
+  const lowered = withoutProvider.toLowerCase();
+  for (const prefix of ["user:", "dm:", "open_id:"]) {
+    if (lowered.startsWith(prefix)) {
+      return normalizeText(withoutProvider.slice(prefix.length));
+    }
+  }
+  const id = parseFeishuTargetId(target);
+  if (!id) {
+    return undefined;
+  }
+  if (id.startsWith("ou_") || id.startsWith("on_")) {
+    return id;
+  }
+  return undefined;
+}
+
 export function parseFeishuConversationId(params: {
   conversationId: string;
   parentConversationId?: string;

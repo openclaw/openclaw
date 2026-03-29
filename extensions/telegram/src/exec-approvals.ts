@@ -1,8 +1,9 @@
-import type { ReplyPayload } from "../../../src/auto-reply/types.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import type { TelegramExecApprovalConfig } from "../../../src/config/types.telegram.js";
-import { getExecApprovalReplyMetadata } from "../../../src/infra/exec-approval-reply.js";
+import { getExecApprovalReplyMetadata } from "openclaw/plugin-sdk/approval-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { TelegramExecApprovalConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveTelegramAccount } from "./accounts.js";
+import { resolveTelegramInlineButtonsConfigScope } from "./inline-buttons.js";
 import { resolveTelegramTargetChatType } from "./targets.js";
 
 function normalizeApproverId(value: string | number): string {
@@ -77,11 +78,7 @@ function resolveExecApprovalButtonsExplicitlyDisabled(params: {
   accountId?: string | null;
 }): boolean {
   const capabilities = resolveTelegramAccount(params).config.capabilities;
-  if (!capabilities || Array.isArray(capabilities) || typeof capabilities !== "object") {
-    return false;
-  }
-  const inlineButtons = (capabilities as { inlineButtons?: unknown }).inlineButtons;
-  return typeof inlineButtons === "string" && inlineButtons.trim().toLowerCase() === "off";
+  return resolveTelegramInlineButtonsConfigScope(capabilities) === "off";
 }
 
 export function shouldEnableTelegramExecApprovalButtons(params: {

@@ -3,7 +3,7 @@ import type {
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
 } from "../media-understanding/types.js";
-import type { StickerMetadata } from "../plugin-sdk-internal/telegram.js";
+import type { StickerMetadata } from "../plugin-sdk/telegram-runtime.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { InternalMessageChannel } from "../utils/message-channel.js";
 import type { CommandArgs } from "./commands-registry.types.js";

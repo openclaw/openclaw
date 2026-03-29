@@ -1,14 +1,10 @@
 import os from "node:os";
 import path from "node:path";
-import { normalizeProviderId } from "../../../../src/agents/model-selection.js";
-import { resolveStateDir } from "../../../../src/config/paths.js";
-import { withFileLock } from "../../../../src/infra/file-lock.js";
-import { resolveRequiredHomeDir } from "../../../../src/infra/home-dir.js";
-import {
-  readJsonFileWithFallback,
-  writeJsonFileAtomically,
-} from "../../../../src/plugin-sdk/json-store.js";
-import { normalizeAccountId as normalizeSharedAccountId } from "../../../../src/routing/account-id.js";
+import { normalizeAccountId as normalizeSharedAccountId } from "openclaw/plugin-sdk/account-id";
+import { normalizeProviderId } from "openclaw/plugin-sdk/agent-runtime";
+import { withFileLock } from "openclaw/plugin-sdk/file-lock";
+import { readJsonFileWithFallback, writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 
 const MODEL_PICKER_PREFERENCES_LOCK_OPTIONS = {
   retries: {
@@ -40,7 +36,7 @@ export type DiscordModelPickerPreferenceScope = {
 };
 
 function resolvePreferencesStorePath(env: NodeJS.ProcessEnv = process.env): string {
-  const stateDir = resolveStateDir(env, () => resolveRequiredHomeDir(env, os.homedir));
+  const stateDir = resolveStateDir(env, os.homedir);
   return path.join(stateDir, "discord", "model-picker-preferences.json");
 }
 

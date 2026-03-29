@@ -1,4 +1,4 @@
-import { createSubsystemLogger } from "../../../../src/logging/subsystem.js";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 
 export const whatsappLog = createSubsystemLogger("gateway/channels/whatsapp");
 export const whatsappInboundLog = whatsappLog.child("inbound");

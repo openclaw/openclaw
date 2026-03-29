@@ -1,18 +1,22 @@
 import {
+  createAllowFromSection,
+  createTopLevelChannelDmPolicy,
+  createStandardChannelSetupStatus,
   DEFAULT_ACCOUNT_ID,
   hasConfiguredSecretInput,
   type OpenClawConfig,
   patchChannelConfigForAccount,
-  setChannelDmPolicyWithAllowFrom,
   setSetupChannelEnabled,
   splitSetupEntries,
-} from "../../../src/plugin-sdk-internal/setup.js";
-import type {
-  ChannelSetupDmPolicy,
-  ChannelSetupWizard,
-} from "../../../src/plugin-sdk-internal/setup.js";
+} from "openclaw/plugin-sdk/setup";
+import type { ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
+import { formatCliCommand, formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import { inspectTelegramAccount } from "./account-inspect.js";
-import { listTelegramAccountIds, resolveTelegramAccount } from "./accounts.js";
+import {
+  listTelegramAccountIds,
+  mergeTelegramAccountConfig,
+  resolveTelegramAccount,
+} from "./accounts.js";
 import {
   parseTelegramAllowFromId,
   promptTelegramAllowFromForAccount,
@@ -24,24 +28,67 @@ import {
 
 const channel = "telegram" as const;
 
-const dmPolicy: ChannelSetupDmPolicy = {
+function ensureTelegramDefaultGroupMentionGate(
+  cfg: OpenClawConfig,
+  accountId: string,
+): OpenClawConfig {
+  const resolved = resolveTelegramAccount({ cfg, accountId });
+  const wildcardGroup = resolved.config.groups?.["*"];
+  if (wildcardGroup?.requireMention !== undefined) {
+    return cfg;
+  }
+  return patchChannelConfigForAccount({
+    cfg,
+    channel,
+    accountId,
+    patch: {
+      groups: {
+        ...resolved.config.groups,
+        "*": {
+          ...wildcardGroup,
+          requireMention: true,
+        },
+      },
+    },
+  });
+}
+
+function shouldShowTelegramDmAccessWarning(cfg: OpenClawConfig, accountId: string): boolean {
+  const merged = mergeTelegramAccountConfig(cfg, accountId);
+  const policy = merged.dmPolicy ?? "pairing";
+  const hasAllowFrom =
+    Array.isArray(merged.allowFrom) && merged.allowFrom.some((e) => String(e).trim());
+  return policy === "pairing" && !hasAllowFrom;
+}
+
+function buildTelegramDmAccessWarningLines(accountId: string): string[] {
+  const configBase =
+    accountId === DEFAULT_ACCOUNT_ID
+      ? "channels.telegram"
+      : `channels.telegram.accounts.${accountId}`;
+  return [
+    "Your bot is using DM policy: pairing.",
+    "Any Telegram user who discovers the bot can send pairing requests.",
+    "For private use, configure an allowlist with your Telegram user id:",
+    "  " + formatCliCommand(`openclaw config set ${configBase}.dmPolicy "allowlist"`),
+    "  " + formatCliCommand(`openclaw config set ${configBase}.allowFrom '["YOUR_USER_ID"]'`),
+    `Docs: ${formatDocsLink("/channels/pairing", "channels/pairing")}`,
+  ];
+}
+
+const dmPolicy = createTopLevelChannelDmPolicy({
   label: "Telegram",
   channel,
   policyKey: "channels.telegram.dmPolicy",
   allowFromKey: "channels.telegram.allowFrom",
   getCurrent: (cfg) => cfg.channels?.telegram?.dmPolicy ?? "pairing",
-  setPolicy: (cfg, policy) =>
-    setChannelDmPolicyWithAllowFrom({
-      cfg,
-      channel,
-      dmPolicy: policy,
-    }),
   promptAllowFrom: promptTelegramAllowFromForAccount,
-};
+});
 
 export const telegramSetupWizard: ChannelSetupWizard = {
   channel,
-  status: {
+  status: createStandardChannelSetupStatus({
+    channelLabel: "Telegram",
     configuredLabel: "configured",
     unconfiguredLabel: "needs token",
     configuredHint: "recommended · configured",
@@ -53,7 +100,11 @@ export const telegramSetupWizard: ChannelSetupWizard = {
         const account = inspectTelegramAccount({ cfg, accountId });
         return account.configured;
       }),
-  },
+  }),
+  prepare: async ({ cfg, accountId, credentialValues }) => ({
+    cfg: ensureTelegramDefaultGroupMentionGate(cfg, accountId),
+    credentialValues,
+  }),
   credentials: [
     {
       inputKey: "token",
@@ -83,7 +134,7 @@ export const telegramSetupWizard: ChannelSetupWizard = {
       },
     },
   ],
-  allowFrom: {
+  allowFrom: createAllowFromSection({
     helpTitle: "Telegram user id",
     helpLines: TELEGRAM_USER_ID_HELP_LINES,
     credentialInputKey: "token",
@@ -93,10 +144,11 @@ export const telegramSetupWizard: ChannelSetupWizard = {
       "Telegram token missing; use numeric sender ids (usernames require a bot token).",
     parseInputs: splitSetupEntries,
     parseId: parseTelegramAllowFromId,
-    resolveEntries: async ({ credentialValues, entries }) =>
+    resolveEntries: async ({ cfg, accountId, credentialValues, entries }) =>
       resolveTelegramAllowFromEntries({
         credentialValue: credentialValues.token,
         entries,
+        apiRoot: resolveTelegramAccount({ cfg, accountId }).config.apiRoot,
       }),
     apply: async ({ cfg, accountId, allowFrom }) =>
       patchChannelConfigForAccount({
@@ -105,6 +157,15 @@ export const telegramSetupWizard: ChannelSetupWizard = {
         accountId,
         patch: { dmPolicy: "allowlist", allowFrom },
       }),
+  }),
+  finalize: async ({ cfg, accountId, prompter }) => {
+    if (!shouldShowTelegramDmAccessWarning(cfg, accountId)) {
+      return;
+    }
+    await prompter.note(
+      buildTelegramDmAccessWarningLines(accountId).join("\n"),
+      "Telegram DM access warning",
+    );
   },
   dmPolicy,
   disable: (cfg) => setSetupChannelEnabled(cfg, channel, false),

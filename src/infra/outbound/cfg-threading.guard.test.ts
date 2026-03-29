@@ -48,7 +48,7 @@ function listExtensionFiles(): {
       continue;
     }
     const source = readFileSync(channelPath, "utf8");
-    if (source.includes("outbound:")) {
+    if (/\boutbound\s*:\s*\{/.test(source)) {
       inlineChannelEntrypoints.push(toPosix(path.join("extensions", entry.name, "src/channel.ts")));
     }
   }
@@ -61,7 +61,7 @@ function listExtensionFiles(): {
 
 function listHighRiskRuntimeCfgFiles(): string[] {
   return [
-    "src/agents/tools/telegram-actions.ts",
+    "extensions/telegram/src/action-runtime.ts",
     "extensions/discord/src/monitor/reply-delivery.ts",
     "extensions/discord/src/monitor/thread-bindings.discord-api.ts",
     "extensions/discord/src/monitor/thread-bindings.manager.ts",

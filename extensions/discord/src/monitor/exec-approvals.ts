@@ -10,35 +10,38 @@ import {
   type TopLevelComponents,
 } from "@buape/carbon";
 import { ButtonStyle, Routes } from "discord-api-types/v10";
-import type { OpenClawConfig } from "../../../../src/config/config.js";
-import { loadSessionStore, resolveStorePath } from "../../../../src/config/sessions.js";
-import type { DiscordExecApprovalConfig } from "../../../../src/config/types.discord.js";
-import { GatewayClient } from "../../../../src/gateway/client.js";
-import { createOperatorApprovalsGatewayClient } from "../../../../src/gateway/operator-approvals-client.js";
-import type { EventFrame } from "../../../../src/gateway/protocol/index.js";
-import { resolveExecApprovalCommandDisplay } from "../../../../src/infra/exec-approval-command-display.js";
-import { getExecApprovalApproverDmNoticeText } from "../../../../src/infra/exec-approval-reply.js";
-import type {
-  ExecApprovalDecision,
-  ExecApprovalRequest,
-  ExecApprovalResolved,
-} from "../../../../src/infra/exec-approvals.js";
-import { logDebug, logError } from "../../../../src/logger.js";
+import {
+  getExecApprovalApproverDmNoticeText,
+  resolveExecApprovalCommandDisplay,
+  type ExecApprovalDecision,
+  type ExecApprovalRequest,
+  type ExecApprovalResolved,
+  type PluginApprovalRequest,
+  type PluginApprovalResolved,
+} from "openclaw/plugin-sdk/approval-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { loadSessionStore, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
+import type { DiscordExecApprovalConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { EventFrame } from "openclaw/plugin-sdk/gateway-runtime";
+import * as gatewayRuntime from "openclaw/plugin-sdk/gateway-runtime";
 import {
   normalizeAccountId,
+  normalizeMessageChannel,
   resolveAgentIdFromSessionKey,
-} from "../../../../src/routing/session-key.js";
-import type { RuntimeEnv } from "../../../../src/runtime.js";
-import {
-  compileSafeRegex,
-  testRegexWithBoundedInput,
-} from "../../../../src/security/safe-regex.js";
-import { normalizeMessageChannel } from "../../../../src/utils/message-channel.js";
-import { createDiscordClient, stripUndefinedFields } from "../send.shared.js";
+} from "openclaw/plugin-sdk/routing";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { compileSafeRegex, testRegexWithBoundedInput } from "openclaw/plugin-sdk/security-runtime";
+import { logDebug, logError } from "openclaw/plugin-sdk/text-runtime";
+import * as sendShared from "../send.shared.js";
 import { DiscordUiContainer } from "../ui.js";
 
 const EXEC_APPROVAL_KEY = "execapproval";
-export type { ExecApprovalRequest, ExecApprovalResolved };
+export type {
+  ExecApprovalRequest,
+  ExecApprovalResolved,
+  PluginApprovalRequest,
+  PluginApprovalResolved,
+};
 
 /** Extract Discord channel ID from a session key like "agent:main:discord:channel:123456789" */
 export function extractDiscordChannelId(sessionKey?: string | null): string | null {
@@ -61,6 +64,12 @@ type PendingApproval = {
   discordChannelId: string;
   timeoutId: NodeJS.Timeout;
 };
+
+type ApprovalKind = "exec" | "plugin";
+
+type CachedApprovalRequest =
+  | { kind: "exec"; request: ExecApprovalRequest }
+  | { kind: "plugin"; request: PluginApprovalRequest };
 
 function encodeCustomIdValue(value: string): string {
   return encodeURIComponent(value);
@@ -104,6 +113,16 @@ export function parseExecApprovalData(
     approvalId: decodeCustomIdValue(rawId),
     action,
   };
+}
+
+function resolveApprovalKindFromId(approvalId: string): ApprovalKind {
+  return approvalId.startsWith("plugin:") ? "plugin" : "exec";
+}
+
+function isPluginApprovalRequest(
+  request: ExecApprovalRequest | PluginApprovalRequest,
+): request is PluginApprovalRequest {
+  return resolveApprovalKindFromId(request.id) === "plugin";
 }
 
 type ExecApprovalContainerParams = {
@@ -196,11 +215,11 @@ class ExecApprovalActionRow extends Row<Button> {
   }
 }
 
-function resolveExecApprovalAccountId(params: {
+function resolveAccountIdFromSessionKey(params: {
   cfg: OpenClawConfig;
-  request: ExecApprovalRequest;
+  sessionKey?: string | null;
 }): string | null {
-  const sessionKey = params.request.request.sessionKey?.trim();
+  const sessionKey = params.sessionKey?.trim();
   if (!sessionKey) {
     return null;
   }
@@ -220,6 +239,51 @@ function resolveExecApprovalAccountId(params: {
   }
 }
 
+function resolveExecApprovalAccountId(params: {
+  cfg: OpenClawConfig;
+  request: ExecApprovalRequest;
+}): string | null {
+  return resolveAccountIdFromSessionKey({
+    cfg: params.cfg,
+    sessionKey: params.request.request.sessionKey,
+  });
+}
+
+function resolvePluginApprovalAccountId(params: {
+  cfg: OpenClawConfig;
+  request: PluginApprovalRequest;
+}): string | null {
+  const fromSession = resolveAccountIdFromSessionKey({
+    cfg: params.cfg,
+    sessionKey: params.request.request.sessionKey,
+  });
+  if (fromSession) {
+    return fromSession;
+  }
+  return params.request.request.turnSourceAccountId?.trim() || null;
+}
+
+function resolveApprovalAccountId(params: {
+  cfg: OpenClawConfig;
+  request: ExecApprovalRequest | PluginApprovalRequest;
+}): string | null {
+  return isPluginApprovalRequest(params.request)
+    ? resolvePluginApprovalAccountId({ cfg: params.cfg, request: params.request })
+    : resolveExecApprovalAccountId({ cfg: params.cfg, request: params.request });
+}
+
+function resolveApprovalAgentId(
+  request: ExecApprovalRequest | PluginApprovalRequest,
+): string | null {
+  return request.request.agentId?.trim() || null;
+}
+
+function resolveApprovalSessionKey(
+  request: ExecApprovalRequest | PluginApprovalRequest,
+): string | null {
+  return request.request.sessionKey?.trim() || null;
+}
+
 function buildExecApprovalMetadataLines(request: ExecApprovalRequest): string[] {
   const lines: string[] = [];
   if (request.request.cwd) {
@@ -230,6 +294,24 @@ function buildExecApprovalMetadataLines(request: ExecApprovalRequest): string[] 
   }
   if (Array.isArray(request.request.envKeys) && request.request.envKeys.length > 0) {
     lines.push(`- Env Overrides: ${request.request.envKeys.join(", ")}`);
+  }
+  if (request.request.agentId) {
+    lines.push(`- Agent: ${request.request.agentId}`);
+  }
+  return lines;
+}
+
+function buildPluginApprovalMetadataLines(request: PluginApprovalRequest): string[] {
+  const lines: string[] = [];
+  const severity = request.request.severity ?? "warning";
+  lines.push(
+    `- Severity: ${severity === "critical" ? "Critical" : severity === "info" ? "Info" : "Warning"}`,
+  );
+  if (request.request.toolName) {
+    lines.push(`- Tool: ${request.request.toolName}`);
+  }
+  if (request.request.pluginId) {
+    lines.push(`- Plugin: ${request.request.pluginId}`);
   }
   if (request.request.agentId) {
     lines.push(`- Agent: ${request.request.agentId}`);
@@ -298,7 +380,31 @@ function createExecApprovalRequestContainer(params: {
   });
 }
 
-function createResolvedContainer(params: {
+function createPluginApprovalRequestContainer(params: {
+  request: PluginApprovalRequest;
+  cfg: OpenClawConfig;
+  accountId: string;
+  actionRow?: Row<Button>;
+}): ExecApprovalContainer {
+  const expiresAtSeconds = Math.max(0, Math.floor(params.request.expiresAtMs / 1000));
+  const severity = params.request.request.severity ?? "warning";
+  const accentColor =
+    severity === "critical" ? "#ED4245" : severity === "info" ? "#5865F2" : "#FAA61A";
+  return new ExecApprovalContainer({
+    cfg: params.cfg,
+    accountId: params.accountId,
+    title: "Plugin Approval Required",
+    description: "A plugin action needs your approval.",
+    commandPreview: formatCommandPreview(params.request.request.title, 700),
+    commandSecondaryPreview: formatOptionalCommandPreview(params.request.request.description, 1000),
+    metadataLines: buildPluginApprovalMetadataLines(params.request),
+    actionRow: params.actionRow,
+    footer: `Expires <t:${expiresAtSeconds}:R> · ID: ${params.request.id}`,
+    accentColor,
+  });
+}
+
+function createExecResolvedContainer(params: {
   request: ExecApprovalRequest;
   decision: ExecApprovalDecision;
   resolvedBy?: string | null;
@@ -337,7 +443,41 @@ function createResolvedContainer(params: {
   });
 }
 
-function createExpiredContainer(params: {
+function createPluginResolvedContainer(params: {
+  request: PluginApprovalRequest;
+  decision: ExecApprovalDecision;
+  resolvedBy?: string | null;
+  cfg: OpenClawConfig;
+  accountId: string;
+}): ExecApprovalContainer {
+  const decisionLabel =
+    params.decision === "allow-once"
+      ? "Allowed (once)"
+      : params.decision === "allow-always"
+        ? "Allowed (always)"
+        : "Denied";
+
+  const accentColor =
+    params.decision === "deny"
+      ? "#ED4245"
+      : params.decision === "allow-always"
+        ? "#5865F2"
+        : "#57F287";
+
+  return new ExecApprovalContainer({
+    cfg: params.cfg,
+    accountId: params.accountId,
+    title: `Plugin Approval: ${decisionLabel}`,
+    description: params.resolvedBy ? `Resolved by ${params.resolvedBy}` : "Resolved",
+    commandPreview: formatCommandPreview(params.request.request.title, 700),
+    commandSecondaryPreview: formatOptionalCommandPreview(params.request.request.description, 1000),
+    metadataLines: buildPluginApprovalMetadataLines(params.request),
+    footer: `ID: ${params.request.id}`,
+    accentColor,
+  });
+}
+
+function createExecExpiredContainer(params: {
   request: ExecApprovalRequest;
   cfg: OpenClawConfig;
   accountId: string;
@@ -360,6 +500,24 @@ function createExpiredContainer(params: {
   });
 }
 
+function createPluginExpiredContainer(params: {
+  request: PluginApprovalRequest;
+  cfg: OpenClawConfig;
+  accountId: string;
+}): ExecApprovalContainer {
+  return new ExecApprovalContainer({
+    cfg: params.cfg,
+    accountId: params.accountId,
+    title: "Plugin Approval: Expired",
+    description: "This approval request has expired.",
+    commandPreview: formatCommandPreview(params.request.request.title, 700),
+    commandSecondaryPreview: formatOptionalCommandPreview(params.request.request.description, 1000),
+    metadataLines: buildPluginApprovalMetadataLines(params.request),
+    footer: `ID: ${params.request.id}`,
+    accentColor: "#99AAB5",
+  });
+}
+
 export type DiscordExecApprovalHandlerOpts = {
   token: string;
   accountId: string;
@@ -368,12 +526,23 @@ export type DiscordExecApprovalHandlerOpts = {
   cfg: OpenClawConfig;
   runtime?: RuntimeEnv;
   onResolve?: (id: string, decision: ExecApprovalDecision) => Promise<void>;
+  __testing?: {
+    createGatewayClient?: typeof gatewayRuntime.createOperatorApprovalsGatewayClient;
+    createDiscordClient?: (...args: Parameters<typeof sendShared.createDiscordClient>) => {
+      rest: {
+        post: (...args: unknown[]) => Promise<unknown>;
+        patch: (...args: unknown[]) => Promise<unknown>;
+        delete: (...args: unknown[]) => Promise<unknown>;
+      };
+      request: (fn: () => Promise<unknown>, label: string) => Promise<unknown>;
+    };
+  };
 };
 
 export class DiscordExecApprovalHandler {
-  private gatewayClient: GatewayClient | null = null;
+  private gatewayClient: gatewayRuntime.GatewayClient | null = null;
   private pending = new Map<string, PendingApproval>();
-  private requestCache = new Map<string, ExecApprovalRequest>();
+  private requestCache = new Map<string, CachedApprovalRequest>();
   private opts: DiscordExecApprovalHandlerOpts;
   private started = false;
 
@@ -381,7 +550,7 @@ export class DiscordExecApprovalHandler {
     this.opts = opts;
   }
 
-  shouldHandle(request: ExecApprovalRequest): boolean {
+  shouldHandle(request: ExecApprovalRequest | PluginApprovalRequest): boolean {
     const config = this.opts.config;
     if (!config.enabled) {
       return false;
@@ -390,7 +559,7 @@ export class DiscordExecApprovalHandler {
       return false;
     }
 
-    const requestAccountId = resolveExecApprovalAccountId({
+    const requestAccountId = resolveApprovalAccountId({
       cfg: this.opts.cfg,
       request,
     });
@@ -403,17 +572,18 @@ export class DiscordExecApprovalHandler {
 
     // Check agent filter
     if (config.agentFilter?.length) {
-      if (!request.request.agentId) {
+      const agentId = resolveApprovalAgentId(request);
+      if (!agentId) {
         return false;
       }
-      if (!config.agentFilter.includes(request.request.agentId)) {
+      if (!config.agentFilter.includes(agentId)) {
         return false;
       }
     }
 
     // Check session filter (substring match)
     if (config.sessionFilter?.length) {
-      const session = request.request.sessionKey;
+      const session = resolveApprovalSessionKey(request);
       if (!session) {
         return false;
       }
@@ -451,7 +621,10 @@ export class DiscordExecApprovalHandler {
 
     logDebug("discord exec approvals: starting handler");
 
-    this.gatewayClient = await createOperatorApprovalsGatewayClient({
+    this.gatewayClient = await (
+      this.opts.__testing?.createGatewayClient ??
+      gatewayRuntime.createOperatorApprovalsGatewayClient
+    )({
       config: this.opts.cfg,
       gatewayUrl: this.opts.gatewayUrl,
       clientDisplayName: "Discord Exec Approvals",
@@ -493,44 +666,64 @@ export class DiscordExecApprovalHandler {
     if (evt.event === "exec.approval.requested") {
       const request = evt.payload as ExecApprovalRequest;
       void this.handleApprovalRequested(request);
+    } else if (evt.event === "plugin.approval.requested") {
+      const request = evt.payload as PluginApprovalRequest;
+      void this.handleApprovalRequested(request);
     } else if (evt.event === "exec.approval.resolved") {
       const resolved = evt.payload as ExecApprovalResolved;
+      void this.handleApprovalResolved(resolved);
+    } else if (evt.event === "plugin.approval.resolved") {
+      const resolved = evt.payload as PluginApprovalResolved;
       void this.handleApprovalResolved(resolved);
     }
   }
 
-  private async handleApprovalRequested(request: ExecApprovalRequest): Promise<void> {
+  private async handleApprovalRequested(
+    request: ExecApprovalRequest | PluginApprovalRequest,
+  ): Promise<void> {
     if (!this.shouldHandle(request)) {
       return;
     }
 
-    logDebug(`discord exec approvals: received request ${request.id}`);
-
-    this.requestCache.set(request.id, request);
-
-    const { rest, request: discordRequest } = createDiscordClient(
-      { token: this.opts.token, accountId: this.opts.accountId },
-      this.opts.cfg,
+    const pluginRequest: PluginApprovalRequest | null = isPluginApprovalRequest(request)
+      ? request
+      : null;
+    logDebug(
+      `discord exec approvals: received ${pluginRequest ? "plugin" : "exec"} request ${request.id}`,
     );
+    let container: ExecApprovalContainer;
+    if (pluginRequest) {
+      this.requestCache.set(request.id, { kind: "plugin", request: pluginRequest });
+      container = createPluginApprovalRequestContainer({
+        request: pluginRequest,
+        cfg: this.opts.cfg,
+        accountId: this.opts.accountId,
+        actionRow: new ExecApprovalActionRow(request.id),
+      });
+    } else {
+      const execRequest = request as ExecApprovalRequest;
+      this.requestCache.set(request.id, { kind: "exec", request: execRequest });
+      container = createExecApprovalRequestContainer({
+        request: execRequest,
+        cfg: this.opts.cfg,
+        accountId: this.opts.accountId,
+        actionRow: new ExecApprovalActionRow(request.id),
+      });
+    }
 
-    const actionRow = new ExecApprovalActionRow(request.id);
-    const container = createExecApprovalRequestContainer({
-      request,
-      cfg: this.opts.cfg,
-      accountId: this.opts.accountId,
-      actionRow,
-    });
+    const { rest, request: discordRequest } = (
+      this.opts.__testing?.createDiscordClient ?? sendShared.createDiscordClient
+    )({ token: this.opts.token, accountId: this.opts.accountId }, this.opts.cfg);
     const payload = buildExecApprovalPayload(container);
-    const body = stripUndefinedFields(serializePayload(payload));
+    const body = sendShared.stripUndefinedFields(serializePayload(payload));
 
     const target = this.opts.config.target ?? "dm";
     const sendToDm = target === "dm" || target === "both";
     const sendToChannel = target === "channel" || target === "both";
     let fallbackToDm = false;
+    const sessionKey = resolveApprovalSessionKey(request);
     const originatingChannelId =
-      request.request.sessionKey && target === "dm"
-        ? extractDiscordChannelId(request.request.sessionKey)
-        : null;
+      sessionKey && target === "dm" ? extractDiscordChannelId(sessionKey) : null;
 
     if (target === "dm" && originatingChannelId) {
       try {
@@ -548,7 +741,7 @@ export class DiscordExecApprovalHandler {
 
     // Send to originating channel if configured
     if (sendToChannel) {
-      const channelId = extractDiscordChannelId(request.request.sessionKey);
+      const channelId = extractDiscordChannelId(sessionKey);
       if (channelId) {
         try {
           const message = (await discordRequest(
@@ -579,7 +772,7 @@ export class DiscordExecApprovalHandler {
       } else {
         if (!sendToDm) {
           logError(
-            `discord exec approvals: target is "channel" but could not extract channel id from session key "${request.request.sessionKey ?? "(none)"}" — falling back to DM delivery for approval ${request.id}`,
+            `discord exec approvals: target is "channel" but could not extract channel id from session key "${sessionKey ?? "(none)"}" — falling back to DM delivery for approval ${request.id}`,
           );
           fallbackToDm = true;
         } else {
@@ -649,24 +842,37 @@ export class DiscordExecApprovalHandler {
     }
   }
 
-  private async handleApprovalResolved(resolved: ExecApprovalResolved): Promise<void> {
+  private async handleApprovalResolved(
+    resolved: ExecApprovalResolved | PluginApprovalResolved,
+  ): Promise<void> {
     // Clean up all pending entries for this approval (channel + dm)
-    const request = this.requestCache.get(resolved.id);
+    const cached = this.requestCache.get(resolved.id);
     this.requestCache.delete(resolved.id);
 
-    if (!request) {
+    if (!cached) {
       return;
     }
 
-    logDebug(`discord exec approvals: resolved ${resolved.id} with ${resolved.decision}`);
+    logDebug(
+      `discord exec approvals: resolved ${cached.kind} ${resolved.id} with ${resolved.decision}`,
+    );
 
-    const container = createResolvedContainer({
-      request,
-      decision: resolved.decision,
-      resolvedBy: resolved.resolvedBy,
-      cfg: this.opts.cfg,
-      accountId: this.opts.accountId,
-    });
+    const container =
+      cached.kind === "plugin"
+        ? createPluginResolvedContainer({
+            request: cached.request,
+            decision: resolved.decision,
+            resolvedBy: resolved.resolvedBy,
+            cfg: this.opts.cfg,
+            accountId: this.opts.accountId,
+          })
+        : createExecResolvedContainer({
+            request: cached.request,
+            decision: resolved.decision,
+            resolvedBy: resolved.resolvedBy,
+            cfg: this.opts.cfg,
+            accountId: this.opts.accountId,
+          });
 
     for (const suffix of [":channel", ":dm", ""]) {
       const key = `${resolved.id}${suffix}`;
@@ -694,7 +900,7 @@ export class DiscordExecApprovalHandler {
 
     this.pending.delete(key);
 
-    const request = this.requestCache.get(approvalId);
+    const cached = this.requestCache.get(approvalId);
 
     // Only clean up requestCache if no other pending entries exist for this approval
     const hasOtherPending =
@@ -705,17 +911,26 @@ export class DiscordExecApprovalHandler {
       this.requestCache.delete(approvalId);
     }
 
-    if (!request) {
+    if (!cached) {
       return;
     }
 
-    logDebug(`discord exec approvals: timeout for ${approvalId} (${source ?? "default"})`);
+    logDebug(
+      `discord exec approvals: timeout for ${cached.kind} ${approvalId} (${source ?? "default"})`,
+    );
 
-    const container = createExpiredContainer({
-      request,
-      cfg: this.opts.cfg,
-      accountId: this.opts.accountId,
-    });
+    const container =
+      cached.kind === "plugin"
+        ? createPluginExpiredContainer({
+            request: cached.request,
+            cfg: this.opts.cfg,
+            accountId: this.opts.accountId,
+          })
+        : createExecExpiredContainer({
+            request: cached.request,
+            cfg: this.opts.cfg,
+            accountId: this.opts.accountId,
+          });
     await this.finalizeMessage(pending.discordChannelId, pending.discordMessageId, container);
   }
 
@@ -730,10 +945,9 @@ export class DiscordExecApprovalHandler {
     }
 
     try {
-      const { rest, request: discordRequest } = createDiscordClient(
-        { token: this.opts.token, accountId: this.opts.accountId },
-        this.opts.cfg,
-      );
+      const { rest, request: discordRequest } = (
+        this.opts.__testing?.createDiscordClient ?? sendShared.createDiscordClient
+      )({ token: this.opts.token, accountId: this.opts.accountId }, this.opts.cfg);
 
       await discordRequest(
         () => rest.delete(Routes.channelMessage(channelId, messageId)) as Promise<void>,
@@ -751,16 +965,15 @@ export class DiscordExecApprovalHandler {
     container: DiscordUiContainer,
   ): Promise<void> {
     try {
-      const { rest, request: discordRequest } = createDiscordClient(
-        { token: this.opts.token, accountId: this.opts.accountId },
-        this.opts.cfg,
-      );
+      const { rest, request: discordRequest } = (
+        this.opts.__testing?.createDiscordClient ?? sendShared.createDiscordClient
+      )({ token: this.opts.token, accountId: this.opts.accountId }, this.opts.cfg);
       const payload = buildExecApprovalPayload(container);
 
       await discordRequest(
         () =>
           rest.patch(Routes.channelMessage(channelId, messageId), {
-            body: stripUndefinedFields(serializePayload(payload)),
+            body: sendShared.stripUndefinedFields(serializePayload(payload)),
           }),
         "update-approval",
       );
@@ -775,10 +988,14 @@ export class DiscordExecApprovalHandler {
       return false;
     }
 
-    logDebug(`discord exec approvals: resolving ${approvalId} with ${decision}`);
+    const method =
+      resolveApprovalKindFromId(approvalId) === "plugin"
+        ? "plugin.approval.resolve"
+        : "exec.approval.resolve";
+    logDebug(`discord exec approvals: resolving ${approvalId} with ${decision} via ${method}`);
 
     try {
-      await this.gatewayClient.request("exec.approval.resolve", {
+      await this.gatewayClient.request(method, {
         id: approvalId,
         decision,
       });
@@ -831,7 +1048,7 @@ export class ExecApprovalButton extends Button {
     if (!approvers.some((id) => String(id) === userId)) {
       try {
         await interaction.reply({
-          content: "⛔ You are not authorized to approve exec requests.",
+          content: "⛔ You are not authorized to approve requests.",
           ephemeral: true,
         });
       } catch {

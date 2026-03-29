@@ -1,73 +1,72 @@
-import { bluebubblesPlugin } from "../../../extensions/bluebubbles/src/channel.js";
-import { discordPlugin } from "../../../extensions/discord/src/channel.js";
-import { discordSetupPlugin } from "../../../extensions/discord/src/channel.setup.js";
-import { setDiscordRuntime } from "../../../extensions/discord/src/runtime.js";
-import { feishuPlugin } from "../../../extensions/feishu/src/channel.js";
-import { googlechatPlugin } from "../../../extensions/googlechat/src/channel.js";
-import { imessagePlugin } from "../../../extensions/imessage/src/channel.js";
-import { imessageSetupPlugin } from "../../../extensions/imessage/src/channel.setup.js";
-import { ircPlugin } from "../../../extensions/irc/src/channel.js";
-import { linePlugin } from "../../../extensions/line/src/channel.js";
-import { lineSetupPlugin } from "../../../extensions/line/src/channel.setup.js";
-import { setLineRuntime } from "../../../extensions/line/src/runtime.js";
-import { matrixPlugin } from "../../../extensions/matrix/src/channel.js";
-import { mattermostPlugin } from "../../../extensions/mattermost/src/channel.js";
-import { msteamsPlugin } from "../../../extensions/msteams/src/channel.js";
-import { nextcloudTalkPlugin } from "../../../extensions/nextcloud-talk/src/channel.js";
-import { nostrPlugin } from "../../../extensions/nostr/src/channel.js";
-import { signalPlugin } from "../../../extensions/signal/src/channel.js";
-import { signalSetupPlugin } from "../../../extensions/signal/src/channel.setup.js";
-import { slackPlugin } from "../../../extensions/slack/src/channel.js";
-import { slackSetupPlugin } from "../../../extensions/slack/src/channel.setup.js";
-import { synologyChatPlugin } from "../../../extensions/synology-chat/src/channel.js";
-import { telegramPlugin } from "../../../extensions/telegram/src/channel.js";
-import { telegramSetupPlugin } from "../../../extensions/telegram/src/channel.setup.js";
-import { setTelegramRuntime } from "../../../extensions/telegram/src/runtime.js";
-import { tlonPlugin } from "../../../extensions/tlon/src/channel.js";
-import { whatsappPlugin } from "../../../extensions/whatsapp/src/channel.js";
-import { whatsappSetupPlugin } from "../../../extensions/whatsapp/src/channel.setup.js";
-import { zaloPlugin } from "../../../extensions/zalo/src/channel.js";
-import { zalouserPlugin } from "../../../extensions/zalouser/src/channel.js";
+import { GENERATED_BUNDLED_CHANNEL_ENTRIES } from "../../generated/bundled-channel-entries.generated.js";
+import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import type { ChannelId, ChannelPlugin } from "./types.js";
 
-export const bundledChannelPlugins = [
-  bluebubblesPlugin,
-  discordPlugin,
-  feishuPlugin,
-  googlechatPlugin,
-  imessagePlugin,
-  ircPlugin,
-  linePlugin,
-  matrixPlugin,
-  mattermostPlugin,
-  msteamsPlugin,
-  nextcloudTalkPlugin,
-  nostrPlugin,
-  signalPlugin,
-  slackPlugin,
-  synologyChatPlugin,
-  telegramPlugin,
-  tlonPlugin,
-  whatsappPlugin,
-  zaloPlugin,
-  zalouserPlugin,
-] as ChannelPlugin[];
+type GeneratedBundledChannelEntry = {
+  id: string;
+  entry: {
+    channelPlugin: ChannelPlugin;
+    setChannelRuntime?: (runtime: PluginRuntime) => void;
+  };
+  setupEntry?: {
+    plugin: ChannelPlugin;
+  };
+};
 
-export const bundledChannelSetupPlugins = [
-  telegramSetupPlugin,
-  whatsappSetupPlugin,
-  discordSetupPlugin,
-  ircPlugin,
-  googlechatPlugin,
-  slackSetupPlugin,
-  signalSetupPlugin,
-  imessageSetupPlugin,
-  lineSetupPlugin,
-] as ChannelPlugin[];
+function isGeneratedBundledChannelEntry(value: unknown): value is GeneratedBundledChannelEntry {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const record = value as {
+    id?: unknown;
+    entry?: {
+      channelPlugin?: { id?: unknown };
+      setChannelRuntime?: unknown;
+    };
+    setupEntry?: { plugin?: { id?: unknown } };
+  };
+  return typeof record.id === "string" && typeof record.entry?.channelPlugin?.id === "string";
+}
 
-const bundledChannelPluginsById = new Map(
-  bundledChannelPlugins.map((plugin) => [plugin.id, plugin] as const),
+const generatedBundledChannelEntries = (
+  Array.isArray(GENERATED_BUNDLED_CHANNEL_ENTRIES)
+    ? GENERATED_BUNDLED_CHANNEL_ENTRIES.filter(isGeneratedBundledChannelEntry)
+    : []
+) as readonly GeneratedBundledChannelEntry[];
+
+export const bundledChannelPlugins = generatedBundledChannelEntries.map(
+  ({ entry }) => entry.channelPlugin,
 );
+
+export const bundledChannelSetupPlugins = generatedBundledChannelEntries.flatMap(
+  ({ setupEntry }) => {
+    const plugin = setupEntry?.plugin;
+    return plugin ? [plugin] : [];
+  },
+);
+
+function buildBundledChannelPluginsById(plugins: readonly ChannelPlugin[]) {
+  const byId = new Map<ChannelId, ChannelPlugin>();
+  for (const plugin of plugins) {
+    if (byId.has(plugin.id)) {
+      throw new Error(`duplicate bundled channel plugin id: ${plugin.id}`);
+    }
+    byId.set(plugin.id, plugin);
+  }
+  return byId;
+}
+
+const bundledChannelPluginsById = buildBundledChannelPluginsById(bundledChannelPlugins);
+
+const bundledChannelRuntimeSettersById = new Map<
+  ChannelId,
+  NonNullable<GeneratedBundledChannelEntry["entry"]["setChannelRuntime"]>
+>();
+for (const { entry } of generatedBundledChannelEntries) {
+  if (entry.setChannelRuntime) {
+    bundledChannelRuntimeSettersById.set(entry.channelPlugin.id, entry.setChannelRuntime);
+  }
+}
 
 export function getBundledChannelPlugin(id: ChannelId): ChannelPlugin | undefined {
   return bundledChannelPluginsById.get(id);
@@ -81,8 +80,10 @@ export function requireBundledChannelPlugin(id: ChannelId): ChannelPlugin {
   return plugin;
 }
 
-export const bundledChannelRuntimeSetters = {
-  setDiscordRuntime,
-  setLineRuntime,
-  setTelegramRuntime,
-};
+export function setBundledChannelRuntime(id: ChannelId, runtime: PluginRuntime): void {
+  const setter = bundledChannelRuntimeSettersById.get(id);
+  if (!setter) {
+    throw new Error(`missing bundled channel runtime setter: ${id}`);
+  }
+  setter(runtime);
+}

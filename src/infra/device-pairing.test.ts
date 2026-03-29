@@ -8,6 +8,7 @@ import {
   clearDevicePairing,
   ensureDeviceToken,
   getPairedDevice,
+  listDevicePairing,
   removePairedDevice,
   requestDevicePairing,
   rotateDeviceToken,
@@ -27,7 +28,7 @@ async function setupPairedOperatorDevice(baseDir: string, scopes: string[]) {
     },
     baseDir,
   );
-  await approveDevicePairing(request.request.requestId, baseDir);
+  await approveDevicePairing(request.request.requestId, { callerScopes: scopes }, baseDir);
 }
 
 async function setupOperatorToken(scopes: string[]) {
@@ -124,7 +125,7 @@ describe("device pairing tokens", () => {
     expect(second.request.requestId).toBe(first.request.requestId);
   });
 
-  test("merges pending roles/scopes for the same device before approval", async () => {
+  test("supersedes pending requests when requested roles/scopes change", async () => {
     const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
     const first = await requestDevicePairing(
       {
@@ -145,20 +146,65 @@ describe("device pairing tokens", () => {
       baseDir,
     );
 
-    expect(second.created).toBe(false);
-    expect(second.request.requestId).toBe(first.request.requestId);
-    expect(second.request.roles).toEqual(["node", "operator"]);
-    expect(second.request.scopes).toEqual(["operator.read", "operator.write"]);
+    expect(second.created).toBe(true);
+    expect(second.request.requestId).not.toBe(first.request.requestId);
+    expect(second.request.role).toBe("operator");
+    expect(second.request.roles).toEqual(expect.arrayContaining(["node", "operator"]));
+    expect(second.request.scopes).toEqual(
+      expect.arrayContaining(["operator.read", "operator.write"]),
+    );
 
-    await approveDevicePairing(first.request.requestId, baseDir);
+    const list = await listDevicePairing(baseDir);
+    expect(list.pending).toHaveLength(1);
+    expect(list.pending[0]?.requestId).toBe(second.request.requestId);
+
+    await approveDevicePairing(
+      second.request.requestId,
+      { callerScopes: ["operator.read", "operator.write"] },
+      baseDir,
+    );
     const paired = await getPairedDevice("device-1", baseDir);
-    expect(paired?.roles).toEqual(["node", "operator"]);
-    expect(paired?.scopes).toEqual(["operator.read", "operator.write"]);
+    expect(paired?.roles).toEqual(expect.arrayContaining(["node", "operator"]));
+    expect(paired?.scopes).toEqual(expect.arrayContaining(["operator.read", "operator.write"]));
+  });
+
+  test("keeps superseded requests interactive when an existing pending request is interactive", async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
+    const first = await requestDevicePairing(
+      {
+        deviceId: "device-1",
+        publicKey: "public-key-1",
+        role: "node",
+        scopes: [],
+        silent: false,
+      },
+      baseDir,
+    );
+    expect(first.request.silent).toBe(false);
+
+    const second = await requestDevicePairing(
+      {
+        deviceId: "device-1",
+        publicKey: "public-key-1",
+        role: "operator",
+        scopes: ["operator.read"],
+        silent: true,
+      },
+      baseDir,
+    );
+
+    expect(second.created).toBe(true);
+    expect(second.request.requestId).not.toBe(first.request.requestId);
+    expect(second.request.silent).toBe(false);
   });
 
   test("rejects bootstrap token replay before pending scope escalation can be approved", async () => {
     const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
-    const issued = await issueDeviceBootstrapToken({ baseDir });
+    const issued = await issueDeviceBootstrapToken({
+      baseDir,
+      roles: ["operator"],
+      scopes: ["operator.read"],
+    });
 
     await expect(
       verifyDeviceBootstrapToken({
@@ -192,11 +238,48 @@ describe("device pairing tokens", () => {
       }),
     ).resolves.toEqual({ ok: false, reason: "bootstrap_token_invalid" });
 
-    await approveDevicePairing(first.request.requestId, baseDir);
+    await approveDevicePairing(
+      first.request.requestId,
+      { callerScopes: ["operator.read"] },
+      baseDir,
+    );
     const paired = await getPairedDevice("device-1", baseDir);
     expect(paired?.scopes).toEqual(["operator.read"]);
     expect(paired?.approvedScopes).toEqual(["operator.read"]);
     expect(paired?.tokens?.operator?.scopes).toEqual(["operator.read"]);
+  });
+
+  test("fails closed for operator approvals when caller scopes are omitted", async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
+    const request = await requestDevicePairing(
+      {
+        deviceId: "device-1",
+        publicKey: "public-key-1",
+        role: "operator",
+        scopes: ["operator.admin"],
+      },
+      baseDir,
+    );
+
+    await expect(approveDevicePairing(request.request.requestId, baseDir)).resolves.toEqual({
+      status: "forbidden",
+      missingScope: "operator.admin",
+    });
+
+    await expect(
+      approveDevicePairing(
+        request.request.requestId,
+        {
+          callerScopes: ["operator.admin"],
+        },
+        baseDir,
+      ),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        status: "approved",
+        requestId: request.request.requestId,
+      }),
+    );
   });
 
   test("generates base64url device tokens with 256-bit entropy output length", async () => {
@@ -247,12 +330,20 @@ describe("device pairing tokens", () => {
       },
       baseDir,
     );
-    await approveDevicePairing(repair.request.requestId, baseDir);
+    await approveDevicePairing(
+      repair.request.requestId,
+      { callerScopes: ["operator.admin"] },
+      baseDir,
+    );
 
     const paired = await getPairedDevice("device-1", baseDir);
     expect(paired?.scopes).toEqual(["operator.admin"]);
     expect(paired?.approvedScopes).toEqual(["operator.admin"]);
-    expect(paired?.tokens?.operator?.scopes).toEqual(["operator.admin"]);
+    expect(paired?.tokens?.operator?.scopes).toEqual([
+      "operator.admin",
+      "operator.read",
+      "operator.write",
+    ]);
   });
 
   test("rejects scope escalation when rotating a token and leaves state unchanged", async () => {

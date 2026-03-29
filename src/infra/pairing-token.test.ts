@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const randomBytesMock = vi.hoisted(() => vi.fn());
 
@@ -11,7 +11,17 @@ vi.mock("node:crypto", async () => {
   };
 });
 
-import { generatePairingToken, PAIRING_TOKEN_BYTES, verifyPairingToken } from "./pairing-token.js";
+type PairingTokenModule = typeof import("./pairing-token.js");
+
+let generatePairingToken: PairingTokenModule["generatePairingToken"];
+let PAIRING_TOKEN_BYTES: PairingTokenModule["PAIRING_TOKEN_BYTES"];
+let verifyPairingToken: PairingTokenModule["verifyPairingToken"];
+
+beforeEach(async () => {
+  vi.resetModules();
+  ({ generatePairingToken, PAIRING_TOKEN_BYTES, verifyPairingToken } =
+    await import("./pairing-token.js"));
+});
 
 describe("generatePairingToken", () => {
   it("uses the configured byte count and returns a base64url token", () => {

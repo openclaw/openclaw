@@ -1,5 +1,7 @@
-import { expect, it, type Mock } from "vitest";
+import { expect, it, vi, type Mock } from "vitest";
+import { slackOutbound } from "../../../../test/channel-outbounds.js";
 import type { MsgContext } from "../../../auto-reply/templating.js";
+import type { ReplyPayload } from "../../../auto-reply/types.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type {
   ResolveProviderRuntimeGroupPolicyParams,
@@ -30,6 +32,24 @@ import type {
 
 function sortStrings(values: readonly string[]) {
   return [...values].toSorted((left, right) => left.localeCompare(right));
+}
+
+function resolveContractMessageDiscovery(params: {
+  plugin: Pick<ChannelPlugin, "actions">;
+  cfg: OpenClawConfig;
+}) {
+  const actions = params.plugin.actions;
+  if (!actions) {
+    return {
+      actions: [] as ChannelMessageActionName[],
+      capabilities: [] as readonly ChannelMessageCapability[],
+    };
+  }
+  const discovery = actions.describeMessageTool({ cfg: params.cfg }) ?? null;
+  return {
+    actions: Array.isArray(discovery?.actions) ? [...discovery.actions] : [],
+    capabilities: Array.isArray(discovery?.capabilities) ? discovery.capabilities : [],
+  };
 }
 
 const contractRuntime = createNonExitingRuntime();
@@ -95,6 +115,32 @@ function expectFocusedBindingShape(binding: ChannelFocusedBindingContext) {
   expect(binding.labelNoun.trim()).not.toBe("");
 }
 
+export function createSlackOutboundPayloadHarness(params: {
+  payload: ReplyPayload;
+  sendResults?: Array<{ messageId: string }>;
+}) {
+  const sendSlack = vi.fn();
+  primeChannelOutboundSendMock(
+    sendSlack,
+    { messageId: "sl-1", channelId: "C12345", ts: "1234.5678" },
+    params.sendResults,
+  );
+  const ctx = {
+    cfg: {},
+    to: "C12345",
+    text: "",
+    payload: params.payload,
+    deps: {
+      sendSlack,
+    },
+  };
+  return {
+    run: async () => await slackOutbound.sendPayload!(ctx),
+    sendMock: sendSlack,
+    to: ctx.to,
+  };
+}
+
 export function installChannelPluginContractSuite(params: {
   plugin: Pick<ChannelPlugin, "id" | "meta" | "capabilities" | "config">;
 }) {
@@ -132,15 +178,19 @@ export function installChannelActionsContractSuite(params: {
 }) {
   it("exposes the base message actions contract", () => {
     expect(params.plugin.actions).toBeDefined();
-    expect(typeof params.plugin.actions?.listActions).toBe("function");
+    expect(typeof params.plugin.actions?.describeMessageTool).toBe("function");
   });
 
   for (const testCase of params.cases) {
     it(`actions contract: ${testCase.name}`, () => {
       testCase.beforeTest?.();
 
-      const actions = params.plugin.actions?.listActions?.({ cfg: testCase.cfg }) ?? [];
-      const capabilities = params.plugin.actions?.getCapabilities?.({ cfg: testCase.cfg }) ?? [];
+      const discovery = resolveContractMessageDiscovery({
+        plugin: params.plugin,
+        cfg: testCase.cfg,
+      });
+      const actions = discovery.actions;
+      const capabilities = discovery.capabilities;
 
       expect(actions).toEqual([...new Set(actions)]);
       expect(capabilities).toEqual([...new Set(capabilities)]);
@@ -192,7 +242,7 @@ export function installChannelSurfaceContractSuite(params: {
   it(`exposes the ${surface} surface contract`, () => {
     if (surface === "actions") {
       expect(plugin.actions).toBeDefined();
-      expect(typeof plugin.actions?.listActions).toBe("function");
+      expect(typeof plugin.actions?.describeMessageTool).toBe("function");
       return;
     }
 
@@ -393,19 +443,20 @@ export function installChannelThreadingContractSuite(params: {
 
 export function installChannelDirectoryContractSuite(params: {
   plugin: Pick<ChannelPlugin, "id" | "directory">;
-  invokeLookups?: boolean;
+  coverage?: "lookups" | "presence";
+  cfg?: OpenClawConfig;
+  accountId?: string;
 }) {
   it("exposes the base directory contract", async () => {
     const directory = params.plugin.directory;
     expect(directory).toBeDefined();
 
-    if (params.invokeLookups === false) {
+    if (params.coverage === "presence") {
       return;
     }
-
     const self = await directory?.self?.({
-      cfg: {} as OpenClawConfig,
-      accountId: "default",
+      cfg: params.cfg ?? ({} as OpenClawConfig),
+      accountId: params.accountId ?? "default",
       runtime: contractRuntime,
     });
     if (self) {
@@ -414,8 +465,8 @@ export function installChannelDirectoryContractSuite(params: {
 
     const peers =
       (await directory?.listPeers?.({
-        cfg: {} as OpenClawConfig,
-        accountId: "default",
+        cfg: params.cfg ?? ({} as OpenClawConfig),
+        accountId: params.accountId ?? "default",
         query: "",
         limit: 5,
         runtime: contractRuntime,
@@ -427,8 +478,8 @@ export function installChannelDirectoryContractSuite(params: {
 
     const groups =
       (await directory?.listGroups?.({
-        cfg: {} as OpenClawConfig,
-        accountId: "default",
+        cfg: params.cfg ?? ({} as OpenClawConfig),
+        accountId: params.accountId ?? "default",
         query: "",
         limit: 5,
         runtime: contractRuntime,
@@ -440,8 +491,8 @@ export function installChannelDirectoryContractSuite(params: {
 
     if (directory?.listGroupMembers && groups[0]?.id) {
       const members = await directory.listGroupMembers({
-        cfg: {} as OpenClawConfig,
-        accountId: "default",
+        cfg: params.cfg ?? ({} as OpenClawConfig),
+        accountId: params.accountId ?? "default",
         groupId: groups[0].id,
         limit: 5,
         runtime: contractRuntime,
@@ -455,13 +506,14 @@ export function installChannelDirectoryContractSuite(params: {
 }
 
 export function installSessionBindingContractSuite(params: {
-  getCapabilities: () => SessionBindingCapabilities;
+  getCapabilities: () => SessionBindingCapabilities | Promise<SessionBindingCapabilities>;
   bindAndResolve: () => Promise<SessionBindingRecord>;
+  unbindAndVerify: (binding: SessionBindingRecord) => Promise<void>;
   cleanup: () => Promise<void> | void;
   expectedCapabilities: SessionBindingCapabilities;
 }) {
-  it("registers the expected session binding capabilities", () => {
-    expect(params.getCapabilities()).toEqual(params.expectedCapabilities);
+  it("registers the expected session binding capabilities", async () => {
+    expect(await Promise.resolve(params.getCapabilities())).toEqual(params.expectedCapabilities);
   });
 
   it("binds and resolves a session binding through the shared service", async () => {
@@ -476,6 +528,11 @@ export function installSessionBindingContractSuite(params: {
     expect(typeof binding.conversation.conversationId).toBe("string");
     expect(["active", "ending", "ended"]).toContain(binding.status);
     expect(typeof binding.boundAt).toBe("number");
+  });
+
+  it("unbinds a registered binding through the shared service", async () => {
+    const binding = await params.bindAndResolve();
+    await params.unbindAndVerify(binding);
   });
 
   it("cleans up registered bindings", async () => {

@@ -1,8 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   getChannelPlugin: vi.fn(),
-  loadOpenClawPlugins: vi.fn(),
+  resolveRuntimePluginRegistry: vi.fn(),
 }));
 
 const TEST_WORKSPACE_ROOT = "/tmp/openclaw-test-workspace";
@@ -37,7 +37,7 @@ vi.mock("../../agents/agent-scope.js", () => ({
 }));
 
 vi.mock("../../plugins/loader.js", () => ({
-  loadOpenClawPlugins: mocks.loadOpenClawPlugins,
+  resolveRuntimePluginRegistry: mocks.resolveRuntimePluginRegistry,
 }));
 
 vi.mock("../../config/plugin-auto-enable.js", () => ({
@@ -46,9 +46,10 @@ vi.mock("../../config/plugin-auto-enable.js", () => ({
   },
 }));
 
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { resolveOutboundTarget } from "./targets.js";
+let setActivePluginRegistry: typeof import("../../plugins/runtime.js").setActivePluginRegistry;
+let createTestRegistry: typeof import("../../test-utils/channel-plugins.js").createTestRegistry;
+let resetOutboundChannelResolutionStateForTest: typeof import("./channel-resolution.js").resetOutboundChannelResolutionStateForTest;
+let resolveOutboundTarget: typeof import("./targets.js").resolveOutboundTarget;
 
 describe("resolveOutboundTarget channel resolution", () => {
   let registrySeq = 0;
@@ -60,24 +61,30 @@ describe("resolveOutboundTarget channel resolution", () => {
       mode: "explicit",
     });
 
+  beforeAll(async () => {
+    vi.resetModules();
+    ({ setActivePluginRegistry } = await import("../../plugins/runtime.js"));
+    ({ createTestRegistry } = await import("../../test-utils/channel-plugins.js"));
+    ({ resetOutboundChannelResolutionStateForTest } = await import("./channel-resolution.js"));
+    ({ resolveOutboundTarget } = await import("./targets.js"));
+  });
+
   beforeEach(() => {
     registrySeq += 1;
+    resetOutboundChannelResolutionStateForTest();
     setActivePluginRegistry(createTestRegistry([]), `targets-test-${registrySeq}`);
     mocks.getChannelPlugin.mockReset();
-    mocks.loadOpenClawPlugins.mockReset();
+    mocks.resolveRuntimePluginRegistry.mockReset();
   });
 
   it("recovers telegram plugin resolution so announce delivery does not fail with Unsupported channel: telegram", () => {
     const telegramPlugin = createTelegramPlugin();
-    mocks.getChannelPlugin
-      .mockReturnValueOnce(undefined)
-      .mockReturnValueOnce(telegramPlugin)
-      .mockReturnValue(telegramPlugin);
+    mocks.getChannelPlugin.mockReturnValueOnce(undefined).mockReturnValueOnce(telegramPlugin);
 
     const result = resolveTelegramTarget();
 
     expect(result).toEqual({ ok: true, to: "123456" });
-    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledTimes(1);
+    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledTimes(1);
   });
 
   it("retries bootstrap on subsequent resolve when the first bootstrap attempt fails", () => {
@@ -88,7 +95,7 @@ describe("resolveOutboundTarget channel resolution", () => {
       .mockReturnValueOnce(undefined)
       .mockReturnValueOnce(telegramPlugin)
       .mockReturnValue(telegramPlugin);
-    mocks.loadOpenClawPlugins
+    mocks.resolveRuntimePluginRegistry
       .mockImplementationOnce(() => {
         throw new Error("bootstrap failed");
       })
@@ -99,6 +106,6 @@ describe("resolveOutboundTarget channel resolution", () => {
 
     expect(first.ok).toBe(false);
     expect(second).toEqual({ ok: true, to: "123456" });
-    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledTimes(2);
+    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledTimes(2);
   });
 });

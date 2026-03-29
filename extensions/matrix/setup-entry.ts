@@ -1,5 +1,4 @@
+import { defineSetupPluginEntry } from "openclaw/plugin-sdk/core";
 import { matrixPlugin } from "./src/channel.js";
 
-export default {
-  plugin: matrixPlugin,
-};
+export default defineSetupPluginEntry(matrixPlugin);

@@ -1,20 +1,26 @@
-import { getOAuthApiKey } from "@mariozechner/pi-ai/oauth";
 import type {
   ProviderAuthContext,
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
-} from "openclaw/plugin-sdk/core";
-import { CODEX_CLI_PROFILE_ID } from "../../src/agents/auth-profiles.js";
-import { listProfilesForProvider } from "../../src/agents/auth-profiles/profiles.js";
-import { ensureAuthProfileStore } from "../../src/agents/auth-profiles/store.js";
-import type { OAuthCredential } from "../../src/agents/auth-profiles/types.js";
-import { DEFAULT_CONTEXT_TOKENS } from "../../src/agents/defaults.js";
-import { normalizeModelCompat } from "../../src/agents/model-compat.js";
-import { normalizeProviderId } from "../../src/agents/provider-id.js";
-import { loginOpenAICodexOAuth } from "../../src/commands/openai-codex-oauth.js";
-import { fetchCodexUsage } from "../../src/infra/provider-usage.fetch.js";
-import { buildOauthProviderAuthResult } from "../../src/plugin-sdk/provider-auth-result.js";
-import type { ProviderPlugin } from "../../src/plugins/types.js";
+} from "openclaw/plugin-sdk/plugin-entry";
+import {
+  CODEX_CLI_PROFILE_ID,
+  ensureAuthProfileStore,
+  listProfilesForProvider,
+  type OAuthCredential,
+} from "openclaw/plugin-sdk/provider-auth";
+import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth";
+import { loginOpenAICodexOAuth } from "openclaw/plugin-sdk/provider-auth-login";
+import {
+  DEFAULT_CONTEXT_TOKENS,
+  normalizeModelCompat,
+  normalizeProviderId,
+  type ProviderPlugin,
+} from "openclaw/plugin-sdk/provider-model-shared";
+import { createOpenAIAttributionHeadersWrapper } from "openclaw/plugin-sdk/provider-stream";
+import { fetchCodexUsage } from "openclaw/plugin-sdk/provider-usage";
+import { OPENAI_CODEX_DEFAULT_MODEL } from "./default-models.js";
+import { resolveCodexAuthIdentity } from "./openai-codex-auth-identity.js";
 import { buildOpenAICodexProvider } from "./openai-codex-catalog.js";
 import {
   cloneFirstTemplateModel,
@@ -34,7 +40,6 @@ const OPENAI_CODEX_GPT_53_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
 const OPENAI_CODEX_GPT_53_SPARK_CONTEXT_TOKENS = 128_000;
 const OPENAI_CODEX_GPT_53_SPARK_MAX_TOKENS = 128_000;
 const OPENAI_CODEX_TEMPLATE_MODEL_IDS = ["gpt-5.2-codex"] as const;
-const OPENAI_CODEX_DEFAULT_MODEL = `${PROVIDER_ID}/${OPENAI_CODEX_GPT_54_MODEL_ID}`;
 const OPENAI_CODEX_XHIGH_MODEL_IDS = [
   OPENAI_CODEX_GPT_54_MODEL_ID,
   OPENAI_CODEX_GPT_53_MODEL_ID,
@@ -48,9 +53,6 @@ const OPENAI_CODEX_MODERN_MODEL_IDS = [
   "gpt-5.2-codex",
   OPENAI_CODEX_GPT_53_MODEL_ID,
   OPENAI_CODEX_GPT_53_SPARK_MODEL_ID,
-  "gpt-5.1-codex",
-  "gpt-5.1-codex-mini",
-  "gpt-5.1-codex-max",
 ] as const;
 
 function isOpenAICodexBaseUrl(baseUrl?: string): boolean {
@@ -137,18 +139,15 @@ function resolveCodexForwardCompatModel(
 
 async function refreshOpenAICodexOAuthCredential(cred: OAuthCredential) {
   try {
-    const refreshed = await getOAuthApiKey("openai-codex", {
-      "openai-codex": cred,
-    });
-    if (!refreshed) {
-      throw new Error("OpenAI Codex OAuth refresh returned no credentials.");
-    }
+    const { refreshOpenAICodexToken } = await import("./openai-codex-provider.runtime.js");
+    const refreshed = await refreshOpenAICodexToken(cred.refresh);
     return {
       ...cred,
-      ...refreshed.newCredentials,
+      ...refreshed,
       type: "oauth" as const,
       provider: PROVIDER_ID,
       email: cred.email,
+      displayName: cred.displayName,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -180,14 +179,27 @@ async function runOpenAICodexOAuth(ctx: ProviderAuthContext) {
     return { profiles: [] };
   }
 
+  const identity = resolveCodexAuthIdentity({
+    accessToken: creds.access,
+    email: typeof creds.email === "string" ? creds.email : undefined,
+  });
+
   return buildOauthProviderAuthResult({
     providerId: PROVIDER_ID,
     defaultModel: OPENAI_CODEX_DEFAULT_MODEL,
     access: creds.access,
     refresh: creds.refresh,
     expires: creds.expires,
-    email: typeof creds.email === "string" ? creds.email : undefined,
+    email: identity.email,
+    profileName: identity.profileName,
   });
+}
+
+function buildOpenAICodexAuthDoctorHint(ctx: { profileId?: string }) {
+  if (ctx.profileId !== CODEX_CLI_PROFILE_ID) {
+    return undefined;
+  }
+  return "Deprecated profile. Run `openclaw models auth login --provider openai-codex` or `openclaw configure`.";
 }
 
 export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
@@ -228,6 +240,7 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
       },
     },
     resolveDynamicModel: (ctx) => resolveCodexForwardCompatModel(ctx),
+    buildAuthDoctorHint: (ctx) => buildOpenAICodexAuthDoctorHint(ctx),
     capabilities: {
       providerFamily: "openai",
     },
@@ -244,6 +257,7 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
         transport: "auto",
       };
     },
+    wrapStreamFn: (ctx) => createOpenAIAttributionHeadersWrapper(ctx.streamFn),
     normalizeResolvedModel: (ctx) => {
       if (normalizeProviderId(ctx.provider) !== PROVIDER_ID) {
         return undefined;

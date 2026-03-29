@@ -4,68 +4,76 @@ on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
+
+permissions:
+  contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.event_name == 'pull_request' && format('{0}-{1}', github.workflow, github.event.pull_request.number) || format('{0}-{1}', github.workflow, github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
-  # Detect docs-only changes to skip heavy jobs (test, build, Windows, macOS, Android).
-  # Lint and format always run. Fail-safe: if detection fails, run everything.
-  docs-scope:
+  # Preflight: establish routing truth and planner-owned matrices once, then let
+  # real work fan out from a single source of truth.
+  preflight:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 20
     outputs:
-      docs_only: ${{ steps.check.outputs.docs_only }}
-      docs_changed: ${{ steps.check.outputs.docs_changed }}
+      docs_only: ${{ steps.manifest.outputs.docs_only }}
+      docs_changed: ${{ steps.manifest.outputs.docs_changed }}
+      run_node: ${{ steps.manifest.outputs.run_node }}
+      run_macos: ${{ steps.manifest.outputs.run_macos }}
+      run_android: ${{ steps.manifest.outputs.run_android }}
+      run_skills_python: ${{ steps.manifest.outputs.run_skills_python }}
+      run_skills_python_job: ${{ steps.manifest.outputs.run_skills_python_job }}
+      run_windows: ${{ steps.manifest.outputs.run_windows }}
+      has_changed_extensions: ${{ steps.manifest.outputs.has_changed_extensions }}
+      changed_extensions_matrix: ${{ steps.manifest.outputs.changed_extensions_matrix }}
+      run_build_artifacts: ${{ steps.manifest.outputs.run_build_artifacts }}
+      run_checks_fast: ${{ steps.manifest.outputs.run_checks_fast }}
+      checks_fast_matrix: ${{ steps.manifest.outputs.checks_fast_matrix }}
+      run_checks: ${{ steps.manifest.outputs.run_checks }}
+      checks_matrix: ${{ steps.manifest.outputs.checks_matrix }}
+      run_extension_fast: ${{ steps.manifest.outputs.run_extension_fast }}
+      extension_fast_matrix: ${{ steps.manifest.outputs.extension_fast_matrix }}
+      run_check: ${{ steps.manifest.outputs.run_check }}
+      run_check_additional: ${{ steps.manifest.outputs.run_check_additional }}
+      run_build_smoke: ${{ steps.manifest.outputs.run_build_smoke }}
+      run_check_docs: ${{ steps.manifest.outputs.run_check_docs }}
+      run_checks_windows: ${{ steps.manifest.outputs.run_checks_windows }}
+      checks_windows_matrix: ${{ steps.manifest.outputs.checks_windows_matrix }}
+      run_macos_node: ${{ steps.manifest.outputs.run_macos_node }}
+      macos_node_matrix: ${{ steps.manifest.outputs.macos_node_matrix }}
+      run_macos_swift: ${{ steps.manifest.outputs.run_macos_swift }}
+      run_android_job: ${{ steps.manifest.outputs.run_android_job }}
+      android_matrix: ${{ steps.manifest.outputs.android_matrix }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
           fetch-depth: 1
           fetch-tags: false
+          persist-credentials: false
           submodules: false
 
-      - name: Ensure docs-scope base commit
+      - name: Ensure preflight base commit
         uses: ./.github/actions/ensure-base-commit
         with:
           base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
           fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
 
       - name: Detect docs-only changes
-        id: check
+        id: docs_scope
         uses: ./.github/actions/detect-docs-changes
 
-  # Detect which heavy areas are touched so CI can skip unrelated expensive jobs.
-  # Fail-safe: if detection fails, downstream jobs run.
-  changed-scope:
-    needs: [docs-scope]
-    if: needs.docs-scope.outputs.docs_only != 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
-    outputs:
-      run_node: ${{ steps.scope.outputs.run_node }}
-      run_macos: ${{ steps.scope.outputs.run_macos }}
-      run_android: ${{ steps.scope.outputs.run_android }}
-      run_skills_python: ${{ steps.scope.outputs.run_skills_python }}
-      run_windows: ${{ steps.scope.outputs.run_windows }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 1
-          fetch-tags: false
-          submodules: false
-
-      - name: Ensure changed-scope base commit
-        uses: ./.github/actions/ensure-base-commit
-        with:
-          base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
-          fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
-
       - name: Detect changed scopes
-        id: scope
+        id: changed_scope
+        if: steps.docs_scope.outputs.docs_only != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -78,26 +86,83 @@ jobs:
 
           node scripts/ci-changed-scope.mjs --base "$BASE" --head HEAD
 
-  changed-extensions:
-    needs: [docs-scope, changed-scope]
-    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
+      - name: Setup Node environment
+        if: steps.docs_scope.outputs.docs_only != 'true'
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          install-deps: "false"
+          use-sticky-disk: "false"
+
+      - name: Detect changed extensions
+        id: changed_extensions
+        if: steps.docs_scope.outputs.docs_only != 'true' && steps.changed_scope.outputs.run_node == 'true'
+        env:
+          BASE_SHA: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
+          BASE_REF: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
+        run: |
+          node --input-type=module <<'EOF'
+          import { appendFileSync } from "node:fs";
+          import { listChangedExtensionIds } from "./scripts/test-extension.mjs";
+
+          const extensionIds = listChangedExtensionIds({
+            base: process.env.BASE_SHA,
+            head: "HEAD",
+            fallbackBaseRef: process.env.BASE_REF,
+            unavailableBaseBehavior: "all",
+          });
+          const matrix = JSON.stringify({ include: extensionIds.map((extension) => ({ extension })) });
+
+          appendFileSync(process.env.GITHUB_OUTPUT, `has_changed_extensions=${extensionIds.length > 0}\n`, "utf8");
+          appendFileSync(process.env.GITHUB_OUTPUT, `changed_extensions_matrix=${matrix}\n`, "utf8");
+          EOF
+
+      - name: Build CI manifest
+        id: manifest
+        env:
+          OPENCLAW_CI_DOCS_ONLY: ${{ steps.docs_scope.outputs.docs_only }}
+          OPENCLAW_CI_DOCS_CHANGED: ${{ steps.docs_scope.outputs.docs_changed }}
+          OPENCLAW_CI_RUN_NODE: ${{ steps.changed_scope.outputs.run_node || 'false' }}
+          OPENCLAW_CI_RUN_MACOS: ${{ steps.changed_scope.outputs.run_macos || 'false' }}
+          OPENCLAW_CI_RUN_ANDROID: ${{ steps.changed_scope.outputs.run_android || 'false' }}
+          OPENCLAW_CI_RUN_WINDOWS: ${{ steps.changed_scope.outputs.run_windows || 'false' }}
+          OPENCLAW_CI_RUN_SKILLS_PYTHON: ${{ steps.changed_scope.outputs.run_skills_python || 'false' }}
+          OPENCLAW_CI_HAS_CHANGED_EXTENSIONS: ${{ steps.changed_extensions.outputs.has_changed_extensions || 'false' }}
+          OPENCLAW_CI_CHANGED_EXTENSIONS_MATRIX: ${{ steps.changed_extensions.outputs.changed_extensions_matrix || '{"include":[]}' }}
+        run: node scripts/ci-write-manifest-outputs.mjs --workflow ci
+
+  # Run the fast security/SCM checks in parallel with scope detection so the
+  # main Node jobs do not have to wait for Python/pre-commit setup.
+  security-fast:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: blacksmith-16vcpu-ubuntu-2404
-    outputs:
-      has_changed_extensions: ${{ steps.changed.outputs.has_changed_extensions }}
-      changed_extensions_matrix: ${{ steps.changed.outputs.changed_extensions_matrix }}
+    timeout-minutes: 20
+    env:
+      PRE_COMMIT_CACHE_KEY_SUFFIX: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.sha }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
           fetch-depth: 1
           fetch-tags: false
+          persist-credentials: false
           submodules: false
 
-      - name: Ensure changed-extensions base commit
+      - name: Ensure security base commit
         uses: ./.github/actions/ensure-base-commit
         with:
           base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
           fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
+
+      - name: Prepare trusted pre-commit config
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          trusted_config="$RUNNER_TEMP/pre-commit-base.yaml"
+          git show "${BASE_SHA}:.pre-commit-config.yaml" > "$trusted_config"
+          echo "PRE_COMMIT_CONFIG_PATH=$trusted_config" >> "$GITHUB_ENV"
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -106,31 +171,76 @@ jobs:
           install-deps: "false"
           use-sticky-disk: "false"
 
-      - name: Detect changed extensions
-        id: changed
+      - name: Setup Python
+        id: setup-python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: |
+            pyproject.toml
+            .pre-commit-config.yaml
+            .github/workflows/ci.yml
+
+      - name: Restore pre-commit cache
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('.pre-commit-config.yaml') }}-${{ env.PRE_COMMIT_CACHE_KEY_SUFFIX }}
+          restore-keys: |
+            pre-commit-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('.pre-commit-config.yaml') }}-
+
+      - name: Install pre-commit
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pre-commit==4.2.0
+
+      - name: Detect committed private keys
+        run: pre-commit run --config "${PRE_COMMIT_CONFIG_PATH:-.pre-commit-config.yaml}" --all-files detect-private-key
+
+      - name: Audit changed GitHub workflows with zizmor
         env:
           BASE_SHA: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
         run: |
-          node --input-type=module <<'EOF'
-          import { appendFileSync } from "node:fs";
-          import { listChangedExtensionIds } from "./scripts/test-extension.mjs";
+          set -euo pipefail
 
-          const extensionIds = listChangedExtensionIds({ base: process.env.BASE_SHA, head: "HEAD" });
-          const matrix = JSON.stringify({ include: extensionIds.map((extension) => ({ extension })) });
+          if [ -z "${BASE_SHA:-}" ] || [ "${BASE_SHA}" = "0000000000000000000000000000000000000000" ]; then
+            echo "No usable base SHA detected; skipping zizmor."
+            exit 0
+          fi
 
-          appendFileSync(process.env.GITHUB_OUTPUT, `has_changed_extensions=${extensionIds.length > 0}\n`, "utf8");
-          appendFileSync(process.env.GITHUB_OUTPUT, `changed_extensions_matrix=${matrix}\n`, "utf8");
-          EOF
+          if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            echo "Base SHA ${BASE_SHA} is unavailable; skipping zizmor."
+            exit 0
+          fi
+
+          mapfile -t workflow_files < <(
+            git diff --name-only "${BASE_SHA}" HEAD -- '.github/workflows/*.yml' '.github/workflows/*.yaml'
+          )
+          if [ "${#workflow_files[@]}" -eq 0 ]; then
+            echo "No workflow changes detected; skipping zizmor."
+            exit 0
+          fi
+
+          printf 'Auditing workflow files:\n%s\n' "${workflow_files[@]}"
+          pre-commit run --config "${PRE_COMMIT_CONFIG_PATH:-.pre-commit-config.yaml}" zizmor --files "${workflow_files[@]}"
+
+      - name: Audit production dependencies
+        run: pre-commit run --config "${PRE_COMMIT_CONFIG_PATH:-.pre-commit-config.yaml}" --all-files pnpm-audit-prod
 
   # Build dist once for Node-relevant changes and share it with downstream jobs.
+  # Keep this overlapping with the fast correctness lanes so green PRs get heavy
+  # test/build feedback sooner instead of waiting behind a full `check` pass.
   build-artifacts:
-    needs: [docs-scope, changed-scope]
-    if: github.event_name == 'push' && needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
+    needs: [preflight]
+    if: needs.preflight.outputs.run_build_artifacts == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           submodules: false
 
       - name: Ensure secrets base commit (PR fast path)
@@ -149,6 +259,9 @@ jobs:
       - name: Build dist
         run: pnpm build
 
+      - name: Build Control UI
+        run: pnpm ui:build
+
       - name: Upload dist artifact
         uses: actions/upload-artifact@v7
         with:
@@ -156,15 +269,28 @@ jobs:
           path: dist/
           retention-days: 1
 
-  # Validate npm pack contents after build (only on push to main, not PRs).
-  release-check:
-    needs: [docs-scope, build-artifacts]
-    if: github.event_name == 'push' && needs.docs-scope.outputs.docs_only != 'true'
+      - name: Upload A2UI bundle artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: canvas-a2ui-bundle
+          path: src/canvas-host/a2ui/
+          include-hidden-files: true
+          retention-days: 1
+
+  checks-fast:
+    name: ${{ matrix.check_name }}
+    needs: [preflight]
+    if: needs.preflight.outputs.run_checks_fast == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.preflight.outputs.checks_fast_matrix) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           submodules: false
 
       - name: Setup Node environment
@@ -173,69 +299,61 @@ jobs:
           install-bun: "false"
           use-sticky-disk: "false"
 
-      - name: Download dist artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: dist-build
-          path: dist/
-
-      - name: Check release contents
-        run: pnpm release:check
+      - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
+        env:
+          TASK: ${{ matrix.task }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$TASK" in
+            extensions)
+              pnpm test:extensions
+              ;;
+            contracts|contracts-protocol)
+              pnpm build
+              pnpm test:contracts
+              pnpm protocol:check
+              ;;
+            *)
+              echo "Unsupported checks-fast task: $TASK" >&2
+              exit 1
+              ;;
+          esac
 
   checks:
-    needs: [docs-scope, changed-scope]
-    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
+    name: ${{ matrix.check_name }}
+    needs: [preflight, build-artifacts]
+    if: always() && needs.preflight.outputs.run_checks == 'true' && needs.build-artifacts.result == 'success'
     runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 20
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - runtime: node
-            task: test
-            shard_index: 1
-            shard_count: 2
-            command: pnpm canvas:a2ui:bundle && pnpm test
-          - runtime: node
-            task: test
-            shard_index: 2
-            shard_count: 2
-            command: pnpm canvas:a2ui:bundle && pnpm test
-          - runtime: node
-            task: extensions
-            command: pnpm test:extensions
-          - runtime: node
-            task: channels
-            command: pnpm test:channels
-          - runtime: node
-            task: contracts
-            command: pnpm test:contracts
-          - runtime: node
-            task: protocol
-            command: pnpm protocol:check
-          - runtime: bun
-            task: test
-            command: pnpm canvas:a2ui:bundle && bunx vitest run --config vitest.unit.config.ts
+      matrix: ${{ fromJson(needs.preflight.outputs.checks_matrix) }}
     steps:
-      - name: Skip bun lane on pull requests
-        if: github.event_name == 'pull_request' && matrix.runtime == 'bun'
-        run: echo "Skipping Bun compatibility lane on pull requests."
+      - name: Skip compatibility lanes on pull requests
+        if: github.event_name == 'pull_request' && matrix.task == 'compat-node22'
+        run: echo "Skipping push-only lane on pull requests."
 
       - name: Checkout
-        if: github.event_name != 'pull_request' || matrix.runtime != 'bun'
+        if: github.event_name != 'pull_request' || matrix.task != 'compat-node22'
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           submodules: false
 
       - name: Setup Node environment
-        if: matrix.runtime != 'bun' || github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' || matrix.task != 'compat-node22'
         uses: ./.github/actions/setup-node-env
         with:
-          install-bun: "${{ matrix.runtime == 'bun' }}"
+          node-version: "${{ matrix.node_version || '24.x' }}"
+          cache-key-suffix: "${{ matrix.cache_key_suffix || 'node24' }}"
+          install-bun: "false"
           use-sticky-disk: "false"
 
       - name: Configure Node test resources
-        if: (github.event_name != 'pull_request' || matrix.runtime != 'bun') && matrix.task == 'test' && matrix.runtime == 'node'
+        if: (github.event_name != 'pull_request' || matrix.task != 'compat-node22') && matrix.runtime == 'node' && (matrix.task == 'test' || matrix.task == 'channels' || matrix.task == 'compat-node22')
         env:
+          TASK: ${{ matrix.task }}
           SHARD_COUNT: ${{ matrix.shard_count || '' }}
           SHARD_INDEX: ${{ matrix.shard_index || '' }}
         run: |
@@ -243,27 +361,70 @@ jobs:
           # Default heap limits have been too low on Linux CI (V8 OOM near 4GB).
           echo "OPENCLAW_TEST_WORKERS=2" >> "$GITHUB_ENV"
           echo "OPENCLAW_TEST_MAX_OLD_SPACE_SIZE_MB=6144" >> "$GITHUB_ENV"
+          if [ "$TASK" = "channels" ]; then
+            echo "OPENCLAW_TEST_WORKERS=1" >> "$GITHUB_ENV"
+            echo "OPENCLAW_TEST_ISOLATE=1" >> "$GITHUB_ENV"
+          fi
           if [ -n "$SHARD_COUNT" ] && [ -n "$SHARD_INDEX" ]; then
             echo "OPENCLAW_TEST_SHARDS=$SHARD_COUNT" >> "$GITHUB_ENV"
             echo "OPENCLAW_TEST_SHARD_INDEX=$SHARD_INDEX" >> "$GITHUB_ENV"
           fi
 
+      - name: Download dist artifact
+        if: matrix.task == 'test'
+        uses: actions/download-artifact@v8
+        with:
+          name: dist-build
+          path: dist/
+
+      - name: Download A2UI bundle artifact
+        if: matrix.task == 'test' || matrix.task == 'channels'
+        uses: actions/download-artifact@v8
+        with:
+          name: canvas-a2ui-bundle
+          path: src/canvas-host/a2ui/
+
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
-        if: matrix.runtime != 'bun' || github.event_name != 'pull_request'
-        run: ${{ matrix.command }}
+        if: github.event_name != 'pull_request' || matrix.task != 'compat-node22'
+        env:
+          TASK: ${{ matrix.task }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$TASK" in
+            test)
+              pnpm test
+              ;;
+            channels)
+              pnpm test:channels
+              ;;
+            compat-node22)
+              pnpm build
+              pnpm ui:build
+              node openclaw.mjs --help
+              node openclaw.mjs status --json --timeout 1
+              pnpm test:build:singleton
+              ;;
+            *)
+              echo "Unsupported checks task: $TASK" >&2
+              exit 1
+              ;;
+          esac
 
   extension-fast:
-    name: "extension-fast (${{ matrix.extension }})"
-    needs: [docs-scope, changed-scope, changed-extensions]
-    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true' && needs.changed-extensions.outputs.has_changed_extensions == 'true'
+    name: "extension-fast"
+    needs: [preflight]
+    if: needs.preflight.outputs.run_extension_fast == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 20
     strategy:
       fail-fast: false
-      matrix: ${{ fromJson(needs.changed-extensions.outputs.changed_extensions_matrix) }}
+      matrix: ${{ fromJson(needs.preflight.outputs.extension_fast_matrix) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           submodules: false
 
       - name: Setup Node environment
@@ -273,18 +434,22 @@ jobs:
           use-sticky-disk: "false"
 
       - name: Run changed extension tests
-        run: pnpm test:extension ${{ matrix.extension }}
+        env:
+          OPENCLAW_CHANGED_EXTENSION: ${{ matrix.extension }}
+        run: pnpm test:extension "$OPENCLAW_CHANGED_EXTENSION"
 
   # Types, lint, and format check.
   check:
     name: "check"
-    needs: [docs-scope, changed-scope]
-    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
+    needs: [preflight]
+    if: always() && needs.preflight.outputs.run_check == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           submodules: false
 
       - name: Setup Node environment
@@ -299,18 +464,17 @@ jobs:
       - name: Strict TS build smoke
         run: pnpm build:strict-smoke
 
-      - name: Enforce safe external URL opening policy
-        run: pnpm lint:ui:no-raw-window-open
-
-  startup-memory:
-    name: "startup-memory"
-    needs: [docs-scope, changed-scope]
-    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
+  check-additional:
+    name: "check-additional"
+    needs: [preflight]
+    if: always() && needs.preflight.outputs.run_check_additional == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           submodules: false
 
       - name: Setup Node environment
@@ -319,7 +483,170 @@ jobs:
           install-bun: "false"
           use-sticky-disk: "false"
 
+      - name: Run plugin extension boundary guard
+        id: plugin_extension_boundary
+        continue-on-error: true
+        run: pnpm run lint:plugins:no-extension-imports
+
+      - name: Run no-random-messaging guard
+        id: no_random_messaging
+        continue-on-error: true
+        run: pnpm run lint:tmp:no-random-messaging
+
+      - name: Run channel-agnostic boundary guard
+        id: channel_agnostic_boundaries
+        continue-on-error: true
+        run: pnpm run lint:tmp:channel-agnostic-boundaries
+
+      - name: Run no-raw-channel-fetch guard
+        id: no_raw_channel_fetch
+        continue-on-error: true
+        run: pnpm run lint:tmp:no-raw-channel-fetch
+
+      - name: Run ingress owner guard
+        id: ingress_owner
+        continue-on-error: true
+        run: pnpm run lint:agent:ingress-owner
+
+      - name: Run no-register-http-handler guard
+        id: no_register_http_handler
+        continue-on-error: true
+        run: pnpm run lint:plugins:no-register-http-handler
+
+      - name: Run no-monolithic plugin-sdk entry import guard
+        id: no_monolithic_plugin_sdk_entry_imports
+        continue-on-error: true
+        run: pnpm run lint:plugins:no-monolithic-plugin-sdk-entry-imports
+
+      - name: Run no-extension-src-imports guard
+        id: no_extension_src_imports
+        continue-on-error: true
+        run: pnpm run lint:plugins:no-extension-src-imports
+
+      - name: Run no-extension-test-core-imports guard
+        id: no_extension_test_core_imports
+        continue-on-error: true
+        run: pnpm run lint:plugins:no-extension-test-core-imports
+
+      - name: Run plugin-sdk subpaths exported guard
+        id: plugin_sdk_subpaths_exported
+        continue-on-error: true
+        run: pnpm run lint:plugins:plugin-sdk-subpaths-exported
+
+      - name: Run web search provider boundary guard
+        id: web_search_provider_boundary
+        continue-on-error: true
+        run: pnpm run lint:web-search-provider-boundaries
+
+      - name: Run extension src boundary guard
+        id: extension_src_outside_plugin_sdk_boundary
+        continue-on-error: true
+        run: pnpm run lint:extensions:no-src-outside-plugin-sdk
+
+      - name: Run extension plugin-sdk-internal guard
+        id: extension_plugin_sdk_internal_boundary
+        continue-on-error: true
+        run: pnpm run lint:extensions:no-plugin-sdk-internal
+
+      - name: Run extension relative-outside-package guard
+        id: extension_relative_outside_package_boundary
+        continue-on-error: true
+        run: pnpm run lint:extensions:no-relative-outside-package
+
+      - name: Enforce safe external URL opening policy
+        id: no_raw_window_open
+        continue-on-error: true
+        run: pnpm lint:ui:no-raw-window-open
+
+      - name: Run gateway watch regression harness
+        id: gateway_watch_regression
+        continue-on-error: true
+        run: pnpm test:gateway:watch-regression
+
+      - name: Upload gateway watch regression artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: gateway-watch-regression
+          path: .local/gateway-watch-regression/
+          retention-days: 7
+
+      - name: Fail if any additional check failed
+        if: always()
+        env:
+          PLUGIN_EXTENSION_BOUNDARY_OUTCOME: ${{ steps.plugin_extension_boundary.outcome }}
+          NO_RANDOM_MESSAGING_OUTCOME: ${{ steps.no_random_messaging.outcome }}
+          CHANNEL_AGNOSTIC_BOUNDARIES_OUTCOME: ${{ steps.channel_agnostic_boundaries.outcome }}
+          NO_RAW_CHANNEL_FETCH_OUTCOME: ${{ steps.no_raw_channel_fetch.outcome }}
+          INGRESS_OWNER_OUTCOME: ${{ steps.ingress_owner.outcome }}
+          NO_REGISTER_HTTP_HANDLER_OUTCOME: ${{ steps.no_register_http_handler.outcome }}
+          NO_MONOLITHIC_PLUGIN_SDK_ENTRY_IMPORTS_OUTCOME: ${{ steps.no_monolithic_plugin_sdk_entry_imports.outcome }}
+          NO_EXTENSION_SRC_IMPORTS_OUTCOME: ${{ steps.no_extension_src_imports.outcome }}
+          NO_EXTENSION_TEST_CORE_IMPORTS_OUTCOME: ${{ steps.no_extension_test_core_imports.outcome }}
+          PLUGIN_SDK_SUBPATHS_EXPORTED_OUTCOME: ${{ steps.plugin_sdk_subpaths_exported.outcome }}
+          WEB_SEARCH_PROVIDER_BOUNDARY_OUTCOME: ${{ steps.web_search_provider_boundary.outcome }}
+          EXTENSION_SRC_OUTSIDE_PLUGIN_SDK_BOUNDARY_OUTCOME: ${{ steps.extension_src_outside_plugin_sdk_boundary.outcome }}
+          EXTENSION_PLUGIN_SDK_INTERNAL_BOUNDARY_OUTCOME: ${{ steps.extension_plugin_sdk_internal_boundary.outcome }}
+          EXTENSION_RELATIVE_OUTSIDE_PACKAGE_BOUNDARY_OUTCOME: ${{ steps.extension_relative_outside_package_boundary.outcome }}
+          NO_RAW_WINDOW_OPEN_OUTCOME: ${{ steps.no_raw_window_open.outcome }}
+          GATEWAY_WATCH_REGRESSION_OUTCOME: ${{ steps.gateway_watch_regression.outcome }}
+        run: |
+          failures=0
+          for result in \
+            "plugin-extension-boundary|$PLUGIN_EXTENSION_BOUNDARY_OUTCOME" \
+            "lint:tmp:no-random-messaging|$NO_RANDOM_MESSAGING_OUTCOME" \
+            "lint:tmp:channel-agnostic-boundaries|$CHANNEL_AGNOSTIC_BOUNDARIES_OUTCOME" \
+            "lint:tmp:no-raw-channel-fetch|$NO_RAW_CHANNEL_FETCH_OUTCOME" \
+            "lint:agent:ingress-owner|$INGRESS_OWNER_OUTCOME" \
+            "lint:plugins:no-register-http-handler|$NO_REGISTER_HTTP_HANDLER_OUTCOME" \
+            "lint:plugins:no-monolithic-plugin-sdk-entry-imports|$NO_MONOLITHIC_PLUGIN_SDK_ENTRY_IMPORTS_OUTCOME" \
+            "lint:plugins:no-extension-src-imports|$NO_EXTENSION_SRC_IMPORTS_OUTCOME" \
+            "lint:plugins:no-extension-test-core-imports|$NO_EXTENSION_TEST_CORE_IMPORTS_OUTCOME" \
+            "lint:plugins:plugin-sdk-subpaths-exported|$PLUGIN_SDK_SUBPATHS_EXPORTED_OUTCOME" \
+            "web-search-provider-boundary|$WEB_SEARCH_PROVIDER_BOUNDARY_OUTCOME" \
+            "extension-src-outside-plugin-sdk-boundary|$EXTENSION_SRC_OUTSIDE_PLUGIN_SDK_BOUNDARY_OUTCOME" \
+            "extension-plugin-sdk-internal-boundary|$EXTENSION_PLUGIN_SDK_INTERNAL_BOUNDARY_OUTCOME" \
+            "extension-relative-outside-package-boundary|$EXTENSION_RELATIVE_OUTSIDE_PACKAGE_BOUNDARY_OUTCOME" \
+            "lint:ui:no-raw-window-open|$NO_RAW_WINDOW_OPEN_OUTCOME" \
+            "gateway-watch-regression|$GATEWAY_WATCH_REGRESSION_OUTCOME"; do
+            name="${result%%|*}"
+            outcome="${result#*|}"
+            if [ "$outcome" != "success" ]; then
+              echo "::error title=${name} failed::${name} outcome: ${outcome}"
+              failures=1
+            fi
+          done
+
+          exit "$failures"
+
+  build-smoke:
+    name: "build-smoke"
+    needs: [preflight, build-artifacts]
+    if: always() && needs.preflight.outputs.run_build_smoke == 'true' && (github.event_name != 'push' || needs.build-artifacts.result == 'success')
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          use-sticky-disk: "false"
+
+      - name: Download dist artifact
+        if: github.event_name == 'push'
+        uses: actions/download-artifact@v8
+        with:
+          name: dist-build
+          path: dist/
+
       - name: Build dist
+        if: github.event_name != 'push'
         run: pnpm build
 
       - name: Smoke test CLI launcher help
@@ -328,18 +655,23 @@ jobs:
       - name: Smoke test CLI launcher status json
         run: node openclaw.mjs status --json --timeout 1
 
+      - name: Smoke test built bundled plugin singleton
+        run: pnpm test:build:singleton
+
       - name: Check CLI startup memory
         run: pnpm test:startup:memory
 
   # Validate docs (format, lint, broken links) only when docs files changed.
   check-docs:
-    needs: [docs-scope]
-    if: needs.docs-scope.outputs.docs_changed == 'true'
+    needs: [preflight]
+    if: needs.preflight.outputs.run_check_docs == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           submodules: false
 
       - name: Setup Node environment
@@ -351,48 +683,16 @@ jobs:
       - name: Check docs
         run: pnpm check:docs
 
-  compat-node22:
-    name: "compat-node22"
-    needs: [docs-scope, changed-scope]
-    if: github.event_name == 'push' && needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_node == 'true'
-    runs-on: blacksmith-16vcpu-ubuntu-2404
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          submodules: false
-
-      - name: Setup Node 22 compatibility environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          node-version: "22.x"
-          cache-key-suffix: "node22"
-          install-bun: "false"
-          use-sticky-disk: "false"
-
-      - name: Configure Node 22 test resources
-        run: |
-          # Keep the compatibility lane aligned with the default Node test lane.
-          echo "OPENCLAW_TEST_WORKERS=2" >> "$GITHUB_ENV"
-          echo "OPENCLAW_TEST_MAX_OLD_SPACE_SIZE_MB=6144" >> "$GITHUB_ENV"
-
-      - name: Build under Node 22
-        run: pnpm build
-
-      - name: Run tests under Node 22
-        run: pnpm test
-
-      - name: Verify npm pack under Node 22
-        run: pnpm release:check
-
   skills-python:
-    needs: [docs-scope, changed-scope]
-    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_skills_python == 'true'
+    needs: [preflight]
+    if: needs.preflight.outputs.run_skills_python_job == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           submodules: false
 
       - name: Setup Python
@@ -411,87 +711,12 @@ jobs:
       - name: Test skill Python scripts
         run: python -m pytest -q skills
 
-  secrets:
-    runs-on: blacksmith-16vcpu-ubuntu-2404
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          submodules: false
-
-      - name: Ensure secrets base commit
-        uses: ./.github/actions/ensure-base-commit
-        with:
-          base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
-          fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
-
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          install-bun: "false"
-          use-sticky-disk: "false"
-          install-deps: "false"
-
-      - name: Setup Python
-        id: setup-python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-          cache: "pip"
-          cache-dependency-path: |
-            pyproject.toml
-            .pre-commit-config.yaml
-            .github/workflows/ci.yml
-
-      - name: Restore pre-commit cache
-        uses: actions/cache@v5
-        with:
-          path: ~/.cache/pre-commit
-          key: pre-commit-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('.pre-commit-config.yaml') }}
-
-      - name: Install pre-commit
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install pre-commit
-
-      - name: Detect committed private keys
-        run: pre-commit run --all-files detect-private-key
-
-      - name: Audit changed GitHub workflows with zizmor
-        run: |
-          set -euo pipefail
-
-          BASE="$(
-            python - <<'PY'
-            import json
-            import os
-
-            with open(os.environ["GITHUB_EVENT_PATH"], "r", encoding="utf-8") as fh:
-                event = json.load(fh)
-
-            if os.environ["GITHUB_EVENT_NAME"] == "push":
-                print(event["before"])
-            else:
-                print(event["pull_request"]["base"]["sha"])
-            PY
-          )"
-
-          mapfile -t workflow_files < <(git diff --name-only "$BASE" HEAD -- '.github/workflows/*.yml' '.github/workflows/*.yaml')
-          if [ "${#workflow_files[@]}" -eq 0 ]; then
-            echo "No workflow changes detected; skipping zizmor."
-            exit 0
-          fi
-
-          pre-commit run zizmor --files "${workflow_files[@]}"
-
-      - name: Audit production dependencies
-        run: pre-commit run --all-files pnpm-audit-prod
-
   checks-windows:
-    needs: [docs-scope, changed-scope]
-    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_windows == 'true'
+    name: ${{ matrix.check_name }}
+    needs: [preflight, build-artifacts]
+    if: always() && needs.preflight.outputs.run_checks_windows == 'true' && needs.build-artifacts.result == 'success'
     runs-on: blacksmith-32vcpu-windows-2025
-    timeout-minutes: 45
+    timeout-minutes: 20
     env:
       NODE_OPTIONS: --max-old-space-size=6144
       # Keep total concurrency predictable on the 32 vCPU runner.
@@ -502,42 +727,12 @@ jobs:
         shell: bash
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - runtime: node
-            task: test
-            shard_index: 1
-            shard_count: 6
-            command: pnpm test
-          - runtime: node
-            task: test
-            shard_index: 2
-            shard_count: 6
-            command: pnpm test
-          - runtime: node
-            task: test
-            shard_index: 3
-            shard_count: 6
-            command: pnpm test
-          - runtime: node
-            task: test
-            shard_index: 4
-            shard_count: 6
-            command: pnpm test
-          - runtime: node
-            task: test
-            shard_index: 5
-            shard_count: 6
-            command: pnpm test
-          - runtime: node
-            task: test
-            shard_index: 6
-            shard_count: 6
-            command: pnpm test
+      matrix: ${{ fromJson(needs.preflight.outputs.checks_windows_matrix) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           submodules: false
 
       - name: Try to exclude workspace from Windows Defender (best-effort)
@@ -601,29 +796,57 @@ jobs:
 
       - name: Configure test shard (Windows)
         if: matrix.task == 'test'
+        env:
+          SHARD_COUNT: ${{ matrix.shard_count }}
+          SHARD_INDEX: ${{ matrix.shard_index }}
         run: |
-          echo "OPENCLAW_TEST_SHARDS=${{ matrix.shard_count }}" >> "$GITHUB_ENV"
-          echo "OPENCLAW_TEST_SHARD_INDEX=${{ matrix.shard_index }}" >> "$GITHUB_ENV"
+          echo "OPENCLAW_TEST_SHARDS=$SHARD_COUNT" >> "$GITHUB_ENV"
+          echo "OPENCLAW_TEST_SHARD_INDEX=$SHARD_INDEX" >> "$GITHUB_ENV"
 
-      - name: Build A2UI bundle (Windows)
+      - name: Download dist artifact
         if: matrix.task == 'test'
-        run: pnpm canvas:a2ui:bundle
+        uses: actions/download-artifact@v8
+        with:
+          name: dist-build
+          path: dist/
+
+      - name: Download A2UI bundle artifact
+        if: matrix.task == 'test'
+        uses: actions/download-artifact@v8
+        with:
+          name: canvas-a2ui-bundle
+          path: src/canvas-host/a2ui/
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
-        run: ${{ matrix.command }}
+        env:
+          TASK: ${{ matrix.task }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$TASK" in
+            test)
+              pnpm test
+              ;;
+            *)
+              echo "Unsupported Windows checks task: $TASK" >&2
+              exit 1
+              ;;
+          esac
 
-  # Consolidated macOS job: runs TS tests + Swift lint/build/test sequentially
-  # on a single runner. GitHub limits macOS concurrent jobs to 5 per org;
-  # running 4 separate jobs per PR (as before) starved the queue. One job
-  # per PR allows 5 PRs to run macOS checks simultaneously.
-  macos:
-    needs: [docs-scope, changed-scope, check]
-    if: github.event_name == 'pull_request' && needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_macos == 'true'
+  macos-node:
+    name: ${{ matrix.check_name }}
+    needs: [preflight, build-artifacts]
+    if: always() && needs.preflight.outputs.run_macos_node == 'true' && needs.build-artifacts.result == 'success'
     runs-on: macos-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.preflight.outputs.macos_node_matrix) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           submodules: false
 
       - name: Setup Node environment
@@ -631,13 +854,56 @@ jobs:
         with:
           install-bun: "false"
 
-      # --- Run all checks sequentially (fast gates first) ---
+      - name: Download dist artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: dist-build
+          path: dist/
+
+      - name: Download A2UI bundle artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: canvas-a2ui-bundle
+          path: src/canvas-host/a2ui/
+
+      - name: Configure test shard (macOS)
+        env:
+          SHARD_COUNT: ${{ matrix.shard_count }}
+          SHARD_INDEX: ${{ matrix.shard_index }}
+        run: |
+          echo "OPENCLAW_TEST_SHARDS=$SHARD_COUNT" >> "$GITHUB_ENV"
+          echo "OPENCLAW_TEST_SHARD_INDEX=$SHARD_INDEX" >> "$GITHUB_ENV"
+
       - name: TS tests (macOS)
         env:
           NODE_OPTIONS: --max-old-space-size=4096
-        run: pnpm test
+          TASK: ${{ matrix.task }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$TASK" in
+            test)
+              pnpm test
+              ;;
+            *)
+              echo "Unsupported macOS node task: $TASK" >&2
+              exit 1
+              ;;
+          esac
 
-      # --- Xcode/Swift setup ---
+  macos-swift:
+    name: "macos-swift"
+    needs: [preflight]
+    if: needs.preflight.outputs.run_macos_swift == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          submodules: false
+
       - name: Select Xcode 26.1
         run: |
           sudo xcode-select -s /Applications/Xcode_26.1.app
@@ -645,6 +911,14 @@ jobs:
 
       - name: Install XcodeGen / SwiftLint / SwiftFormat
         run: brew install xcodegen swiftlint swiftformat
+
+      - name: Cache SwiftPM
+        uses: actions/cache@v5
+        with:
+          path: ~/Library/Caches/org.swift.swiftpm
+          key: ${{ runner.os }}-swiftpm-${{ hashFiles('apps/macos/Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-swiftpm-
 
       - name: Show toolchain
         run: |
@@ -656,14 +930,6 @@ jobs:
         run: |
           swiftlint --config .swiftlint.yml
           swiftformat --lint apps/macos/Sources --config .swiftformat
-
-      - name: Cache SwiftPM
-        uses: actions/cache@v5
-        with:
-          path: ~/Library/Caches/org.swift.swiftpm
-          key: ${{ runner.os }}-swiftpm-${{ hashFiles('apps/macos/Package.resolved') }}
-          restore-keys: |
-            ${{ runner.os }}-swiftpm-
 
       - name: Swift build (release)
         run: |
@@ -689,182 +955,20 @@ jobs:
           done
           exit 1
 
-  ios:
-    if: false # ignore iOS in CI for now
-    runs-on: macos-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          submodules: false
-
-      - name: Select Xcode 26.1
-        run: |
-          sudo xcode-select -s /Applications/Xcode_26.1.app
-          xcodebuild -version
-
-      - name: Install XcodeGen
-        run: brew install xcodegen
-
-      - name: Install SwiftLint / SwiftFormat
-        run: brew install swiftlint swiftformat
-
-      - name: Show toolchain
-        run: |
-          sw_vers
-          xcodebuild -version
-          swift --version
-
-      - name: Generate iOS project
-        run: |
-          cd apps/ios
-          xcodegen generate
-
-      - name: iOS tests
-        run: |
-          set -euo pipefail
-          RESULT_BUNDLE_PATH="$RUNNER_TEMP/Clawdis-iOS.xcresult"
-          DEST_ID="$(
-            python3 - <<'PY'
-          import json
-          import subprocess
-          import sys
-          import uuid
-
-          def sh(args: list[str]) -> str:
-            return subprocess.check_output(args, text=True).strip()
-
-          # Prefer an already-created iPhone simulator if it exists.
-          devices = json.loads(sh(["xcrun", "simctl", "list", "devices", "-j"]))
-          candidates: list[tuple[str, str]] = []
-          for runtime, devs in (devices.get("devices") or {}).items():
-            for dev in devs or []:
-              if not dev.get("isAvailable"):
-                continue
-              name = str(dev.get("name") or "")
-              udid = str(dev.get("udid") or "")
-              if not udid or not name.startswith("iPhone"):
-                continue
-              candidates.append((name, udid))
-
-          candidates.sort(key=lambda it: (0 if "iPhone 16" in it[0] else 1, it[0]))
-          if candidates:
-            print(candidates[0][1])
-            sys.exit(0)
-
-          # Otherwise, create one from the newest available iOS runtime.
-          runtimes = json.loads(sh(["xcrun", "simctl", "list", "runtimes", "-j"])).get("runtimes") or []
-          ios = [rt for rt in runtimes if rt.get("platform") == "iOS" and rt.get("isAvailable")]
-          if not ios:
-            print("No available iOS runtimes found.", file=sys.stderr)
-            sys.exit(1)
-
-          def version_key(rt: dict) -> tuple[int, ...]:
-            parts: list[int] = []
-            for p in str(rt.get("version") or "0").split("."):
-              try:
-                parts.append(int(p))
-              except ValueError:
-                parts.append(0)
-            return tuple(parts)
-
-          ios.sort(key=version_key, reverse=True)
-          runtime = ios[0]
-          runtime_id = str(runtime.get("identifier") or "")
-          if not runtime_id:
-            print("Missing iOS runtime identifier.", file=sys.stderr)
-            sys.exit(1)
-
-          supported = runtime.get("supportedDeviceTypes") or []
-          iphones = [dt for dt in supported if dt.get("productFamily") == "iPhone"]
-          if not iphones:
-            print("No iPhone device types for iOS runtime.", file=sys.stderr)
-            sys.exit(1)
-
-          iphones.sort(
-            key=lambda dt: (
-              0 if "iPhone 16" in str(dt.get("name") or "") else 1,
-              str(dt.get("name") or ""),
-            )
-          )
-          device_type_id = str(iphones[0].get("identifier") or "")
-          if not device_type_id:
-            print("Missing iPhone device type identifier.", file=sys.stderr)
-            sys.exit(1)
-
-          sim_name = f"CI iPhone {uuid.uuid4().hex[:8]}"
-          udid = sh(["xcrun", "simctl", "create", sim_name, device_type_id, runtime_id])
-          if not udid:
-            print("Failed to create iPhone simulator.", file=sys.stderr)
-            sys.exit(1)
-          print(udid)
-          PY
-          )"
-          echo "Using iOS Simulator id: $DEST_ID"
-          xcodebuild test \
-            -project apps/ios/Clawdis.xcodeproj \
-            -scheme Clawdis \
-            -destination "platform=iOS Simulator,id=$DEST_ID" \
-            -resultBundlePath "$RESULT_BUNDLE_PATH" \
-            -enableCodeCoverage YES
-
-      - name: iOS coverage summary
-        run: |
-          set -euo pipefail
-          RESULT_BUNDLE_PATH="$RUNNER_TEMP/Clawdis-iOS.xcresult"
-          xcrun xccov view --report --only-targets "$RESULT_BUNDLE_PATH"
-
-      - name: iOS coverage gate (43%)
-        run: |
-          set -euo pipefail
-          RESULT_BUNDLE_PATH="$RUNNER_TEMP/Clawdis-iOS.xcresult"
-          RESULT_BUNDLE_PATH="$RESULT_BUNDLE_PATH" python3 - <<'PY'
-          import json
-          import os
-          import subprocess
-          import sys
-
-          target_name = "Clawdis.app"
-          minimum = 0.43
-
-          report = json.loads(
-            subprocess.check_output(
-              ["xcrun", "xccov", "view", "--report", "--json", os.environ["RESULT_BUNDLE_PATH"]],
-              text=True,
-            )
-          )
-
-          target_coverage = None
-          for target in report.get("targets", []):
-            if target.get("name") == target_name:
-              target_coverage = float(target["lineCoverage"])
-              break
-
-          if target_coverage is None:
-            print(f"Could not find coverage for target: {target_name}")
-            sys.exit(1)
-
-          print(f"{target_name} line coverage: {target_coverage * 100:.2f}% (min {minimum * 100:.2f}%)")
-          if target_coverage + 1e-12 < minimum:
-            sys.exit(1)
-          PY
-
   android:
-    needs: [docs-scope, changed-scope]
-    if: needs.docs-scope.outputs.docs_only != 'true' && needs.changed-scope.outputs.run_android == 'true'
+    name: ${{ matrix.check_name }}
+    needs: [preflight]
+    if: needs.preflight.outputs.run_android_job == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 20
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - task: test
-            command: ./gradlew --no-daemon :app:testDebugUnitTest
-          - task: build
-            command: ./gradlew --no-daemon :app:assembleDebug
+      matrix: ${{ fromJson(needs.preflight.outputs.android_matrix) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           submodules: false
 
       - name: Setup Java
@@ -894,7 +998,7 @@ jobs:
           echo "$ANDROID_SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v5
+        uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5
         with:
           gradle-version: 8.11.1
 
@@ -908,4 +1012,26 @@ jobs:
 
       - name: Run Android ${{ matrix.task }}
         working-directory: apps/android
-        run: ${{ matrix.command }}
+        env:
+          TASK: ${{ matrix.task }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$TASK" in
+            test-play)
+              ./gradlew --no-daemon :app:testPlayDebugUnitTest
+              ;;
+            test-third-party)
+              ./gradlew --no-daemon :app:testThirdPartyDebugUnitTest
+              ;;
+            build-play)
+              ./gradlew --no-daemon :app:assemblePlayDebug
+              ;;
+            build-third-party)
+              ./gradlew --no-daemon :app:assembleThirdPartyDebug
+              ;;
+            *)
+              echo "Unsupported Android task: $TASK" >&2
+              exit 1
+              ;;
+          esac

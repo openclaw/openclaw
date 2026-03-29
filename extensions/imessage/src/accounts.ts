@@ -1,10 +1,10 @@
-import type { IMessageAccountConfig } from "openclaw/plugin-sdk/imessage";
 import {
-  type OpenClawConfig,
   createAccountListHelpers,
   normalizeAccountId,
-  resolveAccountEntry,
-} from "../../../src/plugin-sdk-internal/accounts.js";
+  resolveMergedAccountConfig,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/account-resolution";
+import type { IMessageAccountConfig } from "../runtime-api.js";
 
 export type ResolvedIMessageAccount = {
   accountId: string;
@@ -18,18 +18,14 @@ const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("im
 export const listIMessageAccountIds = listAccountIds;
 export const resolveDefaultIMessageAccountId = resolveDefaultAccountId;
 
-function resolveAccountConfig(
-  cfg: OpenClawConfig,
-  accountId: string,
-): IMessageAccountConfig | undefined {
-  return resolveAccountEntry(cfg.channels?.imessage?.accounts, accountId);
-}
-
 function mergeIMessageAccountConfig(cfg: OpenClawConfig, accountId: string): IMessageAccountConfig {
-  const { accounts: _ignored, ...base } = (cfg.channels?.imessage ??
-    {}) as IMessageAccountConfig & { accounts?: unknown };
-  const account = resolveAccountConfig(cfg, accountId) ?? {};
-  return { ...base, ...account };
+  return resolveMergedAccountConfig<IMessageAccountConfig>({
+    channelConfig: cfg.channels?.imessage as IMessageAccountConfig | undefined,
+    accounts: cfg.channels?.imessage?.accounts as
+      | Record<string, Partial<IMessageAccountConfig>>
+      | undefined,
+    accountId,
+  });
 }
 
 export function resolveIMessageAccount(params: {

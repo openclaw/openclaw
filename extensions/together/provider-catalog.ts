@@ -1,9 +1,5 @@
-import {
-  buildTogetherModelDefinition,
-  TOGETHER_BASE_URL,
-  TOGETHER_MODEL_CATALOG,
-} from "../../src/agents/together-models.js";
-import type { ModelProviderConfig } from "../../src/config/types.models.js";
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import { buildTogetherModelDefinition, TOGETHER_BASE_URL, TOGETHER_MODEL_CATALOG } from "./api.js";
 
 export function buildTogetherProvider(): ModelProviderConfig {
   return {

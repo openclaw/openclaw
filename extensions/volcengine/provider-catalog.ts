@@ -1,11 +1,11 @@
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   buildDoubaoModelDefinition,
   DOUBAO_BASE_URL,
   DOUBAO_CODING_BASE_URL,
   DOUBAO_CODING_MODEL_CATALOG,
   DOUBAO_MODEL_CATALOG,
-} from "../../src/agents/doubao-models.js";
-import type { ModelProviderConfig } from "../../src/config/types.models.js";
+} from "./api.js";
 
 export function buildDoubaoProvider(): ModelProviderConfig {
   return {

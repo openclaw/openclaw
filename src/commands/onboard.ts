@@ -4,7 +4,12 @@ import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
-import { isDeprecatedAuthChoice, normalizeLegacyOnboardAuthChoice } from "./auth-choice-legacy.js";
+import {
+  formatDeprecatedNonInteractiveAuthChoiceError,
+  isDeprecatedAuthChoice,
+  normalizeLegacyOnboardAuthChoice,
+  resolveDeprecatedAuthChoiceReplacement,
+} from "./auth-choice-legacy.js";
 import { DEFAULT_WORKSPACE, handleReset } from "./onboard-helpers.js";
 import { runInteractiveSetup } from "./onboard-interactive.js";
 import { runNonInteractiveSetup } from "./onboard-non-interactive.js";
@@ -18,22 +23,22 @@ export async function setupWizardCommand(
 ) {
   assertSupportedRuntime(runtime);
   const originalAuthChoice = opts.authChoice;
-  const normalizedAuthChoice = normalizeLegacyOnboardAuthChoice(originalAuthChoice);
-  if (opts.nonInteractive && isDeprecatedAuthChoice(originalAuthChoice)) {
+  const normalizedAuthChoice = normalizeLegacyOnboardAuthChoice(originalAuthChoice, {
+    env: process.env,
+  });
+  if (opts.nonInteractive && isDeprecatedAuthChoice(originalAuthChoice, { env: process.env })) {
     runtime.error(
-      [
-        `Auth choice "${String(originalAuthChoice)}" is deprecated.`,
-        'Use "--auth-choice token" (Anthropic setup-token) or "--auth-choice openai-codex".',
-      ].join("\n"),
+      formatDeprecatedNonInteractiveAuthChoiceError(originalAuthChoice, {
+        env: process.env,
+      })!,
     );
     runtime.exit(1);
     return;
   }
-  if (originalAuthChoice === "claude-cli") {
-    runtime.log('Auth choice "claude-cli" is deprecated; using setup-token flow instead.');
-  }
-  if (originalAuthChoice === "codex-cli") {
-    runtime.log('Auth choice "codex-cli" is deprecated; using OpenAI Codex OAuth instead.');
+  if (isDeprecatedAuthChoice(originalAuthChoice, { env: process.env })) {
+    runtime.log(
+      resolveDeprecatedAuthChoiceReplacement(originalAuthChoice, { env: process.env })!.message,
+    );
   }
   const flow = opts.flow === "manual" ? ("advanced" as const) : opts.flow;
   const normalizedOpts =

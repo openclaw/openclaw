@@ -4,11 +4,27 @@ import {
   __testing,
   abortEmbeddedPiRun,
   clearActiveEmbeddedRun,
+  consumeEmbeddedRunModelSwitch,
   getActiveEmbeddedRunSnapshot,
+  requestEmbeddedRunModelSwitch,
   setActiveEmbeddedRun,
   updateActiveEmbeddedRunSnapshot,
   waitForActiveEmbeddedRuns,
 } from "./runs.js";
+
+type RunHandle = Parameters<typeof setActiveEmbeddedRun>[1];
+
+function createRunHandle(
+  overrides: { isCompacting?: boolean; abort?: () => void } = {},
+): RunHandle {
+  const abort = overrides.abort ?? (() => {});
+  return {
+    queueMessage: async () => {},
+    isStreaming: () => true,
+    isCompacting: () => overrides.isCompacting ?? false,
+    abort,
+  };
+}
 
 describe("pi-embedded runner run registry", () => {
   afterEach(() => {
@@ -20,19 +36,12 @@ describe("pi-embedded runner run registry", () => {
     const abortCompacting = vi.fn();
     const abortNormal = vi.fn();
 
-    setActiveEmbeddedRun("session-compacting", {
-      queueMessage: async () => {},
-      isStreaming: () => true,
-      isCompacting: () => true,
-      abort: abortCompacting,
-    });
+    setActiveEmbeddedRun(
+      "session-compacting",
+      createRunHandle({ isCompacting: true, abort: abortCompacting }),
+    );
 
-    setActiveEmbeddedRun("session-normal", {
-      queueMessage: async () => {},
-      isStreaming: () => true,
-      isCompacting: () => false,
-      abort: abortNormal,
-    });
+    setActiveEmbeddedRun("session-normal", createRunHandle({ abort: abortNormal }));
 
     const aborted = abortEmbeddedPiRun(undefined, { mode: "compacting" });
     expect(aborted).toBe(true);
@@ -44,19 +53,9 @@ describe("pi-embedded runner run registry", () => {
     const abortA = vi.fn();
     const abortB = vi.fn();
 
-    setActiveEmbeddedRun("session-a", {
-      queueMessage: async () => {},
-      isStreaming: () => true,
-      isCompacting: () => true,
-      abort: abortA,
-    });
+    setActiveEmbeddedRun("session-a", createRunHandle({ isCompacting: true, abort: abortA }));
 
-    setActiveEmbeddedRun("session-b", {
-      queueMessage: async () => {},
-      isStreaming: () => true,
-      isCompacting: () => false,
-      abort: abortB,
-    });
+    setActiveEmbeddedRun("session-b", createRunHandle({ abort: abortB }));
 
     const aborted = abortEmbeddedPiRun(undefined, { mode: "all" });
     expect(aborted).toBe(true);
@@ -67,12 +66,7 @@ describe("pi-embedded runner run registry", () => {
   it("waits for active runs to drain", async () => {
     vi.useFakeTimers();
     try {
-      const handle = {
-        queueMessage: async () => {},
-        isStreaming: () => true,
-        isCompacting: () => false,
-        abort: vi.fn(),
-      };
+      const handle = createRunHandle();
       setActiveEmbeddedRun("session-a", handle);
       setTimeout(() => {
         clearActiveEmbeddedRun("session-a", handle);
@@ -92,12 +86,7 @@ describe("pi-embedded runner run registry", () => {
   it("returns drained=false when timeout elapses", async () => {
     vi.useFakeTimers();
     try {
-      setActiveEmbeddedRun("session-a", {
-        queueMessage: async () => {},
-        isStreaming: () => true,
-        isCompacting: () => false,
-        abort: vi.fn(),
-      });
+      setActiveEmbeddedRun("session-a", createRunHandle());
 
       const waitPromise = waitForActiveEmbeddedRuns(1_000, { pollMs: 100 });
       await vi.advanceTimersByTimeAsync(1_000);
@@ -118,12 +107,7 @@ describe("pi-embedded runner run registry", () => {
       import.meta.url,
       "./runs.js?scope=shared-b",
     );
-    const handle = {
-      queueMessage: async () => {},
-      isStreaming: () => true,
-      isCompacting: () => false,
-      abort: vi.fn(),
-    };
+    const handle = createRunHandle();
 
     runsA.__testing.resetActiveEmbeddedRuns();
     runsB.__testing.resetActiveEmbeddedRuns();
@@ -141,12 +125,7 @@ describe("pi-embedded runner run registry", () => {
   });
 
   it("tracks and clears per-session transcript snapshots for active runs", () => {
-    const handle = {
-      queueMessage: async () => {},
-      isStreaming: () => true,
-      isCompacting: () => false,
-      abort: vi.fn(),
-    };
+    const handle = createRunHandle();
 
     setActiveEmbeddedRun("session-snapshot", handle);
     updateActiveEmbeddedRunSnapshot("session-snapshot", {
@@ -162,5 +141,35 @@ describe("pi-embedded runner run registry", () => {
 
     clearActiveEmbeddedRun("session-snapshot", handle);
     expect(getActiveEmbeddedRunSnapshot("session-snapshot")).toBeUndefined();
+  });
+
+  it("stores and consumes pending live model switch requests", () => {
+    expect(
+      requestEmbeddedRunModelSwitch("session-switch", {
+        provider: "openai",
+        model: "gpt-5.4",
+      }),
+    ).toBe(true);
+
+    expect(consumeEmbeddedRunModelSwitch("session-switch")).toEqual({
+      provider: "openai",
+      model: "gpt-5.4",
+      authProfileId: undefined,
+      authProfileIdSource: undefined,
+    });
+    expect(consumeEmbeddedRunModelSwitch("session-switch")).toBeUndefined();
+  });
+
+  it("drops pending live model switch requests when the run clears", () => {
+    const handle = createRunHandle();
+    setActiveEmbeddedRun("session-clear-switch", handle);
+    requestEmbeddedRunModelSwitch("session-clear-switch", {
+      provider: "openai",
+      model: "gpt-5.4",
+    });
+
+    clearActiveEmbeddedRun("session-clear-switch", handle);
+
+    expect(consumeEmbeddedRunModelSwitch("session-clear-switch")).toBeUndefined();
   });
 });
