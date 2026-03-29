@@ -1406,6 +1406,7 @@ describe("memory index", () => {
 
     const cfg = createCfg({
       storePath: indexFtsOnlyPath,
+      minScore: 0.35,
       hybrid: { enabled: true },
     });
     const result = await getMemorySearchManager({ cfg, agentId: "main" });
@@ -1424,7 +1425,7 @@ describe("memory index", () => {
     expect(status.chunks).toBeGreaterThan(0);
     expect(embedBatchCalls).toBe(0);
 
-    // keyword search should return matching results
+    // keyword search should still return matching results under the default threshold
     const results = await manager.search("Alpha");
     expect(results.length).toBeGreaterThan(0);
     expect(results[0]?.snippet).toMatch(/Alpha/i);
