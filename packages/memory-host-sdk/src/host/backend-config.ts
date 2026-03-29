@@ -11,6 +11,7 @@ import type {
   MemoryQmdMcporterConfig,
   MemoryQmdSearchMode,
 } from "../../../../src/config/types.memory.js";
+import { normalizeAgentId } from "../../../../src/routing/session-key.js";
 import { resolveUserPath } from "../../../../src/utils.js";
 import { splitShellArgs } from "../../../../src/utils/shell-argv.js";
 
@@ -227,6 +228,7 @@ function resolveCustomPaths(
     return [];
   }
   const collections: ResolvedQmdCollection[] = [];
+  const seenRoots = new Set<string>();
   rawPaths.forEach((entry, index) => {
     const trimmedPath = entry?.path?.trim();
     if (!trimmedPath) {
@@ -239,6 +241,11 @@ function resolveCustomPaths(
       return;
     }
     const pattern = entry.pattern?.trim() || "**/*.md";
+    const dedupeKey = `${resolved}\u0000${pattern}`;
+    if (seenRoots.has(dedupeKey)) {
+      return;
+    }
+    seenRoots.add(dedupeKey);
     const baseName = scopeCollectionBase(entry.name?.trim() || `custom-${index + 1}`, agentId);
     const name = ensureUniqueName(baseName, existing);
     collections.push({
@@ -298,19 +305,38 @@ export function resolveMemoryBackendConfig(params: {
   cfg: OpenClawConfig;
   agentId: string;
 }): ResolvedMemoryBackendConfig {
+  const normalizedAgentId = normalizeAgentId(params.agentId);
   const backend = params.cfg.memory?.backend ?? DEFAULT_BACKEND;
   const citations = params.cfg.memory?.citations ?? DEFAULT_CITATIONS;
   if (backend !== "qmd") {
     return { backend: "builtin", citations };
   }
 
-  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
+  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, normalizedAgentId);
   const qmdCfg = params.cfg.memory?.qmd;
   const includeDefaultMemory = qmdCfg?.includeDefaultMemory !== false;
   const nameSet = new Set<string>();
+  const agentEntry = params.cfg.agents?.list?.find(
+    (entry) => normalizeAgentId(entry?.id) === normalizedAgentId,
+  );
+  const mergedExtraPaths = [
+    ...(params.cfg.agents?.defaults?.memorySearch?.extraPaths ?? []),
+    ...(agentEntry?.memorySearch?.extraPaths ?? []),
+  ]
+    .filter((value): value is string => typeof value === "string")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const dedupedExtraPaths = Array.from(new Set(mergedExtraPaths));
+  const searchExtraPaths = dedupedExtraPaths.map(
+    (pathValue): { path: string; pattern?: string; name?: string } => ({ path: pathValue }),
+  );
+
+  // Combine QMD-specific paths with memorySearch extraPaths
+  const allQmdPaths: MemoryQmdIndexPath[] = [...(qmdCfg?.paths ?? []), ...searchExtraPaths];
+
   const collections = [
-    ...resolveDefaultCollections(includeDefaultMemory, workspaceDir, nameSet, params.agentId),
-    ...resolveCustomPaths(qmdCfg?.paths, workspaceDir, nameSet, params.agentId),
+    ...resolveDefaultCollections(includeDefaultMemory, workspaceDir, nameSet, normalizedAgentId),
+    ...resolveCustomPaths(allQmdPaths, workspaceDir, nameSet, normalizedAgentId),
   ];
 
   const rawCommand = qmdCfg?.command?.trim() || "qmd";
