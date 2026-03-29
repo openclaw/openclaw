@@ -160,4 +160,47 @@ describe("media-understanding provider registry", () => {
 
     expect(getMediaUnderstandingProvider("avOnly", registry)).toBeUndefined();
   });
+
+  it("normalizes openai-codex to openai for media-understanding lookup", () => {
+    const pluginRegistry = createEmptyPluginRegistry();
+    pluginRegistry.mediaUnderstandingProviders.push({
+      pluginId: "openai",
+      pluginName: "OpenAI Plugin",
+      source: "test",
+      provider: {
+        id: "openai",
+        capabilities: ["image", "audio"],
+        describeImage: async () => ({ text: "openai image" }),
+      },
+    });
+    setActivePluginRegistry(pluginRegistry);
+
+    const registry = buildMediaUnderstandingRegistry();
+    const provider = getMediaUnderstandingProvider("openai-codex", registry);
+
+    expect(provider).toBeDefined();
+    expect(provider?.id).toBe("openai");
+    expect(provider?.capabilities).toContain("image");
+  });
+
+  it("normalizes github-copilot to openai for media-understanding lookup", () => {
+    const pluginRegistry = createEmptyPluginRegistry();
+    pluginRegistry.mediaUnderstandingProviders.push({
+      pluginId: "openai",
+      pluginName: "OpenAI Plugin",
+      source: "test",
+      provider: {
+        id: "openai",
+        capabilities: ["image", "audio"],
+        describeImage: async () => ({ text: "openai image" }),
+      },
+    });
+    setActivePluginRegistry(pluginRegistry);
+
+    const registry = buildMediaUnderstandingRegistry();
+    const provider = getMediaUnderstandingProvider("github-copilot", registry);
+
+    expect(provider).toBeDefined();
+    expect(provider?.id).toBe("openai")
+  });
 });
