@@ -33,8 +33,9 @@ def group_chain(chain_list: list[str]) -> list[tuple[str, ...]]:
 
 def clean_response_for_user(text: str) -> str:
     """Strip internal STAR markup, <think> blocks, MCP artifacts, and process confidence tags."""
-    # Remove <think>...</think> blocks
+    # Remove <think>...</think> blocks (closed + unclosed fallback)
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    text = re.sub(r"<think>.*$", "", text, flags=re.DOTALL)
     # v14.2: Remove leaked tool-call XML/MD tags that free models emit
     text = re.sub(r"<tool_call>.*?</tool_call>", "", text, flags=re.DOTALL)
     text = re.sub(r"<function=\w+>.*?</function>", "", text, flags=re.DOTALL)

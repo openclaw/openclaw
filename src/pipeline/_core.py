@@ -833,7 +833,8 @@ class PipelineExecutor:
                                         new_response = _raw.strip()
                                     else:
                                         new_response = ""
-                        new_response = re.sub(r"<think>.*?</think>", "", (new_response or ""), flags=re.DOTALL).strip()
+                        new_response = re.sub(r"<think>.*?</think>", "", (new_response or ""), flags=re.DOTALL)
+                        new_response = re.sub(r"<think>.*$", "", new_response, flags=re.DOTALL).strip()
                         if new_response:
                             response += "\n\n[Correction]:\n" + new_response
                             json_match = re.search(r'```json\s*(.*?)\s*```', new_response, re.DOTALL)
