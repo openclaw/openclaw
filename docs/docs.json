@@ -1032,10 +1032,16 @@
                   "concepts/session",
                   "concepts/session-pruning",
                   "concepts/session-tool",
-                  "concepts/memory",
-                  "concepts/memory-builtin",
-                  "concepts/memory-qmd",
-                  "concepts/memory-search",
+                  {
+                    "group": "Memory",
+                    "pages": [
+                      "concepts/memory",
+                      "concepts/memory-builtin",
+                      "concepts/memory-qmd",
+                      "concepts/memory-honcho",
+                      "concepts/memory-search"
+                    ]
+                  },
                   "concepts/compaction"
                 ]
               },

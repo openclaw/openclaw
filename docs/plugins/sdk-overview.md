@@ -237,20 +237,20 @@ AI CLI backend such as `claude-cli` or `codex-cli`.
 
 ### API object fields
 
-| Field                    | Type                      | Description                                               |
-| ------------------------ | ------------------------- | --------------------------------------------------------- |
-| `api.id`                 | `string`                  | Plugin id                                                 |
-| `api.name`               | `string`                  | Display name                                              |
-| `api.version`            | `string?`                 | Plugin version (optional)                                 |
-| `api.description`        | `string?`                 | Plugin description (optional)                             |
-| `api.source`             | `string`                  | Plugin source path                                        |
-| `api.rootDir`            | `string?`                 | Plugin root directory (optional)                          |
-| `api.config`             | `OpenClawConfig`          | Current config snapshot                                   |
-| `api.pluginConfig`       | `Record<string, unknown>` | Plugin-specific config from `plugins.entries.<id>.config` |
-| `api.runtime`            | `PluginRuntime`           | [Runtime helpers](/plugins/sdk-runtime)                   |
-| `api.logger`             | `PluginLogger`            | Scoped logger (`debug`, `info`, `warn`, `error`)          |
-| `api.registrationMode`   | `PluginRegistrationMode`  | `"full"`, `"setup-only"`, or `"setup-runtime"`            |
-| `api.resolvePath(input)` | `(string) => string`      | Resolve path relative to plugin root                      |
+| Field                    | Type                      | Description                                                      |
+| ------------------------ | ------------------------- | ---------------------------------------------------------------- |
+| `api.id`                 | `string`                  | Plugin id                                                        |
+| `api.name`               | `string`                  | Display name                                                     |
+| `api.version`            | `string?`                 | Plugin version (optional)                                        |
+| `api.description`        | `string?`                 | Plugin description (optional)                                    |
+| `api.source`             | `string`                  | Plugin source path                                               |
+| `api.rootDir`            | `string?`                 | Plugin root directory (optional)                                 |
+| `api.config`             | `OpenClawConfig`          | Current config snapshot                                          |
+| `api.pluginConfig`       | `Record<string, unknown>` | Plugin-specific config from `plugins.entries.<id>.config`        |
+| `api.runtime`            | `PluginRuntime`           | [Runtime helpers](/plugins/sdk-runtime)                          |
+| `api.logger`             | `PluginLogger`            | Scoped logger (`debug`, `info`, `warn`, `error`)                 |
+| `api.registrationMode`   | `PluginRegistrationMode`  | `"full"`, `"setup-only"`, `"setup-runtime"`, or `"cli-metadata"` |
+| `api.resolvePath(input)` | `(string) => string`      | Resolve path relative to plugin root                             |
 
 ## Internal module convention
 

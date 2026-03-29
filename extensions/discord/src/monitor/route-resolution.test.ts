@@ -1,6 +1,6 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../../../../src/config/config.js";
-import type { ResolvedAgentRoute } from "../../../../src/routing/resolve-route.js";
 import {
   buildDiscordRoutePeer,
   resolveDiscordBoundConversationRoute,
