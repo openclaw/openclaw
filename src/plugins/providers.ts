@@ -64,9 +64,26 @@ export function resolveEnabledProviderPluginIds(params: {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
+export function resolveBundledChannelCompatPluginIds(params: {
+  config?: PluginLoadOptions["config"];
+  workspaceDir?: string;
+  env?: PluginLoadOptions["env"];
+}): string[] {
+  const registry = loadPluginManifestRegistry({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
+  return registry.plugins
+    .filter((plugin) => plugin.origin === "bundled" && plugin.channels.length > 0)
+    .map((plugin) => plugin.id)
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
 export const __testing = {
   resolveEnabledProviderPluginIds,
   resolveBundledProviderCompatPluginIds,
+  resolveBundledChannelCompatPluginIds,
   withBundledProviderVitestCompat,
 } as const;
 

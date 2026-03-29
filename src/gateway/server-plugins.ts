@@ -2,9 +2,11 @@ import { randomUUID } from "node:crypto";
 import { normalizeModelRef, parseModelRef } from "../agents/model-selection.js";
 import type { loadConfig } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
+import { withBundledPluginAllowlistCompat } from "../plugins/bundled-compat.js";
 import { resolveGatewayStartupPluginIds } from "../plugins/channel-plugin-ids.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
+import { resolveBundledChannelCompatPluginIds } from "../plugins/providers.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -391,10 +393,24 @@ export function loadGatewayPlugins(params: {
   baseMethods: string[];
   preferSetupRuntimeForChannelPlugins?: boolean;
 }) {
-  const resolvedConfig = applyPluginAutoEnable({
+  const autoEnabledConfig = applyPluginAutoEnable({
     config: params.cfg,
     env: process.env,
   }).config;
+  // Apply allowlist compat so bundled channel plugins (telegram, whatsapp, etc.)
+  // are not silently filtered out when plugins.allow is configured but does not
+  // explicitly list them — matching the provider compat already applied in
+  // providers.runtime.ts.
+  const channelCompatIds = resolveBundledChannelCompatPluginIds({
+    config: autoEnabledConfig,
+    workspaceDir: params.workspaceDir,
+    env: process.env,
+  });
+  const resolvedConfig =
+    withBundledPluginAllowlistCompat({
+      config: autoEnabledConfig,
+      pluginIds: channelCompatIds,
+    }) ?? autoEnabledConfig;
   const pluginRegistry = loadOpenClawPlugins({
     config: resolvedConfig,
     workspaceDir: params.workspaceDir,
