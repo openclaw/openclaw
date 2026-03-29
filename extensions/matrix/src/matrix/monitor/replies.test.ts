@@ -3,8 +3,18 @@ import type { PluginRuntime, RuntimeEnv } from "../../../runtime-api.js";
 import type { MatrixClient } from "../sdk.js";
 
 const sendMessageMatrixMock = vi.hoisted(() => vi.fn().mockResolvedValue({ messageId: "mx-1" }));
+const chunkMatrixTextMock = vi.hoisted(() =>
+  vi.fn((text: string, _opts?: unknown) => ({
+    trimmedText: text.trim(),
+    convertedText: text,
+    singleEventLimit: 4000,
+    fitsInSingleEvent: true,
+    chunks: text ? [text] : [],
+  })),
+);
 
 vi.mock("../send.js", () => ({
+  chunkMatrixText: (text: string, opts?: unknown) => chunkMatrixTextMock(text, opts),
   sendMessageMatrix: (to: string, message: string, opts?: unknown) =>
     sendMessageMatrixMock(to, message, opts),
 }));
@@ -48,11 +58,23 @@ describe("deliverMatrixReplies", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     setMatrixRuntime(runtimeStub);
-    chunkMarkdownTextWithModeMock.mockImplementation((text: string) => [text]);
+    chunkMatrixTextMock.mockReset().mockImplementation((text: string) => ({
+      trimmedText: text.trim(),
+      convertedText: text,
+      singleEventLimit: 4000,
+      fitsInSingleEvent: true,
+      chunks: text ? [text] : [],
+    }));
   });
 
   it("keeps replyToId on first reply only when replyToMode=first", async () => {
-    chunkMarkdownTextWithModeMock.mockImplementation((text: string) => text.split("|"));
+    chunkMatrixTextMock.mockImplementation((text: string) => ({
+      trimmedText: text.trim(),
+      convertedText: text,
+      singleEventLimit: 4000,
+      fitsInSingleEvent: true,
+      chunks: text.split("|"),
+    }));
 
     await deliverMatrixReplies({
       cfg,
@@ -124,7 +146,13 @@ describe("deliverMatrixReplies", () => {
   });
 
   it("suppresses replyToId when threadId is set", async () => {
-    chunkMarkdownTextWithModeMock.mockImplementation((text: string) => text.split("|"));
+    chunkMatrixTextMock.mockImplementation((text: string) => ({
+      trimmedText: text.trim(),
+      convertedText: text,
+      singleEventLimit: 4000,
+      fitsInSingleEvent: true,
+      chunks: text.split("|"),
+    }));
 
     await deliverMatrixReplies({
       cfg,
@@ -197,7 +225,11 @@ describe("deliverMatrixReplies", () => {
     });
 
     expect(loadConfigMock).not.toHaveBeenCalled();
-    expect(resolveChunkModeMock).toHaveBeenCalledWith(explicitCfg, "matrix", "ops");
+    expect(chunkMatrixTextMock).toHaveBeenCalledWith("hello", {
+      cfg: explicitCfg,
+      accountId: "ops",
+      tableMode: "code",
+    });
     expect(sendMessageMatrixMock).toHaveBeenCalledWith(
       "room:4",
       "hello",
@@ -205,6 +237,28 @@ describe("deliverMatrixReplies", () => {
         cfg: explicitCfg,
         accountId: "ops",
         replyToId: "reply-1",
+      }),
+    );
+  });
+
+  it("passes raw media captions through to sendMessageMatrix without pre-converting them", async () => {
+    convertMarkdownTablesMock.mockImplementation((text: string) => `converted:${text}`);
+
+    await deliverMatrixReplies({
+      cfg,
+      replies: [{ text: "caption", mediaUrl: "https://example.com/a.jpg" }],
+      roomId: "room:6",
+      client: {} as MatrixClient,
+      runtime: runtimeEnv,
+      textLimit: 4000,
+      replyToMode: "off",
+    });
+
+    expect(sendMessageMatrixMock).toHaveBeenCalledWith(
+      "room:6",
+      "caption",
+      expect.objectContaining({
+        mediaUrl: "https://example.com/a.jpg",
       }),
     );
   });

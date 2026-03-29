@@ -6,7 +6,7 @@ import type {
 } from "../../runtime-api.js";
 import { getMatrixRuntime } from "../../runtime.js";
 import type { MatrixClient } from "../sdk.js";
-import { sendMessageMatrix } from "../send.js";
+import { chunkMatrixText, sendMessageMatrix } from "../send.js";
 
 const THINKING_TAG_RE = /<\s*\/?\s*(?:think(?:ing)?|thought|antthinking)\b[^<>]*>/gi;
 const THINKING_BLOCK_RE =
@@ -59,8 +59,6 @@ export async function deliverMatrixReplies(params: {
       params.runtime.log?.(message);
     }
   };
-  const chunkLimit = Math.min(params.textLimit, 4000);
-  const chunkMode = core.channel.text.resolveChunkMode(params.cfg, "matrix", params.accountId);
   let hasReplied = false;
   for (const reply of params.replies) {
     if (reply.isReasoning === true || shouldSuppressReasoningReplyText(reply.text)) {
@@ -79,7 +77,6 @@ export async function deliverMatrixReplies(params: {
     const replyToIdRaw = reply.replyToId?.trim();
     const replyToId = params.threadId || params.replyToMode === "off" ? undefined : replyToIdRaw;
     const rawText = reply.text ?? "";
-    const text = core.channel.text.convertMarkdownTables(rawText, tableMode);
     const mediaList = reply.mediaUrls?.length
       ? reply.mediaUrls
       : reply.mediaUrl
@@ -92,11 +89,12 @@ export async function deliverMatrixReplies(params: {
 
     if (mediaList.length === 0) {
       let sentTextChunk = false;
-      for (const chunk of core.channel.text.chunkMarkdownTextWithMode(
-        text,
-        chunkLimit,
-        chunkMode,
-      )) {
+      const { chunks } = chunkMatrixText(rawText, {
+        cfg: params.cfg,
+        accountId: params.accountId,
+        tableMode,
+      });
+      for (const chunk of chunks) {
         const trimmed = chunk.trim();
         if (!trimmed) {
           continue;
@@ -118,7 +116,7 @@ export async function deliverMatrixReplies(params: {
 
     let first = true;
     for (const mediaUrl of mediaList) {
-      const caption = first ? text : "";
+      const caption = first ? rawText : "";
       await sendMessageMatrix(params.roomId, caption, {
         client: params.client,
         cfg: params.cfg,
