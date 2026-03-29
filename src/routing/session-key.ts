@@ -169,7 +169,11 @@ export function buildAgentPeerSessionKey(params: {
     });
   }
   const channel = (params.channel ?? "").trim().toLowerCase() || "unknown";
-  const peerId = ((params.peerId ?? "").trim() || "unknown").toLowerCase();
+  // Matrix room IDs are case-sensitive opaque identifiers per the spec.
+  // Other providers (Slack, Discord, etc.) use case-insensitive IDs and
+  // must continue to be lowercased for consistent session key lookups.
+  const rawPeerId = (params.peerId ?? "").trim() || "unknown";
+  const peerId = channel === "matrix" ? rawPeerId : rawPeerId.toLowerCase();
   return `agent:${normalizeAgentId(params.agentId)}:${channel}:${peerKind}:${peerId}`;
 }
 
@@ -227,7 +231,8 @@ export function buildGroupHistoryKey(params: {
 }): string {
   const channel = normalizeToken(params.channel) || "unknown";
   const accountId = normalizeAccountId(params.accountId);
-  const peerId = params.peerId.trim().toLowerCase() || "unknown";
+  const rawPeerId = params.peerId.trim() || "unknown";
+  const peerId = channel === "matrix" ? rawPeerId : rawPeerId.toLowerCase();
   return `${channel}:${accountId}:${params.peerKind}:${peerId}`;
 }
 

@@ -65,3 +65,52 @@ describe("Discord Session Key Continuity", () => {
     expectUnknownChannelKeyCase(channelId);
   });
 });
+
+describe("Matrix Session Key Case Preservation", () => {
+  it("preserves mixed-case room IDs in group/channel session keys", () => {
+    const key = buildAgentSessionKey({
+      agentId: "main",
+      channel: "matrix",
+      peer: { kind: "channel", id: "!IEjZDNPucuFvKLrAQC:matrix.example.com" },
+    });
+    expect(key).toBe("agent:main:matrix:channel:!IEjZDNPucuFvKLrAQC:matrix.example.com");
+  });
+
+  it("preserves mixed-case room IDs in group session keys", () => {
+    const key = buildAgentSessionKey({
+      agentId: "main",
+      channel: "matrix",
+      peer: { kind: "group", id: "!AbCdEfGh:matrix.example.com" },
+    });
+    expect(key).toBe("agent:main:matrix:group:!AbCdEfGh:matrix.example.com");
+  });
+});
+
+describe("Non-Matrix providers still lowercase group/channel peer IDs", () => {
+  it("lowercases Slack channel IDs", () => {
+    const key = buildAgentSessionKey({
+      agentId: "main",
+      channel: "slack",
+      peer: { kind: "channel", id: "C0ABWMM7TDW" },
+    });
+    expect(key).toBe("agent:main:slack:channel:c0abwmm7tdw");
+  });
+
+  it("lowercases Discord channel IDs", () => {
+    const key = buildAgentSessionKey({
+      agentId: "main",
+      channel: "discord",
+      peer: { kind: "channel", id: "Channel456" },
+    });
+    expect(key).toBe("agent:main:discord:channel:channel456");
+  });
+
+  it("lowercases Telegram group IDs", () => {
+    const key = buildAgentSessionKey({
+      agentId: "main",
+      channel: "telegram",
+      peer: { kind: "group", id: "MyGroup123" },
+    });
+    expect(key).toBe("agent:main:telegram:group:mygroup123");
+  });
+});
