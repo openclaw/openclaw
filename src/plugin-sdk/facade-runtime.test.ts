@@ -7,7 +7,10 @@ import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
 
 const tempDirs: string[] = [];
 const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-const FACADE_RUNTIME_MODULE_PATH = fileURLToPath(new URL("./facade-runtime.ts", import.meta.url));
+const FACADE_RUNTIME_MODULE_PATH = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  `facade-runtime${path.extname(fileURLToPath(import.meta.url))}`,
+);
 
 function createBundledPluginDir(prefix: string, marker: string): string {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
