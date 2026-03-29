@@ -4,15 +4,15 @@ import type { OpenClawConfig } from "../config/config.js";
 const ensureOpenClawModelsJsonMock = vi.fn<
   (config: unknown, agentDir: unknown) => Promise<{ agentDir: string; wrote: boolean }>
 >(async () => ({ agentDir: "/tmp/agent", wrote: false }));
-const resolveModelAsyncMock = vi.fn<
+const resolveModelMock = vi.fn<
   (
     provider: unknown,
     modelId: unknown,
     agentDir: unknown,
     cfg: unknown,
     options?: unknown,
-  ) => Promise<{ model: { id: string; provider: string; api: string } }>
->(async () => ({
+  ) => { model: { id: string; provider: string; api: string } }
+>(() => ({
   model: {
     id: "gpt-5.4",
     provider: "openai-codex",
@@ -30,19 +30,19 @@ vi.mock("../agents/models-config.js", () => ({
 }));
 
 vi.mock("../agents/pi-embedded-runner/model.js", () => ({
-  resolveModelAsync: (
+  resolveModel: (
     provider: unknown,
     modelId: unknown,
     agentDir: unknown,
     cfg: unknown,
     options?: unknown,
-  ) => resolveModelAsyncMock(provider, modelId, agentDir, cfg, options),
+  ) => resolveModelMock(provider, modelId, agentDir, cfg, options),
 }));
 
 describe("gateway startup primary model warmup", () => {
   beforeEach(() => {
     ensureOpenClawModelsJsonMock.mockClear();
-    resolveModelAsyncMock.mockClear();
+    resolveModelMock.mockClear();
   });
 
   it("prewarms an explicit configured primary model", async () => {
@@ -63,15 +63,9 @@ describe("gateway startup primary model warmup", () => {
     });
 
     expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledWith(cfg, "/tmp/agent");
-    expect(resolveModelAsyncMock).toHaveBeenCalledWith(
-      "openai-codex",
-      "gpt-5.4",
-      "/tmp/agent",
-      cfg,
-      {
-        retryTransientProviderRuntimeMiss: true,
-      },
-    );
+    expect(resolveModelMock).toHaveBeenCalledWith("openai-codex", "gpt-5.4", "/tmp/agent", cfg, {
+      skipProviderRuntimeHooks: true,
+    });
   });
 
   it("skips warmup when no explicit primary model is configured", async () => {
@@ -83,6 +77,6 @@ describe("gateway startup primary model warmup", () => {
     });
 
     expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
-    expect(resolveModelAsyncMock).not.toHaveBeenCalled();
+    expect(resolveModelMock).not.toHaveBeenCalled();
   });
 });

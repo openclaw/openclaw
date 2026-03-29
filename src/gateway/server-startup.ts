@@ -9,7 +9,7 @@ import {
   resolveHooksGmailModel,
 } from "../agents/model-selection.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
-import { resolveModelAsync } from "../agents/pi-embedded-runner/model.js";
+import { resolveModel } from "../agents/pi-embedded-runner/model.js";
 import { resolveAgentSessionDirs } from "../agents/session-dirs.js";
 import { cleanStaleLockFiles } from "../agents/session-write-lock.js";
 import type { CliDeps } from "../cli/deps.js";
@@ -50,11 +50,14 @@ async function prewarmConfiguredPrimaryModel(params: {
   const agentDir = resolveOpenClawAgentDir();
   try {
     await ensureOpenClawModelsJson(params.cfg, agentDir);
-    const resolved = await resolveModelAsync(provider, model, agentDir, params.cfg, {
-      retryTransientProviderRuntimeMiss: true,
+    const resolved = resolveModel(provider, model, agentDir, params.cfg, {
+      skipProviderRuntimeHooks: true,
     });
     if (!resolved.model) {
-      throw new Error(resolved.error ?? `Unknown model: ${provider}/${model}`);
+      throw new Error(
+        resolved.error ??
+          `Unknown model: ${provider}/${model} (startup warmup only checks static model resolution)`,
+      );
     }
   } catch (err) {
     params.log.warn(`startup model warmup failed for ${provider}/${model}: ${String(err)}`);
