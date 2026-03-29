@@ -40,6 +40,7 @@ import {
   listDiscordDirectoryPeersFromConfig,
 } from "./directory-config.js";
 import {
+  getDiscordExecApprovalApprovers,
   isDiscordExecApprovalClientEnabled,
   shouldSuppressLocalDiscordExecApprovalPrompt,
 } from "./exec-approvals.js";
@@ -300,7 +301,10 @@ function buildDiscordCrossContextComponents(params: {
 function hasDiscordExecApprovalDmRoute(cfg: OpenClawConfig): boolean {
   return listDiscordAccountIds(cfg).some((accountId) => {
     const execApprovals = resolveDiscordAccount({ cfg, accountId }).config.execApprovals;
-    if (!execApprovals?.enabled || (execApprovals.approvers?.length ?? 0) === 0) {
+    if (
+      !execApprovals?.enabled ||
+      getDiscordExecApprovalApprovers({ cfg, accountId }).length === 0
+    ) {
       return false;
     }
     const target = execApprovals.target ?? "dm";
@@ -488,10 +492,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
         },
       },
       execApprovals: {
-        getInitiatingSurfaceState: ({ cfg, accountId }) =>
-          isDiscordExecApprovalClientEnabled({ cfg, accountId })
-            ? { kind: "enabled" }
-            : { kind: "disabled" },
+        getInitiatingSurfaceState: () => ({ kind: "enabled" }),
         shouldSuppressLocalPrompt: ({ cfg, accountId, payload }) =>
           shouldSuppressLocalDiscordExecApprovalPrompt({
             cfg,
