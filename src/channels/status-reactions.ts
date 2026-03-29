@@ -380,9 +380,9 @@ export function createStatusReactionController(params: {
     }
 
     const alreadyInitial = currentEmoji === initialEmoji;
-    const initialAlreadyPending = pendingEmoji === initialEmoji;
+    const initialAlreadyQueuedImmediately = pendingEmoji === initialEmoji && debounceTimer === null;
     clearAllTimers();
-    if (alreadyInitial || initialAlreadyPending) {
+    if (alreadyInitial || initialAlreadyQueuedImmediately) {
       pendingEmoji = "";
       return;
     }
