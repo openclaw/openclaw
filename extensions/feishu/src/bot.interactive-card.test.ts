@@ -16,7 +16,7 @@ function makeInteractiveEvent(card: unknown, messageType = "interactive") {
 }
 
 describe("parseFeishuMessageEvent – interactive cards", () => {
-  it("extracts readable text from interactive card elements", () => {
+  it("extracts readable text from interactive card elements (schema 1.0)", () => {
     const ctx = parseFeishuMessageEvent(
       makeInteractiveEvent({
         header: { title: { content: "Header" } },
@@ -28,6 +28,38 @@ describe("parseFeishuMessageEvent – interactive cards", () => {
     );
 
     expect(ctx.content).toBe("Header\nhello markdown\nhello div");
+    expect(ctx.contentType).toBe("interactive");
+  });
+
+  it("extracts readable text from card body.elements (schema 2.0)", () => {
+    const ctx = parseFeishuMessageEvent(
+      makeInteractiveEvent({
+        header: { title: { content: "Schema 2.0 Header" } },
+        body: {
+          elements: [
+            { tag: "markdown", content: "schema 2.0 content" },
+            { tag: "div", text: { content: "schema 2.0 div" } },
+          ],
+        },
+      }) as any,
+    );
+
+    expect(ctx.content).toBe("Schema 2.0 Header\nschema 2.0 content\nschema 2.0 div");
+    expect(ctx.contentType).toBe("interactive");
+  });
+
+  it("prefers schema 1.0 elements over body.elements when both present", () => {
+    const ctx = parseFeishuMessageEvent(
+      makeInteractiveEvent({
+        header: { title: { content: "Mixed" } },
+        elements: [{ tag: "markdown", content: "v1 content" }],
+        body: {
+          elements: [{ tag: "markdown", content: "v2 content" }],
+        },
+      }) as any,
+    );
+
+    expect(ctx.content).toBe("Mixed\nv1 content");
     expect(ctx.contentType).toBe("interactive");
   });
 
