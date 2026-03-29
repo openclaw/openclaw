@@ -27,7 +27,6 @@ export async function runStartupSessionMigration(params: {
     const result = await migrate({
       cfg: params.cfg,
       env: params.env ?? process.env,
-      log: params.log,
     });
     if (result.changes.length > 0) {
       params.log.info(

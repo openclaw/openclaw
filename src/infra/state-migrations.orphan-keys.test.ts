@@ -162,6 +162,30 @@ describe("migrateOrphanedSessionKeys", () => {
     expect(Object.keys(store).filter((k) => k.startsWith("agent:ops:")).length).toBe(1);
   });
 
+  it("lets the main agent claim bare main aliases in shared stores", async () => {
+    const sharedStorePath = path.join(tmpDir, "shared-sessions.json");
+    writeStore(sharedStorePath, {
+      main: { sessionId: "main-session", updatedAt: 2000 },
+      "agent:ops:work": { sessionId: "ops-session", updatedAt: 1000 },
+    });
+
+    const cfg = {
+      session: { mainKey: "work", store: sharedStorePath },
+      agents: { list: [{ id: "main" }, { id: "ops", default: true }] },
+    } as OpenClawConfig;
+
+    await migrateOrphanedSessionKeys({
+      cfg,
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+
+    const store = readStore(sharedStorePath);
+    expect(store["agent:main:work"]).toBeDefined();
+    expect((store["agent:main:work"] as { sessionId: string }).sessionId).toBe("main-session");
+    expect(store.main).toBeUndefined();
+    expect(store["agent:ops:work"]).toBeDefined();
+  });
+
   it("no-ops when default agentId is main and mainKey is main", async () => {
     const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
     writeStore(storePath, {

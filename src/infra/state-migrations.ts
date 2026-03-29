@@ -158,6 +158,13 @@ function canonicalizeSessionKeyForAgent(params: {
     if (parsed && normalizeAgentId(parsed.agentId) !== agentId) {
       return raw.toLowerCase();
     }
+    const rawLower = raw.toLowerCase();
+    if (
+      agentId !== DEFAULT_AGENT_ID &&
+      (rawLower === DEFAULT_MAIN_KEY || rawLower === params.mainKey)
+    ) {
+      return rawLower;
+    }
   }
 
   const canonicalMain = canonicalizeMainSessionAlias({
@@ -1039,7 +1046,6 @@ export async function autoMigrateLegacyAgentDir(params: {
 export async function migrateOrphanedSessionKeys(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-  log?: MigrationLogger;
 }): Promise<{ changes: string[]; warnings: string[] }> {
   const changes: string[] = [];
   const warnings: string[] = [];
@@ -1078,6 +1084,9 @@ export async function migrateOrphanedSessionKeys(params: {
     }
   }
   // Agent directories present on disk.
+  // This only covers the standard state-dir layout so we can still pick up
+  // orphaned stores left behind by older configs. Active custom-template paths
+  // are already covered by the configured-agents loop above.
   const agentsDir = path.join(stateDir, "agents");
   if (existsDir(agentsDir)) {
     for (const dirEntry of safeReadDir(agentsDir)) {
@@ -1124,6 +1133,8 @@ export async function migrateOrphanedSessionKeys(params: {
         skipCrossAgentRemap: storeAgentIds.size > 1 && storeAgentIds.has(DEFAULT_AGENT_ID),
       });
       working = canonicalized;
+      // Each pass only counts keys it changed from the current working store, so
+      // once a key is canonicalized it is not counted again by later agent passes.
       totalLegacy += legacyKeys.length;
     }
     if (totalLegacy === 0) {
@@ -1191,7 +1202,6 @@ export async function autoMigrateLegacyState(params: {
   const orphanKeys = await migrateOrphanedSessionKeys({
     cfg: params.cfg,
     env,
-    log: params.log,
   });
 
   const logMigrationResults = (changes: string[], warnings: string[]) => {
