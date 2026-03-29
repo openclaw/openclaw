@@ -3,7 +3,6 @@
   "ignores": [
     "docs/zh-CN/**",
     "docs/.i18n/**",
-    "docs/internal/**",
     "docs/reference/templates/**",
     "**/.local/**"
   ],
