@@ -1105,6 +1105,13 @@ export function registerBrowserAgentActRoutes(
             if (targetIdError) {
               return jsonError(res, 403, targetIdError);
             }
+            await assertPlaywrightTabTargetAllowed({
+              ctx,
+              pw,
+              cdpUrl,
+              targetId: tab.targetId,
+              url: tab.url,
+            });
             const stopOnError = toBoolean(body.stopOnError) ?? true;
             const result = await pw.batchViaPlaywright({
               cdpUrl,

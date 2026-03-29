@@ -334,4 +334,21 @@ describe("browser navigation guard", () => {
     expect(routeContinue).toHaveBeenCalledTimes(1);
     expect(routeAbort).not.toHaveBeenCalled();
   });
+
+  it("does not let unroute errors replace the navigation result", async () => {
+    const page = {
+      route: vi.fn(async () => {}),
+      unroute: vi.fn(async () => {
+        throw new Error("unroute failed");
+      }),
+    };
+
+    const result = await withRequestTimeBrowserNavigationGuard({
+      page,
+      navigate: async () => "done",
+    });
+
+    expect(result).toBe("done");
+    expect(page.unroute).toHaveBeenCalledTimes(1);
+  });
 });
