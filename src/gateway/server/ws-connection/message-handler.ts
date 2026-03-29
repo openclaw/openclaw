@@ -49,6 +49,7 @@ import { resolveNodeCommandAllowlist } from "../../node-command-policy.js";
 import { checkBrowserOrigin } from "../../origin-check.js";
 import {
   ConnectErrorDetailCodes,
+  CONTROL_UI_DEVICE_IDENTITY_INSECURE_CONTEXT_MESSAGE,
   resolveDeviceAuthConnectErrorDetailCode,
   resolveAuthConnectErrorDetailCode,
 } from "../../protocol/connect-error-details.js";
@@ -558,15 +559,14 @@ export function attachGatewayWsMessageHandler(params: {
           }
 
           if (decision.kind === "reject-control-ui-insecure-auth") {
-            const errorMessage =
-              "control ui requires device identity (use HTTPS or localhost secure context)";
+            const errorMessage = CONTROL_UI_DEVICE_IDENTITY_INSECURE_CONTEXT_MESSAGE;
             markHandshakeFailure("control-ui-insecure-auth", {
               insecureAuthConfigured: controlUiAuthPolicy.allowInsecureAuthConfigured,
             });
             sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, errorMessage, {
               details: { code: ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED },
             });
-            close(1008, errorMessage);
+            close(1008, truncateCloseReason(errorMessage));
             return false;
           }
 

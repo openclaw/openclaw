@@ -331,7 +331,7 @@ describe("connectGateway", () => {
     });
 
     expect(host.lastErrorCode).toBe(ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED);
-    expect(host.lastError).toContain("device identity required");
+    expect(host.lastError).toContain("control ui requires device identity");
   });
 
   it("maps generic fetch failures to actionable origin guidance", () => {

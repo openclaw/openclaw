@@ -587,7 +587,7 @@ describe("abortChatRun", () => {
       sessionKey: "main",
       runId: "run-1",
     });
-    expect(state.lastError).toContain("device identity required");
+    expect(state.lastError).toContain("control ui requires device identity");
   });
 });
 

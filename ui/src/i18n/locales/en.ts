@@ -117,7 +117,8 @@ export const en: TranslationMap = {
     },
     insecure: {
       hint: "This page is HTTP, so the browser blocks device identity. Use HTTPS (Tailscale Serve) or open {url} on the gateway host.",
-      stayHttp: "If you must stay on HTTP, set {config} (token-only).",
+      stayHttp:
+        "On localhost HTTP only, set {config} (token-only). Remote plain HTTP cannot use device identity—use HTTPS, an SSH tunnel to localhost, or read the insecure HTTP docs.",
     },
     connection: {
       title: "How to connect",
