@@ -2823,6 +2823,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     exclusiveMinimum: 0,
                     maximum: 9007199254740991,
                   },
+                  awaitEnabled: {
+                    description:
+                      "Enable the sessions_await tool and suppressAnnounce/waitForCompletion params on sessions_spawn for parallel sub-agent orchestration. Default: false.",
+                    type: "boolean",
+                  },
                 },
                 additionalProperties: false,
               },
@@ -3978,6 +3983,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                     },
                     thinking: {
                       type: "string",
+                    },
+                    awaitEnabled: {
+                      description:
+                        "Enable the sessions_await tool and suppressAnnounce/waitForCompletion params on sessions_spawn for parallel sub-agent orchestration. Default: false.",
+                      type: "boolean",
                     },
                   },
                   additionalProperties: false,

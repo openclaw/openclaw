@@ -203,6 +203,12 @@ export const AgentDefaultsSchema = z
         thinking: z.string().optional(),
         runTimeoutSeconds: z.number().int().min(0).optional(),
         announceTimeoutMs: z.number().int().positive().optional(),
+        awaitEnabled: z
+          .boolean()
+          .optional()
+          .describe(
+            "Enable the sessions_await tool and suppressAnnounce/waitForCompletion params on sessions_spawn for parallel sub-agent orchestration. Default: false.",
+          ),
       })
       .strict()
       .optional(),
