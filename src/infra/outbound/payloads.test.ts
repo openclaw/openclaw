@@ -56,16 +56,14 @@ describe("normalizeReplyPayloadsForDelivery", () => {
     expect(
       normalizeReplyPayloadsForDelivery([
         { text: '{"action":"NO_REPLY"}' },
-        { text: "{\n  \"action\": \"NO_REPLY\"\n}" },
+        { text: '{\n  "action": "NO_REPLY"\n}' },
       ]),
     ).toEqual([]);
   });
 
   it("keeps JSON NO_REPLY objects that include extra fields", () => {
     expect(
-      normalizeReplyPayloadsForDelivery([
-        { text: '{"action":"NO_REPLY","note":"example"}' },
-      ]),
+      normalizeReplyPayloadsForDelivery([{ text: '{"action":"NO_REPLY","note":"example"}' }]),
     ).toEqual([
       {
         text: '{"action":"NO_REPLY","note":"example"}',

@@ -1,9 +1,9 @@
 import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
-import { describe, expect, it } from "vitest";
 import type {
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { describe, expect, it } from "vitest";
 import { resolveGoogle31ForwardCompatModel } from "./provider-models.js";
 
 function createTemplateModel(

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { detectLineMediaKind, resolveLineOutboundMedia, validateLineMediaUrl } from "./outbound-media.js";
+import {
+  detectLineMediaKind,
+  resolveLineOutboundMedia,
+  validateLineMediaUrl,
+} from "./outbound-media.js";
 
 describe("validateLineMediaUrl", () => {
   it("accepts HTTPS URL", () => {
