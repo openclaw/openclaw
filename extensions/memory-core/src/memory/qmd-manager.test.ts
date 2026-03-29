@@ -1836,7 +1836,7 @@ describe("QmdMemoryManager", () => {
 
     const { manager } = await createManager();
     const managerWithPrivate = manager as object as {
-      runMcporter: typeof manager["runMcporter"];
+      runMcporter: (typeof manager)["runMcporter"];
     };
     const originalRunMcporter = managerWithPrivate.runMcporter.bind(managerWithPrivate);
     let injectTimeoutOnce = true;
@@ -1854,7 +1854,7 @@ describe("QmdMemoryManager", () => {
       });
 
     await expect(
-      manager.search('abc: Tool query not found', {
+      manager.search("abc: Tool query not found", {
         sessionKey: "agent:main:slack:dm:u123",
       }),
     ).rejects.toThrow("timed out after 5000ms");
@@ -2028,6 +2028,9 @@ describe("QmdMemoryManager", () => {
     const spawnOpts = mcporterCall?.[2] as { env?: NodeJS.ProcessEnv } | undefined;
     const normalizePath = (value?: string) => value?.replace(/\\/g, "/");
     expect(normalizePath(spawnOpts?.env?.XDG_CONFIG_HOME)).toContain("/agents/main/qmd/xdg-config");
+    expect(normalizePath(spawnOpts?.env?.QMD_CONFIG_DIR)).toContain(
+      "/agents/main/qmd/xdg-config/qmd",
+    );
     expect(normalizePath(spawnOpts?.env?.XDG_CACHE_HOME)).toContain("/agents/main/qmd/xdg-cache");
 
     await manager.close();
