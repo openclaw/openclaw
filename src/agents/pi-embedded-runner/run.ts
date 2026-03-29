@@ -449,12 +449,21 @@ export async function runEmbeddedPiAgent(
             };
           }
           runLoopIterations += 1;
-          const nextSelection = resolvePersistedLiveSelection();
-          if (hasDifferentLiveSessionModelSelection(resolveCurrentLiveSelection(), nextSelection)) {
-            log.info(
-              `live session model switch detected before attempt for ${params.sessionId}: ${provider}/${modelId} -> ${nextSelection.provider}/${nextSelection.model}`,
-            );
-            throw new LiveSessionModelSwitchError(nextSelection);
+          // Live model switch detection only applies to interactive sessions where
+          // a user changes the model mid-conversation. Non-interactive runs (cron,
+          // heartbeat, memory, overflow) use intentional model overrides that should
+          // not trigger a switch back to the agent's default. See #57155.
+          const isInteractiveRun = params.trigger === "user" || params.trigger === "manual";
+          if (isInteractiveRun || !params.trigger) {
+            const nextSelection = resolvePersistedLiveSelection();
+            if (
+              hasDifferentLiveSessionModelSelection(resolveCurrentLiveSelection(), nextSelection)
+            ) {
+              log.info(
+                `live session model switch detected before attempt for ${params.sessionId}: ${provider}/${modelId} -> ${nextSelection.provider}/${nextSelection.model}`,
+              );
+              throw new LiveSessionModelSwitchError(nextSelection);
+            }
           }
           const runtimeAuthRetry = authRetryPending;
           authRetryPending = false;
@@ -591,31 +600,40 @@ export async function runEmbeddedPiAgent(
             !attempt.lastToolError &&
             attempt.toolMetas.length === 0 &&
             attempt.assistantTexts.length === 0;
-          const requestedSelection = consumeLiveSessionModelSwitch(params.sessionId);
-          if (
-            requestedSelection &&
-            canRestartForLiveSwitch &&
-            hasDifferentLiveSessionModelSelection(resolveCurrentLiveSelection(), requestedSelection)
-          ) {
-            log.info(
-              `live session model switch requested during active attempt for ${params.sessionId}: ${provider}/${modelId} -> ${requestedSelection.provider}/${requestedSelection.model}`,
-            );
-            throw new LiveSessionModelSwitchError(requestedSelection);
-          }
-          const failedOrAbortedAttempt =
-            aborted || Boolean(promptError) || Boolean(assistantErrorText) || timedOut;
-          const persistedSelection = failedOrAbortedAttempt
-            ? resolvePersistedLiveSelection()
-            : null;
-          if (
-            failedOrAbortedAttempt &&
-            canRestartForLiveSwitch &&
-            hasDifferentLiveSessionModelSelection(resolveCurrentLiveSelection(), persistedSelection)
-          ) {
-            log.info(
-              `live session model switch detected after failed attempt for ${params.sessionId}: ${provider}/${modelId} -> ${persistedSelection.provider}/${persistedSelection.model}`,
-            );
-            throw new LiveSessionModelSwitchError(persistedSelection);
+          // Live model switch detection — interactive runs only (see #57155).
+          if (isInteractiveRun || !params.trigger) {
+            const requestedSelection = consumeLiveSessionModelSwitch(params.sessionId);
+            if (
+              requestedSelection &&
+              canRestartForLiveSwitch &&
+              hasDifferentLiveSessionModelSelection(
+                resolveCurrentLiveSelection(),
+                requestedSelection,
+              )
+            ) {
+              log.info(
+                `live session model switch requested during active attempt for ${params.sessionId}: ${provider}/${modelId} -> ${requestedSelection.provider}/${requestedSelection.model}`,
+              );
+              throw new LiveSessionModelSwitchError(requestedSelection);
+            }
+            const failedOrAbortedAttempt =
+              aborted || Boolean(promptError) || Boolean(assistantErrorText) || timedOut;
+            const persistedSelection = failedOrAbortedAttempt
+              ? resolvePersistedLiveSelection()
+              : null;
+            if (
+              failedOrAbortedAttempt &&
+              canRestartForLiveSwitch &&
+              hasDifferentLiveSessionModelSelection(
+                resolveCurrentLiveSelection(),
+                persistedSelection,
+              )
+            ) {
+              log.info(
+                `live session model switch detected after failed attempt for ${params.sessionId}: ${provider}/${modelId} -> ${persistedSelection.provider}/${persistedSelection.model}`,
+              );
+              throw new LiveSessionModelSwitchError(persistedSelection);
+            }
           }
 
           // ── Timeout-triggered compaction ──────────────────────────────────
