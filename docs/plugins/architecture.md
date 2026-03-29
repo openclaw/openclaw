@@ -12,9 +12,12 @@ sidebarTitle: "Internals"
 # Plugin Internals
 
 <Info>
-  This page is for **plugin developers and contributors**. If you just want to
-  install and use plugins, see [Plugins](/tools/plugin). If you want to build
-  a plugin, see [Building Plugins](/plugins/building-plugins).
+  This is the **deep architecture reference**. For practical guides, see:
+  - [Install and use plugins](/tools/plugin) — user guide
+  - [Getting Started](/plugins/building-plugins) — first plugin tutorial
+  - [Channel Plugins](/plugins/sdk-channel-plugins) — build a messaging channel
+  - [Provider Plugins](/plugins/sdk-provider-plugins) — build a model provider
+  - [SDK Overview](/plugins/sdk-overview) — import map and registration API
 </Info>
 
 This page covers the internal architecture of the OpenClaw plugin system.
@@ -24,14 +27,15 @@ This page covers the internal architecture of the OpenClaw plugin system.
 Capabilities are the public **native plugin** model inside OpenClaw. Every
 native OpenClaw plugin registers against one or more capability types:
 
-| Capability          | Registration method                           | Example plugins           |
-| ------------------- | --------------------------------------------- | ------------------------- |
-| Text inference      | `api.registerProvider(...)`                   | `openai`, `anthropic`     |
-| Speech              | `api.registerSpeechProvider(...)`             | `elevenlabs`, `microsoft` |
-| Media understanding | `api.registerMediaUnderstandingProvider(...)` | `openai`, `google`        |
-| Image generation    | `api.registerImageGenerationProvider(...)`    | `openai`, `google`        |
-| Web search          | `api.registerWebSearchProvider(...)`          | `google`                  |
-| Channel / messaging | `api.registerChannel(...)`                    | `msteams`, `matrix`       |
+| Capability            | Registration method                           | Example plugins           |
+| --------------------- | --------------------------------------------- | ------------------------- |
+| Text inference        | `api.registerProvider(...)`                   | `openai`, `anthropic`     |
+| CLI inference backend | `api.registerCliBackend(...)`                 | `openai`, `anthropic`     |
+| Speech                | `api.registerSpeechProvider(...)`             | `elevenlabs`, `microsoft` |
+| Media understanding   | `api.registerMediaUnderstandingProvider(...)` | `openai`, `google`        |
+| Image generation      | `api.registerImageGenerationProvider(...)`    | `openai`, `google`        |
+| Web search            | `api.registerWebSearchProvider(...)`          | `google`                  |
+| Channel / messaging   | `api.registerChannel(...)`                    | `msteams`, `matrix`       |
 
 A plugin that registers zero capabilities but provides hooks, tools, or
 services is a **legacy hook-only** plugin. That pattern is still fully supported.
@@ -431,6 +435,11 @@ skills.
 
 Use allowlists and explicit install/load paths for non-bundled plugins. Treat
 workspace plugins as development-time code, not production defaults.
+
+For bundled workspace package names, keep the plugin id anchored in the npm
+name: `@openclaw/<id>` by default, or an approved typed suffix such as
+`-provider`, `-plugin`, `-speech`, `-sandbox`, or `-media-understanding` when
+the package intentionally exposes a narrower plugin role.
 
 Important trust note:
 
@@ -960,16 +969,17 @@ authoring plugins:
   New code should import the narrower primitives instead.
 - Bundled extension internals remain private. External plugins should use only
   `openclaw/plugin-sdk/*` subpaths. OpenClaw core/test code may use the repo
-  public entry points under `extensions/<id>/index.js`, `api.js`, `runtime-api.js`,
-  `setup-entry.js`, and narrowly scoped files such as `login-qr-api.js`. Never
-  import `extensions/<id>/src/*` from core or from another extension.
+  public entry points under a plugin package root such as `index.js`, `api.js`,
+  `runtime-api.js`, `setup-entry.js`, and narrowly scoped files such as
+  `login-qr-api.js`. Never import a plugin package's `src/*` from core or from
+  another extension.
 - Repo entry point split:
-  `extensions/<id>/api.js` is the helper/types barrel,
-  `extensions/<id>/runtime-api.js` is the runtime-only barrel,
-  `extensions/<id>/index.js` is the bundled plugin entry,
-  and `extensions/<id>/setup-entry.js` is the setup plugin entry.
+  `<plugin-package-root>/api.js` is the helper/types barrel,
+  `<plugin-package-root>/runtime-api.js` is the runtime-only barrel,
+  `<plugin-package-root>/index.js` is the bundled plugin entry,
+  and `<plugin-package-root>/setup-entry.js` is the setup plugin entry.
 - No bundled channel-branded public subpaths remain. Channel-specific helper and
-  runtime seams live under `extensions/<id>/api.js` and `extensions/<id>/runtime-api.js`;
+  runtime seams live under `<plugin-package-root>/api.js` and `<plugin-package-root>/runtime-api.js`;
   the public SDK contract is the generic shared primitives instead.
 
 Compatibility note:
@@ -1207,7 +1217,7 @@ Example:
     },
     "install": {
       "npmSpec": "@openclaw/nextcloud-talk",
-      "localPath": "extensions/nextcloud-talk",
+      "localPath": "<bundled-plugin-local-path>",
       "defaultChoice": "npm"
     }
   }

@@ -3,22 +3,12 @@ import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { runMessageAction } from "./message-action-runner.js";
+
+let runMessageAction: typeof import("./message-action-runner.js").runMessageAction;
 
 const mocks = vi.hoisted(() => ({
   executePollAction: vi.fn(),
 }));
-
-vi.mock("./outbound-send-service.js", async () => {
-  const actual = await vi.importActual<typeof import("./outbound-send-service.js")>(
-    "./outbound-send-service.js",
-  );
-  return {
-    ...actual,
-    executePollAction: mocks.executePollAction,
-  };
-});
-
 const telegramConfig = {
   channels: {
     telegram: {
@@ -41,6 +31,12 @@ const telegramPollTestPlugin: ChannelPlugin = {
     listAccountIds: () => ["default"],
     resolveAccount: () => ({ botToken: "telegram-test" }),
     isConfigured: () => true,
+  },
+  outbound: {
+    deliveryMode: "gateway",
+    sendPoll: async () => ({
+      messageId: "poll-test",
+    }),
   },
   messaging: {
     targetResolver: {
@@ -96,7 +92,17 @@ async function runPollAction(params: {
 }
 
 describe("runMessageAction poll handling", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    vi.doMock("./outbound-send-service.js", async () => {
+      const actual = await vi.importActual<typeof import("./outbound-send-service.js")>(
+        "./outbound-send-service.js",
+      );
+      return {
+        ...actual,
+        executePollAction: mocks.executePollAction,
+      };
+    });
     setActivePluginRegistry(
       createTestRegistry([
         {
@@ -112,6 +118,7 @@ describe("runMessageAction poll handling", () => {
       payload: { ok: true, corePoll: input.resolveCorePoll() },
       pollResult: { ok: true },
     }));
+    ({ runMessageAction } = await import("./message-action-runner.js"));
   });
 
   afterEach(() => {

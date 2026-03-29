@@ -7,7 +7,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
-import { resolveAccountEntry } from "../routing/account-lookup.js";
+import { resolveAccountEntry, resolveNormalizedAccountEntry } from "../routing/account-lookup.js";
 import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
@@ -71,6 +71,24 @@ function resolveDefaultRuntime(channelId: ChannelId): ChannelAccountSnapshot {
 
 function cloneDefaultRuntime(channelId: ChannelId, accountId: string): ChannelAccountSnapshot {
   return { ...resolveDefaultRuntime(channelId), accountId };
+}
+
+function applyDescribedAccountFields(
+  next: ChannelAccountSnapshot,
+  described: ChannelAccountSnapshot | undefined,
+) {
+  if (!described) {
+    return next;
+  }
+  if (typeof described.configured === "boolean") {
+    next.configured = described.configured;
+  } else {
+    next.configured ??= true;
+  }
+  if (described.mode !== undefined) {
+    next.mode = described.mode;
+  }
+  return next;
 }
 
 type ChannelManagerOptions = {
@@ -162,13 +180,15 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     if (!normalizedAccountId) {
       return undefined;
     }
-    const matchKey = Object.keys(channelConfig.accounts).find(
-      (key) => normalizeAccountId(key) === normalizedAccountId,
+    const match = resolveNormalizedAccountEntry(
+      channelConfig.accounts,
+      normalizedAccountId,
+      normalizeAccountId,
     );
-    if (!matchKey) {
+    if (typeof match?.healthMonitor?.enabled !== "boolean") {
       return undefined;
     }
-    return channelConfig.accounts[matchKey]?.healthMonitor?.enabled;
+    return match.healthMonitor.enabled;
   };
 
   const isHealthMonitorEnabled = (channelId: ChannelId, accountId: string): boolean => {
@@ -494,7 +514,13 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
 
   const startChannels = async () => {
     for (const plugin of listChannelPlugins()) {
-      await startChannel(plugin.id);
+      try {
+        await startChannel(plugin.id);
+      } catch (err) {
+        channelLogs[plugin.id]?.error?.(
+          `[${plugin.id}] channel startup failed: ${formatErrorMessage(err)}`,
+        );
+      }
     }
   };
 
@@ -542,11 +568,11 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           ? plugin.config.isEnabled(account, cfg)
           : isAccountEnabled(account);
         const described = plugin.config.describeAccount?.(account, cfg);
-        const configured = described?.configured;
         const current = store.runtimes.get(id) ?? cloneDefaultRuntime(plugin.id, id);
         const next = { ...current, accountId: id };
         next.enabled = enabled;
-        next.configured = typeof configured === "boolean" ? configured : (next.configured ?? true);
+        applyDescribedAccountFields(next, described);
+        const configured = described?.configured;
         if (!next.running) {
           if (!enabled) {
             next.lastError ??= plugin.config.disabledReason?.(account, cfg) ?? "disabled";

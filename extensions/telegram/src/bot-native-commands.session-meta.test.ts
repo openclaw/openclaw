@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import type { ResolvedAgentRoute } from "../../../src/routing/resolve-route.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
@@ -9,10 +9,7 @@ import {
   createTelegramTopicCommandContext,
   type NativeCommandTestParams,
 } from "./bot-native-commands.fixture-test-support.js";
-import {
-  registerTelegramNativeCommands,
-  type RegisterTelegramHandlerParams,
-} from "./bot-native-commands.js";
+import { type RegisterTelegramHandlerParams } from "./bot-native-commands.js";
 
 // All mocks scoped to this file only — does not affect bot-native-commands.test.ts
 
@@ -147,6 +144,11 @@ vi.mock("../../../src/plugins/commands.js", () => ({
 vi.mock("./bot/delivery.js", () => ({
   deliverReplies: deliveryMocks.deliverReplies,
 }));
+vi.mock("./bot/delivery.replies.js", () => ({
+  deliverReplies: deliveryMocks.deliverReplies,
+}));
+
+let registerTelegramNativeCommands: typeof import("./bot-native-commands.js").registerTelegramNativeCommands;
 
 type TelegramCommandHandler = (ctx: unknown) => Promise<void>;
 
@@ -207,6 +209,7 @@ function registerAndResolveCommandHandlerBase(params: {
       byProvider: new Map<string, Set<string>>(),
       providers: [],
       resolvedDefault: { provider: "openai", model: "gpt-4.1" },
+      modelNames: new Map<string, string>(),
     })),
     listSkillCommandsForAgents: vi.fn(() => []),
     wasSentByBot: vi.fn(() => false),
@@ -387,6 +390,11 @@ function expectUnauthorizedNewCommandBlocked(sendMessage: ReturnType<typeof vi.f
 }
 
 describe("registerTelegramNativeCommands — session metadata", () => {
+  beforeAll(async () => {
+    vi.resetModules();
+    ({ registerTelegramNativeCommands } = await import("./bot-native-commands.js"));
+  });
+
   beforeEach(() => {
     persistentBindingMocks.resolveConfiguredBindingRoute.mockClear();
     persistentBindingMocks.resolveConfiguredBindingRoute.mockImplementation(({ route }) =>
@@ -634,6 +642,41 @@ describe("registerTelegramNativeCommands — session metadata", () => {
       undefined,
     );
   });
+
+  it.each(["new", "reset"] as const)(
+    "preserves the topic-qualified origin target for native /%s in forum topics",
+    async (commandName) => {
+      const { handler } = registerAndResolveCommandHandler({
+        commandName,
+        cfg: {},
+        allowFrom: ["200"],
+        groupAllowFrom: ["200"],
+        useAccessGroups: true,
+      });
+      await handler(createTelegramTopicCommandContext());
+
+      const dispatchCall = (
+        replyMocks.dispatchReplyWithBufferedBlockDispatcher.mock.calls as unknown as Array<
+          [
+            {
+              ctx?: {
+                CommandTargetSessionKey?: string;
+                MessageThreadId?: number;
+                OriginatingTo?: string;
+              };
+            },
+          ]
+        >
+      )[0]?.[0];
+      expect(dispatchCall?.ctx).toEqual(
+        expect.objectContaining({
+          CommandTargetSessionKey: "agent:main:telegram:group:-1001234567890:topic:42",
+          MessageThreadId: 42,
+          OriginatingTo: "telegram:-1001234567890:topic:42",
+        }),
+      );
+    },
+  );
 
   it("aborts native command dispatch when configured ACP topic binding cannot initialize", async () => {
     const boundSessionKey = "agent:codex:acp:binding:telegram:default:feedface";

@@ -1,24 +1,21 @@
-import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   collectPluginExtensionImportBoundaryInventory,
   diffInventory,
+  main,
 } from "../scripts/check-plugin-extension-import-boundary.mjs";
+import { createCapturedIo } from "./helpers/captured-io.js";
 
 const repoRoot = process.cwd();
-const scriptPath = path.join(repoRoot, "scripts", "check-plugin-extension-import-boundary.mjs");
 const baselinePath = path.join(
   repoRoot,
   "test",
   "fixtures",
   "plugin-extension-import-boundary-inventory.json",
 );
-
-function readBaseline() {
-  return JSON.parse(readFileSync(baselinePath, "utf8"));
-}
+const baseline = JSON.parse(readFileSync(baselinePath, "utf8"));
 
 describe("plugin extension import boundary inventory", () => {
   it("keeps dedicated web-search registry shims out of the remaining inventory", async () => {
@@ -59,18 +56,17 @@ describe("plugin extension import boundary inventory", () => {
   });
 
   it("matches the checked-in baseline", async () => {
-    const expected = readBaseline();
     const actual = await collectPluginExtensionImportBoundaryInventory();
 
-    expect(diffInventory(expected, actual)).toEqual({ missing: [], unexpected: [] });
+    expect(diffInventory(baseline, actual)).toEqual({ missing: [], unexpected: [] });
   });
 
-  it("script json output matches the baseline exactly", () => {
-    const stdout = execFileSync(process.execPath, [scriptPath, "--json"], {
-      cwd: repoRoot,
-      encoding: "utf8",
-    });
+  it("script json output matches the baseline exactly", async () => {
+    const captured = createCapturedIo();
+    const exitCode = await main(["--json"], captured.io);
 
-    expect(JSON.parse(stdout)).toEqual(readBaseline());
+    expect(exitCode).toBe(0);
+    expect(captured.readStderr()).toBe("");
+    expect(JSON.parse(captured.readStdout())).toEqual(baseline);
   });
 });

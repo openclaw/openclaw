@@ -2,6 +2,7 @@
 // off direct src/auto-reply imports by routing common reply primitives here.
 
 export {
+  chunkMarkdownText,
   chunkMarkdownTextWithMode,
   chunkText,
   chunkTextWithMode,
@@ -47,3 +48,8 @@ export type {
 export { createReplyReferencePlanner } from "../auto-reply/reply/reply-reference.js";
 export type { GetReplyOptions, ReplyPayload } from "../auto-reply/types.js";
 export type { FinalizedMsgContext, MsgContext } from "../auto-reply/templating.js";
+export {
+  resolveAutoTopicLabelConfig,
+  generateTopicLabel,
+} from "../auto-reply/reply/auto-topic-label.js";
+export type { AutoTopicLabelParams } from "../auto-reply/reply/auto-topic-label.js";

@@ -1,4 +1,4 @@
-import { vi, type Mock } from "vitest";
+import { expect, vi, type Mock } from "vitest";
 import type { MatrixClient } from "./sdk.js";
 
 type MatrixClientResolverMocks = {
@@ -91,4 +91,57 @@ export function primeMatrixClientResolverMocks(params?: {
   acquireSharedMatrixClientMock.mockResolvedValue(client);
 
   return client;
+}
+
+export async function expectOneOffSharedMatrixClient(params?: {
+  cfg?: unknown;
+  accountId?: string;
+  timeoutMs?: number;
+  prepareForOneOffCalls?: number;
+  startCalls?: number;
+  releaseMode?: "persist" | "stop";
+}) {
+  const {
+    getActiveMatrixClientMock,
+    acquireSharedMatrixClientMock,
+    releaseSharedClientInstanceMock,
+  } = matrixClientResolverMocks;
+  const accountId = params?.accountId ?? "default";
+  const prepareForOneOffCalls = params?.prepareForOneOffCalls ?? 1;
+  const startCalls = params?.startCalls ?? 0;
+  const releaseMode = params?.releaseMode ?? "stop";
+
+  expect(getActiveMatrixClientMock).toHaveBeenCalledWith(accountId);
+  expect(acquireSharedMatrixClientMock).toHaveBeenCalledTimes(1);
+  expect(acquireSharedMatrixClientMock).toHaveBeenCalledWith({
+    cfg: params?.cfg ?? {},
+    timeoutMs: params?.timeoutMs,
+    accountId,
+    startClient: false,
+  });
+
+  const sharedClient = await acquireSharedMatrixClientMock.mock.results[0]?.value;
+  expect(sharedClient.prepareForOneOff).toHaveBeenCalledTimes(prepareForOneOffCalls);
+  expect(sharedClient.start).toHaveBeenCalledTimes(startCalls);
+  expect(releaseSharedClientInstanceMock).toHaveBeenCalledWith(sharedClient, releaseMode);
+
+  return sharedClient;
+}
+
+export function expectExplicitMatrixClientConfig(params: { cfg: unknown; accountId?: string }) {
+  const { getMatrixRuntimeMock, resolveMatrixAuthContextMock, acquireSharedMatrixClientMock } =
+    matrixClientResolverMocks;
+  const accountId = params.accountId ?? "default";
+
+  expect(getMatrixRuntimeMock).not.toHaveBeenCalled();
+  expect(resolveMatrixAuthContextMock).toHaveBeenCalledWith({
+    cfg: params.cfg,
+    accountId,
+  });
+  expect(acquireSharedMatrixClientMock).toHaveBeenCalledWith({
+    cfg: params.cfg,
+    timeoutMs: undefined,
+    accountId,
+    startClient: false,
+  });
 }

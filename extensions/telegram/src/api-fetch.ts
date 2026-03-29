@@ -1,11 +1,48 @@
+import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/telegram-core";
+import { resolveTelegramApiBase, resolveTelegramFetch } from "./fetch.js";
+import { makeProxyFetch } from "./proxy.js";
+
+export function resolveTelegramChatLookupFetch(params?: {
+  proxyUrl?: string;
+  network?: TelegramNetworkConfig;
+}): typeof fetch {
+  const proxyUrl = params?.proxyUrl?.trim();
+  const proxyFetch = proxyUrl ? makeProxyFetch(proxyUrl) : undefined;
+  return resolveTelegramFetch(proxyFetch, { network: params?.network });
+}
+
+export async function lookupTelegramChatId(params: {
+  token: string;
+  chatId: string;
+  signal?: AbortSignal;
+  apiRoot?: string;
+  proxyUrl?: string;
+  network?: TelegramNetworkConfig;
+}): Promise<string | null> {
+  return fetchTelegramChatId({
+    token: params.token,
+    chatId: params.chatId,
+    signal: params.signal,
+    apiRoot: params.apiRoot,
+    fetchImpl: resolveTelegramChatLookupFetch({
+      proxyUrl: params.proxyUrl,
+      network: params.network,
+    }),
+  });
+}
+
 export async function fetchTelegramChatId(params: {
   token: string;
   chatId: string;
   signal?: AbortSignal;
+  apiRoot?: string;
+  fetchImpl?: typeof fetch;
 }): Promise<string | null> {
-  const url = `https://api.telegram.org/bot${params.token}/getChat?chat_id=${encodeURIComponent(params.chatId)}`;
+  const apiBase = resolveTelegramApiBase(params.apiRoot);
+  const url = `${apiBase}/bot${params.token}/getChat?chat_id=${encodeURIComponent(params.chatId)}`;
+  const fetchImpl = params.fetchImpl ?? fetch;
   try {
-    const res = await fetch(url, params.signal ? { signal: params.signal } : undefined);
+    const res = await fetchImpl(url, params.signal ? { signal: params.signal } : undefined);
     if (!res.ok) {
       return null;
     }

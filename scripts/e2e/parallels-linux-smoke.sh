@@ -2,9 +2,14 @@
 set -euo pipefail
 
 VM_NAME="Ubuntu 24.04.3 ARM64"
+VM_NAME_EXPLICIT=0
 SNAPSHOT_HINT="fresh"
 MODE="both"
-OPENAI_API_KEY_ENV="OPENAI_API_KEY"
+PROVIDER="openai"
+API_KEY_ENV=""
+AUTH_CHOICE=""
+AUTH_KEY_FLAG=""
+MODEL_ID=""
 INSTALL_URL="https://openclaw.ai/install.sh"
 HOST_PORT="18427"
 HOST_PORT_EXPLICIT=0
@@ -78,9 +83,14 @@ Usage: bash scripts/e2e/parallels-linux-smoke.sh [options]
 
 Options:
   --vm <name>                Parallels VM name. Default: "Ubuntu 24.04.3 ARM64"
+                             Falls back to the closest Ubuntu VM when omitted and unavailable.
   --snapshot-hint <name>     Snapshot name substring/fuzzy match. Default: "fresh"
   --mode <fresh|upgrade|both>
-  --openai-api-key-env <var> Host env var name for OpenAI API key. Default: OPENAI_API_KEY
+  --provider <openai|anthropic|minimax>
+                             Provider auth/model lane. Default: openai
+  --api-key-env <var>        Host env var name for provider API key.
+                             Default: OPENAI_API_KEY for openai, ANTHROPIC_API_KEY for anthropic
+  --openai-api-key-env <var> Alias for --api-key-env (backward compatible)
   --install-url <url>        Installer URL for latest release. Default: https://openclaw.ai/install.sh
   --host-port <port>         Host HTTP port for current-main tgz. Default: 18427
   --host-ip <ip>             Override Parallels host IP.
@@ -97,8 +107,12 @@ EOF
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --)
+      shift
+      ;;
     --vm)
       VM_NAME="$2"
+      VM_NAME_EXPLICIT=1
       shift 2
       ;;
     --snapshot-hint)
@@ -109,8 +123,12 @@ while [[ $# -gt 0 ]]; do
       MODE="$2"
       shift 2
       ;;
-    --openai-api-key-env)
-      OPENAI_API_KEY_ENV="$2"
+    --provider)
+      PROVIDER="$2"
+      shift 2
+      ;;
+    --api-key-env|--openai-api-key-env)
+      API_KEY_ENV="$2"
       shift 2
       ;;
     --install-url)
@@ -163,8 +181,68 @@ case "$MODE" in
     ;;
 esac
 
-OPENAI_API_KEY_VALUE="${!OPENAI_API_KEY_ENV:-}"
-[[ -n "$OPENAI_API_KEY_VALUE" ]] || die "$OPENAI_API_KEY_ENV is required"
+case "$PROVIDER" in
+  openai)
+    AUTH_CHOICE="openai-api-key"
+    AUTH_KEY_FLAG="openai-api-key"
+    MODEL_ID="openai/gpt-5.4"
+    [[ -n "$API_KEY_ENV" ]] || API_KEY_ENV="OPENAI_API_KEY"
+    ;;
+  anthropic)
+    AUTH_CHOICE="apiKey"
+    AUTH_KEY_FLAG="anthropic-api-key"
+    MODEL_ID="anthropic/claude-sonnet-4-6"
+    [[ -n "$API_KEY_ENV" ]] || API_KEY_ENV="ANTHROPIC_API_KEY"
+    ;;
+  minimax)
+    AUTH_CHOICE="minimax-global-api"
+    AUTH_KEY_FLAG="minimax-api-key"
+    MODEL_ID="minimax/MiniMax-M2.7"
+    [[ -n "$API_KEY_ENV" ]] || API_KEY_ENV="MINIMAX_API_KEY"
+    ;;
+  *)
+    die "invalid --provider: $PROVIDER"
+    ;;
+esac
+
+API_KEY_VALUE="${!API_KEY_ENV:-}"
+[[ -n "$API_KEY_VALUE" ]] || die "$API_KEY_ENV is required"
+
+resolve_vm_name() {
+  local json requested explicit
+  json="$(prlctl list --all --json)"
+  requested="$VM_NAME"
+  explicit="$VM_NAME_EXPLICIT"
+  PRL_VM_JSON="$json" REQUESTED_VM_NAME="$requested" VM_NAME_EXPLICIT="$explicit" python3 - <<'PY'
+import difflib
+import json
+import os
+import sys
+
+payload = json.loads(os.environ["PRL_VM_JSON"])
+requested = os.environ["REQUESTED_VM_NAME"].strip()
+requested_lower = requested.lower()
+explicit = os.environ["VM_NAME_EXPLICIT"] == "1"
+names = [str(item.get("name", "")).strip() for item in payload if str(item.get("name", "")).strip()]
+
+if requested in names:
+    print(requested)
+    raise SystemExit(0)
+
+if explicit:
+    sys.exit(f"vm not found: {requested}")
+
+ubuntu_names = [name for name in names if "ubuntu" in name.lower()]
+if not ubuntu_names:
+    sys.exit(f"default vm not found and no Ubuntu fallback available: {requested}")
+
+best_name = max(
+    ubuntu_names,
+    key=lambda name: difflib.SequenceMatcher(None, requested_lower, name.lower()).ratio(),
+)
+print(best_name)
+PY
+}
 
 resolve_snapshot_info() {
   local json hint
@@ -484,10 +562,10 @@ verify_version_contains() {
 }
 
 run_ref_onboard() {
-  guest_exec /usr/bin/env "OPENAI_API_KEY=$OPENAI_API_KEY_VALUE" openclaw onboard \
+  guest_exec /usr/bin/env "$API_KEY_ENV=$API_KEY_VALUE" openclaw onboard \
     --non-interactive \
     --mode local \
-    --auth-choice openai-api-key \
+    --auth-choice "$AUTH_CHOICE" \
     --secret-input-mode ref \
     --gateway-port 18789 \
     --gateway-bind loopback \
@@ -498,7 +576,8 @@ run_ref_onboard() {
 }
 
 verify_local_turn() {
-  guest_exec /usr/bin/env "OPENAI_API_KEY=$OPENAI_API_KEY_VALUE" openclaw agent \
+  guest_exec openclaw models set "$MODEL_ID"
+  guest_exec /usr/bin/env "$API_KEY_ENV=$API_KEY_VALUE" openclaw agent \
     --local \
     --agent main \
     --message ping \
@@ -588,6 +667,7 @@ summary = {
     "snapshotHint": os.environ["SUMMARY_SNAPSHOT_HINT"],
     "snapshotId": os.environ["SUMMARY_SNAPSHOT_ID"],
     "mode": os.environ["SUMMARY_MODE"],
+    "provider": os.environ["SUMMARY_PROVIDER"],
     "latestVersion": os.environ["SUMMARY_LATEST_VERSION"],
     "installVersion": os.environ["SUMMARY_INSTALL_VERSION"],
     "targetPackageSpec": os.environ["SUMMARY_TARGET_PACKAGE_SPEC"],
@@ -646,6 +726,12 @@ run_upgrade_lane() {
   UPGRADE_AGENT_STATUS="pass"
 }
 
+RESOLVED_VM_NAME="$(resolve_vm_name)"
+if [[ "$RESOLVED_VM_NAME" != "$VM_NAME" ]]; then
+  warn "requested VM $VM_NAME not found; using $RESOLVED_VM_NAME"
+  VM_NAME="$RESOLVED_VM_NAME"
+fi
+
 IFS=$'\t' read -r SNAPSHOT_ID SNAPSHOT_STATE SNAPSHOT_NAME <<<"$(resolve_snapshot_info)"
 [[ -n "$SNAPSHOT_ID" ]] || die "failed to resolve snapshot id"
 [[ -n "$SNAPSHOT_NAME" ]] || SNAPSHOT_NAME="$SNAPSHOT_HINT"
@@ -697,6 +783,7 @@ SUMMARY_JSON_PATH="$(
   SUMMARY_SNAPSHOT_HINT="$SNAPSHOT_HINT" \
   SUMMARY_SNAPSHOT_ID="$SNAPSHOT_ID" \
   SUMMARY_MODE="$MODE" \
+  SUMMARY_PROVIDER="$PROVIDER" \
   SUMMARY_LATEST_VERSION="$LATEST_VERSION" \
   SUMMARY_INSTALL_VERSION="$INSTALL_VERSION" \
   SUMMARY_TARGET_PACKAGE_SPEC="$TARGET_PACKAGE_SPEC" \

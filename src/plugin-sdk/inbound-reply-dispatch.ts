@@ -27,6 +27,7 @@ export async function dispatchReplyFromConfigWithSettledDispatcher(params: {
   dispatcher: ReplyDispatcher;
   onSettled: () => void | Promise<void>;
   replyOptions?: ReplyDispatchFromConfigOptions;
+  configOverride?: OpenClawConfig;
 }): Promise<DispatchFromConfigResult> {
   return await withReplyDispatcher({
     dispatcher: params.dispatcher,
@@ -37,6 +38,7 @@ export async function dispatchReplyFromConfigWithSettledDispatcher(params: {
         cfg: params.cfg,
         dispatcher: params.dispatcher,
         replyOptions: params.replyOptions,
+        configOverride: params.configOverride,
       }),
   });
 }

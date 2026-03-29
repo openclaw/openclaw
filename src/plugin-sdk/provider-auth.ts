@@ -6,16 +6,18 @@ export type { ProviderAuthResult } from "../plugins/types.js";
 export type { ProviderAuthContext } from "../plugins/types.js";
 export type { AuthProfileStore, OAuthCredential } from "../agents/auth-profiles/types.js";
 
+export { CLAUDE_CLI_PROFILE_ID, CODEX_CLI_PROFILE_ID } from "../agents/auth-profiles/constants.js";
+export { ensureAuthProfileStore } from "../agents/auth-profiles/store.js";
 export {
-  CLAUDE_CLI_PROFILE_ID,
-  CODEX_CLI_PROFILE_ID,
-  ensureAuthProfileStore,
   listProfilesForProvider,
-  suggestOAuthProfileIdForLegacyDefault,
   upsertAuthProfile,
-} from "../agents/auth-profiles.js";
+  upsertAuthProfileWithLock,
+} from "../agents/auth-profiles/profiles.js";
+export { readClaudeCliCredentialsCached } from "../agents/cli-credentials.js";
+export { suggestOAuthProfileIdForLegacyDefault } from "../agents/auth-profiles/repair.js";
 export {
   MINIMAX_OAUTH_MARKER,
+  isNonSecretApiKeyMarker,
   resolveOAuthApiKeyMarker,
   resolveNonEnvSecretRefApiKeyMarker,
 } from "../agents/model-auth-markers.js";

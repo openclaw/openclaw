@@ -218,6 +218,24 @@ describe("createTelegramDraftStream", () => {
     );
   });
 
+  it("keeps allow_sending_without_reply on message previews that target a reply", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api, {
+      thread: { id: 42, scope: "dm" },
+      previewTransport: "message",
+      replyToMessageId: 411,
+    });
+
+    stream.update("Hello");
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello", {
+      message_thread_id: 42,
+      reply_to_message_id: 411,
+      allow_sending_without_reply: true,
+    });
+  });
+
   it("materializes draft previews using rendered HTML text", async () => {
     const api = createMockDraftApi();
     const stream = createDraftStream(api, {

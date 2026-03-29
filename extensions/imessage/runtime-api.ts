@@ -1,7 +1,9 @@
 export {
   DEFAULT_ACCOUNT_ID,
   PAIRING_APPROVED_MESSAGE,
+  buildComputedAccountStatusSnapshot,
   buildChannelConfigSchema,
+  chunkTextForOutbound,
   collectStatusIssuesFromLastError,
   formatTrimmedAllowFromEntries,
   getChatChannelMeta,
@@ -13,7 +15,7 @@ export {
   IMessageConfigSchema,
   type ChannelPlugin,
   type IMessageAccountConfig,
-} from "../../src/plugin-sdk/imessage.js";
+} from "openclaw/plugin-sdk/imessage";
 export {
   resolveIMessageGroupRequireMention,
   resolveIMessageGroupToolPolicy,
@@ -22,4 +24,5 @@ export {
 export { monitorIMessageProvider } from "./src/monitor.js";
 export type { MonitorIMessageOpts } from "./src/monitor.js";
 export { probeIMessage } from "./src/probe.js";
+export type { IMessageProbe } from "./src/probe.js";
 export { sendMessageIMessage } from "./src/send.js";

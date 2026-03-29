@@ -1,5 +1,4 @@
-import { resolveOpenAITtsInstructions } from "../../api.js";
-import { pcmToMulaw } from "../telephony-audio.js";
+import { convertPcmToMulaw8k } from "../telephony-audio.js";
 
 /**
  * OpenAI TTS Provider
@@ -70,6 +69,11 @@ export type OpenAITTSVoice = (typeof OPENAI_TTS_VOICES)[number];
 function trimToUndefined(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
+}
+
+function resolveOpenAITtsInstructions(model: string, instructions?: string): string | undefined {
+  const next = trimToUndefined(instructions);
+  return next && model.includes("gpt-4o-mini-tts") ? next : undefined;
 }
 
 /**
@@ -145,49 +149,9 @@ export class OpenAITTSProvider {
     // Get raw PCM from OpenAI (24kHz, 16-bit signed LE, mono)
     const pcm24k = await this.synthesize(text);
 
-    // Resample from 24kHz to 8kHz
-    const pcm8k = resample24kTo8k(pcm24k);
-
-    // Encode to mu-law
-    return pcmToMulaw(pcm8k);
+    // Convert from 24kHz PCM to Twilio-compatible 8kHz mu-law
+    return convertPcmToMulaw8k(pcm24k, 24000);
   }
-}
-
-/**
- * Resample 24kHz PCM to 8kHz using linear interpolation.
- * Input/output: 16-bit signed little-endian mono.
- */
-function resample24kTo8k(input: Buffer): Buffer {
-  const inputSamples = input.length / 2;
-  const outputSamples = Math.floor(inputSamples / 3);
-  const output = Buffer.alloc(outputSamples * 2);
-
-  for (let i = 0; i < outputSamples; i++) {
-    // Calculate position in input (3:1 ratio)
-    const srcPos = i * 3;
-    const srcIdx = srcPos * 2;
-
-    if (srcIdx + 3 < input.length) {
-      // Linear interpolation between samples
-      const s0 = input.readInt16LE(srcIdx);
-      const s1 = input.readInt16LE(srcIdx + 2);
-      const frac = srcPos % 1 || 0;
-      const sample = Math.round(s0 + frac * (s1 - s0));
-      output.writeInt16LE(clamp16(sample), i * 2);
-    } else {
-      // Last sample
-      output.writeInt16LE(input.readInt16LE(srcIdx), i * 2);
-    }
-  }
-
-  return output;
-}
-
-/**
- * Clamp value to 16-bit signed integer range.
- */
-function clamp16(value: number): number {
-  return Math.max(-32768, Math.min(32767, value));
 }
 
 /**

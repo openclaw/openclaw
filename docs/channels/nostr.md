@@ -35,7 +35,7 @@ openclaw plugins install @openclaw/nostr
 Use a local checkout (dev workflows):
 
 ```bash
-openclaw plugins install --link <path-to-openclaw>/extensions/nostr
+openclaw plugins install --link <path-to-local-nostr-plugin>
 ```
 
 Restart the Gateway after installing or enabling plugins.
@@ -129,6 +129,12 @@ Notes:
 - **allowlist**: only pubkeys in `allowFrom` can DM.
 - **open**: public inbound DMs (requires `allowFrom: ["*"]`).
 - **disabled**: ignore inbound DMs.
+
+Enforcement notes:
+
+- Sender policy is checked before signature verification and NIP-04 decryption.
+- Pairing replies are sent without processing the original DM body.
+- Inbound DMs are rate-limited and oversized payloads are dropped before decrypt.
 
 ### Allowlist example
 
@@ -234,6 +240,7 @@ docker run -p 7777:7777 ghcr.io/hoytech/strfry
 - Never commit private keys.
 - Use environment variables for keys.
 - Consider `allowlist` for production bots.
+- Pairing and allowlist policy is enforced before decrypt, so unknown senders cannot force full crypto work.
 
 ## Limitations (MVP)
 

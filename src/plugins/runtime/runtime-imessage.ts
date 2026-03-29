@@ -2,7 +2,7 @@ import {
   monitorIMessageProvider,
   probeIMessage,
   sendMessageIMessage,
-} from "../../../extensions/imessage/runtime-api.js";
+} from "../../plugin-sdk/imessage.js";
 import type { PluginRuntimeChannel } from "./types-channel.js";
 
 export function createRuntimeIMessage(): PluginRuntimeChannel["imessage"] {

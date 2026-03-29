@@ -37,7 +37,6 @@ import {
   DEFAULT_WORKSPACE,
   ensureWorkspaceAndSessions,
   guardCancel,
-  printWizardHeader,
   probeGatewayReachable,
   resolveControlUiLinks,
   summarizeExistingConfig,
@@ -88,12 +87,8 @@ async function runGatewayHealthCheck(params: {
     value: params.cfg.gateway?.auth?.password,
     path: "gateway.auth.password",
   });
-  const token =
-    process.env.OPENCLAW_GATEWAY_TOKEN ?? process.env.CLAWDBOT_GATEWAY_TOKEN ?? configuredToken;
-  const password =
-    process.env.OPENCLAW_GATEWAY_PASSWORD ??
-    process.env.CLAWDBOT_GATEWAY_PASSWORD ??
-    configuredPassword;
+  const token = process.env.OPENCLAW_GATEWAY_TOKEN ?? configuredToken;
+  const password = process.env.OPENCLAW_GATEWAY_PASSWORD ?? configuredPassword;
 
   await waitForGatewayReachable({
     url: wsUrl,
@@ -163,50 +158,17 @@ async function promptChannelMode(runtime: RuntimeEnv): Promise<ChannelsWizardMod
 async function promptWebToolsConfig(
   nextConfig: OpenClawConfig,
   runtime: RuntimeEnv,
+  prompter: ReturnType<typeof createClackPrompter>,
 ): Promise<OpenClawConfig> {
   const existingSearch = nextConfig.tools?.web?.search;
   const existingFetch = nextConfig.tools?.web?.fetch;
-  const {
-    resolveSearchProviderOptions,
-    resolveExistingKey,
-    hasExistingKey,
-    applySearchKey,
-    applySearchProviderSelection,
-    hasKeyInEnv,
-  } = await import("./onboard-search.js");
+  const { resolveSearchProviderOptions, setupSearch } = await import("./onboard-search.js");
   const searchProviderOptions = resolveSearchProviderOptions(nextConfig);
-  const defaultProvider = searchProviderOptions[0]?.id;
-
-  const hasKeyForProvider = (provider: string): boolean => {
-    const entry = searchProviderOptions.find((e) => e.id === provider);
-    if (!entry) {
-      return false;
-    }
-    return hasExistingKey(nextConfig, provider) || hasKeyInEnv(entry);
-  };
-
-  const existingProvider = (() => {
-    const stored = existingSearch?.provider;
-    if (stored && searchProviderOptions.some((e) => e.id === stored)) {
-      return stored;
-    }
-    return searchProviderOptions.find((e) => hasKeyForProvider(e.id))?.id ?? defaultProvider;
-  })();
-
-  note(
-    [
-      "Web search lets your agent look things up online using the `web_search` tool.",
-      "Choose a provider and paste your API key.",
-      "Docs: https://docs.openclaw.ai/tools/web",
-    ].join("\n"),
-    "Web search",
-  );
 
   const enableSearch = guardCancel(
     await confirm({
       message: "Enable web_search?",
-      initialValue:
-        existingSearch?.enabled ?? searchProviderOptions.some((e) => hasKeyForProvider(e.id)),
+      initialValue: existingSearch?.enabled ?? searchProviderOptions.length > 0,
     }),
     runtime,
   );
@@ -232,65 +194,11 @@ async function promptWebToolsConfig(
         enabled: false,
       };
     } else {
-      const providerOptions = searchProviderOptions.map((entry) => {
-        const configured = hasKeyForProvider(entry.id);
-        return {
-          value: entry.id,
-          label: entry.label,
-          hint: configured ? `${entry.hint} · configured` : entry.hint,
-        };
-      });
-
-      const providerChoice = guardCancel(
-        await select({
-          message: "Choose web search provider",
-          options: providerOptions,
-          initialValue: existingProvider,
-        }),
-        runtime,
-      );
-
-      nextSearch = { ...nextSearch, provider: providerChoice };
-
-      const entry = searchProviderOptions.find((e) => e.id === providerChoice)!;
-      const existingKey = resolveExistingKey(nextConfig, providerChoice);
-      const keyConfigured = hasExistingKey(nextConfig, providerChoice);
-      const envAvailable = entry.envVars.some((k) => Boolean(process.env[k]?.trim()));
-      const envVarNames = entry.envVars.join(" / ");
-
-      const keyInput = guardCancel(
-        await text({
-          message: keyConfigured
-            ? envAvailable
-              ? `${entry.label} API key (leave blank to keep current or use ${envVarNames})`
-              : `${entry.label} API key (leave blank to keep current)`
-            : envAvailable
-              ? `${entry.label} API key (paste it here; leave blank to use ${envVarNames})`
-              : `${entry.label} API key`,
-          placeholder: keyConfigured ? "Leave blank to keep current" : entry.placeholder,
-        }),
-        runtime,
-      );
-      const key = String(keyInput ?? "").trim();
-
-      if (key || existingKey) {
-        workingConfig = applySearchKey(workingConfig, providerChoice, (key || existingKey)!);
-        nextSearch = { ...workingConfig.tools?.web?.search };
-      } else if (keyConfigured || envAvailable) {
-        workingConfig = applySearchProviderSelection(workingConfig, providerChoice);
-        nextSearch = { ...workingConfig.tools?.web?.search };
-      } else {
-        nextSearch = { ...nextSearch, provider: providerChoice };
-        note(
-          [
-            "No key stored yet — web_search won't work until a key is available.",
-            `Store a key here or set ${envVarNames} in the Gateway environment.`,
-            `Get your API key at: ${entry.signupUrl}`,
-            "Docs: https://docs.openclaw.ai/tools/web",
-          ].join("\n"),
-          "Web search",
-        );
-      }
+      workingConfig = await setupSearch(workingConfig, runtime, prompter);
+      nextSearch = {
+        ...workingConfig.tools?.web?.search,
+        enabled: workingConfig.tools?.web?.search?.provider ? true : existingSearch?.enabled,
+      };
     }
   }
 
@@ -325,7 +233,6 @@ export async function runConfigureWizard(
   runtime: RuntimeEnv = defaultRuntime,
 ) {
   try {
-    printWizardHeader(runtime);
     intro(opts.command === "update" ? "OpenClaw update wizard" : "OpenClaw configure");
     const prompter = createClackPrompter();
 
@@ -367,14 +274,8 @@ export async function runConfigureWizard(
     });
     const localProbe = await probeGatewayReachable({
       url: localUrl,
-      token:
-        process.env.OPENCLAW_GATEWAY_TOKEN ??
-        process.env.CLAWDBOT_GATEWAY_TOKEN ??
-        baseLocalProbeToken,
-      password:
-        process.env.OPENCLAW_GATEWAY_PASSWORD ??
-        process.env.CLAWDBOT_GATEWAY_PASSWORD ??
-        baseLocalProbePassword,
+      token: process.env.OPENCLAW_GATEWAY_TOKEN ?? baseLocalProbeToken,
+      password: process.env.OPENCLAW_GATEWAY_PASSWORD ?? baseLocalProbePassword,
     });
     const remoteUrl = baseConfig.gateway?.remote?.url?.trim() ?? "";
     const baseRemoteProbeToken = await resolveGatewaySecretInputForWizard({
@@ -544,7 +445,7 @@ export async function runConfigureWizard(
       }
 
       if (selected.includes("web")) {
-        nextConfig = await promptWebToolsConfig(nextConfig, runtime);
+        nextConfig = await promptWebToolsConfig(nextConfig, runtime, prompter);
       }
 
       if (selected.includes("gateway")) {
@@ -597,7 +498,7 @@ export async function runConfigureWizard(
         }
 
         if (choice === "web") {
-          nextConfig = await promptWebToolsConfig(nextConfig, runtime);
+          nextConfig = await promptWebToolsConfig(nextConfig, runtime, prompter);
           await persistConfig();
         }
 
@@ -658,10 +559,9 @@ export async function runConfigureWizard(
       customBindHost: nextConfig.gateway?.customBindHost,
       basePath: nextConfig.gateway?.controlUi?.basePath,
     });
-    // Try both new and old passwords since gateway may still have old config.
+    // Try both newly written and preexisting passwords while the gateway restarts.
     const newPassword =
       process.env.OPENCLAW_GATEWAY_PASSWORD ??
-      process.env.CLAWDBOT_GATEWAY_PASSWORD ??
       (await resolveGatewaySecretInputForWizard({
         cfg: nextConfig,
         value: nextConfig.gateway?.auth?.password,
@@ -669,7 +569,6 @@ export async function runConfigureWizard(
       }));
     const oldPassword =
       process.env.OPENCLAW_GATEWAY_PASSWORD ??
-      process.env.CLAWDBOT_GATEWAY_PASSWORD ??
       (await resolveGatewaySecretInputForWizard({
         cfg: baseConfig,
         value: baseConfig.gateway?.auth?.password,
@@ -677,7 +576,6 @@ export async function runConfigureWizard(
       }));
     const token =
       process.env.OPENCLAW_GATEWAY_TOKEN ??
-      process.env.CLAWDBOT_GATEWAY_TOKEN ??
       (await resolveGatewaySecretInputForWizard({
         cfg: nextConfig,
         value: nextConfig.gateway?.auth?.token,

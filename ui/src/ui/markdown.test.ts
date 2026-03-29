@@ -162,4 +162,22 @@ describe("toSanitizedMarkdownHtml", () => {
       warnSpy.mockRestore();
     }
   });
+
+  it("keeps adjacent trailing CJK text outside bare auto-links", () => {
+    const html = toSanitizedMarkdownHtml("https://example.com重新解读");
+    expect(html).toContain('<a href="https://example.com"');
+    expect(html).toContain(">https://example.com</a>重新解读");
+  });
+
+  it("preserves valid mixed-script query parameters inside auto-links", () => {
+    const html = toSanitizedMarkdownHtml("https://api.example.com?q=重新&lang=en");
+    expect(html).toContain('href="https://api.example.com?q=%E9%87%8D%E6%96%B0&amp;lang=en"');
+    expect(html).toContain(">https://api.example.com?q=重新&amp;lang=en</a>");
+  });
+
+  it("preserves valid mixed-script path segments inside auto-links", () => {
+    const html = toSanitizedMarkdownHtml("https://example.com/path/重新/file");
+    expect(html).toContain('href="https://example.com/path/%E9%87%8D%E6%96%B0/file"');
+    expect(html).toContain(">https://example.com/path/重新/file</a>");
+  });
 });

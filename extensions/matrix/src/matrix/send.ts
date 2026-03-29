@@ -1,4 +1,4 @@
-import type { PollInput } from "../runtime-api.js";
+import type { MarkdownTableMode, PollInput } from "../runtime-api.js";
 import { getMatrixRuntime } from "../runtime.js";
 import type { CoreConfig } from "../types.js";
 import { buildPollStartContent, M_POLL_START } from "./poll-types.js";
@@ -22,6 +22,7 @@ import { normalizeThreadId, resolveMatrixRoomId } from "./send/targets.js";
 import {
   EventType,
   MsgType,
+  RelationType,
   type MatrixOutboundContent,
   type MatrixSendOpts,
   type MatrixSendResult,
@@ -32,6 +33,17 @@ const getCore = () => getMatrixRuntime();
 
 export type { MatrixSendOpts, MatrixSendResult } from "./send/types.js";
 export { resolveMatrixRoomId } from "./send/targets.js";
+
+export type MatrixPreparedSingleText = {
+  trimmedText: string;
+  convertedText: string;
+  singleEventLimit: number;
+  fitsInSingleEvent: boolean;
+};
+
+export type MatrixPreparedChunkedText = MatrixPreparedSingleText & {
+  chunks: string[];
+};
 
 type MatrixClientResolveOpts = {
   client?: MatrixClient;
@@ -61,6 +73,57 @@ function normalizeMatrixClientResolveOpts(
   };
 }
 
+export function prepareMatrixSingleText(
+  text: string,
+  opts: {
+    cfg?: CoreConfig;
+    accountId?: string;
+    tableMode?: MarkdownTableMode;
+  } = {},
+): MatrixPreparedSingleText {
+  const trimmedText = text.trim();
+  const cfg = opts.cfg ?? getCore().config.loadConfig();
+  const tableMode =
+    opts.tableMode ??
+    getCore().channel.text.resolveMarkdownTableMode({
+      cfg,
+      channel: "matrix",
+      accountId: opts.accountId,
+    });
+  const convertedText = getCore().channel.text.convertMarkdownTables(trimmedText, tableMode);
+  const singleEventLimit = Math.min(
+    getCore().channel.text.resolveTextChunkLimit(cfg, "matrix", opts.accountId),
+    MATRIX_TEXT_LIMIT,
+  );
+  return {
+    trimmedText,
+    convertedText,
+    singleEventLimit,
+    fitsInSingleEvent: convertedText.length <= singleEventLimit,
+  };
+}
+
+export function chunkMatrixText(
+  text: string,
+  opts: {
+    cfg?: CoreConfig;
+    accountId?: string;
+    tableMode?: MarkdownTableMode;
+  } = {},
+): MatrixPreparedChunkedText {
+  const preparedText = prepareMatrixSingleText(text, opts);
+  const cfg = opts.cfg ?? getCore().config.loadConfig();
+  const chunkMode = getCore().channel.text.resolveChunkMode(cfg, "matrix", opts.accountId);
+  return {
+    ...preparedText,
+    chunks: getCore().channel.text.chunkMarkdownTextWithMode(
+      preparedText.convertedText,
+      preparedText.singleEventLimit,
+      chunkMode,
+    ),
+  };
+}
+
 export async function sendMessageMatrix(
   to: string,
   message: string | undefined,
@@ -80,23 +143,10 @@ export async function sendMessageMatrix(
     async (client) => {
       const roomId = await resolveMatrixRoomId(client, to);
       const cfg = opts.cfg ?? getCore().config.loadConfig();
-      const tableMode = getCore().channel.text.resolveMarkdownTableMode({
+      const { chunks } = chunkMatrixText(trimmedMessage, {
         cfg,
-        channel: "matrix",
         accountId: opts.accountId,
       });
-      const convertedMessage = getCore().channel.text.convertMarkdownTables(
-        trimmedMessage,
-        tableMode,
-      );
-      const textLimit = getCore().channel.text.resolveTextChunkLimit(cfg, "matrix", opts.accountId);
-      const chunkLimit = Math.min(textLimit, MATRIX_TEXT_LIMIT);
-      const chunkMode = getCore().channel.text.resolveChunkMode(cfg, "matrix", opts.accountId);
-      const chunks = getCore().channel.text.chunkMarkdownTextWithMode(
-        convertedMessage,
-        chunkLimit,
-        chunkMode,
-      );
       const threadId = normalizeThreadId(opts.threadId);
       const relation = threadId
         ? buildThreadRelation(threadId, opts.replyToId)
@@ -156,7 +206,9 @@ export async function sendMessageMatrix(
         const eventId = await sendContent(content);
         lastMessageId = eventId ?? lastMessageId;
         const textChunks = useVoice ? chunks : rest;
-        const followupRelation = threadId ? relation : undefined;
+        // Voice messages use a generic media body ("Voice message"), so keep any
+        // transcript follow-up attached to the same reply/thread context.
+        const followupRelation = useVoice || threadId ? relation : undefined;
         for (const chunk of textChunks) {
           const text = chunk.trim();
           if (!text) {
@@ -252,6 +304,109 @@ export async function sendReadReceiptMatrix(
     const resolvedRoom = await resolveMatrixRoomId(resolved, roomId);
     await resolved.sendReadReceipt(resolvedRoom, eventId.trim());
   });
+}
+
+export async function sendSingleTextMessageMatrix(
+  roomId: string,
+  text: string,
+  opts: {
+    client?: MatrixClient;
+    cfg?: CoreConfig;
+    replyToId?: string;
+    threadId?: string;
+    accountId?: string;
+  } = {},
+): Promise<MatrixSendResult> {
+  const { trimmedText, convertedText, singleEventLimit, fitsInSingleEvent } =
+    prepareMatrixSingleText(text, {
+      cfg: opts.cfg,
+      accountId: opts.accountId,
+    });
+  if (!trimmedText) {
+    throw new Error("Matrix single-message send requires text");
+  }
+  if (!fitsInSingleEvent) {
+    throw new Error(
+      `Matrix single-message text exceeds limit (${convertedText.length} > ${singleEventLimit})`,
+    );
+  }
+  return await withResolvedMatrixClient(
+    {
+      client: opts.client,
+      cfg: opts.cfg,
+      accountId: opts.accountId,
+    },
+    async (client) => {
+      const resolvedRoom = await resolveMatrixRoomId(client, roomId);
+      const normalizedThreadId = normalizeThreadId(opts.threadId);
+      const relation = normalizedThreadId
+        ? buildThreadRelation(normalizedThreadId, opts.replyToId)
+        : buildReplyRelation(opts.replyToId);
+      const content = buildTextContent(convertedText, relation);
+      const eventId = await client.sendMessage(resolvedRoom, content);
+      return {
+        messageId: eventId ?? "unknown",
+        roomId: resolvedRoom,
+      };
+    },
+  );
+}
+
+export async function editMessageMatrix(
+  roomId: string,
+  originalEventId: string,
+  newText: string,
+  opts: {
+    client?: MatrixClient;
+    cfg?: CoreConfig;
+    threadId?: string;
+    accountId?: string;
+  } = {},
+): Promise<string> {
+  return await withResolvedMatrixClient(
+    {
+      client: opts.client,
+      cfg: opts.cfg,
+      accountId: opts.accountId,
+    },
+    async (client) => {
+      const resolvedRoom = await resolveMatrixRoomId(client, roomId);
+      const cfg = opts.cfg ?? getCore().config.loadConfig();
+      const tableMode = getCore().channel.text.resolveMarkdownTableMode({
+        cfg,
+        channel: "matrix",
+        accountId: opts.accountId,
+      });
+      const convertedText = getCore().channel.text.convertMarkdownTables(newText, tableMode);
+      const newContent = buildTextContent(convertedText);
+
+      const replaceRelation: Record<string, unknown> = {
+        rel_type: RelationType.Replace,
+        event_id: originalEventId,
+      };
+      const threadId = normalizeThreadId(opts.threadId);
+      if (threadId) {
+        // Thread-aware replace: Synapse needs the thread context to keep the
+        // edited event visible in the thread timeline.
+        replaceRelation["m.in_reply_to"] = { event_id: threadId };
+      }
+
+      // Spread newContent into the outer event so clients that don't support
+      // m.new_content still see properly formatted text (with HTML).
+      const content: Record<string, unknown> = {
+        ...newContent,
+        body: `* ${convertedText}`,
+        ...(typeof newContent.formatted_body === "string"
+          ? { formatted_body: `* ${newContent.formatted_body}` }
+          : {}),
+        "m.new_content": newContent,
+        "m.relates_to": replaceRelation,
+      };
+
+      const eventId = await client.sendMessage(resolvedRoom, content);
+      return eventId ?? "";
+    },
+  );
 }
 
 export async function reactMatrixMessage(

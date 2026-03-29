@@ -209,12 +209,8 @@ describe("temp path guard", () => {
       "const p = path.join(os.tmpdir());",
     ];
 
-    for (const fixture of dynamicFixtures) {
-      expect(hasDynamicTmpdirJoin(fixture)).toBe(true);
-    }
-    for (const fixture of staticFixtures) {
-      expect(hasDynamicTmpdirJoin(fixture)).toBe(false);
-    }
+    expect(dynamicFixtures.every((fixture) => hasDynamicTmpdirJoin(fixture))).toBe(true);
+    expect(staticFixtures.every((fixture) => !hasDynamicTmpdirJoin(fixture))).toBe(true);
   });
 
   it("enforces runtime guardrails for tmpdir joins and weak randomness", async () => {

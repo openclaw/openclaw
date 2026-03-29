@@ -17,6 +17,7 @@ import {
   DEFAULT_MAX_OUTPUT,
   DEFAULT_PATH,
   DEFAULT_PENDING_MAX_OUTPUT,
+  type ExecProcessOutcome,
   applyPathPrepend,
   applyShellPath,
   normalizeExecAsk,
@@ -43,6 +44,7 @@ import {
   truncateMiddle,
 } from "./bash-tools.shared.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
+import { failedTextResult, textResult } from "./tools/common.js";
 
 export type { BashSandboxConfig } from "./bash-tools.shared.js";
 export type {
@@ -50,6 +52,30 @@ export type {
   ExecToolDefaults,
   ExecToolDetails,
 } from "./bash-tools.exec-types.js";
+
+function buildExecForegroundResult(params: {
+  outcome: ExecProcessOutcome;
+  cwd?: string;
+  warningText?: string;
+}): AgentToolResult<ExecToolDetails> {
+  const warningText = params.warningText?.trim() ? `${params.warningText}\n\n` : "";
+  if (params.outcome.status === "failed") {
+    return failedTextResult(`${warningText}${params.outcome.reason}`, {
+      status: "failed",
+      exitCode: params.outcome.exitCode ?? null,
+      durationMs: params.outcome.durationMs,
+      aggregated: params.outcome.aggregated,
+      cwd: params.cwd,
+    });
+  }
+  return textResult(`${warningText}${params.outcome.aggregated || "(no output)"}`, {
+    status: "completed",
+    exitCode: params.outcome.exitCode,
+    durationMs: params.outcome.durationMs,
+    aggregated: params.outcome.aggregated,
+    cwd: params.cwd,
+  });
+}
 
 function extractScriptTargetFromCommand(
   command: string,
@@ -304,7 +330,6 @@ export function createExecTool(
         logInfo(`exec: elevated command ${truncateMiddle(params.command, 120)}`);
       }
       const configuredHost = defaults?.host ?? "sandbox";
-      const sandboxHostConfigured = defaults?.host === "sandbox";
       const requestedHost = normalizeExecHost(params.host) ?? null;
       let host: ExecHost = requestedHost ?? configuredHost;
       if (!elevatedRequested && requestedHost && requestedHost !== configuredHost) {
@@ -333,14 +358,11 @@ export function createExecTool(
       }
 
       const sandbox = host === "sandbox" ? defaults?.sandbox : undefined;
-      if (
-        host === "sandbox" &&
-        !sandbox &&
-        (sandboxHostConfigured || requestedHost === "sandbox")
-      ) {
+      // Never fall through to direct host exec when the selected host was sandbox.
+      if (host === "sandbox" && !sandbox) {
         throw new Error(
           [
-            "exec host=sandbox is configured, but sandbox runtime is unavailable for this session.",
+            "exec host resolved to sandbox, but sandbox runtime is unavailable for this session.",
             'Enable sandbox mode (`agents.defaults.sandbox.mode="non-main"` or `"all"`) or set tools.exec.host to "gateway"/"node".',
           ].join("\n"),
         );
@@ -356,7 +378,10 @@ export function createExecTool(
         });
         workdir = resolved.hostWorkdir;
         containerWorkdir = resolved.containerWorkdir;
-      } else {
+      } else if (host !== "node") {
+        // Skip local workdir resolution for remote node execution: the remote node's
+        // filesystem is not visible to the gateway, so resolveWorkdir() would incorrectly
+        // fall back to the gateway's cwd. The node is responsible for validating its own cwd.
         workdir = resolveWorkdir(rawWorkdir, warnings);
       }
 
@@ -448,6 +473,7 @@ export function createExecTool(
           agentId,
           security,
           ask,
+          strictInlineEval: defaults?.strictInlineEval,
           timeoutSec: params.timeout,
           defaultTimeoutSec,
           approvalRunningNoticeMs,
@@ -470,6 +496,7 @@ export function createExecTool(
           ask,
           safeBins,
           safeBinProfiles,
+          strictInlineEval: defaults?.strictInlineEval,
           agentId,
           sessionKey: defaults?.sessionKey,
           turnSourceChannel: defaults?.messageProvider,
@@ -595,25 +622,13 @@ export function createExecTool(
             if (yielded || run.session.backgrounded) {
               return;
             }
-            if (outcome.status === "failed") {
-              reject(new Error(outcome.reason ?? "Command failed."));
-              return;
-            }
-            resolve({
-              content: [
-                {
-                  type: "text",
-                  text: `${getWarningText()}${outcome.aggregated || "(no output)"}`,
-                },
-              ],
-              details: {
-                status: "completed",
-                exitCode: outcome.exitCode ?? 0,
-                durationMs: outcome.durationMs,
-                aggregated: outcome.aggregated,
+            resolve(
+              buildExecForegroundResult({
+                outcome,
                 cwd: run.session.cwd,
-              },
-            });
+                warningText: getWarningText(),
+              }),
+            );
           })
           .catch((err) => {
             if (yieldTimer) {

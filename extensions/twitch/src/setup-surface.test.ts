@@ -113,9 +113,12 @@ describe("setup surface helpers", () => {
       expect(result).toBe("oauth:test123");
 
       // Test the validate function
-      expect(capturedValidate).toBeDefined();
-      expect(capturedValidate!("")).toBe("Required");
-      expect(capturedValidate!("notoauth")).toBe("Token should start with 'oauth:'");
+      if (!capturedValidate) {
+        throw new Error("promptToken validate callback was not captured");
+      }
+      expect(capturedValidate("")).toBe("Required");
+      expect(capturedValidate("notoauth")).toBe("Token should start with 'oauth:'");
+      expect(capturedValidate("oauth:goodtoken")).toBeUndefined();
     });
 
     it("should return early when no existing token and no env token", async () => {

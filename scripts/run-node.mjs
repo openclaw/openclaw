@@ -4,12 +4,17 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import { resolveGitHead, writeBuildStamp as writeDistBuildStamp } from "./build-stamp.mjs";
+import {
+  BUNDLED_PLUGIN_PATH_PREFIX,
+  BUNDLED_PLUGIN_ROOT_DIR,
+} from "./lib/bundled-plugin-paths.mjs";
 import { runRuntimePostBuild } from "./runtime-postbuild.mjs";
 
 const buildScript = "scripts/tsdown-build.mjs";
 const compilerArgs = [buildScript, "--no-clean"];
 
-const runNodeSourceRoots = ["src", "extensions"];
+const runNodeSourceRoots = ["src", BUNDLED_PLUGIN_ROOT_DIR];
 const runNodeConfigFiles = ["tsconfig.json", "package.json", "tsdown.config.ts"];
 export const runNodeWatchedPaths = [...runNodeSourceRoots, ...runNodeConfigFiles];
 const extensionSourceFilePattern = /\.(?:[cm]?[jt]sx?)$/;
@@ -39,8 +44,8 @@ export const isBuildRelevantRunNodePath = (repoPath) => {
   if (normalizedPath.startsWith("src/")) {
     return !isIgnoredSourcePath(normalizedPath.slice("src/".length));
   }
-  if (normalizedPath.startsWith("extensions/")) {
-    return isBuildRelevantSourcePath(normalizedPath.slice("extensions/".length));
+  if (normalizedPath.startsWith(BUNDLED_PLUGIN_PATH_PREFIX)) {
+    return isBuildRelevantSourcePath(normalizedPath.slice(BUNDLED_PLUGIN_PATH_PREFIX.length));
   }
   return false;
 };
@@ -61,8 +66,8 @@ export const isRestartRelevantRunNodePath = (repoPath) => {
   if (normalizedPath.startsWith("src/")) {
     return !isIgnoredSourcePath(normalizedPath.slice("src/".length));
   }
-  if (normalizedPath.startsWith("extensions/")) {
-    return isRestartRelevantExtensionPath(normalizedPath.slice("extensions/".length));
+  if (normalizedPath.startsWith(BUNDLED_PLUGIN_PATH_PREFIX)) {
+    return isRestartRelevantExtensionPath(normalizedPath.slice(BUNDLED_PLUGIN_PATH_PREFIX.length));
   }
   return false;
 };
@@ -119,27 +124,6 @@ const findLatestMtime = (dirPath, shouldSkip, deps) => {
     }
   }
   return latest;
-};
-
-const runGit = (gitArgs, deps) => {
-  try {
-    const result = deps.spawnSync("git", gitArgs, {
-      cwd: deps.cwd,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    if (result.status !== 0) {
-      return null;
-    }
-    return (result.stdout ?? "").trim();
-  } catch {
-    return null;
-  }
-};
-
-const resolveGitHead = (deps) => {
-  const head = runGit(["rev-parse", "HEAD"], deps);
-  return head || null;
 };
 
 const readGitStatus = (deps) => {
@@ -231,10 +215,10 @@ const shouldBuild = (deps) => {
 
   const currentHead = resolveGitHead(deps);
   if (currentHead && !stamp.head) {
-    return hasSourceMtimeChanged(stamp.mtime, deps);
+    return true;
   }
   if (currentHead && stamp.head && currentHead !== stamp.head) {
-    return hasSourceMtimeChanged(stamp.mtime, deps);
+    return true;
   }
   if (currentHead) {
     const dirty = hasDirtySourceTree(deps);
@@ -296,12 +280,11 @@ const syncRuntimeArtifacts = (deps) => {
 
 const writeBuildStamp = (deps) => {
   try {
-    deps.fs.mkdirSync(deps.distRoot, { recursive: true });
-    const stamp = {
-      builtAt: Date.now(),
-      head: resolveGitHead(deps),
-    };
-    deps.fs.writeFileSync(deps.buildStampPath, `${JSON.stringify(stamp)}\n`);
+    writeDistBuildStamp({
+      cwd: deps.cwd,
+      fs: deps.fs,
+      spawnSync: deps.spawnSync,
+    });
   } catch (error) {
     // Best-effort stamp; still allow the runner to start.
     logRunner(`Failed to write build stamp: ${error?.message ?? "unknown error"}`, deps);

@@ -4,48 +4,9 @@ import {
   redactConfigSnapshot,
   restoreRedactedValues as restoreRedactedValues_orig,
 } from "./redact-snapshot.js";
-import { __test__ } from "./schema.hints.js";
+import { makeSnapshot, restoreRedactedValues } from "./redact-snapshot.test-helpers.js";
+import { redactSnapshotTestHints as mainSchemaHints } from "./redact-snapshot.test-hints.js";
 import type { ConfigUiHints } from "./schema.js";
-import type { ConfigFileSnapshot } from "./types.openclaw.js";
-import { OpenClawSchema } from "./zod-schema.js";
-
-const { mapSensitivePaths } = __test__;
-const mainSchemaHints = mapSensitivePaths(OpenClawSchema, "", {});
-
-type TestSnapshot<TConfig extends Record<string, unknown>> = ConfigFileSnapshot & {
-  parsed: TConfig;
-  resolved: TConfig;
-  config: TConfig;
-};
-
-function makeSnapshot<TConfig extends Record<string, unknown>>(
-  config: TConfig,
-  raw?: string,
-): TestSnapshot<TConfig> {
-  return {
-    path: "/home/user/.openclaw/config.json5",
-    exists: true,
-    raw: raw ?? JSON.stringify(config),
-    parsed: config,
-    resolved: config as ConfigFileSnapshot["resolved"],
-    valid: true,
-    config: config as ConfigFileSnapshot["config"],
-    hash: "abc123",
-    issues: [],
-    warnings: [],
-    legacyIssues: [],
-  } as unknown as TestSnapshot<TConfig>;
-}
-
-function restoreRedactedValues<TOriginal>(
-  incoming: unknown,
-  original: TOriginal,
-  hints?: ConfigUiHints,
-): TOriginal {
-  const result = restoreRedactedValues_orig(incoming, original, hints);
-  expect(result.ok).toBe(true);
-  return result.result as TOriginal;
-}
 
 describe("restoreRedactedValues", () => {
   it("restores redacted URL endpoint fields on round-trip", () => {

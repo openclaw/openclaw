@@ -2,7 +2,13 @@
 // helpers without traversing the full plugin-sdk/runtime graph or bootstrapping
 // matrix-js-sdk during plain runtime-api import.
 export * from "./src/auth-precedence.js";
-export * from "./helper-api.js";
+export {
+  requiresExplicitMatrixDefaultAccount,
+  resolveMatrixDefaultOrOnlyAccountId,
+} from "./src/account-selection.js";
+export * from "./src/account-selection.js";
+export * from "./src/env-vars.js";
+export * from "./src/storage-paths.js";
 export {
   assertHttpUrlTargetsPrivateNetwork,
   closeDispatcher,
@@ -15,8 +21,9 @@ export {
 export {
   setMatrixThreadBindingIdleTimeoutBySessionKey,
   setMatrixThreadBindingMaxAgeBySessionKey,
-} from "./thread-bindings-runtime.js";
-export { writeJsonFileAtomically } from "../../src/plugin-sdk/json-store.js";
+} from "./src/matrix/thread-bindings-shared.js";
+export { setMatrixRuntime } from "./src/runtime.js";
+export { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
 export type {
   ChannelDirectoryEntry,
   ChannelMessageActionContext,
@@ -25,5 +32,21 @@ export type {
   RuntimeLogger,
   RuntimeEnv,
   WizardPrompter,
-} from "../../src/plugin-sdk/matrix.js";
-export { formatZonedTimestamp } from "../../src/plugin-sdk/matrix.js";
+} from "openclaw/plugin-sdk/matrix-runtime-shared";
+export { formatZonedTimestamp } from "openclaw/plugin-sdk/matrix-runtime-shared";
+
+export function chunkTextForOutbound(text: string, limit: number): string[] {
+  const chunks: string[] = [];
+  let remaining = text;
+  while (remaining.length > limit) {
+    const window = remaining.slice(0, limit);
+    const splitAt = Math.max(window.lastIndexOf("\n"), window.lastIndexOf(" "));
+    const breakAt = splitAt > 0 ? splitAt : limit;
+    chunks.push(remaining.slice(0, breakAt).trimEnd());
+    remaining = remaining.slice(breakAt).trimStart();
+  }
+  if (remaining.length > 0 || text.length === 0) {
+    chunks.push(remaining);
+  }
+  return chunks;
+}

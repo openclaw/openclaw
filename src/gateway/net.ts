@@ -1,6 +1,9 @@
 import type { IncomingMessage } from "node:http";
 import net from "node:net";
-import os from "node:os";
+import {
+  pickMatchingExternalInterfaceAddress,
+  readNetworkInterfaces,
+} from "../infra/network-interfaces.js";
 import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
 import {
   isCanonicalDottedDecimalIPv4,
@@ -15,22 +18,10 @@ import {
  * Prefers common interface names (en0, eth0) then falls back to any external IPv4.
  */
 export function pickPrimaryLanIPv4(): string | undefined {
-  const nets = os.networkInterfaces();
-  const preferredNames = ["en0", "eth0"];
-  for (const name of preferredNames) {
-    const list = nets[name];
-    const entry = list?.find((n) => n.family === "IPv4" && !n.internal);
-    if (entry?.address) {
-      return entry.address;
-    }
-  }
-  for (const list of Object.values(nets)) {
-    const entry = list?.find((n) => n.family === "IPv4" && !n.internal);
-    if (entry?.address) {
-      return entry.address;
-    }
-  }
-  return undefined;
+  return pickMatchingExternalInterfaceAddress(readNetworkInterfaces(), {
+    family: "IPv4",
+    preferredNames: ["en0", "eth0"],
+  });
 }
 
 export function normalizeHostHeader(hostHeader?: string): string {

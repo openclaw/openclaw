@@ -65,6 +65,13 @@ export type AcpSessionRuntimeOptions = {
   backendExtras?: Record<string, string>;
 };
 
+export type CliSessionBinding = {
+  sessionId: string;
+  authProfileId?: string;
+  extraSystemPromptHash?: string;
+  mcpConfigHash?: string;
+};
+
 export type SessionEntry = {
   /**
    * Last delivered heartbeat payload (used to suppress duplicate heartbeat notifications).
@@ -164,7 +171,9 @@ export type SessionEntry = {
   compactionCount?: number;
   memoryFlushAt?: number;
   memoryFlushCompactionCount?: number;
+  memoryFlushContextHash?: string;
   cliSessionIds?: Record<string, string>;
+  cliSessionBindings?: Record<string, CliSessionBinding>;
   claudeCliSessionId?: string;
   label?: string;
   displayName?: string;

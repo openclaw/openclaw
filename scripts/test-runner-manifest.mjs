@@ -1,8 +1,9 @@
-import fs from "node:fs";
-import path from "node:path";
+import { normalizeTrackedRepoPath, tryReadJsonFile } from "./test-report-utils.mjs";
 
 export const behaviorManifestPath = "test/fixtures/test-parallel.behavior.json";
 export const unitTimingManifestPath = "test/fixtures/test-timings.unit.json";
+export const channelTimingManifestPath = "test/fixtures/test-timings.channels.json";
+export const extensionTimingManifestPath = "test/fixtures/test-timings.extensions.json";
 export const unitMemoryHotspotManifestPath = "test/fixtures/test-memory-hotspots.unit.json";
 
 const defaultTimingManifest = {
@@ -10,31 +11,20 @@ const defaultTimingManifest = {
   defaultDurationMs: 250,
   files: {},
 };
+const defaultChannelTimingManifest = {
+  config: "vitest.channels.config.ts",
+  defaultDurationMs: 3000,
+  files: {},
+};
+const defaultExtensionTimingManifest = {
+  config: "vitest.extensions.config.ts",
+  defaultDurationMs: 1000,
+  files: {},
+};
 const defaultMemoryHotspotManifest = {
   config: "vitest.unit.config.ts",
   defaultMinDeltaKb: 256 * 1024,
   files: {},
-};
-
-const readJson = (filePath, fallback) => {
-  try {
-    return JSON.parse(fs.readFileSync(filePath, "utf8"));
-  } catch {
-    return fallback;
-  }
-};
-
-const normalizeRepoPath = (value) => value.split(path.sep).join("/");
-const repoRoot = path.resolve(process.cwd());
-const normalizeTrackedRepoPath = (value) => {
-  const normalizedValue = typeof value === "string" ? value : String(value ?? "");
-  const repoRelative = path.isAbsolute(normalizedValue)
-    ? path.relative(repoRoot, path.resolve(normalizedValue))
-    : normalizedValue;
-  if (path.isAbsolute(repoRelative) || repoRelative.startsWith("..") || repoRelative === "") {
-    return normalizeRepoPath(normalizedValue);
-  }
-  return normalizeRepoPath(repoRelative);
 };
 
 const normalizeManifestEntries = (entries) =>
@@ -49,25 +39,72 @@ const normalizeManifestEntries = (entries) =>
     )
     .filter((entry) => entry.file.length > 0);
 
+const mergeManifestEntries = (section, keys) => {
+  const merged = [];
+  const seenFiles = new Set();
+  for (const key of keys) {
+    const normalizedEntries = normalizeManifestEntries(section?.[key] ?? []);
+    for (const entry of normalizedEntries) {
+      if (seenFiles.has(entry.file)) {
+        continue;
+      }
+      seenFiles.add(entry.file);
+      merged.push(entry);
+    }
+  }
+  return merged;
+};
+
+const mergeManifestStrings = (section, keys) => {
+  const merged = [];
+  const seen = new Set();
+  for (const key of keys) {
+    const values = Array.isArray(section?.[key]) ? section[key] : [];
+    for (const value of values) {
+      if (typeof value !== "string") {
+        continue;
+      }
+      const normalizedValue = normalizeTrackedRepoPath(value);
+      if (normalizedValue.length === 0 || seen.has(normalizedValue)) {
+        continue;
+      }
+      seen.add(normalizedValue);
+      merged.push(normalizedValue);
+    }
+  }
+  return merged;
+};
+
 export function loadTestRunnerBehavior() {
-  const raw = readJson(behaviorManifestPath, {});
+  const raw = tryReadJsonFile(behaviorManifestPath, {});
   const unit = raw.unit ?? {};
+  const base = raw.base ?? {};
+  const channels = raw.channels ?? {};
+  const extensions = raw.extensions ?? {};
   return {
+    base: {
+      threadPinned: mergeManifestEntries(base, ["threadPinned", "threadSingleton"]),
+    },
+    channels: {
+      isolated: mergeManifestEntries(channels, ["isolated"]),
+      isolatedPrefixes: mergeManifestStrings(channels, ["isolatedPrefixes"]),
+    },
+    extensions: {
+      isolated: mergeManifestEntries(extensions, ["isolated"]),
+    },
     unit: {
-      isolated: normalizeManifestEntries(unit.isolated ?? []),
-      singletonIsolated: normalizeManifestEntries(unit.singletonIsolated ?? []),
-      threadSingleton: normalizeManifestEntries(unit.threadSingleton ?? []),
-      vmForkSingleton: normalizeManifestEntries(unit.vmForkSingleton ?? []),
+      isolated: mergeManifestEntries(unit, ["isolated"]),
+      threadPinned: mergeManifestEntries(unit, ["threadPinned", "threadSingleton"]),
     },
   };
 }
 
-export function loadUnitTimingManifest() {
-  const raw = readJson(unitTimingManifestPath, defaultTimingManifest);
+const loadTimingManifest = (manifestPath, fallbackManifest) => {
+  const raw = tryReadJsonFile(manifestPath, fallbackManifest);
   const defaultDurationMs =
     Number.isFinite(raw.defaultDurationMs) && raw.defaultDurationMs > 0
       ? raw.defaultDurationMs
-      : defaultTimingManifest.defaultDurationMs;
+      : fallbackManifest.defaultDurationMs;
   const files = Object.fromEntries(
     Object.entries(raw.files ?? {})
       .map(([file, value]) => {
@@ -91,16 +128,27 @@ export function loadUnitTimingManifest() {
   );
 
   return {
-    config:
-      typeof raw.config === "string" && raw.config ? raw.config : defaultTimingManifest.config,
+    config: typeof raw.config === "string" && raw.config ? raw.config : fallbackManifest.config,
     generatedAt: typeof raw.generatedAt === "string" ? raw.generatedAt : "",
     defaultDurationMs,
     files,
   };
+};
+
+export function loadUnitTimingManifest() {
+  return loadTimingManifest(unitTimingManifestPath, defaultTimingManifest);
+}
+
+export function loadChannelTimingManifest() {
+  return loadTimingManifest(channelTimingManifestPath, defaultChannelTimingManifest);
+}
+
+export function loadExtensionTimingManifest() {
+  return loadTimingManifest(extensionTimingManifestPath, defaultExtensionTimingManifest);
 }
 
 export function loadUnitMemoryHotspotManifest() {
-  const raw = readJson(unitMemoryHotspotManifestPath, defaultMemoryHotspotManifest);
+  const raw = tryReadJsonFile(unitMemoryHotspotManifestPath, defaultMemoryHotspotManifest);
   const defaultMinDeltaKb =
     Number.isFinite(raw.defaultMinDeltaKb) && raw.defaultMinDeltaKb > 0
       ? raw.defaultMinDeltaKb
@@ -223,11 +271,41 @@ export function packFilesByDuration(files, bucketCount, estimateDurationMs) {
     return [];
   }
 
-  const buckets = Array.from({ length: Math.min(normalizedBucketCount, files.length) }, () => ({
-    totalMs: 0,
-    files: [],
-  }));
+  return packFilesIntoDurationBuckets(
+    files,
+    Array.from({ length: Math.min(normalizedBucketCount, files.length) }, () => ({
+      totalMs: 0,
+      files: [],
+    })),
+    estimateDurationMs,
+  ).filter((bucket) => bucket.length > 0);
+}
 
+export function packFilesByDurationWithBaseLoads(
+  files,
+  bucketCount,
+  estimateDurationMs,
+  baseLoadsMs = [],
+) {
+  const normalizedBucketCount = Math.max(0, Math.floor(bucketCount));
+  if (normalizedBucketCount <= 0) {
+    return [];
+  }
+
+  return packFilesIntoDurationBuckets(
+    files,
+    Array.from({ length: normalizedBucketCount }, (_, index) => ({
+      totalMs:
+        Number.isFinite(baseLoadsMs[index]) && baseLoadsMs[index] >= 0
+          ? Math.round(baseLoadsMs[index])
+          : 0,
+      files: [],
+    })),
+    estimateDurationMs,
+  );
+}
+
+function packFilesIntoDurationBuckets(files, buckets, estimateDurationMs) {
   const sortedFiles = [...files].toSorted((left, right) => {
     return estimateDurationMs(right) - estimateDurationMs(left);
   });
@@ -240,7 +318,7 @@ export function packFilesByDuration(files, bucketCount, estimateDurationMs) {
     bucket.totalMs += estimateDurationMs(file);
   }
 
-  return buckets.map((bucket) => bucket.files).filter((bucket) => bucket.length > 0);
+  return buckets.map((bucket) => bucket.files);
 }
 
 export function dedupeFilesPreserveOrder(files, exclude = new Set()) {

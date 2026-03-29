@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadWorkspaceSkillEntries, type SkillEntry, type SkillSnapshot } from "../skills.js";
+import { resolveSkillRuntimeConfig } from "../skills/runtime-config.js";
 
 export function resolveEmbeddedRunSkillEntries(params: {
   workspaceDir: string;
@@ -10,10 +11,11 @@ export function resolveEmbeddedRunSkillEntries(params: {
   skillEntries: SkillEntry[];
 } {
   const shouldLoadSkillEntries = !params.skillsSnapshot || !params.skillsSnapshot.resolvedSkills;
+  const config = resolveSkillRuntimeConfig(params.config);
   return {
     shouldLoadSkillEntries,
     skillEntries: shouldLoadSkillEntries
-      ? loadWorkspaceSkillEntries(params.workspaceDir, { config: params.config })
+      ? loadWorkspaceSkillEntries(params.workspaceDir, { config })
       : [],
   };
 }

@@ -1,6 +1,10 @@
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import type { OpenClawPluginApi } from "../runtime-api.js";
-import { resolveFeishuAccount } from "./accounts.js";
+import {
+  listFeishuAccountIds,
+  resolveFeishuAccount,
+  resolveFeishuRuntimeAccount,
+} from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { resolveToolsConfig } from "./tools-config.js";
 import type { FeishuToolsConfig, ResolvedFeishuAccount } from "./types.js";
@@ -21,6 +25,37 @@ function readConfiguredDefaultAccountId(config: OpenClawPluginApi["config"]): st
   return normalizeOptionalAccountId(value);
 }
 
+function resolveImplicitToolAccountId(params: {
+  api: Pick<OpenClawPluginApi, "config">;
+  executeParams?: AccountAwareParams;
+  defaultAccountId?: string;
+}): string | undefined {
+  const explicitAccountId = normalizeOptionalAccountId(params.executeParams?.accountId);
+  if (explicitAccountId) {
+    return explicitAccountId;
+  }
+
+  const configuredDefaultAccountId = readConfiguredDefaultAccountId(params.api.config);
+  if (configuredDefaultAccountId) {
+    return configuredDefaultAccountId;
+  }
+
+  const contextualAccountId = normalizeOptionalAccountId(params.defaultAccountId);
+  if (!contextualAccountId) {
+    return undefined;
+  }
+
+  if (!listFeishuAccountIds(params.api.config).includes(contextualAccountId)) {
+    return undefined;
+  }
+
+  const contextualAccount = resolveFeishuAccount({
+    cfg: params.api.config,
+    accountId: contextualAccountId,
+  });
+  return contextualAccount.enabled ? contextualAccountId : undefined;
+}
+
 export function resolveFeishuToolAccount(params: {
   api: Pick<OpenClawPluginApi, "config">;
   executeParams?: AccountAwareParams;
@@ -29,12 +64,9 @@ export function resolveFeishuToolAccount(params: {
   if (!params.api.config) {
     throw new Error("Feishu config unavailable");
   }
-  return resolveFeishuAccount({
+  return resolveFeishuRuntimeAccount({
     cfg: params.api.config,
-    accountId:
-      normalizeOptionalAccountId(params.executeParams?.accountId) ??
-      readConfiguredDefaultAccountId(params.api.config) ??
-      normalizeOptionalAccountId(params.defaultAccountId),
+    accountId: resolveImplicitToolAccountId(params),
   });
 }
 
