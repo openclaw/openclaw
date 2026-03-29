@@ -40,7 +40,10 @@ function buildTelegramMediaSsrfPolicy(apiRoot?: string) {
     // Restrict media downloads to the configured Telegram API hosts while still
     // enforcing SSRF checks on the resolved and redirected targets.
     hostnameAllowlist: hostnames,
-    ...(allowedHostnames ? { allowedHostnames } : {}),
+    // Always allow the Telegram API hostnames through private-IP checks so media
+    // downloads work in fake-IP proxy environments (Clash/Mihomo/Surge) where
+    // api.telegram.org resolves to a virtual private address.
+    allowedHostnames: hostnames,
     allowRfc2544BenchmarkRange: false,
   };
 }
