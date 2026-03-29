@@ -82,6 +82,33 @@ function normalizeFingerprintValue(value: unknown): string | undefined {
   return undefined;
 }
 
+function normalizeMessagingFingerprintTarget(params: {
+  toolName: string;
+  args: Record<string, unknown> | undefined;
+  key: string;
+  value: unknown;
+}): string | undefined {
+  const { toolName, args, key, value } = params;
+  const normalized = normalizeFingerprintValue(value);
+  if (!normalized) {
+    return normalized;
+  }
+  if (toolName !== "message") {
+    return normalized;
+  }
+  if (key !== "to" && key !== "target") {
+    return normalized;
+  }
+  const channel = normalizeFingerprintValue(args?.channel);
+  if (channel !== "discord") {
+    return normalized;
+  }
+  if (/^\d+$/.test(normalized)) {
+    return `channel:${normalized}`;
+  }
+  return normalized;
+}
+
 export function isLikelyMutatingToolName(toolName: string): boolean {
   const normalized = toolName.trim().toLowerCase();
   if (!normalized) {
@@ -165,7 +192,12 @@ export function buildToolActionFingerprint(
     "id",
     "model",
   ]) {
-    const value = normalizeFingerprintValue(record?.[key]);
+    const value = normalizeMessagingFingerprintTarget({
+      toolName: normalizedTool,
+      args: record,
+      key,
+      value: record?.[key],
+    });
     if (value) {
       parts.push(`${key.toLowerCase()}=${value}`);
       hasStableTarget = true;

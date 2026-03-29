@@ -175,6 +175,57 @@ describe("handleToolExecutionEnd cron.add commitment tracking", () => {
   });
 });
 
+describe("messaging tool error clearing", () => {
+  it("clears a discord message send failure after an immediate channel-prefixed retry succeeds", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-msg-fail",
+      args: {
+        action: "send",
+        channel: "discord",
+        target: "1470553231271788668",
+        message: "Audit line",
+      },
+    });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-msg-fail",
+      isError: true,
+      result:
+        'Error: Ambiguous Discord recipient "1470553231271788668". Use "user:1470553231271788668" for DMs or "channel:1470553231271788668" for channel messages.',
+    });
+
+    expect(ctx.state.lastToolError?.toolName).toBe("message");
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-msg-retry",
+      args: {
+        action: "send",
+        channel: "discord",
+        target: "channel:1470553231271788668",
+        message: "Audit line",
+      },
+    });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-msg-retry",
+      isError: false,
+      result: { ok: true, messageId: "m-1" },
+    });
+
+    expect(ctx.state.lastToolError).toBeUndefined();
+  });
+});
+
 describe("messaging tool media URL tracking", () => {
   it("tracks media arg from messaging tool as pending", async () => {
     const { ctx } = createTestContext();

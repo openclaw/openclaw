@@ -65,6 +65,23 @@ describe("tool mutation helpers", () => {
     ).toBe(false);
   });
 
+  it("normalizes discord bare numeric message targets to the same fingerprint as channel-prefixed retries", () => {
+    const bareTarget = buildToolActionFingerprint("message", {
+      action: "send",
+      channel: "discord",
+      target: "1470553231271788668",
+      message: "Audit line",
+    });
+    const prefixedTarget = buildToolActionFingerprint("message", {
+      action: "send",
+      channel: "discord",
+      target: "channel:1470553231271788668",
+      message: "Audit line",
+    });
+    expect(bareTarget).toBe(prefixedTarget);
+    expect(bareTarget).toContain("target=channel:1470553231271788668");
+  });
+
   it("keeps legacy name-only mutating heuristics for payload fallback", () => {
     expect(isLikelyMutatingToolName("sessions_send")).toBe(true);
     expect(isLikelyMutatingToolName("browser_actions")).toBe(true);
