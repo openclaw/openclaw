@@ -41,6 +41,9 @@ function applyVitestCapabilityAliasOverrides(params: {
     "openclaw/plugin-sdk/llm-task": fileURLToPath(
       new URL("./capability-runtime-vitest-shims/llm-task.ts", import.meta.url),
     ),
+    "openclaw/plugin-sdk/config-runtime": fileURLToPath(
+      new URL("./capability-runtime-vitest-shims/config-runtime.ts", import.meta.url),
+    ),
     "openclaw/plugin-sdk/media-runtime": fileURLToPath(
       new URL("./capability-runtime-vitest-shims/media-runtime.ts", import.meta.url),
     ),
