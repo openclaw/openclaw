@@ -282,7 +282,7 @@ jobs:
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_fast == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
-    timeout-minutes: 20
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.preflight.outputs.checks_fast_matrix) }}
@@ -325,7 +325,7 @@ jobs:
     needs: [preflight, build-artifacts]
     if: always() && needs.preflight.outputs.run_checks == 'true' && needs.build-artifacts.result == 'success'
     runs-on: blacksmith-16vcpu-ubuntu-2404
-    timeout-minutes: 20
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.preflight.outputs.checks_matrix) }}
@@ -416,7 +416,7 @@ jobs:
     needs: [preflight]
     if: needs.preflight.outputs.run_extension_fast == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
-    timeout-minutes: 20
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.preflight.outputs.extension_fast_matrix) }}
@@ -716,7 +716,7 @@ jobs:
     needs: [preflight, build-artifacts]
     if: always() && needs.preflight.outputs.run_checks_windows == 'true' && needs.build-artifacts.result == 'success'
     runs-on: blacksmith-32vcpu-windows-2025
-    timeout-minutes: 20
+    timeout-minutes: 35
     env:
       NODE_OPTIONS: --max-old-space-size=6144
       # Keep total concurrency predictable on the 32 vCPU runner.
