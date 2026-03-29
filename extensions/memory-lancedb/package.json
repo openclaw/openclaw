@@ -14,7 +14,6 @@
     ],
     "install": {
       "npmSpec": "@openclaw/memory-lancedb",
-      "localPath": "extensions/memory-lancedb",
       "defaultChoice": "npm",
       "minHostVersion": ">=2026.3.28"
     },

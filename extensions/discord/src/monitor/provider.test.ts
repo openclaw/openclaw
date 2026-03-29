@@ -9,7 +9,7 @@ import {
   getFirstDiscordMessageHandlerParams,
   getProviderMonitorTestMocks,
   resetDiscordProviderMonitorMocks,
-} from "../../../../test/helpers/extensions/discord-provider.test-support.js";
+} from "../../../../test/helpers/plugins/discord-provider.test-support.js";
 
 const {
   clientConstructorOptionsMock,

@@ -1,13 +1,39 @@
+import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "openclaw/plugin-sdk/feishu";
 import { expect, vi } from "vitest";
-import type {
-  ClawdbotConfig,
-  PluginRuntime,
-  RuntimeEnv,
-} from "../../../extensions/feishu/runtime-api.js";
-import { monitorSingleAccount } from "../../../extensions/feishu/src/monitor.account.js";
-import { setFeishuRuntime } from "../../../extensions/feishu/src/runtime.js";
-import type { ResolvedFeishuAccount } from "../../../extensions/feishu/src/types.js";
+import { loadBundledPluginPublicSurfaceSync } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 import { createPluginRuntimeMock } from "./plugin-runtime-mock.js";
+
+type ResolvedFeishuAccount = {
+  accountId: string;
+  selectionSource: string;
+  enabled: boolean;
+  configured: boolean;
+  name?: string;
+  appId?: string;
+  appSecret?: string;
+  encryptKey?: string;
+  verificationToken?: string;
+  domain: string;
+  config: Record<string, unknown>;
+};
+
+const { monitorSingleAccount } = loadBundledPluginPublicSurfaceSync<{
+  monitorSingleAccount: (params: {
+    cfg: ClawdbotConfig;
+    account: ResolvedFeishuAccount;
+    runtime: RuntimeEnv;
+    botOpenIdSource: typeof FEISHU_PREFETCHED_BOT_OPEN_ID_SOURCE;
+  }) => Promise<void>;
+}>({
+  pluginId: "feishu",
+  artifactBasename: "src/monitor.account.js",
+});
+const { setFeishuRuntime } = loadBundledPluginPublicSurfaceSync<{
+  setFeishuRuntime: (runtime: PluginRuntime) => void;
+}>({
+  pluginId: "feishu",
+  artifactBasename: "src/runtime.js",
+});
 
 type InboundDebouncerParams<T> = {
   onFlush?: (items: T[]) => Promise<void>;
@@ -175,12 +201,12 @@ export function createFeishuLifecycleConfig(params: {
   return {
     ...extraConfig,
     channels: {
-      ...((extraConfig.channels as Record<string, unknown> | undefined) ?? {}),
+      ...(extraConfig.channels as Record<string, unknown> | undefined),
       feishu: {
         enabled: true,
         requireMention: false,
         resolveSenderNames: false,
-        ...(params.channelConfig ?? {}),
+        ...params.channelConfig,
         accounts: {
           [params.accountId]: {
             enabled: true,
@@ -189,7 +215,7 @@ export function createFeishuLifecycleConfig(params: {
             connectionMode: "websocket",
             requireMention: false,
             resolveSenderNames: false,
-            ...(params.accountConfig ?? {}),
+            ...params.accountConfig,
           },
         },
       },
@@ -220,8 +246,8 @@ export function createFeishuLifecycleFixture(params: {
       appId: params.appId,
       appSecret: params.appSecret,
       config: {
-        ...((params.channelConfig as Record<string, unknown> | undefined) ?? {}),
-        ...((params.accountConfig as Record<string, unknown> | undefined) ?? {}),
+        ...params.channelConfig,
+        ...params.accountConfig,
       },
     }),
   };

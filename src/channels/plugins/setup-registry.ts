@@ -3,7 +3,7 @@ import {
   requireActivePluginRegistry,
 } from "../../plugins/runtime.js";
 import { CHAT_CHANNEL_ORDER, type ChatChannelId } from "../registry.js";
-import { bundledChannelSetupPlugins } from "./bundled.js";
+import { listBundledChannelSetupPlugins } from "./bundled.js";
 import type { ChannelId, ChannelPlugin } from "./types.js";
 
 type CachedChannelSetupPlugins = {
@@ -20,7 +20,7 @@ const EMPTY_CHANNEL_SETUP_CACHE: CachedChannelSetupPlugins = {
 
 let cachedChannelSetupPlugins = EMPTY_CHANNEL_SETUP_CACHE;
 
-function dedupeSetupPlugins(plugins: ChannelPlugin[]): ChannelPlugin[] {
+function dedupeSetupPlugins(plugins: readonly ChannelPlugin[]): ChannelPlugin[] {
   const seen = new Set<string>();
   const resolved: ChannelPlugin[] = [];
   for (const plugin of plugins) {
@@ -34,7 +34,7 @@ function dedupeSetupPlugins(plugins: ChannelPlugin[]): ChannelPlugin[] {
   return resolved;
 }
 
-function sortChannelSetupPlugins(plugins: ChannelPlugin[]): ChannelPlugin[] {
+function sortChannelSetupPlugins(plugins: readonly ChannelPlugin[]): ChannelPlugin[] {
   return dedupeSetupPlugins(plugins).toSorted((a, b) => {
     const indexA = CHAT_CHANNEL_ORDER.indexOf(a.id as ChatChannelId);
     const indexB = CHAT_CHANNEL_ORDER.indexOf(b.id as ChatChannelId);
@@ -57,7 +57,7 @@ function resolveCachedChannelSetupPlugins(): CachedChannelSetupPlugins {
 
   const registryPlugins = (registry.channelSetups ?? []).map((entry) => entry.plugin);
   const sorted = sortChannelSetupPlugins(
-    registryPlugins.length > 0 ? registryPlugins : bundledChannelSetupPlugins,
+    registryPlugins.length > 0 ? registryPlugins : listBundledChannelSetupPlugins(),
   );
   const byId = new Map<string, ChannelPlugin>();
   for (const plugin of sorted) {

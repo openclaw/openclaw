@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { SYNTHETIC_DEFAULT_MODEL_ID } from "../../src/agents/synthetic-models.js";
 import { resolveAgentModelPrimaryValue } from "../../src/config/model-input.js";
-import { createLegacyProviderConfig } from "../../test/helpers/extensions/onboard-config.js";
+import { createLegacyProviderConfig } from "../../test/helpers/plugins/onboard-config.js";
 import {
   applySyntheticConfig,
   applySyntheticProviderConfig,

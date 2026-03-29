@@ -6,7 +6,7 @@ import {
 import {
   createConfigWithFallbacks,
   EXPECTED_FALLBACKS,
-} from "../../test/helpers/extensions/onboard-config.js";
+} from "../../test/helpers/plugins/onboard-config.js";
 import { applyOpencodeGoConfig, applyOpencodeGoProviderConfig } from "./onboard.js";
 
 const MODEL_REF = "opencode-go/kimi-k2.5";

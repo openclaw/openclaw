@@ -7,7 +7,7 @@ import type { OpenClawConfig } from "../../../src/config/config.js";
 import {
   pluginCommandMocks,
   resetPluginCommandMocks,
-} from "../../../test/helpers/extensions/telegram-plugin-command.js";
+} from "../../../test/helpers/plugins/telegram-plugin-command.js";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
 import {
   createNativeCommandTestParams,

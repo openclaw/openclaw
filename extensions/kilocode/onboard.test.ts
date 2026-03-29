@@ -12,7 +12,7 @@ import {
   KILOCODE_DEFAULT_COST,
   KILOCODE_DEFAULT_MODEL_ID,
 } from "../../src/plugin-sdk/kilocode.js";
-import { captureEnv } from "../../test/helpers/extensions/env.js";
+import { captureEnv } from "../../test/helpers/plugins/env.js";
 import {
   applyKilocodeProviderConfig,
   applyKilocodeConfig,
