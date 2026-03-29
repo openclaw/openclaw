@@ -32,7 +32,10 @@ export function recordCommandPoll(
   const now = Date.now();
 
   if (hasNewOutput) {
-    state.commandPollCounts.set(commandId, { count: 0, lastPollAt: now });
+    // Reset to -1 so the next no-output poll increments to 0 (first backoff tier).
+    // Using 0 here would cause the next no-output poll to compute (0 + 1) = 1,
+    // skipping the 5s tier and jumping straight to 10s.
+    state.commandPollCounts.set(commandId, { count: -1, lastPollAt: now });
     return BACKOFF_SCHEDULE_MS[0] ?? 5000;
   }
 
