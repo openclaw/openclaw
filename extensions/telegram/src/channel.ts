@@ -2,7 +2,10 @@ import {
   buildDmGroupAccountAllowlistAdapter,
   createNestedAllowlistOverrideResolver,
 } from "openclaw/plugin-sdk/allowlist-config-edit";
-import { buildPluginApprovalRequestMessage } from "openclaw/plugin-sdk/approval-runtime";
+import {
+  buildPluginApprovalRequestMessage,
+  createApproverRestrictedNativeApprovalAdapter,
+} from "openclaw/plugin-sdk/approval-runtime";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import { createAllowlistProviderRouteAllowlistWarningCollector } from "openclaw/plugin-sdk/channel-policy";
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
@@ -47,10 +50,7 @@ import {
   listTelegramDirectoryGroupsFromConfig,
   listTelegramDirectoryPeersFromConfig,
 } from "./directory-config.js";
-import {
-  buildTelegramExecApprovalPendingPayload,
-  shouldSuppressTelegramExecApprovalForwardingFallback,
-} from "./exec-approval-forwarding.js";
+import { buildTelegramExecApprovalPendingPayload } from "./exec-approval-forwarding.js";
 import {
   getTelegramExecApprovalApprovers,
   isTelegramExecApprovalApprover,
@@ -325,16 +325,6 @@ function resolveTelegramOutboundSessionRoute(params: {
   };
 }
 
-function hasTelegramExecApprovalDmRoute(cfg: OpenClawConfig): boolean {
-  return listTelegramAccountIds(cfg).some((accountId) => {
-    if (!isTelegramExecApprovalClientEnabled({ cfg, accountId })) {
-      return false;
-    }
-    const target = resolveTelegramExecApprovalTarget({ cfg, accountId });
-    return target === "dm" || target === "both";
-  });
-}
-
 const telegramMessageActions: ChannelMessageActionAdapter = {
   describeMessageTool: (ctx) =>
     getTelegramRuntime().channel.telegram.messageActions?.describeMessageTool?.(ctx) ?? null,
@@ -460,29 +450,24 @@ export const telegramPlugin = createChatChannelPlugin({
       },
     },
     execApprovals: {
-      authorizeCommand: ({ cfg, accountId, senderId, kind }) => {
-        const params = { cfg, accountId, senderId };
-        const authorized =
-          kind === "plugin"
-            ? isTelegramExecApprovalApprover(params)
-            : isTelegramExecApprovalAuthorizedSender(params);
-        return authorized
-          ? { authorized: true }
-          : {
-              authorized: false,
-              reason:
-                kind === "plugin"
-                  ? "❌ You are not authorized to approve plugin requests on Telegram."
-                  : "❌ You are not authorized to approve exec requests on Telegram.",
-            };
-      },
-      getInitiatingSurfaceState: ({ cfg, accountId }) =>
-        getTelegramExecApprovalApprovers({ cfg, accountId }).length > 0
-          ? { kind: "enabled" }
-          : { kind: "disabled" },
-      hasConfiguredDmRoute: ({ cfg }) => hasTelegramExecApprovalDmRoute(cfg),
-      shouldSuppressForwardingFallback: (params) =>
-        shouldSuppressTelegramExecApprovalForwardingFallback(params),
+      ...createApproverRestrictedNativeApprovalAdapter({
+        channel: "telegram",
+        channelLabel: "Telegram",
+        listAccountIds: listTelegramAccountIds,
+        hasApprovers: ({ cfg, accountId }) =>
+          getTelegramExecApprovalApprovers({ cfg, accountId }).length > 0,
+        isExecAuthorizedSender: ({ cfg, accountId, senderId }) =>
+          isTelegramExecApprovalAuthorizedSender({ cfg, accountId, senderId }),
+        isPluginAuthorizedSender: ({ cfg, accountId, senderId }) =>
+          isTelegramExecApprovalApprover({ cfg, accountId, senderId }),
+        isNativeDeliveryEnabled: ({ cfg, accountId }) =>
+          isTelegramExecApprovalClientEnabled({ cfg, accountId }),
+        resolveNativeDeliveryMode: ({ cfg, accountId }) =>
+          resolveTelegramExecApprovalTarget({ cfg, accountId }),
+        requireMatchingTurnSourceChannel: true,
+        resolveSuppressionAccountId: ({ target, request }) =>
+          target.accountId?.trim() || request.request.turnSourceAccountId?.trim() || undefined,
+      }),
       buildPendingPayload: ({ request, nowMs }) =>
         buildTelegramExecApprovalPendingPayload({ request, nowMs }),
       beforeDeliverPending: async ({ cfg, target, payload }) => {
