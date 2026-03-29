@@ -1,339 +1,48 @@
 import type { Command } from "commander";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
-  buildWorkspaceSkillStatus,
-  type SkillStatusEntry,
-  type SkillStatusReport,
-} from "../agents/skills-status.js";
+  installSkillFromClawHub,
+  readTrackedClawHubSkillSlugs,
+  searchSkillsFromClawHub,
+  updateSkillsFromClawHub,
+} from "../agents/skills-clawhub.js";
 import { loadConfig } from "../config/config.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
-import { renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
-import { shortenHomePath } from "../utils.js";
-import { formatCliCommand } from "./command-format.js";
+import { formatSkillInfo, formatSkillsCheck, formatSkillsList } from "./skills-cli.format.js";
 
-export type SkillsListOptions = {
-  json?: boolean;
-  eligible?: boolean;
-  verbose?: boolean;
-};
+export type {
+  SkillInfoOptions,
+  SkillsCheckOptions,
+  SkillsListOptions,
+} from "./skills-cli.format.js";
+export { formatSkillInfo, formatSkillsCheck, formatSkillsList } from "./skills-cli.format.js";
 
-export type SkillInfoOptions = {
-  json?: boolean;
-};
+type SkillStatusReport = Awaited<
+  ReturnType<(typeof import("../agents/skills-status.js"))["buildWorkspaceSkillStatus"]>
+>;
 
-export type SkillsCheckOptions = {
-  json?: boolean;
-};
-
-function appendClawHubHint(output: string, json?: boolean): string {
-  if (json) {
-    return output;
-  }
-  return `${output}\n\nTip: use \`npx clawhub\` to search, install, and sync skills.`;
+async function loadSkillsStatusReport(): Promise<SkillStatusReport> {
+  const config = loadConfig();
+  const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
+  const { buildWorkspaceSkillStatus } = await import("../agents/skills-status.js");
+  return buildWorkspaceSkillStatus(workspaceDir, { config });
 }
 
-function formatSkillStatus(skill: SkillStatusEntry): string {
-  if (skill.eligible) {
-    return theme.success("✓ ready");
+async function runSkillsAction(render: (report: SkillStatusReport) => string): Promise<void> {
+  try {
+    const report = await loadSkillsStatusReport();
+    defaultRuntime.log(render(report));
+  } catch (err) {
+    defaultRuntime.error(String(err));
+    defaultRuntime.exit(1);
   }
-  if (skill.disabled) {
-    return theme.warn("⏸ disabled");
-  }
-  if (skill.blockedByAllowlist) {
-    return theme.warn("🚫 blocked");
-  }
-  return theme.error("✗ missing");
 }
 
-function formatSkillName(skill: SkillStatusEntry): string {
-  const emoji = skill.emoji ?? "📦";
-  return `${emoji} ${theme.command(skill.name)}`;
-}
-
-function formatSkillMissingSummary(skill: SkillStatusEntry): string {
-  const missing: string[] = [];
-  if (skill.missing.bins.length > 0) {
-    missing.push(`bins: ${skill.missing.bins.join(", ")}`);
-  }
-  if (skill.missing.anyBins.length > 0) {
-    missing.push(`anyBins: ${skill.missing.anyBins.join(", ")}`);
-  }
-  if (skill.missing.env.length > 0) {
-    missing.push(`env: ${skill.missing.env.join(", ")}`);
-  }
-  if (skill.missing.config.length > 0) {
-    missing.push(`config: ${skill.missing.config.join(", ")}`);
-  }
-  if (skill.missing.os.length > 0) {
-    missing.push(`os: ${skill.missing.os.join(", ")}`);
-  }
-  return missing.join("; ");
-}
-
-/**
- * Format the skills list output
- */
-export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOptions): string {
-  const skills = opts.eligible ? report.skills.filter((s) => s.eligible) : report.skills;
-
-  if (opts.json) {
-    const jsonReport = {
-      workspaceDir: report.workspaceDir,
-      managedSkillsDir: report.managedSkillsDir,
-      skills: skills.map((s) => ({
-        name: s.name,
-        description: s.description,
-        emoji: s.emoji,
-        eligible: s.eligible,
-        disabled: s.disabled,
-        blockedByAllowlist: s.blockedByAllowlist,
-        source: s.source,
-        bundled: s.bundled,
-        primaryEnv: s.primaryEnv,
-        homepage: s.homepage,
-        missing: s.missing,
-      })),
-    };
-    return JSON.stringify(jsonReport, null, 2);
-  }
-
-  if (skills.length === 0) {
-    const message = opts.eligible
-      ? `No eligible skills found. Run \`${formatCliCommand("openclaw skills list")}\` to see all skills.`
-      : "No skills found.";
-    return appendClawHubHint(message, opts.json);
-  }
-
-  const eligible = skills.filter((s) => s.eligible);
-  const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
-  const rows = skills.map((skill) => {
-    const missing = formatSkillMissingSummary(skill);
-    return {
-      Status: formatSkillStatus(skill),
-      Skill: formatSkillName(skill),
-      Description: theme.muted(skill.description),
-      Source: skill.source ?? "",
-      Missing: missing ? theme.warn(missing) : "",
-    };
-  });
-
-  const columns = [
-    { key: "Status", header: "Status", minWidth: 10 },
-    { key: "Skill", header: "Skill", minWidth: 18, flex: true },
-    { key: "Description", header: "Description", minWidth: 24, flex: true },
-    { key: "Source", header: "Source", minWidth: 10 },
-  ];
-  if (opts.verbose) {
-    columns.push({ key: "Missing", header: "Missing", minWidth: 18, flex: true });
-  }
-
-  const lines: string[] = [];
-  lines.push(
-    `${theme.heading("Skills")} ${theme.muted(`(${eligible.length}/${skills.length} ready)`)}`,
-  );
-  lines.push(
-    renderTable({
-      width: tableWidth,
-      columns,
-      rows,
-    }).trimEnd(),
-  );
-
-  return appendClawHubHint(lines.join("\n"), opts.json);
-}
-
-/**
- * Format detailed info for a single skill
- */
-export function formatSkillInfo(
-  report: SkillStatusReport,
-  skillName: string,
-  opts: SkillInfoOptions,
-): string {
-  const skill = report.skills.find((s) => s.name === skillName || s.skillKey === skillName);
-
-  if (!skill) {
-    if (opts.json) {
-      return JSON.stringify({ error: "not found", skill: skillName }, null, 2);
-    }
-    return appendClawHubHint(
-      `Skill "${skillName}" not found. Run \`${formatCliCommand("openclaw skills list")}\` to see available skills.`,
-      opts.json,
-    );
-  }
-
-  if (opts.json) {
-    return JSON.stringify(skill, null, 2);
-  }
-
-  const lines: string[] = [];
-  const emoji = skill.emoji ?? "📦";
-  const status = skill.eligible
-    ? theme.success("✓ Ready")
-    : skill.disabled
-      ? theme.warn("⏸ Disabled")
-      : skill.blockedByAllowlist
-        ? theme.warn("🚫 Blocked by allowlist")
-        : theme.error("✗ Missing requirements");
-
-  lines.push(`${emoji} ${theme.heading(skill.name)} ${status}`);
-  lines.push("");
-  lines.push(skill.description);
-  lines.push("");
-
-  // Details
-  lines.push(theme.heading("Details:"));
-  lines.push(`${theme.muted("  Source:")} ${skill.source}`);
-  lines.push(`${theme.muted("  Path:")} ${shortenHomePath(skill.filePath)}`);
-  if (skill.homepage) {
-    lines.push(`${theme.muted("  Homepage:")} ${skill.homepage}`);
-  }
-  if (skill.primaryEnv) {
-    lines.push(`${theme.muted("  Primary env:")} ${skill.primaryEnv}`);
-  }
-
-  // Requirements
-  const hasRequirements =
-    skill.requirements.bins.length > 0 ||
-    skill.requirements.anyBins.length > 0 ||
-    skill.requirements.env.length > 0 ||
-    skill.requirements.config.length > 0 ||
-    skill.requirements.os.length > 0;
-
-  if (hasRequirements) {
-    lines.push("");
-    lines.push(theme.heading("Requirements:"));
-    if (skill.requirements.bins.length > 0) {
-      const binsStatus = skill.requirements.bins.map((bin) => {
-        const missing = skill.missing.bins.includes(bin);
-        return missing ? theme.error(`✗ ${bin}`) : theme.success(`✓ ${bin}`);
-      });
-      lines.push(`${theme.muted("  Binaries:")} ${binsStatus.join(", ")}`);
-    }
-    if (skill.requirements.anyBins.length > 0) {
-      const anyBinsMissing = skill.missing.anyBins.length > 0;
-      const anyBinsStatus = skill.requirements.anyBins.map((bin) => {
-        const missing = anyBinsMissing;
-        return missing ? theme.error(`✗ ${bin}`) : theme.success(`✓ ${bin}`);
-      });
-      lines.push(`${theme.muted("  Any binaries:")} ${anyBinsStatus.join(", ")}`);
-    }
-    if (skill.requirements.env.length > 0) {
-      const envStatus = skill.requirements.env.map((env) => {
-        const missing = skill.missing.env.includes(env);
-        return missing ? theme.error(`✗ ${env}`) : theme.success(`✓ ${env}`);
-      });
-      lines.push(`${theme.muted("  Environment:")} ${envStatus.join(", ")}`);
-    }
-    if (skill.requirements.config.length > 0) {
-      const configStatus = skill.requirements.config.map((cfg) => {
-        const missing = skill.missing.config.includes(cfg);
-        return missing ? theme.error(`✗ ${cfg}`) : theme.success(`✓ ${cfg}`);
-      });
-      lines.push(`${theme.muted("  Config:")} ${configStatus.join(", ")}`);
-    }
-    if (skill.requirements.os.length > 0) {
-      const osStatus = skill.requirements.os.map((osName) => {
-        const missing = skill.missing.os.includes(osName);
-        return missing ? theme.error(`✗ ${osName}`) : theme.success(`✓ ${osName}`);
-      });
-      lines.push(`${theme.muted("  OS:")} ${osStatus.join(", ")}`);
-    }
-  }
-
-  // Install options
-  if (skill.install.length > 0 && !skill.eligible) {
-    lines.push("");
-    lines.push(theme.heading("Install options:"));
-    for (const inst of skill.install) {
-      lines.push(`  ${theme.warn("→")} ${inst.label}`);
-    }
-  }
-
-  return appendClawHubHint(lines.join("\n"), opts.json);
-}
-
-/**
- * Format a check/summary of all skills status
- */
-export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOptions): string {
-  const eligible = report.skills.filter((s) => s.eligible);
-  const disabled = report.skills.filter((s) => s.disabled);
-  const blocked = report.skills.filter((s) => s.blockedByAllowlist && !s.disabled);
-  const missingReqs = report.skills.filter(
-    (s) => !s.eligible && !s.disabled && !s.blockedByAllowlist,
-  );
-
-  if (opts.json) {
-    return JSON.stringify(
-      {
-        summary: {
-          total: report.skills.length,
-          eligible: eligible.length,
-          disabled: disabled.length,
-          blocked: blocked.length,
-          missingRequirements: missingReqs.length,
-        },
-        eligible: eligible.map((s) => s.name),
-        disabled: disabled.map((s) => s.name),
-        blocked: blocked.map((s) => s.name),
-        missingRequirements: missingReqs.map((s) => ({
-          name: s.name,
-          missing: s.missing,
-          install: s.install,
-        })),
-      },
-      null,
-      2,
-    );
-  }
-
-  const lines: string[] = [];
-  lines.push(theme.heading("Skills Status Check"));
-  lines.push("");
-  lines.push(`${theme.muted("Total:")} ${report.skills.length}`);
-  lines.push(`${theme.success("✓")} ${theme.muted("Eligible:")} ${eligible.length}`);
-  lines.push(`${theme.warn("⏸")} ${theme.muted("Disabled:")} ${disabled.length}`);
-  lines.push(`${theme.warn("🚫")} ${theme.muted("Blocked by allowlist:")} ${blocked.length}`);
-  lines.push(`${theme.error("✗")} ${theme.muted("Missing requirements:")} ${missingReqs.length}`);
-
-  if (eligible.length > 0) {
-    lines.push("");
-    lines.push(theme.heading("Ready to use:"));
-    for (const skill of eligible) {
-      const emoji = skill.emoji ?? "📦";
-      lines.push(`  ${emoji} ${skill.name}`);
-    }
-  }
-
-  if (missingReqs.length > 0) {
-    lines.push("");
-    lines.push(theme.heading("Missing requirements:"));
-    for (const skill of missingReqs) {
-      const emoji = skill.emoji ?? "📦";
-      const missing: string[] = [];
-      if (skill.missing.bins.length > 0) {
-        missing.push(`bins: ${skill.missing.bins.join(", ")}`);
-      }
-      if (skill.missing.anyBins.length > 0) {
-        missing.push(`anyBins: ${skill.missing.anyBins.join(", ")}`);
-      }
-      if (skill.missing.env.length > 0) {
-        missing.push(`env: ${skill.missing.env.join(", ")}`);
-      }
-      if (skill.missing.config.length > 0) {
-        missing.push(`config: ${skill.missing.config.join(", ")}`);
-      }
-      if (skill.missing.os.length > 0) {
-        missing.push(`os: ${skill.missing.os.join(", ")}`);
-      }
-      lines.push(`  ${emoji} ${skill.name} ${theme.muted(`(${missing.join("; ")})`)}`);
-    }
-  }
-
-  return appendClawHubHint(lines.join("\n"), opts.json);
+function resolveActiveWorkspaceDir(): string {
+  const config = loadConfig();
+  return resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
 }
 
 /**
@@ -350,21 +59,123 @@ export function registerSkillsCli(program: Command) {
     );
 
   skills
+    .command("search")
+    .description("Search ClawHub skills")
+    .argument("[query...]", "Optional search query")
+    .option("--limit <n>", "Max results", (value) => Number.parseInt(value, 10))
+    .option("--json", "Output as JSON", false)
+    .action(async (queryParts: string[], opts: { limit?: number; json?: boolean }) => {
+      try {
+        const results = await searchSkillsFromClawHub({
+          query: queryParts.join(" ").trim() || undefined,
+          limit: opts.limit,
+        });
+        if (opts.json) {
+          defaultRuntime.writeJson({ results });
+          return;
+        }
+        if (results.length === 0) {
+          defaultRuntime.log("No ClawHub skills found.");
+          return;
+        }
+        for (const entry of results) {
+          const version = entry.version ? ` v${entry.version}` : "";
+          const summary = entry.summary ? `  ${entry.summary}` : "";
+          defaultRuntime.log(`${entry.slug}${version}  ${entry.displayName}${summary}`);
+        }
+      } catch (err) {
+        defaultRuntime.error(String(err));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  skills
+    .command("install")
+    .description("Install a skill from ClawHub into the active workspace")
+    .argument("<slug>", "ClawHub skill slug")
+    .option("--version <version>", "Install a specific version")
+    .option("--force", "Overwrite an existing workspace skill", false)
+    .action(async (slug: string, opts: { version?: string; force?: boolean }) => {
+      try {
+        const workspaceDir = resolveActiveWorkspaceDir();
+        const result = await installSkillFromClawHub({
+          workspaceDir,
+          slug,
+          version: opts.version,
+          force: Boolean(opts.force),
+          logger: {
+            info: (message) => defaultRuntime.log(message),
+          },
+        });
+        if (!result.ok) {
+          defaultRuntime.error(result.error);
+          defaultRuntime.exit(1);
+          return;
+        }
+        defaultRuntime.log(`Installed ${result.slug}@${result.version} -> ${result.targetDir}`);
+      } catch (err) {
+        defaultRuntime.error(String(err));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  skills
+    .command("update")
+    .description("Update ClawHub-installed skills in the active workspace")
+    .argument("[slug]", "Single skill slug")
+    .option("--all", "Update all tracked ClawHub skills", false)
+    .action(async (slug: string | undefined, opts: { all?: boolean }) => {
+      try {
+        if (!slug && !opts.all) {
+          defaultRuntime.error("Provide a skill slug or use --all.");
+          defaultRuntime.exit(1);
+          return;
+        }
+        if (slug && opts.all) {
+          defaultRuntime.error("Use either a skill slug or --all.");
+          defaultRuntime.exit(1);
+          return;
+        }
+        const workspaceDir = resolveActiveWorkspaceDir();
+        const tracked = await readTrackedClawHubSkillSlugs(workspaceDir);
+        if (opts.all && tracked.length === 0) {
+          defaultRuntime.log("No tracked ClawHub skills to update.");
+          return;
+        }
+        const results = await updateSkillsFromClawHub({
+          workspaceDir,
+          slug,
+          logger: {
+            info: (message) => defaultRuntime.log(message),
+          },
+        });
+        for (const result of results) {
+          if (!result.ok) {
+            defaultRuntime.error(result.error);
+            continue;
+          }
+          if (result.changed) {
+            defaultRuntime.log(
+              `Updated ${result.slug}: ${result.previousVersion ?? "unknown"} -> ${result.version}`,
+            );
+            continue;
+          }
+          defaultRuntime.log(`${result.slug} already at ${result.version}`);
+        }
+      } catch (err) {
+        defaultRuntime.error(String(err));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  skills
     .command("list")
     .description("List all available skills")
     .option("--json", "Output as JSON", false)
     .option("--eligible", "Show only eligible (ready to use) skills", false)
     .option("-v, --verbose", "Show more details including missing requirements", false)
     .action(async (opts) => {
-      try {
-        const config = loadConfig();
-        const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
-        const report = buildWorkspaceSkillStatus(workspaceDir, { config });
-        defaultRuntime.log(formatSkillsList(report, opts));
-      } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
-      }
+      await runSkillsAction((report) => formatSkillsList(report, opts));
     });
 
   skills
@@ -373,15 +184,7 @@ export function registerSkillsCli(program: Command) {
     .argument("<name>", "Skill name")
     .option("--json", "Output as JSON", false)
     .action(async (name, opts) => {
-      try {
-        const config = loadConfig();
-        const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
-        const report = buildWorkspaceSkillStatus(workspaceDir, { config });
-        defaultRuntime.log(formatSkillInfo(report, name, opts));
-      } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
-      }
+      await runSkillsAction((report) => formatSkillInfo(report, name, opts));
     });
 
   skills
@@ -389,27 +192,11 @@ export function registerSkillsCli(program: Command) {
     .description("Check which skills are ready vs missing requirements")
     .option("--json", "Output as JSON", false)
     .action(async (opts) => {
-      try {
-        const config = loadConfig();
-        const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
-        const report = buildWorkspaceSkillStatus(workspaceDir, { config });
-        defaultRuntime.log(formatSkillsCheck(report, opts));
-      } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
-      }
+      await runSkillsAction((report) => formatSkillsCheck(report, opts));
     });
 
   // Default action (no subcommand) - show list
   skills.action(async () => {
-    try {
-      const config = loadConfig();
-      const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
-      const report = buildWorkspaceSkillStatus(workspaceDir, { config });
-      defaultRuntime.log(formatSkillsList(report, {}));
-    } catch (err) {
-      defaultRuntime.error(String(err));
-      defaultRuntime.exit(1);
-    }
+    await runSkillsAction((report) => formatSkillsList(report, {}));
   });
 }

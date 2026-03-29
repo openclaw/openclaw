@@ -1,4 +1,4 @@
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { ApiContributor, Entry, MapConfig, User } from "./update-clawtributors.types.js";
@@ -15,7 +15,6 @@ const emailToLogin = normalizeMap(mapConfig.emailToLogin ?? {});
 const ensureLogins = (mapConfig.ensureLogins ?? []).map((login) => login.toLowerCase());
 
 const readmePath = resolve("README.md");
-const placeholderAvatar = mapConfig.placeholderAvatar ?? "assets/avatar-placeholder.svg";
 const seedCommit = mapConfig.seedCommit ?? null;
 const seedEntries = seedCommit ? parseReadmeEntries(run(`git show ${seedCommit}:README.md`)) : [];
 const raw = run(`gh api "repos/${REPO}/contributors?per_page=100&anon=1" --paginate`);
@@ -46,8 +45,10 @@ for (const login of ensureLogins) {
   }
 }
 
-const log = run("git log --format=%aN%x7c%aE --numstat");
+// %x1f = unit separator to avoid collisions with author names containing "|"
+const log = run("git log --reverse --format=%aN%x1f%aE%x1f%aI --numstat");
 const linesByLogin = new Map<string, number>();
+const firstCommitByLogin = new Map<string, string>();
 
 let currentName: string | null = null;
 let currentEmail: string | null = null;
@@ -57,10 +58,21 @@ for (const line of log.split("\n")) {
     continue;
   }
 
-  if (line.includes("|") && !/^[0-9-]/.test(line)) {
-    const [name, email] = line.split("|", 2);
+  if (line.includes("\x1f") && !/^[0-9-]/.test(line)) {
+    const [name, email, date] = line.split("\x1f", 3);
     currentName = name?.trim() ?? null;
     currentEmail = email?.trim().toLowerCase() ?? null;
+
+    // Track first commit date per login (log is --reverse so first seen = earliest)
+    if (currentName && date) {
+      const login = resolveLogin(currentName, currentEmail, apiByLogin, nameToLogin, emailToLogin);
+      if (login) {
+        const key = login.toLowerCase();
+        if (!firstCommitByLogin.has(key)) {
+          firstCommitByLogin.set(key, date.slice(0, 10));
+        }
+      }
+    }
     continue;
   }
 
@@ -69,7 +81,13 @@ for (const line of log.split("\n")) {
   }
 
   const parts = line.split("\t");
-  if (parts.length < 2) {
+  if (parts.length < 3) {
+    continue;
+  }
+
+  // Skip docs paths so bulk-generated i18n scaffolds don't inflate rankings
+  const filePath = parts[2];
+  if (filePath.startsWith("docs/")) {
     continue;
   }
 
@@ -95,36 +113,78 @@ for (const login of ensureLogins) {
   }
 }
 
+// Fetch merged PRs and count per author
+const prsByLogin = new Map<string, number>();
+const prRaw = run(
+  `gh pr list -R ${REPO} --state merged --limit 5000 --json author --jq '.[].author.login'`,
+);
+for (const login of prRaw.split("\n")) {
+  const trimmed = login.trim().toLowerCase();
+  if (!trimmed) {
+    continue;
+  }
+  prsByLogin.set(trimmed, (prsByLogin.get(trimmed) ?? 0) + 1);
+}
+
+// Repo epoch for tenure calculation (root commit date)
+const rootCommit = run("git rev-list --max-parents=0 HEAD").split("\n")[0];
+const repoEpochStr = run(`git log --format=%aI -1 ${rootCommit}`);
+const repoEpoch = new Date(repoEpochStr.slice(0, 10)).getTime();
+const nowDate = new Date().toISOString().slice(0, 10);
+const now = new Date(nowDate).getTime();
+const repoAgeDays = Math.max(1, (now - repoEpoch) / 86_400_000);
+
+// Composite score:
+//   base  = commits*2 + merged_PRs*10 + sqrt(code_LOC)
+//   tenure = 1.0 + (days_since_first_commit / repo_age)^2 * 0.5
+//   score  = base * tenure
+// Squared curve: only true early contributors get meaningful boost.
+// Day-1 = 1.5x, halfway through repo life = 1.125x, recent = ~1.0x.
+function computeScore(loc: number, commits: number, prs: number, firstDate: string): number {
+  const base = commits * 2 + prs * 10 + Math.sqrt(loc);
+  const daysIn = firstDate
+    ? Math.max(0, (now - new Date(firstDate.slice(0, 10)).getTime()) / 86_400_000)
+    : 0;
+  const tenureRatio = Math.min(1, daysIn / repoAgeDays);
+  const tenure = 1.0 + tenureRatio * tenureRatio * 0.5;
+  return base * tenure;
+}
+
 const entriesByKey = new Map<string, Entry>();
 
 for (const seed of seedEntries) {
-  const login = loginFromUrl(seed.html_url);
-  const resolvedLogin =
-    login ?? resolveLogin(seed.display, null, apiByLogin, nameToLogin, emailToLogin);
-  const key = resolvedLogin ? resolvedLogin.toLowerCase() : `name:${normalizeName(seed.display)}`;
-  const avatar =
-    seed.avatar_url && !isGhostAvatar(seed.avatar_url)
-      ? normalizeAvatar(seed.avatar_url)
-      : placeholderAvatar;
+  const login =
+    loginFromUrl(seed.html_url) ??
+    resolveLogin(seed.display, null, apiByLogin, nameToLogin, emailToLogin);
+  if (!login) {
+    continue;
+  }
+  const key = login.toLowerCase();
+  const user = apiByLogin.get(key) ?? fetchUser(login);
+  if (!user) {
+    continue;
+  }
+  apiByLogin.set(key, user);
   const existing = entriesByKey.get(key);
   if (!existing) {
-    const user = resolvedLogin ? apiByLogin.get(key) : null;
+    const fd = firstCommitByLogin.get(key) ?? "";
     entriesByKey.set(key, {
       key,
-      login: resolvedLogin ?? login ?? undefined,
+      login: user.login,
       display: seed.display,
-      html_url: user?.html_url ?? seed.html_url,
-      avatar_url: user?.avatar_url ?? avatar,
+      html_url: user.html_url,
+      avatar_url: user.avatar_url,
       lines: 0,
+      commits: 0,
+      prs: 0,
+      score: 0,
+      firstCommitDate: fd,
     });
   } else {
     existing.display = existing.display || seed.display;
-    if (existing.avatar_url === placeholderAvatar || !existing.avatar_url) {
-      existing.avatar_url = avatar;
-    }
-    if (!existing.html_url || existing.html_url.includes("/search?q=")) {
-      existing.html_url = seed.html_url;
-    }
+    existing.login = user.login;
+    existing.html_url = user.html_url;
+    existing.avatar_url = user.avatar_url;
   }
 }
 
@@ -138,56 +198,53 @@ for (const item of contributors) {
     ? item.login
     : resolveLogin(baseName, item.email ?? null, apiByLogin, nameToLogin, emailToLogin);
 
-  if (resolvedLogin) {
-    const key = resolvedLogin.toLowerCase();
-    const existing = entriesByKey.get(key);
-    if (!existing) {
-      let user = apiByLogin.get(key) ?? fetchUser(resolvedLogin);
-      if (user) {
-        const lines = linesByLogin.get(key) ?? 0;
-        const contributions = contributionsByLogin.get(key) ?? 0;
-        entriesByKey.set(key, {
-          key,
-          login: user.login,
-          display: pickDisplay(baseName, user.login, existing?.display),
-          html_url: user.html_url,
-          avatar_url: normalizeAvatar(user.avatar_url),
-          lines: lines > 0 ? lines : contributions,
-        });
-      }
-    } else if (existing) {
-      existing.login = existing.login ?? resolvedLogin;
-      existing.display = pickDisplay(baseName, existing.login, existing.display);
-      if (existing.avatar_url === placeholderAvatar || !existing.avatar_url) {
-        const user = apiByLogin.get(key) ?? fetchUser(resolvedLogin);
-        if (user) {
-          existing.html_url = user.html_url;
-          existing.avatar_url = normalizeAvatar(user.avatar_url);
-        }
-      }
-      const lines = linesByLogin.get(key) ?? 0;
-      const contributions = contributionsByLogin.get(key) ?? 0;
-      existing.lines = Math.max(existing.lines, lines > 0 ? lines : contributions);
-    }
+  if (!resolvedLogin) {
     continue;
   }
 
-  const anonKey = `name:${normalizeName(baseName)}`;
-  const existingAnon = entriesByKey.get(anonKey);
-  if (!existingAnon) {
-    entriesByKey.set(anonKey, {
-      key: anonKey,
-      display: baseName,
-      html_url: fallbackHref(baseName),
-      avatar_url: placeholderAvatar,
-      lines: item.contributions ?? 0,
+  const key = resolvedLogin.toLowerCase();
+  const user = apiByLogin.get(key) ?? fetchUser(resolvedLogin);
+  if (!user) {
+    continue;
+  }
+  apiByLogin.set(key, user);
+
+  const existing = entriesByKey.get(key);
+  if (!existing) {
+    const loc = linesByLogin.get(key) ?? 0;
+    const commits = contributionsByLogin.get(key) ?? 0;
+    const prs = prsByLogin.get(key) ?? 0;
+    const fd = firstCommitByLogin.get(key) ?? "";
+    entriesByKey.set(key, {
+      key,
+      login: user.login,
+      display: pickDisplay(baseName, user.login),
+      html_url: user.html_url,
+      avatar_url: normalizeAvatar(user.avatar_url),
+      lines: loc > 0 ? loc : commits,
+      commits,
+      prs,
+      score: computeScore(loc, commits, prs, fd),
+      firstCommitDate: fd,
     });
   } else {
-    existingAnon.lines = Math.max(existingAnon.lines, item.contributions ?? 0);
+    existing.login = user.login;
+    existing.display = pickDisplay(baseName, user.login, existing.display);
+    existing.html_url = user.html_url;
+    existing.avatar_url = normalizeAvatar(user.avatar_url);
+    const loc = linesByLogin.get(key) ?? 0;
+    const commits = contributionsByLogin.get(key) ?? 0;
+    const prs = prsByLogin.get(key) ?? 0;
+    const fd = firstCommitByLogin.get(key) ?? existing.firstCommitDate;
+    existing.lines = Math.max(existing.lines, loc > 0 ? loc : commits);
+    existing.commits = Math.max(existing.commits, commits);
+    existing.prs = Math.max(existing.prs, prs);
+    existing.firstCommitDate = fd || existing.firstCommitDate;
+    existing.score = Math.max(existing.score, computeScore(loc, commits, prs, fd));
   }
 }
 
-for (const [login, lines] of linesByLogin.entries()) {
+for (const [login, loc] of linesByLogin.entries()) {
   if (entriesByKey.has(login)) {
     continue;
   }
@@ -196,22 +253,20 @@ for (const [login, lines] of linesByLogin.entries()) {
     user = fetchUser(login) || undefined;
   }
   if (user) {
-    const contributions = contributionsByLogin.get(login) ?? 0;
+    const commits = contributionsByLogin.get(login) ?? 0;
+    const prs = prsByLogin.get(login) ?? 0;
+    const fd = firstCommitByLogin.get(login) ?? "";
     entriesByKey.set(login, {
       key: login,
       login: user.login,
       display: displayName[user.login.toLowerCase()] ?? user.login,
       html_url: user.html_url,
       avatar_url: normalizeAvatar(user.avatar_url),
-      lines: lines > 0 ? lines : contributions,
-    });
-  } else {
-    entriesByKey.set(login, {
-      key: login,
-      display: login,
-      html_url: fallbackHref(login),
-      avatar_url: placeholderAvatar,
-      lines,
+      lines: loc > 0 ? loc : commits,
+      commits,
+      prs,
+      score: computeScore(loc, commits, prs, fd),
+      firstCommitDate: fd,
     });
   }
 }
@@ -219,22 +274,22 @@ for (const [login, lines] of linesByLogin.entries()) {
 const entries = Array.from(entriesByKey.values());
 
 entries.sort((a, b) => {
-  if (b.lines !== a.lines) {
-    return b.lines - a.lines;
+  if (b.score !== a.score) {
+    return b.score - a.score;
   }
   return a.display.localeCompare(b.display);
 });
 
-const lines: string[] = [];
+const htmlLines: string[] = [];
 for (let i = 0; i < entries.length; i += PER_LINE) {
   const chunk = entries.slice(i, i + PER_LINE);
   const parts = chunk.map((entry) => {
     return `<a href="${entry.html_url}"><img src="${entry.avatar_url}" width="48" height="48" alt="${entry.display}" title="${entry.display}"/></a>`;
   });
-  lines.push(`  ${parts.join(" ")}`);
+  htmlLines.push(`  ${parts.join(" ")}`);
 }
 
-const block = `${lines.join("\n")}\n`;
+const block = `${htmlLines.join("\n")}\n`;
 const readme = readFileSync(readmePath, "utf8");
 const start = readme.indexOf('<p align="left">');
 const end = readme.indexOf("</p>", start);
@@ -247,6 +302,24 @@ const next = `${readme.slice(0, start)}<p align="left">\n${block}${readme.slice(
 writeFileSync(readmePath, next);
 
 console.log(`Updated README clawtributors: ${entries.length} entries`);
+console.log(`\nTop 25 by composite score: (commits*2 + PRs*10 + sqrt(LOC)) * tenure`);
+console.log(`  tenure = 1.0 + (days_since_first_commit / repo_age)^2 * 0.5`);
+console.log(
+  `${"#".padStart(3)}  ${"login".padEnd(24)} ${"score".padStart(8)} ${"tenure".padStart(7)} ${"commits".padStart(8)} ${"PRs".padStart(6)} ${"LOC".padStart(10)}  first commit`,
+);
+console.log("-".repeat(85));
+for (const entry of entries.slice(0, 25)) {
+  const login = (entry.login ?? entry.key).slice(0, 24);
+  const fd = entry.firstCommitDate || "?";
+  const daysIn =
+    fd !== "?" ? Math.max(0, (now - new Date(fd.slice(0, 10)).getTime()) / 86_400_000) : 0;
+  const tr = Math.min(1, daysIn / repoAgeDays);
+  const tenure = 1.0 + tr * tr * 0.5;
+  console.log(
+    `${entries.indexOf(entry) + 1}`.padStart(3) +
+      `  ${login.padEnd(24)} ${entry.score.toFixed(0).padStart(8)} ${tenure.toFixed(2).padStart(6)}x ${String(entry.commits).padStart(8)} ${String(entry.prs).padStart(6)} ${String(entry.lines).padStart(10)}  ${fd}`,
+  );
+}
 
 function run(cmd: string): string {
   return execSync(cmd, {
@@ -290,6 +363,27 @@ function parseCount(value: string): number {
   return /^\d+$/.test(value) ? Number(value) : 0;
 }
 
+function isValidLogin(login: string): boolean {
+  if (!/^[A-Za-z0-9-]{1,39}$/.test(login)) {
+    return false;
+  }
+  if (login.startsWith("-") || login.endsWith("-")) {
+    return false;
+  }
+  if (login.includes("--")) {
+    return false;
+  }
+  return true;
+}
+
+function normalizeLogin(login: string | null): string | null {
+  if (!login) {
+    return null;
+  }
+  const trimmed = login.trim();
+  return isValidLogin(trimmed) ? trimmed : null;
+}
+
 function normalizeAvatar(url: string): string {
   if (!/^https?:/i.test(url)) {
     return url;
@@ -302,13 +396,13 @@ function normalizeAvatar(url: string): string {
   return `${url}${sep}s=48`;
 }
 
-function isGhostAvatar(url: string): boolean {
-  return url.toLowerCase().includes("ghost.png");
-}
-
 function fetchUser(login: string): User | null {
+  const normalized = normalizeLogin(login);
+  if (!normalized) {
+    return null;
+  }
   try {
-    const data = execSync(`gh api users/${login}`, {
+    const data = execFileSync("gh", ["api", `users/${normalized}`], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -334,45 +428,45 @@ function resolveLogin(
   emailToLogin: Record<string, string>,
 ): string | null {
   if (email && emailToLogin[email]) {
-    return emailToLogin[email];
+    return normalizeLogin(emailToLogin[email]);
   }
 
   if (email && name) {
     const guessed = guessLoginFromEmailName(name, email, apiByLogin);
     if (guessed) {
-      return guessed;
+      return normalizeLogin(guessed);
     }
   }
 
   if (email && email.endsWith("@users.noreply.github.com")) {
     const local = email.split("@", 1)[0];
     const login = local.includes("+") ? local.split("+")[1] : local;
-    return login || null;
+    return normalizeLogin(login);
   }
 
   if (email && email.endsWith("@github.com")) {
     const login = email.split("@", 1)[0];
     if (apiByLogin.has(login.toLowerCase())) {
-      return login;
+      return normalizeLogin(login);
     }
   }
 
   const normalized = normalizeName(name);
   if (nameToLogin[normalized]) {
-    return nameToLogin[normalized];
+    return normalizeLogin(nameToLogin[normalized]);
   }
 
   const compact = normalized.replace(/\s+/g, "");
   if (nameToLogin[compact]) {
-    return nameToLogin[compact];
+    return normalizeLogin(nameToLogin[compact]);
   }
 
   if (apiByLogin.has(normalized)) {
-    return normalized;
+    return normalizeLogin(normalized);
   }
 
   if (apiByLogin.has(compact)) {
-    return compact;
+    return normalizeLogin(compact);
   }
 
   return null;

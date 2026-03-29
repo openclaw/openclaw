@@ -15,9 +15,17 @@ with a Z.AI API key.
 ## CLI setup
 
 ```bash
-openclaw onboard --auth-choice zai-api-key
-# or non-interactive
-openclaw onboard --zai-api-key "$ZAI_API_KEY"
+# Coding Plan Global, recommended for Coding Plan users
+openclaw onboard --auth-choice zai-coding-global
+
+# Coding Plan CN (China region), recommended for Coding Plan users
+openclaw onboard --auth-choice zai-coding-cn
+
+# General API
+openclaw onboard --auth-choice zai-global
+
+# General API CN (China region)
+openclaw onboard --auth-choice zai-cn
 ```
 
 ## Config snippet
@@ -32,5 +40,7 @@ openclaw onboard --zai-api-key "$ZAI_API_KEY"
 ## Notes
 
 - GLM models are available as `zai/<model>` (example: `zai/glm-5`).
+- `tool_stream` is enabled by default for Z.AI tool-call streaming. Set
+  `agents.defaults.models["zai/<model>"].params.tool_stream` to `false` to disable it.
 - See [/providers/glm](/providers/glm) for the model family overview.
 - Z.AI uses Bearer auth with your API key.

@@ -31,6 +31,7 @@ export interface ProcessSession {
   scopeKey?: string;
   sessionKey?: string;
   notifyOnExit?: boolean;
+  notifyOnExitEmptySuccess?: boolean;
   exitNotified?: boolean;
   child?: ChildProcessWithoutNullStreams;
   stdin?: SessionStdin;
@@ -51,6 +52,8 @@ export interface ProcessSession {
   exited: boolean;
   truncated: boolean;
   backgrounded: boolean;
+  /** PTY cursor key mode: unknown until a PTY reports smkx/rmkx. */
+  cursorKeyMode: "unknown" | "normal" | "application";
 }
 
 export interface FinishedSession {

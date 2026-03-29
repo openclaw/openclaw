@@ -16,13 +16,23 @@ export function registerMessageSendCommand(message: Command, helpers: MessageCli
           "Attach media (image/audio/video/document). Accepts local paths or URLs.",
         )
         .option(
+          "--interactive <json>",
+          "Shared interactive payload as JSON (buttons/selects rendered natively by supported channels)",
+        )
+        .option(
           "--buttons <json>",
           "Telegram inline keyboard buttons as JSON (array of button rows)",
         )
+        .option("--components <json>", "Discord components payload as JSON")
         .option("--card <json>", "Adaptive Card JSON object (when supported by the channel)")
         .option("--reply-to <id>", "Reply-to message id")
         .option("--thread-id <id>", "Thread id (Telegram forum thread)")
         .option("--gif-playback", "Treat video media as GIF playback (WhatsApp only).", false)
+        .option(
+          "--force-document",
+          "Send media as document to avoid Telegram compression (Telegram only). Applies to images and GIFs.",
+          false,
+        )
         .option(
           "--silent",
           "Send message silently without notification (Telegram + Discord)",

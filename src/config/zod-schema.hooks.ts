@@ -1,5 +1,35 @@
+import path from "node:path";
 import { z } from "zod";
+import { InstallRecordShape } from "./zod-schema.installs.js";
 import { sensitive } from "./zod-schema.sensitive.js";
+
+function isSafeRelativeModulePath(raw: string): boolean {
+  const value = raw.trim();
+  if (!value) {
+    return false;
+  }
+  // Hook modules are loaded via file-path resolution + dynamic import().
+  // Keep this strictly relative to a configured base dir to avoid path traversal and surprises.
+  if (path.isAbsolute(value)) {
+    return false;
+  }
+  if (value.startsWith("~")) {
+    return false;
+  }
+  // Disallow URL-ish and drive-relative forms (e.g. "file:...", "C:foo").
+  if (value.includes(":")) {
+    return false;
+  }
+  const parts = value.split(/[\\/]+/g);
+  if (parts.some((part) => part === "..")) {
+    return false;
+  }
+  return true;
+}
+
+const SafeRelativeModulePathSchema = z
+  .string()
+  .refine(isSafeRelativeModulePath, "module must be a safe relative path (no absolute paths)");
 
 export const HookMappingSchema = z
   .object({
@@ -19,26 +49,17 @@ export const HookMappingSchema = z
     textTemplate: z.string().optional(),
     deliver: z.boolean().optional(),
     allowUnsafeExternalContent: z.boolean().optional(),
-    channel: z
-      .union([
-        z.literal("last"),
-        z.literal("whatsapp"),
-        z.literal("telegram"),
-        z.literal("discord"),
-        z.literal("irc"),
-        z.literal("slack"),
-        z.literal("signal"),
-        z.literal("imessage"),
-        z.literal("msteams"),
-      ])
-      .optional(),
+    // Keep this open-ended so runtime channel plugins (for example feishu) can be
+    // referenced without hard-coding every channel id in the config schema.
+    // Runtime still validates the resolved value against currently registered channels.
+    channel: z.string().trim().min(1).optional(),
     to: z.string().optional(),
     model: z.string().optional(),
     thinking: z.string().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
     transform: z
       .object({
-        module: z.string(),
+        module: SafeRelativeModulePathSchema,
         export: z.string().optional(),
       })
       .strict()
@@ -50,7 +71,7 @@ export const HookMappingSchema = z
 export const InternalHookHandlerSchema = z
   .object({
     event: z.string(),
-    module: z.string(),
+    module: SafeRelativeModulePathSchema,
     export: z.string().optional(),
   })
   .strict();
@@ -67,12 +88,7 @@ const HookConfigSchema = z
 
 const HookInstallRecordSchema = z
   .object({
-    source: z.union([z.literal("npm"), z.literal("archive"), z.literal("path")]),
-    spec: z.string().optional(),
-    sourcePath: z.string().optional(),
-    installPath: z.string().optional(),
-    version: z.string().optional(),
-    installedAt: z.string().optional(),
+    ...InstallRecordShape,
     hooks: z.array(z.string()).optional(),
   })
   .strict();

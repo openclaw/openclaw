@@ -8,6 +8,8 @@ import {
   type Tool,
 } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
+import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
+import { normalizeProviderId } from "./provider-id.js";
 
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
 const DEFAULT_TIMEOUT_MS = 12_000;
@@ -95,26 +97,6 @@ function normalizeCreatedAtMs(value: unknown): number | null {
     return Math.round(value);
   }
   return Math.round(value * 1000);
-}
-
-function inferParamBFromIdOrName(text: string): number | null {
-  const raw = text.toLowerCase();
-  const matches = raw.matchAll(/(?:^|[^a-z0-9])[a-z]?(\d+(?:\.\d+)?)b(?:[^a-z0-9]|$)/g);
-  let best: number | null = null;
-  for (const match of matches) {
-    const numRaw = match[1];
-    if (!numRaw) {
-      continue;
-    }
-    const value = Number(numRaw);
-    if (!Number.isFinite(value) || value <= 0) {
-      continue;
-    }
-    if (best === null || value > best) {
-      best = value;
-    }
-  }
-  return best;
 }
 
 function parseModality(modality: string | null): Array<"text" | "image"> {
@@ -281,7 +263,7 @@ async function probeTool(
     const message = await withTimeout(timeoutMs, (signal) =>
       complete(model, context, {
         apiKey,
-        maxTokens: 32,
+        maxTokens: 256,
         temperature: 0,
         toolChoice: "required",
         signal,
@@ -345,12 +327,38 @@ async function probeImage(
 }
 
 function ensureImageInput(model: OpenAIModel): OpenAIModel {
-  if (model.input.includes("image")) {
+  if (model.input?.includes("image")) {
     return model;
   }
   return {
     ...model,
-    input: Array.from(new Set([...model.input, "image"])),
+    input: Array.from(new Set([...(model.input ?? []), "image"])),
+  };
+}
+
+function buildOpenRouterScanResult(params: {
+  entry: OpenRouterModelMeta;
+  isFree: boolean;
+  tool: ProbeResult;
+  image: ProbeResult;
+}): ModelScanResult {
+  const { entry, isFree } = params;
+  return {
+    id: entry.id,
+    name: entry.name,
+    provider: "openrouter",
+    modelRef: `openrouter/${entry.id}`,
+    contextLength: entry.contextLength,
+    maxCompletionTokens: entry.maxCompletionTokens,
+    supportedParametersCount: entry.supportedParametersCount,
+    supportsToolsMeta: entry.supportsToolsMeta,
+    modality: entry.modality,
+    inferredParamB: entry.inferredParamB,
+    createdAtMs: entry.createdAtMs,
+    pricing: entry.pricing,
+    isFree,
+    tool: params.tool,
+    image: params.image,
   };
 }
 
@@ -401,7 +409,7 @@ export async function scanOpenRouterModels(
   const concurrency = Math.max(1, Math.floor(options.concurrency ?? DEFAULT_CONCURRENCY));
   const minParamB = Math.max(0, Math.floor(options.minParamB ?? 0));
   const maxAgeDays = Math.max(0, Math.floor(options.maxAgeDays ?? 0));
-  const providerFilter = options.providerFilter?.trim().toLowerCase() ?? "";
+  const providerFilter = normalizeProviderId(options.providerFilter ?? "");
 
   const catalog = await fetchOpenRouterModels(fetchImpl);
   const now = Date.now();
@@ -411,7 +419,7 @@ export async function scanOpenRouterModels(
       return false;
     }
     if (providerFilter) {
-      const prefix = entry.id.split("/")[0]?.toLowerCase() ?? "";
+      const prefix = normalizeProviderId(entry.id.split("/")[0] ?? "");
       if (prefix !== providerFilter) {
         return false;
       }
@@ -446,23 +454,12 @@ export async function scanOpenRouterModels(
     async (entry) => {
       const isFree = isFreeOpenRouterModel(entry);
       if (!probe) {
-        return {
-          id: entry.id,
-          name: entry.name,
-          provider: "openrouter",
-          modelRef: `openrouter/${entry.id}`,
-          contextLength: entry.contextLength,
-          maxCompletionTokens: entry.maxCompletionTokens,
-          supportedParametersCount: entry.supportedParametersCount,
-          supportsToolsMeta: entry.supportsToolsMeta,
-          modality: entry.modality,
-          inferredParamB: entry.inferredParamB,
-          createdAtMs: entry.createdAtMs,
-          pricing: entry.pricing,
+        return buildOpenRouterScanResult({
+          entry,
           isFree,
           tool: { ok: false, latencyMs: null, skipped: true },
           image: { ok: false, latencyMs: null, skipped: true },
-        } satisfies ModelScanResult;
+        });
       }
 
       const model: OpenAIModel = {
@@ -476,27 +473,16 @@ export async function scanOpenRouterModels(
       };
 
       const toolResult = await probeTool(model, apiKey, timeoutMs);
-      const imageResult = model.input.includes("image")
+      const imageResult = model.input?.includes("image")
         ? await probeImage(ensureImageInput(model), apiKey, timeoutMs)
         : { ok: false, latencyMs: null, skipped: true };
 
-      return {
-        id: entry.id,
-        name: entry.name,
-        provider: "openrouter",
-        modelRef: `openrouter/${entry.id}`,
-        contextLength: entry.contextLength,
-        maxCompletionTokens: entry.maxCompletionTokens,
-        supportedParametersCount: entry.supportedParametersCount,
-        supportsToolsMeta: entry.supportsToolsMeta,
-        modality: entry.modality,
-        inferredParamB: entry.inferredParamB,
-        createdAtMs: entry.createdAtMs,
-        pricing: entry.pricing,
+      return buildOpenRouterScanResult({
+        entry,
         isFree,
         tool: toolResult,
         image: imageResult,
-      } satisfies ModelScanResult;
+      });
     },
     {
       onProgress: (completed, total) =>

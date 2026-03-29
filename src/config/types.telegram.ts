@@ -6,26 +6,70 @@ import type {
   MarkdownConfig,
   OutboundRetryConfig,
   ReplyToMode,
+  SessionThreadBindingsConfig,
 } from "./types.base.js";
-import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
+import type {
+  ChannelHealthMonitorConfig,
+  ChannelHeartbeatVisibilityConfig,
+} from "./types.channels.js";
 import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 export type TelegramActionConfig = {
   reactions?: boolean;
   sendMessage?: boolean;
+  /** Enable poll creation. Requires sendMessage to also be enabled. */
+  poll?: boolean;
   deleteMessage?: boolean;
   editMessage?: boolean;
   /** Enable sticker actions (send and search). */
   sticker?: boolean;
+  /** Enable forum topic creation. */
+  createForumTopic?: boolean;
+  /** Enable forum topic editing (rename / change icon). */
+  editForumTopic?: boolean;
+};
+
+export type TelegramThreadBindingsConfig = SessionThreadBindingsConfig & {
+  /**
+   * Allow `sessions_spawn({ thread: true })` to auto-create + bind Telegram
+   * topics for subagent sessions. Default: false (opt-in).
+   */
+  spawnSubagentSessions?: boolean;
+  /**
+   * Allow `/acp spawn` to auto-create + bind Telegram topics for ACP
+   * sessions. Default: false (opt-in).
+   */
+  spawnAcpSessions?: boolean;
 };
 
 export type TelegramNetworkConfig = {
   /** Override Node's autoSelectFamily behavior (true = enable, false = disable). */
   autoSelectFamily?: boolean;
+  /**
+   * DNS result order for network requests ("ipv4first" | "verbatim").
+   * Set to "ipv4first" to prioritize IPv4 addresses and work around IPv6 issues.
+   * Default: "ipv4first" on Node 22+ to avoid common fetch failures.
+   */
+  dnsResultOrder?: "ipv4first" | "verbatim";
 };
 
 export type TelegramInlineButtonsScope = "off" | "dm" | "group" | "all" | "allowlist";
+export type TelegramStreamingMode = "off" | "partial" | "block" | "progress";
+export type TelegramExecApprovalTarget = "dm" | "channel" | "both";
+
+export type TelegramExecApprovalConfig = {
+  /** Enable Telegram exec approvals for this account. Default: false. */
+  enabled?: boolean;
+  /** Telegram user IDs allowed to approve exec requests. Required if enabled. */
+  approvers?: Array<string | number>;
+  /** Only forward approvals for these agent IDs. Omit = all agents. */
+  agentFilter?: string[];
+  /** Only forward approvals matching these session key patterns (substring or regex). */
+  sessionFilter?: string[];
+  /** Where to send approval prompts. Default: "dm". */
+  target?: TelegramExecApprovalTarget;
+};
 
 export type TelegramCapabilitiesConfig =
   | string[]
@@ -46,6 +90,8 @@ export type TelegramAccountConfig = {
   name?: string;
   /** Optional provider capability tags used for agent/runtime guidance. */
   capabilities?: TelegramCapabilitiesConfig;
+  /** Telegram-native exec approval delivery + approver authorization. */
+  execApprovals?: TelegramExecApprovalConfig;
   /** Markdown formatting overrides (tables). */
   markdown?: MarkdownConfig;
   /** Override native command registration for Telegram (bool or "auto"). */
@@ -65,13 +111,18 @@ export type TelegramAccountConfig = {
   /** If false, do not start this Telegram account. Default: true. */
   enabled?: boolean;
   botToken?: string;
-  /** Path to file containing bot token (for secret managers like agenix). */
+  /** Path to a regular file containing the bot token; symlinks are rejected. */
   tokenFile?: string;
   /** Control reply threading when reply tags are present (off|first|all). */
   replyToMode?: ReplyToMode;
   groups?: Record<string, TelegramGroupConfig>;
+  /** Per-DM configuration for Telegram DM topics (key is chat ID). */
+  direct?: Record<string, TelegramDirectConfig>;
+  /** DM allowlist (numeric Telegram user IDs). Onboarding can resolve @username to IDs. */
   allowFrom?: Array<string | number>;
-  /** Optional allowlist for Telegram group senders (user ids or usernames). */
+  /** Default delivery target for CLI `--deliver` when no explicit `--reply-to` is provided. */
+  defaultTo?: string | number;
+  /** Optional allowlist for Telegram group senders (numeric Telegram user IDs). */
   groupAllowFrom?: Array<string | number>;
   /**
    * Controls how group messages are handled:
@@ -90,13 +141,23 @@ export type TelegramAccountConfig = {
   textChunkLimit?: number;
   /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
   chunkMode?: "length" | "newline";
+  /**
+   * Stream preview mode:
+   * - "off": disable preview updates
+   * - "partial": edit a single preview message
+   * - "block": stream in larger chunked updates
+   * - "progress": alias that maps to "partial" on Telegram
+   *
+   * Legacy boolean values are still accepted and auto-migrated.
+   */
+  streaming?: TelegramStreamingMode | boolean;
   /** Disable block streaming for this account. */
   blockStreaming?: boolean;
-  /** Chunking config for draft streaming in `streamMode: "block"`. */
+  /** @deprecated Legacy chunking config from `streamMode: "block"`; ignored after migration. */
   draftChunk?: BlockStreamingChunkConfig;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
-  /** Draft streaming mode for Telegram (off|partial|block). Default: partial. */
+  /** @deprecated Legacy key; migrated automatically to `streaming`. */
   streamMode?: "off" | "partial" | "block";
   mediaMaxMb?: number;
   /** Telegram API client timeout in seconds (grammY ApiClientOptions). */
@@ -111,8 +172,14 @@ export type TelegramAccountConfig = {
   webhookPath?: string;
   /** Local webhook listener bind host (default: 127.0.0.1). */
   webhookHost?: string;
+  /** Local webhook listener bind port (default: 8787). */
+  webhookPort?: number;
+  /** Path to the self-signed certificate (PEM) to upload to Telegram during webhook registration. */
+  webhookCertPath?: string;
   /** Per-action tool gating (default: true for all). */
   actions?: TelegramActionConfig;
+  /** Telegram thread/conversation binding overrides. */
+  threadBindings?: TelegramThreadBindingsConfig;
   /**
    * Controls which user reactions trigger notifications:
    * - "off" (default): ignore all reactions
@@ -130,8 +197,12 @@ export type TelegramAccountConfig = {
   reactionLevel?: "off" | "ack" | "minimal" | "extensive";
   /** Heartbeat visibility settings for this channel. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /** Channel health monitor overrides for this channel/account. */
+  healthMonitor?: ChannelHealthMonitorConfig;
   /** Controls whether link previews are shown in outbound messages. Default: true. */
   linkPreview?: boolean;
+  /** Send Telegram bot error replies silently (no notification sound). Default: false. */
+  silentErrorReplies?: boolean;
   /**
    * Per-channel outbound response prefix override.
    *
@@ -140,6 +211,15 @@ export type TelegramAccountConfig = {
    * Use `"auto"` to derive `[{identity.name}]` from the routed agent.
    */
   responsePrefix?: string;
+  /**
+   * Per-channel ack reaction override.
+   * Telegram expects unicode emoji (e.g., "👀") rather than shortcodes.
+   */
+  ackReaction?: string;
+  /** Custom Telegram Bot API root URL (e.g. "https://my-proxy.example.com" or a local Bot API server). */
+  apiRoot?: string;
+  /** Auto-rename DM forum topics on first message using LLM. Default: true. */
+  autoTopicLabel?: AutoTopicLabelConfig;
 };
 
 export type TelegramTopicConfig = {
@@ -150,10 +230,14 @@ export type TelegramTopicConfig = {
   skills?: string[];
   /** If false, disable the bot for this topic. */
   enabled?: boolean;
-  /** Optional allowlist for topic senders (ids or usernames). */
+  /** Optional allowlist for topic senders (numeric Telegram user IDs). */
   allowFrom?: Array<string | number>;
   /** Optional system prompt snippet for this topic. */
   systemPrompt?: string;
+  /** If true, skip automatic voice-note transcription for mention detection in this topic. */
+  disableAudioPreflight?: boolean;
+  /** Route this topic to a specific agent (overrides group-level and binding routing). */
+  agentId?: string;
 };
 
 export type TelegramGroupConfig = {
@@ -169,13 +253,54 @@ export type TelegramGroupConfig = {
   topics?: Record<string, TelegramTopicConfig>;
   /** If false, disable the bot for this group (and its topics). */
   enabled?: boolean;
-  /** Optional allowlist for group senders (ids or usernames). */
+  /** Optional allowlist for group senders (numeric Telegram user IDs). */
   allowFrom?: Array<string | number>;
   /** Optional system prompt snippet for this group. */
   systemPrompt?: string;
+  /** If true, skip automatic voice-note transcription for mention detection in this group. */
+  disableAudioPreflight?: boolean;
+};
+
+/** Config for LLM-based auto-topic labeling. */
+export type AutoTopicLabelConfig =
+  | boolean
+  | {
+      enabled?: boolean;
+      /** Custom prompt for LLM-based topic naming. */
+      prompt?: string;
+    };
+
+export type TelegramDirectConfig = {
+  /** Per-DM override for DM message policy (open|disabled|allowlist). */
+  dmPolicy?: DmPolicy;
+  /** Optional tool policy overrides for this DM. */
+  tools?: GroupToolPolicyConfig;
+  toolsBySender?: GroupToolPolicyBySenderConfig;
+  /** If specified, only load these skills for this DM (when no topic). Omit = all skills; empty = no skills. */
+  skills?: string[];
+  /** Per-topic configuration for DM topics (key is message_thread_id as string) */
+  topics?: Record<string, TelegramTopicConfig>;
+  /** If false, disable the bot for this DM (and its topics). */
+  enabled?: boolean;
+  /** If true, require messages to be from a topic when topics are enabled. */
+  requireTopic?: boolean;
+  /** Optional allowlist for DM senders (numeric Telegram user IDs). */
+  allowFrom?: Array<string | number>;
+  /** Optional system prompt snippet for this DM. */
+  systemPrompt?: string;
+  /** Auto-rename DM forum topics on first message using LLM. Default: true. */
+  autoTopicLabel?: AutoTopicLabelConfig;
 };
 
 export type TelegramConfig = {
   /** Optional per-account Telegram configuration (multi-account). */
   accounts?: Record<string, TelegramAccountConfig>;
+  /** Optional default account id when multiple accounts are configured. */
+  defaultAccount?: string;
 } & TelegramAccountConfig;
+
+declare module "./types.channels.js" {
+  interface ChannelsConfig {
+    telegram?: TelegramConfig;
+  }
+}

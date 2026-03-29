@@ -1,22 +1,28 @@
 {
   "name": "@openclaw/googlechat",
-  "version": "2026.2.13",
+  "version": "2026.3.28",
   "private": true,
   "description": "OpenClaw Google Chat channel plugin",
   "type": "module",
   "dependencies": {
-    "google-auth-library": "^10.5.0"
+    "google-auth-library": "^10.6.2"
   },
   "devDependencies": {
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.1.26"
+    "openclaw": ">=2026.3.28"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
   },
   "openclaw": {
     "extensions": [
       "./index.ts"
     ],
+    "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "googlechat",
       "label": "Google Chat",
@@ -24,17 +30,20 @@
       "detailLabel": "Google Chat",
       "docsPath": "/channels/googlechat",
       "docsLabel": "googlechat",
-      "blurb": "Google Workspace Chat app via HTTP webhooks.",
+      "blurb": "Google Workspace Chat app with HTTP webhook.",
       "aliases": [
         "gchat",
         "google-chat"
       ],
-      "order": 55
+      "order": 55,
+      "systemImage": "message.badge",
+      "markdownCapable": true
     },
     "install": {
       "npmSpec": "@openclaw/googlechat",
       "localPath": "extensions/googlechat",
-      "defaultChoice": "npm"
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.3.28"
     }
   }
 }

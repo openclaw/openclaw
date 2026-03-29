@@ -159,7 +159,9 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
 extension MenuSessionsInjector {
     // MARK: - Injection
 
-    private var mainSessionKey: String { WorkActivityStore.shared.mainSessionKey }
+    private var mainSessionKey: String {
+        WorkActivityStore.shared.mainSessionKey
+    }
 
     private func inject(into menu: NSMenu) {
         self.cancelPreviewTasks()
@@ -444,6 +446,8 @@ extension MenuSessionsInjector {
 
     private func buildUsageOverflowMenu(rows: [UsageRow], width: CGFloat) -> NSMenu {
         let menu = NSMenu()
+        // Keep submenu delegate nil: reusing the status-menu delegate here causes
+        // recursive reinjection whenever this submenu is opened.
         for row in rows {
             let item = NSMenuItem()
             item.tag = self.tag
@@ -491,7 +495,6 @@ extension MenuSessionsInjector {
         guard !summary.daily.isEmpty else { return nil }
 
         let menu = NSMenu()
-        menu.delegate = self
 
         let chartView = CostUsageHistoryMenuView(summary: summary, width: width)
         let hosting = NSHostingView(rootView: AnyView(chartView))
@@ -1096,36 +1099,31 @@ extension MenuSessionsInjector {
     // MARK: - Width + placement
 
     private func findInsertIndex(in menu: NSMenu) -> Int? {
-        // Insert right before the separator above "Send Heartbeats".
-        if let idx = menu.items.firstIndex(where: { $0.title == "Send Heartbeats" }) {
-            if let sepIdx = menu.items[..<idx].lastIndex(where: { $0.isSeparatorItem }) {
-                return sepIdx
-            }
-            return idx
-        }
-
-        if let sepIdx = menu.items.firstIndex(where: { $0.isSeparatorItem }) {
-            return sepIdx
-        }
-
-        if menu.items.count >= 1 { return 1 }
-        return menu.items.count
+        self.findDynamicSectionInsertIndex(in: menu)
     }
 
     private func findNodesInsertIndex(in menu: NSMenu) -> Int? {
-        if let idx = menu.items.firstIndex(where: { $0.title == "Send Heartbeats" }) {
-            if let sepIdx = menu.items[..<idx].lastIndex(where: { $0.isSeparatorItem }) {
-                return sepIdx
-            }
-            return idx
+        self.findDynamicSectionInsertIndex(in: menu)
+    }
+
+    private func findDynamicSectionInsertIndex(in menu: NSMenu) -> Int? {
+        // Keep controls and action buttons visible by inserting dynamic rows at the
+        // built-in footer boundary, not by matching localized menu item titles.
+        if let footerSeparatorIndex = menu.items.lastIndex(where: { item in
+            item.isSeparatorItem && !self.isInjectedItem(item)
+        }) {
+            return footerSeparatorIndex
         }
 
-        if let sepIdx = menu.items.firstIndex(where: { $0.isSeparatorItem }) {
-            return sepIdx
+        if let firstBaseItemIndex = menu.items.firstIndex(where: { !self.isInjectedItem($0) }) {
+            return min(firstBaseItemIndex + 1, menu.items.count)
         }
 
-        if menu.items.count >= 1 { return 1 }
         return menu.items.count
+    }
+
+    private func isInjectedItem(_ item: NSMenuItem) -> Bool {
+        item.tag == self.tag || item.tag == self.nodesTag
     }
 
     private func initialWidth(for menu: NSMenu) -> CGFloat {
@@ -1175,8 +1173,7 @@ extension MenuSessionsInjector {
 
     private func makeHostedView(rootView: AnyView, width: CGFloat, highlighted: Bool) -> NSView {
         if highlighted {
-            let container = HighlightedMenuItemHostView(rootView: rootView, width: width)
-            return container
+            return HighlightedMenuItemHostView(rootView: rootView, width: width)
         }
 
         let hosting = NSHostingView(rootView: rootView)
@@ -1225,8 +1222,22 @@ extension MenuSessionsInjector {
         self.usageCacheUpdatedAt = Date()
     }
 
+    func setTestingCostUsageSummary(_ summary: GatewayCostUsageSummary?, errorText: String? = nil) {
+        self.cachedCostSummary = summary
+        self.cachedCostErrorText = errorText
+        self.costCacheUpdatedAt = Date()
+    }
+
     func injectForTesting(into menu: NSMenu) {
         self.inject(into: menu)
+    }
+
+    func testingFindInsertIndex(in menu: NSMenu) -> Int? {
+        self.findInsertIndex(in: menu)
+    }
+
+    func testingFindNodesInsertIndex(in menu: NSMenu) -> Int? {
+        self.findNodesInsertIndex(in: menu)
     }
 }
 #endif

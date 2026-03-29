@@ -1,13 +1,14 @@
 import AppKit
+import Foundation
 import OpenClawChatUI
 import OpenClawKit
 import OpenClawProtocol
-import Foundation
 import OSLog
 import QuartzCore
 import SwiftUI
 
 private let webChatSwiftLogger = Logger(subsystem: "ai.openclaw", category: "WebChatSwiftUI")
+private let webChatThinkingLevelDefaultsKey = "openclaw.webchat.thinkingLevel"
 
 private enum WebChatSwiftUILayout {
     static let windowSize = NSSize(width: 500, height: 840)
@@ -16,9 +17,24 @@ private enum WebChatSwiftUILayout {
     static let anchorPadding: CGFloat = 8
 }
 
-struct MacGatewayChatTransport: OpenClawChatTransport, Sendable {
+struct MacGatewayChatTransport: OpenClawChatTransport {
     func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload {
         try await GatewayConnection.shared.chatHistory(sessionKey: sessionKey)
+    }
+
+    func listModels() async throws -> [OpenClawChatModelChoice] {
+        do {
+            let data = try await GatewayConnection.shared.request(
+                method: "models.list",
+                params: [:],
+                timeoutMs: 15000)
+            let result = try JSONDecoder().decode(ModelsListResult.self, from: data)
+            return result.models.map(Self.mapModelChoice)
+        } catch {
+            webChatSwiftLogger.warning(
+                "models.list failed; hiding model picker: \(error.localizedDescription, privacy: .public)")
+            return []
+        }
     }
 
     func abortRun(sessionKey: String, runId: String) async throws {
@@ -43,7 +59,45 @@ struct MacGatewayChatTransport: OpenClawChatTransport, Sendable {
             method: "sessions.list",
             params: params,
             timeoutMs: 15000)
-        return try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: data)
+        let decoded = try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: data)
+        let mainSessionKey = await GatewayConnection.shared.cachedMainSessionKey()
+        let defaults = decoded.defaults.map {
+            OpenClawChatSessionsDefaults(
+                model: $0.model,
+                contextTokens: $0.contextTokens,
+                mainSessionKey: mainSessionKey)
+        } ?? OpenClawChatSessionsDefaults(
+            model: nil,
+            contextTokens: nil,
+            mainSessionKey: mainSessionKey)
+        return OpenClawChatSessionsListResponse(
+            ts: decoded.ts,
+            path: decoded.path,
+            count: decoded.count,
+            defaults: defaults,
+            sessions: decoded.sessions)
+    }
+
+    func setSessionModel(sessionKey: String, model: String?) async throws {
+        var params: [String: AnyCodable] = [
+            "key": AnyCodable(sessionKey),
+        ]
+        params["model"] = model.map(AnyCodable.init) ?? AnyCodable(NSNull())
+        _ = try await GatewayConnection.shared.request(
+            method: "sessions.patch",
+            params: params,
+            timeoutMs: 15000)
+    }
+
+    func setSessionThinking(sessionKey: String, thinkingLevel: String) async throws {
+        let params: [String: AnyCodable] = [
+            "key": AnyCodable(sessionKey),
+            "thinkingLevel": AnyCodable(thinkingLevel),
+        ]
+        _ = try await GatewayConnection.shared.request(
+            method: "sessions.patch",
+            params: params,
+            timeoutMs: 15000)
     }
 
     func sendMessage(
@@ -63,6 +117,20 @@ struct MacGatewayChatTransport: OpenClawChatTransport, Sendable {
 
     func requestHealth(timeoutMs: Int) async throws -> Bool {
         try await GatewayConnection.shared.healthOK(timeoutMs: timeoutMs)
+    }
+
+    func resetSession(sessionKey: String) async throws {
+        _ = try await GatewayConnection.shared.request(
+            method: "sessions.reset",
+            params: ["key": AnyCodable(sessionKey)],
+            timeoutMs: 10000)
+    }
+
+    func compactSession(sessionKey: String) async throws {
+        _ = try await GatewayConnection.shared.request(
+            method: "sessions.compact",
+            params: ["key": AnyCodable(sessionKey)],
+            timeoutMs: 10000)
     }
 
     func events() -> AsyncStream<OpenClawChatTransportEvent> {
@@ -133,6 +201,14 @@ struct MacGatewayChatTransport: OpenClawChatTransport, Sendable {
             return .seqGap
         }
     }
+
+    private static func mapModelChoice(_ model: OpenClawProtocol.ModelChoice) -> OpenClawChatModelChoice {
+        OpenClawChatModelChoice(
+            modelID: model.id,
+            name: model.name,
+            provider: model.provider,
+            contextWindow: model.contextwindow)
+    }
 }
 
 // MARK: - Window controller
@@ -155,7 +231,13 @@ final class WebChatSwiftUIWindowController {
     init(sessionKey: String, presentation: WebChatPresentation, transport: any OpenClawChatTransport) {
         self.sessionKey = sessionKey
         self.presentation = presentation
-        let vm = OpenClawChatViewModel(sessionKey: sessionKey, transport: transport)
+        let vm = OpenClawChatViewModel(
+            sessionKey: sessionKey,
+            transport: transport,
+            initialThinkingLevel: Self.persistedThinkingLevel(),
+            onThinkingLevelChanged: { level in
+                UserDefaults.standard.set(level, forKey: webChatThinkingLevelDefaultsKey)
+            })
         let accent = Self.color(fromHex: AppStateStore.shared.seamColorHex)
         self.hosting = NSHostingController(rootView: OpenClawChatView(
             viewModel: vm,
@@ -251,10 +333,17 @@ final class WebChatSwiftUIWindowController {
     }
 
     private func removeDismissMonitor() {
-        if let monitor = self.dismissMonitor {
-            NSEvent.removeMonitor(monitor)
-            self.dismissMonitor = nil
+        OverlayPanelFactory.clearGlobalEventMonitor(&self.dismissMonitor)
+    }
+
+    private static func persistedThinkingLevel() -> String? {
+        let stored = UserDefaults.standard.string(forKey: webChatThinkingLevelDefaultsKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard let stored, ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive"].contains(stored) else {
+            return nil
         }
+        return stored
     }
 
     private static func makeWindow(
@@ -316,7 +405,12 @@ final class WebChatSwiftUIWindowController {
         let controller = NSViewController()
         let effectView = NSVisualEffectView()
         effectView.material = .sidebar
-        effectView.blendingMode = .behindWindow
+        effectView.blendingMode = switch presentation {
+        case .panel:
+            .withinWindow
+        case .window:
+            .behindWindow
+        }
         effectView.state = .active
         effectView.wantsLayer = true
         effectView.layer?.cornerCurve = .continuous
@@ -328,6 +422,7 @@ final class WebChatSwiftUIWindowController {
         }
         effectView.layer?.cornerRadius = cornerRadius
         effectView.layer?.masksToBounds = true
+        effectView.layer?.backgroundColor = NSColor.clear.cgColor
 
         effectView.translatesAutoresizingMaskIntoConstraints = true
         effectView.autoresizingMask = [.width, .height]
@@ -335,6 +430,9 @@ final class WebChatSwiftUIWindowController {
 
         hosting.view.translatesAutoresizingMaskIntoConstraints = false
         hosting.view.wantsLayer = true
+        hosting.view.layer?.cornerCurve = .continuous
+        hosting.view.layer?.cornerRadius = cornerRadius
+        hosting.view.layer?.masksToBounds = true
         hosting.view.layer?.backgroundColor = NSColor.clear.cgColor
 
         controller.addChild(hosting)
@@ -362,13 +460,6 @@ final class WebChatSwiftUIWindowController {
     }
 
     private static func color(fromHex raw: String?) -> Color? {
-        let trimmed = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        let hex = trimmed.hasPrefix("#") ? String(trimmed.dropFirst()) : trimmed
-        guard hex.count == 6, let value = Int(hex, radix: 16) else { return nil }
-        let r = Double((value >> 16) & 0xFF) / 255.0
-        let g = Double((value >> 8) & 0xFF) / 255.0
-        let b = Double(value & 0xFF) / 255.0
-        return Color(red: r, green: g, blue: b)
+        ColorHexSupport.color(fromHex: raw)
     }
 }

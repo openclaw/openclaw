@@ -1,35 +1,69 @@
-import { callGateway } from "../../gateway/call.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import { withProgress } from "../progress.js";
+
+function resolveProbeFailureMessage(result: {
+  error?: string | null;
+  close?: { code: number; reason: string } | null;
+}): string {
+  const closeHint = result.close
+    ? `gateway closed (${result.close.code}): ${result.close.reason}`
+    : null;
+  if (closeHint && (!result.error || result.error === "timeout")) {
+    return closeHint;
+  }
+  return result.error ?? closeHint ?? "gateway probe failed";
+}
 
 export async function probeGatewayStatus(opts: {
   url: string;
   token?: string;
   password?: string;
+  tlsFingerprint?: string;
   timeoutMs: number;
   json?: boolean;
+  requireRpc?: boolean;
   configPath?: string;
 }) {
   try {
-    await withProgress(
+    const result = await withProgress(
       {
         label: "Checking gateway status...",
         indeterminate: true,
         enabled: opts.json !== true,
       },
-      async () =>
-        await callGateway({
+      async () => {
+        if (opts.requireRpc) {
+          const { callGateway } = await import("../../gateway/call.js");
+          await callGateway({
+            url: opts.url,
+            token: opts.token,
+            password: opts.password,
+            tlsFingerprint: opts.tlsFingerprint,
+            method: "status",
+            timeoutMs: opts.timeoutMs,
+            ...(opts.configPath ? { configPath: opts.configPath } : {}),
+          });
+          return { ok: true } as const;
+        }
+        const { probeGateway } = await import("../../gateway/probe.js");
+        return await probeGateway({
           url: opts.url,
-          token: opts.token,
-          password: opts.password,
-          method: "status",
+          auth: {
+            token: opts.token,
+            password: opts.password,
+          },
+          tlsFingerprint: opts.tlsFingerprint,
           timeoutMs: opts.timeoutMs,
-          clientName: GATEWAY_CLIENT_NAMES.CLI,
-          mode: GATEWAY_CLIENT_MODES.CLI,
-          ...(opts.configPath ? { configPath: opts.configPath } : {}),
-        }),
+          includeDetails: false,
+        });
+      },
     );
-    return { ok: true } as const;
+    if (result.ok) {
+      return { ok: true } as const;
+    }
+    return {
+      ok: false,
+      error: resolveProbeFailureMessage(result),
+    } as const;
   } catch (err) {
     return {
       ok: false,

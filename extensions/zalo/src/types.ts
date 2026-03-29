@@ -1,22 +1,28 @@
+import type { SecretInput } from "./runtime-api.js";
+
 export type ZaloAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
   /** If false, do not start this Zalo account. Default: true. */
   enabled?: boolean;
   /** Bot token from Zalo Bot Creator. */
-  botToken?: string;
+  botToken?: SecretInput;
   /** Path to file containing the bot token. */
   tokenFile?: string;
   /** Webhook URL for receiving updates (HTTPS required). */
   webhookUrl?: string;
   /** Webhook secret token (8-256 chars) for request verification. */
-  webhookSecret?: string;
+  webhookSecret?: SecretInput;
   /** Webhook path for the gateway HTTP server (defaults to webhook URL path). */
   webhookPath?: string;
   /** Direct message access policy (default: pairing). */
   dmPolicy?: "pairing" | "allowlist" | "open" | "disabled";
   /** Allowlist for DM senders (Zalo user IDs). */
   allowFrom?: Array<string | number>;
+  /** Group-message access policy. */
+  groupPolicy?: "open" | "allowlist" | "disabled";
+  /** Allowlist for group senders (falls back to allowFrom when unset). */
+  groupAllowFrom?: Array<string | number>;
   /** Max inbound media size in MB. */
   mediaMaxMb?: number;
   /** Proxy URL for API requests. */

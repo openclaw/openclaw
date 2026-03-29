@@ -13,8 +13,10 @@ extension OnboardingView {
         guard self.state.connectionMode == .local else { return }
         let configured = await self.loadAgentWorkspace()
         let url = AgentWorkspace.resolveWorkspaceURL(from: configured)
-        switch AgentWorkspace.bootstrapSafety(for: url) {
-        case .safe:
+        let safety = AgentWorkspace.bootstrapSafety(for: url)
+        if let reason = safety.unsafeReason {
+            self.workspaceStatus = "Workspace not touched: \(reason)"
+        } else {
             do {
                 _ = try AgentWorkspace.bootstrap(workspaceURL: url)
                 if (configured ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -23,8 +25,6 @@ extension OnboardingView {
             } catch {
                 self.workspaceStatus = "Failed to create workspace: \(error.localizedDescription)"
             }
-        case let .unsafe(reason):
-            self.workspaceStatus = "Workspace not touched: \(reason)"
         }
         self.refreshBootstrapStatus()
     }
@@ -54,7 +54,7 @@ extension OnboardingView {
 
         do {
             let url = AgentWorkspace.resolveWorkspaceURL(from: self.workspacePath)
-            if case let .unsafe(reason) = AgentWorkspace.bootstrapSafety(for: url) {
+            if let reason = AgentWorkspace.bootstrapSafety(for: url).unsafeReason {
                 self.workspaceStatus = "Workspace not created: \(reason)"
                 return
             }
@@ -69,9 +69,7 @@ extension OnboardingView {
 
     private func loadAgentWorkspace() async -> String? {
         let root = await ConfigStore.load()
-        let agents = root["agents"] as? [String: Any]
-        let defaults = agents?["defaults"] as? [String: Any]
-        return defaults?["workspace"] as? String
+        return AgentWorkspaceConfig.workspace(from: root)
     }
 
     @discardableResult
@@ -87,24 +85,7 @@ extension OnboardingView {
     @MainActor
     private static func buildAndSaveWorkspace(_ workspace: String?) async -> (Bool, String?) {
         var root = await ConfigStore.load()
-        var agents = root["agents"] as? [String: Any] ?? [:]
-        var defaults = agents["defaults"] as? [String: Any] ?? [:]
-        let trimmed = workspace?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if trimmed.isEmpty {
-            defaults.removeValue(forKey: "workspace")
-        } else {
-            defaults["workspace"] = trimmed
-        }
-        if defaults.isEmpty {
-            agents.removeValue(forKey: "defaults")
-        } else {
-            agents["defaults"] = defaults
-        }
-        if agents.isEmpty {
-            root.removeValue(forKey: "agents")
-        } else {
-            root["agents"] = agents
-        }
+        AgentWorkspaceConfig.setWorkspace(in: &root, workspace: workspace)
         do {
             try await ConfigStore.save(root)
             return (true, nil)

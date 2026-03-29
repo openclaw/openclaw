@@ -6,11 +6,16 @@
  * run records. The base session (`...:cron:<jobId>`) is kept as-is.
  */
 
-import type { CronConfig } from "../config/types.cron.js";
-import type { Logger } from "./service/state.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
-import { updateSessionStore } from "../config/sessions.js";
+import {
+  archiveRemovedSessionTranscripts,
+  loadSessionStore,
+  updateSessionStore,
+} from "../config/sessions.js";
+import type { CronConfig } from "../config/types.cron.js";
+import { cleanupArchivedSessionTranscripts } from "../gateway/session-utils.fs.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
+import type { Logger } from "./service/state.js";
 
 const DEFAULT_RETENTION_MS = 24 * 3_600_000; // 24 hours
 
@@ -74,6 +79,7 @@ export async function sweepCronRunSessions(params: {
   }
 
   let pruned = 0;
+  const prunedSessions = new Map<string, string | undefined>();
   try {
     await updateSessionStore(storePath, (store) => {
       const cutoff = now - retentionMs;
@@ -87,6 +93,9 @@ export async function sweepCronRunSessions(params: {
         }
         const updatedAt = entry.updatedAt ?? 0;
         if (updatedAt < cutoff) {
+          if (!prunedSessions.has(entry.sessionId) || entry.sessionFile) {
+            prunedSessions.set(entry.sessionId, entry.sessionFile);
+          }
           delete store[key];
           pruned++;
         }
@@ -98,6 +107,34 @@ export async function sweepCronRunSessions(params: {
   }
 
   lastSweepAtMsByStore.set(storePath, now);
+
+  if (prunedSessions.size > 0) {
+    try {
+      const store = loadSessionStore(storePath, { skipCache: true });
+      const referencedSessionIds = new Set(
+        Object.values(store)
+          .map((entry) => entry?.sessionId)
+          .filter((id): id is string => Boolean(id)),
+      );
+      const archivedDirs = await archiveRemovedSessionTranscripts({
+        removedSessionFiles: prunedSessions,
+        referencedSessionIds,
+        storePath,
+        reason: "deleted",
+        restrictToStoreDir: true,
+      });
+      if (archivedDirs.size > 0) {
+        await cleanupArchivedSessionTranscripts({
+          directories: [...archivedDirs],
+          olderThanMs: retentionMs,
+          reason: "deleted",
+          nowMs: now,
+        });
+      }
+    } catch (err) {
+      params.log.warn({ err: String(err) }, "cron-reaper: transcript cleanup failed");
+    }
+  }
 
   if (pruned > 0) {
     params.log.info(

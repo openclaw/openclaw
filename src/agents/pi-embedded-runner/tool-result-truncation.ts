@@ -1,7 +1,10 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { TextContent } from "@mariozechner/pi-ai";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
+import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { acquireSessionWriteLock } from "../session-write-lock.js";
 import { log } from "./logger.js";
+import { rewriteTranscriptEntriesInSessionManager } from "./transcript-rewrite.js";
 
 /**
  * Maximum share of the context window a single tool result should occupy.
@@ -33,21 +36,83 @@ const TRUNCATION_SUFFIX =
   "The content above is a partial view. If you need more, request specific sections or use " +
   "offset/limit parameters to read smaller chunks.]";
 
+type ToolResultTruncationOptions = {
+  suffix?: string;
+  minKeepChars?: number;
+};
+
 /**
- * Truncate a single text string to fit within maxChars, preserving the beginning.
+ * Marker inserted between head and tail when using head+tail truncation.
  */
-export function truncateToolResultText(text: string, maxChars: number): string {
+const MIDDLE_OMISSION_MARKER =
+  "\n\n⚠️ [... middle content omitted — showing head and tail ...]\n\n";
+
+/**
+ * Detect whether text likely contains error/diagnostic content near the end,
+ * which should be preserved during truncation.
+ */
+function hasImportantTail(text: string): boolean {
+  // Check last ~2000 chars for error-like patterns
+  const tail = text.slice(-2000).toLowerCase();
+  return (
+    /\b(error|exception|failed|fatal|traceback|panic|stack trace|errno|exit code)\b/.test(tail) ||
+    // JSON closing — if the output is JSON, the tail has closing structure
+    /\}\s*$/.test(tail.trim()) ||
+    // Summary/result lines often appear at the end
+    /\b(total|summary|result|complete|finished|done)\b/.test(tail)
+  );
+}
+
+/**
+ * Truncate a single text string to fit within maxChars.
+ *
+ * Uses a head+tail strategy when the tail contains important content
+ * (errors, results, JSON structure), otherwise preserves the beginning.
+ * This ensures error messages and summaries at the end of tool output
+ * aren't lost during truncation.
+ */
+export function truncateToolResultText(
+  text: string,
+  maxChars: number,
+  options: ToolResultTruncationOptions = {},
+): string {
+  const suffix = options.suffix ?? TRUNCATION_SUFFIX;
+  const minKeepChars = options.minKeepChars ?? MIN_KEEP_CHARS;
   if (text.length <= maxChars) {
     return text;
   }
-  const keepChars = Math.max(MIN_KEEP_CHARS, maxChars - TRUNCATION_SUFFIX.length);
-  // Try to break at a newline boundary to avoid cutting mid-line
-  let cutPoint = keepChars;
-  const lastNewline = text.lastIndexOf("\n", keepChars);
-  if (lastNewline > keepChars * 0.8) {
+  const budget = Math.max(minKeepChars, maxChars - suffix.length);
+
+  // If tail looks important, split budget between head and tail
+  if (hasImportantTail(text) && budget > minKeepChars * 2) {
+    const tailBudget = Math.min(Math.floor(budget * 0.3), 4_000);
+    const headBudget = budget - tailBudget - MIDDLE_OMISSION_MARKER.length;
+
+    if (headBudget > minKeepChars) {
+      // Find clean cut points at newline boundaries
+      let headCut = headBudget;
+      const headNewline = text.lastIndexOf("\n", headBudget);
+      if (headNewline > headBudget * 0.8) {
+        headCut = headNewline;
+      }
+
+      let tailStart = text.length - tailBudget;
+      const tailNewline = text.indexOf("\n", tailStart);
+      if (tailNewline !== -1 && tailNewline < tailStart + tailBudget * 0.2) {
+        tailStart = tailNewline + 1;
+      }
+
+      return text.slice(0, headCut) + MIDDLE_OMISSION_MARKER + text.slice(tailStart) + suffix;
+    }
+  }
+
+  // Default: keep the beginning
+  let cutPoint = budget;
+  const lastNewline = text.lastIndexOf("\n", budget);
+  if (lastNewline > budget * 0.8) {
     cutPoint = lastNewline;
   }
-  return text.slice(0, cutPoint) + TRUNCATION_SUFFIX;
+  return text.slice(0, cutPoint) + suffix;
 }
 
 /**
@@ -67,7 +132,7 @@ export function calculateMaxToolResultChars(contextWindowTokens: number): number
 /**
  * Get the total character count of text content blocks in a tool result message.
  */
-function getToolResultTextLength(msg: AgentMessage): number {
+export function getToolResultTextLength(msg: AgentMessage): number {
   if (!msg || (msg as { role?: string }).role !== "toolResult") {
     return 0;
   }
@@ -91,7 +156,13 @@ function getToolResultTextLength(msg: AgentMessage): number {
  * Truncate a tool result message's text content blocks to fit within maxChars.
  * Returns a new message (does not mutate the original).
  */
-function truncateToolResultMessage(msg: AgentMessage, maxChars: number): AgentMessage {
+export function truncateToolResultMessage(
+  msg: AgentMessage,
+  maxChars: number,
+  options: ToolResultTruncationOptions = {},
+): AgentMessage {
+  const suffix = options.suffix ?? TRUNCATION_SUFFIX;
+  const minKeepChars = options.minKeepChars ?? MIN_KEEP_CHARS;
   const content = (msg as { content?: unknown }).content;
   if (!Array.isArray(content)) {
     return msg;
@@ -114,10 +185,10 @@ function truncateToolResultMessage(msg: AgentMessage, maxChars: number): AgentMe
     }
     // Proportional budget for this block
     const blockShare = textBlock.text.length / totalTextChars;
-    const blockBudget = Math.max(MIN_KEEP_CHARS, Math.floor(maxChars * blockShare));
+    const blockBudget = Math.max(minKeepChars + suffix.length, Math.floor(maxChars * blockShare));
     return {
       ...textBlock,
-      text: truncateToolResultText(textBlock.text, blockBudget),
+      text: truncateToolResultText(textBlock.text, blockBudget, { suffix, minKeepChars }),
     };
   });
 
@@ -143,8 +214,10 @@ export async function truncateOversizedToolResultsInSession(params: {
 }): Promise<{ truncated: boolean; truncatedCount: number; reason?: string }> {
   const { sessionFile, contextWindowTokens } = params;
   const maxChars = calculateMaxToolResultChars(contextWindowTokens);
+  let sessionLock: Awaited<ReturnType<typeof acquireSessionWriteLock>> | undefined;
 
   try {
+    sessionLock = await acquireSessionWriteLock({ sessionFile });
     const sessionManager = SessionManager.open(sessionFile);
     const branch = sessionManager.getBranch();
 
@@ -178,87 +251,46 @@ export async function truncateOversizedToolResultsInSession(params: {
       return { truncated: false, truncatedCount: 0, reason: "no oversized tool results" };
     }
 
-    // Branch from the parent of the first oversized entry
-    const firstOversizedIdx = oversizedIndices[0];
-    const firstOversizedEntry = branch[firstOversizedIdx];
-    const branchFromId = firstOversizedEntry.parentId;
-
-    if (!branchFromId) {
-      // The oversized entry is the root - very unusual but handle it
-      sessionManager.resetLeaf();
-    } else {
-      sessionManager.branch(branchFromId);
-    }
-
-    // Re-append all entries from the first oversized one onwards,
-    // with truncated tool results
-    const oversizedSet = new Set(oversizedIndices);
-    let truncatedCount = 0;
-
-    for (let i = firstOversizedIdx; i < branch.length; i++) {
-      const entry = branch[i];
-
-      if (entry.type === "message") {
-        let message = entry.message;
-
-        if (oversizedSet.has(i)) {
-          message = truncateToolResultMessage(message, maxChars);
-          truncatedCount++;
-          const newLength = getToolResultTextLength(message);
-          log.info(
-            `[tool-result-truncation] Truncated tool result: ` +
-              `originalEntry=${entry.id} newChars=${newLength} ` +
-              `sessionKey=${params.sessionKey ?? params.sessionId ?? "unknown"}`,
-          );
-        }
-
-        // appendMessage expects Message | CustomMessage | BashExecutionMessage
-        sessionManager.appendMessage(message as Parameters<typeof sessionManager.appendMessage>[0]);
-      } else if (entry.type === "compaction") {
-        sessionManager.appendCompaction(
-          entry.summary,
-          entry.firstKeptEntryId,
-          entry.tokensBefore,
-          entry.details,
-          entry.fromHook,
-        );
-      } else if (entry.type === "thinking_level_change") {
-        sessionManager.appendThinkingLevelChange(entry.thinkingLevel);
-      } else if (entry.type === "model_change") {
-        sessionManager.appendModelChange(entry.provider, entry.modelId);
-      } else if (entry.type === "custom") {
-        sessionManager.appendCustomEntry(entry.customType, entry.data);
-      } else if (entry.type === "custom_message") {
-        sessionManager.appendCustomMessageEntry(
-          entry.customType,
-          entry.content,
-          entry.display,
-          entry.details,
-        );
-      } else if (entry.type === "branch_summary") {
-        // Branch summaries reference specific entry IDs - skip to avoid inconsistency
-        continue;
-      } else if (entry.type === "label") {
-        // Labels reference specific entry IDs - skip to avoid inconsistency
-        continue;
-      } else if (entry.type === "session_info") {
-        if (entry.name) {
-          sessionManager.appendSessionInfo(entry.name);
-        }
+    const replacements = oversizedIndices.flatMap((index) => {
+      const entry = branch[index];
+      if (!entry || entry.type !== "message") {
+        return [];
       }
+      const message = truncateToolResultMessage(entry.message, maxChars);
+      const newLength = getToolResultTextLength(message);
+      log.info(
+        `[tool-result-truncation] Truncated tool result: ` +
+          `originalEntry=${entry.id} newChars=${newLength} ` +
+          `sessionKey=${params.sessionKey ?? params.sessionId ?? "unknown"}`,
+      );
+      return [{ entryId: entry.id, message }];
+    });
+
+    const rewriteResult = rewriteTranscriptEntriesInSessionManager({
+      sessionManager,
+      replacements,
+    });
+    if (rewriteResult.changed) {
+      emitSessionTranscriptUpdate(sessionFile);
     }
 
     log.info(
-      `[tool-result-truncation] Truncated ${truncatedCount} tool result(s) in session ` +
+      `[tool-result-truncation] Truncated ${rewriteResult.rewrittenEntries} tool result(s) in session ` +
         `(contextWindow=${contextWindowTokens} maxChars=${maxChars}) ` +
         `sessionKey=${params.sessionKey ?? params.sessionId ?? "unknown"}`,
     );
 
-    return { truncated: true, truncatedCount };
+    return {
+      truncated: rewriteResult.changed,
+      truncatedCount: rewriteResult.rewrittenEntries,
+      reason: rewriteResult.reason,
+    };
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
     log.warn(`[tool-result-truncation] Failed to truncate: ${errMsg}`);
     return { truncated: false, truncatedCount: 0, reason: errMsg };
+  } finally {
+    await sessionLock?.release();
   }
 }
 

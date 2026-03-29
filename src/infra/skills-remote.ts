@@ -1,9 +1,9 @@
 import type { SkillEligibilityContext, SkillEntry } from "../agents/skills.js";
-import type { OpenClawConfig } from "../config/config.js";
-import type { NodeRegistry } from "../gateway/node-registry.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { loadWorkspaceSkillEntries } from "../agents/skills.js";
 import { bumpSkillsSnapshotVersion } from "../agents/skills/refresh.js";
+import { listAgentWorkspaceDirs } from "../agents/workspace-dirs.js";
+import type { OpenClawConfig } from "../config/config.js";
+import type { NodeRegistry } from "../gateway/node-registry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { listNodePairing, updatePairedNodeMetadata } from "./node-pairing.js";
 
@@ -168,18 +168,16 @@ export function recordRemoteNodeBins(nodeId: string, bins: string[]) {
   upsertNode({ nodeId, bins });
 }
 
-function listWorkspaceDirs(cfg: OpenClawConfig): string[] {
-  const dirs = new Set<string>();
-  const list = cfg.agents?.list;
-  if (Array.isArray(list)) {
-    for (const entry of list) {
-      if (entry && typeof entry === "object" && typeof entry.id === "string") {
-        dirs.add(resolveAgentWorkspaceDir(cfg, entry.id));
-      }
-    }
+export function removeRemoteNodeInfo(nodeId: string) {
+  const existing = remoteNodes.get(nodeId);
+  remoteNodes.delete(nodeId);
+  if (
+    existing &&
+    isMacPlatform(existing.platform, existing.deviceFamily) &&
+    supportsSystemRun(existing.commands)
+  ) {
+    bumpSkillsSnapshotVersion({ reason: "remote-node" });
   }
-  dirs.add(resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)));
-  return [...dirs];
 }
 
 function collectRequiredBins(entries: SkillEntry[], targetPlatform: string): string[] {
@@ -268,7 +266,7 @@ export async function refreshRemoteNodeBins(params: {
     return;
   }
 
-  const workspaceDirs = listWorkspaceDirs(params.cfg);
+  const workspaceDirs = listAgentWorkspaceDirs(params.cfg);
   const requiredBins = new Set<string>();
   for (const workspaceDir of workspaceDirs) {
     const entries = loadWorkspaceSkillEntries(workspaceDir, { config: params.cfg });

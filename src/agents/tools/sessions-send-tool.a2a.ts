@@ -1,8 +1,8 @@
 import crypto from "node:crypto";
-import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { callGateway } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { AGENT_LANE_NESTED } from "../lanes.js";
 import { readLatestAssistantReply, runAgentStep } from "./agent-step.js";
 import { resolveAnnounceTarget } from "./sessions-announce-target.js";
@@ -14,6 +14,16 @@ import {
 } from "./sessions-send-helpers.js";
 
 const log = createSubsystemLogger("agents/sessions-send");
+
+type GatewayCaller = typeof callGateway;
+
+const defaultSessionsSendA2ADeps = {
+  callGateway,
+};
+
+let sessionsSendA2ADeps: {
+  callGateway: GatewayCaller;
+} = defaultSessionsSendA2ADeps;
 
 export async function runSessionsSendA2AFlow(params: {
   targetSessionKey: string;
@@ -32,7 +42,7 @@ export async function runSessionsSendA2AFlow(params: {
     let latestReply = params.roundOneReply;
     if (!primaryReply && params.waitRunId) {
       const waitMs = Math.min(params.announceTimeoutMs, 60_000);
-      const wait = await callGateway<{ status: string }>({
+      const wait = await sessionsSendA2ADeps.callGateway<{ status: string }>({
         method: "agent.wait",
         params: {
           runId: params.waitRunId,
@@ -120,7 +130,7 @@ export async function runSessionsSendA2AFlow(params: {
     });
     if (announceTarget && announceReply && announceReply.trim() && !isAnnounceSkip(announceReply)) {
       try {
-        await callGateway({
+        await sessionsSendA2ADeps.callGateway({
           method: "send",
           params: {
             to: announceTarget.to,
@@ -147,3 +157,14 @@ export async function runSessionsSendA2AFlow(params: {
     });
   }
 }
+
+export const __testing = {
+  setDepsForTest(overrides?: Partial<{ callGateway: GatewayCaller }>) {
+    sessionsSendA2ADeps = overrides
+      ? {
+          ...defaultSessionsSendA2ADeps,
+          ...overrides,
+        }
+      : defaultSessionsSendA2ADeps;
+  },
+};

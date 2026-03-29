@@ -1,318 +1,47 @@
-import crypto from "node:crypto";
-import path from "node:path";
-import { resolveQueueSettings } from "../auto-reply/reply/queue.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import { loadConfig } from "../config/config.js";
-import {
-  loadSessionStore,
-  resolveAgentIdFromSessionKey,
-  resolveMainSessionKey,
-  resolveSessionFilePath,
-  resolveStorePath,
-} from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
-import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
-import { normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
+import { isCronSessionKey } from "../sessions/session-key-utils.js";
+import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import {
-  type DeliveryContext,
-  deliveryContextFromSession,
-  mergeDeliveryContext,
-  normalizeDeliveryContext,
-} from "../utils/delivery-context.js";
+  buildAnnounceIdFromChildRun,
+  buildAnnounceIdempotencyKey,
+} from "./announce-idempotency.js";
+import { formatAgentInternalEventsForPrompt, type AgentInternalEvent } from "./internal-events.js";
+import { isEmbeddedPiRunActive, waitForEmbeddedPiRunEnd } from "./pi-embedded.js";
 import {
-  isEmbeddedPiRunActive,
-  queueEmbeddedPiMessage,
-  waitForEmbeddedPiRunEnd,
-} from "./pi-embedded.js";
-import { type AnnounceQueueItem, enqueueAnnounce } from "./subagent-announce-queue.js";
-import { readLatestAssistantReply } from "./tools/agent-step.js";
+  deliverSubagentAnnouncement,
+  loadRequesterSessionEntry,
+  loadSessionEntryByKey,
+  resolveAnnounceOrigin,
+  runAnnounceDeliveryWithRetry,
+  resolveSubagentAnnounceTimeoutMs,
+  resolveSubagentCompletionOrigin,
+} from "./subagent-announce-delivery.js";
+import {
+  applySubagentWaitOutcome,
+  buildChildCompletionFindings,
+  buildCompactAnnounceStatsLine,
+  dedupeLatestChildCompletionRows,
+  filterCurrentDirectChildCompletionRows,
+  readLatestSubagentOutputWithRetry,
+  readSubagentOutput,
+  type SubagentRunOutcome,
+  waitForSubagentRunOutcome,
+} from "./subagent-announce-output.js";
+import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
+import type { SpawnSubagentMode } from "./subagent-spawn.js";
+import { isAnnounceSkip } from "./tools/sessions-send-helpers.js";
+let subagentRegistryRuntimePromise: Promise<
+  typeof import("./subagent-registry-runtime.js")
+> | null = null;
 
-function formatTokenCount(value?: number) {
-  if (!value || !Number.isFinite(value)) {
-    return "0";
-  }
-  if (value >= 1_000_000) {
-    return `${(value / 1_000_000).toFixed(1)}m`;
-  }
-  if (value >= 1_000) {
-    return `${(value / 1_000).toFixed(1)}k`;
-  }
-  return String(Math.round(value));
-}
-
-function formatUsd(value?: number) {
-  if (value === undefined || !Number.isFinite(value)) {
-    return undefined;
-  }
-  if (value >= 1) {
-    return `$${value.toFixed(2)}`;
-  }
-  if (value >= 0.01) {
-    return `$${value.toFixed(2)}`;
-  }
-  return `$${value.toFixed(4)}`;
-}
-
-function resolveModelCost(params: {
-  provider?: string;
-  model?: string;
-  config: ReturnType<typeof loadConfig>;
-}):
-  | {
-      input: number;
-      output: number;
-      cacheRead: number;
-      cacheWrite: number;
-    }
-  | undefined {
-  const provider = params.provider?.trim();
-  const model = params.model?.trim();
-  if (!provider || !model) {
-    return undefined;
-  }
-  const models = params.config.models?.providers?.[provider]?.models ?? [];
-  const entry = models.find((candidate) => candidate.id === model);
-  return entry?.cost;
-}
-
-async function waitForSessionUsage(params: { sessionKey: string }) {
-  const cfg = loadConfig();
-  const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
-  const storePath = resolveStorePath(cfg.session?.store, { agentId });
-  let entry = loadSessionStore(storePath)[params.sessionKey];
-  if (!entry) {
-    return { entry, storePath };
-  }
-  const hasTokens = () =>
-    entry &&
-    (typeof entry.totalTokens === "number" ||
-      typeof entry.inputTokens === "number" ||
-      typeof entry.outputTokens === "number");
-  if (hasTokens()) {
-    return { entry, storePath };
-  }
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    entry = loadSessionStore(storePath)[params.sessionKey];
-    if (hasTokens()) {
-      break;
-    }
-  }
-  return { entry, storePath };
-}
-
-type DeliveryContextSource = Parameters<typeof deliveryContextFromSession>[0];
-
-function resolveAnnounceOrigin(
-  entry?: DeliveryContextSource,
-  requesterOrigin?: DeliveryContext,
-): DeliveryContext | undefined {
-  // requesterOrigin (captured at spawn time) reflects the channel the user is
-  // actually on and must take priority over the session entry, which may carry
-  // stale lastChannel / lastTo values from a previous channel interaction.
-  return mergeDeliveryContext(requesterOrigin, deliveryContextFromSession(entry));
-}
-
-async function sendAnnounce(item: AnnounceQueueItem) {
-  const origin = item.origin;
-  const threadId =
-    origin?.threadId != null && origin.threadId !== "" ? String(origin.threadId) : undefined;
-  await callGateway({
-    method: "agent",
-    params: {
-      sessionKey: item.sessionKey,
-      message: item.prompt,
-      channel: origin?.channel,
-      accountId: origin?.accountId,
-      to: origin?.to,
-      threadId,
-      deliver: true,
-      idempotencyKey: crypto.randomUUID(),
-    },
-    expectFinal: true,
-    timeoutMs: 60_000,
-  });
-}
-
-function resolveRequesterStoreKey(
-  cfg: ReturnType<typeof loadConfig>,
-  requesterSessionKey: string,
-): string {
-  const raw = requesterSessionKey.trim();
-  if (!raw) {
-    return raw;
-  }
-  if (raw === "global" || raw === "unknown") {
-    return raw;
-  }
-  if (raw.startsWith("agent:")) {
-    return raw;
-  }
-  const mainKey = normalizeMainKey(cfg.session?.mainKey);
-  if (raw === "main" || raw === mainKey) {
-    return resolveMainSessionKey(cfg);
-  }
-  const agentId = resolveAgentIdFromSessionKey(raw);
-  return `agent:${agentId}:${raw}`;
-}
-
-function loadRequesterSessionEntry(requesterSessionKey: string) {
-  const cfg = loadConfig();
-  const canonicalKey = resolveRequesterStoreKey(cfg, requesterSessionKey);
-  const agentId = resolveAgentIdFromSessionKey(canonicalKey);
-  const storePath = resolveStorePath(cfg.session?.store, { agentId });
-  const store = loadSessionStore(storePath);
-  const entry = store[canonicalKey];
-  return { cfg, entry, canonicalKey };
-}
-
-async function maybeQueueSubagentAnnounce(params: {
-  requesterSessionKey: string;
-  triggerMessage: string;
-  summaryLine?: string;
-  requesterOrigin?: DeliveryContext;
-}): Promise<"steered" | "queued" | "none"> {
-  const { cfg, entry } = loadRequesterSessionEntry(params.requesterSessionKey);
-  const canonicalKey = resolveRequesterStoreKey(cfg, params.requesterSessionKey);
-  const sessionId = entry?.sessionId;
-  if (!sessionId) {
-    return "none";
-  }
-
-  const queueSettings = resolveQueueSettings({
-    cfg,
-    channel: entry?.channel ?? entry?.lastChannel,
-    sessionEntry: entry,
-  });
-  const isActive = isEmbeddedPiRunActive(sessionId);
-
-  const shouldSteer = queueSettings.mode === "steer" || queueSettings.mode === "steer-backlog";
-  if (shouldSteer) {
-    const steered = queueEmbeddedPiMessage(sessionId, params.triggerMessage);
-    if (steered) {
-      return "steered";
-    }
-  }
-
-  const shouldFollowup =
-    queueSettings.mode === "followup" ||
-    queueSettings.mode === "collect" ||
-    queueSettings.mode === "steer-backlog" ||
-    queueSettings.mode === "interrupt";
-  if (isActive && (shouldFollowup || queueSettings.mode === "steer")) {
-    const origin = resolveAnnounceOrigin(entry, params.requesterOrigin);
-    enqueueAnnounce({
-      key: canonicalKey,
-      item: {
-        prompt: params.triggerMessage,
-        summaryLine: params.summaryLine,
-        enqueuedAt: Date.now(),
-        sessionKey: canonicalKey,
-        origin,
-      },
-      settings: queueSettings,
-      send: sendAnnounce,
-    });
-    return "queued";
-  }
-
-  return "none";
-}
-
-async function buildSubagentStatsLine(params: {
-  sessionKey: string;
-  startedAt?: number;
-  endedAt?: number;
-}) {
-  const cfg = loadConfig();
-  const { entry, storePath } = await waitForSessionUsage({
-    sessionKey: params.sessionKey,
-  });
-
-  const sessionId = entry?.sessionId;
-  let transcriptPath: string | undefined;
-  if (sessionId && storePath) {
-    try {
-      transcriptPath = resolveSessionFilePath(sessionId, entry, {
-        sessionsDir: path.dirname(storePath),
-      });
-    } catch {
-      transcriptPath = undefined;
-    }
-  }
-
-  const input = entry?.inputTokens;
-  const output = entry?.outputTokens;
-  const total =
-    entry?.totalTokens ??
-    (typeof input === "number" && typeof output === "number" ? input + output : undefined);
-  const runtimeMs =
-    typeof params.startedAt === "number" && typeof params.endedAt === "number"
-      ? Math.max(0, params.endedAt - params.startedAt)
-      : undefined;
-
-  const provider = entry?.modelProvider;
-  const model = entry?.model;
-  const costConfig = resolveModelCost({ provider, model, config: cfg });
-  const cost =
-    costConfig && typeof input === "number" && typeof output === "number"
-      ? (input * costConfig.input + output * costConfig.output) / 1_000_000
-      : undefined;
-
-  const parts: string[] = [];
-  const runtime = formatDurationCompact(runtimeMs);
-  parts.push(`runtime ${runtime ?? "n/a"}`);
-  if (typeof total === "number") {
-    const inputText = typeof input === "number" ? formatTokenCount(input) : "n/a";
-    const outputText = typeof output === "number" ? formatTokenCount(output) : "n/a";
-    const totalText = formatTokenCount(total);
-    parts.push(`tokens ${totalText} (in ${inputText} / out ${outputText})`);
-  } else {
-    parts.push("tokens n/a");
-  }
-  const costText = formatUsd(cost);
-  if (costText) {
-    parts.push(`est ${costText}`);
-  }
-  parts.push(`sessionKey ${params.sessionKey}`);
-  if (sessionId) {
-    parts.push(`sessionId ${sessionId}`);
-  }
-  if (transcriptPath) {
-    parts.push(`transcript ${transcriptPath}`);
-  }
-
-  return `Stats: ${parts.join(" \u2022 ")}`;
-}
-
-function loadSessionEntryByKey(sessionKey: string) {
-  const cfg = loadConfig();
-  const agentId = resolveAgentIdFromSessionKey(sessionKey);
-  const storePath = resolveStorePath(cfg.session?.store, { agentId });
-  const store = loadSessionStore(storePath);
-  return store[sessionKey];
-}
-
-async function readLatestAssistantReplyWithRetry(params: {
-  sessionKey: string;
-  initialReply?: string;
-  maxWaitMs: number;
-}): Promise<string | undefined> {
-  const RETRY_INTERVAL_MS = 100;
-  let reply = params.initialReply?.trim() ? params.initialReply : undefined;
-  if (reply) {
-    return reply;
-  }
-
-  const deadline = Date.now() + Math.max(0, Math.min(params.maxWaitMs, 15_000));
-  while (Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, RETRY_INTERVAL_MS));
-    const latest = await readLatestAssistantReply({ sessionKey: params.sessionKey });
-    if (latest?.trim()) {
-      return latest;
-    }
-  }
-  return reply;
+function loadSubagentRegistryRuntime() {
+  subagentRegistryRuntimePromise ??= import("./subagent-registry-runtime.js");
+  return subagentRegistryRuntimePromise;
 }
 
 export function buildSubagentSystemPrompt(params: {
@@ -321,58 +50,237 @@ export function buildSubagentSystemPrompt(params: {
   childSessionKey: string;
   label?: string;
   task?: string;
+  /** Whether ACP-specific routing guidance should be included. Defaults to true. */
+  acpEnabled?: boolean;
+  /** Depth of the child being spawned (1 = sub-agent, 2 = sub-sub-agent). */
+  childDepth?: number;
+  /** Config value: max allowed spawn depth. */
+  maxSpawnDepth?: number;
 }) {
   const taskText =
     typeof params.task === "string" && params.task.trim()
       ? params.task.replace(/\s+/g, " ").trim()
       : "{{TASK_DESCRIPTION}}";
+  const childDepth = typeof params.childDepth === "number" ? params.childDepth : 1;
+  const maxSpawnDepth =
+    typeof params.maxSpawnDepth === "number"
+      ? params.maxSpawnDepth
+      : DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
+  const acpEnabled = params.acpEnabled !== false;
+  const canSpawn = childDepth < maxSpawnDepth;
+  const parentLabel = childDepth >= 2 ? "parent orchestrator" : "main agent";
+
   const lines = [
     "# Subagent Context",
     "",
-    "You are a **subagent** spawned by the main agent for a specific task.",
+    `You are a **subagent** spawned by the ${parentLabel} for a specific task.`,
     "",
     "## Your Role",
     `- You were created to handle: ${taskText}`,
     "- Complete this task. That's your entire purpose.",
-    "- You are NOT the main agent. Don't try to be.",
+    `- You are NOT the ${parentLabel}. Don't try to be.`,
     "",
     "## Rules",
     "1. **Stay focused** - Do your assigned task, nothing else",
-    "2. **Complete the task** - Your final message will be automatically reported to the main agent",
+    `2. **Complete the task** - Your final message will be automatically reported to the ${parentLabel}`,
     "3. **Don't initiate** - No heartbeats, no proactive actions, no side quests",
     "4. **Be ephemeral** - You may be terminated after task completion. That's fine.",
+    "5. **Trust push-based completion** - Descendant results are auto-announced back to you; do not busy-poll for status.",
+    "6. **Recover from compacted/truncated tool output** - If you see `[compacted: tool output removed to free context]` or `[truncated: output exceeded context limit]`, assume prior output was reduced. Re-read only what you need using smaller chunks (`read` with offset/limit, or targeted `rg`/`head`/`tail`) instead of full-file `cat`.",
     "",
     "## Output Format",
     "When complete, your final response should include:",
-    "- What you accomplished or found",
-    "- Any relevant details the main agent should know",
+    `- What you accomplished or found`,
+    `- Any relevant details the ${parentLabel} should know`,
     "- Keep it concise but informative",
     "",
     "## What You DON'T Do",
-    "- NO user conversations (that's main agent's job)",
+    `- NO user conversations (that's ${parentLabel}'s job)`,
     "- NO external messages (email, tweets, etc.) unless explicitly tasked with a specific recipient/channel",
     "- NO cron jobs or persistent state",
-    "- NO pretending to be the main agent",
-    "- Only use the `message` tool when explicitly instructed to contact a specific external recipient; otherwise return plain text and let the main agent deliver it",
+    `- NO pretending to be the ${parentLabel}`,
+    `- Only use the \`message\` tool when explicitly instructed to contact a specific external recipient; otherwise return plain text and let the ${parentLabel} deliver it`,
     "",
+  ];
+
+  if (canSpawn) {
+    lines.push(
+      "## Sub-Agent Spawning",
+      "You CAN spawn your own sub-agents for parallel or complex work using `sessions_spawn`.",
+      "Use the `subagents` tool to steer, kill, or do an on-demand status check for your spawned sub-agents.",
+      "Your sub-agents will announce their results back to you automatically (not to the main agent).",
+      "Default workflow: spawn work, continue orchestrating, and wait for auto-announced completions.",
+      "Auto-announce is push-based. After spawning children, do NOT call sessions_list, sessions_history, exec sleep, or any polling tool.",
+      "Wait for completion events to arrive as user messages.",
+      "Track expected child session keys and only send your final answer after completion events for ALL expected children arrive.",
+      "If a child completion event arrives AFTER you already sent your final answer, reply ONLY with NO_REPLY.",
+      "Do NOT repeatedly poll `subagents list` in a loop unless you are actively debugging or intervening.",
+      "Coordinate their work and synthesize results before reporting back.",
+      ...(acpEnabled
+        ? [
+            'For ACP harness sessions (codex/claudecode/gemini), use `sessions_spawn` with `runtime: "acp"` (set `agentId` unless `acp.defaultAgent` is configured).',
+            '`agents_list` and `subagents` apply to OpenClaw sub-agents (`runtime: "subagent"`); ACP harness ids are controlled by `acp.allowedAgents`.',
+            "Do not ask users to run slash commands or CLI when `sessions_spawn` can do it directly.",
+            "Do not use `exec` (`openclaw ...`, `acpx ...`) to spawn ACP sessions.",
+            'Use `subagents` only for OpenClaw subagents (`runtime: "subagent"`).',
+            "Subagent results auto-announce back to you; ACP sessions continue in their bound thread.",
+            "Avoid polling loops; spawn, orchestrate, and synthesize results.",
+          ]
+        : []),
+      "",
+    );
+  } else if (childDepth >= 2) {
+    lines.push(
+      "## Sub-Agent Spawning",
+      "You are a leaf worker and CANNOT spawn further sub-agents. Focus on your assigned task.",
+      "",
+    );
+  }
+
+  lines.push(
     "## Session Context",
-    params.label ? `- Label: ${params.label}` : undefined,
-    params.requesterSessionKey ? `- Requester session: ${params.requesterSessionKey}.` : undefined,
-    params.requesterOrigin?.channel
-      ? `- Requester channel: ${params.requesterOrigin.channel}.`
-      : undefined,
-    `- Your session: ${params.childSessionKey}.`,
+    ...[
+      params.label ? `- Label: ${params.label}` : undefined,
+      params.requesterSessionKey
+        ? `- Requester session: ${params.requesterSessionKey}.`
+        : undefined,
+      params.requesterOrigin?.channel
+        ? `- Requester channel: ${params.requesterOrigin.channel}.`
+        : undefined,
+      `- Your session: ${params.childSessionKey}.`,
+    ].filter((line): line is string => line !== undefined),
     "",
-  ].filter((line): line is string => line !== undefined);
+  );
   return lines.join("\n");
 }
 
-export type SubagentRunOutcome = {
-  status: "ok" | "error" | "timeout" | "unknown";
-  error?: string;
-};
+export { captureSubagentCompletionReply } from "./subagent-announce-output.js";
+export type { SubagentRunOutcome } from "./subagent-announce-output.js";
 
 export type SubagentAnnounceType = "subagent task" | "cron job";
+
+function buildAnnounceReplyInstruction(params: {
+  requesterIsSubagent: boolean;
+  announceType: SubagentAnnounceType;
+  expectsCompletionMessage?: boolean;
+}): string {
+  if (params.requesterIsSubagent) {
+    return `Convert this completion into a concise internal orchestration update for your parent agent in your own words. Keep this internal context private (don't mention system/log/stats/session details or announce type). If this result is duplicate or no update is needed, reply ONLY: ${SILENT_REPLY_TOKEN}.`;
+  }
+  if (params.expectsCompletionMessage) {
+    return `A completed ${params.announceType} is ready for user delivery. Convert the result above into your normal assistant voice and send that user-facing update now. Keep this internal context private (don't mention system/log/stats/session details or announce type).`;
+  }
+  return `A completed ${params.announceType} is ready for user delivery. Convert the result above into your normal assistant voice and send that user-facing update now. Keep this internal context private (don't mention system/log/stats/session details or announce type), and do not copy the internal event text verbatim. Reply ONLY: ${SILENT_REPLY_TOKEN} if this exact result was already delivered to the user in this same turn.`;
+}
+
+function buildAnnounceSteerMessage(events: AgentInternalEvent[]): string {
+  return (
+    formatAgentInternalEventsForPrompt(events) ||
+    "A background task finished. Process the completion update now."
+  );
+}
+
+function hasUsableSessionEntry(entry: unknown): boolean {
+  if (!entry || typeof entry !== "object") {
+    return false;
+  }
+  const sessionId = (entry as { sessionId?: unknown }).sessionId;
+  return typeof sessionId !== "string" || sessionId.trim() !== "";
+}
+
+function buildDescendantWakeMessage(params: { findings: string; taskLabel: string }): string {
+  return [
+    "[Subagent Context] Your prior run ended while waiting for descendant subagent completions.",
+    "[Subagent Context] All pending descendants for that run have now settled.",
+    "[Subagent Context] Continue your workflow using these results. Spawn more subagents if needed, otherwise send your final answer.",
+    "",
+    `Task: ${params.taskLabel}`,
+    "",
+    params.findings,
+  ].join("\n");
+}
+
+const WAKE_RUN_SUFFIX = ":wake";
+
+function stripWakeRunSuffixes(runId: string): string {
+  let next = runId.trim();
+  while (next.endsWith(WAKE_RUN_SUFFIX)) {
+    next = next.slice(0, -WAKE_RUN_SUFFIX.length);
+  }
+  return next || runId.trim();
+}
+
+function isWakeContinuationRun(runId: string): boolean {
+  const trimmed = runId.trim();
+  if (!trimmed) {
+    return false;
+  }
+  return stripWakeRunSuffixes(trimmed) !== trimmed;
+}
+
+async function wakeSubagentRunAfterDescendants(params: {
+  runId: string;
+  childSessionKey: string;
+  taskLabel: string;
+  findings: string;
+  announceId: string;
+  signal?: AbortSignal;
+}): Promise<boolean> {
+  if (params.signal?.aborted) {
+    return false;
+  }
+
+  const childEntry = loadSessionEntryByKey(params.childSessionKey);
+  if (!hasUsableSessionEntry(childEntry)) {
+    return false;
+  }
+
+  const cfg = loadConfig();
+  const announceTimeoutMs = resolveSubagentAnnounceTimeoutMs(cfg);
+  const wakeMessage = buildDescendantWakeMessage({
+    findings: params.findings,
+    taskLabel: params.taskLabel,
+  });
+
+  let wakeRunId = "";
+  try {
+    const wakeResponse = await runAnnounceDeliveryWithRetry<{ runId?: string }>({
+      operation: "descendant wake agent call",
+      signal: params.signal,
+      run: async () =>
+        await callGateway({
+          method: "agent",
+          params: {
+            sessionKey: params.childSessionKey,
+            message: wakeMessage,
+            deliver: false,
+            inputProvenance: {
+              kind: "inter_session",
+              sourceSessionKey: params.childSessionKey,
+              sourceChannel: INTERNAL_MESSAGE_CHANNEL,
+              sourceTool: "subagent_announce",
+            },
+            idempotencyKey: buildAnnounceIdempotencyKey(`${params.announceId}:wake`),
+          },
+          timeoutMs: announceTimeoutMs,
+        }),
+    });
+    wakeRunId = typeof wakeResponse?.runId === "string" ? wakeResponse.runId.trim() : "";
+  } catch {
+    return false;
+  }
+
+  if (!wakeRunId) {
+    return false;
+  }
+
+  const { replaceSubagentRunAfterSteer } = await loadSubagentRegistryRuntime();
+  return replaceSubagentRunAfterSteer({
+    previousRunId: params.runId,
+    nextRunId: wakeRunId,
+    preserveFrozenResultFallback: true,
+  });
+}
 
 export async function runSubagentAnnounceFlow(params: {
   childSessionKey: string;
@@ -384,17 +292,30 @@ export async function runSubagentAnnounceFlow(params: {
   timeoutMs: number;
   cleanup: "delete" | "keep";
   roundOneReply?: string;
+  /**
+   * Fallback text preserved from the pre-wake run when a wake continuation
+   * completes with NO_REPLY despite an earlier final summary already existing.
+   */
+  fallbackReply?: string;
   waitForCompletion?: boolean;
   startedAt?: number;
   endedAt?: number;
   label?: string;
   outcome?: SubagentRunOutcome;
   announceType?: SubagentAnnounceType;
+  expectsCompletionMessage?: boolean;
+  spawnMode?: SpawnSubagentMode;
+  wakeOnDescendantSettle?: boolean;
+  signal?: AbortSignal;
+  bestEffortDeliver?: boolean;
 }): Promise<boolean> {
   let didAnnounce = false;
+  const expectsCompletionMessage = params.expectsCompletionMessage === true;
+  const announceType = params.announceType ?? "subagent task";
   let shouldDeleteChildSession = params.cleanup === "delete";
   try {
-    const requesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
+    let targetRequesterSessionKey = params.requesterSessionKey;
+    let targetRequesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
     const childSessionId = (() => {
       const entry = loadSessionEntryByKey(params.childSessionKey);
       return typeof entry?.sessionId === "string" && entry.sessionId.trim()
@@ -404,84 +325,167 @@ export async function runSubagentAnnounceFlow(params: {
     const settleTimeoutMs = Math.min(Math.max(params.timeoutMs, 1), 120_000);
     let reply = params.roundOneReply;
     let outcome: SubagentRunOutcome | undefined = params.outcome;
-    // Lifecycle "end" can arrive before auto-compaction retries finish. If the
-    // subagent is still active, wait for the embedded run to fully settle.
     if (childSessionId && isEmbeddedPiRunActive(childSessionId)) {
       const settled = await waitForEmbeddedPiRunEnd(childSessionId, settleTimeoutMs);
       if (!settled && isEmbeddedPiRunActive(childSessionId)) {
-        // The child run is still active (e.g., compaction retry still in progress).
-        // Defer announcement so we don't report stale/partial output.
-        // Keep the child session so output is not lost while the run is still active.
         shouldDeleteChildSession = false;
         return false;
       }
     }
 
     if (!reply && params.waitForCompletion !== false) {
-      const waitMs = settleTimeoutMs;
-      const wait = await callGateway<{
-        status?: string;
-        startedAt?: number;
-        endedAt?: number;
-        error?: string;
-      }>({
-        method: "agent.wait",
-        params: {
-          runId: params.childRunId,
-          timeoutMs: waitMs,
-        },
-        timeoutMs: waitMs + 2000,
+      const wait = await waitForSubagentRunOutcome(params.childRunId, settleTimeoutMs);
+      const applied = applySubagentWaitOutcome({
+        wait,
+        outcome,
+        startedAt: params.startedAt,
+        endedAt: params.endedAt,
       });
-      const waitError = typeof wait?.error === "string" ? wait.error : undefined;
-      if (wait?.status === "timeout") {
-        outcome = { status: "timeout" };
-      } else if (wait?.status === "error") {
-        outcome = { status: "error", error: waitError };
-      } else if (wait?.status === "ok") {
-        outcome = { status: "ok" };
-      }
-      if (typeof wait?.startedAt === "number" && !params.startedAt) {
-        params.startedAt = wait.startedAt;
-      }
-      if (typeof wait?.endedAt === "number" && !params.endedAt) {
-        params.endedAt = wait.endedAt;
-      }
-      if (wait?.status === "timeout") {
-        if (!outcome) {
-          outcome = { status: "timeout" };
-        }
-      }
-      reply = await readLatestAssistantReply({ sessionKey: params.childSessionKey });
-    }
-
-    if (!reply) {
-      reply = await readLatestAssistantReply({ sessionKey: params.childSessionKey });
-    }
-
-    if (!reply?.trim()) {
-      reply = await readLatestAssistantReplyWithRetry({
-        sessionKey: params.childSessionKey,
-        initialReply: reply,
-        maxWaitMs: params.timeoutMs,
-      });
-    }
-
-    if (!reply?.trim() && childSessionId && isEmbeddedPiRunActive(childSessionId)) {
-      // Avoid announcing "(no output)" while the child run is still producing output.
-      shouldDeleteChildSession = false;
-      return false;
+      outcome = applied.outcome;
+      params.startedAt = applied.startedAt;
+      params.endedAt = applied.endedAt;
     }
 
     if (!outcome) {
       outcome = { status: "unknown" };
     }
 
-    // Build stats
-    const statsLine = await buildSubagentStatsLine({
-      sessionKey: params.childSessionKey,
-      startedAt: params.startedAt,
-      endedAt: params.endedAt,
+    let requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey);
+    const requesterIsInternalSession = () =>
+      requesterDepth >= 1 || isCronSessionKey(targetRequesterSessionKey);
+
+    let childCompletionFindings: string | undefined;
+    let subagentRegistryRuntime:
+      | Awaited<ReturnType<typeof loadSubagentRegistryRuntime>>
+      | undefined;
+    try {
+      subagentRegistryRuntime = await loadSubagentRegistryRuntime();
+      if (
+        requesterDepth >= 1 &&
+        subagentRegistryRuntime.shouldIgnorePostCompletionAnnounceForSession(
+          targetRequesterSessionKey,
+        )
+      ) {
+        return true;
+      }
+
+      const pendingChildDescendantRuns = Math.max(
+        0,
+        subagentRegistryRuntime.countPendingDescendantRuns(params.childSessionKey),
+      );
+      if (pendingChildDescendantRuns > 0 && announceType !== "cron job") {
+        shouldDeleteChildSession = false;
+        return false;
+      }
+
+      if (typeof subagentRegistryRuntime.listSubagentRunsForRequester === "function") {
+        const directChildren = subagentRegistryRuntime.listSubagentRunsForRequester(
+          params.childSessionKey,
+          {
+            requesterRunId: params.childRunId,
+          },
+        );
+        if (Array.isArray(directChildren) && directChildren.length > 0) {
+          childCompletionFindings = buildChildCompletionFindings(
+            dedupeLatestChildCompletionRows(
+              filterCurrentDirectChildCompletionRows(directChildren, {
+                requesterSessionKey: params.childSessionKey,
+                getLatestSubagentRunByChildSessionKey:
+                  subagentRegistryRuntime.getLatestSubagentRunByChildSessionKey,
+              }),
+            ),
+          );
+        }
+      }
+    } catch {
+      // Best-effort only.
+    }
+
+    const announceId = buildAnnounceIdFromChildRun({
+      childSessionKey: params.childSessionKey,
+      childRunId: params.childRunId,
     });
+
+    const childRunAlreadyWoken = isWakeContinuationRun(params.childRunId);
+    if (
+      params.wakeOnDescendantSettle === true &&
+      childCompletionFindings?.trim() &&
+      !childRunAlreadyWoken
+    ) {
+      const wakeAnnounceId = buildAnnounceIdFromChildRun({
+        childSessionKey: params.childSessionKey,
+        childRunId: stripWakeRunSuffixes(params.childRunId),
+      });
+      const woke = await wakeSubagentRunAfterDescendants({
+        runId: params.childRunId,
+        childSessionKey: params.childSessionKey,
+        taskLabel: params.label || params.task || "task",
+        findings: childCompletionFindings,
+        announceId: wakeAnnounceId,
+        signal: params.signal,
+      });
+      if (woke) {
+        shouldDeleteChildSession = false;
+        return true;
+      }
+    }
+
+    if (!childCompletionFindings) {
+      const fallbackReply = params.fallbackReply?.trim() ? params.fallbackReply.trim() : undefined;
+      const fallbackIsSilent =
+        Boolean(fallbackReply) &&
+        (isAnnounceSkip(fallbackReply) || isSilentReplyText(fallbackReply, SILENT_REPLY_TOKEN));
+
+      if (!reply) {
+        reply = await readSubagentOutput(params.childSessionKey, outcome);
+      }
+
+      if (!reply?.trim()) {
+        reply = await readLatestSubagentOutputWithRetry({
+          sessionKey: params.childSessionKey,
+          maxWaitMs: params.timeoutMs,
+          outcome,
+        });
+      }
+
+      if (!reply?.trim() && fallbackReply && !fallbackIsSilent) {
+        reply = fallbackReply;
+      }
+
+      // A worker can finish just after the first wait request timed out.
+      // If we already have real completion content, do one cached recheck so
+      // the final completion event prefers the authoritative terminal state.
+      // This is best-effort; if the recheck fails, keep the known timeout
+      // outcome instead of dropping the announcement entirely.
+      if (outcome?.status === "timeout" && reply?.trim() && params.waitForCompletion !== false) {
+        try {
+          const rechecked = await waitForSubagentRunOutcome(params.childRunId, 0);
+          const applied = applySubagentWaitOutcome({
+            wait: rechecked,
+            outcome,
+            startedAt: params.startedAt,
+            endedAt: params.endedAt,
+          });
+          outcome = applied.outcome;
+          params.startedAt = applied.startedAt;
+          params.endedAt = applied.endedAt;
+        } catch {
+          // Best-effort recheck; keep the existing timeout outcome on failure.
+        }
+      }
+
+      if (isAnnounceSkip(reply) || isSilentReplyText(reply, SILENT_REPLY_TOKEN)) {
+        if (fallbackReply && !fallbackIsSilent) {
+          reply = fallbackReply;
+        } else {
+          return true;
+        }
+      }
+    }
+
+    if (!outcome) {
+      outcome = { status: "unknown" };
+    }
 
     // Build status label
     const statusLabel =
@@ -493,63 +497,114 @@ export async function runSubagentAnnounceFlow(params: {
             ? `failed: ${outcome.error || "unknown error"}`
             : "finished with unknown status";
 
-    // Build instructional message for main agent
-    const announceType = params.announceType ?? "subagent task";
     const taskLabel = params.label || params.task || "task";
-    const triggerMessage = [
-      `A ${announceType} "${taskLabel}" just ${statusLabel}.`,
-      "",
-      "Findings:",
-      reply || "(no output)",
-      "",
-      statsLine,
-      "",
-      "Summarize this naturally for the user. Keep it brief (1-2 sentences). Flow it into the conversation naturally.",
-      `Do not mention technical details like tokens, stats, or that this was a ${announceType}.`,
-      "You can respond with NO_REPLY if no announcement is needed (e.g., internal task with no user-facing result).",
-    ].join("\n");
+    const announceSessionId = childSessionId || "unknown";
+    const findings = childCompletionFindings || reply || "(no output)";
 
-    const queued = await maybeQueueSubagentAnnounce({
-      requesterSessionKey: params.requesterSessionKey,
-      triggerMessage,
-      summaryLine: taskLabel,
-      requesterOrigin,
+    let requesterIsSubagent = requesterIsInternalSession();
+    if (requesterIsSubagent) {
+      const {
+        isSubagentSessionRunActive,
+        resolveRequesterForChildSession,
+        shouldIgnorePostCompletionAnnounceForSession,
+      } = subagentRegistryRuntime ?? (await loadSubagentRegistryRuntime());
+      if (!isSubagentSessionRunActive(targetRequesterSessionKey)) {
+        if (shouldIgnorePostCompletionAnnounceForSession(targetRequesterSessionKey)) {
+          return true;
+        }
+        const parentSessionEntry = loadSessionEntryByKey(targetRequesterSessionKey);
+        const parentSessionAlive = hasUsableSessionEntry(parentSessionEntry);
+
+        if (!parentSessionAlive) {
+          const fallback = resolveRequesterForChildSession(targetRequesterSessionKey);
+          if (!fallback?.requesterSessionKey) {
+            shouldDeleteChildSession = false;
+            return false;
+          }
+          targetRequesterSessionKey = fallback.requesterSessionKey;
+          targetRequesterOrigin =
+            normalizeDeliveryContext(fallback.requesterOrigin) ?? targetRequesterOrigin;
+          requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey);
+          requesterIsSubagent = requesterIsInternalSession();
+        }
+      }
+    }
+
+    const replyInstruction = buildAnnounceReplyInstruction({
+      requesterIsSubagent,
+      announceType,
+      expectsCompletionMessage,
     });
-    if (queued === "steered") {
-      didAnnounce = true;
-      return true;
-    }
-    if (queued === "queued") {
-      didAnnounce = true;
-      return true;
-    }
-
-    // Send to main agent - it will respond in its own voice
-    let directOrigin = requesterOrigin;
-    if (!directOrigin) {
-      const { entry } = loadRequesterSessionEntry(params.requesterSessionKey);
-      directOrigin = deliveryContextFromSession(entry);
-    }
-    await callGateway({
-      method: "agent",
-      params: {
-        sessionKey: params.requesterSessionKey,
-        message: triggerMessage,
-        deliver: true,
-        channel: directOrigin?.channel,
-        accountId: directOrigin?.accountId,
-        to: directOrigin?.to,
-        threadId:
-          directOrigin?.threadId != null && directOrigin.threadId !== ""
-            ? String(directOrigin.threadId)
-            : undefined,
-        idempotencyKey: crypto.randomUUID(),
+    const statsLine = await buildCompactAnnounceStatsLine({
+      sessionKey: params.childSessionKey,
+      startedAt: params.startedAt,
+      endedAt: params.endedAt,
+    });
+    const internalEvents: AgentInternalEvent[] = [
+      {
+        type: "task_completion",
+        source: announceType === "cron job" ? "cron" : "subagent",
+        childSessionKey: params.childSessionKey,
+        childSessionId: announceSessionId,
+        announceType,
+        taskLabel,
+        status: outcome.status,
+        statusLabel,
+        result: findings,
+        statsLine,
+        replyInstruction,
       },
-      expectFinal: true,
-      timeoutMs: 60_000,
-    });
+    ];
+    const triggerMessage = buildAnnounceSteerMessage(internalEvents);
 
-    didAnnounce = true;
+    // Send to the requester session. For nested subagents this is an internal
+    // follow-up injection (deliver=false) so the orchestrator receives it.
+    let directOrigin = targetRequesterOrigin;
+    if (!requesterIsSubagent) {
+      const { entry } = loadRequesterSessionEntry(targetRequesterSessionKey);
+      directOrigin = resolveAnnounceOrigin(entry, targetRequesterOrigin);
+    }
+    const completionDirectOrigin =
+      expectsCompletionMessage && !requesterIsSubagent
+        ? await resolveSubagentCompletionOrigin({
+            childSessionKey: params.childSessionKey,
+            requesterSessionKey: targetRequesterSessionKey,
+            requesterOrigin: directOrigin,
+            childRunId: params.childRunId,
+            spawnMode: params.spawnMode,
+            expectsCompletionMessage,
+          })
+        : targetRequesterOrigin;
+    const directIdempotencyKey = buildAnnounceIdempotencyKey(announceId);
+    const delivery = await deliverSubagentAnnouncement({
+      requesterSessionKey: targetRequesterSessionKey,
+      announceId,
+      triggerMessage,
+      steerMessage: triggerMessage,
+      internalEvents,
+      summaryLine: taskLabel,
+      requesterOrigin:
+        expectsCompletionMessage && !requesterIsSubagent
+          ? completionDirectOrigin
+          : targetRequesterOrigin,
+      completionDirectOrigin,
+      directOrigin,
+      sourceSessionKey: params.childSessionKey,
+      sourceChannel: INTERNAL_MESSAGE_CHANNEL,
+      sourceTool: "subagent_announce",
+      targetRequesterSessionKey,
+      requesterIsSubagent,
+      expectsCompletionMessage: expectsCompletionMessage,
+      bestEffortDeliver: params.bestEffortDeliver,
+      directIdempotencyKey,
+      signal: params.signal,
+    });
+    didAnnounce = delivery.delivered;
+    if (!delivery.delivered && delivery.path === "direct" && delivery.error) {
+      defaultRuntime.error?.(
+        `Subagent completion direct announce failed for run ${params.childRunId}: ${delivery.error}`,
+      );
+    }
   } catch (err) {
     defaultRuntime.error?.(`Subagent announce failed: ${String(err)}`);
     // Best-effort follow-ups; ignore failures to avoid breaking the caller response.
@@ -570,7 +625,11 @@ export async function runSubagentAnnounceFlow(params: {
       try {
         await callGateway({
           method: "sessions.delete",
-          params: { key: params.childSessionKey, deleteTranscript: true },
+          params: {
+            key: params.childSessionKey,
+            deleteTranscript: true,
+            emitLifecycleHooks: params.spawnMode === "session",
+          },
           timeoutMs: 10_000,
         });
       } catch {

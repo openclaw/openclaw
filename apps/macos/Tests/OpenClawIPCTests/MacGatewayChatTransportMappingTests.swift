@@ -3,8 +3,8 @@ import OpenClawProtocol
 import Testing
 @testable import OpenClaw
 
-@Suite struct MacGatewayChatTransportMappingTests {
-    @Test func snapshotMapsToHealth() {
+struct MacGatewayChatTransportMappingTests {
+    @Test func `snapshot maps to health`() {
         let snapshot = Snapshot(
             presence: [],
             health: OpenClawProtocol.AnyCodable(["ok": OpenClawProtocol.AnyCodable(false)]),
@@ -12,7 +12,9 @@ import Testing
             uptimems: 123,
             configpath: nil,
             statedir: nil,
-            sessiondefaults: nil)
+            sessiondefaults: nil,
+            authmode: nil,
+            updateavailable: nil)
 
         let hello = HelloOk(
             type: "hello",
@@ -33,7 +35,7 @@ import Testing
         }
     }
 
-    @Test func healthEventMapsToHealth() {
+    @Test func `health event maps to health`() {
         let frame = EventFrame(
             type: "event",
             event: "health",
@@ -50,7 +52,7 @@ import Testing
         }
     }
 
-    @Test func tickEventMapsToTick() {
+    @Test func `tick event maps to tick`() {
         let frame = EventFrame(type: "event", event: "tick", payload: nil, seq: 1, stateversion: nil)
         let mapped = MacGatewayChatTransport.mapPushToTransportEvent(.event(frame))
         #expect({
@@ -59,7 +61,7 @@ import Testing
         }())
     }
 
-    @Test func chatEventMapsToChat() {
+    @Test func `chat event maps to chat`() {
         let payload = OpenClawProtocol.AnyCodable([
             "runId": OpenClawProtocol.AnyCodable("run-1"),
             "sessionKey": OpenClawProtocol.AnyCodable("main"),
@@ -78,7 +80,7 @@ import Testing
         }
     }
 
-    @Test func unknownEventMapsToNil() {
+    @Test func `unknown event maps to nil`() {
         let frame = EventFrame(
             type: "event",
             event: "unknown",
@@ -89,7 +91,7 @@ import Testing
         #expect(mapped == nil)
     }
 
-    @Test func seqGapMapsToSeqGap() {
+    @Test func `seq gap maps to seq gap`() {
         let mapped = MacGatewayChatTransport.mapPushToTransportEvent(.seqGap(expected: 1, received: 9))
         #expect({
             if case .seqGap = mapped { return true }

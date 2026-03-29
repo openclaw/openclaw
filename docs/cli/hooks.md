@@ -2,7 +2,7 @@
 summary: "CLI reference for `openclaw hooks` (agent hooks)"
 read_when:
   - You want to manage agent hooks
-  - You want to install or update hooks
+  - You want to inspect hook availability or enable workspace hooks
 title: "hooks"
 ---
 
@@ -13,7 +13,7 @@ Manage agent hooks (event-driven automations for commands like `/new`, `/reset`,
 Related:
 
 - Hooks: [Hooks](/automation/hooks)
-- Plugin hooks: [Plugins](/tools/plugin#plugin-hooks)
+- Plugin hooks: [Plugin hooks](/plugins/architecture#provider-runtime-hooks)
 
 ## List All Hooks
 
@@ -21,7 +21,7 @@ Related:
 openclaw hooks list
 ```
 
-List all discovered hooks from workspace, managed, and bundled directories.
+List all discovered hooks from workspace, managed, extra, and bundled directories.
 
 **Options:**
 
@@ -38,7 +38,7 @@ Ready:
   🚀 boot-md ✓ - Run BOOT.md on gateway startup
   📎 bootstrap-extra-files ✓ - Inject extra workspace bootstrap files during agent bootstrap
   📝 command-logger ✓ - Log all command events to a centralized audit file
-  💾 session-memory ✓ - Save session context to memory when /new command is issued
+  💾 session-memory ✓ - Save session context to memory when /new or /reset command is issued
 ```
 
 **Example (verbose):**
@@ -84,14 +84,14 @@ openclaw hooks info session-memory
 ```
 💾 session-memory ✓ Ready
 
-Save session context to memory when /new command is issued
+Save session context to memory when /new or /reset command is issued
 
 Details:
   Source: openclaw-bundled
   Path: /path/to/openclaw/hooks/bundled/session-memory/HOOK.md
   Handler: /path/to/openclaw/hooks/bundled/session-memory/handler.ts
-  Homepage: https://docs.openclaw.ai/hooks#session-memory
-  Events: command:new
+  Homepage: https://docs.openclaw.ai/automation/hooks#session-memory
+  Events: command:new, command:reset
 
 Requirements:
   Config: ✓ workspace.dir
@@ -127,8 +127,7 @@ openclaw hooks enable <name>
 
 Enable a specific hook by adding it to your config (`~/.openclaw/config.json`).
 
-**Note:** Hooks managed by plugins show `plugin:<id>` in `openclaw hooks list` and
-can’t be enabled/disabled here. Enable/disable the plugin instead.
+**Note:** Workspace hooks are disabled by default until enabled here or in config. Hooks managed by plugins show `plugin:<id>` in `openclaw hooks list` and can’t be enabled/disabled here. Enable/disable the plugin instead.
 
 **Arguments:**
 
@@ -151,6 +150,9 @@ openclaw hooks enable session-memory
 - Checks if hook exists and is eligible
 - Updates `hooks.internal.entries.<name>.enabled = true` in your config
 - Saves config to disk
+
+If the hook came from `<workspace>/hooks/`, this opt-in step is required before
+the Gateway will load it.
 
 **After enabling:**
 
@@ -184,13 +186,26 @@ openclaw hooks disable command-logger
 
 - Restart the gateway so hooks reload
 
-## Install Hooks
+## Install Hook Packs
 
 ```bash
-openclaw hooks install <path-or-spec>
+openclaw plugins install <package>        # ClawHub first, then npm
+openclaw plugins install <package> --pin  # pin version
+openclaw plugins install <path>           # local path
 ```
 
-Install a hook pack from a local folder/archive or npm.
+Install hook packs through the unified plugins installer.
+
+`openclaw hooks install` still works as a compatibility alias, but it prints a
+deprecation warning and forwards to `openclaw plugins install`.
+
+Npm specs are **registry-only** (package name + optional **exact version** or
+**dist-tag**). Git/URL/file specs and semver ranges are rejected. Dependency
+installs run with `--ignore-scripts` for safety.
+
+Bare specs and `@latest` stay on the stable track. If npm resolves either of
+those to a prerelease, OpenClaw stops and asks you to opt in explicitly with a
+prerelease tag such as `@beta`/`@rc` or an exact prerelease version.
 
 **What it does:**
 
@@ -201,6 +216,7 @@ Install a hook pack from a local folder/archive or npm.
 **Options:**
 
 - `-l, --link`: Link a local directory instead of copying (adds it to `hooks.internal.load.extraDirs`)
+- `--pin`: Record npm installs as exact resolved `name@version` in `hooks.internal.installs`
 
 **Supported archives:** `.zip`, `.tgz`, `.tar.gz`, `.tar`
 
@@ -208,37 +224,47 @@ Install a hook pack from a local folder/archive or npm.
 
 ```bash
 # Local directory
-openclaw hooks install ./my-hook-pack
+openclaw plugins install ./my-hook-pack
 
 # Local archive
-openclaw hooks install ./my-hook-pack.zip
+openclaw plugins install ./my-hook-pack.zip
 
 # NPM package
-openclaw hooks install @openclaw/my-hook-pack
+openclaw plugins install @openclaw/my-hook-pack
 
 # Link a local directory without copying
-openclaw hooks install -l ./my-hook-pack
+openclaw plugins install -l ./my-hook-pack
 ```
 
-## Update Hooks
+Linked hook packs are treated as managed hooks from an operator-configured
+directory, not as workspace hooks.
+
+## Update Hook Packs
 
 ```bash
-openclaw hooks update <id>
-openclaw hooks update --all
+openclaw plugins update <id>
+openclaw plugins update --all
 ```
 
-Update installed hook packs (npm installs only).
+Update tracked npm-based hook packs through the unified plugins updater.
+
+`openclaw hooks update` still works as a compatibility alias, but it prints a
+deprecation warning and forwards to `openclaw plugins update`.
 
 **Options:**
 
 - `--all`: Update all tracked hook packs
 - `--dry-run`: Show what would change without writing
 
+When a stored integrity hash exists and the fetched artifact hash changes,
+OpenClaw prints a warning and asks for confirmation before proceeding. Use
+global `--yes` to bypass prompts in CI/non-interactive runs.
+
 ## Bundled Hooks
 
 ### session-memory
 
-Saves session context to memory when you issue `/new`.
+Saves session context to memory when you issue `/new` or `/reset`.
 
 **Enable:**
 

@@ -1,12 +1,30 @@
 import AppKit
+import Foundation
 import OpenClawIPC
 import OpenClawKit
-import Foundation
 import WebKit
 
 final class CanvasA2UIActionMessageHandler: NSObject, WKScriptMessageHandler {
     static let messageName = "openclawCanvasA2UIAction"
     static let allMessageNames = [messageName]
+
+    /// Compatibility helper for debug/test shims. Runtime dispatch remains
+    /// limited to in-app canvas schemes in `didReceive`.
+    static func isLocalNetworkCanvasURL(_ url: URL) -> Bool {
+        guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else {
+            return false
+        }
+        guard let host = url.host?.lowercased(), !host.isEmpty else {
+            return false
+        }
+        if host == "localhost" {
+            return true
+        }
+        guard let ip = Self.parseIPv4(host) else {
+            return false
+        }
+        return Self.isLocalNetworkIPv4(ip)
+    }
 
     private let sessionKey: String
 
@@ -18,13 +36,10 @@ final class CanvasA2UIActionMessageHandler: NSObject, WKScriptMessageHandler {
     func userContentController(_: WKUserContentController, didReceive message: WKScriptMessage) {
         guard Self.allMessageNames.contains(message.name) else { return }
 
-        // Only accept actions from local Canvas content (not arbitrary web pages).
+        // Only accept actions from the in-app canvas scheme. Local-network HTTP
+        // pages are regular web content and must not get direct agent dispatch.
         guard let webView = message.webView, let url = webView.url else { return }
-        if let scheme = url.scheme, CanvasScheme.allSchemes.contains(scheme) {
-            // ok
-        } else if Self.isLocalNetworkCanvasURL(url) {
-            // ok
-        } else {
+        guard let scheme = url.scheme, CanvasScheme.allSchemes.contains(scheme) else {
             return
         }
 
@@ -108,33 +123,15 @@ final class CanvasA2UIActionMessageHandler: NSObject, WKScriptMessageHandler {
         }
     }
 
-    static func isLocalNetworkCanvasURL(_ url: URL) -> Bool {
-        guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else {
-            return false
-        }
-        guard let host = url.host?.trimmingCharacters(in: .whitespacesAndNewlines), !host.isEmpty else {
-            return false
-        }
-        if host == "localhost" { return true }
-        if host.hasSuffix(".local") { return true }
-        if host.hasSuffix(".ts.net") { return true }
-        if host.hasSuffix(".tailscale.net") { return true }
-        if !host.contains("."), !host.contains(":") { return true }
-        if let ipv4 = Self.parseIPv4(host) {
-            return Self.isLocalNetworkIPv4(ipv4)
-        }
-        return false
-    }
-
-    static func parseIPv4(_ host: String) -> (UInt8, UInt8, UInt8, UInt8)? {
+    private static func parseIPv4(_ host: String) -> (UInt8, UInt8, UInt8, UInt8)? {
         let parts = host.split(separator: ".", omittingEmptySubsequences: false)
         guard parts.count == 4 else { return nil }
-        let bytes: [UInt8] = parts.compactMap { UInt8($0) }
+        let bytes = parts.compactMap { UInt8($0) }
         guard bytes.count == 4 else { return nil }
         return (bytes[0], bytes[1], bytes[2], bytes[3])
     }
 
-    static func isLocalNetworkIPv4(_ ip: (UInt8, UInt8, UInt8, UInt8)) -> Bool {
+    private static func isLocalNetworkIPv4(_ ip: (UInt8, UInt8, UInt8, UInt8)) -> Bool {
         let (a, b, _, _) = ip
         if a == 10 { return true }
         if a == 172, (16...31).contains(Int(b)) { return true }
@@ -144,6 +141,5 @@ final class CanvasA2UIActionMessageHandler: NSObject, WKScriptMessageHandler {
         if a == 100, (64...127).contains(Int(b)) { return true }
         return false
     }
-
     // Formatting helpers live in OpenClawKit (`OpenClawCanvasA2UIAction`).
 }

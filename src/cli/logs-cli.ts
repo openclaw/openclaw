@@ -1,7 +1,8 @@
-import type { Command } from "commander";
 import { setTimeout as delay } from "node:timers/promises";
+import type { Command } from "commander";
 import { buildGatewayConnectionDetails } from "../gateway/call.js";
 import { parseLogLine } from "../logging/parse-log-line.js";
+import { formatTimestamp, isValidTimeZone } from "../logging/timestamps.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { clearActiveProgressLine } from "../terminal/progress-line.js";
 import { createSafeStreamWriter } from "../terminal/stream-writer.js";
@@ -73,31 +74,10 @@ export function formatLogTimestamp(
     return value;
   }
 
-  const formatLocalIsoWithOffset = (now: Date) => {
-    const year = now.getFullYear();
-    const month = String(now.getMonth() + 1).padStart(2, "0");
-    const day = String(now.getDate()).padStart(2, "0");
-    const h = String(now.getHours()).padStart(2, "0");
-    const m = String(now.getMinutes()).padStart(2, "0");
-    const s = String(now.getSeconds()).padStart(2, "0");
-    const ms = String(now.getMilliseconds()).padStart(3, "0");
-    const tzOffset = now.getTimezoneOffset();
-    const tzSign = tzOffset <= 0 ? "+" : "-";
-    const tzHours = String(Math.floor(Math.abs(tzOffset) / 60)).padStart(2, "0");
-    const tzMinutes = String(Math.abs(tzOffset) % 60).padStart(2, "0");
-    return `${year}-${month}-${day}T${h}:${m}:${s}.${ms}${tzSign}${tzHours}:${tzMinutes}`;
-  };
-
-  let timeString: string;
-  if (localTime) {
-    timeString = formatLocalIsoWithOffset(parsed);
-  } else {
-    timeString = parsed.toISOString();
-  }
   if (mode === "pretty") {
-    return timeString.slice(11, 19);
+    return formatTimestamp(parsed, { style: "short", timeZone: localTime ? undefined : "UTC" });
   }
-  return timeString;
+  return localTime ? formatTimestamp(parsed, { style: "long" }) : parsed.toISOString();
 }
 
 function formatLogLine(
@@ -237,7 +217,8 @@ export function registerLogsCli(program: Command) {
     const jsonMode = Boolean(opts.json);
     const pretty = !jsonMode && Boolean(process.stdout.isTTY) && !opts.plain;
     const rich = isRich() && opts.color !== false;
-    const localTime = Boolean(opts.localTime);
+    const localTime =
+      Boolean(opts.localTime) || (!!process.env.TZ && isValidTimeZone(process.env.TZ));
 
     while (true) {
       let payload: LogsTailPayload;

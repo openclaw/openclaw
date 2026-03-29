@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CronJob, CronStoreFile } from "../types.js";
-import type { CronServiceState } from "./state.js";
 import { recomputeNextRuns } from "./jobs.js";
+import type { CronServiceState } from "./state.js";
 
 function createMockState(jobs: CronJob[]): CronServiceState {
   const store: CronStoreFile = { version: 1, jobs };
@@ -185,5 +185,20 @@ describe("cron schedule error isolation", () => {
 
     expect(badJob.state.lastError).toMatch(/^schedule error:/);
     expect(badJob.state.lastError).toBeTruthy();
+  });
+
+  it("records a clear schedule error when cron expr is missing", () => {
+    const badJob = createJob({
+      id: "missing-expr",
+      name: "Missing Expr",
+      schedule: { kind: "cron" } as unknown as CronJob["schedule"],
+    });
+    const state = createMockState([badJob]);
+
+    recomputeNextRuns(state);
+
+    expect(badJob.state.lastError).toContain("invalid cron schedule: expr is required");
+    expect(badJob.state.lastError).not.toContain("Cannot read properties of undefined");
+    expect(badJob.state.scheduleErrorCount).toBe(1);
   });
 });

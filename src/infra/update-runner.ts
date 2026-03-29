@@ -6,7 +6,11 @@ import {
   resolveControlUiDistIndexHealth,
   resolveControlUiDistIndexPathForRoot,
 } from "./control-ui-assets.js";
+import { detectPackageManager as detectPackageManagerImpl } from "./detect-package-manager.js";
+import { readPackageName, readPackageVersion } from "./package-json.js";
+import { normalizePackageTagInput } from "./package-tag.js";
 import { trimLogTail } from "./restart-sentinel.js";
+import { resolveStableNodePath } from "./stable-node-path.js";
 import {
   channelToNpmTag,
   DEFAULT_PACKAGE_CHANNEL,
@@ -17,9 +21,15 @@ import {
 } from "./update-channels.js";
 import { compareSemverStrings } from "./update-check.js";
 import {
+  collectInstalledGlobalPackageErrors,
   cleanupGlobalRenameDirs,
+  createGlobalInstallEnv,
   detectGlobalInstallManagerForRoot,
   globalInstallArgs,
+  globalInstallFallbackArgs,
+  resolveExpectedInstalledVersionFromSpec,
+  resolveGlobalInstallSpec,
+  resolveGlobalPackageRoot,
 } from "./update-global.js";
 
 export type UpdateStepResult = {
@@ -76,6 +86,8 @@ type UpdateRunnerOptions = {
   progress?: UpdateStepProgress;
 };
 
+type BuildManager = "pnpm" | "bun" | "npm";
+
 const DEFAULT_TIMEOUT_MS = 20 * 60_000;
 const MAX_LOG_CHARS = 8000;
 const PREFLIGHT_MAX_COMMITS = 10;
@@ -128,27 +140,6 @@ function buildStartDirs(opts: UpdateRunnerOptions): string[] {
     dirs.push(proc);
   }
   return Array.from(new Set(dirs));
-}
-
-async function readPackageVersion(root: string) {
-  try {
-    const raw = await fs.readFile(path.join(root, "package.json"), "utf-8");
-    const parsed = JSON.parse(raw) as { version?: string };
-    return typeof parsed?.version === "string" ? parsed.version : null;
-  } catch {
-    return null;
-  }
-}
-
-async function readPackageName(root: string) {
-  try {
-    const raw = await fs.readFile(path.join(root, "package.json"), "utf-8");
-    const parsed = JSON.parse(raw) as { name?: string };
-    const name = parsed?.name?.trim();
-    return name ? name : null;
-  } catch {
-    return null;
-  }
 }
 
 async function readBranchName(
@@ -217,7 +208,10 @@ async function resolveGitRoot(
   for (const dir of candidates) {
     const res = await runCommand(["git", "-C", dir, "rev-parse", "--show-toplevel"], {
       timeoutMs,
-    });
+    }).catch(() => null);
+    if (!res) {
+      continue;
+    }
     if (res.code === 0) {
       const root = res.stdout.trim();
       if (root) {
@@ -253,29 +247,89 @@ async function findPackageRoot(candidates: string[]) {
   return null;
 }
 
-async function detectPackageManager(root: string) {
+async function detectPackageManager(root: string): Promise<BuildManager> {
+  return (await detectPackageManagerImpl(root)) ?? "npm";
+}
+
+function managerPreferenceOrder(preferred: BuildManager): BuildManager[] {
+  if (preferred === "pnpm") {
+    return ["pnpm", "npm", "bun"];
+  }
+  if (preferred === "bun") {
+    return ["bun", "npm", "pnpm"];
+  }
+  return ["npm", "pnpm", "bun"];
+}
+
+function managerVersionArgs(manager: BuildManager): string[] {
+  if (manager === "pnpm") {
+    return ["pnpm", "--version"];
+  }
+  if (manager === "bun") {
+    return ["bun", "--version"];
+  }
+  return ["npm", "--version"];
+}
+
+async function isManagerAvailable(
+  runCommand: CommandRunner,
+  manager: BuildManager,
+  timeoutMs: number,
+): Promise<boolean> {
   try {
-    const raw = await fs.readFile(path.join(root, "package.json"), "utf-8");
-    const parsed = JSON.parse(raw) as { packageManager?: string };
-    const pm = parsed?.packageManager?.split("@")[0]?.trim();
-    if (pm === "pnpm" || pm === "bun" || pm === "npm") {
-      return pm;
+    const res = await runCommand(managerVersionArgs(manager), { timeoutMs });
+    return res.code === 0;
+  } catch {
+    return false;
+  }
+}
+
+async function isCommandAvailable(
+  runCommand: CommandRunner,
+  argv: string[],
+  timeoutMs: number,
+): Promise<boolean> {
+  try {
+    const res = await runCommand(argv, { timeoutMs });
+    return res.code === 0;
+  } catch {
+    return false;
+  }
+}
+
+async function ensurePnpmAvailable(runCommand: CommandRunner, timeoutMs: number): Promise<boolean> {
+  if (await isManagerAvailable(runCommand, "pnpm", timeoutMs)) {
+    return true;
+  }
+  if (!(await isCommandAvailable(runCommand, ["corepack", "--version"], timeoutMs))) {
+    return false;
+  }
+  try {
+    const res = await runCommand(["corepack", "enable"], { timeoutMs });
+    if (res.code !== 0) {
+      return false;
     }
   } catch {
-    // ignore
+    return false;
   }
+  return await isManagerAvailable(runCommand, "pnpm", timeoutMs);
+}
 
-  const files = await fs.readdir(root).catch((): string[] => []);
-  if (files.includes("pnpm-lock.yaml")) {
-    return "pnpm";
+async function resolveAvailableManager(
+  runCommand: CommandRunner,
+  root: string,
+  timeoutMs: number,
+): Promise<{ manager: BuildManager; fallback: boolean }> {
+  const preferred = await detectPackageManager(root);
+  if (preferred === "pnpm" && (await ensurePnpmAvailable(runCommand, timeoutMs))) {
+    return { manager: "pnpm", fallback: false };
   }
-  if (files.includes("bun.lockb")) {
-    return "bun";
+  for (const manager of managerPreferenceOrder(preferred)) {
+    if (await isManagerAvailable(runCommand, manager, timeoutMs)) {
+      return { manager, fallback: manager !== preferred };
+    }
   }
-  if (files.includes("package-lock.json")) {
-    return "npm";
-  }
-  return "npm";
+  return { manager: "npm", fallback: preferred !== "npm" };
 }
 
 type RunStepOptions = {
@@ -327,7 +381,7 @@ async function runStep(opts: RunStepOptions): Promise<UpdateStepResult> {
   };
 }
 
-function managerScriptArgs(manager: "pnpm" | "bun" | "npm", script: string, args: string[] = []) {
+function managerScriptArgs(manager: BuildManager, script: string, args: string[] = []) {
   if (manager === "pnpm") {
     return ["pnpm", script, ...args];
   }
@@ -340,36 +394,51 @@ function managerScriptArgs(manager: "pnpm" | "bun" | "npm", script: string, args
   return ["npm", "run", script];
 }
 
-function managerInstallArgs(manager: "pnpm" | "bun" | "npm") {
+function managerInstallArgs(manager: BuildManager, opts?: { compatFallback?: boolean }) {
   if (manager === "pnpm") {
     return ["pnpm", "install"];
   }
   if (manager === "bun") {
     return ["bun", "install"];
   }
+  if (opts?.compatFallback) {
+    // pnpm/bun workspaces can hit npm-only peer resolution conflicts and should not create
+    // a package-lock.json when npm is only acting as a compatibility fallback.
+    return ["npm", "install", "--no-package-lock", "--legacy-peer-deps"];
+  }
   return ["npm", "install"];
 }
 
 function normalizeTag(tag?: string) {
-  const trimmed = tag?.trim();
-  if (!trimmed) {
-    return "latest";
+  return normalizePackageTagInput(tag, ["openclaw", DEFAULT_PACKAGE_NAME]) ?? "latest";
+}
+
+function mergeCommandEnvironments(
+  baseEnv: NodeJS.ProcessEnv | undefined,
+  overrideEnv: NodeJS.ProcessEnv | undefined,
+): NodeJS.ProcessEnv | undefined {
+  if (!baseEnv) {
+    return overrideEnv;
   }
-  if (trimmed.startsWith("openclaw@")) {
-    return trimmed.slice("openclaw@".length);
+  if (!overrideEnv) {
+    return baseEnv;
   }
-  if (trimmed.startsWith(`${DEFAULT_PACKAGE_NAME}@`)) {
-    return trimmed.slice(`${DEFAULT_PACKAGE_NAME}@`.length);
-  }
-  return trimmed;
+  return {
+    ...baseEnv,
+    ...overrideEnv,
+  };
 }
 
 export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<UpdateRunResult> {
   const startedAt = Date.now();
+  const defaultCommandEnv = await createGlobalInstallEnv();
   const runCommand =
     opts.runCommand ??
     (async (argv, options) => {
-      const res = await runCommandWithTimeout(argv, options);
+      const res = await runCommandWithTimeout(argv, {
+        ...options,
+        env: mergeCommandEnvironments(defaultCommandEnv, options.env),
+      });
       return { stdout: res.stdout, stderr: res.stderr, code: res.code };
     });
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -431,6 +500,23 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     const branch = channel === "dev" ? await readBranchName(runCommand, gitRoot, timeoutMs) : null;
     const needsCheckoutMain = channel === "dev" && branch !== DEV_BRANCH;
     gitTotalSteps = channel === "dev" ? (needsCheckoutMain ? 11 : 10) : 9;
+    const buildGitErrorResult = (reason: string): UpdateRunResult => ({
+      status: "error",
+      mode: "git",
+      root: gitRoot,
+      reason,
+      before: { sha: beforeSha, version: beforeVersion },
+      steps,
+      durationMs: Date.now() - startedAt,
+    });
+    const runGitCheckoutOrFail = async (name: string, argv: string[]) => {
+      const checkoutStep = await runStep(step(name, argv, gitRoot));
+      steps.push(checkoutStep);
+      if (checkoutStep.exitCode !== 0) {
+        return buildGitErrorResult("checkout-failed");
+      }
+      return null;
+    };
 
     const statusCheck = await runStep(
       step(
@@ -456,24 +542,15 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
 
     if (channel === "dev") {
       if (needsCheckoutMain) {
-        const checkoutStep = await runStep(
-          step(
-            `git checkout ${DEV_BRANCH}`,
-            ["git", "-C", gitRoot, "checkout", DEV_BRANCH],
-            gitRoot,
-          ),
-        );
-        steps.push(checkoutStep);
-        if (checkoutStep.exitCode !== 0) {
-          return {
-            status: "error",
-            mode: "git",
-            root: gitRoot,
-            reason: "checkout-failed",
-            before: { sha: beforeSha, version: beforeVersion },
-            steps,
-            durationMs: Date.now() - startedAt,
-          };
+        const failure = await runGitCheckoutOrFail(`git checkout ${DEV_BRANCH}`, [
+          "git",
+          "-C",
+          gitRoot,
+          "checkout",
+          DEV_BRANCH,
+        ]);
+        if (failure) {
+          return failure;
         }
       }
 
@@ -567,7 +644,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         };
       }
 
-      const manager = await detectPackageManager(gitRoot);
+      const manager = await resolveAvailableManager(runCommand, gitRoot, timeoutMs);
       const preflightRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-preflight-"));
       const worktreeDir = path.join(preflightRoot, "worktree");
       const worktreeStep = await runStep(
@@ -608,7 +685,13 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
           }
 
           const depsStep = await runStep(
-            step(`preflight deps install (${shortSha})`, managerInstallArgs(manager), worktreeDir),
+            step(
+              `preflight deps install (${shortSha})`,
+              managerInstallArgs(manager.manager, {
+                compatFallback: manager.fallback && manager.manager === "npm",
+              }),
+              worktreeDir,
+            ),
           );
           steps.push(depsStep);
           if (depsStep.exitCode !== 0) {
@@ -616,7 +699,11 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
           }
 
           const buildStep = await runStep(
-            step(`preflight build (${shortSha})`, managerScriptArgs(manager, "build"), worktreeDir),
+            step(
+              `preflight build (${shortSha})`,
+              managerScriptArgs(manager.manager, "build"),
+              worktreeDir,
+            ),
           );
           steps.push(buildStep);
           if (buildStep.exitCode !== 0) {
@@ -624,7 +711,11 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
           }
 
           const lintStep = await runStep(
-            step(`preflight lint (${shortSha})`, managerScriptArgs(manager, "lint"), worktreeDir),
+            step(
+              `preflight lint (${shortSha})`,
+              managerScriptArgs(manager.manager, "lint"),
+              worktreeDir,
+            ),
           );
           steps.push(lintStep);
           if (lintStep.exitCode !== 0) {
@@ -720,35 +811,74 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         };
       }
 
-      const checkoutStep = await runStep(
-        step(`git checkout ${tag}`, ["git", "-C", gitRoot, "checkout", "--detach", tag], gitRoot),
-      );
-      steps.push(checkoutStep);
-      if (checkoutStep.exitCode !== 0) {
-        return {
-          status: "error",
-          mode: "git",
-          root: gitRoot,
-          reason: "checkout-failed",
-          before: { sha: beforeSha, version: beforeVersion },
-          steps,
-          durationMs: Date.now() - startedAt,
-        };
+      const failure = await runGitCheckoutOrFail(`git checkout ${tag}`, [
+        "git",
+        "-C",
+        gitRoot,
+        "checkout",
+        "--detach",
+        tag,
+      ]);
+      if (failure) {
+        return failure;
       }
     }
 
-    const manager = await detectPackageManager(gitRoot);
+    const manager = await resolveAvailableManager(runCommand, gitRoot, timeoutMs);
 
-    const depsStep = await runStep(step("deps install", managerInstallArgs(manager), gitRoot));
+    const depsStep = await runStep(
+      step(
+        "deps install",
+        managerInstallArgs(manager.manager, {
+          compatFallback: manager.fallback && manager.manager === "npm",
+        }),
+        gitRoot,
+      ),
+    );
     steps.push(depsStep);
+    if (depsStep.exitCode !== 0) {
+      return {
+        status: "error",
+        mode: "git",
+        root: gitRoot,
+        reason: "deps-install-failed",
+        before: { sha: beforeSha, version: beforeVersion },
+        steps,
+        durationMs: Date.now() - startedAt,
+      };
+    }
 
-    const buildStep = await runStep(step("build", managerScriptArgs(manager, "build"), gitRoot));
+    const buildStep = await runStep(
+      step("build", managerScriptArgs(manager.manager, "build"), gitRoot),
+    );
     steps.push(buildStep);
+    if (buildStep.exitCode !== 0) {
+      return {
+        status: "error",
+        mode: "git",
+        root: gitRoot,
+        reason: "build-failed",
+        before: { sha: beforeSha, version: beforeVersion },
+        steps,
+        durationMs: Date.now() - startedAt,
+      };
+    }
 
     const uiBuildStep = await runStep(
-      step("ui:build", managerScriptArgs(manager, "ui:build"), gitRoot),
+      step("ui:build", managerScriptArgs(manager.manager, "ui:build"), gitRoot),
     );
     steps.push(uiBuildStep);
+    if (uiBuildStep.exitCode !== 0) {
+      return {
+        status: "error",
+        mode: "git",
+        root: gitRoot,
+        reason: "ui-build-failed",
+        before: { sha: beforeSha, version: beforeVersion },
+        steps,
+        durationMs: Date.now() - startedAt,
+      };
+    }
 
     const doctorEntry = path.join(gitRoot, "openclaw.mjs");
     const doctorEntryExists = await fs
@@ -775,7 +905,10 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       };
     }
 
-    const doctorArgv = [process.execPath, doctorEntry, "doctor", "--non-interactive"];
+    // Use --fix so that doctor auto-strips unknown config keys introduced by
+    // schema changes between versions, preventing a startup validation crash.
+    const doctorNodePath = await resolveStableNodePath(process.execPath);
+    const doctorArgv = [doctorNodePath, doctorEntry, "doctor", "--non-interactive", "--fix"];
     const doctorStep = await runStep(
       step("openclaw doctor", doctorArgv, gitRoot, { OPENCLAW_UPDATE_IN_PROGRESS: "1" }),
     );
@@ -783,7 +916,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
 
     const uiIndexHealth = await resolveControlUiDistIndexHealth({ root: gitRoot });
     if (!uiIndexHealth.exists) {
-      const repairArgv = managerScriptArgs(manager, "ui:build");
+      const repairArgv = managerScriptArgs(manager.manager, "ui:build");
       const started = Date.now();
       const repairResult = await runCommand(repairArgv, { cwd: gitRoot, timeoutMs });
       const repairStep: UpdateStepResult = {
@@ -875,24 +1008,74 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     });
     const channel = opts.channel ?? DEFAULT_PACKAGE_CHANNEL;
     const tag = normalizeTag(opts.tag ?? channelToNpmTag(channel));
-    const spec = `${packageName}@${tag}`;
+    const steps: UpdateStepResult[] = [];
+    const globalInstallEnv = await createGlobalInstallEnv();
+    const spec = resolveGlobalInstallSpec({
+      packageName,
+      tag,
+      env: globalInstallEnv,
+    });
     const updateStep = await runStep({
       runCommand,
       name: "global update",
       argv: globalInstallArgs(globalManager, spec),
       cwd: pkgRoot,
       timeoutMs,
+      env: globalInstallEnv,
       progress,
       stepIndex: 0,
       totalSteps: 1,
     });
-    const steps = [updateStep];
-    const afterVersion = await readPackageVersion(pkgRoot);
+    steps.push(updateStep);
+
+    let finalStep = updateStep;
+    if (updateStep.exitCode !== 0) {
+      const fallbackArgv = globalInstallFallbackArgs(globalManager, spec);
+      if (fallbackArgv) {
+        const fallbackStep = await runStep({
+          runCommand,
+          name: "global update (omit optional)",
+          argv: fallbackArgv,
+          cwd: pkgRoot,
+          timeoutMs,
+          env: globalInstallEnv,
+          progress,
+          stepIndex: 0,
+          totalSteps: 1,
+        });
+        steps.push(fallbackStep);
+        finalStep = fallbackStep;
+      }
+    }
+
+    const verifiedPackageRoot =
+      (await resolveGlobalPackageRoot(globalManager, runCommand, timeoutMs)) ?? pkgRoot;
+    const expectedVersion = resolveExpectedInstalledVersionFromSpec(packageName, spec);
+    const verificationErrors = await collectInstalledGlobalPackageErrors({
+      packageRoot: verifiedPackageRoot,
+      expectedVersion,
+    });
+    if (verificationErrors.length > 0) {
+      steps.push({
+        name: "global install verify",
+        command: `verify ${verifiedPackageRoot}`,
+        cwd: verifiedPackageRoot,
+        durationMs: 0,
+        exitCode: 1,
+        stderrTail: verificationErrors.join("\n"),
+      });
+    }
+    const afterVersion = await readPackageVersion(verifiedPackageRoot);
+    const failedStep =
+      finalStep.exitCode !== 0
+        ? finalStep
+        : (steps.find((step) => step.name === "global install verify" && step.exitCode !== 0) ??
+          null);
     return {
-      status: updateStep.exitCode === 0 ? "ok" : "error",
+      status: failedStep ? "error" : "ok",
       mode: globalManager,
-      root: pkgRoot,
-      reason: updateStep.exitCode === 0 ? undefined : updateStep.name,
+      root: verifiedPackageRoot,
+      reason: failedStep ? failedStep.name : undefined,
       before: { version: beforeVersion },
       after: { version: afterVersion },
       steps,

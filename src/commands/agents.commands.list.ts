@@ -1,12 +1,13 @@
-import type { AgentBinding } from "../config/types.js";
-import type { RuntimeEnv } from "../runtime.js";
-import type { AgentSummary } from "./agents.config.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { listRouteBindings } from "../config/bindings.js";
+import type { AgentRouteBinding } from "../config/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
 import { describeBinding } from "./agents.bindings.js";
 import { requireValidConfig } from "./agents.command-shared.js";
+import type { AgentSummary } from "./agents.config.js";
 import { buildAgentSummaries } from "./agents.config.js";
 import {
   buildProviderStatusIndex,
@@ -81,8 +82,8 @@ export async function agentsListCommand(
   }
 
   const summaries = buildAgentSummaries(cfg);
-  const bindingMap = new Map<string, AgentBinding[]>();
-  for (const binding of cfg.bindings ?? []) {
+  const bindingMap = new Map<string, AgentRouteBinding[]>();
+  for (const binding of listRouteBindings(cfg)) {
     const agentId = normalizeAgentId(binding.agentId);
     const list = bindingMap.get(agentId) ?? [];
     list.push(binding);
@@ -121,7 +122,7 @@ export async function agentsListCommand(
   }
 
   if (opts.json) {
-    runtime.log(JSON.stringify(summaries, null, 2));
+    writeRuntimeJson(runtime, summaries);
     return;
   }
 

@@ -5,11 +5,15 @@
     "declarationMap": false,
     "emitDeclarationOnly": true,
     "noEmit": false,
-    "noEmitOnError": true,
+    "noEmitOnError": false,
     "outDir": "dist/plugin-sdk",
-    "rootDir": "src",
+    "rootDir": ".",
     "tsBuildInfoFile": "dist/plugin-sdk/.tsbuildinfo"
   },
-  "include": ["src/plugin-sdk/index.ts", "src/types/**/*.d.ts"],
+  "include": [
+    "src/plugin-sdk/**/*.ts",
+    "src/types/**/*.d.ts",
+    "packages/memory-host-sdk/src/**/*.ts"
+  ],
   "exclude": ["node_modules", "dist", "src/**/*.test.ts"]
 }

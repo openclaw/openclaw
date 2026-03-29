@@ -1,8 +1,9 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AuthProfileConfig } from "../../config/types.js";
+import { findNormalizedProviderKey, normalizeProviderId } from "../provider-id.js";
+import { resolveAuthProfileMetadata } from "./identity.js";
+import { dedupeProfileIds, listProfilesForProvider } from "./profiles.js";
 import type { AuthProfileIdRepairResult, AuthProfileStore } from "./types.js";
-import { normalizeProviderId } from "../model-selection.js";
-import { listProfilesForProvider } from "./profiles.js";
 
 function getProfileSuffix(profileId: string): string {
   const idx = profileId.indexOf(":");
@@ -51,11 +52,11 @@ export function suggestOAuthProfileIdForLegacyDefault(params: {
   const configuredEmail = legacyCfg?.email?.trim();
   if (configuredEmail) {
     const byEmail = oauthProfiles.find((id) => {
-      const cred = params.store.profiles[id];
-      if (!cred || cred.type !== "oauth") {
-        return false;
-      }
-      const email = cred.email?.trim();
+      const email = resolveAuthProfileMetadata({
+        cfg: params.cfg,
+        store: params.store,
+        profileId: id,
+      }).email;
       return email === configuredEmail || id === `${providerKey}:${configuredEmail}`;
     });
     if (byEmail) {
@@ -110,15 +111,19 @@ export function repairOAuthProfileIdMismatch(params: {
     return { config: params.cfg, changes: [], migrated: false };
   }
 
-  const toCred = params.store.profiles[toProfileId];
-  const toEmail = toCred?.type === "oauth" ? toCred.email?.trim() : undefined;
+  const { email: toEmail, displayName: toDisplayName } = resolveAuthProfileMetadata({
+    store: params.store,
+    profileId: toProfileId,
+  });
+  const { email: _legacyEmail, displayName: _legacyDisplayName, ...legacyCfgRest } = legacyCfg;
 
   const nextProfiles = {
     ...params.cfg.auth?.profiles,
   } as Record<string, AuthProfileConfig>;
   delete nextProfiles[legacyProfileId];
   nextProfiles[toProfileId] = {
-    ...legacyCfg,
+    ...legacyCfgRest,
+    ...(toDisplayName ? { displayName: toDisplayName } : {}),
     ...(toEmail ? { email: toEmail } : {}),
   };
 
@@ -128,7 +133,7 @@ export function repairOAuthProfileIdMismatch(params: {
     if (!order) {
       return undefined;
     }
-    const resolvedKey = Object.keys(order).find((key) => normalizeProviderId(key) === providerKey);
+    const resolvedKey = findNormalizedProviderKey(order, providerKey);
     if (!resolvedKey) {
       return order;
     }
@@ -139,12 +144,7 @@ export function repairOAuthProfileIdMismatch(params: {
     const replaced = existing
       .map((id) => (id === legacyProfileId ? toProfileId : id))
       .filter((id): id is string => typeof id === "string" && id.trim().length > 0);
-    const deduped: string[] = [];
-    for (const entry of replaced) {
-      if (!deduped.includes(entry)) {
-        deduped.push(entry);
-      }
-    }
+    const deduped = dedupeProfileIds(replaced);
     return { ...order, [resolvedKey]: deduped };
   })();
 

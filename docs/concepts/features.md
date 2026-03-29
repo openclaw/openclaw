@@ -5,6 +5,8 @@ read_when:
 title: "Features"
 ---
 
+# Features
+
 ## Highlights
 
 <Columns>
@@ -24,30 +26,48 @@ title: "Features"
     Web Control UI and macOS companion app.
   </Card>
   <Card title="Mobile nodes" icon="smartphone">
-    iOS and Android nodes with Canvas support.
+    iOS and Android nodes with pairing, voice/chat, and rich device commands.
   </Card>
 </Columns>
 
 ## Full list
 
-- WhatsApp integration via WhatsApp Web (Baileys)
-- Telegram bot support (grammY)
-- Discord bot support (channels.discord.js)
-- Mattermost bot support (plugin)
-- iMessage integration via local imsg CLI (macOS)
-- Agent bridge for Pi in RPC mode with tool streaming
-- Streaming and chunking for long responses
-- Multi-agent routing for isolated sessions per workspace or sender
-- Subscription auth for Anthropic and OpenAI via OAuth
-- Sessions: direct chats collapse into shared `main`; groups are isolated
-- Group chat support with mention based activation
-- Media support for images, audio, and documents
-- Optional voice note transcription hook
-- WebChat and macOS menu bar app
-- iOS node with pairing and Canvas surface
-- Android node with pairing, Canvas, chat, and camera
+**Channels:**
 
-<Note>
-Legacy Claude, Codex, Gemini, and Opencode paths have been removed. Pi is the only
-coding agent path.
-</Note>
+- WhatsApp, Telegram, Discord, iMessage (built-in)
+- Mattermost, Matrix, Microsoft Teams, Nostr, and more (plugins)
+- Group chat support with mention-based activation
+- DM safety with allowlists and pairing
+
+**Agent:**
+
+- Embedded agent runtime with tool streaming
+- Multi-agent routing with isolated sessions per workspace or sender
+- Sessions: direct chats collapse into shared `main`; groups are isolated
+- Streaming and chunking for long responses
+
+**Auth and providers:**
+
+- 35+ model providers (Anthropic, OpenAI, Google, and more)
+- Subscription auth via OAuth (e.g. OpenAI Codex)
+- Custom and self-hosted provider support (vLLM, SGLang, Ollama, and any OpenAI-compatible or Anthropic-compatible endpoint)
+
+**Media:**
+
+- Images, audio, video, and documents in and out
+- Voice note transcription
+- Text-to-speech with multiple providers
+
+**Apps and interfaces:**
+
+- WebChat and browser Control UI
+- macOS menu bar companion app
+- iOS node with pairing, Canvas, camera, screen recording, location, and voice
+- Android node with pairing, chat, voice, Canvas, camera, and device commands
+
+**Tools and automation:**
+
+- Browser automation, exec, sandboxing
+- Web search (Brave, Perplexity, Gemini, Grok, Kimi, Firecrawl)
+- Cron jobs and heartbeat scheduling
+- Skills, plugins, and workflow pipelines (Lobster)

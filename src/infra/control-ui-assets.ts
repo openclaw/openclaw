@@ -79,11 +79,23 @@ export async function resolveControlUiDistIndexPath(
     return null;
   }
   const normalized = path.resolve(argv1);
+  const entrypointCandidates = [normalized];
+  try {
+    const realpathEntrypoint = fs.realpathSync(normalized);
+    if (realpathEntrypoint !== normalized) {
+      entrypointCandidates.push(realpathEntrypoint);
+    }
+  } catch {
+    // Ignore missing/non-realpath argv1 and keep path-based candidates.
+  }
 
-  // Case 1: entrypoint is directly inside dist/ (e.g., dist/entry.js)
-  const distDir = path.dirname(normalized);
-  if (path.basename(distDir) === "dist") {
-    return path.join(distDir, "control-ui", "index.html");
+  // Case 1: entrypoint is directly inside dist/ (e.g., dist/entry.js).
+  // Include symlink-resolved argv1 so global wrappers (e.g. Bun) still map to dist/control-ui.
+  for (const entrypoint of entrypointCandidates) {
+    const distDir = path.dirname(entrypoint);
+    if (path.basename(distDir) === "dist") {
+      return path.join(distDir, "control-ui", "index.html");
+    }
   }
 
   const packageRoot = await resolveOpenClawPackageRoot({ argv1: normalized, moduleUrl });
@@ -93,26 +105,34 @@ export async function resolveControlUiDistIndexPath(
 
   // Fallback: traverse up and find package.json with name "openclaw" + dist/control-ui/index.html
   // This handles global installs where path-based resolution might fail.
-  let dir = path.dirname(normalized);
-  for (let i = 0; i < 8; i++) {
-    const pkgJsonPath = path.join(dir, "package.json");
-    const indexPath = path.join(dir, "dist", "control-ui", "index.html");
-    if (fs.existsSync(pkgJsonPath) && fs.existsSync(indexPath)) {
-      try {
-        const raw = fs.readFileSync(pkgJsonPath, "utf-8");
-        const parsed = JSON.parse(raw) as { name?: unknown };
-        if (parsed.name === "openclaw") {
-          return indexPath;
+  const fallbackStartDirs = new Set(
+    entrypointCandidates.map((candidate) => path.dirname(candidate)),
+  );
+  for (const startDir of fallbackStartDirs) {
+    let dir = startDir;
+    for (let i = 0; i < 8; i++) {
+      const pkgJsonPath = path.join(dir, "package.json");
+      const indexPath = path.join(dir, "dist", "control-ui", "index.html");
+      if (fs.existsSync(pkgJsonPath)) {
+        try {
+          const raw = fs.readFileSync(pkgJsonPath, "utf-8");
+          const parsed = JSON.parse(raw) as { name?: unknown };
+          if (parsed.name === "openclaw") {
+            return fs.existsSync(indexPath) ? indexPath : null;
+          }
+          // Stop at the first package boundary to avoid resolving through unrelated ancestors.
+          break;
+        } catch {
+          // Invalid package.json at package boundary; abort this candidate chain.
+          break;
         }
-      } catch {
-        // Invalid package.json, continue searching
       }
+      const parent = path.dirname(dir);
+      if (parent === dir) {
+        break;
+      }
+      dir = parent;
     }
-    const parent = path.dirname(dir);
-    if (parent === dir) {
-      break;
-    }
-    dir = parent;
   }
 
   return null;
@@ -124,6 +144,22 @@ export type ControlUiRootResolveOptions = {
   cwd?: string;
   execPath?: string;
 };
+
+function pathsMatchByRealpathOrResolve(left: string, right: string): boolean {
+  let realLeft: string;
+  let realRight: string;
+  try {
+    realLeft = fs.realpathSync(left);
+  } catch {
+    realLeft = path.resolve(left);
+  }
+  try {
+    realRight = fs.realpathSync(right);
+  } catch {
+    realRight = path.resolve(right);
+  }
+  return realLeft === realRight;
+}
 
 function addCandidate(candidates: Set<string>, value: string | null) {
   if (!value) {
@@ -155,6 +191,16 @@ export function resolveControlUiRootSync(opts: ControlUiRootResolveOptions = {})
   const cwd = opts.cwd ?? process.cwd();
   const moduleDir = opts.moduleUrl ? path.dirname(fileURLToPath(opts.moduleUrl)) : null;
   const argv1Dir = argv1 ? path.dirname(path.resolve(argv1)) : null;
+  const argv1RealpathDir = (() => {
+    if (!argv1) {
+      return null;
+    }
+    try {
+      return path.dirname(fs.realpathSync(path.resolve(argv1)));
+    } catch {
+      return null;
+    }
+  })();
   const execDir = (() => {
     try {
       const execPath = opts.execPath ?? process.execPath;
@@ -169,7 +215,8 @@ export function resolveControlUiRootSync(opts: ControlUiRootResolveOptions = {})
     cwd,
   });
 
-  // Packaged app: control-ui lives alongside the executable.
+  // Packaged app: prefer bundled resources, then support legacy alongside-executable layout.
+  addCandidate(candidates, execDir ? path.join(execDir, "../Resources/control-ui") : null);
   addCandidate(candidates, execDir ? path.join(execDir, "control-ui") : null);
   if (moduleDir) {
     // dist/<bundle>.js -> dist/control-ui
@@ -184,6 +231,11 @@ export function resolveControlUiRootSync(opts: ControlUiRootResolveOptions = {})
     addCandidate(candidates, path.join(argv1Dir, "dist", "control-ui"));
     addCandidate(candidates, path.join(argv1Dir, "control-ui"));
   }
+  if (argv1RealpathDir && argv1RealpathDir !== argv1Dir) {
+    // Symlinked wrappers (e.g. ~/.bun/bin/openclaw -> .../dist/index.js)
+    addCandidate(candidates, path.join(argv1RealpathDir, "dist", "control-ui"));
+    addCandidate(candidates, path.join(argv1RealpathDir, "control-ui"));
+  }
   if (packageRoot) {
     addCandidate(candidates, path.join(packageRoot, "dist", "control-ui"));
   }
@@ -196,6 +248,24 @@ export function resolveControlUiRootSync(opts: ControlUiRootResolveOptions = {})
     }
   }
   return null;
+}
+
+export function isPackageProvenControlUiRootSync(
+  root: string,
+  opts: ControlUiRootResolveOptions = {},
+): boolean {
+  const argv1 = opts.argv1 ?? process.argv[1];
+  const cwd = opts.cwd ?? process.cwd();
+  const packageRoot = resolveOpenClawPackageRootSync({
+    argv1,
+    moduleUrl: opts.moduleUrl,
+    cwd,
+  });
+  if (!packageRoot) {
+    return false;
+  }
+  const packageDistRoot = path.join(packageRoot, "dist", "control-ui");
+  return pathsMatchByRealpathOrResolve(root, packageDistRoot);
 }
 
 export type EnsureControlUiAssetsResult = {

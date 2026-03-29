@@ -1,5 +1,4 @@
 import { confirm as clackConfirm } from "@clack/prompts";
-import type { RuntimeEnv } from "../runtime.js";
 import {
   listSandboxBrowsers,
   listSandboxContainers,
@@ -8,6 +7,7 @@ import {
   type SandboxBrowserInfo,
   type SandboxContainerInfo,
 } from "../agents/sandbox.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import {
   displayBrowsers,
   displayContainers,
@@ -48,7 +48,7 @@ export async function sandboxListCommand(
   const browsers = opts.browser ? await listSandboxBrowsers().catch(() => []) : [];
 
   if (opts.json) {
-    runtime.log(JSON.stringify({ containers, browsers }, null, 2));
+    writeRuntimeJson(runtime, { containers, browsers });
     return;
   }
 
@@ -74,7 +74,7 @@ export async function sandboxRecreateCommand(
   const filtered = await fetchAndFilterContainers(opts);
 
   if (filtered.containers.length + filtered.browsers.length === 0) {
-    runtime.log("No containers found matching the criteria.");
+    runtime.log("No sandbox runtimes found matching the criteria.");
     return;
   }
 
@@ -154,7 +154,7 @@ async function removeContainers(
   filtered: FilteredContainers,
   runtime: RuntimeEnv,
 ): Promise<{ successCount: number; failCount: number }> {
-  runtime.log("\nRemoving containers...\n");
+  runtime.log("\nRemoving sandbox runtimes...\n");
 
   let successCount = 0;
   let failCount = 0;
