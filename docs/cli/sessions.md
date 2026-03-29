@@ -1,5 +1,5 @@
 ---
-summary: "CLI reference for `openclaw sessions` (list stored sessions + usage)"
+summary: "CLI reference for `openclaw sessions` (list, label, rename, cleanup)"
 read_when:
   - You want to list stored sessions and see recent activity
 title: "sessions"
@@ -29,6 +29,32 @@ session discovery are broader: they also include disk-only stores found under
 the default `agents/` root or a templated `session.store` root. Those
 discovered stores must resolve to regular `sessions.json` files inside the
 agent root; symlinks and out-of-root paths are skipped.
+
+Text output includes a **Label** column when a session has a user-defined label
+or display name (same values shown in the control UI Sessions table).
+
+## Session label (gateway)
+
+Set or clear a friendly **label** on a session via the running gateway (same
+field as the Sessions table in the control UI). Requires a reachable gateway
+and operator credentials (device pairing or token, same as other gateway CLI
+calls).
+
+`openclaw sessions rename` is an **alias** for `openclaw sessions label` (same
+flags and behavior).
+
+```bash
+openclaw sessions label --session "agent:main:main" "Morning digest"
+openclaw sessions label --session "agent:main:cron:abc123" --clear
+openclaw sessions label --session "agent:main:main" "Hi" --json
+openclaw sessions rename --session "agent:main:main" "My Custom Name"
+```
+
+- `--session`: required session key.
+- Positional `label`: new label text (omit when using `--clear`).
+- `--clear`: remove the custom label.
+- `--json`: print the `sessions.patch` result as JSON.
+- `--url`, `--token`, `--password`, `--timeout`: optional gateway overrides.
 
 JSON examples:
 

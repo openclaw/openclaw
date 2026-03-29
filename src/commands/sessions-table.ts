@@ -9,6 +9,8 @@ import { theme } from "../terminal/theme.js";
 
 export type SessionDisplayRow = {
   key: string;
+  label?: string;
+  displayName?: string;
   updatedAt: number | null;
   ageMs: number | null;
   sessionId?: string;
@@ -36,6 +38,7 @@ export type SessionDisplayDefaults = {
 };
 
 export const SESSION_KEY_PAD = 26;
+export const SESSION_LABEL_PAD = 22;
 export const SESSION_AGE_PAD = 9;
 export const SESSION_MODEL_PAD = 14;
 
@@ -45,6 +48,8 @@ export function toSessionDisplayRows(store: Record<string, SessionEntry>): Sessi
       const updatedAt = entry?.updatedAt ?? null;
       return {
         key,
+        label: entry?.label,
+        displayName: entry?.displayName,
         updatedAt,
         ageMs: updatedAt ? Date.now() - updatedAt : null,
         sessionId: entry?.sessionId,
@@ -104,6 +109,19 @@ function truncateSessionKey(key: string): string {
 export function formatSessionKeyCell(key: string, rich: boolean): string {
   const label = truncateSessionKey(key).padEnd(SESSION_KEY_PAD);
   return rich ? theme.accent(label) : label;
+}
+
+export function formatSessionLabelCell(
+  label: string | undefined,
+  displayName: string | undefined,
+  rich: boolean,
+): string {
+  const text = (label?.trim() || displayName?.trim() || "").slice(0, SESSION_LABEL_PAD);
+  const padded = text.padEnd(SESSION_LABEL_PAD);
+  if (!text) {
+    return rich ? theme.muted(padded) : padded;
+  }
+  return rich ? theme.success(padded) : padded;
 }
 
 export function formatSessionAgeCell(updatedAt: number | null | undefined, rich: boolean): string {

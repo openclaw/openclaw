@@ -1,0 +1,125 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { RuntimeEnv } from "../runtime.js";
+
+const mocks = vi.hoisted(() => ({
+  callGateway: vi.fn(),
+  withProgress: vi.fn(),
+}));
+
+vi.mock("../gateway/call.js", () => ({
+  callGateway: mocks.callGateway,
+}));
+
+vi.mock("../cli/progress.js", () => ({
+  withProgress: async (
+    _opts: { label: string; indeterminate: boolean; enabled: boolean },
+    fn: () => Promise<unknown>,
+  ) => fn(),
+}));
+
+import { sessionsLabelCommand } from "./sessions-label.js";
+
+function makeRuntime(): { runtime: RuntimeEnv; logs: string[]; errors: string[]; exits: number[] } {
+  const logs: string[] = [];
+  const errors: string[] = [];
+  const exits: number[] = [];
+  return {
+    runtime: {
+      log: (msg: unknown) => logs.push(String(msg)),
+      error: (msg: unknown) => errors.push(String(msg)),
+      exit: (code?: number) => exits.push(code ?? 0),
+    },
+    logs,
+    errors,
+    exits,
+  };
+}
+
+describe("sessionsLabelCommand", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("rejects missing session", async () => {
+    const { runtime, errors, exits } = makeRuntime();
+    await sessionsLabelCommand({ session: "", label: "x" }, runtime);
+    expect(errors.some((e) => e.includes("--session"))).toBe(true);
+    expect(exits).toContain(1);
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+  });
+
+  it("rejects clear plus label", async () => {
+    const { runtime, errors, exits } = makeRuntime();
+    await sessionsLabelCommand({ session: "agent:main:main", label: "x", clear: true }, runtime);
+    expect(errors.some((e) => e.includes("clear"))).toBe(true);
+    expect(exits).toContain(1);
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+  });
+
+  it("rejects missing label when not clearing", async () => {
+    const { runtime, errors, exits } = makeRuntime();
+    await sessionsLabelCommand({ session: "agent:main:main" }, runtime);
+    expect(errors.some((e) => e.includes("label"))).toBe(true);
+    expect(exits).toContain(1);
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+  });
+
+  it("calls sessions.patch with label", async () => {
+    mocks.callGateway.mockResolvedValue({
+      ok: true,
+      key: "agent:main:main",
+      path: "/p",
+      entry: { label: "Morning digest", sessionId: "s", updatedAt: 1 },
+    });
+    const { runtime, logs } = makeRuntime();
+    await sessionsLabelCommand(
+      { session: "agent:main:main", label: "Morning digest", timeout: 5000 },
+      runtime,
+    );
+    expect(mocks.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "sessions.patch",
+        params: { key: "agent:main:main", label: "Morning digest" },
+        timeoutMs: 5000,
+      }),
+    );
+    expect(logs.some((l) => l.includes("Set label") && l.includes("Morning digest"))).toBe(true);
+  });
+
+  it("calls sessions.patch with null label when clearing", async () => {
+    mocks.callGateway.mockResolvedValue({
+      ok: true,
+      key: "agent:main:main",
+      path: "/p",
+      entry: { sessionId: "s", updatedAt: 1 },
+    });
+    const { runtime, logs } = makeRuntime();
+    await sessionsLabelCommand({ session: "agent:main:main", clear: true }, runtime);
+    expect(mocks.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: { key: "agent:main:main", label: null },
+      }),
+    );
+    expect(logs.some((l) => l.includes("Cleared label"))).toBe(true);
+  });
+
+  it("writes JSON when --json", async () => {
+    const payload = {
+      ok: true as const,
+      key: "agent:main:main",
+      path: "/p",
+      entry: { label: "x", sessionId: "s", updatedAt: 1 },
+    };
+    mocks.callGateway.mockResolvedValue(payload);
+    const logs: string[] = [];
+    const runtime: RuntimeEnv = {
+      log: (msg: unknown) => logs.push(String(msg)),
+      error: () => {},
+      exit: () => {},
+    };
+    await sessionsLabelCommand({ session: "agent:main:main", label: "x", json: true }, runtime);
+    expect(mocks.callGateway).toHaveBeenCalled();
+    expect(logs).toHaveLength(1);
+    expect(JSON.parse(logs[0] ?? "{}")).toEqual(payload);
+  });
+});

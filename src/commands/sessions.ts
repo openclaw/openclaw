@@ -12,11 +12,13 @@ import {
   formatSessionAgeCell,
   formatSessionFlagsCell,
   formatSessionKeyCell,
+  formatSessionLabelCell,
   formatSessionModelCell,
   resolveSessionDisplayDefaults,
   resolveSessionDisplayModel,
   SESSION_AGE_PAD,
   SESSION_KEY_PAD,
+  SESSION_LABEL_PAD,
   SESSION_MODEL_PAD,
   type SessionDisplayRow,
   toSessionDisplayRows,
@@ -157,6 +159,8 @@ export async function sessionsCommand(
         const model = resolveSessionDisplayModel(cfg, r, displayDefaults);
         return {
           ...r,
+          label: r.label ?? null,
+          displayName: r.displayName ?? null,
           totalTokens: resolveFreshSessionTotalTokens(r) ?? null,
           totalTokensFresh:
             typeof r.totalTokens === "number" ? r.totalTokensFresh !== false : false,
@@ -191,6 +195,7 @@ export async function sessionsCommand(
     ...(showAgentColumn ? ["Agent".padEnd(AGENT_PAD)] : []),
     "Kind".padEnd(KIND_PAD),
     "Key".padEnd(SESSION_KEY_PAD),
+    "Label".padEnd(SESSION_LABEL_PAD),
     "Age".padEnd(SESSION_AGE_PAD),
     "Model".padEnd(SESSION_MODEL_PAD),
     "Tokens (ctx %)".padEnd(TOKENS_PAD),
@@ -210,6 +215,7 @@ export async function sessionsCommand(
         : []),
       formatKindCell(row.kind, rich),
       formatSessionKeyCell(row.key, rich),
+      formatSessionLabelCell(row.label, row.displayName, rich),
       formatSessionAgeCell(row.updatedAt, rich),
       formatSessionModelCell(model, rich),
       formatTokensCell(total, contextTokens ?? null, rich),

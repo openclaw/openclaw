@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { resolveSessionDisplayName } from "../app-render.helpers.ts";
 import { formatRelativeTimestamp } from "../format.ts";
 import { icons } from "../icons.ts";
 import { pathForTab } from "../navigation.ts";
@@ -433,15 +434,8 @@ function renderRow(
   const verboseLevels = withCurrentLabeledOption(VERBOSE_LEVELS, verbose);
   const reasoning = row.reasoningLevel ?? "";
   const reasoningLevels = withCurrentOption(REASONING_LEVELS, reasoning);
-  const displayName =
-    typeof row.displayName === "string" && row.displayName.trim().length > 0
-      ? row.displayName.trim()
-      : null;
-  const showDisplayName = Boolean(
-    displayName &&
-    displayName !== row.key &&
-    displayName !== (typeof row.label === "string" ? row.label.trim() : ""),
-  );
+  const primaryTitle = resolveSessionDisplayName(row.key, row);
+  const showKeySecondary = primaryTitle !== row.key;
   const canLink = row.kind !== "global";
   const chatUrl = canLink
     ? `${pathForTab("chat", basePath)}?session=${encodeURIComponent(row.key)}`
@@ -466,11 +460,13 @@ function renderRow(
         />
       </td>
       <td class="data-table-key-col">
-        <div class="mono session-key-cell">
+        <div class="mono session-key-cell" title=${row.key}>
           ${canLink
             ? html`<a
                 href=${chatUrl}
                 class="session-link"
+                title=${row.key}
+                aria-label=${showKeySecondary ? `${primaryTitle} (${row.key})` : primaryTitle}
                 @click=${(e: MouseEvent) => {
                   if (
                     e.defaultPrevented ||
@@ -487,11 +483,11 @@ function renderRow(
                     onNavigateToChat(row.key);
                   }
                 }}
-                >${row.key}</a
+                >${primaryTitle}</a
               >`
-            : row.key}
-          ${showDisplayName
-            ? html`<span class="muted session-key-display-name">${displayName}</span>`
+            : primaryTitle}
+          ${showKeySecondary
+            ? html`<span class="muted session-key-display-name">${row.key}</span>`
             : nothing}
         </div>
       </td>

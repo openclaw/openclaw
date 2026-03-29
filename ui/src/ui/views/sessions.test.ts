@@ -127,6 +127,29 @@ describe("sessions view", () => {
     expect(fast?.value).toBe("on");
   });
 
+  it("shows resolved session title in the key column when a label is set", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions(
+        buildProps(
+          buildResult({
+            key: "agent:main:cron:abc-123",
+            kind: "unknown",
+            updatedAt: Date.now(),
+            label: "Morning digest",
+          }),
+        ),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const link = container.querySelector(".session-link") as HTMLAnchorElement | null;
+    expect(link?.textContent?.trim()).toBe("Cron: Morning digest");
+    const secondary = container.querySelector(".session-key-display-name");
+    expect(secondary?.textContent?.trim()).toBe("agent:main:cron:abc-123");
+  });
+
   it("deselects only the current page from the header checkbox", async () => {
     const onSelectPage = vi.fn();
     const onDeselectPage = vi.fn();

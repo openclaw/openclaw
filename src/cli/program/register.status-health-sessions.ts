@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { healthCommand } from "../../commands/health.js";
 import { sessionsCleanupCommand } from "../../commands/sessions-cleanup.js";
+import { sessionsLabelCommand } from "../../commands/sessions-label.js";
 import { sessionsCommand } from "../../commands/sessions.js";
 import { statusCommand } from "../../commands/status.js";
 import { setVerbose } from "../../globals.js";
@@ -38,6 +39,53 @@ async function runWithVerboseAndTimeout(
   await runCommandWithRuntime(defaultRuntime, async () => {
     await action({ verbose, timeoutMs });
   });
+}
+
+function registerSessionsLabelSubcommand(
+  sessionsCmd: Command,
+  name: "label" | "rename",
+  description: string,
+  exampleRows: Array<[string, string]>,
+): void {
+  sessionsCmd
+    .command(name)
+    .description(description)
+    .requiredOption("--session <key>", "Session key (for example agent:main:main)")
+    .option("--clear", "Remove the custom label", false)
+    .option("--json", "Output JSON", false)
+    .option("--url <url>", "Gateway WebSocket URL override")
+    .option("--token <token>", "Gateway auth token")
+    .option("--password <password>", "Gateway password")
+    .option("--timeout <ms>", "Request timeout in milliseconds", "15000")
+    .argument("[label]", "Friendly label text")
+    .addHelpText(
+      "after",
+      () => `\n${theme.heading("Examples:")}\n${formatHelpExamples(exampleRows)}`,
+    )
+    .action(async (label: string | undefined, opts) => {
+      const timeoutRaw = opts.timeout as string | undefined;
+      const parsedTimeout = parsePositiveIntOrUndefined(timeoutRaw);
+      if (timeoutRaw !== undefined && parsedTimeout === undefined) {
+        defaultRuntime.error("--timeout must be a positive integer (milliseconds)");
+        defaultRuntime.exit(1);
+        return;
+      }
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await sessionsLabelCommand(
+          {
+            session: opts.session as string,
+            label: typeof label === "string" ? label : undefined,
+            clear: Boolean(opts.clear),
+            json: Boolean(opts.json),
+            url: opts.url as string | undefined,
+            token: opts.token as string | undefined,
+            password: opts.password as string | undefined,
+            timeout: parsedTimeout ?? 15_000,
+          },
+          defaultRuntime,
+        );
+      });
+    });
 }
 
 export function registerStatusHealthSessionsCommands(program: Command) {
@@ -154,6 +202,38 @@ export function registerStatusHealthSessionsCommands(program: Command) {
       );
     });
   sessionsCmd.enablePositionalOptions();
+
+  registerSessionsLabelSubcommand(
+    sessionsCmd,
+    "label",
+    "Set or clear a session label (friendly name) via the gateway",
+    [
+      [
+        'openclaw sessions label --session "agent:main:main" "Morning digest"',
+        "Set a friendly name for a session.",
+      ],
+      [
+        'openclaw sessions label --session "agent:main:cron:abc" --clear',
+        "Remove the custom label.",
+      ],
+      ['openclaw sessions label "Hi" --session agent:main:main --json', "Machine-readable result."],
+    ],
+  );
+  registerSessionsLabelSubcommand(
+    sessionsCmd,
+    "rename",
+    "Alias for sessions label: set or clear a session friendly name via the gateway",
+    [
+      [
+        'openclaw sessions rename --session "agent:main:main" "My Custom Name"',
+        "Same behavior as sessions label.",
+      ],
+      [
+        'openclaw sessions rename --session "agent:main:cron:abc" --clear',
+        "Remove the custom label.",
+      ],
+    ],
+  );
 
   sessionsCmd
     .command("cleanup")
