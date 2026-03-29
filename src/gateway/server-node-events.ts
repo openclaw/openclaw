@@ -17,7 +17,7 @@ import { defaultRuntime } from "../runtime.js";
 import { parseMessageWithAttachments } from "./chat-attachments.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./server-methods/attachment-normalize.js";
 import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
-import { loadSessionEntry, migrateAndPruneGatewaySessionStoreKey } from "./session-utils.js";
+import { loadSessionEntry, migrateAndPruneGatewaySessionStoreKey, resolveSessionModelRef } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
 
 const MAX_EXEC_EVENT_OUTPUT_CHARS = 180;
@@ -347,23 +347,51 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         timeoutSeconds?: number | null;
         key?: string | null;
       };
+
       let link: AgentDeepLink | null = null;
       try {
         link = JSON.parse(evt.payloadJSON) as AgentDeepLink;
       } catch {
         return;
       }
+
+      const sessionKeyRaw = (link?.sessionKey ?? "").trim();
+      const sessionKey = sessionKeyRaw.length > 0 ? sessionKeyRaw : `node-${nodeId}`;
+      const cfg = loadConfig();
+      const { storePath, entry, canonicalKey } = loadSessionEntry(sessionKey);
+
       let message = (link?.message ?? "").trim();
       const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(
         link?.attachments ?? undefined,
       );
-    let images: Array<{ type: "image"; data: string; mimeType: string }> = [];
+      let images: Array<{ type: "image"; data: string; mimeType: string }> = [];
+
       if (normalizedAttachments.length > 0) {
+        let supportsImages = true;
+        try {
+          const catalog = 'loadGatewayModelCatalog' in ctx && typeof ctx.loadGatewayModelCatalog === 'function'
+            ? await (ctx as any).loadGatewayModelCatalog()
+            : [];
+          const modelRef = resolveSessionModelRef(cfg, entry, undefined);
+          const catalogModels: unknown[] = Array.isArray(catalog)
+            ? catalog
+            : Array.isArray((catalog as { models?: unknown[] } | null)?.models)
+              ? (catalog as { models: unknown[] }).models
+              : [];
+          const modelEntry = catalogModels.find(
+            (m): m is { id?: unknown; input?: unknown[] } =>
+              m !== null && typeof m === "object" && (m as Record<string, unknown>).id === modelRef.model,
+          );
+          if (modelEntry != null) {
+            supportsImages = Array.isArray(modelEntry.input) && modelEntry.input.includes("image");
+          }
+        } catch {}
+
         try {
           const parsed = await parseMessageWithAttachments(message, normalizedAttachments, {
             maxBytes: 5_000_000,
             log: ctx.logGateway,
-            supportsImages: true,
+            supportsImages,
           });
           message = parsed.message.trim();
           images = parsed.images;
@@ -372,6 +400,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
           return;
         }
       }
+
       if (!message) {
         return;
       }
@@ -388,10 +417,6 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       const receiptText =
         receiptTextRaw || "Just received your iOS share + request, working on it.";
 
-      const sessionKeyRaw = (link?.sessionKey ?? "").trim();
-      const sessionKey = sessionKeyRaw.length > 0 ? sessionKeyRaw : `node-${nodeId}`;
-      const cfg = loadConfig();
-      const { storePath, entry, canonicalKey } = loadSessionEntry(sessionKey);
       const now = Date.now();
       const sessionId = entry?.sessionId ?? randomUUID();
       await touchSessionStore({ cfg, sessionKey, storePath, canonicalKey, entry, sessionId, now });

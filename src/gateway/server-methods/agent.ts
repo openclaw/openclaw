@@ -363,6 +363,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           const { cfg: sessCfg, entry: sessEntry } = loadSessionEntry(requestedSessionKeyRaw);
           const catalog = await context.loadGatewayModelCatalog();
           const modelRef = resolveSessionModelRef(sessCfg, sessEntry, undefined);
+          const effectiveModel = modelOverride || modelRef.model; 
           const catalogModels: unknown[] = Array.isArray(catalog)
             ? catalog
             : Array.isArray((catalog as { models?: unknown[] } | null)?.models)
@@ -372,7 +373,7 @@ export const agentHandlers: GatewayRequestHandlers = {
             (m): m is { id?: unknown; input?: unknown[] } =>
               m !== null &&
               typeof m === "object" &&
-              (m as Record<string, unknown>).id === modelRef.model,
+              (m as Record<string, unknown>).id === effectiveModel,
           );
           if (modelEntry != null) {
             supportsImages =
