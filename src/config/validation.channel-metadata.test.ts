@@ -60,8 +60,15 @@ describe("validateConfigObjectWithPlugins channel metadata (applyDefaults: true)
   });
 });
 
-describe("validateConfigObjectRawWithPlugins channel metadata (applyDefaults: false)", () => {
-  it("does NOT inject channel AJV defaults when applyDefaults is false", async () => {
+describe("validateConfigObjectRawWithPlugins channel metadata", () => {
+  it("still injects channel AJV defaults even in raw mode — persistence safety is handled by io.ts", async () => {
+    // Channel and plugin AJV validation always runs with applyDefaults: true
+    // (hardcoded) to avoid breaking schemas that mark defaulted fields as
+    // required (e.g., BlueBubbles enrichGroupParticipantsFromContacts).
+    //
+    // The actual protection against leaking these defaults to disk lives in
+    // writeConfigFile (io.ts), which uses persistCandidate (the pre-validation
+    // merge-patched value) instead of validated.config.
     setupTelegramSchemaWithDefault();
 
     const { validateConfigObjectRawWithPlugins } = await import("./validation.js");
@@ -73,9 +80,11 @@ describe("validateConfigObjectRawWithPlugins channel metadata (applyDefaults: fa
 
     expect(result.ok).toBe(true);
     if (result.ok) {
-      // With applyDefaults: false, AJV must not inject the dmPolicy default.
-      // The channel config should remain as the caller provided it.
-      expect(result.config.channels?.telegram).toEqual({});
+      // AJV defaults ARE injected into validated.config even in raw mode.
+      // This is intentional — see comment above.
+      expect(result.config.channels?.telegram).toEqual(
+        expect.objectContaining({ dmPolicy: "pairing" }),
+      );
     }
   });
 });
