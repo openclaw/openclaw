@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../../src/config/config.js";
 import {
   isTelegramExecApprovalApprover,
   isTelegramExecApprovalClientEnabled,
+  isTelegramExecApprovalTargetRecipient,
   resolveTelegramExecApprovalTarget,
   shouldEnableTelegramExecApprovalButtons,
   shouldInjectTelegramExecApprovalButtons,
@@ -88,5 +89,80 @@ describe("telegram exec approvals", () => {
     } as OpenClawConfig;
 
     expect(shouldEnableTelegramExecApprovalButtons({ cfg, to: "123" })).toBe(false);
+  });
+
+  describe("isTelegramExecApprovalTargetRecipient", () => {
+    function buildTargetConfig(
+      targets: Array<{ channel: string; to: string; accountId?: string }>,
+    ): OpenClawConfig {
+      return {
+        channels: { telegram: { botToken: "tok" } },
+        approvals: { exec: { enabled: true, mode: "targets", targets } },
+      } as OpenClawConfig;
+    }
+
+    it("accepts sender who is a DM target", () => {
+      const cfg = buildTargetConfig([{ channel: "telegram", to: "12345" }]);
+      expect(isTelegramExecApprovalTargetRecipient({ cfg, senderId: "12345" })).toBe(true);
+    });
+
+    it("rejects sender not in any target", () => {
+      const cfg = buildTargetConfig([{ channel: "telegram", to: "12345" }]);
+      expect(isTelegramExecApprovalTargetRecipient({ cfg, senderId: "99999" })).toBe(false);
+    });
+
+    it("rejects group targets", () => {
+      const cfg = buildTargetConfig([{ channel: "telegram", to: "-100123456" }]);
+      expect(isTelegramExecApprovalTargetRecipient({ cfg, senderId: "123456" })).toBe(false);
+    });
+
+    it("ignores non-telegram targets", () => {
+      const cfg = buildTargetConfig([{ channel: "discord", to: "12345" }]);
+      expect(isTelegramExecApprovalTargetRecipient({ cfg, senderId: "12345" })).toBe(false);
+    });
+
+    it("returns false when no targets configured", () => {
+      const cfg = buildConfig();
+      expect(isTelegramExecApprovalTargetRecipient({ cfg, senderId: "12345" })).toBe(false);
+    });
+
+    it("returns false when senderId is empty or null", () => {
+      const cfg = buildTargetConfig([{ channel: "telegram", to: "12345" }]);
+      expect(isTelegramExecApprovalTargetRecipient({ cfg, senderId: "" })).toBe(false);
+      expect(isTelegramExecApprovalTargetRecipient({ cfg, senderId: null })).toBe(false);
+      expect(isTelegramExecApprovalTargetRecipient({ cfg })).toBe(false);
+    });
+
+    it("matches across multiple targets", () => {
+      const cfg = buildTargetConfig([
+        { channel: "slack", to: "U12345" },
+        { channel: "telegram", to: "67890" },
+        { channel: "telegram", to: "11111" },
+      ]);
+      expect(isTelegramExecApprovalTargetRecipient({ cfg, senderId: "67890" })).toBe(true);
+      expect(isTelegramExecApprovalTargetRecipient({ cfg, senderId: "11111" })).toBe(true);
+      expect(isTelegramExecApprovalTargetRecipient({ cfg, senderId: "U12345" })).toBe(false);
+    });
+
+    it("scopes by accountId in multi-bot deployments", () => {
+      const cfg = buildTargetConfig([
+        { channel: "telegram", to: "12345", accountId: "account-a" },
+        { channel: "telegram", to: "67890", accountId: "account-b" },
+      ]);
+      expect(
+        isTelegramExecApprovalTargetRecipient({ cfg, senderId: "12345", accountId: "account-a" }),
+      ).toBe(true);
+      expect(
+        isTelegramExecApprovalTargetRecipient({ cfg, senderId: "12345", accountId: "account-b" }),
+      ).toBe(false);
+      expect(isTelegramExecApprovalTargetRecipient({ cfg, senderId: "12345" })).toBe(true);
+    });
+
+    it("allows unscoped targets regardless of callback accountId", () => {
+      const cfg = buildTargetConfig([{ channel: "telegram", to: "12345" }]);
+      expect(
+        isTelegramExecApprovalTargetRecipient({ cfg, senderId: "12345", accountId: "any-account" }),
+      ).toBe(true);
+    });
   });
 });

@@ -4,7 +4,7 @@ import type { TelegramExecApprovalConfig } from "openclaw/plugin-sdk/config-runt
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveTelegramAccount } from "./accounts.js";
 import { resolveTelegramInlineButtonsConfigScope } from "./inline-buttons.js";
-import { resolveTelegramTargetChatType } from "./targets.js";
+import { isNumericTelegramChatId, resolveTelegramTargetChatType } from "./targets.js";
 
 function normalizeApproverId(value: string | number): string {
   return String(value).trim();
@@ -45,6 +45,37 @@ export function isTelegramExecApprovalApprover(params: {
   }
   const approvers = getTelegramExecApprovalApprovers(params);
   return approvers.includes(senderId);
+}
+
+/** Check if sender is an implicit approver via exec approval forwarding targets. */
+export function isTelegramExecApprovalTargetRecipient(params: {
+  cfg: OpenClawConfig;
+  senderId?: string | null;
+  accountId?: string | null;
+}): boolean {
+  const senderId = params.senderId?.trim();
+  if (!senderId) {
+    return false;
+  }
+  const targets = params.cfg.approvals?.exec?.targets;
+  if (!targets || !Array.isArray(targets)) {
+    return false;
+  }
+  const accountId = params.accountId?.trim() || undefined;
+  return targets.some((target) => {
+    const channel = target.channel?.trim().toLowerCase();
+    if (channel !== "telegram") {
+      return false;
+    }
+    if (accountId && target.accountId && target.accountId !== accountId) {
+      return false;
+    }
+    const to = target.to?.trim();
+    if (!to || !isNumericTelegramChatId(to) || to.startsWith("-")) {
+      return false;
+    }
+    return to === senderId;
+  });
 }
 
 export function resolveTelegramExecApprovalTarget(params: {
