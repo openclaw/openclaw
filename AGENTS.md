@@ -17,6 +17,7 @@ Skills own workflows; root owns hard policy and routing.
 - Live-verify when feasible. Never print secrets.
 - Missing deps: `pnpm install`, retry once, then report first actionable error.
 - CODEOWNERS: maint/refactor/tests ok. Larger behavior/product/security/ownership: owner ask/review.
+- For downstream Monty work in the public `ericberic/openclaw` fork, also read `docs/MONTY_DOWNSTREAM.md`. Keep downstream-only policy/docs out of upstream PR branches unless explicitly requested.
 - Product/docs/UI/changelog wording: "plugin/plugins"; `extensions/` is internal.
 - New channel/plugin/app/doc surface: update `.github/labeler.yml` + GH labels.
 - New `AGENTS.md`: add sibling `CLAUDE.md` symlink; edit `AGENTS.md` only.
