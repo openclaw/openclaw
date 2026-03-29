@@ -130,6 +130,14 @@ OpenClaw's plugin system has four layers:
    The rest of OpenClaw reads the registry to expose tools, channels, provider
    setup, hooks, HTTP routes, CLI commands, and services.
 
+For plugin CLI specifically, root command discovery is split in two phases:
+
+- parse-time metadata comes from `registerCli(..., { descriptors: [...] })`
+- the real plugin CLI module can stay lazy and register on first invocation
+
+That keeps plugin-owned CLI code inside the plugin while still letting OpenClaw
+reserve root command names before parsing.
+
 The important design boundary:
 
 - discovery + config validation should work from **manifest/schema metadata**
@@ -996,8 +1004,10 @@ Compatibility note:
   helper is only needed by a bundled extension, keep it behind the extension's
   local `api.js` or `runtime-api.js` seam instead of promoting it into
   `openclaw/plugin-sdk/<extension>`.
-- Channel-branded bundled bars stay private unless they are explicitly added
-  back to the public contract.
+- New shared helper seams should be generic, not channel-branded. Shared target
+  parsing belongs on `openclaw/plugin-sdk/channel-targets`; channel-specific
+  internals stay behind the owning plugin's local `api.js` or `runtime-api.js`
+  seam.
 - Capability-specific subpaths such as `image-generation`,
   `media-understanding`, and `speech` exist because bundled/native plugins use
   them today. Their presence does not by itself mean every exported helper is a

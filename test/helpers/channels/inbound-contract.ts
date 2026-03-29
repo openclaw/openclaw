@@ -36,23 +36,36 @@ const { createInboundSlackTestContext, prepareSlackMessage } = loadBundledPlugin
     opts: { source: string };
   }) => Promise<SlackPrepareResult>;
 }>("slack");
-const { buildTelegramMessageContextForTest } = loadBundledPluginTestApiSync<{
-  buildTelegramMessageContextForTest: (params: {
-    cfg: OpenClawConfig;
-    message: Record<string, unknown>;
-  }) => Promise<{ ctxPayload: MsgContext } | null | undefined>;
-}>("telegram");
+const { telegramHarnessModuleId, signalApiModuleId, whatsAppTestApiModuleId } = vi.hoisted(() => ({
+  telegramHarnessModuleId: resolveRelativeBundledPluginPublicModuleId({
+    fromModuleUrl: import.meta.url,
+    pluginId: "telegram",
+    artifactBasename: "src/bot-message-context.test-harness.js",
+  }),
+  signalApiModuleId: resolveRelativeBundledPluginPublicModuleId({
+    fromModuleUrl: import.meta.url,
+    pluginId: "signal",
+    artifactBasename: "api.js",
+  }),
+  whatsAppTestApiModuleId: resolveRelativeBundledPluginPublicModuleId({
+    fromModuleUrl: import.meta.url,
+    pluginId: "whatsapp",
+    artifactBasename: "test-api.js",
+  }),
+}));
 
-const signalApiModuleId = resolveRelativeBundledPluginPublicModuleId({
-  fromModuleUrl: import.meta.url,
-  pluginId: "signal",
-  artifactBasename: "api.js",
-});
-const whatsAppTestApiModuleId = resolveRelativeBundledPluginPublicModuleId({
-  fromModuleUrl: import.meta.url,
-  pluginId: "whatsapp",
-  artifactBasename: "test-api.js",
-});
+async function buildTelegramMessageContextForTest(params: {
+  cfg: OpenClawConfig;
+  message: Record<string, unknown>;
+}): Promise<{ ctxPayload: MsgContext } | null | undefined> {
+  const telegramHarnessModule = (await import(telegramHarnessModuleId)) as {
+    buildTelegramMessageContextForTest: (params: {
+      cfg: OpenClawConfig;
+      message: Record<string, unknown>;
+    }) => Promise<{ ctxPayload: MsgContext } | null | undefined>;
+  };
+  return await telegramHarnessModule.buildTelegramMessageContextForTest(params);
+}
 
 const dispatchInboundMessageMock = vi.hoisted(() =>
   vi.fn(

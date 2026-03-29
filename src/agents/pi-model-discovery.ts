@@ -9,6 +9,7 @@ import type {
 import { normalizeModelCompat } from "../plugins/provider-model-compat.js";
 import {
   applyProviderResolvedModelCompatWithPlugins,
+  applyProviderResolvedTransportWithPlugin,
   normalizeProviderResolvedModelWithPlugin,
 } from "../plugins/provider-runtime.js";
 import type { ProviderRuntimeModel } from "../plugins/types.js";
@@ -88,7 +89,17 @@ function normalizeRegistryModel<T>(value: T, agentDir: string): T {
         agentDir,
       },
     }) ?? pluginNormalized;
-  return normalizeModelCompat(compatNormalized as Model<Api>) as T;
+  const transportNormalized =
+    applyProviderResolvedTransportWithPlugin({
+      provider: model.provider,
+      context: {
+        provider: model.provider,
+        modelId: model.id,
+        model: compatNormalized,
+        agentDir,
+      },
+    }) ?? compatNormalized;
+  return normalizeModelCompat(transportNormalized as Model<Api>) as T;
 }
 
 class OpenClawModelRegistry extends PiModelRegistryClass {

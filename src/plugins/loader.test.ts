@@ -11,6 +11,7 @@ import { createHookRunner } from "./hooks.js";
 import {
   __testing,
   clearPluginLoaderCache,
+  loadOpenClawPluginCliRegistry,
   loadOpenClawPlugins,
   resolveRuntimePluginRegistry,
 } from "./loader.js";
@@ -2595,6 +2596,361 @@ module.exports = {
     expect(fs.existsSync(built.setupMarker)).toBe(expectSetupLoaded);
     expect(registry.channelSetups).toHaveLength(1);
     expect(registry.channels).toHaveLength(expectedChannels);
+  });
+
+  it("passes validated plugin config into non-activating CLI metadata loads", async () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "config-cli",
+      filename: "config-cli.cjs",
+      body: `module.exports = {
+  id: "config-cli",
+  register(api) {
+    if (!api.pluginConfig || api.pluginConfig.token !== "ok") {
+      throw new Error("missing plugin config");
+    }
+    api.registerCli(() => {}, {
+      descriptors: [
+        {
+          name: "cfg",
+          description: "Config-backed CLI command",
+          hasSubcommands: true,
+        },
+      ],
+    });
+  },
+};`,
+    });
+    fs.writeFileSync(
+      path.join(plugin.dir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "config-cli",
+          configSchema: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              token: { type: "string" },
+            },
+            required: ["token"],
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const registry = await loadOpenClawPluginCliRegistry({
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["config-cli"],
+          entries: {
+            "config-cli": {
+              config: {
+                token: "ok",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(registry.cliRegistrars.flatMap((entry) => entry.commands)).toContain("cfg");
+    expect(registry.plugins.find((entry) => entry.id === "config-cli")?.status).toBe("loaded");
+  });
+
+  it("uses the real channel entry in cli-metadata mode for CLI metadata capture", async () => {
+    useNoBundledPlugins();
+    const pluginDir = makeTempDir();
+    const fullMarker = path.join(pluginDir, "full-loaded.txt");
+    const modeMarker = path.join(pluginDir, "registration-mode.txt");
+    const runtimeMarker = path.join(pluginDir, "runtime-set.txt");
+
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/cli-metadata-channel",
+          openclaw: { extensions: ["./index.cjs"], setupEntry: "./setup-entry.cjs" },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "cli-metadata-channel",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+          channels: ["cli-metadata-channel"],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "index.cjs"),
+      `const { defineChannelPluginEntry } = require("openclaw/plugin-sdk/core");
+require("node:fs").writeFileSync(${JSON.stringify(fullMarker)}, "loaded", "utf-8");
+module.exports = {
+  ...defineChannelPluginEntry({
+    id: "cli-metadata-channel",
+    name: "CLI Metadata Channel",
+    description: "cli metadata channel",
+    setRuntime() {
+      require("node:fs").writeFileSync(${JSON.stringify(runtimeMarker)}, "loaded", "utf-8");
+    },
+    plugin: {
+      id: "cli-metadata-channel",
+      meta: {
+        id: "cli-metadata-channel",
+        label: "CLI Metadata Channel",
+        selectionLabel: "CLI Metadata Channel",
+        docsPath: "/channels/cli-metadata-channel",
+        blurb: "cli metadata channel",
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => [],
+        resolveAccount: () => ({ accountId: "default" }),
+      },
+      outbound: { deliveryMode: "direct" },
+    },
+    registerCliMetadata(api) {
+      require("node:fs").writeFileSync(
+        ${JSON.stringify(modeMarker)},
+        String(api.registrationMode),
+        "utf-8",
+      );
+      api.registerCli(() => {}, {
+        descriptors: [
+          {
+            name: "cli-metadata-channel",
+            description: "Channel CLI metadata",
+            hasSubcommands: true,
+          },
+        ],
+      });
+    },
+    registerFull() {
+      throw new Error("full channel entry should not run during CLI metadata capture");
+    },
+  }),
+};`,
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "setup-entry.cjs"),
+      `throw new Error("setup entry should not load during CLI metadata capture");`,
+      "utf-8",
+    );
+
+    const registry = await loadOpenClawPluginCliRegistry({
+      config: {
+        plugins: {
+          load: { paths: [pluginDir] },
+          allow: ["cli-metadata-channel"],
+        },
+      },
+    });
+
+    expect(fs.existsSync(fullMarker)).toBe(true);
+    expect(fs.existsSync(runtimeMarker)).toBe(false);
+    expect(fs.readFileSync(modeMarker, "utf-8")).toBe("cli-metadata");
+    expect(registry.cliRegistrars.flatMap((entry) => entry.commands)).toContain(
+      "cli-metadata-channel",
+    );
+  });
+
+  it("collects channel CLI metadata during full plugin loads", () => {
+    useNoBundledPlugins();
+    const pluginDir = makeTempDir();
+    const modeMarker = path.join(pluginDir, "registration-mode.txt");
+    const fullMarker = path.join(pluginDir, "full-loaded.txt");
+
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/full-cli-metadata-channel",
+          openclaw: { extensions: ["./index.cjs"] },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "full-cli-metadata-channel",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+          channels: ["full-cli-metadata-channel"],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "index.cjs"),
+      `const { defineChannelPluginEntry } = require("openclaw/plugin-sdk/core");
+module.exports = {
+  ...defineChannelPluginEntry({
+    id: "full-cli-metadata-channel",
+    name: "Full CLI Metadata Channel",
+    description: "full cli metadata channel",
+    plugin: {
+      id: "full-cli-metadata-channel",
+      meta: {
+        id: "full-cli-metadata-channel",
+        label: "Full CLI Metadata Channel",
+        selectionLabel: "Full CLI Metadata Channel",
+        docsPath: "/channels/full-cli-metadata-channel",
+        blurb: "full cli metadata channel",
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => [],
+        resolveAccount: () => ({ accountId: "default" }),
+      },
+      outbound: { deliveryMode: "direct" },
+    },
+    registerCliMetadata(api) {
+      require("node:fs").writeFileSync(
+        ${JSON.stringify(modeMarker)},
+        String(api.registrationMode),
+        "utf-8",
+      );
+      api.registerCli(() => {}, {
+        descriptors: [
+          {
+            name: "full-cli-metadata-channel",
+            description: "Full-load channel CLI metadata",
+            hasSubcommands: true,
+          },
+        ],
+      });
+    },
+    registerFull() {
+      require("node:fs").writeFileSync(${JSON.stringify(fullMarker)}, "loaded", "utf-8");
+    },
+  }),
+};`,
+      "utf-8",
+    );
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [pluginDir] },
+          allow: ["full-cli-metadata-channel"],
+        },
+      },
+    });
+
+    expect(fs.readFileSync(modeMarker, "utf-8")).toBe("full");
+    expect(fs.existsSync(fullMarker)).toBe(true);
+    expect(registry.cliRegistrars.flatMap((entry) => entry.commands)).toContain(
+      "full-cli-metadata-channel",
+    );
+  });
+
+  it("awaits async plugin registration when collecting CLI metadata", async () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "async-cli",
+      filename: "async-cli.cjs",
+      body: `module.exports = {
+  id: "async-cli",
+  async register(api) {
+    await Promise.resolve();
+    api.registerCli(() => {}, {
+      descriptors: [
+        {
+          name: "async-cli",
+          description: "Async CLI metadata",
+          hasSubcommands: true,
+        },
+      ],
+    });
+  },
+};`,
+    });
+
+    const registry = await loadOpenClawPluginCliRegistry({
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["async-cli"],
+        },
+      },
+    });
+
+    expect(registry.cliRegistrars.flatMap((entry) => entry.commands)).toContain("async-cli");
+    expect(
+      registry.diagnostics.some((entry) => entry.message.includes("async registration is ignored")),
+    ).toBe(false);
+  });
+
+  it("applies memory slot gating to non-bundled CLI metadata loads", async () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "memory-external",
+      filename: "memory-external.cjs",
+      body: `module.exports = {
+  id: "memory-external",
+  kind: "memory",
+  register(api) {
+    api.registerCli(() => {}, {
+      descriptors: [
+        {
+          name: "memory-external",
+          description: "External memory CLI metadata",
+          hasSubcommands: true,
+        },
+      ],
+    });
+  },
+};`,
+    });
+    fs.writeFileSync(
+      path.join(plugin.dir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "memory-external",
+          kind: "memory",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const registry = await loadOpenClawPluginCliRegistry({
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["memory-external"],
+          slots: { memory: "memory-other" },
+        },
+      },
+    });
+
+    expect(registry.cliRegistrars.flatMap((entry) => entry.commands)).not.toContain(
+      "memory-external",
+    );
+    const memory = registry.plugins.find((entry) => entry.id === "memory-external");
+    expect(memory?.status).toBe("disabled");
+    expect(String(memory?.error ?? "")).toContain('memory slot set to "memory-other"');
   });
 
   it("blocks before_prompt_build but preserves legacy model overrides when prompt injection is disabled", async () => {
