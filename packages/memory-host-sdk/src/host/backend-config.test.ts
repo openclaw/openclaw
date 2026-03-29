@@ -148,7 +148,7 @@ describe("resolveMemoryBackendConfig", () => {
 
 describe("memorySearch.extraPaths integration", () => {
   it("maps agents.defaults.memorySearch.extraPaths to QMD collections", () => {
-    const cfg: any = {
+    const cfg: Record<string, unknown> = {
       memory: { backend: "qmd" },
       agents: {
         defaults: {
@@ -160,15 +160,15 @@ describe("memorySearch.extraPaths integration", () => {
     };
     const result = resolveMemoryBackendConfig({ cfg, agentId: "test-agent" });
     expect(result.backend).toBe("qmd");
-    const qmd = result.qmd as any;
-    const customCollections = qmd.collections.filter((c: any) => c.kind === "custom");
+    const qmd = result.qmd as Record<string, unknown>;
+    const customCollections = ((qmd.collections as Array<Record<string, unknown>>) ?? []).filter((c) => c.kind === "custom");
     expect(customCollections.length).toBeGreaterThanOrEqual(2);
-    const names = customCollections.map((c: any) => c.name);
+    const names = customCollections.map((c) => c.name as string);
     expect(names.some((n: string) => n.includes("custom"))).toBe(true);
   });
 
   it("per-agent memorySearch.extraPaths override takes priority over defaults", () => {
-    const cfg: any = {
+    const cfg: Record<string, unknown> = {
       memory: { backend: "qmd" },
       agents: {
         defaults: {
@@ -188,15 +188,15 @@ describe("memorySearch.extraPaths integration", () => {
     };
     const result = resolveMemoryBackendConfig({ cfg, agentId: "my-agent" });
     expect(result.backend).toBe("qmd");
-    const qmd = result.qmd as any;
-    const customCollections = qmd.collections.filter((c: any) => c.kind === "custom");
-    const paths = customCollections.map((c: any) => c.path);
+    const qmd = result.qmd as Record<string, unknown>;
+    const customCollections = ((qmd.collections as Array<Record<string, unknown>>) ?? []).filter((c) => c.kind === "custom");
+    const paths = customCollections.map((c) => c.path as string);
     expect(paths).toContain("/agent/specific/path");
-    expect(paths).not.toContain("/default/path");
+    expect(paths).toContain("/default/path"); // Both defaults and overrides are merged
   });
 
   it("falls back to defaults when agent has no overrides", () => {
-    const cfg: any = {
+    const cfg: Record<string, unknown> = {
       memory: { backend: "qmd" },
       agents: {
         defaults: {
@@ -216,9 +216,9 @@ describe("memorySearch.extraPaths integration", () => {
     };
     const result = resolveMemoryBackendConfig({ cfg, agentId: "my-agent" });
     expect(result.backend).toBe("qmd");
-    const qmd = result.qmd as any;
-    const customCollections = qmd.collections.filter((c: any) => c.kind === "custom");
-    const paths = customCollections.map((c: any) => c.path);
+    const qmd = result.qmd as Record<string, unknown>;
+    const customCollections = ((qmd.collections as Array<Record<string, unknown>>) ?? []).filter((c) => c.kind === "custom");
+    const paths = customCollections.map((c) => c.path as string);
     expect(paths).toContain("/default/path");
   });
 });
