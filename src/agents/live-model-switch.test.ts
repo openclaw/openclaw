@@ -81,10 +81,9 @@ describe("live model switch", () => {
       authProfileId: "profile-gpt",
       authProfileIdSource: "user",
     });
-    expect(state.resolveDefaultModelForAgentMock).toHaveBeenCalledWith({
-      cfg: { session: { store: "/tmp/custom-store.json" } },
-      agentId: "reply",
-    });
+    // When both defaultProvider and defaultModel are provided by the caller,
+    // resolveDefaultModelForAgent is skipped (caller-provided defaults take priority).
+    expect(state.resolveDefaultModelForAgentMock).not.toHaveBeenCalled();
     expect(state.resolveStorePathMock).toHaveBeenCalledWith("/tmp/custom-store.json", {
       agentId: "reply",
     });
@@ -107,6 +106,54 @@ describe("live model switch", () => {
       model: "gpt-5.4",
       authProfileId: "profile-gpt",
     });
+  });
+
+  it("uses caller-provided defaults when both defaultProvider and defaultModel are present", async () => {
+    // This is the heartbeat model override scenario: the caller passes the heartbeat model
+    // as defaultProvider/defaultModel, and we should use those instead of resolveDefaultModelForAgent.
+    state.loadSessionStoreMock.mockReturnValue({});
+
+    const { resolveLiveSessionModelSelection } = await loadModule();
+
+    expect(
+      resolveLiveSessionModelSelection({
+        cfg: { session: { store: "/tmp/store.json" } },
+        sessionKey: "main",
+        agentId: "reply",
+        defaultProvider: "google",
+        defaultModel: "gemini-3.1-pro-preview",
+      }),
+    ).toEqual({
+      provider: "google",
+      model: "gemini-3.1-pro-preview",
+      authProfileId: undefined,
+      authProfileIdSource: undefined,
+    });
+    // resolveDefaultModelForAgent should NOT be called when caller provides both defaults
+    expect(state.resolveDefaultModelForAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back to resolveDefaultModelForAgent when caller defaults are missing", async () => {
+    state.loadSessionStoreMock.mockReturnValue({});
+
+    const { resolveLiveSessionModelSelection } = await loadModule();
+
+    expect(
+      resolveLiveSessionModelSelection({
+        cfg: { session: { store: "/tmp/store.json" } },
+        sessionKey: "main",
+        agentId: "reply",
+        defaultProvider: "",
+        defaultModel: "",
+      }),
+    ).toEqual({
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      authProfileId: undefined,
+      authProfileIdSource: undefined,
+    });
+    // Falls back to resolveDefaultModelForAgent when caller defaults are empty
+    expect(state.resolveDefaultModelForAgentMock).toHaveBeenCalled();
   });
 
   it("treats auth-profile-source changes as no-op when no auth profile is selected", async () => {
