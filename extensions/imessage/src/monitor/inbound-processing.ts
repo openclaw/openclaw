@@ -64,6 +64,50 @@ function describeReplyContext(message: IMessagePayload): IMessageReplyContext | 
   return { body, id, sender };
 }
 
+function resolveInboundEchoMessageIds(message: IMessagePayload): string[] {
+  const values = [
+    message.id != null ? String(message.id) : undefined,
+    normalizeReplyField(message.guid),
+  ];
+  const ids: string[] = [];
+  for (const value of values) {
+    if (!value || ids.includes(value)) {
+      continue;
+    }
+    ids.push(value);
+  }
+  return ids;
+}
+
+function hasIMessageEchoMatch(params: {
+  echoCache: {
+    has: (
+      scope: string,
+      lookup: { text?: string; messageId?: string },
+      skipIdShortCircuit?: boolean,
+    ) => boolean;
+  };
+  scope: string;
+  text?: string;
+  messageIds: string[];
+  skipIdShortCircuit?: boolean;
+}): boolean {
+  for (const messageId of params.messageIds) {
+    if (params.echoCache.has(params.scope, { messageId })) {
+      return true;
+    }
+  }
+  const fallbackMessageId = params.messageIds[0];
+  if (!params.text && !fallbackMessageId) {
+    return false;
+  }
+  return params.echoCache.has(
+    params.scope,
+    { text: params.text, messageId: fallbackMessageId },
+    params.skipIdShortCircuit,
+  );
+}
+
 export type IMessageInboundDispatchDecision = {
   kind: "dispatch";
   isGroup: boolean;
@@ -168,9 +212,9 @@ export function resolveIMessageInboundDecision(params: {
   // When true, the selfChatCache.has() check below must be skipped — we just
   // called remember() and would immediately match our own entry.
   let skipSelfChatHasCheck = false;
-  const inboundMessageId =
-    normalizeReplyField(params.message.guid) ??
-    (params.message.id != null ? String(params.message.id) : undefined);
+  const inboundMessageIds = resolveInboundEchoMessageIds(params.message);
+  const inboundMessageId = inboundMessageIds[0];
+  const hasInboundGuid = Boolean(normalizeReplyField(params.message.guid));
 
   if (params.message.is_from_me) {
     // Always cache in selfChatCache so the upcoming is_from_me=false reflection
@@ -190,11 +234,13 @@ export function resolveIMessageInboundDecision(params: {
       if (
         params.echoCache &&
         (bodyText || inboundMessageId) &&
-        params.echoCache.has(
-          echoScope,
-          { text: bodyText || undefined, messageId: inboundMessageId },
-          !normalizeReplyField(params.message.guid),
-        )
+        hasIMessageEchoMatch({
+          echoCache: params.echoCache,
+          scope: echoScope,
+          text: bodyText || undefined,
+          messageIds: inboundMessageIds,
+          skipIdShortCircuit: !hasInboundGuid,
+        })
       ) {
         return { kind: "drop", reason: "agent echo in self-chat" };
       }
@@ -305,9 +351,11 @@ export function resolveIMessageInboundDecision(params: {
       sender,
     });
     if (
-      params.echoCache.has(echoScope, {
+      hasIMessageEchoMatch({
+        echoCache: params.echoCache,
+        scope: echoScope,
         text: bodyText || undefined,
-        messageId: inboundMessageId,
+        messageIds: inboundMessageIds,
       })
     ) {
       params.logVerbose?.(
