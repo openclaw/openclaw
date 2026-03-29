@@ -20,9 +20,11 @@ describe("subagent hook runner methods", () => {
 
   async function invokeSubagentHook(params: {
     hookName:
+      | "before_subagent_spawn"
       | "subagent_spawning"
       | "subagent_spawned"
       | "subagent_delivery_target"
+      | "before_subagent_result_deliver"
       | "subagent_ended";
     event: Record<string, unknown>;
     ctx: Record<string, unknown>;
@@ -34,19 +36,46 @@ describe("subagent hook runner methods", () => {
     }
     const { runner } = createHookRunnerWithRegistry([{ hookName: params.hookName, handler }]);
     const result =
-      params.hookName === "subagent_spawning"
-        ? await runner.runSubagentSpawning(params.event as never, params.ctx as never)
-        : params.hookName === "subagent_spawned"
-          ? await runner.runSubagentSpawned(params.event as never, params.ctx as never)
-          : params.hookName === "subagent_delivery_target"
-            ? await runner.runSubagentDeliveryTarget(params.event as never, params.ctx as never)
-            : await runner.runSubagentEnded(params.event as never, params.ctx as never);
+      params.hookName === "before_subagent_spawn"
+        ? await runner.runBeforeSubagentSpawn(params.event as never, params.ctx as never)
+        : params.hookName === "subagent_spawning"
+          ? await runner.runSubagentSpawning(params.event as never, params.ctx as never)
+          : params.hookName === "subagent_spawned"
+            ? await runner.runSubagentSpawned(params.event as never, params.ctx as never)
+            : params.hookName === "subagent_delivery_target"
+              ? await runner.runSubagentDeliveryTarget(params.event as never, params.ctx as never)
+              : params.hookName === "before_subagent_result_deliver"
+                ? await runner.runBeforeSubagentResultDeliver(
+                    params.event as never,
+                    params.ctx as never,
+                  )
+                : await runner.runSubagentEnded(params.event as never, params.ctx as never);
 
     expect(handler).toHaveBeenCalledWith(params.event, params.ctx);
     return result;
   }
 
   it.each([
+    {
+      name: "runBeforeSubagentSpawn invokes registered before_subagent_spawn hooks",
+      hookName: "before_subagent_spawn" as const,
+      methodName: "runBeforeSubagentSpawn" as const,
+      event: {
+        childSessionKey: "agent:main:subagent:child",
+        agentId: "main",
+        label: "research",
+        mode: "run" as const,
+        requester: baseRequester,
+        threadRequested: false,
+        task: "scan repo",
+      },
+      ctx: {
+        childSessionKey: "agent:main:subagent:child",
+        requesterSessionKey: "agent:main:main",
+      },
+      handlerResult: { decision: "warn" as const, reason: "review suggested" },
+      expectedResult: { decision: "warn", reason: "review suggested" },
+    },
     {
       name: "runSubagentSpawning invokes registered subagent_spawning hooks",
       hookName: "subagent_spawning" as const,
@@ -112,6 +141,26 @@ describe("subagent hook runner methods", () => {
       },
     },
     {
+      name: "runBeforeSubagentResultDeliver invokes registered before_subagent_result_deliver hooks",
+      hookName: "before_subagent_result_deliver" as const,
+      methodName: "runBeforeSubagentResultDeliver" as const,
+      event: {
+        childSessionKey: "agent:main:subagent:child",
+        childRunId: "run-1",
+        requesterSessionKey: "agent:main:main",
+        announceType: "subagent task" as const,
+        taskLabel: "research",
+        status: "ok",
+        statusLabel: "completed successfully",
+        resultText: "raw result",
+        replyInstruction: "reply",
+        expectsCompletionMessage: true,
+      },
+      ctx: baseSubagentCtx,
+      handlerResult: { resultText: "rewritten result" },
+      expectedResult: { resultText: "rewritten result" },
+    },
+    {
       name: "runSubagentEnded invokes registered subagent_ended hooks",
       hookName: "subagent_ended" as const,
       methodName: "runSubagentEnded" as const,
@@ -153,13 +202,16 @@ describe("subagent hook runner methods", () => {
 
   it("hasHooks returns true for registered subagent hooks", () => {
     const { runner } = createHookRunnerWithRegistry([
+      { hookName: "before_subagent_spawn", handler: vi.fn() },
       { hookName: "subagent_spawning", handler: vi.fn() },
       { hookName: "subagent_delivery_target", handler: vi.fn() },
     ]);
 
+    expect(runner.hasHooks("before_subagent_spawn")).toBe(true);
     expect(runner.hasHooks("subagent_spawning")).toBe(true);
     expect(runner.hasHooks("subagent_delivery_target")).toBe(true);
     expect(runner.hasHooks("subagent_spawned")).toBe(false);
+    expect(runner.hasHooks("before_subagent_result_deliver")).toBe(false);
     expect(runner.hasHooks("subagent_ended")).toBe(false);
   });
 });

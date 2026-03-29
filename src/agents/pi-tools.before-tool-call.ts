@@ -201,10 +201,17 @@ export async function runBeforeToolCallHook(args: {
       toolContext,
     );
 
-    if (hookResult?.block) {
+    if (hookResult?.block || hookResult?.decision === "deny") {
       return {
         blocked: true,
-        reason: hookResult.blockReason || "Tool call blocked by plugin hook",
+        reason: hookResult.blockReason || hookResult.reason || "Tool call blocked by plugin hook",
+      };
+    }
+
+    if (hookResult?.decision === "escalate" && !hookResult.requireApproval) {
+      return {
+        blocked: true,
+        reason: hookResult.reason || "Tool call escalated by plugin hook",
       };
     }
 
