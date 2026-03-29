@@ -11,6 +11,8 @@ import { resetSubagentRegistryForTests } from "./subagent-registry.js";
 
 const hookRunnerMocks = vi.hoisted(() => ({
   hasSubagentEndedHook: true,
+  hasBeforeSubagentSpawnHook: false,
+  runBeforeSubagentSpawn: vi.fn(async () => undefined),
   runSubagentSpawning: vi.fn(async (event: unknown) => {
     const input = event as {
       threadRequested?: boolean;
@@ -39,9 +41,11 @@ const hookRunnerMocks = vi.hoisted(() => ({
 vi.mock("../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: vi.fn(() => ({
     hasHooks: (hookName: string) =>
+      (hookName === "before_subagent_spawn" && hookRunnerMocks.hasBeforeSubagentSpawnHook) ||
       hookName === "subagent_spawning" ||
       hookName === "subagent_spawned" ||
       (hookName === "subagent_ended" && hookRunnerMocks.hasSubagentEndedHook),
+    runBeforeSubagentSpawn: hookRunnerMocks.runBeforeSubagentSpawn,
     runSubagentSpawning: hookRunnerMocks.runSubagentSpawning,
     runSubagentSpawned: hookRunnerMocks.runSubagentSpawned,
     runSubagentEnded: hookRunnerMocks.runSubagentEnded,
@@ -137,6 +141,8 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
   beforeEach(() => {
     resetSubagentRegistryForTests();
     hookRunnerMocks.hasSubagentEndedHook = true;
+    hookRunnerMocks.hasBeforeSubagentSpawnHook = false;
+    hookRunnerMocks.runBeforeSubagentSpawn.mockClear();
     hookRunnerMocks.runSubagentSpawning.mockClear();
     hookRunnerMocks.runSubagentSpawned.mockClear();
     hookRunnerMocks.runSubagentEnded.mockClear();
@@ -226,6 +232,50 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
       requesterSessionKey: "main",
       childSessionKey: event.childSessionKey,
     });
+  });
+
+  it("blocks spawn when before_subagent_spawn denies the task", async () => {
+    hookRunnerMocks.hasBeforeSubagentSpawnHook = true;
+    hookRunnerMocks.runBeforeSubagentSpawn.mockResolvedValueOnce({
+      decision: "deny",
+      reason: "spawn blocked for review",
+    });
+
+    const tool = await getSessionsSpawnTool({
+      agentSessionKey: "main",
+      agentChannel: "discord",
+      agentAccountId: "work",
+      agentTo: "channel:123",
+    });
+
+    const result = await tool.execute("call-deny", {
+      task: "do thing",
+      runTimeoutSeconds: 1,
+    });
+
+    expect(result.details).toMatchObject({
+      status: "forbidden",
+      error: "spawn blocked for review",
+    });
+    expect(hookRunnerMocks.runBeforeSubagentSpawn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        task: "do thing",
+        mode: "run",
+        threadRequested: false,
+      }),
+      expect.objectContaining({
+        requesterSessionKey: "main",
+        childSessionKey: expect.stringMatching(/^agent:main:subagent:/),
+      }),
+    );
+    const deleteCall = findGatewayRequest("sessions.delete");
+    expect(deleteCall?.params).toMatchObject({
+      key: expect.stringMatching(/^agent:main:subagent:/),
+      emitLifecycleHooks: false,
+      deleteTranscript: true,
+    });
+    expect(getGatewayMethods()).not.toContain("agent");
   });
 
   it("emits subagent_spawned with threadRequested=false when not requested", async () => {

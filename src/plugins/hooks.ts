@@ -28,8 +28,15 @@ import type {
   PluginHookLlmInputEvent,
   PluginHookLlmOutputEvent,
   PluginHookBeforeResetEvent,
+  PluginHookBeforeSubagentResultDeliverEvent,
+  PluginHookBeforeSubagentResultDeliverResult,
+  PluginHookBeforeSubagentSpawnEvent,
+  PluginHookBeforeSubagentSpawnResult,
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
+  PluginHookBeforeToolResultDeliverContext,
+  PluginHookBeforeToolResultDeliverEvent,
+  PluginHookBeforeToolResultDeliverResult,
   PluginHookGatewayContext,
   PluginHookGatewayStartEvent,
   PluginHookGatewayStopEvent,
@@ -54,6 +61,8 @@ import type {
   PluginHookToolResultPersistContext,
   PluginHookToolResultPersistEvent,
   PluginHookToolResultPersistResult,
+  PluginGuardAnnotation,
+  PluginGuardDecision,
   PluginHookBeforeMessageWriteEvent,
   PluginHookBeforeMessageWriteResult,
   PluginHookBeforeInstallContext,
@@ -78,6 +87,10 @@ export type {
   PluginHookAgentEndEvent,
   PluginHookBeforeCompactionEvent,
   PluginHookBeforeResetEvent,
+  PluginHookBeforeSubagentResultDeliverEvent,
+  PluginHookBeforeSubagentResultDeliverResult,
+  PluginHookBeforeSubagentSpawnEvent,
+  PluginHookBeforeSubagentSpawnResult,
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
   PluginHookInboundClaimResult,
@@ -91,6 +104,9 @@ export type {
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
   PluginHookAfterToolCallEvent,
+  PluginHookBeforeToolResultDeliverContext,
+  PluginHookBeforeToolResultDeliverEvent,
+  PluginHookBeforeToolResultDeliverResult,
   PluginHookToolResultPersistContext,
   PluginHookToolResultPersistEvent,
   PluginHookToolResultPersistResult,
@@ -100,8 +116,12 @@ export type {
   PluginHookSessionStartEvent,
   PluginHookSessionEndEvent,
   PluginHookSubagentContext,
+  PluginHookBeforeSubagentSpawnEvent,
+  PluginHookBeforeSubagentSpawnResult,
   PluginHookSubagentDeliveryTargetEvent,
   PluginHookSubagentDeliveryTargetResult,
+  PluginHookBeforeSubagentResultDeliverEvent,
+  PluginHookBeforeSubagentResultDeliverResult,
   PluginHookSubagentSpawningEvent,
   PluginHookSubagentSpawningResult,
   PluginHookSubagentSpawnedEvent,
@@ -187,6 +207,57 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   const lastDefined = <T>(prev: T | undefined, next: T | undefined): T | undefined => next ?? prev;
   const stickyTrue = (prev?: boolean, next?: boolean): true | undefined =>
     prev === true || next === true ? true : undefined;
+  const mergeAnnotations = (
+    prev?: PluginGuardAnnotation[],
+    next?: PluginGuardAnnotation[],
+  ): PluginGuardAnnotation[] | undefined => {
+    if (!prev?.length) {
+      return next?.length ? [...next] : undefined;
+    }
+    if (!next?.length) {
+      return [...prev];
+    }
+    return [...prev, ...next];
+  };
+  const guardDecisionRank = (decision?: PluginGuardDecision): number => {
+    switch (decision) {
+      case "deny":
+        return 5;
+      case "escalate":
+        return 4;
+      case "redact":
+        return 3;
+      case "warn":
+        return 2;
+      case "allow":
+        return 1;
+      default:
+        return 0;
+    }
+  };
+  const pickStricterDecision = (
+    prev?: PluginGuardDecision,
+    next?: PluginGuardDecision,
+  ): PluginGuardDecision | undefined =>
+    guardDecisionRank(next) > guardDecisionRank(prev) ? next : prev;
+  const mergeGuardDecisionFields = <
+    TResult extends {
+      decision?: PluginGuardDecision;
+      reason?: string;
+      annotations?: PluginGuardAnnotation[];
+    },
+  >(
+    acc: TResult | undefined,
+    next: TResult,
+  ): Pick<TResult, "decision" | "reason" | "annotations"> => {
+    const decision = pickStricterDecision(acc?.decision, next.decision);
+    const decisionChanged = decision !== acc?.decision && decision === next.decision;
+    return {
+      decision,
+      reason: decisionChanged ? next.reason : lastDefined(acc?.reason, next.reason),
+      annotations: mergeAnnotations(acc?.annotations, next.annotations),
+    };
+  };
 
   const mergeBeforeModelResolve = (
     acc: PluginHookBeforeModelResolveResult | undefined,
@@ -705,18 +776,20 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
       ctx,
       {
         mergeResults: (acc, next, reg) => {
-          if (acc?.block === true) {
+          if (acc?.block === true || acc?.decision === "deny") {
             return acc;
           }
           const approvalPluginId = acc?.requireApproval?.pluginId;
           const freezeParamsForDifferentPlugin =
             Boolean(approvalPluginId) && approvalPluginId !== reg.pluginId;
+          const guardFields = mergeGuardDecisionFields(acc, next);
           return {
             params: freezeParamsForDifferentPlugin
               ? acc?.params
               : lastDefined(acc?.params, next.params),
             block: stickyTrue(acc?.block, next.block),
-            blockReason: lastDefined(acc?.blockReason, next.blockReason),
+            blockReason: lastDefined(acc?.blockReason, next.blockReason ?? next.reason),
+            ...guardFields,
             requireApproval:
               acc?.requireApproval ??
               (next.requireApproval
@@ -724,8 +797,8 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
                 : undefined),
           };
         },
-        shouldStop: (result) => result.block === true,
-        terminalLabel: "block=true",
+        shouldStop: (result) => result.block === true || result.decision === "deny",
+        terminalLabel: "block=true/decision=deny",
       },
     );
   }
@@ -739,6 +812,74 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     ctx: PluginHookToolContext,
   ): Promise<void> {
     return runVoidHook("after_tool_call", event, ctx);
+  }
+
+  /**
+   * Run before_tool_result_deliver hook.
+   *
+   * This hook is intentionally synchronous: it runs before a tool result is
+   * delivered back into live agent context.
+   */
+  function runBeforeToolResultDeliver(
+    event: PluginHookBeforeToolResultDeliverEvent,
+    ctx: PluginHookBeforeToolResultDeliverContext,
+  ): PluginHookBeforeToolResultDeliverResult | undefined {
+    const hooks = getHooksForName(registry, "before_tool_result_deliver");
+    if (hooks.length === 0) {
+      return undefined;
+    }
+
+    let current = event.message;
+    let currentResult: PluginHookBeforeToolResultDeliverResult | undefined;
+
+    for (const hook of hooks) {
+      try {
+        // oxlint-disable-next-line typescript/no-explicit-any
+        const out = (hook.handler as any)({ ...event, message: current }, ctx) as
+          | PluginHookBeforeToolResultDeliverResult
+          | void
+          | Promise<unknown>;
+
+        // Guard against accidental async handlers (this hook is sync-only).
+        // oxlint-disable-next-line typescript/no-explicit-any
+        if (out && typeof (out as any).then === "function") {
+          const msg =
+            `[hooks] before_tool_result_deliver handler from ${hook.pluginId} returned a Promise; ` +
+            `this hook is synchronous and the result was ignored.`;
+          if (catchErrors) {
+            logger?.warn?.(msg);
+            continue;
+          }
+          throw new Error(msg);
+        }
+
+        const next = out as PluginHookBeforeToolResultDeliverResult | undefined;
+        if (!next) {
+          continue;
+        }
+
+        const guardFields = mergeGuardDecisionFields(currentResult, next);
+        currentResult = {
+          ...guardFields,
+          message: lastDefined(currentResult?.message, next.message),
+        };
+        if (currentResult.message) {
+          current = currentResult.message;
+        }
+        if (currentResult.decision === "deny") {
+          break;
+        }
+      } catch (err) {
+        const msg = `[hooks] before_tool_result_deliver handler from ${hook.pluginId} failed: ${String(err)}`;
+        if (catchErrors) {
+          logger?.error(msg);
+        } else {
+          throw new Error(msg, { cause: err });
+        }
+      }
+    }
+
+    return currentResult;
   }
 
   /**
@@ -904,6 +1045,33 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   }
 
   /**
+   * Run before_subagent_spawn hook.
+   * Runs sequentially so security/policy hooks can review delegated work.
+   */
+  async function runBeforeSubagentSpawn(
+    event: PluginHookBeforeSubagentSpawnEvent,
+    ctx: PluginHookSubagentContext,
+  ): Promise<PluginHookBeforeSubagentSpawnResult | undefined> {
+    return runModifyingHook<"before_subagent_spawn", PluginHookBeforeSubagentSpawnResult>(
+      "before_subagent_spawn",
+      event,
+      ctx,
+      {
+        mergeResults: (acc, next) => {
+          const guardFields = mergeGuardDecisionFields(acc, next);
+          return {
+            ...guardFields,
+            task: lastDefined(acc?.task, next.task),
+            label: lastDefined(acc?.label, next.label),
+          };
+        },
+        shouldStop: (result) => result.decision === "deny",
+        terminalLabel: "decision=deny",
+      },
+    );
+  }
+
+  /**
    * Run subagent_spawning hook.
    * Runs sequentially so channel plugins can deterministically provision session bindings.
    */
@@ -955,6 +1123,31 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     ctx: PluginHookSubagentContext,
   ): Promise<void> {
     return runVoidHook("subagent_ended", event, ctx);
+  }
+
+  /**
+   * Run before_subagent_result_deliver hook.
+   * Runs sequentially so security/policy hooks can review child output before delivery.
+   */
+  async function runBeforeSubagentResultDeliver(
+    event: PluginHookBeforeSubagentResultDeliverEvent,
+    ctx: PluginHookSubagentContext,
+  ): Promise<PluginHookBeforeSubagentResultDeliverResult | undefined> {
+    return runModifyingHook<
+      "before_subagent_result_deliver",
+      PluginHookBeforeSubagentResultDeliverResult
+    >("before_subagent_result_deliver", event, ctx, {
+      mergeResults: (acc, next) => {
+        const guardFields = mergeGuardDecisionFields(acc, next);
+        return {
+          ...guardFields,
+          resultText: lastDefined(acc?.resultText, next.resultText),
+          replyInstruction: lastDefined(acc?.replyInstruction, next.replyInstruction),
+        };
+      },
+      shouldStop: (result) => result.decision === "deny",
+      terminalLabel: "decision=deny",
+    });
   }
 
   // =========================================================================
@@ -1058,15 +1251,18 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     // Tool hooks
     runBeforeToolCall,
     runAfterToolCall,
+    runBeforeToolResultDeliver,
     runToolResultPersist,
     // Message write hooks
     runBeforeMessageWrite,
     // Session hooks
     runSessionStart,
     runSessionEnd,
+    runBeforeSubagentSpawn,
     runSubagentSpawning,
     runSubagentDeliveryTarget,
     runSubagentSpawned,
+    runBeforeSubagentResultDeliver,
     runSubagentEnded,
     // Gateway hooks
     runGatewayStart,

@@ -15,6 +15,10 @@ const readLatestAssistantReplyMock = vi.fn(async (_params?: unknown) => "raw sub
 const isEmbeddedPiRunActiveMock = vi.fn((_sessionId: string) => false);
 const queueEmbeddedPiMessageMock = vi.fn((_sessionId: string, _text: string) => false);
 const waitForEmbeddedPiRunEndMock = vi.fn(async (_sessionId: string, _timeoutMs?: number) => true);
+const hookRunnerState = vi.hoisted(() => ({
+  hasBeforeSubagentResultDeliverHook: false,
+  runBeforeSubagentResultDeliver: vi.fn(async () => undefined),
+}));
 let mockConfig: Record<string, unknown> = {
   session: {
     mainKey: "main",
@@ -56,7 +60,12 @@ vi.mock("../gateway/call.js", () => ({
 }));
 
 vi.mock("../plugins/hook-runner-global.js", () => ({
-  getGlobalHookRunner: () => ({ hasHooks: () => false }),
+  getGlobalHookRunner: () => ({
+    hasHooks: (hookName: string) =>
+      hookName === "before_subagent_result_deliver" &&
+      hookRunnerState.hasBeforeSubagentResultDeliverHook,
+    runBeforeSubagentResultDeliver: hookRunnerState.runBeforeSubagentResultDeliver,
+  }),
 }));
 
 vi.mock("./pi-embedded.js", async (importOriginal) => {
@@ -125,6 +134,8 @@ describe("subagent announce seam flow", () => {
     isEmbeddedPiRunActiveMock.mockReset().mockReturnValue(false);
     queueEmbeddedPiMessageMock.mockReset().mockReturnValue(false);
     waitForEmbeddedPiRunEndMock.mockReset().mockResolvedValue(true);
+    hookRunnerState.hasBeforeSubagentResultDeliverHook = false;
+    hookRunnerState.runBeforeSubagentResultDeliver.mockReset().mockResolvedValue(undefined);
     mockConfig = {
       session: {
         mainKey: "main",
@@ -210,6 +221,87 @@ describe("subagent announce seam flow", () => {
       },
       timeoutMs: 10_000,
     });
+  });
+
+  it("rewrites announced child results through before_subagent_result_deliver", async () => {
+    hookRunnerState.hasBeforeSubagentResultDeliverHook = true;
+    hookRunnerState.runBeforeSubagentResultDeliver.mockResolvedValueOnce({
+      decision: "warn",
+      reason: "child output came from an untrusted source",
+      resultText: "rewritten child finding",
+    });
+
+    ({ runSubagentAnnounceFlow } = await import("./subagent-announce.js"));
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-guarded-result",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "summarize",
+      timeoutMs: 10,
+      cleanup: "delete",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "original child result",
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(hookRunnerState.runBeforeSubagentResultDeliver).toHaveBeenCalledWith(
+      expect.objectContaining({
+        childSessionKey: "agent:main:subagent:test",
+        childRunId: "run-guarded-result",
+        resultText: "original child result",
+      }),
+      expect.objectContaining({
+        requesterSessionKey: "agent:main:main",
+      }),
+    );
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    expect(agentSpy.mock.calls[0]?.[0]?.params?.internalEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          result: expect.stringContaining("rewritten child finding"),
+        }),
+      ]),
+    );
+  });
+
+  it("recomputes statusLabel when before_subagent_result_deliver blocks child output", async () => {
+    hookRunnerState.hasBeforeSubagentResultDeliverHook = true;
+    hookRunnerState.runBeforeSubagentResultDeliver.mockResolvedValueOnce({
+      decision: "deny",
+      reason: "blocked by guard",
+    });
+
+    ({ runSubagentAnnounceFlow } = await import("./subagent-announce.js"));
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-guarded-deny",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "summarize",
+      timeoutMs: 10,
+      cleanup: "delete",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "original child result",
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    expect(agentSpy.mock.calls[0]?.[0]?.params?.internalEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          status: "error",
+          statusLabel: "failed: blocked by guard",
+          result: "blocked by guard",
+        }),
+      ]),
+    );
   });
 
   it("uses origin.provider for channel-specific queue settings in active announce delivery", async () => {

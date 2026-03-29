@@ -1809,12 +1809,15 @@ export type PluginHookName =
   | "message_sent"
   | "before_tool_call"
   | "after_tool_call"
+  | "before_tool_result_deliver"
   | "tool_result_persist"
   | "before_message_write"
   | "session_start"
   | "session_end"
+  | "before_subagent_spawn"
   | "subagent_spawning"
   | "subagent_delivery_target"
+  | "before_subagent_result_deliver"
   | "subagent_spawned"
   | "subagent_ended"
   | "gateway_start"
@@ -1838,12 +1841,15 @@ export const PLUGIN_HOOK_NAMES = [
   "message_sent",
   "before_tool_call",
   "after_tool_call",
+  "before_tool_result_deliver",
   "tool_result_persist",
   "before_message_write",
   "session_start",
   "session_end",
+  "before_subagent_spawn",
   "subagent_spawning",
   "subagent_delivery_target",
+  "before_subagent_result_deliver",
   "subagent_spawned",
   "subagent_ended",
   "gateway_start",
@@ -2171,10 +2177,24 @@ export const PluginApprovalResolutions = {
 export type PluginApprovalResolution =
   (typeof PluginApprovalResolutions)[keyof typeof PluginApprovalResolutions];
 
+export const PLUGIN_GUARD_DECISIONS = ["allow", "warn", "deny", "escalate", "redact"] as const;
+
+export type PluginGuardDecision = (typeof PLUGIN_GUARD_DECISIONS)[number];
+
+export type PluginGuardAnnotation = {
+  code: string;
+  message: string;
+  severity?: "info" | "warning" | "critical";
+  source?: string;
+};
+
 export type PluginHookBeforeToolCallResult = {
   params?: Record<string, unknown>;
   block?: boolean;
   blockReason?: string;
+  decision?: PluginGuardDecision;
+  reason?: string;
+  annotations?: PluginGuardAnnotation[];
   requireApproval?: {
     title: string;
     description: string;
@@ -2202,6 +2222,33 @@ export type PluginHookAfterToolCallEvent = {
   result?: unknown;
   error?: string;
   durationMs?: number;
+};
+
+export type PluginHookBeforeToolResultDeliverContext = {
+  agentId?: string;
+  sessionKey?: string;
+  toolName?: string;
+  toolCallId?: string;
+  runId?: string;
+};
+
+export type PluginHookBeforeToolResultDeliverEvent = {
+  toolName?: string;
+  toolCallId?: string;
+  runId?: string;
+  params?: Record<string, unknown>;
+  message: AgentMessage;
+  result?: unknown;
+  error?: string;
+  durationMs?: number;
+  isSynthetic?: boolean;
+};
+
+export type PluginHookBeforeToolResultDeliverResult = {
+  decision?: PluginGuardDecision;
+  reason?: string;
+  annotations?: PluginGuardAnnotation[];
+  message?: AgentMessage;
 };
 
 // tool_result_persist hook
@@ -2285,6 +2332,24 @@ type PluginHookSubagentSpawnBase = {
   threadRequested: boolean;
 };
 
+export type PluginHookBeforeSubagentSpawnEvent = PluginHookSubagentSpawnBase & {
+  task: string;
+  model?: string;
+  thinking?: string;
+  timeoutSeconds?: number;
+  sandbox?: "inherit" | "require";
+  expectsCompletionMessage?: boolean;
+  attachmentCount?: number;
+};
+
+export type PluginHookBeforeSubagentSpawnResult = {
+  decision?: PluginGuardDecision;
+  reason?: string;
+  annotations?: PluginGuardAnnotation[];
+  task?: string;
+  label?: string;
+};
+
 // subagent_spawning hook
 export type PluginHookSubagentSpawningEvent = PluginHookSubagentSpawnBase;
 
@@ -2338,6 +2403,27 @@ export type PluginHookSubagentEndedEvent = {
   endedAt?: number;
   outcome?: "ok" | "error" | "timeout" | "killed" | "reset" | "deleted";
   error?: string;
+};
+
+export type PluginHookBeforeSubagentResultDeliverEvent = {
+  childSessionKey: string;
+  childRunId?: string;
+  requesterSessionKey?: string;
+  announceType: "subagent task" | "cron job";
+  taskLabel: string;
+  status: "ok" | "error" | "timeout" | "killed" | "reset" | "deleted";
+  statusLabel: string;
+  resultText: string;
+  replyInstruction: string;
+  expectsCompletionMessage?: boolean;
+};
+
+export type PluginHookBeforeSubagentResultDeliverResult = {
+  decision?: PluginGuardDecision;
+  reason?: string;
+  annotations?: PluginGuardAnnotation[];
+  resultText?: string;
+  replyInstruction?: string;
 };
 
 // Gateway context
@@ -2529,6 +2615,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookAfterToolCallEvent,
     ctx: PluginHookToolContext,
   ) => Promise<void> | void;
+  before_tool_result_deliver: (
+    event: PluginHookBeforeToolResultDeliverEvent,
+    ctx: PluginHookBeforeToolResultDeliverContext,
+  ) => PluginHookBeforeToolResultDeliverResult | void;
   tool_result_persist: (
     event: PluginHookToolResultPersistEvent,
     ctx: PluginHookToolResultPersistContext,
@@ -2545,6 +2635,13 @@ export type PluginHookHandlerMap = {
     event: PluginHookSessionEndEvent,
     ctx: PluginHookSessionContext,
   ) => Promise<void> | void;
+  before_subagent_spawn: (
+    event: PluginHookBeforeSubagentSpawnEvent,
+    ctx: PluginHookSubagentContext,
+  ) =>
+    | Promise<PluginHookBeforeSubagentSpawnResult | void>
+    | PluginHookBeforeSubagentSpawnResult
+    | void;
   subagent_spawning: (
     event: PluginHookSubagentSpawningEvent,
     ctx: PluginHookSubagentContext,
@@ -2560,6 +2657,13 @@ export type PluginHookHandlerMap = {
     event: PluginHookSubagentSpawnedEvent,
     ctx: PluginHookSubagentContext,
   ) => Promise<void> | void;
+  before_subagent_result_deliver: (
+    event: PluginHookBeforeSubagentResultDeliverEvent,
+    ctx: PluginHookSubagentContext,
+  ) =>
+    | Promise<PluginHookBeforeSubagentResultDeliverResult | void>
+    | PluginHookBeforeSubagentResultDeliverResult
+    | void;
   subagent_ended: (
     event: PluginHookSubagentEndedEvent,
     ctx: PluginHookSubagentContext,

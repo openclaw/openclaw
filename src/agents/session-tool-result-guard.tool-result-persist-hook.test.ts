@@ -130,6 +130,81 @@ describe("tool_result_persist hook", () => {
     expect(toolResult.toolCallId).toBe("call_1");
     expect(Array.isArray(toolResult.content)).toBe(true);
   });
+
+  it("applies before_tool_result_deliver warnings before persistence", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-tool-deliver-"));
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+
+    const plugin = writeTempPlugin({
+      dir: tmp,
+      id: "deliver-warn",
+      body: `export default { id: "deliver-warn", register(api) {
+  api.on("before_tool_result_deliver", () => ({
+    decision: "warn",
+    reason: "suspicious tool result",
+  }));
+} };`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: tmp,
+      config: {
+        plugins: {
+          load: { paths: [plugin] },
+          allow: ["deliver-warn"],
+        },
+      },
+    });
+    initializeGlobalHookRunner(registry);
+
+    const sm = guardSessionManager(SessionManager.inMemory(), {
+      agentId: "main",
+      sessionKey: "main",
+    });
+
+    appendToolCallAndResult(sm);
+    const toolResult = getPersistedToolResult(sm);
+    expect(toolResult.content?.[0]?.text).toContain("[Guard warning] suspicious tool result");
+  });
+
+  it("replaces denied tool results before persistence", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-tool-deliver-deny-"));
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+
+    const plugin = writeTempPlugin({
+      dir: tmp,
+      id: "deliver-deny",
+      body: `export default { id: "deliver-deny", register(api) {
+  api.on("before_tool_result_deliver", () => ({
+    decision: "deny",
+    reason: "blocked by result guard",
+  }));
+} };`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: tmp,
+      config: {
+        plugins: {
+          load: { paths: [plugin] },
+          allow: ["deliver-deny"],
+        },
+      },
+    });
+    initializeGlobalHookRunner(registry);
+
+    const sm = guardSessionManager(SessionManager.inMemory(), {
+      agentId: "main",
+      sessionKey: "main",
+    });
+
+    appendToolCallAndResult(sm);
+    const toolResult = getPersistedToolResult(sm);
+    expect(toolResult.isError).toBe(true);
+    expect(toolResult.content?.[0]?.text).toContain("blocked by result guard");
+  });
 });
 
 describe("before_message_write hook", () => {

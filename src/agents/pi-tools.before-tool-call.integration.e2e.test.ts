@@ -145,6 +145,24 @@ describe("before_tool_call hook integration", () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
+  it("blocks tool execution when hook returns decision=deny", async () => {
+    beforeToolCallHook = installBeforeToolCallHook({
+      runBeforeToolCallImpl: async () => ({
+        decision: "deny",
+        reason: "denied by guard",
+      }),
+    });
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const tool = wrapToolWithBeforeToolCallHook({ name: "exec", execute } as any);
+    const extensionContext = {} as Parameters<typeof tool.execute>[3];
+
+    await expect(
+      tool.execute("call-3b", { cmd: "rm -rf /" }, undefined, extensionContext),
+    ).rejects.toThrow("denied by guard");
+    expect(execute).not.toHaveBeenCalled();
+  });
+
   it("does not execute lower-priority hooks after block=true", async () => {
     const high = vi.fn().mockResolvedValue({ block: true, blockReason: "blocked-high" });
     const low = vi.fn().mockResolvedValue({ params: { shouldNotApply: true } });

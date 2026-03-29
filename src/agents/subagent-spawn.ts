@@ -295,8 +295,8 @@ export async function spawnSubagentDirect(
   params: SpawnSubagentParams,
   ctx: SpawnSubagentContext,
 ): Promise<SpawnSubagentResult> {
-  const task = params.task;
-  const label = params.label?.trim() || "";
+  let task = params.task;
+  let label = params.label?.trim() || "";
   const requestedAgentId = params.agentId?.trim();
 
   // Reject malformed agentId before normalizeAgentId can mangle it.
@@ -461,6 +461,64 @@ export async function spawnSubagentDirect(
       };
     }
     thinkingOverride = normalized;
+  }
+  if (hookRunner?.hasHooks("before_subagent_spawn")) {
+    try {
+      const guardResult = await hookRunner.runBeforeSubagentSpawn(
+        {
+          childSessionKey,
+          agentId: targetAgentId,
+          label: label || undefined,
+          mode: spawnMode,
+          requester: {
+            channel: requesterOrigin?.channel,
+            accountId: requesterOrigin?.accountId,
+            to: requesterOrigin?.to,
+            threadId: requesterOrigin?.threadId,
+          },
+          threadRequested: requestThreadBinding,
+          task,
+          model: resolvedModel,
+          thinking: thinkingOverride,
+          timeoutSeconds: runTimeoutSeconds,
+          sandbox: sandboxMode,
+          expectsCompletionMessage,
+          attachmentCount: params.attachments?.length ?? 0,
+        },
+        {
+          requesterSessionKey: requesterInternalKey,
+          childSessionKey,
+        },
+      );
+      if (guardResult?.task) {
+        task = guardResult.task;
+      }
+      if (guardResult?.label !== undefined) {
+        label = guardResult.label;
+      }
+      if (guardResult?.decision === "deny" || guardResult?.decision === "escalate") {
+        const error = guardResult.reason?.trim() || "Subagent spawn blocked by plugin hook.";
+        await cleanupProvisionalSession(childSessionKey, {
+          emitLifecycleHooks: false,
+          deleteTranscript: true,
+        });
+        return {
+          status: "forbidden",
+          error,
+          childSessionKey,
+        };
+      }
+    } catch (err) {
+      await cleanupProvisionalSession(childSessionKey, {
+        emitLifecycleHooks: false,
+        deleteTranscript: true,
+      });
+      return {
+        status: "error",
+        error: summarizeError(err),
+        childSessionKey,
+      };
+    }
   }
   const patchChildSession = async (patch: Record<string, unknown>): Promise<string | undefined> => {
     try {
