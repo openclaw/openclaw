@@ -712,53 +712,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       }
     }
     if (!this.provider) {
-      this.clearIndexedFileData(entry.path, options.source);
-      const now = Date.now();
-      for (const chunk of chunks) {
-        const id = hashText(
-          `${options.source}:${entry.path}:${chunk.startLine}:${chunk.endLine}:${chunk.hash}:${indexModel}`,
-        );
-        this.db
-          .prepare(
-            `INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT(id) DO UPDATE SET
-               hash=excluded.hash,
-               model=excluded.model,
-               text=excluded.text,
-               embedding=excluded.embedding,
-               updated_at=excluded.updated_at`,
-          )
-          .run(
-            id,
-            entry.path,
-            options.source,
-            chunk.startLine,
-            chunk.endLine,
-            chunk.hash,
-            indexModel,
-            chunk.text,
-            "[]",
-            now,
-          );
-        if (this.fts.enabled && this.fts.available) {
-          this.db
-            .prepare(
-              `INSERT INTO ${FTS_TABLE} (text, id, path, source, model, start_line, end_line)\n` +
-                ` VALUES (?, ?, ?, ?, ?, ?, ?)`,
-            )
-            .run(
-              chunk.text,
-              id,
-              entry.path,
-              options.source,
-              indexModel,
-              chunk.startLine,
-              chunk.endLine,
-            );
-        }
-      }
-      this.upsertFileRecord(entry, options.source);
+      this.writeChunks(entry, options.source, "fts-only", chunks, [], false);
       return;
     }
 
