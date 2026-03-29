@@ -17,6 +17,7 @@ let statusAllModulePromise: Promise<typeof import("./status-all.js")> | undefine
 let statusCommandTextRuntimePromise:
   | Promise<typeof import("./status.command.text-runtime.js")>
   | undefined;
+let statusNodeModeModulePromise: Promise<typeof import("./status.node-mode.js")> | undefined;
 
 function loadProviderUsage() {
   providerUsagePromise ??= import("../infra/provider-usage.js");
@@ -51,6 +52,11 @@ function loadStatusAllModule() {
 function loadStatusCommandTextRuntime() {
   statusCommandTextRuntimePromise ??= import("./status.command.text-runtime.js");
   return statusCommandTextRuntimePromise;
+}
+
+function loadStatusNodeModeModule() {
+  statusNodeModeModulePromise ??= import("./status.node-mode.js");
+  return statusNodeModeModulePromise;
 }
 
 function resolvePairingRecoveryContext(params: {
@@ -302,7 +308,21 @@ export async function statusCommand(
         }).httpUrl
       : "disabled";
 
+  const [daemon, nodeDaemon] = await Promise.all([
+    getDaemonStatusSummary(),
+    getNodeDaemonStatusSummary(),
+  ]);
+  const nodeOnlyGateway = await loadStatusNodeModeModule().then(({ resolveNodeOnlyGatewayInfo }) =>
+    resolveNodeOnlyGatewayInfo({
+      daemon,
+      node: nodeDaemon,
+    }),
+  );
+
   const gatewayValue = (() => {
+    if (nodeOnlyGateway) {
+      return nodeOnlyGateway.gatewayValue;
+    }
     const target = remoteUrlMissing
       ? `fallback ${gatewayConnection.url}`
       : `${gatewayConnection.url}${gatewayConnection.urlSource ? ` (${gatewayConnection.urlSource})` : ""}`;
@@ -344,11 +364,6 @@ export async function statusCommand(
     const defSuffix = def ? ` · default ${def.id} active ${defActive}` : "";
     return `${agentStatus.agents.length} · ${pending} · sessions ${agentStatus.totalSessions}${defSuffix}`;
   })();
-
-  const [daemon, nodeDaemon] = await Promise.all([
-    getDaemonStatusSummary(),
-    getNodeDaemonStatusSummary(),
-  ]);
   const daemonValue = (() => {
     if (daemon.installed === false) {
       return `${daemon.label} not installed`;
@@ -743,7 +758,9 @@ export async function statusCommand(
   runtime.log("Next steps:");
   runtime.log(`  Need to share?      ${formatCliCommand("openclaw status --all")}`);
   runtime.log(`  Need to debug live? ${formatCliCommand("openclaw logs --follow")}`);
-  if (gatewayReachable) {
+  if (nodeOnlyGateway) {
+    runtime.log(`  Need node service?  ${formatCliCommand("openclaw node status")}`);
+  } else if (gatewayReachable) {
     runtime.log(`  Need to test channels? ${formatCliCommand("openclaw status --deep")}`);
   } else {
     runtime.log(`  Fix reachability first: ${formatCliCommand("openclaw gateway probe")}`);
