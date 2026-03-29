@@ -988,7 +988,6 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               registerWebSearchProvider: (provider) => registerWebSearchProvider(record, provider),
               registerGatewayMethod: (method, handler, opts) =>
                 registerGatewayMethod(record, method, handler, opts),
-              registerCli: (registrar, opts) => registerCli(record, registrar, opts),
               registerService: (service) => registerService(record, service),
               registerCliBackend: (backend) => registerCliBackend(record, backend),
               registerInteractiveHandler: (registration) => {
@@ -1097,6 +1096,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                 registerTypedHook(record, hookName, handler, opts, params.hookPolicy),
             }
           : {}),
+        // Allow setup-only/setup-runtime paths to surface parse-time CLI metadata
+        // without opting into the wider full-registration surface.
+        registerCli: (registrar, opts) => registerCli(record, registrar, opts),
         registerChannel: (registration) => registerChannel(record, registration, registrationMode),
       },
     });
