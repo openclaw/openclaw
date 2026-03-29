@@ -84,6 +84,7 @@ describe("runEmbeddedAttempt memory flush tool forwarding", () => {
       });
       const writeTool: AnyAgentTool = {
         name: "write",
+        label: "write",
         description: "Write content to a file.",
         parameters: { type: "object", properties: {} },
         execute: fallbackWrite,
