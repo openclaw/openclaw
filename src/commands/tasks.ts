@@ -83,6 +83,15 @@ function formatTaskRows(tasks: TaskRecord[], rich: boolean) {
   return lines;
 }
 
+function formatTaskListSummary(tasks: TaskRecord[]) {
+  const queued = tasks.filter((task) => task.status === "queued").length;
+  const running = tasks.filter((task) => task.status === "running").length;
+  const issues = tasks.filter(
+    (task) => task.status === "failed" || task.status === "timed_out" || task.status === "lost",
+  ).length;
+  return `${queued} queued · ${running} running · ${issues} issues`;
+}
+
 export async function tasksListCommand(
   opts: { json?: boolean; runtime?: string; status?: string },
   runtime: RuntimeEnv,
@@ -116,6 +125,7 @@ export async function tasksListCommand(
   }
 
   runtime.log(info(`Background tasks: ${tasks.length}`));
+  runtime.log(info(`Task pressure: ${formatTaskListSummary(tasks)}`));
   if (runtimeFilter) {
     runtime.log(info(`Runtime filter: ${runtimeFilter}`));
   }
