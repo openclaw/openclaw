@@ -1,10 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
-import {
-  buildTelegramExecApprovalPendingPayload,
-  shouldSuppressTelegramExecApprovalForwardingFallback,
-} from "../plugin-sdk/telegram.js";
+import { shouldSuppressTelegramExecApprovalForwardingFallback } from "../plugin-sdk/telegram.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { createExecApprovalForwarder } from "./exec-approval-forwarder.js";
@@ -55,12 +52,6 @@ const telegramApprovalPlugin: Pick<
     delivery: {
       shouldSuppressForwardingFallback: (params) =>
         shouldSuppressTelegramExecApprovalForwardingFallback(params),
-    },
-    render: {
-      exec: {
-        buildPendingPayload: ({ request, nowMs }) =>
-          buildTelegramExecApprovalPendingPayload({ request, nowMs }),
-      },
     },
   },
 };
@@ -306,7 +297,7 @@ describe("exec approval forwarder", () => {
     expect(deliver).not.toHaveBeenCalled();
   });
 
-  it("attaches explicit telegram buttons in forwarded telegram fallback payloads", async () => {
+  it("attaches shared interactive approval buttons in forwarded fallback payloads", async () => {
     vi.useFakeTimers();
     const { deliver, forwarder } = createForwarder({
       cfg: makeTargetsCfg([{ channel: "telegram", to: "123" }]),
@@ -334,15 +325,30 @@ describe("exec approval forwarder", () => {
               execApproval: expect.objectContaining({
                 approvalId: "req-1",
               }),
-              telegram: {
-                buttons: [
-                  [
-                    { text: "Allow Once", callback_data: "/approve req-1 allow-once" },
-                    { text: "Allow Always", callback_data: "/approve req-1 always" },
+            },
+            interactive: {
+              blocks: [
+                {
+                  type: "buttons",
+                  buttons: [
+                    {
+                      label: "Allow Once",
+                      value: "/approve req-1 allow-once",
+                      style: "success",
+                    },
+                    {
+                      label: "Allow Always",
+                      value: "/approve req-1 always",
+                      style: "primary",
+                    },
+                    {
+                      label: "Deny",
+                      value: "/approve req-1 deny",
+                      style: "danger",
+                    },
                   ],
-                  [{ text: "Deny", callback_data: "/approve req-1 deny" }],
-                ],
-              },
+                },
+              ],
             },
           }),
         ],

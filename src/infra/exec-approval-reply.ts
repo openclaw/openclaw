@@ -1,4 +1,5 @@
 import type { ReplyPayload } from "../auto-reply/types.js";
+import type { InteractiveReply, InteractiveReplyButton } from "../interactive/payload.js";
 import type { ExecHost } from "./exec-approvals.js";
 
 export type ExecApprovalReplyDecision = "allow-once" | "allow-always" | "deny";
@@ -32,6 +33,55 @@ export type ExecApprovalUnavailableReplyParams = {
   reason: ExecApprovalUnavailableReason;
   sentApproverDms?: boolean;
 };
+
+const DEFAULT_ALLOWED_DECISIONS = ["allow-once", "allow-always", "deny"] as const;
+
+function buildApprovalDecisionCommandValue(params: {
+  approvalId: string;
+  decision: ExecApprovalReplyDecision;
+}): string {
+  return `/approve ${params.approvalId} ${params.decision === "allow-always" ? "always" : params.decision}`;
+}
+
+function buildApprovalInteractiveButtons(
+  allowedDecisions: readonly ExecApprovalReplyDecision[],
+  approvalId: string,
+): InteractiveReplyButton[] {
+  const buttons: InteractiveReplyButton[] = [];
+  if (allowedDecisions.includes("allow-once")) {
+    buttons.push({
+      label: "Allow Once",
+      value: buildApprovalDecisionCommandValue({ approvalId, decision: "allow-once" }),
+      style: "success",
+    });
+  }
+  if (allowedDecisions.includes("allow-always")) {
+    buttons.push({
+      label: "Allow Always",
+      value: buildApprovalDecisionCommandValue({ approvalId, decision: "allow-always" }),
+      style: "primary",
+    });
+  }
+  if (allowedDecisions.includes("deny")) {
+    buttons.push({
+      label: "Deny",
+      value: buildApprovalDecisionCommandValue({ approvalId, decision: "deny" }),
+      style: "danger",
+    });
+  }
+  return buttons;
+}
+
+export function buildApprovalInteractiveReply(params: {
+  approvalId: string;
+  allowedDecisions?: readonly ExecApprovalReplyDecision[];
+}): InteractiveReply | undefined {
+  const buttons = buildApprovalInteractiveButtons(
+    params.allowedDecisions ?? DEFAULT_ALLOWED_DECISIONS,
+    params.approvalId,
+  );
+  return buttons.length > 0 ? { blocks: [{ type: "buttons", buttons }] } : undefined;
+}
 
 export function getExecApprovalApproverDmNoticeText(): string {
   return "Approval required. I sent approval DMs to the approvers for this account.";
@@ -137,11 +187,12 @@ export function buildExecApprovalPendingReplyPayload(
 
   return {
     text: lines.join("\n\n"),
+    interactive: buildApprovalInteractiveReply({ approvalId: params.approvalId }),
     channelData: {
       execApproval: {
         approvalId: params.approvalId,
         approvalSlug: params.approvalSlug,
-        allowedDecisions: ["allow-once", "allow-always", "deny"],
+        allowedDecisions: DEFAULT_ALLOWED_DECISIONS,
       },
     },
   };
