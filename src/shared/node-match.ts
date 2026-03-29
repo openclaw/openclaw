@@ -6,6 +6,12 @@ export type NodeMatchCandidate = {
   clientId?: string;
 };
 
+type ScoredNodeMatch = {
+  node: NodeMatchCandidate;
+  matchScore: number;
+  selectionScore: number;
+};
+
 export function normalizeNodeKey(value: string) {
   return value
     .toLowerCase()
@@ -54,32 +60,66 @@ function pickPreferredLegacyMigrationMatch(
   return current[0];
 }
 
+function resolveMatchScore(
+  node: NodeMatchCandidate,
+  query: string,
+  queryNormalized: string,
+): number {
+  if (node.nodeId === query) {
+    return 4_000;
+  }
+  if (typeof node.remoteIp === "string" && node.remoteIp === query) {
+    return 3_000;
+  }
+  const name = typeof node.displayName === "string" ? node.displayName : "";
+  if (name && normalizeNodeKey(name) === queryNormalized) {
+    return 2_000;
+  }
+  if (query.length >= 6 && node.nodeId.startsWith(query)) {
+    return 1_000;
+  }
+  return 0;
+}
+
+function scoreNodeCandidate(node: NodeMatchCandidate, matchScore: number): number {
+  let score = matchScore;
+  if (node.connected === true) {
+    score += 100;
+  }
+  if (isCurrentOpenClawClient(node.clientId)) {
+    score += 10;
+  } else if (isLegacyClawdbotClient(node.clientId)) {
+    score -= 10;
+  }
+  return score;
+}
+
+function resolveScoredMatches(nodes: NodeMatchCandidate[], query: string): ScoredNodeMatch[] {
+  const trimmed = query.trim();
+  if (!trimmed) {
+    return [];
+  }
+  const normalized = normalizeNodeKey(trimmed);
+  return nodes
+    .map((node) => {
+      const matchScore = resolveMatchScore(node, trimmed, normalized);
+      if (matchScore === 0) {
+        return null;
+      }
+      return {
+        node,
+        matchScore,
+        selectionScore: scoreNodeCandidate(node, matchScore),
+      };
+    })
+    .filter((entry): entry is ScoredNodeMatch => entry !== null);
+}
+
 export function resolveNodeMatches(
   nodes: NodeMatchCandidate[],
   query: string,
 ): NodeMatchCandidate[] {
-  const q = query.trim();
-  if (!q) {
-    return [];
-  }
-
-  const qNorm = normalizeNodeKey(q);
-  return nodes.filter((n) => {
-    if (n.nodeId === q) {
-      return true;
-    }
-    if (typeof n.remoteIp === "string" && n.remoteIp === q) {
-      return true;
-    }
-    const name = typeof n.displayName === "string" ? n.displayName : "";
-    if (name && normalizeNodeKey(name) === qNorm) {
-      return true;
-    }
-    if (q.length >= 6 && n.nodeId.startsWith(q)) {
-      return true;
-    }
-    return false;
-  });
+  return resolveScoredMatches(nodes, query).map((entry) => entry.node);
 }
 
 export function resolveNodeIdFromCandidates(nodes: NodeMatchCandidate[], query: string): string {
@@ -88,29 +128,33 @@ export function resolveNodeIdFromCandidates(nodes: NodeMatchCandidate[], query: 
     throw new Error("node required");
   }
 
-  const rawMatches = resolveNodeMatches(nodes, q);
+  const rawMatches = resolveScoredMatches(nodes, q);
   if (rawMatches.length === 1) {
-    return rawMatches[0]?.nodeId ?? "";
+    return rawMatches[0]?.node.nodeId ?? "";
   }
   if (rawMatches.length === 0) {
     const known = listKnownNodes(nodes);
     throw new Error(`unknown node: ${q}${known ? ` (known: ${known})` : ""}`);
   }
 
-  // Re-pair/reinstall flows can leave multiple nodes with the same display name.
-  // Prefer a unique connected match when available.
-  const connectedMatches = rawMatches.filter((match) => match.connected === true);
-  const matches = connectedMatches.length > 0 ? connectedMatches : rawMatches;
-  if (matches.length === 1) {
-    return matches[0]?.nodeId ?? "";
+  const topMatchScore = Math.max(...rawMatches.map((match) => match.matchScore));
+  const strongestMatches = rawMatches.filter((match) => match.matchScore === topMatchScore);
+  if (strongestMatches.length === 1) {
+    return strongestMatches[0]?.node.nodeId ?? "";
   }
 
-  const preferred = pickPreferredLegacyMigrationMatch(matches);
+  const topSelectionScore = Math.max(...strongestMatches.map((match) => match.selectionScore));
+  const matches = strongestMatches.filter((match) => match.selectionScore === topSelectionScore);
+  if (matches.length === 1) {
+    return matches[0]?.node.nodeId ?? "";
+  }
+
+  const preferred = pickPreferredLegacyMigrationMatch(matches.map((match) => match.node));
   if (preferred) {
     return preferred.nodeId;
   }
 
   throw new Error(
-    `ambiguous node: ${q} (matches: ${matches.map(formatNodeCandidateLabel).join(", ")})`,
+    `ambiguous node: ${q} (matches: ${matches.map((match) => formatNodeCandidateLabel(match.node)).join(", ")})`,
   );
 }
