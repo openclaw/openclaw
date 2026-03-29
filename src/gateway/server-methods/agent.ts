@@ -26,7 +26,11 @@ import { classifySessionKeyShape, normalizeAgentId } from "../../routing/session
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
-import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
+import { createTaskRecord } from "../../tasks/task-registry.js";
+import {
+  normalizeDeliveryContext,
+  normalizeSessionDeliveryFields,
+} from "../../utils/delivery-context.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,
@@ -184,6 +188,30 @@ function dispatchAgentRunFromGateway(params: {
   respond: GatewayRequestHandlerOptions["respond"];
   context: GatewayRequestHandlerOptions["context"];
 }) {
+  if (params.ingressOpts.sessionKey?.trim()) {
+    try {
+      createTaskRecord({
+        source: "background_cli",
+        runtime: "cli",
+        requesterSessionKey: params.ingressOpts.sessionKey,
+        requesterOrigin: normalizeDeliveryContext({
+          channel: params.ingressOpts.channel,
+          to: params.ingressOpts.to,
+          accountId: params.ingressOpts.accountId,
+          threadId: params.ingressOpts.threadId,
+        }),
+        childSessionKey: params.ingressOpts.sessionKey,
+        runId: params.runId,
+        bindingTargetKind: "session",
+        task: params.ingressOpts.message,
+        status: "running",
+        deliveryStatus: "not_applicable",
+        startedAt: Date.now(),
+      });
+    } catch {
+      // Best-effort only: background task tracking must not block agent runs.
+    }
+  }
   void agentCommandFromIngress(params.ingressOpts, defaultRuntime, params.context.deps)
     .then((result) => {
       const payload = {
@@ -453,7 +481,7 @@ export const agentHandlers: GatewayRequestHandlers = {
     // Inject timestamp into user-authored messages that don't already have one.
     // Channel messages (Discord, Telegram, etc.) get timestamps via envelope
     // formatting in a separate code path — they never reach this handler.
-    // See: https://github.com/moltbot/moltbot/issues/3658
+    // See: https://github.com/openclaw/openclaw/issues/3658
     if (!skipTimestampInjection) {
       message = injectTimestamp(message, timestampOptsFromConfig(cfg));
     }

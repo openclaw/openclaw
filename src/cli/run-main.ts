@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { normalizeEnv } from "../infra/env.js";
 import { formatUncaughtError } from "../infra/errors.js";
@@ -9,6 +10,7 @@ import { isMainModule } from "../infra/is-main.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import { enableConsoleCapture } from "../logging.js";
+import { normalizePluginId } from "../plugins/config-state.js";
 import { hasMemoryRuntime } from "../plugins/memory-state.js";
 import {
   getCommandPathWithRootOptions,
@@ -84,6 +86,28 @@ export function shouldEnsureCliPath(argv: string[]): boolean {
 
 export function shouldUseRootHelpFastPath(argv: string[]): boolean {
   return isRootHelpInvocation(argv);
+}
+
+export function resolveMissingBrowserCommandMessage(config?: OpenClawConfig): string | null {
+  const allow =
+    Array.isArray(config?.plugins?.allow) && config.plugins.allow.length > 0
+      ? config.plugins.allow
+          .filter((entry): entry is string => typeof entry === "string")
+          .map((entry) => normalizePluginId(entry))
+      : [];
+  if (allow.length > 0 && !allow.includes("browser")) {
+    return (
+      'The `openclaw browser` command is unavailable because `plugins.allow` excludes "browser". ' +
+      'Add "browser" to `plugins.allow` if you want the bundled browser CLI and tool.'
+    );
+  }
+  if (config?.plugins?.entries?.browser?.enabled === false) {
+    return (
+      "The `openclaw browser` command is unavailable because `plugins.entries.browser.enabled=false`. " +
+      "Re-enable that entry if you want the bundled browser CLI and tool."
+    );
+  }
+  return null;
 }
 
 function shouldLoadCliDotEnv(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -189,7 +213,19 @@ export async function runCli(argv: string[] = process.argv) {
         await import("./program/register.subclis.js");
       const config = await loadValidatedConfigForPluginRegistration();
       if (config) {
-        registerPluginCliCommands(program, config);
+        await registerPluginCliCommands(program, config, undefined, undefined, {
+          mode: "lazy",
+          primary,
+        });
+        if (
+          primary === "browser" &&
+          !program.commands.some((command) => command.name() === "browser")
+        ) {
+          const browserCommandMessage = resolveMissingBrowserCommandMessage(config);
+          if (browserCommandMessage) {
+            throw new Error(browserCommandMessage);
+          }
+        }
       }
     }
 
