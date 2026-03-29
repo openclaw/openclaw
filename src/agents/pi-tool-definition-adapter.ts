@@ -172,24 +172,53 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
   });
 }
 
-// Convert client tools (OpenResponses hosted tools) to ToolDefinition format
-// These tools are intercepted to return a "pending" result instead of executing
+/** Prefix applied to caller-provided tools that collide with built-in tool names. */
+export const CLIENT_TOOL_COLLISION_PREFIX = "user_";
+
+/**
+ * Result of converting client tools with collision detection.
+ * `renamedTools` maps prefixed names back to the caller's original names
+ * (e.g. `{ "user_read": "read" }`). Empty when no collisions occurred.
+ */
+export interface ClientToolConversionResult {
+  tools: ToolDefinition[];
+  renamedTools: Map<string, string>;
+}
+
+// Convert client tools (OpenResponses hosted tools) to ToolDefinition format.
+// These tools are intercepted to return a "pending" result instead of executing.
+// When `builtInToolNames` is provided, any client tool whose name collides with a
+// built-in is automatically prefixed with `user_` to prevent shadowing server-side
+// tools. The original name is preserved in the onClientToolCall callback so the
+// caller receives the name it expects in the function_call response.
 export function toClientToolDefinitions(
   tools: ClientToolDefinition[],
   onClientToolCall?: (toolName: string, params: Record<string, unknown>) => void,
   hookContext?: HookContext,
-): ToolDefinition[] {
-  return tools.map((tool) => {
+  builtInToolNames?: ReadonlySet<string>,
+): ClientToolConversionResult {
+  const renamedTools = new Map<string, string>();
+
+  const defs = tools.map((tool) => {
     const func = tool.function;
+    const originalName = func.name;
+
+    // Detect collision with built-in tools and prefix to avoid shadowing
+    let effectiveName = originalName;
+    if (builtInToolNames?.has(originalName)) {
+      effectiveName = `${CLIENT_TOOL_COLLISION_PREFIX}${originalName}`;
+      renamedTools.set(effectiveName, originalName);
+    }
+
     return {
-      name: func.name,
-      label: func.name,
+      name: effectiveName,
+      label: effectiveName,
       description: func.description ?? "",
       parameters: func.parameters as ToolDefinition["parameters"],
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
         const { toolCallId, params } = splitToolExecuteArgs(args);
         const outcome = await runBeforeToolCallHook({
-          toolName: func.name,
+          toolName: effectiveName,
           params,
           toolCallId,
           ctx: hookContext,
@@ -199,17 +228,20 @@ export function toClientToolDefinitions(
         }
         const adjustedParams = outcome.params;
         const paramsRecord = isPlainObject(adjustedParams) ? adjustedParams : {};
-        // Notify handler that a client tool was called
+        // Notify handler with the ORIGINAL name so the caller's function_call
+        // response contains the name it expects (not the prefixed version).
         if (onClientToolCall) {
-          onClientToolCall(func.name, paramsRecord);
+          onClientToolCall(originalName, paramsRecord);
         }
         // Return a pending result - the client will execute this tool
         return jsonResult({
           status: "pending",
-          tool: func.name,
+          tool: originalName,
           message: "Tool execution delegated to client",
         });
       },
     } satisfies ToolDefinition;
   });
+
+  return { tools: defs, renamedTools };
 }

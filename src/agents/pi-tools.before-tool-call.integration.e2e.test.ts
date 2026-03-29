@@ -328,7 +328,9 @@ describe("before_tool_call hook integration for client tools", () => {
       runBeforeToolCallImpl: async () => ({ params: { extra: true } }),
     });
     const onClientToolCall = vi.fn();
-    const [tool] = toClientToolDefinitions(
+    const {
+      tools: [tool],
+    } = toClientToolDefinitions(
       [
         {
           type: "function",

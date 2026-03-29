@@ -74,7 +74,10 @@ import {
 import { subscribeEmbeddedPiSession } from "../../pi-embedded-subscribe.js";
 import { createPreparedEmbeddedPiSettingsManager } from "../../pi-project-settings.js";
 import { applyPiAutoCompactionGuard } from "../../pi-settings.js";
-import { toClientToolDefinitions } from "../../pi-tool-definition-adapter.js";
+import {
+  toClientToolDefinitions,
+  CLIENT_TOOL_COLLISION_PREFIX,
+} from "../../pi-tool-definition-adapter.js";
 import { createOpenClawCodingTools, resolveToolLoopDetectionConfig } from "../../pi-tools.js";
 import { registerProviderStreamForModel } from "../../provider-stream.js";
 import { resolveSandboxContext } from "../../sandbox.js";
@@ -798,13 +801,29 @@ export async function runEmbeddedAttempt(
         sandboxEnabled: !!sandbox?.enabled,
       });
 
-      // Add client tools (OpenResponses hosted tools) to customTools
+      // Add client tools (OpenResponses hosted tools) to customTools.
+      // Detect name collisions with built-in tools and prefix to prevent
+      // caller-provided tools from shadowing server-side execution.
       let clientToolCallDetected: { name: string; params: Record<string, unknown> } | null = null;
       const clientToolLoopDetection = resolveToolLoopDetectionConfig({
         cfg: params.config,
         agentId: sessionAgentId,
       });
-      const clientToolDefs = clientTools
+
+      // Collect built-in tool names for collision detection
+      const builtInToolNames = new Set<string>();
+      for (const tool of effectiveTools) {
+        if (tool.name) {
+          builtInToolNames.add(tool.name);
+        }
+      }
+      for (const tool of customTools) {
+        if (tool.name) {
+          builtInToolNames.add(tool.name);
+        }
+      }
+
+      const clientToolConversion = clientTools
         ? toClientToolDefinitions(
             clientTools,
             (toolName, toolParams) => {
@@ -817,10 +836,41 @@ export async function runEmbeddedAttempt(
               runId: params.runId,
               loopDetection: clientToolLoopDetection,
             },
+            builtInToolNames,
           )
-        : [];
+        : { tools: [], renamedTools: new Map<string, string>() };
+      const clientToolDefs = clientToolConversion.tools;
+      const renamedClientTools = clientToolConversion.renamedTools;
 
       const allCustomTools = [...customTools, ...clientToolDefs];
+
+      // Update allowedToolNames with prefixed names so the model can call them
+      for (const prefixed of renamedClientTools.keys()) {
+        allowedToolNames.add(prefixed);
+      }
+
+      // If any client tools were renamed to avoid collisions, add a system prompt
+      // note so the model uses the prefixed names and understands the mapping.
+      if (renamedClientTools.size > 0) {
+        const lines = [
+          "## Caller-Provided Tool Namespace",
+          "Some caller-provided tools were renamed to avoid conflicts with built-in tools.",
+          `The prefix \`${CLIENT_TOOL_COLLISION_PREFIX}\` was added. Use the prefixed names when calling these tools:`,
+        ];
+        for (const [prefixed, original] of renamedClientTools) {
+          lines.push(
+            `- \`${prefixed}\` — caller-provided (originally \`${original}\`); this is NOT the built-in \`${original}\` tool`,
+          );
+        }
+        lines.push(
+          "",
+          `Built-in tools (${[...builtInToolNames].filter((n) => renamedClientTools.has(`${CLIENT_TOOL_COLLISION_PREFIX}${n}`)).join(", ")}) remain available and execute server-side as normal.`,
+        );
+        const collisionNote = lines.join("\n");
+        systemPromptText = systemPromptText
+          ? `${systemPromptText}\n\n${collisionNote}`
+          : collisionNote;
+      }
 
       ({ session } = await createAgentSession({
         cwd: resolvedWorkspace,
