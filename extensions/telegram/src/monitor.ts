@@ -2,6 +2,7 @@ import type { RunOptions } from "@grammyjs/runner";
 import { resolveAgentMaxConcurrent } from "openclaw/plugin-sdk/config-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/config-runtime";
 import { waitForAbortSignal } from "openclaw/plugin-sdk/runtime-env";
 import { registerUnhandledRejectionHandler } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
@@ -75,6 +76,55 @@ const isGrammyHttpError = (err: unknown): boolean => {
   return (err as { name?: string }).name === "HttpError";
 };
 
+async function resolveMonitorTelegramToken(params: {
+  cfg: OpenClawConfig;
+  explicitToken?: string;
+  resolvedAccountToken: string;
+  resolvedAccountTokenSource: "env" | "tokenFile" | "config" | "none";
+}): Promise<string> {
+  const explicitToken = params.explicitToken?.trim();
+  if (explicitToken) {
+    const resolved = await resolveConfiguredSecretInputString({
+      config: params.cfg,
+      env: process.env,
+      value: explicitToken,
+      path: "telegram.monitor.token",
+    });
+    if (resolved.value) {
+      return resolved.value;
+    }
+    if (explicitToken === params.resolvedAccountToken) {
+      throw new Error(
+        `Telegram bot token unavailable: ${resolved.unresolvedRefReason ?? "explicit token SecretRef is unresolved."}`,
+      );
+    }
+    return explicitToken;
+  }
+
+  if (params.resolvedAccountTokenSource === "env") {
+    const envToken = process.env.TELEGRAM_BOT_TOKEN?.trim();
+    if (envToken) {
+      const resolved = await resolveConfiguredSecretInputString({
+        config: params.cfg,
+        env: process.env,
+        value: envToken,
+        path: "TELEGRAM_BOT_TOKEN",
+      });
+      if (resolved.value) {
+        return resolved.value;
+      }
+      if (envToken === params.resolvedAccountToken) {
+        throw new Error(
+          `Telegram bot token unavailable: ${resolved.unresolvedRefReason ?? "TELEGRAM_BOT_TOKEN SecretRef is unresolved."}`,
+        );
+      }
+      return envToken;
+    }
+  }
+
+  return params.resolvedAccountToken.trim();
+}
+
 export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
   const log = opts.runtime?.error ?? console.error;
   let pollingSession: TelegramPollingSession | undefined;
@@ -110,7 +160,12 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       cfg,
       accountId: opts.accountId,
     });
-    const token = opts.token?.trim() || account.token;
+    const token = await resolveMonitorTelegramToken({
+      cfg,
+      explicitToken: opts.token,
+      resolvedAccountToken: account.token,
+      resolvedAccountTokenSource: account.tokenSource,
+    });
     if (!token) {
       throw new Error(
         `Telegram bot token missing for account "${account.accountId}" (set channels.telegram.accounts.${account.accountId}.botToken/tokenFile or TELEGRAM_BOT_TOKEN for default).`,

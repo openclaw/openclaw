@@ -41,6 +41,11 @@ const { initSpy, runSpy, loadConfig } = vi.hoisted(() => ({
     channels: { telegram: {} },
   })),
 }));
+const { resolveConfiguredSecretInputStringMock } = vi.hoisted(() => ({
+  resolveConfiguredSecretInputStringMock: vi.fn(async ({ value }: { value: unknown }) => ({
+    value: typeof value === "string" ? value.trim() || undefined : undefined,
+  })),
+}));
 
 const { registerUnhandledRejectionHandlerMock, emitUnhandledRejection, resetUnhandledRejection } =
   vi.hoisted(() => {
@@ -246,6 +251,7 @@ vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
   return {
     ...actual,
     loadConfig,
+    resolveConfiguredSecretInputString: resolveConfiguredSecretInputStringMock,
   };
 });
 
@@ -338,6 +344,11 @@ describe("monitorTelegramProvider (grammY)", () => {
       agents: { defaults: { maxConcurrent: 2 } },
       channels: { telegram: {} },
     });
+    resolveConfiguredSecretInputStringMock
+      .mockReset()
+      .mockImplementation(async ({ value }: { value: unknown }) => ({
+        value: typeof value === "string" ? value.trim() || undefined : undefined,
+      }));
     initSpy.mockClear();
     readTelegramUpdateOffsetSpy.mockReset().mockResolvedValue(null);
     api.getUpdates.mockReset().mockResolvedValue([]);
@@ -405,6 +416,28 @@ describe("monitorTelegramProvider (grammY)", () => {
           maxRetryTime: 60 * 60 * 1000,
           retryInterval: "exponential",
         }),
+      }),
+    );
+  });
+
+  it("resolves env SecretRef token before starting the provider", async () => {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "op://secrets/telegram/credential");
+    resolveConfiguredSecretInputStringMock.mockResolvedValueOnce({
+      value: "resolved-telegram-token",
+    });
+    const abort = new AbortController();
+    mockRunOnceAndAbort(abort);
+    await monitorTelegramProvider({ abortSignal: abort.signal });
+
+    expect(resolveConfiguredSecretInputStringMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        value: "op://secrets/telegram/credential",
+        path: "TELEGRAM_BOT_TOKEN",
+      }),
+    );
+    expect(readTelegramUpdateOffsetSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        botToken: "resolved-telegram-token",
       }),
     );
   });
