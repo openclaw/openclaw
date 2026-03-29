@@ -621,6 +621,18 @@ describe("OpenAIWebSocketManager", () => {
       expect(sent["tools"]).toHaveLength(1);
       expect((sent["tools"] as Array<{ name?: string }>)[0]?.name).toBe("exec");
     });
+
+    it("omits tools when provided as an empty array", async () => {
+      const { manager, sock } = await createConnectedManager();
+
+      manager.warmUp({
+        model: "gpt-5.2",
+        tools: [],
+      });
+
+      const sent = JSON.parse(sock.sentMessages[0] ?? "{}") as Record<string, unknown>;
+      expect(sent).not.toHaveProperty("tools");
+    });
   });
 
   // ─── Error handling ─────────────────────────────────────────────────────────
