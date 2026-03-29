@@ -29,7 +29,7 @@ Use dated filenames:
 
 Example:
 
-`docs/internal/osolmaz/2026-03-29-background-task-lifecycle.md`
+`docs/internal/steipete/2026-03-29-background-task-lifecycle.md`
 
 Do not use this README to track or index individual notes. Keep it focused on the conventions for creating and organizing them.
 
@@ -41,8 +41,8 @@ Use YAML frontmatter. At minimum include:
 ---
 title: "Background Task Lifecycle"
 summary: "Plan for background task creation, recovery, and cleanup"
-author: "Onur Solmaz <onur@solmaz.io>"
-github_username: "osolmaz"
+author: "Peter Steinberger <steipete@gmail.com>"
+github_username: "steipete"
 created: "2026-03-29"
 ---
 ```
