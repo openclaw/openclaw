@@ -1,6 +1,5 @@
 import { Type } from "@sinclair/typebox";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
-import { ACP_SPAWN_MODES, ACP_SPAWN_STREAM_TARGETS, spawnAcpDirect } from "../acp-spawn.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import type { SpawnedToolContext } from "../spawned-context.js";
 import { SUBAGENT_SPAWN_MODES, spawnSubagentDirect } from "../subagent-spawn.js";
@@ -9,6 +8,9 @@ import { jsonResult, readStringParam, ToolInputError } from "./common.js";
 
 const SESSIONS_SPAWN_RUNTIMES = ["subagent", "acp"] as const;
 const SESSIONS_SPAWN_SANDBOX_MODES = ["inherit", "require"] as const;
+const ACP_SESSIONS_SPAWN_MODES = ["run", "session"] as const;
+const ACP_SESSIONS_SPAWN_STREAM_TARGETS = ["parent"] as const;
+const ACP_SESSIONS_PARENT_UPDATE_MODES = ["system", "notify"] as const;
 const UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS = [
   "target",
   "transport",
@@ -41,7 +43,8 @@ const SessionsSpawnToolSchema = Type.Object({
   mode: optionalStringEnum(SUBAGENT_SPAWN_MODES),
   cleanup: optionalStringEnum(["delete", "keep"] as const),
   sandbox: optionalStringEnum(SESSIONS_SPAWN_SANDBOX_MODES),
-  streamTo: optionalStringEnum(ACP_SPAWN_STREAM_TARGETS),
+  streamTo: optionalStringEnum(ACP_SESSIONS_SPAWN_STREAM_TARGETS),
+  parentUpdates: optionalStringEnum(ACP_SESSIONS_PARENT_UPDATE_MODES),
 
   // Inline attachments (snapshot-by-value).
   // NOTE: Attachment contents are redacted from transcript persistence by sanitizeToolCallInputs.
@@ -106,6 +109,12 @@ export function createSessionsSpawnTool(
         params.cleanup === "keep" || params.cleanup === "delete" ? params.cleanup : "keep";
       const sandbox = params.sandbox === "require" ? "require" : "inherit";
       const streamTo = params.streamTo === "parent" ? "parent" : undefined;
+      const parentUpdates =
+        params.parentUpdates === "notify"
+          ? "notify"
+          : params.parentUpdates === "system"
+            ? "system"
+            : undefined;
       // Back-compat: older callers used timeoutSeconds for this tool.
       const timeoutSecondsCandidate =
         typeof params.runTimeoutSeconds === "number"
@@ -126,6 +135,13 @@ export function createSessionsSpawnTool(
             mimeType?: string;
           }>)
         : undefined;
+
+      if (parentUpdates && runtime !== "acp") {
+        return jsonResult({
+          status: "error",
+          error: `parentUpdates is only supported for runtime=acp; got runtime=${runtime}`,
+        });
+      }
 
       if (streamTo && runtime !== "acp") {
         return jsonResult({
@@ -149,6 +165,7 @@ export function createSessionsSpawnTool(
               "attachments are currently unsupported for runtime=acp; use runtime=subagent or remove attachments",
           });
         }
+        const { spawnAcpDirect } = await import("../acp-spawn.js");
         const result = await spawnAcpDirect(
           {
             task,
@@ -156,10 +173,11 @@ export function createSessionsSpawnTool(
             agentId: requestedAgentId,
             resumeSessionId,
             cwd,
-            mode: mode && ACP_SPAWN_MODES.includes(mode) ? mode : undefined,
+            mode: mode && ACP_SESSIONS_SPAWN_MODES.includes(mode) ? mode : undefined,
             thread,
             sandbox,
             streamTo,
+            parentUpdates,
           },
           {
             agentSessionKey: opts?.agentSessionKey,

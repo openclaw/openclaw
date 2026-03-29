@@ -36,8 +36,13 @@ import "./test-helpers/fast-core-tools.js";
 import { __testing as openClawToolsTesting, createOpenClawTools } from "./openclaw-tools.js";
 import { __testing as subagentControlTesting } from "./subagent-control.js";
 import { __testing as agentStepTesting } from "./tools/agent-step.js";
+import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
+import { createSessionsListTool } from "./tools/sessions-list-tool.js";
 import { __testing as sessionsResolutionTesting } from "./tools/sessions-resolution.js";
+import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 import { __testing as sessionsSendA2ATesting } from "./tools/sessions-send-tool.a2a.js";
+import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
+import { createSubagentsTool } from "./tools/subagents-tool.js";
 
 const TEST_CONFIG = {
   session: {
@@ -88,7 +93,29 @@ describe("sessions tools", () => {
   });
 
   it("uses number (not integer) in tool schemas for Gemini compatibility", () => {
-    const tools = createOpenClawTools();
+    const tools = [
+      createSessionsHistoryTool({
+        agentSessionKey: "agent:main:main",
+        config: TEST_CONFIG,
+        callGateway: (opts: unknown) => callGatewayMock(opts),
+      }),
+      createSessionsListTool({
+        agentSessionKey: "agent:main:main",
+        config: TEST_CONFIG,
+        callGateway: (opts: unknown) => callGatewayMock(opts),
+      }),
+      createSessionsSendTool({
+        agentSessionKey: "agent:main:main",
+        config: TEST_CONFIG,
+        callGateway: (opts: unknown) => callGatewayMock(opts),
+      }),
+      createSessionsSpawnTool({
+        agentSessionKey: "agent:main:main",
+      }),
+      createSubagentsTool({
+        agentSessionKey: "agent:main:main",
+      }),
+    ];
     const byName = (name: string) => {
       const tool = tools.find((candidate) => candidate.name === name);
       expect(tool).toBeDefined();
@@ -128,6 +155,7 @@ describe("sessions tools", () => {
     expect(schemaProp("sessions_spawn", "mode").type).toBe("string");
     expect(schemaProp("sessions_spawn", "sandbox").type).toBe("string");
     expect(schemaProp("sessions_spawn", "streamTo").type).toBe("string");
+    expect(schemaProp("sessions_spawn", "parentUpdates").type).toBe("string");
     expect(schemaProp("sessions_spawn", "runtime").type).toBe("string");
     expect(schemaProp("sessions_spawn", "cwd").type).toBe("string");
     expect(schemaProp("subagents", "recentMinutes").type).toBe("number");

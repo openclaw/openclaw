@@ -15,6 +15,7 @@ vi.mock("../subagent-spawn.js", () => ({
 }));
 
 vi.mock("../acp-spawn.js", () => ({
+  ACP_PARENT_UPDATE_MODES: ["system", "notify"],
   ACP_SPAWN_MODES: ["run", "session"],
   ACP_SPAWN_STREAM_TARGETS: ["parent"],
   spawnAcpDirect: (...args: unknown[]) => hoisted.spawnAcpDirectMock(...args),
@@ -29,6 +30,7 @@ async function loadFreshSessionsSpawnToolModuleForTest() {
     spawnSubagentDirect: (...args: unknown[]) => hoisted.spawnSubagentDirectMock(...args),
   }));
   vi.doMock("../acp-spawn.js", () => ({
+    ACP_PARENT_UPDATE_MODES: ["system", "notify"],
     ACP_SPAWN_MODES: ["run", "session"],
     ACP_SPAWN_STREAM_TARGETS: ["parent"],
     spawnAcpDirect: (...args: unknown[]) => hoisted.spawnAcpDirectMock(...args),
@@ -178,6 +180,30 @@ describe("sessions_spawn tool", () => {
     );
   });
 
+  it("passes parentUpdates through to ACP spawns", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    await tool.execute("call-2parent", {
+      runtime: "acp",
+      task: "resume prior work",
+      agentId: "codex",
+      streamTo: "parent",
+      parentUpdates: "notify",
+    });
+
+    expect(hoisted.spawnAcpDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: "resume prior work",
+        agentId: "codex",
+        streamTo: "parent",
+        parentUpdates: "notify",
+      }),
+      expect.any(Object),
+    );
+  });
+
   it("passes resumeSessionId through to ACP spawns", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
@@ -236,6 +262,52 @@ describe("sessions_spawn tool", () => {
     const details = result.details as { error?: string };
     expect(details.error).toContain("attachments are currently unsupported for runtime=acp");
     expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects parentUpdates when runtime is not "acp"', async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    const result = await tool.execute("call-3aa", {
+      runtime: "subagent",
+      task: "analyze file",
+      streamTo: "parent",
+      parentUpdates: "notify",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "error",
+    });
+    const details = result.details as { error?: string };
+    expect(details.error).toContain("parentUpdates is only supported for runtime=acp");
+    expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+  });
+
+  it('passes parentUpdates through even without streamTo="parent"', async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    const result = await tool.execute("call-3ab", {
+      runtime: "acp",
+      task: "analyze file",
+      parentUpdates: "notify",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "accepted",
+    });
+    expect(hoisted.spawnAcpDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: "analyze file",
+        parentUpdates: "notify",
+        streamTo: undefined,
+      }),
+      expect.any(Object),
+    );
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
 

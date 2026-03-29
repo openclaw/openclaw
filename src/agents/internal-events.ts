@@ -2,7 +2,7 @@ export type AgentInternalEventType = "task_completion";
 
 export type AgentTaskCompletionInternalEvent = {
   type: "task_completion";
-  source: "subagent" | "cron";
+  source: "subagent" | "cron" | "acp";
   childSessionKey: string;
   childSessionId?: string;
   announceType: string;

@@ -304,8 +304,16 @@ Interface details:
 - `cwd` (optional): requested runtime working directory (validated by backend/runtime policy).
 - `label` (optional): operator-facing label used in session/banner text.
 - `resumeSessionId` (optional): resume an existing ACP session instead of creating a new one. The agent replays its conversation history via `session/load`. Requires `runtime: "acp"`.
-- `streamTo` (optional): `"parent"` streams initial ACP run progress summaries back to the requester session as system events.
+- `streamTo` (optional): `"parent"` streams initial ACP run progress summaries back to the requester session.
   - When available, accepted responses include `streamLogPath` pointing to a session-scoped JSONL log (`<sessionId>.acp-stream.jsonl`) you can tail for full relay history.
+- `parentUpdates` (optional): controls how ACP `mode: "run"` spawns report back to the requester session.
+  - `system` is the default behavior and preserves the current relay path.
+  - `notify` is opt-in and changes terminal completion routing so the finished ACP task is announced back into the parent session like a subagent completion.
+  - `notify` requires `mode: "run"` and an active requester session context.
+  - When `notify` owns terminal delivery, OpenClaw suppresses child inline external delivery so the parent session remains the only user-facing completion path.
+  - `streamTo: "parent"` remains the switch for progress relay. When both are set, progress stays on the lightweight relay path while terminal completion uses the announce path.
+  - This split is intentional: progress updates are frequent, best-effort status signals, while announce is better suited to one terminal completion message with final outcome metadata.
+  - If the notify path is unavailable, OpenClaw falls back to the normal parent-session system-event completion notice.
 
 ### Resume an existing session
 

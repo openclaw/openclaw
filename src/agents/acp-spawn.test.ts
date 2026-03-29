@@ -925,6 +925,13 @@ describe("spawnAcpDirect", () => {
         agentId: "codex",
         logPath: "/tmp/sess-main.acp-stream.jsonl",
         emitStartNotice: false,
+        parentUpdateMode: "system",
+        requesterOrigin: expect.objectContaining({
+          channel: "discord",
+          accountId: "default",
+          to: "channel:parent-channel",
+        }),
+        taskLabel: "Investigate flaky tests",
       }),
     );
     const relayRuns = hoisted.startAcpSpawnParentStreamRelayMock.mock.calls.map(
@@ -938,6 +945,92 @@ describe("spawnAcpDirect", () => {
     expect(firstHandle.dispose).toHaveBeenCalledTimes(1);
     expect(firstHandle.notifyStarted).not.toHaveBeenCalled();
     expect(secondHandle.notifyStarted).toHaveBeenCalledTimes(1);
+  });
+
+  it('passes parentUpdates="notify" through to the parent relay', async () => {
+    const relayHandle = createRelayHandle();
+    hoisted.startAcpSpawnParentStreamRelayMock.mockReset().mockReturnValue(relayHandle);
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        label: "Flaky tests",
+        agentId: "codex",
+        streamTo: "parent",
+        parentUpdates: "notify",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "discord",
+        agentAccountId: "default",
+        agentTo: "channel:parent-channel",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(hoisted.startAcpSpawnParentStreamRelayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        relayProgressToParent: true,
+        parentUpdateMode: "notify",
+        requesterOrigin: expect.objectContaining({
+          channel: "discord",
+          accountId: "default",
+          to: "channel:parent-channel",
+        }),
+        taskLabel: "Flaky tests",
+      }),
+    );
+  });
+
+  it('starts a completion-only parent relay when parentUpdates="notify" is used without streamTo="parent"', async () => {
+    const relayHandle = createRelayHandle();
+    hoisted.startAcpSpawnParentStreamRelayMock.mockReset().mockReturnValue(relayHandle);
+    const requesterContext = createRequesterContext();
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        parentUpdates: "notify",
+      },
+      requesterContext,
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(result.mode).toBe("run");
+    expect(hoisted.startAcpSpawnParentStreamRelayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        relayProgressToParent: false,
+        parentUpdateMode: "notify",
+        parentSessionKey: requesterContext.agentSessionKey,
+      }),
+    );
+    expectAgentGatewayCall({
+      deliver: false,
+      channel: undefined,
+      to: undefined,
+      threadId: undefined,
+    });
+  });
+
+  it('rejects parentUpdates="notify" for ACP mode="session"', async () => {
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+        mode: "session",
+        thread: true,
+        parentUpdates: "notify",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expect(result.status).toBe("error");
+    expect(result.error).toContain('parentUpdates="notify"');
+    expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
+    expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
   });
 
   it("implicitly streams mode=run ACP spawns for subagent requester sessions", async () => {
