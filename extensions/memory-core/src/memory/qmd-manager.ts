@@ -1316,10 +1316,10 @@ export class QmdMemoryManager implements MemorySearchManager {
 
   private isQueryToolNotFoundError(err: unknown): boolean {
     const message = err instanceof Error ? err.message : String(err);
-    const detail =
-      message.match(/ failed \(code \d+\): ([\s\S]*)$/)?.[1] ??
-      message.match(/ timed out after \d+ms: ([\s\S]*)$/)?.[1] ??
-      message;
+    const detail = message.match(/ failed \(code \d+\): ([\s\S]*)$/)?.[1];
+    if (!detail) {
+      return false;
+    }
     // Match only the specific v2-query missing-tool signatures emitted by MCP.
     // The full mcporter command summary includes the serialized user query, so
     // parse only the trailing stderr/stdout detail before deciding to pin v1.

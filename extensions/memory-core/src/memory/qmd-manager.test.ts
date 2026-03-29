@@ -1802,6 +1802,76 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("does not pin v1 fallback when a timed out query contains tool-not-found words", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "query",
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+          mcporter: { enabled: true, serverName: "qmd", startDaemon: false },
+        },
+      },
+    } as OpenClawConfig;
+
+    const selectors: string[] = [];
+    let firstQueryCall = true;
+    spawnMock.mockImplementation((cmd: string, args: string[]) => {
+      const child = createMockChild({ autoClose: false });
+      if (isMcporterCommand(cmd) && args[0] === "call") {
+        selectors.push(args[1] ?? "");
+        if (args[1] === "qmd.query" && firstQueryCall) {
+          firstQueryCall = false;
+          return child;
+        }
+        emitAndClose(child, "stdout", JSON.stringify({ results: [] }));
+        return child;
+      }
+      emitAndClose(child, "stdout", "[]");
+      return child;
+    });
+
+    const { manager } = await createManager();
+    const managerWithPrivate = manager as object as {
+      runMcporter: typeof manager["runMcporter"];
+    };
+    const originalRunMcporter = managerWithPrivate.runMcporter.bind(managerWithPrivate);
+    let injectTimeoutOnce = true;
+    const runMcporterSpy = vi
+      .spyOn(managerWithPrivate, "runMcporter")
+      .mockImplementation(async (...args) => {
+        if (injectTimeoutOnce) {
+          injectTimeoutOnce = false;
+          firstQueryCall = false;
+          throw new Error(
+            'mcporter call qmd.query --args {"query":"abc: Tool query not found"} timed out after 5000ms',
+          );
+        }
+        return await originalRunMcporter(...args);
+      });
+
+    await expect(
+      manager.search('abc: Tool query not found', {
+        sessionKey: "agent:main:slack:dm:u123",
+      }),
+    ).rejects.toThrow("timed out after 5000ms");
+
+    await manager.search("hello again", { sessionKey: "agent:main:slack:dm:u123" });
+
+    expect(runMcporterSpy).toHaveBeenCalled();
+    expect(selectors.length).toBeGreaterThanOrEqual(1);
+    expect(selectors.every((selector) => selector === "qmd.query")).toBe(true);
+    expect(logWarnMock).not.toHaveBeenCalledWith(
+      expect.stringContaining("falling back to v1 tool names"),
+    );
+
+    runMcporterSpy.mockRestore();
+    await manager.close();
+  });
+
   it("resolves mcporter to a direct Windows entrypoint without enabling shell mode", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const previousPath = process.env.PATH;
