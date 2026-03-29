@@ -8,7 +8,7 @@ const { loadConfigMock, isNodeCommandAllowedMock, resolveNodeCommandAllowlistMoc
   }),
 );
 
-vi.mock("../../../../src/config/config.js", () => ({
+vi.mock("openclaw/plugin-sdk/config-runtime", () => ({
   loadConfig: loadConfigMock,
 }));
 
