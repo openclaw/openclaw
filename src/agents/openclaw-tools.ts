@@ -7,7 +7,11 @@ import {
 } from "../secrets/runtime.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
-import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
+import {
+  resolveAgentConfig,
+  resolveAgentWorkspaceDir,
+  resolveSessionAgentId,
+} from "./agent-scope.js";
 import { applyPluginToolDeliveryDefaults } from "./plugin-tool-delivery-defaults.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
@@ -23,6 +27,7 @@ import { createMessageTool } from "./tools/message-tool.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
 import { createPdfTool } from "./tools/pdf-tool.js";
 import { createSessionStatusTool } from "./tools/session-status-tool.js";
+import { createSessionsAwaitTool } from "./tools/sessions-await-tool.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
@@ -106,6 +111,11 @@ export function createOpenClawTools(
     sessionKey: options?.agentSessionKey,
     config: resolvedConfig,
   });
+  const effectiveAwaitAgentId = options?.requesterAgentIdOverride?.trim() || sessionAgentId;
+  const effectiveAwaitEnabled =
+    (resolvedConfig
+      ? resolveAgentConfig(resolvedConfig, effectiveAwaitAgentId)?.subagents?.awaitEnabled
+      : undefined) ?? resolvedConfig?.agents?.defaults?.subagents?.awaitEnabled === true;
   // Fall back to the session agent workspace so plugin loading stays workspace-stable
   // even when a caller forgets to thread workspaceDir explicitly.
   const inferredWorkspaceDir =
@@ -243,9 +253,13 @@ export function createOpenClawTools(
       agentGroupChannel: options?.agentGroupChannel,
       agentGroupSpace: options?.agentGroupSpace,
       sandboxed: options?.sandboxed,
+      awaitEnabled: effectiveAwaitEnabled,
       requesterAgentIdOverride: options?.requesterAgentIdOverride,
       workspaceDir: spawnWorkspaceDir,
     }),
+    ...(effectiveAwaitEnabled
+      ? [createSessionsAwaitTool({ agentSessionKey: options?.agentSessionKey })]
+      : []),
     createSubagentsTool({
       agentSessionKey: options?.agentSessionKey,
     }),

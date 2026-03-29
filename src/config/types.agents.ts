@@ -85,6 +85,13 @@ export type AgentConfig = {
     allowAgents?: string[];
     /** Per-agent default model for spawned sub-agents (string or {primary,fallbacks}). */
     model?: AgentModelConfig;
+    /** Per-agent default thinking level for spawned sub-agents. */
+    thinking?: string;
+    /**
+     * Enable sessions_await and await-only sessions_spawn flags
+     * for this agent, overriding agents.defaults.subagents.awaitEnabled.
+     */
+    awaitEnabled?: boolean;
   };
   /** Optional per-agent sandbox overrides. */
   sandbox?: AgentSandboxConfig;
