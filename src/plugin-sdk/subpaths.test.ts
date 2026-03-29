@@ -593,10 +593,25 @@ describe("plugin-sdk subpath exports", () => {
       "ssrfPolicyFromAllowPrivateNetwork",
     ]);
 
-    expectSourceMentions("provider-setup", [
-      "buildVllmProvider",
-      "discoverOpenAICompatibleSelfHostedProvider",
-    ]);
+    expectSourceContract("provider-setup", {
+      mentions: [
+        "applyProviderDefaultModel",
+        "discoverOpenAICompatibleLocalModels",
+        "discoverOpenAICompatibleSelfHostedProvider",
+      ],
+      omits: [
+        "buildOllamaProvider",
+        "configureOllamaNonInteractive",
+        "ensureOllamaModelPulled",
+        "promptAndConfigureOllama",
+        "promptAndConfigureVllm",
+        "buildVllmProvider",
+        "buildSglangProvider",
+        "OLLAMA_DEFAULT_BASE_URL",
+        "OLLAMA_DEFAULT_MODEL",
+        "VLLM_DEFAULT_BASE_URL",
+      ],
+    });
     expectSourceOmitsSnippet("provider-setup", "./ollama-surface.js");
     expectSourceOmitsSnippet("provider-setup", "./vllm.js");
     expectSourceOmitsSnippet("provider-setup", "./sglang.js");
@@ -641,13 +656,15 @@ describe("plugin-sdk subpath exports", () => {
       "formatDocsLink",
     ]);
     expectSourceMentions("lazy-runtime", ["createLazyRuntimeSurface", "createLazyRuntimeModule"]);
-    expectSourceMentions("self-hosted-provider-setup", [
-      "buildVllmProvider",
-      "buildSglangProvider",
-      "configureOpenAICompatibleSelfHostedProviderNonInteractive",
-    ]);
-    expectSourceOmitsSnippet("self-hosted-provider-setup", "./vllm.js");
-    expectSourceOmitsSnippet("self-hosted-provider-setup", "./sglang.js");
+    expectSourceContract("self-hosted-provider-setup", {
+      mentions: [
+        "applyProviderDefaultModel",
+        "discoverOpenAICompatibleLocalModels",
+        "discoverOpenAICompatibleSelfHostedProvider",
+        "configureOpenAICompatibleSelfHostedProviderNonInteractive",
+      ],
+      omits: ["buildVllmProvider", "buildSglangProvider"],
+    });
     expectSourceOmitsSnippet("agent-runtime", "./sglang.js");
     expectSourceOmitsSnippet("agent-runtime", "./vllm.js");
     expectSourceOmitsSnippet("xai-model-id", "./xai.js");

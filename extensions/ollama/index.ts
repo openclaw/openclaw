@@ -6,6 +6,12 @@ import {
   type ProviderAuthResult,
   type ProviderDiscoveryContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  buildOllamaProvider,
+  configureOllamaNonInteractive,
+  ensureOllamaModelPulled,
+  promptAndConfigureOllama,
+} from "./api.js";
 import { OLLAMA_DEFAULT_BASE_URL } from "./src/defaults.js";
 import {
   DEFAULT_OLLAMA_EMBEDDING_MODEL,
@@ -22,10 +28,6 @@ const DEFAULT_API_KEY = "ollama-local";
 
 function shouldSkipAmbientOllamaDiscovery(env: NodeJS.ProcessEnv): boolean {
   return Boolean(env.VITEST) || env.NODE_ENV === "test";
-}
-
-async function loadProviderSetup() {
-  return await import("openclaw/plugin-sdk/provider-setup");
 }
 
 export default definePluginEntry({
@@ -45,8 +47,7 @@ export default definePluginEntry({
           hint: "Cloud and local open models",
           kind: "custom",
           run: async (ctx: ProviderAuthContext): Promise<ProviderAuthResult> => {
-            const providerSetup = await loadProviderSetup();
-            const result = await providerSetup.promptAndConfigureOllama({
+            const result = await promptAndConfigureOllama({
               cfg: ctx.config,
               prompter: ctx.prompter,
               isRemote: ctx.isRemote,
@@ -67,8 +68,7 @@ export default definePluginEntry({
             };
           },
           runNonInteractive: async (ctx: ProviderAuthMethodNonInteractiveContext) => {
-            const providerSetup = await loadProviderSetup();
-            return await providerSetup.configureOllamaNonInteractive({
+            return await configureOllamaNonInteractive({
               nextConfig: ctx.config,
               opts: {
                 customBaseUrl: ctx.opts.customBaseUrl as string | undefined,
@@ -103,8 +103,7 @@ export default definePluginEntry({
             return null;
           }
 
-          const providerSetup = await loadProviderSetup();
-          const provider = await providerSetup.buildOllamaProvider(explicit?.baseUrl, {
+          const provider = await buildOllamaProvider(explicit?.baseUrl, {
             quiet: !ollamaKey && !explicit,
           });
           if (provider.models.length === 0 && !ollamaKey && !explicit?.apiKey) {
@@ -142,8 +141,7 @@ export default definePluginEntry({
         if (!model.startsWith("ollama/")) {
           return;
         }
-        const providerSetup = await loadProviderSetup();
-        await providerSetup.ensureOllamaModelPulled({ config, model, prompter });
+        await ensureOllamaModelPulled({ config, model, prompter });
       },
       createStreamFn: ({ config, model }) => {
         return createConfiguredOllamaStreamFn({

@@ -115,6 +115,11 @@ function installDiscoveryHooks(state: DiscoveryState) {
       pluginId: "github-copilot",
       artifactBasename: "token.js",
     });
+    const ollamaApiModuleId = resolveRelativeBundledPluginPublicModuleId({
+      fromModuleUrl: import.meta.url,
+      pluginId: "ollama",
+      artifactBasename: "api.js",
+    });
     const vllmApiModuleId = resolveRelativeBundledPluginPublicModuleId({
       fromModuleUrl: import.meta.url,
       pluginId: "vllm",
@@ -149,23 +154,11 @@ function installDiscoveryHooks(state: DiscoveryState) {
         resolveCopilotApiToken: resolveCopilotApiTokenMock,
       };
     });
-    vi.doMock("openclaw/plugin-sdk/provider-setup", async () => {
-      const actual = await vi.importActual<object>("openclaw/plugin-sdk/provider-setup");
+    vi.doMock(ollamaApiModuleId, async () => {
+      const actual = await vi.importActual<object>(ollamaApiModuleId);
       return {
         ...actual,
         buildOllamaProvider: (...args: unknown[]) => buildOllamaProviderMock(...args),
-        buildVllmProvider: (...args: unknown[]) => buildVllmProviderMock(...args),
-        buildSglangProvider: (...args: unknown[]) => buildSglangProviderMock(...args),
-      };
-    });
-    vi.doMock("openclaw/plugin-sdk/self-hosted-provider-setup", async () => {
-      const actual = await vi.importActual<object>(
-        "openclaw/plugin-sdk/self-hosted-provider-setup",
-      );
-      return {
-        ...actual,
-        buildVllmProvider: (...args: unknown[]) => buildVllmProviderMock(...args),
-        buildSglangProvider: (...args: unknown[]) => buildSglangProviderMock(...args),
       };
     });
     vi.doMock(vllmApiModuleId, async () => {
