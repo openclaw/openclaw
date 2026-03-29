@@ -12,7 +12,7 @@ export type McpServerConfig = {
   /** SSE transport: URL of the remote MCP server (http or https). */
   url?: string;
   /** SSE transport: extra HTTP headers sent with every request. */
-  headers?: Record<string, string>;
+  headers?: Record<string, string | number | boolean>;
   [key: string]: unknown;
 };
 
