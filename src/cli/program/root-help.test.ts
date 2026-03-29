@@ -5,8 +5,10 @@ vi.mock("./core-command-descriptors.js", () => ({
     {
       name: "status",
       description: "Show status",
+      hasSubcommands: false,
     },
   ],
+  getCoreCliCommandsWithSubcommands: () => [],
 }));
 
 vi.mock("./subcli-descriptors.js", () => ({
@@ -14,8 +16,10 @@ vi.mock("./subcli-descriptors.js", () => ({
     {
       name: "config",
       description: "Manage config",
+      hasSubcommands: true,
     },
   ],
+  getSubCliCommandsWithSubcommands: () => ["config"],
 }));
 
 vi.mock("../../plugins/cli.js", () => ({
