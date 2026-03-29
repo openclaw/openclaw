@@ -155,7 +155,7 @@ describe("createBundleMcpToolRuntime", () => {
     });
 
     try {
-      expect(runtime.tools.map((tool) => tool.name)).toEqual(["bundle_probe"]);
+      expect(runtime.tools.map((tool) => tool.name)).toEqual(["bundleProbe__bundle_probe"]);
       const result = await runtime.tools[0].execute("call-bundle-probe", {}, undefined, undefined);
       expect(result.content[0]).toMatchObject({
         type: "text",
@@ -170,7 +170,7 @@ describe("createBundleMcpToolRuntime", () => {
     }
   });
 
-  it("skips bundle MCP tools that collide with existing tool names", async () => {
+  it("disambiguates bundle MCP tools that collide with existing tool names", async () => {
     const workspaceDir = await makeTempDir("openclaw-bundle-mcp-tools-");
     const pluginRoot = path.join(workspaceDir, ".openclaw", "extensions", "bundle-probe");
     const serverScriptPath = path.join(pluginRoot, "servers", "bundle-probe.mjs");
@@ -186,11 +186,11 @@ describe("createBundleMcpToolRuntime", () => {
           },
         },
       },
-      reservedToolNames: ["bundle_probe"],
+      reservedToolNames: ["bundleProbe__bundle_probe"],
     });
 
     try {
-      expect(runtime.tools).toEqual([]);
+      expect(runtime.tools.map((tool) => tool.name)).toEqual(["bundleProbe__bundle_probe-2"]);
     } finally {
       await runtime.dispose();
     }
@@ -219,7 +219,7 @@ describe("createBundleMcpToolRuntime", () => {
     });
 
     try {
-      expect(runtime.tools.map((tool) => tool.name)).toEqual(["bundle_probe"]);
+      expect(runtime.tools.map((tool) => tool.name)).toEqual(["configuredProbe__bundle_probe"]);
       const result = await runtime.tools[0].execute(
         "call-configured-probe",
         {},
@@ -285,6 +285,7 @@ describe("createBundleMcpToolRuntime", () => {
             servers: {
               sseProbe: {
                 url: `http://127.0.0.1:${port}/sse`,
+                transport: "sse",
               },
             },
           },
@@ -292,7 +293,7 @@ describe("createBundleMcpToolRuntime", () => {
       });
 
       try {
-        expect(runtime.tools.map((tool) => tool.name)).toEqual(["sse_probe"]);
+        expect(runtime.tools.map((tool) => tool.name)).toEqual(["sseProbe__sse_probe"]);
         const result = await runtime.tools[0].execute("call-sse-probe", {}, undefined, undefined);
         expect(result.content[0]).toMatchObject({
           type: "text",
@@ -352,8 +353,8 @@ describe("createBundleMcpToolRuntime", () => {
     });
 
     expect(runtimeA).toBe(runtimeB);
-    expect(materializedA.tools.map((tool) => tool.name)).toEqual(["bundle_probe"]);
-    expect(materializedB.tools.map((tool) => tool.name)).toEqual(["bundle_probe"]);
+    expect(materializedA.tools.map((tool) => tool.name)).toEqual(["bundleProbe__bundle_probe"]);
+    expect(materializedB.tools.map((tool) => tool.name)).toEqual(["bundleProbe__bundle_probe"]);
     expect(await fs.readFile(startupCounterPath, "utf8")).toBe("1");
     expect(__testing.getCachedSessionIds()).toEqual(["session-a"]);
   });
