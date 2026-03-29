@@ -3,7 +3,7 @@ import { CHANNEL_IDS } from "../channels/registry.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
 import { GENERATED_BASE_CONFIG_SCHEMA } from "./schema.base.generated.js";
 import type { ConfigUiHint, ConfigUiHints } from "./schema.hints.js";
-import { applySensitiveHints } from "./schema.hints.js";
+import { applySensitiveHints, applySensitiveUrlHints } from "./schema.hints.js";
 import {
   asSchemaObject,
   cloneSchema,
@@ -509,7 +509,10 @@ export function buildConfigSchema(params?: {
     channels,
   );
   const mergedHints = applyDerivedTags(
-    applySensitiveHints(mergedWithoutSensitiveHints, extensionHintKeys),
+    applySensitiveUrlHints(
+      applySensitiveHints(mergedWithoutSensitiveHints, extensionHintKeys),
+      extensionHintKeys,
+    ),
   );
   const mergedSchema = applyChannelSchemas(applyPluginSchemas(base.schema, plugins), channels);
   const merged = {
