@@ -117,7 +117,7 @@ Text + native (when enabled):
 - `/verbose on|full|off` (alias: `/v`)
 - `/reasoning on|off|stream` (alias: `/reason`; when on, sends a separate message prefixed `Reasoning:`; `stream` = Telegram draft only)
 - `/elevated on|off|ask|full` (alias: `/elev`; `full` skips exec approvals)
-- `/exec host=<sandbox|gateway|node> security=<deny|allowlist|full> ask=<off|on-miss|always> node=<id>` (send `/exec` to show current)
+- `/exec host=<auto|sandbox|gateway|node> security=<deny|allowlist|full> ask=<off|on-miss|always> node=<id>` (send `/exec` to show current)
 - `/model <name>` (alias: `/models`; or `/<alias>` from `agents.defaults.models.*.alias`)
 - `/queue <mode>` (plus options like `debounce:2s cap:25 drop:summarize`; send `/queue` to see current settings)
 - `/bash <command>` (host-only; alias for `! <command>`; requires `commands.bash: true` + `tools.elevated` allowlists)
@@ -143,6 +143,7 @@ Notes:
 - ACP command reference and runtime behavior: [ACP Agents](/tools/acp-agents).
 - `/verbose` is meant for debugging and extra visibility; keep it **off** in normal use.
 - `/fast on|off` persists a session override. Use the Sessions UI `inherit` option to clear it and fall back to config defaults.
+- `/fast` is provider-specific: OpenAI/OpenAI Codex map it to `service_tier=priority` on native Responses endpoints, while direct Anthropic API-key requests map it to `service_tier=auto` or `standard_only`. See [OpenAI](/providers/openai) and [Anthropic](/providers/anthropic).
 - Tool failure summaries are still shown when relevant, but detailed failure text is only included when `/verbose` is `on` or `full`.
 - `/reasoning` (and `/verbose`) are risky in group settings: they may reveal internal reasoning or tool output you did not intend to expose. Prefer leaving them off, especially in group chats.
 - **Fast path:** command-only messages from allowlisted senders are handled immediately (bypass queue + model).

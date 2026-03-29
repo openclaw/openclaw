@@ -585,11 +585,12 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 
   </Accordion>
 
-  <Accordion title="Why am I seeing HTTP 429 rate_limit_error from Anthropic?">
-    That means your **Anthropic quota/rate limit** is exhausted for the current window. If you
-    use a **Claude subscription** (setup-token), wait for the window to
-    reset or upgrade your plan. If you use an **Anthropic API key**, check the Anthropic Console
-    for usage/billing and raise limits as needed.
+<a id="why-am-i-seeing-http-429-ratelimiterror-from-anthropic"></a>
+<Accordion title="Why am I seeing HTTP 429 rate_limit_error from Anthropic?">
+That means your **Anthropic quota/rate limit** is exhausted for the current window. If you
+use a **Claude subscription** (setup-token), wait for the window to
+reset or upgrade your plan. If you use an **Anthropic API key**, check the Anthropic Console
+for usage/billing and raise limits as needed.
 
     If the message is specifically:
     `Extra usage is required for long context requests`, the request is trying to use
@@ -633,7 +634,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   </Accordion>
 
   <Accordion title="Is a local model OK for casual chats?">
-    Usually no. OpenClaw needs large context + strong safety; small cards truncate and leak. If you must, run the **largest** MiniMax M2.5 build you can locally (LM Studio) and see [/gateway/local-models](/gateway/local-models). Smaller/quantized models increase prompt-injection risk - see [Security](/gateway/security).
+    Usually no. OpenClaw needs large context + strong safety; small cards truncate and leak. If you must, run the **largest** model build you can locally (LM Studio) and see [/gateway/local-models](/gateway/local-models). Smaller/quantized models increase prompt-injection risk - see [Security](/gateway/security).
   </Accordion>
 
   <Accordion title="How do I keep hosted model traffic in a specific region?">

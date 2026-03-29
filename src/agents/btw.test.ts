@@ -128,6 +128,30 @@ function createDoneEvent(text: string) {
   };
 }
 
+function createThinkingOnlyDoneEvent(thinking: string) {
+  return {
+    type: "done",
+    reason: "stop",
+    message: {
+      role: "assistant",
+      content: [{ type: "thinking", thinking }],
+      provider: DEFAULT_PROVIDER,
+      api: "anthropic-messages",
+      model: DEFAULT_MODEL,
+      stopReason: "stop",
+      usage: {
+        input: 1,
+        output: 2,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 3,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      timestamp: Date.now(),
+    },
+  };
+}
+
 function mockDoneAnswer(text: string) {
   streamSimpleMock.mockReturnValue(makeAsyncEvents([createDoneEvent(text)]));
 }
@@ -279,6 +303,28 @@ describe("runBtwSideQuestion", () => {
     const result = await runSideQuestion();
 
     expect(result).toEqual({ text: "Final answer." });
+  });
+
+  it("forces provider reasoning off even when the session think level is adaptive", async () => {
+    streamSimpleMock.mockImplementation((_model, _input, options?: { reasoning?: unknown }) => {
+      return options?.reasoning === undefined
+        ? makeAsyncEvents([createDoneEvent("Final answer.")])
+        : makeAsyncEvents([createThinkingOnlyDoneEvent("thinking only")]);
+    });
+
+    const result = await runSideQuestion({ resolvedThinkLevel: "adaptive" });
+
+    expect(result).toEqual({ text: "Final answer." });
+    expect(streamSimpleMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ reasoning: undefined }),
+    );
+    expect(streamSimpleMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.not.objectContaining({ reasoning: expect.anything() }),
+    );
   });
 
   it("fails when the current branch has no messages", async () => {

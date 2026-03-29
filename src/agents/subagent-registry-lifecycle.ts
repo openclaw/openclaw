@@ -1,6 +1,7 @@
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { defaultRuntime } from "../runtime.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
+import { updateTaskDeliveryByRunId, updateTaskStateByRunId } from "../tasks/task-registry.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import {
   captureSubagentCompletionReply,
@@ -151,6 +152,10 @@ export function createSubagentRegistryLifecycleController(params: {
     entry: SubagentRunRecord;
     reason: "retry-limit" | "expiry";
   }) => {
+    updateTaskDeliveryByRunId({
+      runId: giveUpParams.runId,
+      deliveryStatus: "failed",
+    });
     giveUpParams.entry.wakeOnDescendantSettle = undefined;
     giveUpParams.entry.fallbackFrozenResultText = undefined;
     giveUpParams.entry.fallbackFrozenResultCapturedAt = undefined;
@@ -263,6 +268,10 @@ export function createSubagentRegistryLifecycleController(params: {
       return;
     }
     if (didAnnounce) {
+      updateTaskDeliveryByRunId({
+        runId,
+        deliveryStatus: "delivered",
+      });
       entry.wakeOnDescendantSettle = undefined;
       entry.fallbackFrozenResultText = undefined;
       entry.fallbackFrozenResultCapturedAt = undefined;
@@ -315,6 +324,10 @@ export function createSubagentRegistryLifecycleController(params: {
     }
 
     if (deferredDecision.kind === "give-up") {
+      updateTaskDeliveryByRunId({
+        runId,
+        deliveryStatus: "failed",
+      });
       entry.wakeOnDescendantSettle = undefined;
       entry.fallbackFrozenResultText = undefined;
       entry.fallbackFrozenResultCapturedAt = undefined;
@@ -443,6 +456,21 @@ export function createSubagentRegistryLifecycleController(params: {
     if (mutated) {
       params.persist();
     }
+    updateTaskStateByRunId({
+      runId: entry.runId,
+      status:
+        completeParams.outcome.status === "ok"
+          ? "succeeded"
+          : completeParams.outcome.status === "timeout"
+            ? "timed_out"
+            : "failed",
+      startedAt: entry.startedAt,
+      endedAt: entry.endedAt,
+      lastEventAt: entry.endedAt ?? Date.now(),
+      error: completeParams.outcome.status === "error" ? completeParams.outcome.error : undefined,
+      progressSummary: entry.frozenResultText ?? undefined,
+      terminalSummary: null,
+    });
 
     try {
       await persistSubagentSessionTiming(entry);

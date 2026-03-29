@@ -226,8 +226,8 @@ export function parseToolsBySenderTypedKey(
 export type GroupToolPolicyBySenderConfig = Record<string, GroupToolPolicyConfig>;
 
 export type ExecToolConfig = {
-  /** Exec host routing (default: sandbox). */
-  host?: "sandbox" | "gateway" | "node";
+  /** Exec host routing (default: auto). */
+  host?: "auto" | "sandbox" | "gateway" | "node";
   /** Exec security mode (default: deny). */
   security?: "deny" | "allowlist" | "full";
   /** Exec ask mode (default: on-miss). */
@@ -379,6 +379,10 @@ export type MemorySearchConfig = {
   store?: {
     driver?: "sqlite";
     path?: string;
+    fts?: {
+      /** FTS5 tokenizer (default: "unicode61"). Use "trigram" for CJK text support. */
+      tokenizer?: "unicode61" | "trigram";
+    };
     vector?: {
       /** Enable sqlite-vec extension for vector search (default: true). */
       enabled?: boolean;

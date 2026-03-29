@@ -312,7 +312,7 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.exec":
     "Exec-tool policy grouping for shell execution host, security mode, approval behavior, and runtime bindings. Keep conservative defaults in production and tighten elevated execution paths.",
   "tools.exec.host":
-    "Selects execution host strategy for shell commands, typically controlling local vs delegated execution environment. Use the safest host mode that still satisfies your automation requirements.",
+    'Selects execution target strategy for shell commands. Use "auto" for runtime-aware behavior (sandbox when available, otherwise gateway), or pin sandbox/gateway/node explicitly when you need a fixed surface.',
   "tools.exec.security":
     "Execution security posture selector controlling sandbox/approval expectations for command execution. Keep strict security mode for untrusted prompts and relax only for trusted operator workflows.",
   "tools.exec.ask":
@@ -1001,8 +1001,7 @@ export const FIELD_HELP: Record<string, string> = {
   "plugins.installs.*.source": 'Install source ("npm", "archive", or "path").',
   "plugins.installs.*.spec": "Original npm spec used for install (if source is npm).",
   "plugins.installs.*.sourcePath": "Original archive/path used for install (if any).",
-  "plugins.installs.*.installPath":
-    "Resolved install directory (usually ~/.openclaw/extensions/<id>).",
+  "plugins.installs.*.installPath": "Resolved install directory for the installed plugin bundle.",
   "plugins.installs.*.version": "Version recorded at install time (if available).",
   "plugins.installs.*.resolvedName": "Resolved npm package name from the fetched artifact.",
   "plugins.installs.*.resolvedVersion":

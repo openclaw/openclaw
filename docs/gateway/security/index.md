@@ -191,7 +191,7 @@ If more than one person can DM your bot:
 - **Local disk hygiene** (permissions, symlinks, config includes, “synced folder” paths).
 - **Plugins** (extensions exist without an explicit allowlist).
 - **Policy drift/misconfig** (sandbox docker settings configured but sandbox mode off; ineffective `gateway.nodes.denyCommands` patterns because matching is exact command-name only (for example `system.run`) and does not inspect shell text; dangerous `gateway.nodes.allowCommands` entries; global `tools.profile="minimal"` overridden by per-agent profiles; extension plugin tools reachable under permissive tool policy).
-- **Runtime expectation drift** (for example `tools.exec.host="sandbox"` while sandbox mode is off, which runs directly on the gateway host).
+- **Runtime expectation drift** (for example assuming implicit exec still means `sandbox` when `tools.exec.host` now defaults to `auto`, or explicitly setting `tools.exec.host="sandbox"` while sandbox mode is off).
 - **Model hygiene** (warn when configured models look legacy; not a hard block).
 
 If you run `--deep`, OpenClaw also attempts a best-effort live Gateway probe.
@@ -253,8 +253,8 @@ High-signal `checkId` values you will most likely see in real deployments (not e
 | `logging.redact_off`                                          | warn          | Sensitive values leak to logs/status                                                 | `logging.redactSensitive`                                                                            | yes      |
 | `sandbox.docker_config_mode_off`                              | warn          | Sandbox Docker config present but inactive                                           | `agents.*.sandbox.mode`                                                                              | no       |
 | `sandbox.dangerous_network_mode`                              | critical      | Sandbox Docker network uses `host` or `container:*` namespace-join mode              | `agents.*.sandbox.docker.network`                                                                    | no       |
-| `tools.exec.host_sandbox_no_sandbox_defaults`                 | warn          | `exec host=sandbox` resolves to host exec when sandbox is off                        | `tools.exec.host`, `agents.defaults.sandbox.mode`                                                    | no       |
-| `tools.exec.host_sandbox_no_sandbox_agents`                   | warn          | Per-agent `exec host=sandbox` resolves to host exec when sandbox is off              | `agents.list[].tools.exec.host`, `agents.list[].sandbox.mode`                                        | no       |
+| `tools.exec.host_sandbox_no_sandbox_defaults`                 | warn          | `exec host=sandbox` fails closed when sandbox is off                                 | `tools.exec.host`, `agents.defaults.sandbox.mode`                                                    | no       |
+| `tools.exec.host_sandbox_no_sandbox_agents`                   | warn          | Per-agent `exec host=sandbox` fails closed when sandbox is off                       | `agents.list[].tools.exec.host`, `agents.list[].sandbox.mode`                                        | no       |
 | `tools.exec.security_full_configured`                         | warn/critical | Host exec is running with `security="full"`                                          | `tools.exec.security`, `agents.list[].tools.exec.security`                                           | no       |
 | `tools.exec.auto_allow_skills_enabled`                        | warn          | Exec approvals trust skill bins implicitly                                           | `~/.openclaw/exec-approvals.json`                                                                    | no       |
 | `tools.exec.allowlist_interpreter_without_strict_inline_eval` | warn          | Interpreter allowlists permit inline eval without forced reapproval                  | `tools.exec.strictInlineEval`, `agents.list[].tools.exec.strictInlineEval`, exec approvals allowlist | no       |
@@ -459,7 +459,7 @@ Plugins run **in-process** with the Gateway. Treat them as trusted code:
 - Review plugin config before enabling.
 - Restart the Gateway after plugin changes.
 - If you install plugins (`openclaw plugins install <package>`), treat it like running untrusted code:
-  - The install path is `~/.openclaw/extensions/<pluginId>/` (or `$OPENCLAW_STATE_DIR/extensions/<pluginId>/`).
+  - The install path is the per-plugin directory under the active plugin install root.
   - OpenClaw uses `npm pack` and then runs `npm install --omit=dev` in that directory (npm lifecycle scripts can execute code during install).
   - Prefer pinned, exact versions (`@scope/pkg@1.2.3`), and inspect the unpacked code on disk before enabling.
 
@@ -534,7 +534,7 @@ Even with strong system prompts, **prompt injection is not solved**. System prom
 - Prefer mention gating in groups; avoid “always-on” bots in public rooms.
 - Treat links, attachments, and pasted instructions as hostile by default.
 - Run sensitive tool execution in a sandbox; keep secrets out of the agent’s reachable filesystem.
-- Note: sandboxing is opt-in. If sandbox mode is off, exec runs on the gateway host even though tools.exec.host defaults to sandbox, and host exec does not require approvals unless you set host=gateway and configure exec approvals.
+- Note: sandboxing is opt-in. If sandbox mode is off, implicit `host=auto` resolves to the gateway host. Explicit `host=sandbox` still fails closed because no sandbox runtime is available. Set `host=gateway` if you want that behavior to be explicit in config.
 - Limit high-risk tools (`exec`, `browser`, `web_fetch`, `web_search`) to trusted agents or explicit allowlists.
 - If you allowlist interpreters (`python`, `node`, `ruby`, `perl`, `php`, `lua`, `osascript`), enable `tools.exec.strictInlineEval` so inline eval forms still need explicit approval.
 - **Model choice matters:** older/smaller/legacy models are significantly less robust against prompt injection and tool misuse. For tool-enabled agents, use the strongest latest-generation, instruction-hardened model available.
@@ -601,6 +601,8 @@ Recommendations:
 - If you must use a smaller model, **reduce blast radius** (read-only tools, strong sandboxing, minimal filesystem access, strict allowlists).
 - When running small models, **enable sandboxing for all sessions** and **disable web_search/web_fetch/browser** unless inputs are tightly controlled.
 - For chat-only personal assistants with trusted input and no tools, smaller models are usually fine.
+
+<a id="reasoning-verbose-output-in-groups"></a>
 
 ## Reasoning & verbose output in groups
 
@@ -859,7 +861,7 @@ Assume anything under `~/.openclaw/` (or `$OPENCLAW_STATE_DIR/`) may contain sec
 - `secrets.json` (optional): file-backed secret payload used by `file` SecretRef providers (`secrets.providers`).
 - `agents/<agentId>/agent/auth.json`: legacy compatibility file. Static `api_key` entries are scrubbed when discovered.
 - `agents/<agentId>/sessions/**`: session transcripts (`*.jsonl`) + routing metadata (`sessions.json`) that can contain private messages and tool output.
-- `extensions/**`: installed plugins (plus their `node_modules/`).
+- bundled plugin packages: installed plugins (plus their `node_modules/`).
 - `sandboxes/**`: tool sandbox workspaces; can accumulate copies of files you read/write inside the sandbox.
 
 Hardening tips:

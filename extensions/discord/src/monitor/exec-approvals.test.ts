@@ -3,9 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import type { ButtonInteraction, ComponentData } from "@buape/carbon";
 import { Routes } from "discord-api-types/v10";
+import { clearSessionStoreCacheForTest } from "openclaw/plugin-sdk/config-runtime";
+import type { DiscordExecApprovalConfig } from "openclaw/plugin-sdk/config-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearSessionStoreCacheForTest } from "../../../../src/config/sessions.js";
-import type { DiscordExecApprovalConfig } from "../../../../src/config/types.discord.js";
 
 const STORE_PATH = path.join(os.tmpdir(), "openclaw-exec-approvals-test.json");
 
@@ -757,7 +757,7 @@ describe("DiscordExecApprovalHandler plugin approvals", () => {
     const handler = createHandler({ enabled: true, approvers: ["123"] });
     mockSuccessfulDmDelivery({
       noteChannelId: "999888777",
-      expectedNoteText: "I sent the allowed approvers DMs",
+      expectedNoteText: "I sent approval DMs to the approvers for this account",
       throwOnUnexpectedRoute: true,
     });
 
@@ -1238,7 +1238,7 @@ describe("DiscordExecApprovalHandler delivery routing", () => {
 
     mockSuccessfulDmDelivery({
       noteChannelId: "999888777",
-      expectedNoteText: "I sent the allowed approvers DMs",
+      expectedNoteText: "I sent approval DMs to the approvers for this account",
       throwOnUnexpectedRoute: true,
     });
 
@@ -1248,7 +1248,7 @@ describe("DiscordExecApprovalHandler delivery routing", () => {
       Routes.channelMessages("999888777"),
       expect.objectContaining({
         body: expect.objectContaining({
-          content: expect.stringContaining("I sent the allowed approvers DMs"),
+          content: expect.stringContaining("I sent approval DMs to the approvers for this account"),
         }),
       }),
     );

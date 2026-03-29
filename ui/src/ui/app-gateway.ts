@@ -2,7 +2,11 @@ import {
   GATEWAY_EVENT_UPDATE_AVAILABLE,
   type GatewayUpdateAvailableEventPayload,
 } from "../../../src/gateway/events.js";
-import { CHAT_SESSIONS_ACTIVE_MINUTES, flushChatQueueForEvent } from "./app-chat.ts";
+import {
+  CHAT_SESSIONS_ACTIVE_MINUTES,
+  clearPendingQueueItemsForRun,
+  flushChatQueueForEvent,
+} from "./app-chat.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import {
   applySettings,
@@ -260,8 +264,9 @@ export function connectGateway(host: GatewayHost) {
       if (host.client !== client) {
         return;
       }
-      host.lastError = `event gap detected (expected seq ${expected}, got ${received}); refresh recommended`;
+      host.lastError = `event gap detected (expected seq ${expected}, got ${received}); reconnecting`;
       host.lastErrorCode = null;
+      connectGateway(host);
     },
   });
   host.client = client;
@@ -289,6 +294,10 @@ function handleTerminalChatEvent(
   const toolHost = host as unknown as Parameters<typeof resetToolStream>[0];
   const hadToolEvents = toolHost.toolStreamOrder.length > 0;
   resetToolStream(toolHost);
+  clearPendingQueueItemsForRun(
+    host as unknown as Parameters<typeof clearPendingQueueItemsForRun>[0],
+    payload?.runId,
+  );
   void flushChatQueueForEvent(host as unknown as Parameters<typeof flushChatQueueForEvent>[0]);
   const runId = payload?.runId;
   if (runId && host.refreshSessionsAfterChat.has(runId)) {

@@ -1,6 +1,14 @@
-import { getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
+import {
+  getChannelPlugin,
+  listChannelPlugins,
+  resolveChannelApprovalAdapter,
+} from "../channels/plugins/index.js";
 import { loadConfig, type OpenClawConfig } from "../config/config.js";
-import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../utils/message-channel.js";
+import {
+  INTERNAL_MESSAGE_CHANNEL,
+  isDeliverableMessageChannel,
+  normalizeMessageChannel,
+} from "../utils/message-channel.js";
 
 export type ExecApprovalInitiatingSurfaceState =
   | { kind: "enabled"; channel: string | undefined; channelLabel: string }
@@ -34,18 +42,24 @@ export function resolveExecApprovalInitiatingSurfaceState(params: {
   }
 
   const cfg = params.cfg ?? loadConfig();
-  const state = getChannelPlugin(channel)?.execApprovals?.getInitiatingSurfaceState?.({
+  const state = resolveChannelApprovalAdapter(
+    getChannelPlugin(channel),
+  )?.auth?.getInitiatingSurfaceState?.({
     cfg,
     accountId: params.accountId,
   });
   if (state) {
     return { ...state, channel, channelLabel };
   }
+  if (isDeliverableMessageChannel(channel)) {
+    return { kind: "enabled", channel, channelLabel };
+  }
   return { kind: "unsupported", channel, channelLabel };
 }
 
 export function hasConfiguredExecApprovalDmRoute(cfg: OpenClawConfig): boolean {
   return listChannelPlugins().some(
-    (plugin) => plugin.execApprovals?.hasConfiguredDmRoute?.({ cfg }) ?? false,
+    (plugin) =>
+      resolveChannelApprovalAdapter(plugin)?.delivery?.hasConfiguredDmRoute?.({ cfg }) ?? false,
   );
 }

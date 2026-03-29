@@ -63,7 +63,7 @@ Usage: bash scripts/e2e/parallels-npm-update-smoke.sh [options]
 
 Options:
   --package-spec <npm-spec>  Baseline npm package spec. Default: openclaw@latest
-  --provider <openai|anthropic>
+  --provider <openai|anthropic|minimax>
                              Provider auth/model lane. Default: openai
   --api-key-env <var>        Host env var name for provider API key.
                              Default: OPENAI_API_KEY for openai, ANTHROPIC_API_KEY for anthropic
@@ -116,6 +116,12 @@ case "$PROVIDER" in
     AUTH_KEY_FLAG="anthropic-api-key"
     MODEL_ID="anthropic/claude-sonnet-4-6"
     [[ -n "$API_KEY_ENV" ]] || API_KEY_ENV="ANTHROPIC_API_KEY"
+    ;;
+  minimax)
+    AUTH_CHOICE="minimax-global-api"
+    AUTH_KEY_FLAG="minimax-api-key"
+    MODEL_ID="minimax/MiniMax-M2.7"
+    [[ -n "$API_KEY_ENV" ]] || API_KEY_ENV="MINIMAX_API_KEY"
     ;;
   *)
     die "invalid --provider: $PROVIDER"

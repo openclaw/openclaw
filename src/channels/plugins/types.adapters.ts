@@ -28,12 +28,12 @@ import type {
   ChannelStatusIssue,
 } from "./types.core.js";
 
-export type ChannelExecApprovalInitiatingSurfaceState =
+export type ChannelApprovalInitiatingSurfaceState =
   | { kind: "enabled" }
   | { kind: "disabled" }
   | { kind: "unsupported" };
 
-export type ChannelExecApprovalForwardTarget = {
+export type ChannelApprovalForwardTarget = {
   channel: string;
   to: string;
   accountId?: string | null;
@@ -465,11 +465,23 @@ export type ChannelLifecycleAdapter = {
   }) => Promise<void> | void;
 };
 
-export type ChannelExecApprovalAdapter = {
+export type ChannelApprovalAuthAdapter = {
+  authorizeCommand?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    senderId?: string | null;
+    kind: "exec" | "plugin";
+  }) => {
+    authorized: boolean;
+    reason?: string;
+  };
   getInitiatingSurfaceState?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
-  }) => ChannelExecApprovalInitiatingSurfaceState;
+  }) => ChannelApprovalInitiatingSurfaceState;
+};
+
+export type ChannelApprovalDeliveryAdapter = {
   shouldSuppressLocalPrompt?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
@@ -478,36 +490,49 @@ export type ChannelExecApprovalAdapter = {
   hasConfiguredDmRoute?: (params: { cfg: OpenClawConfig }) => boolean;
   shouldSuppressForwardingFallback?: (params: {
     cfg: OpenClawConfig;
-    target: ChannelExecApprovalForwardTarget;
+    target: ChannelApprovalForwardTarget;
     request: ExecApprovalRequest;
   }) => boolean;
-  buildPendingPayload?: (params: {
-    cfg: OpenClawConfig;
-    request: ExecApprovalRequest;
-    target: ChannelExecApprovalForwardTarget;
-    nowMs: number;
-  }) => ReplyPayload | null;
-  buildResolvedPayload?: (params: {
-    cfg: OpenClawConfig;
-    resolved: ExecApprovalResolved;
-    target: ChannelExecApprovalForwardTarget;
-  }) => ReplyPayload | null;
   beforeDeliverPending?: (params: {
     cfg: OpenClawConfig;
-    target: ChannelExecApprovalForwardTarget;
+    target: ChannelApprovalForwardTarget;
     payload: ReplyPayload;
   }) => Promise<void> | void;
-  buildPluginPendingPayload?: (params: {
-    cfg: OpenClawConfig;
-    request: PluginApprovalRequest;
-    target: ChannelExecApprovalForwardTarget;
-    nowMs: number;
-  }) => ReplyPayload | null;
-  buildPluginResolvedPayload?: (params: {
-    cfg: OpenClawConfig;
-    resolved: PluginApprovalResolved;
-    target: ChannelExecApprovalForwardTarget;
-  }) => ReplyPayload | null;
+};
+
+export type ChannelApprovalRenderAdapter = {
+  exec?: {
+    buildPendingPayload?: (params: {
+      cfg: OpenClawConfig;
+      request: ExecApprovalRequest;
+      target: ChannelApprovalForwardTarget;
+      nowMs: number;
+    }) => ReplyPayload | null;
+    buildResolvedPayload?: (params: {
+      cfg: OpenClawConfig;
+      resolved: ExecApprovalResolved;
+      target: ChannelApprovalForwardTarget;
+    }) => ReplyPayload | null;
+  };
+  plugin?: {
+    buildPendingPayload?: (params: {
+      cfg: OpenClawConfig;
+      request: PluginApprovalRequest;
+      target: ChannelApprovalForwardTarget;
+      nowMs: number;
+    }) => ReplyPayload | null;
+    buildResolvedPayload?: (params: {
+      cfg: OpenClawConfig;
+      resolved: PluginApprovalResolved;
+      target: ChannelApprovalForwardTarget;
+    }) => ReplyPayload | null;
+  };
+};
+
+export type ChannelApprovalAdapter = {
+  auth?: ChannelApprovalAuthAdapter;
+  delivery?: ChannelApprovalDeliveryAdapter;
+  render?: ChannelApprovalRenderAdapter;
 };
 
 export type ChannelAllowlistAdapter = {

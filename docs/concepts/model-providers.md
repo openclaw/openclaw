@@ -147,7 +147,8 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Override per model via `agents.defaults.models["openai/<model>"].params.transport` (`"sse"`, `"websocket"`, or `"auto"`)
 - OpenAI Responses WebSocket warm-up defaults to enabled via `params.openaiWsWarmup` (`true`/`false`)
 - OpenAI priority processing can be enabled via `agents.defaults.models["openai/<model>"].params.serviceTier`
-- OpenAI fast mode can be enabled per model via `agents.defaults.models["<provider>/<model>"].params.fastMode`
+- `/fast` and `params.fastMode` map direct `openai/*` Responses requests to `service_tier=priority` on `api.openai.com`
+- Use `params.serviceTier` when you want an explicit tier instead of the shared `/fast` toggle
 - `openai/gpt-5.3-codex-spark` is intentionally suppressed in OpenClaw because the live OpenAI API rejects it; Spark is treated as Codex-only
 
 ```json5
@@ -181,7 +182,8 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - CLI: `openclaw onboard --auth-choice openai-codex` or `openclaw models auth login --provider openai-codex`
 - Default transport is `auto` (WebSocket-first, SSE fallback)
 - Override per model via `agents.defaults.models["openai-codex/<model>"].params.transport` (`"sse"`, `"websocket"`, or `"auto"`)
-- Shares the same `/fast` toggle and `params.fastMode` config as direct `openai/*`
+- `params.serviceTier` is also forwarded on native Codex Responses requests (`chatgpt.com/backend-api`)
+- Shares the same `/fast` toggle and `params.fastMode` config as direct `openai/*`; OpenClaw maps that to `service_tier=priority`
 - `openai-codex/gpt-5.3-codex-spark` remains available when the Codex OAuth catalog exposes it; entitlement-dependent
 - Policy note: OpenAI Codex OAuth is explicitly supported for external tools/workflows like OpenClaw.
 
@@ -247,7 +249,7 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Example model: `kilocode/anthropic/claude-opus-4.6`
 - CLI: `openclaw onboard --kilocode-api-key <key>`
 - Base URL: `https://api.kilo.ai/api/gateway/`
-- Expanded built-in catalog includes GLM-5 Free, MiniMax M2.5 Free, GPT-5.2, Gemini 3 Pro Preview, Gemini 3 Flash Preview, Grok Code Fast 1, and Kimi K2.5.
+- Expanded built-in catalog includes GLM-5 Free, MiniMax M2.7 Free, GPT-5.2, Gemini 3 Pro Preview, Gemini 3 Flash Preview, Grok Code Fast 1, and Kimi K2.5.
 
 See [/providers/kilocode](/providers/kilocode) for setup details.
 
@@ -538,8 +540,8 @@ Example (OpenAI‑compatible):
 {
   agents: {
     defaults: {
-      model: { primary: "lmstudio/minimax-m2.5-gs32" },
-      models: { "lmstudio/minimax-m2.5-gs32": { alias: "Minimax" } },
+      model: { primary: "lmstudio/my-local-model" },
+      models: { "lmstudio/my-local-model": { alias: "Local" } },
     },
   },
   models: {
@@ -550,8 +552,8 @@ Example (OpenAI‑compatible):
         api: "openai-completions",
         models: [
           {
-            id: "minimax-m2.5-gs32",
-            name: "MiniMax M2.5",
+            id: "my-local-model",
+            name: "Local Model",
             reasoning: false,
             input: ["text"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },

@@ -188,7 +188,7 @@ const MAX_TELEGRAM_CLIENT_OPTIONS_CACHE_SIZE = 64;
 function asTelegramClientFetch(
   fetchImpl: typeof globalThis.fetch,
 ): NonNullable<ApiClientOptions["fetch"]> {
-  return fetchImpl as NonNullable<ApiClientOptions["fetch"]>;
+  return fetchImpl as unknown as NonNullable<ApiClientOptions["fetch"]>;
 }
 
 export function resetTelegramClientOptionsCacheForTests(): void {

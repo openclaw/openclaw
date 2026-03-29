@@ -37,6 +37,7 @@ dispatch.
 ## Walkthrough
 
 <Steps>
+  <a id="step-1-package-and-manifest"></a>
   <Step title="Package and manifest">
     Create the standard plugin files. The `channel` field in `package.json` is
     what makes this a channel plugin:
@@ -214,21 +215,35 @@ dispatch.
       name: "Acme Chat",
       description: "Acme Chat channel plugin",
       plugin: acmeChatPlugin,
-      registerFull(api) {
+      registerCliMetadata(api) {
         api.registerCli(
           ({ program }) => {
             program
               .command("acme-chat")
               .description("Acme Chat management");
           },
-          { commands: ["acme-chat"] },
+          {
+            descriptors: [
+              {
+                name: "acme-chat",
+                description: "Acme Chat management",
+                hasSubcommands: false,
+              },
+            ],
+          },
         );
+      },
+      registerFull(api) {
+        api.registerGatewayMethod(/* ... */);
       },
     });
     ```
 
-    `defineChannelPluginEntry` handles the setup/full registration split
-    automatically. See
+    Put channel-owned CLI descriptors in `registerCliMetadata(...)` so OpenClaw
+    can show them in root help without activating the full channel runtime,
+    while normal full loads still pick up the same descriptors for real command
+    registration. Keep `registerFull(...)` for runtime-only work.
+    `defineChannelPluginEntry` handles the registration-mode split automatically. See
     [Entry Points](/plugins/sdk-entrypoints#definechannelpluginentry) for all
     options.
 
@@ -265,7 +280,7 @@ dispatch.
 
           // Your inbound handler dispatches the message to OpenClaw.
           // The exact wiring depends on your platform SDK —
-          // see a real example in extensions/msteams or extensions/googlechat.
+          // see a real example in the bundled Microsoft Teams or Google Chat plugin package.
           await handleAcmeChatInbound(api, event);
 
           res.statusCode = 200;
@@ -279,13 +294,14 @@ dispatch.
     <Note>
       Inbound message handling is channel-specific. Each channel plugin owns
       its own inbound pipeline. Look at bundled channel plugins
-      (e.g. `extensions/msteams`, `extensions/googlechat`) for real patterns.
+      (for example the Microsoft Teams or Google Chat plugin package) for real patterns.
     </Note>
 
   </Step>
 
-  <Step title="Test">
-    Write colocated tests in `src/channel.test.ts`:
+<a id="step-6-test"></a>
+<Step title="Test">
+Write colocated tests in `src/channel.test.ts`:
 
     ```typescript src/channel.test.ts
     import { describe, it, expect } from "vitest";
@@ -320,7 +336,7 @@ dispatch.
     ```
 
     ```bash
-    pnpm test -- extensions/acme-chat/
+    pnpm test -- <bundled-plugin-root>/acme-chat/
     ```
 
     For shared test helpers, see [Testing](/plugins/sdk-testing).
@@ -331,7 +347,7 @@ dispatch.
 ## File structure
 
 ```
-extensions/acme-chat/
+<bundled-plugin-root>/acme-chat/
 ├── package.json              # openclaw.channel metadata
 ├── openclaw.plugin.json      # Manifest with config schema
 ├── index.ts                  # defineChannelPluginEntry

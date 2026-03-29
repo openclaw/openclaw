@@ -1,6 +1,7 @@
 import { loadConfig } from "../config/config.js";
 import { callGateway } from "../gateway/call.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { createTaskRecord } from "../tasks/task-registry.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { ensureRuntimePluginsLoaded } from "./runtime-plugins.js";
 import type { SubagentRunOutcome } from "./subagent-announce.js";
@@ -315,6 +316,28 @@ export function createSubagentRunManager(params: {
       attachmentsRootDir: registerParams.attachmentsRootDir,
       retainAttachmentsOnKeep: registerParams.retainAttachmentsOnKeep,
     });
+    try {
+      createTaskRecord({
+        runtime: "subagent",
+        sourceId: registerParams.runId,
+        requesterSessionKey: registerParams.requesterSessionKey,
+        requesterOrigin,
+        childSessionKey: registerParams.childSessionKey,
+        runId: registerParams.runId,
+        label: registerParams.label,
+        task: registerParams.task,
+        status: "running",
+        deliveryStatus:
+          registerParams.expectsCompletionMessage === false ? "not_applicable" : "pending",
+        startedAt: now,
+        lastEventAt: now,
+      });
+    } catch (error) {
+      log.warn("Failed to create background task for subagent run", {
+        runId: registerParams.runId,
+        error,
+      });
+    }
     params.ensureListener();
     params.persist();
     if (archiveAtMs) {

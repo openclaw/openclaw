@@ -1,22 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withServer } from "../../../test/helpers/http-test-server.js";
 import {
   createLifecycleMonitorSetup,
   createTextUpdate,
   postWebhookReplay,
-  resetLifecycleTestState,
-  setLifecycleRuntimeCore,
-  sendMessageMock,
   settleAsyncWork,
+} from "../test-support/lifecycle.js";
+import {
+  resetLifecycleTestState,
+  sendMessageMock,
+  setLifecycleRuntimeCore,
   startWebhookLifecycleMonitor,
-} from "../../../test/helpers/extensions/zalo-lifecycle.js";
-import { withServer } from "../../../test/helpers/http-test-server.js";
+} from "../test-support/monitor-mocks.js";
 
 describe("Zalo pairing lifecycle", () => {
   const readAllowFromStoreMock = vi.fn(async () => [] as string[]);
   const upsertPairingRequestMock = vi.fn(async () => ({ code: "PAIRCODE", created: true }));
 
-  beforeEach(() => {
-    resetLifecycleTestState();
+  beforeEach(async () => {
+    await resetLifecycleTestState();
     setLifecycleRuntimeCore({
       pairing: {
         readAllowFromStore: readAllowFromStoreMock,
@@ -29,8 +31,8 @@ describe("Zalo pairing lifecycle", () => {
     });
   });
 
-  afterEach(() => {
-    resetLifecycleTestState();
+  afterEach(async () => {
+    await resetLifecycleTestState();
   });
 
   function createPairingMonitorSetup() {
@@ -42,92 +44,92 @@ describe("Zalo pairing lifecycle", () => {
   }
 
   it("emits one pairing reply across duplicate webhook replay and scopes reads and writes to accountId", async () => {
-    const { abort, route, run } = await startWebhookLifecycleMonitor(createPairingMonitorSetup());
+    const monitor = await startWebhookLifecycleMonitor(createPairingMonitorSetup());
 
-    await withServer(
-      (req, res) => route.handler(req, res),
-      async (baseUrl) => {
-        const { first, replay } = await postWebhookReplay({
-          baseUrl,
-          path: "/hooks/zalo",
-          secret: "supersecret",
-          payload: createTextUpdate({
-            messageId: `zalo-pairing-${Date.now()}`,
-            userId: "user-unauthorized",
-            userName: "Unauthorized User",
-            chatId: "dm-pairing-1",
-          }),
-        });
+    try {
+      await withServer(
+        (req, res) => monitor.route.handler(req, res),
+        async (baseUrl) => {
+          const { first, replay } = await postWebhookReplay({
+            baseUrl,
+            path: "/hooks/zalo",
+            secret: "supersecret",
+            payload: createTextUpdate({
+              messageId: `zalo-pairing-${Date.now()}`,
+              userId: "user-unauthorized",
+              userName: "Unauthorized User",
+              chatId: "dm-pairing-1",
+            }),
+          });
 
-        expect(first.status).toBe(200);
-        expect(replay.status).toBe(200);
-        await settleAsyncWork();
-      },
-    );
+          expect(first.status).toBe(200);
+          expect(replay.status).toBe(200);
+          await settleAsyncWork();
+        },
+      );
 
-    expect(readAllowFromStoreMock).toHaveBeenCalledTimes(1);
-    expect(readAllowFromStoreMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "zalo",
-        accountId: "acct-zalo-pairing",
-      }),
-    );
-    expect(upsertPairingRequestMock).toHaveBeenCalledTimes(1);
-    expect(upsertPairingRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "zalo",
-        accountId: "acct-zalo-pairing",
-        id: "user-unauthorized",
-      }),
-    );
-    expect(sendMessageMock).toHaveBeenCalledTimes(1);
-    expect(sendMessageMock).toHaveBeenCalledWith(
-      "zalo-token",
-      expect.objectContaining({
-        chat_id: "dm-pairing-1",
-        text: expect.stringContaining("PAIRCODE"),
-      }),
-      undefined,
-    );
-
-    abort.abort();
-    await run;
+      expect(readAllowFromStoreMock).toHaveBeenCalledTimes(1);
+      expect(readAllowFromStoreMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          channel: "zalo",
+          accountId: "acct-zalo-pairing",
+        }),
+      );
+      expect(upsertPairingRequestMock).toHaveBeenCalledTimes(1);
+      expect(upsertPairingRequestMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          channel: "zalo",
+          accountId: "acct-zalo-pairing",
+          id: "user-unauthorized",
+        }),
+      );
+      expect(sendMessageMock).toHaveBeenCalledTimes(1);
+      expect(sendMessageMock).toHaveBeenCalledWith(
+        "zalo-token",
+        expect.objectContaining({
+          chat_id: "dm-pairing-1",
+          text: expect.stringContaining("PAIRCODE"),
+        }),
+        undefined,
+      );
+    } finally {
+      await monitor.stop();
+    }
   });
 
   it("does not emit a second pairing reply when replay arrives after the first send fails", async () => {
     sendMessageMock.mockRejectedValueOnce(new Error("pairing send failed"));
 
-    const { abort, route, run, runtime } = await startWebhookLifecycleMonitor(
-      createPairingMonitorSetup(),
-    );
+    const monitor = await startWebhookLifecycleMonitor(createPairingMonitorSetup());
 
-    await withServer(
-      (req, res) => route.handler(req, res),
-      async (baseUrl) => {
-        const { first, replay } = await postWebhookReplay({
-          baseUrl,
-          path: "/hooks/zalo",
-          secret: "supersecret",
-          payload: createTextUpdate({
-            messageId: `zalo-pairing-retry-${Date.now()}`,
-            userId: "user-unauthorized",
-            userName: "Unauthorized User",
-            chatId: "dm-pairing-1",
-          }),
-          settleBeforeReplay: true,
-        });
+    try {
+      await withServer(
+        (req, res) => monitor.route.handler(req, res),
+        async (baseUrl) => {
+          const { first, replay } = await postWebhookReplay({
+            baseUrl,
+            path: "/hooks/zalo",
+            secret: "supersecret",
+            payload: createTextUpdate({
+              messageId: `zalo-pairing-retry-${Date.now()}`,
+              userId: "user-unauthorized",
+              userName: "Unauthorized User",
+              chatId: "dm-pairing-1",
+            }),
+            settleBeforeReplay: true,
+          });
 
-        expect(first.status).toBe(200);
-        expect(replay.status).toBe(200);
-        await settleAsyncWork();
-      },
-    );
+          expect(first.status).toBe(200);
+          expect(replay.status).toBe(200);
+          await settleAsyncWork();
+        },
+      );
 
-    expect(upsertPairingRequestMock).toHaveBeenCalledTimes(1);
-    expect(sendMessageMock).toHaveBeenCalledTimes(1);
-    expect(runtime.error).not.toHaveBeenCalled();
-
-    abort.abort();
-    await run;
+      expect(upsertPairingRequestMock).toHaveBeenCalledTimes(1);
+      expect(sendMessageMock).toHaveBeenCalledTimes(1);
+      expect(monitor.runtime.error).not.toHaveBeenCalled();
+    } finally {
+      await monitor.stop();
+    }
   });
 });

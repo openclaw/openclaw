@@ -1,8 +1,7 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { PluginRuntime } from "openclaw/plugin-sdk/testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import type { PluginApprovalRequest } from "../../../src/infra/plugin-approvals.js";
-import type { PluginRuntime } from "../../../src/plugins/runtime/types.js";
-import { createStartAccountContext } from "../../../test/helpers/extensions/start-account-context.js";
+import { createStartAccountContext } from "../../../test/helpers/plugins/start-account-context.js";
 import type { ResolvedTelegramAccount } from "./accounts.js";
 import * as auditModule from "./audit.js";
 import { telegramPlugin } from "./channel.js";
@@ -160,26 +159,6 @@ function installSendMessageRuntime(
     sendMessageTelegram,
   });
   return sendMessageTelegram;
-}
-
-function createPluginApprovalRequest(
-  overrides: Partial<PluginApprovalRequest["request"]> = {},
-): PluginApprovalRequest {
-  return {
-    id: "plugin:12345678-1234-1234-1234-1234567890ab",
-    request: {
-      title: "Sensitive plugin action",
-      description: "The plugin requested a sensitive operation.",
-      severity: "warning",
-      toolName: "plugin.tool",
-      pluginId: "plugin-test",
-      agentId: "agent-main",
-      sessionKey: "agent:agent-main:telegram:12345",
-      ...overrides,
-    },
-    createdAtMs: 1_000,
-    expiresAtMs: 61_000,
-  };
 }
 
 afterEach(() => {
@@ -580,34 +559,6 @@ describe("telegramPlugin duplicate token guard", () => {
     expect(result).toMatchObject({ channel: "telegram", messageId: "tg-4" });
   });
 
-  it("builds plugin approval pending payload with callback ids that preserve allow-always", () => {
-    const request = createPluginApprovalRequest();
-    const payload = telegramPlugin.execApprovals?.buildPluginPendingPayload?.({
-      cfg: createCfg(),
-      request,
-      target: { channel: "telegram", to: "12345" },
-      nowMs: 2_000,
-    });
-
-    expect(payload?.text).toContain("Plugin approval required");
-    const channelData = payload?.channelData as
-      | {
-          execApproval?: { approvalId?: string; approvalSlug?: string };
-          telegram?: { buttons?: Array<Array<{ text: string; callback_data: string }>> };
-        }
-      | undefined;
-    expect(channelData?.execApproval?.approvalId).toBe(request.id);
-    expect(channelData?.execApproval?.approvalSlug).toBe(request.id);
-    const buttons = channelData?.telegram?.buttons;
-    expect(buttons).toBeDefined();
-    expect(buttons?.[0]?.some((button) => button.text === "Allow Always")).toBe(true);
-    for (const row of buttons ?? []) {
-      for (const button of row) {
-        expect(Buffer.byteLength(button.callback_data, "utf8")).toBeLessThanOrEqual(64);
-      }
-    }
-  });
-
   it("ignores accounts with missing tokens during duplicate-token checks", async () => {
     const cfg = createCfg();
     cfg.channels!.telegram!.accounts!.ops = {} as never;
@@ -721,7 +672,7 @@ describe("telegramPlugin duplicate token guard", () => {
       token: undefined as unknown as string,
     } as ResolvedTelegramAccount;
 
-    await expect(telegramPlugin.gateway!.startAccount!(ctx)).resolves.toBeUndefined();
+    await telegramPlugin.gateway!.startAccount!(ctx);
     expect(probeTelegramMock).toHaveBeenCalledWith("", 2500, {
       accountId: "ops",
       proxyUrl: undefined,

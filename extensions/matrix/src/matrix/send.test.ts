@@ -17,6 +17,8 @@ const isVoiceCompatibleAudioMock = vi.fn(
 const resolveTextChunkLimitMock = vi.fn<
   (cfg: unknown, channel: unknown, accountId?: unknown) => number
 >(() => 4000);
+const resolveMarkdownTableModeMock = vi.fn(() => "code");
+const convertMarkdownTablesMock = vi.fn((text: string) => text);
 
 const runtimeStub = {
   config: {
@@ -37,13 +39,14 @@ const runtimeStub = {
       resolveChunkMode: () => "length",
       chunkMarkdownText: (text: string) => (text ? [text] : []),
       chunkMarkdownTextWithMode: (text: string) => (text ? [text] : []),
-      resolveMarkdownTableMode: () => "code",
-      convertMarkdownTables: (text: string) => text,
+      resolveMarkdownTableMode: () => resolveMarkdownTableModeMock(),
+      convertMarkdownTables: (text: string) => convertMarkdownTablesMock(text),
     },
   },
 } as unknown as PluginRuntime;
 
 let sendMessageMatrix: typeof import("./send.js").sendMessageMatrix;
+let sendSingleTextMessageMatrix: typeof import("./send.js").sendSingleTextMessageMatrix;
 let sendTypingMatrix: typeof import("./send.js").sendTypingMatrix;
 let voteMatrixPoll: typeof import("./actions/polls.js").voteMatrixPoll;
 
@@ -52,6 +55,7 @@ async function loadMatrixSendModules() {
   const runtimeModule = await import("../runtime.js");
   runtimeModule.setMatrixRuntime(runtimeStub);
   ({ sendMessageMatrix } = await import("./send.js"));
+  ({ sendSingleTextMessageMatrix } = await import("./send.js"));
   ({ sendTypingMatrix } = await import("./send.js"));
   ({ voteMatrixPoll } = await import("./actions/polls.js"));
 }
@@ -127,6 +131,8 @@ describe("sendMessageMatrix media", () => {
     mediaKindFromMimeMock.mockReset().mockReturnValue("image");
     isVoiceCompatibleAudioMock.mockReset().mockReturnValue(false);
     resolveTextChunkLimitMock.mockReset().mockReturnValue(4000);
+    resolveMarkdownTableModeMock.mockReset().mockReturnValue("code");
+    convertMarkdownTablesMock.mockReset().mockImplementation((text: string) => text);
     await loadMatrixSendModules();
   });
 
@@ -401,6 +407,29 @@ describe("sendMessageMatrix threads", () => {
     });
 
     expect(resolveTextChunkLimitMock).toHaveBeenCalledWith(expect.anything(), "matrix", "ops");
+  });
+});
+
+describe("sendSingleTextMessageMatrix", () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    await resetMatrixSendRuntimeMocks();
+    resolveMarkdownTableModeMock.mockReset().mockReturnValue("code");
+    convertMarkdownTablesMock.mockReset().mockImplementation((text: string) => text);
+  });
+
+  it("rejects single-event sends when converted text exceeds the Matrix limit", async () => {
+    const { client, sendMessage } = makeClient();
+    resolveTextChunkLimitMock.mockReturnValue(5);
+    convertMarkdownTablesMock.mockImplementation(() => "123456");
+
+    await expect(
+      sendSingleTextMessageMatrix("room:!room:example", "1234", {
+        client,
+      }),
+    ).rejects.toThrow("Matrix single-message text exceeds limit");
+
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 });
 

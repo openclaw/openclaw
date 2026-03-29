@@ -46,7 +46,7 @@ describe("exec approval reply helpers", () => {
 
   it("returns the approver DM notice text", () => {
     expect(getExecApprovalApproverDmNoticeText()).toBe(
-      "Approval required. I sent the allowed approvers DMs.",
+      "Approval required. I sent approval DMs to the approvers for this account.",
     );
   });
 
@@ -95,6 +95,30 @@ describe("exec approval reply helpers", () => {
         allowedDecisions: ["allow-once", "allow-always", "deny"],
       },
     });
+    expect(payload.interactive).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Allow Once",
+              value: "/approve req-1 allow-once",
+              style: "success",
+            },
+            {
+              label: "Allow Always",
+              value: "/approve req-1 always",
+              style: "primary",
+            },
+            {
+              label: "Deny",
+              value: "/approve req-1 deny",
+              style: "danger",
+            },
+          ],
+        },
+      ],
+    });
     expect(payload.text).toContain("Heads up.");
     expect(payload.text).toContain("```txt\n/approve slug-1 allow-once\n```");
     expect(payload.text).toContain("```sh\necho ok\n```");
@@ -129,6 +153,19 @@ describe("exec approval reply helpers", () => {
     expect(payload.text).toContain("Expires in: 0s");
   });
 
+  it("formats longer approval windows in minutes", () => {
+    const payload = buildExecApprovalPendingReplyPayload({
+      approvalId: "req-30m",
+      approvalSlug: "slug-30m",
+      command: "echo later",
+      host: "gateway",
+      expiresAtMs: 1_801_000,
+      nowMs: 1_000,
+    });
+
+    expect(payload.text).toContain("Expires in: 30m");
+  });
+
   it("builds unavailable payloads for approver DMs", () => {
     expect(
       buildExecApprovalUnavailableReplyPayload({
@@ -137,7 +174,7 @@ describe("exec approval reply helpers", () => {
         sentApproverDms: true,
       }),
     ).toEqual({
-      text: "Careful.\n\nApproval required. I sent the allowed approvers DMs.",
+      text: "Careful.\n\nApproval required. I sent approval DMs to the approvers for this account.",
     });
   });
 

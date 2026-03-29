@@ -1,4 +1,5 @@
 import { beforeAll, describe, expect, it } from "vitest";
+import { SENSITIVE_URL_HINT_TAG } from "../shared/net/redact-sensitive-url.js";
 import { buildConfigSchema, lookupConfigSchema } from "./schema.js";
 import { applyDerivedTags, CONFIG_TAGS, deriveTagsForPath } from "./schema.tags.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
@@ -100,8 +101,30 @@ describe("config schema", () => {
     expect(res.uiHints.gateway?.label).toBe("Gateway");
     expect(res.uiHints["gateway.auth.token"]?.sensitive).toBe(true);
     expect(res.uiHints["channels.defaults.groupPolicy"]?.label).toBeTruthy();
+    expect(res.uiHints["mcp.servers.*.headers.*"]?.sensitive).toBe(true);
+    expect(res.uiHints["mcp.servers.*.url"]?.tags).toContain(SENSITIVE_URL_HINT_TAG);
+    expect(res.uiHints["models.providers.*.baseUrl"]?.tags).toContain(SENSITIVE_URL_HINT_TAG);
     expect(res.version).toBeTruthy();
     expect(res.generatedAt).toBeTruthy();
+  });
+
+  it("includes MCP SSE header schema under mcp.servers entries", () => {
+    const schema = baseSchema.schema as {
+      properties?: Record<string, unknown>;
+    };
+    const mcpNode = schema.properties?.mcp as
+      | {
+          properties?: Record<string, unknown>;
+        }
+      | undefined;
+    const serversNode = mcpNode?.properties?.servers as
+      | {
+          additionalProperties?: {
+            properties?: Record<string, unknown>;
+          };
+        }
+      | undefined;
+    expect(serversNode?.additionalProperties?.properties?.headers).toBeTruthy();
   });
 
   it("merges plugin ui hints", () => {
@@ -276,7 +299,7 @@ describe("config schema", () => {
 
   it("covers core/built-in config paths with tags", () => {
     const schema = baseSchema;
-    const allowed = new Set<string>(CONFIG_TAGS);
+    const allowed = new Set<string>([...CONFIG_TAGS, SENSITIVE_URL_HINT_TAG]);
     for (const [key, hint] of Object.entries(schema.uiHints)) {
       if (!key.includes(".")) {
         continue;

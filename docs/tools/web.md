@@ -149,6 +149,11 @@ examples.
 
 For `x_search`, configure `tools.web.x_search.*` directly. It uses the same
 `XAI_API_KEY` fallback as Grok web search.
+When you choose Grok during `openclaw onboard` or `openclaw configure --section web`,
+OpenClaw can also offer optional `x_search` setup with the same key.
+This is a separate follow-up step inside the Grok path, not a separate top-level
+web-search provider choice. If you pick another provider, OpenClaw does not
+show the `x_search` prompt.
 
 ### Storing API keys
 
