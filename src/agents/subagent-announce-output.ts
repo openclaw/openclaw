@@ -11,8 +11,23 @@ import { readLatestAssistantReply } from "./tools/agent-step.js";
 import { sanitizeTextContent, extractAssistantText } from "./tools/sessions-helpers.js";
 import { isAnnounceSkip } from "./tools/sessions-send-helpers.js";
 
-const FAST_TEST_MODE = process.env.OPENCLAW_TEST_FAST === "1";
 const FAST_TEST_RETRY_INTERVAL_MS = 8;
+
+type SubagentAnnounceOutputDeps = {
+  callGateway: typeof callGateway;
+  loadConfig: typeof loadConfig;
+};
+
+const defaultSubagentAnnounceOutputDeps: SubagentAnnounceOutputDeps = {
+  callGateway,
+  loadConfig,
+};
+
+let subagentAnnounceOutputDeps: SubagentAnnounceOutputDeps = defaultSubagentAnnounceOutputDeps;
+
+function isFastTestMode() {
+  return process.env.OPENCLAW_TEST_FAST === "1";
+}
 
 type ToolResultMessage = {
   role?: unknown;
@@ -230,7 +245,7 @@ export async function readSubagentOutput(
   sessionKey: string,
   outcome?: SubagentRunOutcome,
 ): Promise<string | undefined> {
-  const history = await callGateway<{ messages?: Array<unknown> }>({
+  const history = await subagentAnnounceOutputDeps.callGateway<{ messages?: Array<unknown> }>({
     method: "chat.history",
     params: { sessionKey, limit: 100 },
   });
@@ -248,15 +263,22 @@ export async function readLatestSubagentOutputWithRetry(params: {
   maxWaitMs: number;
   outcome?: SubagentRunOutcome;
 }): Promise<string | undefined> {
-  const retryIntervalMs = FAST_TEST_MODE ? FAST_TEST_RETRY_INTERVAL_MS : 100;
-  const deadline = Date.now() + Math.max(0, Math.min(params.maxWaitMs, 15_000));
+  const retryIntervalMs = isFastTestMode() ? FAST_TEST_RETRY_INTERVAL_MS : 100;
+  const maxWaitMs = Math.max(0, Math.min(params.maxWaitMs, 15_000));
+  let waitedMs = 0;
   let result: string | undefined;
-  while (Date.now() < deadline) {
+  while (waitedMs < maxWaitMs) {
     result = await readSubagentOutput(params.sessionKey, params.outcome);
     if (result?.trim()) {
       return result;
     }
-    await new Promise((resolve) => setTimeout(resolve, retryIntervalMs));
+    const remainingMs = maxWaitMs - waitedMs;
+    if (remainingMs <= 0) {
+      break;
+    }
+    const sleepMs = Math.min(retryIntervalMs, remainingMs);
+    await new Promise((resolve) => setTimeout(resolve, sleepMs));
+    waitedMs += sleepMs;
   }
   return result;
 }
@@ -266,7 +288,7 @@ export async function waitForSubagentRunOutcome(
   timeoutMs: number,
 ): Promise<AgentWaitResult> {
   const waitMs = Math.max(0, Math.floor(timeoutMs));
-  return await callGateway<AgentWaitResult>({
+  return await subagentAnnounceOutputDeps.callGateway<AgentWaitResult>({
     method: "agent.wait",
     params: {
       runId,
@@ -313,7 +335,7 @@ export async function captureSubagentCompletionReply(
   }
   return await readLatestSubagentOutputWithRetry({
     sessionKey,
-    maxWaitMs: FAST_TEST_MODE ? 50 : 1_500,
+    maxWaitMs: isFastTestMode() ? 50 : 1_500,
   });
 }
 
@@ -478,11 +500,11 @@ export async function buildCompactAnnounceStatsLine(params: {
   startedAt?: number;
   endedAt?: number;
 }) {
-  const cfg = loadConfig();
+  const cfg = subagentAnnounceOutputDeps.loadConfig();
   const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
   let entry = loadSessionStore(storePath)[params.sessionKey];
-  const tokenWaitAttempts = FAST_TEST_MODE ? 1 : 3;
+  const tokenWaitAttempts = isFastTestMode() ? 1 : 3;
   for (let attempt = 0; attempt < tokenWaitAttempts; attempt += 1) {
     const hasTokenData =
       typeof entry?.inputTokens === "number" ||
@@ -491,7 +513,7 @@ export async function buildCompactAnnounceStatsLine(params: {
     if (hasTokenData) {
       break;
     }
-    if (!FAST_TEST_MODE) {
+    if (!isFastTestMode()) {
       await new Promise((resolve) => setTimeout(resolve, 150));
     }
     entry = loadSessionStore(storePath)[params.sessionKey];
@@ -515,3 +537,14 @@ export async function buildCompactAnnounceStatsLine(params: {
   }
   return `Stats: ${parts.join(" • ")}`;
 }
+
+export const __testing = {
+  setDepsForTest(overrides?: Partial<SubagentAnnounceOutputDeps>) {
+    subagentAnnounceOutputDeps = overrides
+      ? {
+          ...defaultSubagentAnnounceOutputDeps,
+          ...overrides,
+        }
+      : defaultSubagentAnnounceOutputDeps;
+  },
+};
