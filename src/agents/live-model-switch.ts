@@ -24,6 +24,34 @@ export class LiveSessionModelSwitchError extends Error {
   }
 }
 
+function resolvePersistedAuthProfileSelection(
+  entry: Pick<
+    SessionEntry,
+    "authProfileOverride" | "authProfileOverrideSource" | "authProfileOverrideCompactionCount"
+  >,
+): Pick<LiveSessionModelSelection, "authProfileId" | "authProfileIdSource"> {
+  const authProfileId = entry.authProfileOverride?.trim() || undefined;
+  if (!authProfileId) {
+    return {
+      authProfileId: undefined,
+      authProfileIdSource: undefined,
+    };
+  }
+  const authProfileIdSource =
+    entry.authProfileOverrideSource ??
+    (typeof entry.authProfileOverrideCompactionCount === "number" ? "auto" : "user");
+  if (authProfileIdSource !== "user") {
+    return {
+      authProfileId: undefined,
+      authProfileIdSource: undefined,
+    };
+  }
+  return {
+    authProfileId,
+    authProfileIdSource,
+  };
+}
+
 export function resolveLiveSessionModelSelection(params: {
   cfg?: { session?: { store?: string } } | undefined;
   sessionKey?: string;
@@ -43,12 +71,14 @@ export function resolveLiveSessionModelSelection(params: {
   const entry = loadSessionStore(storePath, { skipCache: true })[sessionKey];
   const provider = entry?.providerOverride?.trim() || params.defaultProvider;
   const model = entry?.modelOverride?.trim() || params.defaultModel;
-  const authProfileId = entry?.authProfileOverride?.trim() || undefined;
+  const { authProfileId, authProfileIdSource } = entry
+    ? resolvePersistedAuthProfileSelection(entry)
+    : { authProfileId: undefined, authProfileIdSource: undefined };
   return {
     provider,
     model,
     authProfileId,
-    authProfileIdSource: authProfileId ? entry?.authProfileOverrideSource : undefined,
+    authProfileIdSource,
   };
 }
 

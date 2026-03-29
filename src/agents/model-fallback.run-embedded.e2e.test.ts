@@ -145,6 +145,14 @@ function makeConfig(): OpenClawConfig {
   } satisfies OpenClawConfig;
 }
 
+async function writeSessionStore(
+  storePath: string,
+  sessionKey: string,
+  entry: Record<string, unknown>,
+) {
+  await fs.writeFile(storePath, JSON.stringify({ [sessionKey]: entry }), "utf-8");
+}
+
 async function withAgentWorkspace<T>(
   fn: (ctx: { agentDir: string; workspaceDir: string }) => Promise<T>,
 ): Promise<T> {
@@ -205,6 +213,9 @@ async function runEmbeddedFallback(params: {
   abortSignal?: AbortSignal;
 }) {
   const cfg = makeConfig();
+  cfg.session = {
+    store: path.join(params.agentDir, "sessions.json"),
+  };
   return await runWithModelFallback({
     cfg,
     provider: "openai",
@@ -346,6 +357,32 @@ describe("runWithModelFallback + runEmbeddedPiAgent overload policy", () => {
       expect(result.attempts[0]?.reason).toBe("overloaded");
       expect(result.result.payloads?.[0]?.text ?? "").toContain("fallback ok");
       expectOpenAiThenGroqAttemptOrder();
+    });
+  });
+
+  it("ignores auto-selected persisted auth profiles when crossing providers during fallback", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeAuthStore(agentDir);
+      await writeSessionStore(path.join(agentDir, "sessions.json"), "main", {
+        sessionId: "session:run:overloaded-cross-provider:auto-auth",
+        authProfileOverride: "openai:p1",
+        authProfileOverrideSource: "auto",
+        authProfileOverrideCompactionCount: 1,
+      });
+      mockPrimaryOverloadedThenFallbackSuccess();
+
+      const result = await runEmbeddedFallback({
+        agentDir,
+        workspaceDir,
+        agentId: "main",
+        sessionKey: "main",
+        runId: "run:overloaded-cross-provider:auto-auth",
+      });
+
+      expect(result.provider).toBe("groq");
+      expect(result.model).toBe("mock-2");
+      expect(result.result.payloads?.[0]?.text ?? "").toContain("fallback ok");
+      expectOpenAiThenGroqAttemptOrder({ expectOpenAiAuthProfileId: "openai:p1" });
     });
   });
 

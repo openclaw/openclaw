@@ -99,6 +99,33 @@ describe("live model switch", () => {
     });
   });
 
+  it("ignores auto-selected auth profile overrides when resolving persisted selection", async () => {
+    state.loadSessionStoreMock.mockReturnValue({
+      main: {
+        authProfileOverride: "anthropic:default",
+        authProfileOverrideSource: "auto",
+        authProfileOverrideCompactionCount: 2,
+      },
+    });
+
+    const { resolveLiveSessionModelSelection } = await loadModule();
+
+    expect(
+      resolveLiveSessionModelSelection({
+        cfg: { session: { store: "/tmp/custom-store.json" } },
+        sessionKey: "main",
+        agentId: "reply",
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.4",
+      }),
+    ).toEqual({
+      provider: "openai",
+      model: "gpt-5.4",
+      authProfileId: undefined,
+      authProfileIdSource: undefined,
+    });
+  });
+
   it("queues a live switch only when an active run was aborted", async () => {
     state.abortEmbeddedPiRunMock.mockReturnValue(true);
 
