@@ -433,6 +433,52 @@ describe("run-node script", () => {
     });
   });
 
+  it("skips rebuilding when working tree is dirty but no source files are newer than the build stamp", async () => {
+    await withTempDir(async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+        },
+        // source file mtime is older than the build stamp — dist is up to date
+        oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE],
+        buildPaths: [DIST_ENTRY, BUILD_STAMP],
+      });
+
+      const { spawnCalls, spawn, spawnSync } = createSpawnRecorder({
+        gitHead: "abc123\n",
+        // dirty: src/index.ts shows as modified in git status
+        gitStatus: ` M ${ROOT_SRC}\n`,
+      });
+      const exitCode = await runStatusCommand({ tmp, spawn, spawnSync });
+
+      expect(exitCode).toBe(0);
+      expect(spawnCalls).toEqual([statusCommandSpawn()]);
+    });
+  });
+
+  it("rebuilds when working tree is dirty and a source file is newer than the build stamp", async () => {
+    await withTempDir(async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 2;\n",
+        },
+        oldPaths: [ROOT_TSCONFIG, ROOT_PACKAGE],
+        buildPaths: [DIST_ENTRY, BUILD_STAMP],
+        // source file mtime is newer than the build stamp
+        newPaths: [ROOT_SRC],
+      });
+
+      const { spawnCalls, spawn, spawnSync } = createSpawnRecorder({
+        gitHead: "abc123\n",
+        gitStatus: ` M ${ROOT_SRC}\n`,
+      });
+      const exitCode = await runStatusCommand({ tmp, spawn, spawnSync });
+
+      expect(exitCode).toBe(0);
+      expect(spawnCalls).toEqual([expectedBuildSpawn(), statusCommandSpawn()]);
+    });
+  });
+
   it("repairs missing bundled plugin metadata without rerunning tsdown", async () => {
     await withTempDir(async (tmp) => {
       await setupTrackedProject(tmp, {

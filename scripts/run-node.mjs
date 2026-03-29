@@ -222,12 +222,12 @@ const shouldBuild = (deps) => {
   }
   if (currentHead) {
     const dirty = hasDirtySourceTree(deps);
-    if (dirty === true) {
-      return true;
-    }
     if (dirty === false) {
       return false;
     }
+    // dirty or git status unavailable — fall through to mtime check.
+    // A dirty tree only means uncommitted changes exist, not that those
+    // changes are newer than the last build. Let mtime decide.
   }
 
   if (hasSourceMtimeChanged(stamp.mtime, deps)) {
