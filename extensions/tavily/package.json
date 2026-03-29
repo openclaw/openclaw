@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/tavily-plugin",
-  "version": "2026.3.28-beta.1",
+  "version": "2026.3.28",
   "private": true,
   "description": "OpenClaw Tavily plugin",
   "type": "module",
