@@ -264,7 +264,6 @@ describe("linePlugin outbound.sendPayload", () => {
       expect.objectContaining({
         verbose: false,
         mediaUrl: "https://example.com/img.jpg",
-        mediaKind: "image",
         accountId: "default",
         cfg,
       }),

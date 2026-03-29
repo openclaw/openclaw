@@ -74,7 +74,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
   deliveryMode: "direct",
   chunker: (text, limit) => getLineRuntime().channel.text.chunkMarkdownText(text, limit),
   textChunkLimit: 5000,
-  sendPayload: async ({ to, payload, accountId, cfg, mediaLocalRoots }) => {
+  sendPayload: async ({ to, payload, accountId, cfg }) => {
     const runtime = getLineRuntime();
     const lineData = (payload.channelData?.line as LineChannelDataWithMedia | undefined) ?? {};
     const sendText = runtime.channel.line.pushMessageLine;
@@ -138,7 +138,6 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
           continue;
         }
         const resolved = await resolveLineOutboundMedia(trimmed, {
-          mediaLocalRoots,
           mediaKind: lineData.mediaKind,
           previewImageUrl: lineData.previewImageUrl,
           durationMs: lineData.durationMs,
@@ -263,7 +262,6 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
           continue;
         }
         const resolved = await resolveLineOutboundMedia(trimmed, {
-          mediaLocalRoots,
           mediaKind: lineData.mediaKind,
           previewImageUrl: lineData.previewImageUrl,
           durationMs: lineData.durationMs,

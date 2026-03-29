@@ -1,31 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/infra-runtime")>();
-  return {
-    ...actual,
-    fetchWithSsrFGuard: vi.fn(),
-  };
-});
-
-import {
-  LINE_MEDIA_KIND_PROBE_TIMEOUT_MS,
-  detectLineMediaKind,
-  resolveLineOutboundMedia,
-  validateLineMediaUrl,
-} from "./outbound-media.js";
-
-function responseWithContentType(contentType: string | null): Response {
-  return {
-    headers: {
-      get: (name: string) => (name.toLowerCase() === "content-type" ? contentType : null),
-    },
-  } as unknown as Response;
-}
-
-afterEach(() => {
-  vi.clearAllMocks();
-  vi.useRealTimers();
-});
+import { describe, expect, it } from "vitest";
+import { detectLineMediaKind, resolveLineOutboundMedia, validateLineMediaUrl } from "./outbound-media.js";
 
 describe("validateLineMediaUrl", () => {
   it("accepts HTTPS URL", () => {
@@ -70,119 +44,88 @@ describe("detectLineMediaKind", () => {
 });
 
 describe("resolveLineOutboundMedia", () => {
-  async function getGuardedFetchMock() {
-    const { fetchWithSsrFGuard } = await import("openclaw/plugin-sdk/infra-runtime");
-    return vi.mocked(fetchWithSsrFGuard);
-  }
-
   it("respects explicit media kind without remote MIME probing", async () => {
-    const guardedFetch = await getGuardedFetchMock();
-
     await expect(
       resolveLineOutboundMedia("https://example.com/download?id=123", { mediaKind: "video" }),
     ).resolves.toEqual({
       mediaUrl: "https://example.com/download?id=123",
       mediaKind: "video",
     });
-    expect(guardedFetch).not.toHaveBeenCalled();
   });
 
-  it("detects video kind from extensionless URL via HEAD content-type", async () => {
-    const guardedFetch = await getGuardedFetchMock();
-    const release = vi.fn().mockResolvedValue(undefined);
-    guardedFetch.mockResolvedValue({
-      response: responseWithContentType("video/mp4"),
-      finalUrl: "https://example.com/download?id=123",
-      release,
-    });
-
-    await expect(resolveLineOutboundMedia("https://example.com/download?id=123")).resolves.toEqual({
-      mediaUrl: "https://example.com/download?id=123",
-      mediaKind: "video",
-    });
-    expect(guardedFetch).toHaveBeenCalledTimes(1);
-    expect(guardedFetch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        mode: "strict",
-        url: "https://example.com/download?id=123",
-        timeoutMs: LINE_MEDIA_KIND_PROBE_TIMEOUT_MS,
-        init: expect.objectContaining({ method: "HEAD" }),
-      }),
-    );
-    expect(release).toHaveBeenCalledTimes(1);
-  });
-
-  it("falls back to GET when HEAD cannot determine MIME", async () => {
-    const guardedFetch = await getGuardedFetchMock();
-    const releaseHead = vi.fn().mockResolvedValue(undefined);
-    const releaseGet = vi.fn().mockResolvedValue(undefined);
-    guardedFetch
-      .mockResolvedValueOnce({
-        response: responseWithContentType("application/octet-stream"),
-        finalUrl: "https://example.com/download?id=audio",
-        release: releaseHead,
-      })
-      .mockResolvedValueOnce({
-        response: responseWithContentType("audio/mpeg"),
-        finalUrl: "https://example.com/download?id=audio",
-        release: releaseGet,
-      });
-
+  it("preserves explicit video kind when a preview URL is provided", async () => {
     await expect(
-      resolveLineOutboundMedia("https://example.com/download?id=audio"),
-    ).resolves.toEqual({
-      mediaUrl: "https://example.com/download?id=audio",
-      mediaKind: "audio",
-    });
-    expect(guardedFetch).toHaveBeenCalledTimes(2);
-    expect(guardedFetch).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        init: expect.objectContaining({ method: "HEAD" }),
-      }),
-    );
-    expect(guardedFetch).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        init: expect.objectContaining({
-          method: "GET",
-          headers: expect.objectContaining({ Range: "bytes=0-0" }),
-        }),
-      }),
-    );
-    expect(releaseHead).toHaveBeenCalledTimes(1);
-    expect(releaseGet).toHaveBeenCalledTimes(1);
-  });
-
-  it("falls back to image when MIME probing times out", async () => {
-    const guardedFetch = await getGuardedFetchMock();
-    guardedFetch.mockRejectedValue(new Error("timeout"));
-
-    await expect(resolveLineOutboundMedia("https://example.com/download?id=slow")).resolves.toEqual(
-      {
-        mediaUrl: "https://example.com/download?id=slow",
-        mediaKind: "image",
-      },
-    );
-    expect(guardedFetch).toHaveBeenCalledTimes(2);
-  });
-
-  it("honors an explicit media kind without inferring from preview image hints", async () => {
-    await expect(
-      resolveLineOutboundMedia("https://example.com/media.mp3", {
-        mediaKind: "audio",
+      resolveLineOutboundMedia("https://example.com/download?id=123", {
+        mediaKind: "video",
         previewImageUrl: "https://example.com/preview.jpg",
       }),
     ).resolves.toEqual({
-      mediaUrl: "https://example.com/media.mp3",
-      mediaKind: "audio",
+      mediaUrl: "https://example.com/download?id=123",
+      mediaKind: "video",
       previewImageUrl: "https://example.com/preview.jpg",
     });
   });
 
-  it("throws for local paths because LINE outbound media requires public HTTPS URLs", async () => {
+  it("infers audio kind from explicit duration metadata when mediaKind is omitted", async () => {
+    await expect(
+      resolveLineOutboundMedia("https://example.com/download?id=audio", {
+        durationMs: 60000,
+      }),
+    ).resolves.toEqual({
+      mediaUrl: "https://example.com/download?id=audio",
+      mediaKind: "audio",
+      durationMs: 60000,
+    });
+  });
+
+  it("does not infer video from previewImageUrl alone", async () => {
+    await expect(
+      resolveLineOutboundMedia("https://example.com/image.jpg", {
+        previewImageUrl: "https://example.com/preview.jpg",
+      }),
+    ).resolves.toEqual({
+      mediaUrl: "https://example.com/image.jpg",
+      mediaKind: "image",
+      previewImageUrl: "https://example.com/preview.jpg",
+    });
+  });
+
+  it("infers media kinds from known HTTPS file extensions", async () => {
+    await expect(resolveLineOutboundMedia("https://example.com/audio.mp3")).resolves.toEqual({
+      mediaUrl: "https://example.com/audio.mp3",
+      mediaKind: "audio",
+    });
+    await expect(resolveLineOutboundMedia("https://example.com/video.mp4")).resolves.toEqual({
+      mediaUrl: "https://example.com/video.mp4",
+      mediaKind: "video",
+    });
+    await expect(resolveLineOutboundMedia("https://example.com/image.jpg")).resolves.toEqual({
+      mediaUrl: "https://example.com/image.jpg",
+      mediaKind: "image",
+    });
+  });
+
+  it("validates previewImageUrl when provided", async () => {
+    await expect(
+      resolveLineOutboundMedia("https://example.com/video.mp4", {
+        mediaKind: "video",
+        previewImageUrl: "http://example.com/preview.jpg",
+      }),
+    ).rejects.toThrow(/must use HTTPS/i);
+  });
+
+  it("falls back to image when no explicit LINE media options or known extension are present", async () => {
+    await expect(
+      resolveLineOutboundMedia("https://example.com/download?id=audio"),
+    ).resolves.toEqual({
+      mediaUrl: "https://example.com/download?id=audio",
+      mediaKind: "image",
+    });
+  });
+
+  it("rejects local paths because LINE outbound media requires public HTTPS URLs", async () => {
     await expect(resolveLineOutboundMedia("./assets/image.jpg")).rejects.toThrow(
-      /publicly accessible HTTPS URL/i,
+      /requires a public https url/i,
     );
   });
 
