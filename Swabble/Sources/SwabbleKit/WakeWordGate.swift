@@ -79,7 +79,11 @@ public enum WakeWordGate {
             let count = trigger.tokens.count
             guard count > 0, tokens.count > count else { continue }
             for i in 0...(tokens.count - count - 1) {
-                let matched = (0..<count).allSatisfy { tokens[i + $0].normalized == trigger.tokens[$0] }
+                let matched = (0..<count).allSatisfy {
+                    let seg = tokens[i + $0].normalized
+                    let trig = trigger.tokens[$0]
+                    return seg == trig || seg.hasPrefix(trig)
+                }
                 if !matched { continue }
 
                 let triggerEnd = tokens[i + count - 1].end
