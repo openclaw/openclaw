@@ -402,9 +402,11 @@ that channel as an approval surface just because the conversation happened there
 
 Shared behavior:
 
-- only configured approvers can approve or deny
+- only resolved approvers can approve or deny
+- Discord and Telegram approvers can be explicit (`execApprovals.approvers`) or inferred from existing owner config (`allowFrom`, plus direct-message `defaultTo` where supported)
 - the requester does not need to be an approver
 - when channel delivery is enabled, approval prompts include the command text
+- pending exec approvals expire after 30 minutes by default
 - if no operator UI or configured approval client can accept the request, the prompt falls back to `askFallback`
 
 Telegram defaults to approver DMs (`target: "dm"`). You can switch to `channel` or `both` when you
