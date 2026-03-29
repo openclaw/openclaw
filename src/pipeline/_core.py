@@ -1289,14 +1289,22 @@ class PipelineExecutor:
     ) -> Dict[str, Any]:
         """Run decomposed sub-tasks concurrently, each routed to its brigade."""
 
+        # v15.2: Extract [CHAT HISTORY] from original prompt so each sub-task
+        # retains multi-turn context (prevents amnesia during decomposition).
+        _history_block = ""
+        if "[CURRENT TASK]:" in original_prompt:
+            _history_block = original_prompt.split("[CURRENT TASK]:")[0] + "[CURRENT TASK]:\n"
+
         async def _run_one(idx: int, text: str, brigade: str) -> Dict[str, Any]:
             if status_callback:
                 await status_callback(
                     "Decomposer", "system",
                     f"🔀 Подзадача {idx + 1}/{len(sub_tasks)} → {brigade}",
                 )
+            # Prepend chat history to each sub-task
+            enriched_text = _history_block + text if _history_block else text
             return await self.execute(
-                prompt=text,
+                prompt=enriched_text,
                 brigade=brigade,
                 max_steps=max_steps,
                 status_callback=status_callback,

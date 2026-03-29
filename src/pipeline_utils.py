@@ -144,8 +144,15 @@ def compress_for_next_step(role_name: str, response: str) -> str:
 def emergency_compress(step_prompt: str, ctx_threshold: int, role_name: str) -> str:
     """
     Emergency context compression when input exceeds ctx budget.
-    Preserves structure: keeps [ORIGINAL USER TASK] and compresses [PIPELINE CONTEXT].
+    Preserves structure: keeps [ORIGINAL USER TASK], [CHAT HISTORY], and compresses [PIPELINE CONTEXT].
     """
+    # v15.2: Extract and preserve [CHAT HISTORY] block before compression
+    _chat_history_block = ""
+    if "[CHAT HISTORY" in step_prompt and "[CURRENT TASK]:" in step_prompt:
+        _hist_end = step_prompt.index("[CURRENT TASK]:") + len("[CURRENT TASK]:\n")
+        _chat_history_block = step_prompt[:_hist_end]
+        step_prompt = step_prompt[_hist_end:]
+
     parts = step_prompt.split("[ORIGINAL USER TASK]")
     if len(parts) < 2:
         target_chars = ctx_threshold * 4
@@ -154,8 +161,8 @@ def emergency_compress(step_prompt: str, ctx_threshold: int, role_name: str) -> 
             last_boundary = max(cut.rfind('. '), cut.rfind('\n'), cut.rfind('? '))
             if last_boundary > target_chars // 2:
                 cut = cut[:last_boundary + 1]
-            return cut + "\n[...CONTEXT COMPRESSED DUE TO OVERFLOW...]"
-        return step_prompt
+            return _chat_history_block + cut + "\n[...CONTEXT COMPRESSED DUE TO OVERFLOW...]"
+        return _chat_history_block + step_prompt
 
     pipeline_ctx = parts[0]
     original_task = "[ORIGINAL USER TASK]" + parts[1]
@@ -165,7 +172,8 @@ def emergency_compress(step_prompt: str, ctx_threshold: int, role_name: str) -> 
     if available_for_ctx < 400:
         logger.warning(f"Extreme overflow for {role_name}: dropping pipeline context entirely")
         return (
-            "[PIPELINE CONTEXT — COMPRESSED]\n"
+            _chat_history_block
+            + "[PIPELINE CONTEXT — COMPRESSED]\n"
             "Previous steps completed. Details truncated due to context limit.\n\n"
             + original_task
         )
@@ -190,7 +198,7 @@ def emergency_compress(step_prompt: str, ctx_threshold: int, role_name: str) -> 
         clean_ctx = head + "\n[...COMPRESSED...]\n" + tail
 
     logger.info(f"Context compressed for {role_name}: {len(pipeline_ctx)} → {len(clean_ctx)} chars")
-    return clean_ctx + "\n\n" + original_task
+    return _chat_history_block + clean_ctx + "\n\n" + original_task
 
 
 def compress_for_model_swap(steps_results: list, accumulated_context: str = "", max_tokens: int = 800) -> str:
@@ -427,26 +435,54 @@ _ANTI_REFUSAL_PROTOCOL = _ZERO_SHOT_AUTONOMY_PROTOCOL
 
 # v15.0: Role-specific execution mandates — inspired by MetaGPT role goals/constraints
 _RESEARCHER_EXECUTION_MANDATE = (
-    "\n\n[EXECUTION MANDATE — RESEARCHER v15.0]"
+    "\n\n[EXECUTION MANDATE — RESEARCHER v15.2]"
     "\nТы ОБЯЗАН вызвать инструменты поиска и вернуть РЕАЛЬНЫЕ данные."
     "\nНе пиши 'Я бы выполнил поиск...' — ВЫПОЛНИ поиск."
     "\nНе пиши 'Рекомендую проверить...' — ПРОВЕРЬ и выдай результат."
+    "\nЕсли видишь URL — твоё ПЕРВОЕ действие ОБЯЗАНО быть вызовом web_search или youtube_parser. НЕ пытайся угадать содержимое ссылки."
     "\nМинимальный артефакт: структурированные данные из инструментов + твой анализ."
 )
 
 _CODER_EXECUTION_MANDATE = (
-    "\n\n[EXECUTION MANDATE — CODER v15.0]"
+    "\n\n[EXECUTION MANDATE — CODER v15.2]"
     "\nТы ОБЯЗАН выдать ПОЛНЫЙ работающий код. Не заглушки, не TODO, не описания."
     "\nНикогда не пиши 'Я бы реализовал это так...' — реализуй и отдай готовый код."
     "\nНикогда не пиши 'Вот пример кода...' — пиши финальный production-ready код."
+    "\nИспользование заглушек типа `// ... rest of the code`, `pass`, `# TODO` — СТРОГО ЗАПРЕЩЕНО. Каждая функция должна быть ПОЛНОЙ."
     "\nМинимальный артефакт: запускаемый файл или функция с импортами."
 )
 
 _ANALYST_EXECUTION_MANDATE = (
-    "\n\n[EXECUTION MANDATE — ANALYST v15.0]"
+    "\n\n[EXECUTION MANDATE — ANALYST v15.2]"
     "\nТы ОБЯЗАН выдать КОНКРЕТНЫЙ анализ с данными, метриками, выводами."
     "\nНе пиши 'Следует проанализировать...' — анализируй здесь и сейчас."
+    "\nЕсли в промпте есть URL — твоё ПЕРВОЕ действие ОБЯЗАНО быть вызовом web_search или youtube_parser. НЕ пытайся угадать содержимое."
     "\nМинимальный артефакт: структурированный отчёт с фактами из контекста."
+)
+
+# v15.2: Planner execution mandate — strict output format
+_PLANNER_EXECUTION_MANDATE = (
+    "\n\n[EXECUTION MANDATE — PLANNER v15.2]"
+    "\nВыдавай ТОЛЬКО нумерованный список шагов. НЕ объясняй свои рассуждения если не просят."
+    "\nКаждый шаг = конкретное действие с указанием роли-исполнителя."
+    "\nНе пиши вводные абзацы, не описывай контекст. Сразу к делу."
+)
+
+# v15.2: Auditor execution mandate — precision review
+_AUDITOR_EXECUTION_MANDATE = (
+    "\n\n[EXECUTION MANDATE — AUDITOR v15.2]"
+    "\nНЕ переписывай код если это не необходимо. Указывай ТОЧНЫЕ номера строк и расхождения."
+    "\nФормат: проблема → строка → предлагаемое исправление."
+    "\nЕсли код корректен — подтверди кратко и иди дальше."
+)
+
+# v15.2: Universal CRITICAL EXECUTION DIRECTIVES — injected into EVERY system prompt
+_CRITICAL_EXECUTION_DIRECTIVES = (
+    "\n\n[CRITICAL EXECUTION DIRECTIVES — v15.2]"
+    "\n1. ZERO-SHOT ACTION: Ты — автономный backend-исполнитель. НЕ веди себя как разговорный ассистент."
+    "\n2. NO REFUSALS: НИКОГДА не говори 'Я не могу просматривать интернет', 'Я не могу смотреть видео', 'Я — ИИ'. У тебя ЕСТЬ инструменты. Используй их немедленно."
+    "\n3. NO FILLER: НЕ используй разговорные вставки ('Вот код', 'Сейчас я проанализирую'). Выдавай ТОЛЬКО запрошенный формат или <tool_call>."
+    "\n4. ASSUME CONTEXT: Если в промпте не хватает деталей — используй [CHAT HISTORY] для вывода контекста. НЕ проси пользователя уточнять."
 )
 
 
@@ -549,6 +585,7 @@ def build_role_prompt(role_name: str, role_config: dict, framework_root: str, ta
     system_prompt += _ZERO_SHOT_AUTONOMY_PROTOCOL
 
     # v15.0: Role-specific execution mandates — force action, not description
+    # v15.2: Extended with Planner and Auditor mandates
     is_researcher = "Researcher" in role_name
     is_analyst = "Analyst" in role_name
     if is_researcher:
@@ -557,6 +594,10 @@ def build_role_prompt(role_name: str, role_config: dict, framework_root: str, ta
         system_prompt += _ANALYST_EXECUTION_MANDATE
     elif is_coder:
         system_prompt += _CODER_EXECUTION_MANDATE
+    elif is_planner:
+        system_prompt += _PLANNER_EXECUTION_MANDATE
+    elif is_auditor:
+        system_prompt += _AUDITOR_EXECUTION_MANDATE
 
     # Inject IDENTITY.md persona cues for Archivists (human-readable output) and Planners
     if is_archivist or is_planner:
@@ -583,5 +624,9 @@ def build_role_prompt(role_name: str, role_config: dict, framework_root: str, ta
                 system_prompt += f"\n\n[PROJECT CONTEXT]\n{ctx_content}"
             except Exception as e:
                 logger.warning(f"Failed to read PROJECT_CONTEXT.md: {e}")
+
+    # v15.2: Universal CRITICAL EXECUTION DIRECTIVES — injected into EVERY system prompt
+    # This is the absolute LAST injection so the model sees it as the final authority.
+    system_prompt += _CRITICAL_EXECUTION_DIRECTIVES
 
     return system_prompt
