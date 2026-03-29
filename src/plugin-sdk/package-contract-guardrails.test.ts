@@ -1,6 +1,9 @@
-import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import os from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { pluginSdkEntrypoints } from "./entrypoints.js";
 
@@ -56,6 +59,32 @@ function readRootPackageJson(): {
   };
 }
 
+function createRootPackageRequire() {
+  return createRequire(pathToFileURL(resolve(REPO_ROOT, "package.json")).href);
+}
+
+function resolvePackageManagerCommand(name: "npm" | "pnpm"): string {
+  return process.platform === "win32" ? `${name}.cmd` : name;
+}
+
+function packOpenClawToTempDir(packDir: string): string {
+  const raw = execFileSync(
+    resolvePackageManagerCommand("npm"),
+    ["pack", "--ignore-scripts", "--json", "--pack-destination", packDir],
+    {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+      env: { ...process.env, COREPACK_ENABLE_DOWNLOAD_PROMPT: "0" },
+    },
+  );
+  const parsed = JSON.parse(raw) as Array<{ filename?: string }>;
+  const filename = parsed[0]?.filename?.trim();
+  if (!filename) {
+    throw new Error(`npm pack did not return a filename: ${raw}`);
+  }
+  return join(packDir, filename);
+}
+
 function readGeneratedFacadeTypeMap(): string {
   return readFileSync(
     resolve(REPO_ROOT, "src/generated/plugin-sdk-facade-type-map.generated.ts"),
@@ -99,8 +128,65 @@ describe("plugin-sdk package contract guardrails", () => {
   it("mirrors matrix runtime deps needed by the bundled host graph", () => {
     const { dependencies = {}, optionalDependencies = {} } = readRootPackageJson();
 
+    expect(dependencies["@matrix-org/matrix-sdk-crypto-wasm"]).toBe("18.0.0");
     expect(dependencies["matrix-js-sdk"]).toBe("41.2.0");
     expect(optionalDependencies["@matrix-org/matrix-sdk-crypto-nodejs"]).toBe("^0.4.0");
+  });
+
+  it("resolves matrix crypto WASM from the root runtime surface", () => {
+    const rootRequire = createRootPackageRequire();
+
+    expect(rootRequire.resolve("@matrix-org/matrix-sdk-crypto-wasm")).toContain(
+      "@matrix-org/matrix-sdk-crypto-wasm",
+    );
+  });
+
+  it("resolves matrix crypto WASM from an installed packed artifact", () => {
+    const tempRoot = mkdtempSync(join(os.tmpdir(), "openclaw-matrix-wasm-pack-"));
+    try {
+      const packDir = join(tempRoot, "pack");
+      const consumerDir = join(tempRoot, "consumer");
+      mkdirSync(packDir, { recursive: true });
+      mkdirSync(consumerDir, { recursive: true });
+      writeFileSync(
+        join(consumerDir, "package.json"),
+        `${JSON.stringify({ name: "matrix-wasm-smoke", private: true }, null, 2)}\n`,
+        "utf8",
+      );
+
+      const archivePath = packOpenClawToTempDir(packDir);
+
+      execFileSync(
+        resolvePackageManagerCommand("pnpm"),
+        ["add", "--offline", "--ignore-scripts", archivePath],
+        {
+          cwd: consumerDir,
+          encoding: "utf8",
+          env: { ...process.env, COREPACK_ENABLE_DOWNLOAD_PROMPT: "0" },
+          stdio: ["ignore", "pipe", "pipe"],
+        },
+      );
+
+      const installedPackageJsonPath = join(
+        consumerDir,
+        "node_modules",
+        "openclaw",
+        "package.json",
+      );
+      const installedPackageJson = JSON.parse(readFileSync(installedPackageJsonPath, "utf8")) as {
+        dependencies?: Record<string, string>;
+      };
+      const installedRequire = createRequire(pathToFileURL(installedPackageJsonPath).href);
+
+      expect(installedPackageJson.dependencies?.["@matrix-org/matrix-sdk-crypto-wasm"]).toBe(
+        "18.0.0",
+      );
+      expect(installedRequire.resolve("@matrix-org/matrix-sdk-crypto-wasm")).toContain(
+        "@matrix-org/matrix-sdk-crypto-wasm",
+      );
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
   });
 
   it("keeps generated facade types on package-style module specifiers", () => {

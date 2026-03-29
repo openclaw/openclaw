@@ -28,7 +28,6 @@ const requiredPathGroups = [
   "dist/build-info.json",
   "dist/channel-catalog.json",
   "dist/control-ui/index.html",
-  "dist/pkg/matrix_sdk_crypto_wasm_bg.wasm",
 ];
 const forbiddenPrefixes = ["dist-runtime/", "dist/OpenClaw.app/"];
 // 2026.3.12 ballooned to ~213.6 MiB unpacked and correlated with low-memory
@@ -64,13 +63,76 @@ function collectBundledExtensions(): BundledExtension[] {
 function checkBundledExtensionMetadata() {
   const extensions = collectBundledExtensions();
   const manifestErrors = collectBundledExtensionManifestErrors(extensions);
-  if (manifestErrors.length > 0) {
+  const rootPackage = JSON.parse(readFileSync(resolve("package.json"), "utf8")) as {
+    dependencies?: Record<string, string>;
+    optionalDependencies?: Record<string, string>;
+  };
+  const rootRuntimeDeps = new Set([
+    ...Object.keys(rootPackage.dependencies ?? {}),
+    ...Object.keys(rootPackage.optionalDependencies ?? {}),
+  ]);
+  const rootMirrorErrors = collectBundledExtensionRootDependencyMirrorErrors(
+    extensions,
+    rootRuntimeDeps,
+  );
+  const errors = [...manifestErrors, ...rootMirrorErrors];
+  if (errors.length > 0) {
     console.error("release-check: bundled extension manifest validation failed:");
-    for (const error of manifestErrors) {
+    for (const error of errors) {
       console.error(`  - ${error}`);
     }
     process.exit(1);
   }
+}
+
+export function collectBundledExtensionRootDependencyMirrorErrors(
+  extensions: BundledExtension[],
+  rootRuntimeDeps: ReadonlySet<string>,
+): string[] {
+  const errors: string[] = [];
+
+  for (const extension of extensions) {
+    const rawReleaseChecks = extension.packageJson.openclaw?.releaseChecks;
+    const allowlist = (rawReleaseChecks as { rootDependencyMirrorAllowlist?: unknown } | undefined)
+      ?.rootDependencyMirrorAllowlist;
+
+    if (allowlist === undefined) {
+      continue;
+    }
+    if (!Array.isArray(allowlist)) {
+      errors.push(
+        `bundled extension '${extension.id}' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist must be an array`,
+      );
+      continue;
+    }
+
+    const extensionRuntimeDeps = new Set([
+      ...Object.keys(extension.packageJson.dependencies ?? {}),
+      ...Object.keys(extension.packageJson.optionalDependencies ?? {}),
+    ]);
+
+    for (const entry of allowlist) {
+      if (typeof entry !== "string" || entry.trim().length === 0) {
+        errors.push(
+          `bundled extension '${extension.id}' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist entries must be non-empty strings`,
+        );
+        continue;
+      }
+
+      if (!extensionRuntimeDeps.has(entry)) {
+        errors.push(
+          `bundled extension '${extension.id}' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist entry '${entry}' must be declared in extension runtime dependencies`,
+        );
+      }
+      if (!rootRuntimeDeps.has(entry)) {
+        errors.push(
+          `bundled extension '${extension.id}' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist entry '${entry}' must be mirrored in root runtime dependencies`,
+        );
+      }
+    }
+  }
+
+  return errors;
 }
 
 function runPackDry(): PackResult[] {

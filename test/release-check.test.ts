@@ -4,6 +4,7 @@ import { listPluginSdkDistArtifacts } from "../scripts/lib/plugin-sdk-entries.mj
 import {
   collectAppcastSparkleVersionErrors,
   collectBundledExtensionManifestErrors,
+  collectBundledExtensionRootDependencyMirrorErrors,
   collectForbiddenPackPaths,
   collectMissingPackPaths,
   collectPackUnpackedSizeErrors,
@@ -20,7 +21,6 @@ function makePackResult(filename: string, unpackedSize: number) {
 
 const requiredPluginSdkPackPaths = [...listPluginSdkDistArtifacts(), "dist/plugin-sdk/compat.js"];
 const requiredBundledPluginPackPaths = listBundledPluginPackArtifacts();
-const requiredMatrixCryptoWasmPackPaths = ["dist/pkg/matrix_sdk_crypto_wasm_bg.wasm"];
 
 describe("collectAppcastSparkleVersionErrors", () => {
   it("accepts legacy 9-digit calver builds before lane-floor cutover", () => {
@@ -110,6 +110,103 @@ describe("collectBundledExtensionManifestErrors", () => {
   });
 });
 
+describe("collectBundledExtensionRootDependencyMirrorErrors", () => {
+  it("flags a non-array mirror allowlist", () => {
+    expect(
+      collectBundledExtensionRootDependencyMirrorErrors(
+        [
+          {
+            id: "matrix",
+            packageJson: {
+              openclaw: {
+                releaseChecks: {
+                  rootDependencyMirrorAllowlist: true,
+                },
+              },
+            },
+          },
+        ],
+        new Set(),
+      ),
+    ).toEqual([
+      "bundled extension 'matrix' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist must be an array",
+    ]);
+  });
+
+  it("flags mirror entries missing from extension runtime dependencies", () => {
+    expect(
+      collectBundledExtensionRootDependencyMirrorErrors(
+        [
+          {
+            id: "matrix",
+            packageJson: {
+              dependencies: {
+                "matrix-js-sdk": "41.2.0",
+              },
+              openclaw: {
+                releaseChecks: {
+                  rootDependencyMirrorAllowlist: ["@matrix-org/matrix-sdk-crypto-wasm"],
+                },
+              },
+            },
+          },
+        ],
+        new Set(["@matrix-org/matrix-sdk-crypto-wasm"]),
+      ),
+    ).toEqual([
+      "bundled extension 'matrix' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist entry '@matrix-org/matrix-sdk-crypto-wasm' must be declared in extension runtime dependencies",
+    ]);
+  });
+
+  it("flags mirror entries missing from root runtime dependencies", () => {
+    expect(
+      collectBundledExtensionRootDependencyMirrorErrors(
+        [
+          {
+            id: "matrix",
+            packageJson: {
+              dependencies: {
+                "@matrix-org/matrix-sdk-crypto-wasm": "18.0.0",
+              },
+              openclaw: {
+                releaseChecks: {
+                  rootDependencyMirrorAllowlist: ["@matrix-org/matrix-sdk-crypto-wasm"],
+                },
+              },
+            },
+          },
+        ],
+        new Set(),
+      ),
+    ).toEqual([
+      "bundled extension 'matrix' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist entry '@matrix-org/matrix-sdk-crypto-wasm' must be mirrored in root runtime dependencies",
+    ]);
+  });
+
+  it("accepts mirror entries declared by both the extension and root package", () => {
+    expect(
+      collectBundledExtensionRootDependencyMirrorErrors(
+        [
+          {
+            id: "matrix",
+            packageJson: {
+              dependencies: {
+                "@matrix-org/matrix-sdk-crypto-wasm": "18.0.0",
+              },
+              openclaw: {
+                releaseChecks: {
+                  rootDependencyMirrorAllowlist: ["@matrix-org/matrix-sdk-crypto-wasm"],
+                },
+              },
+            },
+          },
+        ],
+        new Set(["@matrix-org/matrix-sdk-crypto-wasm"]),
+      ),
+    ).toEqual([]);
+  });
+});
+
 describe("collectForbiddenPackPaths", () => {
   it("allows bundled plugin runtime deps under dist/extensions but still blocks other node_modules", () => {
     expect(
@@ -139,7 +236,6 @@ describe("collectMissingPackPaths", () => {
       expect.arrayContaining([
         "dist/channel-catalog.json",
         "dist/control-ui/index.html",
-        "dist/pkg/matrix_sdk_crypto_wasm_bg.wasm",
         bundledDistPluginFile("matrix", "helper-api.js"),
         bundledDistPluginFile("matrix", "runtime-api.js"),
         bundledDistPluginFile("matrix", "thread-bindings-runtime.js"),
@@ -160,7 +256,6 @@ describe("collectMissingPackPaths", () => {
         "dist/entry.js",
         "dist/control-ui/index.html",
         ...requiredBundledPluginPackPaths,
-        ...requiredMatrixCryptoWasmPackPaths,
         ...requiredPluginSdkPackPaths,
         "dist/plugin-sdk/root-alias.cjs",
         "dist/build-info.json",
