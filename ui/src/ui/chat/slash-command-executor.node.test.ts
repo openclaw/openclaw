@@ -245,13 +245,17 @@ describe("executeSlashCommand directives", () => {
           sessions: [
             row("agent:main:main", {
               model: "gpt-4.1-mini",
+              modelProvider: "openai",
             }),
           ],
         };
       }
       if (method === "models.list") {
         return {
-          models: [{ id: "gpt-4.1-mini" }, { id: "gpt-4.1" }],
+          models: [
+            { id: "gpt-4.1-mini", provider: "openai" },
+            { id: "gpt-4.1", provider: "openai" },
+          ],
         };
       }
       throw new Error(`unexpected method: ${method}`);
@@ -265,7 +269,7 @@ describe("executeSlashCommand directives", () => {
     );
 
     expect(result.content).toBe(
-      "**Current model:** `gpt-4.1-mini`\n**Available:** `gpt-4.1-mini`, `gpt-4.1`",
+      "**Current model:** `openai/gpt-4.1-mini`\n**Available:** `openai/gpt-4.1-mini`, `openai/gpt-4.1`",
     );
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
     expect(request).toHaveBeenNthCalledWith(2, "models.list", {});
