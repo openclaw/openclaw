@@ -48,8 +48,10 @@ export function resolveLiveSessionModelSelection(params: {
     agentId,
   });
   const entry = loadSessionStore(storePath, { skipCache: true })[sessionKey];
-  const provider = entry?.providerOverride?.trim() || defaultModelRef.provider;
-  const model = entry?.modelOverride?.trim() || defaultModelRef.model;
+  const runtimeProvider = entry?.modelProvider?.trim();
+  const runtimeModel = entry?.model?.trim();
+  const provider = runtimeProvider || entry?.providerOverride?.trim() || defaultModelRef.provider;
+  const model = runtimeModel || entry?.modelOverride?.trim() || defaultModelRef.model;
   const authProfileId = entry?.authProfileOverride?.trim() || undefined;
   return {
     provider,
@@ -100,4 +102,16 @@ export function hasDifferentLiveSessionModelSelection(
     (current.authProfileId?.trim() ? current.authProfileIdSource : undefined) !==
       next.authProfileIdSource
   );
+}
+
+export function shouldTrackPersistedLiveSessionModelSelection(
+  current: {
+    provider: string;
+    model: string;
+    authProfileId?: string;
+    authProfileIdSource?: string;
+  },
+  persisted: LiveSessionModelSelection | null | undefined,
+): boolean {
+  return !hasDifferentLiveSessionModelSelection(current, persisted);
 }
