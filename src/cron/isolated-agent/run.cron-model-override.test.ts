@@ -250,4 +250,22 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
     expect(cronSession.sessionEntry.model).toBe("claude-opus-4-6");
     expect(cronSession.sessionEntry.modelProvider).toBe("anthropic");
   });
+
+  it("persists providerOverride/modelOverride so live-switch resolver sees cron model", async () => {
+    // When the main agent uses Opus but cron resolves to a different model
+    // (e.g. subagent default GPT-5.4), the live-session model-switch resolver
+    // reads providerOverride/modelOverride from the session entry.  If those
+    // are missing it falls back to the main agent default, sees a mismatch,
+    // and throws LiveSessionModelSwitchError.
+    runWithModelFallbackMock.mockResolvedValueOnce({
+      reply: "digest complete",
+      agentMeta: { provider: "anthropic", model: "claude-sonnet-4-6" },
+    });
+
+    await runCronIsolatedAgentTurn(makeParams());
+
+    // providerOverride/modelOverride must match the resolved cron model
+    expect(cronSession.sessionEntry.providerOverride).toBe("anthropic");
+    expect(cronSession.sessionEntry.modelOverride).toBe("claude-sonnet-4-6");
+  });
 });

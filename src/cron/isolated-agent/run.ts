@@ -401,6 +401,13 @@ export async function runCronIsolatedAgentTurn(params: {
   // must not prevent the actual agent run from executing.
   cronSession.sessionEntry.modelProvider = provider;
   cronSession.sessionEntry.model = model;
+  // Persist provider/model overrides so that the live-session model-switch
+  // resolver (resolveLiveSessionModelSelection) sees the cron-resolved model
+  // instead of falling back to the main agent default.  Without this, isolated
+  // cron sessions that use a different model (e.g. subagent default GPT-5.4
+  // vs main agent Opus) immediately throw LiveSessionModelSwitchError.
+  cronSession.sessionEntry.providerOverride = provider;
+  cronSession.sessionEntry.modelOverride = model;
   cronSession.sessionEntry.systemSent = true;
   try {
     await persistSessionEntry();
