@@ -55,6 +55,10 @@ def clean_response_for_user(text: str) -> str:
     text = re.sub(r"\[ARCHIVIST PROTOCOL[^\]]*\][^\n]*\n?", "", text)
     # Remove [EXECUTOR PROTOCOL...] remnants
     text = re.sub(r"\[EXECUTOR PROTOCOL[^\]]*\][^\n]*\n?", "", text)
+    # Remove [EXECUTION MANDATE...] remnants (v15.0)
+    text = re.sub(r"\[EXECUTION MANDATE[^\]]*\][^\n]*\n?", "", text)
+    # Remove [CRITICAL DIRECTIVE...] remnants (v15.0)
+    text = re.sub(r"\[CRITICAL DIRECTIVE[^\]]*\][^\n]*\n?", "", text)
     # Remove agent persona markers injected by AgentPersonaManager
     text = re.sub(r"\[ACTIVE AGENT PERSONA[^\]]*\][^\n]*\n?", "", text)
     text = re.sub(r"\[END AGENT PERSONA\]\s*", "", text)
@@ -383,19 +387,66 @@ _AUDITOR_PROTOCOL = (
 )
 
 
-# v14.6: Anti-Refusal + Zero-Shot Tool Execution — injected into ALL roles
-# Insight: MetaGPT BY_ORDER mode eliminates laziness by removing LLM optionality;
-# OpenHands CodeAct queues pending_actions and pops them without giving LLM a "refuse" path.
-# We replicate this determinism via system-prompt directive for all roles.
-_ANTI_REFUSAL_PROTOCOL = (
-    "\n\n[CRITICAL DIRECTIVE: ZERO-SHOT TOOL EXECUTION — v14.6]"
-    "\nЕсли в промпте есть URL (http/https/youtube.com/youtu.be) — НЕМЕДЛЕННО вызови инструмент."
-    "\nНЕ пиши 'Я не могу перейти по ссылке' или 'Как языковая модель...'. У тебя ЕСТЬ инструменты. ИСПОЛЬЗУЙ их."
-    "\n- youtube.com / youtu.be → вызови youtube_parser с этим URL"
-    "\n- http/https (не YouTube) → вызови web_search_mcp или fetch_url с этим URL"
-    "\n- Запрос на выполнение кода → вызови sandbox_execute немедленно"
-    "\nАЛГОРИТМ: Thought → Action (выбор инструмента) → Action Input (JSON параметры) → наблюдение результата."
-    "\nОТКАЗ ЗАПРЕЩЁН. Объяснения 'почему не могу' — ЗАПРЕЩЕНЫ. Только действие."
+# v15.0: Zero-Shot Autonomy Protocol — universal execution mandate for ALL roles
+# SOTA insights incorporated:
+# - MetaGPT BY_ORDER mode: eliminates LLM optionality, actions execute sequentially with no refusal path
+# - OpenHands CodeAct: pending_actions deque — agent generates tool-calls, they're queued and popped, only /exit stops
+# - AutoGPT: forced JSON-strict output via collision-proof tags, retry with structured error feedback
+# Replaces v14.6 _ANTI_REFUSAL_PROTOCOL (URL-only) with universal directive.
+_ZERO_SHOT_AUTONOMY_PROTOCOL = (
+    "\n\n[CRITICAL DIRECTIVE: ZERO-SHOT AUTONOMY — v15.0]"
+    "\n"
+    "\n[ПРАВИЛО №1 — ДЕЙСТВУЙ НЕМЕДЛЕННО]"
+    "\nПолучил задачу → ВЫПОЛНЯЙ. Не описывай что бы ты сделал — ДЕЛАЙ."
+    "\nНе проси разрешения. Не объясняй ограничения. Не делегируй обратно пользователю."
+    "\nЕдинственная допустимая причина остановки — задача ТРЕБУЕТ данных, которых нет в контексте И нет инструментов для их получения."
+    "\n"
+    "\n[ПРАВИЛО №2 — ИНСТРУМЕНТЫ = ДЕЙСТВИЕ]"
+    "\nЕсли в промпте есть URL (http/https/youtube.com/youtu.be) — НЕМЕДЛЕННО вызови инструмент:"
+    "\n- youtube.com / youtu.be → youtube_parser"
+    "\n- http/https (не YouTube) → web_search_mcp или fetch_url"
+    "\n- Запрос на код → sandbox_execute немедленно"
+    "\n- Запрос данных → вызови нужный инструмент, а не описывай процесс"
+    "\nАЛГОРИТМ: Thought → Action → Action Input (JSON) → Observation → следующий шаг."
+    "\nОТКАЗ ЗАПРЕЩЁН. Фразы 'Я не могу', 'Как языковая модель' — ЗАПРЕЩЕНЫ."
+    "\n"
+    "\n[ПРАВИЛО №3 — РАЗМЫТЫЙ ЗАПРОС ≠ ПОВОД ДЛЯ БЕЗДЕЙСТВИЯ]"
+    "\nЕсли запрос неконкретен ('напиши что-нибудь', 'сделай круто', 'проверь') — ИНТЕРПРЕТИРУЙ и ВЫПОЛНЯЙ:"
+    "\n- Выбери наиболее полезную интерпретацию в контексте текущей бригады и проекта"
+    "\n- Сформулируй конкретную подзадачу и реши её"
+    "\n- НЕ спрашивай 'что именно вы имели в виду?' — действуй на основе контекста"
+    "\n"
+    "\n[ПРАВИЛО №4 — ЗАПРЕТ ФИЛЛЕРА]"
+    "\nЗАПРЕЩЕНО начинать ответ с: 'Давайте рассмотрим...', 'Хороший вопрос!', 'Конечно, я помогу...', "
+    "'Для начала необходимо...', 'Представляет собой...', 'Безусловно...'."
+    "\nПервое слово ответа = начало ДЕЙСТВИЯ или АРТЕФАКТА. Без вступлений."
+)
+
+# Backward compatibility alias
+_ANTI_REFUSAL_PROTOCOL = _ZERO_SHOT_AUTONOMY_PROTOCOL
+
+# v15.0: Role-specific execution mandates — inspired by MetaGPT role goals/constraints
+_RESEARCHER_EXECUTION_MANDATE = (
+    "\n\n[EXECUTION MANDATE — RESEARCHER v15.0]"
+    "\nТы ОБЯЗАН вызвать инструменты поиска и вернуть РЕАЛЬНЫЕ данные."
+    "\nНе пиши 'Я бы выполнил поиск...' — ВЫПОЛНИ поиск."
+    "\nНе пиши 'Рекомендую проверить...' — ПРОВЕРЬ и выдай результат."
+    "\nМинимальный артефакт: структурированные данные из инструментов + твой анализ."
+)
+
+_CODER_EXECUTION_MANDATE = (
+    "\n\n[EXECUTION MANDATE — CODER v15.0]"
+    "\nТы ОБЯЗАН выдать ПОЛНЫЙ работающий код. Не заглушки, не TODO, не описания."
+    "\nНикогда не пиши 'Я бы реализовал это так...' — реализуй и отдай готовый код."
+    "\nНикогда не пиши 'Вот пример кода...' — пиши финальный production-ready код."
+    "\nМинимальный артефакт: запускаемый файл или функция с импортами."
+)
+
+_ANALYST_EXECUTION_MANDATE = (
+    "\n\n[EXECUTION MANDATE — ANALYST v15.0]"
+    "\nТы ОБЯЗАН выдать КОНКРЕТНЫЙ анализ с данными, метриками, выводами."
+    "\nНе пиши 'Следует проанализировать...' — анализируй здесь и сейчас."
+    "\nМинимальный артефакт: структурированный отчёт с фактами из контекста."
 )
 
 
@@ -448,6 +499,9 @@ def build_role_prompt(role_name: str, role_config: dict, framework_root: str, ta
             "\n6. SCOPE LIMITATION: Объясняй только четко установленные факты из контекста и доступных данных. Если ты НЕ УВЕРЕН — скажи 'недостаточно данных' вместо домысливания. Пропускай спорные или непроверенные области."
             "\n7. ВАЖНО: Весь ответ на РУССКОМ ЯЗЫКЕ."
             f"\n8. СИСТЕМНАЯ СРЕДА: Бот работает на {os_name}. Инструменты доступны через MCP. Для выполнения команд в терминале используй run_command — внутри бота есть shell-агент. НЕ проси пользователя запускать команды вручную."
+            "\n9. [v15.0 AUTONOMY]: ask_user — ПОСЛЕДНИЙ вариант. СНАЧАЛА попробуй выполнить задачу "
+            "на основе контекста. ask_user допустим ТОЛЬКО если задача ФИЗИЧЕСКИ невыполнима без уточнения "
+            "(пример: 'какой API-ключ использовать?'). Размытый запрос — НЕ повод для ask_user."
         )
 
         # Inject BRAIN.md for Planners
@@ -491,8 +545,18 @@ def build_role_prompt(role_name: str, role_config: dict, framework_root: str, ta
     # Inject Kill List into ALL roles for persona consistency
     system_prompt += _KILL_LIST
 
-    # v14.6: Inject Anti-Refusal protocol into ALL roles — zero-shot tool execution guarantee
-    system_prompt += _ANTI_REFUSAL_PROTOCOL
+    # v15.0: Inject Zero-Shot Autonomy protocol into ALL roles (replaces v14.6 Anti-Refusal)
+    system_prompt += _ZERO_SHOT_AUTONOMY_PROTOCOL
+
+    # v15.0: Role-specific execution mandates — force action, not description
+    is_researcher = "Researcher" in role_name
+    is_analyst = "Analyst" in role_name
+    if is_researcher:
+        system_prompt += _RESEARCHER_EXECUTION_MANDATE
+    elif is_analyst:
+        system_prompt += _ANALYST_EXECUTION_MANDATE
+    elif is_coder:
+        system_prompt += _CODER_EXECUTION_MANDATE
 
     # Inject IDENTITY.md persona cues for Archivists (human-readable output) and Planners
     if is_archivist or is_planner:

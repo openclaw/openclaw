@@ -4,6 +4,27 @@ Docs: https://docs.openclaw.ai
 
 ## 2026.3.2 (Unreleased)
 
+### [v15.0] Zero-Shot Autonomy (SOTA Prompt Architecture Overhaul)
+
+#### Исследование
+
+- **Deep Research** 5 SOTA фреймворков: AutoGPT (JSON-strict output blocks), MetaGPT (BY_ORDER mode — no LLM optionality), OpenHands/CodeAct (pending_actions deque — no refuse path), CrewAI (role+backstory+goal), LangGraph (state-machine graphs)
+- **Gap Analysis**: 6 критических разрывов между OpenClaw v14.9 и SOTA — anti-refusal только для URLs, отсутствие execution mandates, нет enrichment размытых промптов
+
+#### Изменения
+
+- **`_ZERO_SHOT_AUTONOMY_PROTOCOL` (v15.0)** — полная замена `_ANTI_REFUSAL_PROTOCOL` (v14.6). 4 правила: немедленное действие, инструменты=действие, размытый запрос≠бездействие, запрет филлера. Инжектится во ВСЕ роли. (`src/pipeline_utils.py`)
+- **Role-Specific Execution Mandates** — `_RESEARCHER_EXECUTION_MANDATE` (обязан вызвать инструменты), `_CODER_EXECUTION_MANDATE` (обязан выдать полный код), `_ANALYST_EXECUTION_MANDATE` (обязан выдать конкретный анализ с данными). (`src/pipeline_utils.py`)
+- **Planner v15.0 Autonomy** — `ask_user` теперь ПОСЛЕДНИЙ вариант. Размытый запрос — не повод для ask_user, плаенер обязан интерпретировать и действовать. (`src/pipeline_utils.py`)
+- **AFlow Vague Prompt Enrichment** — детекция размытых промптов (`_VAGUE_INDICATORS`) + автоматическое обогащение контекстом бригады (`_BRIGADE_ENRICHMENT`). Размытый "напиши что-нибудь" → "напиши что-нибудь (в контексте DMarket — торговля скинами CS2...)". (`src/pipeline/_aflow.py`)
+- **Response Cleanup v15.0** — `clean_response_for_user()` теперь стрипает `[EXECUTION MANDATE...]` и `[CRITICAL DIRECTIVE...]` remnants. (`src/pipeline_utils.py`)
+- **Backward Compatibility** — `_ANTI_REFUSAL_PROTOCOL` сохранён как alias на `_ZERO_SHOT_AUTONOMY_PROTOCOL`
+
+#### Тесты
+
+- 25 новых тестов в `scripts/test_v15_zero_shot.py`: protocol injection, role mandates, vague enrichment, response cleanup, backward compat
+- 501 existing tests — ALL GREEN
+
 ### [v14.9] Stress-Test 8-Bug Fix (Pipeline Reliability)
 
 #### Исправления

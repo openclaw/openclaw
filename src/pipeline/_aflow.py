@@ -82,6 +82,20 @@ _URL_PATTERN = re.compile(r"https?://", re.I)
 # Roles considered tool-capable for URL/fetch tasks
 _TOOL_CAPABLE_ROLES = frozenset(["Researcher", "Executor_Tools"])
 
+# v15.0: Vague prompt indicators — prompts matching these need enrichment, not ask_user
+_VAGUE_INDICATORS = re.compile(
+    r"^(напиши|сделай|проверь|расскажи|покажи|найди|создай|помоги|объясни)"
+    r"\s+(что-нибудь|что-то|как-нибудь|нормально|круто|прикольное|интересное)",
+    re.I,
+)
+
+# v15.0: Brigade-specific enrichment context — used to concretize vague prompts
+_BRIGADE_ENRICHMENT: Dict[str, str] = {
+    "Dmarket-Dev": "в контексте DMarket — торговля скинами CS2, API интеграция, арбитраж, автоматизация",
+    "OpenClaw-Core": "в контексте OpenClaw — мульти-агентный AI-фреймворк, pipeline, бригады, инструменты",
+    "Research-Ops": "в контексте исследования — deep research, анализ данных, сбор информации из web",
+}
+
 
 @dataclass
 class AFlowResult:
@@ -136,12 +150,26 @@ class AFlowEngine:
         """Generate optimal agent chain for the given prompt and brigade.
 
         Algorithm:
-        1. Heuristic fast-path → immediate return, no LLM call
-        2. LLM generation with candidate expansion (asyncio.TaskGroup)
-        3. Fallback to static default_chain on errors
+        1. v15.0: Vague prompt enrichment — concretize ambiguous requests
+        2. Heuristic fast-path → immediate return, no LLM call
+        3. LLM generation with candidate expansion (asyncio.TaskGroup)
+        4. Fallback to static default_chain on errors
         """
+        # v15.0: Enrich vague prompts with brigade context instead of punting to ask_user
+        enriched_prompt = prompt
+        if _VAGUE_INDICATORS.search(prompt):
+            enrichment = _BRIGADE_ENRICHMENT.get(brigade, "")
+            if enrichment:
+                enriched_prompt = f"{prompt} ({enrichment})"
+                logger.info(
+                    "AFlow v15.0: vague prompt enriched",
+                    original=prompt[:80],
+                    enriched=enriched_prompt[:120],
+                    brigade=brigade,
+                )
+
         # Stage 1: Heuristic fast-path
-        heuristic = self._match_heuristic(prompt, available_roles)
+        heuristic = self._match_heuristic(enriched_prompt, available_roles)
         if heuristic:
             # URL pre-flight: if prompt contains a URL, guarantee a tool-capable role is first
             if _URL_PATTERN.search(prompt):
@@ -160,7 +188,7 @@ class AFlowEngine:
         try:
             result = await asyncio.wait_for(
                 self._llm_generate_chain(
-                    prompt=prompt,
+                    prompt=enriched_prompt,
                     brigade=brigade,
                     available_roles=available_roles,
                     config=config,
