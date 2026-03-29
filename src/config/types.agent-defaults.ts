@@ -294,6 +294,12 @@ export type AgentDefaultsConfig = {
     announceTimeoutMs?: number;
     /** Require explicit agentId in sessions_spawn (no default same-as-caller). Default: false. */
     requireAgentId?: boolean;
+    /**
+     * Enable the `sessions_await` tool and `suppressAnnounce`/`waitForCompletion`
+     * parameters on `sessions_spawn` for parallel sub-agent orchestration.
+     * Default: false.
+     */
+    awaitEnabled?: boolean;
   };
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: AgentSandboxConfig;

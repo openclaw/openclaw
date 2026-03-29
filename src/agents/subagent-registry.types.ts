@@ -30,6 +30,11 @@ export type SubagentRunRecord = {
   cleanupCompletedAt?: number;
   cleanupHandled?: boolean;
   suppressAnnounceReason?: "steer-restart" | "killed";
+  /**
+   * When true, skip announce:v1 follow-up runs. Used for blocking spawn flows
+   * that already wait and return the child completion inline.
+   */
+  suppressAutoAnnounce?: boolean;
   expectsCompletionMessage?: boolean;
   /** Number of announce delivery attempts that returned false (deferred). */
   announceRetryCount?: number;

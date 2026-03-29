@@ -87,6 +87,13 @@ export type AgentConfig = {
     model?: AgentModelConfig;
     /** Require explicit agentId in sessions_spawn (no default same-as-caller). */
     requireAgentId?: boolean;
+    /** Per-agent default thinking level for spawned sub-agents. */
+    thinking?: string;
+    /**
+     * Enable sessions_await and await-only sessions_spawn flags
+     * for this agent, overriding agents.defaults.subagents.awaitEnabled.
+     */
+    awaitEnabled?: boolean;
   };
   /** Optional per-agent sandbox overrides. */
   sandbox?: AgentSandboxConfig;

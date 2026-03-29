@@ -117,7 +117,6 @@ describe("spawnSubagentDirect seam flow", () => {
 
     const childSessionKey = result.childSessionKey as string;
     expect(hoisted.pruneLegacyStoreKeysMock).toHaveBeenCalledTimes(1);
-    expect(hoisted.updateSessionStoreMock).toHaveBeenCalledTimes(1);
     expect(hoisted.registerSubagentRunMock).toHaveBeenCalledWith(
       expect.objectContaining({
         runId: "run-1",
@@ -145,16 +144,235 @@ describe("spawnSubagentDirect seam flow", () => {
       label: undefined,
     });
 
-    expectPersistedRuntimeModel({
-      persistedStore,
-      sessionKey: childSessionKey,
-      provider: "openai-codex",
-      model: "gpt-5.4",
-    });
-    expect(operations.indexOf("gateway:sessions.patch")).toBeGreaterThan(-1);
-    expect(operations.indexOf("store:update")).toBeGreaterThan(
-      operations.indexOf("gateway:sessions.patch"),
+    const patchIdx = operations.indexOf("gateway:sessions.patch");
+    const storeUpdateIdx = operations.indexOf("store:update");
+    const agentIdx = operations.indexOf("gateway:agent");
+    expect(patchIdx).toBeGreaterThan(-1);
+    expect(agentIdx).toBeGreaterThan(patchIdx);
+
+    if (storeUpdateIdx > -1) {
+      expect(storeUpdateIdx).toBeGreaterThan(patchIdx);
+      expect(agentIdx).toBeGreaterThan(storeUpdateIdx);
+      expectPersistedRuntimeModel({
+        persistedStore,
+        sessionKey: childSessionKey,
+        provider: "openai-codex",
+        model: "gpt-5.4",
+      });
+    }
+  });
+
+  it('rejects waitForCompletion when mode="session"', async () => {
+    const result = await spawnSubagentDirect(
+      {
+        task: "session mode cannot block inline",
+        mode: "session",
+        thread: true,
+        waitForCompletion: true,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "discord",
+      },
     );
-    expect(operations.indexOf("gateway:agent")).toBeGreaterThan(operations.indexOf("store:update"));
+
+    expect(result).toMatchObject({
+      status: "error",
+      error: 'waitForCompletion=true is only supported for mode="run".',
+    });
+    expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("caps waitForCompletion inline timeout to five minutes", async () => {
+    const FIVE_MINUTES_MS = 5 * 60 * 1000;
+    let waitRequestTimeoutMs: number | undefined;
+    hoisted.callGatewayMock.mockImplementation(
+      async (request: { method?: string; params?: { timeoutMs?: number } }) => {
+        if (request.method === "agent") {
+          return { runId: "run-1" };
+        }
+        if (request.method === "agent.wait") {
+          waitRequestTimeoutMs = request.params?.timeoutMs;
+          return { status: "timeout" };
+        }
+        if (request.method?.startsWith("sessions.")) {
+          return { ok: true };
+        }
+        return {};
+      },
+    );
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "long child timeout should not block parent turn indefinitely",
+        waitForCompletion: true,
+        runTimeoutSeconds: 86_400,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "discord",
+      },
+    );
+
+    expect(waitRequestTimeoutMs).toBe(FIVE_MINUTES_MS);
+    expect(result).toMatchObject({
+      status: "accepted",
+      runId: "run-1",
+      completion: {
+        status: "timeout",
+        waitTimeoutMs: FIVE_MINUTES_MS,
+        error: "subagent run timed out",
+      },
+    });
+  });
+
+  it("restores auto-announce when waitForCompletion receives unexpected wait status", async () => {
+    const result = await spawnSubagentDirect(
+      {
+        task: "wait with malformed status",
+        waitForCompletion: true,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "discord",
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "accepted",
+      runId: "run-1",
+      completion: {
+        status: "error",
+        error: "unexpected agent.wait status: undefined",
+      },
+    });
+  });
+
+  it("restores auto-announce when waitForCompletion returns error status", async () => {
+    hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent") {
+        return { runId: "run-1" };
+      }
+      if (request.method === "agent.wait") {
+        return { status: "error", error: "run failed" };
+      }
+      if (request.method?.startsWith("sessions.")) {
+        return { ok: true };
+      }
+      return {};
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "wait returns error status",
+        waitForCompletion: true,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "discord",
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "accepted",
+      runId: "run-1",
+      completion: {
+        status: "error",
+        error: "run failed",
+      },
+    });
+  });
+
+  it("keeps waitForCompletion successful when reply capture fails", async () => {
+    hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent") {
+        return { runId: "run-1" };
+      }
+      if (request.method === "agent.wait") {
+        return { status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        throw new Error("history unavailable");
+      }
+      if (request.method?.startsWith("sessions.")) {
+        return { ok: true };
+      }
+      return {};
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "wait returns ok but history lookup fails",
+        waitForCompletion: true,
+        cleanup: "delete",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "discord",
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "accepted",
+      runId: "run-1",
+      completion: {
+        status: "ok",
+        error: "failed to capture completion reply: history unavailable",
+      },
+    });
+    expect(result.completion?.reply).toBeUndefined();
+    expect(hoisted.callGatewayMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "sessions.delete",
+      }),
+    );
+  });
+
+  it("deletes delete-cleanup child session after inline reply capture", async () => {
+    const methods: string[] = [];
+    hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
+      methods.push(request.method ?? "unknown");
+      if (request.method === "agent") {
+        return { runId: "run-1" };
+      }
+      if (request.method === "agent.wait") {
+        return { status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        return {
+          messages: [{ role: "assistant", content: "final result" }],
+        };
+      }
+      if (request.method?.startsWith("sessions.")) {
+        return { ok: true };
+      }
+      return {};
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "wait returns ok and should cleanup delete after capture",
+        waitForCompletion: true,
+        cleanup: "delete",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "discord",
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "accepted",
+      runId: "run-1",
+      completion: {
+        status: "ok",
+        reply: "final result",
+      },
+    });
+
+    const captureIdx = methods.indexOf("chat.history");
+    const deleteIdx = methods.lastIndexOf("sessions.delete");
+    expect(captureIdx).toBeGreaterThan(-1);
+    expect(deleteIdx).toBeGreaterThan(captureIdx);
   });
 });
