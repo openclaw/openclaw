@@ -106,10 +106,12 @@ _BRIGADE_KEYWORDS: dict[str, list[str]] = {
     "Research-Ops": [
         "research", "найди", "поищи", "youtube", "видео", "video",
         "url", "http", "ссылк", "статью", "интернет", "анализ",
+        "vision", "проанализируй",
     ],
     "OpenClaw-Core": [
         "config", "pipeline", "model", "bot", "openclaw", "gateway",
         "конфиг", "бригад", "бот", "память", "memory", "mcp",
+        "code", "python", "rust", "напиши", "функци",
     ],
 }
 
@@ -121,7 +123,7 @@ def _route_subtask(text: str) -> str:
     for brigade, keywords in _BRIGADE_KEYWORDS.items():
         scores[brigade] = sum(1 for kw in keywords if kw in lower)
     best = max(scores, key=scores.get)  # type: ignore[arg-type]
-    return best if scores[best] > 0 else "Dmarket-Dev"
+    return best if scores[best] > 0 else "OpenClaw-Core"
 
 
 def _decompose_multi_task(prompt: str) -> list[tuple[str, str]]:
@@ -904,21 +906,23 @@ class PipelineExecutor:
                         memory=self._supermemory,
                         config=self.config,
                     )
-                    if not march_result.passed:
+                    total_claims = len(march_result.verified_claims) + len(march_result.discrepancies)
+                    disc_rate = len(march_result.discrepancies) / max(total_claims, 1)
+                    if not march_result.is_consistent:
                         logger.warning(
                             "MARCH cross-verification failed",
-                            discrepancy_rate=march_result.discrepancy_rate,
-                            unverified=march_result.unverified_count,
+                            discrepancy_rate=disc_rate,
+                            unverified=len(march_result.discrepancies),
                         )
-                        if march_result.revised_response:
-                            final_response = march_result.revised_response
+                        if march_result.corrected_response:
+                            final_response = march_result.corrected_response
                             steps_results.append({
                                 "role": "MARCH_Verification",
                                 "model": "march",
                                 "response": final_response,
                             })
                     else:
-                        logger.info("MARCH cross-verification passed", rate=march_result.discrepancy_rate)
+                        logger.info("MARCH cross-verification passed", rate=disc_rate)
                 except Exception as e:
                     logger.warning("MARCH verification failed (non-fatal)", error=str(e))
 
