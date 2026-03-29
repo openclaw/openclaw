@@ -692,7 +692,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
 
   if (!statusReactionsEnabled) {
     removeAckReactionAfterReply({
-      removeAfterReply: ctx.removeAckAfterReply,
+      removeAfterReply: ctx.removeAckAfterReply && anyReplyDelivered,
       ackReactionPromise: prepared.ackReactionPromise,
       ackReactionValue: prepared.ackReactionValue,
       remove: () =>
