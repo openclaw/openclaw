@@ -14,6 +14,7 @@ import {
   resolveModelRefFromString,
 } from "./model-selection.js";
 import { resolveModel } from "./pi-embedded-runner/model.js";
+import { emitLlmEvent } from "../observability/event-emitter.js";
 
 type SimpleCompletionAuthStorage = {
   setRuntimeApiKey: (provider: string, apiKey: string) => void;
@@ -237,9 +238,48 @@ export async function completeWithPreparedSimpleCompletionModel(params: {
   auth: ResolvedProviderAuth;
   context: Parameters<typeof complete>[1];
   options?: Omit<Parameters<typeof complete>[2], "apiKey">;
+  /** Optional session key for observability; falls back to 'unknown'. */
+  sessionKey?: string;
 }) {
-  return await complete(params.model, params.context, {
-    ...params.options,
-    apiKey: params.auth.apiKey,
-  });
+  const startTime = performance.now();
+  let response: Awaited<ReturnType<typeof complete>> | undefined;
+
+  try {
+    response = await complete(params.model, params.context, {
+      ...params.options,
+      apiKey: params.auth.apiKey,
+    });
+
+    emitLlmEvent({
+      level: "info",
+      model: response.model ?? params.model.id ?? "unknown",
+      provider: response.provider ?? params.model.provider ?? "unknown",
+      sessionKey: params.sessionKey ?? "unknown",
+      startTime,
+      tokensIn: response.usage?.input,
+      tokensOut: response.usage?.output,
+    });
+
+    return response;
+  } catch (err) {
+    // Only emit if the API responded with usage data.
+    // Zero usage = network failure / request never reached API = do NOT emit.
+    const hasUsage =
+      (response?.usage?.input ?? 0) > 0 || (response?.usage?.output ?? 0) > 0;
+
+    if (hasUsage) {
+      emitLlmEvent({
+        level: "error",
+        model: response?.model ?? params.model.id ?? "unknown",
+        provider: response?.provider ?? params.model.provider ?? "unknown",
+        sessionKey: params.sessionKey ?? "unknown",
+        startTime,
+        tokensIn: response?.usage?.input,
+        tokensOut: response?.usage?.output,
+        error: err,
+      });
+    }
+
+    throw err;
+  }
 }
