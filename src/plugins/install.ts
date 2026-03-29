@@ -376,11 +376,14 @@ async function installBundleFromSourceDir(
   }
 
   try {
-    await runtime.scanBundleInstallSource({
+    const scanResult = await runtime.scanBundleInstallSource({
       sourceDir: params.sourceDir,
       pluginId,
       logger,
     });
+    if (scanResult?.blocked) {
+      return { ok: false, error: scanResult.blocked.reason };
+    }
   } catch (err) {
     logger.warn?.(
       `Bundle "${pluginId}" code safety scan failed (${String(err)}). Installation continues; run "openclaw security audit --deep" after install.`,
@@ -545,12 +548,15 @@ async function installPluginFromPackageDir(
     };
   }
   try {
-    await runtime.scanPackageInstallSource({
+    const scanResult = await runtime.scanPackageInstallSource({
       packageDir: params.packageDir,
       pluginId,
       logger,
       extensions,
     });
+    if (scanResult?.blocked) {
+      return { ok: false, error: scanResult.blocked.reason };
+    }
   } catch (err) {
     logger.warn?.(
       `Plugin "${pluginId}" code safety scan failed (${String(err)}). Installation continues; run "openclaw security audit --deep" after install.`,
