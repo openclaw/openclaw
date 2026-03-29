@@ -482,6 +482,18 @@ describe("tts", () => {
       expect(result.overrides.provider).toBeUndefined();
       expect(result.ttsText).toBeUndefined();
     });
+
+    it("supports CRLF-delimited directives", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
+      const input =
+        "Hello world\r\n[[tts:provider=edge]]\r\n[[tts:text]]\r\nRead this.\r\n[[/tts:text]]\r\n";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.hasDirective).toBe(true);
+      expect(result.overrides.provider).toBe("edge");
+      expect(result.ttsText).toBe("Read this.");
+      expect(result.cleanedText).toContain("Hello world");
+    });
   });
 
   describe("summarizeText", () => {
