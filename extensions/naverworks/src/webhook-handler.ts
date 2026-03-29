@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { formatLocationText } from "openclaw/plugin-sdk";
+import { formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
 import type { NaverWorksAccount, NaverWorksInboundEvent } from "./types.js";
 
 function readBody(req: IncomingMessage): Promise<string> {

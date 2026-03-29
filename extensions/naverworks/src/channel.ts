@@ -1,13 +1,12 @@
+import type { ChannelPlugin, OpenClawConfig } from "openclaw/plugin-sdk";
+import { toLocationContext } from "openclaw/plugin-sdk/channel-inbound";
 import {
-  DEFAULT_ACCOUNT_ID,
   buildChannelConfigSchema,
-  type ChannelOutboundContext,
-  type ChannelPlugin,
-  registerPluginHttpRoute,
-  resolveOutboundMediaUrls,
   setAccountEnabledInConfigSection,
-  toLocationContext,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/core";
+import { resolveOutboundMediaUrls } from "openclaw/plugin-sdk/reply-payload";
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
+import { registerPluginHttpRoute } from "openclaw/plugin-sdk/webhook-ingress";
 import { z } from "zod";
 import { listAccountIds, resolveAccount } from "./accounts.js";
 import { getNaverWorksRuntime } from "./runtime.js";
@@ -64,6 +63,13 @@ const PROCESSING_STICKER_INTERVAL_MS = 60_000;
 const FAILED_REPLY_NOTICE = "처리에 실패했습니다. 잠시 후 다시 시도해주세요.";
 
 type AutoThinkingLevel = "low" | "medium" | "high";
+type NaverWorksChannelOutboundContext = {
+  cfg: OpenClawConfig;
+  to: string;
+  text?: string;
+  mediaUrl?: string;
+  accountId?: string | null;
+};
 
 function formatDeliveryLog(delivery: NaverWorksSendDelivery): string {
   return [
@@ -319,7 +325,7 @@ export function createNaverWorksPlugin(): ChannelPlugin<NaverWorksAccount> {
 
     outbound: {
       deliveryMode: "direct",
-      sendText: async ({ cfg, to, text, accountId }: ChannelOutboundContext) => {
+      sendText: async ({ cfg, to, text, accountId }: NaverWorksChannelOutboundContext) => {
         const account = resolveAccount(cfg as Record<string, unknown>, accountId);
         const sent = await sendMessageNaverWorks({
           account,
@@ -344,7 +350,13 @@ export function createNaverWorksPlugin(): ChannelPlugin<NaverWorksAccount> {
           messageId: `naverworks:${Date.now()}:${Math.random().toString(36).slice(2, 10)}`,
         };
       },
-      sendMedia: async ({ cfg, to, text, mediaUrl, accountId }: ChannelOutboundContext) => {
+      sendMedia: async ({
+        cfg,
+        to,
+        text,
+        mediaUrl,
+        accountId,
+      }: NaverWorksChannelOutboundContext) => {
         const account = resolveAccount(cfg as Record<string, unknown>, accountId);
         const caption = text?.trim();
         const mediaHref = mediaUrl?.trim();

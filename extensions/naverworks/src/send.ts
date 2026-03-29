@@ -1,13 +1,13 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { detectMime, normalizeMimeType } from "../../../src/media/mime.js";
 import {
   createTextLineComponents,
   markdownToNaverWorksFlexTemplate,
   type NaverWorksFlexContainer,
   type NaverWorksFlexComponent,
 } from "./markdown-to-flex.js";
+import { getNaverWorksRuntime } from "./runtime.js";
 import type { NaverWorksAccount, NaverWorksStickerRef } from "./types.js";
 
 type OAuthTokenCacheEntry = {
@@ -117,6 +117,14 @@ function buildAltText(text: string): string {
     return "OpenClaw message";
   }
   return normalized.slice(0, 400);
+}
+
+function normalizeMimeType(mime?: string | null): string | undefined {
+  if (!mime) {
+    return undefined;
+  }
+  const cleaned = mime.split(";")[0]?.trim().toLowerCase();
+  return cleaned || undefined;
 }
 
 async function issueAccessTokenWithJwt(account: NaverWorksAccount): Promise<{
@@ -425,8 +433,12 @@ async function uploadLocalMediaAsAttachment(params: {
     return created;
   }
   const mediaKind = inferMediaKindFromUrl(fileName);
+  const runtime = getNaverWorksRuntime();
   const detectedContentType = normalizeMimeType(
-    await detectMime({ buffer: fileBuffer.subarray(0, 512), filePath: params.mediaPath }),
+    await runtime.media.detectMime({
+      buffer: fileBuffer.subarray(0, 512),
+      filePath: params.mediaPath,
+    }),
   );
   const contentType =
     detectedContentType ??
