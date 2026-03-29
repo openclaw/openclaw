@@ -57,7 +57,7 @@ export function getCommandPollSuggestion(
   if (!pollData) {
     return undefined;
   }
-  return calculateBackoffMs(pollData.count);
+  return calculateBackoffMs(Math.max(0, pollData.count));
 }
 
 /**
