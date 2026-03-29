@@ -15,10 +15,6 @@ export type TaskRegistryHookEvent =
       tasks: TaskRecord[];
     }
   | {
-      kind: "persisted";
-      tasks: TaskRecord[];
-    }
-  | {
       kind: "upserted";
       task: TaskRecord;
       previous?: TaskRecord;
@@ -30,6 +26,7 @@ export type TaskRegistryHookEvent =
     };
 
 export type TaskRegistryHooks = {
+  // Hooks are incremental/observational. Snapshot persistence belongs to TaskRegistryStore.
   onEvent?: (event: TaskRegistryHookEvent) => void;
 };
 

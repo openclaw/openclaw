@@ -53,16 +53,16 @@ function snapshotTaskRecords(source: ReadonlyMap<string, TaskRecord>): TaskRecor
   return [...source.values()].map((record) => cloneTaskRecord(record));
 }
 
-function emitTaskRegistryHookEvent(event: TaskRegistryHookEvent): void {
+function emitTaskRegistryHookEvent(createEvent: () => TaskRegistryHookEvent): void {
   const hooks = getTaskRegistryHooks();
   if (!hooks?.onEvent) {
     return;
   }
   try {
-    hooks.onEvent(event);
+    hooks.onEvent(createEvent());
   } catch (error) {
     log.warn("Task registry hook failed", {
-      event: event.kind,
+      event: "task-registry",
       error,
     });
   }
@@ -70,10 +70,6 @@ function emitTaskRegistryHookEvent(event: TaskRegistryHookEvent): void {
 
 function persistTaskRegistry() {
   getTaskRegistryStore().saveSnapshot(tasks);
-  emitTaskRegistryHookEvent({
-    kind: "persisted",
-    tasks: snapshotTaskRecords(tasks),
-  });
 }
 
 function ensureDeliveryStatus(requesterSessionKey: string): TaskDeliveryStatus {
@@ -292,10 +288,10 @@ function restoreTaskRegistryOnce() {
       tasks.set(taskId, task);
     }
     rebuildRunIdIndex();
-    emitTaskRegistryHookEvent({
+    emitTaskRegistryHookEvent(() => ({
       kind: "restored",
       tasks: snapshotTaskRecords(tasks),
-    });
+    }));
   } catch (error) {
     log.warn("Failed to restore task registry", { error });
   }
@@ -317,11 +313,11 @@ function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskRecord | nu
     rebuildRunIdIndex();
   }
   persistTaskRegistry();
-  emitTaskRegistryHookEvent({
+  emitTaskRegistryHookEvent(() => ({
     kind: "upserted",
     task: cloneTaskRecord(next),
     previous: cloneTaskRecord(current),
-  });
+  }));
   return cloneTaskRecord(next);
 }
 
@@ -755,10 +751,10 @@ export function createTaskRecord(params: {
   tasks.set(taskId, record);
   addRunIdIndex(taskId, record.runId);
   persistTaskRegistry();
-  emitTaskRegistryHookEvent({
+  emitTaskRegistryHookEvent(() => ({
     kind: "upserted",
     task: cloneTaskRecord(record),
-  });
+  }));
   return cloneTaskRecord(record);
 }
 
@@ -999,11 +995,11 @@ export function deleteTaskRecordById(taskId: string): boolean {
   tasks.delete(taskId);
   rebuildRunIdIndex();
   persistTaskRegistry();
-  emitTaskRegistryHookEvent({
+  emitTaskRegistryHookEvent(() => ({
     kind: "deleted",
     taskId: current.taskId,
     previous: cloneTaskRecord(current),
-  });
+  }));
   return true;
 }
 

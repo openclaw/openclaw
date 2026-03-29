@@ -64,7 +64,7 @@ describe("task-registry store runtime", () => {
     expect(latestSnapshot.get("task-restored")?.task).toBe("Restored task");
   });
 
-  it("emits hook events for restore, mutation, and delete", () => {
+  it("emits incremental hook events for restore, mutation, and delete", () => {
     const events: TaskRegistryHookEvent[] = [];
     configureTaskRegistryRuntime({
       store: {
@@ -91,22 +91,16 @@ describe("task-registry store runtime", () => {
     });
     expect(deleteTaskRecordById(created.taskId)).toBe(true);
 
-    expect(events.map((event) => event.kind)).toEqual([
-      "restored",
-      "persisted",
-      "upserted",
-      "persisted",
-      "deleted",
-    ]);
+    expect(events.map((event) => event.kind)).toEqual(["restored", "upserted", "deleted"]);
     expect(events[0]).toMatchObject({
       kind: "restored",
       tasks: [expect.objectContaining({ taskId: "task-restored" })],
     });
-    expect(events[2]).toMatchObject({
+    expect(events[1]).toMatchObject({
       kind: "upserted",
       task: expect.objectContaining({ taskId: created.taskId }),
     });
-    expect(events[4]).toMatchObject({
+    expect(events[2]).toMatchObject({
       kind: "deleted",
       taskId: created.taskId,
     });
