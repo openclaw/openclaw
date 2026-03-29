@@ -10,6 +10,13 @@ services:
       CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}
       CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
       TZ: ${OPENCLAW_TZ:-UTC}
+      ## Uncomment and set the following lines to enable proxy for outbound connections from the gateway.
+      ## Replace 7897 with the port your proxy is actually listening on your host machine.
+      # HTTP_PROXY: "socks5h://host.docker.internal:7897"
+      # HTTPS_PROXY: "socks5h://host.docker.internal:7897"
+      # NO_PROXY: "localhost,*.local,127.0.0.1,10.*.*.*,172.*.*.*,192.168.*.*"
+    # extra_hosts:
+    #   - "host.docker.internal:host-gateway"
     volumes:
       - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
       - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace

@@ -137,6 +137,23 @@ The setup script accepts these optional environment variables:
 | `OPENCLAW_SANDBOX`             | Opt in to sandbox bootstrap (`1`, `true`, `yes`, `on`)           |
 | `OPENCLAW_DOCKER_SOCKET`       | Override Docker socket path                                      |
 
+### Proxy configuration
+
+If your host routes outbound traffic through a local proxy (such as Clash Verge, v2ray, or Shadowsocks), you can enable proxying for the gateway container by setting the following environment variables in your `docker-compose.yml`:
+
+```yaml
+# In openclaw-gateway.environment:
+# HTTP_PROXY: "socks5h://host.docker.internal:7897"
+# HTTPS_PROXY: "socks5h://host.docker.internal:7897"
+# NO_PROXY: "localhost,*.local,127.0.0.1,10.*.*.*,172.*.*.*,192.168.*.*"
+```
+
+> **Note:**
+> Replace `7897` with the port your proxy is actually listening on your host machine.
+> For Linux, ensure you add `extra_hosts: - "host.docker.internal:host-gateway"` to make `host.docker.internal` available inside the container.
+
+This ensures all outbound requests from the gateway container are routed through your local proxy.
+
 ### Health checks
 
 Container probe endpoints (no auth required):
