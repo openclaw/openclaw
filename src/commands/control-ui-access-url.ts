@@ -25,9 +25,14 @@ export type ControlUiAccessUrlResult = {
 export async function resolveControlUiAccessUrl(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  /**
+   * Optional runtime-resolved gateway port (for example from service args).
+   * When provided, this takes precedence over config/env derivation.
+   */
+  resolvedPort?: number;
 }): Promise<ControlUiAccessUrlResult> {
   const env = params.env ?? process.env;
-  const port = resolveGatewayPort(params.cfg, env);
+  const port = params.resolvedPort ?? resolveGatewayPort(params.cfg, env);
   const bind = params.cfg.gateway?.bind ?? "loopback";
   const basePath = params.cfg.gateway?.controlUi?.basePath;
   const customBindHost = params.cfg.gateway?.customBindHost;

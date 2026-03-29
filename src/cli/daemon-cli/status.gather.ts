@@ -333,15 +333,17 @@ export async function gatherDaemonStatus(
     const access = await resolveControlUiAccessUrl({
       cfg: daemonCfg,
       env: mergedDaemonEnv as NodeJS.ProcessEnv,
+      resolvedPort: gatewayBase.port,
     });
+    const controlUiAccessHint = access.unresolvedRefReason
+      ? `URL omits token (${access.unresolvedRefReason}). Run \`openclaw dashboard\` with credentials in your shell, or paste the token in Control UI settings.`
+      : access.tokenSecretRefConfigured
+        ? "Token auto-auth is disabled for SecretRef-managed `gateway.auth.token`; use your external token source if prompted."
+        : undefined;
     gateway = {
       ...gatewayBase,
       controlUiAccessUrl: access.dashboardUrl,
-      ...(access.unresolvedRefReason
-        ? {
-            controlUiAccessHint: `URL omits token (${access.unresolvedRefReason}). Run \`openclaw dashboard\` with credentials in your shell, or paste the token in Control UI settings.`,
-          }
-        : {}),
+      ...(controlUiAccessHint ? { controlUiAccessHint } : {}),
     };
   } catch {
     // Keep gateway summary without dashboard URL hints if token resolution fails.

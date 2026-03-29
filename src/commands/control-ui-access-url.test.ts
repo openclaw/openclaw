@@ -64,6 +64,23 @@ describe("resolveControlUiAccessUrl", () => {
     expect(res.authToken).toBe("from-ref");
   });
 
+  it("uses runtime-resolved port override when provided", async () => {
+    mocks.resolveConfiguredSecretInputWithFallback.mockResolvedValue({
+      secretRefConfigured: false,
+    });
+
+    await resolveControlUiAccessUrl({
+      cfg: { gateway: {} },
+      env: {},
+      resolvedPort: 19001,
+    });
+
+    expect(mocks.resolveControlUiLinks).toHaveBeenCalledWith(
+      expect.objectContaining({ port: 19001 }),
+    );
+    expect(mocks.resolveGatewayPort).not.toHaveBeenCalled();
+  });
+
   it("maps lan bind to loopback for links", async () => {
     mocks.resolveConfiguredSecretInputWithFallback.mockResolvedValue({
       secretRefConfigured: false,

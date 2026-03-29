@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ControlUiAccessUrlResult } from "../../commands/control-ui-access-url.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import { captureEnv } from "../../test-utils/env.js";
 import type { GatewayRestartSnapshot } from "./restart-health.js";
@@ -69,6 +70,14 @@ let cliLoadedConfig: Record<string, unknown> = {
     bind: "loopback",
   },
 };
+const resolveControlUiAccessUrl = vi.fn<(_params?: unknown) => Promise<ControlUiAccessUrlResult>>(
+  async (_params?: unknown) => ({
+    httpUrl: "http://127.0.0.1:19001/",
+    dashboardUrl: "http://127.0.0.1:19001/",
+    tokenFragmentEmbedded: false,
+    tokenSecretRefConfigured: false,
+  }),
+);
 
 vi.mock("../../config/config.js", () => ({
   createConfigIO: ({ configPath }: { configPath: string }) => {
@@ -91,6 +100,10 @@ vi.mock("../../config/config.js", () => ({
 
 vi.mock("../../daemon/diagnostics.js", () => ({
   readLastGatewayErrorLine: (env: NodeJS.ProcessEnv) => readLastGatewayErrorLine(env),
+}));
+
+vi.mock("../../commands/control-ui-access-url.js", () => ({
+  resolveControlUiAccessUrl: (params: unknown) => resolveControlUiAccessUrl(params),
 }));
 
 vi.mock("../../daemon/inspect.js", () => ({
@@ -156,6 +169,13 @@ describe("gatherDaemonStatus", () => {
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
     delete process.env.DAEMON_GATEWAY_TOKEN;
     delete process.env.DAEMON_GATEWAY_PASSWORD;
+    resolveControlUiAccessUrl.mockReset();
+    resolveControlUiAccessUrl.mockResolvedValue({
+      httpUrl: "http://127.0.0.1:19001/",
+      dashboardUrl: "http://127.0.0.1:19001/",
+      tokenFragmentEmbedded: false,
+      tokenSecretRefConfigured: false,
+    });
     callGatewayStatusProbe.mockClear();
     loadGatewayTlsRuntime.mockClear();
     inspectGatewayRestart.mockClear();
@@ -195,6 +215,57 @@ describe("gatherDaemonStatus", () => {
     expect(status.gateway?.probeUrl).toBe("wss://127.0.0.1:19001");
     expect(status.rpc?.url).toBe("wss://127.0.0.1:19001");
     expect(status.rpc?.ok).toBe(true);
+  });
+
+  it("uses runtime daemon port when resolving dashboard access URL", async () => {
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: false,
+      deep: false,
+    });
+
+    expect(resolveControlUiAccessUrl).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resolvedPort: 19001,
+      }),
+    );
+    expect(status.gateway?.controlUiAccessUrl).toBe("http://127.0.0.1:19001/");
+  });
+
+  it("surfaces SecretRef hint when token URL embedding is intentionally disabled", async () => {
+    resolveControlUiAccessUrl.mockResolvedValueOnce({
+      httpUrl: "http://127.0.0.1:19001/",
+      dashboardUrl: "http://127.0.0.1:19001/",
+      tokenFragmentEmbedded: false,
+      tokenSecretRefConfigured: true,
+    });
+
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: false,
+      deep: false,
+    });
+
+    expect(status.gateway?.controlUiAccessHint).toContain("SecretRef-managed");
+  });
+
+  it("keeps unresolved-ref hint with resolution guidance", async () => {
+    resolveControlUiAccessUrl.mockResolvedValueOnce({
+      httpUrl: "http://127.0.0.1:19001/",
+      dashboardUrl: "http://127.0.0.1:19001/",
+      tokenFragmentEmbedded: false,
+      tokenSecretRefConfigured: false,
+      unresolvedRefReason: "provider unavailable",
+    });
+
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: false,
+      deep: false,
+    });
+
+    expect(status.gateway?.controlUiAccessHint).toContain("provider unavailable");
+    expect(status.gateway?.controlUiAccessHint).toContain("openclaw dashboard");
   });
 
   it("forwards requireRpc and configPath to the daemon probe", async () => {
