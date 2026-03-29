@@ -570,6 +570,9 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   };
 
   const emitReasoningStream = (text: string) => {
+    if (params.silentExpected) {
+      return;
+    }
     if (!state.streamReasoning || !params.onReasoningStream) {
       return;
     }

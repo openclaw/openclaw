@@ -189,9 +189,6 @@ export async function runAgentTurnWithFallback(params: {
         let text = payload.text;
         const reply = resolveSendableOutboundReplyParts(payload);
         if (params.followupRun.run.silentExpected) {
-          if (!text) {
-            return reply.hasMedia ? { text: undefined, skip: false } : { skip: true };
-          }
           return { skip: true };
         }
         if (!params.isHeartbeat && text?.includes("HEARTBEAT_OK")) {
@@ -439,6 +436,9 @@ export async function runAgentTurnWithFallback(params: {
                 onReasoningStream:
                   params.typingSignals.shouldStartOnReasoning || params.opts?.onReasoningStream
                     ? async (payload) => {
+                        if (params.followupRun.run.silentExpected) {
+                          return;
+                        }
                         await params.typingSignals.signalReasoningDelta();
                         await params.opts?.onReasoningStream?.({
                           text: payload.text,

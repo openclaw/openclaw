@@ -498,20 +498,48 @@ describe("runReplyAgent typing (heartbeat)", () => {
   it("suppresses narrated silent-turn partials, block replies, and final payloads", async () => {
     const onPartialReply = vi.fn();
     const onBlockReply = vi.fn();
+    const onReasoningStream = vi.fn();
     state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
       expect(params.silentExpected).toBe(true);
+      await params.onReasoningStream?.({ text: "Reasoning:\nI am trying to send NO_REPLY now." });
       await params.onPartialReply?.({ text: "I am trying to send NO_REPLY now." });
       await params.onBlockReply?.({ text: "I am trying to send NO_REPLY now." });
       return { payloads: [{ text: "I am trying to send NO_REPLY now." }], meta: {} };
     });
 
     const { run } = createMinimalRun({
-      opts: { isHeartbeat: false, onPartialReply, onBlockReply },
+      opts: { isHeartbeat: false, onPartialReply, onBlockReply, onReasoningStream },
       blockStreamingEnabled: true,
       runOverrides: { silentExpected: true },
     });
     const res = await run();
 
+    expect(onReasoningStream).not.toHaveBeenCalled();
+    expect(onPartialReply).not.toHaveBeenCalled();
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(res).toBeUndefined();
+  });
+
+  it("suppresses bare NO_REPLY silent-turn payloads", async () => {
+    const onPartialReply = vi.fn();
+    const onBlockReply = vi.fn();
+    const onReasoningStream = vi.fn();
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      expect(params.silentExpected).toBe(true);
+      await params.onReasoningStream?.({ text: "Reasoning:\nNO_REPLY" });
+      await params.onPartialReply?.({ text: "NO_REPLY" });
+      await params.onBlockReply?.({ text: "NO_REPLY" });
+      return { payloads: [{ text: "NO_REPLY" }], meta: { finalAssistantText: "NO_REPLY" } };
+    });
+
+    const { run } = createMinimalRun({
+      opts: { isHeartbeat: false, onPartialReply, onBlockReply, onReasoningStream },
+      blockStreamingEnabled: true,
+      runOverrides: { silentExpected: true },
+    });
+    const res = await run();
+
+    expect(onReasoningStream).not.toHaveBeenCalled();
     expect(onPartialReply).not.toHaveBeenCalled();
     expect(onBlockReply).not.toHaveBeenCalled();
     expect(res).toBeUndefined();

@@ -154,15 +154,7 @@ export async function buildReplyPayloads(params: {
       }),
     )
   ).filter(isRenderablePayload);
-  const silentFilteredPayloads = params.silentExpected
-    ? replyTaggedPayloads.flatMap((payload) => {
-        const parts = resolveSendableOutboundReplyParts(payload);
-        if (!parts.hasMedia) {
-          return [];
-        }
-        return [{ ...payload, text: undefined }];
-      })
-    : replyTaggedPayloads;
+  const silentFilteredPayloads = params.silentExpected ? [] : replyTaggedPayloads;
 
   // Drop final payloads only when block streaming succeeded end-to-end.
   // If streaming aborted (e.g., timeout), fall back to final payloads.
