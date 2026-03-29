@@ -1,4 +1,5 @@
 {
+{
   "name": "openclaw",
   "version": "2026.3.29",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
@@ -30,7 +31,8 @@
     "docs/",
     "!docs/.generated/**",
     "!docs/.i18n/zh-CN.tm.jsonl",
-    "skills/"
+    "skills/",
+    "scripts/"
   ],
   "type": "module",
   "main": "dist/index.js",
