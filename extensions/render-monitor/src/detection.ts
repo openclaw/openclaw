@@ -24,7 +24,7 @@ function resolveDeployFailure(status?: string | null): boolean {
 function resolveServiceError(status?: string | null): boolean {
   const s = normalizeLower(status);
   if (!s) return false;
-  return ["error", "failed"].some((needle) => s.includes(needle));
+  return ["error", "failed", "suspended"].some((needle) => s.includes(needle));
 }
 
 function resolveHttpFailure(url?: string): boolean {

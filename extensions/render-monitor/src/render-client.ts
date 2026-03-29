@@ -63,30 +63,47 @@ export class RenderClient {
 
   async getService(serviceId: string): Promise<RenderServiceSnapshot> {
     const raw = await this.requestJson<Record<string, unknown>>(`/v1/services/${serviceId}`);
-    const status = normalizeStringOrNull(raw.status);
-    const healthCheckState = normalizeStringOrNull(
-      (raw as Record<string, unknown>).health_check_state ??
-        (raw as Record<string, unknown>).healthCheckState,
-    );
 
-    const latestDeployRaw = (raw as Record<string, unknown>).latest_deploy ?? (raw as any).latestDeploy;
-    const latestDeploy =
-      latestDeployRaw && typeof latestDeployRaw === "object"
-        ? {
-            id: normalizeStringOrNull((latestDeployRaw as Record<string, unknown>).id) ?? null,
-            status:
-              normalizeStringOrNull(
-                (latestDeployRaw as Record<string, unknown>).status ??
-                  (latestDeployRaw as any).state,
-              ) ?? null,
-            commitSha:
-              normalizeStringOrNull(
-                (latestDeployRaw as Record<string, unknown>).commit_sha ??
-                  (latestDeployRaw as Record<string, unknown>).commitSha ??
-                  (latestDeployRaw as any).commit,
-              ) ?? null,
-          }
-        : null;
+    // Render v1 /services/{id} returns config only — runtime status comes from
+    // the suspended field and the separate deploys endpoint.
+    const suspended = normalizeStringOrNull(raw.suspended);
+    const isSuspended = suspended != null && suspended !== "not_suspended";
+
+    // Fetch latest deploy from the dedicated endpoint.
+    // Response shape: [{ deploy: { id, status, commit, ... }, cursor }]
+    type DeployEntry = { deploy?: Record<string, unknown> };
+    const deploysRaw = await this.requestJson<DeployEntry[]>(
+      `/v1/services/${serviceId}/deploys`,
+      { limit: "1" },
+    ).catch(() => [] as DeployEntry[]);
+
+    const latestDeployRaw = deploysRaw[0]?.deploy ?? null;
+    const latestDeploy = latestDeployRaw
+      ? {
+          id: normalizeStringOrNull(latestDeployRaw.id) ?? null,
+          status: normalizeStringOrNull(latestDeployRaw.status) ?? null,
+          commitSha:
+            normalizeStringOrNull(
+              (latestDeployRaw.commit as Record<string, unknown>)?.id ??
+                latestDeployRaw.commit_sha ??
+                latestDeployRaw.commitSha,
+            ) ?? null,
+        }
+      : null;
+
+    // Derive a top-level status from deploy + suspension state.
+    const deployStatus = latestDeploy?.status ?? null;
+    const status = isSuspended
+      ? "suspended"
+      : deployStatus;
+
+    // Render v1 does not expose healthCheckState directly; derive from
+    // deploy status when possible (live = healthy, build_failed = failing).
+    const healthCheckState =
+      deployStatus === "live" ? "healthy"
+        : deployStatus && ["build_failed", "update_failed", "pre_deploy_failed"].includes(deployStatus)
+          ? "failing"
+          : null;
 
     return {
       serviceId,
