@@ -1789,6 +1789,17 @@ export const registerTelegramHandlers = ({
     if (!msg) {
       return;
     }
+    if (
+      msg.chat.type === "private" &&
+      msg.from?.id != null &&
+      ctx.me?.id != null &&
+      msg.from.id === ctx.me.id
+    ) {
+      logVerbose(
+        `Ignoring self-authored telegram DM update for chat ${msg.chat.id} sender=${msg.from.id}`,
+      );
+      return;
+    }
     const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
     const isForum = await resolveTelegramForumFlag({
       chatId: msg.chat.id,

@@ -675,6 +675,42 @@ describe("createTelegramBot", () => {
       fetchSpy.mockRestore();
     }
   });
+  it("ignores self-authored DM message updates before pairing", async () => {
+    await withIsolatedStateDirAsync(async () => {
+      loadConfig.mockReturnValue({
+        channels: { telegram: { dmPolicy: "pairing" } },
+      });
+      readChannelAllowFromStore.mockResolvedValue([]);
+      upsertChannelPairingRequest.mockClear();
+      sendMessageSpy.mockClear();
+      replySpy.mockClear();
+
+      createTelegramBot({ token: "tok" });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+      await handler({
+        message: {
+          chat: { id: 1234, type: "private" },
+          message_id: 410,
+          date: 1736380800,
+          pinned_message: {
+            message_id: 409,
+            date: 1736380799,
+            chat: { id: 1234, type: "private" },
+            from: { id: 777001, is_bot: true, first_name: "Cindy", username: "cindya" },
+            text: "status card",
+          },
+          from: { id: 777001, is_bot: true, first_name: "Cindy", username: "cindya" },
+        },
+        me: { id: 777001, username: "cindya" },
+        getFile: async () => ({}),
+      });
+
+      expect(upsertChannelPairingRequest).not.toHaveBeenCalled();
+      expect(sendMessageSpy).not.toHaveBeenCalled();
+      expect(replySpy).not.toHaveBeenCalled();
+    });
+  });
   it("blocks DM media downloads completely when dmPolicy is disabled", async () => {
     loadConfig.mockReturnValue({
       channels: { telegram: { dmPolicy: "disabled" } },
