@@ -41,7 +41,8 @@ function resolveCachedChannelPlugins(): CachedChannelPlugins {
     return cached;
   }
 
-  const sorted = dedupeChannels(registry.channels.map((entry) => entry.plugin)).toSorted((a, b) => {
+  const channelEntries = Array.isArray(registry.channels) ? registry.channels : [];
+  const sorted = dedupeChannels(channelEntries.map((entry) => entry.plugin)).toSorted((a, b) => {
     const indexA = CHAT_CHANNEL_ORDER.indexOf(a.id as ChatChannelId);
     const indexB = CHAT_CHANNEL_ORDER.indexOf(b.id as ChatChannelId);
     const orderA = a.meta.order ?? (indexA === -1 ? 999 : indexA);
