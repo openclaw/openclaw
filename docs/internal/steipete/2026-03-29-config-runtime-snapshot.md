@@ -21,3 +21,4 @@ read_when:
   - updated Discord preflight wording to match runtime-snapshot semantics
   - adjusted session-listing subagent selection to prefer active disk-only runs while still honoring newer in-memory replacement rows
   - deleted the flaky duplicated Telegram gateway writeback integration test and kept stable coverage in `server-methods/send.test.ts` plus `extensions/telegram/src/target-writeback.test.ts`
+  - trimmed remaining Telegram-specific assertions from `src/gateway/server-methods/send.test.ts` so core only covers generic channel-send contracts and Telegram writeback behavior stays extension-owned
