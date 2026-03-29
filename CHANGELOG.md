@@ -211,6 +211,7 @@ Docs: https://docs.openclaw.ai
 - Memory/builtin: keep memory-file indexing active in FTS-only mode (no embedding provider) so forced reindexes no longer swap in an empty index and wipe existing memory chunks. (#42714) Thanks @asamimei.
 - CLI/status: detect node-only hosts in `openclaw status` and `openclaw status --all`, show the configured remote gateway target instead of a false local `ECONNREFUSED`, and suppress contradictory local-gateway diagnosis output.
 - Gateway/SQLite transient handling: keep unhandled `SQLITE_CANTOPEN`, `SQLITE_BUSY`, `SQLITE_LOCKED`, and `SQLITE_IOERR` failures non-fatal in the global rejection handler so macOS LaunchAgent restarts do not enter a crash-throttle loop. (#57018)
+- Control UI/gateway: reconnect the browser client when gateway event sequence gaps are detected, so stale non-chat state recovers automatically instead of only telling the user to refresh. (#23912) thanks @Olshansk.
 
 ## 2026.3.24
 
