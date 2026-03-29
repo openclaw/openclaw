@@ -19,9 +19,9 @@ export function resolveGroupPolicyFor(cfg: ReturnType<typeof loadConfig>, conver
   const whatsappCfg = cfg.channels?.whatsapp as
     | { groupAllowFrom?: string[]; allowFrom?: string[] }
     | undefined;
-  const hasGroupAllowFrom = Boolean(
-    whatsappCfg?.groupAllowFrom?.length || whatsappCfg?.allowFrom?.length,
-  );
+  // Only check groupAllowFrom — DM allowFrom entries (from pairing) should
+  // not grant group access or bypass the group allowlist gate.
+  const hasGroupAllowFrom = Boolean(whatsappCfg?.groupAllowFrom?.length);
   return resolveChannelGroupPolicy({
     cfg,
     channel: "whatsapp",
