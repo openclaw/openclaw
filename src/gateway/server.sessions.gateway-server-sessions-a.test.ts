@@ -4,10 +4,10 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
+import { ensureMemoryIndexSchema } from "../../packages/memory-host-sdk/src/host/memory-schema.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { isSessionPatchEvent, type InternalHookEvent } from "../hooks/internal-hooks.js";
-import { ensureMemoryIndexSchema } from "../../packages/memory-host-sdk/src/host/memory-schema.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
@@ -1198,6 +1198,87 @@ describe("gateway server sessions", () => {
     const keys = searched.payload?.results.map((entry) => entry.sessionKey) ?? [];
     expect(keys).toContain("agent:main:main");
     expect(keys).toContain("agent:main:subagent:worker");
+    ws.close();
+  });
+
+  test("sessions.search kinds main matches sessions_list tool semantics (not gateway row kind)", async () => {
+    await createSessionStoreDir();
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+        },
+        "subagent:worker": {
+          sessionId: "sess-worker",
+          updatedAt: Date.now() - 1_000,
+          spawnedBy: "agent:main:main",
+        },
+      },
+    });
+
+    const stateDir = process.env.OPENCLAW_STATE_DIR;
+    expect(typeof stateDir).toBe("string");
+    const dbPath = path.join(String(stateDir), "memory", "main.sqlite");
+    await fs.mkdir(path.dirname(dbPath), { recursive: true });
+    let ftsAvailable = false;
+    const db = new DatabaseSync(dbPath);
+    try {
+      const schema = ensureMemoryIndexSchema({
+        db,
+        embeddingCacheTable: "embedding_cache",
+        cacheEnabled: false,
+        ftsTable: "chunks_fts",
+        ftsEnabled: true,
+      });
+      ftsAvailable = schema.ftsAvailable;
+      if (!ftsAvailable) {
+        return;
+      }
+      db.exec("DELETE FROM chunks_fts;");
+      db.prepare(
+        "INSERT INTO chunks_fts (text, id, path, source, model, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      ).run(
+        "User: investigate rollout plan",
+        "c-main",
+        "sessions/sess-main.jsonl",
+        "sessions",
+        "fts-only",
+        3,
+        3,
+      );
+      db.prepare(
+        "INSERT INTO chunks_fts (text, id, path, source, model, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      ).run(
+        "User: investigate rollout plan deeply",
+        "c-worker",
+        "sessions/sess-worker.jsonl",
+        "sessions",
+        "fts-only",
+        7,
+        7,
+      );
+    } finally {
+      db.close();
+    }
+
+    const { ws } = await openClient();
+    const searched = await rpcReq<{
+      count: number;
+      results: Array<{ sessionKey: string; sessionId: string; snippet: string }>;
+    }>(ws, "sessions.search", {
+      query: "rollout plan",
+      limit: 5,
+      kinds: ["main"],
+    });
+    expect(searched.ok).toBe(true);
+    if (!ftsAvailable) {
+      ws.close();
+      return;
+    }
+    const keys = searched.payload?.results.map((entry) => entry.sessionKey) ?? [];
+    expect(keys).toContain("agent:main:main");
+    expect(keys).not.toContain("agent:main:subagent:worker");
     ws.close();
   });
 
