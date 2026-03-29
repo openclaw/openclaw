@@ -850,6 +850,68 @@ describe("BlueBubbles webhook monitor", () => {
       }
     });
 
+    it("coalesces URL text with URL balloon webhook events by associatedMessageGuid", async () => {
+      vi.useFakeTimers();
+      try {
+        const core = createMockRuntime();
+        installTimingAwareInboundDebouncer(core);
+        const processMessage = vi.fn().mockResolvedValue(undefined);
+        const registry = createBlueBubblesDebounceRegistry({ processMessage });
+        const account = createMockAccount();
+        const target = {
+          account,
+          config: {},
+          runtime: { log: vi.fn(), error: vi.fn() },
+          core,
+          path: "/bluebubbles-webhook",
+        };
+        const debouncer = registry.getOrCreateDebouncer(target);
+
+        const messageId = "url-msg-1";
+        const chatGuid = "iMessage;-;+15551234567";
+        const url = "https://github.com/bitfocus/companion/issues/4047";
+
+        await debouncer.enqueue({
+          message: createDebounceTestMessage({
+            chatGuid,
+            text: url,
+            messageId,
+          }),
+          target,
+        });
+
+        await vi.advanceTimersByTimeAsync(300);
+
+        await debouncer.enqueue({
+          message: createDebounceTestMessage({
+            chatGuid,
+            text: url,
+            messageId: "url-balloon-1",
+            balloonBundleId: "com.apple.messages.URLBalloonProvider",
+            associatedMessageGuid: messageId,
+          }),
+          target,
+        });
+
+        expect(processMessage).not.toHaveBeenCalled();
+
+        await vi.advanceTimersByTimeAsync(600);
+
+        expect(processMessage).toHaveBeenCalledTimes(1);
+        expect(processMessage).toHaveBeenCalledWith(
+          expect.objectContaining({
+            text: url,
+            messageId,
+            balloonBundleId: undefined,
+          }),
+          target,
+        );
+        expect(target.runtime.error).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("skips null-text entries during flush and still delivers the valid message", async () => {
       vi.useFakeTimers();
       try {
