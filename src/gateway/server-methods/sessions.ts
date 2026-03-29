@@ -1159,10 +1159,15 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    // Acquire write lock before reading/writing the transcript so that concurrent
-    // sessions.truncate (which also holds this lock during its file write) cannot
-    // interleave and silently overwrite compact's output with stale pre-compact content.
-    const compactWriteLock = await acquireSessionWriteLock({ sessionFile: filePath });
+    // Acquire a non-reentrant write lock before reading/writing the transcript so that:
+    // 1. Concurrent sessions.truncate (which holds the same lock) cannot interleave and
+    //    overwrite compact's output with stale pre-compact content.
+    // 2. Active agent runs holding the lock in the same process are actually blocked
+    //    (allowReentrant: false prevents lock re-entry from this destructive path).
+    const compactWriteLock = await acquireSessionWriteLock({
+      sessionFile: filePath,
+      allowReentrant: false,
+    });
     let archived = "";
     let keptLines: string[] = [];
     try {
@@ -1273,9 +1278,14 @@ export const sessionsHandlers: GatewayRequestHandlers = {
 
     // Phase 1: read-only scan under the write lock to locate the cut point.
     // Do NOT abort active runs yet; only do so after confirming a valid cut exists.
+    // allowReentrant: false ensures active runs holding this lock in the same process
+    // are blocked here, preventing the scan from racing with concurrent appends.
     let cutLineIndex = -1;
     {
-      const scanLock = await acquireSessionWriteLock({ sessionFile: filePath });
+      const scanLock = await acquireSessionWriteLock({
+        sessionFile: filePath,
+        allowReentrant: false,
+      });
       try {
         let raw: string;
         try {
@@ -1342,10 +1352,15 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     // Re-scan for p.seq under the lock: sessions.compact now also acquires this lock
     // before rewriting the transcript, so all transcript writes are serialized and
     // line indices from Phase 1 are re-validated before the final swap.
+    // allowReentrant: false blocks any active run in the same process from holding
+    // the lock concurrently with the destructive rename/swap.
     let keptLines: string[] = [];
     let archived = "";
     let seqFoundInPhase3c = false;
-    const writeLock = await acquireSessionWriteLock({ sessionFile: filePath });
+    const writeLock = await acquireSessionWriteLock({
+      sessionFile: filePath,
+      allowReentrant: false,
+    });
     try {
       let raw: string;
       try {
