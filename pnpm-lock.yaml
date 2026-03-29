@@ -619,9 +619,12 @@ importers:
 
   extensions/venice:
     dependencies:
-      venice-e2ee:
-        specifier: github:elkimek/venice-e2ee#be02cd50e5d33c736c4d16c1afe42b072e0287f2
-        version: https://codeload.github.com/elkimek/venice-e2ee/tar.gz/be02cd50e5d33c736c4d16c1afe42b072e0287f2
+      '@noble/hashes':
+        specifier: ^2.0.1
+        version: 2.0.1
+      '@noble/secp256k1':
+        specifier: ^2.1.0
+        version: 2.3.0
 
   extensions/vercel-ai-gateway: {}
 
@@ -6402,15 +6405,6 @@ packages:
   vary@1.1.2:
     resolution: {integrity: sha512-BNGbWLfd0eUPabhkXUVm0j8uuvREyTh5ovRa/dyow/BqAbZJyC+5fU+IzQOzmAKzYqYRAISoRhdQr3eIZ/PXqg==}
     engines: {node: '>= 0.8'}
-
-  venice-e2ee@https://codeload.github.com/elkimek/venice-e2ee/tar.gz/be02cd50e5d33c736c4d16c1afe42b072e0287f2:
-    resolution: {tarball: https://codeload.github.com/elkimek/venice-e2ee/tar.gz/be02cd50e5d33c736c4d16c1afe42b072e0287f2}
-    version: 0.1.0
-    peerDependencies:
-      '@phala/dcap-qvl': ^0.3.9
-    peerDependenciesMeta:
-      '@phala/dcap-qvl':
-        optional: true
 
   vfile-message@4.0.3:
     resolution: {integrity: sha512-QTHzsGd1EhbZs4AsQ20JX1rC3cOlt/IWJruk893DfLRr57lcnOeMaWG4K0JrRta4mIJZKth2Au3mM3u03/JWKw==}
@@ -13126,11 +13120,6 @@ snapshots:
   validate-npm-package-name@7.0.2: {}
 
   vary@1.1.2: {}
-
-  venice-e2ee@https://codeload.github.com/elkimek/venice-e2ee/tar.gz/be02cd50e5d33c736c4d16c1afe42b072e0287f2:
-    dependencies:
-      '@noble/hashes': 2.0.1
-      '@noble/secp256k1': 2.3.0
 
   vfile-message@4.0.3:
     dependencies:

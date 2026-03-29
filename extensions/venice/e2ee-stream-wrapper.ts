@@ -17,13 +17,12 @@ import {
   type AssistantMessageEvent,
   type Context,
 } from "@mariozechner/pi-ai";
-import { createVeniceE2EE, encryptMessage, decryptChunk, type E2EESession } from "venice-e2ee";
+import { createVeniceE2EE, encryptMessage, decryptChunk, type E2EESession } from "./e2ee/index.js";
 
 // ── Module-level session cache ──────────────────────────────────────────────
 
 interface E2EEInstance {
   createSession: (modelId: string) => Promise<E2EESession>;
-  clearSession: () => void;
 }
 
 const _e2eeCache = new Map<string, E2EEInstance>();
@@ -75,13 +74,17 @@ function formatAttestationBanner(session: E2EESession): string {
   return lines.join("\n");
 }
 
-function logAttestation(session: E2EESession): void {
+/**
+ * Log attestation results and enforce that critical checks passed.
+ * Throws if any required attestation check failed — refusing to send
+ * data to an unverified TEE.
+ */
+function enforceAttestation(session: E2EESession): void {
   const a = session.attestation;
   if (!a) {
-    console.warn(
-      "[venice-e2ee] E2EE session established without attestation data (verification disabled?)",
+    throw new Error(
+      "Venice E2EE: session has no attestation data. Refusing to send to unverified TEE.",
     );
-    return;
   }
 
   const summary = [
@@ -102,6 +105,20 @@ function logAttestation(session: E2EESession): void {
       console.error(`[venice-e2ee] attestation error: ${err}`);
     }
   }
+
+  // Enforce critical checks — refuse to proceed if attestation is invalid
+  const failures: string[] = [];
+  if (!a.nonceVerified) failures.push("nonce verification failed");
+  if (!a.signingKeyBound) failures.push("signing key not bound to TEE");
+  if (a.debugMode) failures.push("TEE is running in debug mode");
+  if (a.serverTdxValid === false) failures.push("server TDX verification failed");
+
+  if (failures.length > 0) {
+    throw new Error(
+      `Venice E2EE attestation failed: ${failures.join(", ")}. ` +
+        `Refusing to send data to unverified TEE.`,
+    );
+  }
 }
 
 // ── Public wrapper ──────────────────────────────────────────────────────────
@@ -118,7 +135,7 @@ export function isVeniceE2EEModel(modelId: string): boolean {
  * - Adds `X-Venice-TEE-*` headers and `venice_parameters.enable_e2ee`.
  * - Decrypts every `text_delta` / `text_end` event in the response stream
  *   using per-chunk ECDH key derivation.
- * - Logs attestation details and injects a verification banner into the
+ * - Enforces attestation checks and injects a verification banner into the
  *   response so the user can verify E2EE is active.
  */
 export function createVeniceE2EEStreamWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
@@ -145,8 +162,8 @@ export function createVeniceE2EEStreamWrapper(baseStreamFn: StreamFn | undefined
       );
     }
 
-    // ── Log attestation results ──────────────────────────────────────────
-    logAttestation(session);
+    // ── Enforce attestation — throws on any failed check ─────────────────
+    enforceAttestation(session);
 
     // ── Encrypt context ─────────────────────────────────────────────────
     const encryptedContext = await encryptContext(context, session);
@@ -189,8 +206,8 @@ export function createVeniceE2EEStreamWrapper(baseStreamFn: StreamFn | undefined
             bannerInjected = true;
             const bannerDelta = banner + "\n\n";
             const decrypted = await decryptChunk(session.privateKey, event.delta);
-            const fullAccum = bannerDelta + decrypted;
-            decryptedAccum.set(event.contentIndex, fullAccum);
+            // Keep decryptedAccum clean (no banner) for text_end/done
+            decryptedAccum.set(event.contentIndex, decrypted);
             resultStream.push({
               ...event,
               delta: bannerDelta,
@@ -199,7 +216,7 @@ export function createVeniceE2EEStreamWrapper(baseStreamFn: StreamFn | undefined
             resultStream.push({
               ...event,
               delta: decrypted,
-              partial: patchPartialText(event.partial, event.contentIndex, fullAccum),
+              partial: patchPartialText(event.partial, event.contentIndex, bannerDelta + decrypted),
             });
             continue;
           }

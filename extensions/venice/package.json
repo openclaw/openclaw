@@ -5,7 +5,8 @@
   "description": "OpenClaw Venice provider plugin",
   "type": "module",
   "dependencies": {
-    "venice-e2ee": "github:elkimek/venice-e2ee#be02cd50e5d33c736c4d16c1afe42b072e0287f2"
+    "@noble/hashes": "^2.0.1",
+    "@noble/secp256k1": "^2.1.0"
   },
   "openclaw": {
     "extensions": [
