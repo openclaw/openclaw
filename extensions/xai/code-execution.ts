@@ -23,11 +23,16 @@ type XaiPluginConfig = NonNullable<
   ? Config
   : undefined;
 
-type CodeExecutionConfig = XaiPluginConfig extends infer Config
-  ? Config extends { codeExecution?: infer CodeExecution }
-    ? CodeExecution
-    : undefined
-  : undefined;
+// The fields accessed at runtime on the codeExecution sub-object.
+// Previously inferred via conditional types from OpenClawConfig, but
+// that chain resolves to `undefined` when the xai plugin entry isn't
+// fully declared in the config schema — causing TS2339 on .enabled
+// and .timeoutSeconds. A concrete interface avoids the inference gap.
+interface CodeExecutionConfig {
+  enabled?: boolean;
+  timeoutSeconds?: number;
+  maxTurns?: number;
+}
 
 function readLegacyGrokApiKey(cfg?: OpenClawConfig): string | undefined {
   const search = cfg?.tools?.web?.search;
