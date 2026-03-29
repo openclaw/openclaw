@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveBrewExecutable } from "../infra/brew.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { runCommandWithTimeout, type CommandOptions } from "../process/exec.js";
 import { scanDirectoryWithSummary } from "../security/skill-scanner.js";
 import { resolveUserPath } from "../utils.js";
@@ -55,13 +56,26 @@ function formatScanFindingDetail(
   return `${finding.message} (${filePath}:${finding.line})`;
 }
 
-async function collectSkillInstallScanWarnings(entry: SkillEntry): Promise<string[]> {
+type SkillScanResult = {
+  warnings: string[];
+  findings: Array<{
+    ruleId: string;
+    severity: "info" | "warn" | "critical";
+    file: string;
+    line: number;
+    message: string;
+  }>;
+};
+
+async function collectSkillInstallScanWarnings(entry: SkillEntry): Promise<SkillScanResult> {
   const warnings: string[] = [];
+  const findings: SkillScanResult["findings"] = [];
   const skillName = entry.skill.name;
   const skillDir = path.resolve(entry.skill.baseDir);
 
   try {
     const summary = await scanDirectoryWithSummary(skillDir);
+    findings.push(...summary.findings);
     if (summary.critical > 0) {
       const criticalDetails = summary.findings
         .filter((finding) => finding.severity === "critical")
@@ -81,7 +95,7 @@ async function collectSkillInstallScanWarnings(entry: SkillEntry): Promise<strin
     );
   }
 
-  return warnings;
+  return { warnings, findings };
 }
 
 function resolveInstallId(spec: SkillInstallSpec, index: number): string {
@@ -439,8 +453,49 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
   }
 
   const spec = findInstallSpec(entry, params.installId);
-  const warnings = await collectSkillInstallScanWarnings(entry);
+  const scanResult = await collectSkillInstallScanWarnings(entry);
+  const warnings = scanResult.warnings;
   const skillSource = entry.skill.sourceInfo?.source?.trim() || "unknown";
+
+  // Run before_install so external scanners can augment findings or block installs.
+  const hookRunner = getGlobalHookRunner();
+  if (hookRunner?.hasHooks("before_install")) {
+    try {
+      const hookResult = await hookRunner.runBeforeInstall(
+        {
+          targetName: params.skillName,
+          targetType: "skill",
+          sourceDir: path.resolve(entry.skill.baseDir),
+          source: skillSource,
+          builtinFindings: scanResult.findings,
+        },
+        { source: skillSource, targetType: "skill" },
+      );
+      if (hookResult?.block) {
+        return {
+          ok: false,
+          message: hookResult.blockReason || "Installation blocked by plugin hook",
+          stdout: "",
+          stderr: "",
+          code: null,
+          warnings: warnings.length > 0 ? warnings.slice() : undefined,
+        };
+      }
+      if (hookResult?.findings) {
+        for (const finding of hookResult.findings) {
+          if (finding.severity === "critical") {
+            warnings.push(
+              `WARNING: Plugin scanner: ${finding.message} (${finding.file}:${finding.line})`,
+            );
+          } else if (finding.severity === "warn") {
+            warnings.push(`Plugin scanner: ${finding.message} (${finding.file}:${finding.line})`);
+          }
+        }
+      }
+    } catch {
+      // Hook errors are non-fatal — built-in scanner results still apply.
+    }
+  }
 
   // Warn when install is triggered from a non-bundled source.
   // Workspace/project/personal agent skills can contain attacker-controlled metadata.
