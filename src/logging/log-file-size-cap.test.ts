@@ -14,10 +14,12 @@ const DEFAULT_MAX_FILE_BYTES = 500 * 1024 * 1024;
 
 describe("log file size cap", () => {
   let logPath = "";
+  let archivedLogPath = "";
   let originalUmask = 0;
 
   beforeEach(() => {
     logPath = path.join(os.tmpdir(), `openclaw-log-cap-${crypto.randomUUID()}.log`);
+    archivedLogPath = `${logPath}.rotated`;
     originalUmask = process.umask();
     resetLogger();
     setLoggerOverride(null);
@@ -30,6 +32,11 @@ describe("log file size cap", () => {
     vi.restoreAllMocks();
     try {
       fs.rmSync(logPath, { force: true });
+    } catch {
+      // ignore cleanup errors
+    }
+    try {
+      fs.rmSync(archivedLogPath, { force: true });
     } catch {
       // ignore cleanup errors
     }
@@ -94,6 +101,22 @@ describe("log file size cap", () => {
     const logger = getLogger();
     logger.info("normalize-mode-check");
 
+    expect(fs.statSync(logPath).mode & 0o777).toBe(0o600);
+  });
+
+  it("keeps renamed archive logs and recreated active logs at 0600", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    process.umask(0);
+    setLoggerOverride({ level: "info", file: logPath });
+
+    const logger = getLogger();
+    logger.info("before-rotation");
+    fs.renameSync(logPath, archivedLogPath);
+    logger.info("after-rotation");
+
+    expect(fs.statSync(archivedLogPath).mode & 0o777).toBe(0o600);
     expect(fs.statSync(logPath).mode & 0o777).toBe(0o600);
   });
 });
