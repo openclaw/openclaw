@@ -1234,15 +1234,22 @@ function emitJobFinished(
 
 export function wake(
   state: CronServiceState,
-  opts: { mode: "now" | "next-heartbeat"; text: string },
+  opts: { mode: "now" | "next-heartbeat"; text: string; agentId?: string; sessionKey?: string },
 ) {
   const text = opts.text.trim();
   if (!text) {
     return { ok: false } as const;
   }
-  state.deps.enqueueSystemEvent(text);
+  state.deps.enqueueSystemEvent(text, {
+    ...(opts.agentId ? { agentId: opts.agentId } : {}),
+    ...(opts.sessionKey ? { sessionKey: opts.sessionKey } : {}),
+  });
   if (opts.mode === "now") {
-    state.deps.requestHeartbeatNow({ reason: "wake" });
+    state.deps.requestHeartbeatNow({
+      reason: "wake",
+      agentId: opts.agentId,
+      sessionKey: opts.sessionKey,
+    });
   }
   return { ok: true } as const;
 }
