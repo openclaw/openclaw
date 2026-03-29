@@ -4,6 +4,7 @@ import type { SandboxBackendCommandParams, SandboxBackendCommandResult } from ".
 import { SANDBOX_PINNED_MUTATION_PYTHON } from "./fs-bridge-mutation-helper.js";
 import { createWritableRenameTargetResolver } from "./fs-bridge-rename-targets.js";
 import type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "./fs-bridge.js";
+import { toFriendlySandboxMutationError } from "./mutation-errors.js";
 import {
   isPathInsideContainerRoot,
   normalizeContainerPath as normalizeSandboxContainerPath,
@@ -472,18 +473,22 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     signal?: AbortSignal;
     allowFailure?: boolean;
   }) {
-    await this.runRemoteScript({
-      script: [
-        "set -eu",
-        "python3 /dev/fd/3 \"$@\" 3<<'PY'",
-        SANDBOX_PINNED_MUTATION_PYTHON,
-        "PY",
-      ].join("\n"),
-      args: params.args,
-      stdin: params.stdin,
-      signal: params.signal,
-      allowFailure: params.allowFailure,
-    });
+    try {
+      await this.runRemoteScript({
+        script: [
+          "set -eu",
+          "python3 /dev/fd/3 \"$@\" 3<<'PY'",
+          SANDBOX_PINNED_MUTATION_PYTHON,
+          "PY",
+        ].join("\n"),
+        args: params.args,
+        stdin: params.stdin,
+        signal: params.signal,
+        allowFailure: params.allowFailure,
+      });
+    } catch (error) {
+      throw toFriendlySandboxMutationError(error);
+    }
   }
 
   private async runRemoteScript(params: {

@@ -14,6 +14,7 @@ import {
   resolveSandboxFsPathWithMounts,
   type SandboxResolvedFsPath,
 } from "./fs-paths.js";
+import { toFriendlySandboxMutationError } from "./mutation-errors.js";
 import type { SandboxContext, SandboxWorkspaceAccess } from "./types.js";
 
 type RunCommandOptions = {
@@ -286,12 +287,19 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     if (plan.recheckBeforeCommand) {
       await this.pathGuard.assertPathChecks(plan.checks);
     }
-    return await this.runCommand(plan.script, {
-      args: plan.args,
-      stdin: plan.stdin,
-      allowFailure: plan.allowFailure,
-      signal: plan.signal,
-    });
+    try {
+      return await this.runCommand(plan.script, {
+        args: plan.args,
+        stdin: plan.stdin,
+        allowFailure: plan.allowFailure,
+        signal: plan.signal,
+      });
+    } catch (error) {
+      if (plan.script.includes("python3 /dev/fd/3")) {
+        throw toFriendlySandboxMutationError(error);
+      }
+      throw error;
+    }
   }
 
   private async runPlannedCommand(
