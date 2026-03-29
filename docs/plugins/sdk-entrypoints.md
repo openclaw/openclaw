@@ -4,7 +4,7 @@ sidebarTitle: "Entry Points"
 summary: "Reference for definePluginEntry, defineChannelPluginEntry, and defineSetupPluginEntry"
 read_when:
   - You need the exact type signature of definePluginEntry or defineChannelPluginEntry
-  - You want to understand registration mode (full vs setup)
+  - You want to understand registration mode (full vs setup vs CLI metadata)
   - You are looking up entry point options
 ---
 
@@ -61,7 +61,8 @@ export default definePluginEntry({
 **Import:** `openclaw/plugin-sdk/core`
 
 Wraps `definePluginEntry` with channel-specific wiring. Automatically calls
-`api.registerChannel({ plugin })` and gates `registerFull` on registration mode.
+`api.registerChannel({ plugin })`, exposes an optional root-help CLI metadata
+seam, and gates `registerFull` on registration mode.
 
 ```typescript
 import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
@@ -72,30 +73,37 @@ export default defineChannelPluginEntry({
   description: "Short summary",
   plugin: myChannelPlugin,
   setRuntime: setMyRuntime,
-  registerFull(api) {
+  registerCliMetadata(api) {
     api.registerCli(/* ... */);
+  },
+  registerFull(api) {
     api.registerGatewayMethod(/* ... */);
   },
 });
 ```
 
-| Field          | Type                                                             | Required | Default             |
-| -------------- | ---------------------------------------------------------------- | -------- | ------------------- |
-| `id`           | `string`                                                         | Yes      | —                   |
-| `name`         | `string`                                                         | Yes      | —                   |
-| `description`  | `string`                                                         | Yes      | —                   |
-| `plugin`       | `ChannelPlugin`                                                  | Yes      | —                   |
-| `configSchema` | `OpenClawPluginConfigSchema \| () => OpenClawPluginConfigSchema` | No       | Empty object schema |
-| `setRuntime`   | `(runtime: PluginRuntime) => void`                               | No       | —                   |
-| `registerFull` | `(api: OpenClawPluginApi) => void`                               | No       | —                   |
+| Field                 | Type                                                             | Required | Default             |
+| --------------------- | ---------------------------------------------------------------- | -------- | ------------------- |
+| `id`                  | `string`                                                         | Yes      | —                   |
+| `name`                | `string`                                                         | Yes      | —                   |
+| `description`         | `string`                                                         | Yes      | —                   |
+| `plugin`              | `ChannelPlugin`                                                  | Yes      | —                   |
+| `configSchema`        | `OpenClawPluginConfigSchema \| () => OpenClawPluginConfigSchema` | No       | Empty object schema |
+| `setRuntime`          | `(runtime: PluginRuntime) => void`                               | No       | —                   |
+| `registerCliMetadata` | `(api: OpenClawPluginApi) => void`                               | No       | —                   |
+| `registerFull`        | `(api: OpenClawPluginApi) => void`                               | No       | —                   |
 
 - `setRuntime` is called during registration so you can store the runtime reference
-  (typically via `createPluginRuntimeStore`).
+  (typically via `createPluginRuntimeStore`). It is skipped during CLI metadata
+  capture.
+- `registerCliMetadata` runs only when `api.registrationMode === "cli-metadata"`.
+  Use it for root-help CLI descriptors that should stay non-activating.
 - `registerFull` only runs when `api.registrationMode === "full"`. It is skipped
   during setup-only loading.
 - For plugin-owned root CLI commands, prefer `api.registerCli(..., { descriptors: [...] })`
   when you want the command to stay lazy-loaded without disappearing from the
-  root CLI parse tree.
+  root CLI parse tree. For channel plugins, prefer registering those descriptors
+  from `registerCliMetadata(...)` and keep `registerFull(...)` focused on runtime-only work.
 
 ## `defineSetupPluginEntry`
 
@@ -123,17 +131,22 @@ unconfigured, or when deferred loading is enabled. See
 | `"full"`          | Normal gateway startup            | Everything                    |
 | `"setup-only"`    | Disabled/unconfigured channel     | Channel registration only     |
 | `"setup-runtime"` | Setup flow with runtime available | Channel + lightweight runtime |
+| `"cli-metadata"`  | Root help / CLI metadata capture  | CLI descriptors only          |
 
 `defineChannelPluginEntry` handles this split automatically. If you use
 `definePluginEntry` directly for a channel, check mode yourself:
 
 ```typescript
 register(api) {
+  if (api.registrationMode === "cli-metadata") {
+    api.registerCli(/* ... */);
+    return;
+  }
+
   api.registerChannel({ plugin: myPlugin });
   if (api.registrationMode !== "full") return;
 
   // Heavy runtime-only registrations
-  api.registerCli(/* ... */);
   api.registerService(/* ... */);
 }
 ```
