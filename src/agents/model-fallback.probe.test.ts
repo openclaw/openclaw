@@ -11,6 +11,7 @@ vi.mock("./auth-profiles.js", () => ({
   ensureAuthProfileStore: vi.fn(),
   getSoonestCooldownExpiry: vi.fn(),
   isProfileInCooldown: vi.fn(),
+  loadAuthProfileStoreForRuntime: vi.fn(),
   resolveProfilesUnavailableReason: vi.fn(),
   resolveAuthProfileOrder: vi.fn(),
 }));
@@ -371,6 +372,7 @@ describe("runWithModelFallback – probe logic", () => {
           },
         },
       },
+      auth: { cooldowns: { rateLimitWaitSeconds: 0 } },
     } as Partial<OpenClawConfig>);
 
     mockedResolveAuthProfileOrder.mockImplementation(({ provider }: { provider: string }) => {
@@ -542,9 +544,10 @@ describe("runWithModelFallback – probe logic", () => {
           },
         },
       },
+      auth: { cooldowns: { rateLimitWaitSeconds: 0 } },
     } as Partial<OpenClawConfig>);
 
-    // Cooldown far enough away (> 90s) that the wait-and-retry path does not trigger.
+    // Wait-and-retry disabled via config — test exercises the immediate-failure path.
     const farCooldown = NOW + 120 * 1000;
     mockedGetSoonestCooldownExpiry.mockReturnValue(farCooldown);
 
