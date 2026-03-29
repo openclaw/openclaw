@@ -13,10 +13,12 @@
 #define OPENCLAW_LINUX_GATEWAY_HTTP_H
 
 #include <glib.h>
+#include "state.h"
 
 typedef struct {
     gboolean ok;
     gboolean healthy;
+    HttpProbeResult probe_result; /* phase-aware probe outcome */
     gchar *version;
     gchar *error;
 } GatewayHealthResult;

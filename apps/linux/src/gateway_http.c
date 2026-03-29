@@ -13,6 +13,7 @@
 #include "log.h"
 #include <libsoup/soup.h>
 #include <json-glib/json-glib.h>
+#include <gio/gio.h>
 
 static SoupSession *http_session = NULL;
 
@@ -37,7 +38,54 @@ typedef struct {
     GatewayHealthCallback callback;
     gpointer user_data;
     SoupMessage *msg; /* retained for HTTP status inspection in callback */
+    gboolean tcp_connected; /* phase tracking: set by network-event signal */
 } HealthCheckContext;
+
+/*
+ * Phase-aware probe failure classification.
+ *
+ * libsoup3's soup_session_send_and_read_finish collapses both
+ * connect-timeout and response-timeout into the same GError code
+ * (G_IO_ERROR_TIMED_OUT or similar). To distinguish "timed out before
+ * connect" from "timed out after connect established," we rely on the
+ * tcp_connected flag set by the SoupMessage::network-event signal at
+ * G_SOCKET_CLIENT_CONNECTED.
+ */
+static HttpProbeResult classify_probe_error(const GError *error,
+                                             gboolean tcp_connected) {
+    if (!error) return HTTP_PROBE_UNKNOWN_ERROR;
+
+    if (g_error_matches(error, G_IO_ERROR, G_IO_ERROR_CONNECTION_REFUSED))
+        return HTTP_PROBE_CONNECT_REFUSED;
+
+    if (g_error_matches(error, G_IO_ERROR, G_IO_ERROR_HOST_UNREACHABLE) ||
+        g_error_matches(error, G_IO_ERROR, G_IO_ERROR_NETWORK_UNREACHABLE))
+        return HTTP_PROBE_CONNECT_REFUSED;
+
+    /*
+     * Timeout disambiguation: if tcp_connected is TRUE, the TCP handshake
+     * completed before the timeout fired, proving the listener was present.
+     * Otherwise, the timeout happened during connect (no listener proof).
+     */
+    if (g_error_matches(error, G_IO_ERROR, G_IO_ERROR_TIMED_OUT) ||
+        g_error_matches(error, G_IO_ERROR, G_IO_ERROR_HOST_NOT_FOUND)) {
+        return tcp_connected ? HTTP_PROBE_TIMED_OUT_AFTER_CONNECT
+                             : HTTP_PROBE_CONNECT_TIMEOUT;
+    }
+
+    return tcp_connected ? HTTP_PROBE_TIMED_OUT_AFTER_CONNECT
+                         : HTTP_PROBE_UNKNOWN_ERROR;
+}
+
+static void on_network_event(SoupMessage *msg, GSocketClientEvent event,
+                              GIOStream *connection, gpointer user_data) {
+    (void)msg;
+    (void)connection;
+    HealthCheckContext *ctx = (HealthCheckContext *)user_data;
+    if (event == G_SOCKET_CLIENT_CONNECTED) {
+        ctx->tcp_connected = TRUE;
+    }
+}
 
 static void on_health_response(GObject *source, GAsyncResult *res, gpointer user_data) {
     HealthCheckContext *ctx = (HealthCheckContext *)user_data;
@@ -49,8 +97,10 @@ static void on_health_response(GObject *source, GAsyncResult *res, gpointer user
 
     if (!body) {
         result.ok = FALSE;
+        result.probe_result = classify_probe_error(error, ctx->tcp_connected);
         result.error = g_strdup_printf("Health check failed: %s", error ? error->message : "unknown");
-        OC_LOG_DEBUG(OPENCLAW_LOG_CAT_GATEWAY, "http health error: %s", result.error);
+        OC_LOG_DEBUG(OPENCLAW_LOG_CAT_GATEWAY, "http health error: %s (probe_result=%d tcp_connected=%d)",
+                  result.error, result.probe_result, ctx->tcp_connected);
         if (ctx->callback) ctx->callback(&result, ctx->user_data);
         g_free(result.error);
         g_object_unref(ctx->msg);
@@ -62,6 +112,7 @@ static void on_health_response(GObject *source, GAsyncResult *res, gpointer user
     guint status_code = soup_message_get_status(ctx->msg);
     if (status_code < 200 || status_code >= 300) {
         result.ok = FALSE;
+        result.probe_result = HTTP_PROBE_INVALID_RESPONSE;
         result.error = g_strdup_printf("Health check HTTP %u", status_code);
         OC_LOG_DEBUG(OPENCLAW_LOG_CAT_GATEWAY, "http health non-ok status: %u", status_code);
         g_bytes_unref(body);
@@ -85,6 +136,7 @@ static void on_health_response(GObject *source, GAsyncResult *res, gpointer user
     g_autoptr(JsonParser) parser = json_parser_new();
     if (!data || size == 0 || !json_parser_load_from_data(parser, data, size, NULL)) {
         result.ok = FALSE;
+        result.probe_result = HTTP_PROBE_INVALID_RESPONSE;
         result.error = g_strdup("Health response is not valid JSON");
         OC_LOG_DEBUG(OPENCLAW_LOG_CAT_GATEWAY, "http health non-json response");
         g_bytes_unref(body);
@@ -98,6 +150,7 @@ static void on_health_response(GObject *source, GAsyncResult *res, gpointer user
     JsonNode *root = json_parser_get_root(parser);
     if (!root || !JSON_NODE_HOLDS_OBJECT(root)) {
         result.ok = FALSE;
+        result.probe_result = HTTP_PROBE_INVALID_RESPONSE;
         result.error = g_strdup("Health response is not a JSON object");
         OC_LOG_DEBUG(OPENCLAW_LOG_CAT_GATEWAY, "http health non-object json");
         g_bytes_unref(body);
@@ -114,6 +167,7 @@ static void on_health_response(GObject *source, GAsyncResult *res, gpointer user
                       : NULL;
     if (!ok_node || json_node_get_value_type(ok_node) != G_TYPE_BOOLEAN) {
         result.ok = FALSE;
+        result.probe_result = HTTP_PROBE_INVALID_RESPONSE;
         result.error = ok_node
             ? g_strdup("Health response 'ok' field is not a boolean (wrong service?)")
             : g_strdup("Health response missing 'ok' field (wrong service?)");
@@ -128,6 +182,7 @@ static void on_health_response(GObject *source, GAsyncResult *res, gpointer user
     }
 
     result.ok = TRUE;
+    result.probe_result = HTTP_PROBE_OK;
     result.healthy = json_node_get_boolean(ok_node);
 
     if (json_object_has_member(obj, "version")) {
@@ -167,6 +222,7 @@ void gateway_http_check_health(const gchar *base_url, GatewayHealthCallback call
     ctx->user_data = user_data;
     ctx->msg = g_object_ref(msg); /* retain for status inspection in callback */
 
+    g_signal_connect(msg, "network-event", G_CALLBACK(on_network_event), ctx);
     soup_session_send_and_read_async(http_session, msg, G_PRIORITY_DEFAULT, NULL, on_health_response, ctx);
     g_object_unref(msg);
 }

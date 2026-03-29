@@ -238,6 +238,7 @@ void state_update_health(const HealthState *health_state) {
 
     current_health_state.last_updated = health_state->last_updated;
     current_health_state.http_ok = health_state->http_ok;
+    current_health_state.http_probe_result = health_state->http_probe_result;
     current_health_state.ws_connected = health_state->ws_connected;
     current_health_state.rpc_ok = health_state->rpc_ok;
     current_health_state.auth_ok = health_state->auth_ok;
