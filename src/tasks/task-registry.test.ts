@@ -7,6 +7,7 @@ import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   createTaskRecord,
   findTaskByRunId,
+  getTaskById,
   listTaskRecords,
   maybeDeliverTaskStateChangeUpdate,
   maybeDeliverTaskTerminalUpdate,
@@ -241,6 +242,45 @@ describe("task-registry", () => {
           expect.stringContaining("Background task failed: ACP background task"),
         ]),
       );
+    });
+  });
+
+  it("marks internal fallback delivery as session queued instead of delivered", async () => {
+    await withTempDir({ prefix: "openclaw-task-registry-" }, async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+
+      createTaskRecord({
+        source: "sessions_spawn",
+        runtime: "acp",
+        requesterSessionKey: "agent:main:main",
+        childSessionKey: "agent:main:acp:child",
+        runId: "run-session-queued",
+        task: "Investigate issue",
+        status: "running",
+        deliveryStatus: "pending",
+        startedAt: 100,
+      });
+
+      emitAgentEvent({
+        runId: "run-session-queued",
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          endedAt: 250,
+        },
+      });
+
+      await waitForAssertion(() =>
+        expect(findTaskByRunId("run-session-queued")).toMatchObject({
+          status: "done",
+          deliveryStatus: "session_queued",
+        }),
+      );
+      expect(peekSystemEvents("agent:main:main")).toEqual([
+        expect.stringContaining("Background task done: ACP background task"),
+      ]);
+      expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
     });
   });
 
@@ -502,7 +542,7 @@ describe("task-registry", () => {
     });
   });
 
-  it("marks inspection-time orphaned tasks as lost", async () => {
+  it("projects inspection-time orphaned tasks as lost without mutating the registry", async () => {
     await withTempDir({ prefix: "openclaw-task-registry-" }, async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
       resetTaskRegistryForTests();
@@ -527,9 +567,10 @@ describe("task-registry", () => {
         status: "lost",
         error: "backing session missing",
       });
-      expect(peekSystemEvents("agent:main:main")).toEqual([
-        expect.stringContaining("Background task lost: ACP background task"),
-      ]);
+      expect(getTaskById(task.taskId)).toMatchObject({
+        status: "running",
+      });
+      expect(peekSystemEvents("agent:main:main")).toEqual([]);
     });
   });
 
@@ -825,6 +866,10 @@ describe("task-registry", () => {
         source: "sessions_spawn",
         runtime: "acp",
         requesterSessionKey: "agent:main:main",
+        requesterOrigin: {
+          channel: "telegram",
+          to: "telegram:123",
+        },
         childSessionKey: "agent:codex:acp:child",
         runId: "run-cancel-acp",
         task: "Investigate issue",
@@ -853,6 +898,15 @@ describe("task-registry", () => {
           error: "Cancelled by operator.",
         }),
       });
+      await waitForAssertion(() =>
+        expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            channel: "telegram",
+            to: "telegram:123",
+            content: "Background task cancelled: ACP background task (run run-canc).",
+          }),
+        ),
+      );
     });
   });
 
@@ -870,6 +924,10 @@ describe("task-registry", () => {
         source: "sessions_spawn",
         runtime: "subagent",
         requesterSessionKey: "agent:main:main",
+        requesterOrigin: {
+          channel: "telegram",
+          to: "telegram:123",
+        },
         childSessionKey: "agent:worker:subagent:child",
         runId: "run-cancel-subagent",
         task: "Investigate issue",
@@ -897,6 +955,15 @@ describe("task-registry", () => {
           error: "Cancelled by operator.",
         }),
       });
+      await waitForAssertion(() =>
+        expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            channel: "telegram",
+            to: "telegram:123",
+            content: "Background task cancelled: Subagent task (run run-canc).",
+          }),
+        ),
+      );
     });
   });
 });

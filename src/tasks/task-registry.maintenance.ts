@@ -98,12 +98,22 @@ function markTaskLost(task: TaskRecord, now: number): TaskRecord {
   return updated;
 }
 
+function projectTaskLost(task: TaskRecord, now: number): TaskRecord {
+  return {
+    ...task,
+    status: "lost",
+    endedAt: task.endedAt ?? now,
+    lastEventAt: now,
+    error: task.error ?? "backing session missing",
+  };
+}
+
 export function reconcileTaskRecordForOperatorInspection(task: TaskRecord): TaskRecord {
   const now = Date.now();
   if (!shouldMarkLost(task, now)) {
     return task;
   }
-  return markTaskLost(task, now);
+  return projectTaskLost(task, now);
 }
 
 export function reconcileInspectableTasks(): TaskRecord[] {

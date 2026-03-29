@@ -311,6 +311,9 @@ function formatTaskTerminalEvent(task: TaskRecord): string {
   if (task.status === "lost") {
     return `Background task lost: ${title}${runLabel}. ${task.error ?? "Backing session disappeared."}`;
   }
+  if (task.status === "cancelled") {
+    return `Background task cancelled: ${title}${runLabel}.`;
+  }
   const error = task.error?.trim();
   return error
     ? `Background task failed: ${title}${runLabel}. ${error}`
@@ -359,14 +362,18 @@ function formatTaskStateChangeEvent(task: TaskRecord, event: TaskEventRecord): s
 }
 
 function shouldAutoDeliverTaskUpdate(task: TaskRecord): boolean {
-  if (task.notifyPolicy === "silent" || task.runtime === "subagent") {
+  if (task.notifyPolicy === "silent") {
+    return false;
+  }
+  if (task.runtime === "subagent" && task.status !== "cancelled") {
     return false;
   }
   if (
     task.status !== "done" &&
     task.status !== "failed" &&
     task.status !== "timed_out" &&
-    task.status !== "lost"
+    task.status !== "lost" &&
+    task.status !== "cancelled"
   ) {
     return false;
   }
@@ -425,7 +432,7 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
       try {
         queueTaskSystemEvent(latest, eventText);
         return updateTask(taskId, {
-          deliveryStatus: "delivered",
+          deliveryStatus: "session_queued",
           lastEventAt: Date.now(),
         });
       } catch (error) {
@@ -881,6 +888,9 @@ export async function cancelTaskById(params: {
         summary: "Cancelled by operator.",
       }),
     });
+    if (updated) {
+      void maybeDeliverTaskTerminalUpdate(updated.taskId);
+    }
     return {
       found: true,
       cancelled: true,

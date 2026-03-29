@@ -14,6 +14,7 @@ export type TaskStatus =
 export type TaskDeliveryStatus =
   | "pending"
   | "delivered"
+  | "session_queued"
   | "failed"
   | "parent_missing"
   | "not_applicable";
