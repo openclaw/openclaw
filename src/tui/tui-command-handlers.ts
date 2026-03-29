@@ -67,8 +67,7 @@ export function buildSessionPickerSearchText(params: {
   formattedKey: string;
 }): string {
   const parsed = parseAgentSessionKey(params.session.key);
-  const restKey = parsed?.rest;
-  const tailKey = restKey?.split(":").filter(Boolean).at(-1);
+  const tailKey = parsed?.rest?.split(":").filter(Boolean).at(-1);
   return [
     params.formattedKey,
     params.session.displayName,
@@ -77,7 +76,6 @@ export function buildSessionPickerSearchText(params: {
     params.session.derivedTitle,
     params.session.sessionId,
     params.session.key,
-    restKey,
     tailKey,
     params.session.lastMessagePreview,
   ]
