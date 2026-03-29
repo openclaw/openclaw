@@ -9,12 +9,13 @@ title: "Text-to-Speech (legacy path)"
 
 # Text-to-speech (TTS)
 
-OpenClaw can convert outbound replies into audio using ElevenLabs, Microsoft, or OpenAI.
+OpenClaw can convert outbound replies into audio using ElevenLabs, Fish Audio, Microsoft, or OpenAI.
 It works anywhere OpenClaw can send audio.
 
 ## Supported services
 
 - **ElevenLabs** (primary or fallback provider)
+- **Fish Audio** (primary or fallback provider; supports voice cloning)
 - **Microsoft** (primary or fallback provider; current bundled implementation uses `node-edge-tts`)
 - **OpenAI** (primary or fallback provider; also used for summaries)
 
@@ -33,9 +34,10 @@ or ElevenLabs.
 
 ## Optional keys
 
-If you want OpenAI or ElevenLabs:
+If you want OpenAI, ElevenLabs, or Fish Audio:
 
 - `ELEVENLABS_API_KEY` (or `XI_API_KEY`)
+- `FISH_AUDIO_API_KEY`
 - `OPENAI_API_KEY`
 
 Microsoft speech does **not** require an API key.
@@ -50,6 +52,8 @@ so that provider must also be authenticated if you enable summaries.
 - [OpenAI Audio API reference](https://platform.openai.com/docs/api-reference/audio)
 - [ElevenLabs Text to Speech](https://elevenlabs.io/docs/api-reference/text-to-speech)
 - [ElevenLabs Authentication](https://elevenlabs.io/docs/api-reference/authentication)
+- [Fish Audio TTS API](https://docs.fish.audio/api-reference/tts)
+- [Fish Audio Voice Cloning](https://fish.audio)
 - [node-edge-tts](https://github.com/SchneeHertz/node-edge-tts)
 - [Microsoft Speech output formats](https://learn.microsoft.com/azure/ai-services/speech-service/rest-text-to-speech#audio-outputs)
 
@@ -143,6 +147,28 @@ Full schema is in [Gateway configuration](/gateway/configuration).
 }
 ```
 
+### Fish Audio with voice cloning
+
+```json5
+{
+  messages: {
+    tts: {
+      auto: "always",
+      provider: "fish-audio",
+      providers: {
+        "fish-audio": {
+          apiKey: "fish_audio_api_key",
+          voiceId: "your-voice-reference-id", // from fish.audio
+          model: "s2-pro",      // s2-pro | s1
+          latency: "normal",    // normal | balanced | low
+          // speed: 1.0,        // 0.5–2.0 (optional)
+        },
+      },
+    },
+  },
+}
+```
+
 ### Disable Microsoft speech
 
 ```json5
@@ -211,7 +237,7 @@ Then run:
   - `tagged` only sends audio when the reply includes `[[tts]]` tags.
 - `enabled`: legacy toggle (doctor migrates this to `auto`).
 - `mode`: `"final"` (default) or `"all"` (includes tool/block replies).
-- `provider`: speech provider id such as `"elevenlabs"`, `"microsoft"`, or `"openai"` (fallback is automatic).
+- `provider`: speech provider id such as `"elevenlabs"`, `"fish-audio"`, `"microsoft"`, or `"openai"` (fallback is automatic).
 - If `provider` is **unset**, OpenClaw uses the first configured speech provider in registry auto-select order.
 - Legacy `provider: "edge"` still works and is normalized to `microsoft`.
 - `summaryModel`: optional cheap model for auto-summary; defaults to `agents.defaults.model.primary`.
@@ -223,7 +249,7 @@ Then run:
 - `maxTextLength`: hard cap for TTS input (chars). `/tts audio` fails if exceeded.
 - `timeoutMs`: request timeout (ms).
 - `prefsPath`: override the local prefs JSON path (provider/limit/summary).
-- `apiKey` values fall back to env vars (`ELEVENLABS_API_KEY`/`XI_API_KEY`, `OPENAI_API_KEY`).
+- `apiKey` values fall back to env vars (`ELEVENLABS_API_KEY`/`XI_API_KEY`, `FISH_AUDIO_API_KEY`, `OPENAI_API_KEY`).
 - `providers.elevenlabs.baseUrl`: override ElevenLabs API base URL.
 - `providers.openai.baseUrl`: override the OpenAI TTS endpoint.
   - Resolution order: `messages.tts.providers.openai.baseUrl` -> `OPENAI_TTS_BASE_URL` -> `https://api.openai.com/v1`
@@ -235,6 +261,14 @@ Then run:
 - `providers.elevenlabs.applyTextNormalization`: `auto|on|off`
 - `providers.elevenlabs.languageCode`: 2-letter ISO 639-1 (e.g. `en`, `de`)
 - `providers.elevenlabs.seed`: integer `0..4294967295` (best-effort determinism)
+- `providers.fish-audio.apiKey`: Fish Audio API key (or `FISH_AUDIO_API_KEY` env var).
+- `providers.fish-audio.voiceId`: voice reference ID from [fish.audio](https://fish.audio) (**required**).
+- `providers.fish-audio.model`: TTS model (`s2-pro` default, `s1`).
+- `providers.fish-audio.latency`: latency mode (`normal` default, `balanced`, `low`).
+- `providers.fish-audio.speed`: prosody speed `0.5..2.0` (1.0 = normal).
+- `providers.fish-audio.temperature`: sampling temperature `0..1`.
+- `providers.fish-audio.topP`: top-p sampling `0..1`.
+- `providers.fish-audio.baseUrl`: override Fish Audio API base URL.
 - `providers.microsoft.enabled`: allow Microsoft speech usage (default `true`; no API key).
 - `providers.microsoft.voice`: Microsoft neural voice name (e.g. `en-US-MichelleNeural`).
 - `providers.microsoft.lang`: language code (e.g. `en-US`).
@@ -269,13 +303,16 @@ Here you go.
 
 Available directive keys (when enabled):
 
-- `provider` (registered speech provider id, for example `openai`, `elevenlabs`, or `microsoft`; requires `allowProvider: true`)
-- `voice` (OpenAI voice) or `voiceId` (ElevenLabs)
-- `model` (OpenAI TTS model or ElevenLabs model id)
-- `stability`, `similarityBoost`, `style`, `speed`, `useSpeakerBoost`
-- `applyTextNormalization` (`auto|on|off`)
-- `languageCode` (ISO 639-1)
-- `seed`
+- `provider` (registered speech provider id, for example `openai`, `elevenlabs`, `fish-audio`, or `microsoft`; requires `allowProvider: true`)
+- `voice` (OpenAI voice), `voiceId` (ElevenLabs or Fish Audio reference ID)
+- `model` (OpenAI TTS model, ElevenLabs model id, or Fish Audio model)
+- `stability`, `similarityBoost`, `style`, `speed`, `useSpeakerBoost` (ElevenLabs)
+- `speed` (Fish Audio prosody speed `0.5..2.0`)
+- `latency` (Fish Audio: `normal`, `balanced`, `low`)
+- `temperature`, `top_p` (Fish Audio sampling parameters)
+- `applyTextNormalization` (`auto|on|off`) (ElevenLabs)
+- `languageCode` (ISO 639-1) (ElevenLabs)
+- `seed` (ElevenLabs)
 
 Disable all model overrides:
 
@@ -324,9 +361,9 @@ These override `messages.tts.*` for that host.
 
 ## Output formats (fixed)
 
-- **Feishu / Matrix / Telegram / WhatsApp**: Opus voice message (`opus_48000_64` from ElevenLabs, `opus` from OpenAI).
+- **Feishu / Matrix / Telegram / WhatsApp**: Opus voice message (`opus_48000_64` from ElevenLabs, `opus` from Fish Audio/OpenAI).
   - 48kHz / 64kbps is a good voice message tradeoff.
-- **Other channels**: MP3 (`mp3_44100_128` from ElevenLabs, `mp3` from OpenAI).
+- **Other channels**: MP3 (`mp3_44100_128` from ElevenLabs, `mp3` from Fish Audio/OpenAI).
   - 44.1kHz / 128kbps is the default balance for speech clarity.
 - **Microsoft**: uses `microsoft.outputFormat` (default `audio-24khz-48kbitrate-mono-mp3`).
   - The bundled transport accepts an `outputFormat`, but not all formats are available from the service.
@@ -335,7 +372,8 @@ These override `messages.tts.*` for that host.
     guaranteed Opus voice messages.
   - If the configured Microsoft output format fails, OpenClaw retries with MP3.
 
-OpenAI/ElevenLabs output formats are fixed per channel (see above).
+OpenAI/ElevenLabs/Fish Audio output formats are fixed per channel (see above).
+Fish Audio output is `voiceCompatible` in both MP3 and Opus formats.
 
 ## Auto-TTS behavior
 
