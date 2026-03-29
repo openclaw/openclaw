@@ -218,6 +218,7 @@ type DefineChannelPluginEntryOptions<TPlugin = ChannelPlugin> = {
   plugin: TPlugin;
   configSchema?: OpenClawPluginConfigSchema | (() => OpenClawPluginConfigSchema);
   setRuntime?: (runtime: PluginRuntime) => void;
+  registerCliMetadata?: (api: OpenClawPluginApi) => void;
   registerFull?: (api: OpenClawPluginApi) => void;
 };
 
@@ -281,6 +282,7 @@ export function defineChannelPluginEntry<TPlugin>({
   plugin,
   configSchema = emptyPluginConfigSchema,
   setRuntime,
+  registerCliMetadata,
   registerFull,
 }: DefineChannelPluginEntryOptions<TPlugin>): DefinedChannelPluginEntry<TPlugin> {
   const resolvedConfigSchema = typeof configSchema === "function" ? configSchema() : configSchema;
@@ -291,6 +293,10 @@ export function defineChannelPluginEntry<TPlugin>({
     configSchema: resolvedConfigSchema,
     register(api: OpenClawPluginApi) {
       setRuntime?.(api.runtime);
+      if (api.registrationMode === "cli-metadata") {
+        registerCliMetadata?.(api);
+        return;
+      }
       api.registerChannel({ plugin: plugin as ChannelPlugin });
       if (api.registrationMode !== "full") {
         return;

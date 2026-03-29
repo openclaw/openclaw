@@ -6,7 +6,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { loadOpenClawPlugins, type PluginLoadOptions } from "./loader.js";
+import { loadOpenClawPluginCliRegistry, type PluginLoadOptions } from "./loader.js";
 import type { OpenClawPluginCliCommandDescriptor } from "./types.js";
 import type { PluginLogger } from "./types.js";
 
@@ -30,13 +30,10 @@ function canRegisterPluginCliLazily(entry: {
   return entry.commands.every((command) => descriptorNames.has(command));
 }
 
-function loadPluginCliRegistry(
+async function loadPluginCliRegistry(
   cfg?: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
-  loaderOptions?: Pick<
-    PluginLoadOptions,
-    "pluginSdkResolution" | "activate" | "cache" | "captureCliMetadataOnly"
-  >,
+  loaderOptions?: Pick<PluginLoadOptions, "pluginSdkResolution">,
 ) {
   const config = cfg ?? loadConfig();
   const resolvedConfig = applyPluginAutoEnable({ config, env: env ?? process.env }).config;
@@ -54,7 +51,7 @@ function loadPluginCliRegistry(
     config: resolvedConfig,
     workspaceDir,
     logger,
-    registry: loadOpenClawPlugins({
+    registry: await loadOpenClawPluginCliRegistry({
       config: resolvedConfig,
       workspaceDir,
       env,
@@ -64,16 +61,12 @@ function loadPluginCliRegistry(
   };
 }
 
-export function getPluginCliCommandDescriptors(
+export async function getPluginCliCommandDescriptors(
   cfg?: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
-): OpenClawPluginCliCommandDescriptor[] {
+): Promise<OpenClawPluginCliCommandDescriptor[]> {
   try {
-    const { registry } = loadPluginCliRegistry(cfg, env, {
-      activate: false,
-      cache: false,
-      captureCliMetadataOnly: true,
-    });
+    const { registry } = await loadPluginCliRegistry(cfg, env);
     const seen = new Set<string>();
     const descriptors: OpenClawPluginCliCommandDescriptor[] = [];
     for (const entry of registry.cliRegistrars) {
@@ -98,7 +91,11 @@ export async function registerPluginCliCommands(
   loaderOptions?: Pick<PluginLoadOptions, "pluginSdkResolution">,
   options?: RegisterPluginCliOptions,
 ) {
-  const { config, workspaceDir, logger, registry } = loadPluginCliRegistry(cfg, env, loaderOptions);
+  const { config, workspaceDir, logger, registry } = await loadPluginCliRegistry(
+    cfg,
+    env,
+    loaderOptions,
+  );
   const mode = options?.mode ?? "eager";
   const primary = options?.primary ?? null;
 

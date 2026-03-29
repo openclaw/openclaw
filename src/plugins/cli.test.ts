@@ -6,12 +6,13 @@ const mocks = vi.hoisted(() => ({
   memoryRegister: vi.fn(),
   otherRegister: vi.fn(),
   memoryListAction: vi.fn(),
-  loadOpenClawPlugins: vi.fn(),
+  loadOpenClawPluginCliRegistry: vi.fn(),
   applyPluginAutoEnable: vi.fn(),
 }));
 
 vi.mock("./loader.js", () => ({
-  loadOpenClawPlugins: (...args: unknown[]) => mocks.loadOpenClawPlugins(...args),
+  loadOpenClawPluginCliRegistry: (...args: unknown[]) =>
+    mocks.loadOpenClawPluginCliRegistry(...args),
 }));
 
 vi.mock("../config/plugin-auto-enable.js", () => ({
@@ -63,7 +64,7 @@ function createCliRegistry(params?: {
 }
 
 function expectPluginLoaderConfig(config: OpenClawConfig) {
-  expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
+  expect(mocks.loadOpenClawPluginCliRegistry).toHaveBeenCalledWith(
     expect.objectContaining({
       config,
     }),
@@ -109,8 +110,8 @@ describe("registerPluginCliCommands", () => {
       program.command("other").description("Other commands");
     });
     mocks.memoryListAction.mockReset();
-    mocks.loadOpenClawPlugins.mockReset();
-    mocks.loadOpenClawPlugins.mockReturnValue(createCliRegistry());
+    mocks.loadOpenClawPluginCliRegistry.mockReset();
+    mocks.loadOpenClawPluginCliRegistry.mockResolvedValue(createCliRegistry());
     mocks.applyPluginAutoEnable.mockReset();
     mocks.applyPluginAutoEnable.mockImplementation(({ config }) => ({ config, changes: [] }));
   });
@@ -129,7 +130,7 @@ describe("registerPluginCliCommands", () => {
 
     await registerPluginCliCommands(createProgram(), {} as OpenClawConfig, env);
 
-    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
+    expect(mocks.loadOpenClawPluginCliRegistry).toHaveBeenCalledWith(
       expect.objectContaining({
         env,
       }),
@@ -150,10 +151,10 @@ describe("registerPluginCliCommands", () => {
     );
   });
 
-  it("loads root-help descriptors through the non-activating loader path", () => {
+  it("loads root-help descriptors through the dedicated non-activating CLI collector", async () => {
     const { rawConfig, autoEnabledConfig } = createAutoEnabledCliFixture();
     mocks.applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
-    mocks.loadOpenClawPlugins.mockReturnValue({
+    mocks.loadOpenClawPluginCliRegistry.mockResolvedValue({
       cliRegistrars: [
         {
           pluginId: "matrix",
@@ -184,19 +185,16 @@ describe("registerPluginCliCommands", () => {
       ],
     });
 
-    expect(getPluginCliCommandDescriptors(rawConfig)).toEqual([
+    await expect(getPluginCliCommandDescriptors(rawConfig)).resolves.toEqual([
       {
         name: "matrix",
         description: "Matrix channel utilities",
         hasSubcommands: true,
       },
     ]);
-    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
+    expect(mocks.loadOpenClawPluginCliRegistry).toHaveBeenCalledWith(
       expect.objectContaining({
         config: autoEnabledConfig,
-        activate: false,
-        cache: false,
-        captureCliMetadataOnly: true,
       }),
     );
   });
@@ -220,7 +218,7 @@ describe("registerPluginCliCommands", () => {
   });
 
   it("falls back to eager registration when descriptors do not cover every command root", async () => {
-    mocks.loadOpenClawPlugins.mockReturnValue(
+    mocks.loadOpenClawPluginCliRegistry.mockResolvedValue(
       createCliRegistry({
         memoryCommands: ["memory", "memory-admin"],
         memoryDescriptors: [

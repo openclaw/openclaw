@@ -160,7 +160,7 @@ export async function runCli(argv: string[] = process.argv) {
   try {
     if (shouldUseRootHelpFastPath(normalizedArgv)) {
       const { outputRootHelp } = await import("./program/root-help.js");
-      outputRootHelp();
+      await outputRootHelp();
       return;
     }
 

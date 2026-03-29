@@ -1,25 +1,17 @@
 import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { matrixPlugin } from "./src/channel.js";
 import { setMatrixRuntime } from "./src/runtime.js";
 
 export { matrixPlugin } from "./src/channel.js";
 export { setMatrixRuntime } from "./src/runtime.js";
 
-const matrixEntry = defineChannelPluginEntry({
+export default defineChannelPluginEntry({
   id: "matrix",
   name: "Matrix",
   description: "Matrix channel plugin (matrix-js-sdk)",
   plugin: matrixPlugin,
   setRuntime: setMatrixRuntime,
-});
-
-export default {
-  ...matrixEntry,
-  register(api: OpenClawPluginApi) {
-    matrixEntry.register(api);
-    // Expose Matrix CLI metadata during descriptor capture without crossing
-    // into the full runtime bootstrap path.
+  registerCliMetadata(api) {
     api.registerCli(
       async ({ program }) => {
         const { registerMatrixCli } = await import("./src/cli.js");
@@ -35,10 +27,8 @@ export default {
         ],
       },
     );
-    if (api.registrationMode !== "full") {
-      return;
-    }
-
+  },
+  registerFull(api) {
     void import("./src/plugin-entry.runtime.js")
       .then(({ ensureMatrixCryptoRuntime }) =>
         ensureMatrixCryptoRuntime({ log: api.logger.info }).catch((err: unknown) => {
@@ -66,4 +56,4 @@ export default {
       await handleVerificationStatus(ctx);
     });
   },
-};
+});
