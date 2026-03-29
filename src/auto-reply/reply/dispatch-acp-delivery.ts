@@ -39,7 +39,10 @@ function shouldTreatDeliveredTextAsVisible(params: {
   if (params.kind === "final") {
     return true;
   }
-  return normalizeDeliveryChannel(params.channel) === "telegram";
+  // Block replies on channels with blockStreaming count as visible text,
+  // preventing the final-reply fallback from repeating already-delivered content.
+  const ch = normalizeDeliveryChannel(params.channel);
+  return ch === "telegram" || ch === "whatsapp";
 }
 
 type AcpDispatchDeliveryState = {
