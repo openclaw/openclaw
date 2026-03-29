@@ -585,35 +585,46 @@ export function readDiscordComponentSpec(raw: unknown): DiscordComponentMessageS
   }
   const obj = requireObject(raw, "components");
   const blocksRaw = obj.blocks;
-  const blocks = Array.isArray(blocksRaw)
-    ? blocksRaw.map((entry, idx) => parseComponentBlock(entry, `components.blocks[${idx}]`))
-    : undefined;
+  const blocks =
+    Array.isArray(blocksRaw) && blocksRaw.length > 0
+      ? blocksRaw.map((entry, idx) => parseComponentBlock(entry, `components.blocks[${idx}]`))
+      : undefined;
   const modalRaw = obj.modal;
   const reusable = typeof obj.reusable === "boolean" ? obj.reusable : undefined;
   let modal: DiscordModalSpec | undefined;
-  if (modalRaw !== undefined) {
+  if (modalRaw !== undefined && modalRaw !== null) {
     const modalObj = requireObject(modalRaw, "components.modal");
     const fieldsRaw = modalObj.fields;
-    if (!Array.isArray(fieldsRaw) || fieldsRaw.length === 0) {
-      throw new Error("components.modal.fields must be a non-empty array");
+    // Treat empty modal (no fields) as absent — LLMs often fill in all tool
+    // parameters with empty defaults which produces an empty modal spec.
+    if (Array.isArray(fieldsRaw) && fieldsRaw.length > 0) {
+      if (fieldsRaw.length > 5) {
+        throw new Error("components.modal.fields supports up to 5 inputs");
+      }
+      const fields = fieldsRaw.map((entry, idx) =>
+        parseModalField(entry, `components.modal.fields[${idx}]`, idx),
+      );
+      modal = {
+        title: readString(modalObj.title, "components.modal.title"),
+        callbackData: readOptionalString(modalObj.callbackData),
+        triggerLabel: readOptionalString(modalObj.triggerLabel),
+        triggerStyle: readOptionalString(modalObj.triggerStyle) as DiscordComponentButtonStyle,
+        allowedUsers: readOptionalStringArray(
+          modalObj.allowedUsers,
+          "components.modal.allowedUsers",
+        ),
+        fields,
+      };
     }
-    if (fieldsRaw.length > 5) {
-      throw new Error("components.modal.fields supports up to 5 inputs");
-    }
-    const fields = fieldsRaw.map((entry, idx) =>
-      parseModalField(entry, `components.modal.fields[${idx}]`, idx),
-    );
-    modal = {
-      title: readString(modalObj.title, "components.modal.title"),
-      callbackData: readOptionalString(modalObj.callbackData),
-      triggerLabel: readOptionalString(modalObj.triggerLabel),
-      triggerStyle: readOptionalString(modalObj.triggerStyle) as DiscordComponentButtonStyle,
-      allowedUsers: readOptionalStringArray(modalObj.allowedUsers, "components.modal.allowedUsers"),
-      fields,
-    };
+  }
+  const text = readOptionalString(obj.text);
+  // If spec has no meaningful content (no text, blocks, or modal), treat as absent.
+  // This handles LLMs that fill in every tool parameter with empty defaults.
+  if (!text && !blocks?.length && !modal) {
+    return null;
   }
   return {
-    text: readOptionalString(obj.text),
+    text,
     reusable,
     container:
       typeof obj.container === "object" && obj.container && !Array.isArray(obj.container)
