@@ -59,8 +59,20 @@ export function canonicalizeMainSessionAlias(params: {
   const agentMainSessionKey = buildMainSessionKey(agentId, mainKey);
   const agentMainAliasKey = buildMainSessionKey(agentId, "main");
 
+  // Also recognize legacy keys built with the hardcoded DEFAULT_AGENT_ID ("main")
+  // when the configured agent differs. resolveSessionKey() historically used
+  // DEFAULT_AGENT_ID="main" for all write paths, producing "agent:main:<mainKey>"
+  // even when the configured agent is e.g. "ops". See #29683.
+  const legacyMainKey = buildMainSessionKey(FALLBACK_DEFAULT_AGENT_ID, mainKey);
+  const legacyMainAliasKey = buildMainSessionKey(FALLBACK_DEFAULT_AGENT_ID, "main");
+
   const isMainAlias =
-    raw === "main" || raw === mainKey || raw === agentMainSessionKey || raw === agentMainAliasKey;
+    raw === "main" ||
+    raw === mainKey ||
+    raw === agentMainSessionKey ||
+    raw === agentMainAliasKey ||
+    raw === legacyMainKey ||
+    raw === legacyMainAliasKey;
 
   if (params.cfg?.session?.scope === "global" && isMainAlias) {
     return "global";
