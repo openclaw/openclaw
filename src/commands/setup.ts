@@ -45,11 +45,14 @@ export async function setupCommand(
   const defaults = cfg.agents?.defaults ?? {};
 
   const rawWorkspace =
-    desiredWorkspace?.trim() ||
+    desiredWorkspace ||
     (typeof defaults.workspace === "string" ? defaults.workspace.trim() : "") ||
     portableDefaultAgentWorkspacePath();
   const resolvedWorkspace = resolveUserPath(rawWorkspace);
-  const workspace = workspaceResolvedDirToConfigValue(resolvedWorkspace);
+  // For the default workspace, store the portable ~/.openclaw/workspace form;
+  // for custom paths, preserve the user's original text (e.g. ~/my-workspace).
+  const resolvedDefault = workspaceResolvedDirToConfigValue(resolvedWorkspace);
+  const workspace = resolvedDefault !== resolvedWorkspace ? resolvedDefault : rawWorkspace;
 
   const next: OpenClawConfig = {
     ...cfg,

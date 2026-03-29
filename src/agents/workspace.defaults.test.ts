@@ -35,4 +35,13 @@ describe("DEFAULT_AGENT_WORKSPACE_DIR", () => {
       path.join(def, "extra"),
     );
   });
+
+  it("workspaceResolvedDirToConfigValue uses portable profile path for default profile workspace", () => {
+    vi.stubEnv("OPENCLAW_PROFILE", "staging");
+    const def = resolveDefaultAgentWorkspaceDir();
+    expect(workspaceResolvedDirToConfigValue(def)).toBe("~/.openclaw/workspace-staging");
+    expect(workspaceResolvedDirToConfigValue(path.join(def, "extra"))).toBe(
+      path.join(def, "extra"),
+    );
+  });
 });
