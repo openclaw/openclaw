@@ -78,6 +78,9 @@ const sessionStoreMocks = vi.hoisted(() => ({
   resolveStorePath: vi.fn(() => "/tmp/mock-sessions.json"),
   resolveSessionStoreEntry: vi.fn(() => ({ existing: sessionStoreMocks.currentEntry })),
 }));
+const agentEventMocks = vi.hoisted(() => ({
+  emitAgentEvent: vi.fn(),
+}));
 const ttsMocks = vi.hoisted(() => {
   const state = {
     synthesizeFinalAudio: false,
@@ -205,6 +208,13 @@ vi.mock("../../infra/outbound/session-binding-service.js", async (importOriginal
       touch: sessionBindingMocks.touch,
       unbind: vi.fn(async () => []),
     }),
+  };
+});
+vi.mock("../../infra/agent-events.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../infra/agent-events.js")>();
+  return {
+    ...actual,
+    emitAgentEvent: (params: unknown) => agentEventMocks.emitAgentEvent(params),
   };
 });
 vi.mock("../../tts/tts.js", () => ({
@@ -349,6 +359,7 @@ describe("dispatchReplyFromConfig", () => {
     acpMocks.upsertAcpSessionMeta.mockReset();
     acpMocks.upsertAcpSessionMeta.mockResolvedValue(null);
     acpMocks.requireAcpRuntimeBackend.mockReset();
+    agentEventMocks.emitAgentEvent.mockReset();
     sessionBindingMocks.listBySession.mockReset();
     sessionBindingMocks.listBySession.mockReturnValue([]);
     pluginBindingTesting.reset();
@@ -1124,6 +1135,127 @@ describe("dispatchReplyFromConfig", () => {
     await dispatchPromise;
 
     expect(outcome).toBe("settled");
+  });
+
+  it("emits lifecycle end for ACP turns using the current run id", async () => {
+    setNoAbort();
+    const runtime = createAcpRuntime([{ type: "text_delta", text: "done" }, { type: "done" }]);
+    acpMocks.readAcpSessionEntry.mockReturnValue({
+      sessionKey: "agent:codex-acp:session-1",
+      storeSessionKey: "agent:codex-acp:session-1",
+      cfg: {},
+      storePath: "/tmp/mock-sessions.json",
+      entry: {},
+      acp: {
+        backend: "acpx",
+        agent: "codex",
+        runtimeSessionName: "runtime:1",
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: Date.now(),
+      },
+    });
+    acpMocks.requireAcpRuntimeBackend.mockReturnValue({
+      id: "acpx",
+      runtime,
+    });
+
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      SessionKey: "agent:codex-acp:session-1",
+      BodyForAgent: "write a test",
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: {
+        acp: {
+          enabled: true,
+          dispatch: { enabled: true },
+          stream: { coalesceIdleMs: 0, maxChunkChars: 128 },
+        },
+      } as OpenClawConfig,
+      dispatcher,
+      replyOptions: {
+        runId: "run-acp-lifecycle-end",
+      },
+    });
+
+    expect(agentEventMocks.emitAgentEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run-acp-lifecycle-end",
+        sessionKey: "agent:codex-acp:session-1",
+        stream: "lifecycle",
+        data: expect.objectContaining({
+          phase: "end",
+        }),
+      }),
+    );
+  });
+
+  it("emits lifecycle error for ACP turn failures using the current run id", async () => {
+    setNoAbort();
+    const runtime = createAcpRuntime([]);
+    runtime.runTurn.mockImplementation(async function* () {
+      yield { type: "status", tag: "usage_update", text: "warming up" };
+      throw new Error("ACP exploded");
+    });
+    acpMocks.readAcpSessionEntry.mockReturnValue({
+      sessionKey: "agent:codex-acp:session-1",
+      storeSessionKey: "agent:codex-acp:session-1",
+      cfg: {},
+      storePath: "/tmp/mock-sessions.json",
+      entry: {},
+      acp: {
+        backend: "acpx",
+        agent: "codex",
+        runtimeSessionName: "runtime:1",
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: Date.now(),
+      },
+    });
+    acpMocks.requireAcpRuntimeBackend.mockReturnValue({
+      id: "acpx",
+      runtime,
+    });
+
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      SessionKey: "agent:codex-acp:session-1",
+      BodyForAgent: "write a test",
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: {
+        acp: {
+          enabled: true,
+          dispatch: { enabled: true },
+          stream: { coalesceIdleMs: 0, maxChunkChars: 128 },
+        },
+      } as OpenClawConfig,
+      dispatcher,
+      replyOptions: {
+        runId: "run-acp-lifecycle-error",
+      },
+    });
+
+    expect(agentEventMocks.emitAgentEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run-acp-lifecycle-error",
+        sessionKey: "agent:codex-acp:session-1",
+        stream: "lifecycle",
+        data: expect.objectContaining({
+          phase: "error",
+          error: expect.stringContaining("ACP exploded"),
+        }),
+      }),
+    );
   });
 
   it("posts a one-time resolved-session-id notice in thread after the first ACP turn", async () => {
