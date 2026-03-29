@@ -104,11 +104,32 @@ Create `memory/schedule.md` with the table header above.
 - OpenClaw with `tools.sessions.visibility` set to `all`
 - Cron jobs using `systemEvent` mode (main session access)
 
+## Phase 3: Session Memory Restore (on demand)
+
+The most critical piece — when the agent receives a message in a group session:
+
+1. Check if `memory/groups/<chat_id>.md` exists
+2. If yes, read it to restore context about recent discussions, open questions, and todos
+3. This is configured in `AGENTS.md` under "群 Session 记忆恢复"
+
+Without this step, Phases 1-2 only help the human (morning brief), but the agent itself still wakes up with no memory.
+
+### File structure
+```
+memory/groups/
+├── oc_abc123.md    # Group A: recent 3-day summary + open questions
+├── oc_def456.md    # Group B: recent 3-day summary + open questions
+└── ...
+```
+
+Phase 2 generates/updates these files each morning. They are compact (< 2KB each) and designed for fast loading.
+
 ## Privacy Notes
 
 - Phase 1 writes a daily summary that Phase 2 broadcasts to groups. Never include private MEMORY.md content in the daily summary.
 - Each group only receives its own summary in the morning dispatch — no cross-group content leakage.
 - MEMORY.md is updated separately and stays in the main session context only.
+- Per-group memory snapshots only contain that group's own conversation summaries.
 
 ## Inspirations
 
