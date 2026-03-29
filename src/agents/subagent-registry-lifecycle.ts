@@ -460,7 +460,7 @@ export function createSubagentRegistryLifecycleController(params: {
       runId: entry.runId,
       status:
         completeParams.outcome.status === "ok"
-          ? "done"
+          ? "succeeded"
           : completeParams.outcome.status === "timeout"
             ? "timed_out"
             : "failed",

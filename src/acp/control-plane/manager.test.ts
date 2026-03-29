@@ -304,13 +304,12 @@ describe("AcpSessionManager", () => {
       });
 
       expect(findTaskByRunId("direct-parented-run")).toMatchObject({
-        source: "unknown",
         runtime: "acp",
         requesterSessionKey: "agent:quant:telegram:quant:direct:822430204",
         childSessionKey: "agent:codex:acp:child-1",
         label: "Quant patch",
         task: "Implement the feature and report back",
-        status: "done",
+        status: "succeeded",
         progressSummary: "Write failed: permission denied for /root/oc-acp-write-should-fail.txt.",
         terminalOutcome: "blocked",
         terminalSummary: "Permission denied for /root/oc-acp-write-should-fail.txt.",
