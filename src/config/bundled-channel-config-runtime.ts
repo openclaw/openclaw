@@ -14,33 +14,38 @@ type BundledChannelPluginShape = {
   id: string;
   configSchema?: ChannelConfigSchema;
 };
-type BundledChannelMaps = {
-  runtimeMap: Map<string, ChannelConfigRuntimeSchema>;
-  configSchemaMap: Map<string, ChannelConfigSchema>;
-};
 
 const staticBundledChannelSchemas = new Map<string, ChannelConfigSchema>([
   ["msteams", buildChannelConfigSchema(MSTeamsConfigSchema)],
   ["whatsapp", buildChannelConfigSchema(WhatsAppConfigSchema)],
 ]);
-let cachedBundledChannelMaps: BundledChannelMaps | undefined;
+let cachedBundledChannelRuntimeMap: Map<string, ChannelConfigRuntimeSchema> | undefined;
+let cachedBundledChannelConfigSchemaMap: Map<string, ChannelConfigSchema> | undefined;
 
-function buildBundledChannelMaps(
+function buildBundledChannelRuntimeMap(
   plugins: readonly BundledChannelPluginShape[],
-): BundledChannelMaps {
+): Map<string, ChannelConfigRuntimeSchema> {
   const runtimeMap = new Map<string, ChannelConfigRuntimeSchema>();
-  const configSchemaMap = new Map<string, ChannelConfigSchema>();
 
   for (const plugin of plugins) {
     const channelSchema = plugin.configSchema;
-    if (!channelSchema) {
+    if (!channelSchema?.runtime) {
       continue;
     }
-    configSchemaMap.set(plugin.id, channelSchema);
-    if (channelSchema.runtime) {
-      runtimeMap.set(plugin.id, channelSchema.runtime);
+    runtimeMap.set(plugin.id, channelSchema.runtime);
+  }
+
+  for (const [channelId, channelSchema] of staticBundledChannelSchemas) {
+    if (channelSchema.runtime && !runtimeMap.has(channelId)) {
+      runtimeMap.set(channelId, channelSchema.runtime);
     }
   }
+
+  return runtimeMap;
+}
+
+function buildBundledChannelConfigSchemaMap(): Map<string, ChannelConfigSchema> {
+  const configSchemaMap = new Map<string, ChannelConfigSchema>();
 
   for (const entry of listBundledPluginMetadata({ includeChannelConfigs: true })) {
     const channelConfigs = entry.manifest.channelConfigs;
@@ -62,12 +67,9 @@ function buildBundledChannelMaps(
     if (!configSchemaMap.has(channelId)) {
       configSchemaMap.set(channelId, channelSchema);
     }
-    if (channelSchema.runtime && !runtimeMap.has(channelId)) {
-      runtimeMap.set(channelId, channelSchema.runtime);
-    }
   }
 
-  return { runtimeMap, configSchemaMap };
+  return configSchemaMap;
 }
 
 function readBundledChannelPlugins(): readonly BundledChannelPluginShape[] | undefined {
@@ -87,25 +89,26 @@ function readBundledChannelPlugins(): readonly BundledChannelPluginShape[] | und
   }
 }
 
-function getBundledChannelMaps(): BundledChannelMaps {
+export function getBundledChannelRuntimeMap(): BundledChannelRuntimeMap {
   const plugins = readBundledChannelPlugins();
-  if (plugins && cachedBundledChannelMaps) {
-    return cachedBundledChannelMaps;
+  if (plugins && cachedBundledChannelRuntimeMap) {
+    return cachedBundledChannelRuntimeMap;
   }
 
-  const maps = buildBundledChannelMaps(plugins ?? []);
+  const runtimeMap = buildBundledChannelRuntimeMap(plugins ?? []);
   // Tests and some import cycles can temporarily expose an incomplete bundled list.
   // Only cache once the exported plugin array is actually available.
   if (plugins) {
-    cachedBundledChannelMaps = maps;
+    cachedBundledChannelRuntimeMap = runtimeMap;
   }
-  return maps;
-}
-
-export function getBundledChannelRuntimeMap(): BundledChannelRuntimeMap {
-  return getBundledChannelMaps().runtimeMap;
+  return runtimeMap;
 }
 
 export function getBundledChannelConfigSchemaMap(): BundledChannelConfigSchemaMap {
-  return getBundledChannelMaps().configSchemaMap;
+  if (!cachedBundledChannelConfigSchemaMap) {
+    // Config validation only needs the declared schema surface, which is available
+    // directly from bundled plugin manifests and avoids eagerly loading channel code.
+    cachedBundledChannelConfigSchemaMap = buildBundledChannelConfigSchemaMap();
+  }
+  return cachedBundledChannelConfigSchemaMap;
 }
