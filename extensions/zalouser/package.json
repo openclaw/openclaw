@@ -4,7 +4,7 @@
   "description": "OpenClaw Zalo Personal Account plugin via native zca-js integration",
   "type": "module",
   "dependencies": {
-    "@sinclair/typebox": "0.34.48",
+    "@sinclair/typebox": "0.34.49",
     "zca-js": "2.1.2"
   },
   "devDependencies": {
