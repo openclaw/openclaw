@@ -487,6 +487,7 @@ describe("buildGatewayConnectionDetails", () => {
     expect(details.url).toBe(expectedUrl);
     expect(details.urlSource).toBe("local loopback");
     expect(details.bindDetail).toBe("Bind: lan");
+    expect(details.message).toContain("OPENCLAW_GATEWAY_URL");
   });
 
   it("prefers remote url when configured", () => {

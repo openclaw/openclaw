@@ -193,7 +193,13 @@ export async function runCli(argv: string[] = process.argv) {
       }
     }
 
-    await program.parseAsync(parseArgv);
+    try {
+      await program.parseAsync(parseArgv);
+    } catch (error) {
+      // Commander async actions reject here; avoid surfacing them as "Failed to start CLI" from entry.ts.
+      console.error("[openclaw] Error:", formatUncaughtError(error));
+      process.exitCode = 1;
+    }
   } finally {
     await closeCliMemoryManagers();
   }

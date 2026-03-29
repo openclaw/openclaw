@@ -64,12 +64,19 @@ type DevicePairingList = {
 
 const FALLBACK_NOTICE = "Direct scope access failed; using local fallback.";
 
+/** Device pairing RPCs can wait on busy gateways (Pi, Docker, LAN); keep above generic CLI defaults. */
+const DEVICES_GATEWAY_DEFAULT_TIMEOUT_MS = 30_000;
+
 const devicesCallOpts = (cmd: Command, defaults?: { timeoutMs?: number }) =>
   cmd
     .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
     .option("--token <token>", "Gateway token (if required)")
     .option("--password <password>", "Gateway password (password auth)")
-    .option("--timeout <ms>", "Timeout in ms", String(defaults?.timeoutMs ?? 10_000))
+    .option(
+      "--timeout <ms>",
+      "Timeout in ms",
+      String(defaults?.timeoutMs ?? DEVICES_GATEWAY_DEFAULT_TIMEOUT_MS),
+    )
     .option("--json", "Output JSON", false);
 
 const callGatewayCli = async (method: string, opts: DevicesRpcOpts, params?: unknown) =>
@@ -86,7 +93,7 @@ const callGatewayCli = async (method: string, opts: DevicesRpcOpts, params?: unk
         password: opts.password,
         method,
         params,
-        timeoutMs: Number(opts.timeout ?? 10_000),
+        timeoutMs: Number(opts.timeout ?? DEVICES_GATEWAY_DEFAULT_TIMEOUT_MS),
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,
       }),
