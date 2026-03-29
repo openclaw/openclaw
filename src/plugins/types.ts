@@ -1603,6 +1603,14 @@ export type OpenClawPluginCliContext = {
 
 export type OpenClawPluginCliRegistrar = (ctx: OpenClawPluginCliContext) => void | Promise<void>;
 
+/**
+ * Top-level CLI metadata for plugin-owned commands.
+ *
+ * Descriptors are the parse-time contract for lazy plugin CLI registration.
+ * If you want OpenClaw to keep a plugin command lazy-loaded while still
+ * advertising it at the root CLI level, provide descriptors that cover every
+ * top-level command root registered by that plugin CLI surface.
+ */
 export type OpenClawPluginCliCommandDescriptor = {
   name: string;
   description: string;
@@ -1707,7 +1715,15 @@ export type OpenClawPluginApi = {
   registerCli: (
     registrar: OpenClawPluginCliRegistrar,
     opts?: {
+      /** Explicit top-level command roots owned by this registrar. */
       commands?: string[];
+      /**
+       * Parse-time command descriptors for lazy root CLI registration.
+       *
+       * When descriptors cover every top-level command root, OpenClaw can keep
+       * the plugin registrar lazy in the normal root CLI path. Command-only
+       * registrations stay on the eager compatibility path.
+       */
       descriptors?: OpenClawPluginCliCommandDescriptor[];
     },
   ) => void;
