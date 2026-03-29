@@ -153,13 +153,21 @@ class MARCHProtocol:
         executor_response: str,
         archivist_response: str = "",
         prompt: str = "",
+        **kwargs: Any,
     ) -> MARCHResult:
         """Run the MARCH cross-verification protocol.
 
         1. Extract entities from executor and archivist responses.
         2. Verify each against SuperMemory knowledge base.
         3. If discrepancy rate exceeds threshold — trigger Reflexion.
+
+        v14.4: Accepts **kwargs so callers can pass extra context
+        (memory, config, etc.) without causing TypeError.
         """
+        # v14.4: Accept supermemory override from pipeline caller
+        if "memory" in kwargs and kwargs["memory"] is not None:
+            self.supermemory = kwargs["memory"]
+
         start = time.monotonic()
 
         # Step 1: Extract claims

@@ -88,6 +88,59 @@ from src.pipeline._tool_call_parser import (
 logger = structlog.get_logger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# v14.4: Multi-Task Decomposer  (P1-1 / P1-3 hotfix)
+# ---------------------------------------------------------------------------
+
+_NUMBERED_RE = re.compile(
+    r"(?:^|\n)\s*(\d+)\.\s+(.+?)(?=\n\s*\d+\.\s|\Z)",
+    re.DOTALL,
+)
+
+# Keyword → brigade mapping (reused from intent_classifier)
+_BRIGADE_KEYWORDS: dict[str, list[str]] = {
+    "Dmarket-Dev": [
+        "dmarket", "buy", "sell", "trade", "price", "skin", "inventory",
+        "купить", "продать", "торговля", "скин", "инвентарь", "арбитраж",
+    ],
+    "Research-Ops": [
+        "research", "найди", "поищи", "youtube", "видео", "video",
+        "url", "http", "ссылк", "статью", "интернет", "анализ",
+    ],
+    "OpenClaw-Core": [
+        "config", "pipeline", "model", "bot", "openclaw", "gateway",
+        "конфиг", "бригад", "бот", "память", "memory", "mcp",
+    ],
+}
+
+
+def _route_subtask(text: str) -> str:
+    """Route a single sub-task to the most relevant brigade by keywords."""
+    lower = text.lower()
+    scores: dict[str, int] = {}
+    for brigade, keywords in _BRIGADE_KEYWORDS.items():
+        scores[brigade] = sum(1 for kw in keywords if kw in lower)
+    best = max(scores, key=scores.get)  # type: ignore[arg-type]
+    return best if scores[best] > 0 else "Dmarket-Dev"
+
+
+def _decompose_multi_task(prompt: str) -> list[tuple[str, str]]:
+    """Split a numbered-list prompt into (sub_task_text, brigade) pairs.
+
+    Returns an empty list if the prompt doesn't look like a multi-task list.
+    """
+    matches = _NUMBERED_RE.findall(prompt)
+    if len(matches) < 2:
+        return []
+    sub_tasks: list[tuple[str, str]] = []
+    for _num, body in matches:
+        body = body.strip()
+        if body:
+            brigade = _route_subtask(body)
+            sub_tasks.append((body, brigade))
+    return sub_tasks
+
+
 async def _async_save_trajectory(supermemory, prompt, chain, complexity, steps_results, response):
     """v14.0: Complementary RL — сохранение траектории успешной сложной задачи в SuperMemory."""
     try:
@@ -350,6 +403,27 @@ class PipelineExecutor:
         task_type: Optional[str] = None
     ) -> Dict[str, Any]:
         """Execute the full pipeline for a brigade."""
+
+        # --- v14.4: Multi-Task Decomposer (P1-1 / P1-3 hotfix) ---
+        # If the prompt contains a numbered list (1. ... 2. ...) and is long enough,
+        # decompose into sub-tasks and route each to the best-matching brigade.
+        if not task_type and len(prompt) > 500:
+            sub_tasks = _decompose_multi_task(prompt)
+            if len(sub_tasks) >= 2:
+                logger.info(
+                    "Multi-task decomposer activated",
+                    n_subtasks=len(sub_tasks),
+                    brigades=[s[1] for s in sub_tasks],
+                )
+                if status_callback:
+                    await status_callback(
+                        "Decomposer", "system",
+                        f"🧩 Обнаружено {len(sub_tasks)} подзадач — запускаю параллельно...",
+                    )
+                return await self._execute_multi_task(
+                    sub_tasks, prompt, max_steps, status_callback,
+                )
+
         if task_type:
             chain = [task_type]
             chain_source = "task_type"
@@ -1135,6 +1209,67 @@ class PipelineExecutor:
         )
         logger.debug("Inference metrics recorded", model=used_model, latency_ms=round(elapsed_ms), role=role_name)
         return result
+
+    # ------------------------------------------------------------------
+    # v14.4: Multi-Task parallel execution
+    # ------------------------------------------------------------------
+
+    async def _execute_multi_task(
+        self,
+        sub_tasks: list[tuple[str, str]],
+        original_prompt: str,
+        max_steps: int,
+        status_callback,
+    ) -> Dict[str, Any]:
+        """Run decomposed sub-tasks concurrently, each routed to its brigade."""
+
+        async def _run_one(idx: int, text: str, brigade: str) -> Dict[str, Any]:
+            if status_callback:
+                await status_callback(
+                    "Decomposer", "system",
+                    f"🔀 Подзадача {idx + 1}/{len(sub_tasks)} → {brigade}",
+                )
+            return await self.execute(
+                prompt=text,
+                brigade=brigade,
+                max_steps=max_steps,
+                status_callback=status_callback,
+            )
+
+        tasks = [
+            _run_one(i, text, brigade)
+            for i, (text, brigade) in enumerate(sub_tasks)
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Merge results into one response
+        merged_parts: list[str] = []
+        all_steps: list[dict] = []
+        all_chains: list[str] = []
+        for i, (text, brigade) in enumerate(sub_tasks):
+            res = results[i]
+            if isinstance(res, Exception):
+                merged_parts.append(f"**Задача {i + 1}** ({brigade}): ⚠️ Ошибка: {res}")
+            else:
+                resp = res.get("final_response", "")
+                merged_parts.append(f"**Задача {i + 1}** ({brigade}):\n{resp}")
+                all_steps.extend(res.get("steps", []))
+                all_chains.extend(res.get("chain_executed", []))
+
+        final = "\n\n---\n\n".join(merged_parts)
+        logger.info(
+            "Multi-task decomposer complete",
+            n_subtasks=len(sub_tasks),
+            n_steps=len(all_steps),
+        )
+        return {
+            "final_response": final,
+            "brigade": "Multi-Task",
+            "chain_executed": all_chains,
+            "steps": all_steps,
+            "status": "completed",
+            "meta": {"decomposed": True, "n_subtasks": len(sub_tasks)},
+        }
 
     async def _force_unload(self, model: str):
         await force_unload(model)

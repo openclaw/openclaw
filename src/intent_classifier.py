@@ -18,7 +18,23 @@ async def classify_intent(gateway, prompt: str) -> str:
     LLM-based intent classification.
     Uses model from config (model_router.risk_analysis) for routing.
     Falls back to keyword matching if vLLM is unavailable.
+
+    v14.4: Fast-Intent — prefix commands bypass LLM entirely.
     """
+    # v14.4: Prefix command fast-path — zero latency routing
+    _PREFIX_MAP = {
+        "/dmarket": "Dmarket-Dev",
+        "/research": "Research-Ops",
+        "/openclaw": "OpenClaw-Core",
+        "/core": "OpenClaw-Core",
+        "/general": "General",
+    }
+    stripped = prompt.strip()
+    for prefix, brigade in _PREFIX_MAP.items():
+        if stripped.lower().startswith(prefix):
+            logger.info("Intent fast-path: prefix command", prefix=prefix, brigade=brigade)
+            return brigade
+
     # Check cache first (capped at 500 entries to prevent memory leak)
     cache_key = prompt.lower().strip()[:100]
     if cache_key in gateway._intent_cache:

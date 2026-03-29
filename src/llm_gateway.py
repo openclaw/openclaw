@@ -371,9 +371,12 @@ async def route_llm(
     result = ""
     used_provider = "none"
 
+    # v14.4: Intent tasks get max 1 retry (fast-fail to keyword fallback)
+    _retries = 1 if task_type == "intent" else 3
+
     api_key = _openrouter_config.get("api_key", "")
     if api_key and _openrouter_config.get("enabled", False):
-        result = await _call_openrouter(messages, selected_model, max_tokens, temperature)
+        result = await _call_openrouter(messages, selected_model, max_tokens, temperature, retries=_retries)
         if result:
             used_provider = "openrouter"
 
@@ -388,7 +391,7 @@ async def route_llm(
                     primary=selected_model,
                     fallback=fallback_model,
                 )
-                result = await _call_openrouter(messages, fallback_model, max_tokens, temperature)
+                result = await _call_openrouter(messages, fallback_model, max_tokens, temperature, retries=_retries)
                 if result:
                     used_provider = "openrouter"
 
