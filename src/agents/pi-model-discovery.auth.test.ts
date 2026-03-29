@@ -273,4 +273,111 @@ describe("discoverAuthStorage", () => {
       }
     });
   });
+
+  it("normalizes discovered Mistral compat flags for custom Mistral-hosted providers", async () => {
+    await withAgentDir(async (agentDir) => {
+      saveAuthProfileStore(
+        {
+          version: 1,
+          profiles: {
+            "custom-api-mistral-ai:default": {
+              type: "api_key",
+              provider: "custom-api-mistral-ai",
+              key: "mistral-custom-key",
+            },
+          },
+        },
+        agentDir,
+      );
+      await writeModelsJson(agentDir, {
+        providers: {
+          "custom-api-mistral-ai": {
+            api: "openai-completions",
+            baseUrl: "https://api.mistral.ai/v1",
+            apiKey: "custom-api-mistral-ai",
+            models: [
+              {
+                id: "mistral-small-latest",
+                name: "Mistral Small",
+                reasoning: true,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 262144,
+                maxTokens: 16384,
+              },
+            ],
+          },
+        },
+      });
+
+      const authStorage = discoverAuthStorage(agentDir);
+      const modelRegistry = discoverModels(authStorage, agentDir);
+      const model = modelRegistry.find("custom-api-mistral-ai", "mistral-small-latest") as {
+        compat?: {
+          supportsStore?: boolean;
+          supportsReasoningEffort?: boolean;
+          maxTokensField?: string;
+        };
+      } | null;
+
+      expect(model?.compat?.supportsStore).toBe(false);
+      expect(model?.compat?.supportsReasoningEffort).toBe(false);
+      expect(model?.compat?.maxTokensField).toBe("max_tokens");
+    });
+  });
+
+  it("normalizes discovered Mistral compat flags for OpenRouter Mistral model ids", async () => {
+    await withAgentDir(async (agentDir) => {
+      saveAuthProfileStore(
+        {
+          version: 1,
+          profiles: {
+            "openrouter:default": {
+              type: "api_key",
+              provider: "openrouter",
+              key: "sk-or-v1-runtime",
+            },
+          },
+        },
+        agentDir,
+      );
+      await writeModelsJson(agentDir, {
+        providers: {
+          openrouter: {
+            api: "openai-completions",
+            baseUrl: "https://openrouter.ai/api/v1",
+            apiKey: "OPENROUTER_API_KEY",
+            models: [
+              {
+                id: "mistralai/mistral-small-3.2-24b-instruct",
+                name: "Mistral Small via OpenRouter",
+                reasoning: true,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 262144,
+                maxTokens: 16384,
+              },
+            ],
+          },
+        },
+      });
+
+      const authStorage = discoverAuthStorage(agentDir);
+      const modelRegistry = discoverModels(authStorage, agentDir);
+      const model = modelRegistry.find(
+        "openrouter",
+        "mistralai/mistral-small-3.2-24b-instruct",
+      ) as {
+        compat?: {
+          supportsStore?: boolean;
+          supportsReasoningEffort?: boolean;
+          maxTokensField?: string;
+        };
+      } | null;
+
+      expect(model?.compat?.supportsStore).toBe(false);
+      expect(model?.compat?.supportsReasoningEffort).toBe(false);
+      expect(model?.compat?.maxTokensField).toBe("max_tokens");
+    });
+  });
 });
