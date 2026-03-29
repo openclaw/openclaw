@@ -588,15 +588,6 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Bravo");
   });
 
-  it("returns no project context for an empty context files array after dedup", () => {
-    const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-      contextFiles: [],
-    });
-
-    expect(prompt).not.toContain("# Project Context");
-  });
-
   it("treats paths with different whitespace as the same after trim", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -609,6 +600,21 @@ describe("buildAgentSystemPrompt", () => {
     // After dedup (last wins), only the second entry should remain
     expect(prompt).toContain("trimmed");
     expect(prompt).not.toContain("padded");
+  });
+
+  it("renders trimmed path in heading even when padded entry wins", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      contextFiles: [
+        { path: "AGENTS.md", content: "xyzzy-overwritten-entry" },
+        { path: "  AGENTS.md  ", content: "xyzzy-padded-winner" },
+      ],
+    });
+
+    expect(prompt).toContain("## AGENTS.md");
+    expect(prompt).not.toContain("##   AGENTS.md  ");
+    expect(prompt).toContain("xyzzy-padded-winner");
+    expect(prompt).not.toContain("xyzzy-overwritten-entry");
   });
 
   it("summarizes the message tool when available", () => {

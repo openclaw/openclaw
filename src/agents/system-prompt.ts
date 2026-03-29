@@ -626,7 +626,7 @@ export function buildAgentSystemPrompt(params: {
     }
     lines.push("");
     for (const file of dedupedContextFiles) {
-      lines.push(`## ${file.path}`, "", file.content, "");
+      lines.push(`## ${file.path.trim()}`, "", file.content, "");
     }
   }
 
