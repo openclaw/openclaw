@@ -5,7 +5,11 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { applyTestPluginDefaults, normalizePluginsConfig } from "./config-state.js";
 import { resolveRuntimePluginRegistry, type PluginLoadOptions } from "./loader.js";
 import { createPluginLoaderLogger } from "./logger.js";
-import { getActivePluginRegistry } from "./runtime.js";
+import {
+  getActivePluginRegistry,
+  getActivePluginRegistryKey,
+  getActivePluginRuntimeSubagentMode,
+} from "./runtime.js";
 import type { OpenClawPluginToolContext } from "./types.js";
 
 const log = createSubsystemLogger("plugins");
@@ -55,7 +59,11 @@ function resolvePluginToolRegistry(params: {
   loadOptions: PluginLoadOptions;
   allowGatewaySubagentBinding?: boolean;
 }) {
-  if (params.allowGatewaySubagentBinding) {
+  if (
+    params.allowGatewaySubagentBinding &&
+    getActivePluginRegistryKey() &&
+    getActivePluginRuntimeSubagentMode() === "gateway-bindable"
+  ) {
     return getActivePluginRegistry() ?? resolveRuntimePluginRegistry(params.loadOptions);
   }
   return resolveRuntimePluginRegistry(params.loadOptions);
