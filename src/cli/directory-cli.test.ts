@@ -14,8 +14,9 @@ function getRuntimeCapture(): CliRuntimeCapture {
 
 const mocks = vi.hoisted(() => ({
   loadConfig: vi.fn(),
+  readConfigFileSnapshot: vi.fn(),
   applyPluginAutoEnable: vi.fn(),
-  writeConfigFile: vi.fn(),
+  replaceConfigFile: vi.fn(),
   resolveInstallableChannelPlugin: vi.fn(),
   resolveMessageChannelSelection: vi.fn(),
   getChannelPlugin: vi.fn(),
@@ -24,7 +25,8 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../config/config.js", () => ({
   loadConfig: mocks.loadConfig,
-  writeConfigFile: mocks.writeConfigFile,
+  readConfigFileSnapshot: mocks.readConfigFileSnapshot,
+  replaceConfigFile: mocks.replaceConfigFile,
 }));
 
 vi.mock("../config/plugin-auto-enable.js", () => ({
@@ -58,8 +60,9 @@ describe("registerDirectoryCli", () => {
     vi.clearAllMocks();
     getRuntimeCapture().resetRuntimeCapture();
     mocks.loadConfig.mockReturnValue({ channels: {} });
+    mocks.readConfigFileSnapshot.mockResolvedValue({ hash: "config-1" });
     mocks.applyPluginAutoEnable.mockImplementation(({ config }) => ({ config, changes: [] }));
-    mocks.writeConfigFile.mockResolvedValue(undefined);
+    mocks.replaceConfigFile.mockResolvedValue(undefined);
     mocks.resolveChannelDefaultAccountId.mockReturnValue("default");
     mocks.resolveMessageChannelSelection.mockResolvedValue({
       channel: "demo-channel",
@@ -99,11 +102,12 @@ describe("registerDirectoryCli", () => {
         allowInstall: true,
       }),
     );
-    expect(mocks.writeConfigFile).toHaveBeenCalledWith(
-      expect.objectContaining({
+    expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
+      nextConfig: expect.objectContaining({
         plugins: { entries: { "demo-directory": { enabled: true } } },
       }),
-    );
+      baseHash: "config-1",
+    });
     expect(self).toHaveBeenCalledWith(
       expect.objectContaining({
         accountId: "default",
@@ -150,6 +154,9 @@ describe("registerDirectoryCli", () => {
         cfg: autoEnabledConfig,
       }),
     );
-    expect(mocks.writeConfigFile).toHaveBeenCalledWith(autoEnabledConfig);
+    expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
+      nextConfig: autoEnabledConfig,
+      baseHash: "config-1",
+    });
   });
 });
