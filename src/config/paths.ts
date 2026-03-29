@@ -299,8 +299,9 @@ export function resolveGatewayPort(
 export async function applyGatewayRuntimePortEnvOverride(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<void> {
-  // Skip if already set
-  if (env.OPENCLAW_GATEWAY_PORT?.trim()) {
+  // Skip if already set (check both legacy CLAWDBOT_GATEWAY_PORT and current
+  // OPENCLAW_GATEWAY_PORT env vars to preserve backward compatibility)
+  if (env.OPENCLAW_GATEWAY_PORT?.trim() || env.CLAWDBOT_GATEWAY_PORT?.trim()) {
     return;
   }
 

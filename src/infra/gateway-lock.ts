@@ -151,7 +151,16 @@ async function readLockPayload(lockPath: string): Promise<LockPayload | null> {
       return null;
     }
     const startTime = typeof parsed.startTime === "number" ? parsed.startTime : undefined;
-    const port = typeof parsed.port === "number" ? parsed.port : undefined;
+    // Validate port range to prevent ERR_SOCKET_BAD_PORT when probing via
+    // net.createConnection in resolveGatewayOwnerStatus. Out-of-range ports
+    // (e.g., 70000, -1) should be treated as missing.
+    const port =
+      typeof parsed.port === "number" &&
+      Number.isFinite(parsed.port) &&
+      parsed.port > 0 &&
+      parsed.port <= 65535
+        ? parsed.port
+        : undefined;
     return {
       pid: parsed.pid,
       createdAt: parsed.createdAt,
