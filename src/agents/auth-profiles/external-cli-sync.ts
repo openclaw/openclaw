@@ -120,8 +120,58 @@ function syncExternalCliCredentialsForProvider(
 }
 
 /**
+ * Sync env-var-backed token credentials into the store.
+ *
+ * When `openclaw.json` declares `auth.profiles["provider:label"] = { mode: "token" }`,
+ * the actual bearer token may live in an env var (loaded from credentials/*.env).
+ * The gateway's main session picks this up at boot, but the per-agent
+ * `auth-profiles.json` can go stale after token refresh.  This function
+ * resolves the env var and patches the store entry so the embedded runner
+ * always sees the current token.
+ *
+ * Env var naming convention: the profile id is upper-cased with `:` and `.`
+ * replaced by `_`, suffixed with `_TOKEN`.
+ * E.g. `anthropic:me.com` → `ANTHROPIC_ME_COM_TOKEN`.
+ */
+function syncEnvBackedTokenCredentials(
+  store: AuthProfileStore,
+  options: ExternalCliSyncOptions,
+): boolean {
+  let mutated = false;
+
+  for (const [profileId, credential] of Object.entries(store.profiles)) {
+    if (credential.type !== "token") {
+      continue;
+    }
+
+    // Derive the expected env var name from the profile id.
+    const envVarName = profileId.toUpperCase().replace(/[:.]/g, "_") + "_TOKEN";
+    const envValue = process.env[envVarName]?.trim();
+    if (!envValue) {
+      continue;
+    }
+
+    const existing = credential;
+    if (existing.token === envValue) {
+      continue;
+    }
+
+    existing.token = envValue;
+    mutated = true;
+
+    if (options.log !== false) {
+      log.info(`synced token credential from env var ${envVarName}`, {
+        profileId,
+      });
+    }
+  }
+
+  return mutated;
+}
+
+/**
  * Sync OAuth credentials from external CLI tools (MiniMax CLI, Codex CLI)
- * into the store.
+ * and env-var-backed token credentials into the store.
  *
  * Returns true if any credentials were updated.
  */
@@ -135,6 +185,10 @@ export function syncExternalCliCredentials(
     if (syncExternalCliCredentialsForProvider(store, provider, options)) {
       mutated = true;
     }
+  }
+
+  if (syncEnvBackedTokenCredentials(store, options)) {
+    mutated = true;
   }
 
   return mutated;

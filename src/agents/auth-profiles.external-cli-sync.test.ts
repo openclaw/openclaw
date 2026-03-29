@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AuthProfileStore, OAuthCredential } from "./auth-profiles/types.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AuthProfileStore, OAuthCredential, TokenCredential } from "./auth-profiles/types.js";
 
 const mocks = vi.hoisted(() => ({
   readCodexCliCredentialsCached: vi.fn<() => OAuthCredential | null>(() => null),
@@ -178,6 +178,87 @@ describe("syncExternalCliCredentials", () => {
       access: "new-access-token",
       refresh: "new-refresh-token",
       expires: freshExpiry,
+    });
+  });
+
+  describe("syncEnvBackedTokenCredentials", () => {
+    const ENV_KEY = "ANTHROPIC_ME_COM_TOKEN";
+
+    afterEach(() => {
+      delete process.env[ENV_KEY];
+    });
+
+    it("syncs token from env var into matching store entry", () => {
+      process.env[ENV_KEY] = "sk-ant-fresh-token";
+
+      const store: AuthProfileStore = {
+        version: 1,
+        profiles: {
+          "anthropic:me.com": {
+            type: "token",
+            provider: "anthropic",
+            token: "sk-ant-stale-token",
+          } as TokenCredential,
+        },
+      };
+
+      const mutated = syncExternalCliCredentials(store);
+
+      expect(mutated).toBe(true);
+      expect((store.profiles["anthropic:me.com"] as TokenCredential).token).toBe(
+        "sk-ant-fresh-token",
+      );
+    });
+
+    it("skips sync when env var matches stored token", () => {
+      process.env[ENV_KEY] = "sk-ant-same-token";
+
+      const store: AuthProfileStore = {
+        version: 1,
+        profiles: {
+          "anthropic:me.com": {
+            type: "token",
+            provider: "anthropic",
+            token: "sk-ant-same-token",
+          } as TokenCredential,
+        },
+      };
+
+      const mutated = syncExternalCliCredentials(store);
+
+      expect(mutated).toBe(false);
+    });
+
+    it("skips sync when env var is not set", () => {
+      const store: AuthProfileStore = {
+        version: 1,
+        profiles: {
+          "anthropic:me.com": {
+            type: "token",
+            provider: "anthropic",
+            token: "sk-ant-existing",
+          } as TokenCredential,
+        },
+      };
+
+      const mutated = syncExternalCliCredentials(store);
+
+      expect(mutated).toBe(false);
+    });
+
+    it("does not touch non-token profile types", () => {
+      process.env.OPENAI_CODEX_DEFAULT_TOKEN = "should-not-apply";
+
+      const oauthCred = makeOAuthCredential({ provider: "openai-codex" });
+      const store = makeStore(OPENAI_CODEX_DEFAULT_PROFILE_ID, oauthCred);
+
+      syncExternalCliCredentials(store);
+
+      expect(store.profiles[OPENAI_CODEX_DEFAULT_PROFILE_ID]).toMatchObject({
+        type: "oauth",
+      });
+
+      delete process.env.OPENAI_CODEX_DEFAULT_TOKEN;
     });
   });
 
