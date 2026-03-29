@@ -74,4 +74,29 @@ describe("skills hub lockfile", () => {
     const parsed = await readHubLockfile(lockPath);
     expect(parsed.skills.map((skill) => skill.name)).toEqual(["alpha", "zeta"]);
   });
+
+  it("drops skill rows missing required lockfile fields", async () => {
+    const dir = await makeTmpDir();
+    const lockPath = path.join(dir, "hub.lock.json");
+    await fs.writeFile(
+      lockPath,
+      `${JSON.stringify({
+        lockfileVersion: 1,
+        skills: [
+          { name: "incomplete" },
+          {
+            name: "ok",
+            source: "github",
+            url: "https://github.com/acme/ok",
+            ref: "abc",
+            contentHash: "hash-ok",
+            scan: { critical: 0, warn: 0, info: 0, verdict: "safe" },
+          },
+        ],
+      })}\n`,
+      "utf-8",
+    );
+    const parsed = await readHubLockfile(lockPath);
+    expect(parsed.skills.map((s) => s.name)).toEqual(["ok"]);
+  });
 });
