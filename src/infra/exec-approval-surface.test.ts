@@ -19,9 +19,13 @@ async function loadExecApprovalSurfaceModule() {
   normalizeMessageChannelMock.mockImplementation((value?: string | null) =>
     typeof value === "string" ? value.trim().toLowerCase() : undefined,
   );
-  vi.doMock("../config/config.js", () => ({
-    loadConfig: (...args: unknown[]) => loadConfigMock(...args),
-  }));
+  vi.doMock("../config/config.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../config/config.js")>();
+    return {
+      ...actual,
+      loadConfig: (...args: unknown[]) => loadConfigMock(...args),
+    };
+  });
   vi.doMock("../channels/plugins/index.js", () => ({
     getChannelPlugin: (...args: unknown[]) => getChannelPluginMock(...args),
     listChannelPlugins: (...args: unknown[]) => listChannelPluginsMock(...args),

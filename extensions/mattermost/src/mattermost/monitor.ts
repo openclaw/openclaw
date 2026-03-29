@@ -1,33 +1,3 @@
-import type {
-  ChannelAccountSnapshot,
-  ChatType,
-  OpenClawConfig,
-  ReplyPayload,
-  RuntimeEnv,
-} from "../runtime-api.js";
-import {
-  buildAgentMediaPayload,
-  buildModelsProviderData,
-  DM_GROUP_ACCESS_REASON,
-  createChannelPairingController,
-  createChannelReplyPipeline,
-  logInboundDrop,
-  logTypingFailure,
-  buildPendingHistoryContextFromMap,
-  clearHistoryEntriesIfEnabled,
-  DEFAULT_GROUP_HISTORY_LIMIT,
-  recordPendingHistoryEntryIfEnabled,
-  isDangerousNameMatchingEnabled,
-  registerPluginHttpRoute,
-  resolveControlCommandGate,
-  readStoreAllowFromForDmPolicy,
-  resolveDmGroupAccessWithLists,
-  resolveAllowlistProviderRuntimeGroupPolicy,
-  resolveDefaultGroupPolicy,
-  resolveChannelMediaMaxBytes,
-  warnMissingProviderGroupPolicyFallbackOnce,
-  type HistoryEntry,
-} from "../runtime-api.js";
 import { getMattermostRuntime } from "../runtime.js";
 import { resolveMattermostAccount, resolveMattermostReplyToMode } from "./accounts.js";
 import {
@@ -82,6 +52,36 @@ import {
 } from "./monitor-websocket.js";
 import { runWithReconnect } from "./reconnect.js";
 import { deliverMattermostReplyPayload } from "./reply-delivery.js";
+import type {
+  ChannelAccountSnapshot,
+  ChatType,
+  OpenClawConfig,
+  ReplyPayload,
+  RuntimeEnv,
+} from "./runtime-api.js";
+import {
+  buildAgentMediaPayload,
+  buildModelsProviderData,
+  DM_GROUP_ACCESS_REASON,
+  createChannelPairingController,
+  createChannelReplyPipeline,
+  logInboundDrop,
+  logTypingFailure,
+  buildPendingHistoryContextFromMap,
+  clearHistoryEntriesIfEnabled,
+  DEFAULT_GROUP_HISTORY_LIMIT,
+  recordPendingHistoryEntryIfEnabled,
+  isDangerousNameMatchingEnabled,
+  registerPluginHttpRoute,
+  resolveControlCommandGate,
+  readStoreAllowFromForDmPolicy,
+  resolveDmGroupAccessWithLists,
+  resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
+  resolveChannelMediaMaxBytes,
+  warnMissingProviderGroupPolicyFallbackOnce,
+  type HistoryEntry,
+} from "./runtime-api.js";
 import { sendMessageMattermost } from "./send.js";
 import { cleanupSlashCommands } from "./slash-commands.js";
 import { deactivateSlashCommands, getSlashCommandState } from "./slash-state.js";

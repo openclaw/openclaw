@@ -2,9 +2,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const loadConfigMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../config/config.js", () => ({
-  loadConfig: () => loadConfigMock(),
-}));
+vi.mock("../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  return {
+    ...actual,
+    loadConfig: () => loadConfigMock(),
+  };
+});
 
 const originalArgv = process.argv;
 

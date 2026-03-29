@@ -39,14 +39,18 @@ const mockState = vi.hoisted(() => ({
   normalizeMattermostAllowList: vi.fn((value: unknown) => value),
 }));
 
-vi.mock("openclaw/plugin-sdk/mattermost", () => ({
-  buildModelsProviderData: mockState.buildModelsProviderData,
-  createReplyPrefixOptions: vi.fn(() => ({})),
-  createTypingCallbacks: vi.fn(() => ({ onReplyStart: vi.fn() })),
-  isRequestBodyLimitError: vi.fn(() => false),
-  logTypingFailure: vi.fn(),
-  readRequestBodyWithLimit: mockState.readRequestBodyWithLimit,
-}));
+vi.mock("./runtime-api.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./runtime-api.js")>();
+  return {
+    ...actual,
+    buildModelsProviderData: mockState.buildModelsProviderData,
+    createReplyPrefixOptions: vi.fn(() => ({})),
+    createTypingCallbacks: vi.fn(() => ({ onReplyStart: vi.fn() })),
+    isRequestBodyLimitError: vi.fn(() => false),
+    logTypingFailure: vi.fn(),
+    readRequestBodyWithLimit: mockState.readRequestBodyWithLimit,
+  };
+});
 
 vi.mock("../runtime.js", () => ({
   getMattermostRuntime: () => ({
