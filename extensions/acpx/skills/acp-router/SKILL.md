@@ -102,7 +102,7 @@ Required behavior when ACP backend is unavailable:
 
 1. Do not immediately ask the user to pick an alternate path.
 2. First attempt automatic local repair:
-   - ensure plugin-local pinned acpx is installed in `extensions/acpx`
+   - ensure plugin-local pinned acpx is installed in the bundled ACPX plugin package
    - verify `${ACPX_CMD} --version`
 3. After reinstall/repair, restart the gateway and explicitly offer to run that restart for the user.
 4. Retry ACP thread spawn once after repair.
@@ -120,20 +120,21 @@ Do not default to subagent runtime for these requests.
 For this repo, direct `acpx` calls must follow the same pinned policy as the `@openclaw/acpx` extension package.
 
 1. Prefer plugin-local binary, not global PATH:
-   - `./extensions/acpx/node_modules/.bin/acpx`
+   - `${ACPX_PLUGIN_ROOT}/node_modules/.bin/acpx`
 2. Resolve pinned version from extension dependency:
-   - `node -e "console.log(require('./extensions/acpx/package.json').dependencies.acpx)"`
+   - `node -e "console.log(require(process.env.ACPX_PLUGIN_ROOT + '/package.json').dependencies.acpx)"`
 3. If binary is missing or version mismatched, install plugin-local pinned version:
-   - `cd extensions/acpx && npm install --omit=dev --no-save acpx@<pinnedVersion>`
+   - `cd "$ACPX_PLUGIN_ROOT" && npm install --omit=dev --no-save acpx@<pinnedVersion>`
 4. Verify before use:
-   - `./extensions/acpx/node_modules/.bin/acpx --version`
+   - `${ACPX_PLUGIN_ROOT}/node_modules/.bin/acpx --version`
 5. If install/repair changed ACPX artifacts, restart the gateway and offer to run the restart.
 6. Do not run `npm install -g acpx` unless the user explicitly asks for global install.
 
 Set and reuse:
 
 ```bash
-ACPX_CMD="./extensions/acpx/node_modules/.bin/acpx"
+ACPX_PLUGIN_ROOT="<bundled-acpx-plugin-root>"
+ACPX_CMD="$ACPX_PLUGIN_ROOT/node_modules/.bin/acpx"
 ```
 
 ## Direct acpx path ("telephone game")
@@ -227,7 +228,7 @@ If your local Cursor install still exposes ACP as `agent acp`, set that as the `
 ### Failure handling
 
 - `acpx: command not found`:
-  - for thread-spawn ACP requests, install plugin-local pinned acpx in `extensions/acpx` immediately
+  - for thread-spawn ACP requests, install plugin-local pinned acpx in the bundled ACPX plugin package immediately
   - restart gateway after install and offer to run the restart automatically
   - then retry once
   - do not ask for install permission first unless policy explicitly requires it

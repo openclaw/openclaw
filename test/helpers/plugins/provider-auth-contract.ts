@@ -3,6 +3,7 @@ import { clearRuntimeAuthProfileStoreSnapshots } from "../../../src/agents/auth-
 import type { AuthProfileStore } from "../../../src/agents/auth-profiles/types.js";
 import { registerProviders, requireProvider } from "../../../src/plugins/contracts/testkit.js";
 import { createNonExitingRuntime } from "../../../src/runtime.js";
+import { loadBundledPluginPublicSurfaceSync } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 import type {
   WizardMultiSelectParams,
   WizardPrompter,
@@ -44,8 +45,18 @@ vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => {
   };
 });
 
-import githubCopilotPlugin from "../../../extensions/github-copilot/index.js";
-import openAIPlugin from "../../../extensions/openai/index.js";
+const { default: githubCopilotPlugin } = loadBundledPluginPublicSurfaceSync<{
+  default: Parameters<typeof registerProviders>[0];
+}>({
+  pluginId: "github-copilot",
+  artifactBasename: "index.js",
+});
+const { default: openAIPlugin } = loadBundledPluginPublicSurfaceSync<{
+  default: Parameters<typeof registerProviders>[0];
+}>({
+  pluginId: "openai",
+  artifactBasename: "index.js",
+});
 
 function buildPrompter(): WizardPrompter {
   const progress: WizardProgress = {

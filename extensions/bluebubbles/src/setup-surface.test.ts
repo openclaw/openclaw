@@ -6,7 +6,7 @@ import {
   createTestWizardPrompter,
   runSetupWizardConfigure,
   type WizardPrompter,
-} from "../../../test/helpers/extensions/setup-wizard.js";
+} from "../../../test/helpers/plugins/setup-wizard.js";
 import { resolveBlueBubblesAccount } from "./accounts.js";
 import { BlueBubblesConfigSchema } from "./config-schema.js";
 import {

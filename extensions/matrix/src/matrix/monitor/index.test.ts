@@ -1,7 +1,7 @@
 import path from "node:path";
 import { z } from "openclaw/plugin-sdk/zod";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { loadRuntimeApiExportTypesViaJiti } from "../../../../../test/helpers/extensions/jiti-runtime-api.ts";
+import { loadRuntimeApiExportTypesViaJiti } from "../../../../../test/helpers/plugins/jiti-runtime-api.ts";
 
 const hoisted = vi.hoisted(() => {
   const callOrder: string[] = [];
@@ -110,10 +110,6 @@ vi.mock("../../runtime-api.js", () => {
 
 vi.mock("../../resolve-targets.js", () => ({
   resolveMatrixTargets: vi.fn(async () => []),
-}));
-
-vi.mock("../../../../../src/generated/bundled-channel-entries.generated.ts", () => ({
-  GENERATED_BUNDLED_CHANNEL_ENTRIES: [],
 }));
 
 vi.mock("../../runtime.js", () => ({

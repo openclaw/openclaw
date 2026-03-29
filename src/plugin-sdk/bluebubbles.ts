@@ -1,17 +1,44 @@
+import type { OpenClawConfig } from "../config/config.js";
+import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
 import {
   parseChatTargetPrefixesOrThrow,
   resolveServicePrefixedTarget,
   type ParsedChatTarget,
 } from "./imessage-targets.js";
 
-// Narrow plugin-sdk surface for the bundled bluebubbles plugin.
-// Keep this list additive and scoped to symbols used under extensions/bluebubbles.
+// Narrow plugin-sdk surface for the bundled BlueBubbles plugin.
+// Keep this list additive and scoped to the conversation-binding seam only.
 
 type BlueBubblesService = "imessage" | "sms" | "auto";
 
 type BlueBubblesTarget =
   | ParsedChatTarget
   | { kind: "handle"; to: string; service: BlueBubblesService };
+
+export type BlueBubblesConversationBindingManager = {
+  stop: () => void;
+};
+
+type BlueBubblesFacadeModule = {
+  createBlueBubblesConversationBindingManager: (params: {
+    accountId?: string;
+    cfg: OpenClawConfig;
+  }) => BlueBubblesConversationBindingManager;
+};
+
+function loadBlueBubblesFacadeModule(): BlueBubblesFacadeModule {
+  return loadBundledPluginPublicSurfaceModuleSync<BlueBubblesFacadeModule>({
+    dirName: "bluebubbles",
+    artifactBasename: "api.js",
+  });
+}
+
+export function createBlueBubblesConversationBindingManager(params: {
+  accountId?: string;
+  cfg: OpenClawConfig;
+}): BlueBubblesConversationBindingManager {
+  return loadBlueBubblesFacadeModule().createBlueBubblesConversationBindingManager(params);
+}
 
 const CHAT_ID_PREFIXES = ["chat_id:", "chatid:", "chat:"];
 const CHAT_GUID_PREFIXES = ["chat_guid:", "chatguid:", "guid:"];

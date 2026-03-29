@@ -1,3 +1,3 @@
-import { describeVeniceProviderRuntimeContract } from "../../test/helpers/extensions/provider-runtime-contract.js";
+import { describeVeniceProviderRuntimeContract } from "../../test/helpers/plugins/provider-runtime-contract.js";
 
 describeVeniceProviderRuntimeContract();

@@ -2,6 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, describe, expect, it, vi } from "vitest";
+import {
+  bundledDistPluginFile,
+  bundledPluginFile,
+  bundledPluginRoot,
+} from "../../test/helpers/bundled-plugin-paths.js";
 import { withEnv } from "../test-utils/env.js";
 import {
   buildPluginLoaderAliasMap,
@@ -530,7 +535,10 @@ describe("plugin sdk alias helpers", () => {
 
   it("builds plugin-sdk aliases from the module being loaded, not the loader location", () => {
     const { fixture, sourceRootAlias, distRootAlias } = createPluginSdkAliasTargetFixture();
-    const sourcePluginEntry = writePluginEntry(fixture.root, "extensions/demo/src/index.ts");
+    const sourcePluginEntry = writePluginEntry(
+      fixture.root,
+      bundledPluginFile("demo", "src/index.ts"),
+    );
 
     const sourceAliases = withEnv({ NODE_ENV: undefined }, () =>
       buildPluginLoaderAliasMap(sourcePluginEntry),
@@ -540,7 +548,10 @@ describe("plugin sdk alias helpers", () => {
       channelRuntimePath: path.join(fixture.root, "src", "plugin-sdk", "channel-runtime.ts"),
     });
 
-    const distPluginEntry = writePluginEntry(fixture.root, "dist/extensions/demo/index.js");
+    const distPluginEntry = writePluginEntry(
+      fixture.root,
+      bundledDistPluginFile("demo", "index.js"),
+    );
 
     const distAliases = withEnv({ NODE_ENV: undefined }, () =>
       buildPluginLoaderAliasMap(distPluginEntry),
@@ -553,7 +564,10 @@ describe("plugin sdk alias helpers", () => {
 
   it("applies explicit dist resolution to plugin-sdk subpath aliases too", () => {
     const { fixture, distRootAlias } = createPluginSdkAliasTargetFixture();
-    const sourcePluginEntry = writePluginEntry(fixture.root, "extensions/demo/src/index.ts");
+    const sourcePluginEntry = writePluginEntry(
+      fixture.root,
+      bundledPluginFile("demo", "src/index.ts"),
+    );
 
     const distAliases = withEnv({ NODE_ENV: undefined }, () =>
       buildPluginLoaderAliasMap(sourcePluginEntry, undefined, undefined, "dist"),
@@ -663,7 +677,9 @@ describe("plugin sdk alias helpers", () => {
 
   it("uses transpiled Jiti loads for source TypeScript plugin entries", () => {
     expect(shouldPreferNativeJiti("/repo/dist/plugins/runtime/index.js")).toBe(true);
-    expect(shouldPreferNativeJiti("/repo/extensions/discord/src/channel.runtime.ts")).toBe(false);
+    expect(
+      shouldPreferNativeJiti(`/repo/${bundledPluginFile("discord", "src/channel.runtime.ts")}`),
+    ).toBe(false);
   });
 
   it("disables native Jiti loads under Bun even for built JavaScript entries", () => {
@@ -678,7 +694,9 @@ describe("plugin sdk alias helpers", () => {
 
     try {
       expect(shouldPreferNativeJiti("/repo/dist/plugins/runtime/index.js")).toBe(false);
-      expect(shouldPreferNativeJiti("/repo/dist/extensions/browser/index.js")).toBe(false);
+      expect(shouldPreferNativeJiti(`/repo/${bundledDistPluginFile("browser", "index.js")}`)).toBe(
+        false,
+      );
     } finally {
       Object.defineProperty(process, "versions", {
         configurable: true,
@@ -688,7 +706,7 @@ describe("plugin sdk alias helpers", () => {
   });
 
   it("loads source runtime shims through the non-native Jiti boundary", async () => {
-    const copiedExtensionRoot = path.join(makeTempDir(), "extensions", "discord");
+    const copiedExtensionRoot = path.join(makeTempDir(), bundledPluginRoot("discord"));
     const copiedSourceDir = path.join(copiedExtensionRoot, "src");
     const copiedPluginSdkDir = path.join(copiedExtensionRoot, "plugin-sdk");
     mkdirSafeDir(copiedSourceDir);

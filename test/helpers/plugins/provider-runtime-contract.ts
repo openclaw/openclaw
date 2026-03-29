@@ -5,6 +5,10 @@ import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderPlugin, ProviderRuntimeModel } from "../../../src/plugins/types.js";
 import {
+  loadBundledPluginPublicSurfaceSync,
+  resolveRelativeBundledPluginPublicModuleId,
+} from "../../../src/test-utils/bundled-plugin-public-surface.js";
+import {
   createProviderUsageFetch,
   makeResponse,
 } from "../../../src/test-utils/provider-usage-fetch.js";
@@ -32,7 +36,13 @@ vi.mock("@mariozechner/pi-ai/oauth", async () => {
   };
 });
 
-vi.mock("../../../extensions/openai/openai-codex-provider.runtime.js", () => ({
+const openAICodexProviderRuntimeModuleId = resolveRelativeBundledPluginPublicModuleId({
+  fromModuleUrl: import.meta.url,
+  pluginId: "openai",
+  artifactBasename: "openai-codex-provider.runtime.js",
+});
+
+vi.mock(openAICodexProviderRuntimeModuleId, () => ({
   refreshOpenAICodexToken: refreshOpenAICodexTokenMock,
 }));
 
@@ -63,49 +73,97 @@ const PROVIDER_RUNTIME_CONTRACT_FIXTURES: readonly ProviderRuntimeContractFixtur
     providerIds: ["anthropic"],
     pluginId: "anthropic",
     name: "Anthropic",
-    load: async () => await import("../../../extensions/anthropic/index.ts"),
+    load: async () =>
+      loadBundledPluginPublicSurfaceSync<{
+        default: Parameters<typeof registerProviderPlugin>[0]["plugin"];
+      }>({
+        pluginId: "anthropic",
+        artifactBasename: "index.js",
+      }),
   },
   {
     providerIds: ["github-copilot"],
     pluginId: "github-copilot",
     name: "GitHub Copilot",
-    load: async () => await import("../../../extensions/github-copilot/index.ts"),
+    load: async () =>
+      loadBundledPluginPublicSurfaceSync<{
+        default: Parameters<typeof registerProviderPlugin>[0]["plugin"];
+      }>({
+        pluginId: "github-copilot",
+        artifactBasename: "index.js",
+      }),
   },
   {
     providerIds: ["google", "google-gemini-cli"],
     pluginId: "google",
     name: "Google",
-    load: async () => await import("../../../extensions/google/index.ts"),
+    load: async () =>
+      loadBundledPluginPublicSurfaceSync<{
+        default: Parameters<typeof registerProviderPlugin>[0]["plugin"];
+      }>({
+        pluginId: "google",
+        artifactBasename: "index.js",
+      }),
   },
   {
     providerIds: ["openai", "openai-codex"],
     pluginId: "openai",
     name: "OpenAI",
-    load: async () => await import("../../../extensions/openai/index.ts"),
+    load: async () =>
+      loadBundledPluginPublicSurfaceSync<{
+        default: Parameters<typeof registerProviderPlugin>[0]["plugin"];
+      }>({
+        pluginId: "openai",
+        artifactBasename: "index.js",
+      }),
   },
   {
     providerIds: ["openrouter"],
     pluginId: "openrouter",
     name: "OpenRouter",
-    load: async () => await import("../../../extensions/openrouter/index.ts"),
+    load: async () =>
+      loadBundledPluginPublicSurfaceSync<{
+        default: Parameters<typeof registerProviderPlugin>[0]["plugin"];
+      }>({
+        pluginId: "openrouter",
+        artifactBasename: "index.js",
+      }),
   },
   {
     providerIds: ["venice"],
     pluginId: "venice",
     name: "Venice",
-    load: async () => await import("../../../extensions/venice/index.ts"),
+    load: async () =>
+      loadBundledPluginPublicSurfaceSync<{
+        default: Parameters<typeof registerProviderPlugin>[0]["plugin"];
+      }>({
+        pluginId: "venice",
+        artifactBasename: "index.js",
+      }),
   },
   {
     providerIds: ["xai"],
     pluginId: "xai",
     name: "xAI",
-    load: async () => await import("../../../extensions/xai/index.ts"),
+    load: async () =>
+      loadBundledPluginPublicSurfaceSync<{
+        default: Parameters<typeof registerProviderPlugin>[0]["plugin"];
+      }>({
+        pluginId: "xai",
+        artifactBasename: "index.js",
+      }),
   },
   {
     providerIds: ["zai"],
     pluginId: "zai",
     name: "Z.AI",
-    load: async () => await import("../../../extensions/zai/index.ts"),
+    load: async () =>
+      loadBundledPluginPublicSurfaceSync<{
+        default: Parameters<typeof registerProviderPlugin>[0]["plugin"];
+      }>({
+        pluginId: "zai",
+        artifactBasename: "index.js",
+      }),
   },
 ] as const;
 

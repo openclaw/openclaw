@@ -1,5 +1,5 @@
 // Private helper surface for the bundled mattermost plugin.
-// Keep this list additive and scoped to symbols used under extensions/mattermost.
+// Keep this list additive and scoped to the bundled Mattermost surface.
 
 export { formatInboundFromLabel } from "../auto-reply/envelope.js";
 export type { HistoryEntry } from "../auto-reply/reply/history.js";

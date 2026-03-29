@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../../../src/plugins/registry.js";
 import { setActivePluginRegistry } from "../../../src/plugins/runtime.js";
-import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
+import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
 import type { OpenClawConfig } from "../runtime-api.js";
 import type { ResolvedZaloAccount } from "./accounts.js";
 

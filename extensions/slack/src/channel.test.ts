@@ -1,6 +1,6 @@
 import { Type } from "@sinclair/typebox";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
+import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
 import { slackPlugin } from "./channel.js";
 import { slackOutbound } from "./outbound-adapter.js";
 import * as probeModule from "./probe.js";
