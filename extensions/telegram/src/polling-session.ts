@@ -204,6 +204,10 @@ export class TelegramPollingSession {
     await this.#confirmPersistedOffset(bot);
 
     let lastGetUpdatesAt = Date.now();
+    let lastApiActivityAt = Date.now();
+    let nextInFlightApiCallId = 0;
+    let latestInFlightApiStartedAt: number | null = null;
+    const inFlightApiStartedAt = new Map<number, number>();
     let lastGetUpdatesStartedAt: number | null = null;
     let lastGetUpdatesFinishedAt: number | null = null;
     let lastGetUpdatesDurationMs: number | null = null;
@@ -216,7 +220,31 @@ export class TelegramPollingSession {
 
     bot.api.config.use(async (prev, method, payload, signal) => {
       if (method !== "getUpdates") {
-        return prev(method, payload, signal);
+        const startedAt = Date.now();
+        const callId = nextInFlightApiCallId;
+        nextInFlightApiCallId += 1;
+        inFlightApiStartedAt.set(callId, startedAt);
+        latestInFlightApiStartedAt =
+          latestInFlightApiStartedAt == null
+            ? startedAt
+            : Math.max(latestInFlightApiStartedAt, startedAt);
+        try {
+          const result = await prev(method, payload, signal);
+          lastApiActivityAt = Date.now();
+          return result;
+        } finally {
+          inFlightApiStartedAt.delete(callId);
+          if (latestInFlightApiStartedAt === startedAt) {
+            let newestStartedAt: number | null = null;
+            for (const activeStartedAt of inFlightApiStartedAt.values()) {
+              newestStartedAt =
+                newestStartedAt == null
+                  ? activeStartedAt
+                  : Math.max(newestStartedAt, activeStartedAt);
+            }
+            latestInFlightApiStartedAt = newestStartedAt;
+          }
+        }
       }
 
       const startedAt = Date.now();
@@ -301,8 +329,20 @@ export class TelegramPollingSession {
       const idleElapsed =
         inFlightGetUpdates > 0 ? 0 : now - (lastGetUpdatesFinishedAt ?? lastGetUpdatesAt);
       const elapsed = inFlightGetUpdates > 0 ? activeElapsed : idleElapsed;
+      const apiLivenessAt =
+        latestInFlightApiStartedAt == null
+          ? lastApiActivityAt
+          : Math.max(lastApiActivityAt, latestInFlightApiStartedAt);
+      const apiElapsed = now - apiLivenessAt;
 
-      if (elapsed > POLL_STALL_THRESHOLD_MS && runner.isRunning()) {
+      // Treat recent non-getUpdates success and recent non-getUpdates start as
+      // the same liveness signal. Slow delivery should suppress the watchdog,
+      // but only for the same bounded window as recent successful API traffic.
+      if (
+        elapsed > POLL_STALL_THRESHOLD_MS &&
+        apiElapsed > POLL_STALL_THRESHOLD_MS &&
+        runner.isRunning()
+      ) {
         if (stallDiagLoggedAt && now - stallDiagLoggedAt < POLL_STALL_THRESHOLD_MS / 2) {
           return;
         }
