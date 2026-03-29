@@ -2,8 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveBrewExecutable } from "../infra/brew.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { createBeforeInstallHookPayload } from "../plugins/install-policy-context.js";
+import type { PluginHookBeforeInstallBuiltinScan } from "../plugins/types.js";
 import { runCommandWithTimeout, type CommandOptions } from "../process/exec.js";
-import { scanDirectoryWithSummary } from "../security/skill-scanner.js";
+import { scanDirectoryWithSummary, type SkillScanSummary } from "../security/skill-scanner.js";
 import { resolveUserPath } from "../utils.js";
 import { enforceManagedScanPolicy } from "./skills-hub/managed.js";
 import { installDownloadSpec } from "./skills-install-download.js";
@@ -57,16 +60,44 @@ function formatScanFindingDetail(
   return `${finding.message} (${filePath}:${finding.line})`;
 }
 
+function skillScanSummaryToBuiltinScan(
+  summary: SkillScanSummary,
+  status: "ok" | "error",
+  error?: string,
+): PluginHookBeforeInstallBuiltinScan {
+  return {
+    status,
+    scannedFiles: summary.scannedFiles,
+    critical: summary.critical,
+    warn: summary.warn,
+    info: summary.info,
+    findings: summary.findings.map((finding) => ({
+      ruleId: finding.ruleId,
+      severity: finding.severity,
+      file: finding.file,
+      line: finding.line,
+      message: finding.message,
+    })),
+    ...(error ? { error } : {}),
+  };
+}
+
 async function collectSkillInstallScanWarnings(params: {
   entry: SkillEntry;
   force?: boolean;
-}): Promise<{ warnings: string[]; blockedMessage?: string }> {
+}): Promise<{
+  warnings: string[];
+  builtinScan: PluginHookBeforeInstallBuiltinScan;
+  blockedMessage?: string;
+}> {
   const warnings: string[] = [];
   const skillName = params.entry.skill.name;
   const skillDir = path.resolve(params.entry.skill.baseDir);
 
   try {
     const summary = await scanDirectoryWithSummary(skillDir);
+    const builtinScan = skillScanSummaryToBuiltinScan(summary, "ok");
+
     if (params.entry.skill.sourceInfo?.source === "openclaw-managed") {
       const policy = enforceManagedScanPolicy({
         summary,
@@ -74,9 +105,10 @@ async function collectSkillInstallScanWarnings(params: {
         force: Boolean(params.force),
       });
       if (!policy.ok) {
-        return { warnings, blockedMessage: policy.message };
+        return { warnings, builtinScan, blockedMessage: policy.message };
       }
     }
+
     if (summary.critical > 0) {
       const criticalDetails = summary.findings
         .filter((finding) => finding.severity === "critical")
@@ -90,13 +122,24 @@ async function collectSkillInstallScanWarnings(params: {
         `Skill "${skillName}" has ${summary.warn} suspicious code pattern(s). Run "openclaw security audit --deep" for details.`,
       );
     }
+    return { warnings, builtinScan };
   } catch (err) {
     warnings.push(
       `Skill "${skillName}" code safety scan failed (${String(err)}). Installation continues; run "openclaw security audit --deep" after install.`,
     );
+    return {
+      warnings,
+      builtinScan: {
+        status: "error",
+        scannedFiles: 0,
+        critical: 0,
+        warn: 0,
+        info: 0,
+        findings: [],
+        error: String(err),
+      },
+    };
   }
-
-  return { warnings };
 }
 
 function resolveInstallId(spec: SkillInstallSpec, index: number): string {
@@ -111,6 +154,24 @@ function findInstallSpec(entry: SkillEntry, installId: string): SkillInstallSpec
     }
   }
   return undefined;
+}
+
+function normalizeSkillInstallSpec(spec: SkillInstallSpec): SkillInstallSpec {
+  return {
+    ...(spec.id ? { id: spec.id } : {}),
+    kind: spec.kind,
+    ...(spec.label ? { label: spec.label } : {}),
+    ...(spec.bins ? { bins: spec.bins.slice() } : {}),
+    ...(spec.os ? { os: spec.os.slice() } : {}),
+    ...(spec.formula ? { formula: spec.formula } : {}),
+    ...(spec.package ? { package: spec.package } : {}),
+    ...(spec.module ? { module: spec.module } : {}),
+    ...(spec.url ? { url: spec.url } : {}),
+    ...(spec.archive ? { archive: spec.archive } : {}),
+    ...(spec.extract !== undefined ? { extract: spec.extract } : {}),
+    ...(spec.stripComponents !== undefined ? { stripComponents: spec.stripComponents } : {}),
+    ...(spec.targetDir ? { targetDir: spec.targetDir } : {}),
+  };
 }
 
 function buildNodeInstallCommand(packageName: string, prefs: SkillsInstallPreferences): string[] {
@@ -454,12 +515,12 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
   }
 
   const spec = findInstallSpec(entry, params.installId);
-  const scan = await collectSkillInstallScanWarnings({ entry, force: params.force });
-  const warnings = scan.warnings;
-  if (scan.blockedMessage) {
+  const scanResult = await collectSkillInstallScanWarnings({ entry, force: params.force });
+  const warnings = scanResult.warnings;
+  if (scanResult.blockedMessage) {
     return {
       ok: false,
-      message: scan.blockedMessage,
+      message: scanResult.blockedMessage,
       stdout: "",
       stderr: "",
       code: null,
@@ -467,6 +528,53 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
     };
   }
   const skillSource = entry.skill.sourceInfo?.source?.trim() || "unknown";
+
+  // Run before_install so external scanners can augment findings or block installs.
+  const hookRunner = getGlobalHookRunner();
+  if (hookRunner?.hasHooks("before_install")) {
+    try {
+      const { event, ctx } = createBeforeInstallHookPayload({
+        targetName: params.skillName,
+        targetType: "skill",
+        origin: skillSource,
+        sourcePath: path.resolve(entry.skill.baseDir),
+        sourcePathKind: "directory",
+        request: {
+          kind: "skill-install",
+          mode: "install",
+        },
+        builtinScan: scanResult.builtinScan,
+        skill: {
+          installId: params.installId,
+          ...(spec ? { installSpec: normalizeSkillInstallSpec(spec) } : {}),
+        },
+      });
+      const hookResult = await hookRunner.runBeforeInstall(event, ctx);
+      if (hookResult?.block) {
+        return {
+          ok: false,
+          message: hookResult.blockReason || "Installation blocked by plugin hook",
+          stdout: "",
+          stderr: "",
+          code: null,
+          warnings: warnings.length > 0 ? warnings.slice() : undefined,
+        };
+      }
+      if (hookResult?.findings) {
+        for (const finding of hookResult.findings) {
+          if (finding.severity === "critical") {
+            warnings.push(
+              `WARNING: Plugin scanner: ${finding.message} (${finding.file}:${finding.line})`,
+            );
+          } else if (finding.severity === "warn") {
+            warnings.push(`Plugin scanner: ${finding.message} (${finding.file}:${finding.line})`);
+          }
+        }
+      }
+    } catch {
+      // Hook errors are non-fatal — built-in scanner results still apply.
+    }
+  }
 
   // Warn when install is triggered from a non-bundled source.
   // Workspace/project/personal agent skills can contain attacker-controlled metadata.

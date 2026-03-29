@@ -1,3 +1,4 @@
+import { createSyntheticSourceInfo } from "@mariozechner/pi-coding-agent";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   runCommandWithTimeoutMock,
@@ -21,8 +22,14 @@ vi.mock("./skills.js", async (importOriginal) => {
       {
         skill: {
           name: "managed-skill",
+          description: "managed",
+          filePath: "/tmp/managed-skill/SKILL.md",
           source: "openclaw-managed",
           baseDir: "/tmp/managed-skill",
+          sourceInfo: createSyntheticSourceInfo("/tmp/managed-skill/SKILL.md", {
+            source: "openclaw-managed",
+            baseDir: "/tmp/managed-skill",
+          }),
         },
         metadata: {
           install: [{ id: "deps", kind: "node", package: "example-package" }],

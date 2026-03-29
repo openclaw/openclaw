@@ -81,6 +81,11 @@ export const CORE_CLI_COMMAND_DESCRIPTORS = [
     description: "List stored conversation sessions",
     hasSubcommands: true,
   },
+  {
+    name: "tasks",
+    description: "Inspect durable background task state",
+    hasSubcommands: true,
+  },
 ] as const satisfies ReadonlyArray<CoreCliCommandDescriptor>;
 
 export function getCoreCliCommandDescriptors(): ReadonlyArray<CoreCliCommandDescriptor> {

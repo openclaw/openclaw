@@ -11116,6 +11116,25 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   type: "string",
                   format: "uri",
                 },
+                headers: {
+                  type: "object",
+                  propertyNames: {
+                    type: "string",
+                  },
+                  additionalProperties: {
+                    anyOf: [
+                      {
+                        type: "string",
+                      },
+                      {
+                        type: "number",
+                      },
+                      {
+                        type: "boolean",
+                      },
+                    ],
+                  },
+                },
               },
               additionalProperties: {},
             },
@@ -15556,11 +15575,15 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       sensitive: true,
       tags: ["security", "auth", "tools"],
     },
+    "mcp.servers.*.headers.*": {
+      sensitive: true,
+      tags: ["security"],
+    },
     "skills.entries.*.apiKey": {
       sensitive: true,
       tags: ["security", "auth"],
     },
   },
-  version: "2026.3.28",
+  version: "2026.3.29",
   generatedAt: "2026-03-22T21:17:33.302Z",
 } as const satisfies BaseConfigSchemaResponse;
