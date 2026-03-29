@@ -1,19 +1,18 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_EXEC_APPROVAL_TIMEOUT_MS } from "../../infra/exec-approvals.js";
-import { parseTimeoutMs } from "../nodes-run.js";
+import { parseTimeoutMs } from "../parse-timeout.js";
 
 /**
  * Regression test for #12098:
- * `openclaw nodes run` times out after 35s because the CLI transport timeout
- * (35s default) is shorter than the exec approval timeout (120s). The
- * exec.approval.request call must use a transport timeout at least as long
- * as the approval timeout so the gateway has enough time to collect the
- * user's decision.
+ * `exec.approval.request` times out after 35s when the CLI transport timeout
+ * is shorter than the exec approval timeout (120s). The transport timeout
+ * must be at least as long as the approval timeout so the gateway has enough
+ * time to collect the user's decision.
  *
  * The root cause: callGatewayCli reads opts.timeout for the transport timeout.
- * Before the fix, nodes run called callGatewayCli("exec.approval.request", opts, ...)
- * without overriding opts.timeout, so the 35s CLI default raced against the
- * 120s approval wait on the gateway side. The CLI always lost.
+ * Before the fix, node exec flows called callGatewayCli("exec.approval.request",
+ * opts, ...) without overriding opts.timeout, so the 35s CLI default raced
+ * against the 120s approval wait on the gateway side. The CLI always lost.
  *
  * The fix: override the transport timeout for exec.approval.request to be at
  * least approvalTimeoutMs + 10_000.
@@ -32,7 +31,7 @@ vi.mock("../progress.js", () => ({
   withProgress: (_opts: unknown, fn: () => unknown) => fn(),
 }));
 
-describe("nodes run: approval transport timeout (#12098)", () => {
+describe("exec approval transport timeout (#12098)", () => {
   let callGatewayCli: typeof import("./rpc.js").callGatewayCli;
 
   beforeAll(async () => {
@@ -100,7 +99,7 @@ describe("nodes run: approval transport timeout (#12098)", () => {
     // parseTimeoutMs returns undefined for garbage input, ?? 0 ensures
     // Math.max picks the approval floor instead of producing NaN
     const transportTimeoutMs = Math.max(parseTimeoutMs("foo") ?? 0, approvalTimeoutMs + 10_000);
-    expect(transportTimeoutMs).toBe(130_000);
+    expect(transportTimeoutMs).toBe(approvalTimeoutMs + 10_000);
 
     await callGatewayCli(
       "exec.approval.request",
@@ -110,6 +109,6 @@ describe("nodes run: approval transport timeout (#12098)", () => {
     );
 
     const callOpts = callGatewaySpy.mock.calls[0][0];
-    expect(callOpts.timeoutMs).toBe(130_000);
+    expect(callOpts.timeoutMs).toBe(approvalTimeoutMs + 10_000);
   });
 });
