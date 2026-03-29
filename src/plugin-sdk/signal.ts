@@ -80,3 +80,5 @@ export { resolveSignalReactionLevel } from "./signal-surface.js";
 export { removeReactionSignal, sendReactionSignal } from "./signal-surface.js";
 export { sendMessageSignal } from "./signal-surface.js";
 export { signalMessageActions } from "./signal-surface.js";
+export { resolveAckReaction } from "../agents/identity.js";
+export { shouldAckReaction } from "../channels/ack-reactions.js";
