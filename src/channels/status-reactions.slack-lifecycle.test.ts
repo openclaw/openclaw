@@ -144,6 +144,43 @@ describe("Slack status reaction lifecycle", () => {
     expect(adapter.setReaction).toHaveBeenCalledTimes(3);
   });
 
+  it("restoreInitial re-applies initial emoji after an in-flight debounced transition", async () => {
+    let releaseThinking: (() => void) | undefined;
+    const { adapter, active } = createSlackMockAdapter();
+    adapter.setReaction = vi.fn(async (emoji: string) => {
+      if (emoji === DEFAULT_EMOJIS.thinking) {
+        await new Promise<void>((resolve) => {
+          releaseThinking = resolve;
+        });
+      }
+      if (active.has(emoji)) {
+        throw new Error("already_reacted");
+      }
+      active.add(emoji);
+    });
+
+    const ctrl = createStatusReactionController({
+      enabled: true,
+      adapter,
+      initialEmoji: "eyes",
+      timing: { debounceMs: 0, stallSoftMs: 99999, stallHardMs: 99999 },
+    });
+
+    void ctrl.setQueued();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(active.has("eyes")).toBe(true);
+
+    void ctrl.setThinking();
+    await vi.advanceTimersByTimeAsync(1);
+
+    const restorePromise = ctrl.restoreInitial();
+    releaseThinking?.();
+    await restorePromise;
+
+    expect(active.has("eyes")).toBe(true);
+    expect(active.has(DEFAULT_EMOJIS.thinking)).toBe(false);
+  });
+
   it("does nothing when disabled", async () => {
     const { adapter, active } = createSlackMockAdapter();
     const ctrl = createStatusReactionController({
