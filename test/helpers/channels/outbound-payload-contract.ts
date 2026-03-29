@@ -44,16 +44,18 @@ const { sendMessageZalouser, parseZalouserOutboundTarget } = loadBundledPluginTe
   parseZalouserOutboundTarget: ParseZalouserOutboundTarget;
 }>("zalouser");
 
-const zaloTestApiModuleId = resolveRelativeBundledPluginPublicModuleId({
-  fromModuleUrl: import.meta.url,
-  pluginId: "zalo",
-  artifactBasename: "test-api.js",
-});
-const zalouserTestApiModuleId = resolveRelativeBundledPluginPublicModuleId({
-  fromModuleUrl: import.meta.url,
-  pluginId: "zalouser",
-  artifactBasename: "test-api.js",
-});
+const { zaloTestApiModuleId, zalouserTestApiModuleId } = vi.hoisted(() => ({
+  zaloTestApiModuleId: resolveRelativeBundledPluginPublicModuleId({
+    fromModuleUrl: import.meta.url,
+    pluginId: "zalo",
+    artifactBasename: "test-api.js",
+  }),
+  zalouserTestApiModuleId: resolveRelativeBundledPluginPublicModuleId({
+    fromModuleUrl: import.meta.url,
+    pluginId: "zalouser",
+    artifactBasename: "test-api.js",
+  }),
+}));
 
 vi.mock(zaloTestApiModuleId, async (importOriginal) => {
   const actual = await importOriginal<object>();
