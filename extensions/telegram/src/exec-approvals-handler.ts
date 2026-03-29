@@ -1,10 +1,13 @@
 import {
   buildExecApprovalPendingReplyPayload,
+  buildPluginApprovalPendingReplyPayload,
   resolveExecApprovalCommandDisplay,
   resolveExecApprovalSessionTarget,
   type ExecApprovalPendingReplyParams,
   type ExecApprovalRequest,
   type ExecApprovalResolved,
+  type PluginApprovalRequest,
+  type PluginApprovalResolved,
 } from "openclaw/plugin-sdk/approval-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
@@ -57,7 +60,7 @@ export type TelegramExecApprovalHandlerDeps = {
 function matchesFilters(params: {
   cfg: OpenClawConfig;
   accountId: string;
-  request: ExecApprovalRequest;
+  request: ExecApprovalRequest | PluginApprovalRequest;
 }): boolean {
   const config = resolveTelegramExecApprovalConfig({
     cfg: params.cfg,
@@ -118,11 +121,11 @@ function isHandlerConfigured(params: { cfg: OpenClawConfig; accountId: string })
 
 function resolveRequestSessionTarget(params: {
   cfg: OpenClawConfig;
-  request: ExecApprovalRequest;
+  request: ExecApprovalRequest | PluginApprovalRequest;
 }): { to: string; accountId?: string; threadId?: number; channel?: string } | null {
   return resolveExecApprovalSessionTarget({
     cfg: params.cfg,
-    request: params.request,
+    request: params.request as ExecApprovalRequest,
     turnSourceChannel: params.request.request.turnSourceChannel ?? undefined,
     turnSourceTo: params.request.request.turnSourceTo ?? undefined,
     turnSourceAccountId: params.request.request.turnSourceAccountId ?? undefined,
@@ -133,7 +136,7 @@ function resolveRequestSessionTarget(params: {
 function resolveTelegramSourceTarget(params: {
   cfg: OpenClawConfig;
   accountId: string;
-  request: ExecApprovalRequest;
+  request: ExecApprovalRequest | PluginApprovalRequest;
 }): TelegramApprovalTarget | null {
   const turnSourceChannel = params.request.request.turnSourceChannel?.trim().toLowerCase() || "";
   const turnSourceTo = params.request.request.turnSourceTo?.trim() || "";
@@ -203,7 +206,7 @@ export class TelegramExecApprovalHandler {
     this.editReplyMarkup = deps.editReplyMarkup ?? editMessageReplyMarkupTelegram;
   }
 
-  shouldHandle(request: ExecApprovalRequest): boolean {
+  shouldHandle(request: ExecApprovalRequest | PluginApprovalRequest): boolean {
     return matchesFilters({
       cfg: this.opts.cfg,
       accountId: this.opts.accountId,
@@ -246,10 +249,12 @@ export class TelegramExecApprovalHandler {
     this.gatewayClient = null;
   }
 
-  async handleRequested(request: ExecApprovalRequest): Promise<void> {
+  async handleRequested(request: ExecApprovalRequest | PluginApprovalRequest): Promise<void> {
     if (!this.shouldHandle(request)) {
       return;
     }
+
+    const isPlugin = request.id.startsWith("plugin:");
 
     const targetMode = resolveTelegramExecApprovalTarget({
       cfg: this.opts.cfg,
@@ -283,18 +288,27 @@ export class TelegramExecApprovalHandler {
       return;
     }
 
-    const payloadParams: ExecApprovalPendingReplyParams = {
-      approvalId: request.id,
-      approvalSlug: request.id.slice(0, 8),
-      approvalCommandId: request.id,
-      command: resolveExecApprovalCommandDisplay(request.request).commandText,
-      cwd: request.request.cwd ?? undefined,
-      host: request.request.host === "node" ? "node" : "gateway",
-      nodeId: request.request.nodeId ?? undefined,
-      expiresAtMs: request.expiresAtMs,
-      nowMs: this.nowMs(),
-    };
-    const payload = buildExecApprovalPendingReplyPayload(payloadParams);
+    let payload: { text?: string };
+    if (isPlugin) {
+      payload = buildPluginApprovalPendingReplyPayload({
+        request: request as PluginApprovalRequest,
+        nowMs: this.nowMs(),
+      });
+    } else {
+      const execRequest = request as ExecApprovalRequest;
+      const payloadParams: ExecApprovalPendingReplyParams = {
+        approvalId: request.id,
+        approvalSlug: request.id.slice(0, 8),
+        approvalCommandId: request.id,
+        command: resolveExecApprovalCommandDisplay(execRequest.request).commandText,
+        cwd: execRequest.request.cwd ?? undefined,
+        host: execRequest.request.host === "node" ? "node" : "gateway",
+        nodeId: execRequest.request.nodeId ?? undefined,
+        expiresAtMs: request.expiresAtMs,
+        nowMs: this.nowMs(),
+      };
+      payload = buildExecApprovalPendingReplyPayload(payloadParams);
+    }
     const buttons = buildTelegramExecApprovalButtons(request.id);
     const sentMessages: PendingMessage[] = [];
 
@@ -339,7 +353,7 @@ export class TelegramExecApprovalHandler {
     });
   }
 
-  async handleResolved(resolved: ExecApprovalResolved): Promise<void> {
+  async handleResolved(resolved: ExecApprovalResolved | PluginApprovalResolved): Promise<void> {
     const pending = this.pending.get(resolved.id);
     if (!pending) {
       return;
@@ -361,10 +375,12 @@ export class TelegramExecApprovalHandler {
   private handleGatewayEvent(evt: EventFrame): void {
     if (evt.event === "exec.approval.requested") {
       void this.handleRequested(evt.payload as ExecApprovalRequest);
-      return;
-    }
-    if (evt.event === "exec.approval.resolved") {
+    } else if (evt.event === "plugin.approval.requested") {
+      void this.handleRequested(evt.payload as PluginApprovalRequest);
+    } else if (evt.event === "exec.approval.resolved") {
       void this.handleResolved(evt.payload as ExecApprovalResolved);
+    } else if (evt.event === "plugin.approval.resolved") {
+      void this.handleResolved(evt.payload as PluginApprovalResolved);
     }
   }
 }
