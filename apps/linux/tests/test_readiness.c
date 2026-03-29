@@ -224,6 +224,7 @@ static void test_presenter_degraded_systemd_active_http_unreachable(void) {
     ReadinessInfo ri;
     HealthState hs = {0};
     hs.http_ok = FALSE;
+    hs.http_probe_result = HTTP_PROBE_CONNECT_REFUSED;
     SystemdState sys = {0};
     sys.active = TRUE;
 
@@ -232,6 +233,44 @@ static void test_presenter_degraded_systemd_active_http_unreachable(void) {
     g_assert_cmpstr(ri.classification, ==, "Degraded");
     g_assert_nonnull(ri.missing);
     assert_contains(ri.missing, "not reachable", "degraded_active_http.missing");
+    /* Must NOT claim listener present for connect-refused */
+    g_assert_null(strstr(ri.missing, "accepted a connection"));
+    g_assert_nonnull(ri.next_action);
+}
+
+static void test_presenter_degraded_timed_out_after_connect(void) {
+    ReadinessInfo ri;
+    HealthState hs = {0};
+    hs.http_ok = FALSE;
+    hs.http_probe_result = HTTP_PROBE_TIMED_OUT_AFTER_CONNECT;
+    SystemdState sys = {0};
+    sys.active = TRUE;
+
+    readiness_evaluate(STATE_DEGRADED, &hs, &sys, &ri);
+
+    g_assert_cmpstr(ri.classification, ==, "Degraded");
+    g_assert_nonnull(ri.missing);
+    assert_contains(ri.missing, "accepted a connection", "degraded_timeout_after_connect.missing");
+    assert_contains(ri.missing, "did not respond", "degraded_timeout_after_connect.missing2");
+    g_assert_nonnull(ri.next_action);
+    assert_contains(ri.next_action, "hung", "degraded_timeout_after_connect.next_action");
+}
+
+static void test_presenter_degraded_unknown_error_active(void) {
+    ReadinessInfo ri;
+    HealthState hs = {0};
+    hs.http_ok = FALSE;
+    hs.http_probe_result = HTTP_PROBE_UNKNOWN_ERROR;
+    SystemdState sys = {0};
+    sys.active = TRUE;
+
+    readiness_evaluate(STATE_DEGRADED, &hs, &sys, &ri);
+
+    g_assert_cmpstr(ri.classification, ==, "Degraded");
+    g_assert_nonnull(ri.missing);
+    assert_contains(ri.missing, "not reachable", "degraded_unknown_active.missing");
+    /* Must NOT claim listener present for unknown error */
+    g_assert_null(strstr(ri.missing, "accepted a connection"));
     g_assert_nonnull(ri.next_action);
 }
 
@@ -302,6 +341,8 @@ int main(int argc, char **argv) {
     g_test_add_func("/readiness/degraded/http_ok_ws_disconnected", test_presenter_degraded_http_ok_ws_disconnected);
     g_test_add_func("/readiness/degraded/connected_rpc_incomplete", test_presenter_degraded_connected_rpc_incomplete);
     g_test_add_func("/readiness/degraded/systemd_active_http_unreachable", test_presenter_degraded_systemd_active_http_unreachable);
+    g_test_add_func("/readiness/degraded/timed_out_after_connect", test_presenter_degraded_timed_out_after_connect);
+    g_test_add_func("/readiness/degraded/unknown_error_active", test_presenter_degraded_unknown_error_active);
     g_test_add_func("/readiness/degraded/fallback", test_presenter_degraded_fallback);
 
     /* Error sub-path tests */

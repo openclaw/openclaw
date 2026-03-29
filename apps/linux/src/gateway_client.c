@@ -66,7 +66,8 @@ static GatewayConfig* load_config_with_context(void) {
     return cfg;
 }
 
-static void publish_health_state(gboolean http_ok, gboolean ws_connected,
+static void publish_health_state(gboolean http_ok, HttpProbeResult http_probe_result,
+                                  gboolean ws_connected,
                                   gboolean rpc_ok, gboolean auth_ok,
                                   const gchar *gateway_version,
                                   const gchar *auth_source,
@@ -74,6 +75,7 @@ static void publish_health_state(gboolean http_ok, gboolean ws_connected,
     HealthState hs = {0};
     hs.last_updated = g_get_real_time();
     hs.http_ok = http_ok;
+    hs.http_probe_result = http_probe_result;
     hs.ws_connected = ws_connected;
     hs.rpc_ok = rpc_ok;
     hs.auth_ok = auth_ok;
@@ -143,12 +145,15 @@ static void on_ws_status(const GatewayWsStatus *status, gpointer user_data) {
      * snapshot "HTTP unreachable + WS connected + RPC OK" which the readiness
      * model would classify as DEGRADED even though the gateway is fully usable.
      */
+    HttpProbeResult probe_result = current ? current->http_probe_result : HTTP_PROBE_NONE;
     if (ws_connected && status->rpc_ok) {
         http_ok = TRUE;
+        probe_result = HTTP_PROBE_OK;
     }
 
     publish_health_state(
         http_ok,
+        probe_result,
         ws_connected,
         status->rpc_ok,
         auth_ok,
@@ -214,6 +219,7 @@ static void on_health_result(const GatewayHealthResult *result, gpointer user_da
 
     publish_health_state(
         result->ok,
+        result->probe_result,
         ws_connected,
         current ? current->rpc_ok : FALSE,
         current ? current->auth_ok : FALSE,

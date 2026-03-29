@@ -70,7 +70,16 @@ static gchar* build_diagnostics_text(void) {
     g_string_append_printf(out, "Endpoint: %s:%d\n",
         health->endpoint_host ? health->endpoint_host : "127.0.0.1",
         health->endpoint_port);
-    g_string_append_printf(out, "HTTP Health: %s\n", health->http_ok ? "OK" : "Unreachable");
+    const char *http_probe_str;
+    switch (health->http_probe_result) {
+    case HTTP_PROBE_OK:                      http_probe_str = "OK"; break;
+    case HTTP_PROBE_CONNECT_REFUSED:         http_probe_str = "Connect Refused"; break;
+    case HTTP_PROBE_CONNECT_TIMEOUT:         http_probe_str = "Connect Timeout"; break;
+    case HTTP_PROBE_TIMED_OUT_AFTER_CONNECT: http_probe_str = "Timed Out After Connect"; break;
+    case HTTP_PROBE_INVALID_RESPONSE:        http_probe_str = "Invalid Response"; break;
+    default:                                 http_probe_str = "Unreachable"; break;
+    }
+    g_string_append_printf(out, "HTTP Health: %s\n", http_probe_str);
     g_string_append_printf(out, "WebSocket: %s\n", health->ws_connected ? "Connected" : "Disconnected");
     g_string_append_printf(out, "RPC OK: %s\n", health->rpc_ok ? "Yes" : "No");
     g_string_append_printf(out, "Auth OK: %s\n", health->auth_ok ? "Yes" : "No");

@@ -48,10 +48,21 @@ typedef struct {
     char *sub_state;
 } SystemdState;
 
+typedef enum {
+    HTTP_PROBE_NONE = 0,                /* no probe attempted yet */
+    HTTP_PROBE_OK,                      /* 2xx + valid JSON health response */
+    HTTP_PROBE_CONNECT_REFUSED,         /* TCP connect refused (nothing listening) */
+    HTTP_PROBE_CONNECT_TIMEOUT,         /* TCP connect timed out (no SYN-ACK) */
+    HTTP_PROBE_TIMED_OUT_AFTER_CONNECT, /* TCP connected, no HTTP response in time */
+    HTTP_PROBE_INVALID_RESPONSE,        /* got bytes, but not valid gateway health */
+    HTTP_PROBE_UNKNOWN_ERROR,           /* catch-all */
+} HttpProbeResult;
+
 typedef struct {
     gint64 last_updated; /* g_get_real_time() in microseconds */
 
     gboolean http_ok;       /* GET /health succeeded */
+    HttpProbeResult http_probe_result; /* phase-aware probe outcome */
     gboolean ws_connected;  /* WebSocket handshake complete */
     gboolean rpc_ok;        /* RPC channel operational */
     gboolean auth_ok;       /* Auth handshake succeeded */

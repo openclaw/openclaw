@@ -93,11 +93,19 @@ void readiness_evaluate(AppState state, const HealthState *health,
         } else if (health && health->http_ok && health->ws_connected) {
             out->missing = "Connected, but RPC or auth handshake incomplete.";
         } else if (health && !health->http_ok && sys && sys->active) {
-            out->missing = "Service reports active, but gateway is not reachable via HTTP.";
+            if (health->http_probe_result == HTTP_PROBE_TIMED_OUT_AFTER_CONNECT) {
+                out->missing = "Gateway accepted a connection but did not respond in time.";
+                out->next_action = "Gateway process may be hung. Check gateway logs and restart the service.";
+            } else {
+                out->missing = "Service reports active, but gateway is not reachable via HTTP.";
+                out->next_action = "Check gateway logs and network configuration. Try restarting the service.";
+            }
         } else {
             out->missing = "Gateway connectivity is partially established.";
         }
-        out->next_action = "Check gateway logs and network configuration. Try restarting the service.";
+        if (!out->next_action) {
+            out->next_action = "Check gateway logs and network configuration. Try restarting the service.";
+        }
         break;
 
     case STATE_ERROR:
