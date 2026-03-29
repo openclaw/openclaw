@@ -205,8 +205,9 @@ export class TelegramPollingSession {
 
     let lastGetUpdatesAt = Date.now();
     let lastApiActivityAt = Date.now();
-    let oldestInFlightApiStartedAt: number | null = null;
-    let inFlightApiCalls = 0;
+    let nextInFlightApiCallId = 0;
+    let latestInFlightApiStartedAt: number | null = null;
+    const inFlightApiStartedAt = new Map<number, number>();
     let lastGetUpdatesStartedAt: number | null = null;
     let lastGetUpdatesFinishedAt: number | null = null;
     let lastGetUpdatesDurationMs: number | null = null;
@@ -220,18 +221,28 @@ export class TelegramPollingSession {
     bot.api.config.use(async (prev, method, payload, signal) => {
       if (method !== "getUpdates") {
         const startedAt = Date.now();
-        if (inFlightApiCalls === 0) {
-          oldestInFlightApiStartedAt = startedAt;
-        }
-        inFlightApiCalls += 1;
+        const callId = nextInFlightApiCallId;
+        nextInFlightApiCallId += 1;
+        inFlightApiStartedAt.set(callId, startedAt);
+        latestInFlightApiStartedAt =
+          latestInFlightApiStartedAt == null
+            ? startedAt
+            : Math.max(latestInFlightApiStartedAt, startedAt);
         try {
           const result = await prev(method, payload, signal);
           lastApiActivityAt = Date.now();
           return result;
         } finally {
-          inFlightApiCalls = Math.max(0, inFlightApiCalls - 1);
-          if (inFlightApiCalls === 0) {
-            oldestInFlightApiStartedAt = null;
+          inFlightApiStartedAt.delete(callId);
+          if (latestInFlightApiStartedAt === startedAt) {
+            let newestStartedAt: number | null = null;
+            for (const activeStartedAt of inFlightApiStartedAt.values()) {
+              newestStartedAt =
+                newestStartedAt == null
+                  ? activeStartedAt
+                  : Math.max(newestStartedAt, activeStartedAt);
+            }
+            latestInFlightApiStartedAt = newestStartedAt;
           }
         }
       }
@@ -319,9 +330,9 @@ export class TelegramPollingSession {
         inFlightGetUpdates > 0 ? 0 : now - (lastGetUpdatesFinishedAt ?? lastGetUpdatesAt);
       const elapsed = inFlightGetUpdates > 0 ? activeElapsed : idleElapsed;
       const apiLivenessAt =
-        oldestInFlightApiStartedAt == null
+        latestInFlightApiStartedAt == null
           ? lastApiActivityAt
-          : Math.max(lastApiActivityAt, oldestInFlightApiStartedAt);
+          : Math.max(lastApiActivityAt, latestInFlightApiStartedAt);
       const apiElapsed = now - apiLivenessAt;
 
       // Treat recent non-getUpdates success and recent non-getUpdates start as

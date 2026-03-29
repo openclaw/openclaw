@@ -711,6 +711,136 @@ describe("TelegramPollingSession", () => {
     }
   });
 
+  it("does not trigger stall restart when a newer non-getUpdates API call starts while an older one is still in-flight", async () => {
+    const abort = new AbortController();
+    const botStop = vi.fn(async () => undefined);
+    const runnerStop = vi.fn(async () => undefined);
+
+    let apiMiddleware:
+      | ((
+          prev: (...args: unknown[]) => Promise<unknown>,
+          method: string,
+          payload: unknown,
+        ) => Promise<unknown>)
+      | undefined;
+    createTelegramBotMock.mockReturnValueOnce({
+      api: {
+        deleteWebhook: vi.fn(async () => true),
+        getUpdates: vi.fn(async () => []),
+        config: {
+          use: vi.fn((fn: typeof apiMiddleware) => {
+            apiMiddleware = fn;
+          }),
+        },
+      },
+      stop: botStop,
+    });
+
+    let firstTaskResolve: (() => void) | undefined;
+    runMock.mockReturnValue({
+      task: () =>
+        new Promise<void>((resolve) => {
+          firstTaskResolve = resolve;
+        }),
+      stop: async () => {
+        await runnerStop();
+        firstTaskResolve?.();
+      },
+      isRunning: () => true,
+    });
+
+    const setIntervalSpy = vi.spyOn(globalThis, "setInterval").mockImplementation((fn) => {
+      watchdog = fn as () => void;
+      return 1 as unknown as ReturnType<typeof setInterval>;
+    });
+    const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval").mockImplementation(() => {});
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation((fn) => {
+      void Promise.resolve().then(() => (fn as () => void)());
+      return 1 as unknown as ReturnType<typeof setTimeout>;
+    });
+    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout").mockImplementation(() => {});
+    const dateNowSpy = vi
+      .spyOn(Date, "now")
+      .mockImplementationOnce(() => 0) // lastGetUpdatesAt init
+      .mockImplementationOnce(() => 0) // lastApiActivityAt init
+      .mockImplementationOnce(() => 1) // first sendMessage start
+      .mockImplementationOnce(() => 120_000) // second sendMessage start
+      .mockImplementation(() => 120_001);
+
+    let watchdog: (() => void) | undefined;
+    const log = vi.fn();
+    const session = new TelegramPollingSession({
+      token: "tok",
+      config: {},
+      accountId: "default",
+      runtime: undefined,
+      proxyFetch: undefined,
+      abortSignal: abort.signal,
+      runnerOptions: {},
+      getLastUpdateId: () => null,
+      persistUpdateId: async () => undefined,
+      log,
+      telegramTransport: undefined,
+    });
+
+    try {
+      const runPromise = session.runUntilAbort();
+
+      for (let attempt = 0; attempt < 20 && !watchdog; attempt += 1) {
+        await Promise.resolve();
+      }
+      expect(watchdog).toBeTypeOf("function");
+
+      let resolveFirstSend: ((v: unknown) => void) | undefined;
+      let resolveSecondSend: ((v: unknown) => void) | undefined;
+      if (apiMiddleware) {
+        const firstSendPromise = apiMiddleware(
+          vi.fn(
+            () =>
+              new Promise((resolve) => {
+                resolveFirstSend = resolve;
+              }),
+          ),
+          "sendMessage",
+          { chat_id: 123, text: "older" },
+        );
+        const secondSendPromise = apiMiddleware(
+          vi.fn(
+            () =>
+              new Promise((resolve) => {
+                resolveSecondSend = resolve;
+              }),
+          ),
+          "sendMessage",
+          { chat_id: 123, text: "newer" },
+        );
+
+        // The older send is stale, but the newer send started just now.
+        // Watchdog liveness must follow the newest active non-getUpdates call.
+        watchdog?.();
+
+        expect(runnerStop).not.toHaveBeenCalled();
+        expect(botStop).not.toHaveBeenCalled();
+        expect(log).not.toHaveBeenCalledWith(expect.stringContaining("Polling stall detected"));
+
+        resolveFirstSend?.({ ok: true });
+        resolveSecondSend?.({ ok: true });
+        await firstSendPromise;
+        await secondSendPromise;
+      }
+
+      abort.abort();
+      firstTaskResolve?.();
+      await runPromise;
+    } finally {
+      setIntervalSpy.mockRestore();
+      clearIntervalSpy.mockRestore();
+      setTimeoutSpy.mockRestore();
+      clearTimeoutSpy.mockRestore();
+      dateNowSpy.mockRestore();
+    }
+  });
+
   it("reuses the transport after a getUpdates conflict", async () => {
     const abort = new AbortController();
     const conflictError = Object.assign(
