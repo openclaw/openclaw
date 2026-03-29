@@ -1,10 +1,15 @@
-import type { ExecAsk, ExecHost, ExecSecurity } from "../../../infra/exec-approvals.js";
+import {
+  type ExecAsk,
+  type ExecSecurity,
+  type ExecTarget,
+  normalizeExecTarget,
+} from "../../../infra/exec-approvals.js";
 import { skipDirectiveArgPrefix, takeDirectiveToken } from "../directive-parsing.js";
 
 type ExecDirectiveParse = {
   cleaned: string;
   hasDirective: boolean;
-  execHost?: ExecHost;
+  execHost?: ExecTarget;
   execSecurity?: ExecSecurity;
   execAsk?: ExecAsk;
   execNode?: string;
@@ -18,14 +23,6 @@ type ExecDirectiveParse = {
   invalidAsk: boolean;
   invalidNode: boolean;
 };
-
-function normalizeExecHost(value?: string): ExecHost | undefined {
-  const normalized = value?.trim().toLowerCase();
-  if (normalized === "sandbox" || normalized === "gateway" || normalized === "node") {
-    return normalized;
-  }
-  return undefined;
-}
 
 function normalizeExecSecurity(value?: string): ExecSecurity | undefined {
   const normalized = value?.trim().toLowerCase();
@@ -52,7 +49,7 @@ function parseExecDirectiveArgs(raw: string): Omit<
   const len = raw.length;
   let i = skipDirectiveArgPrefix(raw);
   let consumed = i;
-  let execHost: ExecHost | undefined;
+  let execHost: ExecTarget | undefined;
   let execSecurity: ExecSecurity | undefined;
   let execAsk: ExecAsk | undefined;
   let execNode: string | undefined;
@@ -99,7 +96,7 @@ function parseExecDirectiveArgs(raw: string): Omit<
     const { key, value } = parsed;
     if (key === "host") {
       rawExecHost = value;
-      execHost = normalizeExecHost(value);
+      execHost = normalizeExecTarget(value) ?? undefined;
       if (!execHost) {
         invalidHost = true;
       }

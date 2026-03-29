@@ -4,6 +4,7 @@ import {
   minSecurity,
   normalizeExecAsk,
   normalizeExecHost,
+  normalizeExecTarget,
   normalizeExecSecurity,
   requiresExecApproval,
 } from "./exec-approvals.js";
@@ -16,6 +17,16 @@ describe("exec approvals policy helpers", () => {
     { raw: "ssh", expected: null },
   ])("normalizes exec host value %j", ({ raw, expected }) => {
     expect(normalizeExecHost(raw)).toBe(expected);
+  });
+
+  it.each([
+    { raw: " auto ", expected: "auto" },
+    { raw: " gateway ", expected: "gateway" },
+    { raw: "NODE", expected: "node" },
+    { raw: "", expected: null },
+    { raw: "ssh", expected: null },
+  ])("normalizes exec target value %j", ({ raw, expected }) => {
+    expect(normalizeExecTarget(raw)).toBe(expected);
   });
 
   it.each([
