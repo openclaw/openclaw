@@ -30,6 +30,16 @@ async function findPackageRoot(startDir: string, maxDepth = 12): Promise<string 
   for (const current of iterAncestorDirs(startDir, maxDepth)) {
     const name = await readPackageName(current);
     if (name && CORE_PACKAGE_NAMES.has(name)) {
+      // Skip subdirectories that inherit the parent's package name.
+      // The build system copies package.json into dist/, so dist/package.json
+      // has the same "name" as the root. We must prefer the outermost match.
+      const parent = path.dirname(current);
+      if (parent !== current) {
+        const parentName = await readPackageName(parent);
+        if (parentName && parentName === name) {
+          continue;
+        }
+      }
       return current;
     }
   }
@@ -40,6 +50,16 @@ function findPackageRootSync(startDir: string, maxDepth = 12): string | null {
   for (const current of iterAncestorDirs(startDir, maxDepth)) {
     const name = readPackageNameSync(current);
     if (name && CORE_PACKAGE_NAMES.has(name)) {
+      // Skip subdirectories that inherit the parent's package name.
+      // The build system copies package.json into dist/, so dist/package.json
+      // has the same "name" as the root. We must prefer the outermost match.
+      const parent = path.dirname(current);
+      if (parent !== current) {
+        const parentName = readPackageNameSync(parent);
+        if (parentName && parentName === name) {
+          continue;
+        }
+      }
       return current;
     }
   }

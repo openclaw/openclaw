@@ -213,6 +213,20 @@ describe("resolveOpenClawPackageRoot", () => {
         expected: null,
       }),
     },
+    {
+      name: "skips dist/ that contains a copy of the root package.json",
+      setup: () => {
+        const pkgRoot = fx("dist-copy");
+        setPackageRoot(pkgRoot);
+        // Simulate the build output: dist/package.json is a copy of root package.json
+        setPackageRoot(path.join(pkgRoot, "dist"));
+        // Module lives inside dist/plugins/ — should resolve to pkgRoot, NOT pkgRoot/dist
+        return {
+          opts: { cwd: path.join(pkgRoot, "dist", "plugins") },
+          expected: pkgRoot,
+        };
+      },
+    },
   ])("$name", async ({ setup }) => {
     const { opts, expected } = setup();
     await expectResolvedPackageRoot(
