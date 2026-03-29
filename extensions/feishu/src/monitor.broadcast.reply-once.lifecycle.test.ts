@@ -1,5 +1,9 @@
 import "./lifecycle.test-support.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createNonExitingRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
+import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
+import { FeishuConfigSchema } from "./config-schema.js";
+import { getFeishuLifecycleTestMocks } from "./lifecycle.test-support.js";
 import {
   createFeishuTextMessageEvent,
   createFeishuLifecycleReplyDispatcher,
@@ -9,11 +13,7 @@ import {
   runFeishuLifecycleSequence,
   setFeishuLifecycleStateDir,
   setupFeishuLifecycleHandler,
-} from "../../../test/helpers/plugins/feishu-lifecycle.js";
-import { createNonExitingRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
-import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
-import { FeishuConfigSchema } from "./config-schema.js";
-import { getFeishuLifecycleTestMocks } from "./lifecycle.test-support.js";
+} from "./test-support/lifecycle.js";
 import type { FeishuConfig, ResolvedFeishuAccount } from "./types.js";
 
 const {

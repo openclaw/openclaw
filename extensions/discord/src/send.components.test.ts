@@ -4,9 +4,9 @@ import { makeDiscordRest } from "./send.test-harness.js";
 
 const loadConfigMock = vi.hoisted(() => vi.fn(() => ({ session: { dmScope: "main" } })));
 
-vi.mock("../../../src/config/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../../../src/config/config.js")>(
-    "../../../src/config/config.js",
+vi.mock("openclaw/plugin-sdk/config-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/config-runtime")>(
+    "openclaw/plugin-sdk/config-runtime",
   );
   return {
     ...actual,

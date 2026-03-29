@@ -31,3 +31,11 @@ export {
   type PluginApprovalRequestPayload,
   type PluginApprovalResolved,
 } from "../infra/plugin-approvals.js";
+export { createApproverRestrictedNativeApprovalAdapter } from "./approval-delivery-helpers.js";
+export { resolveApprovalApprovers } from "./approval-approvers.js";
+export {
+  buildApprovalPendingReplyPayload,
+  buildApprovalResolvedReplyPayload,
+  buildPluginApprovalPendingReplyPayload,
+  buildPluginApprovalResolvedReplyPayload,
+} from "./approval-renderers.js";

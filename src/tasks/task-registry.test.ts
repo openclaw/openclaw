@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { startAcpSpawnParentStreamRelay } from "../agents/acp-spawn-parent-stream.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
-import { resetHeartbeatWakeStateForTests } from "../infra/heartbeat-wake.js";
+import {
+  hasPendingHeartbeatWake,
+  resetHeartbeatWakeStateForTests,
+} from "../infra/heartbeat-wake.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
@@ -104,7 +107,6 @@ describe("task-registry", () => {
       resetTaskRegistryForTests();
 
       createTaskRecord({
-        source: "sessions_spawn",
         runtime: "acp",
         requesterSessionKey: "agent:main:main",
         childSessionKey: "agent:main:acp:child",
@@ -133,7 +135,7 @@ describe("task-registry", () => {
 
       expect(findTaskByRunId("run-1")).toMatchObject({
         runtime: "acp",
-        status: "done",
+        status: "succeeded",
         endedAt: 250,
       });
     });
@@ -150,7 +152,6 @@ describe("task-registry", () => {
       });
 
       createTaskRecord({
-        source: "sessions_spawn",
         runtime: "acp",
         requesterSessionKey: "agent:main:main",
         requesterOrigin: {
@@ -177,7 +178,7 @@ describe("task-registry", () => {
 
       await waitForAssertion(() =>
         expect(findTaskByRunId("run-delivery")).toMatchObject({
-          status: "done",
+          status: "succeeded",
           deliveryStatus: "delivered",
         }),
       );
@@ -205,7 +206,6 @@ describe("task-registry", () => {
       hoisted.sendMessageMock.mockRejectedValueOnce(new Error("telegram unavailable"));
 
       createTaskRecord({
-        source: "sessions_spawn",
         runtime: "acp",
         requesterSessionKey: "agent:main:main",
         requesterOrigin: {
@@ -245,13 +245,49 @@ describe("task-registry", () => {
     });
   });
 
+  it("still wakes the parent when blocked delivery misses the outward channel", async () => {
+    await withTempDir({ prefix: "openclaw-task-registry-" }, async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      hoisted.sendMessageMock.mockRejectedValueOnce(new Error("telegram unavailable"));
+
+      createTaskRecord({
+        runtime: "acp",
+        requesterSessionKey: "agent:main:main",
+        requesterOrigin: {
+          channel: "telegram",
+          to: "telegram:123",
+        },
+        childSessionKey: "agent:main:acp:child",
+        runId: "run-delivery-blocked",
+        task: "Port the repo changes",
+        status: "succeeded",
+        deliveryStatus: "pending",
+        terminalOutcome: "blocked",
+        terminalSummary: "Writable session or apply_patch authorization required.",
+      });
+
+      await waitForAssertion(() =>
+        expect(findTaskByRunId("run-delivery-blocked")).toMatchObject({
+          status: "succeeded",
+          deliveryStatus: "failed",
+          terminalOutcome: "blocked",
+        }),
+      );
+      expect(peekSystemEvents("agent:main:main")).toEqual([
+        "Background task blocked: ACP background task (run run-deli). Writable session or apply_patch authorization required.",
+        "Task needs follow-up: ACP background task (run run-deli). Writable session or apply_patch authorization required.",
+      ]);
+      expect(hasPendingHeartbeatWake()).toBe(true);
+    });
+  });
+
   it("marks internal fallback delivery as session queued instead of delivered", async () => {
     await withTempDir({ prefix: "openclaw-task-registry-" }, async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
       resetTaskRegistryForTests();
 
       createTaskRecord({
-        source: "sessions_spawn",
         runtime: "acp",
         requesterSessionKey: "agent:main:main",
         childSessionKey: "agent:main:acp:child",
@@ -273,13 +309,45 @@ describe("task-registry", () => {
 
       await waitForAssertion(() =>
         expect(findTaskByRunId("run-session-queued")).toMatchObject({
-          status: "done",
+          status: "succeeded",
           deliveryStatus: "session_queued",
         }),
       );
       expect(peekSystemEvents("agent:main:main")).toEqual([
         expect.stringContaining("Background task done: ACP background task"),
       ]);
+      expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("wakes the parent for blocked tasks even when delivery falls back to the session", async () => {
+    await withTempDir({ prefix: "openclaw-task-registry-" }, async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+
+      createTaskRecord({
+        runtime: "acp",
+        requesterSessionKey: "agent:main:main",
+        childSessionKey: "agent:main:acp:child",
+        runId: "run-session-blocked",
+        task: "Port the repo changes",
+        status: "succeeded",
+        deliveryStatus: "pending",
+        terminalOutcome: "blocked",
+        terminalSummary: "Writable session or apply_patch authorization required.",
+      });
+
+      await waitForAssertion(() =>
+        expect(findTaskByRunId("run-session-blocked")).toMatchObject({
+          status: "succeeded",
+          deliveryStatus: "session_queued",
+        }),
+      );
+      expect(peekSystemEvents("agent:main:main")).toEqual([
+        "Background task blocked: ACP background task (run run-sess). Writable session or apply_patch authorization required.",
+        "Task needs follow-up: ACP background task (run run-sess). Writable session or apply_patch authorization required.",
+      ]);
+      expect(hasPendingHeartbeatWake()).toBe(true);
       expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
     });
   });
@@ -295,7 +363,6 @@ describe("task-registry", () => {
       });
 
       createTaskRecord({
-        source: "sessions_spawn",
         runtime: "acp",
         requesterSessionKey: "agent:main:main",
         requesterOrigin: {
@@ -335,13 +402,92 @@ describe("task-registry", () => {
     });
   });
 
+  it("surfaces blocked outcomes separately from completed tasks", async () => {
+    await withTempDir({ prefix: "openclaw-task-registry-" }, async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      hoisted.sendMessageMock.mockResolvedValue({
+        channel: "telegram",
+        to: "telegram:123",
+        via: "direct",
+      });
+
+      createTaskRecord({
+        runtime: "acp",
+        requesterSessionKey: "agent:main:main",
+        requesterOrigin: {
+          channel: "telegram",
+          to: "telegram:123",
+        },
+        childSessionKey: "agent:main:acp:child",
+        runId: "run-blocked-outcome",
+        task: "Port the repo changes",
+        status: "succeeded",
+        deliveryStatus: "pending",
+        terminalOutcome: "blocked",
+        terminalSummary: "Writable session or apply_patch authorization required.",
+      });
+
+      await waitForAssertion(() =>
+        expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            content:
+              "Background task blocked: ACP background task (run run-bloc). Writable session or apply_patch authorization required.",
+          }),
+        ),
+      );
+      expect(peekSystemEvents("agent:main:main")).toEqual([
+        "Task needs follow-up: ACP background task (run run-bloc). Writable session or apply_patch authorization required.",
+      ]);
+      expect(hasPendingHeartbeatWake()).toBe(true);
+    });
+  });
+
+  it("does not queue an unblock follow-up for ordinary completed tasks", async () => {
+    await withTempDir({ prefix: "openclaw-task-registry-" }, async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      hoisted.sendMessageMock.mockResolvedValue({
+        channel: "telegram",
+        to: "telegram:123",
+        via: "direct",
+      });
+
+      createTaskRecord({
+        runtime: "acp",
+        requesterSessionKey: "agent:main:main",
+        requesterOrigin: {
+          channel: "telegram",
+          to: "telegram:123",
+        },
+        childSessionKey: "agent:main:acp:child",
+        runId: "run-succeeded-outcome",
+        task: "Create the file and verify it",
+        status: "succeeded",
+        deliveryStatus: "pending",
+        terminalSummary: "Created /tmp/file.txt and verified contents.",
+        terminalOutcome: "succeeded",
+      });
+
+      await waitForAssertion(() =>
+        expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            content:
+              "Background task done: ACP background task (run run-succ). Created /tmp/file.txt and verified contents.",
+          }),
+        ),
+      );
+      expect(peekSystemEvents("agent:main:main")).toEqual([]);
+      expect(hasPendingHeartbeatWake()).toBe(false);
+    });
+  });
+
   it("keeps distinct task records when different producers share a runId", async () => {
     await withTempDir({ prefix: "openclaw-task-registry-" }, async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
       resetTaskRegistryForTests();
 
       createTaskRecord({
-        source: "background_cli",
         runtime: "cli",
         requesterSessionKey: "agent:codex:acp:child",
         childSessionKey: "agent:codex:acp:child",
@@ -352,7 +498,6 @@ describe("task-registry", () => {
       });
 
       createTaskRecord({
-        source: "sessions_spawn",
         runtime: "acp",
         requesterSessionKey: "agent:main:main",
         childSessionKey: "agent:codex:acp:child",
@@ -364,7 +509,6 @@ describe("task-registry", () => {
 
       expect(listTaskRecords().filter((task) => task.runId === "run-shared")).toHaveLength(2);
       expect(findTaskByRunId("run-shared")).toMatchObject({
-        source: "sessions_spawn",
         runtime: "acp",
         task: "Spawn ACP child",
       });
@@ -382,7 +526,6 @@ describe("task-registry", () => {
       });
 
       const directTask = createTaskRecord({
-        source: "unknown",
         runtime: "acp",
         requesterSessionKey: "agent:main:main",
         requesterOrigin: {
@@ -392,11 +535,10 @@ describe("task-registry", () => {
         childSessionKey: "agent:main:acp:child",
         runId: "run-shared-delivery",
         task: "Direct ACP child",
-        status: "done",
+        status: "succeeded",
         deliveryStatus: "pending",
       });
       const spawnedTask = createTaskRecord({
-        source: "sessions_spawn",
         runtime: "acp",
         requesterSessionKey: "agent:main:main",
         requesterOrigin: {
@@ -406,7 +548,8 @@ describe("task-registry", () => {
         childSessionKey: "agent:main:acp:child",
         runId: "run-shared-delivery",
         task: "Spawn ACP child",
-        status: "done",
+        preferMetadata: true,
+        status: "succeeded",
         deliveryStatus: "pending",
       });
 
@@ -419,8 +562,52 @@ describe("task-registry", () => {
       );
       expect(findTaskByRunId("run-shared-delivery")).toMatchObject({
         taskId: directTask.taskId,
-        source: "sessions_spawn",
+        task: "Spawn ACP child",
         deliveryStatus: "delivered",
+      });
+    });
+  });
+
+  it("adopts preferred ACP spawn metadata when collapsing onto an earlier direct record", async () => {
+    await withTempDir({ prefix: "openclaw-task-registry-" }, async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+
+      const directTask = createTaskRecord({
+        runtime: "acp",
+        requesterSessionKey: "agent:main:main",
+        requesterOrigin: {
+          channel: "telegram",
+          to: "telegram:123",
+        },
+        childSessionKey: "agent:main:acp:child",
+        runId: "run-collapse-preferred",
+        task: "Direct ACP child",
+        status: "running",
+        deliveryStatus: "pending",
+      });
+
+      const spawnedTask = createTaskRecord({
+        runtime: "acp",
+        requesterSessionKey: "agent:main:main",
+        requesterOrigin: {
+          channel: "telegram",
+          to: "telegram:123",
+        },
+        childSessionKey: "agent:main:acp:child",
+        runId: "run-collapse-preferred",
+        label: "Quant patch",
+        task: "Implement the feature and report back",
+        preferMetadata: true,
+        status: "running",
+        deliveryStatus: "pending",
+      });
+
+      expect(spawnedTask.taskId).toBe(directTask.taskId);
+      expect(findTaskByRunId("run-collapse-preferred")).toMatchObject({
+        taskId: directTask.taskId,
+        label: "Quant patch",
+        task: "Implement the feature and report back",
       });
     });
   });
@@ -431,7 +618,6 @@ describe("task-registry", () => {
       resetTaskRegistryForTests();
 
       const spawnedTask = createTaskRecord({
-        source: "sessions_spawn",
         runtime: "acp",
         requesterSessionKey: "agent:main:main",
         requesterOrigin: {
@@ -443,11 +629,9 @@ describe("task-registry", () => {
         task: "Spawn ACP child",
         status: "running",
         deliveryStatus: "pending",
-        streamLogPath: "/tmp/stream.jsonl",
       });
 
       const directTask = createTaskRecord({
-        source: "unknown",
         runtime: "acp",
         requesterSessionKey: "agent:main:main",
         requesterOrigin: {
@@ -463,9 +647,7 @@ describe("task-registry", () => {
       expect(directTask.taskId).toBe(spawnedTask.taskId);
       expect(listTaskRecords().filter((task) => task.runId === "run-collapse")).toHaveLength(1);
       expect(findTaskByRunId("run-collapse")).toMatchObject({
-        source: "sessions_spawn",
         task: "Spawn ACP child",
-        streamLogPath: "/tmp/stream.jsonl",
       });
     });
   });
@@ -481,7 +663,6 @@ describe("task-registry", () => {
       });
 
       const task = createTaskRecord({
-        source: "sessions_spawn",
         runtime: "acp",
         requesterSessionKey: "agent:main:main",
         requesterOrigin: {
@@ -491,8 +672,10 @@ describe("task-registry", () => {
         childSessionKey: "agent:main:acp:child",
         runId: "run-racing-delivery",
         task: "Investigate issue",
-        status: "done",
+        status: "succeeded",
         deliveryStatus: "pending",
+        terminalOutcome: "blocked",
+        terminalSummary: "Writable session or apply_patch authorization required.",
       });
 
       const first = maybeDeliverTaskTerminalUpdate(task.taskId);
@@ -502,9 +685,9 @@ describe("task-registry", () => {
       expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(1);
       expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
         expect.objectContaining({
-          idempotencyKey: `task-terminal:${task.taskId}:done`,
+          idempotencyKey: `task-terminal:${task.taskId}:succeeded:blocked`,
           mirror: expect.objectContaining({
-            idempotencyKey: `task-terminal:${task.taskId}:done`,
+            idempotencyKey: `task-terminal:${task.taskId}:succeeded:blocked`,
           }),
         }),
       );
@@ -520,7 +703,6 @@ describe("task-registry", () => {
       resetTaskRegistryForTests();
 
       const task = createTaskRecord({
-        source: "sessions_spawn",
         runtime: "subagent",
         requesterSessionKey: "agent:main:main",
         childSessionKey: "agent:main:subagent:child",
@@ -548,7 +730,6 @@ describe("task-registry", () => {
       resetTaskRegistryForTests();
 
       const task = createTaskRecord({
-        source: "sessions_spawn",
         runtime: "acp",
         requesterSessionKey: "agent:main:main",
         childSessionKey: "agent:main:acp:missing",
@@ -580,13 +761,12 @@ describe("task-registry", () => {
       resetTaskRegistryForTests();
 
       const task = createTaskRecord({
-        source: "background_cli",
         runtime: "cli",
         requesterSessionKey: "agent:main:main",
         childSessionKey: "agent:main:main",
         runId: "run-prune",
         task: "Old completed task",
-        status: "done",
+        status: "succeeded",
         deliveryStatus: "not_applicable",
         startedAt: Date.now() - 9 * 24 * 60 * 60_000,
       });
@@ -614,7 +794,6 @@ describe("task-registry", () => {
       });
 
       const task = createTaskRecord({
-        source: "sessions_spawn",
         runtime: "acp",
         requesterSessionKey: "agent:main:main",
         requesterOrigin: {
@@ -624,7 +803,7 @@ describe("task-registry", () => {
         childSessionKey: "agent:codex:acp:child",
         runId: "run-state-change",
         task: "Investigate issue",
-        status: "accepted",
+        status: "queued",
         notifyPolicy: "done_only",
       });
 
@@ -680,7 +859,6 @@ describe("task-registry", () => {
       vi.useFakeTimers();
 
       createTaskRecord({
-        source: "sessions_spawn",
         runtime: "acp",
         requesterSessionKey: "agent:main:main",
         requesterOrigin: {
@@ -753,7 +931,6 @@ describe("task-registry", () => {
       });
 
       createTaskRecord({
-        source: "sessions_spawn",
         runtime: "acp",
         requesterSessionKey: "agent:main:main",
         requesterOrigin: {
@@ -805,7 +982,6 @@ describe("task-registry", () => {
       vi.useFakeTimers();
 
       createTaskRecord({
-        source: "sessions_spawn",
         runtime: "acp",
         requesterSessionKey: "agent:main:main",
         requesterOrigin: {
@@ -863,7 +1039,6 @@ describe("task-registry", () => {
       hoisted.cancelSessionMock.mockResolvedValue(undefined);
 
       const task = registry.createTaskRecord({
-        source: "sessions_spawn",
         runtime: "acp",
         requesterSessionKey: "agent:main:main",
         requesterOrigin: {
@@ -921,7 +1096,6 @@ describe("task-registry", () => {
       });
 
       const task = registry.createTaskRecord({
-        source: "sessions_spawn",
         runtime: "subagent",
         requesterSessionKey: "agent:main:main",
         requesterOrigin: {

@@ -2,8 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { runAcpRuntimeAdapterContract } from "openclaw/plugin-sdk/testing";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { runAcpRuntimeAdapterContract } from "../../../src/acp/runtime/adapter-contract.testkit.js";
 import { ACPX_PINNED_VERSION, resolveAcpxPluginConfig } from "./config.js";
 import { AcpxRuntime, decodeAcpxRuntimeHandleState } from "./runtime.js";
 import {

@@ -1,10 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  createBlueBubblesMonitorTestRuntime,
-  EMPTY_DISPATCH_RESULT,
-  resetBlueBubblesMonitorTestState,
-  type DispatchReplyParams,
-} from "../../../test/helpers/plugins/bluebubbles-monitor.js";
 import type { ResolvedBlueBubblesAccount } from "./accounts.js";
 import { fetchBlueBubblesHistory } from "./history.js";
 import { handleBlueBubblesWebhookRequest, resolveBlueBubblesMessageId } from "./monitor.js";
@@ -27,6 +21,12 @@ import {
   type WebhookRequestParams,
 } from "./monitor.webhook.test-helpers.js";
 import type { OpenClawConfig, PluginRuntime } from "./runtime-api.js";
+import {
+  createBlueBubblesMonitorTestRuntime,
+  EMPTY_DISPATCH_RESULT,
+  resetBlueBubblesMonitorTestState,
+  type DispatchReplyParams,
+} from "./test-support/monitor.js";
 
 // Mock dependencies
 vi.mock("./send.js", () => ({

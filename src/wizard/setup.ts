@@ -131,7 +131,11 @@ export async function runSetupWizard(
   await requireRiskAcknowledgement({ opts, prompter });
 
   const snapshot = await readConfigFileSnapshot();
-  let baseConfig: OpenClawConfig = snapshot.valid ? (snapshot.exists ? snapshot.config : {}) : {};
+  let baseConfig: OpenClawConfig = snapshot.valid
+    ? snapshot.exists
+      ? (snapshot.sourceConfig ?? snapshot.config)
+      : {}
+    : {};
 
   if (snapshot.exists && !snapshot.valid) {
     await prompter.note(onboardHelpers.summarizeExistingConfig(baseConfig), "Invalid config");

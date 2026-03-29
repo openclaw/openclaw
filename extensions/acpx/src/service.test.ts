@@ -1,9 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   __testing,
   getAcpRuntimeBackend,
   requireAcpRuntimeBackend,
-} from "../../../src/acp/runtime/registry.js";
+} from "openclaw/plugin-sdk/acp-runtime";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AcpRuntime, OpenClawPluginServiceContext } from "../runtime-api.js";
 import { ACPX_BUNDLED_BIN, ACPX_PINNED_VERSION } from "./config.js";
 import { createAcpxRuntimeService } from "./service.js";

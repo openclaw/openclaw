@@ -1,10 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ReplyPayload } from "../auto-reply/types.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
-import {
-  buildTelegramExecApprovalPendingPayload,
-  shouldSuppressTelegramExecApprovalForwardingFallback,
-} from "../plugin-sdk/telegram.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { createExecApprovalForwarder } from "./exec-approval-forwarder.js";
@@ -46,27 +43,111 @@ function isDiscordExecApprovalClientEnabledForTest(params: {
   return Boolean(config?.enabled && (config.approvers?.length ?? 0) > 0);
 }
 
+function isTelegramExecApprovalClientEnabledForTest(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}): boolean {
+  const accountId = params.accountId?.trim();
+  const rootConfig = params.cfg.channels?.telegram?.execApprovals;
+  const accountConfig =
+    accountId && accountId !== "default"
+      ? params.cfg.channels?.telegramAccounts?.[accountId]?.execApprovals
+      : undefined;
+  const config = accountConfig ?? rootConfig;
+  return Boolean(config?.enabled && (config.approvers?.length ?? 0) > 0);
+}
+
+function shouldSuppressTelegramExecApprovalForwardingFallbackForTest(params: {
+  cfg: OpenClawConfig;
+  target: { channel: string; accountId?: string | null };
+  request: { request: { turnSourceChannel?: string | null; turnSourceAccountId?: string | null } };
+}): boolean {
+  if (
+    params.target.channel !== "telegram" ||
+    params.request.request.turnSourceChannel !== "telegram"
+  ) {
+    return false;
+  }
+  const accountId =
+    params.target.accountId?.trim() || params.request.request.turnSourceAccountId?.trim();
+  return isTelegramExecApprovalClientEnabledForTest({ cfg: params.cfg, accountId });
+}
+
+function buildTelegramExecApprovalPendingPayloadForTest(params: {
+  request: { id: string };
+}): ReplyPayload {
+  return {
+    text: `Telegram exec approval ${params.request.id}`,
+    interactive: {
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Allow Once",
+              value: `/approve ${params.request.id} allow-once`,
+              style: "success",
+            },
+            {
+              label: "Allow Always",
+              value: `/approve ${params.request.id} always`,
+              style: "primary",
+            },
+            {
+              label: "Deny",
+              value: `/approve ${params.request.id} deny`,
+              style: "danger",
+            },
+          ],
+        },
+      ],
+    },
+    channelData: {
+      execApproval: {
+        approvalId: params.request.id,
+      },
+      telegram: {
+        buttons: [
+          [
+            { text: "Allow Once", callback_data: `/approve ${params.request.id} allow-once` },
+            { text: "Allow Always", callback_data: `/approve ${params.request.id} always` },
+          ],
+          [{ text: "Deny", callback_data: `/approve ${params.request.id} deny` }],
+        ],
+      },
+    },
+  };
+}
+
 const telegramApprovalPlugin: Pick<
   ChannelPlugin,
-  "id" | "meta" | "capabilities" | "config" | "execApprovals"
+  "id" | "meta" | "capabilities" | "config" | "approvals"
 > = {
   ...createChannelTestPluginBase({ id: "telegram" }),
-  execApprovals: {
-    shouldSuppressForwardingFallback: (params) =>
-      shouldSuppressTelegramExecApprovalForwardingFallback(params),
-    buildPendingPayload: ({ request, nowMs }) =>
-      buildTelegramExecApprovalPendingPayload({ request, nowMs }),
+  approvals: {
+    delivery: {
+      shouldSuppressForwardingFallback: (params) =>
+        shouldSuppressTelegramExecApprovalForwardingFallbackForTest(params),
+    },
+    render: {
+      exec: {
+        buildPendingPayload: ({ request }) =>
+          buildTelegramExecApprovalPendingPayloadForTest({ request }),
+      },
+    },
   },
 };
 const discordApprovalPlugin: Pick<
   ChannelPlugin,
-  "id" | "meta" | "capabilities" | "config" | "execApprovals"
+  "id" | "meta" | "capabilities" | "config" | "approvals"
 > = {
   ...createChannelTestPluginBase({ id: "discord" }),
-  execApprovals: {
-    shouldSuppressForwardingFallback: ({ cfg, target }) =>
-      target.channel === "discord" &&
-      isDiscordExecApprovalClientEnabledForTest({ cfg, accountId: target.accountId }),
+  approvals: {
+    delivery: {
+      shouldSuppressForwardingFallback: ({ cfg, target }) =>
+        target.channel === "discord" &&
+        isDiscordExecApprovalClientEnabledForTest({ cfg, accountId: target.accountId }),
+    },
   },
 };
 const defaultRegistry = createTestRegistry([
@@ -257,6 +338,47 @@ describe("exec approval forwarder", () => {
     expect(deliver).toHaveBeenCalledTimes(2);
   });
 
+  it("calls outbound beforeDeliverPayload before exec approval delivery", async () => {
+    const beforeDeliverPayload = vi.fn();
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          plugin: telegramApprovalPlugin,
+          source: "test",
+        },
+        {
+          pluginId: "discord",
+          plugin: discordApprovalPlugin,
+          source: "test",
+        },
+        {
+          pluginId: "slack",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "slack" as ChannelPlugin["id"] }),
+            outbound: {
+              deliveryMode: "direct",
+              beforeDeliverPayload,
+            },
+          } satisfies Pick<ChannelPlugin, "id" | "meta" | "capabilities" | "config" | "outbound">,
+          source: "test",
+        },
+      ]),
+    );
+
+    const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
+    await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(true);
+    await vi.waitFor(() => {
+      expect(deliver).toHaveBeenCalled();
+    });
+    expect(beforeDeliverPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        hint: { kind: "approval-pending", approvalKind: "exec" },
+        target: expect.objectContaining({ channel: "slack", to: "U123" }),
+      }),
+    );
+  });
+
   it("skips telegram forwarding when telegram exec approvals handler is enabled", async () => {
     vi.useFakeTimers();
     const cfg = {
@@ -298,7 +420,7 @@ describe("exec approval forwarder", () => {
     expect(deliver).not.toHaveBeenCalled();
   });
 
-  it("attaches explicit telegram buttons in forwarded telegram fallback payloads", async () => {
+  it("attaches shared interactive approval buttons in forwarded fallback payloads", async () => {
     vi.useFakeTimers();
     const { deliver, forwarder } = createForwarder({
       cfg: makeTargetsCfg([{ channel: "telegram", to: "123" }]),
@@ -322,20 +444,35 @@ describe("exec approval forwarder", () => {
         to: "123",
         payloads: [
           expect.objectContaining({
-            channelData: {
+            channelData: expect.objectContaining({
               execApproval: expect.objectContaining({
                 approvalId: "req-1",
               }),
-              telegram: {
-                buttons: [
-                  [
-                    { text: "Allow Once", callback_data: "/approve req-1 allow-once" },
-                    { text: "Allow Always", callback_data: "/approve req-1 always" },
+            }),
+            interactive: expect.objectContaining({
+              blocks: [
+                {
+                  type: "buttons",
+                  buttons: [
+                    {
+                      label: "Allow Once",
+                      value: "/approve req-1 allow-once",
+                      style: "success",
+                    },
+                    {
+                      label: "Allow Always",
+                      value: "/approve req-1 always",
+                      style: "primary",
+                    },
+                    {
+                      label: "Deny",
+                      value: "/approve req-1 deny",
+                      style: "danger",
+                    },
                   ],
-                  [{ text: "Deny", callback_data: "/approve req-1 deny" }],
-                ],
-              },
-            },
+                },
+              ],
+            }),
           }),
         ],
       }),
@@ -412,7 +549,6 @@ describe("exec approval forwarder", () => {
   });
 
   it("can forward resolved notices without pending cache when request payload is present", async () => {
-    vi.useFakeTimers();
     const { deliver, forwarder } = createForwarder({
       cfg: makeTargetsCfg([{ channel: "telegram", to: "123" }]),
     });

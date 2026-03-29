@@ -58,6 +58,8 @@ If install succeeds but `openclaw` is not found in a new terminal, see [Node.js 
 
 ---
 
+<a id="installsh"></a>
+
 ## install.sh
 
 <Tip>
@@ -170,6 +172,8 @@ The script exits with code `2` for invalid method selection or invalid `--instal
 
 ---
 
+<a id="install-clish"></a>
+
 ## install-cli.sh
 
 <Info>
@@ -247,6 +251,8 @@ Designed for environments where you want everything under a local prefix (defaul
 </AccordionGroup>
 
 ---
+
+<a id="installps1"></a>
 
 ## install.ps1
 
