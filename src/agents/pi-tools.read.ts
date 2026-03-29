@@ -446,6 +446,7 @@ type MemoryFlushAppendOnlyWriteOptions = {
   root: string;
   relativePath: string;
   containerWorkdir?: string;
+  targetValidator?: (resolvedPath: string) => Promise<void> | void;
   sandbox?: {
     root: string;
     bridge: SandboxFsBridge;
@@ -562,6 +563,7 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
           `Memory flush writes are restricted to ${options.relativePath}; use that path only.`,
         );
       }
+      await options.targetValidator?.(resolvedPath);
 
       await appendMemoryFlushContent({
         absolutePath: allowedAbsolutePath,

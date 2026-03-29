@@ -1,123 +1,96 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { listSearchProviderOptions, setupSearch } from "./onboard-search.js";
 
-type WebSearchConfigRecord = {
-  plugins?: {
-    entries?: Record<
-      string,
-      { enabled?: boolean; config?: { webSearch?: Record<string, unknown> } }
-    >;
-  };
-};
-
-const SEARCH_PROVIDER_PLUGINS: Record<
-  string,
-  { pluginId: string; envVars: string[]; label: string; credentialLabel?: string }
-> = {
-  brave: { pluginId: "brave", envVars: ["BRAVE_API_KEY"], label: "Brave Search" },
-  firecrawl: { pluginId: "firecrawl", envVars: ["FIRECRAWL_API_KEY"], label: "Firecrawl" },
-  gemini: { pluginId: "google", envVars: ["GEMINI_API_KEY", "GOOGLE_API_KEY"], label: "Gemini" },
-  grok: { pluginId: "xai", envVars: ["XAI_API_KEY"], label: "Grok" },
-  kimi: {
-    pluginId: "moonshot",
-    envVars: ["KIMI_API_KEY", "MOONSHOT_API_KEY"],
-    label: "Kimi",
-    credentialLabel: "Moonshot / Kimi API key",
-  },
-  perplexity: {
-    pluginId: "perplexity",
-    envVars: ["PERPLEXITY_API_KEY", "OPENROUTER_API_KEY"],
-    label: "Perplexity",
-  },
-  tavily: { pluginId: "tavily", envVars: ["TAVILY_API_KEY"], label: "Tavily" },
-};
-
-function getWebSearchConfig(config: OpenClawConfig | undefined, pluginId: string) {
-  return (config as WebSearchConfigRecord | undefined)?.plugins?.entries?.[pluginId]?.config
-    ?.webSearch;
-}
-
-function ensureWebSearchConfig(config: OpenClawConfig, pluginId: string) {
-  const entries = ((config.plugins ??= {}).entries ??= {});
-  const pluginEntry = (entries[pluginId] ??= {}) as {
-    enabled?: boolean;
-    config?: { webSearch?: Record<string, unknown> };
-  };
-  pluginEntry.config ??= {};
-  pluginEntry.config.webSearch ??= {};
-  return pluginEntry.config.webSearch;
-}
-
-function createSearchProviderEntry(id: string): PluginWebSearchProviderEntry {
-  const metadata = SEARCH_PROVIDER_PLUGINS[id];
-  if (!metadata) {
-    throw new Error(`missing search provider fixture: ${id}`);
-  }
-  const entry: PluginWebSearchProviderEntry = {
-    id: id as never,
-    pluginId: metadata.pluginId,
-    label: metadata.label,
-    hint: `${metadata.label} web search`,
+const bundledSearchProviders = vi.hoisted(() => {
+  const createProvider = (params: {
+    id: string;
+    pluginId: string;
+    label: string;
+    envVars: string[];
+    requiresCredential?: boolean;
+  }) => ({
+    id: params.id,
+    pluginId: params.pluginId,
+    label: params.label,
+    hint: `${params.label} provider`,
     onboardingScopes: ["text-inference"],
-    envVars: metadata.envVars,
-    placeholder: `${id}-key`,
-    signupUrl: `https://example.com/${id}`,
-    credentialLabel:
-      metadata.credentialLabel ??
-      (id === "gemini" ? "Google Gemini API key" : `${metadata.label} API key`),
-    credentialPath: `plugins.entries.${metadata.pluginId}.config.webSearch.apiKey`,
+    envVars: params.envVars,
+    requiresCredential: params.requiresCredential,
+    placeholder: params.requiresCredential === false ? "(no key needed)" : "test-key",
+    signupUrl: "https://example.com/search",
+    credentialPath:
+      params.requiresCredential === false
+        ? ""
+        : `plugins.entries.${params.pluginId}.config.webSearch.apiKey`,
     getCredentialValue: () => undefined,
     setCredentialValue: () => {},
-    getConfiguredCredentialValue: (config) => getWebSearchConfig(config, metadata.pluginId)?.apiKey,
-    setConfiguredCredentialValue: (config, value) => {
-      ensureWebSearchConfig(config, metadata.pluginId).apiKey = value;
-    },
+    getConfiguredCredentialValue: () => undefined,
+    setConfiguredCredentialValue: () => {},
     createTool: () => null,
-    applySelectionConfig: (config) => {
-      const next: OpenClawConfig = { ...config, plugins: { ...config.plugins } };
-      const entries = { ...next.plugins?.entries } as NonNullable<
-        NonNullable<OpenClawConfig["plugins"]>["entries"]
-      >;
-      entries[metadata.pluginId] = { ...entries[metadata.pluginId], enabled: true };
-      next.plugins = { ...next.plugins, entries };
-      return next;
-    },
+  });
+
+  const providers = [
+    createProvider({
+      id: "brave",
+      pluginId: "brave",
+      label: "Brave Search",
+      envVars: ["BRAVE_API_KEY"],
+    }),
+    createProvider({
+      id: "firecrawl",
+      pluginId: "firecrawl",
+      label: "Firecrawl Search",
+      envVars: ["FIRECRAWL_API_KEY"],
+    }),
+    createProvider({
+      id: "gemini",
+      pluginId: "google",
+      label: "Gemini",
+      envVars: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+    }),
+    createProvider({
+      id: "grok",
+      pluginId: "xai",
+      label: "Grok",
+      envVars: ["XAI_API_KEY"],
+    }),
+    createProvider({
+      id: "kimi",
+      pluginId: "moonshot",
+      label: "Kimi",
+      envVars: ["KIMI_API_KEY", "MOONSHOT_API_KEY"],
+    }),
+    createProvider({
+      id: "perplexity",
+      pluginId: "perplexity",
+      label: "Perplexity",
+      envVars: ["PERPLEXITY_API_KEY", "OPENROUTER_API_KEY"],
+    }),
+    createProvider({
+      id: "tavily",
+      pluginId: "tavily",
+      label: "Tavily Search",
+      envVars: ["TAVILY_API_KEY"],
+    }),
+  ];
+
+  const pluginIdByProviderId = new Map(
+    providers.map((provider) => [provider.id, provider.pluginId]),
+  );
+
+  return {
+    providers,
+    resolveBundledWebSearchPluginId: (providerId?: string) =>
+      providerId ? pluginIdByProviderId.get(providerId) : undefined,
   };
-  if (id === "kimi") {
-    entry.runSetup = async ({ config, prompter }) => {
-      const baseUrl = await prompter.select({
-        message: "Moonshot endpoint",
-        options: [{ value: "https://api.moonshot.ai/v1", label: "Moonshot" }],
-        initialValue: "https://api.moonshot.ai/v1",
-      });
-      const modelChoice = await prompter.select({
-        message: "Moonshot web-search model",
-        options: [{ value: "__keep__", label: "Keep default" }],
-        initialValue: "__keep__",
-      });
-      const webSearch = ensureWebSearchConfig(config, metadata.pluginId);
-      webSearch.baseUrl = baseUrl;
-      webSearch.model = modelChoice === "__keep__" ? "kimi-k2.6" : modelChoice;
-      return config;
-    };
-  }
-  return entry;
-}
+});
 
-const searchProviderFixture = vi.hoisted(() => ({
-  resolvePluginWebSearchProviders: vi.fn(() =>
-    ["brave", "firecrawl", "gemini", "grok", "kimi", "perplexity", "tavily"].map((id) =>
-      createSearchProviderEntry(id),
-    ),
-  ),
-}));
-
-vi.mock("../plugins/web-search-providers.runtime.js", () => ({
-  resolvePluginWebSearchProviders: searchProviderFixture.resolvePluginWebSearchProviders,
+vi.mock("../plugins/bundled-web-search.js", () => ({
+  listBundledWebSearchProviders: () => bundledSearchProviders.providers,
+  resolveBundledWebSearchPluginId: bundledSearchProviders.resolveBundledWebSearchPluginId,
 }));
 
 const runtime: RuntimeEnv = {

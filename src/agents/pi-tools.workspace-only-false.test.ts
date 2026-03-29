@@ -238,4 +238,77 @@ describe("FS tools with workspaceOnly=false", () => {
     });
     await expect(fs.readFile(allowedAbsolutePath, "utf-8")).resolves.toBe("seed\nnew note");
   });
+
+  it("blocks memory flush writes when the flush file is outside configured fs roots", async () => {
+    const allowedRelativePath = "memory/2026-03-07.md";
+    const allowedAbsolutePath = path.join(workspaceDir, allowedRelativePath);
+    const allowedRootDir = path.join(tmpDir, "outside-root");
+    await fs.mkdir(path.dirname(allowedAbsolutePath), { recursive: true });
+    await fs.mkdir(allowedRootDir, { recursive: true });
+    await fs.writeFile(allowedAbsolutePath, "seed");
+
+    const tools = createOpenClawCodingTools({
+      workspaceDir,
+      trigger: "memory",
+      memoryFlushWritePath: allowedRelativePath,
+      config: {
+        tools: {
+          exec: {
+            applyPatch: {},
+          },
+          fs: {
+            roots: [{ path: allowedRootDir, kind: "dir", access: "rw" }],
+          },
+        },
+      },
+      modelProvider: "openai",
+      modelId: "gpt-5",
+    });
+
+    const writeTool = tools.find((tool) => tool.name === "write");
+    expect(writeTool).toBeDefined();
+
+    await expect(
+      writeTool!.execute("test-call-memory-roots-deny", {
+        path: allowedRelativePath,
+        content: "new note",
+      }),
+    ).rejects.toThrow(/outside allowed filesystem roots/);
+    await expect(fs.readFile(allowedAbsolutePath, "utf-8")).resolves.toBe("seed");
+  });
+
+  it("allows memory flush writes when an exact file root permits the flush file", async () => {
+    const allowedRelativePath = "memory/2026-03-07.md";
+    const allowedAbsolutePath = path.join(workspaceDir, allowedRelativePath);
+    await fs.mkdir(path.dirname(allowedAbsolutePath), { recursive: true });
+    await fs.writeFile(allowedAbsolutePath, "seed");
+
+    const tools = createOpenClawCodingTools({
+      workspaceDir,
+      trigger: "memory",
+      memoryFlushWritePath: allowedRelativePath,
+      config: {
+        tools: {
+          exec: {
+            applyPatch: {},
+          },
+          fs: {
+            roots: [{ path: allowedAbsolutePath, kind: "file", access: "rw" }],
+          },
+        },
+      },
+      modelProvider: "openai",
+      modelId: "gpt-5",
+    });
+
+    const writeTool = tools.find((tool) => tool.name === "write");
+    expect(writeTool).toBeDefined();
+
+    const result = await writeTool!.execute("test-call-memory-roots-allow", {
+      path: allowedRelativePath,
+      content: "new note",
+    });
+    expect(hasToolError(result)).toBe(false);
+    await expect(fs.readFile(allowedAbsolutePath, "utf-8")).resolves.toBe("seed\nnew note");
+  });
 });

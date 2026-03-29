@@ -29,23 +29,26 @@ describe("fs-safe unlink helper errors", () => {
     vi.resetModules();
   });
 
-  it("preserves helper startup failures instead of rewriting them to not-found", async () => {
-    const root = await tempDirs.make("openclaw-fs-safe-root-");
-    const targetPath = path.join(root, "note.txt");
-    await fs.writeFile(targetPath, "hello", "utf8");
+  it.runIf(process.platform !== "win32")(
+    "preserves helper startup failures instead of rewriting them to not-found",
+    async () => {
+      const root = await tempDirs.make("openclaw-fs-safe-root-");
+      const targetPath = path.join(root, "note.txt");
+      await fs.writeFile(targetPath, "hello", "utf8");
 
-    try {
-      await removeFileWithinRoot({
-        rootDir: root,
-        relativePath: "note.txt",
-      });
-      throw new Error("expected rooted unlink to fail");
-    } catch (error) {
-      expect(error).toBeInstanceOf(SafeOpenError);
-      expect(error).toMatchObject({ code: "invalid-path" });
-      expect(String(error)).toMatch(/Pinned unlink helper failed to start:/i);
-    }
+      try {
+        await removeFileWithinRoot({
+          rootDir: root,
+          relativePath: "note.txt",
+        });
+        throw new Error("expected rooted unlink to fail");
+      } catch (error) {
+        expect(error).toBeInstanceOf(SafeOpenError);
+        expect(error).toMatchObject({ code: "invalid-path" });
+        expect(String(error)).toMatch(/Pinned unlink helper failed to start:/i);
+      }
 
-    await expect(fs.readFile(targetPath, "utf8")).resolves.toBe("hello");
-  });
+      await expect(fs.readFile(targetPath, "utf8")).resolves.toBe("hello");
+    },
+  );
 });

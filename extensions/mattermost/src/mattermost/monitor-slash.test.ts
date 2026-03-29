@@ -9,8 +9,18 @@ const registerSlashCommands = vi.hoisted(() => vi.fn());
 const resolveCallbackUrl = vi.hoisted(() => vi.fn());
 const resolveSlashCommandConfig = vi.hoisted(() => vi.fn());
 const activateSlashCommands = vi.hoisted(() => vi.fn());
+const createDedupeCache = vi.hoisted(() =>
+  vi.fn(() => ({
+    check: vi.fn(() => false),
+    peek: vi.fn(() => false),
+    delete: vi.fn(),
+    clear: vi.fn(),
+    size: vi.fn(() => 0),
+  })),
+);
 
 vi.mock("./runtime-api.js", () => ({
+  createDedupeCache,
   listSkillCommandsForAgents,
   parseStrictPositiveInteger,
 }));

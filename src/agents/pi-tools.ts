@@ -592,6 +592,13 @@ export function createOpenClawCodingTools(options?: {
           });
         }
       : undefined;
+  const memoryFlushRootsValidator =
+    resolvedRoots && !sandboxRoot
+      ? async (resolvedPath: string) => {
+          validatePathAgainstRoots(resolvedPath, "write", resolvedRoots);
+          await assertAliasSafe(resolvedPath, resolvedRoots, { operation: "write" });
+        }
+      : undefined;
   const applyPatchTool =
     !applyPatchEnabled || (sandboxRoot && !allowWorkspaceWrites)
       ? null
@@ -699,6 +706,7 @@ export function createOpenClawCodingTools(options?: {
               wrapToolMemoryFlushAppendOnlyWrite(tool, {
                 root: sandboxRoot ?? workspaceRoot,
                 relativePath: memoryFlushWritePath,
+                targetValidator: memoryFlushRootsValidator,
                 containerWorkdir: sandbox?.containerWorkdir,
                 sandbox:
                   sandboxRoot && sandboxFsBridge

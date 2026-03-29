@@ -5,8 +5,18 @@ const isDangerousNameMatchingEnabled = vi.hoisted(() => vi.fn());
 const resolveAllowlistMatchSimple = vi.hoisted(() => vi.fn());
 const resolveControlCommandGate = vi.hoisted(() => vi.fn());
 const resolveEffectiveAllowFromLists = vi.hoisted(() => vi.fn());
+const createDedupeCache = vi.hoisted(() =>
+  vi.fn(() => ({
+    check: vi.fn(() => false),
+    peek: vi.fn(() => false),
+    delete: vi.fn(),
+    clear: vi.fn(),
+    size: vi.fn(() => 0),
+  })),
+);
 
 vi.mock("./runtime-api.js", () => ({
+  createDedupeCache,
   evaluateSenderGroupAccessForPolicy,
   isDangerousNameMatchingEnabled,
   resolveAllowlistMatchSimple,
