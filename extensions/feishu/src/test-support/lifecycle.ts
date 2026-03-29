@@ -1,39 +1,8 @@
-import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "openclaw/plugin-sdk/feishu";
 import { expect, vi } from "vitest";
-import { loadBundledPluginPublicSurfaceSync } from "../../../src/test-utils/bundled-plugin-public-surface.js";
-import { createPluginRuntimeMock } from "./plugin-runtime-mock.js";
-
-type ResolvedFeishuAccount = {
-  accountId: string;
-  selectionSource: string;
-  enabled: boolean;
-  configured: boolean;
-  name?: string;
-  appId?: string;
-  appSecret?: string;
-  encryptKey?: string;
-  verificationToken?: string;
-  domain: string;
-  config: Record<string, unknown>;
-};
-
-const { monitorSingleAccount } = loadBundledPluginPublicSurfaceSync<{
-  monitorSingleAccount: (params: {
-    cfg: ClawdbotConfig;
-    account: ResolvedFeishuAccount;
-    runtime: RuntimeEnv;
-    botOpenIdSource: typeof FEISHU_PREFETCHED_BOT_OPEN_ID_SOURCE;
-  }) => Promise<void>;
-}>({
-  pluginId: "feishu",
-  artifactBasename: "src/monitor.account.js",
-});
-const { setFeishuRuntime } = loadBundledPluginPublicSurfaceSync<{
-  setFeishuRuntime: (runtime: PluginRuntime) => void;
-}>({
-  pluginId: "feishu",
-  artifactBasename: "src/runtime.js",
-});
+import { createPluginRuntimeMock } from "../../../../test/helpers/plugins/plugin-runtime-mock.js";
+import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../../runtime-api.js";
+import { setFeishuRuntime } from "../runtime.js";
+import type { ResolvedFeishuAccount } from "../types.js";
 
 type InboundDebouncerParams<T> = {
   onFlush?: (items: T[]) => Promise<void>;
@@ -261,7 +230,7 @@ export function createResolvedFeishuLifecycleAccount(params: {
 }): ResolvedFeishuAccount {
   return {
     accountId: params.accountId,
-    selectionSource: "explicit",
+    selectionSource: "config",
     enabled: true,
     configured: true,
     appId: params.appId,
@@ -400,6 +369,11 @@ export function expectFeishuReplyDispatcherSentFinalReplyOnce(params: {
   expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
 }
 
+async function loadMonitorSingleAccount() {
+  const module = await import("../monitor.account.js");
+  return module.monitorSingleAccount;
+}
+
 export async function setupFeishuLifecycleHandler<T extends RuntimeEnv>(params: {
   createEventDispatcherMock: {
     mockReturnValue: (value: unknown) => unknown;
@@ -422,6 +396,7 @@ export async function setupFeishuLifecycleHandler<T extends RuntimeEnv>(params: 
     params.createEventDispatcherMock.mockReturnValue({ register });
   }
 
+  const monitorSingleAccount = await loadMonitorSingleAccount();
   await monitorSingleAccount({
     cfg: params.cfg,
     account: params.account,
