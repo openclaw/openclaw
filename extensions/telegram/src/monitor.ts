@@ -9,6 +9,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveTelegramAccount } from "./accounts.js";
 import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
 import { TelegramExecApprovalHandler } from "./exec-approvals-handler.js";
+import { resolveTelegramApiBase } from "./fetch.js";
 import { resolveTelegramTransport } from "./fetch.js";
 import {
   isRecoverableTelegramNetworkError,
@@ -202,6 +203,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       log,
       telegramTransport,
       createTelegramTransport: createTelegramTransportForPolling,
+      apiBase: resolveTelegramApiBase(account.config.apiRoot?.trim() || undefined),
     });
     await pollingSession.runUntilAbort();
   } finally {

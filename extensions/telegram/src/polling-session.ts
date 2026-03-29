@@ -7,7 +7,7 @@ import {
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { createTelegramBot } from "./bot.js";
-import { type TelegramTransport } from "./fetch.js";
+import { resolveTelegramApiBase, type TelegramTransport } from "./fetch.js";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 import { TelegramPollingTransportState } from "./polling-transport-state.js";
 
@@ -21,6 +21,7 @@ const TELEGRAM_POLL_RESTART_POLICY = {
 const POLL_STALL_THRESHOLD_MS = 90_000;
 const POLL_WATCHDOG_INTERVAL_MS = 30_000;
 const POLL_STOP_GRACE_MS = 15_000;
+const SUPERVISOR_UPDATES_STALE_THRESHOLD_MS = 90_000;
 
 const waitForGracefulStop = async (stop: () => Promise<void>) => {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -56,6 +57,8 @@ type TelegramPollingSessionOpts = {
   telegramTransport?: TelegramTransport;
   /** Rebuild Telegram transport after stall/network recovery when marked dirty. */
   createTelegramTransport?: () => TelegramTransport;
+  /** Pre-resolved API base for lightweight heartbeat probes. */
+  apiBase?: string;
 };
 
 export class TelegramPollingSession {
@@ -215,7 +218,6 @@ export class TelegramPollingSession {
     let lastGetUpdatesError: string | null = null;
     let lastGetUpdatesOffset: number | null = null;
     let inFlightGetUpdates = 0;
-    let stopSequenceLogged = false;
     let stallDiagLoggedAt = 0;
 
     bot.api.config.use(async (prev, method, payload, signal) => {
@@ -334,6 +336,35 @@ export class TelegramPollingSession {
           ? lastApiActivityAt
           : Math.max(lastApiActivityAt, latestInFlightApiStartedAt);
       const apiElapsed = now - apiLivenessAt;
+      const updatesElapsed = now - (lastGetUpdatesFinishedAt ?? lastGetUpdatesAt);
+      const updatesStale =
+        updatesElapsed > SUPERVISOR_UPDATES_STALE_THRESHOLD_MS && inFlightGetUpdates === 0;
+
+      if (updatesStale && runner.isRunning()) {
+        if (stallDiagLoggedAt && now - stallDiagLoggedAt < POLL_STALL_THRESHOLD_MS / 2) {
+          return;
+        }
+        stallDiagLoggedAt = now;
+        this.#transportState.markDirty();
+        stalledRestart = true;
+        this.opts.log(
+          `[telegram] Polling freshness check failed (no successful getUpdates for ${formatDurationPrecise(updatesElapsed)} with no in-flight request); forcing restart. [diag inFlight=${inFlightGetUpdates} outcome=${lastGetUpdatesOutcome} startedAt=${lastGetUpdatesStartedAt ?? "n/a"} finishedAt=${lastGetUpdatesFinishedAt ?? "n/a"} durationMs=${lastGetUpdatesDurationMs ?? "n/a"} offset=${lastGetUpdatesOffset ?? "n/a"}${lastGetUpdatesError ? ` error=${lastGetUpdatesError}` : ""}]`,
+        );
+        void stopRunner();
+        void stopBot();
+        if (!forceCycleTimer) {
+          forceCycleTimer = setTimeout(() => {
+            if (this.opts.abortSignal?.aborted) {
+              return;
+            }
+            this.opts.log(
+              `[telegram] Polling runner stop timed out after ${formatDurationPrecise(POLL_STOP_GRACE_MS)}; forcing restart cycle.`,
+            );
+            forceCycleResolve?.();
+          }, POLL_STOP_GRACE_MS);
+        }
+        return;
+      }
 
       // Treat recent non-getUpdates success and recent non-getUpdates start as
       // the same liveness signal. Slow delivery should suppress the watchdog,
@@ -429,6 +460,17 @@ export class TelegramPollingSession {
       if (this.#activeFetchAbort === fetchAbortController) {
         this.#activeFetchAbort = undefined;
       }
+    }
+  }
+
+  async #probeHeartbeatOnce(): Promise<void> {
+    const apiBase = this.opts.apiBase ?? resolveTelegramApiBase(undefined);
+    const response = await fetch(`${apiBase}/bot${this.opts.token}/getMe`, {
+      method: "POST",
+      signal: this.opts.abortSignal,
+    });
+    if (!response.ok) {
+      throw new Error(`Telegram heartbeat failed with HTTP ${response.status}`);
     }
   }
 }
