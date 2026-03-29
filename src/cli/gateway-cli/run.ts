@@ -315,9 +315,10 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
 
       // Attempt automatic rollback if config backup is enabled
       const configBackupSettings = preflightSnapshot.config?.gateway?.configBackup;
+      const backupEnabled = configBackupSettings?.enabled !== false; // default true
       const autoRollbackEnabled = configBackupSettings?.autoRollback !== false; // default true
 
-      if (autoRollbackEnabled) {
+      if (backupEnabled && autoRollbackEnabled) {
         gatewayLog.warn("gateway: config validation failed, attempting automatic rollback...");
         const rollbackResult = await attemptConfigRollback(preflightSnapshot.path);
         if (rollbackResult.restored) {
@@ -327,7 +328,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
             gatewayLog.info("gateway: config rollback successful, continuing startup");
           } else {
             const rollbackIssues =
-              rollbackSnapshot.issues.length > 0
+              (rollbackSnapshot.issues?.length ?? 0) > 0
                 ? formatConfigIssueLines(rollbackSnapshot.issues, "", { normalizeRoot: true }).join(
                     "\n",
                   )
