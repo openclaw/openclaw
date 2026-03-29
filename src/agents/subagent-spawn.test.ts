@@ -236,6 +236,7 @@ describe("spawnSubagentDirect seam flow", () => {
       {
         task: "wait returns ok but history lookup fails",
         waitForCompletion: true,
+        cleanup: "delete",
       },
       {
         agentSessionKey: "agent:main:main",
@@ -252,5 +253,58 @@ describe("spawnSubagentDirect seam flow", () => {
       },
     });
     expect(result.completion?.reply).toBeUndefined();
+    expect(hoisted.callGatewayMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "sessions.delete",
+      }),
+    );
+  });
+
+  it("deletes delete-cleanup child session after inline reply capture", async () => {
+    const methods: string[] = [];
+    hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
+      methods.push(request.method ?? "unknown");
+      if (request.method === "agent") {
+        return { runId: "run-1" };
+      }
+      if (request.method === "agent.wait") {
+        return { status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        return {
+          messages: [{ role: "assistant", content: "final result" }],
+        };
+      }
+      if (request.method?.startsWith("sessions.")) {
+        return { ok: true };
+      }
+      return {};
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "wait returns ok and should cleanup delete after capture",
+        waitForCompletion: true,
+        cleanup: "delete",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "discord",
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "accepted",
+      runId: "run-1",
+      completion: {
+        status: "ok",
+        reply: "final result",
+      },
+    });
+
+    const captureIdx = methods.indexOf("chat.history");
+    const deleteIdx = methods.lastIndexOf("sessions.delete");
+    expect(captureIdx).toBeGreaterThan(-1);
+    expect(deleteIdx).toBeGreaterThan(captureIdx);
   });
 });

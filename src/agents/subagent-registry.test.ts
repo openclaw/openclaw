@@ -203,7 +203,7 @@ describe("subagent registry seam flow", () => {
     expect(mocks.persistSubagentRunsToDisk).toHaveBeenCalled();
   });
 
-  it("preserves delete cleanup when auto-announce is suppressed", async () => {
+  it("defers child-session delete cleanup when auto-announce is suppressed", async () => {
     mod.registerSubagentRun({
       runId: "run-suppress-delete",
       childSessionKey: "agent:main:subagent:suppress-delete",
@@ -217,24 +217,20 @@ describe("subagent registry seam flow", () => {
 
     await vi.waitFor(() => {
       expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
-      expect(mocks.callGateway).toHaveBeenCalledWith(
-        expect.objectContaining({
-          method: "sessions.delete",
-          params: expect.objectContaining({
-            key: "agent:main:subagent:suppress-delete",
-            deleteTranscript: true,
-            emitLifecycleHooks: false,
-          }),
-          timeoutMs: 10_000,
-        }),
-      );
     });
+    expect(mocks.callGateway).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "sessions.delete",
+      }),
+    );
 
-    expect(
-      mod
-        .listSubagentRunsForRequester("agent:main:main")
-        .find((entry) => entry.runId === "run-suppress-delete"),
-    ).toBeUndefined();
+    await vi.waitFor(() => {
+      expect(
+        mod
+          .listSubagentRunsForRequester("agent:main:main")
+          .find((entry) => entry.runId === "run-suppress-delete"),
+      ).toBeUndefined();
+    });
   });
 
   it("deletes delete-mode completion runs when announce cleanup gives up after retry limit", async () => {

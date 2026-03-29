@@ -247,6 +247,8 @@ function summarizeError(err: unknown): string {
 async function waitForSpawnedSubagentCompletion(params: {
   runId: string;
   childSessionKey: string;
+  cleanup: "delete" | "keep";
+  spawnMode: SpawnSubagentMode;
   waitTimeoutMs: number;
 }): Promise<{
   status: "ok" | "error" | "timeout";
@@ -254,6 +256,16 @@ async function waitForSpawnedSubagentCompletion(params: {
   reply?: string;
   error?: string;
 }> {
+  const maybeDeleteChildSession = async () => {
+    if (params.cleanup !== "delete") {
+      return;
+    }
+    await cleanupProvisionalSession(params.childSessionKey, {
+      deleteTranscript: true,
+      emitLifecycleHooks: params.spawnMode === "session",
+    });
+  };
+
   try {
     const timeoutMs = Math.max(1, Math.floor(params.waitTimeoutMs));
     const wait = await callGateway<{
@@ -271,6 +283,7 @@ async function waitForSpawnedSubagentCompletion(params: {
     if (wait?.status === "error") {
       // Restore auto-announce so a late completion/summary can still be delivered.
       clearSuppressAutoAnnounce(params.runId);
+      await maybeDeleteChildSession();
       return {
         status: "error",
         waitTimeoutMs: timeoutMs,
@@ -301,6 +314,7 @@ async function waitForSpawnedSubagentCompletion(params: {
     try {
       const capturedReply = await captureSubagentCompletionReply(params.childSessionKey);
       reply = capturedReply?.trim() || undefined;
+      await maybeDeleteChildSession();
     } catch (err) {
       // Preserve success status but restore announce fallback if reply capture transport fails.
       clearSuppressAutoAnnounce(params.runId);
@@ -940,6 +954,8 @@ export async function spawnSubagentDirect(
     ? await waitForSpawnedSubagentCompletion({
         runId: childRunId,
         childSessionKey,
+        cleanup,
+        spawnMode,
         waitTimeoutMs,
       })
     : undefined;

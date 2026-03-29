@@ -141,6 +141,90 @@ describe("sessions_await tool", () => {
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
+  it("deletes cleanup=delete sessions after awaited reply capture", async () => {
+    const completedRun = makeRun({
+      runId: "run-delete-after-capture",
+      childSessionKey: "agent:main:subagent:delete-after-capture",
+      cleanup: "delete",
+      endedAt: Date.now(),
+      outcome: { status: "ok" },
+    });
+    getSubagentRunByChildSessionKeyMock.mockImplementation((key: string) =>
+      key === "agent:main:subagent:delete-after-capture" ? completedRun : null,
+    );
+
+    let captured = false;
+    captureSubagentCompletionReplyMock.mockImplementation(async () => {
+      captured = true;
+      return "captured output";
+    });
+    callGatewayMock.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "sessions.delete") {
+        expect(captured).toBe(true);
+        return { ok: true };
+      }
+      return { status: "ok" };
+    });
+
+    const tool = createSessionsAwaitTool({ agentSessionKey: REQUESTER_SESSION_KEY });
+    const result = await tool.execute("call-delete-after-capture", {
+      sessionKeys: ["agent:main:subagent:delete-after-capture"],
+    });
+
+    const details = result.details as { status: string; results: Array<Record<string, unknown>> };
+    expect(details.status).toBe("ok");
+    expect(details.results[0]).toMatchObject({
+      sessionKey: "agent:main:subagent:delete-after-capture",
+      status: "completed",
+      runId: "run-delete-after-capture",
+      reply: "captured output",
+    });
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "sessions.delete",
+        params: expect.objectContaining({
+          key: "agent:main:subagent:delete-after-capture",
+          deleteTranscript: true,
+          emitLifecycleHooks: false,
+        }),
+        timeoutMs: 10_000,
+      }),
+    );
+  });
+
+  it("defers cleanup=delete session removal when reply capture fails", async () => {
+    const completedRun = makeRun({
+      runId: "run-delete-capture-fail",
+      childSessionKey: "agent:main:subagent:delete-capture-fail",
+      cleanup: "delete",
+      endedAt: Date.now(),
+      outcome: { status: "ok" },
+    });
+    getSubagentRunByChildSessionKeyMock.mockImplementation((key: string) =>
+      key === "agent:main:subagent:delete-capture-fail" ? completedRun : null,
+    );
+    captureSubagentCompletionReplyMock.mockRejectedValue(new Error("history unavailable"));
+
+    const tool = createSessionsAwaitTool({ agentSessionKey: REQUESTER_SESSION_KEY });
+    const result = await tool.execute("call-delete-capture-fail", {
+      sessionKeys: ["agent:main:subagent:delete-capture-fail"],
+    });
+
+    const details = result.details as { status: string; results: Array<Record<string, unknown>> };
+    expect(details.status).toBe("ok");
+    expect(details.results[0]).toMatchObject({
+      sessionKey: "agent:main:subagent:delete-capture-fail",
+      status: "completed",
+      runId: "run-delete-capture-fail",
+      error: expect.stringContaining("failed to capture sub-agent completion reply"),
+    });
+    expect(callGatewayMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "sessions.delete",
+      }),
+    );
+  });
+
   it("returns overall error when every subagent result is error", async () => {
     const failedA = makeRun({
       runId: "run-err-a",

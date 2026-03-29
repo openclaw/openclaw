@@ -43,6 +43,25 @@ function resolveRunOwnerSessionKey(run: {
   return controllerSessionKey || run.requesterSessionKey;
 }
 
+async function deleteAwaitedChildSession(params: {
+  sessionKey: string;
+  spawnMode?: "run" | "session";
+}) {
+  try {
+    await callGateway({
+      method: "sessions.delete",
+      params: {
+        key: params.sessionKey,
+        deleteTranscript: true,
+        emitLifecycleHooks: params.spawnMode === "session",
+      },
+      timeoutMs: 10_000,
+    });
+  } catch {
+    // Best-effort cleanup only.
+  }
+}
+
 export function createSessionsAwaitTool(opts?: { agentSessionKey?: string }): AnyAgentTool {
   return {
     label: "Sessions",
@@ -169,6 +188,8 @@ export function createSessionsAwaitTool(opts?: { agentSessionKey?: string }): An
           const waitResp = waitResults.get(runId);
           const waitStatus = waitResp?.status;
           const runTimedOut = run.outcome?.status === "timeout";
+          const runEnded = typeof run.endedAt === "number";
+          const cleanupDelete = run.cleanup === "delete";
           const isTimedOut =
             waitStatus === "timeout" ||
             runTimedOut ||
@@ -177,6 +198,12 @@ export function createSessionsAwaitTool(opts?: { agentSessionKey?: string }): An
           if (isTimedOut) {
             // Restore auto-announce so the child can still deliver if it completes later.
             clearSuppressAutoAnnounce(runId);
+            if (cleanupDelete && runTimedOut) {
+              await deleteAwaitedChildSession({
+                sessionKey,
+                spawnMode: run.spawnMode,
+              });
+            }
             return {
               sessionKey,
               status: "timeout" as const,
@@ -210,6 +237,17 @@ export function createSessionsAwaitTool(opts?: { agentSessionKey?: string }): An
             replyCaptureError = `failed to capture sub-agent completion reply: ${summarizeTransportError(
               err,
             )}`;
+          }
+          const terminalForDelete =
+            runTimedOut ||
+            waitStatus === "ok" ||
+            (waitStatus === "error" && runEnded) ||
+            (typeof waitResp === "undefined" && runEnded);
+          if (cleanupDelete && terminalForDelete && (!replyCaptureError || Boolean(replyText))) {
+            await deleteAwaitedChildSession({
+              sessionKey,
+              spawnMode: run.spawnMode,
+            });
           }
           const errorMessage = waitErrored
             ? waitResp?.error ||
