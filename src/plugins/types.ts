@@ -2416,8 +2416,8 @@ export type PluginHookBeforeInstallContext = {
   targetType: PluginInstallTargetType;
   /** Original install entrypoint/provenance. */
   requestKind: PluginInstallRequestKind;
-  /** Origin of the install target (e.g. "openclaw-bundled", "plugin-package"). */
-  source?: string;
+  /** Normalized origin of the install target (e.g. "openclaw-bundled", "plugin-package"). */
+  origin?: string;
 };
 
 export type PluginHookBeforeInstallEvent = {
@@ -2429,8 +2429,8 @@ export type PluginHookBeforeInstallEvent = {
   sourcePath: string;
   /** Whether the install target content is a file or directory. */
   sourcePathKind: PluginInstallSourcePathKind;
-  /** Origin of the install target (e.g. "openclaw-bundled", "plugin-package"). */
-  source?: string;
+  /** Normalized origin of the install target (e.g. "openclaw-bundled", "plugin-package"). */
+  origin?: string;
   /** Install request provenance and caller mode. */
   request: PluginHookBeforeInstallRequest;
   /** Structured result of the built-in scanner. */
