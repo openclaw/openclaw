@@ -57,6 +57,7 @@ function createBaseParams(
     channelIssues: [],
     gatewayReachable: false,
     health: null,
+    nodeOnlyGateway: null,
   };
 }
 
@@ -86,5 +87,36 @@ describe("status-all diagnosis port checks", () => {
     const output = params.lines.join("\n");
     expect(output).toContain("! Port 18789");
     expect(output).toContain("Port 18789 is already in use.");
+  });
+
+  it("avoids unreachable gateway diagnosis in node-only mode", async () => {
+    const params = createBaseParams([]);
+    params.connectionDetailsForReport = [
+      "Node-only mode detected",
+      "Local gateway: not expected on this machine",
+      "Remote gateway target: gateway.example.com:19000",
+    ].join("\n");
+    params.tailscale.backendState = "Running";
+    params.health = undefined;
+    params.nodeOnlyGateway = {
+      gatewayTarget: "gateway.example.com:19000",
+      gatewayValue: "node → gateway.example.com:19000 · no local gateway",
+      connectionDetails: [
+        "Node-only mode detected",
+        "Local gateway: not expected on this machine",
+        "Remote gateway target: gateway.example.com:19000",
+        "Inspect the remote gateway host for live channel and health details.",
+      ].join("\n"),
+    };
+
+    await appendStatusAllDiagnosis(params);
+
+    const output = params.lines.join("\n");
+    expect(output).toContain("Node-only mode detected");
+    expect(output).toContain(
+      "Channel issues skipped (node-only mode; query gateway.example.com:19000)",
+    );
+    expect(output).not.toContain("Channel issues skipped (gateway unreachable)");
+    expect(output).not.toContain("Gateway health:");
   });
 });
