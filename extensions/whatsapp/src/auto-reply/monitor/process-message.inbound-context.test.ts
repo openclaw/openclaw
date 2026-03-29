@@ -63,13 +63,19 @@ function makeProcessMessageArgs(params: {
 
 function createWhatsAppDirectStreamingArgs(params?: {
   rememberSentText?: (text: string | undefined, opts: unknown) => void;
+  commentaryDelivery?: "off" | "live";
 }) {
   return makeProcessMessageArgs({
     routeSessionKey: "agent:main:whatsapp:direct:+1555",
     groupHistoryKey: "+1555",
     rememberSentText: params?.rememberSentText,
     cfg: {
-      channels: { whatsapp: { blockStreaming: true } },
+      channels: {
+        whatsapp: {
+          blockStreaming: true,
+          ...(params?.commentaryDelivery ? { commentaryDelivery: params.commentaryDelivery } : {}),
+        },
+      },
       messages: {},
       session: { store: sessionStorePath },
     } as unknown as ReturnType<typeof import("openclaw/plugin-sdk/config-runtime").loadConfig>,
@@ -312,6 +318,92 @@ describe("web processMessage inbound context", () => {
     // oxlint-disable-next-line typescript/no-explicit-any
     const replyOptions = (capturedDispatchParams as any)?.replyOptions;
     expect(replyOptions?.disableBlockStreaming).toBe(true);
+  });
+
+  it("does not wire commentary delivery by default", async () => {
+    await processMessage(createWhatsAppDirectStreamingArgs());
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const replyOptions = (capturedDispatchParams as any)?.replyOptions;
+    expect(replyOptions?.onCommentaryReply).toBeUndefined();
+  });
+
+  it("wires commentary delivery when WhatsApp live commentary is enabled", async () => {
+    await processMessage(createWhatsAppDirectStreamingArgs({ commentaryDelivery: "live" }));
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const replyOptions = (capturedDispatchParams as any)?.replyOptions;
+    expect(replyOptions?.onCommentaryReply).toBeTypeOf("function");
+    expect(replyOptions?.blockReplyTimeoutMs).toBe(15_000);
+  });
+
+  it("normalizes commentary directives before delivery", async () => {
+    await processMessage(createWhatsAppDirectStreamingArgs({ commentaryDelivery: "live" }));
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const replyOptions = (capturedDispatchParams as any)?.replyOptions;
+    await replyOptions?.onCommentaryReply?.({ text: "   [[replyToCurrent]]hello" });
+
+    expect(deliverWebReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyResult: expect.objectContaining({
+          text: "hello",
+          replyToCurrent: true,
+        }),
+      }),
+    );
+  });
+
+  it("suppresses silent commentary after normalization", async () => {
+    const rememberSentText = vi.fn();
+    await processMessage(
+      createWhatsAppDirectStreamingArgs({
+        commentaryDelivery: "live",
+        rememberSentText,
+      }),
+    );
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const replyOptions = (capturedDispatchParams as any)?.replyOptions;
+    await replyOptions?.onCommentaryReply?.({ text: "   " });
+
+    expect(deliverWebReplyMock).not.toHaveBeenCalled();
+    expect(rememberSentText).not.toHaveBeenCalled();
+  });
+
+  it("allows media-only commentary delivery", async () => {
+    await processMessage(createWhatsAppDirectStreamingArgs({ commentaryDelivery: "live" }));
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const replyOptions = (capturedDispatchParams as any)?.replyOptions;
+    await replyOptions?.onCommentaryReply?.({ mediaUrl: "https://example.com/test.jpg" });
+
+    expect(deliverWebReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyResult: expect.objectContaining({
+          mediaUrl: "https://example.com/test.jpg",
+        }),
+      }),
+    );
+  });
+
+  it("forwards commentary abort and timeout into WhatsApp delivery", async () => {
+    await processMessage(createWhatsAppDirectStreamingArgs({ commentaryDelivery: "live" }));
+    const abortController = new AbortController();
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const replyOptions = (capturedDispatchParams as any)?.replyOptions;
+    await replyOptions?.onCommentaryReply?.(
+      { text: "hello" },
+      { abortSignal: abortController.signal, timeoutMs: 3_000 },
+    );
+
+    expect(deliverWebReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        abortSignal: abortController.signal,
+        timeoutMs: 3_000,
+      }),
+    );
   });
 
   it("passes sendComposing through as the reply typing callback", async () => {

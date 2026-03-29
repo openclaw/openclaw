@@ -433,6 +433,7 @@ export async function runAgentTurnWithFallback(params: {
                   await params.typingSignals.signalMessageStart();
                   await params.opts?.onAssistantMessageStart?.();
                 },
+                onCommentaryReply: params.opts?.onCommentaryReply,
                 onReasoningStream:
                   params.typingSignals.shouldStartOnReasoning || params.opts?.onReasoningStream
                     ? async (payload) => {
@@ -510,6 +511,7 @@ export async function runAgentTurnWithFallback(params: {
                         await blockReplyPipeline.flush({ force: true });
                       }
                     : undefined,
+                blockReplyTimeoutMs: params.opts?.blockReplyTimeoutMs,
                 shouldEmitToolResult: params.shouldEmitToolResult,
                 shouldEmitToolOutput: params.shouldEmitToolOutput,
                 bootstrapPromptWarningSignaturesSeen,

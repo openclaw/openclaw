@@ -72,6 +72,8 @@ type WhatsAppSharedConfig = {
   mediaMaxMb?: number;
   /** Disable block streaming for this account. */
   blockStreaming?: boolean;
+  /** WhatsApp live assistant commentary delivery mode. */
+  commentaryDelivery?: "off" | "live";
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
   groups?: Record<string, WhatsAppGroupConfig>;

@@ -1,9 +1,10 @@
 import type { AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
+import { extractAssistantOutputCandidates } from "./pi-embedded-commentary.js";
 import {
   isMessagingToolDuplicateNormalized,
   normalizeTextForComparison,
@@ -53,6 +54,16 @@ function emitReasoningEnd(ctx: EmbeddedPiSubscribeContext) {
   }
   ctx.state.reasoningStreamOpen = false;
   void ctx.params.onReasoningEnd?.();
+}
+
+function extractAssistantOutputsForMessage(ctx: EmbeddedPiSubscribeContext, msg: AgentMessage) {
+  const messageRecord =
+    msg && typeof msg === "object" ? (msg as unknown as Record<string, unknown>) : undefined;
+  const fallbackMessageStableId =
+    typeof messageRecord?.id === "string" && messageRecord.id.trim().length > 0
+      ? undefined
+      : ctx.resolveCurrentAssistantFallbackMessageId();
+  return extractAssistantOutputCandidates(msg, { fallbackMessageStableId });
 }
 
 export function resolveSilentReplyFallbackText(params: {
@@ -338,6 +349,19 @@ export function handleMessageUpdate(
   ) {
     ctx.flushBlockReplyBuffer();
   }
+
+  for (const segment of extractAssistantOutputsForMessage(ctx, msg)) {
+    if (
+      segment.phase !== "commentary" ||
+      segment.isTerminal ||
+      ctx.state.seenLiveCommentarySegmentIds.has(segment.segmentId)
+    ) {
+      continue;
+    }
+    ctx.state.seenLiveCommentarySegmentIds.add(segment.segmentId);
+    const { isTerminal: _isTerminal, ...commentarySegment } = segment;
+    ctx.queueCommentaryDelivery(commentarySegment);
+  }
 }
 
 export function handleMessageEnd(
@@ -392,7 +416,11 @@ export function handleMessageEnd(
     }
   }
 
-  if (!ctx.params.silentExpected && !ctx.state.emittedAssistantUpdate && (cleanedText || hasMedia)) {
+  if (
+    !ctx.params.silentExpected &&
+    !ctx.state.emittedAssistantUpdate &&
+    (cleanedText || hasMedia)
+  ) {
     const data = buildAssistantStreamData({
       text: cleanedText,
       delta: cleanedText,
@@ -518,6 +546,24 @@ export function handleMessageEnd(
 
   if (!ctx.params.silentExpected && ctx.state.blockReplyBreak === "text_end" && onBlockReply) {
     emitSplitResultAsBlockReply(ctx.consumeReplyDirectives("", { final: true }));
+  }
+
+  for (const segment of extractAssistantOutputsForMessage(ctx, assistantMessage)) {
+    const { isTerminal: _isTerminal, ...finalizedSegment } = segment;
+    if (
+      !ctx.state.assistantOutputs.some(
+        (existingSegment) => existingSegment.segmentId === finalizedSegment.segmentId,
+      )
+    ) {
+      ctx.state.assistantOutputs.push(finalizedSegment);
+    }
+    if (
+      finalizedSegment.phase === "commentary" &&
+      !ctx.state.deliveredCommentarySegmentIds.has(finalizedSegment.segmentId) &&
+      !ctx.state.pendingCommentarySegmentIds.has(finalizedSegment.segmentId)
+    ) {
+      ctx.queueCommentaryDelivery(finalizedSegment);
+    }
   }
 
   ctx.state.deltaBuffer = "";

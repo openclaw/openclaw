@@ -91,6 +91,68 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
+  it("strips commentary that was actually delivered live", () => {
+    const payloads = buildPayloads({
+      assistantOutputs: [
+        { segmentId: "c1", text: "Checking the repo state now.", phase: "commentary" },
+        { segmentId: "f1", text: "Lint passed cleanly.", phase: "final_answer" },
+      ],
+      deliveredCommentarySegmentIds: ["c1"],
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("Lint passed cleanly.");
+  });
+
+  it("keeps commentary in the final reply when it was not sent live", () => {
+    const payloads = buildPayloads({
+      assistantOutputs: [
+        { segmentId: "c1", text: "Checking the repo state now.", phase: "commentary" },
+        { segmentId: "f1", text: "Lint passed cleanly.", phase: "final_answer" },
+      ],
+    });
+
+    expect(payloads).toHaveLength(2);
+    expect(payloads.map((payload) => payload.text)).toEqual([
+      "Checking the repo state now.",
+      "Lint passed cleanly.",
+    ]);
+  });
+
+  it("keeps an undelivered commentary suffix in the final reply", () => {
+    const payloads = buildPayloads({
+      assistantOutputs: [
+        { segmentId: "c1", text: "Checking the repo state now.", phase: "commentary" },
+      ],
+      deliveredCommentarySegmentIds: ["c1"],
+      deliveredCommentarySegmentTexts: new Map([["c1", "Checking the "]]),
+      assistantTexts: [],
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("repo state now.");
+  });
+
+  it("does not fall back to assistantTexts when delivered commentary strips all assistant outputs", () => {
+    expectNoPayloads({
+      assistantOutputs: [
+        { segmentId: "c1", text: "Checking the repo state now.", phase: "commentary" },
+      ],
+      deliveredCommentarySegmentIds: ["c1"],
+      assistantTexts: ["Lint passed cleanly."],
+    });
+  });
+
+  it("falls back to assistantTexts when no assistant outputs were finalized", () => {
+    const payloads = buildPayloads({
+      assistantOutputs: [],
+      assistantTexts: ["Still working through the repo state."],
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("Still working through the repo state.");
+  });
+
   it("suppresses JSON NO_REPLY assistant payloads", () => {
     expectNoPayloads({
       assistantTexts: ['{"action":"NO_REPLY"}'],

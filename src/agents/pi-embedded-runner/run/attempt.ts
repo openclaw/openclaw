@@ -1247,6 +1247,8 @@ export async function runEmbeddedAttempt(
         onReasoningEnd: params.onReasoningEnd,
         onBlockReply: params.onBlockReply,
         onBlockReplyFlush: params.onBlockReplyFlush,
+        onCommentaryReply: params.onCommentaryReply,
+        blockReplyTimeoutMs: params.blockReplyTimeoutMs,
         blockReplyBreak: params.blockReplyBreak,
         blockReplyChunking: params.blockReplyChunking,
         onPartialReply: params.onPartialReply,
@@ -1254,6 +1256,7 @@ export async function runEmbeddedAttempt(
         onAgentEvent: params.onAgentEvent,
         enforceFinalTag: params.enforceFinalTag,
         silentExpected: params.silentExpected,
+        abortSignal: params.abortSignal,
         config: params.config,
         sessionKey: sandboxSessionKey,
         sessionId: params.sessionId,
@@ -1262,8 +1265,13 @@ export async function runEmbeddedAttempt(
 
       const {
         assistantTexts,
+        assistantOutputs,
         toolMetas,
         unsubscribe,
+        deliveredCommentarySegmentIds,
+        getPendingCommentaryDeliveryCount,
+        waitForCommentaryDeliveryRound,
+        abortCommentaryDelivery,
         waitForCompactionRetry,
         isCompactionInFlight,
         getMessagingToolSentTexts,
@@ -1288,6 +1296,54 @@ export async function runEmbeddedAttempt(
 
       let abortWarnTimer: NodeJS.Timeout | undefined;
       const isProbeSession = params.sessionId?.startsWith("probe-") ?? false;
+      const commentaryDeliveryTimeoutMs = Math.max(1, params.blockReplyTimeoutMs ?? 15_000);
+      const waitForCommentaryDeliveryBounded = async () => {
+        if (!params.onCommentaryReply) {
+          return;
+        }
+        while (true) {
+          const pendingCount = Math.max(1, getPendingCommentaryDeliveryCount());
+          const roundTimeoutMs = commentaryDeliveryTimeoutMs * pendingCount;
+          let timer: NodeJS.Timeout | undefined;
+          const timeoutError = new Error(`commentary delivery timed out after ${roundTimeoutMs}ms`);
+          timeoutError.name = "AbortError";
+          const timeoutPromise = new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(timeoutError), roundTimeoutMs);
+          });
+          try {
+            const didDrain = await abortable(
+              Promise.race([waitForCommentaryDeliveryRound(), timeoutPromise]),
+            );
+            if (didDrain) {
+              return;
+            }
+            continue;
+          } catch (err) {
+            abortCommentaryDelivery(err);
+            if (err === timeoutError) {
+              if (!isProbeSession) {
+                log.warn(
+                  `commentary delivery wait timed out: runId=${params.runId} sessionId=${params.sessionId} timeoutMs=${roundTimeoutMs} pendingCount=${pendingCount}`,
+                );
+              }
+              return;
+            }
+            if (isRunnerAbortError(err)) {
+              if (!isProbeSession) {
+                log.debug(
+                  `commentary delivery wait aborted: runId=${params.runId} sessionId=${params.sessionId}`,
+                );
+              }
+              return;
+            }
+            throw err;
+          } finally {
+            if (timer) {
+              clearTimeout(timer);
+            }
+          }
+        }
+      };
       const compactionTimeoutMs = resolveCompactionTimeoutMs(params.config);
       let abortTimer: NodeJS.Timeout | undefined;
       let compactionGraceUsed = false;
@@ -1681,6 +1737,7 @@ export async function runEmbeddedAttempt(
         }
         messagesSnapshot = snapshotSelection.messagesSnapshot;
         sessionIdUsed = snapshotSelection.sessionIdUsed;
+        await waitForCommentaryDeliveryBounded();
 
         if (promptError && promptErrorSource === "prompt" && !compactionOccurredThisAttempt) {
           try {
@@ -1844,6 +1901,8 @@ export async function runEmbeddedAttempt(
         systemPromptReport,
         messagesSnapshot,
         assistantTexts,
+        assistantOutputs,
+        deliveredCommentarySegmentIds: deliveredCommentarySegmentIds(),
         toolMetas: toolMetasNormalized,
         lastAssistant,
         lastToolError: getLastToolError?.(),

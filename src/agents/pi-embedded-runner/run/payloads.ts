@@ -5,6 +5,7 @@ import type { ReasoningLevel, VerboseLevel } from "../../../auto-reply/thinking.
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { formatToolAggregate } from "../../../auto-reply/tool-meta.js";
 import type { OpenClawConfig } from "../../../config/config.js";
+import type { AssistantOutputEntry } from "../../pi-embedded-commentary.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
   formatAssistantErrorText,
@@ -14,11 +15,7 @@ import {
   normalizeTextForComparison,
 } from "../../pi-embedded-helpers.js";
 import type { ToolResultFormat } from "../../pi-embedded-subscribe.js";
-import {
-  extractAssistantText,
-  extractAssistantThinking,
-  formatReasoningMessage,
-} from "../../pi-embedded-utils.js";
+import { extractAssistantThinking, formatReasoningMessage } from "../../pi-embedded-utils.js";
 import { isLikelyMutatingToolName } from "../../tool-mutation.js";
 
 type ToolMetaEntry = { toolName: string; meta?: string };
@@ -90,6 +87,8 @@ function resolveToolErrorWarningPolicy(params: {
 
 export function buildEmbeddedRunPayloads(params: {
   assistantTexts: string[];
+  assistantOutputs?: AssistantOutputEntry[];
+  deliveredCommentarySegmentIds?: string[];
   toolMetas: ToolMetaEntry[];
   lastAssistant: AssistantMessage | undefined;
   lastToolError?: LastToolError;
@@ -199,7 +198,6 @@ export function buildEmbeddedRunPayloads(params: {
     replyItems.push({ text: reasoningText, isReasoning: true });
   }
 
-  const fallbackAnswerText = params.lastAssistant ? extractAssistantText(params.lastAssistant) : "";
   const shouldSuppressRawErrorText = (text: string) => {
     if (!lastAssistantErrored) {
       return false;
@@ -250,14 +248,23 @@ export function buildEmbeddedRunPayloads(params: {
     }
     return isRawApiErrorPayload(trimmed);
   };
+  const deliveredCommentarySegmentIds = new Set(params.deliveredCommentarySegmentIds ?? []);
+  const resolvedAssistantTexts = (() => {
+    if (params.assistantOutputs && params.assistantOutputs.length > 0) {
+      const filteredAssistantOutputs = params.assistantOutputs
+        .filter((segment) => {
+          return !(
+            segment.phase === "commentary" && deliveredCommentarySegmentIds.has(segment.segmentId)
+          );
+        })
+        .map((segment) => segment.text);
+      return filteredAssistantOutputs;
+    }
+    return params.assistantTexts;
+  })();
   const answerTexts = suppressAssistantArtifacts
     ? []
-    : (params.assistantTexts.length
-        ? params.assistantTexts
-        : fallbackAnswerText
-          ? [fallbackAnswerText]
-          : []
-      ).filter((text) => !shouldSuppressRawErrorText(text));
+    : resolvedAssistantTexts.filter((text) => !shouldSuppressRawErrorText(text));
 
   let hasUserFacingAssistantReply = false;
   for (const text of answerTexts) {
