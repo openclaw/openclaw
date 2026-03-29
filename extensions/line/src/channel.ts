@@ -515,4 +515,5 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = createChatChannelP
           accountId: accountId ?? undefined,
         }),
     }),
+  },
 });
