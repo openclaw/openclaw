@@ -11,11 +11,10 @@ import {
 } from "./subagent-announce.js";
 import { __testing as subagentRegistryTesting } from "./subagent-registry.js";
 import { __testing as subagentSpawnTesting } from "./subagent-spawn.js";
+import type { SubagentLifecycleHookRunner } from "./subagent-spawn.js";
 
 type SessionsSpawnTestConfig = ReturnType<(typeof import("../config/config.js"))["loadConfig"]>;
-type SessionsSpawnHookRunner = ReturnType<
-  (typeof import("../plugins/hook-runner-global.js"))["getGlobalHookRunner"]
->;
+type SessionsSpawnHookRunner = SubagentLifecycleHookRunner | null;
 type CreateSessionsSpawnTool =
   (typeof import("./tools/sessions-spawn-tool.js"))["createSessionsSpawnTool"];
 export type CreateOpenClawToolsOpts = Parameters<CreateSessionsSpawnTool>[0];
@@ -87,7 +86,7 @@ const hoisted = vi.hoisted(() => {
     set configOverride(next: SessionsSpawnTestConfig) {
       configOverride = next;
     },
-    hookRunnerOverride: undefined as SessionsSpawnHookRunner,
+    hookRunnerOverride: null as SessionsSpawnHookRunner,
     defaultRunSubagentAnnounceFlow,
     runSubagentAnnounceFlowOverride: defaultRunSubagentAnnounceFlow,
   };
@@ -123,7 +122,7 @@ export function resetSessionsSpawnAnnounceFlowOverride(): void {
 }
 
 export function resetSessionsSpawnHookRunnerOverride(): void {
-  hoisted.state.hookRunnerOverride = undefined;
+  hoisted.state.hookRunnerOverride = null;
 }
 
 export function setSessionsSpawnHookRunnerOverride(next: SessionsSpawnHookRunner): void {
