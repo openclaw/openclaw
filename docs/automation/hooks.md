@@ -540,7 +540,7 @@ Example event (plugin package install):
     "findings": [
       {
         "severity": "warn",
-        "code": "network_fetch",
+        "ruleId": "network_fetch",
         "file": "dist/index.js",
         "line": 88,
         "message": "Dynamic network fetch detected during install review."
