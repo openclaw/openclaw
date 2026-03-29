@@ -9,7 +9,11 @@ let prevGatewayToken: string | undefined;
 let prevGatewayPassword: string | undefined;
 
 const pwMocks = vi.hoisted(() => ({
+  batchViaPlaywright: vi.fn(async () => ({ results: [] })),
   closePageViaPlaywright: vi.fn(async () => {}),
+  cookiesGetViaPlaywright: vi.fn(async () => ({
+    cookies: [{ name: "session", value: "abc123" }],
+  })),
   downloadViaPlaywright: vi.fn(async () => ({
     url: "https://example.com/report.pdf",
     suggestedFilename: "report.pdf",
@@ -105,6 +109,8 @@ describe("browser control Playwright follow-up SSRF guard", () => {
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
 
     pwMocks.closePageViaPlaywright.mockClear();
+    pwMocks.batchViaPlaywright.mockClear();
+    pwMocks.cookiesGetViaPlaywright.mockClear();
     pwMocks.downloadViaPlaywright.mockClear();
     pwMocks.evaluateViaPlaywright.mockClear();
     pwMocks.getNetworkRequestsViaPlaywright.mockClear();
@@ -151,6 +157,18 @@ describe("browser control Playwright follow-up SSRF guard", () => {
     }).then((r) => r.json())) as { error?: string };
     expect(evalRes.error).toContain("Blocked");
 
+    const batchRes = (await realFetch(`${base}/act`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: "batch", actions: [{ kind: "evaluate", fn: "() => 1" }] }),
+    }).then((r) => r.json())) as { error?: string };
+    expect(batchRes.error).toContain("Blocked");
+
+    const cookiesRes = (await realFetch(`${base}/cookies`).then((r) => r.json())) as {
+      error?: string;
+    };
+    expect(cookiesRes.error).toContain("Blocked");
+
     const storageRes = (await realFetch(`${base}/storage/local?key=token`).then((r) =>
       r.json(),
     )) as { error?: string };
@@ -192,7 +210,9 @@ describe("browser control Playwright follow-up SSRF guard", () => {
     }).then((r) => r.json())) as { error?: string };
     expect(downloadRes.error).toContain("Blocked");
 
-    expect(pwMocks.closePageViaPlaywright).toHaveBeenCalledTimes(8);
+    expect(pwMocks.closePageViaPlaywright).toHaveBeenCalledTimes(10);
+    expect(pwMocks.batchViaPlaywright).not.toHaveBeenCalled();
+    expect(pwMocks.cookiesGetViaPlaywright).not.toHaveBeenCalled();
     expect(pwMocks.downloadViaPlaywright).not.toHaveBeenCalled();
     expect(pwMocks.evaluateViaPlaywright).not.toHaveBeenCalled();
     expect(pwMocks.getNetworkRequestsViaPlaywright).not.toHaveBeenCalled();
@@ -215,6 +235,17 @@ describe("browser control Playwright follow-up SSRF guard", () => {
       body: JSON.stringify({ kind: "evaluate", fn: "() => 1" }),
     }).then((r) => r.json())) as { ok?: boolean; result?: string };
 
+    const batchRes = (await realFetch(`${base}/act`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: "batch", actions: [{ kind: "evaluate", fn: "() => 1" }] }),
+    }).then((r) => r.json())) as { ok?: boolean; results?: Array<{ ok: boolean }> };
+
+    const cookiesRes = (await realFetch(`${base}/cookies`).then((r) => r.json())) as {
+      ok?: boolean;
+      cookies?: Array<{ name: string }>;
+    };
+
     const snapshotAiRes = (await realFetch(`${base}/snapshot?format=ai`).then((r) => r.json())) as {
       ok?: boolean;
       format?: string;
@@ -226,10 +257,16 @@ describe("browser control Playwright follow-up SSRF guard", () => {
 
     expect(evalRes.ok).toBe(true);
     expect(evalRes.result).toBe("ok");
+    expect(batchRes.ok).toBe(true);
+    expect(batchRes.results).toEqual([]);
+    expect(cookiesRes.ok).toBe(true);
+    expect(cookiesRes.cookies?.[0]?.name).toBe("session");
     expect(requestsRes.ok).toBe(true);
     expect(snapshotAiRes.ok).toBe(true);
     expect(snapshotAiRes.format).toBe("ai");
     expect(pwMocks.closePageViaPlaywright).not.toHaveBeenCalled();
+    expect(pwMocks.batchViaPlaywright).toHaveBeenCalledTimes(1);
+    expect(pwMocks.cookiesGetViaPlaywright).toHaveBeenCalledTimes(1);
     expect(pwMocks.evaluateViaPlaywright).toHaveBeenCalledTimes(1);
     expect(pwMocks.getNetworkRequestsViaPlaywright).toHaveBeenCalledTimes(1);
     expect(pwMocks.snapshotAiViaPlaywright).toHaveBeenCalledTimes(1);

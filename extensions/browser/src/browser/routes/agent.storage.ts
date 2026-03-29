@@ -77,6 +77,13 @@ export function registerBrowserAgentStorageRoutes(
       targetId,
       feature: "cookies",
       run: async ({ cdpUrl, tab, pw }) => {
+        await assertPlaywrightTabTargetAllowed({
+          ctx,
+          pw,
+          cdpUrl,
+          targetId: tab.targetId,
+          url: tab.url,
+        });
         const result = await pw.cookiesGetViaPlaywright({
           cdpUrl,
           targetId: tab.targetId,
