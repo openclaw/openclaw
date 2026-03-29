@@ -9,6 +9,7 @@ const loadChatHistoryMock = vi.hoisted(() => vi.fn(async () => undefined));
 type GatewayClientMock = {
   start: ReturnType<typeof vi.fn>;
   stop: ReturnType<typeof vi.fn>;
+  request: ReturnType<typeof vi.fn>;
   options: { clientVersion?: string };
   emitHello: (hello?: GatewayHelloOk) => void;
   emitClose: (info: {
@@ -39,6 +40,7 @@ vi.mock("./gateway.ts", async (importOriginal) => {
   class GatewayBrowserClient {
     readonly start = vi.fn();
     readonly stop = vi.fn();
+    readonly request = vi.fn(async () => ({}));
 
     constructor(
       private opts: {
@@ -56,6 +58,7 @@ vi.mock("./gateway.ts", async (importOriginal) => {
       gatewayClientInstances.push({
         start: this.start,
         stop: this.stop,
+        request: this.request,
         options: { clientVersion: this.opts.clientVersion },
         emitHello: (hello) => {
           this.opts.onHello?.(
@@ -203,6 +206,68 @@ describe("connectGateway", () => {
     expect(gatewayClientInstances).toHaveLength(3);
     expect(secondClient.stop).toHaveBeenCalledTimes(1);
     expect(host.lastError).toBeNull();
+  });
+
+  it("preserves approval prompts, clears stale run indicators, and resumes queued work after seq-gap reconnect", () => {
+    const host = createHost();
+    const chatHost = host as typeof host & {
+      chatRunId: string | null;
+      chatQueue: Array<{
+        id: string;
+        text: string;
+        createdAt: number;
+        pendingRunId?: string;
+      }>;
+    };
+    chatHost.chatRunId = "run-1";
+    chatHost.chatQueue = [
+      {
+        id: "pending",
+        text: "/steer tighten the plan",
+        createdAt: 1,
+        pendingRunId: "run-1",
+      },
+      {
+        id: "queued",
+        text: "follow up",
+        createdAt: 2,
+      },
+    ];
+    host.execApprovalQueue = [
+      {
+        id: "approval-1",
+        kind: "exec",
+        request: { command: "rm -rf /tmp/demo" },
+        createdAtMs: Date.now(),
+        expiresAtMs: Date.now() + 60_000,
+      },
+    ];
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+
+    client.emitGap(20, 24);
+
+    expect(gatewayClientInstances).toHaveLength(2);
+    expect(host.execApprovalQueue).toHaveLength(1);
+    expect(host.execApprovalQueue[0]?.id).toBe("approval-1");
+    expect(chatHost.chatQueue).toHaveLength(1);
+    expect(chatHost.chatQueue[0]?.text).toBe("follow up");
+
+    const reconnectClient = gatewayClientInstances[1];
+    expect(reconnectClient).toBeDefined();
+
+    reconnectClient.emitHello();
+
+    expect(reconnectClient.request).toHaveBeenCalledWith("chat.send", {
+      sessionKey: "main",
+      message: "follow up",
+      deliver: false,
+      idempotencyKey: expect.any(String),
+      attachments: undefined,
+    });
+    expect(chatHost.chatQueue).toHaveLength(0);
   });
 
   it("ignores stale client onEvent callbacks after reconnect", () => {
