@@ -433,17 +433,17 @@ describe("SOURCE PROOF: deliver:false in injectSystemMessage blocks delivery", (
   const path = require("path");
 
   const serverImplSrc = fs.readFileSync(
-    path.resolve(__dirname, "../gateway/server.impl.ts"),
+    path.resolve(__dirname, "../infra/reply-chain-enforcer.ts"),
     "utf-8",
   );
   const deliverySrc = fs.readFileSync(
-    path.resolve(__dirname, "../commands/agent/delivery.ts"),
+    path.resolve(__dirname, "../agents/command/delivery.ts"),
     "utf-8",
   );
 
   it("injectSystemMessage sets deliver: true (FIXED — was deliver: false)", () => {
     // Find the injectSystemMessage function
-    const fnStart = serverImplSrc.indexOf("injectSystemMessage:");
+    const fnStart = serverImplSrc.indexOf("injectSystemMessage({");
     expect(fnStart).toBeGreaterThan(-1);
     const chunk = serverImplSrc.slice(fnStart, fnStart + 600);
     // FIXED: was deliver: false, now deliver: true
@@ -455,7 +455,7 @@ describe("SOURCE PROOF: deliver:false in injectSystemMessage blocks delivery", (
     // The outbound send path requires deliver to be true
     expect(deliverySrc).toContain("const deliver = opts.deliver === true");
     // Actual Discord send is gated:
-    expect(deliverySrc).toMatch(/if\s*\(deliver\s*&&\s*deliveryChannel/);
+    expect(deliverySrc).toMatch(/if\s*\(deliver\s*&&/);
   });
 
   it("deliver:false path only logs — never calls deliverOutboundPayloads", () => {

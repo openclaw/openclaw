@@ -59,7 +59,7 @@ describe("ReplyChainEnforcer — fork regression", () => {
       const runId = "run-signoff-test";
 
       // Set up run context so events have a sessionKey
-      registerAgentRunContext(runId, { sessionKey, isControlUiVisible: false });
+      registerAgentRunContext(runId, { sessionKey, isControlUiVisible: true });
 
       // Arm the watchdog
       enforcer.onChatFinal(sessionKey, "I'll handle that.");
@@ -85,7 +85,7 @@ describe("ReplyChainEnforcer — fork regression", () => {
       const sessionKey = "agent:main:discord:channel:456" as SessionKey;
       const runId = "run-signoff-rearm";
 
-      registerAgentRunContext(runId, { sessionKey, isControlUiVisible: false });
+      registerAgentRunContext(runId, { sessionKey, isControlUiVisible: true });
 
       // Emit signoff
       emitAgentEvent({
@@ -109,7 +109,7 @@ describe("ReplyChainEnforcer — fork regression", () => {
       const sessionKey = "agent:main:discord:channel:789" as SessionKey;
       const runId = "run-raw-buffer";
 
-      registerAgentRunContext(runId, { sessionKey, isControlUiVisible: false });
+      registerAgentRunContext(runId, { sessionKey, isControlUiVisible: true });
 
       // Arm
       enforcer.onChatFinal(sessionKey, "Working on it...");
@@ -138,7 +138,7 @@ describe("ReplyChainEnforcer — fork regression", () => {
       const sessionKey = "agent:main:discord:channel:790" as SessionKey;
       const runId = "run-substantive";
 
-      registerAgentRunContext(runId, { sessionKey, isControlUiVisible: false });
+      registerAgentRunContext(runId, { sessionKey, isControlUiVisible: true });
 
       // Arm
       enforcer.onChatFinal(sessionKey, "Let me check.");
