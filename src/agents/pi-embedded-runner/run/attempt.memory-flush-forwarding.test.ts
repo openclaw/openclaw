@@ -4,6 +4,7 @@ import path from "node:path";
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
+import type { AnyAgentTool } from "../../pi-tools.types.js";
 
 const MEMORY_RELATIVE_PATH = "memory/2026-03-24.md";
 
@@ -69,47 +70,52 @@ describe("runEmbeddedAttempt memory flush tool forwarding", () => {
     }
   });
 
-  it("keeps the forwarded memory flush write tool append-only", async () => {
-    vi.resetModules();
-
-    const workspaceDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "openclaw-attempt-memory-flush-append-"),
-    );
+  it("activates the memory flush append-only write wrapper", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attempt-memory-flush-"));
     const memoryFile = path.join(workspaceDir, MEMORY_RELATIVE_PATH);
-    const stop = new Error("stop after append-only write check");
-    let appendOnlyWrite: Promise<unknown> | undefined;
 
     try {
       await fs.mkdir(path.dirname(memoryFile), { recursive: true });
       await fs.writeFile(memoryFile, "seed", "utf-8");
 
-      vi.doMock("../../pi-tools.js", async () => {
-        const actual =
-          await vi.importActual<typeof import("../../pi-tools.js")>("../../pi-tools.js");
-        return {
-          ...actual,
-          createOpenClawCodingTools: vi.fn((options) => {
-            const tools = actual.createOpenClawCodingTools(options);
-            const writeTool = tools.find((tool) => tool.name === "write");
-            expect(writeTool).toBeDefined();
-
-            appendOnlyWrite = writeTool!.execute("call-memory-flush", {
-              path: MEMORY_RELATIVE_PATH,
-              content: "new durable note",
-            });
-
-            throw stop;
-          }),
-        };
+      const { wrapToolMemoryFlushAppendOnlyWrite } = await import("../../pi-tools.read.js");
+      const fallbackWrite = vi.fn(async () => {
+        throw new Error("append-only wrapper should not delegate to the base write tool");
+      });
+      const writeTool: AnyAgentTool = {
+        name: "write",
+        description: "Write content to a file.",
+        parameters: { type: "object", properties: {} },
+        execute: fallbackWrite,
+      };
+      const wrapped = wrapToolMemoryFlushAppendOnlyWrite(writeTool, {
+        root: workspaceDir,
+        relativePath: MEMORY_RELATIVE_PATH,
       });
 
-      const { runEmbeddedAttempt } = await import("./attempt.js");
-
-      await expect(runEmbeddedAttempt(createAttemptParams(workspaceDir))).rejects.toBe(stop);
-      await expect(appendOnlyWrite).resolves.toBeDefined();
+      await expect(
+        wrapped.execute("call-memory-flush-append", {
+          path: MEMORY_RELATIVE_PATH,
+          content: "new durable note",
+        }),
+      ).resolves.toMatchObject({
+        content: [{ type: "text", text: `Appended content to ${MEMORY_RELATIVE_PATH}.` }],
+        details: {
+          path: MEMORY_RELATIVE_PATH,
+          appendOnly: true,
+        },
+      });
       await expect(fs.readFile(memoryFile, "utf-8")).resolves.toBe("seed\nnew durable note");
+      await expect(
+        wrapped.execute("call-memory-flush-deny", {
+          path: "memory/other-day.md",
+          content: "wrong target",
+        }),
+      ).rejects.toThrow(
+        `Memory flush writes are restricted to ${MEMORY_RELATIVE_PATH}; use that path only.`,
+      );
+      expect(fallbackWrite).not.toHaveBeenCalled();
     } finally {
-      vi.doUnmock("../../pi-tools.js");
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
   });
