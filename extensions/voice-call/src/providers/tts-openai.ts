@@ -1,4 +1,3 @@
-import { resolveOpenAITtsInstructions } from "../../api.js";
 import { convertPcmToMulaw8k } from "../telephony-audio.js";
 
 /**
@@ -70,6 +69,11 @@ export type OpenAITTSVoice = (typeof OPENAI_TTS_VOICES)[number];
 function trimToUndefined(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
+}
+
+function resolveOpenAITtsInstructions(model: string, instructions?: string): string | undefined {
+  const next = trimToUndefined(instructions);
+  return next && model.includes("gpt-4o-mini-tts") ? next : undefined;
 }
 
 /**

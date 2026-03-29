@@ -188,6 +188,14 @@ function forEachDescendantRun(
       }
     }
     for (const [runId, entry] of latestByChildSessionKey.values()) {
+      const latestForChildSession = findLatestRunForChildSession(runs, entry.childSessionKey);
+      if (
+        !latestForChildSession ||
+        latestForChildSession.runId !== runId ||
+        latestForChildSession.requesterSessionKey !== requester
+      ) {
+        continue;
+      }
       visitor(runId, entry);
       const childKey = entry.childSessionKey.trim();
       if (!childKey || visited.has(childKey)) {

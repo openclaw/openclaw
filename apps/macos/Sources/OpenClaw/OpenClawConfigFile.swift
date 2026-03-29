@@ -44,6 +44,7 @@ enum OpenClawConfigFile {
         let previousData = try? Data(contentsOf: url)
         let previousRoot = previousData.flatMap { self.parseConfigData($0) }
         let previousBytes = previousData?.count
+        let previousAttributes = try? FileManager().attributesOfItem(atPath: url.path)
         let hadMetaBefore = self.hasMeta(previousRoot)
         let gatewayModeBefore = self.gatewayMode(previousRoot)
 
@@ -57,6 +58,7 @@ enum OpenClawConfigFile {
                 withIntermediateDirectories: true)
             try data.write(to: url, options: [.atomic])
             let nextBytes = data.count
+            let nextAttributes = try? FileManager().attributesOfItem(atPath: url.path)
             let gatewayModeAfter = self.gatewayMode(output)
             let suspicious = self.configWriteSuspiciousReasons(
                 existsBefore: previousData != nil,
@@ -74,6 +76,18 @@ enum OpenClawConfigFile {
                 "existsBefore": previousData != nil,
                 "previousBytes": previousBytes ?? NSNull(),
                 "nextBytes": nextBytes,
+                "previousDev": self.fileSystemNumber(previousAttributes?[.systemNumber]) ?? NSNull(),
+                "nextDev": self.fileSystemNumber(nextAttributes?[.systemNumber]) ?? NSNull(),
+                "previousIno": self.fileSystemNumber(previousAttributes?[.systemFileNumber]) ?? NSNull(),
+                "nextIno": self.fileSystemNumber(nextAttributes?[.systemFileNumber]) ?? NSNull(),
+                "previousMode": self.posixMode(previousAttributes?[.posixPermissions]) ?? NSNull(),
+                "nextMode": self.posixMode(nextAttributes?[.posixPermissions]) ?? NSNull(),
+                "previousNlink": self.fileAttributeInt(previousAttributes?[.referenceCount]) ?? NSNull(),
+                "nextNlink": self.fileAttributeInt(nextAttributes?[.referenceCount]) ?? NSNull(),
+                "previousUid": self.fileAttributeInt(previousAttributes?[.ownerAccountID]) ?? NSNull(),
+                "nextUid": self.fileAttributeInt(nextAttributes?[.ownerAccountID]) ?? NSNull(),
+                "previousGid": self.fileAttributeInt(previousAttributes?[.groupOwnerAccountID]) ?? NSNull(),
+                "nextGid": self.fileAttributeInt(nextAttributes?[.groupOwnerAccountID]) ?? NSNull(),
                 "hasMetaBefore": hadMetaBefore,
                 "hasMetaAfter": self.hasMeta(output),
                 "gatewayModeBefore": gatewayModeBefore ?? NSNull(),
@@ -384,6 +398,23 @@ enum OpenClawConfigFile {
         return date.timeIntervalSince1970 * 1000
     }
 
+    private static func fileAttributeInt(_ value: Any?) -> Int? {
+        if let number = value as? NSNumber { return number.intValue }
+        if let number = value as? Int { return number }
+        return nil
+    }
+
+    private static func fileSystemNumber(_ value: Any?) -> String? {
+        if let number = value as? NSNumber { return number.stringValue }
+        if let number = value as? Int { return String(number) }
+        return nil
+    }
+
+    private static func posixMode(_ value: Any?) -> Int? {
+        guard let mode = self.fileAttributeInt(value) else { return nil }
+        return mode & 0o777
+    }
+
     private static func configFingerprint(
         data: Data,
         root: [String: Any]?,
@@ -396,6 +427,12 @@ enum OpenClawConfigFile {
             "bytes": data.count,
             "mtimeMs": self.fileTimestampMs(attributes?[.modificationDate]) ?? NSNull(),
             "ctimeMs": self.fileTimestampMs(attributes?[.creationDate]) ?? NSNull(),
+            "dev": self.fileSystemNumber(attributes?[.systemNumber]) ?? NSNull(),
+            "ino": self.fileSystemNumber(attributes?[.systemFileNumber]) ?? NSNull(),
+            "mode": self.posixMode(attributes?[.posixPermissions]) ?? NSNull(),
+            "nlink": self.fileAttributeInt(attributes?[.referenceCount]) ?? NSNull(),
+            "uid": self.fileAttributeInt(attributes?[.ownerAccountID]) ?? NSNull(),
+            "gid": self.fileAttributeInt(attributes?[.groupOwnerAccountID]) ?? NSNull(),
             "hasMeta": self.hasMeta(root),
             "gatewayMode": self.gatewayMode(root) ?? NSNull(),
             "observedAt": observedAt,
@@ -408,6 +445,12 @@ enum OpenClawConfigFile {
             (left["bytes"] as? Int) == (right["bytes"] as? Int) &&
             (left["mtimeMs"] as? Double) == (right["mtimeMs"] as? Double) &&
             (left["ctimeMs"] as? Double) == (right["ctimeMs"] as? Double) &&
+            (left["dev"] as? String) == (right["dev"] as? String) &&
+            (left["ino"] as? String) == (right["ino"] as? String) &&
+            (left["mode"] as? Int) == (right["mode"] as? Int) &&
+            (left["nlink"] as? Int) == (right["nlink"] as? Int) &&
+            (left["uid"] as? Int) == (right["uid"] as? Int) &&
+            (left["gid"] as? Int) == (right["gid"] as? Int) &&
             (left["hasMeta"] as? Bool) == (right["hasMeta"] as? Bool) &&
             (left["gatewayMode"] as? String) == (right["gatewayMode"] as? String)
     }
@@ -493,8 +536,12 @@ enum OpenClawConfigFile {
             return
         }
 
-        let backup = self.readConfigFingerprint(at: configURL.deletingLastPathComponent().appendingPathComponent("\(configURL.lastPathComponent).bak"))
-        let clobberedPath = self.persistClobberedSnapshot(data: data, configURL: configURL, observedAt: observedAt)
+        let backup = self.readConfigFingerprint(
+            at: configURL.deletingLastPathComponent().appendingPathComponent("\(configURL.lastPathComponent).bak"))
+        let clobberedPath = self.persistClobberedSnapshot(
+            data: data,
+            configURL: configURL,
+            observedAt: observedAt)
         self.logger.warning("config observe anomaly (\(suspicious.joined(separator: ", "))) at \(configURL.path)")
         self.appendConfigObserveAudit([
             "phase": "read",
@@ -505,6 +552,12 @@ enum OpenClawConfigFile {
             "bytes": current["bytes"] ?? NSNull(),
             "mtimeMs": current["mtimeMs"] ?? NSNull(),
             "ctimeMs": current["ctimeMs"] ?? NSNull(),
+            "dev": current["dev"] ?? NSNull(),
+            "ino": current["ino"] ?? NSNull(),
+            "mode": current["mode"] ?? NSNull(),
+            "nlink": current["nlink"] ?? NSNull(),
+            "uid": current["uid"] ?? NSNull(),
+            "gid": current["gid"] ?? NSNull(),
             "hasMeta": current["hasMeta"] ?? false,
             "gatewayMode": current["gatewayMode"] ?? NSNull(),
             "suspicious": suspicious,
@@ -512,11 +565,23 @@ enum OpenClawConfigFile {
             "lastKnownGoodBytes": lastKnownGood?["bytes"] ?? NSNull(),
             "lastKnownGoodMtimeMs": lastKnownGood?["mtimeMs"] ?? NSNull(),
             "lastKnownGoodCtimeMs": lastKnownGood?["ctimeMs"] ?? NSNull(),
+            "lastKnownGoodDev": lastKnownGood?["dev"] ?? NSNull(),
+            "lastKnownGoodIno": lastKnownGood?["ino"] ?? NSNull(),
+            "lastKnownGoodMode": lastKnownGood?["mode"] ?? NSNull(),
+            "lastKnownGoodNlink": lastKnownGood?["nlink"] ?? NSNull(),
+            "lastKnownGoodUid": lastKnownGood?["uid"] ?? NSNull(),
+            "lastKnownGoodGid": lastKnownGood?["gid"] ?? NSNull(),
             "lastKnownGoodGatewayMode": lastKnownGood?["gatewayMode"] ?? NSNull(),
             "backupHash": backup?["hash"] ?? NSNull(),
             "backupBytes": backup?["bytes"] ?? NSNull(),
             "backupMtimeMs": backup?["mtimeMs"] ?? NSNull(),
             "backupCtimeMs": backup?["ctimeMs"] ?? NSNull(),
+            "backupDev": backup?["dev"] ?? NSNull(),
+            "backupIno": backup?["ino"] ?? NSNull(),
+            "backupMode": backup?["mode"] ?? NSNull(),
+            "backupNlink": backup?["nlink"] ?? NSNull(),
+            "backupUid": backup?["uid"] ?? NSNull(),
+            "backupGid": backup?["gid"] ?? NSNull(),
             "backupGatewayMode": backup?["gatewayMode"] ?? NSNull(),
             "clobberedPath": clobberedPath ?? NSNull(),
         ])

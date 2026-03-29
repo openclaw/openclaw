@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createPluginRuntimeMock } from "../../../test/helpers/extensions/plugin-runtime-mock.js";
+import { createPluginRuntimeMock } from "../../../test/helpers/plugins/plugin-runtime-mock.js";
 import type { PluginRuntime, SsrFPolicy } from "../runtime-api.js";
 import { downloadMSTeamsAttachments, downloadMSTeamsGraphMedia } from "./attachments.js";
 import { setMSTeamsRuntime } from "./runtime.js";

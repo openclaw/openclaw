@@ -4,8 +4,8 @@ import path from "node:path";
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestamp.js";
-import { withEnvAsync } from "../../../test/helpers/extensions/env.js";
-import { useFrozenTime, useRealTime } from "../../../test/helpers/extensions/frozen-time.js";
+import { withEnvAsync } from "../../../test/helpers/plugins/env.js";
+import { useFrozenTime, useRealTime } from "../../../test/helpers/plugins/frozen-time.js";
 const harness = await import("./bot.create-telegram-bot.test-harness.js");
 const {
   answerCallbackQuerySpy,
@@ -34,13 +34,15 @@ const {
   throttlerSpy,
   useSpy,
 } = harness;
-let resolveTelegramFetch: typeof import("./fetch.js").resolveTelegramFetch;
-let setTelegramBotRuntimeForTest: typeof import("./bot.js").setTelegramBotRuntimeForTest;
-let createTelegramBotBase: typeof import("./bot.js").createTelegramBot;
+const { resolveTelegramFetch } = await import("./fetch.js");
+const {
+  createTelegramBot: createTelegramBotBase,
+  getTelegramSequentialKey,
+  setTelegramBotRuntimeForTest,
+} = await import("./bot.js");
 let createTelegramBot: (
   opts: Parameters<typeof import("./bot.js").createTelegramBot>[0],
 ) => ReturnType<typeof import("./bot.js").createTelegramBot>;
-let getTelegramSequentialKey: typeof import("./bot.js").getTelegramSequentialKey;
 
 const loadConfig = getLoadConfigMock();
 const loadWebMedia = getLoadWebMediaMock();
@@ -80,15 +82,6 @@ async function withConfigPathAsync<T>(cfg: unknown, fn: () => Promise<T>): Promi
 describe("createTelegramBot", () => {
   beforeAll(() => {
     process.env.TZ = "UTC";
-  });
-  beforeAll(async () => {
-    vi.resetModules();
-    ({ resolveTelegramFetch } = await import("./fetch.js"));
-    ({
-      createTelegramBot: createTelegramBotBase,
-      getTelegramSequentialKey,
-      setTelegramBotRuntimeForTest,
-    } = await import("./bot.js"));
   });
   afterAll(() => {
     process.env.TZ = ORIGINAL_TZ;
@@ -500,13 +493,51 @@ describe("createTelegramBot", () => {
         const pairingText = String(sendMessageSpy.mock.calls[0]?.[1]);
         expect(pairingText, testCase.name).toContain(`Your Telegram user id: ${senderId}`);
         expect(pairingText, testCase.name).toContain("Pairing code:");
-        const code = pairingText.match(/Pairing code:\s*([A-Z2-9]{8})/)?.[1];
-        expect(code, testCase.name).toBeDefined();
-        expect(pairingText, testCase.name).toContain(`openclaw pairing approve telegram ${code}`);
-        expect(pairingText, testCase.name).not.toContain("<code>");
+        expect(pairingText, testCase.name).toContain("openclaw pairing approve telegram");
+        expect(sendMessageSpy.mock.calls[0]?.[2], testCase.name).toEqual(
+          expect.objectContaining({ parse_mode: "HTML" }),
+        );
       }
     });
   });
+
+  it("ignores private self-authored message updates instead of issuing a pairing challenge", async () => {
+    await withIsolatedStateDirAsync(async () => {
+      loadConfig.mockReturnValue({
+        channels: { telegram: { dmPolicy: "pairing" } },
+      });
+      readChannelAllowFromStore.mockResolvedValue([]);
+      upsertChannelPairingRequest.mockClear();
+      sendMessageSpy.mockClear();
+      replySpy.mockClear();
+
+      createTelegramBot({ token: "tok" });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+      await handler({
+        message: {
+          chat: { id: 1234, type: "private", first_name: "Harold" },
+          message_id: 1884,
+          date: 1736380800,
+          from: { id: 7, is_bot: true, first_name: "OpenClaw", username: "openclaw_bot" },
+          pinned_message: {
+            message_id: 1883,
+            date: 1736380799,
+            chat: { id: 1234, type: "private", first_name: "Harold" },
+            from: { id: 7, is_bot: true, first_name: "OpenClaw", username: "openclaw_bot" },
+            text: "Binding: Review pull request 54118 (openclaw)",
+          },
+        },
+        me: { id: 7, is_bot: true, first_name: "OpenClaw", username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      });
+
+      expect(upsertChannelPairingRequest).not.toHaveBeenCalled();
+      expect(sendMessageSpy).not.toHaveBeenCalled();
+      expect(replySpy).not.toHaveBeenCalled();
+    });
+  });
+
   it("blocks unauthorized DM media before download and sends pairing reply", async () => {
     await withIsolatedStateDirAsync(async () => {
       loadConfig.mockReturnValue({
@@ -546,7 +577,12 @@ describe("createTelegramBot", () => {
         expect(getFileSpy).not.toHaveBeenCalled();
         expect(fetchSpy).not.toHaveBeenCalled();
         expect(sendMessageSpy).toHaveBeenCalledTimes(1);
-        expect(String(sendMessageSpy.mock.calls[0]?.[1])).toContain("Pairing code:");
+        const pairingText = String(sendMessageSpy.mock.calls[0]?.[1]);
+        expect(pairingText).toContain("Pairing code:");
+        expect(pairingText).toContain("<pre><code>");
+        expect(sendMessageSpy.mock.calls[0]?.[2]).toEqual(
+          expect.objectContaining({ parse_mode: "HTML" }),
+        );
         expect(replySpy).not.toHaveBeenCalled();
       } finally {
         fetchSpy.mockRestore();
@@ -633,7 +669,12 @@ describe("createTelegramBot", () => {
         expect(getFileSpy).not.toHaveBeenCalled();
         expect(fetchSpy).not.toHaveBeenCalled();
         expect(sendMessageSpy).toHaveBeenCalledTimes(1);
-        expect(String(sendMessageSpy.mock.calls[0]?.[1])).toContain("Pairing code:");
+        const pairingText = String(sendMessageSpy.mock.calls[0]?.[1]);
+        expect(pairingText).toContain("Pairing code:");
+        expect(pairingText).toContain("<pre><code>");
+        expect(sendMessageSpy.mock.calls[0]?.[2]).toEqual(
+          expect.objectContaining({ parse_mode: "HTML" }),
+        );
         expect(replySpy).not.toHaveBeenCalled();
       } finally {
         fetchSpy.mockRestore();

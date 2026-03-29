@@ -7,6 +7,8 @@
 
 /** Minimal ConversationReference shape for proactive messaging */
 export type StoredConversationReference = {
+  /** Timestamp when this reference was last seen/updated. */
+  lastSeenAt?: string;
   /** Activity ID from the last message */
   activityId?: string;
   /** User who sent the message */
@@ -46,5 +48,8 @@ export type MSTeamsConversationStore = {
   get: (conversationId: string) => Promise<StoredConversationReference | null>;
   list: () => Promise<MSTeamsConversationStoreEntry[]>;
   remove: (conversationId: string) => Promise<boolean>;
+  /** Person-targeted proactive lookup: prefer the freshest personal DM reference. */
+  findPreferredDmByUserId: (id: string) => Promise<MSTeamsConversationStoreEntry | null>;
+  /** @deprecated Use `findPreferredDmByUserId` for proactive user-targeted sends. */
   findByUserId: (id: string) => Promise<MSTeamsConversationStoreEntry | null>;
 };

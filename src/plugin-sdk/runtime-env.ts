@@ -16,6 +16,15 @@ export {
   success,
   warn,
 } from "../globals.js";
+export { isTruthyEnvValue } from "../infra/env.js";
 export * from "../logging.js";
 export { waitForAbortSignal } from "../infra/abort-signal.js";
+export { computeBackoff, sleepWithAbort, type BackoffPolicy } from "../infra/backoff.js";
+export {
+  formatDurationPrecise,
+  formatDurationSeconds,
+} from "../infra/format-time/format-duration.ts";
+export { retryAsync } from "../infra/retry.js";
+export { ensureGlobalUndiciEnvProxyDispatcher } from "../infra/net/undici-global-dispatcher.js";
 export { registerUnhandledRejectionHandler } from "../infra/unhandled-rejections.js";
+export { isWSL2Sync } from "../infra/wsl.js";

@@ -1,6 +1,8 @@
+import { createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { Writable } from "node:stream";
 import { resolveArchiveKind } from "../infra/archive.js";
 import { resolveOsHomeRelativePath } from "../infra/home-dir.js";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -591,12 +593,16 @@ async function downloadUrlToTempFile(url: string): Promise<
   if (!response.ok) {
     return { ok: false, error: `failed to download ${url}: HTTP ${response.status}` };
   }
+  if (!response.body) {
+    return { ok: false, error: `failed to download ${url}: empty response body` };
+  }
 
   const pathname = new URL(url).pathname;
   const fileName = path.basename(pathname) || "plugin.tgz";
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-marketplace-download-"));
   const targetPath = path.join(tmpDir, fileName);
-  await fs.writeFile(targetPath, Buffer.from(await response.arrayBuffer()));
+  const fileStream = createWriteStream(targetPath);
+  await response.body.pipeTo(Writable.toWeb(fileStream));
   return {
     ok: true,
     path: targetPath,

@@ -262,9 +262,9 @@ export type ExecToolConfig = {
    * Default false to reduce context noise.
    */
   notifyOnExitEmptySuccess?: boolean;
-  /** apply_patch subtool configuration (experimental). */
+  /** apply_patch subtool configuration. */
   applyPatch?: {
-    /** Enable apply_patch for OpenAI models (default: false). */
+    /** Enable apply_patch for OpenAI models (default: true; set false to disable). */
     enabled?: boolean;
     /**
      * Restrict apply_patch paths to the workspace directory.
@@ -312,6 +312,8 @@ export type AgentToolsConfig = {
   sandbox?: {
     tools?: {
       allow?: string[];
+      /** Additional allowlist entries merged into allow and/or the sandbox default allowlist. */
+      alsoAllow?: string[];
       deny?: string[];
     };
   };
@@ -338,8 +340,8 @@ export type MemorySearchConfig = {
     /** Enable session transcript indexing (experimental, default: false). */
     sessionMemory?: boolean;
   };
-  /** Embedding provider mode. */
-  provider?: "openai" | "gemini" | "local" | "voyage" | "mistral" | "ollama";
+  /** Memory embedding provider adapter id. */
+  provider?: string;
   remote?: {
     baseUrl?: string;
     apiKey?: SecretInput;
@@ -357,8 +359,8 @@ export type MemorySearchConfig = {
       timeoutMinutes?: number;
     };
   };
-  /** Fallback behavior when embeddings fail. */
-  fallback?: "openai" | "gemini" | "local" | "voyage" | "mistral" | "ollama" | "none";
+  /** Fallback memory embedding provider adapter id when embeddings fail. */
+  fallback?: string;
   /** Embedding model id (remote) or alias (local). */
   model?: string;
   /**
@@ -377,6 +379,10 @@ export type MemorySearchConfig = {
   store?: {
     driver?: "sqlite";
     path?: string;
+    fts?: {
+      /** FTS5 tokenizer (default: "unicode61"). Use "trigram" for CJK text support. */
+      tokenizer?: "unicode61" | "trigram";
+    };
     vector?: {
       /** Enable sqlite-vec extension for vector search (default: true). */
       enabled?: boolean;
@@ -457,6 +463,23 @@ type WebSearchLegacyProviderConfig = {
   inlineCitations?: boolean;
 };
 
+type XSearchToolConfig = {
+  /** Enable X search tool (default: true when an xAI API key is available). */
+  enabled?: boolean;
+  /** API key for xAI (defaults to XAI_API_KEY env var). Supports SecretRef. */
+  apiKey?: SecretInput;
+  /** Model id to use for X search. */
+  model?: string;
+  /** Keep inline citations in the xAI response payload when available. */
+  inlineCitations?: boolean;
+  /** Optional max search/tool turns for xAI to use internally. */
+  maxTurns?: number;
+  /** Timeout in seconds for X search requests. */
+  timeoutSeconds?: number;
+  /** Cache TTL in minutes for X search results. */
+  cacheTtlMinutes?: number;
+};
+
 export type ToolsConfig = {
   /** Base tool profile applied before allow/deny lists. */
   profile?: ToolProfileId;
@@ -493,6 +516,8 @@ export type ToolsConfig = {
       /** @deprecated Legacy Perplexity scoped config. */
       perplexity?: WebSearchLegacyProviderConfig;
     } & Record<string, unknown>;
+    /** X (formerly Twitter) search tool configuration using xAI Grok. */
+    x_search?: XSearchToolConfig;
     fetch?: {
       /** Enable web fetch tool (default: true). */
       enabled?: boolean;
@@ -500,6 +525,8 @@ export type ToolsConfig = {
       maxChars?: number;
       /** Hard cap for maxChars (tool or config), defaults to 50000. */
       maxCharsCap?: number;
+      /** Max download size before truncation, defaults to 2000000. */
+      maxResponseBytes?: number;
       /** Timeout in seconds for fetch requests. */
       timeoutSeconds?: number;
       /** Cache TTL in minutes for fetched content. */
@@ -604,6 +631,8 @@ export type ToolsConfig = {
   sandbox?: {
     tools?: {
       allow?: string[];
+      /** Additional allowlist entries merged into allow and/or the sandbox default allowlist. */
+      alsoAllow?: string[];
       deny?: string[];
     };
   };

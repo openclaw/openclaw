@@ -17,12 +17,12 @@ let openResponsesTesting: {
     responseId: string,
     sessionKey: string,
     now: number,
-    scope?: { agentId: string; user?: string; requestedSessionKey?: string },
+    scope?: { authSubject: string; agentId: string; requestedSessionKey?: string },
   ): void;
   lookupResponseSessionAt(
     responseId: string | undefined,
     now: number,
-    scope?: { agentId: string; user?: string; requestedSessionKey?: string },
+    scope?: { authSubject: string; agentId: string; requestedSessionKey?: string },
   ): string | undefined;
   getResponseSessionIds(): string[];
 };
@@ -71,6 +71,7 @@ async function postResponses(port: number, body: unknown, headers?: Record<strin
     headers: {
       "content-type": "application/json",
       authorization: "Bearer secret",
+      "x-openclaw-scopes": "operator.write",
       ...headers,
     },
     body: JSON.stringify(body),
@@ -233,6 +234,19 @@ describe("OpenResponses HTTP API (e2e)", () => {
       );
       await ensureResponseConsumed(resMissingModel);
 
+      agentCommand.mockClear();
+      const resInvalidModel = await postResponses(port, { model: "openai/", input: "hi" });
+      expect(resInvalidModel.status).toBe(400);
+      const invalidModelJson = (await resInvalidModel.json()) as {
+        error?: { type?: string; message?: string };
+      };
+      expect(invalidModelJson.error?.type).toBe("invalid_request_error");
+      expect(invalidModelJson.error?.message).toBe(
+        "Invalid `model`. Use `openclaw` or `openclaw/<agentId>`.",
+      );
+      expect(agentCommand).toHaveBeenCalledTimes(0);
+      await ensureResponseConsumed(resInvalidModel);
+
       mockAgentOnce([{ text: "hello" }]);
       const resHeader = await postResponses(
         port,
@@ -250,13 +264,22 @@ describe("OpenResponses HTTP API (e2e)", () => {
       await ensureResponseConsumed(resHeader);
 
       mockAgentOnce([{ text: "hello" }]);
-      const resModel = await postResponses(port, { model: "openclaw:beta", input: "hi" });
+      const resModel = await postResponses(port, { model: "openclaw/beta", input: "hi" });
       expect(resModel.status).toBe(200);
       const optsModel = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
       expect((optsModel as { sessionKey?: string } | undefined)?.sessionKey ?? "").toMatch(
         /^agent:beta:/,
       );
       await ensureResponseConsumed(resModel);
+
+      mockAgentOnce([{ text: "hello" }]);
+      const resDefaultAlias = await postResponses(port, { model: "openclaw/default", input: "hi" });
+      expect(resDefaultAlias.status).toBe(200);
+      const optsDefaultAlias = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+      expect((optsDefaultAlias as { sessionKey?: string } | undefined)?.sessionKey ?? "").toMatch(
+        /^agent:main:/,
+      );
+      await ensureResponseConsumed(resDefaultAlias);
 
       mockAgentOnce([{ text: "hello" }]);
       const resChannelHeader = await postResponses(
@@ -267,9 +290,38 @@ describe("OpenResponses HTTP API (e2e)", () => {
       expect(resChannelHeader.status).toBe(200);
       const optsChannelHeader = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
       expect((optsChannelHeader as { messageChannel?: string } | undefined)?.messageChannel).toBe(
-        "webchat",
+        "custom-client-channel",
       );
       await ensureResponseConsumed(resChannelHeader);
+
+      mockAgentOnce([{ text: "hello" }]);
+      const resModelOverride = await postResponses(
+        port,
+        {
+          model: "openclaw",
+          input: "hi",
+        },
+        { "x-openclaw-model": "openai/gpt-5.4" },
+      );
+      expect(resModelOverride.status).toBe(200);
+      const optsModelOverride = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+      expect((optsModelOverride as { model?: string } | undefined)?.model).toBe("openai/gpt-5.4");
+      await ensureResponseConsumed(resModelOverride);
+
+      agentCommand.mockClear();
+      const resInvalidOverride = await postResponses(
+        port,
+        { model: "openclaw", input: "hi" },
+        { "x-openclaw-model": "openai/" },
+      );
+      expect(resInvalidOverride.status).toBe(400);
+      const invalidOverrideJson = (await resInvalidOverride.json()) as {
+        error?: { type?: string; message?: string };
+      };
+      expect(invalidOverrideJson.error?.type).toBe("invalid_request_error");
+      expect(invalidOverrideJson.error?.message).toBe("Invalid `x-openclaw-model`.");
+      expect(agentCommand).toHaveBeenCalledTimes(0);
+      await ensureResponseConsumed(resInvalidOverride);
 
       mockAgentOnce([{ text: "hello" }]);
       const resUser = await postResponses(port, {
@@ -777,7 +829,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
     await ensureResponseConsumed(secondResponse);
   });
 
-  it("does not reuse prior sessions across different user scopes", async () => {
+  it("reuses prior sessions across different user values when auth scope matches", async () => {
     const port = enabledPort;
     agentCommand.mockClear();
     agentCommand.mockResolvedValueOnce({
@@ -812,8 +864,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
     const secondOpts = (agentCommand.mock.calls[1] as unknown[] | undefined)?.[0] as
       | { sessionKey?: string }
       | undefined;
-    expect(secondOpts?.sessionKey).not.toBe(firstOpts?.sessionKey);
-    expect(secondOpts?.sessionKey ?? "").toContain("openresponses-user:bob");
+    expect(secondOpts?.sessionKey).toBe(firstOpts?.sessionKey);
     await ensureResponseConsumed(secondResponse);
   });
 
@@ -864,22 +915,22 @@ describe("OpenResponses HTTP API (e2e)", () => {
     expect(openResponsesTesting.lookupResponseSessionAt("resp_504", 505)).toBe("session_504");
   });
 
-  it("does not reuse cached sessions when the user scope changes", () => {
+  it("does not reuse cached sessions when the auth subject changes", () => {
     openResponsesTesting.storeResponseSessionAt("resp_1", "session_1", 100, {
+      authSubject: "subject:a",
       agentId: "main",
-      user: "alice",
     });
 
     expect(
       openResponsesTesting.lookupResponseSessionAt("resp_1", 101, {
+        authSubject: "subject:a",
         agentId: "main",
-        user: "alice",
       }),
     ).toBe("session_1");
     expect(
       openResponsesTesting.lookupResponseSessionAt("resp_1", 101, {
+        authSubject: "subject:b",
         agentId: "main",
-        user: "bob",
       }),
     ).toBeUndefined();
   });

@@ -162,7 +162,7 @@ describe("maybeRunCliInContainer", () => {
     );
   });
 
-  it("clears inherited OPENCLAW_CONTAINER before execing into the child CLI", () => {
+  it("clears inherited host routing and gateway env before execing into the child CLI", () => {
     const spawnSync = vi
       .fn()
       .mockReturnValueOnce({
@@ -181,7 +181,11 @@ describe("maybeRunCliInContainer", () => {
     maybeRunCliInContainer(["node", "openclaw", "status"], {
       env: {
         OPENCLAW_CONTAINER: "demo",
+        OPENCLAW_PROFILE: "work",
+        OPENCLAW_GATEWAY_PORT: "19001",
+        OPENCLAW_GATEWAY_URL: "ws://127.0.0.1:18789",
         OPENCLAW_GATEWAY_TOKEN: "token",
+        OPENCLAW_GATEWAY_PASSWORD: "password",
       } as NodeJS.ProcessEnv,
       spawnSync,
     });
@@ -204,7 +208,6 @@ describe("maybeRunCliInContainer", () => {
         stdio: "inherit",
         env: {
           OPENCLAW_CONTAINER: "",
-          OPENCLAW_GATEWAY_TOKEN: "token",
         },
       },
     );
@@ -316,67 +319,7 @@ describe("maybeRunCliInContainer", () => {
     );
   });
 
-  it("falls back to sudo -u openclaw podman for the documented dedicated-user flow", () => {
-    const spawnSync = vi
-      .fn()
-      .mockReturnValueOnce({
-        status: 1,
-        stdout: "",
-      })
-      .mockReturnValueOnce({
-        status: 1,
-        stdout: "",
-      })
-      .mockReturnValueOnce({
-        status: 0,
-        stdout: "true\n",
-      })
-      .mockReturnValueOnce({
-        status: 0,
-        stdout: "",
-      });
-
-    expect(
-      maybeRunCliInContainer(["node", "openclaw", "--container", "openclaw", "status"], {
-        env: { USER: "somalley" } as NodeJS.ProcessEnv,
-        spawnSync,
-      }),
-    ).toEqual({
-      handled: true,
-      exitCode: 0,
-    });
-
-    expect(spawnSync).toHaveBeenNthCalledWith(
-      3,
-      "sudo",
-      ["-u", "openclaw", "podman", "inspect", "--format", "{{.State.Running}}", "openclaw"],
-      { encoding: "utf8", stdio: ["inherit", "pipe", "inherit"] },
-    );
-    expect(spawnSync).toHaveBeenNthCalledWith(
-      4,
-      "sudo",
-      [
-        "-u",
-        "openclaw",
-        "podman",
-        "exec",
-        "-i",
-        "--env",
-        "OPENCLAW_CONTAINER_HINT=openclaw",
-        "--env",
-        "OPENCLAW_CLI_CONTAINER_BYPASS=1",
-        "openclaw",
-        "openclaw",
-        "status",
-      ],
-      {
-        stdio: "inherit",
-        env: { USER: "somalley", OPENCLAW_CONTAINER: "" },
-      },
-    );
-  });
-
-  it("checks docker before the dedicated-user podman fallback", () => {
+  it("checks docker after podman and before failing", () => {
     const spawnSync = vi
       .fn()
       .mockReturnValueOnce({
@@ -438,6 +381,40 @@ describe("maybeRunCliInContainer", () => {
       },
     );
     expect(spawnSync).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not try any sudo podman fallback for regular users", () => {
+    const spawnSync = vi
+      .fn()
+      .mockReturnValueOnce({
+        status: 1,
+        stdout: "",
+      })
+      .mockReturnValueOnce({
+        status: 1,
+        stdout: "",
+      });
+
+    expect(() =>
+      maybeRunCliInContainer(["node", "openclaw", "--container", "demo", "status"], {
+        env: { USER: "somalley" } as NodeJS.ProcessEnv,
+        spawnSync,
+      }),
+    ).toThrow('No running container matched "demo" under podman or docker.');
+
+    expect(spawnSync).toHaveBeenCalledTimes(2);
+    expect(spawnSync).toHaveBeenNthCalledWith(
+      1,
+      "podman",
+      ["inspect", "--format", "{{.State.Running}}", "demo"],
+      { encoding: "utf8" },
+    );
+    expect(spawnSync).toHaveBeenNthCalledWith(
+      2,
+      "docker",
+      ["inspect", "--format", "{{.State.Running}}", "demo"],
+      { encoding: "utf8" },
+    );
   });
 
   it("rejects ambiguous matches across runtimes", () => {

@@ -3,6 +3,7 @@ import {
   collectWebSearchProviderBoundaryInventory,
   main,
 } from "../scripts/check-web-search-provider-boundaries.mjs";
+import { BUNDLED_PLUGIN_PATH_PREFIX } from "./helpers/bundled-plugin-paths.js";
 import { createCapturedIo } from "./helpers/captured-io.js";
 
 const inventoryPromise = collectWebSearchProviderBoundaryInventory();
@@ -24,7 +25,9 @@ describe("web search provider boundary inventory", () => {
     const jsonOutput = await jsonOutputPromise;
 
     expect(inventory).toEqual([]);
-    expect(inventory.some((entry) => entry.file.startsWith("extensions/"))).toBe(false);
+    expect(inventory.some((entry) => entry.file.startsWith(BUNDLED_PLUGIN_PATH_PREFIX))).toBe(
+      false,
+    );
     expect(
       [...inventory].toSorted(
         (left, right) =>

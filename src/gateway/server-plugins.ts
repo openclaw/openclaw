@@ -1,12 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { normalizeModelRef, parseModelRef } from "../agents/model-selection.js";
-import { primeConfiguredBindingRegistry } from "../channels/plugins/binding-registry.js";
 import type { loadConfig } from "../config/config.js";
+import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { resolveGatewayStartupPluginIds } from "../plugins/channel-plugin-ids.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
-import { setGatewaySubagentRuntime } from "../plugins/runtime/index.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { ADMIN_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
@@ -101,7 +100,7 @@ function normalizeAllowedModelRef(raw: string): string | null {
   return `${normalized.provider}/${normalized.model}`;
 }
 
-function setPluginSubagentOverridePolicies(cfg: ReturnType<typeof loadConfig>): void {
+export function setPluginSubagentOverridePolicies(cfg: ReturnType<typeof loadConfig>): void {
   const pluginSubagentPolicyState = getPluginSubagentPolicyState();
   const normalized = normalizePluginsConfig(cfg.plugins);
   const policies: PluginSubagentPolicyState["policies"] = {};
@@ -294,7 +293,7 @@ async function dispatchGatewayMethod<T>(
   return result.payload as T;
 }
 
-function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
+export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
   const getSessionMessages: PluginRuntime["subagent"]["getSessionMessages"] = async (params) => {
     const payload = await dispatchGatewayMethod<{ messages?: unknown[] }>("sessions.get", {
       key: params.sessionKey,
@@ -369,16 +368,10 @@ function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
       return getSessionMessages(params);
     },
     async deleteSession(params) {
-      await dispatchGatewayMethod(
-        "sessions.delete",
-        {
-          key: params.sessionKey,
-          deleteTranscript: params.deleteTranscript ?? true,
-        },
-        {
-          syntheticScopes: [ADMIN_SCOPE],
-        },
-      );
+      await dispatchGatewayMethod("sessions.delete", {
+        key: params.sessionKey,
+        deleteTranscript: params.deleteTranscript ?? true,
+      });
     },
   };
 }
@@ -397,21 +390,16 @@ export function loadGatewayPlugins(params: {
   coreGatewayHandlers: Record<string, GatewayRequestHandler>;
   baseMethods: string[];
   preferSetupRuntimeForChannelPlugins?: boolean;
-  logDiagnostics?: boolean;
 }) {
-  setPluginSubagentOverridePolicies(params.cfg);
-  // Set the process-global gateway subagent runtime BEFORE loading plugins.
-  // Gateway-owned registries may already exist from schema loads, so the
-  // gateway path opts those runtimes into late binding rather than changing
-  // the default subagent behavior for every plugin runtime in the process.
-  const gatewaySubagent = createGatewaySubagentRuntime();
-  setGatewaySubagentRuntime(gatewaySubagent);
-
-  const pluginRegistry = loadOpenClawPlugins({
+  const resolvedConfig = applyPluginAutoEnable({
     config: params.cfg,
+    env: process.env,
+  }).config;
+  const pluginRegistry = loadOpenClawPlugins({
+    config: resolvedConfig,
     workspaceDir: params.workspaceDir,
     onlyPluginIds: resolveGatewayStartupPluginIds({
-      config: params.cfg,
+      config: resolvedConfig,
       workspaceDir: params.workspaceDir,
       env: process.env,
     }),
@@ -427,26 +415,7 @@ export function loadGatewayPlugins(params: {
     },
     preferSetupRuntimeForChannelPlugins: params.preferSetupRuntimeForChannelPlugins,
   });
-  primeConfiguredBindingRegistry({ cfg: params.cfg });
   const pluginMethods = Object.keys(pluginRegistry.gatewayHandlers);
   const gatewayMethods = Array.from(new Set([...params.baseMethods, ...pluginMethods]));
-  if ((params.logDiagnostics ?? true) && pluginRegistry.diagnostics.length > 0) {
-    for (const diag of pluginRegistry.diagnostics) {
-      const details = [
-        diag.pluginId ? `plugin=${diag.pluginId}` : null,
-        diag.source ? `source=${diag.source}` : null,
-      ]
-        .filter((entry): entry is string => Boolean(entry))
-        .join(", ");
-      const message = details
-        ? `[plugins] ${diag.message} (${details})`
-        : `[plugins] ${diag.message}`;
-      if (diag.level === "error") {
-        params.log.error(message);
-      } else {
-        params.log.info(message);
-      }
-    }
-  }
   return { pluginRegistry, gatewayMethods };
 }

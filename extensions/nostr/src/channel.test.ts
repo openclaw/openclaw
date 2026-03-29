@@ -1,6 +1,20 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import {
+  createPluginSetupWizardConfigure,
+  createTestWizardPrompter,
+  runSetupWizardConfigure,
+  type WizardPrompter,
+} from "../../../test/helpers/plugins/setup-wizard.js";
+import type { OpenClawConfig } from "../runtime-api.js";
 import { nostrPlugin } from "./channel.js";
-import { TEST_HEX_PRIVATE_KEY, createConfiguredNostrCfg } from "./test-fixtures.js";
+import {
+  TEST_HEX_PRIVATE_KEY,
+  TEST_SETUP_RELAY_URLS,
+  createConfiguredNostrCfg,
+} from "./test-fixtures.js";
+import { listNostrAccountIds, resolveDefaultNostrAccountId, resolveNostrAccount } from "./types.js";
+
+const nostrConfigure = createPluginSetupWizardConfigure(nostrPlugin);
 
 function requireNostrLooksLikeId() {
   const looksLikeId = nostrPlugin.messaging?.targetResolver?.looksLikeId;
@@ -157,6 +171,165 @@ describe("nostrPlugin", () => {
         lastStartAt: null,
         lastStopAt: null,
         lastError: null,
+      });
+    });
+  });
+});
+
+describe("nostr setup wizard", () => {
+  it("configures a private key and relay URLs", async () => {
+    const prompter = createTestWizardPrompter({
+      text: vi.fn(async ({ message }: { message: string }) => {
+        if (message === "Nostr private key (nsec... or hex)") {
+          return TEST_HEX_PRIVATE_KEY;
+        }
+        if (message === "Relay URLs (comma-separated, optional)") {
+          return TEST_SETUP_RELAY_URLS.join(", ");
+        }
+        throw new Error(`Unexpected prompt: ${message}`);
+      }) as WizardPrompter["text"],
+    });
+
+    const result = await runSetupWizardConfigure({
+      configure: nostrConfigure,
+      cfg: {} as OpenClawConfig,
+      prompter,
+      options: {},
+    });
+
+    expect(result.accountId).toBe("default");
+    expect(result.cfg.channels?.nostr?.enabled).toBe(true);
+    expect(result.cfg.channels?.nostr?.privateKey).toBe(TEST_HEX_PRIVATE_KEY);
+    expect(result.cfg.channels?.nostr?.relays).toEqual(TEST_SETUP_RELAY_URLS);
+  });
+});
+
+describe("nostr account helpers", () => {
+  describe("listNostrAccountIds", () => {
+    it("returns empty array when not configured", () => {
+      const cfg = { channels: {} };
+      expect(listNostrAccountIds(cfg)).toEqual([]);
+    });
+
+    it("returns empty array when nostr section exists but no privateKey", () => {
+      const cfg = { channels: { nostr: { enabled: true } } };
+      expect(listNostrAccountIds(cfg)).toEqual([]);
+    });
+
+    it("returns default when privateKey is configured", () => {
+      const cfg = createConfiguredNostrCfg();
+      expect(listNostrAccountIds(cfg)).toEqual(["default"]);
+    });
+
+    it("returns configured defaultAccount when privateKey is configured", () => {
+      const cfg = createConfiguredNostrCfg({ defaultAccount: "work" });
+      expect(listNostrAccountIds(cfg)).toEqual(["work"]);
+    });
+  });
+
+  describe("resolveDefaultNostrAccountId", () => {
+    it("returns default when configured", () => {
+      const cfg = createConfiguredNostrCfg();
+      expect(resolveDefaultNostrAccountId(cfg)).toBe("default");
+    });
+
+    it("returns default when not configured", () => {
+      const cfg = { channels: {} };
+      expect(resolveDefaultNostrAccountId(cfg)).toBe("default");
+    });
+
+    it("prefers configured defaultAccount when present", () => {
+      const cfg = createConfiguredNostrCfg({ defaultAccount: "work" });
+      expect(resolveDefaultNostrAccountId(cfg)).toBe("work");
+    });
+  });
+
+  describe("resolveNostrAccount", () => {
+    it("resolves configured account", () => {
+      const cfg = createConfiguredNostrCfg({
+        name: "Test Bot",
+        relays: ["wss://test.relay"],
+        dmPolicy: "pairing" as const,
+      });
+      const account = resolveNostrAccount({ cfg });
+
+      expect(account.accountId).toBe("default");
+      expect(account.name).toBe("Test Bot");
+      expect(account.enabled).toBe(true);
+      expect(account.configured).toBe(true);
+      expect(account.privateKey).toBe(TEST_HEX_PRIVATE_KEY);
+      expect(account.publicKey).toMatch(/^[0-9a-f]{64}$/);
+      expect(account.relays).toEqual(["wss://test.relay"]);
+    });
+
+    it("resolves unconfigured account with defaults", () => {
+      const cfg = { channels: {} };
+      const account = resolveNostrAccount({ cfg });
+
+      expect(account.accountId).toBe("default");
+      expect(account.enabled).toBe(true);
+      expect(account.configured).toBe(false);
+      expect(account.privateKey).toBe("");
+      expect(account.publicKey).toBe("");
+      expect(account.relays).toContain("wss://relay.damus.io");
+      expect(account.relays).toContain("wss://nos.lol");
+    });
+
+    it("handles disabled channel", () => {
+      const cfg = createConfiguredNostrCfg({ enabled: false });
+      const account = resolveNostrAccount({ cfg });
+
+      expect(account.enabled).toBe(false);
+      expect(account.configured).toBe(true);
+    });
+
+    it("handles custom accountId parameter", () => {
+      const cfg = createConfiguredNostrCfg();
+      const account = resolveNostrAccount({ cfg, accountId: "custom" });
+
+      expect(account.accountId).toBe("custom");
+    });
+
+    it("handles allowFrom config", () => {
+      const cfg = createConfiguredNostrCfg({
+        allowFrom: ["npub1test", "0123456789abcdef"],
+      });
+      const account = resolveNostrAccount({ cfg });
+
+      expect(account.config.allowFrom).toEqual(["npub1test", "0123456789abcdef"]);
+    });
+
+    it("handles invalid private key gracefully", () => {
+      const cfg = {
+        channels: {
+          nostr: {
+            privateKey: "invalid-key",
+          },
+        },
+      };
+      const account = resolveNostrAccount({ cfg });
+
+      expect(account.configured).toBe(true);
+      expect(account.publicKey).toBe("");
+    });
+
+    it("preserves all config options", () => {
+      const cfg = createConfiguredNostrCfg({
+        name: "Bot",
+        enabled: true,
+        relays: ["wss://relay1", "wss://relay2"],
+        dmPolicy: "allowlist" as const,
+        allowFrom: ["pubkey1", "pubkey2"],
+      });
+      const account = resolveNostrAccount({ cfg });
+
+      expect(account.config).toEqual({
+        privateKey: TEST_HEX_PRIVATE_KEY,
+        name: "Bot",
+        enabled: true,
+        relays: ["wss://relay1", "wss://relay2"],
+        dmPolicy: "allowlist",
+        allowFrom: ["pubkey1", "pubkey2"],
       });
     });
   });

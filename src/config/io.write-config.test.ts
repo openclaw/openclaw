@@ -541,6 +541,10 @@ describe("config io write", () => {
       expect(last.hasMetaAfter).toBe(true);
       expect(last.previousHash).toBeTypeOf("string");
       expect(last.nextHash).toBeTypeOf("string");
+      expect(last.previousMode).toBeTypeOf("number");
+      expect(last.nextMode).toBeTypeOf("number");
+      expect(last.previousIno).toBeTypeOf("string");
+      expect(last.nextIno).toBeTypeOf("string");
       expect(last.result === "rename" || last.result === "copy-fallback").toBe(true);
     });
   });

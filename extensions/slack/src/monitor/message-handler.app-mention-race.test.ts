@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const prepareSlackMessageMock =
   vi.fn<
@@ -117,12 +117,9 @@ async function createInFlightMessageScenario(ts: string) {
 }
 
 describe("createSlackMessageHandler app_mention race handling", () => {
-  beforeAll(async () => {
+  beforeEach(async () => {
     vi.resetModules();
     ({ createSlackMessageHandler } = await import("./message-handler.js"));
-  });
-
-  beforeEach(() => {
     prepareSlackMessageMock.mockReset();
     dispatchPreparedSlackMessageMock.mockReset();
   });

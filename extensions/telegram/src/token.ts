@@ -1,7 +1,7 @@
-import { resolveNormalizedAccountEntry } from "openclaw/plugin-sdk/account-resolution";
+import { resolveNormalizedAccountEntry } from "openclaw/plugin-sdk/account-core";
 import type { BaseTokenResolution } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { tryReadSecretFileSync } from "openclaw/plugin-sdk/infra-runtime";
+import { tryReadSecretFileSync } from "openclaw/plugin-sdk/core";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type { TelegramAccountConfig } from "../runtime-api.js";
@@ -39,13 +39,28 @@ export function resolveTelegramToken(
   );
 
   // When a non-default accountId is explicitly specified but not found in config,
-  // return empty immediately — do NOT fall through to channel-level defaults,
-  // which would silently route the message via the wrong bot's token.
+  // decide whether to fall through to channel-level defaults based on whether
+  // the config has an explicit accounts section (multi-bot setup).
+  //
+  // Multi-bot: accounts section exists with entries → block fallthrough to prevent
+  // routing via the wrong bot's token.
+  //
+  // Single-bot: no accounts section (or empty) → allow fallthrough so that
+  // binding-created accountIds inherit the channel-level token.
+  // See: https://github.com/openclaw/openclaw/issues/53876
   if (accountId !== DEFAULT_ACCOUNT_ID && !accountCfg) {
-    opts.logMissingFile?.(
-      `channels.telegram.accounts: unknown accountId "${accountId}" — not found in config, refusing channel-level fallback`,
-    );
-    return { token: "", source: "none" };
+    const accounts = telegramCfg?.accounts;
+    const hasConfiguredAccounts =
+      !!accounts &&
+      typeof accounts === "object" &&
+      !Array.isArray(accounts) &&
+      Object.keys(accounts).length > 0;
+    if (hasConfiguredAccounts) {
+      opts.logMissingFile?.(
+        `channels.telegram.accounts: unknown accountId "${accountId}" — not found in config, refusing channel-level fallback`,
+      );
+      return { token: "", source: "none" };
+    }
   }
 
   const accountTokenFile = accountCfg?.tokenFile?.trim();
