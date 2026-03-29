@@ -91,8 +91,8 @@ Add Amazon Bedrock Guardrails support to the `amazon-bedrock` extension plugin. 
 - [ ] 3. Checkpoint - Verify core implementation
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 4. Add unit tests for guardrail behavior
-  - [ ]* 4.1 Write unit tests in `extensions/amazon-bedrock/index.test.ts`
+- [x] 4. Add unit tests for guardrail behavior
+  - [x] 4.1 Write unit tests in `extensions/amazon-bedrock/index.test.ts`
     - Test: schema shape validation — verify `openclaw.plugin.json` contains the `guardrail` object with correct property types, required fields, and enum constraint
     - Test: no guardrail config — register without `guardrail`, call `wrapStreamFn`, verify no `guardrailConfig` in payload
     - Test: guardrail with all optional fields — register with full config including `streamProcessingMode: "sync"` and `trace: "enabled"`, verify payload contains all four fields
