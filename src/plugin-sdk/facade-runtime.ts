@@ -205,18 +205,19 @@ export function loadBundledPluginPublicSurfaceModuleSync<T>(params: {
   }
   fs.closeSync(opened.fd);
 
-  const reentrantPlaceholder = createLazyFacadeObjectValue(() => {
-    const resolved = loadedFacadeModules.get(location.modulePath);
-    if (!resolved) {
-      throw new Error(
-        `Bundled plugin public surface ${params.dirName}/${params.artifactBasename} was accessed before initialization completed`,
-      );
-    }
-    return resolved as object;
-  });
+  const reentrantPlaceholder: Record<PropertyKey, unknown> = {};
   inProgressFacadeModules.set(location.modulePath, reentrantPlaceholder);
   try {
     const loaded = getJiti(location.modulePath)(location.modulePath) as T;
+    if (loaded && typeof loaded === "object") {
+      Object.defineProperties(
+        reentrantPlaceholder,
+        Object.getOwnPropertyDescriptors(loaded as object),
+      );
+      Object.setPrototypeOf(reentrantPlaceholder, Object.getPrototypeOf(loaded as object));
+      loadedFacadeModules.set(location.modulePath, reentrantPlaceholder);
+      return reentrantPlaceholder as T;
+    }
     loadedFacadeModules.set(location.modulePath, loaded);
     return loaded;
   } finally {
