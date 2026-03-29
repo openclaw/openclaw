@@ -156,6 +156,31 @@ describe("sessions_spawn tool", () => {
     expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
   });
 
+  it("omits await-only schema fields when awaitEnabled is false", () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "openresponses-user:alice",
+    });
+    const schema = tool.parameters as {
+      properties?: Record<string, unknown>;
+    };
+
+    expect(schema.properties).not.toHaveProperty("waitForCompletion");
+    expect(schema.properties).not.toHaveProperty("suppressAnnounce");
+  });
+
+  it("includes await-only schema fields when awaitEnabled is true", () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "openresponses-user:alice",
+      awaitEnabled: true,
+    });
+    const schema = tool.parameters as {
+      properties?: Record<string, unknown>;
+    };
+
+    expect(schema.properties).toHaveProperty("waitForCompletion");
+    expect(schema.properties).toHaveProperty("suppressAnnounce");
+  });
+
   it("passes suppressAnnounce through to spawnSubagentDirect", async () => {
     await loadFreshSessionsSpawnToolModuleForTest({ awaitEnabled: true });
     const tool = createSessionsSpawnTool({
