@@ -78,12 +78,25 @@ export function applyConfigSchema(state: ConfigState, res: ConfigSchemaResponse)
 
 export function applyConfigSnapshot(state: ConfigState, snapshot: ConfigSnapshot) {
   state.configSnapshot = snapshot;
-  const rawFromSnapshot =
+  let rawFromSnapshot =
     typeof snapshot.raw === "string"
       ? snapshot.raw
       : snapshot.config && typeof snapshot.config === "object"
         ? serializeConfigForm(snapshot.config)
         : state.configRaw;
+
+  // Gateway redaction fallback may produce JSON5 instead of JSON;
+  // fall back to re-serializing from the config object to guarantee valid JSON.
+  if (rawFromSnapshot) {
+    try {
+      JSON.parse(rawFromSnapshot);
+    } catch {
+      if (snapshot.config && typeof snapshot.config === "object") {
+        rawFromSnapshot = serializeConfigForm(snapshot.config);
+      }
+    }
+  }
+
   if (!state.configFormDirty || state.configFormMode === "raw") {
     state.configRaw = rawFromSnapshot;
   } else if (state.configForm) {

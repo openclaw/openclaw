@@ -1,5 +1,6 @@
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { json } from "@codemirror/lang-json";
+import { syntaxHighlighting, defaultHighlightStyle, foldGutter, foldKeymap } from "@codemirror/language";
 import { linter, lintGutter, type Diagnostic } from "@codemirror/lint";
 import { EditorState, type Extension, Compartment } from "@codemirror/state";
 import {
@@ -192,6 +193,12 @@ export class ConfigEditor extends LitElement {
       // JSON language mode
       json(),
 
+      // Syntax highlighting
+      syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+
+      // Code folding
+      foldGutter(),
+
       // Lint gutter
       lintGutter(),
 
@@ -224,7 +231,7 @@ export class ConfigEditor extends LitElement {
       }),
 
       // Keymaps (includes indentWithTab for Tab-key indentation)
-      keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
+      keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab, ...foldKeymap]),
 
       // Dispatch on change
       EditorView.updateListener.of((update) => {
