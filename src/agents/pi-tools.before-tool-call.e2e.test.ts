@@ -429,6 +429,27 @@ describe("before_tool_call requireApproval handling", () => {
     );
   });
 
+  it("still blocks when there is a soft block without approval", async () => {
+    const { callGatewayTool } = await import("./tools/gateway.js");
+    const mockCallGateway = vi.mocked(callGatewayTool);
+
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      block: true,
+      blockMode: "soft",
+      blockReason: "Soft block not cleared",
+    });
+
+    const result = await runBeforeToolCallHook({
+      toolName: "bash",
+      params: { command: "rm -rf" },
+      ctx: { agentId: "main", sessionKey: "main" },
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result).toHaveProperty("reason", "Soft block not cleared");
+    expect(mockCallGateway).not.toHaveBeenCalled();
+  });
+
   it("calls gateway RPC and unblocks on allow-once", async () => {
     const { callGatewayTool } = await import("./tools/gateway.js");
     const mockCallGateway = vi.mocked(callGatewayTool);
