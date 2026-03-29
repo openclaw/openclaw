@@ -19,8 +19,8 @@ package_name="$(node -e 'const pkg = require(require("node:path").resolve(proces
 package_version="$(node -e 'const pkg = require(require("node:path").resolve(process.argv[1], "package.json")); console.log(pkg.version)' "${package_dir}")"
 current_beta_version="$(npm view "${package_name}" dist-tags.beta 2>/dev/null || true)"
 mapfile -t publish_plan < <(
-  PACKAGE_VERSION="${package_version}" CURRENT_BETA_VERSION="${current_beta_version}" node --import tsx --input-type=module <<'EOF'
-import { resolveNpmPublishPlan } from "./scripts/openclaw-npm-release-check.ts";
+  PACKAGE_VERSION="${package_version}" CURRENT_BETA_VERSION="${current_beta_version}" node --input-type=module <<'EOF'
+import { resolveNpmPublishPlan } from "./scripts/lib/npm-publish-plan.mjs";
 
 const plan = resolveNpmPublishPlan(
   process.env.PACKAGE_VERSION ?? "",
