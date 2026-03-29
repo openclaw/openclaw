@@ -1,16 +1,16 @@
 import type { RequestListener } from "node:http";
+import { createEmptyPluginRegistry } from "openclaw/plugin-sdk/testing";
+import { setActivePluginRegistry } from "openclaw/plugin-sdk/testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createEmptyPluginRegistry } from "../../../src/plugins/registry.js";
-import { setActivePluginRegistry } from "../../../src/plugins/runtime.js";
 import { withServer } from "../../../test/helpers/http-test-server.js";
+import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 import {
   createImageLifecycleCore,
   createImageUpdate,
   createTextUpdate,
   expectImageLifecycleDelivery,
   postWebhookReplay,
-} from "../../../test/helpers/plugins/zalo-lifecycle.js";
-import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
+} from "../test-support/lifecycle.js";
 import {
   clearZaloWebhookSecurityStateForTest,
   getZaloWebhookRateLimitStateSizeForTest,

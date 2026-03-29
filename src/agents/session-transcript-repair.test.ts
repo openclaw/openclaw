@@ -253,7 +253,9 @@ describe("sanitizeToolUseResultPairing", () => {
       { role: "user", content: "retrying" },
     ]);
 
-    const result = repairToolUseResultPairing(input, { dropErroredAssistantResults: true });
+    const result = repairToolUseResultPairing(input, {
+      erroredAssistantResultPolicy: "drop",
+    });
 
     expect(result.droppedOrphanCount).toBe(0);
     expect(result.messages).toHaveLength(2);

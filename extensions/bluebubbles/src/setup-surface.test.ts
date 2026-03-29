@@ -1,6 +1,6 @@
 import { adaptScopedAccountAccessor } from "openclaw/plugin-sdk/channel-config-helpers";
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import { describe, expect, it, vi } from "vitest";
-import { DEFAULT_ACCOUNT_ID } from "../../../src/routing/session-key.js";
 import {
   createSetupWizardAdapter,
   createTestWizardPrompter,

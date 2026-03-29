@@ -6,11 +6,14 @@ const mocks = vi.hoisted(() => ({
   memoryRegister: vi.fn(),
   otherRegister: vi.fn(),
   memoryListAction: vi.fn(),
+  loadOpenClawPluginCliRegistry: vi.fn(),
   loadOpenClawPlugins: vi.fn(),
   applyPluginAutoEnable: vi.fn(),
 }));
 
 vi.mock("./loader.js", () => ({
+  loadOpenClawPluginCliRegistry: (...args: unknown[]) =>
+    mocks.loadOpenClawPluginCliRegistry(...args),
   loadOpenClawPlugins: (...args: unknown[]) => mocks.loadOpenClawPlugins(...args),
 }));
 
@@ -18,7 +21,7 @@ vi.mock("../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable: (...args: unknown[]) => mocks.applyPluginAutoEnable(...args),
 }));
 
-import { registerPluginCliCommands } from "./cli.js";
+import { getPluginCliCommandDescriptors, registerPluginCliCommands } from "./cli.js";
 
 function createProgram(existingCommandName?: string) {
   const program = new Command();
@@ -109,6 +112,8 @@ describe("registerPluginCliCommands", () => {
       program.command("other").description("Other commands");
     });
     mocks.memoryListAction.mockReset();
+    mocks.loadOpenClawPluginCliRegistry.mockReset();
+    mocks.loadOpenClawPluginCliRegistry.mockResolvedValue(createCliRegistry());
     mocks.loadOpenClawPlugins.mockReset();
     mocks.loadOpenClawPlugins.mockReturnValue(createCliRegistry());
     mocks.applyPluginAutoEnable.mockReset();
@@ -148,6 +153,82 @@ describe("registerPluginCliCommands", () => {
         config: autoEnabledConfig,
       }),
     );
+  });
+
+  it("loads root-help descriptors through the dedicated non-activating CLI collector", async () => {
+    const { rawConfig, autoEnabledConfig } = createAutoEnabledCliFixture();
+    mocks.applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
+    mocks.loadOpenClawPluginCliRegistry.mockResolvedValue({
+      cliRegistrars: [
+        {
+          pluginId: "matrix",
+          register: vi.fn(),
+          commands: ["matrix"],
+          descriptors: [
+            {
+              name: "matrix",
+              description: "Matrix channel utilities",
+              hasSubcommands: true,
+            },
+          ],
+          source: "bundled",
+        },
+        {
+          pluginId: "duplicate-matrix",
+          register: vi.fn(),
+          commands: ["matrix"],
+          descriptors: [
+            {
+              name: "matrix",
+              description: "Duplicate Matrix channel utilities",
+              hasSubcommands: true,
+            },
+          ],
+          source: "bundled",
+        },
+      ],
+    });
+
+    await expect(getPluginCliCommandDescriptors(rawConfig)).resolves.toEqual([
+      {
+        name: "matrix",
+        description: "Matrix channel utilities",
+        hasSubcommands: true,
+      },
+    ]);
+    expect(mocks.loadOpenClawPluginCliRegistry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: autoEnabledConfig,
+      }),
+    );
+  });
+
+  it("keeps runtime CLI command registration on the full plugin loader for legacy channel plugins", async () => {
+    const { rawConfig, autoEnabledConfig } = createAutoEnabledCliFixture();
+    mocks.applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
+    mocks.loadOpenClawPlugins.mockReturnValue(
+      createCliRegistry({
+        memoryCommands: ["legacy-channel"],
+        memoryDescriptors: [
+          {
+            name: "legacy-channel",
+            description: "Legacy channel commands",
+            hasSubcommands: true,
+          },
+        ],
+      }),
+    );
+
+    await registerPluginCliCommands(createProgram(), rawConfig, undefined, undefined, {
+      mode: "lazy",
+    });
+
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: autoEnabledConfig,
+      }),
+    );
+    expect(mocks.loadOpenClawPluginCliRegistry).not.toHaveBeenCalled();
   });
 
   it("lazy-registers descriptor-backed plugin commands on first invocation", async () => {

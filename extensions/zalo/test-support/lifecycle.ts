@@ -1,107 +1,8 @@
 import { request as httpRequest } from "node:http";
 import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk/zalo";
 import { expect, vi } from "vitest";
-import { createEmptyPluginRegistry } from "../../../src/plugins/registry.js";
-import { setActivePluginRegistry } from "../../../src/plugins/runtime.js";
-import {
-  loadBundledPluginPublicSurfaceSync,
-  resolveRelativeBundledPluginPublicModuleId,
-} from "../../../src/test-utils/bundled-plugin-public-surface.js";
-import { withServer } from "../http-test-server.js";
-import { createPluginRuntimeMock } from "./plugin-runtime-mock.js";
-import { createRuntimeEnv } from "./runtime-env.js";
-
-export { withServer };
-
-type ResolvedZaloAccount = {
-  accountId: string;
-  enabled: boolean;
-  token: string;
-  tokenSource: "env" | "config" | "configFile" | "none";
-  config: Record<string, unknown>;
-};
-
-const { clearZaloWebhookSecurityStateForTest, monitorZaloProvider } =
-  loadBundledPluginPublicSurfaceSync<{
-    clearZaloWebhookSecurityStateForTest: () => void;
-    monitorZaloProvider: (params: {
-      token: string;
-      account: ResolvedZaloAccount;
-      config: OpenClawConfig;
-      runtime: ReturnType<typeof createRuntimeEnv>;
-      abortSignal: AbortSignal;
-      useWebhook?: boolean;
-      webhookUrl?: string;
-      webhookSecret?: string;
-    }) => Promise<unknown>;
-  }>({
-    pluginId: "zalo",
-    artifactBasename: "src/monitor.js",
-  });
-const { normalizeSecretInputString } = loadBundledPluginPublicSurfaceSync<{
-  normalizeSecretInputString: (value: unknown) => string | undefined;
-}>({
-  pluginId: "zalo",
-  artifactBasename: "src/secret-input.js",
-});
-
-const zaloApiModuleId = resolveRelativeBundledPluginPublicModuleId({
-  fromModuleUrl: import.meta.url,
-  pluginId: "zalo",
-  artifactBasename: "src/api.js",
-});
-const zaloRuntimeModuleId = resolveRelativeBundledPluginPublicModuleId({
-  fromModuleUrl: import.meta.url,
-  pluginId: "zalo",
-  artifactBasename: "src/runtime.js",
-});
-
-const lifecycleMocks = vi.hoisted(() => ({
-  setWebhookMock: vi.fn(async () => ({ ok: true, result: { url: "" } })),
-  deleteWebhookMock: vi.fn(async () => ({ ok: true, result: { url: "" } })),
-  getWebhookInfoMock: vi.fn(async () => ({ ok: true, result: { url: "" } })),
-  getUpdatesMock: vi.fn(() => new Promise(() => {})),
-  sendChatActionMock: vi.fn(async () => ({ ok: true })),
-  sendMessageMock: vi.fn(async () => ({
-    ok: true,
-    result: { message_id: "zalo-test-reply-1" },
-  })),
-  sendPhotoMock: vi.fn(async () => ({ ok: true })),
-  getZaloRuntimeMock: vi.fn(),
-}));
-
-export const setWebhookMock = lifecycleMocks.setWebhookMock;
-export const deleteWebhookMock = lifecycleMocks.deleteWebhookMock;
-export const getWebhookInfoMock = lifecycleMocks.getWebhookInfoMock;
-export const getUpdatesMock = lifecycleMocks.getUpdatesMock;
-export const sendChatActionMock = lifecycleMocks.sendChatActionMock;
-export const sendMessageMock = lifecycleMocks.sendMessageMock;
-export const sendPhotoMock = lifecycleMocks.sendPhotoMock;
-export const getZaloRuntimeMock = lifecycleMocks.getZaloRuntimeMock;
-
-vi.mock(zaloApiModuleId, async (importOriginal) => {
-  const actual = await importOriginal<object>();
-  return {
-    ...actual,
-    deleteWebhook: lifecycleMocks.deleteWebhookMock,
-    getUpdates: lifecycleMocks.getUpdatesMock,
-    getWebhookInfo: lifecycleMocks.getWebhookInfoMock,
-    sendChatAction: lifecycleMocks.sendChatActionMock,
-    sendMessage: lifecycleMocks.sendMessageMock,
-    sendPhoto: lifecycleMocks.sendPhotoMock,
-    setWebhook: lifecycleMocks.setWebhookMock,
-  };
-});
-
-vi.mock(zaloRuntimeModuleId, () => ({
-  getZaloRuntime: lifecycleMocks.getZaloRuntimeMock,
-}));
-
-export function resetLifecycleTestState() {
-  vi.clearAllMocks();
-  clearZaloWebhookSecurityStateForTest();
-  setActivePluginRegistry(createEmptyPluginRegistry());
-}
+import { createPluginRuntimeMock } from "../../../test/helpers/plugins/plugin-runtime-mock.js";
+import type { ResolvedZaloAccount } from "../src/types.js";
 
 export function createLifecycleConfig(params: {
   accountId: string;
@@ -209,16 +110,6 @@ export function createImageUpdate(params?: {
       photo_url: params?.photoUrl ?? "https://example.com/test-image.jpg",
     },
   };
-}
-
-export function setLifecycleRuntimeCore(
-  channel: NonNullable<NonNullable<Parameters<typeof createPluginRuntimeMock>[0]>["channel"]>,
-) {
-  getZaloRuntimeMock.mockReturnValue(
-    createPluginRuntimeMock({
-      channel,
-    }),
-  );
 }
 
 export function createImageLifecycleCore() {
@@ -368,57 +259,4 @@ export async function postWebhookReplay(params: {
   }
   const replay = await postWebhookUpdate(params);
   return { first, replay };
-}
-
-export async function startWebhookLifecycleMonitor(params: {
-  account: ResolvedZaloAccount;
-  config: OpenClawConfig;
-  token?: string;
-  webhookUrl?: string;
-  webhookSecret?: string;
-}) {
-  const registry = createEmptyPluginRegistry();
-  setActivePluginRegistry(registry);
-  const abort = new AbortController();
-  const runtime = createRuntimeEnv();
-  const accountWebhookUrl =
-    typeof params.account.config?.webhookUrl === "string"
-      ? params.account.config.webhookUrl
-      : undefined;
-  const webhookUrl = params.webhookUrl ?? accountWebhookUrl;
-  const webhookSecret =
-    params.webhookSecret ?? normalizeSecretInputString(params.account.config?.webhookSecret);
-  const run = monitorZaloProvider({
-    token: params.token ?? "zalo-token",
-    account: params.account,
-    config: params.config,
-    runtime,
-    abortSignal: abort.signal,
-    useWebhook: true,
-    webhookUrl,
-    webhookSecret,
-  });
-
-  await vi.waitFor(() => {
-    if (setWebhookMock.mock.calls.length !== 1 || registry.httpRoutes.length !== 1) {
-      throw new Error("waiting for webhook registration");
-    }
-  });
-
-  const route = registry.httpRoutes[0];
-  if (!route) {
-    throw new Error("missing plugin HTTP route");
-  }
-
-  return {
-    abort,
-    registry,
-    route,
-    run,
-    runtime,
-    stop: async () => {
-      abort.abort();
-      await run;
-    },
-  };
 }

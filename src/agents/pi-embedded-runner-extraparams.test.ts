@@ -2122,7 +2122,7 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.service_tier).toBe("standard_only");
   });
 
-  it("does not inject Anthropic fast mode service_tier for OAuth auth", () => {
+  it("injects Anthropic fast mode service_tier for OAuth auth", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "anthropic",
       applyModelId: "claude-sonnet-4-5",
@@ -2138,7 +2138,26 @@ describe("applyExtraParamsToAgent", () => {
       },
       payload: {},
     });
-    expect(payload).not.toHaveProperty("service_tier");
+    expect(payload.service_tier).toBe("auto");
+  });
+
+  it("injects Anthropic standard_only service_tier for OAuth auth when fastMode is false", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "anthropic",
+      applyModelId: "claude-sonnet-4-5",
+      extraParamsOverride: { fastMode: false },
+      model: {
+        api: "anthropic-messages",
+        provider: "anthropic",
+        id: "claude-sonnet-4-5",
+        baseUrl: "https://api.anthropic.com",
+      } as unknown as Model<"anthropic-messages">,
+      options: {
+        apiKey: "sk-ant-oat-test-token",
+      },
+      payload: {},
+    });
+    expect(payload.service_tier).toBe("standard_only");
   });
 
   it("does not inject Anthropic fast mode service_tier for proxied base URLs", () => {
