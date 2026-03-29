@@ -12576,7 +12576,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     },
     "tools.loopDetection.enabled": {
       label: "Tool-loop Detection",
-      help: "Enable repetitive tool-call loop detection and backoff safety checks (default: false).",
+      help: "Enable repetitive tool-call loop detection and backoff safety checks (default: true).",
       tags: ["tools"],
     },
     "tools.loopDetection.historySize": {
