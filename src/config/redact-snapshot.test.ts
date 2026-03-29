@@ -213,7 +213,8 @@ describe("redactConfigSnapshot", () => {
     );
 
     const result = redactConfigSnapshot(snapshot, hints);
-    expect(result.config.mcp?.servers?.remote?.url).toBe(REDACTED_SENTINEL);
+    const cfg = result.config as typeof snapshot.config;
+    expect(cfg.mcp.servers.remote.url).toBe(REDACTED_SENTINEL);
     expect(result.raw).toContain(REDACTED_SENTINEL);
     expect(result.raw).not.toContain("user:pass@");
     expect(result.raw).not.toContain("secret123");

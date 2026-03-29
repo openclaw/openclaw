@@ -1,6 +1,10 @@
 import { getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
 import { loadConfig, type OpenClawConfig } from "../config/config.js";
-import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../utils/message-channel.js";
+import {
+  INTERNAL_MESSAGE_CHANNEL,
+  isDeliverableMessageChannel,
+  normalizeMessageChannel,
+} from "../utils/message-channel.js";
 
 export type ExecApprovalInitiatingSurfaceState =
   | { kind: "enabled"; channel: string | undefined; channelLabel: string }
@@ -40,6 +44,9 @@ export function resolveExecApprovalInitiatingSurfaceState(params: {
   });
   if (state) {
     return { ...state, channel, channelLabel };
+  }
+  if (isDeliverableMessageChannel(channel)) {
+    return { kind: "enabled", channel, channelLabel };
   }
   return { kind: "unsupported", channel, channelLabel };
 }
