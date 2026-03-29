@@ -322,5 +322,4 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   }
 
   process.stdout.write(JSON.stringify(resolved));
-  process.exit(0);
 }
