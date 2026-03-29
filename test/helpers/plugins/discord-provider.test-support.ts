@@ -2,7 +2,6 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { Mock } from "vitest";
 import { expect, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/plugin-sdk/discord.js";
-import { resolveRelativeBundledPluginPublicModuleId } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 
 export type NativeCommandSpecMock = {
   name: string;
@@ -146,11 +145,7 @@ const providerMonitorTestMocks: ProviderMonitorTestMocks = vi.hoisted(() => {
 });
 
 function buildDiscordSourceModuleId(artifactBasename: string): string {
-  return resolveRelativeBundledPluginPublicModuleId({
-    fromModuleUrl: import.meta.url,
-    pluginId: "discord",
-    artifactBasename: `src/${artifactBasename}`,
-  });
+  return `../../../extensions/discord/src/${artifactBasename}`;
 }
 
 const {
