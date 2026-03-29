@@ -83,6 +83,7 @@ describe("diagnostic session state pruning", () => {
 
 describe("logger import side effects", () => {
   afterEach(() => {
+    vi.doUnmock("../config/config.js");
     vi.restoreAllMocks();
     vi.useRealTimers();
   });
@@ -98,6 +99,16 @@ describe("logger import side effects", () => {
     );
 
     expect(mkdirSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not import config at diagnostic module load time", async () => {
+    vi.useRealTimers();
+    vi.resetModules();
+    vi.doMock("../config/config.js", () => {
+      throw new Error("diagnostic module imported config eagerly");
+    });
+
+    await expect(import("./diagnostic.js")).resolves.toBeDefined();
   });
 });
 
