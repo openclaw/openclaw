@@ -287,7 +287,9 @@ export function createAnthropicBetaHeadersWrapper(
         : betas;
     if (maybeOauth && requestedContext1m) {
       log.warn(
-        `ignoring context1m for OAuth token auth on ${model.provider}/${model.id}; Anthropic rejects context-1m beta with OAuth auth`,
+        isOauth
+          ? `ignoring context1m for OAuth token auth on ${model.provider}/${model.id}; Anthropic rejects context-1m beta with OAuth auth`
+          : `ignoring context1m for ${model.provider}/${model.id}; apiKey is unresolved (possible OAuth/setup-token), stripping context-1m beta defensively`,
       );
     }
 
