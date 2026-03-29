@@ -37,6 +37,12 @@ export type ParsedReleaseTag = {
   date: Date;
 };
 
+export type NpmPublishPlan = {
+  channel: "stable" | "beta";
+  publishTag: "latest" | "beta";
+  mirrorDistTags: ("latest" | "beta")[];
+};
+
 const STABLE_VERSION_REGEX = /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<day>[1-9]\d?)$/;
 const BETA_VERSION_REGEX =
   /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<day>[1-9]\d?)-beta\.(?<beta>[1-9]\d*)$/;
@@ -137,6 +143,68 @@ export function parseReleaseVersion(version: string): ParsedReleaseVersion | nul
   }
 
   return null;
+}
+
+export function compareReleaseVersions(left: string, right: string): number | null {
+  const parsedLeft = parseReleaseVersion(left);
+  const parsedRight = parseReleaseVersion(right);
+  if (parsedLeft === null || parsedRight === null) {
+    return null;
+  }
+
+  const dateDelta = parsedLeft.date.getTime() - parsedRight.date.getTime();
+  if (dateDelta !== 0) {
+    return Math.sign(dateDelta);
+  }
+
+  if (parsedLeft.channel !== parsedRight.channel) {
+    return parsedLeft.channel === "stable" ? 1 : -1;
+  }
+
+  if (parsedLeft.channel === "beta" && parsedRight.channel === "beta") {
+    return Math.sign((parsedLeft.betaNumber ?? 0) - (parsedRight.betaNumber ?? 0));
+  }
+
+  return Math.sign((parsedLeft.correctionNumber ?? 0) - (parsedRight.correctionNumber ?? 0));
+}
+
+export function resolveNpmPublishPlan(
+  version: string,
+  currentBetaVersion?: string | null,
+): NpmPublishPlan {
+  const parsedVersion = parseReleaseVersion(version);
+  if (parsedVersion === null) {
+    throw new Error(`Unsupported release version "${version}".`);
+  }
+
+  if (parsedVersion.channel === "beta") {
+    return {
+      channel: "beta",
+      publishTag: "beta",
+      mirrorDistTags: [],
+    };
+  }
+
+  const normalizedCurrentBeta = currentBetaVersion?.trim();
+  if (normalizedCurrentBeta) {
+    const betaVsStable = compareReleaseVersions(normalizedCurrentBeta, version);
+    if (betaVsStable !== null && betaVsStable > 0) {
+      return {
+        channel: "stable",
+        publishTag: "latest",
+        // Keep beta on the newer prerelease train when one already exists.
+        mirrorDistTags: [],
+      };
+    }
+  }
+
+  return {
+    channel: "stable",
+    publishTag: "latest",
+    // Stable promotion keeps beta aligned unless beta already points at a
+    // newer prerelease train.
+    mirrorDistTags: ["beta"],
+  };
 }
 
 export function parseReleaseTagVersion(version: string): ParsedReleaseTag | null {

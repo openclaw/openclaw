@@ -10,7 +10,7 @@ read_when:
 
 OpenClaw has three public release lanes:
 
-- stable: tagged releases that publish to npm `latest`
+- stable: tagged releases that publish to npm `latest` and mirror the same version onto `beta` unless `beta` already points at a newer prerelease
 - beta: prerelease tags that publish to npm `beta`
 - dev: the moving head of `main`
 
@@ -24,8 +24,8 @@ OpenClaw has three public release lanes:
   - Git tag: `vYYYY.M.D-beta.N`
 - Do not zero-pad month or day
 - `latest` means the current stable npm release
-- `beta` means the current prerelease npm release
-- Stable correction releases also publish to npm `latest`
+- `beta` means the current beta install target, which may point to either the active prerelease or the latest promoted stable build
+- Stable and stable correction releases publish to npm `latest` and also retag npm `beta` to that same non-beta version after promotion, unless `beta` already points at a newer prerelease
 - Every OpenClaw release ships the npm package and macOS app together
 
 ## Release cadence
