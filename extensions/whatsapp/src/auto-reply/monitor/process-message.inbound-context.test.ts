@@ -496,3 +496,21 @@ describe("web processMessage inbound context", () => {
     expect(updateLastRouteMock).toHaveBeenCalledTimes(1);
   });
 });
+
+  it("skips duplicate final when block streaming already sent identical content", async () => {
+    const rememberSentText = vi.fn();
+    await processMessage(createWhatsAppDirectStreamingArgs({ rememberSentText }));
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const deliver = (capturedDispatchParams as any)?.dispatcherOptions?.deliver as
+      | ((payload: { text?: string }, info: { kind: "tool" | "block" | "final" }) => Promise<void>)
+      | undefined;
+    expect(deliver).toBeTypeOf("function");
+
+    await deliver?.({ text: "same content" }, { kind: "block" });
+    expect(deliverWebReplyMock).toHaveBeenCalledTimes(1);
+
+    await deliver?.({ text: "same content" }, { kind: "final" });
+    // Final must be suppressed — block already delivered identical content
+    expect(deliverWebReplyMock).toHaveBeenCalledTimes(1);
+  });
