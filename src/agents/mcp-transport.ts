@@ -1,5 +1,6 @@
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { logDebug, logWarn } from "../logger.js";
 import { describeSseMcpServerLaunchConfig, resolveSseMcpServerLaunchConfig } from "./mcp-sse.js";
@@ -11,6 +12,7 @@ import {
 export type ResolvedMcpTransport = {
   transport: Transport;
   description: string;
+  transportType: "stdio" | "sse" | "streamable-http";
   detachStderr?: () => void;
 };
 
@@ -86,6 +88,35 @@ function resolveSseTransport(serverName: string, rawServer: unknown): ResolvedMc
       eventSourceInit: hasHeaders ? { fetch: buildSseEventSourceFetch(headers) } : undefined,
     }),
     description: describeSseMcpServerLaunchConfig(sseLaunch.config),
+    transportType: "sse",
+  };
+}
+
+function resolveStreamableHttpTransport(
+  serverName: string,
+  rawServer: unknown,
+): ResolvedMcpTransport | null {
+  const launch = resolveSseMcpServerLaunchConfig(rawServer, {
+    onDroppedHeader: (key) => {
+      logWarn(
+        `bundle-mcp: server "${serverName}": header "${key}" has an unsupported value type and was ignored.`,
+      );
+    },
+    onMalformedHeaders: () => {
+      logWarn(
+        `bundle-mcp: server "${serverName}": "headers" must be a JSON object; the value was ignored.`,
+      );
+    },
+  });
+  if (!launch.ok) {
+    return null;
+  }
+  return {
+    transport: new StreamableHTTPClientTransport(new URL(launch.config.url), {
+      requestInit: launch.config.headers ? { headers: launch.config.headers } : undefined,
+    }),
+    description: describeSseMcpServerLaunchConfig(launch.config),
+    transportType: "streamable-http",
   };
 }
 
@@ -93,6 +124,12 @@ export function resolveMcpTransport(
   serverName: string,
   rawServer: unknown,
 ): ResolvedMcpTransport | null {
+  const requestedTransport =
+    rawServer &&
+    typeof rawServer === "object" &&
+    typeof (rawServer as { transport?: unknown }).transport === "string"
+      ? ((rawServer as { transport?: string }).transport ?? "").trim().toLowerCase()
+      : "";
   const stdioLaunch = resolveStdioMcpServerLaunchConfig(rawServer);
   if (stdioLaunch.ok) {
     const transport = new StdioClientTransport({
@@ -105,8 +142,27 @@ export function resolveMcpTransport(
     return {
       transport,
       description: describeStdioMcpServerLaunchConfig(stdioLaunch.config),
+      transportType: "stdio",
       detachStderr: attachStderrLogging(serverName, transport),
     };
+  }
+
+  if (
+    requestedTransport &&
+    requestedTransport !== "sse" &&
+    requestedTransport !== "streamable-http"
+  ) {
+    logWarn(
+      `bundle-mcp: skipped server "${serverName}" because transport "${requestedTransport}" is not supported.`,
+    );
+    return null;
+  }
+
+  if (requestedTransport === "streamable-http") {
+    const httpTransport = resolveStreamableHttpTransport(serverName, rawServer);
+    if (httpTransport) {
+      return httpTransport;
+    }
   }
 
   const sseTransport = resolveSseTransport(serverName, rawServer);
