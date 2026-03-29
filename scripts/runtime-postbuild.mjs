@@ -32,6 +32,8 @@ function copyStaticExtensionAssets() {
     if (fs.existsSync(srcPath)) {
       fs.mkdirSync(path.dirname(destPath), { recursive: true });
       fs.copyFileSync(srcPath, destPath);
+    } else {
+      console.warn(`[runtime-postbuild] static asset not found, skipping: ${src}`);
     }
   }
 }
