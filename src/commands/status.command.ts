@@ -5,6 +5,7 @@ import type { Tone } from "../plugin-sdk/memory-core-host-status.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import type { HealthSummary } from "./health.js";
 import { getDaemonStatusSummary, getNodeDaemonStatusSummary } from "./status.daemon.js";
+import { resolveNodeOnlyGatewayInfo } from "./status.node-mode.js";
 
 let providerUsagePromise: Promise<typeof import("../infra/provider-usage.js")> | undefined;
 let securityAuditModulePromise: Promise<typeof import("../security/audit.runtime.js")> | undefined;
@@ -302,7 +303,19 @@ export async function statusCommand(
         }).httpUrl
       : "disabled";
 
+  const [daemon, nodeDaemon] = await Promise.all([
+    getDaemonStatusSummary(),
+    getNodeDaemonStatusSummary(),
+  ]);
+  const nodeOnlyGateway = await resolveNodeOnlyGatewayInfo({
+    daemon,
+    node: nodeDaemon,
+  });
+
   const gatewayValue = (() => {
+    if (nodeOnlyGateway) {
+      return nodeOnlyGateway.gatewayValue;
+    }
     const target = remoteUrlMissing
       ? `fallback ${gatewayConnection.url}`
       : `${gatewayConnection.url}${gatewayConnection.urlSource ? ` (${gatewayConnection.urlSource})` : ""}`;
@@ -344,11 +357,6 @@ export async function statusCommand(
     const defSuffix = def ? ` · default ${def.id} active ${defActive}` : "";
     return `${agentStatus.agents.length} · ${pending} · sessions ${agentStatus.totalSessions}${defSuffix}`;
   })();
-
-  const [daemon, nodeDaemon] = await Promise.all([
-    getDaemonStatusSummary(),
-    getNodeDaemonStatusSummary(),
-  ]);
   const daemonValue = (() => {
     if (daemon.installed === false) {
       return `${daemon.label} not installed`;
@@ -743,7 +751,9 @@ export async function statusCommand(
   runtime.log("Next steps:");
   runtime.log(`  Need to share?      ${formatCliCommand("openclaw status --all")}`);
   runtime.log(`  Need to debug live? ${formatCliCommand("openclaw logs --follow")}`);
-  if (gatewayReachable) {
+  if (nodeOnlyGateway) {
+    runtime.log(`  Need node service?  ${formatCliCommand("openclaw node status")}`);
+  } else if (gatewayReachable) {
     runtime.log(`  Need to test channels? ${formatCliCommand("openclaw status --deep")}`);
   } else {
     runtime.log(`  Fix reachability first: ${formatCliCommand("openclaw gateway probe")}`);
