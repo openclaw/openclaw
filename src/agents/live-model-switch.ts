@@ -38,20 +38,38 @@ export function resolveLiveSessionModelSelection(params: {
     return null;
   }
   const agentId = params.agentId?.trim();
-  const defaultModelRef = agentId
-    ? resolveDefaultModelForAgent({
-        cfg,
-        agentId,
-      })
-    : { provider: params.defaultProvider, model: params.defaultModel };
   const storePath = resolveStorePath(cfg.session?.store, {
     agentId,
   });
   const entry = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+
+  // Upstream: prefer runtime fields written by the runner.
   const runtimeProvider = entry?.modelProvider?.trim();
   const runtimeModel = entry?.model?.trim();
-  const provider = runtimeProvider || entry?.providerOverride?.trim() || defaultModelRef.provider;
-  const model = runtimeModel || entry?.modelOverride?.trim() || defaultModelRef.model;
+
+  // When the session entry has an explicit modelOverride (set via /model or
+  // inherited from a parent session write), honour it.  Otherwise fall back to
+  // the caller-supplied defaults which already reflect the resolved model for
+  // this run (including parent-session overrides, heartbeat model config, etc.).
+  // Previously this branch unconditionally used resolveDefaultModelForAgent()
+  // which returns the *config-level* default and ignores any runtime model
+  // resolution performed by the auto-reply / agent-command layer.  That caused
+  // child/heartbeat/thread sessions whose resolved model differs from the
+  // config default to trigger a spurious LiveSessionModelSwitchError on every
+  // attempt, effectively inverting the fallback order (#57063, #56788).
+  const hasExplicitOverride = Boolean(entry?.modelOverride?.trim());
+  const callerDefault = { provider: params.defaultProvider, model: params.defaultModel };
+  const configDefault = hasExplicitOverride && agentId
+    ? resolveDefaultModelForAgent({ cfg, agentId })
+    : callerDefault;
+
+  const provider = runtimeProvider
+    || (hasExplicitOverride
+      ? (entry.providerOverride?.trim() || configDefault.provider)
+      : callerDefault.provider);
+  const model = runtimeModel
+    || (hasExplicitOverride ? entry.modelOverride!.trim() : callerDefault.model);
+
   const authProfileId = entry?.authProfileOverride?.trim() || undefined;
   return {
     provider,

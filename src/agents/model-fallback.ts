@@ -25,6 +25,7 @@ import {
   shouldPreserveTransientCooldownProbeSlot,
   shouldUseTransientCooldownProbeSlot,
 } from "./failover-policy.js";
+import { LiveSessionModelSwitchError } from "./live-model-switch.js";
 import { logModelFallbackDecision } from "./model-fallback-observation.js";
 import type { FallbackAttempt, ModelCandidate } from "./model-fallback.types.js";
 import {
@@ -172,6 +173,16 @@ async function runFallbackCandidate<T>(params: {
       result,
     };
   } catch (err) {
+    // LiveSessionModelSwitchError indicates the session store was updated
+    // (e.g. via /model) while the run was in progress.  This is NOT a model
+    // availability failure and must not be swallowed by the fallback loop;
+    // the outer retry layer (agent-runner-execution) handles it by restarting
+    // the run with the updated model selection.  Letting it fall through here
+    // would cause the fallback loop to skip the current candidate and try the
+    // next one, effectively inverting the intended model order (#57063).
+    if (err instanceof LiveSessionModelSwitchError) {
+      throw err;
+    }
     // Normalize abort-wrapped rate-limit errors (e.g. Google Vertex RESOURCE_EXHAUSTED)
     // so they become FailoverErrors and continue the fallback loop instead of aborting.
     const normalizedFailover = coerceToFailoverError(err, {
