@@ -1,7 +1,7 @@
 import path from "node:path";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../../../infra/local-file-access.js";
-import { resolveMediaBufferPath } from "../../../media/store.js";
+import { resolveMediaBufferPath, getMediaDir } from "../../../media/store.js";
 import { loadWebMedia } from "../../../media/web-media.js";
 import { resolveUserPath } from "../../../utils.js";
 import type { ImageSanitizationLimits } from "../../image-sanitization.js";
@@ -265,7 +265,10 @@ export async function loadImageFromRef(
       // persisted file. It applies its own guards against path traversal,
       // symlinks, and null bytes.
       const physicalPath = await resolveMediaBufferPath(mediaId, "inbound");
-      const media = await loadWebMedia(physicalPath, { maxBytes: options?.maxBytes });
+      const media = await loadWebMedia(physicalPath, { 
+        maxBytes: options?.maxBytes,
+        localRoots: [getMediaDir()]
+      });
       if (media.kind !== "image") {
         log.debug(`Native image: media store entry is not an image: ${mediaId}`);
         return null;
