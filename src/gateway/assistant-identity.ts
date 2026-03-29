@@ -13,7 +13,6 @@ import {
 const MAX_ASSISTANT_NAME = 50;
 const MAX_ASSISTANT_AVATAR = 200;
 const MAX_ASSISTANT_EMOJI = 16;
-const MAX_USER_AVATAR = 200;
 
 export const DEFAULT_ASSISTANT_IDENTITY: AssistantIdentity = {
   agentId: "main",
