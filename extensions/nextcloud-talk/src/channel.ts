@@ -1,4 +1,4 @@
-import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
+import { describeWebhookAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import {
   adaptScopedAccountAccessor,
@@ -14,11 +14,11 @@ import { createAllowlistProviderRouteAllowlistWarningCollector } from "openclaw/
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
 import { runStoppablePassiveMonitor } from "openclaw/plugin-sdk/extension-shared";
 import {
+  buildWebhookChannelStatusSummary,
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 import {
-  buildBaseChannelStatusSummary,
   buildChannelConfigSchema,
   clearAccountEntryFields,
   DEFAULT_ACCOUNT_ID,
@@ -130,7 +130,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
         ...nextcloudTalkConfigAdapter,
         isConfigured: (account) => Boolean(account.secret?.trim() && account.baseUrl?.trim()),
         describeAccount: (account) =>
-          describeAccountSnapshot({
+          describeWebhookAccountSnapshot({
             account,
             configured: Boolean(account.secret?.trim() && account.baseUrl?.trim()),
             extra: {
@@ -173,9 +173,8 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
       status: createComputedAccountStatusAdapter<ResolvedNextcloudTalkAccount>({
         defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
         buildChannelSummary: ({ snapshot }) =>
-          buildBaseChannelStatusSummary(snapshot, {
+          buildWebhookChannelStatusSummary(snapshot, {
             secretSource: snapshot.secretSource ?? "none",
-            mode: "webhook",
           }),
         resolveAccountSnapshot: ({ account }) => ({
           accountId: account.accountId,

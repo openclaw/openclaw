@@ -4,6 +4,7 @@ import { normalizeAccountId } from "../../routing/session-key.js";
 import {
   createAccountListHelpers,
   describeAccountSnapshot,
+  describeWebhookAccountSnapshot,
   listCombinedAccountIds,
   mergeAccountConfig,
   resolveListedDefaultAccountId,
@@ -272,6 +273,47 @@ describe("describeAccountSnapshot", () => {
       name: undefined,
       enabled: true,
       configured: undefined,
+    });
+  });
+});
+
+describe("describeWebhookAccountSnapshot", () => {
+  it("defaults mode to webhook while preserving caller extras", () => {
+    expect(
+      describeWebhookAccountSnapshot({
+        account: {
+          accountId: "work",
+          name: "Work",
+        },
+        configured: true,
+        extra: {
+          tokenSource: "config",
+        },
+      }),
+    ).toEqual({
+      accountId: "work",
+      name: "Work",
+      enabled: true,
+      configured: true,
+      tokenSource: "config",
+      mode: "webhook",
+    });
+  });
+
+  it("allows callers to override the mode when the transport is not always webhook", () => {
+    expect(
+      describeWebhookAccountSnapshot({
+        account: {
+          accountId: "work",
+        },
+        mode: "polling",
+      }),
+    ).toEqual({
+      accountId: "work",
+      name: undefined,
+      enabled: true,
+      configured: undefined,
+      mode: "polling",
     });
   });
 });
