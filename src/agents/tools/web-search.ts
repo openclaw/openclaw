@@ -1636,7 +1636,8 @@ async function runSearxngSearch(params: {
   timeoutSeconds: number;
   language?: string;
 }): Promise<Array<{ title: string; url: string; description: string; published?: string }>> {
-  const url = new URL(`${params.baseUrl}/search`);
+  const normalizedBaseUrl = params.baseUrl.replace(/\/+$/, "");
+  const url = new URL(`${normalizedBaseUrl}/search`);
   url.searchParams.set("q", params.query);
   url.searchParams.set("format", "json");
   if (params.language) {
