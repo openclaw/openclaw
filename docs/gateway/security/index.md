@@ -602,6 +602,8 @@ Recommendations:
 - When running small models, **enable sandboxing for all sessions** and **disable web_search/web_fetch/browser** unless inputs are tightly controlled.
 - For chat-only personal assistants with trusted input and no tools, smaller models are usually fine.
 
+<a id="reasoning-verbose-output-in-groups"></a>
+
 ## Reasoning & verbose output in groups
 
 `/reasoning` and `/verbose` can expose internal reasoning or tool output that
