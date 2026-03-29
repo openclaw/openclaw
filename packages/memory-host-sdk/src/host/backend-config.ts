@@ -320,7 +320,7 @@ export function resolveMemoryBackendConfig(params: {
     }
   }
   // Agent-specific overrides take priority
-  const mergedExtraPaths = searchOverrides.length > 0 ? searchOverrides : searchDefaults;
+  const mergedExtraPaths = [...searchDefaults, ...searchOverrides];
   const searchExtraPaths = mergedExtraPaths
     .filter((p): p is string => typeof p === "string" && p.trim().length > 0)
     .map((p): { path: string; pattern?: string; name?: string } => ({ path: p.trim() }));
