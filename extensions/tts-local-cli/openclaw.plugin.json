@@ -1,0 +1,11 @@
+{
+  "id": "cli",
+  "contracts": {
+    "speechProviders": ["cli"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
