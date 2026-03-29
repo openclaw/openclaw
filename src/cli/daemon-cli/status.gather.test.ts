@@ -247,6 +247,7 @@ describe("gatherDaemonStatus", () => {
     });
 
     expect(status.gateway?.controlUiAccessHint).toContain("SecretRef-managed");
+    expect(status.gateway?.controlUiAccessHint).toContain("openclaw dashboard");
   });
 
   it("keeps unresolved-ref hint with resolution guidance", async () => {

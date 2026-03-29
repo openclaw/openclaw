@@ -338,7 +338,7 @@ export async function gatherDaemonStatus(
     const controlUiAccessHint = access.unresolvedRefReason
       ? `URL omits token (${access.unresolvedRefReason}). Run \`openclaw dashboard\` with credentials in your shell, or paste the token in Control UI settings.`
       : access.tokenSecretRefConfigured
-        ? "Token auto-auth is disabled for SecretRef-managed `gateway.auth.token`; use your external token source if prompted."
+        ? `Token omitted because \`gateway.auth.token\` is SecretRef-managed. Run \`openclaw dashboard\` with your external token source if prompted.`
         : undefined;
     gateway = {
       ...gatewayBase,
