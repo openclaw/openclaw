@@ -10,6 +10,7 @@ export default defineConfig({
           include: ["src/**/*.test.ts"],
           exclude: ["src/**/*.browser.test.ts", "src/**/*.node.test.ts"],
           environment: "jsdom",
+          setupFiles: ["./src/test-helpers/lit-warnings.setup.ts"],
         },
       }),
       defineProject({
@@ -17,12 +18,14 @@ export default defineConfig({
           name: "unit-node",
           include: ["src/**/*.node.test.ts"],
           environment: "jsdom",
+          setupFiles: ["./src/test-helpers/lit-warnings.setup.ts"],
         },
       }),
       defineProject({
         test: {
           name: "browser",
           include: ["src/**/*.browser.test.ts"],
+          setupFiles: ["./src/test-helpers/lit-warnings.setup.ts"],
           browser: {
             enabled: true,
             provider: playwright(),
