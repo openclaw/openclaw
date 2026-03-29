@@ -16,7 +16,7 @@ export type RunHeartbeatOnceOptions = {
   agentId?: string;
   sessionKey?: string;
   /** Override heartbeat config (e.g. `{ target: "last" }` to deliver to the last active channel). */
-  heartbeat?: { target?: string };
+  heartbeat?: { target?: string; model?: string };
 };
 
 /** Core runtime helpers exposed to trusted native plugins. */
