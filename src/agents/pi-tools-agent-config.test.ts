@@ -658,21 +658,21 @@ describe("Agent-specific tool filtering", () => {
     expect(resultDetails?.status).toBe("completed");
   });
 
-  it("fails closed when the implicit exec host resolves to sandbox without a runtime", async () => {
+  it("defaults implicit exec host to gateway when sandbox runtime is unavailable", async () => {
     const tools = createOpenClawCodingTools({
       config: {},
       sessionKey: "agent:main:main",
-      workspaceDir: "/tmp/test-main-implicit-sandbox",
-      agentDir: "/tmp/agent-main-implicit-sandbox",
+      workspaceDir: "/tmp/test-main-implicit-gateway",
+      agentDir: "/tmp/agent-main-implicit-gateway",
     });
     const execTool = tools.find((tool) => tool.name === "exec");
     expect(execTool).toBeDefined();
 
-    await expect(
-      execTool!.execute("call-implicit-sandbox-default", {
-        command: "echo done",
-      }),
-    ).rejects.toThrow("sandbox runtime is unavailable");
+    const result = await execTool!.execute("call-implicit-gateway-default", {
+      command: "echo done",
+    });
+    const resultDetails = result?.details as { status?: string } | undefined;
+    expect(resultDetails?.status).toBe("completed");
   });
 
   it("fails closed when exec host=sandbox is requested without sandbox runtime", async () => {
