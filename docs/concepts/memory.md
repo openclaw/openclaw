@@ -58,16 +58,16 @@ For details on how search works, tuning options, and provider setup, see
 
 OpenClaw has two backends for indexing and searching memory:
 
-**Builtin (default)** -- uses a per-agent SQLite database. Works out of the box
-with no extra dependencies. Supports keyword search, vector similarity, and
-hybrid search with CJK support.
-
-**QMD** -- a local-first search sidecar that adds reranking, query expansion,
-and the ability to index directories outside the workspace (like project docs or
-session transcripts). Set `memory.backend = "qmd"` to switch.
-
-See the [Memory configuration reference](/reference/memory-config) for backend
-setup and all config knobs.
+<CardGroup cols={2}>
+<Card title="Builtin (default)" icon="database" href="/concepts/memory-builtin">
+SQLite-based. Works out of the box with keyword search, vector similarity, and
+hybrid search. No extra dependencies.
+</Card>
+<Card title="QMD" icon="magnifying-glass" href="/concepts/memory-qmd">
+Local-first sidecar with reranking, query expansion, and the ability to index
+directories outside the workspace.
+</Card>
+</CardGroup>
 
 ## Automatic memory flush
 
@@ -91,6 +91,8 @@ openclaw memory index --force   # Rebuild the index
 
 ## Further reading
 
+- [Builtin Memory Engine](/concepts/memory-builtin) -- default SQLite backend
+- [QMD Memory Engine](/concepts/memory-qmd) -- advanced local-first sidecar
 - [Memory Search](/concepts/memory-search) -- search pipeline, providers, and
   tuning
 - [Memory configuration reference](/reference/memory-config) -- all config knobs
