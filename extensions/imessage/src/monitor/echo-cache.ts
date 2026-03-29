@@ -44,6 +44,7 @@ function normalizeEchoMessageIdKey(messageId: string | undefined): string | null
 
 class DefaultSentMessageCache implements SentMessageCache {
   private textCache = new Map<string, number>();
+  private textBackedByIdCache = new Map<string, number>();
   private messageIdCache = new Map<string, number>();
 
   remember(scope: string, lookup: SentMessageLookup): void {
@@ -54,35 +55,33 @@ class DefaultSentMessageCache implements SentMessageCache {
     const messageIdKey = normalizeEchoMessageIdKey(lookup.messageId);
     if (messageIdKey) {
       this.messageIdCache.set(`${scope}:${messageIdKey}`, Date.now());
+      if (textKey) {
+        this.textBackedByIdCache.set(`${scope}:${textKey}`, Date.now());
+      }
     }
     this.cleanup();
   }
 
   has(scope: string, lookup: SentMessageLookup, skipIdShortCircuit = false): boolean {
     this.cleanup();
+    const textKey = normalizeEchoTextKey(lookup.text);
     const messageIdKey = normalizeEchoMessageIdKey(lookup.messageId);
     if (messageIdKey) {
       const idTimestamp = this.messageIdCache.get(`${scope}:${messageIdKey}`);
       if (idTimestamp && Date.now() - idTimestamp <= SENT_MESSAGE_ID_TTL_MS) {
         return true;
       }
-      // If the inbound message has a valid message id that doesn't match any
-      // cached id, short-circuit only when we actually cached real message IDs
-      // for this scope. If remember() only cached text (outbound messageId was
-      // junk like "ok"/"unknown" and got normalized out), text fallback must
-      // still run.
-      //
-      // Exception: when skipIdShortCircuit=true (self-chat is_from_me=true
-      // messages), we always skip this early return so text matching can still
-      // identify agent reply echoes even though IDs never match in this scenario.
-      const hasAnyIdForScope = [...this.messageIdCache.keys()].some((key) =>
-        key.startsWith(`${scope}:`),
-      );
-      if (!skipIdShortCircuit && hasAnyIdForScope) {
+      const textTimestamp = textKey ? this.textCache.get(`${scope}:${textKey}`) : undefined;
+      const textBackedByIdTimestamp = textKey
+        ? this.textBackedByIdCache.get(`${scope}:${textKey}`)
+        : undefined;
+      const hasTextOnlyMatch =
+        typeof textTimestamp === "number" &&
+        (!textBackedByIdTimestamp || textTimestamp > textBackedByIdTimestamp);
+      if (!skipIdShortCircuit && !hasTextOnlyMatch) {
         return false;
       }
     }
-    const textKey = normalizeEchoTextKey(lookup.text);
     if (textKey) {
       const textTimestamp = this.textCache.get(`${scope}:${textKey}`);
       if (textTimestamp && Date.now() - textTimestamp <= SENT_MESSAGE_TEXT_TTL_MS) {
@@ -97,6 +96,11 @@ class DefaultSentMessageCache implements SentMessageCache {
     for (const [key, timestamp] of this.textCache.entries()) {
       if (now - timestamp > SENT_MESSAGE_TEXT_TTL_MS) {
         this.textCache.delete(key);
+      }
+    }
+    for (const [key, timestamp] of this.textBackedByIdCache.entries()) {
+      if (now - timestamp > SENT_MESSAGE_TEXT_TTL_MS) {
+        this.textBackedByIdCache.delete(key);
       }
     }
     for (const [key, timestamp] of this.messageIdCache.entries()) {

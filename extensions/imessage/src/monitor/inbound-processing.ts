@@ -168,7 +168,9 @@ export function resolveIMessageInboundDecision(params: {
   // When true, the selfChatCache.has() check below must be skipped — we just
   // called remember() and would immediately match our own entry.
   let skipSelfChatHasCheck = false;
-  const inboundMessageId = params.message.id != null ? String(params.message.id) : undefined;
+  const inboundMessageId =
+    normalizeReplyField(params.message.guid) ??
+    (params.message.id != null ? String(params.message.id) : undefined);
 
   if (params.message.is_from_me) {
     // Always cache in selfChatCache so the upcoming is_from_me=false reflection
@@ -191,7 +193,7 @@ export function resolveIMessageInboundDecision(params: {
         params.echoCache.has(
           echoScope,
           { text: bodyText || undefined, messageId: inboundMessageId },
-          true, // skipIdShortCircuit
+          !normalizeReplyField(params.message.guid),
         )
       ) {
         return { kind: "drop", reason: "agent echo in self-chat" };

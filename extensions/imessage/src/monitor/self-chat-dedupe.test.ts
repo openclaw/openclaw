@@ -388,6 +388,7 @@ describe("self-chat is_from_me=true handling (Bruce Phase 2 fix)", () => {
       createParams({
         message: {
           id: 123706,
+          guid: "p:0/GUID-abc-def",
           sender: "+15551234567",
           chat_identifier: "+15551234567",
           text: "Hi there!",
@@ -421,6 +422,7 @@ describe("self-chat is_from_me=true handling (Bruce Phase 2 fix)", () => {
       createParams({
         message: {
           id: 123707,
+          guid: "p:0/GUID-media",
           sender: "+15551234567",
           chat_identifier: "+15551234567",
           text: "",
@@ -435,6 +437,39 @@ describe("self-chat is_from_me=true handling (Bruce Phase 2 fix)", () => {
     );
 
     expect(decision).toEqual({ kind: "drop", reason: "agent echo in self-chat" });
+  });
+
+  it("does not drop a real self-chat image just because a recent agent image used the same placeholder", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-24T12:00:00Z"));
+
+    const echoCache = createSentMessageCache();
+    const selfChatCache = createSelfChatCache();
+
+    const scope = "default:imessage:+15551234567";
+    echoCache.remember(scope, { text: "<media:image>", messageId: "p:0/GUID-agent-image" });
+
+    vi.advanceTimersByTime(1000);
+
+    const decision = resolveIMessageInboundDecision(
+      createParams({
+        message: {
+          id: 123708,
+          guid: "p:0/GUID-user-image",
+          sender: "+15551234567",
+          chat_identifier: "+15551234567",
+          text: "",
+          is_from_me: true,
+          is_group: false,
+        },
+        messageText: "",
+        bodyText: "<media:image>",
+        echoCache,
+        selfChatCache,
+      }),
+    );
+
+    expect(decision.kind).toBe("dispatch");
   });
 
   it("drops is_from_me=false reflection via selfChatCache (existing behavior preserved)", () => {
@@ -563,5 +598,27 @@ describe("echo cache — text fallback for null-id inbound messages", () => {
     // With id: null, the text-based fallback path is still active and should
     // correctly identify this as an echo.
     expect(decision).toEqual({ kind: "drop", reason: "echo" });
+  });
+});
+
+describe("echo cache — mixed GUID and text-only scopes", () => {
+  it("still falls back to text for the latest text-only send in a scope with older GUID-backed sends", () => {
+    const echoCache = createSentMessageCache();
+    const scope = "default:imessage:+15555550123";
+
+    echoCache.remember(scope, { text: "older guid-backed", messageId: "p:0/GUID-older" });
+    echoCache.remember(scope, { text: "latest text-only", messageId: "unknown" });
+
+    expect(echoCache.has(scope, { text: "latest text-only", messageId: "200" })).toBe(true);
+  });
+
+  it("still short-circuits when the latest copy of a text was GUID-backed", () => {
+    const echoCache = createSentMessageCache();
+    const scope = "default:imessage:+15555550123";
+
+    echoCache.remember(scope, { text: "same text", messageId: "unknown" });
+    echoCache.remember(scope, { text: "same text", messageId: "p:0/GUID-newer" });
+
+    expect(echoCache.has(scope, { text: "same text", messageId: "200" })).toBe(false);
   });
 });
