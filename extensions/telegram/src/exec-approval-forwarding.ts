@@ -1,9 +1,9 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   buildExecApprovalPendingReplyPayload,
   resolveExecApprovalCommandDisplay,
   type ExecApprovalRequest,
-} from "openclaw/plugin-sdk/approval-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+} from "openclaw/plugin-sdk/exec-approval-runtime";
 import { normalizeMessageChannel } from "openclaw/plugin-sdk/routing";
 import { buildTelegramExecApprovalButtons } from "./approval-buttons.js";
 import { isTelegramExecApprovalClientEnabled } from "./exec-approvals.js";

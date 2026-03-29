@@ -2,12 +2,16 @@ import {
   buildDmGroupAccountAllowlistAdapter,
   createNestedAllowlistOverrideResolver,
 } from "openclaw/plugin-sdk/allowlist-config-edit";
-import { buildPluginApprovalRequestMessage } from "openclaw/plugin-sdk/approval-runtime";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import { createAllowlistProviderRouteAllowlistWarningCollector } from "openclaw/plugin-sdk/channel-policy";
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
 import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
+import { buildPluginApprovalRequestMessage } from "openclaw/plugin-sdk/exec-approval-runtime";
+import {
+  createLazyRuntimeMethodBinder,
+  createLazyRuntimeModule,
+} from "openclaw/plugin-sdk/lazy-runtime";
 import {
   resolveOutboundSendDep,
   type OutboundSendDeps,
@@ -59,14 +63,10 @@ import {
   resolveTelegramGroupRequireMention,
   resolveTelegramGroupToolPolicy,
 } from "./group-policy.js";
-import * as monitorModule from "./monitor.js";
 import { looksLikeTelegramTargetId, normalizeTelegramMessagingTarget } from "./normalize.js";
-import { sendTelegramPayloadMessages } from "./outbound-adapter.js";
 import { parseTelegramReplyToMessageId, parseTelegramThreadId } from "./outbound-params.js";
-import * as probeModule from "./probe.js";
 import type { TelegramProbe } from "./probe.js";
 import { getTelegramRuntime } from "./runtime.js";
-import { sendTypingTelegram } from "./send.js";
 import { telegramSetupAdapter } from "./setup-core.js";
 import { telegramSetupWizard } from "./setup-surface.js";
 import {
@@ -78,6 +78,22 @@ import {
 import { collectTelegramStatusIssues } from "./status-issues.js";
 import { parseTelegramTarget } from "./targets.js";
 
+type TelegramChannelRuntimeModule = typeof import("./channel.runtime.js");
+
+const loadTelegramChannelRuntime = createLazyRuntimeModule(() => import("./channel.runtime.js"));
+const bindTelegramChannelRuntime = createLazyRuntimeMethodBinder(loadTelegramChannelRuntime);
+const sendTelegramPayloadMessages = bindTelegramChannelRuntime(
+  (runtime) => runtime.sendTelegramPayloadMessages,
+);
+const sendTypingTelegram = bindTelegramChannelRuntime((runtime) => runtime.sendTypingTelegram);
+const probeTelegram = bindTelegramChannelRuntime((runtime) => runtime.probeTelegram);
+const monitorTelegramProvider = bindTelegramChannelRuntime(
+  (runtime) => runtime.monitorTelegramProvider,
+);
+const auditTelegramGroupMembership = bindTelegramChannelRuntime(
+  (runtime) => runtime.auditTelegramGroupMembership,
+);
+
 type TelegramSendFn = ReturnType<
   typeof getTelegramRuntime
 >["channel"]["telegram"]["sendMessageTelegram"];
@@ -85,10 +101,10 @@ type TelegramSendFn = ReturnType<
 type TelegramSendOptions = NonNullable<Parameters<TelegramSendFn>[2]>;
 
 type TelegramStatusRuntimeHelpers = {
-  probeTelegram?: typeof probeModule.probeTelegram;
-  collectTelegramUnmentionedGroupIds?: typeof auditModule.collectTelegramUnmentionedGroupIds;
-  auditTelegramGroupMembership?: typeof auditModule.auditTelegramGroupMembership;
-  monitorTelegramProvider?: typeof monitorModule.monitorTelegramProvider;
+  probeTelegram?: TelegramChannelRuntimeModule["probeTelegram"];
+  collectTelegramUnmentionedGroupIds?: TelegramChannelRuntimeModule["collectTelegramUnmentionedGroupIds"];
+  auditTelegramGroupMembership?: TelegramChannelRuntimeModule["auditTelegramGroupMembership"];
+  monitorTelegramProvider?: TelegramChannelRuntimeModule["monitorTelegramProvider"];
 };
 
 function getTelegramStatusRuntimeHelpers(): TelegramStatusRuntimeHelpers {
@@ -103,7 +119,7 @@ function getTelegramStatusRuntimeHelpers(): TelegramStatusRuntimeHelpers {
 }
 
 function resolveTelegramProbe() {
-  return getTelegramStatusRuntimeHelpers().probeTelegram ?? probeModule.probeTelegram;
+  return getTelegramStatusRuntimeHelpers().probeTelegram ?? probeTelegram;
 }
 
 function resolveTelegramAuditCollector() {
@@ -115,16 +131,12 @@ function resolveTelegramAuditCollector() {
 
 function resolveTelegramAuditMembership() {
   return (
-    getTelegramStatusRuntimeHelpers().auditTelegramGroupMembership ??
-    auditModule.auditTelegramGroupMembership
+    getTelegramStatusRuntimeHelpers().auditTelegramGroupMembership ?? auditTelegramGroupMembership
   );
 }
 
 function resolveTelegramMonitor() {
-  return (
-    getTelegramStatusRuntimeHelpers().monitorTelegramProvider ??
-    monitorModule.monitorTelegramProvider
-  );
+  return getTelegramStatusRuntimeHelpers().monitorTelegramProvider ?? monitorTelegramProvider;
 }
 
 function buildTelegramSendOptions(params: {

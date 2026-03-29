@@ -21,6 +21,7 @@ const CURRENT_MODULE_PATH = fileURLToPath(import.meta.url);
 const PUBLIC_SURFACE_SOURCE_EXTENSIONS = [".ts", ".mts", ".js", ".mjs", ".cts", ".cjs"] as const;
 const jitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
 const loadedFacadeModules = new Map<string, unknown>();
+const inProgressFacadeModules = new Map<string, unknown>();
 
 function resolveSourceFirstPublicSurfacePath(params: {
   bundledPluginsDir?: string;
@@ -182,6 +183,10 @@ export function loadBundledPluginPublicSurfaceModuleSync<T>(params: {
   if (cached) {
     return cached as T;
   }
+  const inProgress = inProgressFacadeModules.get(location.modulePath);
+  if (inProgress) {
+    return inProgress as T;
+  }
 
   const opened = openBoundaryFileSync({
     absolutePath: location.modulePath,
@@ -200,7 +205,21 @@ export function loadBundledPluginPublicSurfaceModuleSync<T>(params: {
   }
   fs.closeSync(opened.fd);
 
-  const loaded = getJiti(location.modulePath)(location.modulePath) as T;
-  loadedFacadeModules.set(location.modulePath, loaded);
-  return loaded;
+  const reentrantPlaceholder = createLazyFacadeObjectValue(() => {
+    const resolved = loadedFacadeModules.get(location.modulePath);
+    if (!resolved) {
+      throw new Error(
+        `Bundled plugin public surface ${params.dirName}/${params.artifactBasename} was accessed before initialization completed`,
+      );
+    }
+    return resolved as object;
+  });
+  inProgressFacadeModules.set(location.modulePath, reentrantPlaceholder);
+  try {
+    const loaded = getJiti(location.modulePath)(location.modulePath) as T;
+    loadedFacadeModules.set(location.modulePath, loaded);
+    return loaded;
+  } finally {
+    inProgressFacadeModules.delete(location.modulePath);
+  }
 }

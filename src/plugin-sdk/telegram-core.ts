@@ -10,7 +10,10 @@ export type { OpenClawPluginApi } from "../plugins/types.js";
 export type {
   TelegramAccountConfig,
   TelegramActionConfig,
+  TelegramDirectConfig,
+  TelegramGroupConfig,
   TelegramNetworkConfig,
+  TelegramTopicConfig,
 } from "../config/types.js";
 export type {
   ChannelConfiguredBindingProvider,
@@ -52,3 +55,7 @@ export {
 export { TelegramConfigSchema } from "../config/zod-schema.providers-core.js";
 export { resolvePollMaxSelections } from "../polls.js";
 export { buildTokenChannelStatusSummary } from "./status-helpers.js";
+export { readChannelAllowFromStore } from "../pairing/pairing-store.js";
+export { resolveTelegramPreviewStreamMode } from "../config/discord-preview-streaming.js";
+export type { NormalizedLocation } from "../channels/location.js";
+export { formatLocationText } from "../channels/location.js";

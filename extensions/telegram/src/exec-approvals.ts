@@ -1,6 +1,6 @@
-import { getExecApprovalReplyMetadata } from "openclaw/plugin-sdk/approval-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { TelegramExecApprovalConfig } from "openclaw/plugin-sdk/config-runtime";
+import { getExecApprovalReplyMetadata } from "openclaw/plugin-sdk/exec-approval-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { resolveTelegramAccount } from "./accounts.js";

@@ -13,6 +13,7 @@
   "channel-setup",
   "setup-tools",
   "approval-runtime",
+  "exec-approval-runtime",
   "config-runtime",
   "reply-runtime",
   "reply-payload",
