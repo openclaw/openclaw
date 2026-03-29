@@ -221,6 +221,11 @@ describe("telegram exec approvals", () => {
       expect(isTelegramExecApprovalAuthorizedSender({ cfg, senderId: "123" })).toBe(true);
     });
 
+    it("accepts explicit approvers even when the richer client is disabled", () => {
+      const cfg = buildConfig({ enabled: false, approvers: ["123"] });
+      expect(isTelegramExecApprovalAuthorizedSender({ cfg, senderId: "123" })).toBe(true);
+    });
+
     it("accepts active forwarded DM targets", () => {
       const cfg = {
         channels: { telegram: { botToken: "tok" } },

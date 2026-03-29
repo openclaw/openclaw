@@ -465,11 +465,23 @@ export type ChannelLifecycleAdapter = {
   }) => Promise<void> | void;
 };
 
-export type ChannelExecApprovalAdapter = {
+export type ChannelExecApprovalAuthAdapter = {
+  authorizeCommand?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    senderId?: string | null;
+    kind: "exec" | "plugin";
+  }) => {
+    authorized: boolean;
+    reason?: string;
+  };
   getInitiatingSurfaceState?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
   }) => ChannelExecApprovalInitiatingSurfaceState;
+};
+
+export type ChannelExecApprovalDeliveryAdapter = {
   shouldSuppressLocalPrompt?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
@@ -497,17 +509,41 @@ export type ChannelExecApprovalAdapter = {
     target: ChannelExecApprovalForwardTarget;
     payload: ReplyPayload;
   }) => Promise<void> | void;
-  buildPluginPendingPayload?: (params: {
-    cfg: OpenClawConfig;
-    request: PluginApprovalRequest;
-    target: ChannelExecApprovalForwardTarget;
-    nowMs: number;
-  }) => ReplyPayload | null;
-  buildPluginResolvedPayload?: (params: {
-    cfg: OpenClawConfig;
-    resolved: PluginApprovalResolved;
-    target: ChannelExecApprovalForwardTarget;
-  }) => ReplyPayload | null;
+};
+
+export type ChannelExecApprovalRenderAdapter = {
+  exec?: {
+    buildPendingPayload?: (params: {
+      cfg: OpenClawConfig;
+      request: ExecApprovalRequest;
+      target: ChannelExecApprovalForwardTarget;
+      nowMs: number;
+    }) => ReplyPayload | null;
+    buildResolvedPayload?: (params: {
+      cfg: OpenClawConfig;
+      resolved: ExecApprovalResolved;
+      target: ChannelExecApprovalForwardTarget;
+    }) => ReplyPayload | null;
+  };
+  plugin?: {
+    buildPendingPayload?: (params: {
+      cfg: OpenClawConfig;
+      request: PluginApprovalRequest;
+      target: ChannelExecApprovalForwardTarget;
+      nowMs: number;
+    }) => ReplyPayload | null;
+    buildResolvedPayload?: (params: {
+      cfg: OpenClawConfig;
+      resolved: PluginApprovalResolved;
+      target: ChannelExecApprovalForwardTarget;
+    }) => ReplyPayload | null;
+  };
+};
+
+export type ChannelExecApprovalAdapter = {
+  auth?: ChannelExecApprovalAuthAdapter;
+  delivery?: ChannelExecApprovalDeliveryAdapter;
+  render?: ChannelExecApprovalRenderAdapter;
 };
 
 export type ChannelAllowlistAdapter = {
