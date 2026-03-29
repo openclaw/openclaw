@@ -177,6 +177,53 @@ function listChildDirectories(dir: string): string[] {
   }
 }
 
+function collectSkillCandidateDirs(params: {
+  baseDir: string;
+  maxCandidates: number;
+  maxDirsToScan: number;
+}): { skillDirs: string[]; truncated: boolean; scannedDirCount: number } {
+  if (params.maxCandidates <= 0 || params.maxDirsToScan <= 0) {
+    return { skillDirs: [], truncated: false, scannedDirCount: 0 };
+  }
+
+  const results: string[] = [];
+  const queue = listChildDirectories(params.baseDir).map((name) => path.join(params.baseDir, name));
+  const visited = new Set<string>();
+  let scannedDirCount = 0;
+
+  while (
+    queue.length > 0 &&
+    results.length < params.maxCandidates &&
+    scannedDirCount < params.maxDirsToScan
+  ) {
+    const dir = queue.shift();
+    if (!dir) {
+      continue;
+    }
+    if (visited.has(dir)) {
+      continue;
+    }
+    visited.add(dir);
+    scannedDirCount += 1;
+
+    const skillMd = path.join(dir, "SKILL.md");
+    if (fs.existsSync(skillMd)) {
+      results.push(dir);
+      continue;
+    }
+
+    for (const child of listChildDirectories(dir)) {
+      queue.push(path.join(dir, child));
+    }
+  }
+
+  return {
+    skillDirs: results,
+    truncated: queue.length > 0,
+    scannedDirCount,
+  };
+}
+
 function tryRealpath(filePath: string): string | null {
   try {
     return fs.realpathSync(filePath);
@@ -357,30 +404,37 @@ function loadSkillEntries(
     const suspicious = childDirs.length > limits.maxCandidatesPerRoot;
 
     const maxCandidates = Math.max(0, limits.maxSkillsLoadedPerSource);
-    const limitedChildren = childDirs.slice().sort().slice(0, maxCandidates);
+    const {
+      skillDirs: candidateSkillDirs,
+      truncated,
+      scannedDirCount,
+    } = collectSkillCandidateDirs({
+      baseDir,
+      maxCandidates,
+      maxDirsToScan: limits.maxCandidatesPerRoot,
+    });
 
-    if (suspicious) {
+    if (suspicious || truncated) {
       skillsLogger.warn("Skills root looks suspiciously large, truncating discovery.", {
         dir: params.dir,
         baseDir,
         childDirCount: childDirs.length,
+        scannedDirCount,
         maxCandidatesPerRoot: limits.maxCandidatesPerRoot,
         maxSkillsLoadedPerSource: limits.maxSkillsLoadedPerSource,
       });
-    } else if (childDirs.length > maxCandidates) {
+    } else if (candidateSkillDirs.length >= maxCandidates && maxCandidates > 0) {
       skillsLogger.warn("Skills root has many entries, truncating discovery.", {
         dir: params.dir,
         baseDir,
-        childDirCount: childDirs.length,
+        discoveredSkillDirCount: candidateSkillDirs.length,
         maxSkillsLoadedPerSource: limits.maxSkillsLoadedPerSource,
       });
     }
 
     const loadedSkills: Skill[] = [];
 
-    // Only consider immediate subfolders that look like skills (have SKILL.md) and are under size cap.
-    for (const name of limitedChildren) {
-      const skillDir = path.join(baseDir, name);
+    for (const skillDir of candidateSkillDirs) {
       const skillDirRealPath = resolveContainedSkillPath({
         source: params.source,
         rootDir,
@@ -407,7 +461,7 @@ function loadSkillEntries(
         const size = fs.statSync(skillMdRealPath).size;
         if (size > limits.maxSkillFileBytes) {
           skillsLogger.warn("Skipping skill due to oversized SKILL.md.", {
-            skill: name,
+            skill: path.basename(skillDir),
             filePath: skillMd,
             size,
             maxSkillFileBytes: limits.maxSkillFileBytes,

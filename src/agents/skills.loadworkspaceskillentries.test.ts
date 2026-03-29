@@ -175,4 +175,21 @@ describe("loadWorkspaceSkillEntries", () => {
       expect(entries.map((entry) => entry.skill.name)).not.toContain("outside-file-skill");
     },
   );
+
+  it("discovers skills nested under category subdirectories", async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    const nestedSkillDir = path.join(workspaceDir, "skills", "coze", "koze-retrieval");
+    await writeSkill({
+      dir: nestedSkillDir,
+      name: "koze-retrieval",
+      description: "Nested category skill",
+    });
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, {
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+      bundledSkillsDir: path.join(workspaceDir, ".bundled"),
+    });
+
+    expect(entries.map((entry) => entry.skill.name)).toContain("koze-retrieval");
+  });
 });
