@@ -65,6 +65,7 @@ Docs: https://docs.openclaw.ai
 - Agents/compaction: surface safeguard-specific cancel reasons and relabel benign manual `/compact` no-op cases as skipped instead of failed. (#51072) Thanks @afurm.
 - Docs: add `pnpm docs:check-links:anchors` for Mintlify anchor validation while keeping `scripts/docs-link-audit.mjs` as the stable link-audit entrypoint. (#55912) Thanks @velvet-shark.
 - Tavily: mark outbound API requests with `X-Client-Source: openclaw` so Tavily can attribute OpenClaw-originated traffic. (#55335) Thanks @lakshyaag-tavily.
+- Matrix/streaming: add `streaming: "partial"` draft replies that stay on a single editable preview message, stop preview streaming once text no longer fits one Matrix event, and clear stale previews before media-only finals. (#56387) thanks @jrusz.
 
 ### Fixes
 
