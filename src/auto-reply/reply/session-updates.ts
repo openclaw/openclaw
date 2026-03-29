@@ -243,7 +243,7 @@ function resolveCompactionSessionFile(params: {
   );
 }
 
-function canonicalizeAbsoluteSessionFilePath(filePath: string): string {
+export function canonicalizeAbsoluteSessionFilePath(filePath: string): string {
   const resolved = path.resolve(filePath);
   try {
     const parentDir = fs.realpathSync(path.dirname(resolved));
@@ -253,7 +253,7 @@ function canonicalizeAbsoluteSessionFilePath(filePath: string): string {
   }
 }
 
-function rewriteSessionFileForNewSessionId(params: {
+export function rewriteSessionFileForNewSessionId(params: {
   sessionFile?: string;
   previousSessionId: string;
   nextSessionId: string;
