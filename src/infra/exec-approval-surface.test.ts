@@ -34,7 +34,6 @@ async function loadExecApprovalSurfaceModule() {
   vi.doMock("../channels/plugins/index.js", () => ({
     getChannelPlugin: (...args: unknown[]) => getChannelPluginMock(...args),
     listChannelPlugins: (...args: unknown[]) => listChannelPluginsMock(...args),
-    resolveChannelApprovalAdapter: (plugin?: { approvals?: unknown } | null) => plugin?.approvals,
   }));
   vi.doMock("../utils/message-channel.js", () => ({
     INTERNAL_MESSAGE_CHANNEL: "web",
@@ -83,18 +82,14 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
     getChannelPluginMock.mockImplementation((channel: string) =>
       channel === "telegram"
         ? {
-            approvals: {
-              auth: {
-                getInitiatingSurfaceState: () => ({ kind: "enabled" }),
-              },
+            auth: {
+              getActionAvailabilityState: () => ({ kind: "enabled" }),
             },
           }
         : channel === "discord"
           ? {
-              approvals: {
-                auth: {
-                  getInitiatingSurfaceState: () => ({ kind: "disabled" }),
-                },
+              auth: {
+                getActionAvailabilityState: () => ({ kind: "disabled" }),
               },
             }
           : undefined,
@@ -132,10 +127,8 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
     getChannelPluginMock.mockImplementation((channel: string) =>
       channel === "telegram"
         ? {
-            approvals: {
-              auth: {
-                getInitiatingSurfaceState: () => ({ kind: "disabled" }),
-              },
+            auth: {
+              getActionAvailabilityState: () => ({ kind: "disabled" }),
             },
           }
         : undefined,

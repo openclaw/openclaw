@@ -4,7 +4,6 @@ const getChannelPluginMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../channels/plugins/index.js", () => ({
   getChannelPlugin: (...args: unknown[]) => getChannelPluginMock(...args),
-  resolveChannelApprovalAdapter: (plugin?: { approvals?: unknown } | null) => plugin?.approvals,
 }));
 
 import { resolveApprovalCommandAuthorization } from "./channel-approval-auth.js";
@@ -27,13 +26,16 @@ describe("resolveApprovalCommandAuthorization", () => {
 
   it("delegates to the channel approval override when present", () => {
     getChannelPluginMock.mockReturnValue({
-      approvals: {
-        auth: {
-          authorizeCommand: ({ kind }: { kind: "exec" | "plugin" }) =>
-            kind === "plugin"
-              ? { authorized: false, reason: "plugin denied" }
-              : { authorized: true },
-        },
+      auth: {
+        authorizeActorAction: ({
+          approvalKind,
+        }: {
+          action: "approve";
+          approvalKind: "exec" | "plugin";
+        }) =>
+          approvalKind === "plugin"
+            ? { authorized: false, reason: "plugin denied" }
+            : { authorized: true },
       },
     });
 

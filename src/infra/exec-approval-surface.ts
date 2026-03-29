@@ -1,8 +1,4 @@
-import {
-  getChannelPlugin,
-  listChannelPlugins,
-  resolveChannelApprovalAdapter,
-} from "../channels/plugins/index.js";
+import { getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
 import { loadConfig, type OpenClawConfig } from "../config/config.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
@@ -42,11 +38,10 @@ export function resolveExecApprovalInitiatingSurfaceState(params: {
   }
 
   const cfg = params.cfg ?? loadConfig();
-  const state = resolveChannelApprovalAdapter(
-    getChannelPlugin(channel),
-  )?.auth?.getInitiatingSurfaceState?.({
+  const state = getChannelPlugin(channel)?.auth?.getActionAvailabilityState?.({
     cfg,
     accountId: params.accountId,
+    action: "approve",
   });
   if (state) {
     return { ...state, channel, channelLabel };
@@ -59,7 +54,6 @@ export function resolveExecApprovalInitiatingSurfaceState(params: {
 
 export function hasConfiguredExecApprovalDmRoute(cfg: OpenClawConfig): boolean {
   return listChannelPlugins().some(
-    (plugin) =>
-      resolveChannelApprovalAdapter(plugin)?.delivery?.hasConfiguredDmRoute?.({ cfg }) ?? false,
+    (plugin) => plugin.approvals?.delivery?.hasConfiguredDmRoute?.({ cfg }) ?? false,
   );
 }

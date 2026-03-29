@@ -1,6 +1,5 @@
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { resolveChannelApprovalAdapter } from "./approvals.js";
 import { getChannelPlugin, normalizeChannelId } from "./registry.js";
 
 export function shouldSuppressLocalExecApprovalPrompt(params: {
@@ -14,12 +13,11 @@ export function shouldSuppressLocalExecApprovalPrompt(params: {
     return false;
   }
   return (
-    resolveChannelApprovalAdapter(getChannelPlugin(channel))?.delivery?.shouldSuppressLocalPrompt?.(
-      {
-        cfg: params.cfg,
-        accountId: params.accountId,
-        payload: params.payload,
-      },
-    ) ?? false
+    getChannelPlugin(channel)?.outbound?.shouldSuppressLocalPayloadPrompt?.({
+      cfg: params.cfg,
+      accountId: params.accountId,
+      payload: params.payload,
+      hint: { kind: "approval-pending", approvalKind: "exec" },
+    }) ?? false
   );
 }
