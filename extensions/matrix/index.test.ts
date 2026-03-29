@@ -48,4 +48,32 @@ describe("matrix plugin", () => {
     await result;
     expect(cliMocks.registerMatrixCli).toHaveBeenCalledWith({ program });
   });
+
+  it("keeps runtime bootstrap out of setup-only registration while exposing CLI metadata", () => {
+    const registerCli = vi.fn();
+    const registerGatewayMethod = vi.fn();
+    const api = createTestPluginApi({
+      id: "matrix",
+      name: "Matrix",
+      source: "test",
+      config: {},
+      runtime: {} as never,
+      registrationMode: "setup-only",
+      registerCli,
+      registerGatewayMethod,
+    });
+
+    matrixPlugin.register(api);
+
+    expect(registerCli).toHaveBeenCalledWith(expect.any(Function), {
+      descriptors: [
+        {
+          name: "matrix",
+          description: "Manage Matrix accounts, verification, devices, and profile state",
+          hasSubcommands: true,
+        },
+      ],
+    });
+    expect(registerGatewayMethod).not.toHaveBeenCalled();
+  });
 });
