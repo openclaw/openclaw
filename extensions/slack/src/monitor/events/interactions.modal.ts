@@ -1,3 +1,4 @@
+import { requestHeartbeatNow } from "openclaw/plugin-sdk/heartbeat-runtime";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { parseSlackModalPrivateMetadata } from "../../modal-metadata.js";
 import { authorizeSlackSystemEventSender } from "../auth.js";
@@ -228,10 +229,13 @@ export async function emitSlackModalLifecycleEvent(params: {
     return;
   }
 
-  enqueueSystemEvent(params.formatSystemEvent(eventPayload), {
+  const queued = enqueueSystemEvent(params.formatSystemEvent(eventPayload), {
     sessionKey: sessionRouting.sessionKey,
     contextKey: [params.contextPrefix, callbackId, viewId, userId].filter(Boolean).join(":"),
   });
+  if (queued) {
+    requestHeartbeatNow({ reason: "exec-event", sessionKey: sessionRouting.sessionKey });
+  }
 }
 
 export function registerModalLifecycleHandler(params: {

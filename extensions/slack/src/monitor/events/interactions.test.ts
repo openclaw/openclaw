@@ -1,6 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
+const requestHeartbeatNowMock = vi.hoisted(() => vi.fn());
 const dispatchPluginInteractiveHandlerMock = vi.hoisted(() =>
   vi.fn(async () => ({
     matched: false,
@@ -21,6 +22,14 @@ vi.mock("openclaw/plugin-sdk/system-event-runtime", async (importOriginal) => {
   return {
     ...actual,
     enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/heartbeat-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/heartbeat-runtime")>();
+  return {
+    ...actual,
+    requestHeartbeatNow: (...args: unknown[]) => requestHeartbeatNowMock(...args),
   };
 });
 
@@ -281,6 +290,8 @@ describe("registerSlackInteractionEvents", () => {
 
   beforeEach(() => {
     enqueueSystemEventMock.mockClear();
+    enqueueSystemEventMock.mockReturnValue(true);
+    requestHeartbeatNowMock.mockClear();
     dispatchPluginInteractiveHandlerMock.mockClear();
     resolvePluginConversationBindingApprovalMock.mockClear();
     resolvePluginConversationBindingApprovalMock.mockResolvedValue({ status: "expired" });
@@ -370,6 +381,10 @@ describe("registerSlackInteractionEvents", () => {
       senderId: "U123",
     });
     expect(trackEvent).toHaveBeenCalledTimes(1);
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+      reason: "exec-event",
+      sessionKey: "agent:ops:slack:channel:C1",
+    });
     expect(app.client.chat.update).toHaveBeenCalledTimes(1);
   });
 
@@ -1001,6 +1016,7 @@ describe("registerSlackInteractionEvents", () => {
 
     expect(ack).toHaveBeenCalled();
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
     expect(app.client.chat.update).not.toHaveBeenCalled();
     expect(respond).toHaveBeenCalledWith({
       text: "You are not authorized to use this control.",
@@ -1746,6 +1762,10 @@ describe("registerSlackInteractionEvents", () => {
       ]),
     );
     expect(trackEvent).toHaveBeenCalledTimes(1);
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+      reason: "exec-event",
+      sessionKey: "agent:ops:slack:channel:C1",
+    });
   });
 
   it("blocks modal events when private metadata userId does not match submitter", async () => {
@@ -1773,6 +1793,7 @@ describe("registerSlackInteractionEvents", () => {
 
     expect(ack).toHaveBeenCalled();
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
   });
 
   it("blocks modal events when private metadata is missing userId", async () => {
@@ -2178,6 +2199,10 @@ describe("registerSlackInteractionEvents", () => {
     );
     expect(trackEvent).toHaveBeenCalledTimes(1);
     expect(options.sessionKey).toBe("agent:main:slack:channel:C99");
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+      reason: "exec-event",
+      sessionKey: "agent:main:slack:channel:C99",
+    });
   });
 
   it("defaults modal close isCleared to false when Slack omits the flag", async () => {
