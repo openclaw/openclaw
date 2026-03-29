@@ -15,6 +15,7 @@ export {
   getModelsPageSize,
   inspectTelegramAccount,
   isTelegramExecApprovalApprover,
+  isTelegramExecApprovalAuthorizedSender,
   isTelegramExecApprovalClientEnabled,
   isTelegramExecApprovalTargetRecipient,
   listTelegramAccountIds,
