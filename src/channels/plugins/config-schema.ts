@@ -1,6 +1,11 @@
 import { z, type ZodTypeAny } from "zod";
 import { DmPolicySchema } from "../../config/zod-schema.core.js";
-import type { ChannelConfigSchema } from "./types.plugin.js";
+import type {
+  ChannelConfigRuntimeIssue,
+  ChannelConfigRuntimeParseResult,
+  ChannelConfigSchema,
+  ChannelConfigUiHint,
+} from "./types.plugin.js";
 
 type ZodSchemaWithToJsonSchema = ZodTypeAny & {
   toJSONSchema?: (params?: Record<string, unknown>) => unknown;
@@ -32,7 +37,45 @@ export function buildCatchallMultiAccountChannelSchema<T extends ExtendableZodOb
   }) as T;
 }
 
-export function buildChannelConfigSchema(schema: ZodTypeAny): ChannelConfigSchema {
+type BuildChannelConfigSchemaOptions = {
+  uiHints?: Record<string, ChannelConfigUiHint>;
+};
+
+function cloneRuntimeIssue(issue: unknown): ChannelConfigRuntimeIssue {
+  const record = issue && typeof issue === "object" ? (issue as Record<string, unknown>) : {};
+  const path = Array.isArray(record.path)
+    ? record.path.filter((segment): segment is string | number => {
+        const kind = typeof segment;
+        return kind === "string" || kind === "number";
+      })
+    : undefined;
+  return {
+    ...record,
+    ...(path ? { path } : {}),
+  };
+}
+
+function safeParseRuntimeSchema(
+  schema: ZodTypeAny,
+  value: unknown,
+): ChannelConfigRuntimeParseResult {
+  const result = schema.safeParse(value);
+  if (result.success) {
+    return {
+      success: true,
+      data: result.data,
+    };
+  }
+  return {
+    success: false,
+    issues: result.error.issues.map((issue) => cloneRuntimeIssue(issue)),
+  };
+}
+
+export function buildChannelConfigSchema(
+  schema: ZodTypeAny,
+  options?: BuildChannelConfigSchemaOptions,
+): ChannelConfigSchema {
   const schemaWithJson = schema as ZodSchemaWithToJsonSchema;
   if (typeof schemaWithJson.toJSONSchema === "function") {
     return {
@@ -40,6 +83,10 @@ export function buildChannelConfigSchema(schema: ZodTypeAny): ChannelConfigSchem
         target: "draft-07",
         unrepresentable: "any",
       }) as Record<string, unknown>,
+      ...(options?.uiHints ? { uiHints: options.uiHints } : {}),
+      runtime: {
+        safeParse: (value) => safeParseRuntimeSchema(schema, value),
+      },
     };
   }
 
@@ -49,6 +96,10 @@ export function buildChannelConfigSchema(schema: ZodTypeAny): ChannelConfigSchem
     schema: {
       type: "object",
       additionalProperties: true,
+    },
+    ...(options?.uiHints ? { uiHints: options.uiHints } : {}),
+    runtime: {
+      safeParse: (value) => safeParseRuntimeSchema(schema, value),
     },
   };
 }

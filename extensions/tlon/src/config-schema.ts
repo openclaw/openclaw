@@ -1,5 +1,5 @@
-import { z } from "zod";
-import { buildChannelConfigSchema } from "../api.js";
+import { buildChannelConfigSchema } from "openclaw/plugin-sdk/core";
+import { z } from "openclaw/plugin-sdk/zod";
 
 const ShipSchema = z.string().min(1);
 const ChannelNestSchema = z.string().min(1);

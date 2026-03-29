@@ -1,14 +1,14 @@
 import {
+  applyAgentDefaultModelPrimary,
+  applyProviderConfigWithModelCatalogPreset,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/provider-onboard";
+import {
   CHUTES_BASE_URL,
   CHUTES_DEFAULT_MODEL_REF,
   CHUTES_MODEL_CATALOG,
   buildChutesModelDefinition,
-} from "openclaw/plugin-sdk/provider-models";
-import {
-  applyAgentDefaultModelPrimary,
-  applyProviderConfigWithModelCatalog,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/provider-onboard";
+} from "./api.js";
 
 export { CHUTES_DEFAULT_MODEL_REF };
 
@@ -17,24 +17,20 @@ export { CHUTES_DEFAULT_MODEL_REF };
  * Registers all catalog models and sets provider aliases (chutes-fast, etc.).
  */
 export function applyChutesProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
-  const models = { ...cfg.agents?.defaults?.models };
-  for (const m of CHUTES_MODEL_CATALOG) {
-    models[`chutes/${m.id}`] = {
-      ...models[`chutes/${m.id}`],
-    };
-  }
-
-  models["chutes-fast"] = { alias: "chutes/zai-org/GLM-4.7-FP8" };
-  models["chutes-vision"] = { alias: "chutes/chutesai/Mistral-Small-3.2-24B-Instruct-2506" };
-  models["chutes-pro"] = { alias: "chutes/deepseek-ai/DeepSeek-V3.2-TEE" };
-
-  const chutesModels = CHUTES_MODEL_CATALOG.map(buildChutesModelDefinition);
-  return applyProviderConfigWithModelCatalog(cfg, {
-    agentModels: models,
+  return applyProviderConfigWithModelCatalogPreset(cfg, {
     providerId: "chutes",
     api: "openai-completions",
     baseUrl: CHUTES_BASE_URL,
-    catalogModels: chutesModels,
+    catalogModels: CHUTES_MODEL_CATALOG.map(buildChutesModelDefinition),
+    aliases: [
+      ...CHUTES_MODEL_CATALOG.map((model) => `chutes/${model.id}`),
+      { modelRef: "chutes-fast", alias: "chutes/zai-org/GLM-4.7-FP8" },
+      {
+        modelRef: "chutes-vision",
+        alias: "chutes/chutesai/Mistral-Small-3.2-24B-Instruct-2506",
+      },
+      { modelRef: "chutes-pro", alias: "chutes/deepseek-ai/DeepSeek-V3.2-TEE" },
+    ],
   });
 }
 

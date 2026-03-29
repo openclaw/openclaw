@@ -8,7 +8,10 @@
 import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { SessionEntry } from "../config/sessions.js";
+import type { SessionsPatchParams } from "../gateway/protocol/index.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 export type InternalHookEventType = "command" | "session" | "agent" | "gateway" | "message";
 
@@ -156,6 +159,18 @@ export type MessagePreprocessedHookEvent = InternalHookEvent & {
   context: MessagePreprocessedHookContext;
 };
 
+export type SessionPatchHookContext = {
+  sessionEntry: SessionEntry;
+  patch: SessionsPatchParams;
+  cfg: OpenClawConfig;
+};
+
+export type SessionPatchHookEvent = InternalHookEvent & {
+  type: "session";
+  action: "patch";
+  context: SessionPatchHookContext;
+};
+
 export interface InternalHookEvent {
   /** The type of event (command, session, agent, gateway, etc.) */
   type: InternalHookEventType;
@@ -183,13 +198,11 @@ export type InternalHookHandler = (event: InternalHookEvent) => Promise<void> | 
  * are invisible to triggerInternalHook in another chunk, causing hooks
  * to silently fire with zero handlers.
  */
-const _g = globalThis as typeof globalThis & {
-  __openclaw_internal_hook_handlers__?: Map<string, InternalHookHandler[]>;
-};
-const handlers = (_g.__openclaw_internal_hook_handlers__ ??= new Map<
-  string,
-  InternalHookHandler[]
->());
+const INTERNAL_HOOK_HANDLERS_KEY = Symbol.for("openclaw.internalHookHandlers");
+const handlers = resolveGlobalSingleton<Map<string, InternalHookHandler[]>>(
+  INTERNAL_HOOK_HANDLERS_KEY,
+  () => new Map<string, InternalHookHandler[]>(),
+);
 const log = createSubsystemLogger("internal-hooks");
 
 /**
@@ -255,6 +268,12 @@ export function getRegisteredEventKeys(): string[] {
   return Array.from(handlers.keys());
 }
 
+export function hasInternalHookListeners(type: InternalHookEventType, action: string): boolean {
+  return (
+    (handlers.get(type)?.length ?? 0) > 0 || (handlers.get(`${type}:${action}`)?.length ?? 0) > 0
+  );
+}
+
 /**
  * Trigger a hook event
  *
@@ -268,14 +287,13 @@ export function getRegisteredEventKeys(): string[] {
  * @param event - The event to trigger
  */
 export async function triggerInternalHook(event: InternalHookEvent): Promise<void> {
-  const typeHandlers = handlers.get(event.type) ?? [];
-  const specificHandlers = handlers.get(`${event.type}:${event.action}`) ?? [];
-
-  const allHandlers = [...typeHandlers, ...specificHandlers];
-
-  if (allHandlers.length === 0) {
+  if (!hasInternalHookListeners(event.type, event.action)) {
     return;
   }
+
+  const typeHandlers = handlers.get(event.type) ?? [];
+  const specificHandlers = handlers.get(`${event.type}:${event.action}`) ?? [];
+  const allHandlers = [...typeHandlers, ...specificHandlers];
 
   for (const handler of allHandlers) {
     try {
@@ -418,4 +436,22 @@ export function isMessagePreprocessedEvent(
     return false;
   }
   return hasStringContextField(context, "channelId");
+}
+
+export function isSessionPatchEvent(event: InternalHookEvent): event is SessionPatchHookEvent {
+  if (!isHookEventTypeAndAction(event, "session", "patch")) {
+    return false;
+  }
+  const context = getHookContext<SessionPatchHookContext>(event);
+  if (!context) {
+    return false;
+  }
+  return (
+    typeof context.patch === "object" &&
+    context.patch !== null &&
+    typeof context.cfg === "object" &&
+    context.cfg !== null &&
+    typeof context.sessionEntry === "object" &&
+    context.sessionEntry !== null
+  );
 }

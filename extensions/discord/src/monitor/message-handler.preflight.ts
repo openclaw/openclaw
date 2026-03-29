@@ -1,30 +1,24 @@
 import { ChannelType, MessageType, type Message, type User } from "@buape/carbon";
 import { Routes, type APIMessage } from "discord-api-types/v10";
-import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/channel-runtime";
-import { resolveControlCommandGate } from "openclaw/plugin-sdk/channel-runtime";
-import { logInboundDrop } from "openclaw/plugin-sdk/channel-runtime";
-import { resolveMentionGatingWithBypass } from "openclaw/plugin-sdk/channel-runtime";
+import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/allow-from";
+import {
+  buildMentionRegexes,
+  logInboundDrop,
+  matchesMentionWithExplicit,
+  resolveMentionGatingWithBypass,
+} from "openclaw/plugin-sdk/channel-inbound";
+import { enqueueSystemEvent, recordChannelActivity } from "openclaw/plugin-sdk/channel-runtime";
+import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth";
+import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
+import { shouldHandleTextCommands } from "openclaw/plugin-sdk/command-auth";
 import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
-import {
-  ensureConfiguredBindingRouteReady,
-  resolveConfiguredBindingRoute,
-} from "openclaw/plugin-sdk/conversation-runtime";
-import {
-  getSessionBindingService,
-  type SessionBindingRecord,
-} from "openclaw/plugin-sdk/conversation-runtime";
-import { buildPairingReply } from "openclaw/plugin-sdk/conversation-runtime";
-import { isPluginOwnedSessionBindingRecord } from "openclaw/plugin-sdk/conversation-runtime";
-import { recordChannelActivity } from "openclaw/plugin-sdk/infra-runtime";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
-import { hasControlCommand } from "openclaw/plugin-sdk/reply-runtime";
-import { shouldHandleTextCommands } from "openclaw/plugin-sdk/reply-runtime";
+import type { SessionBindingRecord } from "openclaw/plugin-sdk/conversation-runtime";
+import * as conversationRuntime from "openclaw/plugin-sdk/conversation-runtime";
 import {
   recordPendingHistoryEntryIfEnabled,
   type HistoryEntry,
-} from "openclaw/plugin-sdk/reply-runtime";
-import { buildMentionRegexes, matchesMentionWithExplicit } from "openclaw/plugin-sdk/reply-runtime";
+} from "openclaw/plugin-sdk/reply-history";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
@@ -355,7 +349,7 @@ export async function preflightDiscordMessage(
           try {
             await sendMessageDiscord(
               `user:${author.id}`,
-              buildPairingReply({
+              conversationRuntime.buildPairingReply({
                 channel: "discord",
                 idLine: `Your Discord user id: ${author.id}`,
                 code,
@@ -451,7 +445,7 @@ export async function preflightDiscordMessage(
   const bindingConversationId = isDirectMessage ? `user:${author.id}` : messageChannelId;
   let threadBinding: SessionBindingRecord | undefined;
   threadBinding =
-    getSessionBindingService().resolveByConversation({
+    conversationRuntime.getSessionBindingService().resolveByConversation({
       channel: "discord",
       accountId: params.accountId,
       conversationId: bindingConversationId,
@@ -459,7 +453,7 @@ export async function preflightDiscordMessage(
     }) ?? undefined;
   const configuredRoute =
     threadBinding == null
-      ? resolveConfiguredBindingRoute({
+      ? conversationRuntime.resolveConfiguredBindingRoute({
           cfg: freshCfg,
           route,
           conversation: {
@@ -485,7 +479,7 @@ export async function preflightDiscordMessage(
     logVerbose(`discord: drop bound-thread webhook echo message ${message.id}`);
     return null;
   }
-  const boundSessionKey = isPluginOwnedSessionBindingRecord(threadBinding)
+  const boundSessionKey = conversationRuntime.isPluginOwnedSessionBindingRecord(threadBinding)
     ? ""
     : threadBinding?.targetSessionKey?.trim();
   const effectiveRoute = resolveDiscordEffectiveRoute({
@@ -496,7 +490,7 @@ export async function preflightDiscordMessage(
   });
   const boundAgentId = boundSessionKey ? effectiveRoute.agentId : undefined;
   const isBoundThreadSession = Boolean(threadBinding && earlyThreadChannel);
-  const bypassMentionRequirement = isBoundThreadSession || Boolean(configuredBinding);
+  const bypassMentionRequirement = isBoundThreadSession;
   if (
     isBoundThreadBotSystemMessage({
       isBoundThreadSession,
@@ -867,7 +861,7 @@ export async function preflightDiscordMessage(
     return null;
   }
   if (configuredBinding) {
-    const ensured = await ensureConfiguredBindingRouteReady({
+    const ensured = await conversationRuntime.ensureConfiguredBindingRouteReady({
       cfg: freshCfg,
       bindingResolution: configuredBinding,
     });

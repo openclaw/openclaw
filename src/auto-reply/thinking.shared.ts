@@ -1,3 +1,5 @@
+import { matchesExactOrPrefix } from "../plugin-sdk/provider-model-shared.js";
+
 export type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
 export type VerboseLevel = "off" | "on" | "full";
 export type NoticeLevel = "off" | "on" | "full";
@@ -14,6 +16,20 @@ export type ThinkingCatalogEntry = {
 const BASE_THINKING_LEVELS: ThinkLevel[] = ["off", "minimal", "low", "medium", "high", "adaptive"];
 const ANTHROPIC_CLAUDE_46_MODEL_RE = /^claude-(?:opus|sonnet)-4(?:\.|-)6(?:$|[-.])/i;
 const AMAZON_BEDROCK_CLAUDE_46_MODEL_RE = /claude-(?:opus|sonnet)-4(?:\.|-)6(?:$|[-.])/i;
+const OPENAI_XHIGH_MODEL_IDS = [
+  "gpt-5.4",
+  "gpt-5.4-pro",
+  "gpt-5.4-mini",
+  "gpt-5.4-nano",
+  "gpt-5.2",
+] as const;
+const OPENAI_CODEX_XHIGH_MODEL_IDS = [
+  "gpt-5.4",
+  "gpt-5.3-codex-spark",
+  "gpt-5.2-codex",
+  "gpt-5.1-codex",
+] as const;
+const GITHUB_COPILOT_XHIGH_MODEL_IDS = ["gpt-5.2", "gpt-5.2-codex"] as const;
 
 export function normalizeProviderId(provider?: string | null): string {
   if (!provider) {
@@ -31,6 +47,27 @@ export function normalizeProviderId(provider?: string | null): string {
 
 export function isBinaryThinkingProvider(provider?: string | null): boolean {
   return normalizeProviderId(provider) === "zai";
+}
+
+export function supportsBuiltInXHighThinking(
+  provider?: string | null,
+  model?: string | null,
+): boolean {
+  const providerId = normalizeProviderId(provider);
+  const modelId = model?.trim().toLowerCase();
+  if (!providerId || !modelId) {
+    return false;
+  }
+  if (providerId === "openai") {
+    return matchesExactOrPrefix(modelId, OPENAI_XHIGH_MODEL_IDS);
+  }
+  if (providerId === "openai-codex") {
+    return matchesExactOrPrefix(modelId, OPENAI_CODEX_XHIGH_MODEL_IDS);
+  }
+  if (providerId === "github-copilot") {
+    return GITHUB_COPILOT_XHIGH_MODEL_IDS.includes(modelId as never);
+  }
+  return false;
 }
 
 // Normalize user-provided thinking level strings to the canonical enum.

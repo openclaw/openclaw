@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearConfigCache } from "../config/config.js";
 import { buildSystemRunPreparePayload } from "../test-utils/system-run-prepare-payload.js";
 
@@ -28,6 +28,13 @@ vi.mock("../infra/exec-obfuscation-detect.js", () => ({
 let callGatewayTool: typeof import("./tools/gateway.js").callGatewayTool;
 let createExecTool: typeof import("./bash-tools.exec.js").createExecTool;
 let detectCommandObfuscation: typeof import("../infra/exec-obfuscation-detect.js").detectCommandObfuscation;
+
+async function loadExecApprovalModules() {
+  vi.resetModules();
+  ({ callGatewayTool } = await import("./tools/gateway.js"));
+  ({ createExecTool } = await import("./bash-tools.exec.js"));
+  ({ detectCommandObfuscation } = await import("../infra/exec-obfuscation-detect.js"));
+}
 
 function buildPreparedSystemRunPayload(rawInvokeParams: unknown) {
   const invoke = (rawInvokeParams ?? {}) as {
@@ -203,12 +210,6 @@ describe("exec approvals", () => {
   let previousHome: string | undefined;
   let previousUserProfile: string | undefined;
 
-  beforeAll(async () => {
-    ({ callGatewayTool } = await import("./tools/gateway.js"));
-    ({ createExecTool } = await import("./bash-tools.exec.js"));
-    ({ detectCommandObfuscation } = await import("../infra/exec-obfuscation-detect.js"));
-  });
-
   beforeEach(async () => {
     previousHome = process.env.HOME;
     previousUserProfile = process.env.USERPROFILE;
@@ -216,6 +217,7 @@ describe("exec approvals", () => {
     process.env.HOME = tempDir;
     // Windows uses USERPROFILE for os.homedir()
     process.env.USERPROFILE = tempDir;
+    await loadExecApprovalModules();
   });
 
   afterEach(() => {
@@ -447,6 +449,50 @@ describe("exec approvals", () => {
     );
   });
 
+  it("uses a deny-specific followup prompt so prior output is not reused", async () => {
+    const agentCalls: Array<Record<string, unknown>> = [];
+
+    vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
+      if (method === "exec.approval.request") {
+        return acceptedApprovalResponse(params);
+      }
+      if (method === "exec.approval.waitDecision") {
+        return { decision: "deny" };
+      }
+      if (method === "agent") {
+        agentCalls.push(params as Record<string, unknown>);
+        return { status: "ok" };
+      }
+      return { ok: true };
+    });
+
+    const tool = createExecTool({
+      host: "gateway",
+      ask: "always",
+      approvalRunningNoticeMs: 0,
+      sessionKey: "agent:main:main",
+      elevated: { enabled: true, allowed: true, defaultLevel: "ask" },
+    });
+
+    const result = await tool.execute("call-gw-followup-deny", {
+      command: "echo ok",
+      workdir: process.cwd(),
+      gatewayUrl: undefined,
+      gatewayToken: undefined,
+    });
+
+    expect(result.details.status).toBe("approval-pending");
+    await expect.poll(() => agentCalls.length, { timeout: 3_000, interval: 20 }).toBe(1);
+    expect(typeof agentCalls[0]?.message).toBe("string");
+    expect(agentCalls[0]?.message).toContain("An async command did not run.");
+    expect(agentCalls[0]?.message).toContain(
+      "Do not mention, summarize, or reuse output from any earlier run in this session.",
+    );
+    expect(agentCalls[0]?.message).not.toContain(
+      "An async command the user already approved has completed.",
+    );
+  });
+
   it("requires a separate approval for each elevated command after allow-once", async () => {
     const requestCommands: string[] = [];
     const requestIds: string[] = [];
@@ -636,7 +682,7 @@ describe("exec approvals", () => {
     });
 
     const text = expectApprovalUnavailableText(result);
-    expect(text).toContain("chat exec approvals are not enabled on Discord");
+    expect(text).toContain("Discord does not support chat exec approvals.");
     expect(text).toContain("Web UI or terminal UI");
   });
 
@@ -673,7 +719,8 @@ describe("exec approvals", () => {
     });
 
     const text = expectApprovalUnavailableText(result);
-    expect(text).toContain("Approval required. I sent the allowed approvers DMs.");
+    expect(text).toContain("Telegram does not support chat exec approvals.");
+    expect(text).toContain("Web UI or terminal UI");
   });
 
   it("denies node obfuscated command when approval request times out", async () => {

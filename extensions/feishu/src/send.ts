@@ -1,5 +1,7 @@
-import type { ClawdbotConfig } from "openclaw/plugin-sdk/feishu";
-import { resolveFeishuAccount } from "./accounts.js";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
+import type { ClawdbotConfig } from "../runtime-api.js";
+import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import type { MentionTarget } from "./mention.js";
 import { buildMentionedMessage, buildMentionedCardContent } from "./mention.js";
@@ -286,7 +288,7 @@ export async function getMessageFeishu(params: {
   accountId?: string;
 }): Promise<FeishuMessageInfo | null> {
   const { cfg, messageId, accountId } = params;
-  const account = resolveFeishuAccount({ cfg, accountId });
+  const account = resolveFeishuRuntimeAccount({ cfg, accountId });
   if (!account.configured) {
     throw new Error(`Feishu account "${account.accountId}" not configured`);
   }
@@ -343,7 +345,7 @@ export async function listFeishuThreadMessages(params: {
   accountId?: string;
 }): Promise<FeishuThreadMessageInfo[]> {
   const { cfg, threadId, currentMessageId, rootMessageId, limit = 20, accountId } = params;
-  const account = resolveFeishuAccount({ cfg, accountId });
+  const account = resolveFeishuRuntimeAccount({ cfg, accountId });
   if (!account.configured) {
     throw new Error(`Feishu account "${account.accountId}" not configured`);
   }
@@ -445,7 +447,7 @@ export async function sendMessageFeishu(
 ): Promise<FeishuSendResult> {
   const { cfg, to, text, replyToMessageId, replyInThread, mentions, accountId } = params;
   const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({ cfg, to, accountId });
-  const tableMode = getFeishuRuntime().channel.text.resolveMarkdownTableMode({
+  const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "feishu",
   });
@@ -455,7 +457,7 @@ export async function sendMessageFeishu(
   if (mentions && mentions.length > 0) {
     rawText = buildMentionedMessage(mentions, rawText);
   }
-  const messageText = getFeishuRuntime().channel.text.convertMarkdownTables(rawText, tableMode);
+  const messageText = convertMarkdownTables(rawText, tableMode);
 
   const { content, msgType } = buildFeishuPostMessagePayload({ messageText });
 
@@ -506,7 +508,7 @@ export async function editMessageFeishu(params: {
   accountId?: string;
 }): Promise<{ messageId: string; contentType: "post" | "interactive" }> {
   const { cfg, messageId, text, card, accountId } = params;
-  const account = resolveFeishuAccount({ cfg, accountId });
+  const account = resolveFeishuRuntimeAccount({ cfg, accountId });
   if (!account.configured) {
     throw new Error(`Feishu account "${account.accountId}" not configured`);
   }
@@ -533,11 +535,11 @@ export async function editMessageFeishu(params: {
     return { messageId, contentType: "interactive" };
   }
 
-  const tableMode = getFeishuRuntime().channel.text.resolveMarkdownTableMode({
+  const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "feishu",
   });
-  const messageText = getFeishuRuntime().channel.text.convertMarkdownTables(text!, tableMode);
+  const messageText = convertMarkdownTables(text!, tableMode);
   const payload = buildFeishuPostMessagePayload({ messageText });
   const response = await client.im.message.patch({
     path: { message_id: messageId },
@@ -558,7 +560,7 @@ export async function updateCardFeishu(params: {
   accountId?: string;
 }): Promise<void> {
   const { cfg, messageId, card, accountId } = params;
-  const account = resolveFeishuAccount({ cfg, accountId });
+  const account = resolveFeishuRuntimeAccount({ cfg, accountId });
   if (!account.configured) {
     throw new Error(`Feishu account "${account.accountId}" not configured`);
   }

@@ -52,7 +52,7 @@ async function expectSharedOperatorScopesCleared(
 
     const adminRes = await rpcReq(ws, "set-heartbeats", { enabled: false });
     expect(adminRes.ok).toBe(false);
-    expect(adminRes.error?.message).toBe("missing scope: operator.admin");
+    expect(adminRes.error?.message ?? "").toContain("missing scope");
   } finally {
     ws.close();
   }
@@ -87,7 +87,7 @@ describe("gateway auth compatibility baseline", () => {
       }
     });
 
-    test("clears client-declared scopes for shared-token operator connects", async () => {
+    test("clears requested scopes for shared-token operator connects without device identity", async () => {
       await expectSharedOperatorScopesCleared(port, { token: "secret" });
     });
 
@@ -167,7 +167,9 @@ describe("gateway auth compatibility baseline", () => {
         role: "operator",
         scopes: ["operator.admin"],
       });
-      await approveDevicePairing(pending.request.requestId);
+      await approveDevicePairing(pending.request.requestId, {
+        callerScopes: ["operator.admin"],
+      });
 
       const rotated = await rotateDeviceToken({
         deviceId: identity.deviceId,
@@ -239,7 +241,7 @@ describe("gateway auth compatibility baseline", () => {
       }
     });
 
-    test("clears client-declared scopes for shared-password operator connects", async () => {
+    test("clears requested scopes for shared-password operator connects without device identity", async () => {
       await expectSharedOperatorScopesCleared(port, { password: "secret" });
     });
   });

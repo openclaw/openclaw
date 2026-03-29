@@ -1,6 +1,7 @@
-import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "openclaw/plugin-sdk/zalouser";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import "./monitor.send-mocks.js";
+import "./zalo-js.test-mocks.js";
 import { resolveZalouserAccountSync } from "./accounts.js";
 import { __testing } from "./monitor.js";
 import {
@@ -506,10 +507,9 @@ describe("zalouser monitor group mention gating", () => {
     });
   });
 
-  it("allows allowlisted group replies without inheriting the DM allowlist", async () => {
+  it("blocks routed allowlist groups without an explicit group sender allowlist", async () => {
     const { dispatchReplyWithBufferedBlockDispatcher } = installRuntime({
       commandAuthorized: false,
-      replyPayload: { text: "ok" },
     });
     await __testing.processMessage({
       message: createGroupMessage({
@@ -533,7 +533,7 @@ describe("zalouser monitor group mention gating", () => {
       runtime: createRuntimeEnv(),
     });
 
-    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+    expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
   });
 
   it("blocks group messages when sender is not in groupAllowFrom", async () => {

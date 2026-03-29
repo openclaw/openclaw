@@ -24,6 +24,7 @@ import type { ProviderAuthMethod, ProviderAuthOptionBag } from "./types.js";
 export type ApplyProviderAuthChoiceParams = {
   authChoice: string;
   config: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
   agentDir?: string;
@@ -83,6 +84,7 @@ async function loadPluginProviderRuntime() {
 
 export async function runProviderPluginAuthMethod(params: {
   config: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
   runtime: RuntimeEnv;
   prompter: WizardPrompter;
   method: ProviderAuthMethod;
@@ -108,6 +110,7 @@ export async function runProviderPluginAuthMethod(params: {
 
   const result = await params.method.run({
     config: params.config,
+    env: params.env,
     agentDir,
     workspaceDir,
     prompter: params.prompter,
@@ -143,6 +146,9 @@ export async function runProviderPluginAuthMethod(params: {
       ...("email" in profile.credential && profile.credential.email
         ? { email: profile.credential.email }
         : {}),
+      ...("displayName" in profile.credential && profile.credential.displayName
+        ? { displayName: profile.credential.displayName }
+        : {}),
     });
   }
 
@@ -167,6 +173,7 @@ export async function applyAuthChoiceLoadedPluginProvider(
   const providers = resolvePluginProviders({
     config: params.config,
     workspaceDir,
+    env: params.env,
     bundledProviderAllowlistCompat: true,
     bundledProviderVitestCompat: true,
   });
@@ -180,6 +187,7 @@ export async function applyAuthChoiceLoadedPluginProvider(
 
   const applied = await runProviderPluginAuthMethod({
     config: params.config,
+    env: params.env,
     runtime: params.runtime,
     prompter: params.prompter,
     method: resolved.method,
@@ -247,6 +255,7 @@ export async function applyAuthChoicePluginProvider(
   const providers = resolvePluginProviders({
     config: nextConfig,
     workspaceDir,
+    env: params.env,
     bundledProviderAllowlistCompat: true,
     bundledProviderVitestCompat: true,
   });
@@ -267,6 +276,7 @@ export async function applyAuthChoicePluginProvider(
 
   const applied = await runProviderPluginAuthMethod({
     config: nextConfig,
+    env: params.env,
     runtime: params.runtime,
     prompter: params.prompter,
     method,

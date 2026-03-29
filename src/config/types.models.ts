@@ -1,3 +1,4 @@
+import type { OpenAICompletionsCompat } from "@mariozechner/pi-ai";
 import type { SecretInput } from "./types.secrets.js";
 
 export const MODEL_APIS = [
@@ -13,18 +14,31 @@ export const MODEL_APIS = [
 
 export type ModelApi = (typeof MODEL_APIS)[number];
 
-export type ModelCompatConfig = {
-  supportsStore?: boolean;
-  supportsDeveloperRole?: boolean;
-  supportsReasoningEffort?: boolean;
-  supportsUsageInStreaming?: boolean;
+type SupportedOpenAICompatFields = Pick<
+  OpenAICompletionsCompat,
+  | "supportsStore"
+  | "supportsDeveloperRole"
+  | "supportsReasoningEffort"
+  | "supportsUsageInStreaming"
+  | "supportsStrictMode"
+  | "maxTokensField"
+  | "requiresToolResultName"
+  | "requiresAssistantAfterToolResult"
+  | "requiresThinkingAsText"
+>;
+
+type SupportedThinkingFormat =
+  | NonNullable<OpenAICompletionsCompat["thinkingFormat"]>
+  | "openrouter"
+  | "qwen-chat-template";
+
+export type ModelCompatConfig = SupportedOpenAICompatFields & {
+  thinkingFormat?: SupportedThinkingFormat;
   supportsTools?: boolean;
-  supportsStrictMode?: boolean;
-  maxTokensField?: "max_completion_tokens" | "max_tokens";
-  thinkingFormat?: "openai" | "zai" | "qwen";
-  requiresToolResultName?: boolean;
-  requiresAssistantAfterToolResult?: boolean;
-  requiresThinkingAsText?: boolean;
+  toolSchemaProfile?: string;
+  unsupportedToolSchemaKeywords?: string[];
+  nativeWebSearchTool?: boolean;
+  toolCallArgumentsEncoding?: string;
   requiresMistralToolIds?: boolean;
   requiresOpenAiAnthropicToolPayload?: boolean;
 };

@@ -1,5 +1,4 @@
-import type { LookupFn, SsrFPolicy } from "../../api.js";
-import { fetchWithSsrFGuard } from "../../api.js";
+import { fetchWithSsrFGuard, type LookupFn, type SsrFPolicy } from "../../runtime-api.js";
 import { validateUrbitBaseUrl } from "./base-url.js";
 import { UrbitUrlError } from "./errors.js";
 

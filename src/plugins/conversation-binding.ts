@@ -11,6 +11,7 @@ import { expandHomePrefix } from "../infra/home-dir.js";
 import { writeJsonAtomic } from "../infra/json-files.js";
 import { type ConversationRef } from "../infra/outbound/session-binding-service.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveGlobalMap, resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { getActivePluginRegistry } from "./runtime.js";
 import type {
   PluginConversationBinding,
@@ -104,24 +105,30 @@ type PluginBindingResolveResult =
       status: "expired";
     };
 
-const pendingRequests = new Map<string, PendingPluginBindingRequest>();
+const PLUGIN_BINDING_PENDING_REQUESTS_KEY = Symbol.for("openclaw.pluginBindingPendingRequests");
+
+const pendingRequests = resolveGlobalMap<string, PendingPluginBindingRequest>(
+  PLUGIN_BINDING_PENDING_REQUESTS_KEY,
+);
 
 type PluginBindingGlobalState = {
   fallbackNoticeBindingIds: Set<string>;
+  approvalsCache: PluginBindingApprovalsFile | null;
+  approvalsLoaded: boolean;
 };
 
 const pluginBindingGlobalStateKey = Symbol.for("openclaw.plugins.binding.global-state");
-
-let approvalsCache: PluginBindingApprovalsFile | null = null;
-let approvalsLoaded = false;
+const pluginBindingGlobalState = resolveGlobalSingleton<PluginBindingGlobalState>(
+  pluginBindingGlobalStateKey,
+  () => ({
+    fallbackNoticeBindingIds: new Set<string>(),
+    approvalsCache: null,
+    approvalsLoaded: false,
+  }),
+);
 
 function getPluginBindingGlobalState(): PluginBindingGlobalState {
-  const globalStore = globalThis as typeof globalThis & {
-    [pluginBindingGlobalStateKey]?: PluginBindingGlobalState;
-  };
-  return (globalStore[pluginBindingGlobalStateKey] ??= {
-    fallbackNoticeBindingIds: new Set<string>(),
-  });
+  return pluginBindingGlobalState;
 }
 
 function resolveApprovalsPath(): string {
@@ -297,8 +304,9 @@ function loadApprovalsFromDisk(): PluginBindingApprovalsFile {
 async function saveApprovals(file: PluginBindingApprovalsFile): Promise<void> {
   const filePath = resolveApprovalsPath();
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  approvalsCache = file;
-  approvalsLoaded = true;
+  const state = getPluginBindingGlobalState();
+  state.approvalsCache = file;
+  state.approvalsLoaded = true;
   await writeJsonAtomic(filePath, file, {
     mode: 0o600,
     trailingNewline: true,
@@ -306,11 +314,12 @@ async function saveApprovals(file: PluginBindingApprovalsFile): Promise<void> {
 }
 
 function getApprovals(): PluginBindingApprovalsFile {
-  if (!approvalsLoaded || !approvalsCache) {
-    approvalsCache = loadApprovalsFromDisk();
-    approvalsLoaded = true;
+  const state = getPluginBindingGlobalState();
+  if (!state.approvalsLoaded || !state.approvalsCache) {
+    state.approvalsCache = loadApprovalsFromDisk();
+    state.approvalsLoaded = true;
   }
-  return approvalsCache;
+  return state.approvalsCache;
 }
 
 function hasPersistentApproval(params: {
@@ -836,8 +845,9 @@ export function buildPluginBindingResolvedText(params: PluginBindingResolveResul
 export const __testing = {
   reset() {
     pendingRequests.clear();
-    approvalsCache = null;
-    approvalsLoaded = false;
-    getPluginBindingGlobalState().fallbackNoticeBindingIds.clear();
+    const state = getPluginBindingGlobalState();
+    state.approvalsCache = null;
+    state.approvalsLoaded = false;
+    state.fallbackNoticeBindingIds.clear();
   },
 };

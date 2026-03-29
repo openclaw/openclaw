@@ -1,4 +1,8 @@
 import {
+  resolveSendableOutboundReplyParts,
+  sendMediaWithLeadingCaption,
+} from "openclaw/plugin-sdk/reply-payload";
+import {
   chunkByParagraph,
   chunkMarkdownTextWithMode,
   resolveChunkMode,
@@ -23,9 +27,9 @@ import {
   toPluginMessageContext,
   toPluginMessageSentEvent,
 } from "../../hooks/message-hook-mappers.js";
-import { hasReplyChannelData, hasReplyContent } from "../../interactive/payload.js";
+import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
+import { getAgentScopedMediaLocalRootsForSources } from "../../media/local-roots.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { throwIfAborted } from "./abort.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
@@ -74,6 +78,7 @@ type ChannelHandler = {
     overrides?: {
       replyToId?: string | null;
       threadId?: string | number | null;
+      audioAsVoice?: boolean;
     },
   ) => Promise<OutboundDeliveryResult>;
   sendFormattedText?: (
@@ -81,6 +86,7 @@ type ChannelHandler = {
     overrides?: {
       replyToId?: string | null;
       threadId?: string | number | null;
+      audioAsVoice?: boolean;
     },
   ) => Promise<OutboundDeliveryResult[]>;
   sendFormattedMedia?: (
@@ -89,6 +95,7 @@ type ChannelHandler = {
     overrides?: {
       replyToId?: string | null;
       threadId?: string | number | null;
+      audioAsVoice?: boolean;
     },
   ) => Promise<OutboundDeliveryResult>;
   sendText: (
@@ -96,6 +103,7 @@ type ChannelHandler = {
     overrides?: {
       replyToId?: string | null;
       threadId?: string | number | null;
+      audioAsVoice?: boolean;
     },
   ) => Promise<OutboundDeliveryResult>;
   sendMedia: (
@@ -104,6 +112,7 @@ type ChannelHandler = {
     overrides?: {
       replyToId?: string | null;
       threadId?: string | number | null;
+      audioAsVoice?: boolean;
     },
   ) => Promise<OutboundDeliveryResult>;
 };
@@ -121,6 +130,7 @@ type ChannelHandlerParams = {
   forceDocument?: boolean;
   silent?: boolean;
   mediaLocalRoots?: readonly string[];
+  gatewayClientScopes?: readonly string[];
 };
 
 // Channel docking: outbound delivery delegates to plugin.outbound adapters.
@@ -155,10 +165,12 @@ function createPluginHandler(
   const resolveCtx = (overrides?: {
     replyToId?: string | null;
     threadId?: string | number | null;
+    audioAsVoice?: boolean;
   }): Omit<ChannelOutboundContext, "text" | "mediaUrl"> => ({
     ...baseCtx,
     replyToId: overrides?.replyToId ?? baseCtx.replyToId,
     threadId: overrides?.threadId ?? baseCtx.threadId,
+    audioAsVoice: overrides?.audioAsVoice,
   });
   return {
     chunker,
@@ -239,6 +251,7 @@ function createChannelOutboundContextBase(
     deps: params.deps,
     silent: params.silent,
     mediaLocalRoots: params.mediaLocalRoots,
+    gatewayClientScopes: params.gatewayClientScopes,
   };
 }
 
@@ -264,7 +277,16 @@ type DeliverOutboundPayloadsCoreParams = {
   session?: OutboundSessionContext;
   mirror?: DeliveryMirror;
   silent?: boolean;
+  gatewayClientScopes?: readonly string[];
 };
+
+function collectPayloadMediaSources(payloads: ReplyPayload[]): string[] {
+  const mediaSources: string[] = [];
+  for (const payload of normalizeReplyPayloadsForDelivery(payloads)) {
+    mediaSources.push(...resolveSendableOutboundReplyParts(payload).mediaUrls);
+  }
+  return mediaSources;
+}
 
 export type DeliverOutboundPayloadsParams = DeliverOutboundPayloadsCoreParams & {
   /** @internal Skip write-ahead queue (used by crash-recovery to avoid re-enqueueing). */
@@ -280,17 +302,8 @@ type MessageSentEvent = {
 
 function normalizeEmptyPayloadForDelivery(payload: ReplyPayload): ReplyPayload | null {
   const text = typeof payload.text === "string" ? payload.text : "";
-  const hasChannelData = hasReplyChannelData(payload.channelData);
   if (!text.trim()) {
-    if (
-      !hasReplyContent({
-        text,
-        mediaUrl: payload.mediaUrl,
-        mediaUrls: payload.mediaUrls,
-        interactive: payload.interactive,
-        hasChannelData,
-      })
-    ) {
+    if (!hasReplyPayloadContent({ ...payload, text })) {
       return null;
     }
     if (text) {
@@ -336,9 +349,11 @@ function normalizePayloadsForChannelDelivery(
 }
 
 function buildPayloadSummary(payload: ReplyPayload): NormalizedOutboundPayload {
+  const parts = resolveSendableOutboundReplyParts(payload);
   return {
-    text: payload.text ?? "",
-    mediaUrls: payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []),
+    text: parts.text,
+    mediaUrls: parts.mediaUrls,
+    audioAsVoice: payload.audioAsVoice === true ? true : undefined,
     interactive: payload.interactive,
     channelData: payload.channelData,
   };
@@ -496,6 +511,7 @@ export async function deliverOutboundPayloads(
         forceDocument: params.forceDocument,
         silent: params.silent,
         mirror: params.mirror,
+        gatewayClientScopes: params.gatewayClientScopes,
       }).catch(() => null); // Best-effort — don't block delivery if queue write fails.
 
   // Wrap onError to detect partial failures under bestEffort mode.
@@ -545,10 +561,11 @@ async function deliverOutboundPayloadsCore(
   const accountId = params.accountId;
   const deps = params.deps;
   const abortSignal = params.abortSignal;
-  const mediaLocalRoots = getAgentScopedMediaLocalRoots(
+  const mediaLocalRoots = getAgentScopedMediaLocalRootsForSources({
     cfg,
-    params.session?.agentId ?? params.mirror?.agentId,
-  );
+    agentId: params.session?.agentId ?? params.mirror?.agentId,
+    mediaSources: collectPayloadMediaSources(payloads),
+  });
   const results: OutboundDeliveryResult[] = [];
   const handler = await createChannelHandler({
     cfg,
@@ -563,6 +580,7 @@ async function deliverOutboundPayloadsCore(
     forceDocument: params.forceDocument,
     silent: params.silent,
     mediaLocalRoots,
+    gatewayClientScopes: params.gatewayClientScopes,
   });
   const configuredTextLimit = handler.chunker
     ? resolveTextChunkLimit(cfg, channel, accountId, {
@@ -576,7 +594,11 @@ async function deliverOutboundPayloadsCore(
 
   const sendTextChunks = async (
     text: string,
-    overrides?: { replyToId?: string | null; threadId?: string | number | null },
+    overrides?: {
+      replyToId?: string | null;
+      threadId?: string | number | null;
+      audioAsVoice?: boolean;
+    },
   ) => {
     throwIfAborted(abortSignal);
     if (!handler.chunker || textLimit === undefined) {
@@ -661,14 +683,15 @@ async function deliverOutboundPayloadsCore(
       const sendOverrides = {
         replyToId: effectivePayload.replyToId ?? params.replyToId ?? undefined,
         threadId: params.threadId ?? undefined,
+        audioAsVoice: effectivePayload.audioAsVoice === true ? true : undefined,
         forceDocument: params.forceDocument,
       };
       if (
         handler.sendPayload &&
-        (effectivePayload.channelData ||
-          hasReplyContent({
-            interactive: effectivePayload.interactive,
-          }))
+        hasReplyPayloadContent({
+          interactive: effectivePayload.interactive,
+          channelData: effectivePayload.channelData,
+        })
       ) {
         const delivery = await handler.sendPayload(effectivePayload, sendOverrides);
         results.push(delivery);
@@ -721,22 +744,27 @@ async function deliverOutboundPayloadsCore(
         continue;
       }
 
-      let first = true;
       let lastMessageId: string | undefined;
-      for (const url of payloadSummary.mediaUrls) {
-        throwIfAborted(abortSignal);
-        const caption = first ? payloadSummary.text : "";
-        first = false;
-        if (handler.sendFormattedMedia) {
-          const delivery = await handler.sendFormattedMedia(caption, url, sendOverrides);
+      await sendMediaWithLeadingCaption({
+        mediaUrls: payloadSummary.mediaUrls,
+        caption: payloadSummary.text,
+        send: async ({ mediaUrl, caption }) => {
+          throwIfAborted(abortSignal);
+          if (handler.sendFormattedMedia) {
+            const delivery = await handler.sendFormattedMedia(
+              caption ?? "",
+              mediaUrl,
+              sendOverrides,
+            );
+            results.push(delivery);
+            lastMessageId = delivery.messageId;
+            return;
+          }
+          const delivery = await handler.sendMedia(caption ?? "", mediaUrl, sendOverrides);
           results.push(delivery);
           lastMessageId = delivery.messageId;
-        } else {
-          const delivery = await handler.sendMedia(caption, url, sendOverrides);
-          results.push(delivery);
-          lastMessageId = delivery.messageId;
-        }
-      }
+        },
+      });
       emitMessageSent({
         success: true,
         content: payloadSummary.text,

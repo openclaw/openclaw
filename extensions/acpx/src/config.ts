@@ -1,7 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { OpenClawPluginConfigSchema } from "openclaw/plugin-sdk/acpx";
+import { buildPluginConfigSchema } from "openclaw/plugin-sdk/core";
+import { z } from "openclaw/plugin-sdk/zod";
+import type { OpenClawPluginConfigSchema } from "../runtime-api.js";
 
 export const ACPX_PERMISSION_MODES = ["approve-all", "approve-reads", "deny-all"] as const;
 export type AcpxPermissionMode = (typeof ACPX_PERMISSION_MODES)[number];
@@ -9,7 +11,7 @@ export type AcpxPermissionMode = (typeof ACPX_PERMISSION_MODES)[number];
 export const ACPX_NON_INTERACTIVE_POLICIES = ["deny", "fail"] as const;
 export type AcpxNonInteractivePermissionPolicy = (typeof ACPX_NON_INTERACTIVE_POLICIES)[number];
 
-export const ACPX_PINNED_VERSION = "0.1.16";
+export const ACPX_PINNED_VERSION = "0.3.1";
 export const ACPX_VERSION_ANY = "any";
 const ACPX_BIN_NAME = process.platform === "win32" ? "acpx.cmd" : "acpx";
 
@@ -111,169 +113,79 @@ type ParseResult =
   | { ok: true; value: AcpxPluginConfig | undefined }
   | { ok: false; message: string };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+const nonEmptyTrimmedString = (message: string) =>
+  z.string({ error: message }).trim().min(1, { error: message });
 
-function isPermissionMode(value: string): value is AcpxPermissionMode {
-  return ACPX_PERMISSION_MODES.includes(value as AcpxPermissionMode);
-}
+const McpServerConfigSchema = z.object({
+  command: nonEmptyTrimmedString("command must be a non-empty string").describe(
+    "Command to run the MCP server",
+  ),
+  args: z
+    .array(z.string({ error: "args must be an array of strings" }), {
+      error: "args must be an array of strings",
+    })
+    .optional()
+    .describe("Arguments to pass to the command"),
+  env: z
+    .record(z.string(), z.string({ error: "env values must be strings" }), {
+      error: "env must be an object of strings",
+    })
+    .optional()
+    .describe("Environment variables for the MCP server"),
+});
 
-function isNonInteractivePermissionPolicy(
-  value: string,
-): value is AcpxNonInteractivePermissionPolicy {
-  return ACPX_NON_INTERACTIVE_POLICIES.includes(value as AcpxNonInteractivePermissionPolicy);
-}
+const AcpxPluginConfigSchema = z.strictObject({
+  command: nonEmptyTrimmedString("command must be a non-empty string").optional(),
+  expectedVersion: nonEmptyTrimmedString("expectedVersion must be a non-empty string").optional(),
+  cwd: nonEmptyTrimmedString("cwd must be a non-empty string").optional(),
+  permissionMode: z
+    .enum(ACPX_PERMISSION_MODES, {
+      error: `permissionMode must be one of: ${ACPX_PERMISSION_MODES.join(", ")}`,
+    })
+    .optional(),
+  nonInteractivePermissions: z
+    .enum(ACPX_NON_INTERACTIVE_POLICIES, {
+      error: `nonInteractivePermissions must be one of: ${ACPX_NON_INTERACTIVE_POLICIES.join(", ")}`,
+    })
+    .optional(),
+  strictWindowsCmdWrapper: z
+    .boolean({ error: "strictWindowsCmdWrapper must be a boolean" })
+    .optional(),
+  timeoutSeconds: z
+    .number({ error: "timeoutSeconds must be a number >= 0.001" })
+    .min(0.001, { error: "timeoutSeconds must be a number >= 0.001" })
+    .optional(),
+  queueOwnerTtlSeconds: z
+    .number({ error: "queueOwnerTtlSeconds must be a number >= 0" })
+    .min(0, { error: "queueOwnerTtlSeconds must be a number >= 0" })
+    .optional(),
+  mcpServers: z.record(z.string(), McpServerConfigSchema).optional(),
+});
 
-function isMcpServerConfig(value: unknown): value is McpServerConfig {
-  if (!isRecord(value)) {
-    return false;
+function formatAcpxConfigIssue(issue: z.ZodIssue | undefined): string {
+  if (!issue) {
+    return "invalid config";
   }
-  if (typeof value.command !== "string" || value.command.trim() === "") {
-    return false;
+  if (issue.code === "unrecognized_keys" && issue.keys.length > 0) {
+    return `unknown config key: ${issue.keys[0]}`;
   }
-  if (value.args !== undefined) {
-    if (!Array.isArray(value.args)) {
-      return false;
-    }
-    for (const arg of value.args) {
-      if (typeof arg !== "string") {
-        return false;
-      }
-    }
+  if (issue.code === "invalid_type" && issue.path.length === 0) {
+    return "expected config object";
   }
-  if (value.env !== undefined) {
-    if (!isRecord(value.env)) {
-      return false;
-    }
-    for (const envValue of Object.values(value.env)) {
-      if (typeof envValue !== "string") {
-        return false;
-      }
-    }
-  }
-  return true;
+  return issue.message;
 }
 
 function parseAcpxPluginConfig(value: unknown): ParseResult {
   if (value === undefined) {
     return { ok: true, value: undefined };
   }
-  if (!isRecord(value)) {
-    return { ok: false, message: "expected config object" };
+  const parsed = AcpxPluginConfigSchema.safeParse(value);
+  if (!parsed.success) {
+    return { ok: false, message: formatAcpxConfigIssue(parsed.error.issues[0]) };
   }
-  const allowedKeys = new Set([
-    "command",
-    "expectedVersion",
-    "cwd",
-    "permissionMode",
-    "nonInteractivePermissions",
-    "strictWindowsCmdWrapper",
-    "timeoutSeconds",
-    "queueOwnerTtlSeconds",
-    "mcpServers",
-  ]);
-  for (const key of Object.keys(value)) {
-    if (!allowedKeys.has(key)) {
-      return { ok: false, message: `unknown config key: ${key}` };
-    }
-  }
-
-  const command = value.command;
-  if (command !== undefined && (typeof command !== "string" || command.trim() === "")) {
-    return { ok: false, message: "command must be a non-empty string" };
-  }
-
-  const expectedVersion = value.expectedVersion;
-  if (
-    expectedVersion !== undefined &&
-    (typeof expectedVersion !== "string" || expectedVersion.trim() === "")
-  ) {
-    return { ok: false, message: "expectedVersion must be a non-empty string" };
-  }
-
-  const cwd = value.cwd;
-  if (cwd !== undefined && (typeof cwd !== "string" || cwd.trim() === "")) {
-    return { ok: false, message: "cwd must be a non-empty string" };
-  }
-
-  const permissionMode = value.permissionMode;
-  if (
-    permissionMode !== undefined &&
-    (typeof permissionMode !== "string" || !isPermissionMode(permissionMode))
-  ) {
-    return {
-      ok: false,
-      message: `permissionMode must be one of: ${ACPX_PERMISSION_MODES.join(", ")}`,
-    };
-  }
-
-  const nonInteractivePermissions = value.nonInteractivePermissions;
-  if (
-    nonInteractivePermissions !== undefined &&
-    (typeof nonInteractivePermissions !== "string" ||
-      !isNonInteractivePermissionPolicy(nonInteractivePermissions))
-  ) {
-    return {
-      ok: false,
-      message: `nonInteractivePermissions must be one of: ${ACPX_NON_INTERACTIVE_POLICIES.join(", ")}`,
-    };
-  }
-
-  const timeoutSeconds = value.timeoutSeconds;
-  if (
-    timeoutSeconds !== undefined &&
-    (typeof timeoutSeconds !== "number" || !Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0)
-  ) {
-    return { ok: false, message: "timeoutSeconds must be a positive number" };
-  }
-
-  const strictWindowsCmdWrapper = value.strictWindowsCmdWrapper;
-  if (strictWindowsCmdWrapper !== undefined && typeof strictWindowsCmdWrapper !== "boolean") {
-    return { ok: false, message: "strictWindowsCmdWrapper must be a boolean" };
-  }
-
-  const queueOwnerTtlSeconds = value.queueOwnerTtlSeconds;
-  if (
-    queueOwnerTtlSeconds !== undefined &&
-    (typeof queueOwnerTtlSeconds !== "number" ||
-      !Number.isFinite(queueOwnerTtlSeconds) ||
-      queueOwnerTtlSeconds < 0)
-  ) {
-    return { ok: false, message: "queueOwnerTtlSeconds must be a non-negative number" };
-  }
-
-  const mcpServers = value.mcpServers;
-  if (mcpServers !== undefined) {
-    if (!isRecord(mcpServers)) {
-      return { ok: false, message: "mcpServers must be an object" };
-    }
-    for (const [key, serverConfig] of Object.entries(mcpServers)) {
-      if (!isMcpServerConfig(serverConfig)) {
-        return {
-          ok: false,
-          message: `mcpServers.${key} must have a command string, optional args array, and optional env object`,
-        };
-      }
-    }
-  }
-
   return {
     ok: true,
-    value: {
-      command: typeof command === "string" ? command.trim() : undefined,
-      expectedVersion: typeof expectedVersion === "string" ? expectedVersion.trim() : undefined,
-      cwd: typeof cwd === "string" ? cwd.trim() : undefined,
-      permissionMode: typeof permissionMode === "string" ? permissionMode : undefined,
-      nonInteractivePermissions:
-        typeof nonInteractivePermissions === "string" ? nonInteractivePermissions : undefined,
-      strictWindowsCmdWrapper:
-        typeof strictWindowsCmdWrapper === "boolean" ? strictWindowsCmdWrapper : undefined,
-      timeoutSeconds: typeof timeoutSeconds === "number" ? timeoutSeconds : undefined,
-      queueOwnerTtlSeconds:
-        typeof queueOwnerTtlSeconds === "number" ? queueOwnerTtlSeconds : undefined,
-      mcpServers: mcpServers as Record<string, McpServerConfig> | undefined,
-    },
+    value: parsed.data as AcpxPluginConfig,
   };
 }
 
@@ -290,63 +202,7 @@ function resolveConfiguredCommand(params: { configured?: string; workspaceDir?: 
 }
 
 export function createAcpxPluginConfigSchema(): OpenClawPluginConfigSchema {
-  return {
-    safeParse(value: unknown):
-      | { success: true; data?: unknown }
-      | {
-          success: false;
-          error: { issues: Array<{ path: Array<string | number>; message: string }> };
-        } {
-      const parsed = parseAcpxPluginConfig(value);
-      if (parsed.ok) {
-        return { success: true, data: parsed.value };
-      }
-      return {
-        success: false,
-        error: {
-          issues: [{ path: [], message: parsed.message }],
-        },
-      };
-    },
-    jsonSchema: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        command: { type: "string" },
-        expectedVersion: { type: "string" },
-        cwd: { type: "string" },
-        permissionMode: {
-          type: "string",
-          enum: [...ACPX_PERMISSION_MODES],
-        },
-        nonInteractivePermissions: {
-          type: "string",
-          enum: [...ACPX_NON_INTERACTIVE_POLICIES],
-        },
-        strictWindowsCmdWrapper: { type: "boolean" },
-        timeoutSeconds: { type: "number", minimum: 0.001 },
-        queueOwnerTtlSeconds: { type: "number", minimum: 0 },
-        mcpServers: {
-          type: "object",
-          additionalProperties: {
-            type: "object",
-            properties: {
-              command: { type: "string" },
-              args: {
-                type: "array",
-                items: { type: "string" },
-              },
-              env: {
-                type: "object",
-                additionalProperties: { type: "string" },
-              },
-            },
-            required: ["command"],
-          },
-        },
-      },
-    },
-  };
+  return buildPluginConfigSchema(AcpxPluginConfigSchema);
 }
 
 export function toAcpMcpServers(mcpServers: Record<string, McpServerConfig>): AcpxMcpServer[] {

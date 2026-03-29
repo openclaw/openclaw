@@ -2,13 +2,20 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   expectProvidedCfgSkipsRuntimeLoad,
   expectRuntimeCfgFallback,
-} from "../../../../test/helpers/extensions/send-config.js";
-import { parseMattermostTarget, sendMessageMattermost } from "./send.js";
-import { resetMattermostOpaqueTargetCacheForTests } from "./target-resolution.js";
+} from "../../../../test/helpers/plugins/send-config.js";
+
+let parseMattermostTarget: typeof import("./send.js").parseMattermostTarget;
+let sendMessageMattermost: typeof import("./send.js").sendMessageMattermost;
+let resetMattermostOpaqueTargetCacheForTests: typeof import("./target-resolution.js").resetMattermostOpaqueTargetCacheForTests;
+
+type SendMessageMattermostOptions = NonNullable<
+  Parameters<typeof import("./send.js").sendMessageMattermost>[2]
+>;
 
 const mockState = vi.hoisted(() => ({
   loadConfig: vi.fn(() => ({})),
   loadOutboundMediaFromUrl: vi.fn(),
+  recordActivity: vi.fn(),
   resolveMattermostAccount: vi.fn(() => ({
     accountId: "default",
     botToken: "bot-token",
@@ -28,8 +35,16 @@ const mockState = vi.hoisted(() => ({
   uploadMattermostFile: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/mattermost", () => ({
+vi.mock("../../runtime-api.js", () => ({
   loadOutboundMediaFromUrl: mockState.loadOutboundMediaFromUrl,
+}));
+
+vi.mock("openclaw/plugin-sdk/config-runtime", () => ({
+  resolveMarkdownTableMode: vi.fn(() => "off"),
+}));
+
+vi.mock("openclaw/plugin-sdk/text-runtime", () => ({
+  convertMarkdownTables: vi.fn((text: string) => text),
 }));
 
 vi.mock("./accounts.js", () => ({
@@ -65,16 +80,18 @@ vi.mock("../runtime.js", () => ({
         convertMarkdownTables: (text: string) => text,
       },
       activity: {
-        record: vi.fn(),
+        record: mockState.recordActivity,
       },
     },
   }),
 }));
 
 describe("sendMessageMattermost", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     mockState.loadConfig.mockReset();
     mockState.loadConfig.mockReturnValue({});
+    mockState.recordActivity.mockReset();
     mockState.resolveMattermostAccount.mockReset();
     mockState.resolveMattermostAccount.mockReturnValue({
       accountId: "default",
@@ -93,7 +110,6 @@ describe("sendMessageMattermost", () => {
     mockState.fetchMattermostUserTeams.mockReset();
     mockState.fetchMattermostUserByUsername.mockReset();
     mockState.uploadMattermostFile.mockReset();
-    resetMattermostOpaqueTargetCacheForTests();
     mockState.createMattermostClient.mockReturnValue({});
     mockState.createMattermostPost.mockResolvedValue({ id: "post-1" });
     mockState.createMattermostDirectChannelWithRetry.mockResolvedValue({ id: "dm-channel-1" });
@@ -101,6 +117,9 @@ describe("sendMessageMattermost", () => {
     mockState.fetchMattermostUserTeams.mockResolvedValue([{ id: "team-1" }]);
     mockState.fetchMattermostChannelByName.mockResolvedValue({ id: "town-square" });
     mockState.uploadMattermostFile.mockResolvedValue({ id: "file-1" });
+    ({ parseMattermostTarget, sendMessageMattermost } = await import("./send.js"));
+    ({ resetMattermostOpaqueTargetCacheForTests } = await import("./target-resolution.js"));
+    resetMattermostOpaqueTargetCacheForTests();
   });
 
   it("uses provided cfg and skips runtime loadConfig", async () => {
@@ -118,9 +137,13 @@ describe("sendMessageMattermost", () => {
       config: {},
     });
 
-    await sendMessageMattermost("channel:town-square", "hello", {
-      cfg: providedCfg as any,
+    const options: SendMessageMattermostOptions = {
+      cfg: providedCfg,
       accountId: "work",
+    };
+
+    await sendMessageMattermost("channel:town-square", "hello", {
+      ...options,
     });
 
     expectProvidedCfgSkipsRuntimeLoad({
@@ -155,6 +178,36 @@ describe("sendMessageMattermost", () => {
       cfg: runtimeCfg,
       accountId: undefined,
     });
+  });
+
+  it("sends with provided cfg even when the runtime store is not initialized", async () => {
+    const providedCfg = {
+      channels: {
+        mattermost: {
+          botToken: "provided-token",
+        },
+      },
+    };
+    mockState.resolveMattermostAccount.mockReturnValue({
+      accountId: "work",
+      botToken: "provided-token",
+      baseUrl: "https://mattermost.example.com",
+      config: {},
+    });
+    mockState.recordActivity.mockImplementation(() => {
+      throw new Error("Mattermost runtime not initialized");
+    });
+
+    await expect(
+      sendMessageMattermost("channel:town-square", "hello", {
+        cfg: providedCfg,
+        accountId: "work",
+      }),
+    ).resolves.toEqual({
+      messageId: "post-1",
+      channelId: "town-square",
+    });
+    expect(mockState.loadConfig).not.toHaveBeenCalled();
   });
 
   it("loads outbound media with trusted local roots before upload", async () => {

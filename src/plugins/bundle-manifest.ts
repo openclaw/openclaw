@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { isRecord } from "../utils.js";
 import { DEFAULT_PLUGIN_ENTRY_CANDIDATES, PLUGIN_MANIFEST_FILENAME } from "./manifest.js";
 import type { PluginBundleFormat } from "./types.js";
@@ -102,17 +102,19 @@ function loadBundleManifestFile(params: {
     rejectHardlinks: params.rejectHardlinks,
   });
   if (!opened.ok) {
-    if (opened.reason === "path") {
-      if (params.allowMissing) {
-        return { ok: true, raw: {}, manifestPath };
-      }
-      return { ok: false, error: `plugin manifest not found: ${manifestPath}`, manifestPath };
-    }
-    return {
-      ok: false,
-      error: `unsafe plugin manifest path: ${manifestPath} (${opened.reason})`,
-      manifestPath,
-    };
+    return matchBoundaryFileOpenFailure(opened, {
+      path: () => {
+        if (params.allowMissing) {
+          return { ok: true, raw: {}, manifestPath };
+        }
+        return { ok: false, error: `plugin manifest not found: ${manifestPath}`, manifestPath };
+      },
+      fallback: (failure) => ({
+        ok: false,
+        error: `unsafe plugin manifest path: ${manifestPath} (${failure.reason})`,
+        manifestPath,
+      }),
+    });
   }
   try {
     const raw = JSON.parse(fs.readFileSync(opened.fd, "utf-8")) as unknown;
@@ -216,6 +218,8 @@ function resolveClaudeSkillDirs(raw: Record<string, unknown>, rootDir: string): 
   return mergeBundlePathLists(
     resolveClaudeSkillsRootDirs(raw, rootDir),
     resolveClaudeCommandRootDirs(raw, rootDir),
+    resolveClaudeAgentDirs(raw, rootDir),
+    resolveClaudeOutputStylePaths(raw, rootDir),
   );
 }
 
@@ -397,7 +401,7 @@ export function loadBundleManifest(params: {
       version,
       skills: resolveClaudeSkillDirs(raw, params.rootDir),
       settingsFiles: resolveClaudeSettingsFiles(raw, params.rootDir),
-      hooks: [],
+      hooks: resolveClaudeHookPaths(raw, params.rootDir),
       bundleFormat: "claude",
       capabilities: buildClaudeCapabilities(raw, params.rootDir),
     },

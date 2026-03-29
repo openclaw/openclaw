@@ -34,6 +34,7 @@ const EXPLICIT_TARGET_ACTIONS = new Set<ChannelMessageActionName>([
   "send",
   "sendWithEffect",
   "sendAttachment",
+  "upload-file",
   "reply",
   "thread-reply",
   "broadcast",
@@ -120,6 +121,12 @@ function buildSendSchema(options: { includeInteractive: boolean }) {
     forceDocument: Type.Optional(
       Type.Boolean({
         description: "Send image/GIF as document to avoid Telegram compression (Telegram only).",
+      }),
+    ),
+    asDocument: Type.Optional(
+      Type.Boolean({
+        description:
+          "Send image/GIF as document to avoid Telegram compression. Alias for forceDocument (Telegram only).",
       }),
     ),
     interactive: Type.Optional(interactiveMessageSchema),
@@ -386,6 +393,9 @@ type MessageToolOptions = {
   agentSessionKey?: string;
   sessionId?: string;
   config?: OpenClawConfig;
+  loadConfig?: () => OpenClawConfig;
+  resolveCommandSecretRefsViaGateway?: typeof resolveCommandSecretRefsViaGateway;
+  runMessageAction?: typeof runMessageAction;
   currentChannelId?: string;
   currentChannelProvider?: string;
   currentThreadTs?: string;
@@ -621,6 +631,10 @@ function buildMessageToolDescription(options?: {
 }
 
 export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
+  const loadConfigForTool = options?.loadConfig ?? loadConfig;
+  const resolveSecretRefsForTool =
+    options?.resolveCommandSecretRefsViaGateway ?? resolveCommandSecretRefsViaGateway;
+  const runMessageActionForTool = options?.runMessageAction ?? runMessageAction;
   const agentAccountId = resolveAgentAccountId(options?.agentAccountId);
   const resolvedAgentId = options?.agentSessionKey
     ? resolveSessionAgentId({
@@ -658,6 +672,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
   return {
     label: "Message",
     name: "message",
+    displaySummary: "Send and manage messages across configured channels.",
     description,
     parameters: schema,
     execute: async (_toolCallId, args, signal) => {
@@ -683,7 +698,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       }) as ChannelMessageActionName;
       let cfg = options?.config;
       if (!cfg) {
-        const loadedRaw = loadConfig();
+        const loadedRaw = loadConfigForTool();
         const scope = resolveMessageSecretScope({
           channel: params.channel,
           target: params.target,
@@ -698,7 +713,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           accountId: scope.accountId,
         });
         cfg = (
-          await resolveCommandSecretRefsViaGateway({
+          await resolveSecretRefsForTool({
             config: loadedRaw,
             commandName: "tools.message",
             targetIds: scopedTargets.targetIds,
@@ -765,7 +780,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
             }
           : undefined;
 
-      const result = await runMessageAction({
+      const result = await runMessageActionForTool({
         cfg,
         action,
         params,

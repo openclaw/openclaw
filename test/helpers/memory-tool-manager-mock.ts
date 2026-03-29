@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import { resolveRelativeBundledPluginPublicModuleId } from "../../src/test-utils/bundled-plugin-public-surface.js";
 
 export type SearchImpl = () => Promise<unknown[]>;
 export type MemoryReadParams = { relPath: string; from?: number; lines?: number };
@@ -33,8 +34,41 @@ const stubManager = {
   close: vi.fn(),
 };
 
-vi.mock("../../src/memory/index.js", () => ({
-  getMemorySearchManager: async () => ({ manager: stubManager }),
+const getMemorySearchManagerMock = vi.fn(async () => ({ manager: stubManager }));
+const readAgentMemoryFileMock = vi.fn(
+  async (params: MemoryReadParams) => await readFileImpl(params),
+);
+
+const memoryIndexModuleId = resolveRelativeBundledPluginPublicModuleId({
+  fromModuleUrl: import.meta.url,
+  pluginId: "memory-core",
+  artifactBasename: "src/memory/index.js",
+});
+const memoryToolsRuntimeModuleId = resolveRelativeBundledPluginPublicModuleId({
+  fromModuleUrl: import.meta.url,
+  pluginId: "memory-core",
+  artifactBasename: "src/tools.runtime.js",
+});
+
+vi.mock(memoryIndexModuleId, () => ({
+  getMemorySearchManager: getMemorySearchManagerMock,
+}));
+
+vi.mock("../../packages/memory-host-sdk/src/host/read-file.js", () => ({
+  readAgentMemoryFile: readAgentMemoryFileMock,
+}));
+
+vi.mock(memoryToolsRuntimeModuleId, () => ({
+  resolveMemoryBackendConfig: ({
+    cfg,
+  }: {
+    cfg?: { memory?: { backend?: string; qmd?: unknown } };
+  }) => ({
+    backend,
+    qmd: cfg?.memory?.qmd,
+  }),
+  getMemorySearchManager: getMemorySearchManagerMock,
+  readAgentMemoryFile: readAgentMemoryFileMock,
 }));
 
 export function setMemoryBackend(next: MemoryBackend): void {
@@ -62,4 +96,12 @@ export function resetMemoryToolMockState(overrides?: {
     overrides?.readFileImpl ??
     (async (params: MemoryReadParams) => ({ text: "", path: params.relPath }));
   vi.clearAllMocks();
+}
+
+export function getMemorySearchManagerMockCalls(): number {
+  return getMemorySearchManagerMock.mock.calls.length;
+}
+
+export function getReadAgentMemoryFileMockCalls(): number {
+  return readAgentMemoryFileMock.mock.calls.length;
 }

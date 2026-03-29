@@ -4,6 +4,7 @@ import path from "node:path";
 import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
+import { createCliRuntimeCapture, mockRuntimeModule } from "./test-runtime-capture.js";
 
 /**
  * Test for issue #6070:
@@ -16,6 +17,7 @@ const mockWriteConfigFile = vi.fn<
   (cfg: OpenClawConfig, options?: { unsetPaths?: string[][] }) => Promise<void>
 >(async () => {});
 const mockResolveSecretRefValue = vi.fn();
+const mockReadBestEffortRuntimeConfigSchema = vi.fn();
 
 vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot: () => mockReadConfigFileSnapshot(),
@@ -27,20 +29,18 @@ vi.mock("../secrets/resolve.js", () => ({
   resolveSecretRefValue: (...args: unknown[]) => mockResolveSecretRefValue(...args),
 }));
 
-const mockLog = vi.fn();
-const mockError = vi.fn();
-const mockExit = vi.fn((code: number) => {
-  const errorMessages = mockError.mock.calls.map((c) => c.join(" ")).join("; ");
-  throw new Error(`__exit__:${code} - ${errorMessages}`);
-});
-
-vi.mock("../runtime.js", () => ({
-  defaultRuntime: {
-    log: (...args: unknown[]) => mockLog(...args),
-    error: (...args: unknown[]) => mockError(...args),
-    exit: (code: number) => mockExit(code),
-  },
+vi.mock("../config/runtime-schema.js", () => ({
+  readBestEffortRuntimeConfigSchema: () => mockReadBestEffortRuntimeConfigSchema(),
 }));
+
+const { defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
+const mockLog = defaultRuntime.log;
+const mockError = defaultRuntime.error;
+const mockExit = defaultRuntime.exit;
+
+vi.mock("../runtime.js", async (importOriginal) => {
+  return mockRuntimeModule(importOriginal<typeof import("../runtime.js")>, defaultRuntime);
+});
 
 function buildSnapshot(params: {
   resolved: OpenClawConfig;
@@ -74,7 +74,7 @@ function withRuntimeDefaults(resolved: OpenClawConfig): OpenClawConfig {
     agents: {
       ...resolved.agents,
       defaults: {
-        model: "gpt-5.2",
+        model: "gpt-5.4",
       } as never,
     } as never,
   };
@@ -131,6 +131,41 @@ describe("config cli", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    resetRuntimeCapture();
+    mockReadBestEffortRuntimeConfigSchema.mockResolvedValue({
+      schema: {
+        $schema: "http://json-schema.org/draft-07/schema#",
+        type: "object",
+        properties: {
+          channels: {
+            type: "object",
+            properties: {
+              telegram: {
+                type: "object",
+                properties: {
+                  token: { type: "string" },
+                },
+              },
+            },
+          },
+          plugins: {
+            type: "object",
+            properties: {
+              entries: {
+                type: "object",
+              },
+            },
+          },
+        },
+      },
+      uiHints: {},
+      version: "test",
+      generatedAt: "2026-03-25T00:00:00.000Z",
+    });
+    mockExit.mockImplementation((code: number) => {
+      const errorMessages = mockError.mock.calls.map((call) => call.join(" ")).join("; ");
+      throw new Error(`__exit__:${code} - ${errorMessages}`);
+    });
     mockResolveSecretRefValue.mockResolvedValue("resolved-secret");
   });
 
@@ -169,7 +204,7 @@ describe("config cli", () => {
         ...resolved,
         agents: {
           defaults: {
-            model: "gpt-5.2",
+            model: "gpt-5.4",
             contextWindow: 128_000,
             maxTokens: 16_000,
           },
@@ -192,22 +227,92 @@ describe("config cli", () => {
       expect(written.gateway?.auth).toEqual({ mode: "token" });
     });
 
-    it("auto-seeds a valid Ollama provider when setting only models.providers.ollama.apiKey", async () => {
+    it("drops gateway.auth.password when switching mode to token", async () => {
       const resolved: OpenClawConfig = {
-        gateway: { port: 18789 },
+        gateway: {
+          auth: {
+            mode: "password",
+            token: "token-keep",
+            password: "password-drop", // pragma: allowlist secret
+            allowTailscale: true,
+          },
+        },
       };
       setSnapshot(resolved, resolved);
 
-      await runConfigCommand(["config", "set", "models.providers.ollama.apiKey", '"ollama-local"']);
+      await runConfigCommand(["config", "set", "gateway.auth.mode", "token"]);
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
       const written = mockWriteConfigFile.mock.calls[0]?.[0];
-      expect(written.models?.providers?.ollama).toEqual({
-        baseUrl: "http://127.0.0.1:11434",
-        api: "ollama",
-        models: [],
-        apiKey: "ollama-local", // pragma: allowlist secret
+      expect(written.gateway?.auth).toEqual({
+        mode: "token",
+        token: "token-keep",
+        allowTailscale: true,
       });
+      expect(mockLog).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "Removed inactive gateway.auth.password for gateway.auth.mode=token",
+        ),
+      );
+    });
+
+    it("drops gateway.auth.token when switching mode to password", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: {
+          auth: {
+            mode: "token",
+            token: "token-drop",
+            password: "password-keep", // pragma: allowlist secret
+          },
+        },
+      };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand(["config", "set", "gateway.auth.mode", "password"]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      expect(written.gateway?.auth).toEqual({
+        mode: "password",
+        password: "password-keep", // pragma: allowlist secret
+      });
+      expect(mockLog).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "Removed inactive gateway.auth.token for gateway.auth.mode=password",
+        ),
+      );
+    });
+
+    it("applies mode-based credential cleanup using the final batch result", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: {
+          auth: {
+            mode: "password",
+            token: "token-keep",
+            password: "password-drop", // pragma: allowlist secret
+          },
+        },
+      };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand([
+        "config",
+        "set",
+        "--batch-json",
+        '[{"path":"gateway.auth.password","value":"password-updated"},{"path":"gateway.auth.mode","value":"token"}]',
+      ]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      expect(written.gateway?.auth).toEqual({
+        mode: "token",
+        token: "token-keep",
+      });
+      expect(mockLog).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "Removed inactive gateway.auth.password for gateway.auth.mode=token",
+        ),
+      );
     });
   });
 
@@ -324,6 +429,74 @@ describe("config cli", () => {
     });
   });
 
+  describe("config schema", () => {
+    it("prints the generated JSON schema as plain text", async () => {
+      await runConfigCommand(["config", "schema"]);
+
+      expect(mockExit).not.toHaveBeenCalled();
+      expect(mockError).not.toHaveBeenCalled();
+      expect(defaultRuntime.writeJson).toHaveBeenCalledTimes(1);
+      const raw = mockLog.mock.calls.at(-1)?.[0];
+      expect(typeof raw).toBe("string");
+      const payload = JSON.parse(String(raw)) as {
+        properties?: Record<string, unknown>;
+      };
+      expect(payload.properties?.$schema).toEqual({ type: "string" });
+      expect(payload.properties?.channels).toEqual({
+        type: "object",
+        properties: {
+          telegram: {
+            type: "object",
+            properties: {
+              token: { type: "string" },
+            },
+          },
+        },
+      });
+      expect(payload.properties?.plugins).toEqual({
+        type: "object",
+        properties: {
+          entries: {
+            type: "object",
+          },
+        },
+      });
+    });
+
+    it("falls back cleanly when best-effort schema loading returns channel-only data", async () => {
+      mockReadBestEffortRuntimeConfigSchema.mockResolvedValueOnce({
+        schema: {
+          $schema: "http://json-schema.org/draft-07/schema#",
+          type: "object",
+          properties: {
+            channels: {
+              type: "object",
+              properties: {
+                telegram: {
+                  type: "object",
+                },
+              },
+            },
+          },
+        },
+        uiHints: {},
+        version: "test",
+        generatedAt: "2026-03-25T00:00:00.000Z",
+      });
+
+      await runConfigCommand(["config", "schema"]);
+
+      expect(defaultRuntime.writeJson).toHaveBeenCalledTimes(1);
+      const payload = JSON.parse(String(mockLog.mock.calls.at(-1)?.[0])) as {
+        properties?: Record<string, unknown>;
+      };
+      expect(payload.properties?.$schema).toEqual({ type: "string" });
+      expect(payload.properties?.channels).toBeTruthy();
+      expect(payload.properties?.plugins).toBeUndefined();
+      expect(mockError).not.toHaveBeenCalled();
+    });
+  });
+
   describe("config set parsing flags", () => {
     it("falls back to raw string when parsing fails and strict mode is off", async () => {
       const resolved: OpenClawConfig = { gateway: { port: 18789 } };
@@ -348,6 +521,15 @@ describe("config cli", () => {
     it("keeps --json as a strict parsing alias", async () => {
       await expect(
         runConfigCommand(["config", "set", "gateway.auth.mode", "{bad", "--json"]),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
+    });
+
+    it("rejects JSON5-only object syntax when strict parsing is enabled", async () => {
+      await expect(
+        runConfigCommand(["config", "set", "gateway.auth", "{mode:'token'}", "--strict-json"]),
       ).rejects.toThrow("__exit__:1");
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
@@ -382,6 +564,8 @@ describe("config cli", () => {
       expect(helpText).toContain("--strict-json");
       expect(helpText).toContain("--json");
       expect(helpText).toContain("Legacy alias for --strict-json");
+      expect(helpText).toContain("Value (JSON/JSON5 or raw string)");
+      expect(helpText).toContain("Strict JSON parsing (error instead of");
       expect(helpText).toContain("--ref-provider");
       expect(helpText).toContain("--provider-source");
       expect(helpText).toContain("--batch-json");

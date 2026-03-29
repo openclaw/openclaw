@@ -5,6 +5,7 @@ import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { createSafeAudioFixtureBuffer } from "./runner.test-utils.js";
+import type { MediaUnderstandingProvider } from "./types.js";
 
 // ---------------------------------------------------------------------------
 // Module mocks
@@ -125,6 +126,18 @@ function createAudioConfigWithoutEchoFlag() {
   return { cfg, providers };
 }
 
+function createRegistryMediaProviders(): Record<string, MediaUnderstandingProvider> {
+  const createAudioProvider = (id: string): MediaUnderstandingProvider => ({
+    id,
+    capabilities: ["audio"],
+    transcribeAudio: async () => ({ text: "transcribed text" }),
+  });
+  return {
+    groq: createAudioProvider("groq"),
+    deepgram: createAudioProvider("deepgram"),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -162,6 +175,35 @@ describe("applyMediaUnderstanding – echo transcript", () => {
     vi.doMock("../infra/outbound/deliver-runtime.js", () => ({
       deliverOutboundPayloads: (...args: unknown[]) => mockDeliverOutboundPayloads(...args),
     }));
+    vi.doMock("./provider-registry.js", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("./provider-registry.js")>();
+      const registryProviders = createRegistryMediaProviders();
+      return {
+        ...actual,
+        buildMediaUnderstandingRegistry: (
+          overrides?: Record<string, MediaUnderstandingProvider>,
+        ) => {
+          const registry = new Map<string, MediaUnderstandingProvider>(
+            Object.entries(registryProviders),
+          );
+          for (const [key, provider] of Object.entries(overrides ?? {})) {
+            const normalizedKey = actual.normalizeMediaProviderId(key);
+            const existing = registry.get(normalizedKey);
+            registry.set(
+              normalizedKey,
+              existing
+                ? {
+                    ...existing,
+                    ...provider,
+                    capabilities: provider.capabilities ?? existing.capabilities,
+                  }
+                : provider,
+            );
+          }
+          return registry;
+        },
+      };
+    });
 
     const baseDir = resolvePreferredOpenClawTmpDir();
     await fs.mkdir(baseDir, { recursive: true });

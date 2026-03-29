@@ -1,10 +1,9 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/discord";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getRequiredHookHandler,
   registerHookHandlersForTest,
-} from "../../../test/helpers/extensions/subagent-hooks.js";
-import { registerDiscordSubagentHooks } from "./subagent-hooks.js";
+} from "../../../test/helpers/plugins/subagent-hooks.js";
 
 type ThreadBindingRecord = {
   accountId: string;
@@ -38,6 +37,8 @@ const hookMocks = vi.hoisted(() => ({
   listThreadBindingsBySessionKey: vi.fn((_params?: unknown): ThreadBindingRecord[] => []),
   unbindThreadBindingsBySessionKey: vi.fn(() => []),
 }));
+
+let registerDiscordSubagentHooks: typeof import("./subagent-hooks.js").registerDiscordSubagentHooks;
 
 vi.mock("./accounts.js", () => ({
   resolveDiscordAccount: hookMocks.resolveDiscordAccount,
@@ -165,7 +166,9 @@ async function expectSubagentSpawningError(params?: {
 }
 
 describe("discord subagent hook handlers", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ registerDiscordSubagentHooks } = await import("./subagent-hooks.js"));
     hookMocks.resolveDiscordAccount.mockClear();
     hookMocks.resolveDiscordAccount.mockImplementation((params?: { accountId?: string }) => ({
       accountId: params?.accountId?.trim() || "default",

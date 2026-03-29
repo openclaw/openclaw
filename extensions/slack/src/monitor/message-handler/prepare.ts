@@ -2,26 +2,29 @@ import { resolveAckReaction } from "openclaw/plugin-sdk/agent-runtime";
 import {
   shouldAckReaction as shouldAckReactionGate,
   type AckReactionScope,
-} from "openclaw/plugin-sdk/channel-runtime";
-import { resolveControlCommandGate } from "openclaw/plugin-sdk/channel-runtime";
-import { resolveConversationLabel } from "openclaw/plugin-sdk/channel-runtime";
-import { logInboundDrop } from "openclaw/plugin-sdk/channel-runtime";
-import { resolveMentionGatingWithBypass } from "openclaw/plugin-sdk/channel-runtime";
-import { recordInboundSession } from "openclaw/plugin-sdk/channel-runtime";
-import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
-import { hasControlCommand } from "openclaw/plugin-sdk/reply-runtime";
-import { shouldHandleTextCommands } from "openclaw/plugin-sdk/reply-runtime";
+} from "openclaw/plugin-sdk/channel-feedback";
 import {
+  buildMentionRegexes,
   formatInboundEnvelope,
+  logInboundDrop,
+  matchesMentionWithExplicit,
   resolveEnvelopeFormatOptions,
-} from "openclaw/plugin-sdk/reply-runtime";
+  resolveMentionGatingWithBypass,
+} from "openclaw/plugin-sdk/channel-inbound";
+import { enqueueSystemEvent } from "openclaw/plugin-sdk/channel-runtime";
+import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth";
+import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
+import { shouldHandleTextCommands } from "openclaw/plugin-sdk/command-auth";
+import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
+import {
+  recordInboundSession,
+  resolveConversationLabel,
+} from "openclaw/plugin-sdk/conversation-runtime";
 import {
   buildPendingHistoryContextFromMap,
   recordPendingHistoryEntryIfEnabled,
-} from "openclaw/plugin-sdk/reply-runtime";
+} from "openclaw/plugin-sdk/reply-history";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
-import { buildMentionRegexes, matchesMentionWithExplicit } from "openclaw/plugin-sdk/reply-runtime";
 import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";

@@ -1,5 +1,6 @@
 {
   "id": "synthetic",
+  "enabledByDefault": true,
   "providers": ["synthetic"],
   "providerAuthEnvVars": {
     "synthetic": ["SYNTHETIC_API_KEY"]

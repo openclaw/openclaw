@@ -34,7 +34,7 @@ For model selection rules, see [/concepts/models](/concepts/models).
   `fetchUsageSnapshot`.
 - Note: provider runtime `capabilities` is shared runner metadata (provider
   family, transcript/tooling quirks, transport/cache hints). It is not the
-  same as the [public capability model](/tools/plugin#public-capability-model)
+  same as the [public capability model](/plugins/architecture#public-capability-model)
   which describes what a plugin registers (text inference, speech, etc.).
 
 ## Plugin-owned provider behavior
@@ -108,7 +108,6 @@ Current bundled examples:
 - `byteplus`, `cloudflare-ai-gateway`, `huggingface`, `kimi-coding`,
   `modelstudio`, `nvidia`, `qianfan`, `synthetic`, `together`, `venice`,
   `vercel-ai-gateway`, and `volcengine`: plugin-owned catalogs only
-- `qwen-portal`: plugin-owned catalog, OAuth login, and OAuth refresh
 - `minimax` and `xiaomi`: plugin-owned catalogs plus usage auth/snapshot logic
 
 The bundled `openai` plugin now owns both provider ids: `openai` and
@@ -248,14 +247,14 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Example model: `kilocode/anthropic/claude-opus-4.6`
 - CLI: `openclaw onboard --kilocode-api-key <key>`
 - Base URL: `https://api.kilo.ai/api/gateway/`
-- Expanded built-in catalog includes GLM-5 Free, MiniMax M2.5 Free, GPT-5.2, Gemini 3 Pro Preview, Gemini 3 Flash Preview, Grok Code Fast 1, and Kimi K2.5.
+- Expanded built-in catalog includes GLM-5 Free, MiniMax M2.7 Free, GPT-5.2, Gemini 3 Pro Preview, Gemini 3 Flash Preview, Grok Code Fast 1, and Kimi K2.5.
 
 See [/providers/kilocode](/providers/kilocode) for setup details.
 
 ### Other bundled provider plugins
 
 - OpenRouter: `openrouter` (`OPENROUTER_API_KEY`)
-- Example model: `openrouter/anthropic/claude-sonnet-4-5`
+- Example model: `openrouter/anthropic/claude-sonnet-4-6`
 - Kilo Gateway: `kilocode` (`KILOCODE_API_KEY`)
 - Example model: `kilocode/anthropic/claude-opus-4.6`
 - MiniMax: `minimax` (`MINIMAX_API_KEY`)
@@ -347,22 +346,6 @@ Kimi Coding uses Moonshot AI's Anthropic-compatible endpoint:
   },
 }
 ```
-
-### Qwen OAuth (free tier)
-
-Qwen provides OAuth access to Qwen Coder + Vision via a device-code flow.
-The bundled provider plugin is enabled by default, so just log in:
-
-```bash
-openclaw models auth login --provider qwen-portal --set-default
-```
-
-Model refs:
-
-- `qwen-portal/coder-model`
-- `qwen-portal/vision-model`
-
-See [/providers/qwen](/providers/qwen) for setup details and notes.
 
 ### Volcano Engine (Doubao)
 
@@ -555,8 +538,8 @@ Example (OpenAI‑compatible):
 {
   agents: {
     defaults: {
-      model: { primary: "lmstudio/minimax-m2.5-gs32" },
-      models: { "lmstudio/minimax-m2.5-gs32": { alias: "Minimax" } },
+      model: { primary: "lmstudio/my-local-model" },
+      models: { "lmstudio/my-local-model": { alias: "Local" } },
     },
   },
   models: {
@@ -567,8 +550,8 @@ Example (OpenAI‑compatible):
         api: "openai-completions",
         models: [
           {
-            id: "minimax-m2.5-gs32",
-            name: "MiniMax M2.5",
+            id: "my-local-model",
+            name: "Local Model",
             reasoning: false,
             input: ["text"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   buildCommandText,
   buildCommandTextFromArgs,
@@ -240,6 +240,18 @@ describe("commands registry", () => {
   });
 
   it("respects text command gating", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "discord",
+          plugin: createChannelTestPluginBase({
+            id: "discord",
+            capabilities: { nativeCommands: true, chatTypes: ["direct"] },
+          }),
+          source: "test",
+        },
+      ]),
+    );
     const cfg = { commands: { text: false } };
     expect(
       shouldHandleTextCommands({
@@ -284,8 +296,8 @@ describe("commands registry", () => {
     );
   });
 
-  it("normalizes dock command aliases", () => {
-    expect(normalizeCommandBody("/dock_telegram")).toBe("/dock-telegram");
+  it("keeps unregistered dock underscore aliases unchanged", () => {
+    expect(normalizeCommandBody("/dock_telegram")).toBe("/dock_telegram");
   });
 });
 

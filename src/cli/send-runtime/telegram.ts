@@ -1,7 +1,7 @@
-import { sendMessageTelegram as sendMessageTelegramImpl } from "../../plugin-sdk/telegram.js";
+import { sendMessageTelegram as sendMessageTelegramImpl } from "../../plugin-sdk/telegram-runtime.js";
 
 type RuntimeSend = {
-  sendMessage: typeof import("../../plugin-sdk/telegram.js").sendMessageTelegram;
+  sendMessage: typeof import("../../plugin-sdk/telegram-runtime.js").sendMessageTelegram;
 };
 
 export const runtimeSend = {

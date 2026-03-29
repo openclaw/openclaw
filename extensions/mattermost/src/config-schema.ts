@@ -1,13 +1,27 @@
-import { z } from "zod";
-import { requireChannelOpenAllowFrom } from "../../shared/config-schema-helpers.js";
+import { z } from "openclaw/plugin-sdk/zod";
 import {
   BlockStreamingCoalesceSchema,
   DmPolicySchema,
   GroupPolicySchema,
   MarkdownConfigSchema,
   requireOpenAllowFrom,
-} from "./runtime-api.js";
+} from "./config-runtime.js";
 import { buildSecretInputSchema } from "./secret-input.js";
+
+function requireMattermostOpenAllowFrom(params: {
+  policy?: string;
+  allowFrom?: Array<string | number>;
+  ctx: z.RefinementCtx;
+}) {
+  requireOpenAllowFrom({
+    policy: params.policy,
+    allowFrom: params.allowFrom,
+    ctx: params.ctx,
+    path: ["allowFrom"],
+    message:
+      'channels.mattermost.dmPolicy="open" requires channels.mattermost.allowFrom to include "*"',
+  });
+}
 
 const DmChannelRetrySchema = z
   .object({
@@ -84,18 +98,18 @@ const MattermostAccountSchemaBase = z
         allowedSourceIps: z.array(z.string()).optional(),
       })
       .optional(),
+    /** Allow fetching from private/internal IP addresses (e.g. localhost). Required for self-hosted Mattermost on LAN/VPN. */
+    allowPrivateNetwork: z.boolean().optional(),
     /** Retry configuration for DM channel creation */
     dmChannelRetry: DmChannelRetrySchema,
   })
   .strict();
 
 const MattermostAccountSchema = MattermostAccountSchemaBase.superRefine((value, ctx) => {
-  requireChannelOpenAllowFrom({
-    channel: "mattermost",
+  requireMattermostOpenAllowFrom({
     policy: value.dmPolicy,
     allowFrom: value.allowFrom,
     ctx,
-    requireOpenAllowFrom,
   });
 });
 
@@ -103,11 +117,9 @@ export const MattermostConfigSchema = MattermostAccountSchemaBase.extend({
   accounts: z.record(z.string(), MattermostAccountSchema.optional()).optional(),
   defaultAccount: z.string().optional(),
 }).superRefine((value, ctx) => {
-  requireChannelOpenAllowFrom({
-    channel: "mattermost",
+  requireMattermostOpenAllowFrom({
     policy: value.dmPolicy,
     allowFrom: value.allowFrom,
     ctx,
-    requireOpenAllowFrom,
   });
 });

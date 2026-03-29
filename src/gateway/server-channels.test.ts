@@ -41,37 +41,46 @@ type TestAccount = {
 };
 
 function createTestPlugin(params?: {
+  id?: ChannelId;
+  order?: number;
   account?: TestAccount;
   startAccount?: NonNullable<ChannelPlugin<TestAccount>["gateway"]>["startAccount"];
   includeDescribeAccount?: boolean;
+  describeAccount?: ChannelPlugin<TestAccount>["config"]["describeAccount"];
   resolveAccount?: ChannelPlugin<TestAccount>["config"]["resolveAccount"];
+  isConfigured?: ChannelPlugin<TestAccount>["config"]["isConfigured"];
 }): ChannelPlugin<TestAccount> {
+  const id = params?.id ?? "discord";
   const account = params?.account ?? { enabled: true, configured: true };
   const includeDescribeAccount = params?.includeDescribeAccount !== false;
   const config: ChannelPlugin<TestAccount>["config"] = {
     listAccountIds: () => [DEFAULT_ACCOUNT_ID],
     resolveAccount: params?.resolveAccount ?? (() => account),
     isEnabled: (resolved) => resolved.enabled !== false,
+    ...(params?.isConfigured ? { isConfigured: params.isConfigured } : {}),
   };
   if (includeDescribeAccount) {
-    config.describeAccount = (resolved) => ({
-      accountId: DEFAULT_ACCOUNT_ID,
-      enabled: resolved.enabled !== false,
-      configured: resolved.configured !== false,
-    });
+    config.describeAccount =
+      params?.describeAccount ??
+      ((resolved) => ({
+        accountId: DEFAULT_ACCOUNT_ID,
+        enabled: resolved.enabled !== false,
+        configured: resolved.configured !== false,
+      }));
   }
   const gateway: NonNullable<ChannelPlugin<TestAccount>["gateway"]> = {};
   if (params?.startAccount) {
     gateway.startAccount = params.startAccount;
   }
   return {
-    id: "discord",
+    id,
     meta: {
-      id: "discord",
-      label: "Discord",
-      selectionLabel: "Discord",
-      docsPath: "/channels/discord",
+      id,
+      label: id,
+      selectionLabel: id,
+      docsPath: `/channels/${id}`,
       blurb: "test stub",
+      ...(params?.order === undefined ? {} : { order: params.order }),
     },
     capabilities: { chatTypes: ["direct"] },
     config,
@@ -79,13 +88,23 @@ function createTestPlugin(params?: {
   };
 }
 
-function installTestRegistry(plugin: ChannelPlugin<TestAccount>) {
-  const registry = createEmptyPluginRegistry();
-  registry.channels.push({
-    pluginId: plugin.id,
-    source: "test",
-    plugin,
+function createDeferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolvePromise = () => {};
+  const promise = new Promise<void>((resolve) => {
+    resolvePromise = resolve;
   });
+  return { promise, resolve: resolvePromise };
+}
+
+function installTestRegistry(...plugins: ChannelPlugin<TestAccount>[]) {
+  const registry = createEmptyPluginRegistry();
+  for (const plugin of plugins) {
+    registry.channels.push({
+      pluginId: plugin.id,
+      source: "test",
+      plugin,
+    });
+  }
   setActivePluginRegistry(registry);
 }
 
@@ -93,11 +112,17 @@ function createManager(options?: {
   channelRuntime?: PluginRuntime["channel"];
   resolveChannelRuntime?: () => PluginRuntime["channel"];
   loadConfig?: () => Record<string, unknown>;
+  channelIds?: ChannelId[];
 }) {
   const log = createSubsystemLogger("gateway/server-channels-test");
   const channelLogs = { discord: log } as Record<ChannelId, SubsystemLogger>;
   const runtime = runtimeForLogger(log);
-  const channelRuntimeEnvs = { discord: runtime } as Record<ChannelId, RuntimeEnv>;
+  const channelRuntimeEnvs = { discord: runtime } as unknown as Record<ChannelId, RuntimeEnv>;
+  const channelIds = options?.channelIds ?? ["discord"];
+  for (const channelId of channelIds) {
+    channelLogs[channelId] ??= log.child(channelId);
+    channelRuntimeEnvs[channelId] ??= runtime;
+  }
   return createChannelManager({
     loadConfig: () => options?.loadConfig?.() ?? {},
     channelLogs,
@@ -176,6 +201,24 @@ describe("server-channels auto restart", () => {
     expect(account?.configured).toBe(true);
   });
 
+  it("applies described config fields into runtime snapshots", () => {
+    installTestRegistry(
+      createTestPlugin({
+        describeAccount: (resolved) => ({
+          accountId: DEFAULT_ACCOUNT_ID,
+          enabled: resolved.enabled !== false,
+          configured: false,
+          mode: "webhook",
+        }),
+      }),
+    );
+    const manager = createManager();
+    const snapshot = manager.getRuntimeSnapshot();
+    const account = snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.configured).toBe(false);
+    expect(account?.mode).toBe("webhook");
+  });
+
   it("passes channelRuntime through channel gateway context when provided", async () => {
     const channelRuntime = { marker: "channel-runtime" } as unknown as PluginRuntime["channel"];
     const startAccount = vi.fn(async (ctx) => {
@@ -187,6 +230,52 @@ describe("server-channels auto restart", () => {
 
     await manager.startChannels();
     expect(startAccount).toHaveBeenCalledTimes(1);
+  });
+
+  it("deduplicates concurrent start requests for the same account", async () => {
+    const startupGate = createDeferred();
+    const isConfigured = vi.fn(async () => {
+      await startupGate.promise;
+      return true;
+    });
+    const startAccount = vi.fn(async () => {});
+
+    installTestRegistry(createTestPlugin({ startAccount, isConfigured }));
+    const manager = createManager();
+
+    const firstStart = manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+    const secondStart = manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+
+    await Promise.resolve();
+    expect(isConfigured).toHaveBeenCalledTimes(1);
+    expect(startAccount).not.toHaveBeenCalled();
+
+    startupGate.resolve();
+    await Promise.all([firstStart, secondStart]);
+
+    expect(startAccount).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels a pending startup when the account is stopped mid-boot", async () => {
+    const startupGate = createDeferred();
+    const isConfigured = vi.fn(async () => {
+      await startupGate.promise;
+      return true;
+    });
+    const startAccount = vi.fn(async () => {});
+
+    installTestRegistry(createTestPlugin({ startAccount, isConfigured }));
+    const manager = createManager();
+
+    const startTask = manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+    await Promise.resolve();
+
+    const stopTask = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
+    startupGate.resolve();
+
+    await Promise.all([startTask, stopTask]);
+
+    expect(startAccount).not.toHaveBeenCalled();
   });
 
   it("does not resolve channelRuntime until a channel starts", async () => {
@@ -210,6 +299,23 @@ describe("server-channels auto restart", () => {
 
     expect(resolveChannelRuntime).toHaveBeenCalledTimes(1);
     expect(startAccount).toHaveBeenCalledTimes(1);
+  });
+
+  it("continues starting later channels after one startup failure", async () => {
+    const failingStart = vi.fn(async () => {
+      throw new Error("missing runtime");
+    });
+    const succeedingStart = vi.fn(async () => {});
+    installTestRegistry(
+      createTestPlugin({ id: "discord", order: 1, startAccount: failingStart }),
+      createTestPlugin({ id: "slack", order: 2, startAccount: succeedingStart }),
+    );
+    const manager = createManager({ channelIds: ["discord", "slack"] });
+
+    await expect(manager.startChannels()).resolves.toBeUndefined();
+
+    expect(failingStart).toHaveBeenCalledTimes(1);
+    expect(succeedingStart).toHaveBeenCalledTimes(1);
   });
 
   it("reuses plugin account resolution for health monitor overrides", () => {

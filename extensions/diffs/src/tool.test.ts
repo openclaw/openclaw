@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createTestPluginApi } from "../../../test/helpers/extensions/plugin-api.js";
-import type { OpenClawPluginApi } from "../api.js";
+import { createTestPluginApi } from "../../../test/helpers/plugins/plugin-api.js";
+import type { OpenClawPluginApi, OpenClawPluginToolContext } from "../api.js";
 import type { DiffScreenshotter } from "./browser.js";
 import { DEFAULT_DIFFS_TOOL_DEFAULTS } from "./config.js";
 import { DiffArtifactStore } from "./store.js";
@@ -137,6 +137,8 @@ describe("diffs tool", () => {
     });
 
     expectArtifactOnlyFileResult(screenshotter, result);
+    expect((result?.details as Record<string, unknown>).artifactId).toEqual(expect.any(String));
+    expect((result?.details as Record<string, unknown>).expiresAt).toEqual(expect.any(String));
   });
 
   it("honors ttlSeconds for artifact-only file output", async () => {
@@ -316,6 +318,12 @@ describe("diffs tool", () => {
         fontFamily: "JetBrains Mono",
         fontSize: 17,
       },
+      context: {
+        agentId: "main",
+        sessionId: "session-123",
+        messageChannel: "discord",
+        agentAccountId: "default",
+      },
     });
 
     const result = await tool.execute?.("tool-5", {
@@ -326,6 +334,12 @@ describe("diffs tool", () => {
 
     expect(readTextContent(result, 0)).toContain("Diff viewer ready.");
     expect((result?.details as Record<string, unknown>).mode).toBe("view");
+    expect((result?.details as Record<string, unknown>).context).toEqual({
+      agentId: "main",
+      sessionId: "session-123",
+      messageChannel: "discord",
+      agentAccountId: "default",
+    });
 
     const viewerPath = String((result?.details as Record<string, unknown>).viewerPath);
     const [id] = viewerPath.split("/").filter(Boolean).slice(-2);
@@ -381,6 +395,29 @@ describe("diffs tool", () => {
     const html = await store.readHtml(id);
     expect(html).toContain('body data-theme="dark"');
   });
+
+  it("routes tool context into artifact details for file mode", async () => {
+    const screenshotter = createPngScreenshotter();
+    const tool = createToolWithScreenshotter(store, screenshotter, DEFAULT_DIFFS_TOOL_DEFAULTS, {
+      agentId: "reviewer",
+      sessionId: "session-456",
+      messageChannel: "telegram",
+      agentAccountId: "work",
+    });
+
+    const result = await tool.execute?.("tool-context-file", {
+      before: "one\n",
+      after: "two\n",
+      mode: "file",
+    });
+
+    expect((result?.details as Record<string, unknown>).context).toEqual({
+      agentId: "reviewer",
+      sessionId: "session-456",
+      messageChannel: "telegram",
+      agentAccountId: "work",
+    });
+  });
 });
 
 function createApi(): OpenClawPluginApi {
@@ -403,12 +440,19 @@ function createToolWithScreenshotter(
   store: DiffArtifactStore,
   screenshotter: DiffScreenshotter,
   defaults = DEFAULT_DIFFS_TOOL_DEFAULTS,
+  context: OpenClawPluginToolContext | undefined = {
+    agentId: "main",
+    sessionId: "session-123",
+    messageChannel: "discord",
+    agentAccountId: "default",
+  },
 ) {
   return createDiffsTool({
     api: createApi(),
     store,
     defaults,
     screenshotter,
+    context,
   });
 }
 

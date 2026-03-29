@@ -2,7 +2,11 @@ import {
   GATEWAY_EVENT_UPDATE_AVAILABLE,
   type GatewayUpdateAvailableEventPayload,
 } from "../../../src/gateway/events.js";
-import { CHAT_SESSIONS_ACTIVE_MINUTES, flushChatQueueForEvent } from "./app-chat.ts";
+import {
+  CHAT_SESSIONS_ACTIVE_MINUTES,
+  clearPendingQueueItemsForRun,
+  flushChatQueueForEvent,
+} from "./app-chat.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import {
   applySettings,
@@ -24,11 +28,12 @@ import {
   addExecApproval,
   parseExecApprovalRequested,
   parseExecApprovalResolved,
+  parsePluginApprovalRequested,
   removeExecApproval,
 } from "./controllers/exec-approval.ts";
 import { loadHealthState } from "./controllers/health.ts";
 import { loadNodes } from "./controllers/nodes.ts";
-import { loadSessions } from "./controllers/sessions.ts";
+import { loadSessions, subscribeSessions } from "./controllers/sessions.ts";
 import {
   resolveGatewayErrorDetailCode,
   type GatewayEventFrame,
@@ -213,6 +218,7 @@ export function connectGateway(host: GatewayHost) {
       (host as unknown as { chatStream: string | null }).chatStream = null;
       (host as unknown as { chatStreamStartedAt: number | null }).chatStreamStartedAt = null;
       resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
+      void subscribeSessions(host as unknown as OpenClawApp);
       void loadAssistantIdentity(host as unknown as OpenClawApp);
       void loadAgents(host as unknown as OpenClawApp);
       void loadHealthState(host as unknown as OpenClawApp);
@@ -287,6 +293,10 @@ function handleTerminalChatEvent(
   const toolHost = host as unknown as Parameters<typeof resetToolStream>[0];
   const hadToolEvents = toolHost.toolStreamOrder.length > 0;
   resetToolStream(toolHost);
+  clearPendingQueueItemsForRun(
+    host as unknown as Parameters<typeof clearPendingQueueItemsForRun>[0],
+    payload?.runId,
+  );
   void flushChatQueueForEvent(host as unknown as Parameters<typeof flushChatQueueForEvent>[0]);
   const runId = payload?.runId;
   if (runId && host.refreshSessionsAfterChat.has(runId)) {
@@ -371,6 +381,11 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
     return;
   }
 
+  if (evt.event === "sessions.changed") {
+    void loadSessions(host as unknown as OpenClawApp);
+    return;
+  }
+
   if (evt.event === "cron" && host.tab === "cron") {
     void loadCron(host as unknown as Parameters<typeof loadCron>[0]);
   }
@@ -393,6 +408,27 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
   }
 
   if (evt.event === "exec.approval.resolved") {
+    const resolved = parseExecApprovalResolved(evt.payload);
+    if (resolved) {
+      host.execApprovalQueue = removeExecApproval(host.execApprovalQueue, resolved.id);
+    }
+    return;
+  }
+
+  if (evt.event === "plugin.approval.requested") {
+    const entry = parsePluginApprovalRequested(evt.payload);
+    if (entry) {
+      host.execApprovalQueue = addExecApproval(host.execApprovalQueue, entry);
+      host.execApprovalError = null;
+      const delay = Math.max(0, entry.expiresAtMs - Date.now() + 500);
+      window.setTimeout(() => {
+        host.execApprovalQueue = removeExecApproval(host.execApprovalQueue, entry.id);
+      }, delay);
+    }
+    return;
+  }
+
+  if (evt.event === "plugin.approval.resolved") {
     const resolved = parseExecApprovalResolved(evt.payload);
     if (resolved) {
       host.execApprovalQueue = removeExecApproval(host.execApprovalQueue, resolved.id);

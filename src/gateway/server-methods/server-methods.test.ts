@@ -267,6 +267,27 @@ describe("normalizeRpcAttachmentsToChatAttachments", () => {
   ])("$name", ({ attachments, expected }) => {
     expect(normalizeRpcAttachmentsToChatAttachments(attachments)).toEqual(expected);
   });
+
+  it("accepts dashboard image attachments with nested base64 source", () => {
+    const res = normalizeRpcAttachmentsToChatAttachments([
+      {
+        type: "image",
+        source: {
+          type: "base64",
+          media_type: "image/png",
+          data: "Zm9v",
+        },
+      },
+    ]);
+    expect(res).toEqual([
+      {
+        type: "image",
+        mimeType: "image/png",
+        fileName: undefined,
+        content: "Zm9v",
+      },
+    ]);
+  });
 });
 
 describe("sanitizeChatSendMessageInput", () => {
@@ -847,7 +868,9 @@ describe("exec approval handlers", () => {
       false,
       undefined,
       expect.objectContaining({
+        code: "INVALID_REQUEST",
         message: "unknown or expired approval id",
+        details: expect.objectContaining({ reason: "APPROVAL_NOT_FOUND" }),
       }),
     );
   });

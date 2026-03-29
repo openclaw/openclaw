@@ -1,86 +1,75 @@
 // Public model/catalog helpers for provider plugins.
 
-import type { ModelDefinitionConfig } from "../config/types.models.js";
-import {
-  KILOCODE_DEFAULT_CONTEXT_WINDOW,
-  KILOCODE_DEFAULT_COST,
-  KILOCODE_DEFAULT_MAX_TOKENS,
-  KILOCODE_DEFAULT_MODEL_ID,
-  KILOCODE_DEFAULT_MODEL_NAME,
-} from "../providers/kilocode-shared.js";
-
-export type { ModelApi, ModelProviderConfig } from "../config/types.models.js";
-export type { ModelDefinitionConfig } from "../config/types.models.js";
-export type { ProviderPlugin } from "../plugins/types.js";
-
-export { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
-export { normalizeModelCompat } from "../agents/model-compat.js";
-export { normalizeProviderId } from "../agents/provider-id.js";
-export { cloneFirstTemplateModel } from "../plugins/provider-model-helpers.js";
+export type {
+  BedrockDiscoveryConfig,
+  KilocodeModelCatalogEntry,
+  ModelApi,
+  ModelDefinitionConfig,
+  ModelProviderConfig,
+  ProviderPlugin,
+} from "./provider-model-shared.js";
 
 export {
-  applyGoogleGeminiModelDefault,
-  GOOGLE_GEMINI_DEFAULT_MODEL,
-} from "../plugins/provider-model-defaults.js";
-export { applyOpenAIConfig, OPENAI_DEFAULT_MODEL } from "../plugins/provider-model-defaults.js";
-export { OPENCODE_GO_DEFAULT_MODEL_REF } from "../plugins/provider-model-defaults.js";
-export { OPENCODE_ZEN_DEFAULT_MODEL } from "../plugins/provider-model-defaults.js";
-export { OPENCODE_ZEN_DEFAULT_MODEL_REF } from "../agents/opencode-zen-models.js";
+  DEFAULT_CONTEXT_TOKENS,
+  applyModelCompatPatch,
+  cloneFirstTemplateModel,
+  createMoonshotThinkingWrapper,
+  hasToolSchemaProfile,
+  hasNativeWebSearchTool,
+  matchesExactOrPrefix,
+  normalizeModelCompat,
+  normalizeProviderId,
+  resolveUnsupportedToolSchemaKeywords,
+  resolveMoonshotThinkingType,
+  resolveToolCallArgumentsEncoding,
+} from "./provider-model-shared.js";
 export {
-  buildMinimaxApiModelDefinition,
-  DEFAULT_MINIMAX_BASE_URL,
-  MINIMAX_API_BASE_URL,
-  MINIMAX_CN_API_BASE_URL,
-  MINIMAX_HOSTED_COST,
-  MINIMAX_HOSTED_MODEL_ID,
-  MINIMAX_HOSTED_MODEL_REF,
-  MINIMAX_LM_STUDIO_COST,
-} from "../../extensions/minimax/model-definitions.js";
+  applyXaiModelCompat,
+  HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING,
+  normalizeXaiModelId,
+  XAI_TOOL_SCHEMA_PROFILE,
+} from "./xai.js";
 export {
-  buildMistralModelDefinition,
-  MISTRAL_BASE_URL,
-  MISTRAL_DEFAULT_MODEL_ID,
-  MISTRAL_DEFAULT_MODEL_REF,
-} from "../../extensions/mistral/model-definitions.js";
+  isMiniMaxModernModelId,
+  MINIMAX_DEFAULT_MODEL_ID,
+  MINIMAX_DEFAULT_MODEL_REF,
+  MINIMAX_TEXT_MODEL_CATALOG,
+  MINIMAX_TEXT_MODEL_ORDER,
+  MINIMAX_TEXT_MODEL_REFS,
+} from "./minimax.js";
+
+// Deprecated compat aliases. Prefer provider-specific subpaths.
+export { applyGoogleGeminiModelDefault, GOOGLE_GEMINI_DEFAULT_MODEL } from "./google.js";
 export {
-  buildModelStudioDefaultModelDefinition,
-  buildModelStudioModelDefinition,
-  MODELSTUDIO_CN_BASE_URL,
-  MODELSTUDIO_DEFAULT_MODEL_ID,
-  MODELSTUDIO_DEFAULT_MODEL_REF,
-  MODELSTUDIO_GLOBAL_BASE_URL,
-} from "../../extensions/modelstudio/model-definitions.js";
-export { MOONSHOT_BASE_URL } from "../../extensions/moonshot/provider-catalog.js";
-export { MOONSHOT_CN_BASE_URL } from "../../extensions/moonshot/onboard.js";
+  applyOpenAIConfig,
+  OPENAI_CODEX_DEFAULT_MODEL,
+  OPENAI_DEFAULT_AUDIO_TRANSCRIPTION_MODEL,
+  OPENAI_DEFAULT_EMBEDDING_MODEL,
+  OPENAI_DEFAULT_IMAGE_MODEL,
+  OPENAI_DEFAULT_MODEL,
+  OPENAI_DEFAULT_TTS_MODEL,
+  OPENAI_DEFAULT_TTS_VOICE,
+} from "./openai.js";
+export { OPENCODE_GO_DEFAULT_MODEL_REF, applyOpencodeGoModelDefault } from "./opencode-go.js";
 export {
-  buildXaiModelDefinition,
-  XAI_BASE_URL,
-  XAI_DEFAULT_MODEL_ID,
-  XAI_DEFAULT_MODEL_REF,
-} from "../../extensions/xai/model-definitions.js";
-export {
-  buildZaiModelDefinition,
-  resolveZaiBaseUrl,
-  ZAI_CODING_CN_BASE_URL,
-  ZAI_CODING_GLOBAL_BASE_URL,
-  ZAI_CN_BASE_URL,
-  ZAI_DEFAULT_MODEL_ID,
-  ZAI_DEFAULT_MODEL_REF,
-  ZAI_GLOBAL_BASE_URL,
-} from "../../extensions/zai/model-definitions.js";
+  OPENCODE_ZEN_DEFAULT_MODEL,
+  OPENCODE_ZEN_DEFAULT_MODEL_REF,
+  applyOpencodeZenModelDefault,
+} from "./opencode.js";
 
 export {
   buildCloudflareAiGatewayModelDefinition,
   CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
   resolveCloudflareAiGatewayBaseUrl,
-} from "../agents/cloudflare-ai-gateway.js";
+} from "./cloudflare-ai-gateway.js";
+export { resolveAnthropicVertexRegion } from "./anthropic-vertex.js";
 export {
   discoverHuggingfaceModels,
   HUGGINGFACE_BASE_URL,
   HUGGINGFACE_MODEL_CATALOG,
   buildHuggingfaceModelDefinition,
-} from "../agents/huggingface-models.js";
-export { discoverKilocodeModels } from "../agents/kilocode-models.js";
+} from "./huggingface.js";
+export { discoverKilocodeModels } from "./kilocode.js";
 export {
   buildChutesModelDefinition,
   CHUTES_BASE_URL,
@@ -88,44 +77,64 @@ export {
   CHUTES_DEFAULT_MODEL_REF,
   CHUTES_MODEL_CATALOG,
   discoverChutesModels,
-} from "../agents/chutes-models.js";
-export { resolveOllamaApiBase } from "../agents/ollama-models.js";
+} from "./chutes.js";
+export {
+  buildOllamaModelDefinition,
+  enrichOllamaModelsWithContext,
+  fetchOllamaModels,
+  queryOllamaContextWindow,
+  resolveOllamaApiBase,
+  type OllamaModelWithContext,
+  type OllamaTagModel,
+  type OllamaTagsResponse,
+} from "./ollama-surface.js";
 export {
   buildSyntheticModelDefinition,
   SYNTHETIC_BASE_URL,
   SYNTHETIC_DEFAULT_MODEL_REF,
   SYNTHETIC_MODEL_CATALOG,
-} from "../agents/synthetic-models.js";
+} from "./synthetic.js";
+export {
+  buildDeepSeekModelDefinition,
+  DEEPSEEK_BASE_URL,
+  DEEPSEEK_MODEL_CATALOG,
+} from "./deepseek.js";
 export {
   buildTogetherModelDefinition,
   TOGETHER_BASE_URL,
   TOGETHER_MODEL_CATALOG,
-} from "../agents/together-models.js";
+} from "./together.js";
 export {
   discoverVeniceModels,
   VENICE_BASE_URL,
   VENICE_DEFAULT_MODEL_REF,
   VENICE_MODEL_CATALOG,
   buildVeniceModelDefinition,
-} from "../agents/venice-models.js";
+} from "./venice.js";
 export {
   BYTEPLUS_BASE_URL,
   BYTEPLUS_CODING_BASE_URL,
   BYTEPLUS_CODING_MODEL_CATALOG,
   BYTEPLUS_MODEL_CATALOG,
   buildBytePlusModelDefinition,
-} from "../agents/byteplus-models.js";
+} from "./byteplus.js";
 export {
   DOUBAO_BASE_URL,
   DOUBAO_CODING_BASE_URL,
   DOUBAO_CODING_MODEL_CATALOG,
   DOUBAO_MODEL_CATALOG,
   buildDoubaoModelDefinition,
-} from "../agents/doubao-models.js";
-export { OLLAMA_DEFAULT_BASE_URL } from "../agents/ollama-defaults.js";
-export { VLLM_DEFAULT_BASE_URL } from "../agents/vllm-defaults.js";
-export { SGLANG_DEFAULT_BASE_URL } from "../agents/sglang-defaults.js";
+} from "./volcengine.js";
 export {
+  OLLAMA_DEFAULT_BASE_URL,
+  OLLAMA_DEFAULT_CONTEXT_WINDOW,
+  OLLAMA_DEFAULT_COST,
+  OLLAMA_DEFAULT_MAX_TOKENS,
+} from "./ollama-surface.js";
+export { VLLM_DEFAULT_BASE_URL } from "./vllm.js";
+export { SGLANG_DEFAULT_BASE_URL } from "./sglang.js";
+export {
+  buildKilocodeModelDefinition,
   KILOCODE_BASE_URL,
   KILOCODE_DEFAULT_CONTEXT_WINDOW,
   KILOCODE_DEFAULT_COST,
@@ -134,20 +143,14 @@ export {
   KILOCODE_DEFAULT_MODEL_ID,
   KILOCODE_DEFAULT_MODEL_NAME,
   KILOCODE_MODEL_CATALOG,
-} from "../providers/kilocode-shared.js";
+} from "./kilocode.js";
+export { discoverVercelAiGatewayModels, VERCEL_AI_GATEWAY_BASE_URL } from "./vercel-ai-gateway.js";
 export {
-  discoverVercelAiGatewayModels,
-  VERCEL_AI_GATEWAY_BASE_URL,
-} from "../agents/vercel-ai-gateway.js";
-
-export function buildKilocodeModelDefinition(): ModelDefinitionConfig {
-  return {
-    id: KILOCODE_DEFAULT_MODEL_ID,
-    name: KILOCODE_DEFAULT_MODEL_NAME,
-    reasoning: true,
-    input: ["text", "image"],
-    cost: KILOCODE_DEFAULT_COST,
-    contextWindow: KILOCODE_DEFAULT_CONTEXT_WINDOW,
-    maxTokens: KILOCODE_DEFAULT_MAX_TOKENS,
-  };
-}
+  buildModelStudioDefaultModelDefinition,
+  buildModelStudioModelDefinition,
+  MODELSTUDIO_CN_BASE_URL,
+  MODELSTUDIO_DEFAULT_COST,
+  MODELSTUDIO_DEFAULT_MODEL_ID,
+  MODELSTUDIO_DEFAULT_MODEL_REF,
+  MODELSTUDIO_GLOBAL_BASE_URL,
+} from "./modelstudio.js";

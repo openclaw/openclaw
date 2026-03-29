@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createSafeAudioFixtureBuffer } from "./runner.test-utils.js";
+import type { MediaUnderstandingProvider } from "./types.js";
 
 type ResolveApiKeyForProvider = typeof import("../agents/model-auth.js").resolveApiKeyForProvider;
 
@@ -75,6 +76,18 @@ function createGroqProviders(transcribedText = "transcribed text") {
       id: "groq",
       transcribeAudio: async () => ({ text: transcribedText }),
     },
+  };
+}
+
+function createRegistryMediaProviders(): Record<string, MediaUnderstandingProvider> {
+  const createAudioProvider = (id: string): MediaUnderstandingProvider => ({
+    id,
+    capabilities: ["audio"],
+    transcribeAudio: async () => ({ text: "transcribed text" }),
+  });
+  return {
+    groq: createAudioProvider("groq"),
+    deepgram: createAudioProvider("deepgram"),
   };
 }
 
@@ -245,6 +258,35 @@ describe("applyMediaUnderstanding", () => {
     vi.doMock("../process/exec.js", () => ({
       runExec: runExecMock,
     }));
+    vi.doMock("./provider-registry.js", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("./provider-registry.js")>();
+      const registryProviders = createRegistryMediaProviders();
+      return {
+        ...actual,
+        buildMediaUnderstandingRegistry: (
+          overrides?: Record<string, MediaUnderstandingProvider>,
+        ) => {
+          const registry = new Map<string, MediaUnderstandingProvider>(
+            Object.entries(registryProviders),
+          );
+          for (const [key, provider] of Object.entries(overrides ?? {})) {
+            const normalizedKey = actual.normalizeMediaProviderId(key);
+            const existing = registry.get(normalizedKey);
+            registry.set(
+              normalizedKey,
+              existing
+                ? {
+                    ...existing,
+                    ...provider,
+                    capabilities: provider.capabilities ?? existing.capabilities,
+                  }
+                : provider,
+            );
+          }
+          return registry;
+        },
+      };
+    });
     ({ applyMediaUnderstanding } = await import("./apply.js"));
     ({ clearMediaUnderstandingBinaryCacheForTests } = await import("./runner.js"));
 

@@ -1,16 +1,19 @@
 import {
   type ProviderResolveDynamicModelContext,
   type ProviderRuntimeModel,
-} from "openclaw/plugin-sdk/core";
-import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
+} from "openclaw/plugin-sdk/plugin-entry";
+import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import {
-  applyOpenAIConfig,
   DEFAULT_CONTEXT_TOKENS,
   normalizeModelCompat,
   normalizeProviderId,
-  OPENAI_DEFAULT_MODEL,
   type ProviderPlugin,
-} from "openclaw/plugin-sdk/provider-models";
+} from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  createOpenAIAttributionHeadersWrapper,
+  createOpenAIDefaultTransportWrapper,
+} from "openclaw/plugin-sdk/provider-stream";
+import { applyOpenAIConfig, OPENAI_DEFAULT_MODEL } from "./default-models.js";
 import {
   cloneFirstTemplateModel,
   findCatalogTemplate,
@@ -42,7 +45,6 @@ const OPENAI_MODERN_MODEL_IDS = [
   "gpt-5.4-mini",
   "gpt-5.4-nano",
   "gpt-5.2",
-  "gpt-5.0",
 ] as const;
 const OPENAI_DIRECT_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
 const SUPPRESSED_SPARK_PROVIDERS = new Set(["openai", "azure-openai-responses"]);
@@ -169,6 +171,8 @@ export function buildOpenAIProvider(): ProviderPlugin {
     capabilities: {
       providerFamily: "openai",
     },
+    wrapStreamFn: (ctx) =>
+      createOpenAIAttributionHeadersWrapper(createOpenAIDefaultTransportWrapper(ctx.streamFn)),
     supportsXHighThinking: ({ modelId }) => matchesExactOrPrefix(modelId, OPENAI_XHIGH_MODEL_IDS),
     isModernModelRef: ({ modelId }) => matchesExactOrPrefix(modelId, OPENAI_MODERN_MODEL_IDS),
     buildMissingAuthMessage: (ctx) => {

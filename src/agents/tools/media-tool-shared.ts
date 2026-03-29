@@ -1,6 +1,7 @@
 import { type Api, type Model } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../config/config.js";
-import { getDefaultLocalRoots } from "../../plugin-sdk/web-media.js";
+import { appendLocalMediaParentRoots } from "../../media/local-roots.js";
+import { getDefaultLocalRoots } from "../../media/web-media.js";
 import type { ImageModelConfig } from "./image-tool.helpers.js";
 import type { ToolModelConfig } from "./model-config.helpers.js";
 import { getApiKeyForModel, normalizeWorkspaceDir, requireApiKey } from "./tool-runtime.helpers.js";
@@ -55,16 +56,15 @@ function applyAgentDefaultModelConfig(
 export function resolveMediaToolLocalRoots(
   workspaceDirRaw: string | undefined,
   options?: { workspaceOnly?: boolean },
+  mediaSources?: readonly string[],
 ): string[] {
   const workspaceDir = normalizeWorkspaceDir(workspaceDirRaw);
   if (options?.workspaceOnly) {
     return workspaceDir ? [workspaceDir] : [];
   }
   const roots = getDefaultLocalRoots();
-  if (!workspaceDir) {
-    return [...roots];
-  }
-  return Array.from(new Set([...roots, workspaceDir]));
+  const scopedRoots = workspaceDir ? Array.from(new Set([...roots, workspaceDir])) : [...roots];
+  return appendLocalMediaParentRoots(scopedRoots, mediaSources);
 }
 
 export function resolvePromptAndModelOverride(

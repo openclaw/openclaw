@@ -1,0 +1,11 @@
+{
+  "id": "groq",
+  "contracts": {
+    "mediaUnderstandingProviders": ["groq"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

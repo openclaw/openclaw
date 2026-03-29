@@ -1,5 +1,5 @@
 import { PermissionFlagsBits } from "discord-api-types/v10";
-import { readNumberParam, readStringParam } from "openclaw/plugin-sdk/discord-core";
+import { readNumberParam, readStringParam } from "../runtime-api.js";
 
 export type DiscordModerationAction = "timeout" | "kick" | "ban";
 

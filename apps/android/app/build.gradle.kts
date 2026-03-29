@@ -65,11 +65,26 @@ android {
         applicationId = "ai.openclaw.app"
         minSdk = 31
         targetSdk = 36
-        versionCode = 2026031400
-        versionName = "2026.3.14"
+        versionCode = 2026032800
+        versionName = "2026.3.28"
         ndk {
             // Support all major ABIs — native libs are tiny (~47 KB per ABI)
             abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
+        }
+    }
+
+    flavorDimensions += "store"
+
+    productFlavors {
+        create("play") {
+            dimension = "store"
+            buildConfigField("boolean", "OPENCLAW_ENABLE_SMS", "false")
+            buildConfigField("boolean", "OPENCLAW_ENABLE_CALL_LOG", "false")
+        }
+        create("thirdParty") {
+            dimension = "store"
+            buildConfigField("boolean", "OPENCLAW_ENABLE_SMS", "true")
+            buildConfigField("boolean", "OPENCLAW_ENABLE_CALL_LOG", "true")
         }
     }
 
@@ -140,8 +155,13 @@ androidComponents {
             .forEach { output ->
                 val versionName = output.versionName.orNull ?: "0"
                 val buildType = variant.buildType
-
-                val outputFileName = "openclaw-$versionName-$buildType.apk"
+                val flavorName = variant.flavorName?.takeIf { it.isNotBlank() }
+                val outputFileName =
+                    if (flavorName == null) {
+                        "openclaw-$versionName-$buildType.apk"
+                    } else {
+                        "openclaw-$versionName-$flavorName-$buildType.apk"
+                    }
                 output.outputFileName = outputFileName
             }
     }

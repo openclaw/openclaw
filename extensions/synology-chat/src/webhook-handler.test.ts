@@ -1,18 +1,14 @@
-import { EventEmitter } from "node:events";
-import type { IncomingMessage, ServerResponse } from "node:http";
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { makeFormBody, makeReq, makeRes, makeStalledReq } from "./test-http-utils.js";
 import type { ResolvedSynologyChatAccount } from "./types.js";
 import type { WebhookHandlerDeps } from "./webhook-handler.js";
-import {
-  clearSynologyWebhookRateLimiterStateForTest,
-  createWebhookHandler,
-} from "./webhook-handler.js";
-
-// Mock sendMessage and resolveChatUserId to prevent real HTTP calls
-vi.mock("./client.js", () => ({
-  sendMessage: vi.fn().mockResolvedValue(true),
-  resolveChatUserId: vi.fn().mockResolvedValue(undefined),
-}));
+const clientModule = await import("./client.js");
+const sendMessage = vi.spyOn(clientModule, "sendMessage").mockResolvedValue(true);
+const resolveLegacyWebhookNameToChatUserId = vi
+  .spyOn(clientModule, "resolveLegacyWebhookNameToChatUserId")
+  .mockResolvedValue(undefined);
+const { clearSynologyWebhookRateLimiterStateForTest, createWebhookHandler } =
+  await import("./webhook-handler.js");
 
 function makeAccount(
   overrides: Partial<ResolvedSynologyChatAccount> = {},
@@ -24,6 +20,9 @@ function makeAccount(
     incomingUrl: "https://nas.example.com/incoming",
     nasHost: "nas.example.com",
     webhookPath: "/webhook/synology",
+    webhookPathSource: "default",
+    dangerouslyAllowNameMatching: false,
+    dangerouslyAllowInheritedWebhookPath: false,
     dmPolicy: "open",
     allowedUserIds: [],
     rateLimitPerMinute: 30,
@@ -33,70 +32,6 @@ function makeAccount(
   };
 }
 
-function makeReq(
-  method: string,
-  body: string,
-  opts: { headers?: Record<string, string>; url?: string } = {},
-): IncomingMessage {
-  const req = makeBaseReq(method, opts);
-
-  // Simulate body delivery
-  process.nextTick(() => {
-    if (req.destroyed) {
-      return;
-    }
-    req.emit("data", Buffer.from(body));
-    req.emit("end");
-  });
-
-  return req;
-}
-function makeStalledReq(method: string): IncomingMessage {
-  return makeBaseReq(method);
-}
-
-function makeBaseReq(
-  method: string,
-  opts: { headers?: Record<string, string>; url?: string } = {},
-): IncomingMessage & { destroyed: boolean } {
-  const req = new EventEmitter() as IncomingMessage & {
-    destroyed: boolean;
-  };
-  req.method = method;
-  req.headers = opts.headers ?? {};
-  req.url = opts.url ?? "/webhook/synology";
-  req.socket = { remoteAddress: "127.0.0.1" } as any;
-  req.destroyed = false;
-  req.destroy = ((_: Error | undefined) => {
-    if (req.destroyed) {
-      return req;
-    }
-    req.destroyed = true;
-    return req;
-  }) as IncomingMessage["destroy"];
-  return req;
-}
-
-function makeRes(): ServerResponse & { _status: number; _body: string } {
-  const res = {
-    _status: 0,
-    _body: "",
-    writeHead(statusCode: number, _headers?: Record<string, string>) {
-      res._status = statusCode;
-    },
-    end(body?: string) {
-      res._body = body ?? "";
-    },
-  } as any;
-  return res;
-}
-
-function makeFormBody(fields: Record<string, string>): string {
-  return Object.entries(fields)
-    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
-    .join("&");
-}
-
 const validBody = makeFormBody({
   token: "valid-token",
   user_id: "123",
@@ -104,11 +39,48 @@ const validBody = makeFormBody({
   text: "Hello bot",
 });
 
+async function runDangerousNameMatchReply(
+  log: { info: any; warn: any; error: any },
+  options: {
+    resolvedChatUserId?: number;
+    accountIdSuffix: string;
+  },
+) {
+  vi.mocked(resolveLegacyWebhookNameToChatUserId).mockResolvedValueOnce(options.resolvedChatUserId);
+  const deliver = vi.fn().mockResolvedValue("Bot reply");
+  const handler = createWebhookHandler({
+    account: makeAccount({
+      accountId: `${options.accountIdSuffix}-${Date.now()}`,
+      dangerouslyAllowNameMatching: true,
+    }),
+    deliver,
+    log,
+  });
+
+  const req = makeReq("POST", validBody);
+  const res = makeRes();
+  await handler(req, res);
+
+  expect(res._status).toBe(204);
+  expect(resolveLegacyWebhookNameToChatUserId).toHaveBeenCalledWith({
+    incomingUrl: "https://nas.example.com/incoming",
+    mutableWebhookUsername: "testuser",
+    allowInsecureSsl: true,
+    log,
+  });
+
+  return { deliver };
+}
+
 describe("createWebhookHandler", () => {
   let log: { info: any; warn: any; error: any };
 
   beforeEach(() => {
     clearSynologyWebhookRateLimiterStateForTest();
+    sendMessage.mockClear();
+    sendMessage.mockResolvedValue(true);
+    resolveLegacyWebhookNameToChatUserId.mockClear();
+    resolveLegacyWebhookNameToChatUserId.mockResolvedValue(undefined);
     log = {
       info: vi.fn(),
       warn: vi.fn(),
@@ -206,6 +178,125 @@ describe("createWebhookHandler", () => {
     await handler(req, res);
 
     expect(res._status).toBe(401);
+  });
+
+  it("rate limits repeated invalid token guesses before the correct token can succeed", async () => {
+    const weakToken = "00000129";
+    const deliver = vi.fn().mockResolvedValue(null);
+    const handler = createWebhookHandler({
+      account: makeAccount({
+        accountId: "weak-token-bruteforce-" + Date.now(),
+        token: weakToken,
+        rateLimitPerMinute: 5,
+      }),
+      deliver,
+      log,
+    });
+
+    let guessedToken: string | null = null;
+    let saw429 = false;
+
+    for (let i = 0; i < 130; i += 1) {
+      const candidate = String(i).padStart(8, "0");
+      const req = makeReq(
+        "POST",
+        makeFormBody({
+          token: candidate,
+          user_id: "123",
+          username: "testuser",
+          text: "Hello bot",
+        }),
+      );
+      (req.socket as { remoteAddress?: string }).remoteAddress = "203.0.113.10";
+      const res = makeRes();
+      await handler(req, res);
+
+      if (res._status === 429) {
+        saw429 = true;
+        break;
+      }
+
+      if (res._status === 204) {
+        guessedToken = candidate;
+        break;
+      }
+
+      expect(res._status).toBe(401);
+    }
+
+    expect(saw429).toBe(true);
+    expect(guessedToken).toBeNull();
+    const lockedReq = makeReq(
+      "POST",
+      makeFormBody({
+        token: weakToken,
+        user_id: "123",
+        username: "testuser",
+        text: "Hello bot",
+      }),
+    );
+    (lockedReq.socket as { remoteAddress?: string }).remoteAddress = "203.0.113.10";
+    const lockedRes = makeRes();
+    await handler(lockedReq, lockedRes);
+
+    expect(lockedRes._status).toBe(429);
+    expect(deliver).not.toHaveBeenCalled();
+  });
+
+  it("keeps pre-auth throttling scoped to the remote IP", async () => {
+    const deliver = vi.fn().mockResolvedValue(null);
+    const handler = createWebhookHandler({
+      account: makeAccount({
+        accountId: "preauth-ip-scope-" + Date.now(),
+        rateLimitPerMinute: 1,
+      }),
+      deliver,
+      log,
+    });
+
+    const invalidReq = makeReq(
+      "POST",
+      makeFormBody({
+        token: "wrong-token",
+        user_id: "123",
+        username: "testuser",
+        text: "Hello",
+      }),
+    );
+    (invalidReq.socket as { remoteAddress?: string }).remoteAddress = "203.0.113.10";
+    const invalidRes = makeRes();
+    await handler(invalidReq, invalidRes);
+    expect(invalidRes._status).toBe(401);
+
+    const validReq = makeReq("POST", validBody);
+    (validReq.socket as { remoteAddress?: string }).remoteAddress = "203.0.113.11";
+    const validRes = makeRes();
+    await handler(validReq, validRes);
+
+    expect(validRes._status).toBe(204);
+    expect(deliver).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not spend invalid-token budget on successful requests", async () => {
+    const deliver = vi.fn().mockResolvedValue(null);
+    const handler = createWebhookHandler({
+      account: makeAccount({
+        accountId: "invalid-token-budget-" + Date.now(),
+        rateLimitPerMinute: 30,
+      }),
+      deliver,
+      log,
+    });
+
+    for (let i = 0; i < 11; i += 1) {
+      const req = makeReq("POST", validBody);
+      (req.socket as { remoteAddress?: string }).remoteAddress = "203.0.113.20";
+      const res = makeRes();
+      await handler(req, res);
+      expect(res._status).toBe(204);
+    }
+
+    expect(deliver).toHaveBeenCalledTimes(11);
   });
 
   it("accepts application/json with alias fields", async () => {
@@ -389,6 +480,74 @@ describe("createWebhookHandler", () => {
         chatType: "direct",
         commandAuthorized: true,
       }),
+    );
+  });
+
+  it("keeps replies bound to payload.user_id by default", async () => {
+    const deliver = vi.fn().mockResolvedValue("Bot reply");
+    const handler = createWebhookHandler({
+      account: makeAccount({ accountId: "stable-id-test-" + Date.now() }),
+      deliver,
+      log,
+    });
+
+    const req = makeReq("POST", validBody);
+    const res = makeRes();
+    await handler(req, res);
+
+    expect(res._status).toBe(204);
+    expect(resolveLegacyWebhookNameToChatUserId).not.toHaveBeenCalled();
+    expect(deliver).toHaveBeenCalledWith(
+      expect.objectContaining({
+        from: "123",
+        chatUserId: "123",
+      }),
+    );
+    expect(sendMessage).toHaveBeenCalledWith(
+      "https://nas.example.com/incoming",
+      "Bot reply",
+      "123",
+      true,
+    );
+  });
+
+  it("only resolves reply recipient by username when break-glass mode is enabled", async () => {
+    const { deliver } = await runDangerousNameMatchReply(log, {
+      resolvedChatUserId: 456,
+      accountIdSuffix: "dangerous-name-match-test",
+    });
+    expect(deliver).toHaveBeenCalledWith(
+      expect.objectContaining({
+        from: "123",
+        chatUserId: "456",
+      }),
+    );
+    expect(sendMessage).toHaveBeenCalledWith(
+      "https://nas.example.com/incoming",
+      "Bot reply",
+      "456",
+      true,
+    );
+  });
+
+  it("falls back to payload.user_id when break-glass resolution does not find a match", async () => {
+    const { deliver } = await runDangerousNameMatchReply(log, {
+      accountIdSuffix: "dangerous-name-fallback-test",
+    });
+    expect(log.warn).toHaveBeenCalledWith(
+      'Could not resolve Chat API user_id for "testuser" — falling back to webhook user_id 123. Reply delivery may fail.',
+    );
+    expect(deliver).toHaveBeenCalledWith(
+      expect.objectContaining({
+        from: "123",
+        chatUserId: "123",
+      }),
+    );
+    expect(sendMessage).toHaveBeenCalledWith(
+      "https://nas.example.com/incoming",
+      "Bot reply",
+      "123",
+      true,
     );
   });
 

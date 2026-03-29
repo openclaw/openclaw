@@ -1,3 +1,4 @@
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
@@ -6,11 +7,43 @@ import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { runMessageAction } from "./message-action-runner.js";
 
+type ChannelActionHandler = NonNullable<NonNullable<ChannelPlugin["actions"]>["handleAction"]>;
+
 function createAlwaysConfiguredPluginConfig(account: Record<string, unknown> = { enabled: true }) {
   return {
     listAccountIds: () => ["default"],
     resolveAccount: () => account,
     isConfigured: () => true,
+  };
+}
+
+function createPollForwardingPlugin(params: {
+  pluginId: string;
+  label: string;
+  blurb: string;
+  handleAction: ChannelActionHandler;
+}): ChannelPlugin {
+  return {
+    id: params.pluginId,
+    meta: {
+      id: params.pluginId,
+      label: params.label,
+      selectionLabel: params.label,
+      docsPath: `/channels/${params.pluginId}`,
+      blurb: params.blurb,
+    },
+    capabilities: { chatTypes: ["direct"] },
+    config: createAlwaysConfiguredPluginConfig(),
+    messaging: {
+      targetResolver: {
+        looksLikeId: () => true,
+      },
+    },
+    actions: {
+      describeMessageTool: () => ({ actions: ["poll"] }),
+      supportsAction: ({ action }) => action === "poll",
+      handleAction: params.handleAction,
+    },
   };
 }
 
@@ -35,7 +68,7 @@ describe("runMessageAction plugin dispatch", () => {
       capabilities: { chatTypes: ["direct", "channel"] },
       config: createAlwaysConfiguredPluginConfig(),
       actions: {
-        listActions: () => ["pin", "list-pins", "member-info"],
+        describeMessageTool: () => ({ actions: ["pin", "list-pins", "member-info"] }),
         supportsAction: ({ action }) =>
           action === "pin" || action === "list-pins" || action === "member-info",
         handleAction,
@@ -58,6 +91,7 @@ describe("runMessageAction plugin dispatch", () => {
     afterEach(() => {
       setActivePluginRegistry(createTestRegistry([]));
       vi.clearAllMocks();
+      vi.unstubAllEnvs();
     });
 
     it("dispatches messageId/chatId-based Feishu actions through the shared runner", async () => {
@@ -114,6 +148,10 @@ describe("runMessageAction plugin dispatch", () => {
     });
 
     it("routes execution context ids into plugin handleAction", async () => {
+      const stateDir = path.join("/tmp", "openclaw-plugin-dispatch-media-roots");
+      const expectedWorkspaceRoot = path.resolve(stateDir, "workspace-alpha");
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+
       await runMessageAction({
         cfg: {
           channels: {
@@ -148,6 +186,7 @@ describe("runMessageAction plugin dispatch", () => {
           sessionKey: "agent:alpha:main",
           sessionId: "session-123",
           agentId: "alpha",
+          mediaLocalRoots: expect.arrayContaining([expectedWorkspaceRoot]),
           toolContext: expect.objectContaining({
             currentChannelId: "chat:oc_123",
             currentThreadTs: "thread-456",
@@ -217,6 +256,66 @@ describe("runMessageAction plugin dispatch", () => {
         }),
       );
     });
+
+    it("does not misclassify send as poll when zero-valued poll params are present", async () => {
+      const sendMedia = vi.fn().mockResolvedValue({
+        channel: "testchat",
+        messageId: "m2",
+        chatId: "c1",
+      });
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "testchat",
+            source: "test",
+            plugin: createOutboundTestPlugin({
+              id: "testchat",
+              outbound: {
+                deliveryMode: "direct",
+                sendText: vi.fn().mockResolvedValue({
+                  channel: "testchat",
+                  messageId: "t2",
+                  chatId: "c1",
+                }),
+                sendMedia,
+              },
+            }),
+          },
+        ]),
+      );
+      const cfg = {
+        channels: {
+          testchat: {
+            enabled: true,
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = await runMessageAction({
+        cfg,
+        action: "send",
+        params: {
+          channel: "testchat",
+          target: "channel:abc",
+          media: "https://example.com/file.txt",
+          message: "hello",
+          pollDurationHours: 0,
+          pollDurationSeconds: 0,
+          pollMulti: false,
+          pollQuestion: "",
+          pollOption: [],
+        },
+        dryRun: false,
+      });
+
+      expect(result.kind).toBe("send");
+      expect(sendMedia).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: "hello",
+          mediaUrl: "https://example.com/file.txt",
+        }),
+      );
+    });
   });
 
   describe("card-only send behavior", () => {
@@ -240,7 +339,7 @@ describe("runMessageAction plugin dispatch", () => {
       capabilities: { chatTypes: ["direct"] },
       config: createAlwaysConfiguredPluginConfig(),
       actions: {
-        listActions: () => ["send"],
+        describeMessageTool: () => ({ actions: ["send"] }),
         supportsAction: ({ action }) => action === "send",
         handleAction,
       },
@@ -315,28 +414,12 @@ describe("runMessageAction plugin dispatch", () => {
       }),
     );
 
-    const telegramPollPlugin: ChannelPlugin = {
-      id: "telegram",
-      meta: {
-        id: "telegram",
-        label: "Telegram",
-        selectionLabel: "Telegram",
-        docsPath: "/channels/telegram",
-        blurb: "Telegram poll forwarding test plugin.",
-      },
-      capabilities: { chatTypes: ["direct"] },
-      config: createAlwaysConfiguredPluginConfig(),
-      messaging: {
-        targetResolver: {
-          looksLikeId: () => true,
-        },
-      },
-      actions: {
-        listActions: () => ["poll"],
-        supportsAction: ({ action }) => action === "poll",
-        handleAction,
-      },
-    };
+    const telegramPollPlugin = createPollForwardingPlugin({
+      pluginId: "telegram",
+      label: "Telegram",
+      blurb: "Telegram poll forwarding test plugin.",
+      handleAction,
+    });
 
     beforeEach(() => {
       setActivePluginRegistry(
@@ -422,27 +505,12 @@ describe("runMessageAction plugin dispatch", () => {
       }),
     );
 
-    const discordPollPlugin: ChannelPlugin = {
-      id: "discord",
-      meta: {
-        id: "discord",
-        label: "Discord",
-        selectionLabel: "Discord",
-        docsPath: "/channels/discord",
-        blurb: "Discord plugin-owned poll test plugin.",
-      },
-      capabilities: { chatTypes: ["direct"] },
-      config: createAlwaysConfiguredPluginConfig(),
-      messaging: {
-        targetResolver: {
-          looksLikeId: () => true,
-        },
-      },
-      actions: {
-        supportsAction: ({ action }) => action === "poll",
-        handleAction,
-      },
-    };
+    const discordPollPlugin = createPollForwardingPlugin({
+      pluginId: "discord",
+      label: "Discord",
+      blurb: "Discord plugin-owned poll test plugin.",
+      handleAction,
+    });
 
     beforeEach(() => {
       setActivePluginRegistry(
@@ -521,7 +589,7 @@ describe("runMessageAction plugin dispatch", () => {
       capabilities: { chatTypes: ["direct"] },
       config: createAlwaysConfiguredPluginConfig({}),
       actions: {
-        listActions: () => ["send"],
+        describeMessageTool: () => ({ actions: ["send"] }),
         supportsAction: ({ action }) => action === "send",
         handleAction,
       },
@@ -603,7 +671,7 @@ describe("runMessageAction plugin dispatch", () => {
         resolveAccount: () => ({}),
       },
       actions: {
-        listActions: () => ["send"],
+        describeMessageTool: () => ({ actions: ["send"] }),
         handleAction,
       },
     };

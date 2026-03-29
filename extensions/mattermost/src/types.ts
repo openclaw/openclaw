@@ -1,9 +1,5 @@
-import type {
-  BlockStreamingCoalesceConfig,
-  DmPolicy,
-  GroupPolicy,
-  SecretInput,
-} from "./runtime-api.js";
+import type { BlockStreamingCoalesceConfig, DmPolicy, GroupPolicy } from "./runtime-api.js";
+import type { SecretInput } from "./secret-input.js";
 
 export type MattermostReplyToMode = "off" | "first" | "all";
 export type MattermostChatTypeKey = "direct" | "channel" | "group";
@@ -90,6 +86,8 @@ export type MattermostAccountConfig = {
      */
     allowedSourceIps?: string[];
   };
+  /** Allow fetching from private/internal IP addresses (e.g. localhost). Required for self-hosted Mattermost on LAN/VPN. */
+  allowPrivateNetwork?: boolean;
   /** Retry configuration for DM channel creation */
   dmChannelRetry?: {
     /** Maximum number of retry attempts (default: 3) */

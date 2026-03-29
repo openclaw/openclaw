@@ -154,6 +154,7 @@ async function touchSessionStore(params: {
       store,
     });
     store[primaryKey] = {
+      ...store[primaryKey],
       sessionId: params.sessionId,
       updatedAt: params.now,
       thinkingLevel: params.entry?.thinkingLevel,
@@ -164,6 +165,8 @@ async function touchSessionStore(params: {
       sendPolicy: params.entry?.sendPolicy,
       lastChannel: params.entry?.lastChannel,
       lastTo: params.entry?.lastTo,
+      lastAccountId: params.entry?.lastAccountId,
+      lastThreadId: params.entry?.lastThreadId,
     };
   });
 }
@@ -288,16 +291,18 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
         sessionId,
         now,
       });
+      const runId = randomUUID();
 
       // Ensure chat UI clients refresh when this run completes (even though it wasn't started via chat.send).
-      // This maps agent bus events (keyed by sessionId) to chat events (keyed by clientRunId).
-      ctx.addChatRun(sessionId, {
+      // This maps agent bus events (keyed by per-turn runId) to chat events (keyed by clientRunId).
+      ctx.addChatRun(runId, {
         sessionKey: canonicalKey,
         clientRunId: `voice-${randomUUID()}`,
       });
 
       void agentCommandFromIngress(
         {
+          runId,
           message: text,
           sessionId,
           sessionKey: canonicalKey,
@@ -404,7 +409,6 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       const deliver = deliverRequested && Boolean(channel && to);
       const deliveryChannel = deliver ? channel : undefined;
       const deliveryTo = deliver ? to : undefined;
-
       if (deliverRequested && !deliver) {
         ctx.logGateway.warn(
           `agent delivery disabled node=${nodeId}: missing session delivery route (channel=${channel ?? "-"} to=${to ?? "-"})`,
@@ -430,6 +434,7 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
 
       void agentCommandFromIngress(
         {
+          runId: sessionId,
           message,
           images,
           sessionId,
@@ -520,11 +525,12 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       if (!obj) {
         return;
       }
-      const sessionKey =
+      const sessionKeyRaw =
         typeof obj.sessionKey === "string" ? obj.sessionKey.trim() : `node-${nodeId}`;
-      if (!sessionKey) {
+      if (!sessionKeyRaw) {
         return;
       }
+      const { canonicalKey: sessionKey } = loadSessionEntry(sessionKeyRaw);
 
       // Respect tools.exec.notifyOnExit setting (default: true)
       // When false, skip system event notifications for node exec events.

@@ -1,3 +1,6 @@
+import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
+import { resolveBlueBubblesAccount } from "./accounts.js";
+import { getCachedBlueBubblesPrivateApiStatus, isMacOS26OrHigher } from "./probe.js";
 import {
   BLUEBUBBLES_ACTION_NAMES,
   BLUEBUBBLES_ACTIONS,
@@ -10,10 +13,7 @@ import {
   readStringParam,
   type ChannelMessageActionAdapter,
   type ChannelMessageActionName,
-} from "openclaw/plugin-sdk/bluebubbles";
-import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
-import { resolveBlueBubblesAccount } from "./accounts.js";
-import { getCachedBlueBubblesPrivateApiStatus, isMacOS26OrHigher } from "./probe.js";
+} from "./runtime-api.js";
 import { normalizeSecretInputString } from "./secret-input.js";
 import {
   normalizeBlueBubblesHandle,
@@ -52,7 +52,10 @@ function readMessageText(params: Record<string, unknown>): string | undefined {
 }
 
 /** Supported action names for BlueBubbles */
-const SUPPORTED_ACTIONS = new Set<ChannelMessageActionName>(BLUEBUBBLES_ACTION_NAMES);
+const SUPPORTED_ACTIONS = new Set<ChannelMessageActionName>([
+  ...BLUEBUBBLES_ACTION_NAMES,
+  "upload-file",
+]);
 const PRIVATE_API_ACTIONS = new Set<ChannelMessageActionName>([
   "react",
   "edit",
@@ -67,10 +70,10 @@ const PRIVATE_API_ACTIONS = new Set<ChannelMessageActionName>([
 ]);
 
 export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
-  listActions: ({ cfg, currentChannelId }) => {
+  describeMessageTool: ({ cfg, currentChannelId }) => {
     const account = resolveBlueBubblesAccount({ cfg: cfg });
     if (!account.enabled || !account.configured) {
-      return [];
+      return null;
     }
     const gate = createActionGate(cfg.channels?.bluebubbles?.actions);
     const actions = new Set<ChannelMessageActionName>();
@@ -107,7 +110,10 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
         }
       }
     }
-    return Array.from(actions);
+    if (actions.delete("sendAttachment")) {
+      actions.add("upload-file");
+    }
+    return { actions: Array.from(actions) };
   },
   supportsAction: ({ action }) => SUPPORTED_ACTIONS.has(action),
   extractToolSend: ({ args }) => extractToolSend(args, "sendMessage"),
@@ -161,7 +167,12 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
         throw new Error(`BlueBubbles ${action} requires serverUrl and password.`);
       }
 
-      const resolved = await runtime.resolveChatGuidForTarget({ baseUrl, password, target });
+      const resolved = await runtime.resolveChatGuidForTarget({
+        baseUrl,
+        password,
+        target,
+        allowPrivateNetwork: account.config.allowPrivateNetwork === true,
+      });
       if (!resolved) {
         throw new Error(`BlueBubbles ${action} failed: chatGuid not found for target.`);
       }
@@ -423,11 +434,11 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
       return jsonResult({ ok: true, left: resolvedChatGuid });
     }
 
-    // Handle sendAttachment action
-    if (action === "sendAttachment") {
+    // Handle sendAttachment action (legacy) and upload-file (canonical)
+    if (action === "sendAttachment" || action === "upload-file") {
       const to = readStringParam(params, "to", { required: true });
       const filename = readStringParam(params, "filename", { required: true });
-      const caption = readStringParam(params, "caption");
+      const caption = readStringParam(params, "caption") ?? readStringParam(params, "message");
       const contentType =
         readStringParam(params, "contentType") ?? readStringParam(params, "mimeType");
       const asVoice = readBooleanParam(params, "asVoice");
@@ -443,10 +454,10 @@ export const bluebubblesMessageActions: ChannelMessageActionAdapter = {
       } else if (filePath) {
         // Read file from path (will be handled by caller providing buffer)
         throw new Error(
-          "BlueBubbles sendAttachment: filePath not supported in action, provide buffer as base64.",
+          `BlueBubbles ${action}: filePath not supported in action, provide buffer as base64.`,
         );
       } else {
-        throw new Error("BlueBubbles sendAttachment requires buffer (base64) parameter.");
+        throw new Error(`BlueBubbles ${action} requires buffer (base64) parameter.`);
       }
 
       const result = await runtime.sendBlueBubblesAttachment({

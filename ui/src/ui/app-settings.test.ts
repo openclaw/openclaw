@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createStorageMock } from "../test-helpers/storage.ts";
 import {
   applyResolvedTheme,
   applySettings,
@@ -44,6 +45,7 @@ type SettingsHost = {
     navCollapsed: boolean;
     navWidth: number;
     navGroupsCollapsed: Record<string, boolean>;
+    borderRadius: number;
   };
   theme: ThemeName & ThemeMode;
   themeMode: ThemeMode;
@@ -64,30 +66,6 @@ type SettingsHost = {
   pendingGatewayUrl?: string | null;
   pendingGatewayToken?: string | null;
 };
-
-function createStorageMock(): Storage {
-  const store = new Map<string, string>();
-  return {
-    get length() {
-      return store.size;
-    },
-    clear() {
-      store.clear();
-    },
-    getItem(key: string) {
-      return store.get(key) ?? null;
-    },
-    key(index: number) {
-      return Array.from(store.keys())[index] ?? null;
-    },
-    removeItem(key: string) {
-      store.delete(key);
-    },
-    setItem(key: string, value: string) {
-      store.set(key, String(value));
-    },
-  };
-}
 
 function setTestWindowUrl(urlString: string) {
   const current = new URL(urlString);
@@ -147,6 +125,7 @@ const createHost = (tab: Tab): SettingsHost => ({
     navCollapsed: false,
     navWidth: 220,
     navGroupsCollapsed: {},
+    borderRadius: 50,
   },
   theme: "claw" as unknown as ThemeName & ThemeMode,
   themeMode: "system",
@@ -310,6 +289,18 @@ describe("applySettingsFromUrl", () => {
     expect(host.pendingGatewayUrl).toBe("wss://other-gateway.example/openclaw");
     expect(host.pendingGatewayToken).toBe("abc123");
     expect(window.location.search).toBe("");
+  });
+
+  it("prefers fragment tokens over legacy query tokens when both are present", () => {
+    setTestWindowUrl("https://control.example/ui/overview?token=query-token#token=hash-token");
+    const host = createHost("overview");
+    host.settings.gatewayUrl = "wss://control.example/openclaw";
+
+    applySettingsFromUrl(host);
+
+    expect(host.settings.token).toBe("hash-token");
+    expect(window.location.search).toBe("");
+    expect(window.location.hash).toBe("");
   });
 
   it("resets stale persisted session selection to main when a token is supplied without a session", () => {

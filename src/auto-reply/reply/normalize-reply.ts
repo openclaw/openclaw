@@ -1,8 +1,9 @@
 import { sanitizeUserFacingText } from "../../agents/pi-embedded-helpers.js";
-import { hasReplyChannelData, hasReplyContent } from "../../interactive/payload.js";
+import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import {
   HEARTBEAT_TOKEN,
+  isSilentReplyPayloadText,
   isSilentReplyText,
   SILENT_REPLY_TOKEN,
   stripSilentToken,
@@ -13,13 +14,14 @@ import {
   resolveResponsePrefixTemplate,
   type ResponsePrefixContext,
 } from "./response-prefix-template.js";
-import { hasSlackDirectives, parseSlackDirectives } from "./slack-directives.js";
+import { compileSlackInteractiveReplies } from "./slack-directives.js";
 
 export type NormalizeReplySkipReason = "empty" | "silent" | "heartbeat";
 
 export type NormalizeReplyOptions = {
   responsePrefix?: string;
   enableSlackInteractiveReplies?: boolean;
+  applyChannelTransforms?: boolean;
   /** Context for template variable interpolation in responsePrefix */
   responsePrefixContext?: ResponsePrefixContext;
   onHeartbeatStrip?: () => void;
@@ -32,32 +34,27 @@ export function normalizeReplyPayload(
   payload: ReplyPayload,
   opts: NormalizeReplyOptions = {},
 ): ReplyPayload | null {
-  const hasChannelData = hasReplyChannelData(payload.channelData);
+  const applyChannelTransforms = opts.applyChannelTransforms ?? true;
+  const hasContent = (text: string | undefined) =>
+    hasReplyPayloadContent(
+      {
+        ...payload,
+        text,
+      },
+      {
+        trimText: true,
+      },
+    );
   const trimmed = payload.text?.trim() ?? "";
-  if (
-    !hasReplyContent({
-      text: trimmed,
-      mediaUrl: payload.mediaUrl,
-      mediaUrls: payload.mediaUrls,
-      interactive: payload.interactive,
-      hasChannelData,
-    })
-  ) {
+  if (!hasContent(trimmed)) {
     opts.onSkip?.("empty");
     return null;
   }
 
   const silentToken = opts.silentToken ?? SILENT_REPLY_TOKEN;
   let text = payload.text ?? undefined;
-  if (text && isSilentReplyText(text, silentToken)) {
-    if (
-      !hasReplyContent({
-        mediaUrl: payload.mediaUrl,
-        mediaUrls: payload.mediaUrls,
-        interactive: payload.interactive,
-        hasChannelData,
-      })
-    ) {
+  if (text && isSilentReplyPayloadText(text, silentToken)) {
+    if (!hasContent("")) {
       opts.onSkip?.("silent");
       return null;
     }
@@ -68,15 +65,7 @@ export function normalizeReplyPayload(
   // silent just like the exact-match path above.  (#30916, #30955)
   if (text && text.includes(silentToken) && !isSilentReplyText(text, silentToken)) {
     text = stripSilentToken(text, silentToken);
-    if (
-      !hasReplyContent({
-        text,
-        mediaUrl: payload.mediaUrl,
-        mediaUrls: payload.mediaUrls,
-        interactive: payload.interactive,
-        hasChannelData,
-      })
-    ) {
+    if (!hasContent(text)) {
       opts.onSkip?.("silent");
       return null;
     }
@@ -92,16 +81,7 @@ export function normalizeReplyPayload(
     if (stripped.didStrip) {
       opts.onHeartbeatStrip?.();
     }
-    if (
-      stripped.shouldSkip &&
-      !hasReplyContent({
-        text: stripped.text,
-        mediaUrl: payload.mediaUrl,
-        mediaUrls: payload.mediaUrls,
-        interactive: payload.interactive,
-        hasChannelData,
-      })
-    ) {
+    if (stripped.shouldSkip && !hasContent(stripped.text)) {
       opts.onSkip?.("heartbeat");
       return null;
     }
@@ -111,22 +91,14 @@ export function normalizeReplyPayload(
   if (text) {
     text = sanitizeUserFacingText(text, { errorContext: Boolean(payload.isError) });
   }
-  if (
-    !hasReplyContent({
-      text,
-      mediaUrl: payload.mediaUrl,
-      mediaUrls: payload.mediaUrls,
-      interactive: payload.interactive,
-      hasChannelData,
-    })
-  ) {
+  if (!hasContent(text)) {
     opts.onSkip?.("empty");
     return null;
   }
 
   // Parse LINE-specific directives from text (quick_replies, location, confirm, buttons)
   let enrichedPayload: ReplyPayload = { ...payload, text };
-  if (text && hasLineDirectives(text)) {
+  if (applyChannelTransforms && text && hasLineDirectives(text)) {
     enrichedPayload = parseLineDirectives(enrichedPayload);
     text = enrichedPayload.text;
   }
@@ -146,8 +118,8 @@ export function normalizeReplyPayload(
   }
 
   enrichedPayload = { ...enrichedPayload, text };
-  if (opts.enableSlackInteractiveReplies && text && hasSlackDirectives(text)) {
-    enrichedPayload = parseSlackDirectives(enrichedPayload);
+  if (applyChannelTransforms && opts.enableSlackInteractiveReplies && text) {
+    enrichedPayload = compileSlackInteractiveReplies(enrichedPayload);
   }
 
   return enrichedPayload;

@@ -7,10 +7,11 @@ import type { OpenClawConfig } from "../../../src/config/config.js";
 import {
   pluginCommandMocks,
   resetPluginCommandMocks,
-} from "../../../test/helpers/extensions/telegram-plugin-command.js";
+} from "../../../test/helpers/plugins/telegram-plugin-command.js";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
 import {
   createNativeCommandTestParams,
+  listSkillCommandsForAgents,
   resetNativeCommandMenuMocks,
   waitForRegisteredCommands,
 } from "./bot-native-commands.menu-test-support.js";
@@ -62,6 +63,10 @@ describe("registerTelegramNativeCommands skill allowlist integration", () => {
         },
       ],
     };
+    const actualSkillCommands = await import("../../../src/auto-reply/skill-commands.js");
+    listSkillCommandsForAgents.mockImplementation(({ cfg, agentIds }) =>
+      actualSkillCommands.listSkillCommandsForAgents({ cfg, agentIds }),
+    );
 
     registerTelegramNativeCommands({
       ...createNativeCommandTestParams(cfg, {

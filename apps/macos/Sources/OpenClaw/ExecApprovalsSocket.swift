@@ -271,7 +271,7 @@ enum ExecApprovalsPromptPresenter {
         commandText.drawsBackground = true
         commandText.backgroundColor = NSColor.textBackgroundColor
         commandText.font = NSFont.monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
-        commandText.string = request.command
+        commandText.string = ExecApprovalCommandDisplaySanitizer.sanitize(request.command)
         commandText.textContainerInset = NSSize(width: 6, height: 6)
         commandText.textContainer?.lineFragmentPadding = 0
         commandText.textContainer?.widthTracksTextView = true
@@ -378,7 +378,7 @@ private enum ExecHostExecutor {
         let context = await self.buildContext(
             request: request,
             command: validatedRequest.command,
-            rawCommand: validatedRequest.displayCommand)
+            rawCommand: validatedRequest.evaluationRawCommand)
 
         switch ExecHostRequestEvaluator.evaluate(
             context: context,
@@ -476,13 +476,7 @@ private enum ExecHostExecutor {
     {
         guard decision == .allowAlways, context.security == .allowlist else { return }
         var seenPatterns = Set<String>()
-        for candidate in context.allowlistResolutions {
-            guard let pattern = ExecApprovalHelpers.allowlistPattern(
-                command: context.command,
-                resolution: candidate)
-            else {
-                continue
-            }
+        for pattern in context.allowAlwaysPatterns {
             if seenPatterns.insert(pattern).inserted {
                 ExecApprovalsStore.addAllowlistEntry(agentId: context.agentId, pattern: pattern)
             }

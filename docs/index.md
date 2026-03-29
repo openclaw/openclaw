@@ -54,7 +54,7 @@ OpenClaw is a **self-hosted gateway** that connects your favorite chat apps — 
 - **Agent-native**: built for coding agents with tool use, sessions, memory, and multi-agent routing
 - **Open source**: MIT licensed, community-driven
 
-**What do you need?** Node 24 (recommended), or Node 22 LTS (`22.16+`) for compatibility, an API key from your chosen provider, and 5 minutes. For best quality and security, use the strongest latest-generation model available.
+**What do you need?** Node 24 (recommended), or Node 22 LTS (`22.14+`) for compatibility, an API key from your chosen provider, and 5 minutes. For best quality and security, use the strongest latest-generation model available.
 
 ## How it works
 
@@ -106,15 +106,19 @@ The Gateway is the single source of truth for sessions, routing, and channel con
     openclaw onboard --install-daemon
     ```
   </Step>
-  <Step title="Pair WhatsApp and start the Gateway">
+  <Step title="Chat">
+    Open the Control UI in your browser and send a message:
+
     ```bash
-    openclaw channels login
-    openclaw gateway --port 18789
+    openclaw dashboard
     ```
+
+    Or connect a channel ([Telegram](/channels/telegram) is fastest) and chat from your phone.
+
   </Step>
 </Steps>
 
-Need the full install and dev setup? See [Quick start](/start/quickstart).
+Need the full install and dev setup? See [Getting Started](/start/getting-started).
 
 ## Dashboard
 

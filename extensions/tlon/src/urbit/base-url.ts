@@ -1,4 +1,4 @@
-import { isBlockedHostnameOrIp } from "../../api.js";
+import { isBlockedHostnameOrIp } from "openclaw/plugin-sdk/ssrf-runtime";
 
 export type UrbitBaseUrlValidation =
   | { ok: true; baseUrl: string; hostname: string }

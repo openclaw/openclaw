@@ -3,9 +3,9 @@ import {
   definePluginEntry,
   type ProviderResolveDynamicModelContext,
   type ProviderRuntimeModel,
-} from "openclaw/plugin-sdk/core";
-import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
-import { DEFAULT_CONTEXT_TOKENS } from "openclaw/plugin-sdk/provider-models";
+} from "openclaw/plugin-sdk/plugin-entry";
+import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
+import { DEFAULT_CONTEXT_TOKENS } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   getOpenRouterModelCapabilities,
   loadOpenRouterModelCapabilities,
@@ -13,6 +13,8 @@ import {
   createOpenRouterWrapper,
   isProxyReasoningUnsupported,
 } from "openclaw/plugin-sdk/provider-stream";
+import { applyXaiModelCompat } from "openclaw/plugin-sdk/xai";
+import { openrouterMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { applyOpenrouterConfig, OPENROUTER_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildOpenrouterProvider } from "./provider-catalog.js";
 
@@ -73,6 +75,10 @@ function isOpenRouterCacheTtlModel(modelId: string): boolean {
   return OPENROUTER_CACHE_TTL_MODEL_PREFIXES.some((prefix) => modelId.startsWith(prefix));
 }
 
+function isXaiOpenRouterModel(modelId: string): boolean {
+  return modelId.trim().toLowerCase().startsWith("x-ai/");
+}
+
 export default definePluginEntry({
   id: "openrouter",
   name: "OpenRouter Provider",
@@ -129,6 +135,8 @@ export default definePluginEntry({
         geminiThoughtSignatureSanitization: true,
         geminiThoughtSignatureModelHints: ["gemini"],
       },
+      normalizeResolvedModel: ({ modelId, model }) =>
+        isXaiOpenRouterModel(modelId) ? applyXaiModelCompat(model) : undefined,
       isModernModelRef: () => true,
       wrapStreamFn: (ctx) => {
         let streamFn = ctx.streamFn;
@@ -148,5 +156,6 @@ export default definePluginEntry({
       },
       isCacheTtlEligible: (ctx) => isOpenRouterCacheTtlModel(ctx.modelId),
     });
+    api.registerMediaUnderstandingProvider(openrouterMediaUnderstandingProvider);
   },
 });

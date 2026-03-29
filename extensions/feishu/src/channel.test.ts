@@ -1,5 +1,7 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/feishu";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../runtime-api.js";
+import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
+import { looksLikeFeishuId, normalizeFeishuTarget, resolveReceiveIdType } from "./targets.js";
 
 const probeFeishuMock = vi.hoisted(() => vi.fn());
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
@@ -18,6 +20,7 @@ const getChatMembersMock = vi.hoisted(() => vi.fn());
 const getFeishuMemberInfoMock = vi.hoisted(() => vi.fn());
 const listFeishuDirectoryPeersLiveMock = vi.hoisted(() => vi.fn());
 const listFeishuDirectoryGroupsLiveMock = vi.hoisted(() => vi.fn());
+const feishuOutboundSendMediaMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./probe.js", () => ({
   probeFeishu: probeFeishuMock,
@@ -47,18 +50,63 @@ vi.mock("./channel.runtime.js", () => ({
     sendMessageFeishu: sendMessageFeishuMock,
     feishuOutbound: {
       sendText: vi.fn(),
-      sendMedia: vi.fn(),
+      sendMedia: feishuOutboundSendMediaMock,
     },
   },
 }));
 
-import { feishuPlugin } from "./channel.js";
+vi.mock("../../../src/channels/plugins/bundled.js", () => ({
+  bundledChannelPlugins: [],
+  bundledChannelSetupPlugins: [],
+}));
+
+let feishuPlugin: typeof import("./channel.js").feishuPlugin;
 
 function getDescribedActions(cfg: OpenClawConfig): string[] {
   return [...(feishuPlugin.actions?.describeMessageTool?.({ cfg })?.actions ?? [])];
 }
 
+function createLegacyFeishuButtonCard(value: { command?: string; text?: string }) {
+  return {
+    schema: "2.0",
+    body: {
+      elements: [
+        {
+          tag: "action",
+          actions: [
+            {
+              tag: "button",
+              text: { tag: "plain_text", content: "Run /new" },
+              value,
+            },
+          ],
+        },
+      ],
+    },
+  };
+}
+
+async function expectLegacyFeishuCardPayloadRejected(cfg: OpenClawConfig, card: unknown) {
+  await expect(
+    feishuPlugin.actions?.handleAction?.({
+      action: "send",
+      params: { to: "chat:oc_group_1", card },
+      cfg,
+      accountId: undefined,
+      toolContext: {},
+    } as never),
+  ).rejects.toThrow(
+    "Feishu card buttons that trigger text or commands must use structured interaction envelopes.",
+  );
+  expect(sendCardFeishuMock).not.toHaveBeenCalled();
+}
+
 describe("feishuPlugin.status.probeAccount", () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ feishuPlugin } = await import("./channel.js"));
+  });
+
   it("uses current account credentials for multi-account config", async () => {
     const cfg = {
       channels: {
@@ -93,6 +141,45 @@ describe("feishuPlugin.status.probeAccount", () => {
       }),
     );
     expect(result).toMatchObject({ ok: true, appId: "cli_main" });
+  });
+});
+
+describe("feishuPlugin.pairing.notifyApproval", () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ feishuPlugin } = await import("./channel.js"));
+    sendMessageFeishuMock.mockReset();
+    sendMessageFeishuMock.mockResolvedValue({ messageId: "pairing-msg", chatId: "ou_user" });
+  });
+
+  it("preserves accountId when sending pairing approvals", async () => {
+    const cfg = {
+      channels: {
+        feishu: {
+          accounts: {
+            work: {
+              appId: "cli_work",
+              appSecret: "secret_work",
+              enabled: true,
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await feishuPlugin.pairing?.notifyApproval?.({
+      cfg,
+      id: "ou_user",
+      accountId: "work",
+    });
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg,
+        to: "ou_user",
+        accountId: "work",
+      }),
+    );
   });
 });
 
@@ -202,6 +289,133 @@ describe("feishuPlugin actions", () => {
       replyInThread: false,
     });
     expect(result?.details).toMatchObject({ ok: true, messageId: "om_card", chatId: "oc_group_1" });
+  });
+
+  it("allows structured card button payloads", async () => {
+    sendCardFeishuMock.mockResolvedValueOnce({ messageId: "om_card", chatId: "oc_group_1" });
+    const card = {
+      schema: "2.0",
+      body: {
+        elements: [
+          {
+            tag: "action",
+            actions: [
+              {
+                tag: "button",
+                text: { tag: "plain_text", content: "Run /new" },
+                value: createFeishuCardInteractionEnvelope({
+                  k: "quick",
+                  a: "feishu.quick_actions.help",
+                  q: "/help",
+                  c: { u: "u123", h: "oc_group_1", t: "group", e: Date.now() + 60_000 },
+                }),
+              },
+            ],
+          },
+        ],
+      },
+    };
+
+    await feishuPlugin.actions?.handleAction?.({
+      action: "send",
+      params: { to: "chat:oc_group_1", card },
+      cfg,
+      accountId: undefined,
+      toolContext: {},
+    } as never);
+
+    expect(sendCardFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        card,
+      }),
+    );
+  });
+
+  it("rejects raw legacy card command payloads", async () => {
+    await expectLegacyFeishuCardPayloadRejected(
+      cfg,
+      createLegacyFeishuButtonCard({ command: "/new" }),
+    );
+  });
+
+  it("rejects raw legacy card text payloads", async () => {
+    await expectLegacyFeishuCardPayloadRejected(
+      cfg,
+      createLegacyFeishuButtonCard({ text: "/new" }),
+    );
+  });
+
+  it("allows non-button controls to carry text metadata values", async () => {
+    sendCardFeishuMock.mockResolvedValueOnce({ messageId: "om_card", chatId: "oc_group_1" });
+    const card = {
+      schema: "2.0",
+      body: {
+        elements: [
+          {
+            tag: "action",
+            actions: [
+              {
+                tag: "select_static",
+                placeholder: { tag: "plain_text", content: "Pick one" },
+                value: { text: "display-only metadata" },
+                options: [
+                  {
+                    text: { tag: "plain_text", content: "Option A" },
+                    value: "a",
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    };
+
+    await feishuPlugin.actions?.handleAction?.({
+      action: "send",
+      params: { to: "chat:oc_group_1", card },
+      cfg,
+      accountId: undefined,
+      toolContext: {},
+    } as never);
+
+    expect(sendCardFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        card,
+      }),
+    );
+  });
+
+  it("sends media through the outbound adapter", async () => {
+    feishuOutboundSendMediaMock.mockResolvedValueOnce({
+      channel: "feishu",
+      messageId: "om_media",
+      details: { messageId: "om_media", chatId: "oc_group_1" },
+    });
+
+    const result = await feishuPlugin.actions?.handleAction?.({
+      action: "send",
+      params: {
+        to: "chat:oc_group_1",
+        message: "test",
+        media: "/tmp/image.png",
+      },
+      cfg,
+      accountId: undefined,
+      toolContext: {},
+      mediaLocalRoots: ["/tmp"],
+    } as never);
+
+    expect(feishuOutboundSendMediaMock).toHaveBeenCalledWith({
+      cfg,
+      to: "chat:oc_group_1",
+      text: "test",
+      mediaUrl: "/tmp/image.png",
+      accountId: undefined,
+      mediaLocalRoots: ["/tmp"],
+      replyToId: undefined,
+    });
+    expect(result?.details).toMatchObject({ messageId: "om_media" });
   });
 
   it("reads messages", async () => {
@@ -543,6 +757,34 @@ describe("feishuPlugin actions", () => {
     ).rejects.toThrow("Feishu thread-reply requires messageId.");
   });
 
+  it("sends media-only messages without requiring card", async () => {
+    feishuOutboundSendMediaMock.mockResolvedValueOnce({
+      channel: "feishu",
+      messageId: "om_media_only",
+      details: { messageId: "om_media_only", chatId: "oc_group_1" },
+    });
+
+    const result = await feishuPlugin.actions?.handleAction?.({
+      action: "send",
+      params: {
+        to: "chat:oc_group_1",
+        media: "https://example.com/image.png",
+      },
+      cfg,
+      accountId: undefined,
+      toolContext: {},
+      mediaLocalRoots: [],
+    } as never);
+
+    expect(feishuOutboundSendMediaMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "chat:oc_group_1",
+        mediaUrl: "https://example.com/image.png",
+      }),
+    );
+    expect(result?.details).toMatchObject({ messageId: "om_media_only" });
+  });
+
   it("fails for unsupported action names", async () => {
     await expect(
       feishuPlugin.actions?.handleAction?.({
@@ -552,5 +794,73 @@ describe("feishuPlugin actions", () => {
         accountId: undefined,
       } as never),
     ).rejects.toThrow('Unsupported Feishu action: "search"');
+  });
+});
+
+describe("resolveReceiveIdType", () => {
+  it("resolves chat IDs by oc_ prefix", () => {
+    expect(resolveReceiveIdType("oc_123")).toBe("chat_id");
+  });
+
+  it("resolves open IDs by ou_ prefix", () => {
+    expect(resolveReceiveIdType("ou_123")).toBe("open_id");
+  });
+
+  it("defaults unprefixed IDs to user_id", () => {
+    expect(resolveReceiveIdType("u_123")).toBe("user_id");
+  });
+
+  it("treats explicit group targets as chat_id", () => {
+    expect(resolveReceiveIdType("group:oc_123")).toBe("chat_id");
+  });
+
+  it("treats explicit channel targets as chat_id", () => {
+    expect(resolveReceiveIdType("channel:oc_123")).toBe("chat_id");
+  });
+
+  it("treats dm-prefixed open IDs as open_id", () => {
+    expect(resolveReceiveIdType("dm:ou_123")).toBe("open_id");
+  });
+});
+
+describe("normalizeFeishuTarget", () => {
+  it("strips provider and user prefixes", () => {
+    expect(normalizeFeishuTarget("feishu:user:ou_123")).toBe("ou_123");
+    expect(normalizeFeishuTarget("lark:user:ou_123")).toBe("ou_123");
+  });
+
+  it("strips provider and chat prefixes", () => {
+    expect(normalizeFeishuTarget("feishu:chat:oc_123")).toBe("oc_123");
+  });
+
+  it("normalizes group/channel prefixes to chat ids", () => {
+    expect(normalizeFeishuTarget("group:oc_123")).toBe("oc_123");
+    expect(normalizeFeishuTarget("feishu:group:oc_123")).toBe("oc_123");
+    expect(normalizeFeishuTarget("channel:oc_456")).toBe("oc_456");
+    expect(normalizeFeishuTarget("lark:channel:oc_456")).toBe("oc_456");
+  });
+
+  it("accepts provider-prefixed raw ids", () => {
+    expect(normalizeFeishuTarget("feishu:ou_123")).toBe("ou_123");
+  });
+
+  it("strips provider and dm prefixes", () => {
+    expect(normalizeFeishuTarget("lark:dm:ou_123")).toBe("ou_123");
+  });
+});
+
+describe("looksLikeFeishuId", () => {
+  it("accepts provider-prefixed user targets", () => {
+    expect(looksLikeFeishuId("feishu:user:ou_123")).toBe(true);
+  });
+
+  it("accepts provider-prefixed chat targets", () => {
+    expect(looksLikeFeishuId("lark:chat:oc_123")).toBe(true);
+  });
+
+  it("accepts group/channel targets", () => {
+    expect(looksLikeFeishuId("feishu:group:oc_123")).toBe(true);
+    expect(looksLikeFeishuId("group:oc_123")).toBe(true);
+    expect(looksLikeFeishuId("channel:oc_456")).toBe(true);
   });
 });

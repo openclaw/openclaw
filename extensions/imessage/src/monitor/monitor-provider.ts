@@ -3,9 +3,10 @@ import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
   createChannelInboundDebouncer,
   shouldDebounceTextInbound,
-} from "openclaw/plugin-sdk/channel-runtime";
-import { createReplyPrefixOptions } from "openclaw/plugin-sdk/channel-runtime";
-import { recordInboundSession } from "openclaw/plugin-sdk/channel-runtime";
+} from "openclaw/plugin-sdk/channel-inbound";
+import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
+import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
+import { waitForTransportReady } from "openclaw/plugin-sdk/channel-runtime";
 import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   resolveOpenProviderRuntimeGroupPolicy,
@@ -13,26 +14,25 @@ import {
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/config-runtime";
 import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
-import { issuePairingChallenge } from "openclaw/plugin-sdk/conversation-runtime";
 import {
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
 } from "openclaw/plugin-sdk/conversation-runtime";
-import { normalizeScpRemoteHost } from "openclaw/plugin-sdk/infra-runtime";
-import { waitForTransportReady } from "openclaw/plugin-sdk/infra-runtime";
+import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
+import { normalizeScpRemoteHost } from "openclaw/plugin-sdk/host-runtime";
 import {
   isInboundPathAllowed,
   resolveIMessageAttachmentRoots,
   resolveIMessageRemoteAttachmentRoots,
 } from "openclaw/plugin-sdk/media-runtime";
 import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
-import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
-import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
 import {
   clearHistoryEntriesIfEnabled,
   DEFAULT_GROUP_HISTORY_LIMIT,
   type HistoryEntry,
-} from "openclaw/plugin-sdk/reply-runtime";
+} from "openclaw/plugin-sdk/reply-history";
+import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
+import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
 import { createReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { danger, logVerbose, shouldLogVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
@@ -292,14 +292,8 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       if (!sender) {
         return;
       }
-      await issuePairingChallenge({
+      await createChannelPairingChallengeIssuer({
         channel: "imessage",
-        senderId: decision.senderId,
-        senderIdLine: `Your iMessage sender id: ${decision.senderId}`,
-        meta: {
-          sender: decision.senderId,
-          chatId: chatId ? String(chatId) : undefined,
-        },
         upsertPairingRequest: async ({ id, meta }) =>
           await upsertChannelPairingRequest({
             channel: "imessage",
@@ -307,6 +301,13 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
             accountId: accountInfo.accountId,
             meta,
           }),
+      })({
+        senderId: decision.senderId,
+        senderIdLine: `Your iMessage sender id: ${decision.senderId}`,
+        meta: {
+          sender: decision.senderId,
+          chatId: chatId ? String(chatId) : undefined,
+        },
         onCreated: () => {
           logVerbose(`imessage pairing request sender=${decision.senderId}`);
         },
@@ -393,7 +394,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       );
     }
 
-    const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+    const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
       cfg,
       agentId: decision.route.agentId,
       channel: "imessage",
@@ -401,7 +402,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     });
 
     const dispatcher = createReplyDispatcher({
-      ...prefixOptions,
+      ...replyPipeline,
       humanDelay: resolveHumanDelayConfig(cfg, decision.route.agentId),
       deliver: async (payload) => {
         const target = ctxPayload.To;
@@ -535,3 +536,5 @@ export const __testing = {
   resolveIMessageRuntimeGroupPolicy: resolveOpenProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
 };
+
+export const resolveIMessageRuntimeGroupPolicy = resolveOpenProviderRuntimeGroupPolicy;

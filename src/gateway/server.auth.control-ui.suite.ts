@@ -112,16 +112,23 @@ export function registerControlUiAndPairingSuite(): void {
     expect(talk.error?.message).toBe("missing scope: operator.read");
   };
 
+  const expectDevicePairApproveDenied = async (ws: WebSocket, requestId: string) => {
+    const approve = await rpcReq(ws, "device.pair.approve", { requestId });
+    expect(approve.ok).toBe(false);
+    expect(approve.error?.message ?? "").toMatch(/^missing scope: operator\.(admin|pairing)$/);
+  };
+
   const connectControlUiWithoutDeviceAndExpectOk = async (params: {
     ws: WebSocket;
     token?: string;
     password?: string;
+    client?: { id: string; version: string; platform: string; mode: string };
   }) => {
     const res = await connectReq(params.ws, {
       ...(params.token ? { token: params.token } : {}),
       ...(params.password ? { password: params.password } : {}),
       device: null,
-      client: { ...CONTROL_UI_CLIENT },
+      client: { ...(params.client ?? CONTROL_UI_CLIENT) },
     });
     expect(res.ok).toBe(true);
     await expectStatusAndHealthOk(params.ws);
@@ -194,7 +201,9 @@ export function registerControlUiAndPairingSuite(): void {
       displayName: params.displayName,
       platform: params.platform,
     });
-    await approveDevicePairing(seeded.request.requestId);
+    await approveDevicePairing(seeded.request.requestId, {
+      callerScopes: ["operator.admin"],
+    });
     return { identityPath, identity: { deviceId: identity.deviceId } };
   };
 
@@ -244,6 +253,18 @@ export function registerControlUiAndPairingSuite(): void {
 
   test("clears self-declared scopes for trusted-proxy control ui without device identity", async () => {
     await configureTrustedProxyControlUiAuth();
+    const { publicKeyRawBase64UrlFromPem } = await import("../infra/device-identity.js");
+    const { rejectDevicePairing, requestDevicePairing } =
+      await import("../infra/device-pairing.js");
+    const { identity } = await createOperatorIdentityFixture("openclaw-control-ui-trusted-proxy-");
+    const pendingRequest = await requestDevicePairing({
+      deviceId: identity.deviceId,
+      publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+      role: "operator",
+      scopes: ["operator.admin"],
+      clientId: CONTROL_UI_CLIENT.id,
+      clientMode: CONTROL_UI_CLIENT.mode,
+    });
     await withGatewayServer(async ({ port }) => {
       const ws = await openWs(port, TRUSTED_PROXY_CONTROL_UI_HEADERS);
       try {
@@ -259,8 +280,10 @@ export function registerControlUiAndPairingSuite(): void {
         await expectStatusMissingScopeButHealthOk(ws);
         await expectAdminRpcDenied(ws);
         await expectTalkSecretsDenied(ws);
+        await expectDevicePairApproveDenied(ws, pendingRequest.request.requestId);
       } finally {
         ws.close();
+        await rejectDevicePairing(pendingRequest.request.requestId);
       }
     });
   });
@@ -271,6 +294,24 @@ export function registerControlUiAndPairingSuite(): void {
       wsHeaders: { origin: "http://127.0.0.1" },
     });
     await connectControlUiWithoutDeviceAndExpectOk({ ws, token: "secret" });
+    ws.close();
+    await server.close();
+    restoreGatewayToken(prevToken);
+  });
+
+  test("allows localhost tui without device identity when insecure auth is enabled", async () => {
+    testState.gatewayControlUi = { allowInsecureAuth: true };
+    const { server, ws, prevToken } = await startServerWithClient("secret");
+    await connectControlUiWithoutDeviceAndExpectOk({
+      ws,
+      token: "secret",
+      client: {
+        id: GATEWAY_CLIENT_NAMES.TUI,
+        version: "1.0.0",
+        platform: "darwin",
+        mode: GATEWAY_CLIENT_MODES.UI,
+      },
+    });
     ws.close();
     await server.close();
     restoreGatewayToken(prevToken);
@@ -382,6 +423,35 @@ export function registerControlUiAndPairingSuite(): void {
         expect((res.payload as { auth?: unknown } | undefined)?.auth).toBeUndefined();
         const health = await rpcReq(ws, "health");
         expect(health.ok).toBe(true);
+        ws.close();
+      });
+    } finally {
+      restoreGatewayToken(prevToken);
+    }
+  });
+
+  test("preserves requested control ui scopes when dangerouslyDisableDeviceAuth bypasses device identity", async () => {
+    testState.gatewayControlUi = { dangerouslyDisableDeviceAuth: true };
+    testState.gatewayAuth = { mode: "token", token: "secret" };
+    const prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+    process.env.OPENCLAW_GATEWAY_TOKEN = "secret";
+    try {
+      await withGatewayServer(async ({ port }) => {
+        const ws = await openWs(port, { origin: originForPort(port) });
+        const res = await connectReq(ws, {
+          token: "secret",
+          scopes: ["operator.read"],
+          client: {
+            ...CONTROL_UI_CLIENT,
+          },
+        });
+        expect(res.ok).toBe(true);
+
+        const health = await rpcReq(ws, "health");
+        expect(health.ok).toBe(true);
+
+        const talk = await rpcReq(ws, "chat.history", { sessionKey: "main", limit: 1 });
+        expect(talk.ok).toBe(true);
         ws.close();
       });
     } finally {
@@ -693,7 +763,9 @@ export function registerControlUiAndPairingSuite(): void {
     if (!pendingForTestDevice[0]) {
       throw new Error("expected pending pairing request");
     }
-    await approveDevicePairing(pendingForTestDevice[0].requestId);
+    await approveDevicePairing(pendingForTestDevice[0].requestId, {
+      callerScopes: pendingForTestDevice[0].scopes ?? ["operator.admin"],
+    });
 
     const paired = await getPairedDevice(identity.deviceId);
     expect(paired?.roles).toEqual(expect.arrayContaining(["node", "operator"]));
@@ -775,7 +847,9 @@ export function registerControlUiAndPairingSuite(): void {
       displayName: "legacy-test",
       platform: "test",
     });
-    await approveDevicePairing(pending.request.requestId);
+    await approveDevicePairing(pending.request.requestId, {
+      callerScopes: pending.request.scopes ?? ["operator.admin"],
+    });
 
     await stripPairedMetadataRolesAndScopes(deviceId);
 
