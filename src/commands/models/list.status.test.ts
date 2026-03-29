@@ -329,6 +329,51 @@ describe("modelsStatusCommand auth overview", () => {
     }
   });
 
+  it("dedupes alias and canonical provider ids in auth provider summaries", async () => {
+    const localRuntime = createRuntime();
+    const originalLoadConfig = mocks.loadConfig.getMockImplementation();
+    const originalResolveEnvApiKey = mocks.resolveEnvApiKey.getMockImplementation();
+
+    mocks.loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          model: { primary: "z.ai/glm-4.7", fallbacks: [] },
+          models: { "z.ai/glm-4.7": {} },
+        },
+      },
+      models: { providers: { "z.ai": {} } },
+      env: { shellEnv: { enabled: true } },
+    });
+    mocks.resolveEnvApiKey.mockImplementation((provider: string) => {
+      if (provider === "zai" || provider === "z.ai" || provider === "z-ai") {
+        return {
+          apiKey: "sk-zai-0123456789abcdefghijklmnopqrstuvwxyz", // pragma: allowlist secret
+          source: "shell env: ZAI_API_KEY",
+        };
+      }
+      return null;
+    });
+
+    try {
+      await modelsStatusCommand({ json: true }, localRuntime as never);
+      const payload = JSON.parse(String((localRuntime.log as Mock).mock.calls[0]?.[0]));
+      const providers = payload.auth.providers as Array<{ provider: string }>;
+      expect(providers.filter((provider) => provider.provider === "zai")).toHaveLength(1);
+      expect(providers.some((provider) => provider.provider === "z.ai")).toBe(false);
+    } finally {
+      if (originalLoadConfig) {
+        mocks.loadConfig.mockImplementation(originalLoadConfig);
+      }
+      if (originalResolveEnvApiKey) {
+        mocks.resolveEnvApiKey.mockImplementation(originalResolveEnvApiKey);
+      } else if (defaultResolveEnvApiKeyImpl) {
+        mocks.resolveEnvApiKey.mockImplementation(defaultResolveEnvApiKeyImpl);
+      } else {
+        mocks.resolveEnvApiKey.mockImplementation(() => null);
+      }
+    }
+  });
+
   it("labels defaults when --agent has no overrides", async () => {
     const localRuntime = createRuntime();
     await withAgentScopeOverrides(

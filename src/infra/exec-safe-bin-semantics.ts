@@ -9,10 +9,14 @@ type SafeBinSemanticRule = {
 };
 
 const JQ_ENV_FILTER_PATTERN = /(^|[^.$A-Za-z0-9_])env([^A-Za-z0-9_]|$)/;
+const JQ_ENV_VARIABLE_PATTERN = /\$ENV\b/;
 
 const SAFE_BIN_SEMANTIC_RULES: Readonly<Record<string, SafeBinSemanticRule>> = {
   jq: {
-    validate: ({ positional }) => !positional.some((token) => JQ_ENV_FILTER_PATTERN.test(token)),
+    validate: ({ positional }) =>
+      !positional.some(
+        (token) => JQ_ENV_FILTER_PATTERN.test(token) || JQ_ENV_VARIABLE_PATTERN.test(token),
+      ),
     configWarning:
       "jq supports broad jq programs and builtins (for example `env`), so prefer explicit allowlist entries or approval-gated runs instead of safeBins.",
   },

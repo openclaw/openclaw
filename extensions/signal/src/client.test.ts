@@ -3,10 +3,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const fetchWithTimeoutMock = vi.fn();
 const resolveFetchMock = vi.fn();
 
-vi.mock("openclaw/plugin-sdk/infra-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/fetch-runtime", () => ({
   resolveFetch: (...args: unknown[]) => resolveFetchMock(...args),
-  generateSecureUuid: () => "test-id",
 }));
+
+vi.mock("openclaw/plugin-sdk/core", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/core")>();
+  return {
+    ...actual,
+    generateSecureUuid: () => "test-id",
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/text-runtime", () => ({
   fetchWithTimeout: (...args: unknown[]) => fetchWithTimeoutMock(...args),

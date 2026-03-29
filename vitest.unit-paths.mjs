@@ -22,6 +22,8 @@ export const unitTestAdditionalExcludePatterns = [
   "src/agents/**",
   "src/auto-reply/**",
   "src/commands/**",
+  "src/channels/plugins/contracts/**",
+  "src/plugins/contracts/**",
 ];
 
 const sharedBaseExcludePatterns = [

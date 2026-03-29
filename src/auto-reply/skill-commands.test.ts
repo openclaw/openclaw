@@ -75,15 +75,9 @@ function installSkillCommandTestMocks(registerMock: SkillCommandMockRegistrar) {
   }));
 }
 
-const registerSkillCommandMock: SkillCommandMockRegistrar = (modulePath, factory) => {
-  vi.mock(modulePath, factory as Parameters<typeof vi.mock>[1]);
-};
-
 const registerDynamicSkillCommandMock: SkillCommandMockRegistrar = (modulePath, factory) => {
   vi.doMock(modulePath, factory as Parameters<typeof vi.doMock>[1]);
 };
-
-installSkillCommandTestMocks(registerSkillCommandMock);
 
 async function loadFreshSkillCommandsModuleForTest() {
   vi.resetModules();

@@ -1265,14 +1265,19 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                           },
                           toolSchemaProfile: {
                             type: "string",
-                            const: "xai",
+                          },
+                          unsupportedToolSchemaKeywords: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                              minLength: 1,
+                            },
                           },
                           nativeWebSearchTool: {
                             type: "boolean",
                           },
                           toolCallArgumentsEncoding: {
                             type: "string",
-                            const: "html-entities",
                           },
                           requiresMistralToolIds: {
                             type: "boolean",
@@ -2027,6 +2032,24 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       },
                       path: {
                         type: "string",
+                      },
+                      fts: {
+                        type: "object",
+                        properties: {
+                          tokenizer: {
+                            anyOf: [
+                              {
+                                type: "string",
+                                const: "unicode61",
+                              },
+                              {
+                                type: "string",
+                                const: "trigram",
+                              },
+                            ],
+                          },
+                        },
+                        additionalProperties: false,
                       },
                       vector: {
                         type: "object",
@@ -3590,6 +3613,24 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                         },
                         path: {
                           type: "string",
+                        },
+                        fts: {
+                          type: "object",
+                          properties: {
+                            tokenizer: {
+                              anyOf: [
+                                {
+                                  type: "string",
+                                  const: "unicode61",
+                                },
+                                {
+                                  type: "string",
+                                  const: "trigram",
+                                },
+                              ],
+                            },
+                          },
+                          additionalProperties: false,
                         },
                         vector: {
                           type: "object",
@@ -5627,6 +5668,101 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       },
                     },
                     additionalProperties: false,
+                  },
+                },
+                additionalProperties: false,
+              },
+              x_search: {
+                type: "object",
+                properties: {
+                  enabled: {
+                    type: "boolean",
+                  },
+                  apiKey: {
+                    anyOf: [
+                      {
+                        type: "string",
+                      },
+                      {
+                        oneOf: [
+                          {
+                            type: "object",
+                            properties: {
+                              source: {
+                                type: "string",
+                                const: "env",
+                              },
+                              provider: {
+                                type: "string",
+                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                              },
+                              id: {
+                                type: "string",
+                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                              },
+                            },
+                            required: ["source", "provider", "id"],
+                            additionalProperties: false,
+                          },
+                          {
+                            type: "object",
+                            properties: {
+                              source: {
+                                type: "string",
+                                const: "file",
+                              },
+                              provider: {
+                                type: "string",
+                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                              },
+                              id: {
+                                type: "string",
+                              },
+                            },
+                            required: ["source", "provider", "id"],
+                            additionalProperties: false,
+                          },
+                          {
+                            type: "object",
+                            properties: {
+                              source: {
+                                type: "string",
+                                const: "exec",
+                              },
+                              provider: {
+                                type: "string",
+                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                              },
+                              id: {
+                                type: "string",
+                              },
+                            },
+                            required: ["source", "provider", "id"],
+                            additionalProperties: false,
+                          },
+                        ],
+                      },
+                    ],
+                  },
+                  model: {
+                    type: "string",
+                  },
+                  inlineCitations: {
+                    type: "boolean",
+                  },
+                  maxTurns: {
+                    type: "integer",
+                    minimum: -9007199254740991,
+                    maximum: 9007199254740991,
+                  },
+                  timeoutSeconds: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  cacheTtlMinutes: {
+                    type: "number",
+                    minimum: 0,
                   },
                 },
                 additionalProperties: false,
@@ -8388,6 +8524,74 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
             },
             additionalProperties: false,
           },
+          plugin: {
+            type: "object",
+            properties: {
+              enabled: {
+                type: "boolean",
+              },
+              mode: {
+                anyOf: [
+                  {
+                    type: "string",
+                    const: "session",
+                  },
+                  {
+                    type: "string",
+                    const: "targets",
+                  },
+                  {
+                    type: "string",
+                    const: "both",
+                  },
+                ],
+              },
+              agentFilter: {
+                type: "array",
+                items: {
+                  type: "string",
+                },
+              },
+              sessionFilter: {
+                type: "array",
+                items: {
+                  type: "string",
+                },
+              },
+              targets: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    channel: {
+                      type: "string",
+                      minLength: 1,
+                    },
+                    to: {
+                      type: "string",
+                      minLength: 1,
+                    },
+                    accountId: {
+                      type: "string",
+                    },
+                    threadId: {
+                      anyOf: [
+                        {
+                          type: "string",
+                        },
+                        {
+                          type: "number",
+                        },
+                      ],
+                    },
+                  },
+                  required: ["channel", "to"],
+                  additionalProperties: false,
+                },
+              },
+            },
+            additionalProperties: false,
+          },
         },
         additionalProperties: false,
       },
@@ -9148,44 +9352,8 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   type: "boolean",
                 },
                 channel: {
-                  anyOf: [
-                    {
-                      type: "string",
-                      const: "last",
-                    },
-                    {
-                      type: "string",
-                      const: "whatsapp",
-                    },
-                    {
-                      type: "string",
-                      const: "telegram",
-                    },
-                    {
-                      type: "string",
-                      const: "discord",
-                    },
-                    {
-                      type: "string",
-                      const: "irc",
-                    },
-                    {
-                      type: "string",
-                      const: "slack",
-                    },
-                    {
-                      type: "string",
-                      const: "signal",
-                    },
-                    {
-                      type: "string",
-                      const: "imessage",
-                    },
-                    {
-                      type: "string",
-                      const: "msteams",
-                    },
-                  ],
+                  type: "string",
+                  minLength: 1,
                 },
                 to: {
                   type: "string",
@@ -12532,7 +12700,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     },
     approvals: {
       label: "Approvals",
-      help: "Approval routing controls for forwarding exec approval requests to chat destinations outside the originating session. Keep this disabled unless operators need explicit out-of-band approval visibility.",
+      help: "Approval routing controls for forwarding exec and plugin approval requests to chat destinations outside the originating session. Keep these disabled unless operators need explicit out-of-band approval visibility.",
       tags: ["advanced"],
     },
     "approvals.exec": {
@@ -12583,6 +12751,56 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     "approvals.exec.targets[].threadId": {
       label: "Approval Target Thread ID",
       help: "Optional thread/topic target for channels that support threaded delivery of forwarded approvals. Use this to keep approval traffic contained in operational threads instead of main channels.",
+      tags: ["advanced"],
+    },
+    "approvals.plugin": {
+      label: "Plugin Approval Forwarding",
+      help: "Groups plugin-approval forwarding behavior including enablement, routing mode, filters, and explicit targets. Independent of exec approval forwarding. Configure here when plugin approval prompts must reach operational channels.",
+      tags: ["advanced"],
+    },
+    "approvals.plugin.enabled": {
+      label: "Forward Plugin Approvals",
+      help: "Enables forwarding of plugin approval requests to configured delivery destinations (default: false). Independent of approvals.exec.enabled.",
+      tags: ["advanced"],
+    },
+    "approvals.plugin.mode": {
+      label: "Plugin Approval Forwarding Mode",
+      help: 'Controls where plugin approval prompts are sent: "session" uses origin chat, "targets" uses configured targets, and "both" sends to both paths.',
+      tags: ["advanced"],
+    },
+    "approvals.plugin.agentFilter": {
+      label: "Plugin Approval Agent Filter",
+      help: 'Optional allowlist of agent IDs eligible for forwarded plugin approvals, for example `["primary", "ops-agent"]`. Use this to limit forwarding blast radius.',
+      tags: ["advanced"],
+    },
+    "approvals.plugin.sessionFilter": {
+      label: "Plugin Approval Session Filter",
+      help: 'Optional session-key filters matched as substring or regex-style patterns, for example `["discord:", "^agent:ops:"]`. Use narrow patterns so only intended approval contexts are forwarded.',
+      tags: ["storage"],
+    },
+    "approvals.plugin.targets": {
+      label: "Plugin Approval Forwarding Targets",
+      help: "Explicit delivery targets used when plugin approval forwarding mode includes targets, each with channel and destination details.",
+      tags: ["advanced"],
+    },
+    "approvals.plugin.targets[].channel": {
+      label: "Plugin Approval Target Channel",
+      help: "Channel/provider ID used for forwarded plugin approval delivery, such as discord, slack, or a plugin channel id.",
+      tags: ["advanced"],
+    },
+    "approvals.plugin.targets[].to": {
+      label: "Plugin Approval Target Destination",
+      help: "Destination identifier inside the target channel (channel ID, user ID, or thread root depending on provider).",
+      tags: ["advanced"],
+    },
+    "approvals.plugin.targets[].accountId": {
+      label: "Plugin Approval Target Account ID",
+      help: "Optional account selector for multi-account channel setups when plugin approvals must route through a specific account context.",
+      tags: ["advanced"],
+    },
+    "approvals.plugin.targets[].threadId": {
+      label: "Plugin Approval Target Thread ID",
+      help: "Optional thread/topic target for channels that support threaded delivery of forwarded plugin approvals.",
       tags: ["advanced"],
     },
     "tools.message.allowCrossContextSend": {
@@ -12720,6 +12938,42 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       label: "Firecrawl Timeout (sec)",
       help: "Timeout in seconds for Firecrawl requests.",
       tags: ["performance", "tools"],
+    },
+    "tools.web.x_search.enabled": {
+      label: "Enable X Search Tool",
+      help: "Enable the x_search tool (requires XAI_API_KEY or tools.web.x_search.apiKey).",
+      tags: ["tools"],
+    },
+    "tools.web.x_search.apiKey": {
+      label: "xAI API Key",
+      help: "xAI API key for X search (fallback: XAI_API_KEY env var).",
+      tags: ["security", "auth", "tools"],
+      sensitive: true,
+    },
+    "tools.web.x_search.model": {
+      label: "X Search Model",
+      help: 'Model to use for X search (default: "grok-4-1-fast-non-reasoning").',
+      tags: ["models", "tools"],
+    },
+    "tools.web.x_search.inlineCitations": {
+      label: "X Search Inline Citations",
+      help: "Keep inline citations from xAI in x_search responses when available (default: false).",
+      tags: ["tools"],
+    },
+    "tools.web.x_search.maxTurns": {
+      label: "X Search Max Turns",
+      help: "Optional max internal search/tool turns xAI may use per x_search request. Omit to let xAI choose.",
+      tags: ["performance", "tools"],
+    },
+    "tools.web.x_search.timeoutSeconds": {
+      label: "X Search Timeout (sec)",
+      help: "Timeout in seconds for x_search requests.",
+      tags: ["performance", "tools"],
+    },
+    "tools.web.x_search.cacheTtlMinutes": {
+      label: "X Search Cache TTL (min)",
+      help: "Cache TTL in minutes for x_search results.",
+      tags: ["performance", "storage", "tools"],
     },
     "gateway.controlUi.basePath": {
       label: "Control UI Base Path",
@@ -15256,6 +15510,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       tags: ["security", "auth"],
     },
   },
-  version: "2026.3.26",
+  version: "2026.3.28",
   generatedAt: "2026-03-22T21:17:33.302Z",
 } as const satisfies BaseConfigSchemaResponse;

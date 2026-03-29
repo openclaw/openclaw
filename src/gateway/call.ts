@@ -6,6 +6,12 @@ import {
   resolveGatewayPort,
   resolveStateDir,
 } from "../config/config.js";
+import { loadConfig as loadConfigFromIo } from "../config/io.js";
+import {
+  resolveConfigPath as resolveConfigPathFromPaths,
+  resolveGatewayPort as resolveGatewayPortFromPaths,
+  resolveStateDir as resolveStateDirFromPaths,
+} from "../config/paths.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
@@ -18,6 +24,10 @@ import {
 } from "../utils/message-channel.js";
 import { VERSION } from "../version.js";
 import { GatewayClient, type GatewayClientOptions } from "./client.js";
+import {
+  buildGatewayConnectionDetailsWithResolvers,
+  type GatewayConnectionDetails,
+} from "./connection-details.js";
 import {
   GatewaySecretRefUnavailableError,
   resolveGatewayCredentialsFromConfig,
@@ -32,8 +42,8 @@ import {
   resolveLeastPrivilegeOperatorScopesForMethod,
   type OperatorScope,
 } from "./method-scopes.js";
-import { isSecureWebSocketUrl } from "./net.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
+export type { GatewayConnectionDetails };
 
 type CallGatewayBaseOptions = {
   url?: string;
@@ -73,14 +83,6 @@ export type CallGatewayOptions = CallGatewayBaseOptions & {
   scopes?: OperatorScope[];
 };
 
-export type GatewayConnectionDetails = {
-  url: string;
-  urlSource: string;
-  bindDetail?: string;
-  remoteFallbackNote?: string;
-  message: string;
-};
-
 const defaultCreateGatewayClient = (opts: GatewayClientOptions) => new GatewayClient(opts);
 const defaultGatewayCallDeps = {
   createGatewayClient: defaultCreateGatewayClient,
@@ -94,6 +96,55 @@ const defaultGatewayCallDeps = {
 const gatewayCallDeps = {
   ...defaultGatewayCallDeps,
 };
+
+function loadGatewayConfig(): OpenClawConfig {
+  const loadConfigFn =
+    typeof gatewayCallDeps.loadConfig === "function"
+      ? gatewayCallDeps.loadConfig
+      : typeof defaultGatewayCallDeps.loadConfig === "function"
+        ? defaultGatewayCallDeps.loadConfig
+        : loadConfigFromIo;
+  return loadConfigFn();
+}
+
+function resolveGatewayStateDir(env: NodeJS.ProcessEnv): string {
+  const resolveStateDirFn =
+    typeof gatewayCallDeps.resolveStateDir === "function"
+      ? gatewayCallDeps.resolveStateDir
+      : resolveStateDirFromPaths;
+  return resolveStateDirFn(env);
+}
+
+function resolveGatewayConfigPath(env: NodeJS.ProcessEnv): string {
+  const resolveConfigPathFn =
+    typeof gatewayCallDeps.resolveConfigPath === "function"
+      ? gatewayCallDeps.resolveConfigPath
+      : resolveConfigPathFromPaths;
+  return resolveConfigPathFn(env, resolveGatewayStateDir(env));
+}
+
+function resolveGatewayPortValue(config?: OpenClawConfig, env?: NodeJS.ProcessEnv): number {
+  const resolveGatewayPortFn =
+    typeof gatewayCallDeps.resolveGatewayPort === "function"
+      ? gatewayCallDeps.resolveGatewayPort
+      : resolveGatewayPortFromPaths;
+  return resolveGatewayPortFn(config, env);
+}
+
+export function buildGatewayConnectionDetails(
+  options: {
+    config?: OpenClawConfig;
+    url?: string;
+    configPath?: string;
+    urlSource?: "cli" | "env";
+  } = {},
+): GatewayConnectionDetails {
+  return buildGatewayConnectionDetailsWithResolvers(options, {
+    loadConfig: () => loadGatewayConfig(),
+    resolveConfigPath: (env) => resolveGatewayConfigPath(env),
+    resolveGatewayPort: (config, env) => resolveGatewayPortValue(config, env),
+  });
+}
 
 export const __testing = {
   setDepsForTests(deps: Partial<typeof defaultGatewayCallDeps> | undefined): void {
@@ -194,97 +245,6 @@ export function ensureExplicitGatewayAuth(params: {
   throw new Error(message);
 }
 
-export function buildGatewayConnectionDetails(
-  options: {
-    config?: OpenClawConfig;
-    url?: string;
-    configPath?: string;
-    urlSource?: "cli" | "env";
-  } = {},
-): GatewayConnectionDetails {
-  const config = options.config ?? gatewayCallDeps.loadConfig();
-  const configPath =
-    options.configPath ??
-    gatewayCallDeps.resolveConfigPath(process.env, gatewayCallDeps.resolveStateDir(process.env));
-  const isRemoteMode = config.gateway?.mode === "remote";
-  const remote = isRemoteMode ? config.gateway?.remote : undefined;
-  const tlsEnabled = config.gateway?.tls?.enabled === true;
-  const localPort = gatewayCallDeps.resolveGatewayPort(config);
-  const bindMode = config.gateway?.bind ?? "loopback";
-  const scheme = tlsEnabled ? "wss" : "ws";
-  // Self-connections should always target loopback; bind mode only controls listener exposure.
-  const localUrl = `${scheme}://127.0.0.1:${localPort}`;
-  const cliUrlOverride =
-    typeof options.url === "string" && options.url.trim().length > 0
-      ? options.url.trim()
-      : undefined;
-  const envUrlOverride = cliUrlOverride
-    ? undefined
-    : trimToUndefined(process.env.OPENCLAW_GATEWAY_URL);
-  const urlOverride = cliUrlOverride ?? envUrlOverride;
-  const remoteUrl =
-    typeof remote?.url === "string" && remote.url.trim().length > 0 ? remote.url.trim() : undefined;
-  const remoteMisconfigured = isRemoteMode && !urlOverride && !remoteUrl;
-  const urlSourceHint =
-    options.urlSource ?? (cliUrlOverride ? "cli" : envUrlOverride ? "env" : undefined);
-  const url = urlOverride || remoteUrl || localUrl;
-  const urlSource = urlOverride
-    ? urlSourceHint === "env"
-      ? "env OPENCLAW_GATEWAY_URL"
-      : "cli --url"
-    : remoteUrl
-      ? "config gateway.remote.url"
-      : remoteMisconfigured
-        ? "missing gateway.remote.url (fallback local)"
-        : "local loopback";
-  const bindDetail = !urlOverride && !remoteUrl ? `Bind: ${bindMode}` : undefined;
-  const remoteFallbackNote = remoteMisconfigured
-    ? "Warn: gateway.mode=remote but gateway.remote.url is missing; set gateway.remote.url or switch gateway.mode=local."
-    : undefined;
-
-  const allowPrivateWs = process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS === "1";
-  // Security check: block ALL insecure ws:// to non-loopback addresses (CWE-319, CVSS 9.8)
-  // This applies to the FINAL resolved URL, regardless of source (config, CLI override, etc).
-  // Both credentials and chat/conversation data must not be transmitted over plaintext to remote hosts.
-  if (!isSecureWebSocketUrl(url, { allowPrivateWs })) {
-    throw new Error(
-      [
-        `SECURITY ERROR: Gateway URL "${url}" uses plaintext ws:// to a non-loopback address.`,
-        "Both credentials and chat data would be exposed to network interception.",
-        `Source: ${urlSource}`,
-        `Config: ${configPath}`,
-        "Fix: Use wss:// for remote gateway URLs.",
-        "Safe remote access defaults:",
-        "- keep gateway.bind=loopback and use an SSH tunnel (ssh -N -L 18789:127.0.0.1:18789 user@gateway-host)",
-        "- or use Tailscale Serve/Funnel for HTTPS remote access",
-        allowPrivateWs
-          ? undefined
-          : "Break-glass (trusted private networks only): set OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1",
-        "Doctor: openclaw doctor --fix",
-        "Docs: https://docs.openclaw.ai/gateway/remote",
-      ].join("\n"),
-    );
-  }
-
-  const message = [
-    `Gateway target: ${url}`,
-    `Source: ${urlSource}`,
-    `Config: ${configPath}`,
-    bindDetail,
-    remoteFallbackNote,
-  ]
-    .filter(Boolean)
-    .join("\n");
-
-  return {
-    url,
-    urlSource,
-    bindDetail,
-    remoteFallbackNote,
-    message,
-  };
-}
-
 type GatewayRemoteSettings = {
   url?: string;
   token?: string;
@@ -321,10 +281,8 @@ function resolveGatewayCallTimeout(timeoutValue: unknown): {
 }
 
 function resolveGatewayCallContext(opts: CallGatewayBaseOptions): ResolvedGatewayCallContext {
-  const config = opts.config ?? gatewayCallDeps.loadConfig();
-  const configPath =
-    opts.configPath ??
-    gatewayCallDeps.resolveConfigPath(process.env, gatewayCallDeps.resolveStateDir(process.env));
+  const config = opts.config ?? loadGatewayConfig();
+  const configPath = opts.configPath ?? resolveGatewayConfigPath(process.env);
   const isRemoteMode = config.gateway?.mode === "remote";
   const remote = isRemoteMode
     ? (config.gateway?.remote as GatewayRemoteSettings | undefined)
@@ -732,10 +690,7 @@ export async function resolveGatewayCredentialsWithSecretInputs(params: {
       : undefined;
   const context: ResolvedGatewayCallContext = {
     config: params.config,
-    configPath: gatewayCallDeps.resolveConfigPath(
-      process.env,
-      gatewayCallDeps.resolveStateDir(process.env),
-    ),
+    configPath: resolveGatewayConfigPath(process.env),
     isRemoteMode,
     remote: remoteFromOverride ?? remoteFromConfig,
     urlOverride: trimToUndefined(params.urlOverride),

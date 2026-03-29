@@ -7,6 +7,10 @@ import {
   normalizeChatChannelId,
 } from "../channels/registry.js";
 import {
+  BUNDLED_AUTO_ENABLE_PROVIDER_PLUGIN_IDS,
+  BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS,
+} from "../plugins/bundled-capability-metadata.js";
+import {
   loadPluginManifestRegistry,
   type PluginManifestRegistry,
 } from "../plugins/manifest-registry.js";
@@ -30,12 +34,21 @@ const EMPTY_PLUGIN_MANIFEST_REGISTRY: PluginManifestRegistry = {
   diagnostics: [],
 };
 
-const PROVIDER_PLUGIN_IDS: Array<{ pluginId: string; providerId: string }> = [
-  { pluginId: "google", providerId: "google-gemini-cli" },
-  { pluginId: "copilot-proxy", providerId: "copilot-proxy" },
-  { pluginId: "minimax", providerId: "minimax-portal" },
-];
 const ENV_CATALOG_PATHS = ["OPENCLAW_PLUGIN_CATALOG_PATHS", "OPENCLAW_MPM_CATALOG_PATHS"];
+
+function resolveAutoEnableProviderPluginIds(
+  registry: PluginManifestRegistry,
+): Readonly<Record<string, string>> {
+  const entries = new Map<string, string>(Object.entries(BUNDLED_AUTO_ENABLE_PROVIDER_PLUGIN_IDS));
+  for (const plugin of registry.plugins) {
+    for (const providerId of plugin.autoEnableWhenConfiguredProviders ?? []) {
+      if (!entries.has(providerId)) {
+        entries.set(providerId, plugin.id);
+      }
+    }
+  }
+  return Object.fromEntries(entries);
+}
 
 function collectModelRefs(cfg: OpenClawConfig): string[] {
   const refs: string[] = [];
@@ -125,6 +138,41 @@ function isProviderConfigured(cfg: OpenClawConfig, providerId: string): boolean 
   }
 
   return false;
+}
+
+function hasPluginOwnedWebSearchConfig(cfg: OpenClawConfig, pluginId: string): boolean {
+  const pluginConfig = cfg.plugins?.entries?.[pluginId]?.config;
+  if (!isRecord(pluginConfig)) {
+    return false;
+  }
+  return isRecord(pluginConfig.webSearch);
+}
+
+function hasPluginOwnedToolConfig(cfg: OpenClawConfig, pluginId: string): boolean {
+  if (pluginId === "xai") {
+    const pluginConfig = cfg.plugins?.entries?.xai?.config;
+    return Boolean(
+      isRecord(cfg.tools?.web?.x_search as Record<string, unknown> | undefined) ||
+      (isRecord(pluginConfig) && isRecord(pluginConfig.codeExecution)),
+    );
+  }
+  return false;
+}
+
+function resolveProviderPluginsWithOwnedWebSearch(
+  registry: PluginManifestRegistry,
+): ReadonlySet<string> {
+  const pluginIds = new Set(
+    BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.filter(
+      (entry) => entry.providerIds.length > 0 && entry.webSearchProviderIds.length > 0,
+    ).map((entry) => entry.pluginId),
+  );
+  for (const plugin of registry.plugins) {
+    if (plugin.providers.length > 0 && (plugin.contracts?.webSearchProviders?.length ?? 0) > 0) {
+      pluginIds.add(plugin.id);
+    }
+  }
+  return pluginIds;
 }
 
 function buildChannelToPluginIdMap(registry: PluginManifestRegistry): Map<string, string> {
@@ -286,11 +334,29 @@ function resolveConfiguredPlugins(
     }
   }
 
-  for (const mapping of PROVIDER_PLUGIN_IDS) {
-    if (isProviderConfigured(cfg, mapping.providerId)) {
+  for (const [providerId, pluginId] of Object.entries(
+    resolveAutoEnableProviderPluginIds(registry),
+  )) {
+    if (isProviderConfigured(cfg, providerId)) {
       changes.push({
-        pluginId: mapping.pluginId,
-        reason: `${mapping.providerId} auth configured`,
+        pluginId,
+        reason: `${providerId} auth configured`,
+      });
+    }
+  }
+  for (const pluginId of resolveProviderPluginsWithOwnedWebSearch(registry)) {
+    if (hasPluginOwnedWebSearchConfig(cfg, pluginId)) {
+      changes.push({
+        pluginId,
+        reason: `${pluginId} web search configured`,
+      });
+    }
+  }
+  for (const pluginId of resolveProviderPluginsWithOwnedWebSearch(registry)) {
+    if (hasPluginOwnedToolConfig(cfg, pluginId)) {
+      changes.push({
+        pluginId,
+        reason: `${pluginId} tool configured`,
       });
     }
   }
@@ -337,16 +403,16 @@ function resolvePreferredOverIds(
 ): string[] {
   const normalized = normalizeChatChannelId(pluginId);
   if (normalized) {
-    return getChatChannelMeta(normalized).preferOver ?? [];
+    return [...(getChatChannelMeta(normalized).preferOver ?? [])];
   }
   const installedPlugin = registry.plugins.find((record) => record.id === pluginId);
   const manifestChannelPreferOver = installedPlugin?.channelConfigs?.[pluginId]?.preferOver;
   if (manifestChannelPreferOver?.length) {
-    return manifestChannelPreferOver;
+    return [...manifestChannelPreferOver];
   }
   const installedChannelMeta = installedPlugin?.channelCatalogMeta;
   if (installedChannelMeta?.preferOver?.length) {
-    return installedChannelMeta.preferOver;
+    return [...installedChannelMeta.preferOver];
   }
   return resolveExternalCatalogPreferOver(pluginId, env);
 }

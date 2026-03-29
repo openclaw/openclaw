@@ -24,7 +24,6 @@ import {
 import { applyMatrixProfileUpdate, type MatrixProfileUpdateResult } from "./profile-update.js";
 import { formatZonedTimestamp, normalizeAccountId, type ChannelSetupInput } from "./runtime-api.js";
 import { getMatrixRuntime } from "./runtime.js";
-import { maybeBootstrapNewEncryptedMatrixAccount } from "./setup-bootstrap.js";
 import { matrixSetupAdapter } from "./setup-core.js";
 import type { CoreConfig } from "./types.js";
 
@@ -215,6 +214,7 @@ async function addMatrixAccount(params: {
     backupVersion: null,
   };
   if (accountConfig.encryption === true) {
+    const { maybeBootstrapNewEncryptedMatrixAccount } = await import("./setup-bootstrap.js");
     verificationBootstrap = await maybeBootstrapNewEncryptedMatrixAccount({
       previousCfg: cfg,
       cfg: updated,

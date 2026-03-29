@@ -583,6 +583,43 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(sessionEntry.execNode).toBeUndefined();
   });
 
+  it("blocks internal operator.write verbose persistence in directive-only handling", async () => {
+    const directives = parseInlineDirectives("/verbose full");
+    const sessionEntry = createSessionEntry();
+    const sessionStore = { [sessionKey]: sessionEntry };
+    const result = await handleDirectiveOnly(
+      createHandleParams({
+        directives,
+        sessionEntry,
+        sessionStore,
+        surface: "webchat",
+        gatewayClientScopes: ["operator.write"],
+      }),
+    );
+
+    expect(result?.text).toContain("Verbose logging set for the current reply only.");
+    expect(result?.text).toContain("operator.admin");
+    expect(sessionEntry.verboseLevel).toBeUndefined();
+  });
+
+  it("allows internal operator.admin verbose persistence in directive-only handling", async () => {
+    const directives = parseInlineDirectives("/verbose full");
+    const sessionEntry = createSessionEntry();
+    const sessionStore = { [sessionKey]: sessionEntry };
+    const result = await handleDirectiveOnly(
+      createHandleParams({
+        directives,
+        sessionEntry,
+        sessionStore,
+        surface: "webchat",
+        gatewayClientScopes: ["operator.admin"],
+      }),
+    );
+
+    expect(result?.text).toContain("Verbose logging set to full.");
+    expect(sessionEntry.verboseLevel).toBe("full");
+  });
+
   it("allows internal operator.admin exec persistence in directive-only handling", async () => {
     const directives = parseInlineDirectives(
       "/exec host=node security=allowlist ask=always node=worker-1",
@@ -645,5 +682,74 @@ describe("persistInlineDirectives internal exec scope gate", () => {
     expect(sessionEntry.execSecurity).toBeUndefined();
     expect(sessionEntry.execAsk).toBeUndefined();
     expect(sessionEntry.execNode).toBeUndefined();
+  });
+
+  it("skips verbose persistence for internal operator.write callers", async () => {
+    const allowedModelKeys = new Set(["anthropic/claude-opus-4-5", "openai/gpt-4o"]);
+    const directives = parseInlineDirectives("/verbose full");
+    const sessionEntry = {
+      sessionId: "s1",
+      updatedAt: Date.now(),
+    } as SessionEntry;
+    const sessionStore = { "agent:main:main": sessionEntry };
+
+    await persistInlineDirectives({
+      directives,
+      cfg: baseConfig(),
+      sessionEntry,
+      sessionStore,
+      sessionKey: "agent:main:main",
+      storePath: "/tmp/sessions.json",
+      elevatedEnabled: true,
+      elevatedAllowed: true,
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-5",
+      aliasIndex: baseAliasIndex(),
+      allowedModelKeys,
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      initialModelLabel: "anthropic/claude-opus-4-5",
+      formatModelSwitchEvent: (label) => `Switched to ${label}`,
+      agentCfg: undefined,
+      surface: "webchat",
+      gatewayClientScopes: ["operator.write"],
+    });
+
+    expect(sessionEntry.verboseLevel).toBeUndefined();
+  });
+
+  it("treats internal provider context as authoritative over external surface metadata", async () => {
+    const allowedModelKeys = new Set(["anthropic/claude-opus-4-5", "openai/gpt-4o"]);
+    const directives = parseInlineDirectives("/verbose full");
+    const sessionEntry = {
+      sessionId: "s1",
+      updatedAt: Date.now(),
+    } as SessionEntry;
+    const sessionStore = { "agent:main:main": sessionEntry };
+
+    await persistInlineDirectives({
+      directives,
+      cfg: baseConfig(),
+      sessionEntry,
+      sessionStore,
+      sessionKey: "agent:main:main",
+      storePath: "/tmp/sessions.json",
+      elevatedEnabled: true,
+      elevatedAllowed: true,
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-5",
+      aliasIndex: baseAliasIndex(),
+      allowedModelKeys,
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      initialModelLabel: "anthropic/claude-opus-4-5",
+      formatModelSwitchEvent: (label) => `Switched to ${label}`,
+      agentCfg: undefined,
+      messageProvider: "webchat",
+      surface: "telegram",
+      gatewayClientScopes: ["operator.write"],
+    });
+
+    expect(sessionEntry.verboseLevel).toBeUndefined();
   });
 });
