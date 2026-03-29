@@ -19,6 +19,10 @@ vi.mock("../tools/image-tool.js", () => ({
   createImageTool: () => stubTool("image"),
 }));
 
+vi.mock("../tools/image-generate-tool.js", () => ({
+  createImageGenerateTool: () => stubTool("image_generate"),
+}));
+
 vi.mock("../tools/web-tools.js", () => ({
   createWebSearchTool: () => null,
   createWebFetchTool: () => null,

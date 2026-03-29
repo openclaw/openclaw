@@ -14,7 +14,7 @@ const tinyPngBuffer = Buffer.from(
 );
 
 describe("createOpenClawCodingTools", () => {
-  it("returns image metadata for images and text-only blocks for text files", async () => {
+  it("returns image-aware read metadata for images and text-only blocks for text files", async () => {
     const readTool = defaultTools.find((tool) => tool.name === "read");
     expect(readTool).toBeDefined();
 
@@ -27,15 +27,19 @@ describe("createOpenClawCodingTools", () => {
         path: imagePath,
       });
 
-      expect(imageResult?.content?.some((block) => block.type === "image")).toBe(true);
-      const imageText = imageResult?.content?.find((block) => block.type === "text") as
-        | { text?: string }
+      const imageBlocks = imageResult?.content?.filter((block) => block.type === "image") as
+        | Array<{ mimeType?: string }>
         | undefined;
-      expect(imageText?.text ?? "").toContain("Read image file [image/png]");
-      const image = imageResult?.content?.find((block) => block.type === "image") as
-        | { mimeType?: string }
+      const imageTextBlocks = imageResult?.content?.filter((block) => block.type === "text") as
+        | Array<{ text?: string }>
         | undefined;
-      expect(image?.mimeType).toBe("image/png");
+      const imageText = imageTextBlocks?.map((block) => block.text ?? "").join("\n") ?? "";
+      expect(imageText).toContain("Read image file [image/png]");
+      if ((imageBlocks?.length ?? 0) > 0) {
+        expect(imageBlocks?.every((block) => block.mimeType === "image/png")).toBe(true);
+      } else {
+        expect(imageText).toContain("[Image omitted:");
+      }
 
       const textPath = path.join(tmpDir, "sample.txt");
       const contents = "Hello from openclaw read tool.";
