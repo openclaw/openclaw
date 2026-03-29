@@ -98,6 +98,7 @@ function buildTestWebSearchProviders(): PluginWebSearchProviderEntry[] {
 const OPENAI_ENV_KEY_REF = { source: "env", provider: "default", id: "OPENAI_API_KEY" } as const;
 
 let clearConfigCache: typeof import("../config/config.js").clearConfigCache;
+let clearRuntimeConfigSnapshot: typeof import("../config/config.js").clearRuntimeConfigSnapshot;
 let activateSecretsRuntimeSnapshot: typeof import("./runtime.js").activateSecretsRuntimeSnapshot;
 let clearSecretsRuntimeSnapshot: typeof import("./runtime.js").clearSecretsRuntimeSnapshot;
 let getActiveRuntimeWebToolsMetadata: typeof import("./runtime.js").getActiveRuntimeWebToolsMetadata;
@@ -125,7 +126,7 @@ function loadAuthStoreWithProfiles(profiles: AuthProfileStore["profiles"]): Auth
 describe("secrets runtime snapshot", () => {
   beforeAll(async () => {
     vi.resetModules();
-    ({ clearConfigCache } = await import("../config/config.js"));
+    ({ clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/config.js"));
     ({
       activateSecretsRuntimeSnapshot,
       clearSecretsRuntimeSnapshot,
@@ -143,6 +144,7 @@ describe("secrets runtime snapshot", () => {
 
   afterEach(() => {
     clearSecretsRuntimeSnapshot();
+    clearRuntimeConfigSnapshot();
     clearConfigCache();
     resolveBundledPluginWebSearchProvidersMock.mockReset();
     resolvePluginWebSearchProvidersMock.mockReset();
