@@ -53,6 +53,13 @@ to produce AI-synthesized answers with citations.
 }
 ```
 
+If you use the China API host for chat (`models.providers.moonshot.baseUrl`:
+`https://api.moonshot.cn/v1`), OpenClaw reuses that same host for Kimi
+`web_search` when `tools.web.search.kimi.baseUrl` is omitted, so keys from
+[platform.moonshot.cn](https://platform.moonshot.cn/) do not hit the
+international endpoint by mistake (which often returns HTTP 401). Override
+with `tools.web.search.kimi.baseUrl` when you need a different search base URL.
+
 **Environment alternative:** set `KIMI_API_KEY` or `MOONSHOT_API_KEY` in the
 Gateway environment. For a gateway install, put it in `~/.openclaw/.env`.
 

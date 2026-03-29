@@ -52,6 +52,7 @@ Docs: https://docs.openclaw.ai
 - Cron: replay interrupted recurring jobs on the first gateway restart instead of waiting for a second restart. (#60583) Thanks @joelnishanth.
 - Plugins/media understanding: enable bundled Groq and Deepgram providers by default so configured transcription models work without extra plugin activation config. (#59982) Thanks @yxjsxy.
 - Plugins/Kimi Coding: parse tagged tool calls and keep Anthropic-native tool payloads so Kimi coding endpoints execute tools instead of echoing raw markup. (#60051, #60391)
+- Tools/web_search (Kimi): when `tools.web.search.kimi.baseUrl` is unset, inherit native Moonshot chat `baseUrl` (`.ai` / `.cn`) so China console keys authenticate on the same host as chat. Fixes #44851. (#56769) Thanks @tonga54.
 - Plugins/marketplace: block remote marketplace symlink escapes without breaking ordinary local marketplace install paths. (#60556) Thanks @eleqtrizit.
 - Plugins/install: preserve unsafe override flags across linked plugin and hook-pack probes so local `--link` installs honor the documented override behavior. (#60624) Thanks @JerrettDavis.
 - Config/All Settings: keep the raw config view intact when sensitive fields are blank instead of corrupting or dropping the rendered snapshot. (#28214) Thanks @solodmd.

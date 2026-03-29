@@ -1,4 +1,5 @@
 import { Type } from "@sinclair/typebox";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
 import {
   buildSearchCacheKey,
   buildUnsupportedSearchFilterResponse,
@@ -95,9 +96,28 @@ function resolveKimiModel(kimi?: KimiConfig): string {
   return model || DEFAULT_KIMI_SEARCH_MODEL;
 }
 
-function resolveKimiBaseUrl(kimi?: KimiConfig): string {
-  const baseUrl = typeof kimi?.baseUrl === "string" ? kimi.baseUrl.trim() : "";
-  return baseUrl || DEFAULT_KIMI_BASE_URL;
+function trimTrailingSlashes(url: string): string {
+  return url.replace(/\/+$/, "");
+}
+
+function resolveKimiBaseUrl(kimi?: KimiConfig, openClawConfig?: OpenClawConfig): string {
+  const explicitBaseUrl = typeof kimi?.baseUrl === "string" ? kimi.baseUrl.trim() : "";
+  if (explicitBaseUrl) {
+    return trimTrailingSlashes(explicitBaseUrl) || DEFAULT_KIMI_BASE_URL;
+  }
+
+  const moonshotBaseUrl = openClawConfig?.models?.providers?.moonshot?.baseUrl;
+  if (typeof moonshotBaseUrl === "string") {
+    const normalizedMoonshotBaseUrl = trimTrailingSlashes(moonshotBaseUrl.trim());
+    if (
+      normalizedMoonshotBaseUrl &&
+      isNativeMoonshotBaseUrl(normalizedMoonshotBaseUrl)
+    ) {
+      return normalizedMoonshotBaseUrl;
+    }
+  }
+
+  return DEFAULT_KIMI_BASE_URL;
 }
 
 function extractKimiMessageText(message: KimiMessage | undefined): string | undefined {
@@ -259,7 +279,8 @@ function createKimiSchema() {
 }
 
 function createKimiToolDefinition(
-  searchConfig?: SearchConfigRecord,
+  searchConfig: SearchConfigRecord | undefined,
+  openClawConfig: OpenClawConfig | undefined,
 ): WebSearchProviderToolDefinition {
   return {
     description:
@@ -289,7 +310,7 @@ function createKimiToolDefinition(
         searchConfig?.maxResults ??
         undefined;
       const model = resolveKimiModel(kimiConfig);
-      const baseUrl = resolveKimiBaseUrl(kimiConfig);
+      const baseUrl = resolveKimiBaseUrl(kimiConfig, openClawConfig);
       const cacheKey = buildSearchCacheKey([
         "kimi",
         query,
@@ -445,6 +466,7 @@ export function createKimiWebSearchProvider(): WebSearchProviderPlugin {
           "kimi",
           resolveProviderWebSearchPluginConfig(ctx.config, "moonshot"),
         ) as SearchConfigRecord | undefined,
+        ctx.config,
       ),
   };
 }
