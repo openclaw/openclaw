@@ -15,6 +15,7 @@ import { resolveTelegramMediaPlaceholder } from "./helpers.js";
 import type { StickerMetadata, TelegramContext } from "./types.js";
 
 const FILE_TOO_BIG_RE = /file is too big/i;
+type TelegramMediaUnavailableReason = "download-failed" | "file-too-large";
 const GrammyErrorCtor: typeof GrammyError | undefined =
   typeof GrammyError === "function" ? GrammyError : undefined;
 
@@ -90,11 +91,21 @@ function resolveTelegramFileName(msg: TelegramContext["message"]): string | unde
   );
 }
 
+function buildTelegramDocumentUnavailableText(reason: TelegramMediaUnavailableReason): string {
+  if (reason === "file-too-large") {
+    return "Telegram attachment unavailable: file too large for Bot API download";
+  }
+  return "Telegram attachment unavailable: download failed";
+}
+
 async function resolveTelegramFileWithRetry(
   ctx: TelegramContext,
-): Promise<{ file_path?: string } | null> {
+): Promise<
+  | { file: { file_path?: string }; unavailableReason?: undefined }
+  | { file?: undefined; unavailableReason: TelegramMediaUnavailableReason }
+> {
   try {
-    return await retryAsync(() => ctx.getFile(), {
+    const file = await retryAsync(() => ctx.getFile(), {
       attempts: 3,
       minDelayMs: 1000,
       maxDelayMs: 4000,
@@ -104,6 +115,11 @@ async function resolveTelegramFileWithRetry(
       onRetry: ({ attempt, maxAttempts }) =>
         logVerbose(`telegram: getFile retry ${attempt}/${maxAttempts}`),
     });
+    return file
+      ? { file }
+      : {
+          unavailableReason: "download-failed",
+        };
   } catch (err) {
     // Handle "file is too big" separately - Telegram Bot API has a 20MB download limit
     if (isFileTooBigError(err)) {
@@ -112,12 +128,16 @@ async function resolveTelegramFileWithRetry(
           "telegram: getFile failed - file exceeds Telegram Bot API 20MB limit; skipping attachment",
         ),
       );
-      return null;
+      return {
+        unavailableReason: "file-too-large",
+      };
     }
     // All retries exhausted — return null so the message still reaches the agent
     // with a type-based placeholder (e.g. <media:audio>) instead of being dropped.
     logVerbose(`telegram: getFile failed after retries: ${String(err)}`);
-    return null;
+    return {
+      unavailableReason: "download-failed",
+    };
   }
 }
 
@@ -211,8 +231,8 @@ async function resolveStickerMedia(params: {
   }
 
   try {
-    const file = await resolveTelegramFileWithRetry(ctx);
-    if (!file?.file_path) {
+    const fileResult = await resolveTelegramFileWithRetry(ctx);
+    if (!fileResult.file?.file_path) {
       logVerbose("telegram: getFile returned no file_path for sticker");
       return null;
     }
@@ -222,7 +242,7 @@ async function resolveStickerMedia(params: {
       return null;
     }
     const saved = await downloadAndSaveTelegramFile({
-      filePath: file.file_path,
+      filePath: fileResult.file.file_path,
       token,
       transport: resolvedTransport,
       maxBytes,
@@ -284,10 +304,11 @@ export async function resolveMedia(
   transport?: TelegramTransport,
   apiRoot?: string,
 ): Promise<{
-  path: string;
+  path?: string;
   contentType?: string;
   placeholder: string;
   stickerMetadata?: StickerMetadata;
+  unavailableText?: string;
 } | null> {
   const msg = ctx.message;
   const stickerResolved = await resolveStickerMedia({
@@ -307,10 +328,17 @@ export async function resolveMedia(
     return null;
   }
 
-  const file = await resolveTelegramFileWithRetry(ctx);
-  if (!file) {
+  const fileResult = await resolveTelegramFileWithRetry(ctx);
+  if (!fileResult.file) {
+    if (msg.document) {
+      return {
+        placeholder: resolveTelegramMediaPlaceholder(msg) ?? "<media:document>",
+        unavailableText: buildTelegramDocumentUnavailableText(fileResult.unavailableReason),
+      };
+    }
     return null;
   }
+  const file = fileResult.file;
   if (!file.file_path) {
     throw new Error("Telegram getFile returned no file_path");
   }

@@ -190,6 +190,21 @@ describe("resolveMedia getFile retry", () => {
     );
   });
 
+  it("keeps the document success path unchanged when download succeeds", async () => {
+    const getFile = vi.fn().mockResolvedValue({ file_path: "documents/file_42.pdf" });
+    mockPdfFetchAndSave("file_42.pdf");
+
+    const result = await resolveMedia(makeCtx("document", getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        path: "/tmp/file_42---uuid.pdf",
+        placeholder: "<media:document>",
+      }),
+    );
+    expect(result?.unavailableText).toBeUndefined();
+  });
+
   it.each(["voice", "photo", "video"] as const)(
     "returns null for %s when getFile exhausts retries so message is not dropped",
     async (mediaField) => {
@@ -203,6 +218,22 @@ describe("resolveMedia getFile retry", () => {
       expect(result).toBeNull();
     },
   );
+
+  it("returns a document fallback reason when getFile exhausts retries", async () => {
+    const getFile = vi.fn().mockRejectedValue(new Error("Network request for 'getFile' failed!"));
+
+    const promise = resolveMedia(makeCtx("document", getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
+    await flushRetryTimers();
+    const result = await promise;
+
+    expect(getFile).toHaveBeenCalledTimes(3);
+    expect(result).toEqual(
+      expect.objectContaining({
+        placeholder: "<media:document>",
+        unavailableText: "Telegram attachment unavailable: download failed",
+      }),
+    );
+  });
 
   it("does not catch errors from fetchRemoteMedia (only getFile is retried)", async () => {
     const getFile = vi.fn().mockResolvedValue({ file_path: "voice/file_0.oga" });
@@ -250,6 +281,20 @@ describe("resolveMedia getFile retry", () => {
       expect(result).toBeNull();
     },
   );
+
+  it("returns a document fallback reason when file is too big", async () => {
+    const getFile = vi.fn().mockRejectedValue(createFileTooBigError());
+
+    const result = await resolveMedia(makeCtx("document", getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
+
+    expect(getFile).toHaveBeenCalledTimes(1);
+    expect(result).toEqual(
+      expect.objectContaining({
+        placeholder: "<media:document>",
+        unavailableText: "Telegram attachment unavailable: file too large for Bot API download",
+      }),
+    );
+  });
 
   it("throws when getFile returns no file_path", async () => {
     const getFile = vi.fn().mockResolvedValue({});

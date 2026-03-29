@@ -158,8 +158,11 @@ export async function resolveTelegramInboundBody(params: {
   const locationText = locationData ? formatLocationText(locationData) : undefined;
   const rawText = expandTextLinks(messageTextParts.text, messageTextParts.entities).trim();
   const hasUserText = Boolean(rawText || locationText);
+  const mediaUnavailableText = options?.mediaUnavailableText?.trim();
   let rawBody = [rawText, locationText].filter(Boolean).join("\n").trim();
-  if (!rawBody) {
+  if (mediaUnavailableText) {
+    rawBody = [rawBody, placeholder, mediaUnavailableText].filter(Boolean).join("\n").trim();
+  } else if (!rawBody) {
     rawBody = placeholder;
   }
   if (!rawBody && allMedia.length === 0) {
