@@ -24,7 +24,10 @@ export { buildComputedAccountStatusSnapshot } from "./status-helpers.js";
 export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
 export { createAccountStatusSink, runPassiveAccountLifecycle } from "./channel-lifecycle.js";
 export { formatPairingApproveHint } from "../channels/plugins/helpers.js";
+export { fetchRemoteMedia } from "../media/fetch.js";
 export { resolveChannelMediaMaxBytes } from "../channels/plugins/media-limits.js";
+export { loadWebMedia } from "./web-media.js";
+export { chunkTextForOutbound } from "./text-chunking.js";
 export {
   addWildcardAllowFrom,
   mergeAllowFromEntries,

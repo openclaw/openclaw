@@ -551,12 +551,16 @@ export async function startGatewayServer(
   }
 
   initSubagentRegistry();
-  const defaultAgentId = resolveDefaultAgentId(cfgAtStart);
-  const defaultWorkspaceDir = resolveAgentWorkspaceDir(cfgAtStart, defaultAgentId);
+  const gatewayPluginConfigAtStart = applyPluginAutoEnable({
+    config: cfgAtStart,
+    env: process.env,
+  }).config;
+  const defaultAgentId = resolveDefaultAgentId(gatewayPluginConfigAtStart);
+  const defaultWorkspaceDir = resolveAgentWorkspaceDir(gatewayPluginConfigAtStart, defaultAgentId);
   const deferredConfiguredChannelPluginIds = minimalTestGateway
     ? []
     : resolveConfiguredDeferredChannelPluginIds({
-        config: cfgAtStart,
+        config: gatewayPluginConfigAtStart,
         workspaceDir: defaultWorkspaceDir,
         env: process.env,
       });
@@ -566,7 +570,7 @@ export async function startGatewayServer(
   let baseGatewayMethods = baseMethods;
   if (!minimalTestGateway) {
     ({ pluginRegistry, gatewayMethods: baseGatewayMethods } = loadGatewayStartupPlugins({
-      cfg: cfgAtStart,
+      cfg: gatewayPluginConfigAtStart,
       workspaceDir: defaultWorkspaceDir,
       log,
       coreGatewayHandlers,
@@ -671,7 +675,11 @@ export async function startGatewayServer(
   }
   const serverStartedAt = Date.now();
   const channelManager = createChannelManager({
-    loadConfig,
+    loadConfig: () =>
+      applyPluginAutoEnable({
+        config: loadConfig(),
+        env: process.env,
+      }).config,
     channelLogs,
     channelRuntimeEnvs,
     resolveChannelRuntime: getChannelRuntime,
@@ -949,6 +957,11 @@ export async function startGatewayServer(
                 chatType: sessionRow.chatType,
                 origin: sessionRow.origin,
                 spawnedBy: sessionRow.spawnedBy,
+                spawnedWorkspaceDir: sessionRow.spawnedWorkspaceDir,
+                forkedFromParent: sessionRow.forkedFromParent,
+                spawnDepth: sessionRow.spawnDepth,
+                subagentRole: sessionRow.subagentRole,
+                subagentControlScope: sessionRow.subagentControlScope,
                 label: sessionRow.label,
                 displayName: sessionRow.displayName,
                 deliveryContext: sessionRow.deliveryContext,
@@ -967,6 +980,7 @@ export async function startGatewayServer(
                 lastChannel: sessionRow.lastChannel,
                 lastTo: sessionRow.lastTo,
                 lastAccountId: sessionRow.lastAccountId,
+                lastThreadId: sessionRow.lastThreadId,
                 totalTokens: sessionRow.totalTokens,
                 totalTokensFresh: sessionRow.totalTokensFresh,
                 contextTokens: sessionRow.contextTokens,
@@ -1044,6 +1058,11 @@ export async function startGatewayServer(
                     chatType: sessionRow.chatType,
                     origin: sessionRow.origin,
                     spawnedBy: sessionRow.spawnedBy,
+                    spawnedWorkspaceDir: sessionRow.spawnedWorkspaceDir,
+                    forkedFromParent: sessionRow.forkedFromParent,
+                    spawnDepth: sessionRow.spawnDepth,
+                    subagentRole: sessionRow.subagentRole,
+                    subagentControlScope: sessionRow.subagentControlScope,
                     label: event.label ?? sessionRow.label,
                     displayName: event.displayName ?? sessionRow.displayName,
                     deliveryContext: sessionRow.deliveryContext,
@@ -1062,6 +1081,7 @@ export async function startGatewayServer(
                     lastChannel: sessionRow.lastChannel,
                     lastTo: sessionRow.lastTo,
                     lastAccountId: sessionRow.lastAccountId,
+                    lastThreadId: sessionRow.lastThreadId,
                     totalTokens: sessionRow.totalTokens,
                     totalTokensFresh: sessionRow.totalTokensFresh,
                     contextTokens: sessionRow.contextTokens,
@@ -1305,7 +1325,7 @@ export async function startGatewayServer(
     if (!minimalTestGateway) {
       if (deferredConfiguredChannelPluginIds.length > 0) {
         ({ pluginRegistry } = reloadDeferredGatewayPlugins({
-          cfg: cfgAtStart,
+          cfg: gatewayPluginConfigAtStart,
           workspaceDir: defaultWorkspaceDir,
           log,
           coreGatewayHandlers,
@@ -1314,7 +1334,7 @@ export async function startGatewayServer(
         }));
       }
       ({ pluginServices } = await startGatewaySidecars({
-        cfg: cfgAtStart,
+        cfg: gatewayPluginConfigAtStart,
         pluginRegistry,
         defaultWorkspaceDir,
         deps,

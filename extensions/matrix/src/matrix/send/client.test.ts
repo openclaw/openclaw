@@ -34,10 +34,12 @@ vi.mock("../../runtime.js", () => ({
   getMatrixRuntime: () => getMatrixRuntimeMock(),
 }));
 
-const { withResolvedMatrixClient } = await import("./client.js");
+let withResolvedMatrixClient: typeof import("./client.js").withResolvedMatrixClient;
 
 describe("withResolvedMatrixClient", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ withResolvedMatrixClient } = await import("./client.js"));
     primeMatrixClientResolverMocks({
       resolved: {},
     });

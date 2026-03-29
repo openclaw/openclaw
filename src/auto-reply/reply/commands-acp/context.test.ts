@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { setDefaultChannelPluginRegistryForTests } from "../../../commands/channel-test-helpers.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
   __testing as sessionBindingTesting,
@@ -8,7 +9,6 @@ import {
 } from "../../../infra/outbound/session-binding-service.js";
 import { buildCommandTestParams } from "../commands-spawn.test-harness.js";
 import {
-  isAcpCommandDiscordChannel,
   resolveAcpCommandBindingContext,
   resolveAcpCommandConversationId,
   resolveAcpCommandParentConversationId,
@@ -51,6 +51,7 @@ function registerFeishuBindingAdapterForTest(accountId: string) {
 
 describe("commands-acp context", () => {
   beforeEach(() => {
+    setDefaultChannelPluginRegistryForTests();
     sessionBindingTesting.resetSessionBindingAdaptersForTests();
   });
 
@@ -69,9 +70,8 @@ describe("commands-acp context", () => {
       accountId: "work",
       threadId: "thread-42",
       conversationId: "thread-42",
-      parentConversationId: "parent-1",
+      parentConversationId: "channel:parent-1",
     });
-    expect(isAcpCommandDiscordChannel(params)).toBe(true);
   });
 
   it("resolves discord thread parent from ParentSessionKey when targets point at the thread", () => {
@@ -90,7 +90,7 @@ describe("commands-acp context", () => {
       accountId: "work",
       threadId: "thread-42",
       conversationId: "thread-42",
-      parentConversationId: "parent-9",
+      parentConversationId: "channel:parent-9",
     });
   });
 
@@ -110,7 +110,7 @@ describe("commands-acp context", () => {
       accountId: "work",
       threadId: "thread-42",
       conversationId: "thread-42",
-      parentConversationId: "parent-11",
+      parentConversationId: "channel:parent-11",
     });
   });
 
@@ -129,7 +129,6 @@ describe("commands-acp context", () => {
       conversationId: "123456789",
     });
     expect(resolveAcpCommandConversationId(params)).toBe("123456789");
-    expect(isAcpCommandDiscordChannel(params)).toBe(false);
   });
 
   it("builds canonical telegram topic conversation ids from originating chat + thread", () => {
@@ -164,9 +163,60 @@ describe("commands-acp context", () => {
       accountId: "default",
       threadId: undefined,
       conversationId: "123456789",
-      parentConversationId: "123456789",
     });
     expect(resolveAcpCommandConversationId(params)).toBe("123456789");
+  });
+
+  it("resolves LINE DM conversation ids from raw LINE targets", () => {
+    const params = buildCommandTestParams("/acp status", baseCfg, {
+      Provider: "line",
+      Surface: "line",
+      OriginatingChannel: "line",
+      OriginatingTo: "U1234567890abcdef1234567890abcdef",
+    });
+
+    expect(resolveAcpCommandBindingContext(params)).toEqual({
+      channel: "line",
+      accountId: "default",
+      threadId: undefined,
+      conversationId: "U1234567890abcdef1234567890abcdef",
+    });
+    expect(resolveAcpCommandConversationId(params)).toBe("U1234567890abcdef1234567890abcdef");
+  });
+
+  it("resolves LINE conversation ids from prefixed LINE targets", () => {
+    const params = buildCommandTestParams("/acp status", baseCfg, {
+      Provider: "line",
+      Surface: "line",
+      OriginatingChannel: "line",
+      OriginatingTo: "line:user:U1234567890abcdef1234567890abcdef",
+      AccountId: "work",
+    });
+
+    expect(resolveAcpCommandBindingContext(params)).toEqual({
+      channel: "line",
+      accountId: "work",
+      threadId: undefined,
+      conversationId: "U1234567890abcdef1234567890abcdef",
+    });
+  });
+
+  it("resolves LINE conversation ids from canonical line targets", () => {
+    const params = buildCommandTestParams("/acp status", baseCfg, {
+      Provider: "line",
+      Surface: "line",
+      OriginatingChannel: "line",
+      OriginatingTo: "line:U1234567890abcdef1234567890abcdef",
+      AccountId: "work",
+    });
+
+    expect(resolveAcpCommandBindingContext(params)).toEqual({
+      channel: "line",
+      accountId: "work",
+      threadId: undefined,
+      conversationId: "U1234567890abcdef1234567890abcdef",
+    });
+    expect(resolveAcpCommandConversationId(params)).toBe("U1234567890abcdef1234567890abcdef");
   });
 
   it("resolves Matrix thread context from the current room and thread root", () => {
@@ -188,6 +238,80 @@ describe("commands-acp context", () => {
     });
     expect(resolveAcpCommandConversationId(params)).toBe("$thread-root");
     expect(resolveAcpCommandParentConversationId(params)).toBe("!room:example.org");
+  });
+
+  it("resolves BlueBubbles DM conversation ids from current targets", () => {
+    const params = buildCommandTestParams("/acp status", baseCfg, {
+      Provider: "bluebubbles",
+      Surface: "bluebubbles",
+      OriginatingChannel: "bluebubbles",
+      OriginatingTo: "bluebubbles:+15555550123",
+    });
+
+    expect(resolveAcpCommandBindingContext(params)).toEqual({
+      channel: "bluebubbles",
+      accountId: "default",
+      threadId: undefined,
+      conversationId: "+15555550123",
+      parentConversationId: undefined,
+    });
+    expect(resolveAcpCommandConversationId(params)).toBe("+15555550123");
+  });
+
+  it("resolves BlueBubbles group conversation ids from explicit chat targets", () => {
+    const params = buildCommandTestParams("/acp status", baseCfg, {
+      Provider: "bluebubbles",
+      Surface: "bluebubbles",
+      OriginatingChannel: "bluebubbles",
+      OriginatingTo: "bluebubbles:chat_guid:iMessage;+;chat123",
+      AccountId: "work",
+    });
+
+    expect(resolveAcpCommandBindingContext(params)).toEqual({
+      channel: "bluebubbles",
+      accountId: "work",
+      threadId: undefined,
+      conversationId: "iMessage;+;chat123",
+      parentConversationId: undefined,
+    });
+    expect(resolveAcpCommandConversationId(params)).toBe("iMessage;+;chat123");
+  });
+
+  it("resolves iMessage DM conversation ids from current targets", () => {
+    const params = buildCommandTestParams("/acp status", baseCfg, {
+      Provider: "imessage",
+      Surface: "imessage",
+      OriginatingChannel: "imessage",
+      OriginatingTo: "imessage:+15555550123",
+    });
+
+    expect(resolveAcpCommandBindingContext(params)).toEqual({
+      channel: "imessage",
+      accountId: "default",
+      threadId: undefined,
+      conversationId: "+15555550123",
+      parentConversationId: undefined,
+    });
+    expect(resolveAcpCommandConversationId(params)).toBe("+15555550123");
+  });
+
+  it("resolves iMessage group conversation ids from chat_id targets", () => {
+    const params = buildCommandTestParams("/acp status", baseCfg, {
+      Provider: "imessage",
+      Surface: "imessage",
+      OriginatingChannel: "imessage",
+      OriginatingTo: "chat_id:12345",
+      AccountId: "work",
+    });
+
+    expect(resolveAcpCommandBindingContext(params)).toEqual({
+      channel: "imessage",
+      accountId: "work",
+      threadId: undefined,
+      conversationId: "12345",
+      parentConversationId: undefined,
+    });
+    expect(resolveAcpCommandConversationId(params)).toBe("12345");
   });
 
   it("builds Feishu topic conversation ids from chat target + root message id", () => {

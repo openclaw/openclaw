@@ -23,6 +23,24 @@ let timeoutMemberDiscord: typeof import("./send.js").timeoutMemberDiscord;
 let uploadEmojiDiscord: typeof import("./send.js").uploadEmojiDiscord;
 let uploadStickerDiscord: typeof import("./send.js").uploadStickerDiscord;
 
+function createCompatRateLimitError(
+  response: Response,
+  body: { message: string; retry_after: number; global: boolean },
+  request?: Request,
+): RateLimitError {
+  const compatRequest =
+    request ??
+    new Request("https://discord.com/api/v10/channels/789/messages", {
+      method: "POST",
+    });
+  const RateLimitErrorCtor = RateLimitError as unknown as new (
+    response: Response,
+    body: { message: string; retry_after: number; global: boolean },
+    request?: Request,
+  ) => RateLimitError;
+  return new RateLimitErrorCtor(response, body, compatRequest);
+}
+
 beforeAll(async () => {
   vi.resetModules();
   ({
@@ -423,7 +441,7 @@ function createMockRateLimitError(retryAfter = 0.001): RateLimitError {
       "X-RateLimit-Bucket": "test-bucket",
     },
   });
-  return new RateLimitError(
+  return createCompatRateLimitError(
     response,
     {
       message: "You are being rate limited.",

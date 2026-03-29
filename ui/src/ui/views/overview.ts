@@ -14,6 +14,7 @@ import type {
   SessionsUsageResult,
   SkillStatusReport,
 } from "../types.ts";
+import { renderConnectCommand } from "./connect-command.ts";
 import { renderOverviewAttention } from "./overview-attention.ts";
 import { renderOverviewCards } from "./overview-cards.ts";
 import { renderOverviewEventLog } from "./overview-event-log.ts";
@@ -215,10 +216,9 @@ export function renderOverview(props: OverviewProps) {
               placeholder="ws://100.x.y.z:18789"
             />
           </label>
-          ${
-            isTrustedProxy
-              ? ""
-              : html`
+          ${isTrustedProxy
+            ? ""
+            : html`
                 <label class="field">
                   <span>${t("overview.access.token")}</span>
                   <div style="display: flex; align-items: center; gap: 8px;">
@@ -273,8 +273,7 @@ export function renderOverview(props: OverviewProps) {
                     </button>
                   </div>
                 </label>
-              `
-          }
+              `}
           <label class="field">
             <span>${t("overview.access.sessionKey")}</span>
             <input
@@ -308,20 +307,22 @@ export function renderOverview(props: OverviewProps) {
           <button class="btn" @click=${() => props.onConnect()}>${t("common.connect")}</button>
           <button class="btn" @click=${() => props.onRefresh()}>${t("common.refresh")}</button>
           <span class="muted"
-            >${
-              isTrustedProxy ? t("overview.access.trustedProxy") : t("overview.access.connectHint")
-            }</span
+            >${isTrustedProxy
+              ? t("overview.access.trustedProxy")
+              : t("overview.access.connectHint")}</span
           >
         </div>
-        ${
-          !props.connected
-            ? html`
+        ${!props.connected
+          ? html`
               <div class="login-gate__help" style="margin-top: 16px;">
                 <div class="login-gate__help-title">${t("overview.connection.title")}</div>
                 <ol class="login-gate__steps">
-                  <li>${t("overview.connection.step1")}<code>openclaw gateway run</code></li>
                   <li>
-                    ${t("overview.connection.step2")}<code>openclaw dashboard --no-open</code>
+                    ${t("overview.connection.step1")}
+                    ${renderConnectCommand("openclaw gateway run")}
+                  </li>
+                  <li>
+                    ${t("overview.connection.step2")} ${renderConnectCommand("openclaw dashboard")}
                   </li>
                   <li>${t("overview.connection.step3")}</li>
                   <li>
@@ -342,8 +343,7 @@ export function renderOverview(props: OverviewProps) {
                 </div>
               </div>
             `
-            : nothing
-        }
+          : nothing}
       </div>
 
       <div class="card">
@@ -367,26 +367,22 @@ export function renderOverview(props: OverviewProps) {
           <div class="stat">
             <div class="stat-label">${t("overview.snapshot.lastChannelsRefresh")}</div>
             <div class="stat-value">
-              ${
-                props.lastChannelsRefresh
-                  ? formatRelativeTimestamp(props.lastChannelsRefresh)
-                  : t("common.na")
-              }
+              ${props.lastChannelsRefresh
+                ? formatRelativeTimestamp(props.lastChannelsRefresh)
+                : t("common.na")}
             </div>
           </div>
         </div>
-        ${
-          props.lastError
-            ? html`<div class="callout danger" style="margin-top: 14px;">
+        ${props.lastError
+          ? html`<div class="callout danger" style="margin-top: 14px;">
               <div>${props.lastError}</div>
               ${pairingHint ?? ""} ${authHint ?? ""} ${insecureContextHint ?? ""}
             </div>`
-            : html`
+          : html`
               <div class="callout" style="margin-top: 14px">
                 ${t("overview.snapshot.channelsHint")}
               </div>
-            `
-        }
+            `}
       </div>
     </section>
 

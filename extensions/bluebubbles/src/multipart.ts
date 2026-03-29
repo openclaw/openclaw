@@ -1,4 +1,4 @@
-import type { SsrFPolicy } from "openclaw/plugin-sdk/infra-runtime";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { blueBubblesFetchWithTimeout } from "./types.js";
 
 export function concatUint8Arrays(parts: Uint8Array[]): Uint8Array {

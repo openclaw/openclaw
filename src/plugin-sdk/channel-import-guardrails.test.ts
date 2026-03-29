@@ -62,6 +62,10 @@ const SAME_CHANNEL_SDK_GUARDS: GuardedSource[] = [
     path: "extensions/signal/src/shared.ts",
     forbiddenPatterns: [/["']openclaw\/plugin-sdk\/signal["']/, /plugin-sdk-internal\/signal/],
   },
+  {
+    path: "extensions/signal/src/runtime-api.ts",
+    forbiddenPatterns: [/["']openclaw\/plugin-sdk\/signal["']/, /plugin-sdk-internal\/signal/],
+  },
 ];
 
 const SETUP_BARREL_GUARDS: GuardedSource[] = [

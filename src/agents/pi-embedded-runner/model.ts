@@ -3,18 +3,18 @@ import type { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ModelDefinitionConfig } from "../../config/types.js";
 import {
+  applyProviderResolvedModelCompatWithPlugins,
   buildProviderUnknownModelHintWithPlugin,
   clearProviderRuntimeHookCache,
+  normalizeProviderTransportWithPlugin,
   prepareProviderDynamicModel,
   runProviderDynamicModel,
   normalizeProviderResolvedModelWithPlugin,
 } from "../../plugins/provider-runtime.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
-import { resolveGoogleGenerativeAiTransport } from "../google-generative-ai.js";
 import { buildModelAliasLines } from "../model-alias-lines.js";
 import { isSecretRefHeaderValueMarker } from "../model-auth-markers.js";
-import { normalizeModelCompat } from "../model-compat.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
 import {
   buildSuppressedBuiltInModelError,
@@ -23,7 +23,8 @@ import {
 import { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
 import { normalizeResolvedProviderModel } from "./model.provider-normalization.js";
 
-type InlineModelEntry = ModelDefinitionConfig & {
+type InlineModelEntry = Omit<ModelDefinitionConfig, "api"> & {
+  api?: Api;
   provider: string;
   baseUrl?: string;
   headers?: Record<string, string>;
@@ -36,6 +37,9 @@ type InlineProviderConfig = {
 };
 
 type ProviderRuntimeHooks = {
+  applyProviderResolvedModelCompatWithPlugins?: (
+    params: Parameters<typeof applyProviderResolvedModelCompatWithPlugins>[0],
+  ) => unknown;
   buildProviderUnknownModelHintWithPlugin: (
     params: Parameters<typeof buildProviderUnknownModelHintWithPlugin>[0],
   ) => string | undefined;
@@ -46,14 +50,35 @@ type ProviderRuntimeHooks = {
   normalizeProviderResolvedModelWithPlugin: (
     params: Parameters<typeof normalizeProviderResolvedModelWithPlugin>[0],
   ) => unknown;
+  normalizeProviderTransportWithPlugin: (
+    params: Parameters<typeof normalizeProviderTransportWithPlugin>[0],
+  ) => unknown;
 };
 
 const DEFAULT_PROVIDER_RUNTIME_HOOKS: ProviderRuntimeHooks = {
+  applyProviderResolvedModelCompatWithPlugins,
   buildProviderUnknownModelHintWithPlugin,
   prepareProviderDynamicModel,
   runProviderDynamicModel,
   normalizeProviderResolvedModelWithPlugin,
+  normalizeProviderTransportWithPlugin,
 };
+
+function normalizeResolvedTransportApi(api: unknown): ModelDefinitionConfig["api"] | undefined {
+  switch (api) {
+    case "anthropic-messages":
+    case "bedrock-converse-stream":
+    case "github-copilot":
+    case "google-generative-ai":
+    case "ollama":
+    case "openai-codex-responses":
+    case "openai-completions":
+    case "openai-responses":
+      return api;
+    default:
+      return undefined;
+  }
+}
 
 function sanitizeModelHeaders(
   headers: unknown,
@@ -101,13 +126,48 @@ function normalizeResolvedModel(params: {
       model: normalizedInputModel,
     },
   }) as Model<Api> | undefined;
-  if (pluginNormalized) {
-    return normalizeModelCompat(pluginNormalized);
-  }
+  const compatNormalized = runtimeHooks.applyProviderResolvedModelCompatWithPlugins?.({
+    provider: params.provider,
+    config: params.cfg,
+    context: {
+      config: params.cfg,
+      agentDir: params.agentDir,
+      provider: params.provider,
+      modelId: normalizedInputModel.id,
+      model: (pluginNormalized ?? normalizedInputModel) as never,
+    },
+  }) as Model<Api> | undefined;
   return normalizeResolvedProviderModel({
     provider: params.provider,
-    model: normalizedInputModel,
+    model: compatNormalized ?? pluginNormalized ?? normalizedInputModel,
   });
+}
+
+function resolveProviderTransport(params: {
+  provider: string;
+  api?: Api | null;
+  baseUrl?: string;
+  cfg?: OpenClawConfig;
+  runtimeHooks?: ProviderRuntimeHooks;
+}): {
+  api?: Api;
+  baseUrl?: string;
+} {
+  const runtimeHooks = params.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
+  const normalized = runtimeHooks.normalizeProviderTransportWithPlugin({
+    provider: params.provider,
+    config: params.cfg,
+    context: {
+      provider: params.provider,
+      api: params.api,
+      baseUrl: params.baseUrl,
+    },
+  }) as { api?: Api | null; baseUrl?: string } | undefined;
+
+  return {
+    api: normalizeResolvedTransportApi(normalized?.api ?? params.api),
+    baseUrl: normalized?.baseUrl ?? params.baseUrl,
+  };
 }
 
 function findInlineModelMatch(params: {
@@ -147,9 +207,12 @@ function resolveConfiguredProviderConfig(
 }
 
 function applyConfiguredProviderOverrides(params: {
+  provider: string;
   discoveredModel: Model<Api>;
   providerConfig?: InlineProviderConfig;
   modelId: string;
+  cfg?: OpenClawConfig;
+  runtimeHooks?: ProviderRuntimeHooks;
 }): Model<Api> {
   const { discoveredModel, providerConfig, modelId } = params;
   if (!providerConfig) {
@@ -181,13 +244,19 @@ function applyConfiguredProviderOverrides(params: {
       ? resolvedInput.filter((item) => item === "text" || item === "image")
       : (["text"] as Array<"text" | "image">);
 
-  const resolvedTransport = resolveGoogleGenerativeAiTransport({
+  const resolvedTransport = resolveProviderTransport({
+    provider: params.provider,
     api: configuredModel?.api ?? providerConfig.api ?? discoveredModel.api,
     baseUrl: providerConfig.baseUrl ?? discoveredModel.baseUrl,
+    cfg: params.cfg,
+    runtimeHooks: params.runtimeHooks,
   });
   return {
     ...discoveredModel,
-    api: resolvedTransport.api,
+    api:
+      resolvedTransport.api ??
+      normalizeResolvedTransportApi(discoveredModel.api) ??
+      "openai-responses",
     baseUrl: resolvedTransport.baseUrl ?? discoveredModel.baseUrl,
     reasoning: configuredModel?.reasoning ?? discoveredModel.reasoning,
     input: normalizedInput,
@@ -218,7 +287,8 @@ export function buildInlineProviderModels(
       stripSecretRefMarkers: true,
     });
     return (entry?.models ?? []).map((model) => {
-      const transport = resolveGoogleGenerativeAiTransport({
+      const transport = resolveProviderTransport({
+        provider: trimmed,
         api: model.api ?? entry?.api,
         baseUrl: entry?.baseUrl,
       });
@@ -226,7 +296,7 @@ export function buildInlineProviderModels(
         ...model,
         provider: trimmed,
         baseUrl: transport.baseUrl,
-        api: transport.api,
+        api: transport.api ?? model.api,
         headers: (() => {
           const modelHeaders = sanitizeModelHeaders((model as InlineModelEntry).headers, {
             stripSecretRefMarkers: true,
@@ -284,9 +354,12 @@ function resolveExplicitModelWithRegistry(params: {
         cfg,
         agentDir,
         model: applyConfiguredProviderOverrides({
+          provider,
           discoveredModel: model,
           providerConfig,
           modelId,
+          cfg,
+          runtimeHooks,
         }),
         runtimeHooks,
       }),
@@ -342,9 +415,12 @@ function resolvePluginDynamicModelWithRegistry(params: {
     return undefined;
   }
   const overriddenDynamicModel = applyConfiguredProviderOverrides({
+    provider,
     discoveredModel: pluginDynamicModel,
     providerConfig,
     modelId,
+    cfg,
+    runtimeHooks,
   });
   return normalizeResolvedModel({
     provider,
@@ -374,9 +450,12 @@ function resolveConfiguredFallbackModel(params: {
   if (!providerConfig && !modelId.startsWith("mock-")) {
     return undefined;
   }
-  const fallbackTransport = resolveGoogleGenerativeAiTransport({
+  const fallbackTransport = resolveProviderTransport({
+    provider,
     api: providerConfig?.api ?? "openai-responses",
     baseUrl: providerConfig?.baseUrl,
+    cfg,
+    runtimeHooks,
   });
   return normalizeResolvedModel({
     provider,
@@ -385,7 +464,7 @@ function resolveConfiguredFallbackModel(params: {
     model: {
       id: modelId,
       name: modelId,
-      api: fallbackTransport.api,
+      api: fallbackTransport.api ?? "openai-responses",
       provider,
       baseUrl: fallbackTransport.baseUrl,
       reasoning: configuredModel?.reasoning ?? false,
