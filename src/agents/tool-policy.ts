@@ -43,17 +43,40 @@ function isOwnerOnlyTool(tool: AnyAgentTool) {
   return tool.ownerOnly === true || isOwnerOnlyToolName(tool.name);
 }
 
-export function applyOwnerOnlyToolPolicy(tools: AnyAgentTool[], senderIsOwner: boolean) {
+export type OwnerOnlyToolPolicyOptions = {
+  /**
+   * Explicit `tools.alsoAllow` / `agents.list[].tools.alsoAllow` entries (normalized names).
+   * Opts in owner-only tools for the current session without requiring `senderIsOwner`.
+   */
+  alsoAllow?: string[];
+};
+
+export function applyOwnerOnlyToolPolicy(
+  tools: AnyAgentTool[],
+  senderIsOwner: boolean,
+  options?: OwnerOnlyToolPolicyOptions,
+) {
+  const alsoAllowSet = new Set(
+    (options?.alsoAllow ?? []).map((name) => normalizeToolName(String(name))).filter(Boolean),
+  );
+  const isAllowedOwnerTool = (tool: AnyAgentTool) =>
+    senderIsOwner || alsoAllowSet.has(normalizeToolName(tool.name));
+
   const withGuard = tools.map((tool) => {
     if (!isOwnerOnlyTool(tool)) {
       return tool;
     }
-    return wrapOwnerOnlyToolExecution(tool, senderIsOwner);
+    return wrapOwnerOnlyToolExecution(tool, isAllowedOwnerTool(tool));
   });
   if (senderIsOwner) {
     return withGuard;
   }
-  return withGuard.filter((tool) => !isOwnerOnlyTool(tool));
+  return withGuard.filter((tool) => {
+    if (!isOwnerOnlyTool(tool)) {
+      return true;
+    }
+    return isAllowedOwnerTool(tool);
+  });
 }
 
 export type ToolPolicyLike = {

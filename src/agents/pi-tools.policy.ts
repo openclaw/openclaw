@@ -343,4 +343,32 @@ export function resolveGroupToolPolicy(params: {
   return pickSandboxToolPolicy(toolsConfig);
 }
 
+/**
+ * User-configured `tools.alsoAllow` entries (global + per-agent), normalized.
+ * Excludes implicit profile expansions (e.g. exec/fs sections); used for policy hooks such as
+ * exposing owner-only tools on external channels when explicitly opted in.
+ */
+export function resolveExplicitToolsAlsoAllow(params: {
+  config?: OpenClawConfig;
+  agentId?: string;
+}): string[] {
+  const normalizedAgentId =
+    typeof params.agentId === "string" && params.agentId.trim()
+      ? normalizeAgentId(params.agentId)
+      : undefined;
+  const agentTools =
+    params.config && normalizedAgentId
+      ? resolveAgentConfig(params.config, normalizedAgentId)?.tools
+      : undefined;
+  const global = Array.isArray(params.config?.tools?.alsoAllow) ? params.config.tools.alsoAllow : [];
+  const agent = Array.isArray(agentTools?.alsoAllow) ? agentTools.alsoAllow : [];
+  return Array.from(
+    new Set(
+      [...global, ...agent]
+        .map((entry) => normalizeToolName(String(entry)))
+        .filter((entry) => entry.length > 0),
+    ),
+  );
+}
+
 export { isToolAllowedByPolicies, isToolAllowedByPolicyName } from "./tool-policy-match.js";

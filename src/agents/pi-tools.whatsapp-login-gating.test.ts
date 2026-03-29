@@ -24,6 +24,14 @@ describe("owner-only tool gating", () => {
     expect(toolNames).not.toContain("nodes");
   });
 
+  it("exposes gateway for non-owners when tools.alsoAllow includes gateway", () => {
+    const tools = createOpenClawCodingTools({
+      senderIsOwner: false,
+      config: { tools: { alsoAllow: ["gateway"] } },
+    });
+    expect(tools.map((t) => t.name)).toContain("gateway");
+  });
+
   it("keeps owner-only tools for authorized senders", () => {
     const tools = createOpenClawCodingTools({ senderIsOwner: true });
     const toolNames = tools.map((tool) => tool.name);

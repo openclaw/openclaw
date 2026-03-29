@@ -90,6 +90,12 @@ describe("tool-policy", () => {
     expect(filtered.map((t) => t.name)).toEqual(["read"]);
   });
 
+  it("keeps owner-only tools for non-owners when explicitly listed in tools.alsoAllow", async () => {
+    const tools = createOwnerPolicyTools();
+    const filtered = applyOwnerOnlyToolPolicy(tools, false, { alsoAllow: ["gateway"] });
+    expect(filtered.map((t) => t.name)).toEqual(["read", "gateway"]);
+  });
+
   it("keeps owner-only tools for the owner sender", async () => {
     const tools = createOwnerPolicyTools();
     const filtered = applyOwnerOnlyToolPolicy(tools, true);

@@ -7,10 +7,25 @@ import {
   filterToolsByPolicy,
   isToolAllowedByPolicyName,
   resolveEffectiveToolPolicy,
+  resolveExplicitToolsAlsoAllow,
   resolveSubagentToolPolicy,
   resolveSubagentToolPolicyForSession,
 } from "./pi-tools.policy.js";
 import { createStubTool } from "./test-helpers/pi-tool-stubs.js";
+
+describe("resolveExplicitToolsAlsoAllow", () => {
+  it("merges global and agent tools.alsoAllow", () => {
+    const cfg = {
+      tools: { alsoAllow: ["gateway"] },
+      agents: {
+        list: [{ id: "work", tools: { alsoAllow: ["nodes"] } }],
+      },
+    } as unknown as OpenClawConfig;
+    expect(resolveExplicitToolsAlsoAllow({ config: cfg, agentId: "work" }).sort()).toEqual(
+      ["gateway", "nodes"].sort(),
+    );
+  });
+});
 
 describe("pi-tools.policy", () => {
   it("treats * in allow as allow-all", () => {
