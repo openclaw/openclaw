@@ -2340,11 +2340,82 @@ export type PluginHookGatewayStopEvent = {
 };
 
 export type PluginInstallTargetType = "skill" | "plugin";
+export type PluginInstallRequestKind =
+  | "skill-install"
+  | "plugin-dir"
+  | "plugin-archive"
+  | "plugin-file"
+  | "plugin-npm";
+export type PluginInstallSourcePathKind = "file" | "directory";
+
+export type PluginInstallFinding = {
+  ruleId: string;
+  severity: "info" | "warn" | "critical";
+  file: string;
+  line: number;
+  message: string;
+};
+
+export type PluginHookBeforeInstallRequest = {
+  /** Original install entrypoint/provenance. */
+  kind: PluginInstallRequestKind;
+  /** Install mode requested by the caller. */
+  mode: "install" | "update";
+  /** Raw user-facing specifier or path when available. */
+  requestedSpecifier?: string;
+};
+
+export type PluginHookBeforeInstallBuiltinScan = {
+  /** Whether the built-in scan completed successfully. */
+  status: "ok" | "error";
+  /** Number of files the built-in scanner actually inspected. */
+  scannedFiles: number;
+  critical: number;
+  warn: number;
+  info: number;
+  findings: PluginInstallFinding[];
+  /** Scanner failure reason when status=`error`. */
+  error?: string;
+};
+
+export type PluginHookBeforeInstallSkillInstallSpec = {
+  id?: string;
+  kind: "brew" | "node" | "go" | "uv" | "download";
+  label?: string;
+  bins?: string[];
+  os?: string[];
+  formula?: string;
+  package?: string;
+  module?: string;
+  url?: string;
+  archive?: string;
+  extract?: boolean;
+  stripComponents?: number;
+  targetDir?: string;
+};
+
+export type PluginHookBeforeInstallSkill = {
+  installId: string;
+  installSpec?: PluginHookBeforeInstallSkillInstallSpec;
+};
+
+export type PluginHookBeforeInstallPlugin = {
+  /** Canonical plugin id OpenClaw will install under. */
+  pluginId: string;
+  /** Normalized installable content shape after source resolution. */
+  contentType: "bundle" | "package" | "file";
+  packageName?: string;
+  manifestId?: string;
+  version?: string;
+  extensions?: string[];
+};
 
 // before_install hook
 export type PluginHookBeforeInstallContext = {
   /** Category of install target being checked. */
   targetType: PluginInstallTargetType;
+  /** Original install entrypoint/provenance. */
+  requestKind: PluginInstallRequestKind;
   /** Origin of the install target (e.g. "openclaw-bundled", "plugin-package"). */
   source?: string;
 };
@@ -2354,29 +2425,25 @@ export type PluginHookBeforeInstallEvent = {
   targetType: PluginInstallTargetType;
   /** Human-readable skill or plugin name. */
   targetName: string;
-  /** Absolute path to the install target source directory being scanned. */
-  sourceDir: string;
+  /** Absolute path to the install target content being scanned. */
+  sourcePath: string;
+  /** Whether the install target content is a file or directory. */
+  sourcePathKind: PluginInstallSourcePathKind;
   /** Origin of the install target (e.g. "openclaw-bundled", "plugin-package"). */
   source?: string;
-  /** Findings from the built-in scanner, provided for augmentation. */
-  builtinFindings: Array<{
-    ruleId: string;
-    severity: "info" | "warn" | "critical";
-    file: string;
-    line: number;
-    message: string;
-  }>;
+  /** Install request provenance and caller mode. */
+  request: PluginHookBeforeInstallRequest;
+  /** Structured result of the built-in scanner. */
+  builtinScan: PluginHookBeforeInstallBuiltinScan;
+  /** Present when targetType=`skill`. */
+  skill?: PluginHookBeforeInstallSkill;
+  /** Present when targetType=`plugin`. */
+  plugin?: PluginHookBeforeInstallPlugin;
 };
 
 export type PluginHookBeforeInstallResult = {
   /** Additional findings to merge with built-in scanner results. */
-  findings?: Array<{
-    ruleId: string;
-    severity: "info" | "warn" | "critical";
-    file: string;
-    line: number;
-    message: string;
-  }>;
+  findings?: PluginInstallFinding[];
   /** If true, block the installation entirely. */
   block?: boolean;
   /** Human-readable reason for blocking. */
