@@ -1024,6 +1024,13 @@ export function attachGatewayUpgradeHandler(opts: {
     rateLimiter,
   } = opts;
   httpServer.on("upgrade", (req, socket, head) => {
+    // prevent TLS/network errors on the raw socket from becoming uncaught exceptions
+    if (!socket.listenerCount("error")) {
+      socket.on("error", (err) => {
+        console.warn("[openclaw] Upgrade socket error (destroying):", err.message);
+        socket.destroy();
+      });
+    }
     void (async () => {
       const configSnapshot = loadConfig();
       const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];

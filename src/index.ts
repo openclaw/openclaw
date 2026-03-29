@@ -3,7 +3,11 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { formatUncaughtError } from "./infra/errors.js";
 import { isMainModule } from "./infra/is-main.js";
-import { installUnhandledRejectionHandler } from "./infra/unhandled-rejections.js";
+import {
+  installUnhandledRejectionHandler,
+  isAbortError,
+  isStrictTransientNetworkError,
+} from "./infra/unhandled-rejections.js";
 
 type LegacyCliDeps = {
   installGaxiosFetchCompat: () => Promise<void>;
@@ -92,6 +96,20 @@ if (isMain) {
   installUnhandledRejectionHandler();
 
   process.on("uncaughtException", (error) => {
+    // transient network/TLS errors should not crash the gateway — log and continue.
+    // these errors occur in the I/O layer and do not corrupt application state,
+    // mirroring the same logic used in the unhandledRejection handler.
+    if (isAbortError(error)) {
+      console.warn("[openclaw] Suppressed uncaught AbortError:", formatUncaughtError(error));
+      return;
+    }
+    if (isStrictTransientNetworkError(error)) {
+      console.warn(
+        "[openclaw] Non-fatal uncaught exception (continuing):",
+        formatUncaughtError(error),
+      );
+      return;
+    }
     console.error("[openclaw] Uncaught exception:", formatUncaughtError(error));
     process.exit(1);
   });

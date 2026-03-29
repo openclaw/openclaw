@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { isAbortError, isTransientNetworkError } from "./unhandled-rejections.js";
+import {
+  isAbortError,
+  isStrictTransientNetworkError,
+  isTransientNetworkError,
+} from "./unhandled-rejections.js";
 
 describe("isAbortError", () => {
   it("returns true for error with name AbortError", () => {
@@ -185,5 +189,62 @@ describe("isTransientNetworkError", () => {
   it("returns false for AggregateError with only non-network errors", () => {
     const error = new AggregateError([new Error("regular error")], "Multiple errors");
     expect(isTransientNetworkError(error)).toBe(false);
+  });
+});
+
+describe("isStrictTransientNetworkError", () => {
+  it("returns true for errors with transient network codes", () => {
+    const error = Object.assign(new Error("test"), { code: "ECONNRESET" });
+    expect(isStrictTransientNetworkError(error)).toBe(true);
+  });
+
+  it("returns true for TLS socket disconnection message", () => {
+    const error = new Error(
+      "Client network socket disconnected before secure TLS connection was established",
+    );
+    expect(isStrictTransientNetworkError(error)).toBe(true);
+  });
+
+  it("returns true for socket hang up", () => {
+    expect(isStrictTransientNetworkError(new Error("socket hang up"))).toBe(true);
+  });
+
+  it("returns true for SSL routines errors", () => {
+    expect(isStrictTransientNetworkError(new Error("ssl routines:OPENSSL_internal"))).toBe(true);
+  });
+
+  it("returns true for error codes embedded in message", () => {
+    expect(isStrictTransientNetworkError(new Error("connect ECONNREFUSED 127.0.0.1:443"))).toBe(
+      true,
+    );
+  });
+
+  it("returns false for broad 'fetch failed' messages", () => {
+    expect(isStrictTransientNetworkError(new TypeError("fetch failed"))).toBe(false);
+  });
+
+  it("returns false for broad 'network error' messages", () => {
+    expect(isStrictTransientNetworkError(new Error("network error"))).toBe(false);
+  });
+
+  it("returns false for TimeoutError (used in application-level control flow)", () => {
+    const error = new Error("request timed out");
+    error.name = "TimeoutError";
+    expect(isStrictTransientNetworkError(error)).toBe(false);
+  });
+
+  it("returns true for ConnectTimeoutError", () => {
+    const error = new Error("connect timed out");
+    error.name = "ConnectTimeoutError";
+    expect(isStrictTransientNetworkError(error)).toBe(true);
+  });
+
+  it("returns false for regular errors", () => {
+    expect(isStrictTransientNetworkError(new Error("Something went wrong"))).toBe(false);
+    expect(isStrictTransientNetworkError(new TypeError("Cannot read property"))).toBe(false);
+  });
+
+  it.each([null, undefined, "string error", 42])("returns false for non-error input %#", (v) => {
+    expect(isStrictTransientNetworkError(v)).toBe(false);
   });
 });
