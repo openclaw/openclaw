@@ -25,6 +25,7 @@ import type {
   SessionsListResult,
   SessionsPatchResult,
 } from "../types.ts";
+import { generateUUID } from "../uuid.ts";
 import { SLASH_COMMANDS } from "./slash-commands.ts";
 
 export type SlashCommandResult = {
@@ -44,11 +45,16 @@ export type SlashCommandResult = {
   sessionPatch?: {
     modelOverride?: ChatModelOverride | null;
   };
+  /** When set, the caller should track this as the active run (enables Abort, blocks concurrent sends). */
+  trackRunId?: string;
+  /** When set, the caller should surface a visible pending item tied to the current run. */
+  pendingCurrentRun?: boolean;
 };
 
 export type SlashCommandContext = {
   chatModelCatalog?: ModelCatalogEntry[];
   modelCatalog?: ModelCatalogEntry[];
+  sessionsResult?: SessionsListResult | null;
 };
 export async function executeSlashCommand(
   client: GatewayBrowserClient,
@@ -80,7 +86,7 @@ export async function executeSlashCommand(
       return await executeFast(client, sessionKey, args);
     case "verbose":
       return await executeVerbose(client, sessionKey, args);
-    case "export":
+    case "export-session":
       return { content: "Exporting session...", action: "export" };
     case "usage":
       return await executeUsage(client, sessionKey);
@@ -88,6 +94,10 @@ export async function executeSlashCommand(
       return await executeAgents(client);
     case "kill":
       return await executeKill(client, sessionKey, args);
+    case "steer":
+      return await executeSteer(client, sessionKey, args, context);
+    case "redirect":
+      return await executeRedirect(client, sessionKey, args, context);
     default:
       return { content: `Unknown command: \`/${commandName}\`` };
   }
@@ -602,6 +612,177 @@ function resolveCurrentThinkingLevel(
 
 function resolveCurrentFastMode(session: GatewaySessionRow | undefined): "on" | "off" {
   return session?.fastMode === true ? "on" : "off";
+}
+
+/**
+ * Match a target name against active subagent sessions by key/label only.
+ * Unlike resolveKillTargets, this does NOT match by agent id (avoiding
+ * false positives for common words like "main") and filters to active
+ * sessions (no endedAt) so stale subagents are not targeted.
+ */
+function resolveSteerSubagent(
+  sessions: GatewaySessionRow[],
+  currentSessionKey: string,
+  target: string,
+): string[] {
+  const normalizedTarget = target.trim().toLowerCase();
+  if (!normalizedTarget) {
+    return [];
+  }
+  const normalizedCurrentSessionKey = currentSessionKey.trim().toLowerCase();
+  const currentParsed = parseAgentSessionKey(normalizedCurrentSessionKey);
+  const currentAgentId =
+    currentParsed?.agentId ??
+    (normalizedCurrentSessionKey === DEFAULT_MAIN_KEY ? DEFAULT_AGENT_ID : undefined);
+  const sessionIndex = buildSessionIndex(sessions);
+
+  const keys = new Set<string>();
+  for (const session of sessions) {
+    const key = session?.key?.trim();
+    if (!key || !isSubagentSessionKey(key)) {
+      continue;
+    }
+    const normalizedKey = key.toLowerCase();
+    const parsed = parseAgentSessionKey(normalizedKey);
+    const belongsToCurrentSession = isWithinCurrentSessionSubtree(
+      normalizedKey,
+      normalizedCurrentSessionKey,
+      sessionIndex,
+      currentAgentId,
+      parsed?.agentId,
+    );
+    if (!belongsToCurrentSession) {
+      continue;
+    }
+    // P2: match only on subagent key suffix or label, not agent id
+    const isMatch =
+      normalizedKey === normalizedTarget ||
+      normalizedKey.endsWith(`:subagent:${normalizedTarget}`) ||
+      normalizedKey === `subagent:${normalizedTarget}` ||
+      (session.label ?? "").toLowerCase() === normalizedTarget;
+    if (isMatch) {
+      keys.add(key);
+    }
+  }
+  return [...keys];
+}
+
+/**
+ * Resolve an optional subagent target from the first word of args.
+ * Returns the resolved session key and the remaining message, or
+ * falls back to the current session key with the full args as message.
+ *
+ * Ended subagents are still resolved here so explicit `/steer <id> ...`
+ * can surface the correct "No active run matched" message and `/redirect <id> ...`
+ * can restart that specific session instead of silently steering the current one.
+ */
+async function resolveSteerTarget(
+  client: GatewayBrowserClient,
+  sessionKey: string,
+  args: string,
+  context: SlashCommandContext,
+): Promise<
+  | { key: string; message: string; label?: string; sessions?: SessionsListResult }
+  | { error: string }
+> {
+  const trimmed = args.trim();
+  if (!trimmed) {
+    return { error: "empty" };
+  }
+  const spaceIdx = trimmed.indexOf(" ");
+  if (spaceIdx > 0) {
+    const maybeTarget = trimmed.slice(0, spaceIdx);
+    const rest = trimmed.slice(spaceIdx + 1).trim();
+    // Skip "all" — resolveKillTargets treats it as a wildcard, but steer/redirect
+    // target a single session, so "all good now" should not match subagents.
+    if (rest && maybeTarget.toLowerCase() !== "all") {
+      const sessions =
+        context.sessionsResult ?? (await client.request<SessionsListResult>("sessions.list", {}));
+      const matched = resolveSteerSubagent(sessions?.sessions ?? [], sessionKey, maybeTarget);
+      if (matched.length === 1) {
+        return { key: matched[0], message: rest, label: maybeTarget, sessions };
+      }
+      if (matched.length > 1) {
+        return { error: `Multiple sub-agents match \`${maybeTarget}\`. Be more specific.` };
+      }
+    }
+  }
+  return { key: sessionKey, message: trimmed };
+}
+
+function isActiveSteerSession(session: GatewaySessionRow | undefined): boolean {
+  return session?.status === "running" && session.endedAt == null;
+}
+
+/** Soft inject — queues a message into the active run via chat.send (deliver: false). */
+async function executeSteer(
+  client: GatewayBrowserClient,
+  sessionKey: string,
+  args: string,
+  context: SlashCommandContext,
+): Promise<SlashCommandResult> {
+  try {
+    const resolved = await resolveSteerTarget(client, sessionKey, args, context);
+    if ("error" in resolved) {
+      return {
+        content: resolved.error === "empty" ? "Usage: `/steer [id] <message>`" : resolved.error,
+      };
+    }
+    const sessions =
+      resolved.sessions ?? (await client.request<SessionsListResult>("sessions.list", {}));
+    const targetSession = resolveCurrentSession(sessions, resolved.key);
+    if (!isActiveSteerSession(targetSession)) {
+      return {
+        content: resolved.label
+          ? `No active run matched \`${resolved.label}\`. Use \`/redirect\` instead.`
+          : "No active run. Use the chat input or `/redirect` instead.",
+      };
+    }
+    await client.request("chat.send", {
+      sessionKey: resolved.key,
+      message: resolved.message,
+      deliver: false,
+      idempotencyKey: generateUUID(),
+    });
+    return {
+      content: resolved.label ? `Steered \`${resolved.label}\`.` : "Steered.",
+      pendingCurrentRun: resolved.key === sessionKey,
+    };
+  } catch (err) {
+    return { content: `Failed to steer: ${String(err)}` };
+  }
+}
+
+/** Hard redirect — aborts the active run and restarts with a new message. */
+async function executeRedirect(
+  client: GatewayBrowserClient,
+  sessionKey: string,
+  args: string,
+  context: SlashCommandContext,
+): Promise<SlashCommandResult> {
+  try {
+    const resolved = await resolveSteerTarget(client, sessionKey, args, context);
+    if ("error" in resolved) {
+      return {
+        content: resolved.error === "empty" ? "Usage: `/redirect [id] <message>`" : resolved.error,
+      };
+    }
+    const resp = await client.request<{ runId?: string }>("sessions.steer", {
+      key: resolved.key,
+      message: resolved.message,
+    });
+    // Only track the run when redirecting the current session. Subagent
+    // redirects target a different sessionKey, so chat events for that run
+    // would never clear chatRunId on the current view.
+    const runId = typeof resp?.runId === "string" ? resp.runId : undefined;
+    const trackRunId = resolved.key === sessionKey ? runId : undefined;
+    return {
+      content: resolved.label ? `Redirected \`${resolved.label}\`.` : "Redirected.",
+      trackRunId,
+    };
+  } catch (err) {
+    return { content: `Failed to redirect: ${String(err)}` };
+  }
 }
 
 function fmtTokens(n: number): string {

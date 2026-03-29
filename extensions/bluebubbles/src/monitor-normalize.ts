@@ -189,6 +189,25 @@ function readFirstChatRecord(message: Record<string, unknown>): Record<string, u
   return asRecord(first);
 }
 
+function readParticipantEntries(record: Record<string, unknown> | null): unknown[] | undefined {
+  if (!record) {
+    return undefined;
+  }
+  const participants = record["participants"];
+  if (Array.isArray(participants)) {
+    return participants;
+  }
+  const handles = record["handles"];
+  if (Array.isArray(handles)) {
+    return handles;
+  }
+  const participantHandles = record["participantHandles"];
+  if (Array.isArray(participantHandles)) {
+    return participantHandles;
+  }
+  return undefined;
+}
+
 function extractSenderInfo(message: Record<string, unknown>): {
   senderId: string;
   senderIdExplicit: boolean;
@@ -265,16 +284,11 @@ function extractChatContext(message: Record<string, unknown>): {
     readString(chatFromList, "name") ??
     undefined;
 
-  const chatParticipants = chat ? chat["participants"] : undefined;
-  const messageParticipants = message["participants"];
-  const chatsParticipants = chatFromList ? chatFromList["participants"] : undefined;
-  const participants = Array.isArray(chatParticipants)
-    ? chatParticipants
-    : Array.isArray(messageParticipants)
-      ? messageParticipants
-      : Array.isArray(chatsParticipants)
-        ? chatsParticipants
-        : [];
+  const participants =
+    readParticipantEntries(chat) ??
+    readParticipantEntries(message) ??
+    readParticipantEntries(chatFromList) ??
+    [];
   const participantsCount = participants.length;
   const groupFromChatGuid = resolveGroupFlagFromChatGuid(chatGuid);
   const explicitIsGroup =
@@ -336,13 +350,14 @@ function normalizeParticipantEntry(entry: unknown): BlueBubblesParticipant | nul
   return { id: normalizedId, name };
 }
 
-function normalizeParticipantList(raw: unknown): BlueBubblesParticipant[] {
-  if (!Array.isArray(raw) || raw.length === 0) {
+export function normalizeParticipantList(raw: unknown): BlueBubblesParticipant[] {
+  const entries = Array.isArray(raw) ? raw : (readParticipantEntries(asRecord(raw)) ?? []);
+  if (entries.length === 0) {
     return [];
   }
   const seen = new Set<string>();
   const output: BlueBubblesParticipant[] = [];
-  for (const entry of raw) {
+  for (const entry of entries) {
     const normalized = normalizeParticipantEntry(entry);
     if (!normalized?.id) {
       continue;

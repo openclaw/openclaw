@@ -24,6 +24,8 @@ export OPENCLAW_ENTRY
 
 home_dir=$(mktemp -d "/tmp/openclaw-plugins-e2e.XXXXXX")
 export HOME="$home_dir"
+BUNDLED_PLUGIN_ROOT_DIR="extensions"
+OPENCLAW_PLUGIN_HOME="$HOME/.openclaw/$BUNDLED_PLUGIN_ROOT_DIR"
 
 gateway_pid=""
 
@@ -252,9 +254,11 @@ fs.writeFileSync(file, `${JSON.stringify(parsed, null, 2)}\n`);
 NODE
 }
 
-mkdir -p "$HOME/.openclaw/extensions/demo-plugin"
+demo_plugin_id="demo-plugin"
+demo_plugin_root="$OPENCLAW_PLUGIN_HOME/$demo_plugin_id"
+mkdir -p "$demo_plugin_root"
 
-cat > "$HOME/.openclaw/extensions/demo-plugin/index.js" <<'JS'
+cat > "$demo_plugin_root/index.js" <<'JS'
 module.exports = {
   id: "demo-plugin",
   name: "Demo Plugin",
@@ -267,7 +271,7 @@ module.exports = {
   },
 };
 JS
-cat > "$HOME/.openclaw/extensions/demo-plugin/openclaw.plugin.json" <<'JSON'
+cat > "$demo_plugin_root/openclaw.plugin.json" <<'JSON'
 {
   "id": "demo-plugin",
   "configSchema": {
@@ -450,7 +454,8 @@ console.log("ok");
 NODE
 
 echo "Testing /plugin alias with Claude bundle restart semantics..."
-bundle_root="$HOME/.openclaw/extensions/claude-bundle-e2e"
+bundle_plugin_id="claude-bundle-e2e"
+bundle_root="$OPENCLAW_PLUGIN_HOME/$bundle_plugin_id"
 mkdir -p "$bundle_root/.claude-plugin" "$bundle_root/commands"
 cat > "$bundle_root/.claude-plugin/plugin.json" <<'JSON'
 {

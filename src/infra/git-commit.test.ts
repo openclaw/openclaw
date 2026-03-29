@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 async function makeTempDir(label: string): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), `openclaw-${label}-`));
@@ -43,12 +43,16 @@ describe("git commit resolution", () => {
   let resolveCommitHash: (typeof import("./git-commit.js"))["resolveCommitHash"];
   let __testing: (typeof import("./git-commit.js"))["__testing"];
 
-  beforeEach(async () => {
+  beforeAll(async () => {
+    vi.doUnmock("node:fs");
+    vi.doUnmock("node:module");
+    ({ resolveCommitHash, __testing } = await import("./git-commit.js"));
+  });
+
+  beforeEach(() => {
     vi.restoreAllMocks();
     vi.doUnmock("node:fs");
     vi.doUnmock("node:module");
-    vi.resetModules();
-    ({ resolveCommitHash, __testing } = await import("./git-commit.js"));
     __testing.clearCachedGitCommits();
   });
 
@@ -57,7 +61,6 @@ describe("git commit resolution", () => {
     vi.doUnmock("node:fs");
     vi.doUnmock("node:module");
     __testing.clearCachedGitCommits();
-    vi.resetModules();
   });
 
   it("resolves commit metadata from the caller module root instead of the caller cwd", async () => {

@@ -8,25 +8,54 @@ import {
 } from "./exec-approval-reply.js";
 
 describe("exec approval reply helpers", () => {
+  const invalidReplyMetadataCases = [
+    { name: "empty object", payload: {} },
+    { name: "null channelData", payload: { channelData: null } },
+    { name: "array channelData", payload: { channelData: [] } },
+    { name: "null execApproval", payload: { channelData: { execApproval: null } } },
+    { name: "array execApproval", payload: { channelData: { execApproval: [] } } },
+    {
+      name: "blank approval slug",
+      payload: { channelData: { execApproval: { approvalId: "req-1", approvalSlug: "  " } } },
+    },
+    {
+      name: "blank approval id",
+      payload: { channelData: { execApproval: { approvalId: "  ", approvalSlug: "slug-1" } } },
+    },
+  ] as const;
+
+  const unavailableReasonCases = [
+    {
+      reason: "initiating-platform-disabled" as const,
+      channelLabel: "Slack",
+      expected: "Exec approval is required, but chat exec approvals are not enabled on Slack.",
+    },
+    {
+      reason: "initiating-platform-unsupported" as const,
+      channelLabel: undefined,
+      expected:
+        "Exec approval is required, but this platform does not support chat exec approvals.",
+    },
+    {
+      reason: "no-approval-route" as const,
+      channelLabel: undefined,
+      expected:
+        "Exec approval is required, but no interactive approval client is currently available.",
+    },
+  ] as const;
+
   it("returns the approver DM notice text", () => {
     expect(getExecApprovalApproverDmNoticeText()).toBe(
       "Approval required. I sent the allowed approvers DMs.",
     );
   });
 
-  it("returns null for invalid reply metadata payloads", () => {
-    for (const payload of [
-      {},
-      { channelData: null },
-      { channelData: [] },
-      { channelData: { execApproval: null } },
-      { channelData: { execApproval: [] } },
-      { channelData: { execApproval: { approvalId: "req-1", approvalSlug: "  " } } },
-      { channelData: { execApproval: { approvalId: "  ", approvalSlug: "slug-1" } } },
-    ] as unknown[]) {
+  it.each(invalidReplyMetadataCases)(
+    "returns null for invalid reply metadata payload: $name",
+    ({ payload }) => {
       expect(getExecApprovalReplyMetadata(payload as ReplyPayload)).toBeNull();
-    }
-  });
+    },
+  );
 
   it("normalizes reply metadata and filters invalid decisions", () => {
     expect(
@@ -100,7 +129,7 @@ describe("exec approval reply helpers", () => {
     expect(payload.text).toContain("Expires in: 0s");
   });
 
-  it("builds unavailable payloads for approver DMs and each fallback reason", () => {
+  it("builds unavailable payloads for approver DMs", () => {
     expect(
       buildExecApprovalUnavailableReplyPayload({
         warningText: "  Careful.  ",
@@ -110,34 +139,17 @@ describe("exec approval reply helpers", () => {
     ).toEqual({
       text: "Careful.\n\nApproval required. I sent the allowed approvers DMs.",
     });
+  });
 
-    const cases = [
-      {
-        reason: "initiating-platform-disabled" as const,
-        channelLabel: "Slack",
-        expected: "Exec approval is required, but chat exec approvals are not enabled on Slack.",
-      },
-      {
-        reason: "initiating-platform-unsupported" as const,
-        channelLabel: undefined,
-        expected:
-          "Exec approval is required, but this platform does not support chat exec approvals.",
-      },
-      {
-        reason: "no-approval-route" as const,
-        channelLabel: undefined,
-        expected:
-          "Exec approval is required, but no interactive approval client is currently available.",
-      },
-    ];
-
-    for (const testCase of cases) {
+  it.each(unavailableReasonCases)(
+    "builds unavailable payload for reason $reason",
+    ({ reason, channelLabel, expected }) => {
       expect(
         buildExecApprovalUnavailableReplyPayload({
-          reason: testCase.reason,
-          channelLabel: testCase.channelLabel,
+          reason,
+          channelLabel,
         }).text,
-      ).toContain(testCase.expected);
-    }
-  });
+      ).toContain(expected);
+    },
+  );
 });

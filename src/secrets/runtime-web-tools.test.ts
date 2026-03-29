@@ -225,8 +225,11 @@ describe("runtime web tools resolution", () => {
     }
   });
 
-  it("skips loading web search providers when search config is absent", async () => {
-    const providerSpy = vi.mocked(runtimeWebSearchProviders.resolvePluginWebSearchProviders);
+  it("keeps web search disabled when search config is absent", async () => {
+    const bundledProviderSpy = vi.mocked(
+      bundledWebSearchProviders.resolveBundledPluginWebSearchProviders,
+    );
+    const runtimeProviderSpy = vi.mocked(runtimeWebSearchProviders.resolvePluginWebSearchProviders);
 
     const { metadata } = await runRuntimeWebTools({
       config: asConfig({
@@ -245,7 +248,9 @@ describe("runtime web tools resolution", () => {
       },
     });
 
-    expect(providerSpy).not.toHaveBeenCalled();
+    expect(bundledProviderSpy).not.toHaveBeenCalled();
+    expect(runtimeProviderSpy).not.toHaveBeenCalled();
+    expect(metadata.search.selectedProvider).toBeUndefined();
     expect(metadata.search.providerSource).toBe("none");
     expect(metadata.fetch.firecrawl.active).toBe(true);
     expect(metadata.fetch.firecrawl.apiKeySource).toBe("env");
@@ -681,6 +686,53 @@ describe("runtime web tools resolution", () => {
     expectInactiveFirecrawlSecretRef({ resolveSpy, metadata, context });
   });
 
+  it("keeps configured provider metadata and inactive warnings when search is disabled", async () => {
+    const { metadata, context } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              enabled: false,
+              provider: "gemini",
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            google: {
+              enabled: true,
+              config: {
+                webSearch: {
+                  apiKey: { source: "env", provider: "default", id: "GEMINI_PROVIDER_REF" },
+                },
+              },
+            },
+          },
+        },
+      }),
+    });
+
+    expect(metadata.search.providerConfigured).toBe("gemini");
+    expect(metadata.search.providerSource).toBe("configured");
+    expect(context.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+          path: "plugins.entries.google.config.webSearch.apiKey",
+        }),
+      ]),
+    );
+  });
+
+  it("does not auto-enable search when tools.web.search is absent", async () => {
+    const { metadata } = await runRuntimeWebTools({
+      config: asConfig({}),
+    });
+
+    expect(metadata.search.providerSource).toBe("none");
+    expect(metadata.search.selectedProvider).toBeUndefined();
+  });
+
   it("uses env fallback for unresolved Firecrawl SecretRef when active", async () => {
     const { metadata, resolvedConfig, context } = await runRuntimeWebTools({
       config: asConfig({
@@ -742,6 +794,59 @@ describe("runtime web tools resolution", () => {
         expect.objectContaining({
           code: "WEB_FETCH_FIRECRAWL_KEY_UNRESOLVED_NO_FALLBACK",
           path: "tools.web.fetch.firecrawl.apiKey",
+        }),
+      ]),
+    );
+  });
+
+  it("resolves x_search SecretRef and writes the resolved key into runtime config", async () => {
+    const { metadata, resolvedConfig, context } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            x_search: {
+              apiKey: { source: "env", provider: "default", id: "X_SEARCH_REF" },
+            },
+          },
+        },
+      }),
+      env: {
+        X_SEARCH_REF: "x-search-runtime-key",
+      },
+    });
+
+    expect(metadata.xSearch.active).toBe(true);
+    expect(metadata.xSearch.apiKeySource).toBe("secretRef");
+    expect(resolvedConfig.tools?.web?.x_search?.apiKey).toBe("x-search-runtime-key");
+    expect(context.warnings.map((warning) => warning.code)).not.toContain(
+      "WEB_X_SEARCH_KEY_UNRESOLVED_NO_FALLBACK",
+    );
+  });
+
+  it("uses env fallback for unresolved x_search SecretRef when active", async () => {
+    const { metadata, resolvedConfig, context } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            x_search: {
+              apiKey: { source: "env", provider: "default", id: "MISSING_X_SEARCH_REF" },
+            },
+          },
+        },
+      }),
+      env: {
+        XAI_API_KEY: "x-search-fallback-key", // pragma: allowlist secret
+      },
+    });
+
+    expect(metadata.xSearch.active).toBe(true);
+    expect(metadata.xSearch.apiKeySource).toBe("env");
+    expect(resolvedConfig.tools?.web?.x_search?.apiKey).toBe("x-search-fallback-key");
+    expect(context.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "WEB_X_SEARCH_KEY_UNRESOLVED_FALLBACK_USED",
+          path: "tools.web.x_search.apiKey",
         }),
       ]),
     );

@@ -1,10 +1,7 @@
 import { type Block, type KnownBlock, type WebClient } from "@slack/web-api";
 import { loadConfig, type OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
-import {
-  fetchWithSsrFGuard,
-  withTrustedEnvProxyGuardedFetchMode,
-} from "openclaw/plugin-sdk/infra-runtime";
+import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import { resolveTextChunksWithFallback } from "openclaw/plugin-sdk/reply-payload";
 import {
   chunkMarkdownTextWithMode,
@@ -13,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/reply-runtime";
 import { isSilentReplyText } from "openclaw/plugin-sdk/reply-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import type { SlackTokenSource } from "./accounts.js";
 import { resolveSlackAccount } from "./accounts.js";
@@ -27,6 +25,8 @@ const SLACK_UPLOAD_SSRF_POLICY = {
   allowedHostnames: ["*.slack.com", "*.slack-edge.com", "*.slack-files.com"],
   allowRfc2544BenchmarkRange: true,
 };
+const SLACK_DM_CHANNEL_CACHE_MAX = 1024;
+const slackDmChannelCache = new Map<string, string>();
 
 type SlackRecipient =
   | {
@@ -49,6 +49,8 @@ type SlackSendOpts = {
   token?: string;
   accountId?: string;
   mediaUrl?: string;
+  uploadFileName?: string;
+  uploadTitle?: string;
   mediaLocalRoots?: readonly string[];
   client?: WebClient;
   threadTs?: string;
@@ -167,10 +169,31 @@ function parseRecipient(raw: string): SlackRecipient {
   return { kind: target.kind, id: target.id };
 }
 
+function createSlackDmCacheKey(params: {
+  accountId?: string;
+  token: string;
+  recipientId: string;
+}): string {
+  return `${params.accountId ?? "default"}:${params.token}:${params.recipientId}`;
+}
+
+function setSlackDmChannelCache(key: string, channelId: string): void {
+  if (slackDmChannelCache.has(key)) {
+    slackDmChannelCache.delete(key);
+  } else if (slackDmChannelCache.size >= SLACK_DM_CHANNEL_CACHE_MAX) {
+    const oldest = slackDmChannelCache.keys().next().value;
+    if (oldest) {
+      slackDmChannelCache.delete(oldest);
+    }
+  }
+  slackDmChannelCache.set(key, channelId);
+}
+
 async function resolveChannelId(
   client: WebClient,
   recipient: SlackRecipient,
-): Promise<{ channelId: string; isDm?: boolean }> {
+  params: { accountId?: string; token: string },
+): Promise<{ channelId: string; isDm?: boolean; cacheHit?: boolean }> {
   // Bare Slack user IDs (U-prefix) may arrive with kind="channel" when the
   // target string had no explicit prefix (parseSlackTarget defaults bare IDs
   // to "channel"). chat.postMessage tolerates user IDs directly, but
@@ -181,18 +204,34 @@ async function resolveChannelId(
   if (!isUserId) {
     return { channelId: recipient.id };
   }
+  const cacheKey = createSlackDmCacheKey({
+    accountId: params.accountId,
+    token: params.token,
+    recipientId: recipient.id,
+  });
+  const cachedChannelId = slackDmChannelCache.get(cacheKey);
+  if (cachedChannelId) {
+    return { channelId: cachedChannelId, isDm: true, cacheHit: true };
+  }
   const response = await client.conversations.open({ users: recipient.id });
   const channelId = response.channel?.id;
   if (!channelId) {
     throw new Error("Failed to open Slack DM channel");
   }
-  return { channelId, isDm: true };
+  setSlackDmChannelCache(cacheKey, channelId);
+  return { channelId, isDm: true, cacheHit: false };
+}
+
+export function clearSlackDmChannelCache(): void {
+  slackDmChannelCache.clear();
 }
 
 async function uploadSlackFile(params: {
   client: WebClient;
   channelId: string;
   mediaUrl: string;
+  uploadFileName?: string;
+  uploadTitle?: string;
   mediaLocalRoots?: readonly string[];
   caption?: string;
   threadTs?: string;
@@ -202,11 +241,13 @@ async function uploadSlackFile(params: {
     maxBytes: params.maxBytes,
     localRoots: params.mediaLocalRoots,
   });
+  const uploadFileName = params.uploadFileName ?? fileName ?? "upload";
+  const uploadTitle = params.uploadTitle ?? uploadFileName;
   // Use the 3-step upload flow (getUploadURLExternal -> POST -> completeUploadExternal)
   // instead of files.uploadV2 which relies on the deprecated files.upload endpoint
   // and can fail with missing_scope even when files:write is granted.
   const uploadUrlResp = await params.client.files.getUploadURLExternal({
-    filename: fileName ?? "upload",
+    filename: uploadFileName,
     length: buffer.length,
   });
   if (!uploadUrlResp.ok || !uploadUrlResp.upload_url || !uploadUrlResp.file_id) {
@@ -237,7 +278,7 @@ async function uploadSlackFile(params: {
 
   // Complete the upload and share to channel/thread
   const completeResp = await params.client.files.completeUploadExternal({
-    files: [{ id: uploadUrlResp.file_id, title: fileName ?? "upload" }],
+    files: [{ id: uploadUrlResp.file_id, title: uploadTitle }],
     channel_id: params.channelId,
     ...(params.caption ? { initial_comment: params.caption } : {}),
     ...(params.threadTs ? { thread_ts: params.threadTs } : {}),
@@ -276,7 +317,10 @@ export async function sendMessageSlack(
   });
   const client = opts.client ?? createSlackWebClient(token);
   const recipient = parseRecipient(to);
-  const { channelId } = await resolveChannelId(client, recipient);
+  const { channelId } = await resolveChannelId(client, recipient, {
+    accountId: account.accountId,
+    token,
+  });
   if (blocks) {
     if (opts.mediaUrl) {
       throw new Error("Slack send does not support blocks with mediaUrl");
@@ -325,6 +369,8 @@ export async function sendMessageSlack(
       client,
       channelId,
       mediaUrl: opts.mediaUrl,
+      uploadFileName: opts.uploadFileName,
+      uploadTitle: opts.uploadTitle,
       mediaLocalRoots: opts.mediaLocalRoots,
       caption: firstChunk,
       threadTs: opts.threadTs,

@@ -3,7 +3,6 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 let DiscordMessageListener: typeof import("./listeners.js").DiscordMessageListener;
 
 beforeAll(async () => {
-  vi.resetModules();
   ({ DiscordMessageListener } = await import("./listeners.js"));
 });
 

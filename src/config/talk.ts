@@ -16,7 +16,7 @@ type TalkApiKeyDeps = {
   path?: typeof path;
 };
 
-export const DEFAULT_TALK_PROVIDER = "elevenlabs";
+export const LEGACY_TALK_PROVIDER_ID = "elevenlabs";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -225,19 +225,13 @@ export function normalizeTalkSection(value: TalkConfig | undefined): TalkConfig 
     }
     if (provider) {
       normalized.provider = provider;
-    } else if (providers) {
-      const ids = Object.keys(providers);
-      if (ids.length === 1) {
-        normalized.provider = ids[0];
-      }
     }
     return Object.keys(normalized).length > 0 ? normalized : undefined;
   }
 
   const legacyProviderConfig = legacyProviderConfigFromTalk(source);
   if (legacyProviderConfig) {
-    normalized.provider = DEFAULT_TALK_PROVIDER;
-    normalized.providers = { [DEFAULT_TALK_PROVIDER]: legacyProviderConfig };
+    normalized.providers = { [LEGACY_TALK_PROVIDER_ID]: legacyProviderConfig };
   }
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
