@@ -3,7 +3,7 @@ import {
   normalizeLanguageCode,
   normalizeSeed,
   requireInRange,
-} from "openclaw/plugin-sdk/speech-core";
+} from "openclaw/plugin-sdk/speech";
 
 const DEFAULT_ELEVENLABS_BASE_URL = "https://api.elevenlabs.io";
 
