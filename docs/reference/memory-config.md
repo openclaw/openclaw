@@ -422,6 +422,7 @@ Notes:
 - `vectorWeight` + `textWeight` is normalized to 1.0 in config resolution, so weights behave as percentages.
 - If embeddings are unavailable (or the provider returns a zero-vector), we still run BM25 and return keyword matches.
 - If FTS5 can't be created, we keep vector-only search (no hard failure).
+- **CJK support**: FTS5 uses configurable trigram tokenization with a short-substring fallback so Chinese, Japanese, and Korean text is searchable without breaking mixed-length queries. CJK-heavy text is also weighted correctly during chunk size estimation, and surrogate-pair characters are preserved during fine splits.
 
 This isn't "IR-theory perfect", but it's simple, fast, and tends to improve recall/precision on real notes.
 If we want to get fancier later, common next steps are Reciprocal Rank Fusion (RRF) or score normalization
