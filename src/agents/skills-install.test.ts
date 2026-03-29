@@ -170,11 +170,28 @@ describe("installSkill code safety scanning", () => {
         targetName: "policy-skill",
         targetType: "skill",
         source: "openclaw-workspace",
-        builtinFindings: [],
+        sourcePath: expect.stringContaining("policy-skill"),
+        sourcePathKind: "directory",
+        request: {
+          kind: "skill-install",
+          mode: "install",
+        },
+        builtinScan: {
+          status: "ok",
+          findings: [],
+        },
+        skill: {
+          installId: "deps",
+          installSpec: expect.objectContaining({
+            kind: "node",
+            package: "example-package",
+          }),
+        },
       });
       expect(handler.mock.calls[0]?.[1]).toEqual({
         source: "openclaw-workspace",
         targetType: "skill",
+        requestKind: "skill-install",
       });
       expect(
         result.warnings?.some((warning) =>
