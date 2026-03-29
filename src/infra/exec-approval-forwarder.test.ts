@@ -345,7 +345,30 @@ describe("exec approval forwarder", () => {
     expect(text).toContain("🔒 Exec approval required");
     expect(text).toContain("Command: `echo hello`");
     expect(text).toContain("Expires in: 5s");
-    expect(text).toContain("Reply with: /approve <id> allow-once|allow-always|deny");
+    expect(text).toContain("`/approve req-1 allow-once`");
+    expect(text).toContain("`/approve req-1 allow-always`");
+    expect(text).toContain("`/approve req-1 deny`");
+  });
+
+  it("omits backtick wrapping for non-markdown channels", async () => {
+    vi.useFakeTimers();
+    const cfg = {
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "targets",
+          targets: [{ channel: "whatsapp", to: "+1234" }],
+        },
+      },
+    } as OpenClawConfig;
+    const { deliver, forwarder } = createForwarder({ cfg });
+
+    await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(true);
+    await Promise.resolve();
+
+    const text = getFirstDeliveryText(deliver);
+    expect(text).toContain("/approve req-1 allow-once");
+    expect(text).not.toContain("`/approve");
   });
 
   it.each([
