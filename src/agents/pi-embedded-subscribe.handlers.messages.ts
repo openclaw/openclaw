@@ -22,6 +22,23 @@ import {
   formatReasoningMessage,
   promoteThinkingTagsToBlocks,
 } from "./pi-embedded-utils.js";
+// Lightweight tool-call presence check — unlike extractToolCallsFromAssistant() (which
+// requires a valid id), this only checks the block type since we need presence, not identity.
+const TOOL_CALL_BLOCK_TYPES: ReadonlySet<string> = new Set(["toolCall", "toolUse", "functionCall"]);
+
+function hasToolCallBlocks(message: AgentMessage): boolean {
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  return content.some(
+    (b) =>
+      b != null &&
+      typeof b === "object" &&
+      typeof b.type === "string" &&
+      TOOL_CALL_BLOCK_TYPES.has(b.type),
+  );
+}
 
 const stripTrailingDirective = (text: string): string => {
   const openIndex = text.lastIndexOf("[[");
@@ -379,7 +396,13 @@ export function handleMessageEnd(
     }
   }
 
-  if (!ctx.state.emittedAssistantUpdate && (cleanedText || hasMedia)) {
+  // Tool-call-only responses from OpenAI-compatible providers (e.g. vLLM) may have
+  // no text or media content. Without this check, handleMessageEnd silently skips
+  // emitting the assistant update, which prevents downstream tool execution from
+  // being signalled. See: https://github.com/openclaw/openclaw/issues/13603
+  const hasToolCalls = hasToolCallBlocks(assistantMessage);
+
+  if (!ctx.state.emittedAssistantUpdate && (cleanedText || hasMedia || hasToolCalls)) {
     const data = buildAssistantStreamData({
       text: cleanedText,
       delta: cleanedText,
