@@ -5,7 +5,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import * as bootstrapCache from "../../agents/bootstrap-cache.js";
 import { setDefaultChannelPluginRegistryForTests } from "../../commands/channel-test-helpers.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import { loadSessionStore, type SessionEntry } from "../../config/sessions.js";
+import { resolveSessionModelRef } from "../../gateway/session-utils.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.ts";
 import {
   __testing as sessionBindingTesting,
@@ -1620,6 +1621,64 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       entry.startsWith(`${existingSessionId}.jsonl.reset.`),
     );
     expect(archived).toHaveLength(1);
+  });
+
+  it("clears persisted runtime model on /new so config primary wins (#9754)", async () => {
+    const storePath = await createStorePath("openclaw-new-clears-runtime-model-");
+    const sessionKey = "agent:main:telegram:dm:user-runtime-clear";
+    const existingSessionId = "existing-runtime-clear";
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: Date.now(),
+        modelProvider: "anthropic",
+        model: "claude-opus-4-5",
+        fallbackNoticeSelectedModel: "anthropic/claude-opus-4-5",
+        fallbackNoticeActiveModel: "openai/gpt-4.1-mini",
+        fallbackNoticeReason: "rate limit",
+      },
+    });
+
+    const cfg = {
+      session: { store: storePath, idleMinutes: 999 },
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-sonnet-4-5" },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "/new",
+        RawBody: "/new",
+        CommandBody: "/new",
+        From: "user-runtime-clear",
+        To: "bot",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        Provider: "telegram",
+        Surface: "telegram",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.resetTriggered).toBe(true);
+    expect(result.sessionEntry.model).toBeUndefined();
+    expect(result.sessionEntry.modelProvider).toBeUndefined();
+    expect(result.sessionEntry.fallbackNoticeSelectedModel).toBeUndefined();
+    expect(result.sessionEntry.fallbackNoticeActiveModel).toBeUndefined();
+    expect(result.sessionEntry.fallbackNoticeReason).toBeUndefined();
+
+    const disk = loadSessionStore(storePath);
+    const persisted = disk[sessionKey];
+    expect(persisted?.model).toBeUndefined();
+    expect(persisted?.modelProvider).toBeUndefined();
+
+    const resolved = resolveSessionModelRef(cfg, persisted);
+    expect(resolved).toEqual({ provider: "anthropic", model: "claude-sonnet-4-5" });
   });
 
   it("archives the old session transcript on daily/scheduled reset (stale session)", async () => {

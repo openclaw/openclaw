@@ -598,6 +598,14 @@ export async function initSessionState(params: {
     sessionEntry.outputTokens = undefined;
     sessionEntry.estimatedCostUsd = undefined;
     sessionEntry.contextTokens = undefined;
+    // Clear last-run model snapshot so the next turn resolves from config defaults
+    // (and optional modelOverride) instead of inheriting the previous session's
+    // runtime model through `{ ...store[key], ...sessionEntry }` (#9754).
+    sessionEntry.model = undefined;
+    sessionEntry.modelProvider = undefined;
+    sessionEntry.fallbackNoticeSelectedModel = undefined;
+    sessionEntry.fallbackNoticeActiveModel = undefined;
+    sessionEntry.fallbackNoticeReason = undefined;
   }
   // Preserve per-session overrides while resetting compaction state on /new.
   sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...sessionEntry };
