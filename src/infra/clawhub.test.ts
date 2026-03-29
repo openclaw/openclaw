@@ -40,6 +40,11 @@ describe("clawhub helpers", () => {
       version: "1.2.3",
     });
     expect(parseClawHubPluginSpec("@scope/pkg")).toBeNull();
+
+    // Malformed specs with trailing/leading @ return null
+    expect(parseClawHubPluginSpec("clawhub:demo@")).toBeNull();
+    expect(parseClawHubPluginSpec("clawhub:@1.2.3")).toBeNull();
+    expect(parseClawHubPluginSpec("clawhub:@")).toBeNull();
   });
 
   it("resolves latest versions from latestVersion before tags", () => {
