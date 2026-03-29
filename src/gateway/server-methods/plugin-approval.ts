@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { hasApprovalTurnSourceRoute } from "../../infra/approval-turn-source.js";
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
 import type { ExecApprovalDecision } from "../../infra/exec-approvals.js";
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
@@ -121,7 +122,10 @@ export function createPluginApprovalHandlers(
       }
 
       const hasApprovalClients = context.hasExecApprovalClients?.(client?.connId) ?? false;
-      if (!hasApprovalClients && !forwarded) {
+      const hasTurnSourceRoute = hasApprovalTurnSourceRoute({
+        turnSourceChannel: record.request.turnSourceChannel,
+      });
+      if (!hasApprovalClients && !forwarded && !hasTurnSourceRoute) {
         manager.expire(record.id, "no-approval-route");
         respond(
           true,

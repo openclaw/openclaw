@@ -457,10 +457,7 @@ export const telegramPlugin = createChatChannelPlugin({
       },
     },
     execApprovals: {
-      getInitiatingSurfaceState: ({ cfg, accountId }) =>
-        isTelegramExecApprovalClientEnabled({ cfg, accountId })
-          ? { kind: "enabled" }
-          : { kind: "disabled" },
+      getInitiatingSurfaceState: () => ({ kind: "enabled" }),
       hasConfiguredDmRoute: ({ cfg }) => hasTelegramExecApprovalDmRoute(cfg),
       shouldSuppressForwardingFallback: (params) =>
         shouldSuppressTelegramExecApprovalForwardingFallback(params),
