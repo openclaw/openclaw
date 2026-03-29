@@ -63,6 +63,7 @@ const MARKDOWN_CACHE_MAX_CHARS = 50_000;
 const INLINE_DATA_IMAGE_RE = /^data:image\/[a-z0-9.+-]+;base64,/i;
 const markdownCache = new Map<string, string>();
 const TAIL_LINK_BLUR_CLASS = "chat-link-tail-blur";
+const TRAILING_CJK_TAIL_RE = /([\u4E00-\u9FFF\u3000-\u303F\uFF01-\uFF5E\s]+)$/;
 
 function getCachedMarkdown(key: string): string | null {
   const cached = markdownCache.get(key);
@@ -139,7 +140,7 @@ const cjkAutoLinkExtension = {
 
       // Stop before any CJK character or typical punctuation following CJK
       // This stops link boundaries from bleeding into mixed-language paragraphs.
-      const cjkMatch = urlText.match(/([\u4E00-\u9FFF\u3000-\u303F\uFF01-\uFF5E]+.*)$/);
+      const cjkMatch = urlText.match(TRAILING_CJK_TAIL_RE);
       if (cjkMatch) {
         urlText = urlText.substring(0, urlText.length - cjkMatch[1].length);
       }
