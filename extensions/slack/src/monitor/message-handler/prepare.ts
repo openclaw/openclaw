@@ -556,7 +556,9 @@ export async function prepareSlackMessage(params: {
 
   const ackReactionMessageTs = message.ts;
   const statusReactionsWillHandle =
-    cfg.messages?.statusReactions?.enabled !== false && shouldAckReaction();
+    Boolean(ackReactionMessageTs) &&
+    cfg.messages?.statusReactions?.enabled !== false &&
+    shouldAckReaction();
   const ackReactionPromise =
     !statusReactionsWillHandle && shouldAckReaction() && ackReactionMessageTs && ackReactionValue
       ? reactSlackMessage(message.channel, ackReactionMessageTs, ackReactionValue, {

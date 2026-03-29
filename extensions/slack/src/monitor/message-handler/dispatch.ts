@@ -190,14 +190,17 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     replyToMode: prepared.replyToMode,
   });
 
+  const reactionMessageTs = prepared.ackReactionMessageTs;
   const messageTs = message.ts ?? message.event_ts;
   const incomingThreadTs = message.thread_ts;
   let didSetStatus = false;
   const statusReactionsEnabled =
-    Boolean(prepared.ackReactionPromise) && cfg.messages?.statusReactions?.enabled !== false;
+    Boolean(prepared.ackReactionPromise) &&
+    Boolean(reactionMessageTs) &&
+    cfg.messages?.statusReactions?.enabled !== false;
   const slackStatusAdapter: StatusReactionAdapter = {
     setReaction: async (emoji) => {
-      await reactSlackMessage(message.channel, message.ts ?? "", toSlackEmojiName(emoji), {
+      await reactSlackMessage(message.channel, reactionMessageTs ?? "", toSlackEmojiName(emoji), {
         token: ctx.botToken,
         client: ctx.app.client,
       }).catch((err) => {
@@ -208,7 +211,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       });
     },
     removeReaction: async (emoji) => {
-      await removeSlackReaction(message.channel, message.ts ?? "", toSlackEmojiName(emoji), {
+      await removeSlackReaction(message.channel, reactionMessageTs ?? "", toSlackEmojiName(emoji), {
         token: ctx.botToken,
         client: ctx.app.client,
       }).catch((err) => {

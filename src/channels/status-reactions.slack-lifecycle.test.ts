@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createStatusReactionController,
   DEFAULT_EMOJIS,
@@ -34,6 +34,10 @@ function createSlackMockAdapter() {
 describe("Slack status reaction lifecycle", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("queued -> thinking -> tool -> done -> clear", async () => {
