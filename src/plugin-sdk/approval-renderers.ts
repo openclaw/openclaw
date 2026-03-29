@@ -1,5 +1,8 @@
 import type { ReplyPayload } from "../auto-reply/types.js";
-import type { ExecApprovalReplyDecision } from "../infra/exec-approval-reply.js";
+import {
+  buildApprovalInteractiveReply,
+  type ExecApprovalReplyDecision,
+} from "../infra/exec-approval-reply.js";
 import {
   buildPluginApprovalRequestMessage,
   buildPluginApprovalResolvedMessage,
@@ -9,6 +12,39 @@ import {
 
 const DEFAULT_ALLOWED_DECISIONS = ["allow-once", "allow-always", "deny"] as const;
 
+function neutralizeApprovalText(value: string): string {
+  return value
+    .replace(/@everyone/gi, "@\u200beveryone")
+    .replace(/@here/gi, "@\u200bhere")
+    .replace(/<@/g, "<@\u200b")
+    .replace(/<#/g, "<#\u200b");
+}
+
+export function buildApprovalPendingReplyPayload(params: {
+  approvalId: string;
+  approvalSlug: string;
+  text: string;
+  allowedDecisions?: readonly ExecApprovalReplyDecision[];
+  channelData?: Record<string, unknown>;
+}): ReplyPayload {
+  const allowedDecisions = params.allowedDecisions ?? DEFAULT_ALLOWED_DECISIONS;
+  return {
+    text: neutralizeApprovalText(params.text),
+    interactive: buildApprovalInteractiveReply({
+      approvalId: params.approvalId,
+      allowedDecisions,
+    }),
+    channelData: {
+      execApproval: {
+        approvalId: params.approvalId,
+        approvalSlug: params.approvalSlug,
+        allowedDecisions,
+      },
+      ...params.channelData,
+    },
+  };
+}
+
 export function buildPluginApprovalPendingReplyPayload(params: {
   request: PluginApprovalRequest;
   nowMs: number;
@@ -17,17 +53,13 @@ export function buildPluginApprovalPendingReplyPayload(params: {
   allowedDecisions?: readonly ExecApprovalReplyDecision[];
   channelData?: Record<string, unknown>;
 }): ReplyPayload {
-  return {
+  return buildApprovalPendingReplyPayload({
+    approvalId: params.request.id,
+    approvalSlug: params.approvalSlug ?? params.request.id.slice(0, 8),
     text: params.text ?? buildPluginApprovalRequestMessage(params.request, params.nowMs),
-    channelData: {
-      execApproval: {
-        approvalId: params.request.id,
-        approvalSlug: params.approvalSlug ?? params.request.id.slice(0, 8),
-        allowedDecisions: params.allowedDecisions ?? DEFAULT_ALLOWED_DECISIONS,
-      },
-      ...params.channelData,
-    },
-  };
+    allowedDecisions: params.allowedDecisions,
+    channelData: params.channelData,
+  });
 }
 
 export function buildPluginApprovalResolvedReplyPayload(params: {
@@ -37,10 +69,14 @@ export function buildPluginApprovalResolvedReplyPayload(params: {
 }): ReplyPayload {
   return params.channelData
     ? {
-        text: params.text ?? buildPluginApprovalResolvedMessage(params.resolved),
+        text: neutralizeApprovalText(
+          params.text ?? buildPluginApprovalResolvedMessage(params.resolved),
+        ),
         channelData: params.channelData,
       }
     : {
-        text: params.text ?? buildPluginApprovalResolvedMessage(params.resolved),
+        text: neutralizeApprovalText(
+          params.text ?? buildPluginApprovalResolvedMessage(params.resolved),
+        ),
       };
 }
