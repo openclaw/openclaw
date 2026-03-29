@@ -13,9 +13,10 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
       isNativeDeliveryEnabled: () => true,
       resolveNativeDeliveryMode: () => "dm",
     });
+    const authorizeCommand = adapter.auth.authorizeCommand;
 
     expect(
-      adapter.authorizeCommand({
+      authorizeCommand({
         cfg: {} as never,
         accountId: "work",
         senderId: "exec-owner",
@@ -24,7 +25,7 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
     ).toEqual({ authorized: true });
 
     expect(
-      adapter.authorizeCommand({
+      authorizeCommand({
         cfg: {} as never,
         accountId: "work",
         senderId: "plugin-owner",
@@ -33,7 +34,7 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
     ).toEqual({ authorized: true });
 
     expect(
-      adapter.authorizeCommand({
+      authorizeCommand({
         cfg: {} as never,
         accountId: "work",
         senderId: "someone-else",
@@ -56,14 +57,16 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
       resolveNativeDeliveryMode: ({ accountId }) =>
         accountId === "channel-only" ? "channel" : "dm",
     });
+    const getInitiatingSurfaceState = adapter.auth.getInitiatingSurfaceState;
+    const hasConfiguredDmRoute = adapter.delivery.hasConfiguredDmRoute;
 
-    expect(adapter.getInitiatingSurfaceState({ cfg: {} as never, accountId: "dm-only" })).toEqual({
+    expect(getInitiatingSurfaceState({ cfg: {} as never, accountId: "dm-only" })).toEqual({
       kind: "enabled",
     });
-    expect(
-      adapter.getInitiatingSurfaceState({ cfg: {} as never, accountId: "no-approvers" }),
-    ).toEqual({ kind: "disabled" });
-    expect(adapter.hasConfiguredDmRoute({ cfg: {} as never })).toBe(true);
+    expect(getInitiatingSurfaceState({ cfg: {} as never, accountId: "no-approvers" })).toEqual({
+      kind: "disabled",
+    });
+    expect(hasConfiguredDmRoute({ cfg: {} as never })).toBe(true);
   });
 
   it("suppresses forwarding fallback only for matching native-delivery surfaces", () => {
@@ -82,9 +85,10 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
       resolveSuppressionAccountId: ({ request }) =>
         request.request.turnSourceAccountId?.trim() || undefined,
     });
+    const shouldSuppressForwardingFallback = adapter.delivery.shouldSuppressForwardingFallback;
 
     expect(
-      adapter.shouldSuppressForwardingFallback({
+      shouldSuppressForwardingFallback({
         cfg: {} as never,
         target: { channel: "telegram" },
         request: {
@@ -94,7 +98,7 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
     ).toBe(true);
 
     expect(
-      adapter.shouldSuppressForwardingFallback({
+      shouldSuppressForwardingFallback({
         cfg: {} as never,
         target: { channel: "telegram" },
         request: {
@@ -104,7 +108,7 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
     ).toBe(false);
 
     expect(
-      adapter.shouldSuppressForwardingFallback({
+      shouldSuppressForwardingFallback({
         cfg: {} as never,
         target: { channel: "slack" },
         request: {

@@ -38,7 +38,7 @@ export function resolveExecApprovalInitiatingSurfaceState(params: {
   }
 
   const cfg = params.cfg ?? loadConfig();
-  const state = getChannelPlugin(channel)?.execApprovals?.getInitiatingSurfaceState?.({
+  const state = getChannelPlugin(channel)?.execApprovals?.auth?.getInitiatingSurfaceState?.({
     cfg,
     accountId: params.accountId,
   });
@@ -53,6 +53,6 @@ export function resolveExecApprovalInitiatingSurfaceState(params: {
 
 export function hasConfiguredExecApprovalDmRoute(cfg: OpenClawConfig): boolean {
   return listChannelPlugins().some(
-    (plugin) => plugin.execApprovals?.hasConfiguredDmRoute?.({ cfg }) ?? false,
+    (plugin) => plugin.execApprovals?.delivery?.hasConfiguredDmRoute?.({ cfg }) ?? false,
   );
 }

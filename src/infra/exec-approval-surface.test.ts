@@ -83,13 +83,17 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
       channel === "telegram"
         ? {
             execApprovals: {
-              getInitiatingSurfaceState: () => ({ kind: "enabled" }),
+              auth: {
+                getInitiatingSurfaceState: () => ({ kind: "enabled" }),
+              },
             },
           }
         : channel === "discord"
           ? {
               execApprovals: {
-                getInitiatingSurfaceState: () => ({ kind: "disabled" }),
+                auth: {
+                  getInitiatingSurfaceState: () => ({ kind: "disabled" }),
+                },
               },
             }
           : undefined,
@@ -128,7 +132,9 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
       channel === "telegram"
         ? {
             execApprovals: {
-              getInitiatingSurfaceState: () => ({ kind: "disabled" }),
+              auth: {
+                getInitiatingSurfaceState: () => ({ kind: "disabled" }),
+              },
             },
           }
         : undefined,
@@ -172,12 +178,16 @@ describe("hasConfiguredExecApprovalDmRoute", () => {
       plugins: [
         {
           execApprovals: {
-            hasConfiguredDmRoute: () => false,
+            delivery: {
+              hasConfiguredDmRoute: () => false,
+            },
           },
         },
         {
           execApprovals: {
-            hasConfiguredDmRoute: () => true,
+            delivery: {
+              hasConfiguredDmRoute: () => true,
+            },
           },
         },
       ],
@@ -187,12 +197,16 @@ describe("hasConfiguredExecApprovalDmRoute", () => {
       plugins: [
         {
           execApprovals: {
-            hasConfiguredDmRoute: () => false,
+            delivery: {
+              hasConfiguredDmRoute: () => false,
+            },
           },
         },
         {
           execApprovals: {
-            hasConfiguredDmRoute: () => false,
+            delivery: {
+              hasConfiguredDmRoute: () => false,
+            },
           },
         },
         {

@@ -14,7 +14,7 @@ export function resolveApprovalCommandAuthorization(params: {
     return { authorized: true };
   }
   return (
-    getChannelPlugin(channel)?.execApprovals?.authorizeCommand?.({
+    getChannelPlugin(channel)?.execApprovals?.auth?.authorizeCommand?.({
       cfg: params.cfg,
       accountId: params.accountId,
       senderId: params.senderId,

@@ -582,7 +582,7 @@ describe("telegramPlugin duplicate token guard", () => {
 
   it("builds plugin approval pending payload with callback ids that preserve allow-always", () => {
     const request = createPluginApprovalRequest();
-    const payload = telegramPlugin.execApprovals?.buildPluginPendingPayload?.({
+    const payload = telegramPlugin.execApprovals?.render?.plugin?.buildPendingPayload?.({
       cfg: createCfg(),
       request,
       target: { channel: "telegram", to: "12345" },
