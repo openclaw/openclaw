@@ -205,6 +205,16 @@ export function createVeniceE2EEStreamWrapper(baseStreamFn: StreamFn | undefined
           }
           resultStream.push(await decryptEvent(event, session, decryptedAccum));
         }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        resultStream.push({
+          type: "error",
+          reason: "error",
+          error: {
+            role: "assistant",
+            content: [{ type: "text", text: `E2EE decryption failed: ${message}` }],
+          },
+        } as AssistantMessageEvent);
       } finally {
         resultStream.end();
       }

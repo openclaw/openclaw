@@ -620,7 +620,7 @@ importers:
   extensions/venice:
     dependencies:
       venice-e2ee:
-        specifier: github:elkimek/venice-e2ee
+        specifier: github:elkimek/venice-e2ee#be02cd50e5d33c736c4d16c1afe42b072e0287f2
         version: https://codeload.github.com/elkimek/venice-e2ee/tar.gz/be02cd50e5d33c736c4d16c1afe42b072e0287f2
 
   extensions/vercel-ai-gateway: {}
