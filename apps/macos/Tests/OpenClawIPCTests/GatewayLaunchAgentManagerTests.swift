@@ -7,7 +7,7 @@ struct GatewayLaunchAgentManagerTests {
         let url = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-launchd-\(UUID().uuidString).plist")
         let plist: [String: Any] = [
-            "ProgramArguments": ["openclaw", "gateway-daemon", "--port", "18789", "--bind", "loopback"],
+            "ProgramArguments": ["openclaw", "gateway", "--port", "18789", "--bind", "loopback"],
             "EnvironmentVariables": [
                 "OPENCLAW_GATEWAY_TOKEN": " secret ",
                 "OPENCLAW_GATEWAY_PASSWORD": "pw",
@@ -28,7 +28,7 @@ struct GatewayLaunchAgentManagerTests {
         let url = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-launchd-\(UUID().uuidString).plist")
         let plist: [String: Any] = [
-            "ProgramArguments": ["openclaw", "gateway-daemon", "--port", "18789"],
+            "ProgramArguments": ["openclaw", "gateway", "--port", "18789"],
         ]
         let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
         try data.write(to: url, options: [.atomic])
