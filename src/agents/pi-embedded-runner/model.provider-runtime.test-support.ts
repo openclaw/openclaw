@@ -4,6 +4,7 @@ const OPENAI_BASE_URL = "https://api.openai.com/v1";
 const OPENAI_CODEX_BASE_URL = "https://chatgpt.com/backend-api";
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 const ANTHROPIC_BASE_URL = "https://api.anthropic.com";
+const XAI_BASE_URL = "https://api.x.ai/v1";
 const ZAI_BASE_URL = "https://api.z.ai/api/paas/v4";
 const GOOGLE_GENERATIVE_AI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 const DEFAULT_CONTEXT_WINDOW = 200_000;
@@ -58,12 +59,6 @@ function cloneTemplate(
 }
 
 function normalizeDynamicModel(params: { provider: string; model: ResolvedModelLike }) {
-  if (params.provider === "openai") {
-    const baseUrl = typeof params.model.baseUrl === "string" ? params.model.baseUrl : undefined;
-    if (params.model.api === "openai-completions" && (!baseUrl || baseUrl === OPENAI_BASE_URL)) {
-      return { ...params.model, api: "openai-responses" };
-    }
-  }
   if (params.provider !== "openai-codex") {
     return undefined;
   }
@@ -306,6 +301,7 @@ export function createProviderRuntimeTestMock(options: ProviderRuntimeTestMockOp
       "github-copilot",
       "openai-codex",
       "openai",
+      "xai",
       "anthropic",
       "zai",
     ],
@@ -389,14 +385,37 @@ export function createProviderRuntimeTestMock(options: ProviderRuntimeTestMockOp
           })
         : undefined,
     normalizeProviderTransportWithPlugin: (params: {
+      provider: string;
       context: { api?: string | null; baseUrl?: string };
-    }) =>
-      params.context.api === "google-generative-ai" &&
-      params.context.baseUrl === "https://generativelanguage.googleapis.com"
-        ? {
-            api: params.context.api,
-            baseUrl: GOOGLE_GENERATIVE_AI_BASE_URL,
-          }
-        : undefined,
+    }) => {
+      if (
+        params.context.api === "google-generative-ai" &&
+        params.context.baseUrl === "https://generativelanguage.googleapis.com"
+      ) {
+        return {
+          api: params.context.api,
+          baseUrl: GOOGLE_GENERATIVE_AI_BASE_URL,
+        };
+      }
+      if (
+        params.context.api === "openai-completions" &&
+        (params.provider === "openai" || params.context.baseUrl === OPENAI_BASE_URL)
+      ) {
+        return {
+          api: "openai-responses",
+          baseUrl: params.context.baseUrl,
+        };
+      }
+      if (
+        params.context.api === "openai-completions" &&
+        (params.provider === "xai" || params.context.baseUrl === XAI_BASE_URL)
+      ) {
+        return {
+          api: "openai-responses",
+          baseUrl: params.context.baseUrl,
+        };
+      }
+      return undefined;
+    },
   };
 }
