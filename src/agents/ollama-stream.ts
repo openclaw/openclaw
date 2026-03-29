@@ -404,29 +404,47 @@ export function buildAssistantMessage(
 
 export async function* parseNdjsonStream(
   reader: ReadableStreamDefaultReader<Uint8Array>,
+  signal?: AbortSignal,
 ): AsyncGenerator<OllamaChatResponse> {
   const decoder = new TextDecoder();
   let buffer = "";
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) {
-      break;
-    }
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split("\n");
-    buffer = lines.pop() ?? "";
+  if (signal) {
+    signal.addEventListener(
+      "abort",
+      () => {
+        reader.cancel().catch(() => {});
+      },
+      { once: true },
+    );
+  }
 
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed) {
-        continue;
+  while (true) {
+    try {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
       }
-      try {
-        yield parseJsonPreservingUnsafeIntegers(trimmed) as OllamaChatResponse;
-      } catch {
-        log.warn(`Skipping malformed NDJSON line: ${trimmed.slice(0, 120)}`);
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) {
+          continue;
+        }
+        try {
+          yield parseJsonPreservingUnsafeIntegers(trimmed) as OllamaChatResponse;
+        } catch {
+          log.warn(`Skipping malformed NDJSON line: ${trimmed.slice(0, 120)}`);
+        }
       }
+    } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") {
+        break;
+      }
+      throw err;
     }
   }
 
@@ -544,7 +562,7 @@ export function createOllamaStreamFn(
         const accumulatedToolCalls: OllamaToolCall[] = [];
         let finalResponse: OllamaChatResponse | undefined;
 
-        for await (const chunk of parseNdjsonStream(reader)) {
+        for await (const chunk of parseNdjsonStream(reader, options?.signal)) {
           if (chunk.message?.content) {
             accumulatedContent += chunk.message.content;
           }
