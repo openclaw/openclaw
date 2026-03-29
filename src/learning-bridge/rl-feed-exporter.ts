@@ -4,13 +4,13 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { writeTextAtomic } from "../infra/json-files.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { writeJsonFileAtomically } from "../plugin-sdk/json-store.js";
-import { resolveConfigDir } from "../utils.js";
+import { resolveConfigDir, resolveUserPath } from "../utils.js";
 import type { TrajectorTurn, TrajectoryPackage } from "./types.js";
 
 export async function resolveRlFeedRoot(cfg?: OpenClawConfig): Promise<string> {
   const configured = cfg?.research?.learningBridge?.outputDir?.trim();
   const stateDir = resolveConfigDir();
-  const root = configured ? path.resolve(configured) : path.join(stateDir, "rl-feed");
+  const root = configured ? resolveUserPath(configured) : path.join(stateDir, "rl-feed");
   let realRoot = root;
   try {
     await fs.mkdir(root, { recursive: true, mode: 0o700 });
