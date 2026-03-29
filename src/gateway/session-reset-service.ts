@@ -320,13 +320,14 @@ export async function performGatewaySessionReset(params: {
       previousSessionId: oldSessionId ?? "",
       nextSessionId,
     });
-    const normalizedRewrittenSessionFile =
-      rewrittenSessionFile && path.isAbsolute(rewrittenSessionFile)
-        ? canonicalizeAbsoluteSessionFilePath(rewrittenSessionFile)
-        : rewrittenSessionFile;
+    const effectiveSessionFile = rewrittenSessionFile ?? currentEntry?.sessionFile;
+    const normalizedSessionFile =
+      effectiveSessionFile && path.isAbsolute(effectiveSessionFile)
+        ? canonicalizeAbsoluteSessionFilePath(effectiveSessionFile)
+        : effectiveSessionFile;
     const sessionFile = resolveSessionFilePath(
       nextSessionId,
-      normalizedRewrittenSessionFile ? { sessionFile: normalizedRewrittenSessionFile } : undefined,
+      normalizedSessionFile ? { sessionFile: normalizedSessionFile } : undefined,
       resolveSessionFilePathOptions({
         storePath,
         agentId: sessionAgentId,
