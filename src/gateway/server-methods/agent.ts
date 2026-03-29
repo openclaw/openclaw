@@ -39,7 +39,7 @@ import {
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
 import { resolveAssistantIdentity } from "../assistant-identity.js";
-import { parseMessageWithAttachments } from "../chat-attachments.js";
+import { MediaOffloadError, parseMessageWithAttachments } from "../chat-attachments.js";
 import { resolveAssistantAvatarUrl } from "../control-ui-shared.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import { GATEWAY_CLIENT_CAPS, hasGatewayClientCap } from "../protocol/client-info.js";
@@ -58,6 +58,7 @@ import {
   loadGatewaySessionRow,
   loadSessionEntry,
   migrateAndPruneGatewaySessionStoreKey,
+  resolveSessionModelRef,
 } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import { waitForAgentJob } from "./agent-job.js";
@@ -347,15 +348,64 @@ export const agentHandlers: GatewayRequestHandlers = {
     let message = (request.message ?? "").trim();
     let images: Array<{ type: "image"; data: string; mimeType: string }> = [];
     if (normalizedAttachments.length > 0) {
+      // Determine whether the selected model supports image input so that large-
+      // attachment offload markers are only injected when the model can resolve
+      // them. We probe the catalog using the session key if available.
+      // Defaults to true when the catalog or session is unavailable (backwards-
+      // compatible: unknown models are treated as vision-capable).
+      let supportsImages = true;
+      try {
+        const requestedSessionKeyRaw =
+          typeof request.sessionKey === "string" && request.sessionKey.trim()
+            ? request.sessionKey.trim()
+            : undefined;
+        if (requestedSessionKeyRaw) {
+          const { cfg: sessCfg, entry: sessEntry } = loadSessionEntry(requestedSessionKeyRaw);
+          const catalog = await context.loadGatewayModelCatalog();
+          const modelRef = resolveSessionModelRef(sessCfg, sessEntry, undefined);
+          const catalogModels: unknown[] = Array.isArray(catalog)
+            ? catalog
+            : Array.isArray((catalog as { models?: unknown[] } | null)?.models)
+              ? (catalog as { models: unknown[] }).models
+              : [];
+          const modelEntry = catalogModels.find(
+            (m): m is { id?: unknown; input?: unknown[] } =>
+              m !== null &&
+              typeof m === "object" &&
+              (m as Record<string, unknown>).id === modelRef.model,
+          );
+          if (modelEntry != null) {
+            supportsImages =
+              Array.isArray(modelEntry.input) && modelEntry.input.includes("image");
+          }
+        }
+      } catch {
+        // Session/catalog unavailable — default to true.
+      }
+
       try {
         const parsed = await parseMessageWithAttachments(message, normalizedAttachments, {
           maxBytes: 5_000_000,
           log: context.logGateway,
+          supportsImages,
         });
         message = parsed.message.trim();
         images = parsed.images;
+        // offloadedRefs are appended as text markers to `message`; the agent
+        // runner will resolve them via detectAndLoadPromptImages.
       } catch (err) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(err)));
+        // MediaOffloadError indicates a server-side storage fault (ENOSPC, EPERM,
+        // etc.). Map it to UNAVAILABLE so clients can retry without treating it as
+        // a bad request. All other errors are input-validation failures → 4xx.
+        const isServerFault = err instanceof MediaOffloadError;
+        respond(
+          false,
+          undefined,
+          errorShape(
+            isServerFault ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
+            String(err),
+          ),
+        );
         return;
       }
     }

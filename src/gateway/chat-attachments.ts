@@ -24,7 +24,7 @@ export type ChatImageContent = {
  * persistChatSendImages and buildChatSendTranscriptMessage in chat.ts) would
  * silently omit all large attachments that were offloaded to disk.
  */
-export type OffloadedMediaRef = {
+export type OffloadedRef = {
   /** Opaque media URI injected into the message, e.g. "media://inbound/<id>" */
   mediaRef: string;
   /** The raw media ID from SavedMedia.id, usable with resolveMediaBufferPath */
@@ -52,7 +52,7 @@ export type ParsedMessageWithImages = {
    * `supportsImages: modelSupportsImages(model)` so that text-only model runs
    * do not inject unresolvable media:// markers into prompt text.
    */
-  offloadedRefs: OffloadedMediaRef[];
+  offloadedRefs: OffloadedRef[];
 };
 
 type AttachmentLog = {
@@ -307,7 +307,7 @@ export async function parseMessageWithAttachments(
   }
 
   const images: ChatImageContent[] = [];
-  const offloadedRefs: OffloadedMediaRef[] = [];
+  const offloadedRefs: OffloadedRef[] = [];
   let updatedMessage = message;
 
   // Track IDs of files saved during this request for cleanup if a later

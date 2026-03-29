@@ -357,16 +357,18 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(
         link?.attachments ?? undefined,
       );
-      let images: Array<{ type: "image"; data: string; mimeType: string }> = [];
+    let images: Array<{ type: "image"; data: string; mimeType: string }> = [];
       if (normalizedAttachments.length > 0) {
         try {
           const parsed = await parseMessageWithAttachments(message, normalizedAttachments, {
             maxBytes: 5_000_000,
             log: ctx.logGateway,
+            supportsImages: true,
           });
           message = parsed.message.trim();
           images = parsed.images;
-        } catch {
+        } catch (err) {
+          ctx.logGateway.warn(`agent.request attachment parse failed: ${err instanceof Error ? err.message : String(err)}`);
           return;
         }
       }

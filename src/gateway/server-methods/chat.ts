@@ -35,7 +35,12 @@ import {
   isChatStopCommandText,
   resolveChatRunExpiresAtMs,
 } from "../chat-abort.js";
-import { type ChatImageContent, parseMessageWithAttachments } from "../chat-attachments.js";
+import {
+  type ChatImageContent,
+  MediaOffloadError,
+  type OffloadedRef,
+  parseMessageWithAttachments,
+} from "../chat-attachments.js";
 import { stripEnvelopeFromMessage, stripEnvelopeFromMessages } from "../chat-sanitize.js";
 import { augmentChatHistoryWithCliSessionImports } from "../cli-session-history.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
@@ -326,15 +331,43 @@ function canInjectSystemProvenance(client: GatewayRequestHandlerOptions["client"
   return scopes.includes(ADMIN_SCOPE);
 }
 
+/**
+ * Persist inline images and offloaded-ref media to the transcript media store.
+ *
+ * Inline images are re-saved from their base64 payload so that a stable
+ * filesystem path can be stored in the transcript.  Offloaded refs are already
+ * on disk (saved by parseMessageWithAttachments); their SavedMedia metadata is
+ * synthesised directly from the OffloadedRef, avoiding a redundant write.
+ *
+ * Both sets are combined so that transcript media fields remain complete
+ * regardless of whether attachments were inlined or offloaded.
+ */
 async function persistChatSendImages(params: {
   images: ChatImageContent[];
+  offloadedRefs: OffloadedRef[];
   client: GatewayRequestHandlerOptions["client"];
   logGateway: GatewayRequestContext["logGateway"];
 }): Promise<SavedMedia[]> {
-  if (params.images.length === 0 || isAcpBridgeClient(params.client)) {
+  if (isAcpBridgeClient(params.client)) {
     return [];
   }
+
   const saved: SavedMedia[] = [];
+
+  // Offloaded images are already on disk — convert their metadata directly.
+  // Placed first so MediaPath/MediaPaths in the transcript reflect the original
+  // attachment order (large images precede any trailing inline images in the
+  // message, matching the order in which markers were appended).
+  for (const ref of params.offloadedRefs) {
+    saved.push({
+      id: ref.id,
+      path: ref.mediaRef,
+      size: 0,
+      contentType: ref.mimeType,
+    });
+  }
+
+  // Inline images must be saved to disk to obtain a stable transcript path.
   for (const img of params.images) {
     try {
       saved.push(await saveMediaBuffer(Buffer.from(img.data, "base64"), img.mimeType, "inbound"));
@@ -344,6 +377,7 @@ async function persistChatSendImages(params: {
       );
     }
   }
+
   return saved;
 }
 
@@ -1387,23 +1421,74 @@ export const chatHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+
+    // Load session entry before attachment parsing so we can gate media-URI
+    // marker injection on the model's image capability. This prevents opaque
+    // media:// markers from leaking into prompts for text-only model runs.
+    const rawSessionKey = p.sessionKey;
+    const { cfg, entry, canonicalKey: sessionKey } = loadSessionEntry(rawSessionKey);
+
     let parsedMessage = inboundMessage;
     let parsedImages: ChatImageContent[] = [];
+    let parsedOffloadedRefs: OffloadedRef[] = [];
     if (normalizedAttachments.length > 0) {
+      // Determine whether the selected model supports image input so that large-
+      // attachment offload markers are only injected when the model can resolve
+      // them. Defaults to true when the catalog is unavailable (backwards-
+      // compatible: unknown models are treated as vision-capable).
+      let supportsImages = true;
+      try {
+        const catalog = await context.loadGatewayModelCatalog();
+        const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
+        const modelRef = resolveSessionModelRef(cfg, entry, sessionAgentId);
+        // The catalog shape is opaque here; probe defensively.
+        // Both flat-array and { models: [...] } shapes are handled.
+        const catalogModels: unknown[] = Array.isArray(catalog)
+          ? catalog
+          : Array.isArray((catalog as { models?: unknown[] } | null)?.models)
+            ? (catalog as { models: unknown[] }).models
+            : [];
+        const modelEntry = catalogModels.find(
+          (m): m is { id?: unknown; input?: unknown[] } =>
+            m !== null &&
+            typeof m === "object" &&
+            (m as Record<string, unknown>).id === modelRef.model,
+        );
+        if (modelEntry != null) {
+          supportsImages =
+            Array.isArray(modelEntry.input) && modelEntry.input.includes("image");
+        }
+      } catch {
+        // Catalog unavailable — default to true (allow image attachment offload).
+      }
+
       try {
         const parsed = await parseMessageWithAttachments(inboundMessage, normalizedAttachments, {
           maxBytes: 5_000_000,
           log: context.logGateway,
+          supportsImages,
         });
         parsedMessage = parsed.message;
         parsedImages = parsed.images;
+        parsedOffloadedRefs = parsed.offloadedRefs;
       } catch (err) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(err)));
+        // MediaOffloadError indicates a server-side storage fault (ENOSPC, EPERM,
+        // etc.). All other errors are client-side input validation failures.
+        // Map them to different HTTP status codes so callers can retry server
+        // faults without treating them as bad requests.
+        const isServerFault = err instanceof MediaOffloadError;
+        respond(
+          false,
+          undefined,
+          errorShape(
+            isServerFault ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
+            String(err),
+          ),
+        );
         return;
       }
     }
-    const rawSessionKey = p.sessionKey;
-    const { cfg, entry, canonicalKey: sessionKey } = loadSessionEntry(rawSessionKey);
+
     const timeoutMs = resolveAgentTimeoutMs({
       cfg,
       overrideMs: p.timeoutMs,
@@ -1477,8 +1562,14 @@ export const chatHandlers: GatewayRequestHandlers = {
         status: "started" as const,
       };
       respond(true, ackPayload, undefined, { runId: clientRunId });
+
+      // Persist both inline images and already-offloaded refs to the media
+      // store so that transcript media fields remain complete for all attachment
+      // sizes. Offloaded refs are already on disk; persistChatSendImages converts
+      // their metadata without re-writing the files.
       const persistedImagesPromise = persistChatSendImages({
         images: parsedImages,
+        offloadedRefs: parsedOffloadedRefs,
         client,
         logGateway: context.logGateway,
       });
