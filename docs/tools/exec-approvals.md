@@ -398,7 +398,7 @@ Microsoft Teams in addition to the existing Web UI and terminal UI flows.
 
 This shared text-command path uses the normal channel auth model for that conversation. If the
 originating chat can already send commands and receive replies, approval requests no longer need a
-separate channel-specific approval client just to stay pending.
+separate native delivery adapter just to stay pending.
 
 Discord and Telegram also support same-chat `/approve`, but those channels still use their
 resolved approver list for authorization even when native approval delivery is disabled.
