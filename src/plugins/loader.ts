@@ -1563,7 +1563,7 @@ export async function loadOpenClawPluginCliRegistry(
       continue;
     }
 
-    if (candidate.origin === "bundled" && manifestRecord.kind === "memory") {
+    if (manifestRecord.kind === "memory") {
       const memoryDecision = resolveMemorySlotDecision({
         id: record.id,
         kind: "memory",

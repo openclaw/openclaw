@@ -2900,6 +2900,59 @@ module.exports = {
     ).toBe(false);
   });
 
+  it("applies memory slot gating to non-bundled CLI metadata loads", async () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "memory-external",
+      filename: "memory-external.cjs",
+      body: `module.exports = {
+  id: "memory-external",
+  kind: "memory",
+  register(api) {
+    api.registerCli(() => {}, {
+      descriptors: [
+        {
+          name: "memory-external",
+          description: "External memory CLI metadata",
+          hasSubcommands: true,
+        },
+      ],
+    });
+  },
+};`,
+    });
+    fs.writeFileSync(
+      path.join(plugin.dir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "memory-external",
+          kind: "memory",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const registry = await loadOpenClawPluginCliRegistry({
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["memory-external"],
+          slots: { memory: "memory-other" },
+        },
+      },
+    });
+
+    expect(registry.cliRegistrars.flatMap((entry) => entry.commands)).not.toContain(
+      "memory-external",
+    );
+    const memory = registry.plugins.find((entry) => entry.id === "memory-external");
+    expect(memory?.status).toBe("disabled");
+    expect(String(memory?.error ?? "")).toContain('memory slot set to "memory-other"');
+  });
+
   it("blocks before_prompt_build but preserves legacy model overrides when prompt injection is disabled", async () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
