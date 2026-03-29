@@ -201,6 +201,7 @@ async function runEmbeddedFallback(params: {
   workspaceDir: string;
   sessionKey: string;
   runId: string;
+  agentId?: string;
   abortSignal?: AbortSignal;
 }) {
   const cfg = makeConfig();
@@ -214,6 +215,7 @@ async function runEmbeddedFallback(params: {
       runEmbeddedPiAgent({
         sessionId: `session:${params.runId}`,
         sessionKey: params.sessionKey,
+        agentId: params.agentId,
         sessionFile: path.join(params.workspaceDir, `${params.runId}.jsonl`),
         workspaceDir: params.workspaceDir,
         agentDir: params.agentDir,
@@ -323,6 +325,27 @@ describe("runWithModelFallback + runEmbeddedPiAgent overload policy", () => {
       expectOpenAiThenGroqAttemptOrder();
       expect(computeBackoffMock).toHaveBeenCalledTimes(1);
       expect(sleepWithAbortMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("falls back across providers for agent sessions without explicit model overrides", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeAuthStore(agentDir);
+      mockPrimaryOverloadedThenFallbackSuccess();
+
+      const result = await runEmbeddedFallback({
+        agentDir,
+        workspaceDir,
+        agentId: "main",
+        sessionKey: "main",
+        runId: "run:overloaded-cross-provider:agent-session",
+      });
+
+      expect(result.provider).toBe("groq");
+      expect(result.model).toBe("mock-2");
+      expect(result.attempts[0]?.reason).toBe("overloaded");
+      expect(result.result.payloads?.[0]?.text ?? "").toContain("fallback ok");
+      expectOpenAiThenGroqAttemptOrder();
     });
   });
 
