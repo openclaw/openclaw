@@ -25,6 +25,10 @@ const OPENCLAW_PACKAGE_ROOT =
     modulePath: fileURLToPath(import.meta.url),
     moduleUrl: import.meta.url,
   }) ?? fileURLToPath(new URL("../..", import.meta.url));
+const CURRENT_MODULE_PATH = fileURLToPath(import.meta.url);
+const RUNNING_FROM_BUILT_ARTIFACT =
+  CURRENT_MODULE_PATH.includes(`${path.sep}dist${path.sep}`) ||
+  CURRENT_MODULE_PATH.includes(`${path.sep}dist-runtime${path.sep}`);
 const PUBLIC_SURFACE_SOURCE_EXTENSIONS = [".ts", ".mts", ".js", ".mjs", ".cts", ".cjs"] as const;
 const RUNTIME_SIDECAR_ARTIFACTS = new Set([
   "helper-api.js",
@@ -185,6 +189,14 @@ function resolveBundledPluginScanDir(packageRoot: string): string | undefined {
   const sourceDir = path.join(packageRoot, "extensions");
   const runtimeDir = path.join(packageRoot, "dist-runtime", "extensions");
   const builtDir = path.join(packageRoot, "dist", "extensions");
+  if (RUNNING_FROM_BUILT_ARTIFACT) {
+    if (fs.existsSync(builtDir)) {
+      return builtDir;
+    }
+    if (fs.existsSync(runtimeDir)) {
+      return runtimeDir;
+    }
+  }
   if (fs.existsSync(sourceDir)) {
     return sourceDir;
   }
@@ -347,6 +359,7 @@ function collectBundledChannelConfigs(params: {
 
 function collectBundledPluginMetadataForPackageRoot(
   packageRoot: string,
+  includeChannelConfigs: boolean,
 ): readonly BundledPluginMetadata[] {
   const scanDir = resolveBundledPluginScanDir(packageRoot);
   if (!scanDir || !fs.existsSync(scanDir)) {
@@ -391,11 +404,13 @@ function collectBundledPluginMetadataForPackageRoot(
       ...(setupSourcePath ? { setupEntry: setupSourcePath } : {}),
     });
     const runtimeSidecarArtifacts = collectRuntimeSidecarArtifacts(publicSurfaceArtifacts);
-    const channelConfigs = collectBundledChannelConfigs({
-      pluginDir,
-      manifest: manifestResult.manifest,
-      packageManifest,
-    });
+    const channelConfigs = includeChannelConfigs
+      ? collectBundledChannelConfigs({
+          pluginDir,
+          manifest: manifestResult.manifest,
+          packageManifest,
+        })
+      : manifestResult.manifest.channelConfigs;
 
     entries.push({
       dirName,
@@ -432,14 +447,19 @@ function collectBundledPluginMetadataForPackageRoot(
 
 export function listBundledPluginMetadata(params?: {
   rootDir?: string;
+  includeChannelConfigs?: boolean;
 }): readonly BundledPluginMetadata[] {
   const rootDir = path.resolve(params?.rootDir ?? OPENCLAW_PACKAGE_ROOT);
-  const cached = bundledPluginMetadataCache.get(rootDir);
+  const includeChannelConfigs = params?.includeChannelConfigs ?? !RUNNING_FROM_BUILT_ARTIFACT;
+  const cacheKey = JSON.stringify({ rootDir, includeChannelConfigs });
+  const cached = bundledPluginMetadataCache.get(cacheKey);
   if (cached) {
     return cached;
   }
-  const entries = Object.freeze(collectBundledPluginMetadataForPackageRoot(rootDir));
-  bundledPluginMetadataCache.set(rootDir, entries);
+  const entries = Object.freeze(
+    collectBundledPluginMetadataForPackageRoot(rootDir, includeChannelConfigs),
+  );
+  bundledPluginMetadataCache.set(cacheKey, entries);
   return entries;
 }
 
