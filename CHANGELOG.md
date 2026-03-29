@@ -16,6 +16,8 @@ Docs: https://docs.openclaw.ai
 - Agents/MCP: materialize bundle MCP tools with provider-safe names (`serverName__toolName`), support optional `streamable-http` transport selection plus per-server connection timeouts, and preserve real tool results from aborted/error turns unless truncation explicitly drops them. (#49505) Thanks @ziomancer.
 - Plugins/hooks: add a `before_install` hook with structured request provenance, built-in scan status, and install-target metadata so external security scanners and policy engines can review and block skill, plugin package, plugin bundle, and single-file plugin installs. (#56050) thanks @odysseus0.
 - ACP/plugins: add an explicit default-off ACPX plugin-tools MCP bridge config, document the trust boundary, and harden the built-in bridge packaging/logging path so global installs and stdio MCP sessions work reliably. (#56867) Thanks @joe2643.
+- Docs/zh-CN: add a Chinese Diffs tool page so Chinese readers can access the full Diffs viewer, file-rendering, security, and troubleshooting docs. (#40773) Thanks @elliotllliu.
+- Docs/zh-CN: align the Chinese Diffs tool page with the current English source and generated translation metadata. Thanks @gumadeiras.
 
 ### Fixes
 
