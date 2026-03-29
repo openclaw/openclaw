@@ -41,6 +41,17 @@ function isBackendHealthy(backend: AcpRuntimeBackend): boolean {
   }
 }
 
+function resolveBackendUnhealthyReason(backend: AcpRuntimeBackend): string | undefined {
+  if (!backend.unhealthyReason) {
+    return undefined;
+  }
+  try {
+    return backend.unhealthyReason()?.trim();
+  } catch {
+    return undefined;
+  }
+}
+
 export function registerAcpRuntimeBackend(backend: AcpRuntimeBackend): void {
   const id = normalizeBackendId(backend.id);
   if (!id) {
@@ -89,7 +100,7 @@ export function requireAcpRuntimeBackend(id?: string): AcpRuntimeBackend {
     );
   }
   if (!isBackendHealthy(backend)) {
-    const unhealthyReason = backend.unhealthyReason?.()?.trim();
+    const unhealthyReason = resolveBackendUnhealthyReason(backend);
     throw new AcpRuntimeError(
       "ACP_BACKEND_UNAVAILABLE",
       unhealthyReason
