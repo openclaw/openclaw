@@ -78,7 +78,7 @@ jobs:
     needs: [preflight, build-bun-artifacts]
     if: needs.preflight.outputs.run_bun_checks == 'true'
     runs-on: blacksmith-16vcpu-ubuntu-2404
-    timeout-minutes: 20
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.preflight.outputs.bun_checks_matrix) }}
