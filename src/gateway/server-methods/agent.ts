@@ -270,6 +270,8 @@ export const agentHandlers: GatewayRequestHandlers = {
       bestEffortDeliver?: boolean;
       label?: string;
       inputProvenance?: InputProvenance;
+      subagentWorkspaceScope?: "full" | "essential" | "minimal" | "none";
+      subagentWorkspaceFiles?: string[];
     };
     const senderIsOwner = resolveSenderIsOwnerFromClient(client);
     const allowModelOverride = resolveAllowModelOverrideFromClient(client);
@@ -747,6 +749,8 @@ export const agentHandlers: GatewayRequestHandlers = {
           workspaceDir: sessionEntry?.spawnedWorkspaceDir,
         }),
         senderIsOwner,
+        subagentWorkspaceScope: request.subagentWorkspaceScope,
+        subagentWorkspaceFiles: request.subagentWorkspaceFiles,
         allowModelOverride,
       },
       runId,
