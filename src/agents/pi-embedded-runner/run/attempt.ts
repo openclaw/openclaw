@@ -177,6 +177,12 @@ import { pruneProcessedHistoryImages } from "./history-image-prune.js";
 import { detectAndLoadPromptImages } from "./images.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
+// Type alias for agent with optional getApiKey callback (used for custom/OAuth provider auth)
+// Hoisted to module scope per Greptile review feedback for reusability and discoverability
+type AgentWithCallback = Awaited<ReturnType<typeof createAgentSession>>["session"]["agent"] & {
+  getApiKey?: (provider: string) => Promise<string | undefined>;
+};
+
 export {
   appendAttemptCacheTtlIfNeeded,
   composeSystemPromptWithHookContext,
@@ -881,12 +887,14 @@ export async function runEmbeddedAttempt(
       // This fix restores the callback so pi-agent-core can resolve API keys from authStorage.
       // Guard is forward-compat only — as of SDK 0.63.0, createAgentSession() never pre-populates getApiKey.
       // TODO(#55816): Add integration test covering getApiKey restoration after streamFn override path.
-      type AgentWithCallback = typeof activeSession.agent & {
-        getApiKey?: (provider: string) => Promise<string | undefined>;
-      };
       if (!(activeSession.agent as AgentWithCallback).getApiKey) {
+        log.debug(
+          `getApiKey callback: restoring for provider ${params.provider} (SDK 0.63.0 does not pre-populate)`,
+        );
         (activeSession.agent as AgentWithCallback).getApiKey = (provider: string) =>
           params.authStorage.getApiKey(provider);
+      } else {
+        log.debug(`getApiKey callback: already present (SDK may have changed), skipping restore`);
       }
 
       const { effectiveExtraParams } = applyExtraParamsToAgent(
