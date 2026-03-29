@@ -1,6 +1,9 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
 
-type TestPluginApiInput = Partial<OpenClawPluginApi> &
+type TestPluginApiInput = Omit<
+  Partial<OpenClawPluginApi>,
+  "id" | "name" | "source" | "config" | "runtime"
+> &
   Pick<OpenClawPluginApi, "id" | "name" | "source" | "config" | "runtime">;
 
 export function createTestPluginApi(api: TestPluginApiInput): OpenClawPluginApi {
