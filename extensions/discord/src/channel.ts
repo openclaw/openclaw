@@ -5,6 +5,7 @@ import {
   createNestedAllowlistOverrideResolver,
 } from "openclaw/plugin-sdk/allowlist-config-edit";
 import {
+  createApproverRestrictedNativeApprovalAdapter,
   buildPluginApprovalRequestMessage,
   buildPluginApprovalResolvedMessage,
   type PluginApprovalRequest,
@@ -299,20 +300,6 @@ function buildDiscordCrossContextComponents(params: {
   return [new DiscordUiContainer({ cfg: params.cfg, accountId: params.accountId, components })];
 }
 
-function hasDiscordExecApprovalDmRoute(cfg: OpenClawConfig): boolean {
-  return listDiscordAccountIds(cfg).some((accountId) => {
-    const execApprovals = resolveDiscordAccount({ cfg, accountId }).config.execApprovals;
-    if (
-      !execApprovals?.enabled ||
-      getDiscordExecApprovalApprovers({ cfg, accountId }).length === 0
-    ) {
-      return false;
-    }
-    const target = execApprovals.target ?? "dm";
-    return target === "dm" || target === "both";
-  });
-}
-
 const resolveDiscordAllowlistGroupOverrides = createNestedAllowlistOverrideResolver({
   resolveRecord: (account: ResolvedDiscordAccount) => account.config.guilds,
   outerLabel: (guildKey) => `guild ${guildKey}`,
@@ -493,30 +480,25 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
         },
       },
       execApprovals: {
-        authorizeCommand: ({ cfg, accountId, senderId, kind }) =>
-          isDiscordExecApprovalApprover({ cfg, accountId, senderId })
-            ? { authorized: true }
-            : {
-                authorized: false,
-                reason:
-                  kind === "plugin"
-                    ? "❌ You are not authorized to approve plugin requests on Discord."
-                    : "❌ You are not authorized to approve exec requests on Discord.",
-              },
-        getInitiatingSurfaceState: ({ cfg, accountId }) =>
-          getDiscordExecApprovalApprovers({ cfg, accountId }).length > 0
-            ? { kind: "enabled" }
-            : { kind: "disabled" },
+        ...createApproverRestrictedNativeApprovalAdapter({
+          channel: "discord",
+          channelLabel: "Discord",
+          listAccountIds: listDiscordAccountIds,
+          hasApprovers: ({ cfg, accountId }) =>
+            getDiscordExecApprovalApprovers({ cfg, accountId }).length > 0,
+          isExecAuthorizedSender: ({ cfg, accountId, senderId }) =>
+            isDiscordExecApprovalApprover({ cfg, accountId, senderId }),
+          isNativeDeliveryEnabled: ({ cfg, accountId }) =>
+            isDiscordExecApprovalClientEnabled({ cfg, accountId }),
+          resolveNativeDeliveryMode: ({ cfg, accountId }) =>
+            resolveDiscordAccount({ cfg, accountId }).config.execApprovals?.target ?? "dm",
+        }),
         shouldSuppressLocalPrompt: ({ cfg, accountId, payload }) =>
           shouldSuppressLocalDiscordExecApprovalPrompt({
             cfg,
             accountId,
             payload,
           }),
-        hasConfiguredDmRoute: ({ cfg }) => hasDiscordExecApprovalDmRoute(cfg),
-        shouldSuppressForwardingFallback: ({ cfg, target }) =>
-          (normalizeMessageChannel(target.channel) ?? target.channel) === "discord" &&
-          isDiscordExecApprovalClientEnabled({ cfg, accountId: target.accountId }),
         buildPluginPendingPayload: ({ cfg, request, target, nowMs }) => {
           const text = formatDiscordApprovalPreview(
             buildPluginApprovalRequestMessage(request, nowMs),
