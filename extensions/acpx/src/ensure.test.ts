@@ -24,11 +24,13 @@ import { checkAcpxVersion, ensureAcpx } from "./ensure.js";
 
 describe("acpx ensure", () => {
   const tempDirs: string[] = [];
+  const originalPlatform = process.platform;
 
   beforeEach(() => {
     resolveSpawnFailureMock.mockReset();
     resolveSpawnFailureMock.mockReturnValue(null);
     spawnAndCollectMock.mockReset();
+    Object.defineProperty(process, "platform", { value: originalPlatform });
   });
 
   function makeTempAcpxInstall(version: string): string {
@@ -52,6 +54,7 @@ describe("acpx ensure", () => {
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+    Object.defineProperty(process, "platform", { value: originalPlatform });
   });
 
   function mockEnsureInstallFlow() {
@@ -298,6 +301,32 @@ describe("acpx ensure", () => {
         expectedVersion: ACPX_PINNED_VERSION,
       }),
     ).rejects.toThrow("Fix: sudo chown -R $(id -u):$(id -g) ~/.npm");
+  });
+
+  it("does not add the unix cache-permission hint on Windows", async () => {
+    Object.defineProperty(process, "platform", { value: "win32" });
+    spawnAndCollectMock
+      .mockResolvedValueOnce({
+        stdout: "acpx 0.0.9\n",
+        stderr: "",
+        code: 0,
+        error: null,
+      })
+      .mockResolvedValueOnce({
+        stdout: "",
+        stderr:
+          "npm ERR! code EPERM\nnpm ERR! syscall rename\nnpm ERR! path C:\\Users\\test\\AppData\\Roaming\\npm-cache\\_cacache\\tmp",
+        code: 1,
+        error: null,
+      });
+
+    await expect(
+      ensureAcpx({
+        command: "/plugin/node_modules/.bin/acpx",
+        pluginRoot: "/plugin",
+        expectedVersion: ACPX_PINNED_VERSION,
+      }),
+    ).rejects.not.toThrow("Fix: sudo chown -R $(id -u):$(id -g) ~/.npm");
   });
 
   it("skips install path when allowInstall=false", async () => {
