@@ -29,6 +29,7 @@ let applyProviderNativeStreamingUsageCompatWithPlugin: typeof import("./provider
 let formatProviderAuthProfileApiKeyWithPlugin: typeof import("./provider-runtime.js").formatProviderAuthProfileApiKeyWithPlugin;
 let normalizeProviderConfigWithPlugin: typeof import("./provider-runtime.js").normalizeProviderConfigWithPlugin;
 let normalizeProviderModelIdWithPlugin: typeof import("./provider-runtime.js").normalizeProviderModelIdWithPlugin;
+let applyProviderResolvedModelCompatWithPlugins: typeof import("./provider-runtime.js").applyProviderResolvedModelCompatWithPlugins;
 let normalizeProviderTransportWithPlugin: typeof import("./provider-runtime.js").normalizeProviderTransportWithPlugin;
 let prepareProviderExtraParams: typeof import("./provider-runtime.js").prepareProviderExtraParams;
 let resolveProviderConfigApiKeyWithPlugin: typeof import("./provider-runtime.js").resolveProviderConfigApiKeyWithPlugin;
@@ -211,6 +212,7 @@ describe("provider-runtime", () => {
       buildProviderMissingAuthMessageWithPlugin,
       buildProviderUnknownModelHintWithPlugin,
       applyProviderNativeStreamingUsageCompatWithPlugin,
+      applyProviderResolvedModelCompatWithPlugins,
       formatProviderAuthProfileApiKeyWithPlugin,
       normalizeProviderConfigWithPlugin,
       normalizeProviderModelIdWithPlugin,
@@ -728,6 +730,13 @@ describe("provider-runtime", () => {
     });
 
     expect(
+      applyProviderResolvedModelCompatWithPlugins({
+        provider: DEMO_PROVIDER_ID,
+        context: createDemoResolvedModelContext({}),
+      }),
+    ).toBeUndefined();
+
+    expect(
       formatProviderAuthProfileApiKeyWithPlugin({
         provider: DEMO_PROVIDER_ID,
         context: {
@@ -852,6 +861,53 @@ describe("provider-runtime", () => {
       resolveUsageAuth,
       fetchUsageSnapshot,
     );
+  });
+
+  it("merges compat contributions from owner and foreign provider plugins", () => {
+    resolveOwningPluginIdsForProviderMock.mockReturnValue(["openrouter"]);
+    resolvePluginProvidersMock.mockImplementation((params) => {
+      const onlyPluginIds = params.onlyPluginIds ?? [];
+      const plugins: ProviderPlugin[] = [
+        {
+          id: "openrouter",
+          label: "OpenRouter",
+          auth: [],
+          contributeResolvedModelCompat: () => ({ supportsStrictMode: true }),
+        },
+        {
+          id: "mistral",
+          label: "Mistral",
+          auth: [],
+          contributeResolvedModelCompat: ({ modelId }) =>
+            modelId.startsWith("mistralai/") ? { supportsStore: false } : undefined,
+        },
+      ];
+      return onlyPluginIds.length > 0
+        ? plugins.filter((plugin) => onlyPluginIds.includes(plugin.id))
+        : plugins;
+    });
+
+    expect(
+      applyProviderResolvedModelCompatWithPlugins({
+        provider: "openrouter",
+        context: createDemoResolvedModelContext({
+          provider: "openrouter",
+          modelId: "mistralai/mistral-small-3.2-24b-instruct",
+          model: {
+            ...MODEL,
+            provider: "openrouter",
+            id: "mistralai/mistral-small-3.2-24b-instruct",
+            compat: { supportsDeveloperRole: false },
+          },
+        }),
+      }),
+    ).toMatchObject({
+      compat: {
+        supportsDeveloperRole: false,
+        supportsStrictMode: true,
+        supportsStore: false,
+      },
+    });
   });
 
   it("resolves bundled catalog hooks through provider plugins", async () => {
