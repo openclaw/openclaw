@@ -421,10 +421,10 @@ export function parseClawHubPluginSpec(raw: string): {
     return null;
   }
   const atIndex = spec.lastIndexOf("@");
-  if (atIndex < 0) {
+  if (atIndex <= 0) {
     return { name: spec };
   }
-  if (atIndex === 0 || atIndex >= spec.length - 1) {
+  if (atIndex >= spec.length - 1) {
     return null;
   }
   return {

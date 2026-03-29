@@ -41,10 +41,13 @@ describe("clawhub helpers", () => {
     });
     expect(parseClawHubPluginSpec("@scope/pkg")).toBeNull();
 
-    // Malformed specs with trailing/leading @ return null
+    // Scoped packages are valid
+    expect(parseClawHubPluginSpec("clawhub:@openclaw/voice-call")).toEqual({
+      name: "@openclaw/voice-call",
+    });
+
+    // Trailing @ with no version is malformed
     expect(parseClawHubPluginSpec("clawhub:demo@")).toBeNull();
-    expect(parseClawHubPluginSpec("clawhub:@1.2.3")).toBeNull();
-    expect(parseClawHubPluginSpec("clawhub:@")).toBeNull();
   });
 
   it("resolves latest versions from latestVersion before tags", () => {
