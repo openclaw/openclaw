@@ -100,6 +100,10 @@ export const AgentParamsSchema = Type.Object(
     inputProvenance: Type.Optional(InputProvenanceSchema),
     idempotencyKey: NonEmptyString,
     label: Type.Optional(SessionLabelString),
+    subagentWorkspaceScope: Type.Optional(
+  Type.String({ enum: ["full", "essential", "minimal", "none"] })
+),
+subagentWorkspaceFiles: Type.Optional(Type.Array(Type.String())),
   },
   { additionalProperties: false },
 );
