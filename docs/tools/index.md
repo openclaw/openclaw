@@ -102,7 +102,7 @@ Per-agent override: `agents.list[].tools.profile`.
 | Profile     | What it includes                            |
 | ----------- | ------------------------------------------- |
 | `full`      | All tools (default)                         |
-| `coding`    | File I/O, runtime, sessions, memory, image  |
+| `coding`    | File I/O, runtime, web, sessions, memory, image |
 | `messaging` | Messaging, session list/history/send/status |
 | `minimal`   | `session_status` only                       |
 
