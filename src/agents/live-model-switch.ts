@@ -41,13 +41,10 @@ function resolvePersistedAuthProfileSelection(
   >,
 ): Pick<LiveSessionModelSelection, "authProfileId" | "authProfileIdSource"> {
   const authProfileId = entry.authProfileOverride?.trim() || undefined;
-  const authProfileIdSource =
-    entry.authProfileOverrideSource === "auto"
-      ? "auto"
-      : normalizeSelectedAuthProfileSource(
-          authProfileId,
-          typeof entry.authProfileOverrideCompactionCount === "number" ? "auto" : "user",
-        );
+  const persistedSource =
+    entry.authProfileOverrideSource ??
+    (typeof entry.authProfileOverrideCompactionCount === "number" ? "auto" : "user");
+  const authProfileIdSource = normalizeSelectedAuthProfileSource(authProfileId, persistedSource);
   if (!authProfileId || authProfileIdSource !== "user") {
     return {
       authProfileId: undefined,
