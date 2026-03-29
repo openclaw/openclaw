@@ -182,6 +182,11 @@ describe("GatewayBrowserClient", () => {
     });
 
     vi.stubGlobal("localStorage", storage);
+    const windowLike = Object.assign(globalThis, {
+      location: { href: "http://127.0.0.1:18789/" },
+      localStorage: storage,
+    });
+    vi.stubGlobal("window", windowLike);
     Object.defineProperty(window, "localStorage", {
       configurable: true,
       value: storage,
@@ -374,6 +379,26 @@ describe("GatewayBrowserClient", () => {
     expect(wsInstances).toHaveLength(2);
 
     client.stop();
+    vi.useRealTimers();
+  });
+
+  it("cancels a queued connect send when stopped before the timeout fires", async () => {
+    vi.useFakeTimers();
+
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+    });
+
+    client.start();
+    const ws = getLatestWebSocket();
+    ws.emitOpen();
+
+    client.stop();
+    await vi.advanceTimersByTimeAsync(750);
+
+    expect(ws.sent).toHaveLength(0);
+
     vi.useRealTimers();
   });
 
