@@ -1,15 +1,53 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { telegramOutbound, whatsappOutbound } from "../../../test/channel-outbounds.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { parseTelegramTarget } from "../../plugin-sdk/telegram.js";
 import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "../../plugin-sdk/whatsapp-targets.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { resolveOutboundTarget } from "./targets.js";
 
+function parseTelegramTargetForTest(raw: string): {
+  chatId: string;
+  messageThreadId?: number;
+  chatType: "direct" | "group" | "unknown";
+} {
+  const trimmed = raw
+    .trim()
+    .replace(/^telegram:/i, "")
+    .replace(/^tg:/i, "");
+  const prefixedTopic = /^group:([^:]+):topic:(\d+)$/i.exec(trimmed);
+  if (prefixedTopic) {
+    return {
+      chatId: prefixedTopic[1],
+      messageThreadId: Number.parseInt(prefixedTopic[2], 10),
+      chatType: "group",
+    };
+  }
+  const topic = /^([^:]+):topic:(\d+)$/i.exec(trimmed);
+  if (topic) {
+    return {
+      chatId: topic[1],
+      messageThreadId: Number.parseInt(topic[2], 10),
+      chatType: topic[1].startsWith("-") ? "group" : "direct",
+    };
+  }
+  const colonPair = /^([^:]+):(\d+)$/i.exec(trimmed);
+  if (colonPair && colonPair[1].startsWith("-")) {
+    return {
+      chatId: colonPair[1],
+      messageThreadId: Number.parseInt(colonPair[2], 10),
+      chatType: "group",
+    };
+  }
+  return {
+    chatId: trimmed,
+    chatType: trimmed.startsWith("-") ? "group" : "unknown",
+  };
+}
+
 const telegramMessaging = {
   parseExplicitTarget: ({ raw }: { raw: string }) => {
-    const target = parseTelegramTarget(raw);
+    const target = parseTelegramTargetForTest(raw);
     return {
       to: target.chatId,
       threadId: target.messageThreadId,
