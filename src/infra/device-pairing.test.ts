@@ -8,9 +8,12 @@ import {
   clearDevicePairing,
   ensureDeviceToken,
   getPairedDevice,
+  hasEffectivePairedDeviceRole,
+  listEffectivePairedDeviceRoles,
   listDevicePairing,
   removePairedDevice,
   requestDevicePairing,
+  revokeDeviceToken,
   rotateDeviceToken,
   verifyDeviceToken,
   type PairedDevice,
@@ -513,6 +516,39 @@ describe("device pairing tokens", () => {
         scopes: ["operator.read"],
       }),
     ).resolves.toEqual({ ok: false, reason: "token-mismatch" });
+  });
+
+  test("derives effective roles from active tokens instead of sticky historical roles", async () => {
+    const baseDir = await mkdtemp(join(tmpdir(), "openclaw-device-pairing-"));
+    const request = await requestDevicePairing(
+      {
+        deviceId: "device-1",
+        publicKey: "public-key-1",
+        role: "node",
+      },
+      baseDir,
+    );
+    await approveDevicePairing(request.request.requestId, { callerScopes: [] }, baseDir);
+
+    let paired = await getPairedDevice("device-1", baseDir);
+    expect(paired).toBeDefined();
+    if (!paired) {
+      throw new Error("expected paired node device");
+    }
+    expect(paired?.roles).toContain("node");
+    expect(listEffectivePairedDeviceRoles(paired)).toEqual(["node"]);
+    expect(hasEffectivePairedDeviceRole(paired, "node")).toBe(true);
+
+    await revokeDeviceToken({ deviceId: "device-1", role: "node", baseDir });
+
+    paired = await getPairedDevice("device-1", baseDir);
+    expect(paired).toBeDefined();
+    if (!paired) {
+      throw new Error("expected paired node device after revoke");
+    }
+    expect(paired?.roles).toContain("node");
+    expect(listEffectivePairedDeviceRoles(paired)).toEqual([]);
+    expect(hasEffectivePairedDeviceRole(paired, "node")).toBe(false);
   });
 
   test("removes paired devices by device id", async () => {
