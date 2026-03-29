@@ -88,6 +88,10 @@ export type AgentCommandOpts = {
   streamParams?: AgentStreamParams;
   /** Explicit workspace directory override (for subagents to inherit parent workspace). */
   workspaceDir?: SpawnedRunMetadata["workspaceDir"];
+  /** Workspace scope filter for subagents (full|essential|minimal|none). */
+  subagentWorkspaceScope?: "full" | "essential" | "minimal" | "none";
+  /** Explicit workspace files to include for subagents. */
+  subagentWorkspaceFiles?: string[];
 };
 
 export type AgentCommandIngressOpts = Omit<
