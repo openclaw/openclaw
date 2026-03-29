@@ -288,6 +288,39 @@ Optional per-id errors:
 }
 ```
 
+## MCP server environment variables
+
+MCP server env vars configured via `plugins.entries.acpx.config.mcpServers` support SecretInput. This keeps API keys and tokens out of plaintext config:
+
+```json5
+{
+  plugins: {
+    entries: {
+      acpx: {
+        enabled: true,
+        config: {
+          mcpServers: {
+            github: {
+              command: "npx",
+              args: ["-y", "@modelcontextprotocol/server-github"],
+              env: {
+                GITHUB_PERSONAL_ACCESS_TOKEN: {
+                  source: "env",
+                  provider: "default",
+                  id: "MCP_GITHUB_PAT",
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Plaintext string values still work. Env-template refs like `${MCP_SERVER_API_KEY}` and SecretRef objects are resolved during gateway activation before the MCP server process is spawned. As with other SecretRef surfaces, unresolved refs only block activation when the `acpx` plugin is effectively active.
+
 ## Sandbox SSH auth material
 
 The core `ssh` sandbox backend also supports SecretRefs for SSH auth material:
