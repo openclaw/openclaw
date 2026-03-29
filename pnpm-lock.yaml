@@ -60,6 +60,9 @@ importers:
       '@mariozechner/pi-tui':
         specifier: 0.63.2
         version: 0.63.2
+      '@matrix-org/matrix-sdk-crypto-wasm':
+        specifier: 18.0.0
+        version: 18.0.0
       '@modelcontextprotocol/sdk':
         specifier: 1.28.0
         version: 1.28.0(zod@4.3.6)
@@ -259,6 +262,8 @@ importers:
 
   extensions/anthropic: {}
 
+  extensions/anthropic-vertex: {}
+
   extensions/bluebubbles:
     devDependencies:
       openclaw:
@@ -436,6 +441,9 @@ importers:
       '@matrix-org/matrix-sdk-crypto-nodejs':
         specifier: ^0.4.0
         version: 0.4.0
+      '@matrix-org/matrix-sdk-crypto-wasm':
+        specifier: 18.0.0
+        version: 18.0.0
       fake-indexeddb:
         specifier: ^6.2.5
         version: 6.2.5
