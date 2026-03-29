@@ -18,6 +18,7 @@ import {
 import {
   formatThreadBindingDisabledError,
   formatThreadBindingSpawnDisabledError,
+  requiresNativeThreadContextForThreadHere,
   resolveThreadBindingIdleTimeoutMsForChannel,
   resolveThreadBindingMaxAgeMsForChannel,
   resolveThreadBindingSpawnPolicy,
@@ -125,6 +126,7 @@ export function resolveAcpSpawnRuntimePolicyError(params: {
 type PreparedAcpThreadBinding = {
   channel: string;
   accountId: string;
+  placement: "current" | "child";
   conversationId: string;
 };
 
@@ -352,13 +354,31 @@ async function persistAcpSpawnSessionFileBestEffort(params: {
 }
 
 function resolveConversationIdForThreadBinding(params: {
+  channel?: string;
   to?: string;
   threadId?: string | number;
 }): string | undefined {
-  return resolveConversationIdFromTargets({
+  const genericConversationId = resolveConversationIdFromTargets({
     threadId: params.threadId,
     targets: [params.to],
   });
+  if (genericConversationId) {
+    return genericConversationId;
+  }
+
+  const channel = params.channel?.trim().toLowerCase();
+  const target = params.to?.trim() || "";
+  if (channel === "line") {
+    const prefixed = target.match(/^line:(?:user|group|room):([UCR][a-f0-9]{32})$/i)?.[1];
+    if (prefixed) {
+      return prefixed;
+    }
+    if (/^[UCR][a-f0-9]{32}$/i.test(target)) {
+      return target;
+    }
+  }
+
+  return undefined;
 }
 
 function prepareAcpThreadBinding(params: {
@@ -414,13 +434,15 @@ function prepareAcpThreadBinding(params: {
       error: `Thread bindings are unavailable for ${policy.channel}.`,
     };
   }
-  if (!capabilities.bindSupported || !capabilities.placements.includes("child")) {
+  const placement = requiresNativeThreadContextForThreadHere(policy.channel) ? "child" : "current";
+  if (!capabilities.bindSupported || !capabilities.placements.includes(placement)) {
     return {
       ok: false,
-      error: `Thread bindings do not support ACP thread spawn for ${policy.channel}.`,
+      error: `Thread bindings do not support ${placement} placement for ${policy.channel}.`,
     };
   }
   const conversationId = resolveConversationIdForThreadBinding({
+    channel: policy.channel,
     to: params.to,
     threadId: params.threadId,
   });
@@ -436,6 +458,7 @@ function prepareAcpThreadBinding(params: {
     binding: {
       channel: policy.channel,
       accountId: policy.accountId,
+      placement,
       conversationId,
     },
   };
@@ -583,7 +606,7 @@ async function bindPreparedAcpThread(params: {
       accountId: params.preparedBinding.accountId,
       conversationId: params.preparedBinding.conversationId,
     },
-    placement: "child",
+    placement: params.preparedBinding.placement,
     metadata: {
       threadName: resolveThreadBindingThreadName({
         agentId: params.targetAgentId,
@@ -620,7 +643,7 @@ async function bindPreparedAcpThread(params: {
   }
 
   let sessionEntry = params.initializedRuntime.sessionEntry;
-  if (params.initializedRuntime.sessionId) {
+  if (params.initializedRuntime.sessionId && params.preparedBinding.placement === "child") {
     const boundThreadId = String(binding.conversation.conversationId).trim() || undefined;
     if (boundThreadId) {
       sessionEntry = await persistAcpSpawnSessionFileBestEffort({
@@ -653,19 +676,34 @@ function resolveAcpSpawnBootstrapDeliveryPlan(params: {
   const fallbackThreadId =
     fallbackThreadIdRaw != null ? String(fallbackThreadIdRaw).trim() || undefined : undefined;
   const deliveryThreadId = boundThreadId ?? fallbackThreadId;
+  const requesterConversationId = resolveConversationIdForThreadBinding({
+    channel: params.requester.origin?.channel,
+    threadId: fallbackThreadId,
+    to: params.requester.origin?.to,
+  });
+  const bindingMatchesRequesterConversation = Boolean(
+    params.requester.origin?.channel &&
+    params.binding?.conversation.channel === params.requester.origin.channel &&
+    params.binding?.conversation.accountId === (params.requester.origin.accountId ?? "default") &&
+    requesterConversationId &&
+    params.binding?.conversation.conversationId === requesterConversationId,
+  );
   const boundDeliveryTarget = resolveConversationDeliveryTarget({
     channel: params.requester.origin?.channel ?? params.binding?.conversation.channel,
     conversationId: params.binding?.conversation.conversationId,
     parentConversationId: params.binding?.conversation.parentConversationId,
   });
   const inferredDeliveryTo =
+    (bindingMatchesRequesterConversation ? params.requester.origin?.to?.trim() : undefined) ??
     boundDeliveryTarget.to ??
     params.requester.origin?.to?.trim() ??
     formatConversationTarget({
       channel: params.requester.origin?.channel,
       conversationId: deliveryThreadId,
     });
-  const resolvedDeliveryThreadId = boundDeliveryTarget.threadId ?? deliveryThreadId;
+  const resolvedDeliveryThreadId = bindingMatchesRequesterConversation
+    ? fallbackThreadId
+    : (boundDeliveryTarget.threadId ?? deliveryThreadId);
   const hasDeliveryTarget = Boolean(params.requester.origin?.channel && inferredDeliveryTo);
 
   // Thread-bound session spawns always deliver inline to their bound thread.
