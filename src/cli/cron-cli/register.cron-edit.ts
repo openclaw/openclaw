@@ -281,13 +281,8 @@ export function registerCronEditCommand(cron: Command) {
               }
               const explicitChannel =
                 typeof opts.channel === "string" ? opts.channel.trim().toLowerCase() : "";
-              if (
-                threadId &&
-                explicitChannel &&
-                explicitChannel !== "telegram" &&
-                explicitChannel !== "last"
-              ) {
-                throw new Error("--thread-id is only supported for Telegram channels");
+              if (threadId && explicitChannel && explicitChannel !== "telegram") {
+                throw new Error("--thread-id requires --channel telegram");
               }
               let toRaw = typeof opts.to === "string" ? opts.to.trim() : "";
               // When --thread-id needs existing job context (no --to or no --channel), fetch it
@@ -308,8 +303,8 @@ export function registerCronEditCommand(cron: Command) {
                     throw new Error("--thread-id is not supported for webhook delivery jobs");
                   }
                   const ec = existingChannel.toLowerCase();
-                  if (existingChannel && ec !== "telegram" && ec !== "last") {
-                    throw new Error("--thread-id is only supported for Telegram channels");
+                  if (existingChannel && ec !== "telegram") {
+                    throw new Error("--thread-id requires --channel telegram");
                   }
                 }
                 if (!toRaw) {
