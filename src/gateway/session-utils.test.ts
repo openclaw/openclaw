@@ -548,6 +548,60 @@ describe("gateway session utils", () => {
       expect(agents.map((agent) => agent.id)).toEqual(["main"]);
     });
   });
+
+  test("listAgentsForGateway includes effective workspace + model for default agent", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: {
+        defaults: {
+          workspace: "/tmp/default-workspace",
+          model: {
+            primary: "openai/gpt-5.4",
+            fallbacks: ["openai-codex/gpt-5.2-codex"],
+          },
+        },
+        list: [{ id: "main", default: true }],
+      },
+    } as OpenClawConfig;
+
+    const result = listAgentsForGateway(cfg);
+    expect(result.agents[0]).toMatchObject({
+      id: "main",
+      workspace: "/tmp/default-workspace",
+      model: {
+        primary: "openai/gpt-5.4",
+        fallbacks: ["openai-codex/gpt-5.2-codex"],
+      },
+    });
+  });
+
+  test("listAgentsForGateway respects per-agent fallback override (including explicit empty list)", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.4",
+            fallbacks: ["openai-codex/gpt-5.2-codex"],
+          },
+        },
+        list: [
+          { id: "main", default: true },
+          {
+            id: "ops",
+            model: {
+              primary: "anthropic/claude-opus-4-6",
+              fallbacks: [],
+            },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    const result = listAgentsForGateway(cfg);
+    const ops = result.agents.find((agent) => agent.id === "ops");
+    expect(ops?.model).toEqual({ primary: "anthropic/claude-opus-4-6" });
+  });
 });
 
 describe("resolveSessionModelRef", () => {
