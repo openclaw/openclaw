@@ -360,7 +360,7 @@ type PreparedManualRun =
       ok: true;
       ran: true;
       jobId: string;
-      taskId: string;
+      taskId?: string;
       startedAt: number;
       executionJob: CronJob;
     }
@@ -381,6 +381,71 @@ type ManualRunPreflightResult =
     };
 
 let nextManualRunId = 1;
+
+function tryCreateManualTaskRecord(params: {
+  state: CronServiceState;
+  job: CronJob;
+  startedAt: number;
+}): string | undefined {
+  try {
+    return createTaskRecord({
+      runtime: "cron",
+      sourceId: params.job.id,
+      requesterSessionKey: "",
+      childSessionKey: params.job.sessionKey,
+      agentId: params.job.agentId,
+      runId: `cron:${params.job.id}:${params.startedAt}`,
+      label: params.job.name,
+      task: params.job.name || params.job.id,
+      status: "running",
+      deliveryStatus: "not_applicable",
+      notifyPolicy: "silent",
+      startedAt: params.startedAt,
+      lastEventAt: params.startedAt,
+    }).taskId;
+  } catch (error) {
+    params.state.deps.log.warn(
+      { jobId: params.job.id, error },
+      "cron: failed to create task ledger record",
+    );
+    return undefined;
+  }
+}
+
+function tryUpdateManualTaskRecord(
+  state: CronServiceState,
+  params: {
+    taskId?: string;
+    coreResult: Awaited<ReturnType<typeof executeJobCoreWithTimeout>>;
+    endedAt: number;
+  },
+): void {
+  if (!params.taskId) {
+    return;
+  }
+  try {
+    updateTaskRecordById(params.taskId, {
+      status:
+        params.coreResult.status === "ok" || params.coreResult.status === "skipped"
+          ? "succeeded"
+          : normalizeCronRunErrorText(params.coreResult.error) === "cron: job execution timed out"
+            ? "timed_out"
+            : "failed",
+      endedAt: params.endedAt,
+      lastEventAt: params.endedAt,
+      error:
+        params.coreResult.status === "error"
+          ? normalizeCronRunErrorText(params.coreResult.error)
+          : undefined,
+      terminalSummary: params.coreResult.summary ?? undefined,
+    });
+  } catch (error) {
+    state.deps.log.warn(
+      { taskId: params.taskId, jobStatus: params.coreResult.status, error },
+      "cron: failed to update task ledger record",
+    );
+  }
+}
 
 async function inspectManualRunPreflight(
   state: CronServiceState,
@@ -451,27 +516,17 @@ async function prepareManualRun(
     // force-reload from disk cannot start the same job concurrently.
     await persist(state);
     emit(state, { jobId: job.id, action: "started", runAtMs: preflight.now });
-    const task = createTaskRecord({
-      runtime: "cron",
-      sourceId: job.id,
-      requesterSessionKey: "",
-      childSessionKey: job.sessionKey,
-      agentId: job.agentId,
-      runId: `cron:${job.id}:${preflight.now}`,
-      label: job.name,
-      task: job.name || job.id,
-      status: "running",
-      deliveryStatus: "not_applicable",
-      notifyPolicy: "silent",
+    const taskId = tryCreateManualTaskRecord({
+      state,
+      job,
       startedAt: preflight.now,
-      lastEventAt: preflight.now,
     });
     const executionJob = JSON.parse(JSON.stringify(job)) as CronJob;
     return {
       ok: true,
       ran: true,
       jobId: job.id,
-      taskId: task.taskId,
+      taskId,
       startedAt: preflight.now,
       executionJob,
     } as const;
@@ -495,17 +550,10 @@ async function finishPreparedManualRun(
     coreResult = { status: "error", error: normalizeCronRunErrorText(err) };
   }
   const endedAt = state.deps.nowMs();
-  updateTaskRecordById(taskId, {
-    status:
-      coreResult.status === "ok" || coreResult.status === "skipped"
-        ? "succeeded"
-        : normalizeCronRunErrorText(coreResult.error) === "cron: job execution timed out"
-          ? "timed_out"
-          : "failed",
+  tryUpdateManualTaskRecord(state, {
+    taskId,
+    coreResult,
     endedAt,
-    lastEventAt: endedAt,
-    error: coreResult.status === "error" ? coreResult.error : undefined,
-    terminalSummary: coreResult.summary ?? undefined,
   });
 
   await locked(state, async () => {

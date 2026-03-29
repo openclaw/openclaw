@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import * as taskRegistry from "../../tasks/task-registry.js";
 import { findTaskByRunId, resetTaskRegistryForTests } from "../../tasks/task-registry.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
 import type { CronJob } from "../types.js";
@@ -147,6 +148,96 @@ describe("cron service ops seam coverage", () => {
       sourceId: "isolated-timeout",
     });
 
+    if (originalStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = originalStateDir;
+    }
+    resetTaskRegistryForTests();
+  });
+
+  it("keeps manual cron runs progressing when task ledger creation fails", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-03-23T12:00:00.000Z");
+
+    await writeCronStoreSnapshot({
+      storePath,
+      jobs: [createDueIsolatedJob(now)],
+    });
+
+    const createTaskRecordSpy = vi
+      .spyOn(taskRegistry, "createTaskRecord")
+      .mockImplementation(() => {
+        throw new Error("disk full");
+      });
+
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      log: logger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const, summary: "done" })),
+    });
+
+    await expect(run(state, "isolated-timeout")).resolves.toEqual({ ok: true, ran: true });
+
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf8")) as {
+      jobs: CronJob[];
+    };
+    expect(persisted.jobs[0]?.state.runningAtMs).toBeUndefined();
+    expect(persisted.jobs[0]?.state.lastStatus).toBe("ok");
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ jobId: "isolated-timeout" }),
+      "cron: failed to create task ledger record",
+    );
+
+    createTaskRecordSpy.mockRestore();
+  });
+
+  it("keeps manual cron cleanup progressing when task ledger updates fail", async () => {
+    const { storePath } = await makeStorePath();
+    const stateRoot = path.dirname(path.dirname(storePath));
+    const now = Date.parse("2026-03-23T12:00:00.000Z");
+    const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = stateRoot;
+    resetTaskRegistryForTests();
+
+    await writeCronStoreSnapshot({
+      storePath,
+      jobs: [createDueIsolatedJob(now)],
+    });
+
+    const updateTaskRecordSpy = vi
+      .spyOn(taskRegistry, "updateTaskRecordById")
+      .mockImplementation(() => {
+        throw new Error("disk full");
+      });
+
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      log: logger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const, summary: "done" })),
+    });
+
+    await expect(run(state, "isolated-timeout")).resolves.toEqual({ ok: true, ran: true });
+
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf8")) as {
+      jobs: CronJob[];
+    };
+    expect(persisted.jobs[0]?.state.runningAtMs).toBeUndefined();
+    expect(persisted.jobs[0]?.state.lastStatus).toBe("ok");
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ jobStatus: "ok" }),
+      "cron: failed to update task ledger record",
+    );
+
+    updateTaskRecordSpy.mockRestore();
     if (originalStateDir === undefined) {
       delete process.env.OPENCLAW_STATE_DIR;
     } else {
