@@ -250,6 +250,9 @@ export async function runAgentTurnWithFallback(params: {
             currentMessageId: params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid,
             normalizeStreamingText,
             applyReplyToMode: params.applyReplyToMode,
+            normalizeDirectiveAliases:
+              resolveMessageChannel(params.sessionCtx.Surface, params.sessionCtx.Provider) ===
+              "whatsapp",
             normalizeMediaPaths: normalizeReplyMediaPaths,
             typingSignals: params.typingSignals,
             blockStreamingEnabled: params.blockStreamingEnabled,

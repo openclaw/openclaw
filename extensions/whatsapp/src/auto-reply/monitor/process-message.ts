@@ -16,6 +16,7 @@ import {
 } from "openclaw/plugin-sdk/reply-history";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import {
+  COMMENTARY_REPLY_TIMEOUT_MS,
   normalizeReplyPayloadDirectives,
   resolveChunkMode,
   resolveTextChunkLimit,
@@ -62,8 +63,6 @@ export type GroupHistoryEntry = {
   id?: string;
   senderJid?: string;
 };
-
-const COMMENTARY_REPLY_TIMEOUT_MS = 15_000;
 
 async function resolveWhatsAppCommandAuthorized(params: {
   cfg: ReturnType<typeof loadConfig>;
@@ -425,6 +424,7 @@ export async function processMessage(params: {
       payload,
       trimLeadingWhitespace: true,
       parseMode: "auto",
+      normalizeDirectiveAliases: true,
     });
     const hasMedia = resolveSendableOutboundReplyParts(normalized.payload).hasMedia;
     const hasVisibleContent =

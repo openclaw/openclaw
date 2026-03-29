@@ -51,6 +51,7 @@ export type {
 } from "../auto-reply/reply/reply-dispatcher.js";
 export { createReplyReferencePlanner } from "../auto-reply/reply/reply-reference.js";
 export type { BlockReplyContext, GetReplyOptions, ReplyPayload } from "../auto-reply/types.js";
+export { COMMENTARY_REPLY_TIMEOUT_MS } from "../auto-reply/types.js";
 export { normalizeReplyPayloadDirectives } from "../auto-reply/reply/reply-delivery.js";
 export type { FinalizedMsgContext, MsgContext } from "../auto-reply/templating.js";
 export {

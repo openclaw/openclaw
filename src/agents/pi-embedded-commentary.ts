@@ -121,6 +121,7 @@ export function extractAssistantOutputCandidates(
   }
 
   const groupedSegments: AssistantOutputCandidate[] = [];
+  const signedSegmentsByKey = new Map<string, AssistantOutputCandidate>();
   let pendingUnsignedSegment: AssistantOutputCandidate | null = null;
   let unsignedSegmentOrdinal = 0;
 
@@ -141,12 +142,21 @@ export function extractAssistantOutputCandidates(
     const signatureId = resolveAssistantTextBlockSignatureId(block);
     if (signatureId) {
       flushPendingUnsignedSegment();
-      groupedSegments.push({
+      const signatureKey = `${signatureId}\u0000${phase ?? ""}`;
+      const existingSegment = signedSegmentsByKey.get(signatureKey);
+      if (existingSegment) {
+        existingSegment.text += block.text;
+        existingSegment.isTerminal = index === content.length - 1;
+        continue;
+      }
+      const signedSegment: AssistantOutputCandidate = {
         segmentId: signatureId,
         text: block.text,
         isTerminal: index === content.length - 1,
         ...(phase ? { phase } : {}),
-      });
+      };
+      groupedSegments.push(signedSegment);
+      signedSegmentsByKey.set(signatureKey, signedSegment);
       continue;
     }
     if (!pendingUnsignedSegment || (pendingUnsignedSegment.phase ?? null) !== (phase ?? null)) {

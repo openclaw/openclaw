@@ -176,6 +176,55 @@ describe("subscribeEmbeddedPiSession commentary delivery", () => {
     expect(subscription.deliveredCommentarySegmentIds()).toEqual(["sig-1"]);
   });
 
+  it("merges repeated text blocks that share the same signature id", async () => {
+    const onCommentaryReply = vi.fn();
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run",
+      onCommentaryReply,
+    });
+
+    emit({
+      type: "message_end",
+      message: buildAssistantMessage({
+        id: "assistant-1",
+        stopReason: "toolUse",
+        content: [
+          {
+            type: "text",
+            text: "Checking ",
+            textSignature: JSON.stringify({ id: "sig-merge", phase: "commentary" }),
+          },
+          {
+            type: "text",
+            text: "the repo state now.",
+            textSignature: JSON.stringify({ id: "sig-merge", phase: "commentary" }),
+          },
+          {
+            type: "toolCall",
+            toolCallId: "call-1",
+            toolName: "exec",
+            args: "{}",
+          },
+        ],
+      }),
+    });
+
+    await subscription.waitForCommentaryDelivery();
+
+    expect(onCommentaryReply).toHaveBeenCalledTimes(1);
+    expect(onCommentaryReply).toHaveBeenCalledWith(
+      { text: "Checking the repo state now." },
+      expect.objectContaining({ timeoutMs: undefined }),
+    );
+    expect(subscription.assistantOutputs).toEqual([
+      {
+        segmentId: "sig-merge",
+        text: "Checking the repo state now.",
+        phase: "commentary",
+      },
+    ]);
+  });
+
   it("keeps repeated identical unsigned commentary distinct across assistant turns", async () => {
     const onCommentaryReply = vi.fn();
     const { emit, subscription } = createSubscribedSessionHarness({

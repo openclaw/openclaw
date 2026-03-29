@@ -7,6 +7,8 @@ export type BlockReplyContext = {
   timeoutMs?: number;
 };
 
+export const COMMENTARY_REPLY_TIMEOUT_MS = 15_000;
+
 /** Context passed to onModelSelected callback with actual model used. */
 export type ModelSelectedContext = {
   provider: string;

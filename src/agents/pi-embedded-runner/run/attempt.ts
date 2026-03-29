@@ -8,6 +8,7 @@ import {
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
+import { COMMENTARY_REPLY_TIMEOUT_MS } from "../../../auto-reply/types.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import {
@@ -1296,7 +1297,10 @@ export async function runEmbeddedAttempt(
 
       let abortWarnTimer: NodeJS.Timeout | undefined;
       const isProbeSession = params.sessionId?.startsWith("probe-") ?? false;
-      const commentaryDeliveryTimeoutMs = Math.max(1, params.blockReplyTimeoutMs ?? 15_000);
+      const commentaryDeliveryTimeoutMs = Math.max(
+        1,
+        params.blockReplyTimeoutMs ?? COMMENTARY_REPLY_TIMEOUT_MS,
+      );
       const waitForCommentaryDeliveryBounded = async () => {
         if (!params.onCommentaryReply) {
           return;
