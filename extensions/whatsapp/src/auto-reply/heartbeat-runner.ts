@@ -4,7 +4,7 @@ import {
   resolveHeartbeatVisibility,
   resolveIndicatorType,
 } from "openclaw/plugin-sdk/channel-runtime";
-import { canonicalizeMainSessionAlias, loadConfig, resolveDefaultAgentId } from "openclaw/plugin-sdk/config-runtime";
+import { canonicalizeMainSessionAlias, loadConfig } from "openclaw/plugin-sdk/config-runtime";
 import {
   loadSessionStore,
   resolveSessionKey,
@@ -32,6 +32,12 @@ import { sendMessageWhatsApp } from "../send.js";
 import { formatError } from "../session.js";
 import { whatsappHeartbeatLog } from "./loggers.js";
 import { getSessionSnapshot } from "./session-snapshot.js";
+
+function resolveDefaultAgentIdFromConfig(cfg: ReturnType<typeof loadConfig>): string {
+  const agents = cfg.agents?.list ?? [];
+  const chosen = agents.find((agent) => agent?.default)?.id ?? agents[0]?.id ?? "main";
+  return chosen.trim().toLowerCase() || "main";
+}
 
 export async function runWebHeartbeatOnce(opts: {
   cfg?: ReturnType<typeof loadConfig>;
@@ -89,7 +95,7 @@ export async function runWebHeartbeatOnce(opts: {
   const rawSessionKey = resolveSessionKey(sessionScope, { From: to }, mainKey);
   const sessionKey = canonicalizeMainSessionAlias({
     cfg,
-    agentId: resolveDefaultAgentId(cfg),
+    agentId: resolveDefaultAgentIdFromConfig(cfg),
     sessionKey: rawSessionKey,
   });
   if (sessionId) {
