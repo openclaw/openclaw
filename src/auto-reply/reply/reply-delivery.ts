@@ -10,6 +10,13 @@ import type { TypingSignaler } from "./typing-mode.js";
 
 export type ReplyDirectiveParseMode = "always" | "auto" | "never";
 
+function normalizeDirectiveAliases(text: string): string {
+  return text
+    .replaceAll("[[replyToCurrent]]", "[[reply_to_current]]")
+    .replace(/\[\[\s*replyTo\s*:/g, "[[reply_to:")
+    .replaceAll("[[audioAsVoice]]", "[[audio_as_voice]]");
+}
+
 export function normalizeReplyPayloadDirectives(params: {
   payload: ReplyPayload;
   currentMessageId?: string;
@@ -19,7 +26,8 @@ export function normalizeReplyPayloadDirectives(params: {
 }): { payload: ReplyPayload; isSilent: boolean } {
   const parseMode = params.parseMode ?? "always";
   const silentToken = params.silentToken ?? SILENT_REPLY_TOKEN;
-  const sourceText = params.payload.text ?? "";
+  const rawSourceText = normalizeDirectiveAliases(params.payload.text ?? "");
+  const sourceText = params.trimLeadingWhitespace ? rawSourceText.trimStart() : rawSourceText;
 
   const shouldParse =
     parseMode === "always" ||

@@ -54,6 +54,7 @@ const WhatsAppSharedSchema = z.object({
   textChunkLimit: z.number().int().positive().optional(),
   chunkMode: z.enum(["length", "newline"]).optional(),
   blockStreaming: z.boolean().optional(),
+  commentaryDelivery: z.enum(["off", "live"]).optional(),
   blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
   groups: WhatsAppGroupsSchema,
   ackReaction: WhatsAppAckReactionSchema,

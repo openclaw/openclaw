@@ -18060,6 +18060,10 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
               blockStreaming: {
                 type: "boolean",
               },
+              commentaryDelivery: {
+                type: "string",
+                enum: ["off", "live"],
+              },
               blockStreamingCoalesce: {
                 type: "object",
                 properties: {
@@ -18304,6 +18308,10 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
                     },
                     blockStreaming: {
                       type: "boolean",
+                    },
+                    commentaryDelivery: {
+                      type: "string",
+                      enum: ["off", "live"],
                     },
                     blockStreamingCoalesce: {
                       type: "object",

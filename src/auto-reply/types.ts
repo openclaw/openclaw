@@ -51,6 +51,7 @@ export type GetReplyOptions = {
   onReasoningEnd?: () => Promise<void> | void;
   /** Called when a new assistant message starts (e.g., after tool call or thinking block). */
   onAssistantMessageStart?: () => Promise<void> | void;
+  onCommentaryReply?: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
   onBlockReply?: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
   onToolResult?: (payload: ReplyPayload) => Promise<void> | void;
   /** Called when a tool phase starts/updates, before summary payloads are emitted. */
