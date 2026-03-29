@@ -117,13 +117,15 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
       // Check is_direct flag first (authoritative Matrix protocol signal)
       const directViaSender = await resolveDirectMemberFlag(roomId, senderId);
       const directViaSelf = await resolveDirectMemberFlag(roomId, selfUserId);
-      // Priority: true > null > false. Any true makes it true, both false makes it false, otherwise null
+      // Priority: true > false > null. Any true makes it true (authoritative DM),
+      // any explicit false makes it false (authoritative non-DM),
+      // only both null returns null (unavailable, fallback to 2-member check)
       const isDirectFlag: boolean | null =
         directViaSender === true || directViaSelf === true
           ? true
-          : directViaSender === false && directViaSelf === false
+          : directViaSender === false || directViaSelf === false
             ? false
-            : null;
+            : null; // both null
 
       const strictDirectMembership = isStrictDirectMembership({
         selfUserId,

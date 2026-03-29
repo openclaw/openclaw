@@ -378,11 +378,12 @@ export async function dispatchCronDelivery(
     options?: { retryTransient?: boolean },
   ): Promise<RunCronAgentTurnResult | null> => {
     const identity = resolveAgentOutboundIdentity(params.cfgWithAgentDefaults, params.agentId);
-    const deliveryIdempotencyKey = buildDirectCronDeliveryIdempotencyKey({
-      runSessionId: params.runSessionId,
-      delivery,
-    });
     try {
+      // Validate delivery target early and include in try/catch to avoid uncaught exceptions
+      const deliveryIdempotencyKey = buildDirectCronDeliveryIdempotencyKey({
+        runSessionId: params.runSessionId,
+        delivery,
+      });
       const payloadsForDelivery =
         deliveryPayloads.length > 0
           ? deliveryPayloads
