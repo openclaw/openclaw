@@ -14,6 +14,7 @@ const POLL_INTERVAL_MS = 15;
 const FINISHED_WAIT_TIMEOUT_MS = process.platform === "win32" ? 8_000 : 600;
 const BACKGROUND_TIMEOUT_SEC = process.platform === "win32" ? 0.2 : 0.05;
 const TEST_EXEC_DEFAULTS = {
+  host: "gateway" as const,
   security: "full" as const,
   ask: "off" as const,
 };
