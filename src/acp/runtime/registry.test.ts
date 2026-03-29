@@ -78,6 +78,21 @@ describe("acp runtime registry", () => {
     }
   });
 
+  it("includes unhealthy backend reasons in unavailable errors", () => {
+    registerAcpRuntimeBackend({
+      id: "acpx",
+      runtime: createRuntimeStub(),
+      healthy: () => false,
+      unhealthyReason: () =>
+        "failed to install plugin-local acpx: npm ERR! code EACCES. Fix: sudo chown -R $(id -u):$(id -g) ~/.npm",
+    });
+
+    expect(() => requireAcpRuntimeBackend("acpx")).toThrowError(
+      /failed to install plugin-local acpx/i,
+    );
+    expect(() => requireAcpRuntimeBackend("acpx")).toThrowError(/sudo chown -R/);
+  });
+
   it("unregisters a backend by id", () => {
     registerAcpRuntimeBackend({ id: "acpx", runtime: createRuntimeStub() });
     unregisterAcpRuntimeBackend("acpx");

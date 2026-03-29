@@ -98,6 +98,27 @@ function resolveVersionCheckResult(params: {
   };
 }
 
+function isNpmCachePermissionFailure(detail: string): boolean {
+  const normalized = detail.toLowerCase();
+  if (!normalized.includes("eacces") && !normalized.includes("eperm")) {
+    return false;
+  }
+  return (
+    normalized.includes(".npm") ||
+    normalized.includes("_cacache") ||
+    normalized.includes("npm cache") ||
+    normalized.includes("/npm/") ||
+    normalized.includes("\\npm\\")
+  );
+}
+
+function formatAcpxLocalInstallFailure(detail: string): string {
+  const suffix = isNpmCachePermissionFailure(detail)
+    ? " Fix: sudo chown -R $(id -u):$(id -g) ~/.npm"
+    : "";
+  return `failed to install plugin-local acpx: ${detail}${suffix}`;
+}
+
 export async function checkAcpxVersion(params: {
   command: string;
   cwd?: string;
@@ -249,14 +270,14 @@ export async function ensureAcpx(params: {
       if (spawnFailure === "missing-command") {
         throw new Error("npm is required to install plugin-local acpx but was not found on PATH");
       }
-      throw new Error(`failed to install plugin-local acpx: ${install.error.message}`);
+      throw new Error(formatAcpxLocalInstallFailure(install.error.message));
     }
 
     if ((install.code ?? 0) !== 0) {
       const stderr = install.stderr.trim();
       const stdout = install.stdout.trim();
       const detail = stderr || stdout || `npm exited with code ${install.code ?? "unknown"}`;
-      throw new Error(`failed to install plugin-local acpx: ${detail}`);
+      throw new Error(formatAcpxLocalInstallFailure(detail));
     }
 
     const postcheck = await checkAcpxVersion({

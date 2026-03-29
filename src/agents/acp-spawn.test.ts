@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as acpSessionManager from "../acp/control-plane/manager.js";
 import type { AcpInitializeSessionInput } from "../acp/control-plane/manager.types.js";
+import { AcpRuntimeError } from "../acp/runtime/errors.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -744,6 +745,29 @@ describe("spawnAcpDirect", () => {
       .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
       .find((request) => request.method === "agent");
     expect(agentCall?.params?.sessionKey).toBe(result.childSessionKey);
+  });
+
+  it("preserves detailed ACP backend-unavailable diagnostics during spawn", async () => {
+    hoisted.initializeSessionMock.mockRejectedValueOnce(
+      new AcpRuntimeError(
+        "ACP_BACKEND_UNAVAILABLE",
+        "ACP runtime backend is currently unavailable: failed to install plugin-local acpx: npm ERR! code EACCES. Fix: sudo chown -R $(id -u):$(id -g) ~/.npm",
+      ),
+    );
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Investigate flaky tests",
+        agentId: "codex",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expect(result.status).toBe("error");
+    expect(result.error).toContain("failed to install plugin-local acpx");
+    expect(result.error).toContain("sudo chown -R $(id -u):$(id -g) ~/.npm");
   });
 
   it("includes cwd in ACP thread intro banner when provided at spawn time", async () => {

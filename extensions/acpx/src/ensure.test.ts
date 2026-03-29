@@ -275,6 +275,31 @@ describe("acpx ensure", () => {
     ).rejects.toThrow("failed to install plugin-local acpx");
   });
 
+  it("adds a cache-permission fix hint for npm EACCES install failures", async () => {
+    spawnAndCollectMock
+      .mockResolvedValueOnce({
+        stdout: "acpx 0.0.9\n",
+        stderr: "",
+        code: 0,
+        error: null,
+      })
+      .mockResolvedValueOnce({
+        stdout: "",
+        stderr:
+          "npm ERR! code EACCES\nnpm ERR! syscall open\nnpm ERR! path /Users/test/.npm/_cacache/index-v5/foo",
+        code: 1,
+        error: null,
+      });
+
+    await expect(
+      ensureAcpx({
+        command: "/plugin/node_modules/.bin/acpx",
+        pluginRoot: "/plugin",
+        expectedVersion: ACPX_PINNED_VERSION,
+      }),
+    ).rejects.toThrow("Fix: sudo chown -R $(id -u):$(id -g) ~/.npm");
+  });
+
   it("skips install path when allowInstall=false", async () => {
     spawnAndCollectMock.mockResolvedValueOnce({
       stdout: "",
