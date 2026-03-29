@@ -1558,9 +1558,9 @@ install_git() {
     ui_success "Git installed"
 }
 
-# Fix npm permissions for global installs (Linux)
+# Fix npm permissions for global installs when the active prefix is not writable (macOS + Linux)
 fix_npm_permissions() {
-    if [[ "$OS" != "linux" ]]; then
+    if [[ "$OS" != "linux" && "$OS" != "macos" ]]; then
         return 0
     fi
 
@@ -2355,7 +2355,7 @@ main() {
             install_git
         fi
 
-        # Step 4: npm permissions (Linux)
+        # Step 4: npm permissions (macOS + Linux when global prefix is not writable)
         fix_npm_permissions
 
         # Step 5: OpenClaw
