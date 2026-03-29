@@ -15,7 +15,7 @@
     },
     "chatModel": {
       "label": "Chat Model",
-      "placeholder": "auto (gemma-3-27b-it / gpt-4o-mini)",
+      "placeholder": "auto (gemma-3-12b-it / gpt-4o-mini)",
       "help": "LLM for graph extraction and smart capture. Auto-detected from embedding provider if not set.",
       "advanced": true
     },
@@ -60,6 +60,7 @@
             "enum": [
               "gemini-embedding-001",
               "gemini-embedding-2-preview",
+              "text-embedding-004",
               "text-embedding-3-small",
               "text-embedding-3-large"
             ]

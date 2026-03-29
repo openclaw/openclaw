@@ -10,7 +10,6 @@ import {
   shouldCapture,
   detectCategory,
   looksLikePromptInjection,
-  escapeMemoryForPrompt,
   formatRelevantMemoriesContext,
 } from "./capture.js";
 import { ChatModel } from "./chat.js";
@@ -18,6 +17,7 @@ import { memoryConfigSchema } from "./config.js";
 import { MemoryDB } from "./database.js";
 import { vectorDimsForModel, detectProvider } from "./embeddings.js";
 import { GraphDB } from "./graph.js";
+import { escapePrompt } from "./utils.js";
 
 // ============================================================================
 // Plugin Registration
@@ -252,15 +252,17 @@ describe("promptInjection", () => {
 // Escape and Format
 // ============================================================================
 
-describe("escapeMemoryForPrompt", () => {
+describe("escapePrompt", () => {
   test("should escape HTML special characters", () => {
-    expect(escapeMemoryForPrompt('<script>alert("xss")</script>')).toBe(
-      '‹script›alert("xss")‹/script›',
-    );
+    expect(escapePrompt('<script>alert("xss")</script>')).toBe('‹script›alert("xss")‹/script›');
   });
 
   test("should escape ampersands and quotes", () => {
-    expect(escapeMemoryForPrompt("Tom & Jerry's")).toBe("Tom & Jerry's");
+    expect(escapePrompt("Tom & Jerry's")).toBe("Tom & Jerry's");
+  });
+
+  test("should escape triple backticks", () => {
+    expect(escapePrompt("```javascript\nalert(1)\n```")).toBe("'''javascript\nalert(1)\n'''");
   });
 });
 
@@ -341,6 +343,7 @@ describe("MemoryDB Error Handling", () => {
       (db as any).ensureInitialized = vi.fn().mockResolvedValue(undefined);
       (db as any).table = {
         delete: vi.fn().mockResolvedValue(undefined),
+        update: vi.fn().mockResolvedValue(undefined),
         query: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnThis(),
           toArray: vi.fn().mockResolvedValue([mockRow]),

@@ -10,7 +10,13 @@ describe("ChatModel", () => {
 
   beforeEach(() => {
     fetchMock.mockReset();
-    chatModel = new ChatModel("test-key", "gemma-3-27b-it", "google");
+    chatModel = new ChatModel(
+      "test-key",
+      "gemma-3-27b-it",
+      "google",
+      undefined as any,
+      undefined as any,
+    );
   });
 
   test("checkForContradiction should detect contradictions", async () => {

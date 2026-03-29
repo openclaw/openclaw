@@ -61,3 +61,13 @@ export async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3, delay =
   }
   throw lastError;
 }
+
+/**
+ * Escape chars in memory text before injecting into prompt.
+ * 1. XML-like tag escaping (< >)
+ * 2. Markdown fence escaping (```)
+ */
+export function escapePrompt(text: string): string {
+  if (!text) return "";
+  return text.replace(/</g, "‹").replace(/>/g, "›").replace(/```/g, "'''");
+}

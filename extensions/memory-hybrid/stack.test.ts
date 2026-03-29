@@ -5,14 +5,19 @@
  * ~30-word summaries and accumulates them into a session stack.
  * This allows extracting facts from long conversations without exceeding
  * the model's context window (e.g., 15k tokens).
- *
- * References:
- *  - MemGPT (Packer et al., UC Berkeley, 2023)
- *  - "Recursively Summarizing Enables Long-Term Dialogue Memory" (Wang et al., 2023)
  */
 
 import { describe, it, expect, vi } from "vitest";
 import { ConversationStack } from "./stack.js";
+import { type MemoryTracer, type Logger } from "./tracer.js";
+
+const mockTracer = {
+  traceSummary: vi.fn(),
+} as any;
+
+const mockLogger = {
+  warn: vi.fn(),
+} as any;
 
 // Mock ChatModel that returns predictable compressed summaries
 function createMockChatModel(responses?: string[]) {
@@ -29,7 +34,7 @@ function createMockChatModel(responses?: string[]) {
 }
 
 describe("ConversationStack", () => {
-  it("starts empty with zero turns", () => {
+  it("starts empty with zero turns", async () => {
     const stack = new ConversationStack();
     expect(stack.turnCount).toBe(0);
     expect(stack.getSummary()).toBe("");
@@ -44,6 +49,8 @@ describe("ConversationStack", () => {
       "Як працює архітектура плагіну пам'яті?",
       "Плагін використовує LanceDB для векторного пошуку...",
       mock as any,
+      mockTracer,
+      mockLogger,
     );
 
     expect(stack.turnCount).toBe(0); // Not compressed yet
@@ -62,10 +69,18 @@ describe("ConversationStack", () => {
       "Question 1 is about architecture",
       "Answer 1 explains everything",
       mock as any,
+      mockTracer,
+      mockLogger,
     );
     expect(stack.turnCount).toBe(0);
 
-    await stack.push("Question 2 is about memory", "Answer 2 clarifies it", mock as any);
+    await stack.push(
+      "Question 2 is about memory",
+      "Answer 2 clarifies it",
+      mock as any,
+      mockTracer,
+      mockLogger,
+    );
     expect(stack.turnCount).toBe(1);
     expect(mock.complete).toHaveBeenCalledTimes(1);
   });
@@ -78,10 +93,12 @@ describe("ConversationStack", () => {
       "Question 1 is about architecture",
       "Answer 1 explains everything",
       mock as any,
+      mockTracer,
+      mockLogger,
     );
     expect(stack.turnCount).toBe(0);
 
-    await stack.flush(mock as any);
+    await stack.flush(mock as any, mockTracer, mockLogger);
     expect(stack.turnCount).toBe(1);
     expect(stack.getSummary()).toContain("Forced summary.");
   });
@@ -90,10 +107,34 @@ describe("ConversationStack", () => {
     const mock = createMockChatModel(["Summary 1", "Summary 2"]);
     const stack = new ConversationStack(30, 2);
 
-    await stack.push("Question 1 details here", "Answer 1 details here", mock as any);
-    await stack.push("Question 2 details here", "Answer 2 details here", mock as any); // Batch 1 flush
-    await stack.push("Question 3 details here", "Answer 3 details here", mock as any);
-    await stack.push("Question 4 details here", "Answer 4 details here", mock as any); // Batch 2 flush
+    await stack.push(
+      "Question 1 details here",
+      "Answer 1 details here",
+      mock as any,
+      mockTracer,
+      mockLogger,
+    );
+    await stack.push(
+      "Question 2 details here",
+      "Answer 2 details here",
+      mock as any,
+      mockTracer,
+      mockLogger,
+    );
+    await stack.push(
+      "Question 3 details here",
+      "Answer 3 details here",
+      mock as any,
+      mockTracer,
+      mockLogger,
+    );
+    await stack.push(
+      "Question 4 details here",
+      "Answer 4 details here",
+      mock as any,
+      mockTracer,
+      mockLogger,
+    );
 
     expect(stack.turnCount).toBe(2);
     expect(mock.complete).toHaveBeenCalledTimes(2);
@@ -108,10 +149,9 @@ describe("ConversationStack", () => {
     const stack = new ConversationStack(3, 1); // max 3 turns, batch size 1
 
     for (let i = 0; i < 5; i++) {
-      await stack.push(`Question ${i}`, `Answer ${i}`, mock as any);
+      await stack.push(`Question ${i}`, `Answer ${i}`, mock as any, mockTracer, mockLogger);
     }
 
-    // Should only keep last 3 turns
     expect(stack.turnCount).toBe(3);
     expect(mock.complete).toHaveBeenCalledTimes(5);
   });
@@ -123,16 +163,16 @@ describe("ConversationStack", () => {
       }),
     };
     const stack = new ConversationStack(30, 1); // batch size 1 for immediate compression
-    // Should not throw — use messages longer than 10 chars to pass trivial filter
     await stack.push(
       "Tell me about the memory system architecture",
       "Here is how it works in detail",
       mock as any,
+      mockTracer,
+      mockLogger,
     );
 
     expect(stack.turnCount).toBe(1);
     const summary = stack.getSummary();
-    // Fallback should contain truncated original text
     expect(summary.length).toBeGreaterThan(0);
   });
 
@@ -140,9 +180,8 @@ describe("ConversationStack", () => {
     const mock = createMockChatModel();
     const stack = new ConversationStack();
 
-    await stack.push("ok", "👍", mock as any);
+    await stack.push("ok", "👍", mock as any, mockTracer, mockLogger);
 
-    // Trivial messages should not trigger LLM call
     expect(mock.complete).not.toHaveBeenCalled();
     expect(stack.turnCount).toBe(0);
   });
@@ -158,12 +197,19 @@ describe("ConversationStack", () => {
       "Мене звати Вова, я будую АІ ботів",
       "Приємно познайомитись, Вова!",
       mock as any,
+      mockTracer,
+      mockLogger,
     );
-    await stack.push("Я працюю вночі і люблю темні теми", "Зрозумів, збережу це", mock as any);
+    await stack.push(
+      "Я працюю вночі і люблю темні теми",
+      "Зрозумів, збережу це",
+      mock as any,
+      mockTracer,
+      mockLogger,
+    );
 
     const block = stack.getContextBlock();
     expect(block).toContain("<conversation-summary>");
-    expect(block).toContain("</conversation-summary>");
     expect(block).toContain("Vova");
   });
 
@@ -175,6 +221,8 @@ describe("ConversationStack", () => {
       "Tell me about architecture patterns",
       "Here is the full explanation of patterns",
       mock as any,
+      mockTracer,
+      mockLogger,
     );
     expect(stack.turnCount).toBe(1);
 

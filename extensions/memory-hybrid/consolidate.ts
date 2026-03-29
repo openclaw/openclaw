@@ -13,10 +13,11 @@
  * This keeps the memory store clean, fast, and token-efficient.
  */
 
-import { escapeMemoryForPrompt } from "./capture.js";
 import type { ChatModel } from "./chat.js";
 import type { Embeddings } from "./embeddings.js";
 import { TaskPriority } from "./limiter.js";
+import { type Logger } from "./tracer.js";
+import { escapePrompt } from "./utils.js";
 
 // ============================================================================
 // Types
@@ -122,7 +123,7 @@ export async function mergeFacts(
 ): Promise<string | null> {
   if (facts.length < 2) return null;
 
-  const numberedFacts = facts.map((f, i) => `${i + 1}. "${escapeMemoryForPrompt(f)}"`).join("\n");
+  const numberedFacts = facts.map((f, i) => `${i + 1}. "${escapePrompt(f)}"`).join("\n");
 
   const prompt = `These facts are about the same topic. Merge them into ONE concise, complete statement.
 Keep ALL important details. Do NOT lose any information.
@@ -159,13 +160,25 @@ export async function mergeFactsBatch(
   clusters: string[][],
   chatModel: ChatModel,
   priority = TaskPriority.LOW,
-): Promise<Array<string | null>> {
+  logger?: Logger,
+): Promise<string[]> {
   if (clusters.length === 0) return [];
-  if (clusters.length === 1) return [await mergeFacts(clusters[0], chatModel, priority)];
+
+  const results: string[] = [];
+  if (logger) logger.info(`[memory-hybrid] Merging ${clusters.length} clusters...`);
+
+  // If only one cluster, use the single mergeFacts function
+  if (clusters.length === 1) {
+    const merged = await mergeFacts(clusters[0], chatModel, priority);
+    if (merged) {
+      results.push(merged);
+    }
+    return results;
+  }
 
   const formattedClusters = clusters
     .map((facts, i) => {
-      const list = facts.map((f, j) => `  ${j + 1}. ${escapeMemoryForPrompt(f)}`).join("\n");
+      const list = facts.map((f, j) => `  ${j + 1}. ${escapePrompt(f)}`).join("\n");
       return `Cluster ${i + 1}:\n${list}`;
     })
     .join("\n\n");
@@ -184,15 +197,16 @@ ${formattedClusters}`;
       .replace(/```json\s*/g, "")
       .replace(/```\s*/g, "")
       .trim();
-    const results = JSON.parse(cleanJson);
+    const data = JSON.parse(cleanJson);
 
-    if (!Array.isArray(results)) throw new Error("Batch merge response is not an array");
-
-    // Map results back to index, ensuring we return null for any missing/invalid entries
-    return clusters.map((_, i) => (typeof results[i] === "string" ? results[i] : null));
+    return Array.isArray(data)
+      ? data.filter((f: unknown): f is string => typeof f === "string")
+      : [];
   } catch (error) {
-    console.warn(`[memory-hybrid][consolidate] mergeFactsBatch failed:`, String(error));
-    return clusters.map(() => null);
+    if (logger) {
+      logger.warn(`[memory-hybrid][consolidate] mergeFactsBatch JSON parse failed: ${error}`);
+    }
+    return [];
   }
 }
 

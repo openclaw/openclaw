@@ -499,59 +499,29 @@ export class MemoryDB {
         return 0;
       }
 
-      const updatedRows: Record<string, unknown>[] = [];
-      const successfullyFlushedIds: string[] = [];
+      const flushedIds: string[] = [];
 
-      for (const row of existingRows) {
-        const id = row.id;
-        // BUG 2 FIX: Use snapshotted delta from entriesToFlush
-        const deltaTuple = entriesToFlush.find(([eid]) => eid === id);
-        const delta = deltaTuple ? deltaTuple[1] : 0;
-        if (delta <= 0) continue;
+      // Use Promise.all to update in parallel for efficiency
+      await Promise.all(
+        existingRows.map(async (row) => {
+          const id = row.id;
+          const deltaTuple = entriesToFlush.find(([eid]) => eid === id);
+          const delta = deltaTuple ? deltaTuple[1] : 0;
+          if (delta <= 0) return;
 
-        const updatedRow = {
-          ...row,
-          id: randomUUID(), // New ID to avoid delete collision
-          recallCount: (row.recallCount ?? 0) + delta,
-        };
+          const newCount = (row.recallCount ?? 0) + delta;
 
-        // Track original ID for deletion
-        (updatedRow as Record<string, unknown>).__originalId = id;
+          await this.table!.update({
+            where: `id = '${id}'`,
+            values: { recallCount: newCount },
+          });
+          flushedIds.push(id);
+        }),
+      );
 
-        delete (updatedRow as Record<string, unknown>)._distance;
-        delete (updatedRow as Record<string, unknown>)["vector.isValid"];
-
-        updatedRows.push(updatedRow as unknown as Record<string, unknown>);
-        successfullyFlushedIds.push(id);
-      }
-
-      if (updatedRows.length === 0) return 0;
-
-      // Store-Before-Delete: add new rows first (with new UUIDs), then delete old ones.
-      // If crash occurs after add but before delete, we get duplicates (harmless — next flush dedupes).
-      // This is MUCH safer than Delete-Before-Store which risks total data loss.
-      const cleanRows = updatedRows.map((row) => {
-        const clean = { ...row };
-        delete clean.__originalId;
-        return clean;
-      });
-
-      // Step 1: Add updated rows with new IDs
-      await this.safeAdd(cleanRows);
-
-      // Step 2: Delete old rows (safe — new data already persisted)
-      const idList = successfullyFlushedIds.map((id) => `'${id}'`).join(", ");
-      try {
-        await this.table!.delete(`id IN (${idList})`);
-      } catch (deleteErr) {
-        // New rows are safe. Old duplicates will be cleaned up on next flush/compact.
-        this.logger.warn(
-          `[memory-hybrid] flushRecallCounts: delete old rows failed (duplicates may exist): ${String(deleteErr)}`,
-        );
-      }
-
+      // Successfully updated — carefully deduct snapshotted counts from deltas
       for (const [id, countAtStart] of entriesToFlush) {
-        if (!successfullyFlushedIds.includes(id)) continue;
+        if (!flushedIds.includes(id)) continue;
 
         const currentDelta = this.recallCountDeltas.get(id) ?? 0;
         const remaining = currentDelta - countAtStart;
@@ -562,22 +532,18 @@ export class MemoryDB {
         }
       }
 
-      this.tracer.trace(
-        "flush_recall_counts",
-        { count: updatedRows.length },
-        `Persisted recall counts for ${updatedRows.length} memories.`,
-      );
-
-      return updatedRows.length;
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
-      this.logger.warn(`[memory-hybrid] flushRecallCounts batch failed: ${msg}`);
-
-      // If it's a critical data loss risk, bubble it up (Disk Full or explicit CRITICAL)
-      if (msg.includes("CRITICAL") || msg.includes("Disk Full")) {
-        throw new Error(`[memory-hybrid] CRITICAL DATA LOSS RISK: ${msg}`);
+      if (flushedIds.length > 0) {
+        this.tracer.trace(
+          "flush_recall_counts",
+          { count: flushedIds.length },
+          `Persisted recall counts for ${flushedIds.length} memories (stable IDs).`,
+        );
       }
 
+      return flushedIds.length;
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      this.logger.warn(`[memory-hybrid] flushRecallCounts failed: ${msg}`);
       return 0;
     }
   }
@@ -603,6 +569,8 @@ export class MemoryDB {
       if (validIds) {
         await this.table!.delete(`id IN (${validIds})`);
       }
+      // Periodically optimize to prevent fragmentation from deletes/updates
+      await this.table!.optimize();
     }
 
     return toDelete.length;

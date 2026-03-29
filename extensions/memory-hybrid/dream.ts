@@ -1,11 +1,12 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { escapeMemoryForPrompt } from "./capture.js";
 import type { ChatModel } from "./chat.js";
 import { clusterBySimilarity, mergeFacts, mergeFactsBatch } from "./consolidate.js";
+import type { MemoryDB } from "./database.js";
 import type { Embeddings } from "./embeddings.js";
 import type { GraphDB } from "./graph.js";
-import type { MemoryDB } from "./index.js";
 import { TaskPriority } from "./limiter.js";
+import { MemoryTracer, type Logger } from "./tracer.js";
+import { escapePrompt } from "./utils.js";
 
 const IDLE_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes idle
 const LOOP_INTERVAL_MS = 5 * 60 * 1000; // check every 5 minutes
@@ -16,14 +17,18 @@ export class DreamService {
   private lastInteractionTime: number = Date.now();
   private lastDreamTime: number = 0;
   private isDreaming = false;
+  private readonly logger: Logger;
 
   constructor(
-    private readonly db: MemoryDB,
-    private readonly chat: ChatModel,
-    private readonly embeddings: Embeddings,
-    private readonly graph: GraphDB,
     private readonly api: OpenClawPluginApi,
-  ) {}
+    private readonly db: MemoryDB,
+    private readonly embeddings: Embeddings,
+    private readonly graphDB: GraphDB,
+    private readonly chatModel: ChatModel,
+    private readonly tracer: MemoryTracer,
+  ) {
+    this.logger = api.logger;
+  }
 
   /** Call this whenever the user sends a message */
   public registerInteraction(): void {
@@ -32,11 +37,12 @@ export class DreamService {
 
   public start(): void {
     if (this.timer) {
-      this.api.logger.info("memory-hybrid: Dream Service is already running. Skipping start.");
+      this.logger.info("memory-hybrid: Dream Service is already running. Skipping start.");
       return;
     }
-    this.api.logger.info("memory-hybrid: Dream Service initialized.");
+    this.logger.info("memory-hybrid: Dream Service initialized.");
     this.timer = setInterval(() => void this.tick(), LOOP_INTERVAL_MS);
+    this.timer.unref();
   }
 
   public stop(): void {
@@ -64,55 +70,53 @@ export class DreamService {
     this.isDreaming = true;
     this.lastDreamTime = now; // Mark attempt/start early to avoid spam if crash occurs
     try {
-      this.api.logger.info(
-        "memory-hybrid: [Dream Mode] Entering Synthetic Sleep (NREM Phase 1)...",
-      );
+      this.logger.info("memory-hybrid: [Dream Mode] Entering Synthetic Sleep (NREM Phase 1)...");
 
       // Phase 1: Synaptic Pruning (Garbage Collection)
       const deleted = await this.db.cleanupTrash();
       if (deleted > 0) {
-        this.api.logger.info(`memory-hybrid: [Dream Mode] Pruned ${deleted} noisy/trash memories.`);
+        this.logger.info(`memory-hybrid: [Dream Mode] Pruned ${deleted} noisy/trash memories.`);
       }
 
       // Phase 2: Empathy Profiling
-      this.api.logger.info(
+      this.logger.info(
         "memory-hybrid: [Dream Mode] Generating Empathy Profile (Deep Sleep Phase 2)...",
       );
       await this.generateEmpathyProfile();
 
       // Phase 3: Semantic Consolidation (Merging redundant memories)
-      this.api.logger.info("memory-hybrid: [Dream Mode] Consolidating Knowledge (REM Phase 3)...");
+      this.logger.info("memory-hybrid: [Dream Mode] Consolidating Knowledge (REM Phase 3)...");
       await this.consolidateKnowledge();
 
       // Phase 4: Knowledge Pulse (Syncing and Optimization)
-      this.api.logger.info("memory-hybrid: [Dream Mode] Knowledge Pulse (Phase 4)...");
+      this.logger.info("memory-hybrid: [Dream Mode] Knowledge Pulse (Phase 4)...");
       await this.pulseKnowledge();
 
-      this.api.logger.info(
+      this.logger.info(
         "memory-hybrid: [Dream Mode] Synthetic Sleep complete - brain is refreshed.",
       );
     } catch (err) {
-      this.api.logger.warn(`memory-hybrid: [Dream Mode] Error during sleep cycle: ${String(err)}`);
+      this.logger.warn(`memory-hybrid: [Dream Mode] Error during sleep cycle: ${String(err)}`);
     } finally {
       this.isDreaming = false;
     }
   }
 
   private async generateEmpathyProfile(): Promise<void> {
-    const memories = await this.db.getMemoriesByCategory(["preference", "decision", "emotion"], 50);
+    const memories = await this.db.getMemoriesByCategory(["preference", "decision", "other"], 50);
     if (memories.length < 3) return;
 
     // Use a maximum fact count to prevent token blowout (15k limit) without slicing mid-sentence
     let facts = "";
     for (const m of memories) {
-      const escapedText = escapeMemoryForPrompt(m.text);
+      const escapedText = escapePrompt(m.text);
       if (facts.length + escapedText.length + 1 > 10000) break;
       facts += escapedText + "\n";
     }
 
     const prompt = `Analyze these facts about the user and generate a concise 2-sentence Empathy Profile summarizing their current mental state, core interests, and communication preferences. Return ONLY the 2 sentences.\n\nFacts:\n${facts}`;
 
-    const profileText = await this.chat.complete(
+    const profileText = await this.chatModel.complete(
       [{ role: "user", content: prompt }],
       false,
       TaskPriority.LOW,
@@ -170,7 +174,7 @@ export class DreamService {
       // Entity Check (Hallucination Guard)
       const entitySets: Set<string>[] = [];
       for (const item of cluster) {
-        const found = await this.graph.findEdgesForTexts([item.text]);
+        const found = await this.graphDB.findEdgesForTexts([item.text]);
         entitySets.push(new Set(found.flatMap((e) => [e.source, e.target])));
       }
 
@@ -194,7 +198,7 @@ export class DreamService {
 
     // 3. Batch Merge! (High TPM / Low RPM)
     const clusterTexts = validClusters.map((c) => c.map((item) => item.text));
-    const mergedResults = await mergeFactsBatch(clusterTexts, this.chat);
+    const mergedResults = await mergeFactsBatch(clusterTexts, this.chatModel);
 
     // 4. Batch Embed! (Optimize API usage)
     const validMergedIndices: number[] = [];
@@ -237,7 +241,11 @@ export class DreamService {
     }
 
     if (mergedCount > 0) {
-      this.api.logger.info(`memory-hybrid: Consolidated ${mergedCount} redundant memory clusters.`);
+      // The original instruction snippet had `c.clustersFound` which is not defined here.
+      // I'm assuming it meant the number of clusters that were successfully merged.
+      this.logger.info(
+        `[memory-hybrid] Dream Cycle: Phase 1 (Consolidation) - Merged ${mergedCount} clusters.`,
+      );
     }
   }
 
@@ -245,16 +253,16 @@ export class DreamService {
     // 1. Flush recall counts (persists importance reinforcement)
     const flushed = await this.db.flushRecallCounts();
     if (flushed > 0) {
-      this.api.logger.info(`memory-hybrid: Persisted recall counts for ${flushed} memories.`);
+      this.logger.info(`memory-hybrid: Persisted recall counts for ${flushed} memories.`);
     }
 
     // 2. Compact Knowledge Graph
-    await this.graph.compact();
+    await this.graphDB.compact();
 
     // 3. Cleanup very old unused memories (Synaptic Pruning)
     const pruned = await this.db.deleteOldUnused(30); // 30 days unused
     if (pruned > 0) {
-      this.api.logger.info(`memory-hybrid: Pruned ${pruned} long-term unused memories.`);
+      this.logger.info(`memory-hybrid: Pruned ${pruned} long-term unused memories.`);
     }
   }
 }

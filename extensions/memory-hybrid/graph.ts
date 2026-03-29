@@ -13,11 +13,12 @@
  * - recall(): enriches search results with graph connections
  */
 
-import { readFile, writeFile, appendFile, access, mkdir } from "node:fs/promises";
+import { readFile, writeFile, appendFile, access, mkdir, rename } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import type { ChatModel } from "./chat.js";
 import { TaskPriority } from "./limiter.js";
-import { tracer } from "./tracer.js";
+import { MemoryTracer, type Logger } from "./tracer.js";
+import { escapePrompt } from "./utils.js";
 
 // ============================================================================
 // Types
@@ -61,10 +62,17 @@ export class GraphDB {
   private dirtyNodes: Set<string> = new Set();
   private savedEdgeCount = 0;
 
-  constructor(basePath: string) {
+  private tracer: MemoryTracer;
+  private logger: Logger;
+
+  constructor(basePath: string, tracer: MemoryTracer, logger: Logger) {
+    this.tracer = tracer;
+    this.logger = logger;
     // Save graph.jsonl next to the lancedb folder
     this.filePath = join(dirname(basePath), "graph.jsonl");
     this.legacyJsonPath = join(dirname(basePath), "graph.json");
+    this.edgeKeys = new Set();
+    this.adjacencyList = new Map();
   }
 
   /**
@@ -123,9 +131,13 @@ export class GraphDB {
           }
         }
         this.savedEdgeCount = this.edges.length;
+        this.tracer.traceGraph(this.nodeCount, this.edgeCount);
         this.loaded = true;
         return;
-      } catch {
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+          this.logger.warn(`[memory-hybrid][graph] Load failed: ${err}`);
+        }
         // JSONL doesn't exist — try legacy JSON migration
       }
 
@@ -154,10 +166,13 @@ export class GraphDB {
         this.savedEdgeCount = 0;
         migrated = true;
 
-        console.warn(
+        this.logger.warn(
           `[memory-hybrid][graph] Migrated legacy graph.json → graph.jsonl (${this.nodes.size} nodes, ${this.edges.length} edges)`,
         );
-      } catch {
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+          this.logger.warn(`[memory-hybrid][graph] Legacy load failed: ${err}`);
+        }
         // No legacy file either — start fresh
       }
 
@@ -224,7 +239,10 @@ export class GraphDB {
       for (const edge of this.edges) {
         lines.push(JSON.stringify({ _t: "e", d: edge }));
       }
-      await writeFile(this.filePath, lines.join("\n") + "\n", "utf-8");
+      // Atomic write: tmp file then rename (prevents data loss on crash)
+      const tmpPath = this.filePath + ".tmp";
+      await writeFile(tmpPath, lines.join("\n") + "\n", "utf-8");
+      await rename(tmpPath, this.filePath);
       this.edgeKeys.clear();
       this.adjacencyList.clear();
       this.edges.forEach((edge, index) => {
@@ -357,30 +375,24 @@ export class GraphDB {
     return this.withLock(async () => {
       const visitedNodes = new Set<string>(seedNodeIds);
       const collectedEdges: GraphEdge[] = [];
+      const collectedEdgeKeys = new Set<string>();
       let frontier = [...seedNodeIds];
 
       for (let hop = 0; hop < maxHops; hop++) {
         const nextFrontier: string[] = [];
 
         for (const nodeId of frontier) {
-          // O(1) neighbor lookup via adjacency list instead of O(N) full edge scan
           const neighborIndices = this.adjacencyList.get(nodeId);
           if (!neighborIndices) continue;
           for (const edgeIdx of neighborIndices) {
             const edge = this.edges[edgeIdx];
-            // Avoid collecting duplicate edges
-            if (
-              !collectedEdges.some(
-                (e) =>
-                  e.source === edge.source &&
-                  e.target === edge.target &&
-                  e.relation === edge.relation,
-              )
-            ) {
+            // O(1) duplicate check via Set instead of O(n) Array.some
+            const key = `${edge.source}|${edge.target}|${edge.relation}`;
+            if (!collectedEdgeKeys.has(key)) {
+              collectedEdgeKeys.add(key);
               collectedEdges.push(edge);
             }
 
-            // Discover new nodes
             const otherNode = edge.source === nodeId ? edge.target : edge.source;
             if (!visitedNodes.has(otherNode)) {
               visitedNodes.add(otherNode);
@@ -413,12 +425,15 @@ export async function extractGraphFromText(
   text: string,
   chatModel: ChatModel,
   priority = TaskPriority.NORMAL,
+  tracer: MemoryTracer,
+  logger: Logger,
 ): Promise<{ nodes: GraphNode[]; edges: GraphEdge[] }> {
   // Skip very short text — not enough for meaningful extraction
   if (text.length < 25) {
     return { nodes: [], edges: [] };
   }
 
+  const safeText = escapePrompt(text);
   const prompt = `Extract knowledge graph entities and relationships from the text below.
 Return ONLY valid JSON, no markdown, no explanation.
 
@@ -436,7 +451,7 @@ Rules:
 - If a relation doesn't fit the allowed list perfectly, map it to the closest one (e.g. "loves" -> "LIKES", "built" -> "CREATED")
 - If no entities found, return {"nodes": [], "edges": []}
 
-Text: "${JSON.stringify(text).slice(1, -1)}"`;
+Text: "${JSON.stringify(safeText).slice(1, -1)}"`;
 
   try {
     const response = await chatModel.complete([{ role: "user", content: prompt }], true, priority);
@@ -470,13 +485,13 @@ Text: "${JSON.stringify(text).slice(1, -1)}"`;
         try {
           data = JSON.parse(match[0]);
           tracer.trace("llm_graph_repair_success", {}, "Successfully rescued Graph JSON via regex");
-        } catch (e) {
+        } catch (err) {
           tracer.trace(
             "llm_graph_repair_fatal",
-            { error: String(e) },
+            { error: String(err) },
             "Graph regex rescue failed.",
           );
-          throw e;
+          throw err;
         }
       } else {
         tracer.trace("llm_graph_fatal", {}, "No JSON-like structure found in LLM Graph response.");
@@ -520,9 +535,8 @@ Text: "${JSON.stringify(text).slice(1, -1)}"`;
     return { nodes, edges };
   } catch (error) {
     // LLM extraction is best-effort — never fail the main operation
-    console.warn(
-      `[memory-hybrid][graph] extractGraphFromText failed for: "${text.substring(0, 40)}..."`,
-      error instanceof Error ? error.message : String(error),
+    logger.warn(
+      `[memory-hybrid][graph] extractGraphFromText failed for: "${text.substring(0, 40)}...": ${error instanceof Error ? error.message : String(error)}`,
     );
     return { nodes: [], edges: [] };
   }
@@ -536,11 +550,14 @@ export async function extractGraphFromBatch(
   facts: string[],
   chatModel: ChatModel,
   priority = TaskPriority.NORMAL,
+  tracer: MemoryTracer,
+  logger: Logger,
 ): Promise<{ nodes: GraphNode[]; edges: GraphEdge[] }> {
   if (facts.length === 0) return { nodes: [], edges: [] };
-  if (facts.length === 1) return extractGraphFromText(facts[0], chatModel, priority);
+  if (facts.length === 1)
+    return extractGraphFromText(facts[0], chatModel, priority, tracer, logger);
 
-  const factList = facts.map((f, i) => `${i + 1}. ${f}`).join("\n");
+  const factList = facts.map((f, i) => `${i + 1}. ${escapePrompt(f)}`).join("\n");
   const prompt = `Extract a unified knowledge graph from the multiple facts provided below.
 Return ONLY valid JSON.
 
@@ -601,7 +618,7 @@ ${factList}`;
 
     return { nodes, edges };
   } catch (error) {
-    console.warn(`[memory-hybrid][graph] extractGraphFromBatch failed:`, String(error));
+    logger.warn(`[memory-hybrid][graph] extractGraphFromBatch failed: ${String(error)}`);
     return { nodes: [], edges: [] };
   }
 }

@@ -10,11 +10,20 @@ export interface TraceEvent {
   error?: string;
 }
 
+export interface Logger {
+  info(msg: string): void;
+  warn(msg: string): void;
+  error(msg: string): void;
+}
+
 export class MemoryTracer {
   private readonly logFile: string;
   private writeQueue: Promise<void> = Promise.resolve();
+  private logger?: Logger;
 
-  constructor(customPath?: string) {
+  constructor(options: { customPath?: string; logger?: Logger } = {}) {
+    const { customPath, logger } = options;
+    this.logger = logger;
     // Standardizing on ~/.openclaw for runtime data out of source tree
     this.logFile = customPath || join(homedir(), ".openclaw", "memory", "traces", "thoughts.jsonl");
   }
@@ -35,7 +44,9 @@ export class MemoryTracer {
 
       await appendFile(path, line + "\n", "utf-8");
     } catch (err) {
-      console.warn(`[memory-hybrid][tracer] Failed to write log: ${err}`);
+      if (this.logger) {
+        this.logger.warn(`[memory-hybrid][tracer] Failed to write log: ${err}`);
+      }
     }
   }
 
@@ -99,6 +110,16 @@ export class MemoryTracer {
     );
   }
 
+  public traceRateLimit(delay: number, rpm: number, tokensCount: number): void {
+    if (delay > 0) {
+      this.trace(
+        "rate_limit_throttle",
+        { delayMs: delay, rpm, activeTokens: tokensCount },
+        `Throttling request for ${delay}ms to stay within ${rpm} RPM limit.`,
+      );
+    }
+  }
+
   public traceError(action: string, error: unknown): void {
     const errorMsg = error instanceof Error ? error.message : String(error);
     this.trace(action, { error: errorMsg }, `Error occurred during ${action}.`);
@@ -111,6 +132,3 @@ export class MemoryTracer {
     return this.writeQueue;
   }
 }
-
-// Singleton for easy global imports
-export const tracer = new MemoryTracer();

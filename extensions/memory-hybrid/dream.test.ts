@@ -10,8 +10,18 @@ const mockApi = {
   logger: {
     info: vi.fn(),
     warn: vi.fn((msg) => console.log("API WARN:", msg)),
+    error: vi.fn(),
   },
 };
+
+const mockTracer = {
+  traceRecall: vi.fn(),
+  traceStore: vi.fn(),
+  traceSummary: vi.fn(),
+  traceGraph: vi.fn(),
+  traceError: vi.fn(),
+  trace: vi.fn(),
+} as any;
 
 // We intercept consolidate module to mock cluster logic which normally requires real embeddings
 vi.mock("./consolidate.js", () => {
@@ -61,11 +71,12 @@ describe("DreamService (Safe Pulsing Brain)", () => {
     };
 
     dreamService = new DreamService(
+      mockApi as any,
       mockDb as any as MemoryDB,
-      mockChat as any as ChatModel,
       mockEmbeddings as any as Embeddings,
       mockGraph as any as GraphDB,
-      mockApi as any,
+      mockChat as any as ChatModel,
+      mockTracer,
     );
   });
 

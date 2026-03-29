@@ -1,33 +1,40 @@
+import { type MemoryTracer } from "./tracer.js";
+
 export interface QueueOptions {
   delayMs?: number;
+  maxSize?: number;
+  onError?: (name: string, error: unknown) => void;
+  logger?: any;
 }
 
-/**
- * Orchestrated Background Queue
- *
- * Ensures that heavy memory tasks (LLM calls, embeddings, graph extraction)
- * are processed strictly sequentially with a delay between them.
- * This prevents Gemini API 429 (Rate Limit) errors while allowing the
- * agent to respond immediately to the user.
- */
 export class MemoryQueue {
   private queue: Array<{ name: string; task: () => Promise<void> }> = [];
   private processing = false;
   private delayMs: number;
+  private maxSize: number;
+  private logger?: any;
+  private onError: (name: string, error: unknown) => void;
 
   constructor(options: QueueOptions = {}) {
     this.delayMs = options.delayMs ?? 1000;
+    this.maxSize = options.maxSize ?? 100;
+    this.logger = options.logger;
+    this.onError = options.onError ?? (() => {});
   }
 
-  /**
-   * Push a task to the queue. Returns immediately.
-   */
   push(name: string, task: () => Promise<void>): void {
+    if (this.queue.length >= this.maxSize) {
+      this.onError(
+        name,
+        new Error(`Queue overflow: ${this.queue.length} pending tasks (max: ${this.maxSize})`),
+      );
+      this.logger?.warn(`[memory-hybrid] Queue overflow in ${name}`);
+      return;
+    }
     this.queue.push({ name, task });
     if (!this.processing) {
-      // Start processing in the background (no await)
-      this.processNext().catch(() => {
-        // Top-level catch for the background process
+      this.processNext().catch((err) => {
+        this.onError("queue-loop", err);
         this.processing = false;
       });
     }
@@ -46,32 +53,28 @@ export class MemoryQueue {
       return;
     }
 
-    const { task } = entry;
+    const { name, task } = entry;
 
     try {
       await task();
     } catch (err) {
-      // Silence is golden in background tasks, but we could log to tracer here
+      // Report error instead of swallowing it silently
+      this.onError(name, err);
     }
 
     if (this.delayMs > 0) {
       await new Promise((r) => setTimeout(r, this.delayMs));
     }
 
-    // Continue to next task
     return this.processNext();
   }
 
-  /**
-   * Returns current queue size (number of pending tasks)
-   */
+  /** Returns current queue size (number of pending tasks) */
   get size(): number {
     return this.queue.length;
   }
 
-  /**
-   * Returns true if a task is currently being processed
-   */
+  /** Returns true if a task is currently being processed */
   get isWorking(): boolean {
     return this.processing;
   }

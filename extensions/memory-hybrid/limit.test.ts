@@ -34,7 +34,7 @@ describe("MemoryDB Result Limit", () => {
       countRows: vi.fn().mockResolvedValue(15),
     } as any;
 
-    const db = new MemoryDB("/tmp/fake-db-limit", 2);
+    const db = new MemoryDB("/tmp/fake-db-limit", 2, undefined as any, undefined as any);
     (db as any).table = mockTable;
     (db as any).initialized = true;
 

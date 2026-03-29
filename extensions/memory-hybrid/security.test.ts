@@ -27,7 +27,7 @@ describe("Security: Prompt Injection Protection", () => {
 
     // Expect the malicious characters to be escaped
     expect(lastPrompt).not.toContain("</untrusted-memory>");
-    expect(lastPrompt).toContain("&lt;/untrusted-memory&gt;");
+    expect(lastPrompt).toContain("‹/untrusted-memory›");
   });
 
   test("dream.ts should escape facts in empathy profile prompt", async () => {
@@ -46,22 +46,30 @@ describe("Security: Prompt Injection Protection", () => {
       embed: vi.fn().mockResolvedValue(new Array(3072).fill(0)),
     } as any;
 
+    // Mocks for the new DreamService constructor arguments
+    const mockApi = {} as any;
+    const mockGraph = {} as any;
+    const mockChat = mockChatModel; // Assuming mockChat refers to mockChatModel
+
     const service = new DreamService(
-      mockDb,
-      mockChatModel,
-      mockEmbeddings,
-      {} as any,
-      { logger: { info: vi.fn(), warn: vi.fn() } } as any,
+      mockApi as any,
+      mockDb as any,
+      mockEmbeddings as any,
+      mockGraph as any,
+      mockChat as any,
+      undefined as any,
     );
 
     // @ts-ignore - access private for test
     await service.generateEmpathyProfile();
 
     // Find the call that contains the facts
-    const call = mockChatModel.complete.mock.calls.find((c) => c[0][0].content.includes("Facts:"));
+    const call = mockChatModel.complete.mock.calls.find((c: any) =>
+      c[0][0].content.includes("Facts:"),
+    );
     const prompt = call[0][0].content;
     expect(prompt).not.toContain("</untrusted-memory>");
-    expect(prompt).toContain("&lt;/untrusted-memory&gt;");
+    expect(prompt).toContain("‹/untrusted-memory›");
   });
 
   test("consolidate.ts should escape facts in merge prompt", async () => {
@@ -69,10 +77,12 @@ describe("Security: Prompt Injection Protection", () => {
 
     await mergeFacts(facts, mockChatModel);
 
-    const call = mockChatModel.complete.mock.calls.find((c) => c[0][0].content.includes("Facts:"));
+    const call = mockChatModel.complete.mock.calls.find((c: any) =>
+      c[0][0].content.includes("Facts:"),
+    );
     const prompt = call[0][0].content;
     expect(prompt).not.toContain("</untrusted-memory>");
-    expect(prompt).toContain("&lt;/untrusted-memory&gt;");
+    expect(prompt).toContain("‹/untrusted-memory›");
   });
 
   test("consolidate.ts (batch) should escape facts in merge prompt", async () => {
@@ -80,11 +90,11 @@ describe("Security: Prompt Injection Protection", () => {
 
     await mergeFactsBatch(clusters, mockChatModel);
 
-    const call = mockChatModel.complete.mock.calls.find((c) =>
+    const call = mockChatModel.complete.mock.calls.find((c: any) =>
       c[0][0].content.includes("Clusters to merge:"),
     );
     const prompt = call[0][0].content;
     expect(prompt).not.toContain("</untrusted-memory>");
-    expect(prompt).toContain("&lt;/untrusted-memory&gt;");
+    expect(prompt).toContain("‹/untrusted-memory›");
   });
 });

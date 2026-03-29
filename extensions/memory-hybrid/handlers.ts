@@ -21,9 +21,9 @@ import { MemoryTracer, type Logger } from "./tracer.js";
 
 /** Shape of the event object passed to hook handlers */
 interface AgentEvent {
-  prompt: string;
+  prompt?: string;
   success?: boolean;
-  messages?: Array<{ role: string; content: string }>;
+  messages?: Array<any>;
 }
 
 /** Shape of the context object passed to hook handlers */
@@ -144,7 +144,7 @@ export async function handleCapture(
     for (const text of toCapture.slice(0, 3)) {
       const category = detectCategory(text);
       const importance = category === "entity" || category === "decision" ? 0.85 : 0.7;
-      const promotion = workingMemory.add(text, importance, category);
+      const promotion = await workingMemory.add(text, importance, category);
       if (promotion.promoted) {
         const vector = await embeddings.embed(text);
         const summary = await generateMemorySummary(text, chatModel, logger);

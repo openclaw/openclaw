@@ -1,6 +1,6 @@
 import { rm, mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { describe, test, expect, beforeEach, afterEach } from "vitest";
+import { describe, test, expect, beforeEach, afterEach, vi } from "vitest";
 import { GraphDB, type GraphEdge } from "./graph.js";
 
 const TEST_DIR = join(process.cwd(), ".memory", "test_graph_db");
@@ -9,10 +9,12 @@ describe("GraphDB.traverse", () => {
   let testCount = 0;
 
   async function makeGraph(): Promise<GraphDB> {
+    const mockLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const mockTracer = { traceSummary: vi.fn(), trace: vi.fn(), traceError: vi.fn() } as any;
     testCount++;
     const path = join(TEST_DIR, `test_${testCount}`);
     await mkdir(path, { recursive: true });
-    const graph = new GraphDB(path);
+    const graph = new GraphDB(path, mockTracer, mockLogger as any);
     await graph.load();
 
     // Build a test graph in a single modification block (thread-safe)

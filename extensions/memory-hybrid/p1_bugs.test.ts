@@ -87,6 +87,7 @@ describe("P1 Bug Reproduction", () => {
         toArray: vi.fn().mockResolvedValue([]),
         delete: vi.fn().mockResolvedValue(true),
         add: vi.fn().mockResolvedValue(true),
+        update: vi.fn().mockResolvedValue(true),
         createIndex: vi.fn().mockResolvedValue(true),
       };
       (db as any).table = mockTable;
@@ -124,22 +125,23 @@ describe("P1 Bug Reproduction", () => {
       console.log("🟢 Bug 2 Verified: Recall delta correctly tracked without inflation");
     });
 
-    test("Bug 3: No data loss if safeAdd fails (Store-Before-Delete)", async () => {
+    test("Bug 3: Stable ID update (Atomic persistence)", async () => {
       const id = "12345678-1234-1234-1234-123456789012";
       db.incrementRecallCount([id]);
 
       mockTable.toArray.mockResolvedValue([{ id, recallCount: 10, text: "hello" }]);
+      mockTable.update = vi.fn().mockResolvedValue(true);
 
-      // Store-Before-Delete: Add fails (Disk Full) → delete never runs → original data safe
-      mockTable.add.mockRejectedValue(new Error("Disk Full"));
-      mockTable.delete.mockResolvedValue(true);
+      const flushed = await db.flushRecallCounts();
 
-      // Still throws CRITICAL (Disk Full is a disk error), but no data loss:
-      // Original row was NEVER deleted (Store-Before-Delete order)
-      await expect(db.flushRecallCounts()).rejects.toThrow("CRITICAL DATA LOSS RISK");
-      // Delete should NOT have been called (add failed before reaching delete)
-      expect(mockTable.delete).not.toHaveBeenCalled();
-      console.log("🟢 Bug 3 Fixed: Store-Before-Delete prevents data loss (original data intact)");
+      expect(flushed).toBe(1);
+      expect(mockTable.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: `id = '${id}'`,
+          values: { recallCount: 11 },
+        }),
+      );
+      console.log("🟢 Bug 3 Verified: Stable update replaces the dangerous delete-swap hack");
     });
   });
 });

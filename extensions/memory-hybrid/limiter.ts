@@ -1,11 +1,3 @@
-/**
- * API Rate Limiter & Burst Protection
- *
- * Specifically designed for Gemini Free Tier to prevent 429 errors
- * by ensuring minimum delays between requests and prioritizing
- * user-facing tasks (Recall) over background ones (Capture, Dream).
- */
-
 export enum TaskPriority {
   HIGH = 0, // Recall (blocking user)
   NORMAL = 1, // Smart Capture

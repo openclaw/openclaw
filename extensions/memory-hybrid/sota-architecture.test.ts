@@ -4,6 +4,9 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { ChatModel } from "./chat.js";
 import { GraphDB, extractGraphFromText } from "./graph.js";
 
+const mockLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+const mockTracer = { traceSummary: vi.fn(), trace: vi.fn(), traceError: vi.fn() } as any;
+
 // Mock openai and fetch to prevent network calls
 vi.mock("openai", () => {
   return {
@@ -29,7 +32,13 @@ describe("SOTA Architecture Upgrades", () => {
 
   describe("1. Graph Ontology Enforcement (Concept Chaos)", () => {
     it("normalizes extracted node IDs to lowercase trimmed", async () => {
-      const mockChatModel = new ChatModel("test-key", "gpt-4o-mini", "openai");
+      const mockChatModel = new ChatModel(
+        "test-key",
+        "gpt-4o-mini",
+        "openai",
+        undefined as any,
+        undefined as any,
+      );
       // Mock the LLM returning messy cased nodes and relations
       vi.spyOn(mockChatModel, "complete").mockResolvedValueOnce(
         JSON.stringify({
@@ -44,6 +53,9 @@ describe("SOTA Architecture Upgrades", () => {
       const result = await extractGraphFromText(
         "Vova is a person who loves coding in Python 3 everyday.",
         mockChatModel,
+        undefined as any,
+        mockTracer,
+        mockLogger as any,
       );
 
       // Verify node normalization
@@ -60,7 +72,13 @@ describe("SOTA Architecture Upgrades", () => {
     });
 
     it("accepts allowed relations directly", async () => {
-      const mockChatModel = new ChatModel("test-key", "gpt-4o-mini", "openai");
+      const mockChatModel = new ChatModel(
+        "test-key",
+        "gpt-4o-mini",
+        "openai",
+        undefined as any,
+        undefined as any,
+      );
       vi.spyOn(mockChatModel, "complete").mockResolvedValueOnce(
         JSON.stringify({
           nodes: [
@@ -74,6 +92,9 @@ describe("SOTA Architecture Upgrades", () => {
       const result = await extractGraphFromText(
         "Vova likes eating fresh apples from the garden.",
         mockChatModel,
+        undefined as any,
+        mockTracer,
+        mockLogger as any,
       );
       expect(result.edges[0].relation).toBe("LIKES");
     });
@@ -81,7 +102,13 @@ describe("SOTA Architecture Upgrades", () => {
 
   describe("2. JSON Fragility (Structured Outputs)", () => {
     it("sends response_format: json_object for OpenAI when jsonMode is true", async () => {
-      const mockChatModel = new ChatModel("test-key", "gpt-4o-mini", "openai");
+      const mockChatModel = new ChatModel(
+        "test-key",
+        "gpt-4o-mini",
+        "openai",
+        undefined as any,
+        undefined as any,
+      );
       const completeSpy = vi.spyOn(mockChatModel as any, "completeOpenAI").mockResolvedValue("{}");
 
       await mockChatModel.complete([{ role: "user", content: "test" }], true);
@@ -94,7 +121,7 @@ describe("SOTA Architecture Upgrades", () => {
 
   describe("3. Graph Concurrency Locks", () => {
     it("safely modifies the graph concurrently without race conditions", async () => {
-      const db = new GraphDB(join(TEST_DB_DIR, "db"));
+      const db = new GraphDB(join(TEST_DB_DIR, "db"), mockTracer, mockLogger as any);
       await db.load();
 
       // Trigger 50 concurrent graph modifications
@@ -120,7 +147,7 @@ describe("SOTA Architecture Upgrades", () => {
       expect(db.edgeCount).toBe(50);
 
       // Reload graph from disk to verify append-only saved correctly without corruption
-      const db2 = new GraphDB(join(TEST_DB_DIR, "db"));
+      const db2 = new GraphDB(join(TEST_DB_DIR, "db"), mockTracer, mockLogger as any);
       await db2.load();
 
       expect(db2.nodeCount).toBe(50);

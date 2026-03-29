@@ -18,7 +18,7 @@ describe("MemoryTracer", () => {
   });
 
   it("should write structured JSON lines to the log file", async () => {
-    const tracer = new MemoryTracer(logFile);
+    const tracer = new MemoryTracer({ customPath: logFile });
 
     tracer.trace("test_action", { foo: "bar" }, "Test user thought");
     await tracer.flush();

@@ -5,8 +5,9 @@ import { MemoryDB } from "./index.js";
 describe("AMHR (Associative Multi-Hop Retrieval)", () => {
   test("should retrieve associative memories through the knowledge graph", async () => {
     // 1. Setup DBs
-    const memoryDb = new MemoryDB("/tmp/amhr-test-db", 3072);
-    const graphDb = new GraphDB("/tmp/amhr-test-graph.jsonl");
+    const mockLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const memoryDb = new MemoryDB("/tmp/amhr-test-db", 3072, undefined as any, mockLogger as any);
+    const graphDb = new GraphDB("/tmp/amhr-test-graph.jsonl", undefined as any, mockLogger as any);
 
     // Mock graph data: Вова --[likes]--> Fishing, Fishing --[needs]--> Rod
     vi.spyOn(graphDb, "traverse").mockResolvedValue({

@@ -18,9 +18,10 @@
  * They store facts — we understand the person.
  */
 
-import { escapeMemoryForPrompt } from "./capture.js";
 import type { ChatModel } from "./chat.js";
 import { TaskPriority } from "./limiter.js";
+import { type Logger } from "./tracer.js";
+import { escapePrompt } from "./utils.js";
 
 // ============================================================================
 // Types
@@ -61,8 +62,11 @@ export async function generateReflection(
   memories: MemoryFact[],
   chatModel: ChatModel,
   priority = TaskPriority.LOW,
+  logger?: Logger,
 ): Promise<ReflectionResult> {
   if (memories.length < 5) {
+    if (logger)
+      logger.info("Not enough memories yet. Need at least 5 facts to generate a reflection.");
     return {
       summary: "Not enough memories yet. Need at least 5 facts to generate a reflection.",
       patterns: [],
@@ -96,7 +100,7 @@ export async function generateReflection(
   for (const [category, facts] of Object.entries(grouped)) {
     factLines.push(`\n[${category.toUpperCase()}]`);
     for (const fact of facts) {
-      factLines.push(`- ${escapeMemoryForPrompt(fact)}`);
+      factLines.push(`- ${escapePrompt(fact)}`);
     }
   }
 
@@ -112,7 +116,7 @@ export async function generateReflection(
           ? ` (${m.emotionScore > 0 ? "+" : ""}${m.emotionScore.toFixed(1)})`
           : "";
       const when = m.happenedAt ? ` on ${m.happenedAt}` : "";
-      factLines.push(`- [${m.emotionalTone}${score}${when}] ${escapeMemoryForPrompt(m.text)}`);
+      factLines.push(`- [${m.emotionalTone}${score}${when}] ${escapePrompt(m.text)}`);
     }
   }
 
@@ -164,10 +168,9 @@ Return ONLY valid JSON:
       generatedAt: Date.now(),
     };
   } catch (error) {
-    console.warn(
-      `[memory-hybrid][reflection] generateReflection JSON parse failed`,
-      error instanceof Error ? error.message : String(error),
-    );
+    if (logger) {
+      logger.warn(`[memory-hybrid][reflection] generateReflection JSON parse failed: ${error}`);
+    }
     return {
       summary: "Reflection failed (LLM error). Try again later.",
       patterns: [],

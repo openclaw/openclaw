@@ -1,9 +1,12 @@
-import { unlink, writeFile } from "fs/promises";
-import { join } from "path";
+import { unlink } from "node:fs/promises";
+import { join } from "node:path";
 import { describe, it, expect, vi, beforeAll } from "vitest";
 import { WorkingMemoryBuffer } from "./buffer.js";
 import { Embeddings } from "./embeddings.js";
 import { GraphDB } from "./graph.js";
+
+const mockLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+const mockTracer = { traceSummary: vi.fn(), trace: vi.fn(), traceError: vi.fn() } as any;
 
 describe("Verification of Critical Fixes", () => {
   const testDir = __dirname;
@@ -13,11 +16,13 @@ describe("Verification of Critical Fixes", () => {
   beforeAll(async () => {
     try {
       await unlink(graphPath);
-    } catch {}
+    } catch (c: any) {
+      // explicit any for catch
+    }
   });
 
   it("should prevent race conditions in GraphDB (Fix #2)", async () => {
-    const graph = new GraphDB(join(testDir, "dummy.db"));
+    const graph = new GraphDB(join(testDir, "dummy.db"), mockTracer, mockLogger as any);
 
     // Simulate 5 parallel writes
     const actions = Array.from({ length: 5 }).map(async (_, i) => {
@@ -29,16 +34,16 @@ describe("Verification of Critical Fixes", () => {
     await Promise.all(actions);
 
     // Reload and check
-    const newGraph = new GraphDB(join(testDir, "dummy.db"));
+    const newGraph = new GraphDB(join(testDir, "dummy.db"), mockTracer, mockLogger as any);
     await newGraph.load();
 
     expect(newGraph.nodeCount).toBe(5);
   });
 
-  it("should fuzzy match similar strings in Buffer (Fix #3)", () => {
+  it("should fuzzy match similar strings in Buffer (Fix #3)", async () => {
     const buffer = new WorkingMemoryBuffer(50, 0.7, 3);
 
-    buffer.add("I love artificial intelligence", 0.5, "fact");
+    await buffer.add("I love artificial intelligence", 0.5, "fact");
 
     // 1 edit distance (change 'l' to 'L') - should match
     const res1 = (buffer as any).findSimilar("I Love artificial intelligence");
@@ -54,7 +59,13 @@ describe("Verification of Critical Fixes", () => {
   });
 
   it("should retry on 429 errors in Embeddings (Fix #4)", async () => {
-    const embeddings = new Embeddings("fake-key", "gemini-embedding-001", undefined);
+    const embeddings = new Embeddings(
+      "fake-key",
+      "gemini-embedding-001",
+      undefined,
+      undefined,
+      mockLogger as any,
+    );
 
     let callCount = 0;
     // Mock the global fetch
@@ -76,7 +87,13 @@ describe("Verification of Critical Fixes", () => {
 
   it("LRU cache should evict least-recently-USED, not oldest-inserted (Bug #1)", async () => {
     // Create embeddings with a tiny cache (maxCacheSize = 3, via private field override)
-    const embeddings = new Embeddings("fake-key", "gemini-embedding-001", undefined);
+    const embeddings = new Embeddings(
+      "fake-key",
+      "gemini-embedding-001",
+      undefined,
+      undefined,
+      mockLogger as any,
+    );
     (embeddings as any).maxCacheSize = 3;
 
     let callCount = 0;
@@ -115,7 +132,13 @@ describe("Verification of Critical Fixes", () => {
   });
 
   it("should cache redundant embedding calls (Myelination)", async () => {
-    const embeddings = new Embeddings("fake-key", "gemini-embedding-001", undefined);
+    const embeddings = new Embeddings(
+      "fake-key",
+      "gemini-embedding-001",
+      undefined,
+      undefined,
+      mockLogger as any,
+    );
 
     let callCount = 0;
     global.fetch = vi.fn().mockImplementation(async () => {

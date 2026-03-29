@@ -10,7 +10,7 @@ import type { GraphDB } from "./graph.js";
 import { TaskPriority } from "./limiter.js";
 import { hybridScore } from "./recall.js";
 import { generateReflection } from "./reflection.js";
-import { tracer } from "./tracer.js";
+import type { MemoryTracer } from "./tracer.js";
 
 export interface CliDeps {
   db: MemoryDB;
@@ -18,11 +18,12 @@ export interface CliDeps {
   graphDB: GraphDB;
   workingMemory: WorkingMemoryBuffer;
   chatModel: ChatModel;
+  tracer: MemoryTracer;
   cfg: MemoryConfig;
 }
 
 export function registerCli(api: OpenClawPluginApi, deps: CliDeps) {
-  const { db, embeddings, graphDB, workingMemory, chatModel, cfg } = deps;
+  const { db, embeddings, graphDB, workingMemory, chatModel, tracer, cfg } = deps;
 
   api.registerCli(
     ({ program }) => {

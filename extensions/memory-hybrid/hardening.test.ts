@@ -30,7 +30,7 @@ describe("Memory Hardening & Performance (RED)", () => {
       const bufferPath = join(TEST_DB_DIR, "working_memory.jsonl");
       const buffer = new WorkingMemoryBuffer(10);
 
-      buffer.add("Important fact", 0.9, "fact");
+      await buffer.add("Important fact", 0.9, "fact");
       await buffer.save(bufferPath);
 
       const newBuffer = new WorkingMemoryBuffer(10);
@@ -47,7 +47,7 @@ describe("Memory Hardening & Performance (RED)", () => {
       // This is a behavioral test idea: we want to ensure searchWithAMHR
       // is actually finding things that LIKE might miss or finding them faster.
       // But for RED, we just check if it works with keyword-based results.
-      const db = new MemoryDB(TEST_DB_DIR, 3);
+      const db = new MemoryDB(TEST_DB_DIR, 3, undefined as any, undefined as any);
       await db.store({
         text: "The secret password is 'antigravity'",
         vector: [0.1, 0.2, 0.3],
@@ -67,7 +67,7 @@ describe("Memory Hardening & Performance (RED)", () => {
   // 4. PERFORMANCE: Graph Adjacency List (RED)
   describe("Graph Scaling", () => {
     test("getNeighbors should be fast and available", async () => {
-      const gdb = new GraphDB(TEST_DB_DIR);
+      const gdb = new GraphDB(TEST_DB_DIR, undefined as any, undefined as any);
       // @ts-ignore - check if internal adjacency list exists (will fail in RED)
       expect(gdb.adjacencyList).toBeDefined();
     });
