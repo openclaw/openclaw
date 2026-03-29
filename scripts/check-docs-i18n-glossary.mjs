@@ -6,7 +6,7 @@ import path from "node:path";
 
 const ROOT = process.cwd();
 const GLOSSARY_PATH = path.join(ROOT, "docs", ".i18n", "glossary.zh-CN.json");
-const DOC_FILE_RE = /^docs\/(?!zh-CN\/).+\.(md|mdx)$/i;
+const DOC_FILE_RE = /^docs\/(?!zh-CN\/)(?!internal\/).+\.(md|mdx)$/i;
 const LIST_ITEM_LINK_RE = /^\s*(?:[-*]|\d+\.)\s+\[([^\]]+)\]\((\/[^)]+)\)/;
 const MAX_TITLE_WORDS = 8;
 const MAX_LABEL_WORDS = 6;
