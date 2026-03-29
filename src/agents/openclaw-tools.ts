@@ -7,7 +7,11 @@ import {
 } from "../secrets/runtime.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
-import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "./agent-scope.js";
+import {
+  resolveAgentConfig,
+  resolveAgentWorkspaceDir,
+  resolveSessionAgentId,
+} from "./agent-scope.js";
 import { applyPluginToolDeliveryDefaults } from "./plugin-tool-delivery-defaults.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
@@ -107,6 +111,11 @@ export function createOpenClawTools(
     sessionKey: options?.agentSessionKey,
     config: resolvedConfig,
   });
+  const effectiveAwaitAgentId = options?.requesterAgentIdOverride?.trim() || sessionAgentId;
+  const effectiveAwaitEnabled =
+    (resolvedConfig
+      ? resolveAgentConfig(resolvedConfig, effectiveAwaitAgentId)?.subagents?.awaitEnabled
+      : undefined) ?? resolvedConfig?.agents?.defaults?.subagents?.awaitEnabled === true;
   // Fall back to the session agent workspace so plugin loading stays workspace-stable
   // even when a caller forgets to thread workspaceDir explicitly.
   const inferredWorkspaceDir =
@@ -244,11 +253,11 @@ export function createOpenClawTools(
       agentGroupChannel: options?.agentGroupChannel,
       agentGroupSpace: options?.agentGroupSpace,
       sandboxed: options?.sandboxed,
-      awaitEnabled: resolvedConfig?.agents?.defaults?.subagents?.awaitEnabled === true,
+      awaitEnabled: effectiveAwaitEnabled,
       requesterAgentIdOverride: options?.requesterAgentIdOverride,
       workspaceDir: spawnWorkspaceDir,
     }),
-    ...(resolvedConfig?.agents?.defaults?.subagents?.awaitEnabled
+    ...(effectiveAwaitEnabled
       ? [createSessionsAwaitTool({ agentSessionKey: options?.agentSessionKey })]
       : []),
     createSubagentsTool({
