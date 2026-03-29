@@ -105,6 +105,7 @@ function packOpenClawToTempDir(packDir: string): string {
       cwd: REPO_ROOT,
       encoding: "utf8",
       env: { ...process.env, COREPACK_ENABLE_DOWNLOAD_PROMPT: "0" },
+      maxBuffer: 32 * 1024 * 1024,
     },
   );
   const parsed = JSON.parse(raw) as Array<{ filename?: string }>;
@@ -197,7 +198,7 @@ describe("plugin-sdk package contract guardrails", () => {
 
       execFileSync(
         resolvePackageManagerCommand("pnpm"),
-        ["add", "--offline", "--ignore-scripts", archivePath],
+        ["add", "--prefer-offline", "--ignore-scripts", archivePath],
         {
           cwd: consumerDir,
           encoding: "utf8",
