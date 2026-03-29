@@ -99,6 +99,8 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
 
   // Google/Gemini usageMetadata mapping.
   const googleUsage = raw.usageMetadata;
+  const googlePromptTokenCount = googleUsage?.promptTokenCount;
+  const googleCachedContentTokenCount = googleUsage?.cachedContentTokenCount;
 
   // Some providers (pi-ai OpenAI-format) pre-subtract cached_tokens from
   // prompt_tokens upstream.  When cached_tokens > prompt_tokens the result is
@@ -109,9 +111,19 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
       raw.input_tokens ??
       raw.promptTokens ??
       raw.prompt_tokens ??
-      googleUsage?.promptTokenCount,
+      googlePromptTokenCount,
   );
-  const input = rawInput !== undefined && rawInput < 0 ? 0 : rawInput;
+  // Gemini's promptTokenCount includes cached tokens; subtract cachedContentTokenCount
+  // to get the true uncached input. Only subtract when input actually came from
+  // googlePromptTokenCount (not from other providers' pre-subtracted values).
+  const inputAfterCache =
+    rawInput !== undefined && rawInput < 0
+      ? 0
+      : rawInput !== undefined &&
+        rawInput === googlePromptTokenCount &&
+        googleCachedContentTokenCount !== undefined
+        ? Math.max(0, rawInput - googleCachedContentTokenCount)
+        : rawInput;
   const output = asFiniteNumber(
     raw.output ??
       raw.outputTokens ??
@@ -125,7 +137,8 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
       raw.cache_read ??
       raw.cache_read_input_tokens ??
       raw.cached_tokens ??
-      raw.prompt_tokens_details?.cached_tokens,
+      raw.prompt_tokens_details?.cached_tokens ??
+      googleCachedContentTokenCount,
   );
   const cacheWrite = asFiniteNumber(
     raw.cacheWrite ?? raw.cache_write ?? raw.cache_creation_input_tokens,
@@ -135,7 +148,7 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
   );
 
   if (
-    input === undefined &&
+    inputAfterCache === undefined &&
     output === undefined &&
     cacheRead === undefined &&
     cacheWrite === undefined &&
@@ -145,7 +158,7 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
   }
 
   return {
-    input,
+    input: inputAfterCache,
     output,
     cacheRead,
     cacheWrite,
