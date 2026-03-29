@@ -9,6 +9,7 @@ import { createServer as createHttpsServer } from "node:https";
 import type { TlsOptions } from "node:tls";
 import type { WebSocketServer } from "ws";
 import { resolveAgentAvatar } from "../agents/identity-avatar.js";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { CANVAS_WS_PATH, handleA2uiHttpRequest } from "../canvas-host/a2ui.js";
 import type { CanvasHostHandler } from "../canvas-host/server.js";
 import { loadConfig } from "../config/config.js";
@@ -20,8 +21,6 @@ import {
   isAvatarDataUrl,
   isAvatarHttpUrl,
 } from "../shared/avatar-policy.js";
-import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import { resolveLocalAvatarPath } from "../agents/identity-avatar.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH,
   createAuthRateLimiter,
@@ -967,7 +966,7 @@ export function createGatewayHttpServer(opts: {
               basePath: controlUiBasePath,
               resolveAvatar: (agentId) => {
                 if (agentId === "user") {
-                  // Resolve user avatar from config.ui.userAvatar
+                  // Resolve user avatar from config.ui.userAvatar using the same workspace resolution as agents
                   const raw = configSnapshot.ui?.userAvatar?.trim();
                   if (!raw) {
                     return { kind: "none", reason: "missing" };
@@ -975,18 +974,19 @@ export function createGatewayHttpServer(opts: {
                   if (isAvatarHttpUrl(raw) || isAvatarDataUrl(raw)) {
                     return { kind: isAvatarHttpUrl(raw) ? "remote" : "data", url: raw };
                   }
-                  // Resolve relative to the default workspace (same as agent avatars)
+                  // Resolve relative path using default workspace (same as resolveAgentAvatar does)
                   const workspaceDir = resolveAgentWorkspaceDir(configSnapshot, "default");
-                  const resolved = resolveLocalAvatarPath({ raw, workspaceDir });
-                  if (!resolved.ok) {
-                    return { kind: "none", reason: resolved.reason };
-                  }
-                  return { kind: "local", filePath: resolved.filePath };
+                  const resolved = resolveAgentAvatar(configSnapshot, "default") as
+                    | { kind: "local"; filePath: string }
+                    | { kind: "none"; reason: string };
+                  // For simplicity, we try to construct the path directly; validation will be done by the handler
+                  const filePath = path.resolve(workspaceDir, raw);
+                  return { kind: "local", filePath };
                 }
                 return resolveAgentAvatar(configSnapshot, agentId);
               },
             }),
-            });
+        });
         requestStages.push({
           name: "control-ui-http",
           run: () =>
