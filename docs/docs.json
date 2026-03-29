@@ -1017,6 +1017,7 @@
                 "pages": [
                   "concepts/architecture",
                   "concepts/agent",
+                  "concepts/copilot-chat-agent",
                   "concepts/agent-loop",
                   "concepts/system-prompt",
                   "concepts/context",
@@ -1458,6 +1459,7 @@
                 "pages": [
                   "pi",
                   "reference/wizard",
+                  "reference/copilot-chat-agent-plan",
                   "reference/token-use",
                   "reference/secretref-credential-surface",
                   "reference/prompt-caching",

@@ -17,6 +17,8 @@ For a complete map of the docs, see [Docs hubs](/start/hubs).
 - [Docs hubs (all pages linked)](/start/hubs)
 - [Help](/help)
 - [Configuration](/gateway/configuration)
+- [VS Code Copilot chat agent](/concepts/copilot-chat-agent)
+- [VS Code Copilot chat agent plan](/reference/copilot-chat-agent-plan)
 - [Configuration examples](/gateway/configuration-examples)
 - [Slash commands](/tools/slash-commands)
 - [Multi-agent routing](/concepts/multi-agent)
