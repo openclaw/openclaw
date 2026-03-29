@@ -52,10 +52,15 @@ export { decodeStrictBase64 };
 
 type SubagentSpawnDeps = {
   callGateway: typeof callGateway;
-  getGlobalHookRunner: typeof getGlobalHookRunner;
+  getGlobalHookRunner: () => SubagentLifecycleHookRunner | null;
   loadConfig: typeof loadConfig;
   updateSessionStore: typeof updateSessionStore;
 };
+
+export type SubagentLifecycleHookRunner = Pick<
+  NonNullable<ReturnType<typeof getGlobalHookRunner>>,
+  "hasHooks" | "runSubagentSpawning" | "runSubagentSpawned" | "runSubagentEnded"
+>;
 
 const defaultSubagentSpawnDeps: SubagentSpawnDeps = {
   callGateway,
@@ -148,6 +153,14 @@ async function callSubagentGateway(
   params: Parameters<typeof callGateway>[0],
 ): Promise<Awaited<ReturnType<typeof callGateway>>> {
   return await subagentSpawnDeps.callGateway(params);
+}
+
+function readGatewayRunId(response: Awaited<ReturnType<typeof callGateway>>): string | undefined {
+  if (!response || typeof response !== "object") {
+    return undefined;
+  }
+  const { runId } = response as { runId?: unknown };
+  return typeof runId === "string" && runId ? runId : undefined;
 }
 
 function loadSubagentConfig() {
@@ -264,7 +277,7 @@ function summarizeError(err: unknown): string {
 }
 
 async function ensureThreadBindingForSubagentSpawn(params: {
-  hookRunner: ReturnType<typeof getGlobalHookRunner>;
+  hookRunner: SubagentLifecycleHookRunner | null;
   childSessionKey: string;
   agentId: string;
   label?: string;
@@ -687,7 +700,7 @@ export async function spawnSubagentDirect(
       workspaceDir: _workspaceDir,
       ...publicSpawnedMetadata
     } = spawnedMetadata;
-    const response = await callSubagentGateway<{ runId: string }>({
+    const response = await callSubagentGateway({
       method: "agent",
       params: {
         message: childTaskMessage,
@@ -707,8 +720,9 @@ export async function spawnSubagentDirect(
       },
       timeoutMs: 10_000,
     });
-    if (typeof response?.runId === "string" && response.runId) {
-      childRunId = response.runId;
+    const runId = readGatewayRunId(response);
+    if (runId) {
+      childRunId = runId;
     }
   } catch (err) {
     if (attachmentAbsDir) {
