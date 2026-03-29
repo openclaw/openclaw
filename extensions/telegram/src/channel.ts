@@ -2,7 +2,7 @@ import {
   buildDmGroupAccountAllowlistAdapter,
   createNestedAllowlistOverrideResolver,
 } from "openclaw/plugin-sdk/allowlist-config-edit";
-import { buildPluginApprovalRequestMessage } from "openclaw/plugin-sdk/approval-runtime";
+import { createApproverRestrictedNativeApprovalAdapter } from "openclaw/plugin-sdk/approval-runtime";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import { createAllowlistProviderRouteAllowlistWarningCollector } from "openclaw/plugin-sdk/channel-policy";
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
@@ -23,24 +23,23 @@ import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
-import { parseTelegramTopicConversation } from "../runtime-api.js";
 import {
   buildTokenChannelStatusSummary,
   clearAccountEntryFields,
   DEFAULT_ACCOUNT_ID,
   PAIRING_APPROVED_MESSAGE,
+  parseTelegramTopicConversation,
   projectCredentialSnapshotFields,
   resolveConfiguredFromCredentialStatuses,
   type ChannelMessageActionAdapter,
   type OpenClawConfig,
-} from "../runtime-api.js";
+} from "openclaw/plugin-sdk/telegram-core";
 import {
   listTelegramAccountIds,
   resolveTelegramAccount,
   type ResolvedTelegramAccount,
 } from "./accounts.js";
 import { resolveTelegramAutoThreadId } from "./action-threading.js";
-import { buildTelegramExecApprovalButtons } from "./approval-buttons.js";
 import * as auditModule from "./audit.js";
 import { buildTelegramGroupPeerId } from "./bot/helpers.js";
 import {
@@ -48,10 +47,9 @@ import {
   listTelegramDirectoryPeersFromConfig,
 } from "./directory-config.js";
 import {
-  buildTelegramExecApprovalPendingPayload,
-  shouldSuppressTelegramExecApprovalForwardingFallback,
-} from "./exec-approval-forwarding.js";
-import {
+  getTelegramExecApprovalApprovers,
+  isTelegramExecApprovalApprover,
+  isTelegramExecApprovalAuthorizedSender,
   isTelegramExecApprovalClientEnabled,
   resolveTelegramExecApprovalTarget,
 } from "./exec-approvals.js";
@@ -322,15 +320,24 @@ function resolveTelegramOutboundSessionRoute(params: {
   };
 }
 
-function hasTelegramExecApprovalDmRoute(cfg: OpenClawConfig): boolean {
-  return listTelegramAccountIds(cfg).some((accountId) => {
-    if (!isTelegramExecApprovalClientEnabled({ cfg, accountId })) {
-      return false;
-    }
-    const target = resolveTelegramExecApprovalTarget({ cfg, accountId });
-    return target === "dm" || target === "both";
-  });
-}
+const telegramNativeApprovalAdapter = createApproverRestrictedNativeApprovalAdapter({
+  channel: "telegram",
+  channelLabel: "Telegram",
+  listAccountIds: listTelegramAccountIds,
+  hasApprovers: ({ cfg, accountId }) =>
+    getTelegramExecApprovalApprovers({ cfg, accountId }).length > 0,
+  isExecAuthorizedSender: ({ cfg, accountId, senderId }) =>
+    isTelegramExecApprovalAuthorizedSender({ cfg, accountId, senderId }),
+  isPluginAuthorizedSender: ({ cfg, accountId, senderId }) =>
+    isTelegramExecApprovalApprover({ cfg, accountId, senderId }),
+  isNativeDeliveryEnabled: ({ cfg, accountId }) =>
+    isTelegramExecApprovalClientEnabled({ cfg, accountId }),
+  resolveNativeDeliveryMode: ({ cfg, accountId }) =>
+    resolveTelegramExecApprovalTarget({ cfg, accountId }),
+  requireMatchingTurnSourceChannel: true,
+  resolveSuppressionAccountId: ({ target, request }) =>
+    target.accountId?.trim() || request.request.turnSourceAccountId?.trim() || undefined,
+});
 
 const telegramMessageActions: ChannelMessageActionAdapter = {
   describeMessageTool: (ctx) =>
@@ -457,61 +464,30 @@ export const telegramPlugin = createChatChannelPlugin({
       },
     },
     execApprovals: {
-      getInitiatingSurfaceState: ({ cfg, accountId }) =>
-        isTelegramExecApprovalClientEnabled({ cfg, accountId })
-          ? { kind: "enabled" }
-          : { kind: "disabled" },
-      hasConfiguredDmRoute: ({ cfg }) => hasTelegramExecApprovalDmRoute(cfg),
-      shouldSuppressForwardingFallback: (params) =>
-        shouldSuppressTelegramExecApprovalForwardingFallback(params),
-      buildPendingPayload: ({ request, nowMs }) =>
-        buildTelegramExecApprovalPendingPayload({ request, nowMs }),
-      beforeDeliverPending: async ({ cfg, target, payload }) => {
-        const hasExecApprovalData =
-          payload.channelData &&
-          typeof payload.channelData === "object" &&
-          !Array.isArray(payload.channelData) &&
-          payload.channelData.execApproval;
-        if (!hasExecApprovalData) {
-          return;
-        }
-        const threadId =
-          typeof target.threadId === "number"
-            ? target.threadId
-            : typeof target.threadId === "string"
-              ? Number.parseInt(target.threadId, 10)
-              : undefined;
-        await sendTypingTelegram(target.to, {
-          cfg,
-          accountId: target.accountId ?? undefined,
-          ...(Number.isFinite(threadId) ? { messageThreadId: threadId } : {}),
-        }).catch(() => {});
-      },
-      buildPluginPendingPayload: ({ request, nowMs }) => {
-        const text = buildPluginApprovalRequestMessage(request, nowMs);
-        const buttons = buildTelegramExecApprovalButtons(request.id);
-        const execApproval = {
-          approvalId: request.id,
-          approvalSlug: request.id,
-          allowedDecisions: ["allow-once", "allow-always", "deny"] as const,
-        };
-        if (!buttons) {
-          return {
-            text,
-            channelData: {
-              execApproval,
-            },
-          };
-        }
-        return {
-          text,
-          channelData: {
-            execApproval,
-            telegram: {
-              buttons,
-            },
-          },
-        };
+      auth: telegramNativeApprovalAdapter.auth,
+      delivery: {
+        ...telegramNativeApprovalAdapter.delivery,
+        beforeDeliverPending: async ({ cfg, target, payload }) => {
+          const hasExecApprovalData =
+            payload.channelData &&
+            typeof payload.channelData === "object" &&
+            !Array.isArray(payload.channelData) &&
+            payload.channelData.execApproval;
+          if (!hasExecApprovalData) {
+            return;
+          }
+          const threadId =
+            typeof target.threadId === "number"
+              ? target.threadId
+              : typeof target.threadId === "string"
+                ? Number.parseInt(target.threadId, 10)
+                : undefined;
+          await sendTypingTelegram(target.to, {
+            cfg,
+            accountId: target.accountId ?? undefined,
+            ...(Number.isFinite(threadId) ? { messageThreadId: threadId } : {}),
+          }).catch(() => {});
+        },
       },
     },
     directory: createChannelDirectoryAdapter({

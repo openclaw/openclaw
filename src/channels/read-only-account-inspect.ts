@@ -3,7 +3,7 @@ import type { ChannelId } from "./plugins/types.js";
 
 type DiscordInspectModule = typeof import("./read-only-account-inspect.discord.runtime.js");
 type SlackInspectModule = typeof import("./read-only-account-inspect.slack.runtime.js");
-type TelegramInspectModule = typeof import("./read-only-account-inspect.telegram.runtime.js");
+type TelegramInspectModule = typeof import("./read-only-account-inspect.telegram.js");
 
 let discordInspectModulePromise: Promise<DiscordInspectModule> | undefined;
 let slackInspectModulePromise: Promise<SlackInspectModule> | undefined;
@@ -20,7 +20,7 @@ function loadSlackInspectModule() {
 }
 
 function loadTelegramInspectModule() {
-  telegramInspectModulePromise ??= import("./read-only-account-inspect.telegram.runtime.js");
+  telegramInspectModulePromise ??= import("./read-only-account-inspect.telegram.js");
   return telegramInspectModulePromise;
 }
 

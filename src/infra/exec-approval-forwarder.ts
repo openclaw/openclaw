@@ -7,6 +7,10 @@ import type {
   ExecApprovalForwardTarget,
 } from "../config/types.approvals.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  buildApprovalPendingReplyPayload,
+  buildPluginApprovalPendingReplyPayload,
+} from "../plugin-sdk/approval-renderers.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { compileConfigRegex } from "../security/config-regex.js";
 import { testRegexWithBoundedInput } from "../security/safe-regex.js";
@@ -16,6 +20,7 @@ import {
   type DeliverableMessageChannel,
 } from "../utils/message-channel.js";
 import { resolveExecApprovalCommandDisplay } from "./exec-approval-command-display.js";
+import { formatExecApprovalExpiresIn } from "./exec-approval-reply.js";
 import { resolveExecApprovalSessionTarget } from "./exec-approval-session-target.js";
 import type { ExecApprovalRequest, ExecApprovalResolved } from "./exec-approvals.js";
 import { deliverOutboundPayloads } from "./outbound/deliver.js";
@@ -126,7 +131,7 @@ function shouldSkipForwardingFallback(params: {
   }
   const adapter = getChannelPlugin(channel)?.execApprovals;
   return (
-    adapter?.shouldSuppressForwardingFallback?.({
+    adapter?.delivery?.shouldSuppressForwardingFallback?.({
       cfg: params.cfg,
       target: params.target,
       request: params.request,
@@ -178,8 +183,7 @@ function buildRequestMessage(request: ExecApprovalRequest, nowMs: number) {
   if (request.request.ask) {
     lines.push(`Ask: ${request.request.ask}`);
   }
-  const expiresIn = Math.max(0, Math.round((request.expiresAtMs - nowMs) / 1000));
-  lines.push(`Expires in: ${expiresIn}s`);
+  lines.push(`Expires in: ${formatExecApprovalExpiresIn(request.expiresAtMs, nowMs)}`);
   lines.push("Mode: foreground (interactive approvals available in this chat).");
   lines.push(
     "Background mode note: non-interactive runs cannot wait for chat approvals; use pre-approved policy (allow-always or ask=off).",
@@ -274,7 +278,7 @@ function buildRequestPayloadForTarget(
 ): ReplyPayload {
   const channel = normalizeMessageChannel(target.channel) ?? target.channel;
   const pluginPayload = channel
-    ? getChannelPlugin(channel)?.execApprovals?.buildPendingPayload?.({
+    ? getChannelPlugin(channel)?.execApprovals?.render?.exec?.buildPendingPayload?.({
         cfg,
         request,
         target,
@@ -284,7 +288,11 @@ function buildRequestPayloadForTarget(
   if (pluginPayload) {
     return pluginPayload;
   }
-  return { text: buildRequestMessage(request, nowMsValue) };
+  return buildApprovalPendingReplyPayload({
+    approvalId: request.id,
+    approvalSlug: request.id.slice(0, 8),
+    text: buildRequestMessage(request, nowMsValue),
+  });
 }
 
 function buildResolvedPayloadForTarget(
@@ -294,7 +302,7 @@ function buildResolvedPayloadForTarget(
 ): ReplyPayload {
   const channel = normalizeMessageChannel(target.channel) ?? target.channel;
   const pluginPayload = channel
-    ? getChannelPlugin(channel)?.execApprovals?.buildResolvedPayload?.({
+    ? getChannelPlugin(channel)?.execApprovals?.render?.exec?.buildResolvedPayload?.({
         cfg,
         resolved,
         target,
@@ -409,7 +417,7 @@ export function createExecApprovalForwarder(
         if (!channel) {
           return;
         }
-        await getChannelPlugin(channel)?.execApprovals?.beforeDeliverPending?.({
+        await getChannelPlugin(channel)?.execApprovals?.delivery?.beforeDeliverPending?.({
           cfg,
           target,
           payload,
@@ -556,21 +564,28 @@ export function createExecApprovalForwarder(
       buildPayload: (target) => {
         const channel = normalizeMessageChannel(target.channel) ?? target.channel;
         const adapterPayload = channel
-          ? getChannelPlugin(channel)?.execApprovals?.buildPluginPendingPayload?.({
+          ? getChannelPlugin(channel)?.execApprovals?.render?.plugin?.buildPendingPayload?.({
               cfg,
               request,
               target,
               nowMs: nowMs(),
             })
           : null;
-        return adapterPayload ?? { text: buildPluginApprovalRequestMessage(request, nowMs()) };
+        return (
+          adapterPayload ??
+          buildPluginApprovalPendingReplyPayload({
+            request,
+            nowMs: nowMs(),
+            text: buildPluginApprovalRequestMessage(request, nowMs()),
+          })
+        );
       },
       beforeDeliver: async (target, payload) => {
         const channel = normalizeMessageChannel(target.channel) ?? target.channel;
         if (!channel) {
           return;
         }
-        await getChannelPlugin(channel)?.execApprovals?.beforeDeliverPending?.({
+        await getChannelPlugin(channel)?.execApprovals?.delivery?.beforeDeliverPending?.({
           cfg,
           target,
           payload,
@@ -624,7 +639,7 @@ export function createExecApprovalForwarder(
       buildPayload: (target) => {
         const channel = normalizeMessageChannel(target.channel) ?? target.channel;
         const adapterPayload = channel
-          ? getChannelPlugin(channel)?.execApprovals?.buildPluginResolvedPayload?.({
+          ? getChannelPlugin(channel)?.execApprovals?.render?.plugin?.buildResolvedPayload?.({
               cfg,
               resolved,
               target,

@@ -135,6 +135,87 @@ describe("applyPluginAutoEnable", () => {
     expect(result.config.plugins?.allow).toBeUndefined();
   });
 
+  it("auto-enables browser when browser config exists under a restrictive plugins.allow", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        browser: {
+          defaultProfile: "openclaw",
+        },
+        plugins: {
+          allow: ["telegram"],
+        },
+      },
+      env: {},
+    });
+
+    expect(result.config.plugins?.allow).toEqual(["telegram", "browser"]);
+    expect(result.config.plugins?.entries?.browser?.enabled).toBe(true);
+    expect(result.changes).toContain("browser configured, enabled automatically.");
+  });
+
+  it("auto-enables browser when tools.alsoAllow references browser", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        tools: {
+          alsoAllow: ["browser"],
+        },
+        plugins: {
+          allow: ["telegram"],
+        },
+      },
+      env: {},
+    });
+
+    expect(result.config.plugins?.allow).toEqual(["telegram", "browser"]);
+    expect(result.config.plugins?.entries?.browser?.enabled).toBe(true);
+    expect(result.changes).toContain("browser tool referenced, enabled automatically.");
+  });
+
+  it("keeps restrictive plugins.allow unchanged when browser is not referenced", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        plugins: {
+          allow: ["telegram"],
+        },
+      },
+      env: {},
+    });
+
+    expect(result.config.plugins?.allow).toEqual(["telegram"]);
+    expect(result.config.plugins?.entries?.browser).toBeUndefined();
+    expect(result.changes).toEqual([]);
+  });
+
+  it("skips auto-enable work for configs without channel or plugin-owned surfaces", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        gateway: {
+          auth: {
+            mode: "token",
+            token: "ok",
+          },
+        },
+        agents: {
+          list: [{ id: "pi" }],
+        },
+      },
+      env: {},
+    });
+
+    expect(result.config).toEqual({
+      gateway: {
+        auth: {
+          mode: "token",
+          token: "ok",
+        },
+      },
+      agents: {
+        list: [{ id: "pi" }],
+      },
+    });
+    expect(result.changes).toEqual([]);
+  });
+
   it("ignores channels.modelByChannel for plugin auto-enable", () => {
     const result = applyPluginAutoEnable({
       config: {

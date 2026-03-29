@@ -11,6 +11,37 @@ function normalizeApproverId(value: string | number): string {
   return String(value).trim();
 }
 
+function normalizeTelegramDirectApproverId(value: string | number): string | undefined {
+  const normalized = normalizeApproverId(value);
+  const chatId = normalizeTelegramChatId(normalized);
+  if (!chatId || chatId.startsWith("-")) {
+    return undefined;
+  }
+  return chatId;
+}
+
+function collectTelegramInferredApprovers(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}): string[] {
+  const account = resolveTelegramAccount(params).config;
+  const inferred = new Set<string>();
+  for (const entry of account.allowFrom ?? []) {
+    const approverId = normalizeTelegramDirectApproverId(entry);
+    if (approverId) {
+      inferred.add(approverId);
+    }
+  }
+  const defaultTo = account.defaultTo;
+  if (defaultTo !== undefined && defaultTo !== null) {
+    const approverId = normalizeTelegramDirectApproverId(defaultTo);
+    if (approverId) {
+      inferred.add(approverId);
+    }
+  }
+  return [...inferred];
+}
+
 export function resolveTelegramExecApprovalConfig(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
@@ -22,9 +53,13 @@ export function getTelegramExecApprovalApprovers(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): string[] {
-  return (resolveTelegramExecApprovalConfig(params)?.approvers ?? [])
-    .map(normalizeApproverId)
-    .filter(Boolean);
+  const explicit = (resolveTelegramExecApprovalConfig(params)?.approvers ?? [])
+    .map(normalizeTelegramDirectApproverId)
+    .filter((entry): entry is string => Boolean(entry));
+  if (explicit.length > 0) {
+    return [...new Set(explicit)];
+  }
+  return collectTelegramInferredApprovers(params);
 }
 
 export function isTelegramExecApprovalClientEnabled(params: {
@@ -91,10 +126,7 @@ export function isTelegramExecApprovalAuthorizedSender(params: {
   accountId?: string | null;
   senderId?: string | null;
 }): boolean {
-  return (
-    (isTelegramExecApprovalClientEnabled(params) && isTelegramExecApprovalApprover(params)) ||
-    isTelegramExecApprovalTargetRecipient(params)
-  );
+  return isTelegramExecApprovalApprover(params) || isTelegramExecApprovalTargetRecipient(params);
 }
 
 export function resolveTelegramExecApprovalTarget(params: {

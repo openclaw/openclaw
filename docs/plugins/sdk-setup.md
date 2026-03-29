@@ -43,19 +43,30 @@ your plugin provides:
 }
 ```
 
-**Provider plugin:**
+**Provider plugin / ClawHub publish baseline:**
 
-```json
+```json openclaw-clawhub-package.json
 {
-  "name": "@myorg/openclaw-my-provider",
+  "name": "@myorg/openclaw-my-plugin",
   "version": "1.0.0",
   "type": "module",
   "openclaw": {
     "extensions": ["./index.ts"],
-    "providers": ["my-provider"]
+    "compat": {
+      "pluginApi": ">=2026.3.24-beta.2",
+      "minGatewayVersion": "2026.3.24-beta.2"
+    },
+    "build": {
+      "openclawVersion": "2026.3.24-beta.2",
+      "pluginSdkVersion": "2026.3.24-beta.2"
+    }
   }
 }
 ```
+
+If you publish the plugin externally on ClawHub, those `compat` and `build`
+fields are required. The canonical publish snippets live in
+`docs/snippets/plugin-publish/`.
 
 ### `openclaw` fields
 
@@ -146,6 +157,18 @@ Even plugins with no config must ship a schema. An empty schema is valid:
 ```
 
 See [Plugin Manifest](/plugins/manifest) for the full schema reference.
+
+## ClawHub publishing
+
+For plugin packages, use the package-specific ClawHub command:
+
+```bash
+clawhub package publish your-org/your-plugin --dry-run
+clawhub package publish your-org/your-plugin
+```
+
+The legacy skill-only publish alias is for skills. Plugin packages should
+always use `clawhub package publish`.
 
 ## Setup entry
 

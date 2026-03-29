@@ -13,9 +13,11 @@ import {
   type ConfigFileSnapshot,
   type OpenClawConfig,
   applyConfigOverrides,
+  getRuntimeConfig,
   isNixMode,
   loadConfig,
   migrateLegacyConfig,
+  registerConfigWriteListener,
   readConfigFileSnapshot,
   writeConfigFile,
 } from "../config/config.js";
@@ -73,6 +75,7 @@ import {
 } from "../secrets/runtime.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import { startTaskRegistryMaintenance } from "../tasks/task-registry.maintenance.js";
 import { runSetupWizard } from "../wizard/setup.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
@@ -516,7 +519,7 @@ export async function startGatewayServer(
   }
   const diagnosticsEnabled = isDiagnosticsEnabled(cfgAtStart);
   if (diagnosticsEnabled) {
-    startDiagnosticHeartbeat();
+    startDiagnosticHeartbeat(undefined, { getConfig: getRuntimeConfig });
   }
   setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(cfgAtStart) });
   setPreRestartDeferralCheck(
@@ -880,6 +883,7 @@ export async function startGatewayServer(
         });
 
     if (!minimalTestGateway) {
+      startTaskRegistryMaintenance();
       ({ tickInterval, healthInterval, dedupeCleanup, mediaCleanup } =
         startGatewayMaintenanceTimers({
           broadcast,
@@ -1407,6 +1411,7 @@ export async function startGatewayServer(
           return startGatewayConfigReloader({
             initialConfig: cfgAtStart,
             readSnapshot: readConfigFileSnapshot,
+            subscribeToWrites: registerConfigWriteListener,
             onHotReload: async (plan, nextConfig) => {
               const previousSnapshot = getActiveSecretsRuntimeSnapshot();
               const prepared = await activateRuntimeSecrets(nextConfig, {

@@ -35,12 +35,16 @@ export {
   normalizeIMessageMessagingTarget,
 } from "../channels/plugins/normalize/imessage.js";
 export {
+  createAllowedChatSenderMatcher,
   parseChatAllowTargetPrefixes,
   parseChatTargetPrefixesOrThrow,
   resolveServicePrefixedAllowTarget,
+  resolveServicePrefixedChatTarget,
+  resolveServicePrefixedOrChatAllowTarget,
   resolveServicePrefixedTarget,
+  type ChatSenderAllowParams,
   type ParsedChatTarget,
-} from "./imessage-targets.js";
+} from "./channel-targets.js";
 
 export {
   resolveAllowlistProviderRuntimeGroupPolicy,
@@ -70,6 +74,12 @@ type IMessageFacadeModule = {
     accountId?: string;
     cfg: OpenClawConfig;
   }) => IMessageConversationBindingManager;
+  matchIMessageAcpConversation: (params: {
+    bindingConversationId: string;
+    conversationId: string;
+  }) => { conversationId: string; matchPriority: number } | null;
+  normalizeIMessageAcpConversationId: (conversationId: string) => { conversationId: string } | null;
+  resolveIMessageConversationIdFromTarget: (target: string) => string | undefined;
 };
 
 function loadIMessageFacadeModule(): IMessageFacadeModule {
@@ -84,4 +94,21 @@ export function createIMessageConversationBindingManager(params: {
   cfg: OpenClawConfig;
 }): IMessageConversationBindingManager {
   return loadIMessageFacadeModule().createIMessageConversationBindingManager(params);
+}
+
+export function normalizeIMessageAcpConversationId(
+  conversationId: string,
+): { conversationId: string } | null {
+  return loadIMessageFacadeModule().normalizeIMessageAcpConversationId(conversationId);
+}
+
+export function matchIMessageAcpConversation(params: {
+  bindingConversationId: string;
+  conversationId: string;
+}): { conversationId: string; matchPriority: number } | null {
+  return loadIMessageFacadeModule().matchIMessageAcpConversation(params);
+}
+
+export function resolveIMessageConversationIdFromTarget(target: string): string | undefined {
+  return loadIMessageFacadeModule().resolveIMessageConversationIdFromTarget(target);
 }

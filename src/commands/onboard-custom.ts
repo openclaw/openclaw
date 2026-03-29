@@ -4,7 +4,7 @@ import { buildModelAliasIndex, modelKey } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import { isSecretRef, type SecretInput } from "../config/types.secrets.js";
-import { OLLAMA_DEFAULT_BASE_URL } from "../plugin-sdk/provider-setup.js";
+import { OLLAMA_DEFAULT_BASE_URL } from "../plugin-sdk/ollama-surface.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { fetchWithTimeout } from "../utils/fetch-timeout.js";
 import {
