@@ -85,5 +85,9 @@ export function shouldShowInsecureContextHint(
     return INSECURE_CONTEXT_CODES.has(lastErrorCode);
   }
   const lower = lastError.toLowerCase();
-  return lower.includes("secure context") || lower.includes("device identity required");
+  return (
+    lower.includes("secure context") ||
+    lower.includes("device identity required") ||
+    lower.includes("requires device identity")
+  );
 }

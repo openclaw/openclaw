@@ -1,4 +1,7 @@
-import { ConnectErrorDetailCodes } from "../../../src/gateway/protocol/connect-error-details.js";
+import {
+  ConnectErrorDetailCodes,
+  CONTROL_UI_DEVICE_IDENTITY_INSECURE_CONTEXT_MESSAGE,
+} from "../../../src/gateway/protocol/connect-error-details.js";
 import { resolveGatewayErrorDetailCode } from "./gateway.ts";
 
 type ErrorWithMessageAndDetails = {
@@ -30,7 +33,7 @@ function formatErrorFromMessageAndDetails(error: ErrorWithMessageAndDetails): st
     case ConnectErrorDetailCodes.PAIRING_REQUIRED:
       return "gateway pairing required";
     case ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED:
-      return "device identity required (use HTTPS/localhost or allow insecure auth explicitly)";
+      return CONTROL_UI_DEVICE_IDENTITY_INSECURE_CONTEXT_MESSAGE;
     case ConnectErrorDetailCodes.CONTROL_UI_ORIGIN_NOT_ALLOWED:
       return "origin not allowed (open the Control UI from the gateway host or allow it in gateway.controlUi.allowedOrigins)";
     case ConnectErrorDetailCodes.AUTH_TOKEN_MISSING:
