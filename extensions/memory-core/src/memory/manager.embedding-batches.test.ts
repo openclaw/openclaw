@@ -124,6 +124,28 @@ describe("memory embedding batches", () => {
     expect(calls).toBe(3);
   }, 10000);
 
+  it("retries embeddings on transient fetch failures with network causes", async () => {
+    const memoryDir = fx.getMemoryDir();
+    const managerSmall = fx.getManagerSmall();
+    const line = "f".repeat(120);
+    const content = Array.from({ length: 4 }, () => line).join("\n");
+    await fs.writeFile(path.join(memoryDir, "2026-01-09.md"), content);
+
+    let calls = 0;
+    fx.embedBatch.mockImplementation(async (texts: string[]) => {
+      calls += 1;
+      if (calls === 1) {
+        const cause = Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
+        throw Object.assign(new TypeError("fetch failed"), { cause });
+      }
+      return texts.map(() => [0, 1, 0]);
+    });
+
+    await expectSyncWithFastTimeouts(managerSmall);
+
+    expect(calls).toBe(2);
+  }, 10000);
+
   it("retries embeddings on too-many-tokens-per-day rate limits", async () => {
     const memoryDir = fx.getMemoryDir();
     const managerSmall = fx.getManagerSmall();

@@ -1,5 +1,11 @@
 import fs from "node:fs/promises";
 import {
+  collectErrorGraphCandidates,
+  extractErrorCode,
+  formatErrorMessage,
+  readErrorName,
+} from "openclaw/plugin-sdk/error-runtime";
+import {
   enforceEmbeddingMaxInputTokens,
   estimateStructuredEmbeddingInputBytes,
   estimateUtf8Bytes,
@@ -34,10 +40,127 @@ const EMBEDDING_QUERY_TIMEOUT_LOCAL_MS = 5 * 60_000;
 const EMBEDDING_BATCH_TIMEOUT_REMOTE_MS = 2 * 60_000;
 const EMBEDDING_BATCH_TIMEOUT_LOCAL_MS = 10 * 60_000;
 
+const TRANSIENT_NETWORK_CODES = new Set([
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "ENOTFOUND",
+  "ETIMEDOUT",
+  "ESOCKETTIMEDOUT",
+  "ECONNABORTED",
+  "EPIPE",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "EAI_AGAIN",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_DNS_RESOLVE_FAILED",
+  "UND_ERR_CONNECT",
+  "UND_ERR_SOCKET",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_BODY_TIMEOUT",
+  "EPROTO",
+  "ERR_SSL_WRONG_VERSION_NUMBER",
+  "ERR_SSL_PROTOCOL_RETURNED_AN_ERROR",
+]);
+
+const TRANSIENT_NETWORK_ERROR_NAMES = new Set([
+  "AbortError",
+  "ConnectTimeoutError",
+  "HeadersTimeoutError",
+  "BodyTimeoutError",
+  "TimeoutError",
+]);
+
+const TRANSIENT_NETWORK_MESSAGE_CODE_RE =
+  /\b(ECONNRESET|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|ESOCKETTIMEDOUT|ECONNABORTED|EPIPE|EHOSTUNREACH|ENETUNREACH|EAI_AGAIN|EPROTO|UND_ERR_CONNECT_TIMEOUT|UND_ERR_DNS_RESOLVE_FAILED|UND_ERR_CONNECT|UND_ERR_SOCKET|UND_ERR_HEADERS_TIMEOUT|UND_ERR_BODY_TIMEOUT)\b/i;
+
+const TRANSIENT_NETWORK_MESSAGE_SNIPPETS = [
+  "getaddrinfo",
+  "socket hang up",
+  "client network socket disconnected before secure tls connection was established",
+  "network error",
+  "network is unreachable",
+  "temporary failure in name resolution",
+  "upstream connect error",
+  "disconnect/reset before headers",
+  "tlsv1 alert",
+  "ssl routines",
+  "packet length too long",
+  "write eproto",
+];
+
 const vectorToBlob = (embedding: number[]): Buffer =>
   Buffer.from(new Float32Array(embedding).buffer);
 
 const log = createSubsystemLogger("memory");
+
+function isWrappedFetchFailedMessage(message: string): boolean {
+  if (message === "fetch failed") {
+    return true;
+  }
+  return /:\s*fetch failed$/.test(message);
+}
+
+function extractErrorCodeOrErrno(err: unknown): string | undefined {
+  const code = extractErrorCode(err);
+  if (code) {
+    return code.trim().toUpperCase();
+  }
+  if (!err || typeof err !== "object") {
+    return undefined;
+  }
+  const errno = (err as { errno?: unknown }).errno;
+  if (typeof errno === "string" && errno.trim()) {
+    return errno.trim().toUpperCase();
+  }
+  if (typeof errno === "number" && Number.isFinite(errno)) {
+    return String(errno);
+  }
+  return undefined;
+}
+
+function isTransientEmbeddingNetworkError(err: unknown): boolean {
+  if (!err) {
+    return false;
+  }
+  for (const candidate of collectErrorGraphCandidates(err, (current) => {
+    const nested: Array<unknown> = [
+      current.cause,
+      current.reason,
+      current.original,
+      current.error,
+      current.data,
+    ];
+    if (Array.isArray(current.errors)) {
+      nested.push(...current.errors);
+    }
+    return nested;
+  })) {
+    const code = extractErrorCodeOrErrno(candidate);
+    if (code && TRANSIENT_NETWORK_CODES.has(code)) {
+      return true;
+    }
+
+    const name = readErrorName(candidate);
+    if (name && TRANSIENT_NETWORK_ERROR_NAMES.has(name)) {
+      return true;
+    }
+
+    const message = formatErrorMessage(candidate).trim().toLowerCase();
+    if (!message) {
+      continue;
+    }
+    if (TRANSIENT_NETWORK_MESSAGE_CODE_RE.test(message)) {
+      return true;
+    }
+    if (isWrappedFetchFailedMessage(message)) {
+      return true;
+    }
+    if (TRANSIENT_NETWORK_MESSAGE_SNIPPETS.some((snippet) => message.includes(snippet))) {
+      return true;
+    }
+  }
+  return false;
+}
 
 export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   protected abstract batchFailureCount: number;
@@ -330,8 +453,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           `memory embeddings batch timed out after ${Math.round(timeoutMs / 1000)}s`,
         );
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        if (!this.isRetryableEmbeddingError(message) || attempt >= EMBEDDING_RETRY_MAX_ATTEMPTS) {
+        if (!this.isRetryableEmbeddingError(err) || attempt >= EMBEDDING_RETRY_MAX_ATTEMPTS) {
           throw err;
         }
         await this.waitForEmbeddingRetry(delayMs, "retrying");
@@ -364,8 +486,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           `memory embeddings batch timed out after ${Math.round(timeoutMs / 1000)}s`,
         );
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        if (!this.isRetryableEmbeddingError(message) || attempt >= EMBEDDING_RETRY_MAX_ATTEMPTS) {
+        if (!this.isRetryableEmbeddingError(err) || attempt >= EMBEDDING_RETRY_MAX_ATTEMPTS) {
           throw err;
         }
         await this.waitForEmbeddingRetry(delayMs, "retrying structured batch");
@@ -380,11 +501,15 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       EMBEDDING_RETRY_MAX_DELAY_MS,
       Math.round(delayMs * (1 + Math.random() * 0.2)),
     );
-    log.warn(`memory embeddings rate limited; ${action} in ${waitMs}ms`);
+    log.warn(`memory embeddings transient failure; ${action} in ${waitMs}ms`);
     await new Promise((resolve) => setTimeout(resolve, waitMs));
   }
 
-  private isRetryableEmbeddingError(message: string): boolean {
+  private isRetryableEmbeddingError(err: unknown): boolean {
+    if (isTransientEmbeddingNetworkError(err)) {
+      return true;
+    }
+    const message = formatErrorMessage(err);
     return /(rate[_ ]limit|too many requests|429|resource has been exhausted|5\d\d|cloudflare|tokens per day)/i.test(
       message,
     );

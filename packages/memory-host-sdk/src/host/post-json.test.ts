@@ -56,4 +56,26 @@ describe("postJson", () => {
       status: 502,
     });
   });
+
+  it("wraps transport errors with prefix and cause details", async () => {
+    const cause = Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
+    const fetchError = Object.assign(new TypeError("fetch failed"), { cause });
+    remoteHttpMock.mockRejectedValueOnce(fetchError);
+
+    try {
+      await postJson({
+        url: "https://memory.example/v1/post",
+        headers: {},
+        body: {},
+        errorPrefix: "post failed",
+        parse: () => ({}),
+      });
+      throw new Error("expected postJson to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(Error);
+      expect((err as Error).message).toContain("post failed: fetch failed");
+      expect((err as Error).message).toContain("cause: ECONNRESET socket hang up");
+      expect((err as Error & { cause?: unknown }).cause).toBe(fetchError);
+    }
+  });
 });
