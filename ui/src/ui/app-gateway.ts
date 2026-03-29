@@ -355,6 +355,33 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
     return;
   }
 
+  if (evt.event === "session.message") {
+    const payload = evt.payload as
+      | {
+          sessionKey?: string;
+          message?: { role?: string; content?: unknown; senderLabel?: string; text?: string };
+          messageSeq?: number;
+        }
+      | undefined;
+    if (payload?.sessionKey === host.sessionKey && payload.message?.role === "user") {
+      const { message } = payload;
+      const content =
+        message.content ??
+        (typeof message.text === "string" ? [{ type: "text", text: message.text }] : []);
+      const chatState = host as unknown as { chatMessages: unknown[] };
+      chatState.chatMessages = [
+        ...chatState.chatMessages,
+        {
+          role: "user",
+          content,
+          senderLabel: message.senderLabel,
+          timestamp: Date.now(),
+        },
+      ];
+    }
+    return;
+  }
+
   if (evt.event === "presence") {
     const payload = evt.payload as { presence?: PresenceEntry[] } | undefined;
     if (payload?.presence && Array.isArray(payload.presence)) {

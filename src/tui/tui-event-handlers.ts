@@ -11,6 +11,7 @@ type EventHandlerChatLog = {
     options?: { partial?: boolean; isError?: boolean },
   ) => void;
   addSystem: (text: string) => void;
+  addUser: (text: string) => void;
   updateAssistant: (text: string, runId: string) => void;
   finalizeAssistant: (text: string, runId: string) => void;
   dropAssistant: (runId: string) => void;
@@ -411,5 +412,33 @@ export function createEventHandlers(context: EventHandlerContext) {
     tui.requestRender();
   };
 
-  return { handleChatEvent, handleAgentEvent, handleBtwEvent };
+  const handleSessionMessageEvent = (payload: unknown) => {
+    if (!payload || typeof payload !== "object") {
+      return;
+    }
+    const evt = payload as {
+      sessionKey?: string;
+      message?: { role?: string; content?: unknown; senderLabel?: string; text?: string };
+      messageSeq?: number;
+    };
+    syncSessionKey();
+    if (!isSameSessionKey(evt.sessionKey, state.currentSessionKey)) {
+      return;
+    }
+    if (evt.message?.role !== "user") {
+      return;
+    }
+    const text = extractTextFromMessage(evt.message);
+    if (!text) {
+      return;
+    }
+    const label =
+      typeof evt.message.senderLabel === "string" && evt.message.senderLabel
+        ? `[${evt.message.senderLabel}] `
+        : "";
+    chatLog.addUser(`${label}${text}`);
+    tui.requestRender();
+  };
+
+  return { handleChatEvent, handleAgentEvent, handleBtwEvent, handleSessionMessageEvent };
 }

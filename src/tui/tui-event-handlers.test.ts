@@ -7,6 +7,7 @@ type HandlerChatLog = {
   startTool: (...args: unknown[]) => void;
   updateToolResult: (...args: unknown[]) => void;
   addSystem: (...args: unknown[]) => void;
+  addUser: (...args: unknown[]) => void;
   updateAssistant: (...args: unknown[]) => void;
   finalizeAssistant: (...args: unknown[]) => void;
   dropAssistant: (...args: unknown[]) => void;
@@ -20,6 +21,7 @@ type MockChatLog = {
   startTool: MockFn;
   updateToolResult: MockFn;
   addSystem: MockFn;
+  addUser: MockFn;
   updateAssistant: MockFn;
   finalizeAssistant: MockFn;
   dropAssistant: MockFn;
@@ -35,6 +37,7 @@ function createMockChatLog(): MockChatLog & HandlerChatLog {
     startTool: vi.fn(),
     updateToolResult: vi.fn(),
     addSystem: vi.fn(),
+    addUser: vi.fn(),
     updateAssistant: vi.fn(),
     finalizeAssistant: vi.fn(),
     dropAssistant: vi.fn(),
@@ -649,5 +652,83 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     });
 
     expect(loadHistory).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("tui-event-handlers: handleSessionMessageEvent", () => {
+  it("appends injected user messages to chat log when sessionKey matches", () => {
+    const { state, chatLog, tui, handleSessionMessageEvent } = createHandlersHarness();
+
+    handleSessionMessageEvent({
+      sessionKey: state.currentSessionKey,
+      message: {
+        role: "user",
+        content: [{ type: "text", text: "hello from MCP" }],
+      },
+    });
+
+    expect(chatLog.addUser).toHaveBeenCalledTimes(1);
+    expect(chatLog.addUser).toHaveBeenCalledWith(expect.stringContaining("hello from MCP"));
+    expect(tui.requestRender).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores session.message events for a different session", () => {
+    const { chatLog, tui, handleSessionMessageEvent } = createHandlersHarness();
+
+    handleSessionMessageEvent({
+      sessionKey: "agent:other-agent:main",
+      message: {
+        role: "user",
+        content: [{ type: "text", text: "wrong session" }],
+      },
+    });
+
+    expect(chatLog.addUser).not.toHaveBeenCalled();
+    expect(tui.requestRender).not.toHaveBeenCalled();
+  });
+
+  it("ignores session.message events with non-user role", () => {
+    const { state, chatLog, tui, handleSessionMessageEvent } = createHandlersHarness();
+
+    handleSessionMessageEvent({
+      sessionKey: state.currentSessionKey,
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "assistant reply" }],
+      },
+    });
+
+    expect(chatLog.addUser).not.toHaveBeenCalled();
+    expect(tui.requestRender).not.toHaveBeenCalled();
+  });
+
+  it("prefixes the message with senderLabel when present", () => {
+    const { state, chatLog, handleSessionMessageEvent } = createHandlersHarness();
+
+    handleSessionMessageEvent({
+      sessionKey: state.currentSessionKey,
+      message: {
+        role: "user",
+        content: [{ type: "text", text: "injected message" }],
+        senderLabel: "mcp-client",
+      },
+    });
+
+    expect(chatLog.addUser).toHaveBeenCalledWith("[mcp-client] injected message");
+  });
+
+  it("ignores session.message with no extractable text", () => {
+    const { state, chatLog, tui, handleSessionMessageEvent } = createHandlersHarness();
+
+    handleSessionMessageEvent({
+      sessionKey: state.currentSessionKey,
+      message: {
+        role: "user",
+        content: [],
+      },
+    });
+
+    expect(chatLog.addUser).not.toHaveBeenCalled();
+    expect(tui.requestRender).not.toHaveBeenCalled();
   });
 });
