@@ -56,7 +56,7 @@ export function buildSystemdUnit({
     if (/\s/.test(environmentFile)) {
       throw new Error("Systemd EnvironmentFile path cannot contain whitespace.");
     }
-    envFileLine = `EnvironmentFile=${environmentFile}`;
+    envFileLine = `EnvironmentFile=${systemdEscapeArg(environmentFile)}`;
   }
   const envLines = renderEnvLines(environment);
   return [
