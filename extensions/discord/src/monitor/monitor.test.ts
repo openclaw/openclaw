@@ -18,7 +18,7 @@ import {
   resetDiscordComponentRuntimeMocks,
   resolvePluginConversationBindingApprovalMock,
   upsertPairingRequestMock,
-} from "../../../../test/helpers/extensions/discord-component-runtime.js";
+} from "../../../../test/helpers/plugins/discord-component-runtime.js";
 import { type DiscordComponentEntry, type DiscordModalEntry } from "../components.js";
 import type { DiscordChannelConfigResolved } from "./allow-list.js";
 import {

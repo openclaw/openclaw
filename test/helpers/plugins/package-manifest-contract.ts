@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { isAtLeast, parseSemver } from "../../../src/infra/runtime-guard.js";
 import { parseMinHostVersionRequirement } from "../../../src/plugins/min-host-version.js";
+import { bundledPluginFile } from "../bundled-plugin-paths.js";
 
 type PackageManifest = {
   dependencies?: Record<string, string>;
@@ -25,7 +26,7 @@ function readJson<T>(relativePath: string): T {
 }
 
 export function describePackageManifestContract(params: PackageManifestContractParams) {
-  const packagePath = `extensions/${params.pluginId}/package.json`;
+  const packagePath = bundledPluginFile(params.pluginId, "package.json");
 
   describe(`${params.pluginId} package manifest contract`, () => {
     if (params.runtimeDeps?.length) {

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { withFetchPreconnect } from "../../test/helpers/extensions/fetch-mock.js";
+import { withFetchPreconnect } from "../../test/helpers/plugins/fetch-mock.js";
 import { createXSearchTool } from "./x-search.js";
 
 function installXSearchFetch(payload?: Record<string, unknown>) {
