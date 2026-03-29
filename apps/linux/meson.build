@@ -38,6 +38,7 @@ sources = [
   'src/gateway_ws.c',
   'src/gateway_client.c',
   'src/state.c',
+  'src/readiness.c',
   'src/notify.c',
   'src/diagnostics.c',
   'src/log.c'
@@ -65,7 +66,7 @@ install_data('ai.openclaw.Companion.desktop',
 
 # Local Tests
 test_state_exe = executable('test_state',
-  ['tests/test_state.c', 'src/state.c', 'src/log.c'],
+  ['tests/test_state.c', 'src/state.c', 'src/readiness.c', 'src/log.c'],
   dependencies : [glib_dep, gio_dep])
 test('state', test_state_exe)
 
@@ -73,6 +74,11 @@ test_systemd_exe = executable('test_systemd_helpers',
   ['tests/test_systemd_helpers.c', 'src/systemd_helpers.c'],
   dependencies : [glib_dep, gio_dep, gio_unix_dep])
 test('systemd_helpers', test_systemd_exe)
+
+test_readiness_exe = executable('test_readiness',
+  ['tests/test_readiness.c', 'src/readiness.c'],
+  dependencies : [glib_dep])
+test('readiness', test_readiness_exe)
 
 test_gateway_exe = executable('test_gateway',
   ['tests/test_gateway.c', 'src/gateway_config.c', 'src/gateway_protocol.c', 'src/log.c'],

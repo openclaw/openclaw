@@ -14,6 +14,7 @@
 #include <gtk/gtk.h>
 #include <adwaita.h>
 #include "state.h"
+#include "readiness.h"
 
 static GtkWidget *diag_window = NULL;
 static GtkWidget *copy_btn = NULL;
@@ -35,48 +36,55 @@ static gchar* format_age(gint64 timestamp_us) {
 }
 
 static gchar* build_diagnostics_text(void) {
-    const char *status = state_get_current_string();
+    AppState current = state_get_current();
     SystemdState *sys = state_get_systemd();
     HealthState *health = state_get_health();
 
+    ReadinessInfo ri;
+    readiness_evaluate(current, health, sys, &ri);
+
     g_autofree gchar *health_age = format_age(health->last_updated);
 
-    return g_strdup_printf(
-        "=== Systemd Service ===\n"
-        "Unit: %s\n"
-        "ActiveState: %s\n"
-        "SubState: %s\n\n"
-        "=== Gateway Client ===\n"
-        "Source: Native HTTP + WebSocket\n"
-        "Last updated: %s\n\n"
-        "Normalized Status: %s\n"
-        "Endpoint: %s:%d\n"
-        "HTTP Health: %s\n"
-        "WebSocket: %s\n"
-        "RPC OK: %s\n"
-        "Auth OK: %s\n"
-        "Auth Source: %s\n"
-        "Gateway Version: %s\n"
-        "Config Valid: %s\n"
-        "Config Issues: %d\n"
-        "Last Error: %s\n",
-        sys->unit_name ? sys->unit_name : "N/A",
-        sys->active_state ? sys->active_state : "Unknown",
-        sys->sub_state ? sys->sub_state : "Unknown",
-        health_age,
-        status,
+    GString *out = g_string_new(NULL);
+
+    /* Readiness summary */
+    g_string_append_printf(out, "=== Readiness ===\n");
+    g_string_append_printf(out, "Status: %s\n", ri.classification ? ri.classification : "Unknown");
+    if (ri.missing) {
+        g_string_append_printf(out, "Detail: %s\n", ri.missing);
+    }
+    if (ri.next_action) {
+        g_string_append_printf(out, "Next:   %s\n", ri.next_action);
+    }
+
+    /* Systemd service context */
+    g_string_append_printf(out, "\n=== Systemd Service ===\n");
+    g_string_append_printf(out, "Unit: %s\n", sys->unit_name ? sys->unit_name : "N/A");
+    g_string_append_printf(out, "ActiveState: %s\n", sys->active_state ? sys->active_state : "Unknown");
+    g_string_append_printf(out, "SubState: %s\n", sys->sub_state ? sys->sub_state : "Unknown");
+
+    /* Gateway connectivity */
+    g_string_append_printf(out, "\n=== Gateway Connectivity ===\n");
+    g_string_append_printf(out, "Source: Native HTTP + WebSocket\n");
+    g_string_append_printf(out, "Last updated: %s\n", health_age);
+    g_string_append_printf(out, "Endpoint: %s:%d\n",
         health->endpoint_host ? health->endpoint_host : "127.0.0.1",
-        health->endpoint_port,
-        health->http_ok ? "OK" : "Unreachable",
-        health->ws_connected ? "Connected" : "Disconnected",
-        health->rpc_ok ? "Yes" : "No",
-        health->auth_ok ? "Yes" : "No",
-        health->auth_source ? health->auth_source : "N/A",
-        health->gateway_version ? health->gateway_version : "N/A",
-        health->config_valid ? "Yes" : "No",
-        health->config_issues_count,
-        health->last_error ? health->last_error : "None"
-    );
+        health->endpoint_port);
+    g_string_append_printf(out, "HTTP Health: %s\n", health->http_ok ? "OK" : "Unreachable");
+    g_string_append_printf(out, "WebSocket: %s\n", health->ws_connected ? "Connected" : "Disconnected");
+    g_string_append_printf(out, "RPC OK: %s\n", health->rpc_ok ? "Yes" : "No");
+    g_string_append_printf(out, "Auth OK: %s\n", health->auth_ok ? "Yes" : "No");
+    g_string_append_printf(out, "Auth Source: %s\n", health->auth_source ? health->auth_source : "N/A");
+    g_string_append_printf(out, "Gateway Version: %s\n", health->gateway_version ? health->gateway_version : "N/A");
+
+    /* Configuration */
+    g_string_append_printf(out, "\n=== Configuration ===\n");
+    g_string_append_printf(out, "Config Valid: %s\n", health->config_valid ? "Yes" : "No");
+    g_string_append_printf(out, "Setup Detected: %s\n", health->setup_detected ? "Yes" : "No");
+    g_string_append_printf(out, "Config Issues: %d\n", health->config_issues_count);
+    g_string_append_printf(out, "Last Error: %s\n", health->last_error ? health->last_error : "None");
+
+    return g_string_free(out, FALSE);
 }
 
 static gboolean refresh_diagnostics_view(gpointer user_data) {

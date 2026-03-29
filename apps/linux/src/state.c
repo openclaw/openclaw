@@ -23,7 +23,7 @@
 #include "log.h"
 #include "state.h"
 
-static AppState current_state = STATE_NOT_INSTALLED;
+static AppState current_state = STATE_NEEDS_SETUP;
 static SystemdState current_sys_state = {0};
 static HealthState current_health_state = {0};
 static guint64 current_health_generation = 0;
@@ -36,20 +36,24 @@ static AppState compute_state(void) {
     gboolean gateway_connected = gateway_reachable && current_health_state.ws_connected;
 
     /*
-     * PRIMARY: Runtime connectivity determines operational state.
-     * If the native client has confirmed gateway reachability, this takes
-     * precedence over systemd state for the "is the gateway usable?" question.
-     * A local gateway may be started manually, by another supervisor, or by
-     * a pre-existing process outside the systemd unit the companion expects.
+     * Readiness Decision Table — evaluated top-down, first match wins.
+     *
+     * Precedence Rule:
+     *   1. Runtime reachability and protocol success decide "ready."
+     *   2. When runtime truth does not establish readiness, setup/config/install
+     *      context determines the user-visible explanation.
+     *   3. Systemd contributes lifecycle context but never by itself proves readiness.
      */
+
+    /* ── LAYER 1: RUNTIME TRUTH (rows 1-4) ── */
     if (gateway_connected) {
         if (!current_health_state.rpc_ok || !current_health_state.auth_ok) {
             return STATE_DEGRADED;
         }
         /* TODO(MVP deferral): STATE_RUNNING_WITH_WARNING is intentionally deferred.
-         * The Linux MVP does not yet populate config-audit inputs (config_audit_ok, 
-         * config_issues_count). We explicitly retain this branch to preserve the 
-         * intended UX shape, but do NOT synthesize warning-state behavior from 
+         * The Linux MVP does not yet populate config-audit inputs (config_audit_ok,
+         * config_issues_count). We explicitly retain this branch to preserve the
+         * intended UX shape, but do NOT synthesize warning-state behavior from
          * unrelated config errors just to make it live.
          */
         if (!current_health_state.config_audit_ok && current_health_state.config_issues_count > 0) {
@@ -57,47 +61,67 @@ static AppState compute_state(void) {
         }
         return STATE_RUNNING;
     }
-
     if (gateway_reachable && !gateway_connected) {
-        /* HTTP /health succeeded but WebSocket not connected — partial health */
         return STATE_DEGRADED;
     }
 
-    /*
-     * SECONDARY: When native connectivity has not been established,
-     * consult systemd for install/management context.
-     */
+    /* ── LAYER 2: INFRASTRUCTURE FAILURES (rows 5-6) ── */
     if (current_sys_state.systemd_unavailable) {
         return STATE_USER_SYSTEMD_UNAVAILABLE;
     }
-    if (!current_sys_state.installed) {
-        if (current_sys_state.system_installed_unsupported) {
-            return STATE_SYSTEM_UNSUPPORTED;
-        }
-        return STATE_NOT_INSTALLED;
+    if (!current_sys_state.installed && current_sys_state.system_installed_unsupported) {
+        return STATE_SYSTEM_UNSUPPORTED;
     }
+
+    /* ── LAYER 3: INSTALL STATUS (rows 7-8) ── */
+    if (!current_sys_state.installed) {
+        if (has_health_data && current_health_state.setup_detected) {
+            return STATE_NEEDS_GATEWAY_INSTALL;
+        }
+        return STATE_NEEDS_SETUP;
+    }
+
+    /* ── LAYER 4: SYSTEMD TRANSITIONS (rows 10-12) ── */
     if (current_sys_state.failed) return STATE_ERROR;
     if (current_sys_state.activating) return STATE_STARTING;
     if (current_sys_state.deactivating) return STATE_STOPPING;
 
+    /* ── LAYER 5: CONFIG VALIDITY (row 9) ──
+     * If config is invalid and runtime truth has not proven usability,
+     * surface config invalidity as the primary explanation.
+     * Only evaluated after health data has arrived (otherwise config_valid
+     * is its default zero-value and would falsely trigger).
+     */
+    if (has_health_data && !current_health_state.config_valid) {
+        return STATE_CONFIG_INVALID;
+    }
+
+    /* ── LAYER 6: SYSTEMD ACTIVE (rows 14-15) ── */
     if (current_sys_state.active) {
         /*
          * Startup Hydration Guard:
          * Systemd says active but native client hasn't confirmed health yet.
+         * This is a transitional state — NOT equivalent to fully ready.
          * If we have health data showing HTTP unreachable, report degraded.
-         * Otherwise assume running while the native client establishes.
+         * Otherwise report STARTING while the native client establishes.
          */
         if (has_health_data && !current_health_state.http_ok) {
             return STATE_DEGRADED;
         }
-        return STATE_RUNNING;
+        if (!has_health_data) {
+            return STATE_STARTING;
+        }
+        /* has_health_data && http_ok implies gateway_reachable, which would
+         * have been caught in Layer 1. Should not reach here. */
+        return STATE_STARTING;
     }
 
+    /* ── DEFAULT (row 13) ── */
     return STATE_STOPPED;
 }
 
 void state_init(void) {
-    current_state = STATE_NOT_INSTALLED;
+    current_state = STATE_NEEDS_SETUP;
     initial_hydration_done = FALSE;
     initial_refresh_fired = FALSE;
 
@@ -112,9 +136,11 @@ void state_init(void) {
 
 static const char* state_enum_to_string(AppState s) {
     switch (s) {
-        case STATE_NOT_INSTALLED: return "NOT_INSTALLED";
+        case STATE_NEEDS_SETUP: return "NEEDS_SETUP";
+        case STATE_NEEDS_GATEWAY_INSTALL: return "NEEDS_GATEWAY_INSTALL";
         case STATE_USER_SYSTEMD_UNAVAILABLE: return "USER_SYSTEMD_UNAVAILABLE";
         case STATE_SYSTEM_UNSUPPORTED: return "SYSTEM_UNSUPPORTED";
+        case STATE_CONFIG_INVALID: return "CONFIG_INVALID";
         case STATE_STOPPED: return "STOPPED";
         case STATE_STARTING: return "STARTING";
         case STATE_STOPPING: return "STOPPING";
@@ -216,6 +242,7 @@ void state_update_health(const HealthState *health_state) {
     current_health_state.rpc_ok = health_state->rpc_ok;
     current_health_state.auth_ok = health_state->auth_ok;
     current_health_state.config_valid = health_state->config_valid;
+    current_health_state.setup_detected = health_state->setup_detected;
     current_health_state.endpoint_port = health_state->endpoint_port;
     current_health_state.config_audit_ok = health_state->config_audit_ok;
     current_health_state.config_issues_count = health_state->config_issues_count;
@@ -234,9 +261,11 @@ AppState state_get_current(void) {
 
 const char* state_get_current_string(void) {
     switch (current_state) {
-        case STATE_NOT_INSTALLED: return "Not Installed";
+        case STATE_NEEDS_SETUP: return "Setup Required";
+        case STATE_NEEDS_GATEWAY_INSTALL: return "Gateway Not Installed";
         case STATE_USER_SYSTEMD_UNAVAILABLE: return "User Systemd Unavailable";
         case STATE_SYSTEM_UNSUPPORTED: return "System Service (Unsupported)";
+        case STATE_CONFIG_INVALID: return "Configuration Invalid";
         case STATE_STOPPED: return "Stopped";
         case STATE_STARTING: return "Starting";
         case STATE_STOPPING: return "Stopping";
