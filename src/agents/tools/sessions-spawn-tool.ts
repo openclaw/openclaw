@@ -81,6 +81,8 @@ export function createSessionsSpawnTool(
     agentTo?: string;
     agentThreadId?: string | number;
     sandboxed?: boolean;
+    /** Optional injected awaitEnabled override from resolved tool config. */
+    awaitEnabled?: boolean;
     /** Explicit agent ID override for cron/hook sessions where session key parsing may not work. */
     requesterAgentIdOverride?: string;
   } & SpawnedToolContext,
@@ -114,8 +116,10 @@ export function createSessionsSpawnTool(
         params.cleanup === "keep" || params.cleanup === "delete" ? params.cleanup : "keep";
       const sandbox = params.sandbox === "require" ? "require" : "inherit";
       const streamTo = params.streamTo === "parent" ? "parent" : undefined;
-      const cfg = loadConfig();
-      const awaitEnabled = cfg?.agents?.defaults?.subagents?.awaitEnabled === true;
+      const awaitEnabled =
+        typeof opts?.awaitEnabled === "boolean"
+          ? opts.awaitEnabled
+          : loadConfig()?.agents?.defaults?.subagents?.awaitEnabled === true;
       const waitForCompletion = params.waitForCompletion === true && awaitEnabled;
       const suppressAnnounce = params.suppressAnnounce === true && awaitEnabled;
       // Back-compat: older callers used timeoutSeconds for this tool.

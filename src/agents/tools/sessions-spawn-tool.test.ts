@@ -175,6 +175,55 @@ describe("sessions_spawn tool", () => {
     );
   });
 
+  it("honors injected awaitEnabled option when config fallback is false", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      awaitEnabled: true,
+    });
+
+    await tool.execute("call-injected-await-enabled", {
+      task: "parallel analysis",
+      waitForCompletion: true,
+      suppressAnnounce: true,
+    });
+
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: "parallel analysis",
+        waitForCompletion: true,
+        suppressAnnounce: true,
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("prefers injected awaitEnabled=false over true config fallback", async () => {
+    await loadFreshSessionsSpawnToolModuleForTest({ awaitEnabled: true });
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      awaitEnabled: false,
+    });
+
+    await tool.execute("call-injected-await-disabled", {
+      task: "parallel analysis",
+      waitForCompletion: true,
+      suppressAnnounce: true,
+    });
+
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        waitForCompletion: true,
+      }),
+      expect.any(Object),
+    );
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        suppressAnnounce: true,
+      }),
+      expect.any(Object),
+    );
+  });
+
   it("passes inherited workspaceDir from tool context, not from tool args", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",

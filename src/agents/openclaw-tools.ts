@@ -244,6 +244,7 @@ export function createOpenClawTools(
       agentGroupChannel: options?.agentGroupChannel,
       agentGroupSpace: options?.agentGroupSpace,
       sandboxed: options?.sandboxed,
+      awaitEnabled: resolvedConfig?.agents?.defaults?.subagents?.awaitEnabled === true,
       requesterAgentIdOverride: options?.requesterAgentIdOverride,
       workspaceDir: spawnWorkspaceDir,
     }),
