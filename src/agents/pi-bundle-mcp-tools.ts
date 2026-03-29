@@ -1,19 +1,16 @@
 import crypto from "node:crypto";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { logDebug, logWarn } from "../logger.js";
+import { logWarn } from "../logger.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { redactSensitiveUrlLikeString } from "../shared/net/redact-sensitive-url.js";
 import { loadEmbeddedPiMcpConfig } from "./embedded-pi-mcp.js";
-import { describeSseMcpServerLaunchConfig, resolveSseMcpServerLaunchConfig } from "./mcp-sse.js";
-import {
-  describeStdioMcpServerLaunchConfig,
-  resolveStdioMcpServerLaunchConfig,
-} from "./mcp-stdio.js";
+import { isMcpConfigRecord } from "./mcp-config-shared.js";
+import { resolveMcpTransport } from "./mcp-transport.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 type BundleMcpToolRuntime = {
@@ -25,6 +22,7 @@ type BundleMcpSession = {
   serverName: string;
   client: Client;
   transport: Transport;
+  transportType: "stdio" | "sse" | "streamable-http";
   detachStderr?: () => void;
 };
 
@@ -39,6 +37,7 @@ export type McpServerCatalog = {
 
 export type McpCatalogTool = {
   serverName: string;
+  safeServerName: string;
   toolName: string;
   title?: string;
   description?: string;
@@ -81,9 +80,94 @@ export type SessionMcpRuntimeManager = {
 };
 
 const SESSION_MCP_RUNTIME_MANAGER_KEY = Symbol.for("openclaw.sessionMcpRuntimeManager");
+const DEFAULT_CONNECTION_TIMEOUT_MS = 30_000;
+const TOOL_NAME_SAFE_RE = /[^A-Za-z0-9_-]/g;
+const TOOL_NAME_SEPARATOR = "__";
+const TOOL_NAME_MAX_PREFIX = 30;
+const TOOL_NAME_MAX_TOTAL = 64;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
+function connectWithTimeout(
+  client: Client,
+  transport: Transport,
+  timeoutMs: number,
+): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`MCP server connection timed out after ${timeoutMs}ms`)),
+      timeoutMs,
+    );
+    client.connect(transport).then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
+function redactErrorUrls(error: unknown): string {
+  return redactSensitiveUrlLikeString(String(error));
+}
+
+function sanitizeServerName(raw: string, usedNames: Set<string>): string {
+  const cleaned = raw.trim().replace(TOOL_NAME_SAFE_RE, "-");
+  const base =
+    cleaned.length > TOOL_NAME_MAX_PREFIX
+      ? cleaned.slice(0, TOOL_NAME_MAX_PREFIX)
+      : cleaned || "mcp";
+  let candidate = base;
+  let n = 2;
+  while (usedNames.has(candidate.toLowerCase())) {
+    const suffix = `-${n}`;
+    candidate = `${base.slice(0, Math.max(1, TOOL_NAME_MAX_PREFIX - suffix.length))}${suffix}`;
+    n += 1;
+  }
+  usedNames.add(candidate.toLowerCase());
+  return candidate;
+}
+
+function sanitizeToolName(raw: string): string {
+  const cleaned = raw.trim().replace(TOOL_NAME_SAFE_RE, "-");
+  return cleaned || "tool";
+}
+
+function buildSafeToolName(params: {
+  serverName: string;
+  toolName: string;
+  reservedNames: Set<string>;
+}): string {
+  const cleanedToolName = sanitizeToolName(params.toolName);
+  const maxToolChars = Math.max(
+    1,
+    TOOL_NAME_MAX_TOTAL - params.serverName.length - TOOL_NAME_SEPARATOR.length,
+  );
+  const truncatedToolName = cleanedToolName.slice(0, maxToolChars);
+  let candidateToolName = truncatedToolName || "tool";
+  let candidate = `${params.serverName}${TOOL_NAME_SEPARATOR}${candidateToolName}`;
+  let n = 2;
+  while (params.reservedNames.has(candidate.toLowerCase())) {
+    const suffix = `-${n}`;
+    candidateToolName = `${(truncatedToolName || "tool").slice(0, Math.max(1, maxToolChars - suffix.length))}${suffix}`;
+    candidate = `${params.serverName}${TOOL_NAME_SEPARATOR}${candidateToolName}`;
+    n += 1;
+  }
+  return candidate;
+}
+
+function getConnectionTimeoutMs(rawServer: unknown): number {
+  if (
+    rawServer &&
+    typeof rawServer === "object" &&
+    typeof (rawServer as { connectionTimeoutMs?: unknown }).connectionTimeoutMs === "number" &&
+    (rawServer as { connectionTimeoutMs: number }).connectionTimeoutMs > 0
+  ) {
+    return (rawServer as { connectionTimeoutMs: number }).connectionTimeoutMs;
+  }
+  return DEFAULT_CONNECTION_TIMEOUT_MS;
 }
 
 async function listAllTools(client: Client) {
@@ -145,111 +229,13 @@ function toAgentToolResult(params: {
   };
 }
 
-function attachStderrLogging(serverName: string, transport: StdioClientTransport) {
-  const stderr = transport.stderr;
-  if (!stderr || typeof stderr.on !== "function") {
-    return undefined;
-  }
-  const onData = (chunk: Buffer | string) => {
-    const message = String(chunk).trim();
-    if (!message) {
-      return;
-    }
-    for (const line of message.split(/\r?\n/)) {
-      const trimmed = line.trim();
-      if (trimmed) {
-        logDebug(`bundle-mcp:${serverName}: ${trimmed}`);
-      }
-    }
-  };
-  stderr.on("data", onData);
-  return () => {
-    if (typeof stderr.off === "function") {
-      stderr.off("data", onData);
-    } else if (typeof stderr.removeListener === "function") {
-      stderr.removeListener("data", onData);
-    }
-  };
-}
-
 async function disposeSession(session: BundleMcpSession) {
   session.detachStderr?.();
+  if (session.transportType === "streamable-http") {
+    await (session.transport as StreamableHTTPClientTransport).terminateSession().catch(() => {});
+  }
   await session.client.close().catch(() => {});
   await session.transport.close().catch(() => {});
-}
-
-function resolveTransport(
-  serverName: string,
-  rawServer: unknown,
-): {
-  transport: Transport;
-  description: string;
-  detachStderr?: () => void;
-} | null {
-  const stdioLaunch = resolveStdioMcpServerLaunchConfig(rawServer);
-  if (stdioLaunch.ok) {
-    const transport = new StdioClientTransport({
-      command: stdioLaunch.config.command,
-      args: stdioLaunch.config.args,
-      env: stdioLaunch.config.env,
-      cwd: stdioLaunch.config.cwd,
-      stderr: "pipe",
-    });
-    return {
-      transport,
-      description: describeStdioMcpServerLaunchConfig(stdioLaunch.config),
-      detachStderr: attachStderrLogging(serverName, transport),
-    };
-  }
-
-  const sseLaunch = resolveSseMcpServerLaunchConfig(rawServer, {
-    onDroppedHeader: (key) => {
-      logWarn(
-        `bundle-mcp: server "${serverName}": header "${key}" has an unsupported value type and was ignored.`,
-      );
-    },
-    onMalformedHeaders: () => {
-      logWarn(
-        `bundle-mcp: server "${serverName}": "headers" must be a JSON object; the value was ignored.`,
-      );
-    },
-  });
-  if (sseLaunch.ok) {
-    const headers: Record<string, string> = { ...sseLaunch.config.headers };
-    const hasHeaders = Object.keys(headers).length > 0;
-    const transport = new SSEClientTransport(new URL(sseLaunch.config.url), {
-      requestInit: hasHeaders ? { headers } : undefined,
-      eventSourceInit: hasHeaders
-        ? {
-            fetch: (url, init) => {
-              const sdkHeaders: Record<string, string> = {};
-              if (init?.headers) {
-                if (init.headers instanceof Headers) {
-                  init.headers.forEach((value, key) => {
-                    sdkHeaders[key] = value;
-                  });
-                } else {
-                  Object.assign(sdkHeaders, init.headers);
-                }
-              }
-              return fetch(url, {
-                ...init,
-                headers: { ...sdkHeaders, ...headers },
-              });
-            },
-          }
-        : undefined,
-    });
-    return {
-      transport,
-      description: describeSseMcpServerLaunchConfig(sseLaunch.config),
-    };
-  }
-
-  logWarn(
-    `bundle-mcp: skipped server "${serverName}" because ${stdioLaunch.reason} and ${sseLaunch.reason}.`,
-  );
-  return null;
 }
 
 function normalizeReservedToolNames(names?: Iterable<string>): Set<string> {
@@ -330,13 +316,20 @@ export function createSessionMcpRuntime(params: {
 
       const servers: Record<string, McpServerCatalog> = {};
       const tools: McpCatalogTool[] = [];
+      const usedServerNames = new Set<string>();
 
       try {
         for (const [serverName, rawServer] of Object.entries(loaded.mcpServers)) {
           failIfDisposed();
-          const resolved = resolveTransport(serverName, rawServer);
+          const resolved = resolveMcpTransport(serverName, rawServer);
           if (!resolved) {
             continue;
+          }
+          const safeServerName = sanitizeServerName(serverName, usedServerNames);
+          if (safeServerName !== serverName) {
+            logWarn(
+              `bundle-mcp: server key "${serverName}" registered as "${safeServerName}" for provider-safe tool names.`,
+            );
           }
 
           const client = new Client(
@@ -350,13 +343,14 @@ export function createSessionMcpRuntime(params: {
             serverName,
             client,
             transport: resolved.transport,
+            transportType: resolved.transportType,
             detachStderr: resolved.detachStderr,
           };
           sessions.set(serverName, session);
 
           try {
             failIfDisposed();
-            await client.connect(resolved.transport);
+            await connectWithTimeout(client, resolved.transport, getConnectionTimeoutMs(rawServer));
             failIfDisposed();
             const listedTools = await listAllTools(client);
             failIfDisposed();
@@ -372,6 +366,7 @@ export function createSessionMcpRuntime(params: {
               }
               tools.push({
                 serverName,
+                safeServerName,
                 toolName,
                 title: tool.title,
                 description: tool.description?.trim() || undefined,
@@ -382,7 +377,7 @@ export function createSessionMcpRuntime(params: {
           } catch (error) {
             if (!disposed) {
               logWarn(
-                `bundle-mcp: failed to start server "${serverName}" (${resolved.description}): ${String(error)}`,
+                `bundle-mcp: failed to start server "${serverName}" (${resolved.description}): ${redactErrorUrls(error)}`,
               );
             }
             await disposeSession(session);
@@ -439,7 +434,7 @@ export function createSessionMcpRuntime(params: {
       }
       return (await session.client.callTool({
         name: toolName,
-        arguments: isRecord(input) ? input : {},
+        arguments: isMcpConfigRecord(input) ? input : {},
       })) as CallToolResult;
     },
     async dispose() {
@@ -466,19 +461,23 @@ export async function materializeBundleMcpToolsForRun(params: {
   const tools: AnyAgentTool[] = [];
 
   for (const tool of catalog.tools) {
-    const normalizedName = tool.toolName.trim().toLowerCase();
-    if (!normalizedName) {
+    const originalName = tool.toolName.trim();
+    if (!originalName) {
       continue;
     }
-    if (reservedNames.has(normalizedName)) {
+    const safeToolName = buildSafeToolName({
+      serverName: tool.safeServerName,
+      toolName: originalName,
+      reservedNames,
+    });
+    if (safeToolName !== `${tool.safeServerName}${TOOL_NAME_SEPARATOR}${originalName}`) {
       logWarn(
-        `bundle-mcp: skipped tool "${tool.toolName}" from server "${tool.serverName}" because the name already exists.`,
+        `bundle-mcp: tool "${tool.toolName}" from server "${tool.serverName}" registered as "${safeToolName}" to keep the tool name provider-safe.`,
       );
-      continue;
     }
-    reservedNames.add(normalizedName);
+    reservedNames.add(safeToolName.toLowerCase());
     tools.push({
-      name: tool.toolName,
+      name: safeToolName,
       label: tool.title ?? tool.toolName,
       description: tool.description || tool.fallbackDescription,
       parameters: tool.inputSchema,

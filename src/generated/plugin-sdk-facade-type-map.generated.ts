@@ -223,17 +223,6 @@ export interface PluginSdkFacadeTypeMap {
     };
     types: {};
   };
-  "imessage-targets": {
-    module: typeof import("@openclaw/imessage/api.js");
-    sourceModules: {
-      source1: {
-        module: typeof import("@openclaw/imessage/api.js");
-      };
-    };
-    types: {
-      ParsedChatTarget: import("@openclaw/imessage/api.js").ParsedChatTarget;
-    };
-  };
   "image-generation-runtime": {
     module: typeof import("@openclaw/image-generation-core/runtime-api.js");
     sourceModules: {

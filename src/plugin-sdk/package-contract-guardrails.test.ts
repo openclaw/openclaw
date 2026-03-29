@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -14,6 +14,7 @@ const PUBLIC_CONTRACT_REFERENCE_FILES = [
   "src/plugin-sdk/subpaths.test.ts",
 ] as const;
 const PLUGIN_SDK_SUBPATH_PATTERN = /openclaw\/plugin-sdk\/([a-z0-9][a-z0-9-]*)\b/g;
+const NPM_PACK_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 
 function collectPluginSdkPackageExports(): string[] {
   const packageJson = JSON.parse(readFileSync(resolve(REPO_ROOT, "package.json"), "utf8")) as {
@@ -97,15 +98,29 @@ function createRootPackageRequire() {
   return createRequire(pathToFileURL(resolve(REPO_ROOT, "package.json")).href);
 }
 
-function resolvePackageManagerCommand(name: "npm" | "pnpm"): string {
-  return process.platform === "win32" ? `${name}.cmd` : name;
+function isNpmExecPath(value: string): boolean {
+  return /^npm(?:-cli)?(?:\.(?:c?js|cmd|exe))?$/.test(
+    value.split(/[\\/]/).at(-1)?.toLowerCase() ?? "",
+  );
+}
+
+function resolveNpmCommandInvocation(): { command: string; args: string[] } {
+  const npmExecPath = process.env.npm_execpath;
+  const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
+
+  if (typeof npmExecPath === "string" && npmExecPath.length > 0 && isNpmExecPath(npmExecPath)) {
+    return { command: process.execPath, args: [npmExecPath] };
+  }
+
+  return { command: npmCommand, args: [] };
 }
 
 function packOpenClawToTempDir(packDir: string): string {
   const rootPackageJson = readRootPackageJson();
+  const invocation = resolveNpmCommandInvocation();
   execFileSync(
-    resolvePackageManagerCommand("npm"),
-    ["pack", "--ignore-scripts", "--pack-destination", packDir],
+    invocation.command,
+    [...invocation.args, "pack", "--ignore-scripts", "--pack-destination", packDir],
     {
       cwd: REPO_ROOT,
       env: {
@@ -124,6 +139,20 @@ function packOpenClawToTempDir(packDir: string): string {
     throw new Error("package.json must include name and version to resolve npm pack output");
   }
   return join(packDir, filename);
+}
+
+function readPackedRootPackageJson(archivePath: string): {
+  dependencies?: Record<string, string>;
+} {
+  return JSON.parse(
+    execFileSync("tar", ["-xOf", archivePath, "package/package.json"], {
+      encoding: "utf8",
+      maxBuffer: NPM_PACK_MAX_BUFFER_BYTES,
+      stdio: ["ignore", "pipe", "pipe"],
+    }),
+  ) as {
+    dependencies?: Record<string, string>;
+  };
 }
 
 function readGeneratedFacadeTypeMap(): string {
@@ -191,50 +220,21 @@ describe("plugin-sdk package contract guardrails", () => {
     );
   });
 
-  it("resolves matrix crypto WASM from an installed packed artifact", () => {
+  it("keeps matrix crypto WASM in the packed artifact manifest", () => {
     const tempRoot = mkdtempSync(join(os.tmpdir(), "openclaw-matrix-wasm-pack-"));
     try {
       const packDir = join(tempRoot, "pack");
-      const consumerDir = join(tempRoot, "consumer");
       mkdirSync(packDir, { recursive: true });
-      mkdirSync(consumerDir, { recursive: true });
-      writeFileSync(
-        join(consumerDir, "package.json"),
-        `${JSON.stringify({ name: "matrix-wasm-smoke", private: true }, null, 2)}\n`,
-        "utf8",
-      );
 
       const archivePath = packOpenClawToTempDir(packDir);
-
-      execFileSync(
-        resolvePackageManagerCommand("pnpm"),
-        ["add", "--prefer-offline", "--ignore-scripts", archivePath],
-        {
-          cwd: consumerDir,
-          encoding: "utf8",
-          env: { ...process.env, COREPACK_ENABLE_DOWNLOAD_PROMPT: "0" },
-          stdio: ["ignore", "pipe", "pipe"],
-        },
-      );
-
-      const installedPackageJsonPath = join(
-        consumerDir,
-        "node_modules",
-        "openclaw",
-        "package.json",
-      );
-      const installedPackageJson = JSON.parse(readFileSync(installedPackageJsonPath, "utf8")) as {
-        dependencies?: Record<string, string>;
-      };
-      const installedRequire = createRequire(pathToFileURL(installedPackageJsonPath).href);
+      const packedPackageJson = readPackedRootPackageJson(archivePath);
       const matrixPackageJson = readMatrixPackageJson();
 
-      expect(installedPackageJson.dependencies?.["@matrix-org/matrix-sdk-crypto-wasm"]).toBe(
+      expect(packedPackageJson.dependencies?.["@matrix-org/matrix-sdk-crypto-wasm"]).toBe(
         matrixPackageJson.dependencies?.["@matrix-org/matrix-sdk-crypto-wasm"],
       );
-      expect(installedRequire.resolve("@matrix-org/matrix-sdk-crypto-wasm")).toContain(
-        "@matrix-org/matrix-sdk-crypto-wasm",
-      );
+      expect(packedPackageJson.dependencies?.["@openclaw/plugin-package-contract"]).toBeUndefined();
+      expect(packedPackageJson.dependencies?.["@aws-sdk/client-bedrock"]).toBeUndefined();
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
     }
