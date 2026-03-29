@@ -7,6 +7,9 @@ import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { detectBinary, resolveNodeManagerOptions } from "./onboard-helpers.js";
 
+const SKIP_SELECTION = "__skip__";
+const SELECT_ALL_SELECTION = "__all__";
+
 function summarizeInstallFailure(message: string): string | undefined {
   const cleaned = message.replace(/^Install failed(?:\s*\([^)]*\))?\s*:?\s*/i, "").trim();
   if (!cleaned) {
@@ -90,9 +93,14 @@ export async function setupSkills(
       message: "Install missing skill dependencies",
       options: [
         {
-          value: "__skip__",
+          value: SKIP_SELECTION,
           label: "Skip for now",
           hint: "Continue without installing dependencies",
+        },
+        {
+          value: SELECT_ALL_SELECTION,
+          label: "Select all",
+          hint: "Install every skill dependency shown here",
         },
         ...installable.map((skill) => ({
           value: skill.name,
@@ -102,7 +110,9 @@ export async function setupSkills(
       ],
     });
 
-    const selected = toInstall.filter((name) => name !== "__skip__");
+    const selected = toInstall.includes(SELECT_ALL_SELECTION)
+      ? installable.map((skill) => skill.name)
+      : toInstall.filter((name) => name !== SKIP_SELECTION);
 
     const selectedSkills = selected
       .map((name) => installable.find((s) => s.name === name))

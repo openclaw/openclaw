@@ -149,6 +149,11 @@ describe("onboard-hooks", () => {
         options: [
           { value: "__skip__", label: "Skip for now" },
           {
+            value: "__all__",
+            label: "Select all",
+            hint: "Enable every hook shown here",
+          },
+          {
             value: "session-memory",
             label: "💾 session-memory",
             hint: "Save session context to memory when /new or /reset command is issued",
@@ -159,6 +164,18 @@ describe("onboard-hooks", () => {
             hint: "Log all command events to a centralized audit file",
           },
         ],
+      });
+    });
+
+    it("should enable all eligible hooks when select all is chosen", async () => {
+      const { result } = await runSetupInternalHooks({
+        selected: ["__all__"],
+      });
+
+      expect(result.hooks?.internal?.enabled).toBe(true);
+      expect(result.hooks?.internal?.entries).toEqual({
+        "session-memory": { enabled: true },
+        "command-logger": { enabled: true },
       });
     });
 
