@@ -8,9 +8,7 @@ const GEMINI_3_1_PRO_PREFIX = "gemini-3.1-pro";
 const GEMINI_3_1_FLASH_LITE_PREFIX = "gemini-3.1-flash-lite";
 const GEMINI_3_1_FLASH_PREFIX = "gemini-3.1-flash";
 const GEMINI_3_1_PRO_TEMPLATE_IDS = ["gemini-3-pro-preview"] as const;
-const GEMINI_3_1_FLASH_LITE_TEMPLATE_IDS = [
-  "gemini-3.1-flash-lite-preview",
-] as const;
+const GEMINI_3_1_FLASH_LITE_TEMPLATE_IDS = ["gemini-3.1-flash-lite-preview"] as const;
 const GEMINI_3_1_FLASH_TEMPLATE_IDS = ["gemini-3-flash-preview"] as const;
 
 function cloneFirstGoogleTemplateModel(params: {
@@ -21,10 +19,7 @@ function cloneFirstGoogleTemplateModel(params: {
   ctx: ProviderResolveDynamicModelContext;
   patch?: Partial<ProviderRuntimeModel>;
 }): ProviderRuntimeModel | undefined {
-  const templateProviderIds = [
-    params.providerId,
-    params.templateProviderId,
-  ]
+  const templateProviderIds = [params.providerId, params.templateProviderId]
     .map((providerId) => providerId?.trim())
     .filter((providerId): providerId is string => Boolean(providerId));
 

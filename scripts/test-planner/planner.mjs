@@ -1,5 +1,6 @@
 import path from "node:path";
 import { isUnitConfigTestFile } from "../../vitest.unit-paths.mjs";
+import { BUNDLED_PLUGIN_PATH_PREFIX } from "../lib/bundled-plugin-paths.mjs";
 import {
   loadChannelTimingManifest,
   loadExtensionTimingManifest,
@@ -464,7 +465,9 @@ const buildDefaultUnits = (context, request) => {
     (file) => !new Set(unitFastExcludedFiles).has(file),
   );
   const extensionSharedCandidateFiles = catalog.allKnownTestFiles.filter(
-    (file) => file.startsWith("extensions/") && !catalog.extensionForkIsolatedFileSet.has(file),
+    (file) =>
+      file.startsWith(BUNDLED_PLUGIN_PATH_PREFIX) &&
+      !catalog.extensionForkIsolatedFileSet.has(file),
   );
   const channelSharedCandidateFiles = catalog.allKnownTestFiles.filter(
     (file) =>
@@ -1091,7 +1094,7 @@ const estimateTopLevelEntryDurationMs = (unit, context) => {
     if (context.catalog.channelTestPrefixes.some((prefix) => file.startsWith(prefix))) {
       return totalMs + 3_000;
     }
-    if (file.startsWith("extensions/")) {
+    if (file.startsWith(BUNDLED_PLUGIN_PATH_PREFIX)) {
       return totalMs + 2_000;
     }
     return totalMs + 1_000;
