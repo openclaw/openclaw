@@ -40,7 +40,17 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   if (chunks.length === 0) {
     return {};
   }
-  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  const raw = Buffer.concat(chunks).toString("utf8");
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch (err) {
+    const message = err instanceof SyntaxError ? err.message : String(err);
+    throw new ReplayControlError({
+      code: "invalid_request",
+      status: 400,
+      message: `Invalid JSON body: ${message}`,
+    });
+  }
 }
 
 function assertAuthorized(req: IncomingMessage, token: string): void {

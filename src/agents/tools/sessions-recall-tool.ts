@@ -7,7 +7,7 @@ const SessionsRecallToolSchema = Type.Object({
   query: Type.String({ minLength: 1 }),
   maxTokens: Type.Optional(Type.Number({ minimum: 256, maximum: 4000 })),
   limit: Type.Optional(Type.Number({ minimum: 1, maximum: 20 })),
-  scope: Type.Optional(Type.Union([Type.Literal("recent"), Type.Literal("all")])),
+  scope: Type.Optional(Type.String({ enum: ["recent", "all"] })),
 });
 
 type SessionsRecallResult = {

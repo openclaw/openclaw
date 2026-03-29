@@ -116,6 +116,35 @@ function parseTranscriptMessages(lines: unknown[]): TranscriptMessage[] {
   return out;
 }
 
+/**
+ * Deterministic ordering for research events at equal `ts`. Replaces `kind.localeCompare` so
+ * e.g. `tool.end` never sorts before `tool.start` when timestamps collide (ms resolution).
+ */
+export function researchEventKindTieRank(kind: string): number {
+  switch (kind) {
+    case "run.start":
+      return 0;
+    case "llm.request":
+      return 10;
+    case "tool.start":
+      return 20;
+    case "tool.end":
+      return 30;
+    case "llm.response":
+      return 40;
+    case "approval.request":
+      return 50;
+    case "approval.allow":
+      return 55;
+    case "approval.deny":
+      return 56;
+    case "run.end":
+      return 100;
+    default:
+      return 1000;
+  }
+}
+
 function parseResearchEvents(lines: unknown[]): ResearchEventV1[] {
   const out: ResearchEventV1[] = [];
   for (const line of lines) {
@@ -129,8 +158,10 @@ function parseResearchEvents(lines: unknown[]): ResearchEventV1[] {
     if (a.ts !== b.ts) {
       return a.ts - b.ts;
     }
-    if (a.kind !== b.kind) {
-      return a.kind.localeCompare(b.kind);
+    const ra = researchEventKindTieRank(a.kind);
+    const rb = researchEventKindTieRank(b.kind);
+    if (ra !== rb) {
+      return ra - rb;
     }
     const aId =
       typeof a.payload === "object" && a.payload
@@ -140,7 +171,11 @@ function parseResearchEvents(lines: unknown[]): ResearchEventV1[] {
       typeof b.payload === "object" && b.payload
         ? (b.payload as { toolCallId?: string }).toolCallId
         : "";
-    return String(aId ?? "").localeCompare(String(bId ?? ""));
+    const idCmp = String(aId ?? "").localeCompare(String(bId ?? ""));
+    if (idCmp !== 0) {
+      return idCmp;
+    }
+    return a.kind.localeCompare(b.kind);
   });
   return out;
 }

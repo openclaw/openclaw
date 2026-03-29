@@ -168,4 +168,31 @@ describe("replay control server", () => {
       await server.close();
     }
   });
+
+  it("returns 400 invalid_request for malformed JSON bodies", async () => {
+    const port = await getDeterministicFreePortBlock({ offsets: [1] });
+    const bearerToken = `replay-json-${randomUUID()}`;
+    const server = await startReplayControlServer({
+      enabled: true,
+      port,
+      token: bearerToken,
+    });
+    try {
+      const res = await httpJson({
+        port: server.port,
+        path: "/api/replay/v1/runs.create",
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${bearerToken}`,
+          "Content-Type": "application/json",
+        },
+        body: "{",
+      });
+      expect(res.status).toBe(400);
+      const body = res.json as { error?: { code?: string } };
+      expect(body.error?.code).toBe("invalid_request");
+    } finally {
+      await server.close();
+    }
+  });
 });
