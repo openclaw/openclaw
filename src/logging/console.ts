@@ -72,14 +72,14 @@ function resolveConsoleSettings(): ConsoleSettings {
   }
 
   let cfg: OpenClawConfig["logging"] | undefined =
-    (loggingState.overrideSettings as LoggerSettings | null) ?? readLoggingConfig();
+    (loggingState.overrideSettings as LoggerSettings | null) ?? undefined;
   if (!cfg && !shouldSkipMutatingLoggingConfigRead()) {
     if (loggingState.resolvingConsoleSettings) {
       cfg = undefined;
     } else {
       loggingState.resolvingConsoleSettings = true;
       try {
-        cfg = loadConfigFallback();
+        cfg = readLoggingConfig() ?? loadConfigFallback();
       } finally {
         loggingState.resolvingConsoleSettings = false;
       }
