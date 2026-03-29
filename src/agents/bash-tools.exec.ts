@@ -378,7 +378,10 @@ export function createExecTool(
         });
         workdir = resolved.hostWorkdir;
         containerWorkdir = resolved.containerWorkdir;
-      } else {
+      } else if (host !== "node") {
+        // Skip local workdir resolution for remote node execution: the remote node's
+        // filesystem is not visible to the gateway, so resolveWorkdir() would incorrectly
+        // fall back to the gateway's cwd. The node is responsible for validating its own cwd.
         workdir = resolveWorkdir(rawWorkdir, warnings);
       }
 
