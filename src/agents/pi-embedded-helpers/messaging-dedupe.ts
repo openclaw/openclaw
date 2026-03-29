@@ -15,11 +15,10 @@ export function normalizeTextForComparison(text: string): string {
   // Fast path: skip the expensive Unicode emoji regex for ASCII-only text,
   // which is the common case for code output and most agent responses.
   // eslint-disable-next-line no-control-regex
-  const needsEmojiStrip = /[^\x00-\x7F]/.test(trimmed);
-  const stripped = needsEmojiStrip
-    ? (EMOJI_PATTERN.lastIndex = 0, trimmed.replace(EMOJI_PATTERN, ""))
-    : trimmed;
-  return stripped.replace(/\s+/g, " ").trim();
+  if (/[^\x00-\x7F]/.test(trimmed)) {
+    return trimmed.replace(EMOJI_PATTERN, "").replace(/\s+/g, " ").trim();
+  }
+  return trimmed.replace(/\s+/g, " ").trim();
 }
 
 export function isMessagingToolDuplicateNormalized(
