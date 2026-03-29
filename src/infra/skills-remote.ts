@@ -332,8 +332,8 @@ export function getRemoteSkillEligibility(): SkillEligibilityContext["remote"] |
   const labels = macNodes.map((node) => node.displayName ?? node.nodeId).filter(Boolean);
   const note =
     labels.length > 0
-      ? `Remote macOS node available (${labels.join(", ")}). Run macOS-only skills via nodes.run on that node.`
-      : "Remote macOS node available. Run macOS-only skills via nodes.run on that node.";
+      ? `Remote macOS node available (${labels.join(", ")}). Run macOS-only skills via exec host=node on that node.`
+      : "Remote macOS node available. Run macOS-only skills via exec host=node on that node.";
   return {
     platforms: ["darwin"],
     hasBin: (bin) => bins.has(bin),
