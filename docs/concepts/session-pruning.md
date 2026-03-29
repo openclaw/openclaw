@@ -1,6 +1,6 @@
 ---
 title: "Session Pruning"
-summary: "Session pruning: tool-result trimming to reduce context bloat"
+summary: "How session pruning trims old tool results to reduce context bloat and improve cache efficiency"
 read_when:
   - You want to reduce LLM context growth from tool outputs
   - You are tuning agents.defaults.contextPruning
@@ -8,90 +8,102 @@ read_when:
 
 # Session Pruning
 
-Session pruning trims **old tool results** from the in-memory context right before each LLM call. It does **not** rewrite the on-disk session history (`*.jsonl`).
+Session pruning trims **old tool results** from the in-memory context before
+each LLM call. It does **not** rewrite the on-disk session history (JSONL) --
+it only affects what gets sent to the model for that request.
 
-## When it runs
+## Why prune
 
-- When `mode: "cache-ttl"` is enabled and the last Anthropic call for the session is older than `ttl`.
-- Only affects the messages sent to the model for that request.
-- Only active for Anthropic API calls (and OpenRouter Anthropic models).
-- For best results, match `ttl` to your model `cacheRetention` policy (`short` = 5m, `long` = 1h).
-- After a prune, the TTL window resets so subsequent requests keep cache until `ttl` expires again.
+Long-running sessions accumulate tool outputs (exec results, file reads, search
+results). These inflate the context window, increasing cost and eventually
+forcing [compaction](/concepts/compaction). Pruning removes stale tool output so
+the model sees a leaner context on each turn.
 
-## Smart defaults (Anthropic)
+Pruning is also important for **Anthropic prompt caching**. When a session goes
+idle past the cache TTL, the next request re-caches the full prompt. Pruning
+reduces the cache-write size for that first post-TTL request, which directly
+reduces cost.
 
-- **OAuth or setup-token** profiles: enable `cache-ttl` pruning and set heartbeat to `1h`.
-- **API key** profiles: enable `cache-ttl` pruning, set heartbeat to `30m`, and default `cacheRetention: "short"` on Anthropic models.
-- If you set any of these values explicitly, OpenClaw does **not** override them.
+## How it works
 
-## What this improves (cost + cache behavior)
+Pruning runs in `cache-ttl` mode, which is the only supported mode:
 
-- **Why prune:** Anthropic prompt caching only applies within the TTL. If a session goes idle past the TTL, the next request re-caches the full prompt unless you trim it first.
-- **What gets cheaper:** pruning reduces the **cacheWrite** size for that first request after the TTL expires.
-- **Why the TTL reset matters:** once pruning runs, the cache window resets, so follow‑up requests can reuse the freshly cached prompt instead of re-caching the full history again.
-- **What it does not do:** pruning doesn’t add tokens or “double” costs; it only changes what gets cached on that first post‑TTL request.
+1. **Check the clock** -- pruning only runs if the last Anthropic API call for
+   the session is older than `ttl` (default `5m`).
+2. **Find prunable messages** -- only `toolResult` messages are eligible. User
+   and assistant messages are never modified.
+3. **Protect recent context** -- the last `keepLastAssistants` assistant
+   messages (default `3`) and all tool results after that cutoff are preserved.
+4. **Soft-trim** oversized tool results -- keep the head and tail, insert
+   `...`, and append a note with the original size.
+5. **Hard-clear** remaining eligible results -- replace the entire content with
+   a placeholder.
+6. **Reset the TTL** -- subsequent requests keep cache until `ttl` expires
+   again.
 
-## What can be pruned
+### What gets skipped
 
-- Only `toolResult` messages.
-- User + assistant messages are **never** modified.
-- The last `keepLastAssistants` assistant messages are protected; tool results after that cutoff are not pruned.
-- If there aren’t enough assistant messages to establish the cutoff, pruning is skipped.
-- Tool results containing **image blocks** are skipped (never trimmed/cleared).
+- Tool results containing **image blocks** are never trimmed.
+- If there are not enough assistant messages to establish the cutoff, pruning
+  is skipped entirely.
+- Pruning currently only activates for Anthropic API calls (and OpenRouter
+  Anthropic models).
 
-## Context window estimation
+## Smart defaults
 
-Pruning uses an estimated context window (chars ≈ tokens × 4). The base window is resolved in this order:
+OpenClaw auto-configures pruning for Anthropic profiles:
 
-1. `models.providers.*.models[].contextWindow` override.
-2. Model definition `contextWindow` (from the model registry).
-3. Default `200000` tokens.
+| Profile type         | Pruning             | Heartbeat | Cache retention    |
+| -------------------- | ------------------- | --------- | ------------------ |
+| OAuth or setup-token | `cache-ttl` enabled | `1h`      | (provider default) |
+| API key              | `cache-ttl` enabled | `30m`     | `short` (5 min)    |
 
-If `agents.defaults.contextTokens` is set, it is treated as a cap (min) on the resolved window.
+If you set any of these values explicitly, OpenClaw does not override them.
 
-## Mode
+Match `ttl` to your model `cacheRetention` policy for best results (`short` =
+5 min, `long` = 1 hour).
 
-### cache-ttl
+## Pruning vs compaction
 
-- Pruning only runs if the last Anthropic call is older than `ttl` (default `5m`).
-- When it runs: same soft-trim + hard-clear behavior as before.
+|                | Pruning                           | Compaction                      |
+| -------------- | --------------------------------- | ------------------------------- |
+| **What**       | Trims tool result messages        | Summarizes conversation history |
+| **Persisted?** | No (in-memory, per request)       | Yes (in JSONL transcript)       |
+| **Scope**      | Tool results only                 | Entire conversation             |
+| **Trigger**    | Every LLM call (when TTL expired) | Context window threshold        |
 
-## Soft vs hard pruning
+Built-in tools already truncate their own output. Pruning is an additional layer
+that prevents long-running chats from accumulating too much tool output over
+time. See [Compaction](/concepts/compaction) for the summarization approach.
 
-- **Soft-trim**: only for oversized tool results.
-  - Keeps head + tail, inserts `...`, and appends a note with the original size.
-  - Skips results with image blocks.
-- **Hard-clear**: replaces the entire tool result with `hardClear.placeholder`.
+## Configuration
 
-## Tool selection
+### Defaults (when enabled)
 
-- `tools.allow` / `tools.deny` support `*` wildcards.
-- Deny wins.
-- Matching is case-insensitive.
-- Empty allow list => all tools allowed.
+| Setting                 | Default                             | Description                                      |
+| ----------------------- | ----------------------------------- | ------------------------------------------------ |
+| `ttl`                   | `5m`                                | Prune only after this idle period                |
+| `keepLastAssistants`    | `3`                                 | Protect tool results near recent assistant turns |
+| `softTrimRatio`         | `0.3`                               | Context ratio for soft-trim eligibility          |
+| `hardClearRatio`        | `0.5`                               | Context ratio for hard-clear eligibility         |
+| `minPrunableToolChars`  | `50000`                             | Minimum tool result size to consider             |
+| `softTrim.maxChars`     | `4000`                              | Max chars after soft-trim                        |
+| `softTrim.headChars`    | `1500`                              | Head portion to keep                             |
+| `softTrim.tailChars`    | `1500`                              | Tail portion to keep                             |
+| `hardClear.enabled`     | `true`                              | Enable hard-clear stage                          |
+| `hardClear.placeholder` | `[Old tool result content cleared]` | Replacement text                                 |
 
-## Interaction with other limits
+### Examples
 
-- Built-in tools already truncate their own output; session pruning is an extra layer that prevents long-running chats from accumulating too much tool output in the model context.
-- Compaction is separate: compaction summarizes and persists, pruning is transient per request. See [/concepts/compaction](/concepts/compaction).
-
-## Defaults (when enabled)
-
-- `ttl`: `"5m"`
-- `keepLastAssistants`: `3`
-- `softTrimRatio`: `0.3`
-- `hardClearRatio`: `0.5`
-- `minPrunableToolChars`: `50000`
-- `softTrim`: `{ maxChars: 4000, headChars: 1500, tailChars: 1500 }`
-- `hardClear`: `{ enabled: true, placeholder: "[Old tool result content cleared]" }`
-
-## Examples
-
-Default (off):
+Disable pruning (default state):
 
 ```json5
 {
-  agents: { defaults: { contextPruning: { mode: "off" } } },
+  agents: {
+    defaults: {
+      contextPruning: { mode: "off" },
+    },
+  },
 }
 ```
 
@@ -99,7 +111,11 @@ Enable TTL-aware pruning:
 
 ```json5
 {
-  agents: { defaults: { contextPruning: { mode: "cache-ttl", ttl: "5m" } } },
+  agents: {
+    defaults: {
+      contextPruning: { mode: "cache-ttl", ttl: "5m" },
+    },
+  },
 }
 ```
 
@@ -111,11 +127,32 @@ Restrict pruning to specific tools:
     defaults: {
       contextPruning: {
         mode: "cache-ttl",
-        tools: { allow: ["exec", "read"], deny: ["*image*"] },
+        tools: {
+          allow: ["exec", "read"],
+          deny: ["*image*"],
+        },
       },
     },
   },
 }
 ```
 
-See config reference: [Gateway Configuration](/gateway/configuration)
+Tool selection supports `*` wildcards, deny wins over allow, matching is
+case-insensitive, and an empty allow list means all tools are allowed.
+
+## Context window estimation
+
+Pruning estimates the context window (chars = tokens x 4). The base window is
+resolved in this order:
+
+1. `models.providers.*.models[].contextWindow` override.
+2. Model definition `contextWindow` from the model registry.
+3. Default `200000` tokens.
+
+If `agents.defaults.contextTokens` is set, it caps the resolved window.
+
+## Related
+
+- [Compaction](/concepts/compaction) -- summarization-based context reduction
+- [Session Management](/concepts/session) -- session lifecycle and routing
+- [Gateway Configuration](/gateway/configuration) -- full config reference
