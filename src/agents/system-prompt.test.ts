@@ -555,6 +555,62 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("# Project Context");
   });
 
+  it("deduplicates context files by path, keeping the last occurrence", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      contextFiles: [
+        { path: "AGENTS.md", content: "first version" },
+        { path: "IDENTITY.md", content: "identity" },
+        { path: "AGENTS.md", content: "second version" },
+      ],
+    });
+
+    expect(prompt).toContain("# Project Context");
+    expect(prompt).toContain("## AGENTS.md");
+    expect(prompt).toContain("second version");
+    expect(prompt).not.toContain("first version");
+    expect(prompt).toContain("## IDENTITY.md");
+    expect(prompt).toContain("identity");
+  });
+
+  it("keeps both context files when paths differ", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      contextFiles: [
+        { path: "AGENTS.md", content: "Alpha" },
+        { path: "SOUL.md", content: "Bravo" },
+      ],
+    });
+
+    expect(prompt).toContain("## AGENTS.md");
+    expect(prompt).toContain("Alpha");
+    expect(prompt).toContain("## SOUL.md");
+    expect(prompt).toContain("Bravo");
+  });
+
+  it("returns no project context for an empty context files array after dedup", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      contextFiles: [],
+    });
+
+    expect(prompt).not.toContain("# Project Context");
+  });
+
+  it("treats paths with different whitespace as the same after trim", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      contextFiles: [
+        { path: "  AGENTS.md  ", content: "padded" },
+        { path: "AGENTS.md", content: "trimmed" },
+      ],
+    });
+
+    // After dedup (last wins), only the second entry should remain
+    expect(prompt).toContain("trimmed");
+    expect(prompt).not.toContain("padded");
+  });
+
   it("summarizes the message tool when available", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

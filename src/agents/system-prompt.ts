@@ -602,23 +602,30 @@ export function buildAgentSystemPrompt(params: {
   const validContextFiles = contextFiles.filter(
     (file) => typeof file.path === "string" && file.path.trim().length > 0,
   );
-  if (validContextFiles.length > 0) {
+
+  // Deduplicate context files by path — last occurrence wins so that later
+  // hooks (or restarts that re-inject the same file) override earlier entries.
+  const seenContextFiles = new Map<string, (typeof validContextFiles)[number]>();
+  for (const file of validContextFiles) {
+    seenContextFiles.set(file.path.trim(), file);
+  }
+  const dedupedContextFiles = Array.from(seenContextFiles.values());
+
+  if (dedupedContextFiles.length > 0) {
     lines.push("# Project Context", "");
-    if (validContextFiles.length > 0) {
-      const hasSoulFile = validContextFiles.some((file) => {
-        const normalizedPath = file.path.trim().replace(/\\/g, "/");
-        const baseName = normalizedPath.split("/").pop() ?? normalizedPath;
-        return baseName.toLowerCase() === "soul.md";
-      });
-      lines.push("The following project context files have been loaded:");
-      if (hasSoulFile) {
-        lines.push(
-          "If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.",
-        );
-      }
-      lines.push("");
+    const hasSoulFile = dedupedContextFiles.some((file) => {
+      const normalizedPath = file.path.trim().replace(/\\/g, "/");
+      const baseName = normalizedPath.split("/").pop() ?? normalizedPath;
+      return baseName.toLowerCase() === "soul.md";
+    });
+    lines.push("The following project context files have been loaded:");
+    if (hasSoulFile) {
+      lines.push(
+        "If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.",
+      );
     }
-    for (const file of validContextFiles) {
+    lines.push("");
+    for (const file of dedupedContextFiles) {
       lines.push(`## ${file.path}`, "", file.content, "");
     }
   }
