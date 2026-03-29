@@ -104,10 +104,14 @@ export async function noteMemorySearchHealth(
     }
     if (opts?.gatewayMemoryProbe?.checked && opts.gatewayMemoryProbe.ready) {
       if (resolved.provider === "ollama") {
-        const ollamaBaseUrl = resolved.remote?.baseUrl?.trim();
+        const providerBaseUrl = cfg.models?.providers?.ollama?.baseUrl?.trim();
+        const ollamaBaseUrl = resolved.remote?.baseUrl?.trim() || providerBaseUrl;
         const ollamaLooksLocal =
           !ollamaBaseUrl || /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?(?:\/|$)/i.test(ollamaBaseUrl);
-        if (!hasRemoteApiKey && ollamaLooksLocal) {
+        const hasProviderApiKey = hasConfiguredMemorySecretInput(cfg.models?.providers?.ollama?.apiKey);
+        const hasAnyOllamaApiKey =
+          hasRemoteApiKey || hasProviderApiKey || (await hasApiKeyForProvider("ollama", cfg, agentDir));
+        if (!hasAnyOllamaApiKey && ollamaLooksLocal) {
           return;
         }
       }
