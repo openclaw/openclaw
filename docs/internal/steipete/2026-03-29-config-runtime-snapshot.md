@@ -22,3 +22,4 @@ read_when:
   - adjusted session-listing subagent selection to prefer active disk-only runs while still honoring newer in-memory replacement rows
   - deleted the flaky duplicated Telegram gateway writeback integration test and kept stable coverage in `server-methods/send.test.ts` plus `extensions/telegram/src/target-writeback.test.ts`
   - trimmed remaining Telegram-specific assertions from `src/gateway/server-methods/send.test.ts` so core only covers generic channel-send contracts and Telegram writeback behavior stays extension-owned
+  - removed public SDK re-exports that reached directly into bundled extension source paths; `plugin-sdk/agent-runtime` no longer leaks `sglang`/`vllm`, and `plugin-sdk/xai-model-id` now uses the facade loader instead of `../../extensions/xai/*`
