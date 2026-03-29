@@ -338,6 +338,47 @@ describe("exec approval forwarder", () => {
     expect(deliver).toHaveBeenCalledTimes(2);
   });
 
+  it("calls outbound beforeDeliverPayload before exec approval delivery", async () => {
+    const beforeDeliverPayload = vi.fn();
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          plugin: telegramApprovalPlugin,
+          source: "test",
+        },
+        {
+          pluginId: "discord",
+          plugin: discordApprovalPlugin,
+          source: "test",
+        },
+        {
+          pluginId: "slack",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "slack" as ChannelPlugin["id"] }),
+            outbound: {
+              deliveryMode: "direct",
+              beforeDeliverPayload,
+            },
+          } satisfies Pick<ChannelPlugin, "id" | "meta" | "capabilities" | "config" | "outbound">,
+          source: "test",
+        },
+      ]),
+    );
+
+    const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
+    await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(true);
+    await vi.waitFor(() => {
+      expect(deliver).toHaveBeenCalled();
+    });
+    expect(beforeDeliverPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        hint: { kind: "approval-pending", approvalKind: "exec" },
+        target: expect.objectContaining({ channel: "slack", to: "U123" }),
+      }),
+    );
+  });
+
   it("skips telegram forwarding when telegram exec approvals handler is enabled", async () => {
     vi.useFakeTimers();
     const cfg = {
