@@ -82,10 +82,10 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
   const resolveDirectMemberFlag = async (
     roomId: string,
     userId?: string | null,
-  ): Promise<boolean> => {
+  ): Promise<boolean | null> => {
     const normalizedUserId = userId?.trim();
     if (!normalizedUserId) {
-      return false;
+      return null;
     }
     const cacheKey = `${roomId}\n${normalizedUserId}`;
     const cached = directMemberFlagCache.get(cacheKey);
@@ -117,9 +117,9 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
       // Check is_direct flag first (authoritative Matrix protocol signal)
       const directViaSender = await resolveDirectMemberFlag(roomId, senderId);
       const directViaSelf = await resolveDirectMemberFlag(roomId, selfUserId);
-      // Preserve explicit false: if both lookups resolved and both are false, forward false
+      // Priority: true > null > false. Any true makes it true, both false makes it false, otherwise null
       const isDirectFlag: boolean | null =
-        directViaSender || directViaSelf
+        directViaSender === true || directViaSelf === true
           ? true
           : directViaSender === false && directViaSelf === false
             ? false
