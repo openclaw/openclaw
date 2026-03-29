@@ -1,4 +1,4 @@
-import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
+import { describeWebhookAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { formatNormalizedAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
 import {
   adaptScopedAccountAccessor,
@@ -58,12 +58,11 @@ export const bluebubblesConfigAdapter =
   });
 
 export function describeBlueBubblesAccount(account: ResolvedBlueBubblesAccount) {
-  return describeAccountSnapshot({
+  return describeWebhookAccountSnapshot({
     account,
     configured: account.configured,
     extra: {
       baseUrl: account.baseUrl,
-      mode: "webhook",
     },
   });
 }
