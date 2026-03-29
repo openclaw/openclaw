@@ -526,6 +526,70 @@ describe("memory index", () => {
     }
   });
 
+  it("includes sessions during a full reindex triggered by session-start", async () => {
+    const stateDir = path.join(fixtureRoot, `state-session-start-reindex-${randomUUID()}`);
+    const sessionDir = path.join(stateDir, "agents", "main", "sessions");
+    const storePath = path.join(workspaceDir, `index-session-start-reindex-${randomUUID()}.sqlite`);
+    const sessionPath = path.join(sessionDir, "session-start-reindex.jsonl");
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+
+    await fs.mkdir(sessionDir, { recursive: true });
+    await fs.writeFile(
+      sessionPath,
+      `${JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "session-start reindex transcript line" }],
+        },
+      })}\n`,
+    );
+
+    const firstCfg = createCfg({
+      storePath,
+      sources: ["memory", "sessions"],
+      sessionMemory: true,
+      model: "mock-embed-v1",
+    });
+    const secondCfg = createCfg({
+      storePath,
+      sources: ["memory", "sessions"],
+      sessionMemory: true,
+      model: "mock-embed-v2",
+    });
+
+    try {
+      const firstManager = requireManager(
+        await getMemorySearchManager({ cfg: firstCfg, agentId: "main" }),
+      );
+      await firstManager.sync({ reason: "test" });
+      await firstManager.close?.();
+
+      const secondManager = requireManager(
+        await getMemorySearchManager({ cfg: secondCfg, agentId: "main" }),
+      );
+      await secondManager.sync({ reason: "session-start" });
+
+      const secondStatus = secondManager.status();
+      expect(secondStatus.sourceCounts?.find((entry) => entry.source === "sessions")?.files).toBe(
+        1,
+      );
+      expect(
+        secondStatus.sourceCounts?.find((entry) => entry.source === "sessions")?.chunks ?? 0,
+      ).toBeGreaterThan(0);
+      await secondManager.close?.();
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      await fs.rm(stateDir, { recursive: true, force: true });
+      await fs.rm(storePath, { force: true });
+    }
+  });
+
   it("targets explicit session files during post-compaction sync", async () => {
     const stateDir = path.join(fixtureRoot, `state-targeted-${randomUUID()}`);
     const sessionDir = path.join(stateDir, "agents", "main", "sessions");
