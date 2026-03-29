@@ -395,6 +395,375 @@
       "tags": ["tool_use", "sandbox", "code_execution", "zero_shot", "TOOL_CALL_ALIGNMENT"],
       "created_at": 1753920000.0,
       "use_count": 0
+    },
+
+    {
+      "pattern_id": "role_planner_task_decomposition",
+      "description": "ROLE_OPERATIONAL: Planner role decomposes complex tasks using LATS-style multi-path reasoning, outputs PLANNER_SCHEMA JSON with plan steps and target_roles.",
+      "language": "role_pattern",
+      "code_snippet": "<think>\nSITUATION: Пользователь просит рефакторинг pipeline_utils.py + добавить guardrails.\nTASK: Декомпозиция на атомарные подзадачи.\nACTION:\n  Path A: Сначала guardrails → потом рефакторинг (зависимость: guardrails нужны для валидации рефакторинга)\n  Path B: Параллельно (нет зависимости если guardrails в отдельном файле)\n  LATS score: Path A = 0.85 (safer), Path B = 0.72 (faster but riskier)\n  Выбираю Path A.\nRESULT: 3-шаговый план.\n</think>\n\n```json\n{\n  \"plan\": [\n    \"1. Executor_Architect: добавить guardrail-валидаторы для Researcher, Analyst, Archivist в pipeline_schemas.py\",\n    \"2. Executor_Architect: рефакторинг compress_for_next_step() — заменить head/tail на sentence-boundary extraction\",\n    \"3. Test_Writer: написать pytest для новых guardrails + рефакторинга\"\n  ],\n  \"target_roles\": [\"Executor_Architect\", \"Test_Writer\"],\n  \"summary\": \"Последовательный план: сначала guardrails, потом рефакторинг, потом тесты. LATS оценка: 0.85.\"\n}\n```",
+      "source_file": "knowledge_store/role_patterns",
+      "commit_hash": "v14.7-ROLE-SKILLS",
+      "score": 0.95,
+      "tags": ["role_pattern", "planner", "decomposition", "lats", "ROLE_OPERATIONAL_PLANNER"],
+      "created_at": 1754006400.0,
+      "use_count": 0
+    },
+    {
+      "pattern_id": "role_planner_ask_user",
+      "description": "ROLE_OPERATIONAL: Planner role correctly emits ask_user JSON when prompt is ambiguous or missing critical info, with exactly ONE concise question.",
+      "language": "role_pattern",
+      "code_snippet": "<think>\nSITUATION: Пользователь: 'Обнови конфиг'. Неясно КАКОЙ конфиг (openclaw_config.json? brigade_policy? ollama?).\nTASK: Задать один уточняющий вопрос.\nACTION: ask_user с конкретными вариантами.\n</think>\n\n```json\n{\"action\": \"ask_user\", \"question\": \"Какой конфиг обновить? 1) openclaw_config.json (основной), 2) brigade_policy.json (политики бригад), 3) ollama/modelfile (модели)\"}\n```",
+      "source_file": "knowledge_store/role_patterns",
+      "commit_hash": "v14.7-ROLE-SKILLS",
+      "score": 0.93,
+      "tags": ["role_pattern", "planner", "ask_user", "disambiguation", "ROLE_OPERATIONAL_PLANNER"],
+      "created_at": 1754006400.0,
+      "use_count": 0
+    },
+    {
+      "pattern_id": "role_foreman_task_dispatch",
+      "description": "ROLE_OPERATIONAL: Foreman role outputs FOREMAN_SCHEMA JSON with explicit role assignments, instructions, expected_output, and files_to_modify for each task.",
+      "language": "role_pattern",
+      "code_snippet": "```json\n{\n  \"tasks\": [\n    {\n      \"role\": \"Executor_Architect\",\n      \"instruction\": \"Добавить validate_researcher() и validate_analyst() в pipeline_schemas.py после validate_debugger(). Каждый валидатор: проверить наличие sources[] для Researcher, metrics{} для Analyst.\",\n      \"expected_output\": \"2 функции-валидатора + обновлённый ROLE_GUARDRAILS dict\",\n      \"files_to_modify\": [\"src/pipeline_schemas.py\"]\n    },\n    {\n      \"role\": \"Executor_Tools\",\n      \"instruction\": \"Написать скрипт scripts/test_guardrails.py — прогнать все guardrail-валидаторы на mock-ответах.\",\n      \"expected_output\": \"Скрипт с pytest.main(), минимум 8 тест-кейсов\",\n      \"files_to_modify\": [\"scripts/test_guardrails.py\"]\n    },\n    {\n      \"role\": \"Test_Writer\",\n      \"instruction\": \"Покрыть edge cases: пустой ответ, ответ без JSON, ответ с неверным verdict.\",\n      \"expected_output\": \"pytest с 3+ edge case на каждый валидатор\",\n      \"files_to_modify\": [\"tests/test_pipeline_schemas.py\"]\n    }\n  ],\n  \"priority\": \"high\"\n}\n```",
+      "source_file": "knowledge_store/role_patterns",
+      "commit_hash": "v14.7-ROLE-SKILLS",
+      "score": 0.94,
+      "tags": ["role_pattern", "foreman", "task_dispatch", "schema", "ROLE_OPERATIONAL_FOREMAN"],
+      "created_at": 1754006400.0,
+      "use_count": 0
+    },
+    {
+      "pattern_id": "role_auditor_defect_report",
+      "description": "ROLE_OPERATIONAL: Auditor role produces structured defect report with CWE IDs, severity, exact file:line location, and fix_suggestion. Or 'AUDIT PASSED' if clean.",
+      "language": "role_pattern",
+      "code_snippet": "```json\n{\n  \"verdict\": \"fail\",\n  \"issues\": [\n    {\n      \"severity\": \"CRITICAL\",\n      \"location\": \"src/pipeline/_core.py:752\",\n      \"cwe_id\": \"CWE-78\",\n      \"description\": \"subprocess.run с shell=True и user-controlled input в step_prompt. Прямой вектор OS Command Injection.\",\n      \"fix_suggestion\": \"Заменить на subprocess.run(['cmd', arg1, arg2], shell=False). Санитизировать step_prompt через shlex.quote().\"\n    },\n    {\n      \"severity\": \"MEDIUM\",\n      \"location\": \"src/pipeline_utils.py:212\",\n      \"cwe_id\": \"CWE-117\",\n      \"description\": \"Логирование raw user prompt без санитизации. Потенциальный Log Injection.\",\n      \"fix_suggestion\": \"Обернуть prompt через sanitize_file_content() перед logger.info().\"\n    }\n  ],\n  \"suggestions\": [\"Добавить bandit check в CI для автоматизации\"],\n  \"summary\": \"2 проблемы: 1 critical (CWE-78 Command Injection), 1 medium (CWE-117 Log Injection). Блокирую до исправления.\"\n}\n```",
+      "source_file": "knowledge_store/role_patterns",
+      "commit_hash": "v14.7-ROLE-SKILLS",
+      "score": 0.96,
+      "tags": [
+        "role_pattern",
+        "auditor",
+        "defect_report",
+        "security",
+        "cwe",
+        "ROLE_OPERATIONAL_AUDITOR"
+      ],
+      "created_at": 1754006400.0,
+      "use_count": 0
+    },
+    {
+      "pattern_id": "role_auditor_reflexion",
+      "description": "ROLE_OPERATIONAL: Auditor role performs Reflexion self-check before verdict — identifies what went wrong in agent chain and proposes alternative trajectories.",
+      "language": "role_pattern",
+      "code_snippet": "<self_check>\n1. Задача пользователя: добавить WebSocket heartbeat в Dmarket bot.\n2. Coder сгенерировал код с asyncio.create_task(heartbeat()) — но без cancellation при disconnect.\n3. Код синтаксически корректен, но race condition: heartbeat продолжает слать после ws.close().\n4. Ответ соответствует 80% требований — не хватает graceful shutdown.\n5. Галлюцинаций нет — все API вызовы реальные (проверено по Dmarket API docs).\n6. Неэффективных траекторий нет — прямой путь Planner→Coder.\n7. Декомпозиция корректна.\n</self_check>\n\n[REFLEXION]\nCoder не учёл lifetime management для background tasks. Альтернативная траектория:\n- Добавить asyncio.Event для graceful shutdown\n- Использовать async with для контекстного управления WebSocket\n\n```json\n{\"verdict\": \"partial\", \"issues\": [\"Race condition: heartbeat task не отменяется при disconnect\"], \"reflection\": \"Добавить cancellation token pattern для background tasks\", \"suggestions\": [\"asyncio.Event + task.cancel() в finally блоке\"], \"summary\": \"Код рабочий на 80%, но race condition при disconnect. Partial pass.\"}\n```",
+      "source_file": "knowledge_store/role_patterns",
+      "commit_hash": "v14.7-ROLE-SKILLS",
+      "score": 0.95,
+      "tags": ["role_pattern", "auditor", "reflexion", "self_check", "ROLE_OPERATIONAL_AUDITOR"],
+      "created_at": 1754006400.0,
+      "use_count": 0
+    },
+    {
+      "pattern_id": "role_executor_architect_refactor",
+      "description": "ROLE_OPERATIONAL: Executor_Architect outputs ONLY code with type hints, DRY/SOLID patterns, minimal docstrings, and STATUS/CODE/RISKS structure.",
+      "language": "role_pattern",
+      "code_snippet": "СТАТУС: Рефакторинг compress_for_next_step() — заменил наивный head/tail на sentence-boundary extraction.\n\nКОД:\n```python\ndef compress_for_next_step(role_name: str, response: str, max_chars: int = 1500) -> str:\n    \"\"\"Smart context compression with sentence-boundary extraction.\"\"\"\n    json_blocks = re.findall(r'```json\\s*(.*?)\\s*```', response, re.DOTALL)\n    json_section = f\"\\n```json\\n{json_blocks[0][:800]}\\n```\" if json_blocks else \"\"\n\n    clean = _strip_internal_markup(response)  # extracted helper — DRY\n\n    if len(clean) > 2000:\n        clean = _head_tail_at_sentence_boundary(clean, head_max=1000, tail_max=1000)\n    elif len(clean) > max_chars:\n        clean = _truncate_at_boundary(clean, max_chars)\n\n    return f\"[{role_name} Output]: {clean}{json_section}\"\n```\n\nРИСКИ:\n1. Sentence boundary regex может не сработать на CJK текстах — fallback на char limit.\n2. JSON блок >800 char будет обрезан — для pipeline это ОК.",
+      "source_file": "knowledge_store/role_patterns",
+      "commit_hash": "v14.7-ROLE-SKILLS",
+      "score": 0.94,
+      "tags": [
+        "role_pattern",
+        "executor_architect",
+        "refactoring",
+        "solid",
+        "ROLE_OPERATIONAL_EXECUTOR"
+      ],
+      "created_at": 1754006400.0,
+      "use_count": 0
+    },
+    {
+      "pattern_id": "role_executor_tools_react",
+      "description": "ROLE_OPERATIONAL: Executor_Tools uses ReAct reasoning with real tool calls — Thought→Action→Observation cycle, self-corrects on errors.",
+      "language": "role_pattern",
+      "code_snippet": "Thought: Нужно создать скрипт benchmark_pipeline.py с замером latency каждого шага.\nAction: read_file\nAction Input: {\"path\": \"src/pipeline/_core.py\", \"start_line\": 450, \"end_line\": 500}\nObservation: [содержимое файла — execute() метод использует step_index и time.monotonic()]\n\nThought: execute() уже замеряет время через time.monotonic(). Добавлю wrapper.\nAction: sandbox_execute\nAction Input: {\"code\": \"import time\\nimport asyncio\\nfrom src.pipeline._core import PipelineExecutor\\n\\nasync def bench():\\n    pe = PipelineExecutor(config={})\\n    start = time.monotonic()\\n    result = await pe.execute('test prompt', brigade='OpenClaw-Core')\\n    elapsed = time.monotonic() - start\\n    print(f'Total: {elapsed:.2f}s, Steps: {len(result[\\\"steps\\\"])}')\\n\\nasyncio.run(bench())\", \"language\": \"python\", \"timeout\": 60}\nObservation: exit_code=0, stdout='Total: 3.42s, Steps: 4'\n\nThought: Бенчмарк работает. Оформлю в self-contained скрипт с argparse.",
+      "source_file": "knowledge_store/role_patterns",
+      "commit_hash": "v14.7-ROLE-SKILLS",
+      "score": 0.94,
+      "tags": [
+        "role_pattern",
+        "executor_tools",
+        "react",
+        "tool_use",
+        "devops",
+        "ROLE_OPERATIONAL_EXECUTOR"
+      ],
+      "created_at": 1754006400.0,
+      "use_count": 0
+    },
+    {
+      "pattern_id": "role_executor_integration_pipeline",
+      "description": "ROLE_OPERATIONAL: Executor_Integration links modules with type guards at seams, updates configs, validates prompt chains between roles.",
+      "language": "role_pattern",
+      "code_snippet": "СТАТУС: Добавлен type guard на стыке Foreman→Executor: валидация FOREMAN_SCHEMA перед dispatch.\n\nКОД:\n```python\ndef validate_foreman_handoff(foreman_output: str) -> list[dict]:\n    \"\"\"Type guard: parse Foreman JSON and validate task structure.\"\"\"\n    try:\n        data = json.loads(foreman_output)\n    except json.JSONDecodeError:\n        raise HandoffError(\"Foreman output is not valid JSON\")\n\n    tasks = data.get(\"tasks\", [])\n    for i, task in enumerate(tasks):\n        if \"role\" not in task or \"instruction\" not in task:\n            raise HandoffError(f\"Task {i}: missing 'role' or 'instruction'\")\n        if task[\"role\"] not in AVAILABLE_ROLES:\n            raise HandoffError(f\"Task {i}: unknown role '{task['role']}'\")\n    return tasks\n```\n\nКОНФИГ обновлён:\n```json\n{\"pipeline\": [\"Planner\", \"Foreman\", \"Executor_Architect\", \"Executor_Tools\", \"Auditor\", \"Archivist\"]}\n```\n\nРИСКИ:\n1. Foreman может вернуть роль из другой бригады — HandoffError перехватит.",
+      "source_file": "knowledge_store/role_patterns",
+      "commit_hash": "v14.7-ROLE-SKILLS",
+      "score": 0.93,
+      "tags": [
+        "role_pattern",
+        "executor_integration",
+        "type_guard",
+        "handoff",
+        "ROLE_OPERATIONAL_EXECUTOR"
+      ],
+      "created_at": 1754006400.0,
+      "use_count": 0
+    },
+    {
+      "pattern_id": "role_archivist_verification",
+      "description": "ROLE_OPERATIONAL: Archivist role performs 3-phase processing: VERIFY (check contradictions/fabrications) → FORMAT (clean markup) → CONFIDENCE (rate 1-10).",
+      "language": "role_pattern",
+      "code_snippet": "ФАЗА 1 — ВЕРИФИКАЦИЯ:\n- Executor_Architect утверждает: 'compress_for_next_step() сократил контекст на 60%'. Подтверждено: до рефакторинга max_chars=1500, после — head/tail по 1000 char = ~67% compression для 3000+ char текстов. ✓\n- Auditor указал CWE-78 на строке 752. Проверяю: в _core.py:752 действительно subprocess.run с shell=True. ✓\n- Заявленный 'bandit clean' — НЕ подтверждено (нет вывода bandit в контексте). Удаляю.\n\nФАЗА 2 — ФОРМАТИРОВАНИЕ:\nPipeline обновлён: рефакторинг context compression + 2 новых guardrail-валидатора.\n\n**Изменения:**\n• `pipeline_schemas.py` — добавлены `validate_researcher()`, `validate_analyst()`\n• `pipeline_utils.py` — рефакторинг `compress_for_next_step()` с sentence-boundary extraction\n\n**Аудит:** 1 critical issue (CWE-78, command injection) — исправлен.\n\nФАЗА 3:\n[УВЕРЕННОСТЬ: 8/10]",
+      "source_file": "knowledge_store/role_patterns",
+      "commit_hash": "v14.7-ROLE-SKILLS",
+      "score": 0.95,
+      "tags": [
+        "role_pattern",
+        "archivist",
+        "verification",
+        "formatting",
+        "confidence",
+        "ROLE_OPERATIONAL_ARCHIVIST"
+      ],
+      "created_at": 1754006400.0,
+      "use_count": 0
+    },
+    {
+      "pattern_id": "role_archivist_changelog",
+      "description": "ROLE_OPERATIONAL: Archivist generates conventional commit messages and CHANGELOG entries from pipeline output, separating Changes and Fixes.",
+      "language": "role_pattern",
+      "code_snippet": "**Commit message:**\nfeat: add guardrails for Researcher and Analyst roles (v14.7)\n\n**CHANGELOG entry:**\n### Changes\n- Добавлены guardrail-валидаторы для ролей Researcher (проверка sources[]) и Analyst (проверка metrics{})\n- Рефакторинг context compression (sentence-boundary extraction вместо head/tail)\n\n### Fixes\n- Исправлен CWE-78: command injection через subprocess.run(shell=True) в pipeline core\n- Исправлен race condition при параллельном Executor dispatch\n\n[УВЕРЕННОСТЬ: 9/10]",
+      "source_file": "knowledge_store/role_patterns",
+      "commit_hash": "v14.7-ROLE-SKILLS",
+      "score": 0.92,
+      "tags": [
+        "role_pattern",
+        "archivist",
+        "changelog",
+        "conventional_commits",
+        "ROLE_OPERATIONAL_ARCHIVIST"
+      ],
+      "created_at": 1754006400.0,
+      "use_count": 0
+    },
+    {
+      "pattern_id": "role_state_manager_compression",
+      "description": "ROLE_OPERATIONAL: State_Manager compresses pipeline context preserving semantic key facts, outputs ChromaDB metadata, respects token budgets.",
+      "language": "role_pattern",
+      "code_snippet": "Summary distilled: 4200→195 tokens. Key facts preserved: 6/6.\n\n**Context Briefing для следующего агента:**\n[State_Manager Summary]\n1. Задача: рефакторинг pipeline compression + добавление guardrails\n2. Planner выбрал Path A (последовательный): guardrails → рефакторинг → тесты\n3. Executor_Architect: 2 файла изменены (pipeline_schemas.py, pipeline_utils.py)\n4. Auditor: 1 critical issue найден и исправлен (CWE-78)\n5. Текущий шаг: Test_Writer (ожидается pytest coverage)\n6. Бюджет: 2048 tokens remaining для Test_Writer\n\n**ChromaDB metadata:**\n```json\n{\"collection\": \"pipeline_state\", \"doc_id\": \"run_1754006400_step4\", \"tags\": [\"guardrails\", \"refactoring\", \"security_fix\"], \"compression_ratio\": 0.046}\n```",
+      "source_file": "knowledge_store/role_patterns",
+      "commit_hash": "v14.7-ROLE-SKILLS",
+      "score": 0.93,
+      "tags": [
+        "role_pattern",
+        "state_manager",
+        "compression",
+        "chromadb",
+        "rag",
+        "ROLE_OPERATIONAL_STATE_MANAGER"
+      ],
+      "created_at": 1754006400.0,
+      "use_count": 0
+    },
+    {
+      "pattern_id": "role_test_writer_edge_cases",
+      "description": "ROLE_OPERATIONAL: Test_Writer produces pytest code with arrange/act/assert, speaking names, min 3 edge cases per function, pytest-asyncio for async.",
+      "language": "role_pattern",
+      "code_snippet": "```python\nimport pytest\nfrom src.pipeline_schemas import validate_researcher, validate_analyst\n\n\nclass TestValidateResearcher:\n    \"\"\"Guardrail: Researcher must include sources[] in output.\"\"\"\n\n    def test_valid_report_with_sources(self):\n        response = 'Findings: DMarket API rate limit = 60 req/min. Sources: [official docs, empirical test n=100]'\n        is_valid, feedback = validate_researcher(response)\n        assert is_valid is True\n        assert feedback == ''\n\n    def test_empty_response_fails(self):\n        is_valid, feedback = validate_researcher('')\n        assert is_valid is False\n        assert 'короткий' in feedback.lower() or 'источник' in feedback.lower()\n\n    def test_response_without_sources_fails(self):\n        response = 'DMarket API поддерживает WebSocket. Данные обновляются в реальном времени.'\n        is_valid, feedback = validate_researcher(response)\n        assert is_valid is False\n        assert 'источник' in feedback.lower() or 'source' in feedback.lower()\n\n    def test_response_with_low_confidence_passes_but_warns(self):\n        response = 'Предположительно API v3 в разработке. Source: форум (неофициально). confidence < 70%'\n        is_valid, _ = validate_researcher(response)\n        assert is_valid is True  # passes guardrail but confidence tagged\n```",
+      "source_file": "knowledge_store/role_patterns",
+      "commit_hash": "v14.7-ROLE-SKILLS",
+      "score": 0.95,
+      "tags": [
+        "role_pattern",
+        "test_writer",
+        "pytest",
+        "edge_cases",
+        "guardrails",
+        "ROLE_OPERATIONAL_TEST_WRITER"
+      ],
+      "created_at": 1754006400.0,
+      "use_count": 0
+    },
+    {
+      "pattern_id": "role_researcher_synthesis",
+      "description": "ROLE_OPERATIONAL: Researcher produces structured report with hypothesis, methodology, findings[], confidence_level, sources[]. Uses tools for fact gathering.",
+      "language": "role_pattern",
+      "code_snippet": "<think>\nSITUATION: Запрос — исследовать актуальные лимиты DMarket API v2.\nTASK: Собрать данные из нескольких источников, синтезировать, оценить confidence.\nACTION: 1) fetch_url → DMarket API docs, 2) web_search_mcp → обсуждения на форумах, 3) кросс-проверка MARCH.\n</think>\n\nThought: Нужно проверить актуальные rate limits DMarket API.\nAction: web_search_mcp\nAction Input: {\"query\": \"DMarket API v2 rate limit 2025\"}\nObservation: [результаты поиска — 3 источника]\n\n**Research Report:**\n\n**Hypothesis:** DMarket API v2 имеет rate limit 60 req/min для стандартных аккаунтов.\n\n**Methodology:** Cross-reference 3 источников: официальная документация, экспериментальные данные (n=200 запросов), форумные обсуждения.\n\n**Findings:**\n1. Официальный лимит: 60 req/min (подтверждено docs.dmarket.com)\n2. На практике: soft limit ~55 req/min, hard throttle при 65+ (эмпирически)\n3. WebSocket: без rate limit на подписку, но max 5 concurrent connections\n\n**Confidence:** 85% (2 из 3 источников согласованы, форум — неофициальный)\n\n**Sources:**\n- [1] docs.dmarket.com/api/v2/rate-limits\n- [2] Эмпирический тест: scripts/bench_dmarket_api.py (n=200)\n- [3] Reddit r/dmarket — обсуждение от 2025-06",
+      "source_file": "knowledge_store/role_patterns",
+      "commit_hash": "v14.7-ROLE-SKILLS",
+      "score": 0.95,
+      "tags": [
+        "role_pattern",
+        "researcher",
+        "synthesis",
+        "multi_source",
+        "confidence",
+        "ROLE_OPERATIONAL_RESEARCHER"
+      ],
+      "created_at": 1754006400.0,
+      "use_count": 0
+    },
+    {
+      "pattern_id": "role_analyst_data_report",
+      "description": "ROLE_OPERATIONAL: Analyst produces deterministic numerical reports with sample_size, metrics{}, patterns[], anomalies[], and confidence intervals.",
+      "language": "role_pattern",
+      "code_snippet": "**Data Analysis Report**\n\n**Dataset:** DMarket trade history, 30 days, 12,847 records.\n\n**Metrics:**\n- Mean spread: 4.2% (CI 95%: 3.8–4.6%)\n- Median latency: 142ms (P99: 890ms)\n- Win rate: 62.3% (n=7,994 filled orders)\n- Sharpe ratio: 1.87 (annualized)\n\n**Patterns:**\n1. Spread compression 14:00–16:00 UTC (корреляция с EU market open, r=0.73)\n2. Latency spike кластеры по четвергам (вероятно: Steam weekly maintenance)\n3. Top-3 profitable items: AK-47 Redline, AWP Asiimov, M4A1 Hyper Beast\n\n**Anomalies:**\n- 3σ spike: 2025-07-14 14:32 UTC — spread 18.4% на AWP Dragon Lore (единичная сделка, sample=1)\n- Negative spread (-0.3%) на 12 записях — возможный API glitch или delayed quotes\n\n**Recommendation:** Увеличить позицию по AK-47 Redline в окне 14:00–16:00 UTC. Добавить circuit breaker на spread > 15%.\n\n**Confidence:** 92% (большой sample size, CI узкие)",
+      "source_file": "knowledge_store/role_patterns",
+      "commit_hash": "v14.7-ROLE-SKILLS",
+      "score": 0.94,
+      "tags": [
+        "role_pattern",
+        "analyst",
+        "data_report",
+        "metrics",
+        "anomalies",
+        "ROLE_OPERATIONAL_ANALYST"
+      ],
+      "created_at": 1754006400.0,
+      "use_count": 0
+    },
+    {
+      "pattern_id": "role_summarizer_telegram",
+      "description": "ROLE_OPERATIONAL: Summarizer converts technical pipeline output to clean Russian Telegram message, strips all markup, adds УВЕРЕННОСТЬ tag.",
+      "language": "role_pattern",
+      "code_snippet": "Pipeline обновлён: добавлены guardrail-валидаторы для 6 ролей.\n\n🔧 **Что изменилось:**\n• Researcher теперь обязан указывать источники\n• Analyst проверяется на наличие метрик и CI\n• Archivist валидируется по 3-фазному протоколу\n• Executor роли проходят проверку на наличие кода\n• State_Manager — контроль качества сжатия\n• Test_Writer — минимум 3 edge case на тест\n\n🛡 **Безопасность:** 1 critical fix (command injection CWE-78)\n\n📊 **Stats:** 4 файла изменены, 22 новых скилла добавлено, все тесты пройдены.\n\n[УВЕРЕННОСТЬ: 9/10]",
+      "source_file": "knowledge_store/role_patterns",
+      "commit_hash": "v14.7-ROLE-SKILLS",
+      "score": 0.92,
+      "tags": [
+        "role_pattern",
+        "summarizer",
+        "telegram",
+        "formatting",
+        "ROLE_OPERATIONAL_SUMMARIZER"
+      ],
+      "created_at": 1754006400.0,
+      "use_count": 0
+    },
+    {
+      "pattern_id": "role_coder_dmarket_trading",
+      "description": "ROLE_OPERATIONAL: Coder (Dmarket-Dev) outputs ONLY Python code with type hints, async/await, HMAC auth, timeout+retry for API calls, no hardcoded keys.",
+      "language": "role_pattern",
+      "code_snippet": "```python\nimport asyncio\nimport hashlib\nimport hmac\nimport os\nimport time\nfrom typing import Any\n\nimport aiohttp\n\n_API_BASE = \"https://api.dmarket.com\"\n_API_KEY = os.environ[\"DMARKET_API_KEY\"]\n_API_SECRET = os.environ[\"DMARKET_API_SECRET\"]\n\n\nasync def _signed_request(\n    session: aiohttp.ClientSession,\n    method: str,\n    path: str,\n    body: str = \"\",\n    *,\n    timeout: float = 10.0,\n    max_retries: int = 3,\n) -> dict[str, Any]:\n    \"\"\"HMAC-signed DMarket API request with retry + exponential backoff.\"\"\"\n    for attempt in range(max_retries):\n        timestamp = str(int(time.time()))\n        sign_string = f\"{method}{path}{body}{timestamp}\"\n        signature = hmac.new(\n            _API_SECRET.encode(), sign_string.encode(), hashlib.sha256\n        ).hexdigest()\n        headers = {\n            \"X-Api-Key\": _API_KEY,\n            \"X-Request-Sign\": f\"dmar ed25519 {signature}\",\n            \"X-Sign-Date\": timestamp,\n            \"Content-Type\": \"application/json\",\n        }\n        try:\n            async with session.request(\n                method, f\"{_API_BASE}{path}\",\n                headers=headers, data=body or None,\n                timeout=aiohttp.ClientTimeout(total=timeout),\n            ) as resp:\n                if resp.status == 429:  # rate limited\n                    wait = 2 ** attempt\n                    await asyncio.sleep(wait)\n                    continue\n                resp.raise_for_status()\n                return await resp.json()\n        except aiohttp.ClientError:\n            if attempt == max_retries - 1:\n                raise\n            await asyncio.sleep(2 ** attempt)\n    return {}  # unreachable\n```",
+      "source_file": "knowledge_store/role_patterns",
+      "commit_hash": "v14.7-ROLE-SKILLS",
+      "score": 0.95,
+      "tags": [
+        "role_pattern",
+        "coder",
+        "dmarket",
+        "hmac",
+        "async",
+        "trading",
+        "ROLE_OPERATIONAL_CODER"
+      ],
+      "created_at": 1754006400.0,
+      "use_count": 0
+    },
+    {
+      "pattern_id": "role_handoff_planner_executor",
+      "description": "CROSS_ROLE: Correct JSON handoff pattern from Planner/Foreman to Executor — structured instruction with context, constraints, and expected output format.",
+      "language": "role_pattern",
+      "code_snippet": "```json\n{\n  \"action\": \"delegate\",\n  \"target_role\": \"Executor_Architect\",\n  \"instruction\": \"Рефакторинг src/pipeline_schemas.py: добавить validate_researcher(), validate_analyst(), validate_archivist(). Каждая функция принимает response_text: str и возвращает tuple[bool, str].\",\n  \"context\": {\n    \"existing_validators\": [\"validate_planner\", \"validate_auditor\", \"validate_foreman\", \"validate_debugger\"],\n    \"pattern_to_follow\": \"validate_planner — проверка минимальной длины + наличие ключевых слов\"\n  },\n  \"constraints\": [\n    \"НЕ менять существующие валидаторы\",\n    \"Добавить в ROLE_GUARDRAILS dict\",\n    \"Язык feedback: русский\"\n  ],\n  \"expected_output\": \"Python код 3 функций + обновлённый ROLE_GUARDRAILS\"\n}\n```",
+      "source_file": "knowledge_store/role_patterns",
+      "commit_hash": "v14.7-ROLE-SKILLS",
+      "score": 0.93,
+      "tags": [
+        "role_pattern",
+        "cross_role",
+        "handoff",
+        "delegation",
+        "json",
+        "ROLE_OPERATIONAL_HANDOFF"
+      ],
+      "created_at": 1754006400.0,
+      "use_count": 0
+    },
+    {
+      "pattern_id": "role_pipeline_react_loop",
+      "description": "CROSS_ROLE: Complete ReAct tool-use loop pattern showing Thought→Action→Observation→Thought cycle with error recovery and max 3 retries.",
+      "language": "role_pattern",
+      "code_snippet": "Thought: Нужно проверить наличие файла benchmark_pipeline.py перед созданием.\nAction: list_directory\nAction Input: {\"path\": \"scripts/\"}\nObservation: ['bench-cli-startup.ts', 'bench-model.ts', 'bench1.py', ...] — benchmark_pipeline.py НЕ существует.\n\nThought: Файла нет, создаю новый. Нужно сначала проверить какие imports доступны.\nAction: sandbox_execute\nAction Input: {\"code\": \"import src.pipeline._core; print('OK')\", \"language\": \"python\", \"timeout\": 10}\nObservation: exit_code=1, stderr='ModuleNotFoundError: No module named src'\n\nThought: Ошибка — нужен sys.path. Исправляю (retry 1/3).\nAction: sandbox_execute\nAction Input: {\"code\": \"import sys; sys.path.insert(0, '.'); from src.pipeline._core import PipelineExecutor; print('OK')\", \"language\": \"python\", \"timeout\": 10}\nObservation: exit_code=0, stdout='OK'\n\nThought: Import работает. Пишу полный скрипт.",
+      "source_file": "knowledge_store/role_patterns",
+      "commit_hash": "v14.7-ROLE-SKILLS",
+      "score": 0.94,
+      "tags": [
+        "role_pattern",
+        "cross_role",
+        "react",
+        "tool_loop",
+        "error_recovery",
+        "ROLE_OPERATIONAL_REACT"
+      ],
+      "created_at": 1754006400.0,
+      "use_count": 0
+    },
+    {
+      "pattern_id": "role_researcher_tool_chain",
+      "description": "ROLE_OPERATIONAL: Researcher chains multiple tools (youtube_parser → web_search_mcp → fetch_url) for deep multi-source research with MARCH cross-verification.",
+      "language": "role_pattern",
+      "code_snippet": "Thought: Пользователь просит deep research по новым фичам vLLM 0.8. Нужно собрать из нескольких источников.\n\nAction: web_search_mcp\nAction Input: {\"query\": \"vLLM 0.8 new features changelog 2025\"}\nObservation: [3 результата: GitHub releases, blog post, HuggingFace discussion]\n\nAction: fetch_url\nAction Input: {\"url\": \"https://github.com/vllm-project/vllm/releases/tag/v0.8.0\"}\nObservation: [changelog с 15 записями]\n\nAction: web_search_mcp\nAction Input: {\"query\": \"vLLM 0.8 benchmark performance comparison\"}\nObservation: [benchmarks от независимых тестеров]\n\n[MARCH CROSS-VERIFICATION]\n- GitHub changelog: 'Speculative decoding 2x faster' — подтверждено 2/3 источниками ✓\n- Blog: 'Supports 200B+ models on single GPU' — НЕ подтверждено другими источниками ✗ (удаляю)\n- HF discussion: 'Breaking change in tokenizer API' — подтверждено changelog ✓\n\n**Итог:** 2 факта верифицированы, 1 отброшен как непроверенный.",
+      "source_file": "knowledge_store/role_patterns",
+      "commit_hash": "v14.7-ROLE-SKILLS",
+      "score": 0.94,
+      "tags": [
+        "role_pattern",
+        "researcher",
+        "tool_chain",
+        "march",
+        "multi_source",
+        "ROLE_OPERATIONAL_RESEARCHER"
+      ],
+      "created_at": 1754006400.0,
+      "use_count": 0
+    },
+    {
+      "pattern_id": "role_state_manager_rag_hierarchy",
+      "description": "ROLE_OPERATIONAL: State_Manager manages RAG hierarchy: Hot_Memory (current session) → Domain_Experts (role-specific) → Cold_Memory (archive). Deduplicates and prunes.",
+      "language": "role_pattern",
+      "code_snippet": "**RAG Hierarchy Update:**\n\n[Hot_Memory — текущая сессия]\n- pipeline_run_id: run_1754006400\n- active_brigade: OpenClaw-Core\n- chain: Planner→Foreman→Executor_Architect→Auditor→Archivist\n- current_step: 3/5 (Executor_Architect завершён)\n- key_decisions: Path A выбран (LATS score 0.85)\n\n[Domain_Experts — role-specific]\n- Executor_Architect: last_successful_pattern = sentence-boundary extraction\n- Auditor: последний CWE = CWE-78 (command injection)\n\n[Cold_Memory — archive]\n- Перемещено: 3 записи из Hot → Cold (pipeline runs >24h old)\n- Дедупликация: 2 записи удалены (duplicate facts о rate limits)\n- Pruned: 1 запись score < 0.3\n\n**Stats:** Hot=12 docs, Domain=45 docs, Cold=234 docs. Total ChromaDB: 291 documents.",
+      "source_file": "knowledge_store/role_patterns",
+      "commit_hash": "v14.7-ROLE-SKILLS",
+      "score": 0.92,
+      "tags": [
+        "role_pattern",
+        "state_manager",
+        "rag",
+        "hierarchy",
+        "chromadb",
+        "ROLE_OPERATIONAL_STATE_MANAGER"
+      ],
+      "created_at": 1754006400.0,
+      "use_count": 0
+    },
+    {
+      "pattern_id": "role_test_writer_async_mocking",
+      "description": "ROLE_OPERATIONAL: Test_Writer creates async tests with pytest-asyncio, mocks vLLM/ChromaDB, tests pipeline integration with real chain execution.",
+      "language": "role_pattern",
+      "code_snippet": "```python\nimport pytest\nfrom unittest.mock import AsyncMock, patch\n\n\n@pytest.mark.asyncio\nasync def test_pipeline_execute_calls_guardrails():\n    \"\"\"Verify guardrail validators are called for each role in the chain.\"\"\"\n    mock_vllm = AsyncMock(return_value='{\"verdict\": \"pass\", \"summary\": \"OK\"}')\n\n    with patch('src.pipeline._core.PipelineExecutor._call_vllm', mock_vllm):\n        from src.pipeline._core import PipelineExecutor\n        pe = PipelineExecutor(config=_minimal_config())\n        result = await pe.execute('test task', brigade='OpenClaw-Core')\n\n    assert result['status'] == 'completed'\n    assert len(result['chain_executed']) >= 2\n    # Verify Auditor guardrail was invoked\n    assert any('Auditor' in step for step in result['chain_executed'])\n\n\n@pytest.mark.asyncio\nasync def test_pipeline_reflexion_on_empty_response():\n    \"\"\"Verify Reflexion fallback activates when pipeline produces empty response.\"\"\"\n    mock_vllm = AsyncMock(side_effect=['', 'Reflexion recovered: answer is 42'])\n\n    with patch('src.pipeline._core.PipelineExecutor._call_vllm', mock_vllm):\n        pe = PipelineExecutor(config=_minimal_config())\n        result = await pe.execute('what is the answer?', brigade='OpenClaw-Core')\n\n    assert 'Reflexion' in str(result.get('chain_executed', []))\n    assert '42' in result['final_response']\n```",
+      "source_file": "knowledge_store/role_patterns",
+      "commit_hash": "v14.7-ROLE-SKILLS",
+      "score": 0.94,
+      "tags": [
+        "role_pattern",
+        "test_writer",
+        "async",
+        "mocking",
+        "pytest_asyncio",
+        "ROLE_OPERATIONAL_TEST_WRITER"
+      ],
+      "created_at": 1754006400.0,
+      "use_count": 0
     }
   ]
 }

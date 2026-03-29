@@ -216,11 +216,12 @@ class TestKnowledgeStoreCompleteness:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
         patterns = data["patterns"]
-        assert len(patterns) == 30
+        assert len(patterns) >= 52  # 30 coding + 22 role-operational + extras
         langs = {p["language"] for p in patterns}
         assert "python" in langs
         assert "rust" in langs
         assert "typescript" in langs
+        assert "role_pattern" in langs
 
     def test_special_skills_ts_patterns_exist(self):
         root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))

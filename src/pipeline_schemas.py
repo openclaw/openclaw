@@ -149,11 +149,102 @@ def validate_debugger(response_text: str) -> tuple[bool, str]:
     return True, ""
 
 
+def validate_researcher(response_text: str) -> tuple[bool, str]:
+    """Validate Researcher output has structured findings and sources."""
+    if len(response_text.strip()) < 50:
+        return False, "Исследование слишком короткое. Добавь hypothesis, findings, sources."
+    lower = response_text.lower()
+    has_sources = any(kw in lower for kw in [
+        "source", "источник", "findings", "reference", "docs", "empiric",
+        "[1]", "[2]", "http", "arxiv", "github.com",
+    ])
+    if not has_sources:
+        return False, "Исследование должно содержать источники (sources[]). Добавь ссылки или обоснование данных."
+    return True, ""
+
+
+def validate_analyst(response_text: str) -> tuple[bool, str]:
+    """Validate Analyst output has numerical metrics and data."""
+    if len(response_text.strip()) < 40:
+        return False, "Аналитический отчёт слишком короткий. Добавь метрики, sample size, CI."
+    lower = response_text.lower()
+    has_metrics = any(kw in lower for kw in [
+        "metric", "метрик", "mean", "среднее", "median", "p99", "ci ",
+        "sample", "dataset", "n=", "rate", "latency", "%", "ratio",
+    ])
+    if not has_metrics:
+        return False, "Аналитик обязан предоставить числовые метрики (sample_size, mean, CI, anomalies). Перепиши с данными."
+    return True, ""
+
+
+def validate_archivist(response_text: str) -> tuple[bool, str]:
+    """Validate Archivist output has confidence tag and no raw markup."""
+    if len(response_text.strip()) < 20:
+        return False, "Ответ Архивиста слишком короткий."
+    lower = response_text.lower()
+    # Check for leftover internal markup (should be cleaned)
+    has_raw_markup = any(tag in lower for tag in [
+        "<think>", "[mcp ", "[proof of work", "[agent protocol",
+        "situation:", "task:", "action:", "result:",
+    ])
+    if has_raw_markup:
+        return False, "Архивист оставил служебную разметку (STAR/think/MCP). Удали все внутренние теги."
+    # Confidence tag is optional but encouraged — don't hard-fail
+    return True, ""
+
+
+def validate_executor(response_text: str) -> tuple[bool, str]:
+    """Validate Executor roles produce actionable code or tool results."""
+    if len(response_text.strip()) < 30:
+        return False, "Результат Executor слишком короткий. Предоставь код или результат выполнения инструмента."
+    lower = response_text.lower()
+    # Must have code blocks, JSON, or tool observations
+    has_artifact = any(kw in lower for kw in [
+        "```", "def ", "fn ", "function ", "class ", "import ", "from ",
+        "action:", "observation:", "exit_code", "stdout", "статус:",
+    ])
+    if not has_artifact:
+        return False, "Executor должен выдать код, JSON или результат инструмента. Не пиши пояснения без артефактов."
+    return True, ""
+
+
+def validate_state_manager(response_text: str) -> tuple[bool, str]:
+    """Validate State_Manager output is a proper summary/compression."""
+    if len(response_text.strip()) < 20:
+        return False, "Summary State_Manager слишком короткий."
+    # Should not be too long (defeats the purpose of compression)
+    if len(response_text) > 3000:
+        return False, "Summary State_Manager слишком длинный (>3000 chars). Сожми агрессивнее."
+    return True, ""
+
+
+def validate_test_writer(response_text: str) -> tuple[bool, str]:
+    """Validate Test_Writer output contains actual test code."""
+    if len(response_text.strip()) < 40:
+        return False, "Тестовый код слишком короткий."
+    lower = response_text.lower()
+    has_tests = any(kw in lower for kw in [
+        "def test_", "test(", "assert", "expect(", "it(", "describe(",
+        "pytest", "vitest", "@pytest.mark",
+    ])
+    if not has_tests:
+        return False, "Test_Writer должен выдать тестовый код (pytest/vitest). Не описывай тесты — пиши их."
+    return True, ""
+
+
 ROLE_GUARDRAILS = {
     "Planner": validate_planner,
     "Auditor": validate_auditor,
     "Foreman": validate_foreman,
     "Debugger": validate_debugger,
+    "Researcher": validate_researcher,
+    "Analyst": validate_analyst,
+    "Archivist": validate_archivist,
+    "Executor_Architect": validate_executor,
+    "Executor_Tools": validate_executor,
+    "Executor_Integration": validate_executor,
+    "State_Manager": validate_state_manager,
+    "Test_Writer": validate_test_writer,
 }
 
 GUARDRAIL_MAX_RETRIES = 2
