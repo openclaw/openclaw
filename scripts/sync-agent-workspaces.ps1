@@ -4,6 +4,7 @@ param(
   [switch]$All,
   [switch]$IncludeSharedSkills,
   [switch]$IncludeSharedState,
+  [switch]$IncludeConfig,
   [switch]$Prune,
   [string]$OpenClawRoot = (Join-Path $HOME ".openclaw")
 )
@@ -98,6 +99,7 @@ $teamRoot = Join-Path $repoRoot "agent-team"
 $agentsRoot = Join-Path $teamRoot "agents"
 $sharedSkillsRoot = Join-Path $teamRoot "shared-skills"
 $sharedStateRoot = Join-Path $teamRoot "shared-state"
+$configRoot = Join-Path $teamRoot "config"
 $openClawConfigPath = Get-OpenClawConfigPath -Root $OpenClawRoot
 $openClawCommand = Get-Command "openclaw" -ErrorAction SilentlyContinue
 $canApplyIdentity = ($null -ne $openClawCommand) -and (Test-Path -LiteralPath $openClawConfigPath)
@@ -158,12 +160,40 @@ if ($IncludeSharedSkills) {
   Sync-DirectoryContent -Source $sharedSkillsRoot -Destination $destSkillsRoot -Mirror:$Prune -WhatIf:$WhatIfPreference
 }
 
+if ($IncludeConfig) {
+  $sourceConfig = Join-Path $configRoot "openclaw.json"
+  $destConfig = Join-Path $OpenClawRoot "openclaw.json"
+
+  if (Test-Path -LiteralPath $sourceConfig) {
+    if ($PSCmdlet.ShouldProcess($destConfig, "Copy config from $sourceConfig")) {
+      Copy-Item -LiteralPath $sourceConfig -Destination $destConfig -Force
+    }
+  } else {
+    Write-Warning "Config source not found: $sourceConfig"
+  }
+
+  $sourceEnv = Join-Path $configRoot ".env"
+  $destEnv = Join-Path $OpenClawRoot ".env"
+
+  if (Test-Path -LiteralPath $sourceEnv) {
+    if (Test-Path -LiteralPath $destEnv) {
+      Write-Host "Skipped .env copy because $destEnv already exists. Fill in tokens there manually."
+    } elseif ($PSCmdlet.ShouldProcess($destEnv, "Copy .env template from $sourceEnv")) {
+      Copy-Item -LiteralPath $sourceEnv -Destination $destEnv -Force
+      Write-Host "Copied .env template to $destEnv. Fill in real tokens before starting the gateway."
+    }
+  }
+}
+
 Write-Host "Synced agent workspaces: $($targetAgents -join ', ')"
 if ($IncludeSharedState) {
   Write-Host "Included shared state."
 }
 if ($IncludeSharedSkills) {
   Write-Host "Included shared skills."
+}
+if ($IncludeConfig) {
+  Write-Host "Included config (openclaw.json + .env template)."
 }
 if (-not $canApplyIdentity) {
   Write-Host "Skipped live identity update because openclaw CLI or $openClawConfigPath was not found."
