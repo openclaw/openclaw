@@ -14,6 +14,11 @@ export type DeliveryContextSessionSource = {
   lastTo?: string;
   lastAccountId?: string;
   lastThreadId?: string | number;
+  origin?: {
+    provider?: string;
+    accountId?: string;
+    threadId?: string | number;
+  };
   deliveryContext?: DeliveryContext;
 };
 
@@ -165,17 +170,18 @@ export function normalizeSessionDeliveryFields(source?: DeliveryContextSessionSo
 }
 
 export function deliveryContextFromSession(
-  entry?: DeliveryContextSessionSource & { origin?: { threadId?: string | number } },
+  entry?: DeliveryContextSessionSource,
 ): DeliveryContext | undefined {
   if (!entry) {
     return undefined;
   }
   const source: DeliveryContextSessionSource = {
-    channel: entry.channel,
+    channel: entry.channel ?? entry.origin?.provider,
     lastChannel: entry.lastChannel,
     lastTo: entry.lastTo,
-    lastAccountId: entry.lastAccountId,
+    lastAccountId: entry.lastAccountId ?? entry.origin?.accountId,
     lastThreadId: entry.lastThreadId ?? entry.deliveryContext?.threadId ?? entry.origin?.threadId,
+    origin: entry.origin,
     deliveryContext: entry.deliveryContext,
   };
   return normalizeSessionDeliveryFields(source).deliveryContext;

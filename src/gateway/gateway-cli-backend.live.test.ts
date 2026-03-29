@@ -167,6 +167,13 @@ async function connectClient(params: { url: string; token: string }) {
 
 describeLive("gateway live (cli backend)", () => {
   it("runs the agent pipeline against the local CLI backend", async () => {
+    const preservedEnv = new Set(
+      parseJsonStringArray(
+        "OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV",
+        process.env.OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV,
+      ) ?? [],
+    );
+
     clearRuntimeConfigSnapshot();
     const previous = {
       configPath: process.env.OPENCLAW_CONFIG_PATH,
@@ -183,8 +190,12 @@ describeLive("gateway live (cli backend)", () => {
     process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
     process.env.OPENCLAW_SKIP_CRON = "1";
     process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
-    delete process.env.ANTHROPIC_API_KEY;
-    delete process.env.ANTHROPIC_API_KEY_OLD;
+    if (!preservedEnv.has("ANTHROPIC_API_KEY")) {
+      delete process.env.ANTHROPIC_API_KEY;
+    }
+    if (!preservedEnv.has("ANTHROPIC_API_KEY_OLD")) {
+      delete process.env.ANTHROPIC_API_KEY_OLD;
+    }
 
     const token = `test-${randomUUID()}`;
     process.env.OPENCLAW_GATEWAY_TOKEN = token;
@@ -225,6 +236,7 @@ describeLive("gateway live (cli backend)", () => {
         "OPENCLAW_LIVE_CLI_BACKEND_CLEAR_ENV",
         process.env.OPENCLAW_LIVE_CLI_BACKEND_CLEAR_ENV,
       ) ?? (providerId === "claude-cli" ? DEFAULT_CLEAR_ENV : []);
+    const filteredCliClearEnv = cliClearEnv.filter((name) => !preservedEnv.has(name));
     const cliImageArg = process.env.OPENCLAW_LIVE_CLI_BACKEND_IMAGE_ARG?.trim() || undefined;
     const cliImageMode = parseImageMode(process.env.OPENCLAW_LIVE_CLI_BACKEND_IMAGE_MODE);
 
@@ -260,7 +272,7 @@ describeLive("gateway live (cli backend)", () => {
             [providerId]: {
               command: cliCommand,
               args: cliArgs,
-              clearEnv: cliClearEnv.length > 0 ? cliClearEnv : undefined,
+              clearEnv: filteredCliClearEnv.length > 0 ? filteredCliClearEnv : undefined,
               systemPromptWhen: "never",
               ...(cliImageArg ? { imageArg: cliImageArg, imageMode: cliImageMode } : {}),
             },

@@ -1,9 +1,4 @@
-import {
-  DISCORD_DEFAULT_INBOUND_WORKER_TIMEOUT_MS,
-  DISCORD_DEFAULT_LISTENER_TIMEOUT_MS,
-} from "../../extensions/discord/timeouts.js";
 import { MEDIA_AUDIO_FIELD_HELP } from "./media-audio-field-metadata.js";
-import { IRC_FIELD_HELP } from "./schema.irc.js";
 import { describeTalkSilenceTimeoutDefaults } from "./talk-defaults.js";
 
 export const FIELD_HELP: Record<string, string> = {
@@ -227,7 +222,7 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.list[].runtime.acp":
     "ACP runtime defaults for this agent when runtime.type=acp. Binding-level ACP overrides still take precedence per conversation.",
   "agents.list[].runtime.acp.agent":
-    "Optional ACP harness agent id to use for this OpenClaw agent (for example codex, claude).",
+    "Optional ACP harness agent id to use for this OpenClaw agent (for example codex, claude, cursor, gemini, openclaw).",
   "agents.list[].runtime.acp.backend":
     "Optional ACP backend override for this agent's ACP sessions (falls back to global acp.backend).",
   "agents.list[].runtime.acp.mode":
@@ -317,7 +312,7 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.exec":
     "Exec-tool policy grouping for shell execution host, security mode, approval behavior, and runtime bindings. Keep conservative defaults in production and tighten elevated execution paths.",
   "tools.exec.host":
-    "Selects execution host strategy for shell commands, typically controlling local vs delegated execution environment. Use the safest host mode that still satisfies your automation requirements.",
+    'Selects execution target strategy for shell commands. Use "auto" for runtime-aware behavior (sandbox when available, otherwise gateway), or pin sandbox/gateway/node explicitly when you need a fixed surface.',
   "tools.exec.security":
     "Execution security posture selector controlling sandbox/approval expectations for command execution. Keep strict security mode for untrusted prompts and relax only for trusted operator workflows.",
   "tools.exec.ask":
@@ -537,7 +532,7 @@ export const FIELD_HELP: Record<string, string> = {
   "diagnostics.cacheTrace.includePrompt": "Include prompt text in trace output (default: true).",
   "diagnostics.cacheTrace.includeSystem": "Include system prompt in trace output (default: true).",
   "tools.exec.applyPatch.enabled":
-    "Experimental. Enables apply_patch for OpenAI models when allowed by tool policy.",
+    "Enable or disable apply_patch for OpenAI and OpenAI Codex models when allowed by tool policy (default: true).",
   "tools.exec.applyPatch.workspaceOnly":
     "Restrict apply_patch paths to the workspace directory (default: true). Set false to allow writing outside the workspace (dangerous).",
   "tools.exec.applyPatch.allowModels":
@@ -635,7 +630,7 @@ export const FIELD_HELP: Record<string, string> = {
   "skills.load.watchDebounceMs":
     "Debounce window in milliseconds for coalescing rapid skill file changes before reload logic runs. Increase to reduce reload churn on frequent writes, or lower for faster edit feedback.",
   approvals:
-    "Approval routing controls for forwarding exec approval requests to chat destinations outside the originating session. Keep this disabled unless operators need explicit out-of-band approval visibility.",
+    "Approval routing controls for forwarding exec and plugin approval requests to chat destinations outside the originating session. Keep these disabled unless operators need explicit out-of-band approval visibility.",
   "approvals.exec":
     "Groups exec-approval forwarding behavior including enablement, routing mode, filters, and explicit targets. Configure here when approval prompts must reach operational channels instead of only the origin thread.",
   "approvals.exec.enabled":
@@ -656,6 +651,26 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional account selector for multi-account channel setups when approvals must route through a specific account context. Use this only when the target channel has multiple configured identities.",
   "approvals.exec.targets[].threadId":
     "Optional thread/topic target for channels that support threaded delivery of forwarded approvals. Use this to keep approval traffic contained in operational threads instead of main channels.",
+  "approvals.plugin":
+    "Groups plugin-approval forwarding behavior including enablement, routing mode, filters, and explicit targets. Independent of exec approval forwarding. Configure here when plugin approval prompts must reach operational channels.",
+  "approvals.plugin.enabled":
+    "Enables forwarding of plugin approval requests to configured delivery destinations (default: false). Independent of approvals.exec.enabled.",
+  "approvals.plugin.mode":
+    'Controls where plugin approval prompts are sent: "session" uses origin chat, "targets" uses configured targets, and "both" sends to both paths.',
+  "approvals.plugin.agentFilter":
+    'Optional allowlist of agent IDs eligible for forwarded plugin approvals, for example `["primary", "ops-agent"]`. Use this to limit forwarding blast radius.',
+  "approvals.plugin.sessionFilter":
+    'Optional session-key filters matched as substring or regex-style patterns, for example `["discord:", "^agent:ops:"]`. Use narrow patterns so only intended approval contexts are forwarded.',
+  "approvals.plugin.targets":
+    "Explicit delivery targets used when plugin approval forwarding mode includes targets, each with channel and destination details.",
+  "approvals.plugin.targets[].channel":
+    "Channel/provider ID used for forwarded plugin approval delivery, such as discord, slack, or a plugin channel id.",
+  "approvals.plugin.targets[].to":
+    "Destination identifier inside the target channel (channel ID, user ID, or thread root depending on provider).",
+  "approvals.plugin.targets[].accountId":
+    "Optional account selector for multi-account channel setups when plugin approvals must route through a specific account context.",
+  "approvals.plugin.targets[].threadId":
+    "Optional thread/topic target for channels that support threaded delivery of forwarded plugin approvals.",
   "tools.fs.workspaceOnly":
     "Restrict filesystem tools (read/write/edit/apply_patch) to the workspace directory (default: false).",
   "tools.sessions.visibility":
@@ -699,6 +714,16 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.web.fetch.firecrawl.maxAgeMs":
     "Firecrawl maxAge (ms) for cached results when supported by the API.",
   "tools.web.fetch.firecrawl.timeoutSeconds": "Timeout in seconds for Firecrawl requests.",
+  "tools.web.x_search.enabled":
+    "Enable the x_search tool (requires XAI_API_KEY or tools.web.x_search.apiKey).",
+  "tools.web.x_search.apiKey": "xAI API key for X search (fallback: XAI_API_KEY env var).",
+  "tools.web.x_search.model": 'Model to use for X search (default: "grok-4-1-fast-non-reasoning").',
+  "tools.web.x_search.inlineCitations":
+    "Keep inline citations from xAI in x_search responses when available (default: false).",
+  "tools.web.x_search.maxTurns":
+    "Optional max internal search/tool turns xAI may use per x_search request. Omit to let xAI choose.",
+  "tools.web.x_search.timeoutSeconds": "Timeout in seconds for x_search requests.",
+  "tools.web.x_search.cacheTtlMinutes": "Cache TTL in minutes for x_search results.",
   models:
     "Model catalog root for provider definitions, merge/replace behavior, and optional Bedrock discovery integration. Keep provider definitions explicit and validated before relying on production failover paths.",
   "models.mode":
@@ -736,16 +761,8 @@ export const FIELD_HELP: Record<string, string> = {
   "models.bedrockDiscovery.defaultMaxTokens":
     "Fallback max-token value applied to discovered models without explicit output token limits. Use conservative defaults to reduce truncation surprises and unexpected token spend.",
   auth: "Authentication profile root used for multi-profile provider credentials and cooldown-based failover ordering. Keep profiles minimal and explicit so automatic failover behavior stays auditable.",
-  "channels.slack.allowBots":
-    "Allow bot-authored messages to trigger Slack replies (default: false).",
   "channels.matrix.allowBots":
     'Allow messages from other configured Matrix bot accounts to trigger replies (default: false). Set "mentions" to only accept bot messages that visibly mention this bot.',
-  "channels.slack.thread.historyScope":
-    'Scope for Slack thread history context ("thread" isolates per thread; "channel" reuses channel history).',
-  "channels.slack.thread.inheritParent":
-    "If true, Slack thread sessions inherit the parent channel transcript (default: false).",
-  "channels.slack.thread.initialHistoryLimit":
-    "Maximum number of existing Slack thread messages to fetch when starting a new thread session (default: 20, set to 0 to disable).",
   "channels.mattermost.botToken":
     "Bot token from Mattermost System Console -> Integrations -> Bot Accounts.",
   "channels.mattermost.baseUrl":
@@ -984,8 +1001,7 @@ export const FIELD_HELP: Record<string, string> = {
   "plugins.installs.*.source": 'Install source ("npm", "archive", or "path").',
   "plugins.installs.*.spec": "Original npm spec used for install (if source is npm).",
   "plugins.installs.*.sourcePath": "Original archive/path used for install (if any).",
-  "plugins.installs.*.installPath":
-    "Resolved install directory (usually ~/.openclaw/extensions/<id>).",
+  "plugins.installs.*.installPath": "Resolved install directory for the installed plugin bundle.",
   "plugins.installs.*.version": "Version recorded at install time (if available).",
   "plugins.installs.*.resolvedName": "Resolved npm package name from the fetched artifact.",
   "plugins.installs.*.resolvedVersion":
@@ -1390,28 +1406,16 @@ export const FIELD_HELP: Record<string, string> = {
     "Removes the acknowledgment reaction after final reply delivery when enabled. Keep enabled for cleaner UX in channels where persistent ack reactions create clutter.",
   "messages.tts":
     "Text-to-speech policy for reading agent replies aloud on supported voice or audio surfaces. Keep disabled unless voice playback is part of your operator/user workflow.",
+  "messages.tts.providers":
+    "Provider-specific TTS settings keyed by speech provider id. Use this instead of bundled provider-specific top-level keys so speech plugins stay decoupled from core config schema.",
+  "messages.tts.providers.*":
+    "Provider-specific TTS configuration for one speech provider id. Keep fields scoped to the plugin that owns that provider.",
+  "messages.tts.providers.*.apiKey":
+    "Provider API key used by that speech provider when its plugin requires authenticated TTS access.", // pragma: allowlist secret
   channels:
     "Channel provider configurations plus shared defaults that control access policies, heartbeat visibility, and per-surface behavior. Keep defaults centralized and override per provider only where required.",
-  "channels.telegram":
-    "Telegram channel provider configuration including auth tokens, retry behavior, and message rendering controls. Use this section to tune bot behavior for Telegram-specific API semantics.",
-  "channels.slack":
-    "Slack channel provider configuration for bot/app tokens, streaming behavior, and DM policy controls. Keep token handling and thread behavior explicit to avoid noisy workspace interactions.",
-  "channels.discord":
-    "Discord channel provider configuration for bot auth, retry policy, streaming, thread bindings, and optional voice capabilities. Keep privileged intents and advanced features disabled unless needed.",
-  "channels.whatsapp":
-    "WhatsApp channel provider configuration for access policy and message batching behavior. Use this section to tune responsiveness and direct-message routing safety for WhatsApp chats.",
-  "channels.signal":
-    "Signal channel provider configuration including account identity and DM policy behavior. Keep account mapping explicit so routing remains stable across multi-device setups.",
-  "channels.imessage":
-    "iMessage channel provider configuration for CLI integration and DM access policy handling. Use explicit CLI paths when runtime environments have non-standard binary locations.",
-  "channels.bluebubbles":
-    "BlueBubbles channel provider configuration used for Apple messaging bridge integrations. Keep DM policy aligned with your trusted sender model in shared deployments.",
-  "channels.msteams":
-    "Microsoft Teams channel provider configuration and provider-specific policy toggles. Use this section to isolate Teams behavior from other enterprise chat providers.",
   "channels.mattermost":
     "Mattermost channel provider configuration for bot credentials, base URL, and message trigger modes. Keep mention/trigger rules strict in high-volume team channels.",
-  "channels.irc":
-    "IRC channel provider configuration and compatibility settings for classic IRC transport workflows. Use this section when bridging legacy chat infrastructure into OpenClaw.",
   "channels.defaults":
     "Default channel behavior applied across providers when provider-specific settings are not set. Use this to enforce consistent baseline policy before per-provider tuning.",
   "channels.defaults.groupPolicy":
@@ -1428,78 +1432,10 @@ export const FIELD_HELP: Record<string, string> = {
     'Controls whether heartbeat delivery may target direct/DM chats: "allow" (default) permits DM delivery and "block" suppresses direct-target sends.',
   "agents.list.*.heartbeat.directPolicy":
     'Per-agent override for heartbeat direct/DM delivery policy; use "block" for agents that should only send heartbeat alerts to non-DM destinations.',
-  "channels.telegram.configWrites":
-    "Allow Telegram to write config in response to channel events/commands (default: true).",
-  "channels.telegram.botToken":
-    "Telegram bot token used to authenticate Bot API requests for this account/provider config. Use secret/env substitution and rotate tokens if exposure is suspected.",
-  "channels.telegram.capabilities.inlineButtons":
-    "Enable Telegram inline button components for supported command and interaction surfaces. Disable if your deployment needs plain-text-only compatibility behavior.",
-  "channels.telegram.execApprovals":
-    "Telegram-native exec approval routing and approver authorization. Enable this only when Telegram should act as an explicit exec-approval client for the selected bot account.",
-  "channels.telegram.execApprovals.enabled":
-    "Enable Telegram exec approvals for this account. When false or unset, Telegram messages/buttons cannot approve exec requests.",
-  "channels.telegram.execApprovals.approvers":
-    "Telegram user IDs allowed to approve exec requests for this bot account. Use numeric Telegram user IDs; prompts are only delivered to these approvers when target includes dm.",
-  "channels.telegram.execApprovals.agentFilter":
-    'Optional allowlist of agent IDs eligible for Telegram exec approvals, for example `["main", "ops-agent"]`. Use this to keep approval prompts scoped to the agents you actually operate from Telegram.',
-  "channels.telegram.execApprovals.sessionFilter":
-    "Optional session-key filters matched as substring or regex-style patterns before Telegram approval routing is used. Use narrow patterns so Telegram approvals only appear for intended sessions.",
-  "channels.telegram.execApprovals.target":
-    'Controls where Telegram approval prompts are sent: "dm" sends to approver DMs (default), "channel" sends to the originating Telegram chat/topic, and "both" sends to both. Channel delivery exposes the command text to the chat, so only use it in trusted groups/topics.',
-  "channels.slack.configWrites":
-    "Allow Slack to write config in response to channel events/commands (default: true).",
-  "channels.slack.botToken":
-    "Slack bot token used for standard chat actions in the configured workspace. Keep this credential scoped and rotate if workspace app permissions change.",
-  "channels.slack.appToken":
-    "Slack app-level token used for Socket Mode connections and event transport when enabled. Use least-privilege app scopes and store this token as a secret.",
-  "channels.slack.userToken":
-    "Optional Slack user token for workflows requiring user-context API access beyond bot permissions. Use sparingly and audit scopes because this token can carry broader authority.",
-  "channels.slack.userTokenReadOnly":
-    "When true, treat configured Slack user token usage as read-only helper behavior where possible. Keep enabled if you only need supplemental reads without user-context writes.",
-  "channels.slack.capabilities.interactiveReplies":
-    "Enable agent-authored Slack interactive reply directives (`[[slack_buttons: ...]]`, `[[slack_select: ...]]`). Default: false.",
   "channels.mattermost.configWrites":
     "Allow Mattermost to write config in response to channel events/commands (default: true).",
-  "channels.discord.configWrites":
-    "Allow Discord to write config in response to channel events/commands (default: true).",
-  "channels.discord.token":
-    "Discord bot token used for gateway and REST API authentication for this provider account. Keep this secret out of committed config and rotate immediately after any leak.",
-  "channels.discord.allowBots":
-    'Allow bot-authored messages to trigger Discord replies (default: false). Set "mentions" to only accept bot messages that mention the bot.',
-  "channels.discord.proxy":
-    "Proxy URL for Discord gateway + API requests (app-id lookup and allowlist resolution). Set per account via channels.discord.accounts.<id>.proxy.",
-  "channels.whatsapp.configWrites":
-    "Allow WhatsApp to write config in response to channel events/commands (default: true).",
-  "channels.signal.configWrites":
-    "Allow Signal to write config in response to channel events/commands (default: true).",
-  "channels.signal.account":
-    "Signal account identifier (phone/number handle) used to bind this channel config to a specific Signal identity. Keep this aligned with your linked device/session state.",
-  "channels.imessage.configWrites":
-    "Allow iMessage to write config in response to channel events/commands (default: true).",
-  "channels.imessage.cliPath":
-    "Filesystem path to the iMessage bridge CLI binary used for send/receive operations. Set explicitly when the binary is not on PATH in service runtime environments.",
-  "channels.msteams.configWrites":
-    "Allow Microsoft Teams to write config in response to channel events/commands (default: true).",
   "channels.modelByChannel":
     "Map provider -> channel id -> model override (values are provider/model or aliases).",
-  ...IRC_FIELD_HELP,
-  "channels.discord.commands.native": 'Override native commands for Discord (bool or "auto").',
-  "channels.discord.commands.nativeSkills":
-    'Override native skill commands for Discord (bool or "auto").',
-  "channels.telegram.commands.native": 'Override native commands for Telegram (bool or "auto").',
-  "channels.telegram.commands.nativeSkills":
-    'Override native skill commands for Telegram (bool or "auto").',
-  "channels.slack.commands.native": 'Override native commands for Slack (bool or "auto").',
-  "channels.slack.commands.nativeSkills":
-    'Override native skill commands for Slack (bool or "auto").',
-  "channels.slack.streaming":
-    'Unified Slack stream preview mode: "off" | "partial" | "block" | "progress". Legacy boolean/streamMode keys are auto-mapped.',
-  "channels.slack.nativeStreaming":
-    "Enable native Slack text streaming (chat.startStream/chat.appendStream/chat.stopStream) when channels.slack.streaming is partial (default: true).",
-  "channels.slack.streamMode":
-    "Legacy Slack preview mode alias (replace | status_final | append); auto-migrated to channels.slack.streaming.",
-  "channels.telegram.customCommands":
-    "Additional Telegram bot menu commands (merged with native; conflicts ignored).",
   "messages.suppressToolErrors":
     "When true, suppress ⚠️ tool-error warnings from being shown to the user. The agent already sees errors in context and can retry. Default: false.",
   "messages.ackReaction": "Emoji reaction used to acknowledge inbound messages (empty disables).",
@@ -1515,126 +1451,4 @@ export const FIELD_HELP: Record<string, string> = {
     "Override default timing. Keys: debounceMs (700), stallSoftMs (25000), stallHardMs (60000), doneHoldMs (1500), errorHoldMs (2500).",
   "messages.inbound.debounceMs":
     "Debounce window (ms) for batching rapid inbound messages from the same sender (0 to disable).",
-  "channels.telegram.dmPolicy":
-    'Direct message access control ("pairing" recommended). "open" requires channels.telegram.allowFrom=["*"].',
-  "channels.telegram.streaming":
-    'Unified Telegram stream preview mode: "off" | "partial" | "block" | "progress" (default: "partial"). "progress" maps to "partial" on Telegram. Legacy boolean/streamMode keys are auto-mapped.',
-  "channels.discord.streaming":
-    'Unified Discord stream preview mode: "off" | "partial" | "block" | "progress". "progress" maps to "partial" on Discord. Legacy boolean/streamMode keys are auto-mapped.',
-  "channels.discord.streamMode":
-    "Legacy Discord preview mode alias (off | partial | block); auto-migrated to channels.discord.streaming.",
-  "channels.discord.draftChunk.minChars":
-    'Minimum chars before emitting a Discord stream preview update when channels.discord.streaming="block" (default: 200).',
-  "channels.discord.draftChunk.maxChars":
-    'Target max size for a Discord stream preview chunk when channels.discord.streaming="block" (default: 800; clamped to channels.discord.textChunkLimit).',
-  "channels.discord.draftChunk.breakPreference":
-    "Preferred breakpoints for Discord draft chunks (paragraph | newline | sentence). Default: paragraph.",
-  "channels.telegram.retry.attempts":
-    "Max retry attempts for outbound Telegram API calls (default: 3).",
-  "channels.telegram.retry.minDelayMs": "Minimum retry delay in ms for Telegram outbound calls.",
-  "channels.telegram.retry.maxDelayMs":
-    "Maximum retry delay cap in ms for Telegram outbound calls.",
-  "channels.telegram.retry.jitter": "Jitter factor (0-1) applied to Telegram retry delays.",
-  "channels.telegram.network.autoSelectFamily":
-    "Override Node autoSelectFamily for Telegram (true=enable, false=disable).",
-  "channels.telegram.timeoutSeconds":
-    "Max seconds before Telegram API requests are aborted (default: 500 per grammY).",
-  "channels.telegram.silentErrorReplies":
-    "When true, Telegram bot replies marked as errors are sent silently (no notification sound). Default: false.",
-  "channels.telegram.apiRoot":
-    "Custom Telegram Bot API root URL. Use for self-hosted Bot API servers (https://github.com/tdlib/telegram-bot-api) or reverse proxies in regions where api.telegram.org is blocked.",
-  "channels.telegram.autoTopicLabel":
-    "Auto-rename DM forum topics on first message using LLM. Default: true. Set to false to disable, or use object form { enabled: true, prompt: '...' } for custom prompt.",
-  "channels.telegram.autoTopicLabel.enabled":
-    "Whether auto topic labeling is enabled. Default: true.",
-  "channels.telegram.autoTopicLabel.prompt":
-    "Custom prompt for LLM-based topic naming. The user message is appended after the prompt.",
-  "channels.telegram.threadBindings.enabled":
-    "Enable Telegram conversation binding features (/focus, /unfocus, /agents, and /session idle|max-age). Overrides session.threadBindings.enabled when set.",
-  "channels.telegram.threadBindings.idleHours":
-    "Inactivity window in hours for Telegram bound sessions. Set 0 to disable idle auto-unfocus (default: 24). Overrides session.threadBindings.idleHours when set.",
-  "channels.telegram.threadBindings.maxAgeHours":
-    "Optional hard max age in hours for Telegram bound sessions. Set 0 to disable hard cap (default: 0). Overrides session.threadBindings.maxAgeHours when set.",
-  "channels.telegram.threadBindings.spawnSubagentSessions":
-    "Allow subagent spawns with thread=true to auto-bind Telegram current conversations when supported.",
-  "channels.telegram.threadBindings.spawnAcpSessions":
-    "Allow ACP spawns with thread=true to auto-bind Telegram current conversations when supported.",
-  "channels.whatsapp.dmPolicy":
-    'Direct message access control ("pairing" recommended). "open" requires channels.whatsapp.allowFrom=["*"].',
-  "channels.whatsapp.selfChatMode": "Same-phone setup (bot uses your personal WhatsApp number).",
-  "channels.whatsapp.debounceMs":
-    "Debounce window (ms) for batching rapid consecutive messages from the same sender (0 to disable).",
-  "channels.signal.dmPolicy":
-    'Direct message access control ("pairing" recommended). "open" requires channels.signal.allowFrom=["*"].',
-  "channels.imessage.dmPolicy":
-    'Direct message access control ("pairing" recommended). "open" requires channels.imessage.allowFrom=["*"].',
-  "channels.bluebubbles.dmPolicy":
-    'Direct message access control ("pairing" recommended). "open" requires channels.bluebubbles.allowFrom=["*"].',
-  "channels.discord.dmPolicy":
-    'Direct message access control ("pairing" recommended). "open" requires channels.discord.allowFrom=["*"].',
-  "channels.discord.dm.policy":
-    'Direct message access control ("pairing" recommended). "open" requires channels.discord.allowFrom=["*"] (legacy: channels.discord.dm.allowFrom).',
-  "channels.discord.retry.attempts":
-    "Max retry attempts for outbound Discord API calls (default: 3).",
-  "channels.discord.retry.minDelayMs": "Minimum retry delay in ms for Discord outbound calls.",
-  "channels.discord.retry.maxDelayMs": "Maximum retry delay cap in ms for Discord outbound calls.",
-  "channels.discord.retry.jitter": "Jitter factor (0-1) applied to Discord retry delays.",
-  "channels.discord.maxLinesPerMessage": "Soft max line count per Discord message (default: 17).",
-  "channels.discord.inboundWorker.runTimeoutMs": `Optional queued Discord inbound worker timeout in ms. This is separate from Carbon listener timeouts; defaults to ${DISCORD_DEFAULT_INBOUND_WORKER_TIMEOUT_MS} and can be disabled with 0. Set per account via channels.discord.accounts.<id>.inboundWorker.runTimeoutMs.`,
-  "channels.discord.eventQueue.listenerTimeout": `Canonical Discord listener timeout control in ms for gateway normalization/enqueue handlers. Default is ${DISCORD_DEFAULT_LISTENER_TIMEOUT_MS} in OpenClaw; set per account via channels.discord.accounts.<id>.eventQueue.listenerTimeout.`,
-  "channels.discord.eventQueue.maxQueueSize":
-    "Optional Discord EventQueue capacity override (max queued events before backpressure). Set per account via channels.discord.accounts.<id>.eventQueue.maxQueueSize.",
-  "channels.discord.eventQueue.maxConcurrency":
-    "Optional Discord EventQueue concurrency override (max concurrent handler executions). Set per account via channels.discord.accounts.<id>.eventQueue.maxConcurrency.",
-  "channels.discord.threadBindings.enabled":
-    "Enable Discord thread binding features (/focus, bound-thread routing/delivery, and thread-bound subagent sessions). Overrides session.threadBindings.enabled when set.",
-  "channels.discord.threadBindings.idleHours":
-    "Inactivity window in hours for Discord thread-bound sessions (/focus and spawned thread sessions). Set 0 to disable idle auto-unfocus (default: 24). Overrides session.threadBindings.idleHours when set.",
-  "channels.discord.threadBindings.maxAgeHours":
-    "Optional hard max age in hours for Discord thread-bound sessions. Set 0 to disable hard cap (default: 0). Overrides session.threadBindings.maxAgeHours when set.",
-  "channels.discord.threadBindings.spawnSubagentSessions":
-    "Allow subagent spawns with thread=true to auto-create and bind Discord threads (default: false; opt-in). Set true to enable thread-bound subagent spawns for this account/channel.",
-  "channels.discord.threadBindings.spawnAcpSessions":
-    "Allow /acp spawn to auto-create and bind Discord threads for ACP sessions (default: false; opt-in). Set true to enable thread-bound ACP spawns for this account/channel.",
-  "channels.discord.ui.components.accentColor":
-    "Accent color for Discord component containers (hex). Set per account via channels.discord.accounts.<id>.ui.components.accentColor.",
-  "channels.discord.voice.enabled":
-    "Enable Discord voice channel conversations (default: true). Omit channels.discord.voice to keep voice support disabled for the account.",
-  "channels.discord.voice.autoJoin":
-    "Voice channels to auto-join on startup (list of guildId/channelId entries).",
-  "channels.discord.voice.daveEncryption":
-    "Toggle DAVE end-to-end encryption for Discord voice joins (default: true in @discordjs/voice; Discord may require this).",
-  "channels.discord.voice.decryptionFailureTolerance":
-    "Consecutive decrypt failures before DAVE attempts session recovery (passed to @discordjs/voice; default: 24).",
-  "channels.discord.voice.tts":
-    "Optional TTS overrides for Discord voice playback (merged with messages.tts).",
-  "channels.discord.intents.presence":
-    "Enable the Guild Presences privileged intent. Must also be enabled in the Discord Developer Portal. Allows tracking user activities (e.g. Spotify). Default: false.",
-  "channels.discord.intents.guildMembers":
-    "Enable the Guild Members privileged intent. Must also be enabled in the Discord Developer Portal. Default: false.",
-  "channels.discord.pluralkit.enabled":
-    "Resolve PluralKit proxied messages and treat system members as distinct senders.",
-  "channels.discord.pluralkit.token":
-    "Optional PluralKit token for resolving private systems or members.",
-  "channels.discord.activity": "Discord presence activity text (defaults to custom status).",
-  "channels.discord.status": "Discord presence status (online, dnd, idle, invisible).",
-  "channels.discord.autoPresence.enabled":
-    "Enable automatic Discord bot presence updates based on runtime/model availability signals. When enabled: healthy=>online, degraded/unknown=>idle, exhausted/unavailable=>dnd.",
-  "channels.discord.autoPresence.intervalMs":
-    "How often to evaluate Discord auto-presence state in milliseconds (default: 30000).",
-  "channels.discord.autoPresence.minUpdateIntervalMs":
-    "Minimum time between actual Discord presence update calls in milliseconds (default: 15000). Prevents status spam on noisy state changes.",
-  "channels.discord.autoPresence.healthyText":
-    "Optional custom status text while runtime is healthy (online). If omitted, falls back to static channels.discord.activity when set.",
-  "channels.discord.autoPresence.degradedText":
-    "Optional custom status text while runtime/model availability is degraded or unknown (idle).",
-  "channels.discord.autoPresence.exhaustedText":
-    "Optional custom status text while runtime detects exhausted/unavailable model quota (dnd). Supports {reason} template placeholder.",
-  "channels.discord.activityType":
-    "Discord presence activity type (0=Playing,1=Streaming,2=Listening,3=Watching,4=Custom,5=Competing).",
-  "channels.discord.activityUrl": "Discord presence streaming URL (required for activityType=1).",
-  "channels.slack.dm.policy":
-    'Direct message access control ("pairing" recommended). "open" requires channels.slack.allowFrom=["*"] (legacy: channels.slack.dm.allowFrom).',
-  "channels.slack.dmPolicy":
-    'Direct message access control ("pairing" recommended). "open" requires channels.slack.allowFrom=["*"].',
 };

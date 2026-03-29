@@ -4,8 +4,8 @@ import path from "node:path";
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestamp.js";
-import { withEnvAsync } from "../../../test/helpers/extensions/env.js";
-import { useFrozenTime, useRealTime } from "../../../test/helpers/extensions/frozen-time.js";
+import { withEnvAsync } from "../../../test/helpers/plugins/env.js";
+import { useFrozenTime, useRealTime } from "../../../test/helpers/plugins/frozen-time.js";
 const harness = await import("./bot.create-telegram-bot.test-harness.js");
 const {
   answerCallbackQuerySpy,
@@ -34,13 +34,15 @@ const {
   throttlerSpy,
   useSpy,
 } = harness;
-let resolveTelegramFetch: typeof import("./fetch.js").resolveTelegramFetch;
-let setTelegramBotRuntimeForTest: typeof import("./bot.js").setTelegramBotRuntimeForTest;
-let createTelegramBotBase: typeof import("./bot.js").createTelegramBot;
+const { resolveTelegramFetch } = await import("./fetch.js");
+const {
+  createTelegramBot: createTelegramBotBase,
+  getTelegramSequentialKey,
+  setTelegramBotRuntimeForTest,
+} = await import("./bot.js");
 let createTelegramBot: (
   opts: Parameters<typeof import("./bot.js").createTelegramBot>[0],
 ) => ReturnType<typeof import("./bot.js").createTelegramBot>;
-let getTelegramSequentialKey: typeof import("./bot.js").getTelegramSequentialKey;
 
 const loadConfig = getLoadConfigMock();
 const loadWebMedia = getLoadWebMediaMock();
@@ -80,15 +82,6 @@ async function withConfigPathAsync<T>(cfg: unknown, fn: () => Promise<T>): Promi
 describe("createTelegramBot", () => {
   beforeAll(() => {
     process.env.TZ = "UTC";
-  });
-  beforeAll(async () => {
-    vi.resetModules();
-    ({ resolveTelegramFetch } = await import("./fetch.js"));
-    ({
-      createTelegramBot: createTelegramBotBase,
-      getTelegramSequentialKey,
-      setTelegramBotRuntimeForTest,
-    } = await import("./bot.js"));
   });
   afterAll(() => {
     process.env.TZ = ORIGINAL_TZ;

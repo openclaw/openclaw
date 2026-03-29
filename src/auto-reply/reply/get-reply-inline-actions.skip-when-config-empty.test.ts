@@ -8,6 +8,7 @@ import type { TypingController } from "./typing.js";
 
 const handleCommandsMock = vi.fn();
 const getChannelPluginMock = vi.fn();
+const createOpenClawToolsMock = vi.fn();
 
 let handleInlineActions: typeof import("./get-reply-inline-actions.js").handleInlineActions;
 type HandleInlineActionsInput = Parameters<
@@ -19,6 +20,9 @@ async function loadFreshInlineActionsModuleForTest() {
   vi.doMock("./commands.runtime.js", () => ({
     handleCommands: (...args: unknown[]) => handleCommandsMock(...args),
     buildStatusReply: vi.fn(),
+  }));
+  vi.doMock("../../agents/openclaw-tools.runtime.js", () => ({
+    createOpenClawTools: (...args: unknown[]) => createOpenClawToolsMock(...args),
   }));
   vi.doMock("../../channels/plugins/index.js", async (importOriginal) => {
     const actual = await importOriginal<typeof import("../../channels/plugins/index.js")>();
@@ -115,6 +119,8 @@ describe("handleInlineActions", () => {
     handleCommandsMock.mockReset();
     handleCommandsMock.mockResolvedValue({ shouldContinue: true, reply: undefined });
     getChannelPluginMock.mockReset();
+    createOpenClawToolsMock.mockReset();
+    createOpenClawToolsMock.mockReturnValue([]);
     getChannelPluginMock.mockImplementation((channelId?: string) =>
       channelId === "whatsapp" ? { commands: { skipWhenConfigEmpty: true } } : undefined,
     );
@@ -292,5 +298,64 @@ describe("handleInlineActions", () => {
         }),
       }),
     );
+  });
+
+  it("passes requesterAgentIdOverride into inline tool runtimes", async () => {
+    const typing = createTypingController();
+    const toolExecute = vi.fn(async () => ({ text: "spawned" }));
+    createOpenClawToolsMock.mockReturnValue([
+      {
+        name: "sessions_spawn",
+        execute: toolExecute,
+      },
+    ]);
+
+    const ctx = buildTestCtx({
+      Body: "/spawn_subagent investigate",
+      CommandBody: "/spawn_subagent investigate",
+    });
+    const skillCommands: SkillCommandSpec[] = [
+      {
+        name: "spawn_subagent",
+        skillName: "spawn-subagent",
+        description: "Spawn a subagent",
+        dispatch: {
+          kind: "tool",
+          toolName: "sessions_spawn",
+          argMode: "raw",
+        },
+        sourceFilePath: "/tmp/plugin/commands/spawn-subagent.md",
+      },
+    ];
+
+    const result = await handleInlineActions(
+      createHandleInlineActionsInput({
+        ctx,
+        typing,
+        cleanedBody: "/spawn_subagent investigate",
+        command: {
+          isAuthorizedSender: true,
+          senderId: "sender-1",
+          senderIsOwner: true,
+          abortKey: "sender-1",
+          rawBodyNormalized: "/spawn_subagent investigate",
+          commandBodyNormalized: "/spawn_subagent investigate",
+        },
+        overrides: {
+          cfg: { commands: { text: true } },
+          agentId: "named-worker",
+          allowTextCommands: true,
+          skillCommands,
+        },
+      }),
+    );
+
+    expect(result).toEqual({ kind: "reply", reply: { text: "✅ Done." } });
+    expect(createOpenClawToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requesterAgentIdOverride: "named-worker",
+      }),
+    );
+    expect(toolExecute).toHaveBeenCalled();
   });
 });

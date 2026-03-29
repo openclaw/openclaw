@@ -1,3 +1,4 @@
+import { hasApprovalTurnSourceRoute } from "../../infra/approval-turn-source.js";
 import { sanitizeExecApprovalDisplayText } from "../../infra/exec-approval-command-display.js";
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
 import {
@@ -18,6 +19,10 @@ import {
   validateExecApprovalResolveParams,
 } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
+
+const APPROVAL_NOT_FOUND_DETAILS = {
+  reason: ErrorCodes.APPROVAL_NOT_FOUND,
+} as const;
 
 export function createExecApprovalHandlers(
   manager: ExecApprovalManager,
@@ -183,7 +188,10 @@ export function createExecApprovalHandlers(
         },
         { dropIfSlow: true },
       );
-      const hasExecApprovalClients = context.hasExecApprovalClients?.() ?? false;
+      const hasExecApprovalClients = context.hasExecApprovalClients?.(client?.connId) ?? false;
+      const hasTurnSourceRoute = hasApprovalTurnSourceRoute({
+        turnSourceChannel: record.request.turnSourceChannel,
+      });
       let forwarded = false;
       if (opts?.forwarder) {
         try {
@@ -198,7 +206,7 @@ export function createExecApprovalHandlers(
         }
       }
 
-      if (!hasExecApprovalClients && !forwarded) {
+      if (!hasExecApprovalClients && !forwarded && !hasTurnSourceRoute) {
         manager.expire(record.id, "no-approval-route");
         respond(
           true,
@@ -297,7 +305,9 @@ export function createExecApprovalHandlers(
         respond(
           false,
           undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "unknown or expired approval id"),
+          errorShape(ErrorCodes.INVALID_REQUEST, "unknown or expired approval id", {
+            details: APPROVAL_NOT_FOUND_DETAILS,
+          }),
         );
         return;
       }
@@ -322,7 +332,9 @@ export function createExecApprovalHandlers(
         respond(
           false,
           undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "unknown or expired approval id"),
+          errorShape(ErrorCodes.INVALID_REQUEST, "unknown or expired approval id", {
+            details: APPROVAL_NOT_FOUND_DETAILS,
+          }),
         );
         return;
       }

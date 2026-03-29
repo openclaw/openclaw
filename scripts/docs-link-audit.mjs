@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -64,7 +65,15 @@ for (const item of docsConfig.redirects || []) {
 }
 
 const allFiles = walk(DOCS_DIR);
-const relAllFiles = new Set(allFiles.map((abs) => normalizeSlashes(path.relative(DOCS_DIR, abs))));
+function isIgnoredDocsPath(relPath) {
+  return relPath.startsWith("internal/");
+}
+
+const relAllFiles = new Set(
+  allFiles
+    .map((abs) => normalizeSlashes(path.relative(DOCS_DIR, abs)))
+    .filter((rel) => !isIgnoredDocsPath(rel)),
+);
 
 function isGeneratedTranslatedDoc(relPath) {
   return relPath.startsWith("zh-CN/");
@@ -75,7 +84,7 @@ const markdownFiles = allFiles.filter((abs) => {
     return false;
   }
   const rel = normalizeSlashes(path.relative(DOCS_DIR, abs));
-  return !isGeneratedTranslatedDoc(rel);
+  return !isGeneratedTranslatedDoc(rel) && !isIgnoredDocsPath(rel);
 });
 const routes = new Set();
 
@@ -288,12 +297,32 @@ export function auditDocsLinks() {
   return { checked, broken };
 }
 
-function isCliEntry() {
-  const cliArg = process.argv[1];
-  return cliArg ? import.meta.url === pathToFileURL(cliArg).href : false;
-}
+/**
+ * @param {{
+ *   args?: string[];
+ *   spawnSyncImpl?: typeof spawnSync;
+ * }} [options]
+ */
+export function runDocsLinkAuditCli(options = {}) {
+  const args = options.args ?? process.argv.slice(2);
+  if (args.includes("--anchors")) {
+    const spawnSyncImpl = options.spawnSyncImpl ?? spawnSync;
+    const result = spawnSyncImpl("mint", ["broken-links", "--check-anchors"], {
+      cwd: DOCS_DIR,
+      stdio: "inherit",
+    });
 
-if (isCliEntry()) {
+    if (result.error?.code === "ENOENT") {
+      const fallback = spawnSyncImpl("pnpm", ["dlx", "mint", "broken-links", "--check-anchors"], {
+        cwd: DOCS_DIR,
+        stdio: "inherit",
+      });
+      return fallback.status ?? 1;
+    }
+
+    return result.status ?? 1;
+  }
+
   const { checked, broken } = auditDocsLinks();
   console.log(`checked_internal_links=${checked}`);
   console.log(`broken_links=${broken.length}`);
@@ -302,7 +331,14 @@ if (isCliEntry()) {
     console.log(`${item.file}:${item.line} :: ${item.link} :: ${item.reason}`);
   }
 
-  if (broken.length > 0) {
-    process.exit(1);
-  }
+  return broken.length > 0 ? 1 : 0;
+}
+
+function isCliEntry() {
+  const cliArg = process.argv[1];
+  return cliArg ? import.meta.url === pathToFileURL(cliArg).href : false;
+}
+
+if (isCliEntry()) {
+  process.exit(runDocsLinkAuditCli());
 }

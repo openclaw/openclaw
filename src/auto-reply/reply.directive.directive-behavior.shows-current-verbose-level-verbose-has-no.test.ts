@@ -171,10 +171,10 @@ describe("directive behavior", () => {
         },
       });
       expect(execText).toContain(
-        "Current exec defaults: host=gateway, security=allowlist, ask=always, node=mac-1.",
+        "Current exec defaults: host=gateway, effective=gateway, security=allowlist, ask=always, node=mac-1.",
       );
       expect(execText).toContain(
-        "Options: host=sandbox|gateway|node, security=deny|allowlist|full, ask=off|on-miss|always, node=<id>.",
+        "Options: host=auto|sandbox|gateway|node, security=deny|allowlist|full, ask=off|on-miss|always, node=<id>.",
       );
       expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     });

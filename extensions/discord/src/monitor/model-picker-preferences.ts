@@ -2,8 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import { normalizeAccountId as normalizeSharedAccountId } from "openclaw/plugin-sdk/account-id";
 import { normalizeProviderId } from "openclaw/plugin-sdk/agent-runtime";
-import { withFileLock } from "openclaw/plugin-sdk/infra-runtime";
-import { resolveRequiredHomeDir } from "openclaw/plugin-sdk/infra-runtime";
+import { withFileLock } from "openclaw/plugin-sdk/file-lock";
 import { readJsonFileWithFallback, writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 
@@ -37,7 +36,7 @@ export type DiscordModelPickerPreferenceScope = {
 };
 
 function resolvePreferencesStorePath(env: NodeJS.ProcessEnv = process.env): string {
-  const stateDir = resolveStateDir(env, () => resolveRequiredHomeDir(env, os.homedir));
+  const stateDir = resolveStateDir(env, os.homedir);
   return path.join(stateDir, "discord", "model-picker-preferences.json");
 }
 

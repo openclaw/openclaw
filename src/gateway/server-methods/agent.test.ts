@@ -1,7 +1,12 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { BARE_SESSION_RESET_PROMPT } from "../../auto-reply/reply/session-reset-prompt.js";
+import { findTaskByRunId, resetTaskRegistryForTests } from "../../tasks/task-registry.js";
+import { withTempDir } from "../../test-helpers/temp-dir.js";
 import { agentHandlers } from "./agent.js";
+import { expectSubagentFollowupReactivation } from "./subagent-followup.test-helpers.js";
 import type { GatewayRequestContext } from "./types.js";
+
+const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
 
 const mocks = vi.hoisted(() => ({
   loadSessionEntry: vi.fn(),
@@ -10,7 +15,7 @@ const mocks = vi.hoisted(() => ({
   agentCommand: vi.fn(),
   registerAgentRunContext: vi.fn(),
   performGatewaySessionReset: vi.fn(),
-  getSubagentRunByChildSessionKey: vi.fn(),
+  getLatestSubagentRunByChildSessionKey: vi.fn(),
   replaceSubagentRunAfterSteer: vi.fn(),
   loadConfigReturn: {} as Record<string, unknown>,
 }));
@@ -66,8 +71,11 @@ vi.mock("../../infra/agent-events.js", () => ({
   onAgentEvent: vi.fn(),
 }));
 
-vi.mock("../../agents/subagent-registry.js", () => ({
-  getSubagentRunByChildSessionKey: mocks.getSubagentRunByChildSessionKey,
+vi.mock("../../agents/subagent-registry-read.js", () => ({
+  getLatestSubagentRunByChildSessionKey: mocks.getLatestSubagentRunByChildSessionKey,
+}));
+
+vi.mock("../session-subagent-reactivation.runtime.js", () => ({
   replaceSubagentRunAfterSteer: mocks.replaceSubagentRunAfterSteer,
 }));
 
@@ -298,6 +306,15 @@ async function invokeAgentIdentityGet(
 }
 
 describe("gateway agent handler", () => {
+  afterEach(() => {
+    if (ORIGINAL_STATE_DIR === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
+    }
+    resetTaskRegistryForTests();
+  });
+
   it("preserves ACP metadata from the current stored session entry", async () => {
     const existingAcpMeta = {
       backend: "acpx",
@@ -484,7 +501,7 @@ describe("gateway agent handler", () => {
       };
       return await updater(store);
     });
-    mocks.getSubagentRunByChildSessionKey.mockReturnValueOnce(completedRun);
+    mocks.getLatestSubagentRunByChildSessionKey.mockReturnValueOnce(completedRun);
     mocks.replaceSubagentRunAfterSteer.mockReturnValueOnce(true);
     mocks.loadGatewaySessionRow.mockReturnValueOnce({
       status: "running",
@@ -526,20 +543,96 @@ describe("gateway agent handler", () => {
       undefined,
       { runId: "run-new" },
     );
-    expect(mocks.replaceSubagentRunAfterSteer).toHaveBeenCalledWith({
-      previousRunId: "run-old",
-      nextRunId: "run-new",
-      fallback: completedRun,
-      runTimeoutSeconds: 0,
+    expectSubagentFollowupReactivation({
+      replaceSubagentRunAfterSteerMock: mocks.replaceSubagentRunAfterSteer,
+      broadcastToConnIds,
+      completedRun,
+      childSessionKey,
     });
+  });
+
+  it("includes live session setting metadata in agent send events", async () => {
+    mockMainSessionEntry({
+      sessionId: "sess-main",
+      updatedAt: Date.now(),
+      fastMode: true,
+      sendPolicy: "deny",
+      lastChannel: "telegram",
+      lastTo: "-100123",
+      lastAccountId: "acct-1",
+      lastThreadId: 42,
+    });
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {
+        "agent:main:main": buildExistingMainStoreEntry({
+          fastMode: true,
+          sendPolicy: "deny",
+          lastChannel: "telegram",
+          lastTo: "-100123",
+          lastAccountId: "acct-1",
+          lastThreadId: 42,
+        }),
+      };
+      return await updater(store);
+    });
+    mocks.loadGatewaySessionRow.mockReturnValue({
+      spawnedBy: "agent:main:main",
+      spawnedWorkspaceDir: "/tmp/subagent",
+      forkedFromParent: true,
+      spawnDepth: 2,
+      subagentRole: "orchestrator",
+      subagentControlScope: "children",
+      fastMode: true,
+      sendPolicy: "deny",
+      lastChannel: "telegram",
+      lastTo: "-100123",
+      lastAccountId: "acct-1",
+      lastThreadId: 42,
+      totalTokens: 12,
+      status: "running",
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    const broadcastToConnIds = vi.fn();
+    await invokeAgent(
+      {
+        message: "test",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "test-live-settings",
+      },
+      {
+        context: {
+          dedupe: new Map(),
+          addChatRun: vi.fn(),
+          logGateway: { info: vi.fn(), error: vi.fn() },
+          broadcastToConnIds,
+          getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+        } as unknown as GatewayRequestContext,
+      },
+    );
+
     expect(broadcastToConnIds).toHaveBeenCalledWith(
       "sessions.changed",
       expect.objectContaining({
-        sessionKey: childSessionKey,
+        sessionKey: "agent:main:main",
         reason: "send",
+        spawnedBy: "agent:main:main",
+        spawnedWorkspaceDir: "/tmp/subagent",
+        forkedFromParent: true,
+        spawnDepth: 2,
+        subagentRole: "orchestrator",
+        subagentControlScope: "children",
+        fastMode: true,
+        sendPolicy: "deny",
+        lastChannel: "telegram",
+        lastTo: "-100123",
+        lastAccountId: "acct-1",
+        lastThreadId: 42,
+        totalTokens: 12,
         status: "running",
-        startedAt: 123,
-        endedAt: undefined,
       }),
       new Set(["conn-1"]),
       { dropIfSlow: true },
@@ -735,6 +828,30 @@ describe("gateway agent handler", () => {
     expect(callArgs.channel).toBe("telegram");
     expect(callArgs.messageChannel).toBe("webchat");
     expect(callArgs.runContext?.messageChannel).toBe("webchat");
+  });
+
+  it("tracks async gateway agent runs in the shared task registry", async () => {
+    await withTempDir({ prefix: "openclaw-gateway-agent-task-" }, async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      primeMainAgentRun();
+
+      await invokeAgent(
+        {
+          message: "background cli task",
+          sessionKey: "agent:main:main",
+          idempotencyKey: "task-registry-agent-run",
+        },
+        { reqId: "task-registry-agent-run" },
+      );
+
+      expect(findTaskByRunId("task-registry-agent-run")).toMatchObject({
+        source: "background_cli",
+        runtime: "cli",
+        childSessionKey: "agent:main:main",
+        status: "running",
+      });
+    });
   });
 
   it("handles missing cliSessionIds gracefully", async () => {
