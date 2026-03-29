@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 
 const { resolveRuntimePluginRegistryMock } = vi.hoisted(() => ({
   resolveRuntimePluginRegistryMock: vi.fn<
@@ -15,14 +16,27 @@ vi.mock("../plugins/loader.js", () => ({
 let generateImage: typeof import("./runtime.js").generateImage;
 let listRuntimeImageGenerationProviders: typeof import("./runtime.js").listRuntimeImageGenerationProviders;
 
+function setCompatibleActiveImageGenerationRegistry(
+  pluginRegistry: ReturnType<typeof createEmptyPluginRegistry>,
+  _cfg: OpenClawConfig,
+) {
+  setActivePluginRegistry(pluginRegistry);
+}
+
 describe("image-generation runtime helpers", () => {
   afterEach(() => {
     resolveRuntimePluginRegistryMock.mockReset();
     resolveRuntimePluginRegistryMock.mockReturnValue(undefined);
+    resetPluginRuntimeStateForTest();
+    vi.doUnmock("../plugins/loader.js");
   });
 
   beforeEach(async () => {
     vi.resetModules();
+    resetPluginRuntimeStateForTest();
+    vi.doMock("../plugins/loader.js", () => ({
+      resolveRuntimePluginRegistry: resolveRuntimePluginRegistryMock,
+    }));
     ({ generateImage, listRuntimeImageGenerationProviders } = await import("./runtime.js"));
   });
 
@@ -66,6 +80,7 @@ describe("image-generation runtime helpers", () => {
         },
       },
     } as OpenClawConfig;
+    setCompatibleActiveImageGenerationRegistry(pluginRegistry, cfg);
 
     const result = await generateImage({
       cfg,
@@ -115,6 +130,7 @@ describe("image-generation runtime helpers", () => {
       },
     });
     resolveRuntimePluginRegistryMock.mockReturnValue(pluginRegistry);
+    setCompatibleActiveImageGenerationRegistry(pluginRegistry, {} as OpenClawConfig);
 
     expect(listRuntimeImageGenerationProviders()).toMatchObject([
       {
@@ -174,6 +190,7 @@ describe("image-generation runtime helpers", () => {
       },
     );
     resolveRuntimePluginRegistryMock.mockReturnValue(pluginRegistry);
+    setCompatibleActiveImageGenerationRegistry(pluginRegistry, {} as OpenClawConfig);
 
     const promise = generateImage({ cfg: {} as OpenClawConfig, prompt: "draw a cat" });
 
@@ -204,6 +221,7 @@ describe("image-generation runtime helpers", () => {
       },
     });
     resolveRuntimePluginRegistryMock.mockReturnValue(pluginRegistry);
+    setCompatibleActiveImageGenerationRegistry(pluginRegistry, {} as OpenClawConfig);
 
     await expect(
       generateImage({ cfg: {} as OpenClawConfig, prompt: "draw a cat" }),
