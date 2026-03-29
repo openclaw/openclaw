@@ -579,6 +579,7 @@ describe("channel import guardrails", () => {
           LOCAL_EXTENSION_API_BARREL_EXCEPTIONS.some((suffix) => normalized.endsWith(suffix)) ||
           normalized.endsWith("/api.ts") ||
           normalized.endsWith("/test-runtime.ts") ||
+          normalized.includes("/test-support/") ||
           normalized.includes(".test.") ||
           normalized.includes(".spec.") ||
           normalized.includes(".fixture.") ||

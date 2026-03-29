@@ -1,8 +1,8 @@
-import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
 import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
-} from "openclaw/plugin-sdk/reply-runtime";
+} from "openclaw/plugin-sdk/channel-inbound";
+import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPluginRuntimeMock } from "../../../test/helpers/plugins/plugin-runtime-mock.js";
 import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
