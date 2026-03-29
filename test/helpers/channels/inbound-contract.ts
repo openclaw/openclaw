@@ -36,23 +36,22 @@ const { createInboundSlackTestContext, prepareSlackMessage } = loadBundledPlugin
     opts: { source: string };
   }) => Promise<SlackPrepareResult>;
 }>("slack");
-const { telegramHarnessModuleId, signalApiModuleId, whatsAppTestApiModuleId } = vi.hoisted(() => ({
-  telegramHarnessModuleId: resolveRelativeBundledPluginPublicModuleId({
-    fromModuleUrl: import.meta.url,
-    pluginId: "telegram",
-    artifactBasename: "src/bot-message-context.test-harness.js",
-  }),
-  signalApiModuleId: resolveRelativeBundledPluginPublicModuleId({
-    fromModuleUrl: import.meta.url,
-    pluginId: "signal",
-    artifactBasename: "api.js",
-  }),
-  whatsAppTestApiModuleId: resolveRelativeBundledPluginPublicModuleId({
-    fromModuleUrl: import.meta.url,
-    pluginId: "whatsapp",
-    artifactBasename: "test-api.js",
-  }),
-}));
+
+const telegramHarnessModuleId = resolveRelativeBundledPluginPublicModuleId({
+  fromModuleUrl: import.meta.url,
+  pluginId: "telegram",
+  artifactBasename: "src/bot-message-context.test-harness.js",
+});
+const signalApiModuleId = resolveRelativeBundledPluginPublicModuleId({
+  fromModuleUrl: import.meta.url,
+  pluginId: "signal",
+  artifactBasename: "api.js",
+});
+const whatsAppTestApiModuleId = resolveRelativeBundledPluginPublicModuleId({
+  fromModuleUrl: import.meta.url,
+  pluginId: "whatsapp",
+  artifactBasename: "test-api.js",
+});
 
 async function buildTelegramMessageContextForTest(params: {
   cfg: OpenClawConfig;
@@ -108,33 +107,35 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
   };
 });
 
-vi.mock(signalApiModuleId, () => ({
-  sendMessageSignal: vi.fn(),
-  sendTypingSignal: vi.fn(async () => true),
-  sendReadReceiptSignal: vi.fn(async () => true),
-}));
-
 vi.mock("../../../src/pairing/pairing-store.js", () => ({
   readChannelAllowFromStore: vi.fn().mockResolvedValue([]),
   upsertChannelPairingRequest: vi.fn(),
 }));
 
-vi.mock(whatsAppTestApiModuleId, async (importOriginal) => {
-  const actual = await importOriginal<object>();
-  return {
-    ...actual,
-    trackBackgroundTask: (tasks: Set<Promise<unknown>>, task: Promise<unknown>) => {
-      tasks.add(task);
-      void task.finally(() => {
-        tasks.delete(task);
-      });
-    },
-    updateLastRouteInBackground: vi.fn(),
-    deliverWebReply: vi.fn(async () => {}),
-  };
-});
-
-const { finalizeInboundContext } = await import("../../../src/auto-reply/reply/inbound-context.js");
+async function loadFinalizeInboundContextForTest() {
+  vi.resetModules();
+  vi.doMock(signalApiModuleId, () => ({
+    sendMessageSignal: vi.fn(),
+    sendTypingSignal: vi.fn(async () => true),
+    sendReadReceiptSignal: vi.fn(async () => true),
+  }));
+  vi.doMock(whatsAppTestApiModuleId, async () => {
+    const actual = await vi.importActual<object>(whatsAppTestApiModuleId);
+    return {
+      ...actual,
+      trackBackgroundTask: (tasks: Set<Promise<unknown>>, task: Promise<unknown>) => {
+        tasks.add(task);
+        void task.finally(() => {
+          tasks.delete(task);
+        });
+      },
+      updateLastRouteInBackground: vi.fn(),
+      deliverWebReply: vi.fn(async () => {}),
+    };
+  });
+  const module = await import("../../../src/auto-reply/reply/inbound-context.js");
+  return module.finalizeInboundContext;
+}
 
 function createSlackAccount(config: ResolvedSlackAccount["config"] = {}): ResolvedSlackAccount {
   return {
@@ -170,7 +171,8 @@ export function installDiscordInboundContractSuite() {
 }
 
 export function installSignalInboundContractSuite() {
-  it("keeps inbound context finalized", () => {
+  it("keeps inbound context finalized", async () => {
+    const finalizeInboundContext = await loadFinalizeInboundContextForTest();
     const ctx = finalizeInboundContext({
       Body: "Alice: hi",
       BodyForAgent: "hi",
@@ -261,7 +263,8 @@ export function installTelegramInboundContractSuite() {
 }
 
 export function installWhatsAppInboundContractSuite() {
-  it("keeps inbound context finalized", () => {
+  it("keeps inbound context finalized", async () => {
+    const finalizeInboundContext = await loadFinalizeInboundContextForTest();
     const ctx = finalizeInboundContext({
       Body: "Alice: hi",
       BodyForAgent: "hi",

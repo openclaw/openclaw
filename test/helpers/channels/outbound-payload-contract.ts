@@ -12,10 +12,7 @@ import {
   sendPayloadWithChunkedTextAndMedia as sendZaloPayloadWithChunkedTextAndMedia,
 } from "../../../src/plugin-sdk/zalo.js";
 import { sendPayloadWithChunkedTextAndMedia as sendZalouserPayloadWithChunkedTextAndMedia } from "../../../src/plugin-sdk/zalouser.js";
-import {
-  loadBundledPluginTestApiSync,
-  resolveRelativeBundledPluginPublicModuleId,
-} from "../../../src/test-utils/bundled-plugin-public-surface.js";
+import { loadBundledPluginTestApiSync } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 
 type ChannelSendResponse = { ok?: boolean; messageId?: string };
 type SendMessageZalo = (
@@ -44,20 +41,7 @@ const { sendMessageZalouser, parseZalouserOutboundTarget } = loadBundledPluginTe
   parseZalouserOutboundTarget: ParseZalouserOutboundTarget;
 }>("zalouser");
 
-const { zaloTestApiModuleId, zalouserTestApiModuleId } = vi.hoisted(() => ({
-  zaloTestApiModuleId: resolveRelativeBundledPluginPublicModuleId({
-    fromModuleUrl: import.meta.url,
-    pluginId: "zalo",
-    artifactBasename: "test-api.js",
-  }),
-  zalouserTestApiModuleId: resolveRelativeBundledPluginPublicModuleId({
-    fromModuleUrl: import.meta.url,
-    pluginId: "zalouser",
-    artifactBasename: "test-api.js",
-  }),
-}));
-
-vi.mock(zaloTestApiModuleId, async (importOriginal) => {
+vi.mock("../../../extensions/zalo/test-api.ts", async (importOriginal) => {
   const actual = await importOriginal<object>();
   return {
     ...actual,
@@ -65,7 +49,7 @@ vi.mock(zaloTestApiModuleId, async (importOriginal) => {
   };
 });
 
-vi.mock(zalouserTestApiModuleId, async (importOriginal) => {
+vi.mock("../../../extensions/zalouser/test-api.ts", async (importOriginal) => {
   const actual = await importOriginal<object>();
   return {
     ...actual,
