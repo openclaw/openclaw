@@ -1183,6 +1183,7 @@
     "@mariozechner/pi-ai": "0.63.2",
     "@mariozechner/pi-coding-agent": "0.63.2",
     "@mariozechner/pi-tui": "0.63.2",
+    "@matrix-org/matrix-sdk-crypto-wasm": "18.0.0",
     "@modelcontextprotocol/sdk": "1.28.0",
     "@mozilla/readability": "^0.6.0",
     "@openclaw/plugin-package-contract": "workspace:*",
