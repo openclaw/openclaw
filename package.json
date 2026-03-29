@@ -494,10 +494,6 @@
       "types": "./dist/plugin-sdk/imessage.d.ts",
       "default": "./dist/plugin-sdk/imessage.js"
     },
-    "./plugin-sdk/imessage-core": {
-      "types": "./dist/plugin-sdk/imessage-core.d.ts",
-      "default": "./dist/plugin-sdk/imessage-core.js"
-    },
     "./plugin-sdk/imessage-policy": {
       "types": "./dist/plugin-sdk/imessage-policy.d.ts",
       "default": "./dist/plugin-sdk/imessage-policy.js"
@@ -505,10 +501,6 @@
     "./plugin-sdk/imessage-runtime": {
       "types": "./dist/plugin-sdk/imessage-runtime.d.ts",
       "default": "./dist/plugin-sdk/imessage-runtime.js"
-    },
-    "./plugin-sdk/imessage-targets": {
-      "types": "./dist/plugin-sdk/imessage-targets.d.ts",
-      "default": "./dist/plugin-sdk/imessage-targets.js"
     },
     "./plugin-sdk/irc": {
       "types": "./dist/plugin-sdk/irc.d.ts",

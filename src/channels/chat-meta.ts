@@ -64,7 +64,10 @@ function toChatChannelMeta(params: {
 function buildChatChannelMetaById(): Record<ChatChannelId, ChatChannelMeta> {
   const entries = new Map<ChatChannelId, ChatChannelMeta>();
 
-  for (const entry of listBundledPluginMetadata()) {
+  for (const entry of listBundledPluginMetadata({
+    includeChannelConfigs: true,
+    includeSyntheticChannelConfigs: false,
+  })) {
     const channel =
       entry.packageManifest && "channel" in entry.packageManifest
         ? entry.packageManifest.channel

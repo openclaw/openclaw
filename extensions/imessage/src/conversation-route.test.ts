@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { setDefaultChannelPluginRegistryForTests } from "../../../src/commands/channel-test-helpers.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import {
   __testing as sessionBindingTesting,
@@ -17,7 +16,6 @@ const baseCfg = {
 describe("resolveIMessageConversationRoute", () => {
   beforeEach(() => {
     sessionBindingTesting.resetSessionBindingAdaptersForTests();
-    setDefaultChannelPluginRegistryForTests();
   });
 
   it("lets runtime iMessage conversation bindings override default routing", () => {

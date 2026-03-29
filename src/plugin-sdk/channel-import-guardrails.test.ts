@@ -13,11 +13,10 @@ const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const REPO_ROOT = resolve(ROOT_DIR, "..");
 const ALLOWED_EXTENSION_PUBLIC_SURFACES = new Set(GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES);
 ALLOWED_EXTENSION_PUBLIC_SURFACES.add("test-api.js");
-const BUNDLED_EXTENSION_IDS = new Set(
-  readdirSync(resolve(REPO_ROOT, "extensions"), { withFileTypes: true })
-    .filter((entry) => entry.isDirectory() && entry.name !== "shared")
-    .map((entry) => entry.name),
-);
+const BUNDLED_EXTENSION_IDS = readdirSync(resolve(REPO_ROOT, "extensions"), { withFileTypes: true })
+  .filter((entry) => entry.isDirectory() && entry.name !== "shared")
+  .map((entry) => entry.name)
+  .toSorted((left, right) => right.length - left.length);
 const GUARDED_CHANNEL_EXTENSIONS = new Set([
   "bluebubbles",
   "discord",
@@ -190,6 +189,7 @@ const LOCAL_EXTENSION_API_BARREL_GUARDS = [
   "diffs",
   "feishu",
   "google",
+  "imessage",
   "irc",
   "llm-task",
   "line",
@@ -472,7 +472,12 @@ function expectNoCrossPluginSdkFacadeImports(file: string, imports: string[]): v
       continue;
     }
     const targetSubpath = specifier.slice("openclaw/plugin-sdk/".length);
-    if (!BUNDLED_EXTENSION_IDS.has(targetSubpath) || targetSubpath === currentExtensionId) {
+    const targetExtensionId =
+      BUNDLED_EXTENSION_IDS.find(
+        (extensionId) =>
+          targetSubpath === extensionId || targetSubpath.startsWith(`${extensionId}-`),
+      ) ?? null;
+    if (!targetExtensionId || targetExtensionId === currentExtensionId) {
       continue;
     }
     expect.fail(
@@ -585,7 +590,7 @@ describe("channel import guardrails", () => {
         expect(
           text,
           `${normalized} should import ${extensionId} helpers via the local api barrel`,
-        ).not.toMatch(new RegExp(`["']openclaw/plugin-sdk/${extensionId}["']`, "u"));
+        ).not.toMatch(new RegExp(`["']openclaw/plugin-sdk/${extensionId}(?:["'/])`, "u"));
       }
     }
   });

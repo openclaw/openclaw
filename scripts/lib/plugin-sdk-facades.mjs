@@ -428,19 +428,6 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
     ],
   },
   {
-    subpath: "imessage-targets",
-    source: pluginSource("imessage", "api.js"),
-    exports: [
-      "normalizeIMessageHandle",
-      "parseChatAllowTargetPrefixes",
-      "parseChatTargetPrefixesOrThrow",
-      "resolveServicePrefixedAllowTarget",
-      "resolveServicePrefixedTarget",
-      "ParsedChatTarget",
-    ],
-    typeExports: ["ParsedChatTarget"],
-  },
-  {
     subpath: "image-generation-runtime",
     source: pluginSource("image-generation-core", "runtime-api.js"),
     exports: [

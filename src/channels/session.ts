@@ -1,10 +1,14 @@
 import type { MsgContext } from "../auto-reply/templating.js";
-import {
-  recordSessionMetaFromInbound,
-  type GroupKeyResolution,
-  type SessionEntry,
-  updateLastRoute,
-} from "../config/sessions.js";
+import type { GroupKeyResolution, SessionEntry } from "../config/sessions/types.js";
+
+let inboundSessionRuntimePromise: Promise<
+  typeof import("../config/sessions/inbound.runtime.js")
+> | null = null;
+
+function loadInboundSessionRuntime() {
+  inboundSessionRuntimePromise ??= import("../config/sessions/inbound.runtime.js");
+  return inboundSessionRuntimePromise;
+}
 
 function normalizeSessionStoreKey(sessionKey: string): string {
   return sessionKey.trim().toLowerCase();
@@ -49,13 +53,16 @@ export async function recordInboundSession(params: {
 }): Promise<void> {
   const { storePath, sessionKey, ctx, groupResolution, createIfMissing } = params;
   const canonicalSessionKey = normalizeSessionStoreKey(sessionKey);
-  void recordSessionMetaFromInbound({
-    storePath,
-    sessionKey: canonicalSessionKey,
-    ctx,
-    groupResolution,
-    createIfMissing,
-  }).catch(params.onRecordError);
+  const runtime = await loadInboundSessionRuntime();
+  void runtime
+    .recordSessionMetaFromInbound({
+      storePath,
+      sessionKey: canonicalSessionKey,
+      ctx,
+      groupResolution,
+      createIfMissing,
+    })
+    .catch(params.onRecordError);
 
   const update = params.updateLastRoute;
   if (!update) {
@@ -65,7 +72,7 @@ export async function recordInboundSession(params: {
     return;
   }
   const targetSessionKey = normalizeSessionStoreKey(update.sessionKey);
-  await updateLastRoute({
+  await runtime.updateLastRoute({
     storePath,
     sessionKey: targetSessionKey,
     deliveryContext: {

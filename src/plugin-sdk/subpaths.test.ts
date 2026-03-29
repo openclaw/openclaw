@@ -199,21 +199,15 @@ describe("plugin-sdk subpath exports", () => {
     expectSourceContains("telegram", 'export * from "./telegram-core.js";');
     expectSourceContains("telegram", 'export * from "./telegram-runtime.js";');
     expectSourceMentions("imessage", [
+      "normalizeIMessageAcpConversationId",
+      "matchIMessageAcpConversation",
       "normalizeIMessageHandle",
       "parseChatAllowTargetPrefixes",
       "parseChatTargetPrefixesOrThrow",
+      "resolveIMessageConversationIdFromTarget",
       "resolveServicePrefixedAllowTarget",
       "resolveServicePrefixedTarget",
       "chunkTextForOutbound",
-    ]);
-    expectSourceMentions("imessage-core", [
-      "normalizeIMessageAcpConversationId",
-      "matchIMessageAcpConversation",
-      "resolveIMessageConversationIdFromTarget",
-      "parseChatAllowTargetPrefixes",
-      "parseChatTargetPrefixesOrThrow",
-      "resolveServicePrefixedAllowTarget",
-      "resolveServicePrefixedTarget",
     ]);
     expectSourceMentions("bluebubbles", [
       "normalizeBlueBubblesAcpConversationId",
@@ -503,11 +497,18 @@ describe("plugin-sdk subpath exports", () => {
       "applyChannelMatchMeta",
       "buildChannelKeyCandidates",
       "buildMessagingTarget",
+      "createAllowedChatSenderMatcher",
       "ensureTargetId",
+      "parseChatAllowTargetPrefixes",
       "parseMentionPrefixOrAtUserTarget",
+      "parseChatTargetPrefixesOrThrow",
       "requireTargetKind",
       "resolveChannelEntryMatchWithFallback",
       "resolveChannelMatchConfig",
+      "resolveServicePrefixedAllowTarget",
+      "resolveServicePrefixedChatTarget",
+      "resolveServicePrefixedOrChatAllowTarget",
+      "resolveServicePrefixedTarget",
       "resolveTargetsWithOptionalToken",
     ]);
     expectSourceMentions("channel-config-writes", [
