@@ -311,6 +311,11 @@ describe("runBtwSideQuestion", () => {
       expect.anything(),
       expect.objectContaining({ reasoning: undefined }),
     );
+    expect(streamSimpleMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.not.objectContaining({ reasoning: expect.anything() }),
+    );
   });
 
   it("fails when the current branch has no messages", async () => {
