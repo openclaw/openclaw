@@ -133,8 +133,49 @@ async def handle_prompt(gateway, message: Message):
             pass
 
 
+# ---------------------------------------------------------------------------
+# v16.3: Telegram Teacher Protocol — trigger commands for interactive learning
+# ---------------------------------------------------------------------------
+_TEACH_RE = re.compile(r"^Обучись:\s*(.+)", re.IGNORECASE | re.DOTALL)
+_ERROR_RE = re.compile(r"^Ошибка тут:\s*(.+)", re.IGNORECASE | re.DOTALL)
+_STATUS_RE = re.compile(r"^Статус знаний$", re.IGNORECASE)
+
+
+async def _handle_teacher_commands(message: Message, prompt: str) -> bool:
+    """Check for v16.3 teacher triggers. Returns True if handled."""
+    from src.pipeline._logic_provider import save_teaching, record_learning, get_knowledge_status
+
+    m = _TEACH_RE.match(prompt)
+    if m:
+        result = save_teaching(m.group(1))
+        await message.reply(result)
+        return True
+
+    m = _ERROR_RE.match(prompt)
+    if m:
+        description = m.group(1).strip()
+        record_learning(
+            task="User-reported error",
+            error=description,
+            fix="Учтено пользователем — применять немедленно.",
+        )
+        await message.reply("✅ Ошибка записана в Learning_Log.md — учту при следующем запросе.")
+        return True
+
+    if _STATUS_RE.match(prompt):
+        status = get_knowledge_status()
+        await message.reply(status, parse_mode="Markdown")
+        return True
+
+    return False
+
+
 async def _handle_prompt_inner(gateway, message: Message, prompt: str):
     """Full pipeline execution: injection check → intent → brigade → response."""
+
+    # v16.3: Teacher commands — intercept before full pipeline
+    if await _handle_teacher_commands(message, prompt):
+        return
 
     # Safety: Prompt Injection Detection
     injection_result = gateway.injection_defender.analyze(prompt)

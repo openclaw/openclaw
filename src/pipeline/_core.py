@@ -646,6 +646,16 @@ class PipelineExecutor:
         except Exception as _ns_err:
             logger.debug("Neural Synthesis failed", error=str(_ns_err))
 
+        # v16.3: Persistent Knowledge Hook — fresh entries get top priority
+        try:
+            from src.pipeline._logic_provider import get_recent_knowledge
+            _fresh = get_recent_knowledge(max_age_seconds=3600)
+            if _fresh:
+                memory_context = (_fresh + "\n\n" + memory_context) if memory_context else _fresh
+                logger.info("v16.3 fresh knowledge injected", chars=len(_fresh))
+        except Exception as _fk_err:
+            logger.debug("Fresh knowledge hook failed", error=str(_fk_err))
+
         chain_groups = group_chain(chain)
         steps_results = []
         context_briefing = memory_context
