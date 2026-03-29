@@ -6,8 +6,8 @@ import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../infra/local-fi
 import type { PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
 import { resolveUserPath } from "../utils.js";
 import { maxBytesForKind, type MediaKind } from "./constants.js";
-import { runFfprobe } from "./ffmpeg-exec.js";
 import { fetchRemoteMedia } from "./fetch.js";
+import { runFfprobe } from "./ffmpeg-exec.js";
 import {
   convertHeicToJpeg,
   hasAlphaChannel,
@@ -321,6 +321,10 @@ function isRemoteUrl(value: string): boolean {
   }
 }
 
+function shouldConvertHeicBuffer(opts: { contentType?: string; fileName?: string }): boolean {
+  return isHeicSource(opts);
+}
+
 async function normalizeAudioOnlyWebmMime(
   filePath: string,
   contentType?: string,
@@ -406,7 +410,10 @@ async function optimizeImageWithFallback(params: {
   meta?: { contentType?: string; fileName?: string };
 }): Promise<OptimizedImage> {
   const { buffer, cap, meta } = params;
-  const isPng = meta?.contentType === "image/png" || meta?.fileName?.toLowerCase().endsWith(".png");
+  const sourceLooksHeic = isHeicSource(meta ?? {});
+  const isPng =
+    !sourceLooksHeic &&
+    (meta?.contentType === "image/png" || meta?.fileName?.toLowerCase().endsWith(".png"));
   const hasAlpha = isPng && (await hasAlphaChannel(buffer));
 
   if (hasAlpha) {
@@ -676,7 +683,7 @@ export async function optimizeImageToJpeg(
 }> {
   // Try a grid of sizes/qualities until under the limit.
   let source = buffer;
-  if (isHeicSource(opts)) {
+  if (shouldConvertHeicBuffer(opts)) {
     try {
       source = await convertHeicToJpeg(buffer);
     } catch (err) {

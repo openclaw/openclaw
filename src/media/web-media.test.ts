@@ -1,32 +1,66 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { importFreshModule } from "../../test/helpers/import-fresh.js";
 import { CANVAS_HOST_PATH } from "../canvas-host/a2ui.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import { createJpegBufferWithDimensions, createPngBufferWithDimensions } from "./test-helpers.js";
 
 let loadWebMedia: typeof import("./web-media.js").loadWebMedia;
+const mediaRootTracker = createSuiteTempRootTracker({
+  prefix: "web-media-core-",
+  parentDir: resolvePreferredOpenClawTmpDir(),
+});
 
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
 
 let fixtureRoot = "";
 let tinyPngFile = "";
-let stateDir = "";
-let canvasPngFile = "";
 let workspaceDir = "";
 let workspacePngFile = "";
+let stateDir = "";
+let canvasPngFile = "";
+let fakePdfFile = "";
+let realPdfFile = "";
+let oversizedJpegFile = "";
+let fakeHeicFile = "";
+
+afterEach(() => {
+  vi.clearAllMocks();
+  vi.resetModules();
+  vi.doUnmock("./image-ops.js");
+  vi.doUnmock("./mime.js");
+  vi.doUnmock("./ffmpeg-exec.js");
+});
 
 beforeAll(async () => {
   ({ loadWebMedia } = await import("./web-media.js"));
-  fixtureRoot = await fs.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "web-media-core-"));
+  await mediaRootTracker.setup();
+  fixtureRoot = await mediaRootTracker.make("case");
+  fakePdfFile = path.join(fixtureRoot, "fake.pdf");
+  realPdfFile = path.join(fixtureRoot, "real.pdf");
   tinyPngFile = path.join(fixtureRoot, "tiny.png");
-  await fs.writeFile(tinyPngFile, Buffer.from(TINY_PNG_BASE64, "base64"));
+  oversizedJpegFile = path.join(fixtureRoot, "oversized.jpg");
+  fakeHeicFile = path.join(fixtureRoot, "tiny.heic");
   workspaceDir = path.join(fixtureRoot, "workspace");
   workspacePngFile = path.join(workspaceDir, "chart.png");
   await fs.mkdir(workspaceDir, { recursive: true });
+  await fs.writeFile(fakePdfFile, "TOP_SECRET_TEXT", "utf8");
+  await fs.writeFile(
+    realPdfFile,
+    Buffer.from("%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF"),
+  );
+  await fs.writeFile(tinyPngFile, Buffer.from(TINY_PNG_BASE64, "base64"));
   await fs.writeFile(workspacePngFile, Buffer.from(TINY_PNG_BASE64, "base64"));
+  await fs.writeFile(fakeHeicFile, Buffer.from(TINY_PNG_BASE64, "base64"));
+  await fs.writeFile(
+    oversizedJpegFile,
+    createJpegBufferWithDimensions({ width: 6_000, height: 5_000 }),
+  );
   stateDir = resolveStateDir();
   canvasPngFile = path.join(
     stateDir,
@@ -41,9 +75,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  if (fixtureRoot) {
-    await fs.rm(fixtureRoot, { recursive: true, force: true });
-  }
+  await mediaRootTracker.cleanup();
   if (stateDir) {
     await fs.rm(path.join(stateDir, "canvas", "documents", "cv_test"), {
       recursive: true,
@@ -126,6 +158,24 @@ describe("loadWebMedia", () => {
     await expectLoadedWebMediaCase(createUrl());
   });
 
+  it("rejects oversized pixel-count images before decode/resize backends run", async () => {
+    const oversizedPngFile = path.join(fixtureRoot, "oversized.png");
+    await fs.writeFile(
+      oversizedPngFile,
+      createPngBufferWithDimensions({ width: 8_000, height: 4_000 }),
+    );
+
+    await expect(loadWebMedia(oversizedPngFile, createLocalWebMediaOptions())).rejects.toThrow(
+      /pixel input limit/i,
+    );
+  });
+
+  it("preserves pixel-limit errors for oversized JPEG optimization", async () => {
+    await expect(loadWebMedia(oversizedJpegFile, createLocalWebMediaOptions())).rejects.toThrow(
+      /pixel input limit/i,
+    );
+  });
+
   it.each([
     {
       name: "rejects remote-host file URLs before filesystem checks",
@@ -156,14 +206,46 @@ describe("loadWebMedia", () => {
     expect(result.buffer.length).toBeGreaterThan(0);
   });
 
-  it("resolves relative local media paths against the provided workspace directory", async () => {
-    const result = await loadWebMedia("chart.png", {
-      maxBytes: 1024 * 1024,
-      localRoots: [workspaceDir],
-      workspaceDir,
+  describe("workspaceDir relative path resolution", () => {
+    it("resolves a bare filename against workspaceDir", async () => {
+      const result = await loadWebMedia("chart.png", {
+        ...createLocalWebMediaOptions(),
+        localRoots: [workspaceDir],
+        workspaceDir,
+      });
+      expect(result.kind).toBe("image");
+      expect(result.buffer.length).toBeGreaterThan(0);
     });
-    expect(result.kind).toBe("image");
-    expect(result.buffer.length).toBeGreaterThan(0);
+
+    it("resolves a dot-relative path against workspaceDir", async () => {
+      const result = await loadWebMedia("./chart.png", {
+        ...createLocalWebMediaOptions(),
+        localRoots: [workspaceDir],
+        workspaceDir,
+      });
+      expect(result.kind).toBe("image");
+      expect(result.buffer.length).toBeGreaterThan(0);
+    });
+
+    it("resolves a MEDIA:-prefixed relative path against workspaceDir", async () => {
+      const result = await loadWebMedia("MEDIA:chart.png", {
+        ...createLocalWebMediaOptions(),
+        localRoots: [workspaceDir],
+        workspaceDir,
+      });
+      expect(result.kind).toBe("image");
+      expect(result.buffer.length).toBeGreaterThan(0);
+    });
+
+    it("leaves absolute paths unchanged when workspaceDir is set", async () => {
+      const result = await loadWebMedia(workspacePngFile, {
+        ...createLocalWebMediaOptions(),
+        localRoots: [workspaceDir],
+        workspaceDir: "/some/other/dir",
+      });
+      expect(result.kind).toBe("image");
+      expect(result.buffer.length).toBeGreaterThan(0);
+    });
   });
 
   it("rejects host-read text files outside local roots", async () => {
@@ -466,6 +548,73 @@ describe("loadWebMedia", () => {
   it("rejects media store URIs without an id", async () => {
     await expect(loadWebMedia("media://inbound/")).rejects.toMatchObject({
       code: "invalid-path",
+    });
+  });
+
+  it("normalizes HEIC local files to JPEG output", async () => {
+    const result = await loadWebMedia(fakeHeicFile, createLocalWebMediaOptions());
+
+    expect(result.kind).toBe("image");
+    expect(result.contentType).toBe("image/jpeg");
+    expect(result.fileName).toBe("tiny.jpg");
+    expect(result.buffer[0]).toBe(0xff);
+    expect(result.buffer[1]).toBe(0xd8);
+  });
+
+  it("relabels audio-only webm files as audio before delivery", async () => {
+    const audioOnlyWebmFile = path.join(fixtureRoot, "voice.webm");
+    await fs.writeFile(audioOnlyWebmFile, Buffer.from("fake-webm"));
+    const detectMimeMock = vi.fn().mockResolvedValueOnce("video/webm");
+    const runFfprobeMock = vi.fn().mockResolvedValueOnce("audio\n");
+    vi.doMock("./mime.js", async () => {
+      const actual = await vi.importActual<typeof import("./mime.js")>("./mime.js");
+      return {
+        ...actual,
+        detectMime: detectMimeMock,
+      };
+    });
+    vi.doMock("./ffmpeg-exec.js", async () => {
+      const actual = await vi.importActual<typeof import("./ffmpeg-exec.js")>("./ffmpeg-exec.js");
+      return {
+        ...actual,
+        runFfprobe: runFfprobeMock,
+      };
+    });
+    const { loadWebMedia: loadFreshWebMedia } = await importFreshModule<
+      typeof import("./web-media.js")
+    >(import.meta.url, "./web-media.js?scope=audio-only-webm");
+
+    const result = await loadFreshWebMedia(audioOnlyWebmFile, createLocalWebMediaOptions());
+
+    expect(detectMimeMock).toHaveBeenCalledTimes(1);
+    expect(runFfprobeMock).toHaveBeenCalledTimes(1);
+    expect(result.kind).toBe("audio");
+    expect(result.contentType).toBe("audio/webm");
+  });
+
+  describe("host read capability", () => {
+    it("rejects document uploads that only match by file extension", async () => {
+      await expect(
+        loadWebMedia(fakePdfFile, {
+          maxBytes: 1024 * 1024,
+          localRoots: [fixtureRoot],
+          hostReadCapability: true,
+        }),
+      ).rejects.toMatchObject({
+        code: "path-not-allowed",
+      });
+    });
+
+    it("still allows real PDF uploads detected from file content", async () => {
+      const result = await loadWebMedia(realPdfFile, {
+        maxBytes: 1024 * 1024,
+        localRoots: [fixtureRoot],
+        hostReadCapability: true,
+      });
+
+      expect(result.kind).toBe("document");
+      expect(result.contentType).toBe("application/pdf");
+      expect(result.fileName).toBe("real.pdf");
     });
   });
 });
