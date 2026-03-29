@@ -1,5 +1,75 @@
+import JSZip from "jszip";
 import { estimateBase64DecodedBytes } from "../media/base64.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
+
+const DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+const XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
+function isDocumentMime(mime?: string): boolean {
+  return mime === DOCX_MIME || mime === XLSX_MIME;
+}
+
+async function extractDocxText(buffer: Buffer): Promise<string> {
+  const zip = await JSZip.loadAsync(buffer);
+  const xmlContent = await zip.file("word/document.xml")?.async("string");
+  if (!xmlContent) {
+    return "";
+  }
+  // Extract text from <w:t> tags, preserving paragraph breaks
+  return xmlContent
+    .replace(/<\/w:p>/g, "\n")
+    .replace(/<w:t[^>]*>([^<]*)<\/w:t>/g, "$1")
+    .replace(/<[^>]+>/g, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+async function extractXlsxText(buffer: Buffer): Promise<string> {
+  const zip = await JSZip.loadAsync(buffer);
+
+  // Load shared strings table
+  const sharedStrings: string[] = [];
+  const ssXml = await zip.file("xl/sharedStrings.xml")?.async("string");
+  if (ssXml) {
+    for (const m of ssXml.matchAll(/<t[^>]*>([^<]*)<\/t>/g)) {
+      sharedStrings.push(m[1] ?? "");
+    }
+  }
+
+  const sheetParts: string[] = [];
+  const sheetFiles = Object.keys(zip.files).filter((f) =>
+    /^xl\/worksheets\/sheet\d+\.xml$/.test(f),
+  );
+
+  for (const sheetFile of sheetFiles) {
+    const sheetXml = await zip.file(sheetFile)?.async("string");
+    if (!sheetXml) {
+      continue;
+    }
+    const rows: string[] = [];
+    for (const rowMatch of sheetXml.matchAll(/<row[^>]*>([\s\S]*?)<\/row>/g)) {
+      const cells: string[] = [];
+      for (const cellMatch of rowMatch[1].matchAll(/<c([^>]*)>([\s\S]*?)<\/c>/g)) {
+        const isShared = cellMatch[1].includes('t="s"');
+        const vMatch = /<v>([^<]*)<\/v>/.exec(cellMatch[2]);
+        if (isShared && vMatch) {
+          cells.push(sharedStrings[parseInt(vMatch[1])] ?? "");
+        } else if (vMatch) {
+          cells.push(vMatch[1]);
+        } else {
+          cells.push("");
+        }
+      }
+      if (cells.some(Boolean)) {
+        rows.push(cells.join("\t"));
+      }
+    }
+    if (rows.length > 0) {
+      sheetParts.push(rows.join("\n"));
+    }
+  }
+  return sheetParts.join("\n\n").trim();
+}
 
 export type ChatAttachment = {
   type?: string;
@@ -106,6 +176,7 @@ export async function parseMessageWithAttachments(
   }
 
   const images: ChatImageContent[] = [];
+  const fileTextBlocks: string[] = [];
 
   for (const [idx, att] of attachments.entries()) {
     if (!att) {
@@ -119,6 +190,24 @@ export async function parseMessageWithAttachments(
     const { base64: b64, label, mime } = normalized;
 
     const providedMime = normalizeMime(mime);
+
+    // Handle Word/Excel documents: extract text and append to message
+    if (isDocumentMime(providedMime)) {
+      try {
+        const buf = Buffer.from(b64, "base64");
+        const text =
+          providedMime === XLSX_MIME ? await extractXlsxText(buf) : await extractDocxText(buf);
+        if (text) {
+          fileTextBlocks.push(`[${label}]\n${text}`);
+        } else {
+          log?.warn(`attachment ${label}: document extraction yielded no text`);
+        }
+      } catch (err) {
+        log?.warn(`attachment ${label}: document extraction failed: ${String(err)}`);
+      }
+      continue;
+    }
+
     const sniffedMime = normalizeMime(await sniffMimeFromBase64(b64));
     if (sniffedMime && !isImageMime(sniffedMime)) {
       log?.warn(`attachment ${label}: detected non-image (${sniffedMime}), dropping`);
@@ -141,7 +230,11 @@ export async function parseMessageWithAttachments(
     });
   }
 
-  return { message, images };
+  const finalMessage =
+    fileTextBlocks.length > 0
+      ? `${message}${message.trim() ? "\n\n" : ""}${fileTextBlocks.join("\n\n---\n\n")}`
+      : message;
+  return { message: finalMessage, images };
 }
 
 /**
