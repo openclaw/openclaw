@@ -3,6 +3,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
+import {
+  bm25RankToScore,
+  buildFtsQuery,
+} from "../../../extensions/memory-core/src/memory/hybrid.js";
+import {
+  searchKeyword,
+  type SearchRowResult,
+} from "../../../extensions/memory-core/src/memory/manager-search.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveMemorySearchConfig } from "../../agents/memory-search.js";
 import {
@@ -10,6 +18,10 @@ import {
   isEmbeddedPiRunActive,
   waitForEmbeddedPiRunEnd,
 } from "../../agents/pi-embedded-runner/runs.js";
+import {
+  classifySessionKind,
+  resolveMainSessionAlias,
+} from "../../agents/tools/sessions-helpers.js";
 import { resolveVisibleSessionKeys } from "../../agents/tools/sessions-visible-keys.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import { loadConfig } from "../../config/config.js";
@@ -21,18 +33,13 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
-import { redactSensitiveText } from "../../logging/redact.js";
-import { bm25RankToScore, buildFtsQuery } from "../../../extensions/memory-core/src/memory/hybrid.js";
-import {
-  searchKeyword,
-  type SearchRowResult,
-} from "../../../extensions/memory-core/src/memory/manager-search.js";
 import {
   hasInternalHookListeners,
   triggerInternalHook,
   type SessionPatchHookContext,
   type SessionPatchHookEvent,
 } from "../../hooks/internal-hooks.js";
+import { redactSensitiveText } from "../../logging/redact.js";
 import {
   normalizeAgentId,
   parseAgentSessionKey,
@@ -97,6 +104,40 @@ const SESSION_SEARCH_FTS_TABLE = "chunks_fts";
 const SESSIONS_RECALL_MAX_EVIDENCE_CHARS_PER_HIT = 700;
 const SESSIONS_RECALL_MAX_EVIDENCE_CHARS_TOTAL = 4_000;
 
+/** Gateway `sessions.list` row kinds (`classifySessionKey`). */
+const GATEWAY_SESSION_ROW_KINDS = new Set(["direct", "group", "global", "unknown"]);
+
+function normalizeSessionsSearchKinds(kinds: string[] | undefined): Set<string> | undefined {
+  if (!kinds?.length) {
+    return undefined;
+  }
+  const next = new Set<string>();
+  for (const raw of kinds) {
+    if (typeof raw !== "string") {
+      continue;
+    }
+    const trimmed = raw.trim().toLowerCase();
+    if (trimmed) {
+      next.add(trimmed);
+    }
+  }
+  return next.size > 0 ? next : undefined;
+}
+
+/**
+ * `sessions.search` accepts either gateway row kinds (`direct`, …) or the same tool-facing labels as
+ * `sessions_list` (`main`, `group`, `cron`, …). If the request mixes both, prefer tool semantics so
+ * `main`/`cron`/… are not misread as gateway kinds.
+ */
+function useToolFacingKindFilter(normalizedKinds: Set<string>): boolean {
+  const hasToolOnly = [...normalizedKinds].some((k) => !GATEWAY_SESSION_ROW_KINDS.has(k));
+  const hasGatewayOnly = [...normalizedKinds].some((k) => GATEWAY_SESSION_ROW_KINDS.has(k));
+  if (hasToolOnly && hasGatewayOnly) {
+    return true;
+  }
+  return hasToolOnly;
+}
+
 /**
  * Session FTS (`sessions.search` / `sessions.recall`):
  *
@@ -149,6 +190,7 @@ async function searchSessionsViaFts(params: {
     sandboxed: params.sandboxed,
   });
 
+  const { mainKey, alias } = resolveMainSessionAlias(params.cfg);
   const { storePath, store } = loadCombinedSessionStoreForGateway(params.cfg);
   const listed = listSessionsFromStore({
     cfg: params.cfg,
@@ -160,7 +202,9 @@ async function searchSessionsViaFts(params: {
       ...(typeof params.activeMinutes === "number" ? { activeMinutes: params.activeMinutes } : {}),
     },
   });
-  const allowedKinds = params.kinds?.length ? new Set(params.kinds) : undefined;
+  const normalizedKinds = normalizeSessionsSearchKinds(params.kinds);
+  const toolFacingKindFilter =
+    normalizedKinds !== undefined ? useToolFacingKindFilter(normalizedKinds) : false;
   const requestedKeys = params.requestedKeys?.length ? new Set(params.requestedKeys) : undefined;
   const allowedPaths = new Set<string>();
   const pathToSession = new Map<string, { sessionKey: string; sessionId: string }>();
@@ -174,8 +218,23 @@ async function searchSessionsViaFts(params: {
     if (visibleKeys && !visibleKeys.has(key)) {
       continue;
     }
-    if (allowedKinds && typeof row.kind === "string" && !allowedKinds.has(row.kind)) {
-      continue;
+    if (normalizedKinds) {
+      if (toolFacingKindFilter) {
+        const toolKind = classifySessionKind({
+          key,
+          gatewayKind: typeof row.kind === "string" ? row.kind : undefined,
+          alias,
+          mainKey,
+        });
+        if (!normalizedKinds.has(toolKind)) {
+          continue;
+        }
+      } else {
+        const gk = typeof row.kind === "string" ? row.kind.trim().toLowerCase() : "";
+        if (!gk || !normalizedKinds.has(gk)) {
+          continue;
+        }
+      }
     }
     if (requestedKeys && !requestedKeys.has(key)) {
       continue;
