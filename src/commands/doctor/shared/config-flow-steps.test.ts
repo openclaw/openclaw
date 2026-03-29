@@ -15,7 +15,9 @@ describe("doctor config flow steps", () => {
         issues: [],
         raw: "{}",
         resolved: {},
+        sourceConfig: {},
         config: {},
+        runtimeConfig: {},
         warnings: [],
       } satisfies DoctorConfigPreflightResult["snapshot"],
       state: {

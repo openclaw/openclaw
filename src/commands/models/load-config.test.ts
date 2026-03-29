@@ -1,16 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  loadConfig: vi.fn(),
-  readConfigFileSnapshotForWrite: vi.fn(),
+  getRuntimeConfig: vi.fn(),
+  readSourceConfigSnapshotForWrite: vi.fn(),
   setRuntimeConfigSnapshot: vi.fn(),
   resolveCommandSecretRefsViaGateway: vi.fn(),
   getModelsCommandSecretTargetIds: vi.fn(),
 }));
 
 vi.mock("../../config/config.js", () => ({
-  loadConfig: mocks.loadConfig,
-  readConfigFileSnapshotForWrite: mocks.readConfigFileSnapshotForWrite,
+  getRuntimeConfig: mocks.getRuntimeConfig,
+  readSourceConfigSnapshotForWrite: mocks.readSourceConfigSnapshotForWrite,
   setRuntimeConfigSnapshot: mocks.setRuntimeConfigSnapshot,
 }));
 
@@ -34,9 +34,9 @@ describe("models load-config", () => {
   const targetIds = new Set(["models.providers.*.apiKey"]);
 
   function mockResolvedConfigFlow(params: { sourceConfig: unknown; diagnostics: string[] }) {
-    mocks.loadConfig.mockReturnValue(runtimeConfig);
-    mocks.readConfigFileSnapshotForWrite.mockResolvedValue({
-      snapshot: { valid: true, resolved: params.sourceConfig },
+    mocks.getRuntimeConfig.mockReturnValue(runtimeConfig);
+    mocks.readSourceConfigSnapshotForWrite.mockResolvedValue({
+      snapshot: { valid: true, sourceConfig: params.sourceConfig, resolved: params.sourceConfig },
       writeOptions: {},
     });
     mocks.getModelsCommandSecretTargetIds.mockReturnValue(targetIds);
