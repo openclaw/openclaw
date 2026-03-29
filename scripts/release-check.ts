@@ -60,6 +60,16 @@ function collectBundledExtensions(): BundledExtension[] {
   });
 }
 
+function collectRuntimeDependencySpecs(packageJson: {
+  dependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
+}): Map<string, string> {
+  return new Map([
+    ...Object.entries(packageJson.dependencies ?? {}),
+    ...Object.entries(packageJson.optionalDependencies ?? {}),
+  ]);
+}
+
 function checkBundledExtensionMetadata() {
   const extensions = collectBundledExtensions();
   const manifestErrors = collectBundledExtensionManifestErrors(extensions);
@@ -67,10 +77,7 @@ function checkBundledExtensionMetadata() {
     dependencies?: Record<string, string>;
     optionalDependencies?: Record<string, string>;
   };
-  const rootRuntimeDeps = new Set([
-    ...Object.keys(rootPackage.dependencies ?? {}),
-    ...Object.keys(rootPackage.optionalDependencies ?? {}),
-  ]);
+  const rootRuntimeDeps = collectRuntimeDependencySpecs(rootPackage);
   const rootMirrorErrors = collectBundledExtensionRootDependencyMirrorErrors(
     extensions,
     rootRuntimeDeps,
@@ -87,7 +94,7 @@ function checkBundledExtensionMetadata() {
 
 export function collectBundledExtensionRootDependencyMirrorErrors(
   extensions: BundledExtension[],
-  rootRuntimeDeps: ReadonlySet<string>,
+  rootRuntimeDeps: ReadonlyMap<string, string>,
 ): string[] {
   const errors: string[] = [];
 
@@ -106,10 +113,7 @@ export function collectBundledExtensionRootDependencyMirrorErrors(
       continue;
     }
 
-    const extensionRuntimeDeps = new Set([
-      ...Object.keys(extension.packageJson.dependencies ?? {}),
-      ...Object.keys(extension.packageJson.optionalDependencies ?? {}),
-    ]);
+    const extensionRuntimeDeps = collectRuntimeDependencySpecs(extension.packageJson);
 
     for (const entry of allowlist) {
       if (typeof entry !== "string" || entry.trim().length === 0) {
@@ -119,14 +123,22 @@ export function collectBundledExtensionRootDependencyMirrorErrors(
         continue;
       }
 
-      if (!extensionRuntimeDeps.has(entry)) {
+      const extensionSpec = extensionRuntimeDeps.get(entry);
+      if (!extensionSpec) {
         errors.push(
           `bundled extension '${extension.id}' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist entry '${entry}' must be declared in extension runtime dependencies`,
         );
       }
-      if (!rootRuntimeDeps.has(entry)) {
+      const rootSpec = rootRuntimeDeps.get(entry);
+      if (!rootSpec) {
         errors.push(
           `bundled extension '${extension.id}' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist entry '${entry}' must be mirrored in root runtime dependencies`,
+        );
+        continue;
+      }
+      if (extensionSpec !== rootSpec) {
+        errors.push(
+          `bundled extension '${extension.id}' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist entry '${entry}' must match root runtime dependency version (extension '${extensionSpec}', root '${rootSpec}')`,
         );
       }
     }

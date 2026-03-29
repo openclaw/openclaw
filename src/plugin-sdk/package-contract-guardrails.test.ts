@@ -59,6 +59,36 @@ function readRootPackageJson(): {
   };
 }
 
+function readMatrixPackageJson(): {
+  dependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
+  openclaw?: {
+    releaseChecks?: {
+      rootDependencyMirrorAllowlist?: unknown;
+    };
+  };
+} {
+  return JSON.parse(readFileSync(resolve(REPO_ROOT, "extensions/matrix/package.json"), "utf8")) as {
+    dependencies?: Record<string, string>;
+    optionalDependencies?: Record<string, string>;
+    openclaw?: {
+      releaseChecks?: {
+        rootDependencyMirrorAllowlist?: unknown;
+      };
+    };
+  };
+}
+
+function collectRuntimeDependencySpecs(packageJson: {
+  dependencies?: Record<string, string>;
+  optionalDependencies?: Record<string, string>;
+}): Map<string, string> {
+  return new Map([
+    ...Object.entries(packageJson.dependencies ?? {}),
+    ...Object.entries(packageJson.optionalDependencies ?? {}),
+  ]);
+}
+
 function createRootPackageRequire() {
   return createRequire(pathToFileURL(resolve(REPO_ROOT, "package.json")).href);
 }
@@ -126,11 +156,20 @@ describe("plugin-sdk package contract guardrails", () => {
   });
 
   it("mirrors matrix runtime deps needed by the bundled host graph", () => {
-    const { dependencies = {}, optionalDependencies = {} } = readRootPackageJson();
+    const rootRuntimeDeps = collectRuntimeDependencySpecs(readRootPackageJson());
+    const matrixPackageJson = readMatrixPackageJson();
+    const matrixRuntimeDeps = collectRuntimeDependencySpecs(matrixPackageJson);
+    const allowlist = matrixPackageJson.openclaw?.releaseChecks?.rootDependencyMirrorAllowlist;
 
-    expect(dependencies["@matrix-org/matrix-sdk-crypto-wasm"]).toBe("18.0.0");
-    expect(dependencies["matrix-js-sdk"]).toBe("41.2.0");
-    expect(optionalDependencies["@matrix-org/matrix-sdk-crypto-nodejs"]).toBe("^0.4.0");
+    expect(Array.isArray(allowlist)).toBe(true);
+    const matrixRootMirrorAllowlist = allowlist as string[];
+    expect(matrixRootMirrorAllowlist).toEqual(
+      expect.arrayContaining(["@matrix-org/matrix-sdk-crypto-wasm"]),
+    );
+
+    for (const dep of matrixRootMirrorAllowlist) {
+      expect(rootRuntimeDeps.get(dep)).toBe(matrixRuntimeDeps.get(dep));
+    }
   });
 
   it("resolves matrix crypto WASM from the root runtime surface", () => {
@@ -177,9 +216,10 @@ describe("plugin-sdk package contract guardrails", () => {
         dependencies?: Record<string, string>;
       };
       const installedRequire = createRequire(pathToFileURL(installedPackageJsonPath).href);
+      const matrixPackageJson = readMatrixPackageJson();
 
       expect(installedPackageJson.dependencies?.["@matrix-org/matrix-sdk-crypto-wasm"]).toBe(
-        "18.0.0",
+        matrixPackageJson.dependencies?.["@matrix-org/matrix-sdk-crypto-wasm"],
       );
       expect(installedRequire.resolve("@matrix-org/matrix-sdk-crypto-wasm")).toContain(
         "@matrix-org/matrix-sdk-crypto-wasm",

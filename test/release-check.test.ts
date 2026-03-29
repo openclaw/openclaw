@@ -126,7 +126,7 @@ describe("collectBundledExtensionRootDependencyMirrorErrors", () => {
             },
           },
         ],
-        new Set(),
+        new Map(),
       ),
     ).toEqual([
       "bundled extension 'matrix' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist must be an array",
@@ -151,7 +151,7 @@ describe("collectBundledExtensionRootDependencyMirrorErrors", () => {
             },
           },
         ],
-        new Set(["@matrix-org/matrix-sdk-crypto-wasm"]),
+        new Map([["@matrix-org/matrix-sdk-crypto-wasm", "18.0.0"]]),
       ),
     ).toEqual([
       "bundled extension 'matrix' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist entry '@matrix-org/matrix-sdk-crypto-wasm' must be declared in extension runtime dependencies",
@@ -176,10 +176,35 @@ describe("collectBundledExtensionRootDependencyMirrorErrors", () => {
             },
           },
         ],
-        new Set(),
+        new Map(),
       ),
     ).toEqual([
       "bundled extension 'matrix' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist entry '@matrix-org/matrix-sdk-crypto-wasm' must be mirrored in root runtime dependencies",
+    ]);
+  });
+
+  it("flags mirror entries whose root version drifts from the extension", () => {
+    expect(
+      collectBundledExtensionRootDependencyMirrorErrors(
+        [
+          {
+            id: "matrix",
+            packageJson: {
+              dependencies: {
+                "@matrix-org/matrix-sdk-crypto-wasm": "18.0.0",
+              },
+              openclaw: {
+                releaseChecks: {
+                  rootDependencyMirrorAllowlist: ["@matrix-org/matrix-sdk-crypto-wasm"],
+                },
+              },
+            },
+          },
+        ],
+        new Map([["@matrix-org/matrix-sdk-crypto-wasm", "18.1.0"]]),
+      ),
+    ).toEqual([
+      "bundled extension 'matrix' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist entry '@matrix-org/matrix-sdk-crypto-wasm' must match root runtime dependency version (extension '18.0.0', root '18.1.0')",
     ]);
   });
 
@@ -201,7 +226,7 @@ describe("collectBundledExtensionRootDependencyMirrorErrors", () => {
             },
           },
         ],
-        new Set(["@matrix-org/matrix-sdk-crypto-wasm"]),
+        new Map([["@matrix-org/matrix-sdk-crypto-wasm", "18.0.0"]]),
       ),
     ).toEqual([]);
   });
