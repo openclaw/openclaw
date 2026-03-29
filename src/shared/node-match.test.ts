@@ -35,6 +35,18 @@ describe("shared/node-match", () => {
     ).toBe("ios-live");
   });
 
+  it("prefers the strongest match type before client heuristics", () => {
+    expect(
+      resolveNodeIdFromCandidates(
+        [
+          { nodeId: "mac-studio", displayName: "Other Node", connected: false },
+          { nodeId: "mac-2", displayName: "Mac Studio", connected: true },
+        ],
+        "mac-studio",
+      ),
+    ).toBe("mac-studio");
+  });
+
   it("prefers a unique current OpenClaw client over a legacy clawdbot client", () => {
     expect(
       resolveNodeIdFromCandidates(
@@ -119,7 +131,7 @@ describe("shared/node-match", () => {
         "Peter's Mac Studio",
       ),
     ).toThrow(
-      /ambiguous node: Peter's Mac Studio.*node=legacy-mac.*client=clawdbot-macos.*node=other-mac.*client=openclaw-macos.*node=third-mac.*client=openclaw-macos/,
+      /ambiguous node: Peter's Mac Studio.*node=other-mac.*client=openclaw-macos.*node=third-mac.*client=openclaw-macos/,
     );
   });
 
