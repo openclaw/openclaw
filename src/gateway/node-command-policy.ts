@@ -22,6 +22,7 @@ const CAMERA_COMMANDS = ["camera.list"];
 const CAMERA_DANGEROUS_COMMANDS = ["camera.snap", "camera.clip"];
 
 const SCREEN_DANGEROUS_COMMANDS = ["screen.record"];
+const MACOS_SCREEN_COMMANDS = ["screen.record"];
 
 const LOCATION_COMMANDS = ["location.get"];
 const NOTIFICATION_COMMANDS = ["notifications.list"];
@@ -105,6 +106,7 @@ const PLATFORM_DEFAULTS: Record<string, string[]> = {
   macos: [
     ...CANVAS_COMMANDS,
     ...CAMERA_COMMANDS,
+    ...MACOS_SCREEN_COMMANDS,
     ...LOCATION_COMMANDS,
     ...DEVICE_COMMANDS,
     ...CONTACTS_COMMANDS,
