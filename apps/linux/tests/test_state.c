@@ -15,7 +15,7 @@ void state_on_gateway_refresh_requested(void) {}
 
 static void test_initial_state(void) {
     state_init();
-    g_assert_cmpint(state_get_current(), ==, STATE_NOT_INSTALLED);
+    g_assert_cmpint(state_get_current(), ==, STATE_NEEDS_SETUP);
 }
 
 static void test_installed_inactive(void) {
@@ -33,8 +33,8 @@ static void test_active_without_fresh_health(void) {
     sys.installed = TRUE;
     sys.active = TRUE;
     state_update_systemd(&sys);
-    // Startup hydration guard: systemd active + no health data → RUNNING
-    g_assert_cmpint(state_get_current(), ==, STATE_RUNNING);
+    // Startup hydration guard: systemd active + no health data → STARTING (transitional, not RUNNING)
+    g_assert_cmpint(state_get_current(), ==, STATE_STARTING);
 }
 
 /* ── Native gateway connectivity tests ── */
@@ -165,13 +165,14 @@ static void test_precedence_systemd_active_http_down(void) {
     sys.installed = TRUE;
     sys.active = TRUE;
     state_update_systemd(&sys);
-    g_assert_cmpint(state_get_current(), ==, STATE_RUNNING);
+    g_assert_cmpint(state_get_current(), ==, STATE_STARTING);
 
-    // HTTP health check fails
+    // HTTP health check fails (config is valid but gateway unreachable)
     HealthState hs = {0};
     hs.last_updated = 12345;
     hs.http_ok = FALSE;
     hs.ws_connected = FALSE;
+    hs.config_valid = TRUE;
     state_update_health(&hs);
 
     g_assert_cmpint(state_get_current(), ==, STATE_DEGRADED);
@@ -183,7 +184,7 @@ static void test_precedence_not_installed_native_connected(void) {
     SystemdState sys = {0};
     sys.installed = FALSE;
     state_update_systemd(&sys);
-    g_assert_cmpint(state_get_current(), ==, STATE_NOT_INSTALLED);
+    g_assert_cmpint(state_get_current(), ==, STATE_NEEDS_SETUP);
 
     HealthState hs = {0};
     hs.last_updated = 12345;
@@ -263,7 +264,7 @@ static void test_repeated_running_stopped_transitions(void) {
 
     sys.active = TRUE;
     state_update_systemd(&sys);
-    g_assert_cmpint(state_get_current(), ==, STATE_RUNNING);
+    g_assert_cmpint(state_get_current(), ==, STATE_STARTING);
 
     sys.active = FALSE;
     state_update_systemd(&sys);
@@ -271,7 +272,7 @@ static void test_repeated_running_stopped_transitions(void) {
 
     sys.active = TRUE;
     state_update_systemd(&sys);
-    g_assert_cmpint(state_get_current(), ==, STATE_RUNNING);
+    g_assert_cmpint(state_get_current(), ==, STATE_STARTING);
 
     sys.active = FALSE;
     state_update_systemd(&sys);
@@ -284,7 +285,7 @@ static void test_transition_into_systemd_unavailable(void) {
     sys.installed = TRUE;
     sys.active = TRUE;
     state_update_systemd(&sys);
-    g_assert_cmpint(state_get_current(), ==, STATE_RUNNING);
+    g_assert_cmpint(state_get_current(), ==, STATE_STARTING);
 
     sys.systemd_unavailable = TRUE;
     state_update_systemd(&sys);
@@ -341,8 +342,8 @@ static void test_health_zero_timestamp_preserves_systemd_running(void) {
     hs_zero.last_updated = 0;
     state_update_health(&hs_zero);
 
-    // Systemd still active + no valid health data → startup hydration guard → RUNNING
-    g_assert_cmpint(state_get_current(), ==, STATE_RUNNING);
+    // Systemd still active + no valid health data → startup hydration guard → STARTING
+    g_assert_cmpint(state_get_current(), ==, STATE_STARTING);
 }
 
 static void test_activation_boundary_health_persists_through_stop(void) {
@@ -378,6 +379,7 @@ static void test_activation_boundary_health_persists_through_stop(void) {
     hs_down.last_updated = 12346;
     hs_down.http_ok = FALSE;
     hs_down.ws_connected = FALSE;
+    hs_down.config_valid = TRUE;
     state_update_health(&hs_down);
     // Now systemd says stopped + native says unreachable → STOPPED
     g_assert_cmpint(state_get_current(), ==, STATE_STOPPED);
@@ -406,6 +408,105 @@ static void test_systemd_stop_does_not_regress_native_connected(void) {
     // Systemd says stopped, but native health persists → RUNNING
     sys.active = FALSE;
     state_update_systemd(&sys);
+    g_assert_cmpint(state_get_current(), ==, STATE_RUNNING);
+}
+
+/* ── Readiness decision table tests ── */
+
+static void test_readiness_needs_setup(void) {
+    // No unit installed, no setup detected → NEEDS_SETUP
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = FALSE;
+    state_update_systemd(&sys);
+
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.setup_detected = FALSE;
+    hs.config_valid = FALSE;
+    state_update_health(&hs);
+
+    g_assert_cmpint(state_get_current(), ==, STATE_NEEDS_SETUP);
+}
+
+static void test_readiness_needs_gateway_install(void) {
+    // No unit installed, but setup is detected → NEEDS_GATEWAY_INSTALL
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = FALSE;
+    state_update_systemd(&sys);
+
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.setup_detected = TRUE;
+    hs.config_valid = TRUE;
+    state_update_health(&hs);
+
+    g_assert_cmpint(state_get_current(), ==, STATE_NEEDS_GATEWAY_INSTALL);
+}
+
+static void test_readiness_config_invalid_when_stopped(void) {
+    // Unit installed, stopped, config invalid → CONFIG_INVALID
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = FALSE;
+    state_update_systemd(&sys);
+
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.config_valid = FALSE;
+    state_update_health(&hs);
+
+    g_assert_cmpint(state_get_current(), ==, STATE_CONFIG_INVALID);
+}
+
+static void test_readiness_config_invalid_when_active_unreachable(void) {
+    // Unit installed, systemd active, HTTP unreachable, config invalid → CONFIG_INVALID
+    // (config invalidity surfaces when runtime truth has not proven usability)
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = TRUE;
+    state_update_systemd(&sys);
+
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.http_ok = FALSE;
+    hs.config_valid = FALSE;
+    state_update_health(&hs);
+
+    g_assert_cmpint(state_get_current(), ==, STATE_CONFIG_INVALID);
+}
+
+static void test_readiness_startup_hydration_is_starting(void) {
+    // Systemd active, no health data yet → STARTING (not RUNNING)
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = TRUE;
+    state_update_systemd(&sys);
+
+    g_assert_cmpint(state_get_current(), ==, STATE_STARTING);
+}
+
+static void test_readiness_startup_hydration_to_running(void) {
+    // Hydration → STARTING, then health confirms → RUNNING
+    state_init();
+    SystemdState sys = {0};
+    sys.installed = TRUE;
+    sys.active = TRUE;
+    state_update_systemd(&sys);
+    g_assert_cmpint(state_get_current(), ==, STATE_STARTING);
+
+    HealthState hs = {0};
+    hs.last_updated = 12345;
+    hs.http_ok = TRUE;
+    hs.ws_connected = TRUE;
+    hs.rpc_ok = TRUE;
+    hs.auth_ok = TRUE;
+    hs.config_valid = TRUE;
+    state_update_health(&hs);
     g_assert_cmpint(state_get_current(), ==, STATE_RUNNING);
 }
 
@@ -439,6 +540,14 @@ int main(int argc, char **argv) {
     g_test_add_func("/state/health_zero_timestamp_preserves_systemd_running", test_health_zero_timestamp_preserves_systemd_running);
     g_test_add_func("/state/activation_boundary_health_persists_through_stop", test_activation_boundary_health_persists_through_stop);
     g_test_add_func("/state/systemd_stop_does_not_regress_native_connected", test_systemd_stop_does_not_regress_native_connected);
+
+    /* Readiness decision table tests */
+    g_test_add_func("/state/readiness/needs_setup", test_readiness_needs_setup);
+    g_test_add_func("/state/readiness/needs_gateway_install", test_readiness_needs_gateway_install);
+    g_test_add_func("/state/readiness/config_invalid_when_stopped", test_readiness_config_invalid_when_stopped);
+    g_test_add_func("/state/readiness/config_invalid_when_active_unreachable", test_readiness_config_invalid_when_active_unreachable);
+    g_test_add_func("/state/readiness/startup_hydration_is_starting", test_readiness_startup_hydration_is_starting);
+    g_test_add_func("/state/readiness/startup_hydration_to_running", test_readiness_startup_hydration_to_running);
 
     return g_test_run();
 }

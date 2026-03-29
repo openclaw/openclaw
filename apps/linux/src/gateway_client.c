@@ -32,9 +32,12 @@ static gchar *current_ws_url = NULL;
 static gboolean health_in_flight = FALSE;
 static gboolean initialized = FALSE;
 static guint current_health_generation = 0;
+static gboolean current_setup_detected = FALSE;
 
 static guint health_poll_timer_id = 0;
 #define HEALTH_POLL_INTERVAL_S 10
+
+static void do_health_check(void);
 
 static GatewayConfig* load_config_with_context(void) {
     GatewayConfigContext ctx = {0};
@@ -75,6 +78,7 @@ static void publish_health_state(gboolean http_ok, gboolean ws_connected,
     hs.rpc_ok = rpc_ok;
     hs.auth_ok = auth_ok;
     hs.config_valid = current_config ? current_config->valid : FALSE;
+    hs.setup_detected = current_setup_detected;
 
     /* TODO(MVP deferral): We do not populate config_audit_ok or config_issues_count 
      * here because those are not yet extracted or tracked in the Linux MVP.
@@ -102,6 +106,7 @@ static void publish_invalid_config_state(void) {
     HealthState hs = {0};
     hs.last_updated = g_get_real_time();
     hs.config_valid = FALSE;
+    hs.setup_detected = current_setup_detected;
     hs.last_error = g_strdup(current_config ? current_config->error : "Config load failed");
     if (current_config) {
         hs.endpoint_host = g_strdup(current_config->host);
@@ -126,9 +131,21 @@ static void on_ws_status(const GatewayWsStatus *status, gpointer user_data) {
               status->auth_source ? status->auth_source : "(null)",
               status->last_error ? status->last_error : "(null)");
 
-    /* Re-publish health with latest WS state. Keep the last known http_ok. */
+    /* Re-publish health with latest WS state. */
     HealthState *current = state_get_health();
     gboolean http_ok = current ? current->http_ok : FALSE;
+
+    /*
+     * Cross-transport coherence rule:
+     * If WS is connected with a successful RPC channel, the gateway endpoint
+     * is provably reachable. A stale http_ok=FALSE from before the connection
+     * was established must not persist — it would create the contradictory
+     * snapshot "HTTP unreachable + WS connected + RPC OK" which the readiness
+     * model would classify as DEGRADED even though the gateway is fully usable.
+     */
+    if (ws_connected && status->rpc_ok) {
+        http_ok = TRUE;
+    }
 
     publish_health_state(
         http_ok,
@@ -138,6 +155,15 @@ static void on_ws_status(const GatewayWsStatus *status, gpointer user_data) {
         current ? current->gateway_version : NULL,
         status->auth_source,
         auth_failed ? status->last_error : (ws_connected ? NULL : status->last_error));
+
+    /*
+     * When WS transitions to CONNECTED, trigger an immediate HTTP health
+     * check to refresh HTTP-specific fields (gateway version, healthy flag)
+     * instead of waiting up to HEALTH_POLL_INTERVAL_S for the next poll.
+     */
+    if (ws_connected) {
+        do_health_check();
+    }
 }
 
 static void on_health_result(const GatewayHealthResult *result, gpointer user_data) {
@@ -251,6 +277,19 @@ static void start_transport(void) {
                        on_ws_status, NULL);
 }
 
+static void detect_setup_presence(const GatewayConfig *config) {
+    current_setup_detected = FALSE;
+    if (!config || !config->config_path) return;
+    if (g_file_test(config->config_path, G_FILE_TEST_EXISTS)) {
+        current_setup_detected = TRUE;
+        return;
+    }
+    g_autofree gchar *parent = g_path_get_dirname(config->config_path);
+    if (parent && g_file_test(parent, G_FILE_TEST_IS_DIR)) {
+        current_setup_detected = TRUE;
+    }
+}
+
 void gateway_client_init(void) {
     if (initialized) return;
     initialized = TRUE;
@@ -258,8 +297,9 @@ void gateway_client_init(void) {
     gateway_http_init();
     gateway_ws_init();
 
-    /* Load config */
+    /* Load config and detect setup presence */
     current_config = load_config_with_context();
+    detect_setup_presence(current_config);
     if (!current_config || !current_config->valid) {
         OC_LOG_WARN(OPENCLAW_LOG_CAT_GATEWAY, "gateway config invalid: %s",
                   current_config ? current_config->error : "load failed");
@@ -276,8 +316,9 @@ void gateway_client_refresh(void) {
         return;
     }
 
-    /* Always reload config */
+    /* Always reload config and re-detect setup presence */
     GatewayConfig *new_config = load_config_with_context();
+    detect_setup_presence(new_config);
     gboolean equivalent = gateway_config_equivalent(current_config, new_config);
 
     if (equivalent) {

@@ -21,9 +21,11 @@
 #include <glib.h>
 
 typedef enum {
-    STATE_NOT_INSTALLED,
+    STATE_NEEDS_SETUP,
+    STATE_NEEDS_GATEWAY_INSTALL,
     STATE_USER_SYSTEMD_UNAVAILABLE,
     STATE_SYSTEM_UNSUPPORTED,
+    STATE_CONFIG_INVALID,
     STATE_STOPPED,
     STATE_STARTING,
     STATE_STOPPING,
@@ -60,6 +62,8 @@ typedef struct {
     char *gateway_version;
     char *auth_source;
     char *last_error;
+
+    gboolean setup_detected;
 
     gboolean config_audit_ok;
     int config_issues_count;

@@ -257,9 +257,11 @@ void tray_update_from_state(AppState state) {
     gboolean can_restart = FALSE;
     
     switch (state) {
-        case STATE_NOT_INSTALLED:
+        case STATE_NEEDS_SETUP:
+        case STATE_NEEDS_GATEWAY_INSTALL:
         case STATE_USER_SYSTEMD_UNAVAILABLE:
         case STATE_SYSTEM_UNSUPPORTED:
+        case STATE_CONFIG_INVALID:
             break;
         case STATE_STOPPED:
         case STATE_ERROR:
