@@ -39,6 +39,7 @@ Docs: https://docs.openclaw.ai
 - Memory/FTS: keep provider-less keyword hits visible at the default memory-search threshold, so FTS-only recall works without requiring `--min-score 0`. (#56473) Thanks @opriz.
 - Memory/LanceDB: resolve runtime dependency manifest lookup from the bundled `extensions/memory-lancedb` path (including flattened dist chunks) so startup no longer fails with a missing `@lancedb/lancedb` dependency error. (#56623) Thanks @LUKSOAgent.
 - Tools/web_search: localize the shared search cache to module scope so same-process global symbol lookups can no longer inspect or mutate cached web-search responses. Thanks @vincentkoc.
+- Agents/silent turns: fail closed on silent memory-flush runs so narrated `NO_REPLY` self-talk cannot stream or finalize into external replies even when block streaming is enabled. (#52593)
 
 ## 2026.3.28
 
