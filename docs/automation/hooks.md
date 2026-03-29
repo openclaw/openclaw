@@ -517,6 +517,49 @@ Event fields:
 - **`skill`**: Skill install metadata when `targetType` is `skill`, including `installId` and the selected `installSpec`
 - **`plugin`**: Plugin install metadata when `targetType` is `plugin`, including the canonical `pluginId`, normalized `contentType`, optional `packageName` / `manifestId` / `version`, and `extensions`
 
+Example event (plugin package install):
+
+```json
+{
+  "targetType": "plugin",
+  "targetName": "acme-audit",
+  "sourcePath": "/var/folders/.../openclaw-plugin-acme-audit/package",
+  "sourcePathKind": "directory",
+  "origin": "plugin-package",
+  "request": {
+    "kind": "plugin-npm",
+    "mode": "install",
+    "requestedSpecifier": "@acme/openclaw-plugin-audit@1.4.2"
+  },
+  "builtinScan": {
+    "status": "ok",
+    "scannedFiles": 12,
+    "critical": 0,
+    "warn": 1,
+    "info": 0,
+    "findings": [
+      {
+        "severity": "warn",
+        "code": "network_fetch",
+        "file": "dist/index.js",
+        "line": 88,
+        "message": "Dynamic network fetch detected during install review."
+      }
+    ]
+  },
+  "plugin": {
+    "pluginId": "acme-audit",
+    "contentType": "package",
+    "packageName": "@acme/openclaw-plugin-audit",
+    "manifestId": "acme-audit",
+    "version": "1.4.2",
+    "extensions": ["./dist/index.js"]
+  }
+}
+```
+
+Skill installs use the same event shape with `targetType: "skill"` and a `skill` object instead of `plugin`.
+
 Decision semantics:
 
 - `before_install`: `{ block: true }` is terminal and stops lower-priority handlers.
