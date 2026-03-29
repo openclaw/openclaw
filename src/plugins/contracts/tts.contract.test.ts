@@ -469,6 +469,219 @@ describe("tts", () => {
       expect(openaiOverrides?.voice).toBeUndefined();
       expect(result.warnings).toContain('invalid OpenAI voice "kokoro-chinese"');
     });
+
+    it("ignores TTS directives inside inline code", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
+      const input = "Use `[[tts:voice=Audrey]]` to change the voice.";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.hasDirective).toBe(false);
+      expect(result.cleanedText).toBe(input);
+      expect(result.overrides.provider).toBeUndefined();
+    });
+
+    it("ignores TTS directives inside fenced code blocks", () => {
+      const policy = resolveModelOverridePolicy({
+        enabled: true,
+        allowProvider: true,
+        allowText: true,
+      });
+      const input =
+        "Here is an example:\n\n" +
+        "```\n[[tts:text]]hello[[/tts:text]]\n[[tts:provider=elevenlabs]]\n```\n\n" +
+        "That was just an example.";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.hasDirective).toBe(false);
+      expect(result.cleanedText).toBe(input);
+      expect(result.overrides.provider).toBeUndefined();
+      expect(result.ttsText).toBeUndefined();
+    });
+
+    it("preserves original code in ttsText without placeholder leakage", () => {
+      const policy = resolveModelOverridePolicy({
+        enabled: true,
+        allowProvider: true,
+        allowText: true,
+      });
+      const input = "[[tts:text]]Use `const x = 1;` in your code[[/tts:text]]";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.hasDirective).toBe(true);
+      expect(result.ttsText).toBe("Use `const x = 1;` in your code");
+      expect(result.ttsText).not.toContain("\uFDD0");
+    });
+
+    it("preserves inline and fenced code inside tts:text blocks in ttsText", () => {
+      const policy = resolveModelOverridePolicy({
+        enabled: true,
+        allowText: true,
+      });
+      const input =
+        "[[tts:text]]" +
+        "Here is some `inline code` and a fenced block:\n" +
+        "```ts\n" +
+        "const x = 1;\n" +
+        "console.log(x);\n" +
+        "```\n" +
+        "[[/tts:text]]";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.hasDirective).toBe(true);
+      const expectedTtsText =
+        "Here is some `inline code` and a fenced block:\n" +
+        "```ts\n" +
+        "const x = 1;\n" +
+        "console.log(x);\n" +
+        "```";
+      expect(result.ttsText).toBe(expectedTtsText);
+      expect(result.ttsText).not.toContain("\uFDD0");
+    });
+
+    it("ignores TTS directives inside double-backtick code spans", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
+      const input = "Use ``[[tts:voice=Audrey]]`` to change the voice.";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.hasDirective).toBe(false);
+      expect(result.cleanedText).toBe(input);
+      expect(result.overrides.provider).toBeUndefined();
+    });
+
+    it("ignores TTS directives inside multi-backtick code spans containing backticks", () => {
+      const policy = resolveModelOverridePolicy({
+        enabled: true,
+        allowProvider: true,
+        allowText: true,
+      });
+      const input = "Example `` `code` [[tts:provider=elevenlabs]] `` done.";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.hasDirective).toBe(false);
+      expect(result.cleanedText).toBe(input);
+      expect(result.overrides.provider).toBeUndefined();
+      expect(result.ttsText).toBeUndefined();
+    });
+
+    it("processes directives outside code but preserves code blocks", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
+      const input = "Say hello [[tts:provider=elevenlabs]] with `some code` here.";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.hasDirective).toBe(true);
+      expect(result.overrides.provider).toBe("elevenlabs");
+      expect(result.cleanedText).toContain("`some code`");
+      expect(result.cleanedText).not.toContain("[[tts:");
+    });
+
+    it("ignores TTS directives inside 4-backtick fenced code blocks", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
+      const input = "````\ninside ``` nested\n[[tts:provider=elevenlabs]]\n````\nafter";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.hasDirective).toBe(false);
+      expect(result.cleanedText).toBe(input);
+    });
+
+    it("ignores TTS directives inside tilde-fenced code blocks", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
+      const input = "~~~\n[[tts:provider=elevenlabs]]\n~~~\nafter";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.hasDirective).toBe(false);
+      expect(result.cleanedText).toBe(input);
+    });
+
+    it("ignores TTS directives inside fenced code blocks with CRLF line endings", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
+      const input = "```\r\n[[tts:voice=Audrey]]\r\n```\r\nafter";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.hasDirective).toBe(false);
+      expect(result.cleanedText).toBe(input);
+    });
+
+    it("ignores TTS directives inside CommonMark-indented fenced code blocks", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
+      const input = "1. item\n   ```\n   [[tts:voice=Audrey]]\n   ```\nafter";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.hasDirective).toBe(false);
+      expect(result.cleanedText).toBe(input);
+    });
+
+    it("ignores TTS directives inside triple-backtick inline code spans", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
+      const input = "Use ``` [[tts:voice=Audrey]] ``` in your text";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.hasDirective).toBe(false);
+      expect(result.cleanedText).toBe(input);
+    });
+
+    it("does not mask directives when backtick run lengths differ", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
+      const input = "``[[tts:provider=elevenlabs]]```";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.hasDirective).toBe(true);
+      expect(result.overrides.provider).toBe("elevenlabs");
+    });
+
+    it("ignores TTS directives inside multiline inline code spans", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
+      const input = "`line1\n[[tts:provider=elevenlabs]]\nline2`";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.hasDirective).toBe(false);
+      expect(result.cleanedText).toBe(input);
+    });
+
+    it("does not mask across paragraph breaks in inline code spans", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
+      const input = "`line1\n\n[[tts:provider=elevenlabs]]\nline2`";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.hasDirective).toBe(true);
+      expect(result.overrides.provider).toBe("elevenlabs");
+    });
+
+    it("ignores TTS directives in fenced blocks with trailing whitespace on closing fence", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
+      const input = "```\n[[tts:voice=Audrey]]\n```   \nafter";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.hasDirective).toBe(false);
+      expect(result.cleanedText).toBe(input);
+    });
+
+    it("ignores TTS directives inside unclosed fenced code blocks", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
+      const input = "```\n[[tts:provider=elevenlabs]]";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.hasDirective).toBe(false);
+      expect(result.cleanedText).toBe(input);
+    });
+
+    it("does not treat backticks in info string as a fence opener", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
+      // Invalid fence (backtick in info string) → ``` acts as inline code delimiters,
+      // so the directive is inside a code span per CommonMark and should be ignored.
+      const input = "```js`demo\n[[tts:voice=Audrey]]\n```\nafter";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.hasDirective).toBe(false);
+    });
+
+    it("ignores TTS directives when closing fence is longer than opener", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
+      const input = "```\n[[tts:provider=elevenlabs]]\n`````\nafter";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.hasDirective).toBe(false);
+      expect(result.cleanedText).toBe(input);
+    });
   });
 
   describe("summarizeText", () => {

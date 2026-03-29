@@ -37,6 +37,65 @@ function resolveDirectiveProviderConfig(
   return options?.providerConfigs?.[provider.id];
 }
 
+// U+FDD0 is a Unicode non-character reserved for internal use and unlikely to
+// appear in user-supplied text, making it a practical sentinel for placeholders.
+const PLACEHOLDER_SENTINEL = "\uFDD0";
+
+// CommonMark fenced code block (backticks): line-anchored, 0–3 spaces indent,
+// closing fence must be at least as long as the opener, backtick info strings
+// reject backticks per spec, unclosed fences extend to EOF.
+const BACKTICK_FENCE =
+  "(?<=^|\\n) {0,3}(?<btick>`{3,})[^\\n`]*\\r?\\n[\\s\\S]*?(?:\\r?\\n {0,3}\\k<btick>`*[ \\t]*(?=\\r?\\n|$)|$)";
+
+// CommonMark fenced code block (tildes): same structure, tildes allow any info string.
+const TILDE_FENCE =
+  "(?<=^|\\n) {0,3}(?<tilde>~{3,})[^\\n]*\\r?\\n[\\s\\S]*?(?:\\r?\\n {0,3}\\k<tilde>~*[ \\t]*(?=\\r?\\n|$)|$)";
+
+// Inline code span: named backreference matches any delimiter length (`, ``, ```, …).
+// Allows single newlines (CommonMark treats them as spaces in code spans) but
+// stops at paragraph breaks (\n\n) to prevent over-masking across blocks.
+// Negative lookaround enforces maximal backtick runs per CommonMark §6.1.
+const INLINE_CODE = "(?<!`)(?<code>`+)(?!`)(?:[^\\n]|\\n(?!\\n))*?(?<!`)\\k<code>(?!`)";
+
+const CODE_BLOCK_PATTERN = new RegExp(`${BACKTICK_FENCE}|${TILDE_FENCE}|${INLINE_CODE}`, "g");
+
+/**
+ * Temporarily replace fenced code blocks and inline code spans with inert
+ * placeholders so that literal TTS directive examples inside code are not
+ * interpreted as active directives.
+ *
+ * Returns the masked text and a `restore` function that reverses the masking.
+ * Each call generates a unique nonce via `crypto.randomUUID()` to prevent
+ * placeholder collisions across concurrent or nested invocations.
+ */
+function maskCodeBlocks(text: string): { masked: string; restore: (s: string) => string } {
+  const identity = (s: string): string => s;
+  if (!text.includes("`") && !text.includes("~")) {
+    return { masked: text, restore: identity };
+  }
+
+  const nonce = crypto.randomUUID().replace(/-/g, "");
+  const placeholders: string[] = [];
+
+  const masked = text.replace(CODE_BLOCK_PATTERN, (match) => {
+    const index = placeholders.length;
+    placeholders.push(match);
+    return `${PLACEHOLDER_SENTINEL}${nonce}${index}${PLACEHOLDER_SENTINEL}`;
+  });
+
+  const placeholderPattern = new RegExp(
+    `${PLACEHOLDER_SENTINEL}${nonce}(\\d+)${PLACEHOLDER_SENTINEL}`,
+    "g",
+  );
+  const restore = (s: string): string =>
+    s.replace(
+      placeholderPattern,
+      (original, index: string) => placeholders[Number(index)] ?? original,
+    );
+
+  return { masked, restore };
+}
+
 export function parseTtsDirectives(
   text: string,
   policy: SpeechModelOverridePolicy,
@@ -49,14 +108,15 @@ export function parseTtsDirectives(
   const providers = resolveDirectiveProviders(options);
   const overrides: TtsDirectiveOverrides = {};
   const warnings: string[] = [];
-  let cleanedText = text;
+  const { masked, restore } = maskCodeBlocks(text);
+  let cleanedText = masked;
   let hasDirective = false;
 
   const blockRegex = /\[\[tts:text\]\]([\s\S]*?)\[\[\/tts:text\]\]/gi;
   cleanedText = cleanedText.replace(blockRegex, (_match, inner: string) => {
     hasDirective = true;
     if (policy.allowText && overrides.ttsText == null) {
-      overrides.ttsText = inner.trim();
+      overrides.ttsText = restore(inner.trim());
     }
     return "";
   });
@@ -124,7 +184,7 @@ export function parseTtsDirectives(
   });
 
   return {
-    cleanedText,
+    cleanedText: restore(cleanedText),
     ttsText: overrides.ttsText,
     hasDirective,
     overrides,
