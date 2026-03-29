@@ -694,11 +694,6 @@ export abstract class MemoryManagerSyncOps {
     needsFullReindex: boolean;
     progress?: MemorySyncProgressState;
   }) {
-    // FTS-only mode: skip embedding sync (no provider)
-    if (!this.provider) {
-      log.debug("Skipping memory file sync in FTS-only mode (no embedding provider)");
-      return;
-    }
     const selectSourceFileState = this.db.prepare(`SELECT path, hash FROM files WHERE source = ?`);
     const deleteFileByPathAndSource = this.db.prepare(
       `DELETE FROM files WHERE path = ? AND source = ?`,
@@ -787,7 +782,11 @@ export abstract class MemoryManagerSyncOps {
       deleteChunksByPathAndSource.run(stale.path, "memory");
       if (deleteFtsRowsByPathSourceAndModel) {
         try {
-          deleteFtsRowsByPathSourceAndModel.run(stale.path, "memory", this.provider.model);
+          deleteFtsRowsByPathSourceAndModel.run(
+            stale.path,
+            "memory",
+            this.provider?.model ?? "fts-only",
+          );
         } catch {}
       }
     }
@@ -798,11 +797,6 @@ export abstract class MemoryManagerSyncOps {
     targetSessionFiles?: string[];
     progress?: MemorySyncProgressState;
   }) {
-    // FTS-only mode: skip embedding sync (no provider)
-    if (!this.provider) {
-      log.debug("Skipping session file sync in FTS-only mode (no embedding provider)");
-      return;
-    }
     const selectFileHash = this.db.prepare(`SELECT hash FROM files WHERE path = ? AND source = ?`);
     const selectSourceFileState = this.db.prepare(`SELECT path, hash FROM files WHERE source = ?`);
     const deleteFileByPathAndSource = this.db.prepare(
@@ -932,7 +926,11 @@ export abstract class MemoryManagerSyncOps {
       deleteChunksByPathAndSource.run(stale.path, "sessions");
       if (deleteFtsRowsByPathSourceAndModel) {
         try {
-          deleteFtsRowsByPathSourceAndModel.run(stale.path, "sessions", this.provider.model);
+          deleteFtsRowsByPathSourceAndModel.run(
+            stale.path,
+            "sessions",
+            this.provider?.model ?? "fts-only",
+          );
         } catch {}
       }
     }
@@ -1023,8 +1021,9 @@ export abstract class MemoryManagerSyncOps {
     const needsFullReindex =
       (params?.force && !hasTargetSessionFiles) ||
       !meta ||
-      (this.provider && meta.model !== this.provider.model) ||
-      (this.provider && meta.provider !== this.provider.id) ||
+      // Also detects provider→FTS-only transitions so orphaned old-model FTS rows are cleaned up.
+      (this.provider ? meta.model !== this.provider.model : meta.model !== "fts-only") ||
+      (this.provider ? meta.provider !== this.provider.id : meta.provider !== "none") ||
       meta.providerKey !== this.providerKey ||
       this.metaSourcesDiffer(meta, configuredSources) ||
       meta.scopeHash !== configuredScopeHash ||
