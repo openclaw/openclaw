@@ -21,7 +21,7 @@ Bundled [Fish Audio](https://fish.audio) TTS speech provider for OpenClaw.
         "fish-audio": {
           apiKey: "your-fish-audio-api-key",
           voiceId: "reference-id-of-voice",
-          model: "s2-pro",         // s2-pro | s1 | s2
+          model: "s2-pro",         // s2-pro | s1
           latency: "normal",       // normal | balanced | low
           // speed: 1.0,           // 0.5–2.0 (optional)
           // temperature: 0.7,     // 0–1 (optional)
