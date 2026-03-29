@@ -204,6 +204,15 @@ describe("formatAssistantErrorText", () => {
       "LLM request failed: network connection was interrupted.",
     );
   });
+
+  it("sanitizes invalid streaming event order errors", () => {
+    const msg = makeAssistantError(
+      'Unexpected event order, got message_start before receiving "message_stop"',
+    );
+    expect(formatAssistantErrorText(msg)).toBe(
+      "LLM request failed: provider returned an invalid streaming response. Please try again.",
+    );
+  });
 });
 
 describe("formatRawAssistantErrorForUi", () => {
