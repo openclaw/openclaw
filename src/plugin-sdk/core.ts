@@ -292,11 +292,11 @@ export function defineChannelPluginEntry<TPlugin>({
     description,
     configSchema: resolvedConfigSchema,
     register(api: OpenClawPluginApi) {
-      setRuntime?.(api.runtime);
       if (api.registrationMode === "cli-metadata") {
         registerCliMetadata?.(api);
         return;
       }
+      setRuntime?.(api.runtime);
       api.registerChannel({ plugin: plugin as ChannelPlugin });
       if (api.registrationMode !== "full") {
         return;

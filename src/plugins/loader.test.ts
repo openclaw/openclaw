@@ -2666,6 +2666,7 @@ module.exports = {
     const pluginDir = makeTempDir();
     const fullMarker = path.join(pluginDir, "full-loaded.txt");
     const modeMarker = path.join(pluginDir, "registration-mode.txt");
+    const runtimeMarker = path.join(pluginDir, "runtime-set.txt");
 
     fs.writeFileSync(
       path.join(pluginDir, "package.json"),
@@ -2701,6 +2702,9 @@ module.exports = {
     id: "cli-metadata-channel",
     name: "CLI Metadata Channel",
     description: "cli metadata channel",
+    setRuntime() {
+      require("node:fs").writeFileSync(${JSON.stringify(runtimeMarker)}, "loaded", "utf-8");
+    },
     plugin: {
       id: "cli-metadata-channel",
       meta: {
@@ -2756,6 +2760,7 @@ module.exports = {
     });
 
     expect(fs.existsSync(fullMarker)).toBe(true);
+    expect(fs.existsSync(runtimeMarker)).toBe(false);
     expect(fs.readFileSync(modeMarker, "utf-8")).toBe("cli-metadata");
     expect(registry.cliRegistrars.flatMap((entry) => entry.commands)).toContain(
       "cli-metadata-channel",
