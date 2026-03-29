@@ -1,7 +1,11 @@
 import type { ProgressReporter } from "../../cli/progress.js";
 import { formatConfigIssueLine } from "../../config/issue-format.js";
 import { resolveGatewayLogPaths } from "../../daemon/launchd.js";
-import { formatPortDiagnostics } from "../../infra/ports.js";
+import {
+  formatPortDiagnostics,
+  isDualStackLoopbackGatewayListeners,
+  type PortUsage,
+} from "../../infra/ports.js";
 import {
   type RestartSentinelPayload,
   summarizeRestartSentinel,
@@ -22,7 +26,7 @@ type ConfigSnapshotLike = {
   issues?: ConfigIssueLike[] | null;
 };
 
-type PortUsageLike = { listeners: unknown[] };
+type PortUsageLike = Pick<PortUsage, "listeners" | "port" | "status" | "hints">;
 
 type TailscaleStatusLike = {
   backendState: string | null;
@@ -139,12 +143,20 @@ export async function appendStatusAllDiagnosis(params: {
   }
 
   if (params.portUsage) {
-    const portOk = params.portUsage.listeners.length === 0;
+    const benignDualStackLoopback = isDualStackLoopbackGatewayListeners(
+      params.portUsage.listeners,
+      params.port,
+    );
+    const portOk = params.portUsage.listeners.length === 0 || benignDualStackLoopback;
     emitCheck(`Port ${params.port}`, portOk ? "ok" : "warn");
     if (!portOk) {
-      for (const line of formatPortDiagnostics(params.portUsage as never)) {
+      for (const line of formatPortDiagnostics(params.portUsage)) {
         lines.push(`  ${muted(line)}`);
       }
+    } else if (benignDualStackLoopback) {
+      lines.push(
+        `  ${muted("Detected dual-stack loopback listeners (127.0.0.1 + ::1) for one gateway process.")}`,
+      );
     }
   }
 
