@@ -308,9 +308,20 @@ export function resolveMemoryBackendConfig(params: {
   const qmdCfg = params.cfg.memory?.qmd;
   const includeDefaultMemory = qmdCfg?.includeDefaultMemory !== false;
   const nameSet = new Set<string>();
+  // Read memorySearch.extraPaths and map them to QMD custom paths
+  const searchExtraPaths = (params.cfg.agents?.defaults?.memorySearch?.extraPaths ?? [])
+    .filter((p): p is string => typeof p === "string" && p.trim().length > 0)
+    .map((p): { path: string; pattern?: string; name?: string } => ({ path: p.trim() }));
+
+  // Combine QMD-specific paths with memorySearch extraPaths
+  const allQmdPaths = [
+    ...(qmdCfg?.paths ?? []),
+    ...searchExtraPaths,
+  ];
+
   const collections = [
     ...resolveDefaultCollections(includeDefaultMemory, workspaceDir, nameSet, params.agentId),
-    ...resolveCustomPaths(qmdCfg?.paths, workspaceDir, nameSet, params.agentId),
+    ...resolveCustomPaths(allQmdPaths, workspaceDir, nameSet, params.agentId),
   ];
 
   const rawCommand = qmdCfg?.command?.trim() || "qmd";
