@@ -12,11 +12,12 @@ Write sequence:
     6. Update manifest
 """
 
-import json
 import os
 import tempfile
 from pathlib import Path
 from typing import Any
+
+import yaml
 
 from bodhi_vault.manifest import compute_hash, update_manifest
 from bodhi_vault.validate import validate_node
@@ -49,18 +50,32 @@ def write_node(
     content_hash = compute_hash(data["content"])
     data = {**data, "content_hash": content_hash}
 
-    # 3. Determine target path: vault/nodes/YYYY-MM/<uuid>.json
+    # 3. Determine target path: vault/nodes/YYYY-MM/<uuid>.md
     year_month = data["created_at"][:7]  # "2026-03" from ISO 8601
     node_dir = vault_path / "nodes" / year_month
     node_dir.mkdir(parents=True, exist_ok=True)
-    node_file = node_dir / f"{data['id']}.json"
+    node_file = node_dir / f"{data['id']}.md"
 
-    # 4. Atomic write: temp file in same directory, then rename
+    # 4. Build frontmatter: all fields except 'content' become frontmatter
+    frontmatter = {k: v for k, v in data.items() if k != "content"}
+
+    # 5. Atomic write: temp file in same directory, then rename
     tmp_fd, tmp_path_str = tempfile.mkstemp(dir=node_dir, suffix=".tmp")
     tmp_path = Path(tmp_path_str)
     try:
         with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
-            f.write(json.dumps(data, indent=2, ensure_ascii=False))
+            f.write("---\n")
+            yaml.safe_dump(
+                frontmatter,
+                f,
+                default_flow_style=False,
+                sort_keys=False,
+                allow_unicode=True,
+                width=float("inf"),
+            )
+            f.write("---\n")
+            f.write(data["content"])
+            f.write("\n")
         os.replace(tmp_path, node_file)
     except Exception:
         try:
@@ -69,7 +84,7 @@ def write_node(
             pass
         raise
 
-    # 5. Update manifest
+    # 6. Update manifest (still tracks node UUID; extension change is fine)
     update_manifest(vault_path, data["id"], node_file, content_hash)
 
     return data["id"]

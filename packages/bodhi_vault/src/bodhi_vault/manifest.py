@@ -24,6 +24,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 
 class ManifestError(RuntimeError):
     """Raised when manifest verification finds a tampered or missing node."""
@@ -64,6 +66,40 @@ def update_manifest(
     _save_manifest(manifest_file, manifest)
 
 
+def _read_node_file(path: Path) -> dict[str, Any] | None:
+    """Read a single node file (either .md or .json) and return the node dict."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+    if path.suffix == ".md":
+        # Markdown with YAML frontmatter
+        lines = text.split("\n")
+        if not lines or lines[0].strip() != "---":
+            return None
+        closing_idx = None
+        for i in range(1, len(lines)):
+            if lines[i].strip() == "---":
+                closing_idx = i
+                break
+        if closing_idx is None:
+            return None
+        frontmatter_text = "\n".join(lines[1:closing_idx])
+        content = "\n".join(lines[closing_idx + 1:])
+        try:
+            frontmatter = yaml.safe_load(frontmatter_text) or {}
+        except yaml.YAMLError:
+            return None
+        return {**frontmatter, "content": content}
+    else:
+        # JSON fallback
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            return None
+
+
 def verify_manifest(vault_path: Path) -> bool:
     """
     Verify all nodes in the manifest match their on-disk content hashes.
@@ -83,9 +119,8 @@ def verify_manifest(vault_path: Path) -> bool:
         if not node_file.exists():
             return False
 
-        try:
-            data: dict[str, Any] = json.loads(node_file.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
+        data = _read_node_file(node_file)
+        if data is None:
             return False
 
         actual_hash = compute_hash(data.get("content", ""))

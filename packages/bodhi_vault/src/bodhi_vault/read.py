@@ -7,8 +7,8 @@ The vault directory structure:
     vault/
         nodes/
             2026-03/
-                <uuid>.json
-                <uuid>.json
+                <uuid>.md
+                <uuid>.md
             2026-04/
                 ...
         edges/
@@ -18,30 +18,97 @@ The vault directory structure:
 Reads scan the nodes/ subtree. No database — pure filesystem.
 For the scale of a personal vault (hundreds to low thousands of nodes),
 filesystem scan is fast enough and keeps dependencies minimal.
+
+Nodes are stored as Markdown files with YAML frontmatter. For backward
+compatibility, JSON files are also supported during migration.
 """
 
 import json
 from pathlib import Path
 from typing import Any, Optional
 
+import yaml
+
+
+def _parse_markdown(text: str) -> dict[str, Any] | None:
+    """
+    Parse a Markdown node file with YAML frontmatter.
+
+    Format:
+        ---
+        id: ...
+        type: ...
+        ...
+        ---
+        <content>
+    """
+    lines = text.split("\n")
+
+    # Find opening ---
+    if not lines or lines[0].strip() != "---":
+        return None
+
+    # Find closing ---
+    closing_idx = None
+    for i in range(1, len(lines)):
+        if lines[i].strip() == "---":
+            closing_idx = i
+            break
+
+    if closing_idx is None:
+        return None
+
+    # Extract frontmatter and content
+    frontmatter_text = "\n".join(lines[1:closing_idx])
+    content = "\n".join(lines[closing_idx + 1:])
+
+    try:
+        frontmatter = yaml.safe_load(frontmatter_text) or {}
+    except yaml.YAMLError:
+        return None
+
+    # Ensure content is a string
+    if not isinstance(content, str):
+        content = str(content)
+
+    # Merge: frontmatter fields + content from body
+    node_dict = {**frontmatter, "content": content}
+    return node_dict
+
+
+def _read_node_file(path: Path) -> dict[str, Any] | None:
+    """Read a single node file (either .md or .json) and return the node dict."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+    if path.suffix == ".md":
+        return _parse_markdown(text)
+    # Fallback: JSON
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return None
+
 
 def get_node(vault_path: Path, node_id: str) -> Optional[dict[str, Any]]:
     """
     Retrieve a single node by ID.
 
-    Scans vault/nodes/**/*.json for a file named <node_id>.json.
+    Scans vault/nodes/**/*.md and **/*.json for a file named <node_id>.*.
     Returns None if not found.
     """
     nodes_dir = vault_path / "nodes"
     if not nodes_dir.exists():
         return None
 
-    for node_file in nodes_dir.rglob(f"{node_id}.json"):
-        try:
-            return json.loads(node_file.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            return None
-
+    # Try .md first, then .json
+    for ext in (".md", ".json"):
+        for node_file in nodes_dir.rglob(f"{node_id}{ext}"):
+            data = _read_node_file(node_file)
+            if data is not None:
+                return data
     return None
 
 
@@ -71,22 +138,29 @@ def query_nodes(
 
     results: list[dict[str, Any]] = []
 
-    for node_file in nodes_dir.rglob("*.json"):
-        try:
-            data: dict[str, Any] = json.loads(node_file.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
+    # Search both .md and .json files
+    for node_file in nodes_dir.rglob("*.md"):
+        data = _read_node_file(node_file)
+        if data is None:
             continue
-
-        if node_type is not None and data.get("type") != node_type:
-            continue
-        if source is not None and data.get("source") != source:
-            continue
-        if min_energy is not None and data.get("energy_level", 0) < min_energy:
-            continue
-        if tag is not None and tag not in data.get("tags", []):
-            continue
-
         results.append(data)
+
+    # Also include any remaining .json files (migration in progress)
+    for node_file in nodes_dir.rglob("*.json"):
+        data = _read_node_file(node_file)
+        if data is None:
+            continue
+        results.append(data)
+
+    # Apply filters
+    if node_type is not None:
+        results = [d for d in results if d.get("type") == node_type]
+    if source is not None:
+        results = [d for d in results if d.get("source") == source]
+    if min_energy is not None:
+        results = [d for d in results if d.get("energy_level", 0) >= min_energy]
+    if tag is not None:
+        results = [d for d in results if tag in d.get("tags", [])]
 
     return results
 

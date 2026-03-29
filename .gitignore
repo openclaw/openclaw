@@ -123,6 +123,8 @@ dist/protocol.schema.json
 **/.stfolder/
 
 # OpenBodhi — vault data (personal, never commit)
+# vault/ is a symlink to ~/.alfred/vault (personal Obsidian vault)
+vault/
 vault/nodes/
 vault/edges/
 vault/*.db
