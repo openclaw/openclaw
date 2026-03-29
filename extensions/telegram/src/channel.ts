@@ -52,6 +52,7 @@ import {
   isTelegramExecApprovalAuthorizedSender,
   isTelegramExecApprovalClientEnabled,
   resolveTelegramExecApprovalTarget,
+  shouldSuppressLocalTelegramExecApprovalPrompt,
 } from "./exec-approvals.js";
 import {
   resolveTelegramGroupRequireMention,
@@ -463,32 +464,9 @@ export const telegramPlugin = createChatChannelPlugin({
         await deleteTelegramUpdateOffset({ accountId });
       },
     },
+    auth: telegramNativeApprovalAdapter.auth,
     approvals: {
-      auth: telegramNativeApprovalAdapter.auth,
-      delivery: {
-        ...telegramNativeApprovalAdapter.delivery,
-        beforeDeliverPending: async ({ cfg, target, payload }) => {
-          const hasExecApprovalData =
-            payload.channelData &&
-            typeof payload.channelData === "object" &&
-            !Array.isArray(payload.channelData) &&
-            payload.channelData.execApproval;
-          if (!hasExecApprovalData) {
-            return;
-          }
-          const threadId =
-            typeof target.threadId === "number"
-              ? target.threadId
-              : typeof target.threadId === "string"
-                ? Number.parseInt(target.threadId, 10)
-                : undefined;
-          await sendTypingTelegram(target.to, {
-            cfg,
-            accountId: target.accountId ?? undefined,
-            ...(Number.isFinite(threadId) ? { messageThreadId: threadId } : {}),
-          }).catch(() => {});
-        },
-      },
+      delivery: telegramNativeApprovalAdapter.delivery,
     },
     directory: createChannelDirectoryAdapter({
       listPeers: async (params) => listTelegramDirectoryPeersFromConfig(params),
@@ -742,6 +720,28 @@ export const telegramPlugin = createChatChannelPlugin({
       chunkerMode: "markdown",
       textChunkLimit: 4000,
       pollMaxOptions: 10,
+      shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload }) =>
+        shouldSuppressLocalTelegramExecApprovalPrompt({
+          cfg,
+          accountId,
+          payload,
+        }),
+      beforeDeliverPayload: async ({ cfg, target, hint }) => {
+        if (hint?.kind !== "approval-pending" || hint.approvalKind !== "exec") {
+          return;
+        }
+        const threadId =
+          typeof target.threadId === "number"
+            ? target.threadId
+            : typeof target.threadId === "string"
+              ? Number.parseInt(target.threadId, 10)
+              : undefined;
+        await sendTypingTelegram(target.to, {
+          cfg,
+          accountId: target.accountId ?? undefined,
+          ...(Number.isFinite(threadId) ? { messageThreadId: threadId } : {}),
+        }).catch(() => {});
+      },
       shouldSkipPlainTextSanitization: ({ payload }) => Boolean(payload.channelData),
       resolveEffectiveTextChunkLimit: ({ fallbackLimit }) =>
         typeof fallbackLimit === "number" ? Math.min(fallbackLimit, 4096) : 4096,
