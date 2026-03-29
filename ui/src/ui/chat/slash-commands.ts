@@ -66,6 +66,8 @@ const LOCAL_COMMANDS = new Set([
   "usage",
   "agents",
   "kill",
+  "steer",
+  "redirect",
 ]);
 
 const UI_ONLY_COMMANDS: SlashCommandDef[] = [
@@ -75,6 +77,15 @@ const UI_ONLY_COMMANDS: SlashCommandDef[] = [
     description: "Clear chat history",
     icon: "trash",
     category: "session",
+    executeLocal: true,
+  },
+  {
+    key: "redirect",
+    name: "redirect",
+    description: "Abort and restart with a new message",
+    args: "[id] <message>",
+    icon: "refresh",
+    category: "agents",
     executeLocal: true,
   },
 ];
@@ -92,6 +103,7 @@ const CATEGORY_OVERRIDES: Partial<Record<string, SlashCommandCategory>> = {
   subagents: "agents",
   kill: "agents",
   steer: "agents",
+  redirect: "agents",
   session: "session",
   stop: "session",
   reset: "session",
@@ -107,6 +119,14 @@ const CATEGORY_OVERRIDES: Partial<Record<string, SlashCommandCategory>> = {
   reasoning: "model",
   elevated: "model",
   queue: "model",
+};
+
+const COMMAND_DESCRIPTION_OVERRIDES: Partial<Record<string, string>> = {
+  steer: "Inject a message into the active run",
+};
+
+const COMMAND_ARGS_OVERRIDES: Partial<Record<string, string>> = {
+  steer: "[id] <message>",
 };
 
 function normalizeUiKey(command: ChatCommandDefinition): string {
@@ -170,8 +190,8 @@ function toSlashCommand(command: ChatCommandDefinition): SlashCommandDef | null 
     key: command.key,
     name,
     aliases: getSlashAliases(command).filter((alias) => alias !== name),
-    description: command.description,
-    args: formatArgs(command),
+    description: COMMAND_DESCRIPTION_OVERRIDES[command.key] ?? command.description,
+    args: COMMAND_ARGS_OVERRIDES[command.key] ?? formatArgs(command),
     icon: mapIcon(command),
     category: mapCategory(command),
     executeLocal: LOCAL_COMMANDS.has(command.key),

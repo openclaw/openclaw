@@ -82,6 +82,18 @@ describe("parseSlashCommand", () => {
     });
   });
 
+  it("keeps a single local /steer entry with the control-ui metadata", () => {
+    const steerEntries = SLASH_COMMANDS.filter((entry) => entry.name === "steer");
+    expect(steerEntries).toHaveLength(1);
+    expect(steerEntries[0]).toMatchObject({
+      key: "steer",
+      description: "Inject a message into the active run",
+      args: "[id] <message>",
+      aliases: expect.arrayContaining(["tell"]),
+      executeLocal: true,
+    });
+  });
+
   it("keeps focus as a local slash command", () => {
     expect(parseSlashCommand("/focus")).toMatchObject({
       command: { key: "focus", executeLocal: true },
