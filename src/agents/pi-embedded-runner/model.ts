@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { ModelDefinitionConfig } from "../../config/types.js";
 import {
   applyProviderResolvedModelCompatWithPlugins,
+  applyProviderResolvedTransportWithPlugin,
   buildProviderUnknownModelHintWithPlugin,
   clearProviderRuntimeHookCache,
   normalizeProviderTransportWithPlugin,
@@ -40,6 +41,9 @@ type ProviderRuntimeHooks = {
   applyProviderResolvedModelCompatWithPlugins?: (
     params: Parameters<typeof applyProviderResolvedModelCompatWithPlugins>[0],
   ) => unknown;
+  applyProviderResolvedTransportWithPlugin?: (
+    params: Parameters<typeof applyProviderResolvedTransportWithPlugin>[0],
+  ) => unknown;
   buildProviderUnknownModelHintWithPlugin: (
     params: Parameters<typeof buildProviderUnknownModelHintWithPlugin>[0],
   ) => string | undefined;
@@ -57,6 +61,7 @@ type ProviderRuntimeHooks = {
 
 const DEFAULT_PROVIDER_RUNTIME_HOOKS: ProviderRuntimeHooks = {
   applyProviderResolvedModelCompatWithPlugins,
+  applyProviderResolvedTransportWithPlugin,
   buildProviderUnknownModelHintWithPlugin,
   prepareProviderDynamicModel,
   runProviderDynamicModel,
@@ -137,9 +142,20 @@ function normalizeResolvedModel(params: {
       model: (pluginNormalized ?? normalizedInputModel) as never,
     },
   }) as Model<Api> | undefined;
+  const transportNormalized = runtimeHooks.applyProviderResolvedTransportWithPlugin?.({
+    provider: params.provider,
+    config: params.cfg,
+    context: {
+      config: params.cfg,
+      agentDir: params.agentDir,
+      provider: params.provider,
+      modelId: normalizedInputModel.id,
+      model: (compatNormalized ?? pluginNormalized ?? normalizedInputModel) as never,
+    },
+  }) as Model<Api> | undefined;
   return normalizeResolvedProviderModel({
     provider: params.provider,
-    model: compatNormalized ?? pluginNormalized ?? normalizedInputModel,
+    model: transportNormalized ?? compatNormalized ?? pluginNormalized ?? normalizedInputModel,
   });
 }
 
