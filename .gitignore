@@ -140,3 +140,4 @@ changelog/fragments/
 
 # Local scratch workspace
 .tmp/
+clawd/
