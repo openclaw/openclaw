@@ -137,22 +137,23 @@ describe("sessions_spawn tool", () => {
     );
   });
 
-  it("ignores waitForCompletion=true when awaitEnabled is false", async () => {
+  it("rejects waitForCompletion=true when awaitEnabled is false", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "openresponses-user:alice",
     });
 
-    await tool.execute("call-openresponses-no-wait", {
+    const result = await tool.execute("call-openresponses-no-wait", {
       task: "research and report",
       waitForCompletion: true,
     });
 
-    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
-      expect.not.objectContaining({
-        waitForCompletion: true,
-      }),
-      expect.any(Object),
-    );
+    expect(result.details).toMatchObject({
+      status: "error",
+    });
+    const details = result.details as { error?: string };
+    expect(details.error).toContain("awaitEnabled=true");
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
   });
 
   it("passes suppressAnnounce through to spawnSubagentDirect", async () => {
@@ -197,31 +198,26 @@ describe("sessions_spawn tool", () => {
     );
   });
 
-  it("prefers injected awaitEnabled=false over true config fallback", async () => {
+  it("rejects await-only flags when injected awaitEnabled=false overrides config", async () => {
     await loadFreshSessionsSpawnToolModuleForTest({ awaitEnabled: true });
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
       awaitEnabled: false,
     });
 
-    await tool.execute("call-injected-await-disabled", {
+    const result = await tool.execute("call-injected-await-disabled", {
       task: "parallel analysis",
       waitForCompletion: true,
       suppressAnnounce: true,
     });
 
-    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
-      expect.not.objectContaining({
-        waitForCompletion: true,
-      }),
-      expect.any(Object),
-    );
-    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
-      expect.not.objectContaining({
-        suppressAnnounce: true,
-      }),
-      expect.any(Object),
-    );
+    expect(result.details).toMatchObject({
+      status: "error",
+    });
+    const details = result.details as { error?: string };
+    expect(details.error).toContain("awaitEnabled=true");
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
   });
 
   it("passes inherited workspaceDir from tool context, not from tool args", async () => {

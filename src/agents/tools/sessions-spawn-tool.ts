@@ -120,8 +120,24 @@ export function createSessionsSpawnTool(
         typeof opts?.awaitEnabled === "boolean"
           ? opts.awaitEnabled
           : loadConfig()?.agents?.defaults?.subagents?.awaitEnabled === true;
-      const waitForCompletion = params.waitForCompletion === true && awaitEnabled;
-      const suppressAnnounce = params.suppressAnnounce === true && awaitEnabled;
+      const requestedWaitForCompletion = params.waitForCompletion === true;
+      const requestedSuppressAnnounce = params.suppressAnnounce === true;
+      if (runtime === "acp" && (requestedWaitForCompletion || requestedSuppressAnnounce)) {
+        return jsonResult({
+          status: "error",
+          error:
+            "waitForCompletion/suppressAnnounce are only supported for runtime=subagent; got runtime=acp",
+        });
+      }
+      if (!awaitEnabled && (requestedWaitForCompletion || requestedSuppressAnnounce)) {
+        return jsonResult({
+          status: "error",
+          error:
+            "waitForCompletion/suppressAnnounce require agents.defaults.subagents.awaitEnabled=true",
+        });
+      }
+      const waitForCompletion = requestedWaitForCompletion;
+      const suppressAnnounce = requestedSuppressAnnounce;
       // Back-compat: older callers used timeoutSeconds for this tool.
       const timeoutSecondsCandidate =
         typeof params.runTimeoutSeconds === "number"
@@ -158,13 +174,6 @@ export function createSessionsSpawnTool(
       }
 
       if (runtime === "acp") {
-        if (params.waitForCompletion === true || params.suppressAnnounce === true) {
-          return jsonResult({
-            status: "error",
-            error:
-              "waitForCompletion/suppressAnnounce are only supported for runtime=subagent; got runtime=acp",
-          });
-        }
         if (Array.isArray(attachments) && attachments.length > 0) {
           return jsonResult({
             status: "error",
