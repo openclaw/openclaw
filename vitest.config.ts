@@ -88,10 +88,12 @@ export default defineConfig({
       "ui/src/ui/controllers/sessions.test.ts",
       "ui/src/ui/views/sessions.test.ts",
       "ui/src/ui/app-gateway.sessions.node.test.ts",
+      "ui/src/ui/chat/slash-command-executor.node.test.ts",
     ],
     setupFiles: ["test/setup.ts"],
     exclude: [
       "dist/**",
+      "test/fixtures/**",
       "apps/macos/**",
       "apps/macos/.build/**",
       "**/node_modules/**",

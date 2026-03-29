@@ -548,6 +548,60 @@ describe("gateway session utils", () => {
       expect(agents.map((agent) => agent.id)).toEqual(["main"]);
     });
   });
+
+  test("listAgentsForGateway includes effective workspace + model for default agent", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: {
+        defaults: {
+          workspace: "/tmp/default-workspace",
+          model: {
+            primary: "openai/gpt-5.4",
+            fallbacks: ["openai-codex/gpt-5.2-codex"],
+          },
+        },
+        list: [{ id: "main", default: true }],
+      },
+    } as OpenClawConfig;
+
+    const result = listAgentsForGateway(cfg);
+    expect(result.agents[0]).toMatchObject({
+      id: "main",
+      workspace: "/tmp/default-workspace",
+      model: {
+        primary: "openai/gpt-5.4",
+        fallbacks: ["openai-codex/gpt-5.2-codex"],
+      },
+    });
+  });
+
+  test("listAgentsForGateway respects per-agent fallback override (including explicit empty list)", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.4",
+            fallbacks: ["openai-codex/gpt-5.2-codex"],
+          },
+        },
+        list: [
+          { id: "main", default: true },
+          {
+            id: "ops",
+            model: {
+              primary: "anthropic/claude-opus-4-6",
+              fallbacks: [],
+            },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    const result = listAgentsForGateway(cfg);
+    const ops = result.agents.find((agent) => agent.id === "ops");
+    expect(ops?.model).toEqual({ primary: "anthropic/claude-opus-4-6" });
+  });
 });
 
 describe("resolveSessionModelRef", () => {
@@ -1341,6 +1395,11 @@ describe("listSessionsFromStore subagent metadata", () => {
         sessionId: "sess-child",
         updatedAt: now - 1_000,
         spawnedBy: "agent:main:subagent:parent",
+        spawnedWorkspaceDir: "/tmp/child-workspace",
+        forkedFromParent: true,
+        spawnDepth: 2,
+        subagentRole: "orchestrator",
+        subagentControlScope: "children",
       } as SessionEntry,
       "agent:main:subagent:failed": {
         sessionId: "sess-failed",
@@ -1416,6 +1475,11 @@ describe("listSessionsFromStore subagent metadata", () => {
     expect(child?.startedAt).toBe(now - 7_500);
     expect(child?.endedAt).toBe(now - 2_500);
     expect(child?.runtimeMs).toBe(5_000);
+    expect(child?.spawnedWorkspaceDir).toBe("/tmp/child-workspace");
+    expect(child?.forkedFromParent).toBe(true);
+    expect(child?.spawnDepth).toBe(2);
+    expect(child?.subagentRole).toBe("orchestrator");
+    expect(child?.subagentControlScope).toBe("children");
     expect(child?.childSessions).toBeUndefined();
 
     const failed = result.sessions.find((session) => session.key === "agent:main:subagent:failed");

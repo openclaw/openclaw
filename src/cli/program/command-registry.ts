@@ -164,7 +164,7 @@ const coreEntries: CoreCliEntry[] = [
     commands: [
       {
         name: "mcp",
-        description: "Manage embedded Pi MCP servers",
+        description: "Manage OpenClaw MCP config and channel bridge",
         hasSubcommands: true,
       },
     ],

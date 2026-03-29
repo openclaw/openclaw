@@ -236,6 +236,34 @@ describe("resolveSessionDeliveryTarget", () => {
     });
   });
 
+  it("uses origin provider and accountId when legacy last route fields are absent", () => {
+    const resolved = resolveSessionDeliveryTarget({
+      entry: {
+        sessionId: "sess-origin-route",
+        updatedAt: 1,
+        lastTo: " +1555 ",
+        origin: {
+          provider: " whatsapp ",
+          accountId: " acct-origin ",
+        },
+      },
+      requestedChannel: "last",
+    });
+
+    expect(resolved).toEqual({
+      channel: "whatsapp",
+      to: "+1555",
+      accountId: "acct-origin",
+      threadId: undefined,
+      threadIdExplicit: false,
+      mode: "implicit",
+      lastChannel: "whatsapp",
+      lastTo: "+1555",
+      lastAccountId: "acct-origin",
+      lastThreadId: undefined,
+    });
+  });
+
   it("prefers explicit targets without reusing lastTo", () => {
     const resolved = resolveSessionDeliveryTarget({
       entry: {

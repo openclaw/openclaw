@@ -8,16 +8,15 @@ import {
   type ModelRef,
 } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  clearGatewayModelPricingCacheState,
+  getCachedGatewayModelPricing,
+  getGatewayModelPricingCacheMeta as getGatewayModelPricingCacheMetaState,
+  replaceGatewayModelPricingCache,
+  type CachedModelPricing,
+} from "./model-pricing-cache-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { normalizeGoogleModelId } from "../plugin-sdk/google.js";
-import { normalizeXaiModelId } from "../plugin-sdk/xai.js";
-
-export type CachedModelPricing = {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-};
+import { normalizeProviderModelIdWithPlugin } from "../plugins/provider-runtime.js";
 
 type OpenRouterPricingEntry = {
   id: string;
@@ -30,6 +29,8 @@ type OpenRouterModelPayload = {
   id?: unknown;
   pricing?: unknown;
 };
+
+export { getCachedGatewayModelPricing };
 
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
 const CACHE_TTL_MS = 24 * 60 * 60_000;
@@ -50,11 +51,8 @@ const WRAPPER_PROVIDERS = new Set([
   "openrouter",
   "vercel-ai-gateway",
 ]);
-
 const log = createSubsystemLogger("gateway").child("model-pricing");
 
-let cachedPricing = new Map<string, CachedModelPricing>();
-let cachedAt = 0;
 let refreshTimer: ReturnType<typeof setTimeout> | null = null;
 let inFlightRefresh: Promise<void> | null = null;
 
@@ -151,12 +149,14 @@ function canonicalizeOpenRouterLookupId(id: string): string {
       .replace(/^claude-(\d+)\.(\d+)-/u, "claude-$1-$2-")
       .replace(/^claude-([a-z]+)-(\d+)\.(\d+)$/u, "claude-$1-$2-$3");
   }
-  if (provider === "google") {
-    model = normalizeGoogleModelId(model);
-  }
-  if (provider === "x-ai") {
-    model = normalizeXaiModelId(model);
-  }
+  model =
+    normalizeProviderModelIdWithPlugin({
+      provider,
+      context: {
+        provider,
+        modelId: model,
+      },
+    }) ?? model;
   return `${provider}/${model}`;
 }
 
@@ -380,8 +380,7 @@ export async function refreshGatewayModelPricingCache(params: {
   inFlightRefresh = (async () => {
     const refs = collectConfiguredModelPricingRefs(params.config);
     if (refs.length === 0) {
-      cachedPricing = new Map();
-      cachedAt = Date.now();
+      replaceGatewayModelPricingCache(new Map());
       clearRefreshTimer();
       return;
     }
@@ -409,8 +408,7 @@ export async function refreshGatewayModelPricingCache(params: {
       nextPricing.set(modelKey(ref.provider, ref.model), pricing);
     }
 
-    cachedPricing = nextPricing;
-    cachedAt = Date.now();
+    replaceGatewayModelPricingCache(nextPricing);
     scheduleRefresh({ config: params.config, fetchImpl });
   })();
 
@@ -433,46 +431,16 @@ export function startGatewayModelPricingRefresh(params: {
   };
 }
 
-export function getCachedGatewayModelPricing(params: {
-  provider?: string;
-  model?: string;
-}): CachedModelPricing | undefined {
-  const provider = params.provider?.trim();
-  const model = params.model?.trim();
-  if (!provider || !model) {
-    return undefined;
-  }
-  const normalized = normalizeModelRef(provider, model);
-  return cachedPricing.get(modelKey(normalized.provider, normalized.model));
-}
-
 export function getGatewayModelPricingCacheMeta(): {
   cachedAt: number;
   ttlMs: number;
   size: number;
 } {
-  return {
-    cachedAt,
-    ttlMs: CACHE_TTL_MS,
-    size: cachedPricing.size,
-  };
+  return { ...getGatewayModelPricingCacheMetaState(), ttlMs: CACHE_TTL_MS };
 }
 
 export function __resetGatewayModelPricingCacheForTest(): void {
-  cachedPricing = new Map();
-  cachedAt = 0;
+  clearGatewayModelPricingCacheState();
   clearRefreshTimer();
   inFlightRefresh = null;
-}
-
-export function __setGatewayModelPricingForTest(
-  entries: Array<{ provider: string; model: string; pricing: CachedModelPricing }>,
-): void {
-  cachedPricing = new Map(
-    entries.map((entry) => {
-      const normalized = normalizeModelRef(entry.provider, entry.model);
-      return [modelKey(normalized.provider, normalized.model), entry.pricing] as const;
-    }),
-  );
-  cachedAt = Date.now();
 }

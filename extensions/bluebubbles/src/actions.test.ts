@@ -1,5 +1,4 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { bluebubblesMessageActions } from "./actions.js";
 import { sendBlueBubblesAttachment } from "./attachments.js";
 import { editBlueBubblesMessage, setGroupIconBlueBubbles } from "./chat.js";
 import { resolveBlueBubblesMessageId } from "./monitor.js";
@@ -44,6 +43,9 @@ vi.mock("./probe.js", () => ({
   isMacOS26OrHigher: vi.fn().mockReturnValue(false),
   getCachedBlueBubblesPrivateApiStatus: vi.fn().mockReturnValue(null),
 }));
+
+const freshActionsModulePath = "./actions.js?actions-test";
+const { bluebubblesMessageActions } = await import(freshActionsModulePath);
 
 describe("bluebubblesMessageActions", () => {
   const describeMessageTool = bluebubblesMessageActions.describeMessageTool!;

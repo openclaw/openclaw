@@ -1,7 +1,7 @@
-import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/infra-runtime";
 import type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/setup";
+import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 
-export type { SsrFPolicy } from "openclaw/plugin-sdk/infra-runtime";
+export type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 export type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/setup";
 
 export type BlueBubblesGroupConfig = {

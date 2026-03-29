@@ -361,6 +361,28 @@ describe("/approve command", () => {
     } as OpenClawConfig;
   }
 
+  function createTelegramTargetApproveCfg(
+    targets: Array<{ channel: string; to: string; accountId?: string }> = [
+      { channel: "telegram", to: "123" },
+    ],
+  ): OpenClawConfig {
+    return {
+      commands: { text: true },
+      channels: {
+        telegram: {
+          allowFrom: ["*"],
+        },
+      },
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "targets",
+          targets,
+        },
+      },
+    } as OpenClawConfig;
+  }
+
   function createDiscordApproveCfg(
     execApprovals: {
       enabled: boolean;
@@ -607,7 +629,7 @@ describe("/approve command", () => {
           SenderId: "123",
         },
         setup: undefined,
-        expectedText: "Telegram exec approvals are not enabled",
+        expectedText: "not authorized to approve",
         expectGatewayCalls: 0,
       },
       {
@@ -633,6 +655,27 @@ describe("/approve command", () => {
       expect(result.reply?.text, testCase.name).toContain(testCase.expectedText);
       expect(callGatewayMock, testCase.name).toHaveBeenCalledTimes(testCase.expectGatewayCalls);
     }
+  });
+
+  it("accepts Telegram /approve from active exec forwarding targets", async () => {
+    const cfg = createTelegramTargetApproveCfg([{ channel: "telegram", to: "tg:123" }]);
+    const params = buildParams("/approve abc12345 allow-once", cfg, {
+      Provider: "telegram",
+      Surface: "telegram",
+      SenderId: "123",
+    });
+
+    callGatewayMock.mockResolvedValue({ ok: true });
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Approval allow-once submitted");
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "exec.approval.resolve",
+        params: { id: "abc12345", decision: "allow-once" },
+      }),
+    );
   });
 
   it("rejects Telegram plugin-prefixed IDs when no approver policy is configured", async () => {
@@ -681,6 +724,44 @@ describe("/approve command", () => {
       expect.objectContaining({
         method: "plugin.approval.resolve",
         params: { id: "plugin:abc123", decision: "allow-once" },
+      }),
+    );
+  });
+
+  it("keeps Telegram plugin-prefixed IDs explicit-only for exec forwarding targets", async () => {
+    const cfg = createTelegramTargetApproveCfg();
+    const params = buildParams("/approve plugin:abc123 allow-once", cfg, {
+      Provider: "telegram",
+      Surface: "telegram",
+      SenderId: "123",
+    });
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("not authorized to approve plugin requests");
+    expect(callGatewayMock).toHaveBeenCalledTimes(0);
+  });
+
+  it("does not fall back to legacy plugin approvals for Telegram target recipients", async () => {
+    const cfg = createTelegramTargetApproveCfg();
+    const params = buildParams("/approve legacy-plugin-123 allow-once", cfg, {
+      Provider: "telegram",
+      Surface: "telegram",
+      SenderId: "123",
+    });
+
+    callGatewayMock.mockRejectedValueOnce(
+      gatewayError("unknown or expired approval id", "APPROVAL_NOT_FOUND"),
+    );
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("unknown or expired approval id");
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "exec.approval.resolve",
+        params: { id: "legacy-plugin-123", decision: "allow-once" },
       }),
     );
   });
