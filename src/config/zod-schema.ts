@@ -218,6 +218,12 @@ const McpServerSchema = z
     cwd: z.string().optional(),
     workingDirectory: z.string().optional(),
     url: HttpUrlSchema.optional(),
+    headers: z
+      .record(
+        z.string(),
+        z.union([z.string().register(sensitive), z.number(), z.boolean()]).register(sensitive),
+      )
+      .optional(),
   })
   .catchall(z.unknown());
 
