@@ -518,6 +518,7 @@ export async function runPreparedReply(
     isNewSession,
   });
   const authProfileIdSource = sessionEntry?.authProfileOverrideSource;
+  const authProfileIdCompactionCount = sessionEntry?.authProfileOverrideCompactionCount;
   const followupRun = {
     prompt: queuedBody,
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
@@ -558,6 +559,7 @@ export async function runPreparedReply(
       model,
       authProfileId,
       authProfileIdSource,
+      authProfileIdCompactionCount,
       thinkLevel: resolvedThinkLevel,
       fastMode: resolveFastModeState({
         cfg,

@@ -386,6 +386,31 @@ describe("runWithModelFallback + runEmbeddedPiAgent overload policy", () => {
     });
   });
 
+  it("tolerates legacy auto-selected auth profiles without source metadata during fallback", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeAuthStore(agentDir);
+      await writeSessionStore(path.join(agentDir, "sessions.json"), "main", {
+        sessionId: "session:run:overloaded-cross-provider:legacy-auto-auth",
+        authProfileOverride: "openai:p1",
+        authProfileOverrideCompactionCount: 1,
+      });
+      mockPrimaryOverloadedThenFallbackSuccess();
+
+      const result = await runEmbeddedFallback({
+        agentDir,
+        workspaceDir,
+        agentId: "main",
+        sessionKey: "main",
+        runId: "run:overloaded-cross-provider:legacy-auto-auth",
+      });
+
+      expect(result.provider).toBe("groq");
+      expect(result.model).toBe("mock-2");
+      expect(result.result.payloads?.[0]?.text ?? "").toContain("fallback ok");
+      expectOpenAiThenGroqAttemptOrder({ expectOpenAiAuthProfileId: "openai:p1" });
+    });
+  });
+
   it("surfaces a bounded overloaded summary when every fallback candidate is overloaded", async () => {
     await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
       await writeAuthStore(agentDir);

@@ -139,6 +139,7 @@ async function resolveRuntimeModel(params: {
   model: Model<Api>;
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
+  authProfileIdCompactionCount?: number;
 }> {
   await ensureOpenClawModelsJson(params.cfg, params.agentDir);
   const authStorage = discoverAuthStorage(params.agentDir);
@@ -167,6 +168,7 @@ async function resolveRuntimeModel(params: {
     model,
     authProfileId,
     authProfileIdSource: params.sessionEntry?.authProfileOverrideSource,
+    authProfileIdCompactionCount: params.sessionEntry?.authProfileOverrideCompactionCount,
   };
 }
 

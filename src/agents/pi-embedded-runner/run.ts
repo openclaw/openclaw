@@ -233,6 +233,7 @@ export async function runEmbeddedPiAgent(
         model: modelId,
         authProfileId: preferredProfileId,
         authProfileIdSource: params.authProfileIdSource,
+        authProfileIdCompactionCount: params.authProfileIdCompactionCount,
       });
       const resolvePersistedLiveSelection = () =>
         resolveLiveSessionModelSelection({

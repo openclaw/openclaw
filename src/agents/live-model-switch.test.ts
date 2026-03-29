@@ -254,6 +254,25 @@ describe("live model switch", () => {
     ).toBe(false);
   });
 
+  it("treats a missing persisted auth profile as unchanged for legacy auto overrides without source metadata", async () => {
+    const { hasDifferentLiveSessionModelSelection } = await loadModule();
+
+    expect(
+      hasDifferentLiveSessionModelSelection(
+        {
+          provider: "openai",
+          model: "gpt-5.4",
+          authProfileId: "openai:default",
+          authProfileIdCompactionCount: 2,
+        },
+        {
+          provider: "openai",
+          model: "gpt-5.4",
+        },
+      ),
+    ).toBe(false);
+  });
+
   it("still detects real auto auth profile changes", async () => {
     const { hasDifferentLiveSessionModelSelection } = await loadModule();
 

@@ -27,11 +27,18 @@ export class LiveSessionModelSwitchError extends Error {
 function normalizeSelectedAuthProfileSource(
   authProfileId: string | undefined,
   authProfileIdSource: string | undefined,
+  authProfileIdCompactionCount?: number,
 ): "auto" | "user" | undefined {
   if (!authProfileId) {
     return undefined;
   }
-  return authProfileIdSource === "auto" ? "auto" : "user";
+  if (authProfileIdSource === "auto") {
+    return "auto";
+  }
+  if (authProfileIdSource === undefined && typeof authProfileIdCompactionCount === "number") {
+    return "auto";
+  }
+  return "user";
 }
 
 function resolvePersistedAuthProfileSelection(
@@ -44,7 +51,11 @@ function resolvePersistedAuthProfileSelection(
   const persistedSource =
     entry.authProfileOverrideSource ??
     (typeof entry.authProfileOverrideCompactionCount === "number" ? "auto" : "user");
-  const authProfileIdSource = normalizeSelectedAuthProfileSource(authProfileId, persistedSource);
+  const authProfileIdSource = normalizeSelectedAuthProfileSource(
+    authProfileId,
+    persistedSource,
+    entry.authProfileOverrideCompactionCount,
+  );
   if (!authProfileId || authProfileIdSource !== "user") {
     return {
       authProfileId: undefined,
@@ -115,6 +126,7 @@ export function hasDifferentLiveSessionModelSelection(
     model: string;
     authProfileId?: string;
     authProfileIdSource?: string;
+    authProfileIdCompactionCount?: number;
   },
   next: LiveSessionModelSelection | null | undefined,
 ): next is LiveSessionModelSelection {
@@ -126,6 +138,7 @@ export function hasDifferentLiveSessionModelSelection(
   const currentAuthProfileIdSource = normalizeSelectedAuthProfileSource(
     currentAuthProfileId,
     current.authProfileIdSource,
+    current.authProfileIdCompactionCount,
   );
   const nextAuthProfileIdSource = normalizeSelectedAuthProfileSource(
     nextAuthProfileId,

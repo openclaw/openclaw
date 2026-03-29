@@ -387,6 +387,9 @@ export function runAgentAttempt(params: {
     model: params.modelOverride,
     authProfileId,
     authProfileIdSource: authProfileId ? params.sessionEntry?.authProfileOverrideSource : undefined,
+    authProfileIdCompactionCount: authProfileId
+      ? params.sessionEntry?.authProfileOverrideCompactionCount
+      : undefined,
     thinkLevel: params.resolvedThinkLevel,
     verboseLevel: params.resolvedVerboseLevel,
     timeoutMs: params.timeoutMs,

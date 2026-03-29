@@ -612,6 +612,7 @@ export async function runAgentTurnWithFallback(params: {
         params.followupRun.run.authProfileIdSource = err.authProfileId
           ? err.authProfileIdSource
           : undefined;
+        params.followupRun.run.authProfileIdCompactionCount = undefined;
         fallbackProvider = err.provider;
         fallbackModel = err.model;
         continue;

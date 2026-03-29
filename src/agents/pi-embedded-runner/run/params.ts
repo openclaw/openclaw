@@ -82,6 +82,7 @@ export type RunEmbeddedPiAgentParams = {
   model?: string;
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
+  authProfileIdCompactionCount?: number;
   thinkLevel?: ThinkLevel;
   fastMode?: boolean;
   verboseLevel?: VerboseLevel;

@@ -5,12 +5,18 @@ export function resolveProviderScopedAuthProfile(params: {
   primaryProvider: string;
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
-}): { authProfileId?: string; authProfileIdSource?: "auto" | "user" } {
+  authProfileIdCompactionCount?: number;
+}): {
+  authProfileId?: string;
+  authProfileIdSource?: "auto" | "user";
+  authProfileIdCompactionCount?: number;
+} {
   const authProfileId =
     params.provider === params.primaryProvider ? params.authProfileId : undefined;
   return {
     authProfileId,
     authProfileIdSource: authProfileId ? params.authProfileIdSource : undefined,
+    authProfileIdCompactionCount: authProfileId ? params.authProfileIdCompactionCount : undefined,
   };
 }
 
@@ -20,5 +26,6 @@ export function resolveRunAuthProfile(run: FollowupRun["run"], provider: string)
     primaryProvider: run.provider,
     authProfileId: run.authProfileId,
     authProfileIdSource: run.authProfileIdSource,
+    authProfileIdCompactionCount: run.authProfileIdCompactionCount,
   });
 }
