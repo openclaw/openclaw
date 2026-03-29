@@ -486,7 +486,11 @@ export async function ensureOllamaModelPulled(params: {
   if (!params.model.startsWith("ollama/")) {
     return;
   }
-  const baseUrl = params.config.models?.providers?.ollama?.baseUrl ?? OLLAMA_DEFAULT_BASE_URL;
+  const ollamaProvider = params.config.models?.providers?.ollama;
+  const baseUrl =
+    ollamaProvider?.baseUrl ||
+    (ollamaProvider as { baseURL?: string } | undefined)?.baseURL ||
+    OLLAMA_DEFAULT_BASE_URL;
   const modelName = params.model.slice("ollama/".length);
   if (isOllamaCloudModel(modelName)) {
     return;

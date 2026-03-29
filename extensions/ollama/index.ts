@@ -6,6 +6,7 @@ import {
   type ProviderAuthResult,
   type ProviderDiscoveryContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { OLLAMA_DEFAULT_BASE_URL } from "./src/defaults.js";
 import {
   DEFAULT_OLLAMA_EMBEDDING_MODEL,
@@ -16,6 +17,21 @@ import {
   createConfiguredOllamaCompatStreamWrapper,
   createConfiguredOllamaStreamFn,
 } from "./src/stream.js";
+
+// Users familiar with the OpenAI SDK often write `baseURL` (uppercase) while
+// the openclaw config schema uses `baseUrl`. Accept both spellings so remote
+// Ollama hosts are not silently ignored and requests do not fall back to
+// localhost:11434.
+function readProviderBaseUrl(
+  provider: ModelProviderConfig | (ModelProviderConfig & { baseURL?: string }) | undefined,
+): string | undefined {
+  if (!provider) return undefined;
+  const url =
+    (typeof provider.baseUrl === "string" && provider.baseUrl.trim()) ||
+    (typeof (provider as { baseURL?: string }).baseURL === "string" &&
+      (provider as { baseURL?: string }).baseURL!.trim());
+  return url || undefined;
+}
 
 const PROVIDER_ID = "ollama";
 const DEFAULT_API_KEY = "ollama-local";
@@ -90,10 +106,7 @@ export default definePluginEntry({
             return {
               provider: {
                 ...explicit,
-                baseUrl:
-                  typeof explicit.baseUrl === "string" && explicit.baseUrl.trim()
-                    ? resolveOllamaApiBase(explicit.baseUrl)
-                    : OLLAMA_DEFAULT_BASE_URL,
+                baseUrl: resolveOllamaApiBase(readProviderBaseUrl(explicit)),
                 api: explicit.api ?? "ollama",
                 apiKey: ollamaKey ?? explicit.apiKey ?? DEFAULT_API_KEY,
               },
@@ -104,7 +117,7 @@ export default definePluginEntry({
           }
 
           const providerSetup = await loadProviderSetup();
-          const provider = await providerSetup.buildOllamaProvider(explicit?.baseUrl, {
+          const provider = await providerSetup.buildOllamaProvider(readProviderBaseUrl(explicit), {
             quiet: !ollamaKey && !explicit,
           });
           if (provider.models.length === 0 && !ollamaKey && !explicit?.apiKey) {
@@ -148,7 +161,7 @@ export default definePluginEntry({
       createStreamFn: ({ config, model }) => {
         return createConfiguredOllamaStreamFn({
           model,
-          providerBaseUrl: config?.models?.providers?.ollama?.baseUrl,
+          providerBaseUrl: readProviderBaseUrl(config?.models?.providers?.ollama),
         });
       },
       wrapStreamFn: (ctx) => {
