@@ -2,6 +2,7 @@ import path from "node:path";
 import { extensionUsesSkippedScannerPath, isPathInside } from "../security/scan-paths.js";
 import { scanDirectoryWithSummary } from "../security/skill-scanner.js";
 import { getGlobalHookRunner } from "./hook-runner-global.js";
+import { createBeforeInstallHookPayload } from "./install-policy-context.js";
 
 type InstallScanLogger = {
   warn?: (message: string) => void;
@@ -131,7 +132,7 @@ async function scanFileTarget(params: {
 async function runBeforeInstallHook(params: {
   logger: InstallScanLogger;
   installLabel: string;
-  source: string;
+  origin: string;
   sourcePath: string;
   sourcePathKind: "file" | "directory";
   targetName: string;
@@ -173,28 +174,22 @@ async function runBeforeInstallHook(params: {
   }
 
   try {
-    const hookResult = await hookRunner.runBeforeInstall(
-      {
-        targetName: params.targetName,
-        targetType: params.targetType,
-        source: params.source,
-        sourcePath: params.sourcePath,
-        sourcePathKind: params.sourcePathKind,
-        request: {
-          kind: params.requestKind,
-          mode: params.requestMode,
-          ...(params.requestedSpecifier ? { requestedSpecifier: params.requestedSpecifier } : {}),
-        },
-        builtinScan: params.builtinScan,
-        ...(params.skill ? { skill: params.skill } : {}),
-        ...(params.plugin ? { plugin: params.plugin } : {}),
+    const { event, ctx } = createBeforeInstallHookPayload({
+      targetName: params.targetName,
+      targetType: params.targetType,
+      origin: params.origin,
+      sourcePath: params.sourcePath,
+      sourcePathKind: params.sourcePathKind,
+      request: {
+        kind: params.requestKind,
+        mode: params.requestMode,
+        ...(params.requestedSpecifier ? { requestedSpecifier: params.requestedSpecifier } : {}),
       },
-      {
-        source: params.source,
-        targetType: params.targetType,
-        requestKind: params.requestKind,
-      },
-    );
+      builtinScan: params.builtinScan,
+      ...(params.skill ? { skill: params.skill } : {}),
+      ...(params.plugin ? { plugin: params.plugin } : {}),
+    });
+    const hookResult = await hookRunner.runBeforeInstall(event, ctx);
     if (hookResult?.block) {
       const reason = hookResult.blockReason || "Installation blocked by plugin hook";
       params.logger.warn?.(`WARNING: ${params.installLabel} blocked by plugin hook: ${reason}`);
@@ -237,7 +232,7 @@ export async function scanBundleInstallSourceRuntime(params: {
   return await runBeforeInstallHook({
     logger: params.logger,
     installLabel: `Bundle "${params.pluginId}" installation`,
-    source: "plugin-bundle",
+    origin: "plugin-bundle",
     sourcePath: params.sourceDir,
     sourcePathKind: "directory",
     targetName: params.pluginId,
@@ -297,7 +292,7 @@ export async function scanPackageInstallSourceRuntime(params: {
   return await runBeforeInstallHook({
     logger: params.logger,
     installLabel: `Plugin "${params.pluginId}" installation`,
-    source: "plugin-package",
+    origin: "plugin-package",
     sourcePath: params.packageDir,
     sourcePathKind: "directory",
     targetName: params.pluginId,
@@ -336,7 +331,7 @@ export async function scanFileInstallSourceRuntime(params: {
   return await runBeforeInstallHook({
     logger: params.logger,
     installLabel: `Plugin file "${params.pluginId}" installation`,
-    source: "plugin-file",
+    origin: "plugin-file",
     sourcePath: params.filePath,
     sourcePathKind: "file",
     targetName: params.pluginId,
