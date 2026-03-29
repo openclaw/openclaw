@@ -12,6 +12,11 @@ import {
 const GENERATED_BUNDLED_SKILLS_DIR = "bundled-skills";
 const TRANSIENT_COPY_ERROR_CODES = new Set(["EEXIST", "ENOENT", "ENOTEMPTY", "EBUSY"]);
 const COPY_RETRY_DELAYS_MS = [10, 25, 50];
+const RUNTIME_PUBLIC_SURFACE_ONLY_DIR_NAMES = new Set([
+  "image-generation-core",
+  "media-understanding-core",
+  "speech-core",
+]);
 
 function shouldCopyBundledPluginMetadata(id, env) {
   if (!NON_PACKAGED_BUNDLED_PLUGIN_DIRS.has(id)) {
@@ -246,47 +251,53 @@ export function copyBundledPluginMetadata(params = {}) {
       removePathIfExists(distPluginDir);
       continue;
     }
+    const hasManifest = fs.existsSync(manifestPath);
+    const isRuntimePublicSurfaceOnlyDir = RUNTIME_PUBLIC_SURFACE_ONLY_DIR_NAMES.has(dirent.name);
     if (!shouldBuildBundledCluster(dirent.name, env, { packageJson })) {
       removePathIfExists(distPluginDir);
       continue;
     }
 
     const isManifestlessSupportPackage =
-      !fs.existsSync(manifestPath) &&
+      !hasManifest &&
       isManifestlessBundledRuntimeSupportPackage({
         dirName: dirent.name,
         packageJson,
         topLevelPublicSurfaceEntries,
       });
+    const shouldSkipManifestless = !hasManifest && !isRuntimePublicSurfaceOnlyDir;
+    if (shouldSkipManifestless && !isManifestlessSupportPackage) {
+      continue;
+    }
 
     sourcePluginDirs.add(dirent.name);
 
     const distManifestPath = path.join(distPluginDir, "openclaw.plugin.json");
     const distPackageJsonPath = path.join(distPluginDir, "package.json");
-    if (!fs.existsSync(manifestPath) && !isManifestlessSupportPackage) {
-      removePathIfExists(distPluginDir);
+    if (!hasManifest) {
+      removeFileIfExists(distManifestPath);
+      if (!fs.existsSync(packageJsonPath)) {
+        removeFileIfExists(distPackageJsonPath);
+        continue;
+      }
+      writeTextFileIfChanged(distPackageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`);
       continue;
     }
-
-    if (fs.existsSync(manifestPath)) {
-      const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-      // Generated skill assets live under a dedicated dist-owned directory. Also
-      // remove the older bad node_modules tree so release packs cannot pick it up.
-      removePathIfExists(path.join(distPluginDir, GENERATED_BUNDLED_SKILLS_DIR));
-      removePathIfExists(path.join(distPluginDir, "node_modules"));
-      const copiedSkills = copyDeclaredPluginSkillPaths({
-        manifest,
-        pluginDir,
-        distPluginDir,
-        repoRoot,
-      });
-      const bundledManifest = Array.isArray(manifest.skills)
-        ? { ...manifest, skills: copiedSkills }
-        : manifest;
-      writeTextFileIfChanged(distManifestPath, `${JSON.stringify(bundledManifest, null, 2)}\n`);
-    } else {
-      removeFileIfExists(distManifestPath);
-    }
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    // Generated skill assets live under a dedicated dist-owned directory. Also
+    // remove the older bad node_modules tree so release packs cannot pick it up.
+    removePathIfExists(path.join(distPluginDir, GENERATED_BUNDLED_SKILLS_DIR));
+    removePathIfExists(path.join(distPluginDir, "node_modules"));
+    const copiedSkills = copyDeclaredPluginSkillPaths({
+      manifest,
+      pluginDir,
+      distPluginDir,
+      repoRoot,
+    });
+    const bundledManifest = Array.isArray(manifest.skills)
+      ? { ...manifest, skills: copiedSkills }
+      : manifest;
+    writeTextFileIfChanged(distManifestPath, `${JSON.stringify(bundledManifest, null, 2)}\n`);
 
     if (!fs.existsSync(packageJsonPath)) {
       removeFileIfExists(distPackageJsonPath);

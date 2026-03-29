@@ -342,6 +342,37 @@ describe("copyBundledPluginMetadata", () => {
     expect(fs.existsSync(path.join(staleDistDir, "package.json"))).toBe(true);
   });
 
+  it("preserves runtime-only public surface packages without plugin manifests", () => {
+    const repoRoot = makeRepoRoot("openclaw-bundled-plugin-runtime-surface-only-");
+    const sourcePluginDir = path.join(repoRoot, "extensions", "speech-core");
+    fs.mkdirSync(sourcePluginDir, { recursive: true });
+    writeJson(path.join(sourcePluginDir, "package.json"), {
+      name: "@openclaw/speech-core",
+      type: "module",
+    });
+
+    const distPluginDir = path.join(repoRoot, "dist", "extensions", "speech-core");
+    fs.mkdirSync(distPluginDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(distPluginDir, "runtime-api.js"),
+      "export const ok = true;\n",
+      "utf8",
+    );
+    writeJson(path.join(distPluginDir, "openclaw.plugin.json"), {
+      id: "speech-core",
+      configSchema: { type: "object" },
+    });
+
+    copyBundledPluginMetadata({ repoRoot });
+
+    expect(fs.existsSync(path.join(distPluginDir, "runtime-api.js"))).toBe(true);
+    expect(fs.existsSync(path.join(distPluginDir, "openclaw.plugin.json"))).toBe(false);
+    expect(readBundledPackageJson(repoRoot, "speech-core")).toEqual({
+      name: "@openclaw/speech-core",
+      type: "module",
+    });
+  });
+
   it.each([
     {
       name: "skips metadata for optional bundled clusters only when explicitly disabled",

@@ -506,11 +506,32 @@ describe("collectMissingPackPaths", () => {
   it("requires bundled plugin runtime sidecars that dynamic plugin boundaries resolve at runtime", () => {
     expect(requiredBundledPluginPackPaths).toEqual(
       expect.arrayContaining([
+        bundledDistPluginFile("image-generation-core", "runtime-api.js"),
         bundledDistPluginFile("matrix", "helper-api.js"),
         bundledDistPluginFile("matrix", "runtime-api.js"),
         bundledDistPluginFile("matrix", "thread-bindings-runtime.js"),
+        bundledDistPluginFile("media-understanding-core", "runtime-api.js"),
+        bundledDistPluginFile("speech-core", "runtime-api.js"),
         bundledDistPluginFile("whatsapp", "light-runtime-api.js"),
         bundledDistPluginFile("whatsapp", "runtime-api.js"),
+      ]),
+    );
+  });
+  it("requires the authored qa scenario pack files in npm pack output", () => {
+    expect(requiredQaScenarioPackPaths).toContain("qa/scenarios/index.md");
+    expect(
+      requiredQaScenarioPackPaths.some(
+        (path) => path.startsWith("qa/scenarios/") && path !== "qa/scenarios/index.md",
+      ),
+    ).toBe(true);
+  });
+
+  it("does not require plugin manifests for runtime-only public surface packages", () => {
+    expect(requiredBundledPluginPackPaths).not.toEqual(
+      expect.arrayContaining([
+        bundledDistPluginFile("image-generation-core", "openclaw.plugin.json"),
+        bundledDistPluginFile("media-understanding-core", "openclaw.plugin.json"),
+        bundledDistPluginFile("speech-core", "openclaw.plugin.json"),
       ]),
     );
   });
