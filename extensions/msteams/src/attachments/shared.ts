@@ -4,8 +4,8 @@ import {
   isHttpsUrlAllowedByHostnameSuffixAllowlist,
   isPrivateIpAddress,
   normalizeHostnameSuffixAllowlist,
-} from "openclaw/plugin-sdk";
-import type { SsrFPolicy } from "openclaw/plugin-sdk";
+} from "../../runtime-api.js";
+import type { SsrFPolicy } from "../../runtime-api.js";
 import type { MSTeamsAttachmentLike } from "./types.js";
 
 type InlineImageCandidate =
@@ -59,6 +59,9 @@ export const DEFAULT_MEDIA_HOST_ALLOWLIST = [
 export const DEFAULT_MEDIA_AUTH_HOST_ALLOWLIST = [
   "api.botframework.com",
   "botframework.com",
+  // Bot Framework Service URL (smba.trafficmanager.net) used for outbound
+  // replies and inbound attachment downloads (clipboard-pasted images).
+  "smba.trafficmanager.net",
   "graph.microsoft.com",
   "graph.microsoft.us",
   "graph.microsoft.de",

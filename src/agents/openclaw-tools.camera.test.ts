@@ -14,8 +14,7 @@ vi.mock("../media/image-ops.js", () => ({
   resizeToJpeg: vi.fn(async () => Buffer.from("jpeg")),
 }));
 
-import "./test-helpers/fast-core-tools.js";
-import { createOpenClawTools } from "./openclaw-tools.js";
+let createOpenClawTools: typeof import("./openclaw-tools.js").createOpenClawTools;
 
 const NODE_ID = "mac-1";
 const BASE_RUN_INPUT = { action: "run", node: NODE_ID, command: ["echo", "hi"] } as const;
@@ -25,6 +24,23 @@ const JPG_PAYLOAD = {
   width: 1,
   height: 1,
 } as const;
+const PHOTOS_LATEST_ACTION_INPUT = { action: "photos_latest", node: NODE_ID } as const;
+const PHOTOS_LATEST_DEFAULT_PARAMS = {
+  limit: 1,
+  maxWidth: 1600,
+  quality: 0.85,
+} as const;
+const PHOTOS_LATEST_PAYLOAD = {
+  photos: [
+    {
+      format: "jpeg",
+      base64: "aGVsbG8=",
+      width: 1,
+      height: 1,
+      createdAt: "2026-03-04T00:00:00Z",
+    },
+  ],
+} as const;
 
 type GatewayCall = { method: string; params?: unknown };
 
@@ -32,16 +48,29 @@ function unexpectedGatewayMethod(method: unknown): never {
   throw new Error(`unexpected method: ${String(method)}`);
 }
 
-function getNodesTool() {
-  const tool = createOpenClawTools().find((candidate) => candidate.name === "nodes");
+function getNodesTool(options?: { modelHasVision?: boolean; allowMediaInvokeCommands?: boolean }) {
+  const toolOptions: {
+    modelHasVision?: boolean;
+    allowMediaInvokeCommands?: boolean;
+  } = {};
+  if (options?.modelHasVision !== undefined) {
+    toolOptions.modelHasVision = options.modelHasVision;
+  }
+  if (options?.allowMediaInvokeCommands !== undefined) {
+    toolOptions.allowMediaInvokeCommands = options.allowMediaInvokeCommands;
+  }
+  const tool = createOpenClawTools(toolOptions).find((candidate) => candidate.name === "nodes");
   if (!tool) {
     throw new Error("missing nodes tool");
   }
   return tool;
 }
 
-async function executeNodes(input: Record<string, unknown>) {
-  return getNodesTool().execute("call1", input as never);
+async function executeNodes(
+  input: Record<string, unknown>,
+  options?: { modelHasVision?: boolean; allowMediaInvokeCommands?: boolean },
+) {
+  return getNodesTool(options).execute("call1", input as never);
 }
 
 type NodesToolResult = Awaited<ReturnType<typeof executeNodes>>;
@@ -65,6 +94,18 @@ function expectSingleImage(result: NodesToolResult, params?: { mimeType?: string
   if (params?.mimeType) {
     expect(images[0]?.mimeType).toBe(params.mimeType);
   }
+}
+
+function expectNoImages(result: NodesToolResult) {
+  const images = (result.content ?? []).filter((block) => block.type === "image");
+  expect(images).toHaveLength(0);
+}
+
+function expectFirstMediaUrl(result: NodesToolResult): string {
+  const details = result.details as { media?: { mediaUrls?: string[] } } | undefined;
+  const mediaUrl = details?.media?.mediaUrls?.[0];
+  expect(typeof mediaUrl).toBe("string");
+  return mediaUrl ?? "";
 }
 
 function expectFirstTextContains(result: NodesToolResult, expectedText: string) {
@@ -100,11 +141,10 @@ function setupNodeInvokeMock(params: {
 function createSystemRunPreparePayload(cwd: string | null) {
   return {
     payload: {
-      cmdText: "echo hi",
       plan: {
         argv: ["echo", "hi"],
         cwd,
-        rawCommand: "echo hi",
+        commandText: "echo hi",
         agentId: null,
         sessionKey: null,
       },
@@ -135,9 +175,29 @@ function setupSystemRunGateway(params: {
   });
 }
 
-beforeEach(() => {
+function setupPhotosLatestMock(params?: { remoteIp?: string }) {
+  setupNodeInvokeMock({
+    ...(params?.remoteIp ? { remoteIp: params.remoteIp } : {}),
+    onInvoke: (invokeParams) => {
+      expect(invokeParams).toMatchObject({
+        command: "photos.latest",
+        params: PHOTOS_LATEST_DEFAULT_PARAMS,
+      });
+      return { payload: PHOTOS_LATEST_PAYLOAD };
+    },
+  });
+}
+
+async function executePhotosLatest(params: { modelHasVision: boolean }) {
+  return executeNodes(PHOTOS_LATEST_ACTION_INPUT, {
+    modelHasVision: params.modelHasVision,
+  });
+}
+
+beforeEach(async () => {
   callGateway.mockClear();
   vi.unstubAllGlobals();
+  await loadOpenClawToolsForTest();
 });
 
 describe("nodes camera_snap", () => {
@@ -156,10 +216,13 @@ describe("nodes camera_snap", () => {
       },
     });
 
-    const result = await executeNodes({
-      action: "camera_snap",
-      node: NODE_ID,
-    });
+    const result = await executeNodes(
+      {
+        action: "camera_snap",
+        node: NODE_ID,
+      },
+      { modelHasVision: true },
+    );
 
     expectSingleImage(result);
   });
@@ -169,13 +232,35 @@ describe("nodes camera_snap", () => {
       invokePayload: JPG_PAYLOAD,
     });
 
-    const result = await executeNodes({
-      action: "camera_snap",
-      node: NODE_ID,
-      facing: "front",
-    });
+    const result = await executeNodes(
+      {
+        action: "camera_snap",
+        node: NODE_ID,
+        facing: "front",
+      },
+      { modelHasVision: true },
+    );
 
     expectSingleImage(result, { mimeType: "image/jpeg" });
+  });
+
+  it("omits inline base64 image blocks when model has no vision", async () => {
+    setupNodeInvokeMock({
+      invokePayload: JPG_PAYLOAD,
+    });
+
+    const result = await executeNodes(
+      {
+        action: "camera_snap",
+        node: NODE_ID,
+        facing: "front",
+      },
+      { modelHasVision: false },
+    );
+
+    expectNoImages(result);
+    expect(result.content ?? []).toEqual([]);
+    expect(expectFirstMediaUrl(result)).toMatch(/openclaw-camera-snap-front-.*\.jpg$/);
   });
 
   it("passes deviceId when provided", async () => {
@@ -226,11 +311,8 @@ describe("nodes camera_snap", () => {
       facing: "front",
     });
 
-    expect(result.content?.[0]).toMatchObject({ type: "text" });
-    const mediaPath = String((result.content?.[0] as { text?: string } | undefined)?.text ?? "")
-      .replace(/^MEDIA:/, "")
-      .trim();
-    await expect(readFileUtf8AndCleanup(mediaPath)).resolves.toBe("url-image");
+    expect(result.content ?? []).toEqual([]);
+    await expect(readFileUtf8AndCleanup(expectFirstMediaUrl(result))).resolves.toBe("url-image");
   });
 
   it("rejects camera_snap url payloads when node remoteIp is missing", async () => {
@@ -296,6 +378,65 @@ describe("nodes camera_clip", () => {
         facing: "front",
       }),
     ).rejects.toThrow(/node remoteip/i);
+  });
+});
+
+describe("nodes photos_latest", () => {
+  it("returns empty content/details when no photos are available", async () => {
+    setupNodeInvokeMock({
+      onInvoke: (invokeParams) => {
+        expect(invokeParams).toMatchObject({
+          command: "photos.latest",
+          params: {
+            limit: 1,
+            maxWidth: 1600,
+            quality: 0.85,
+          },
+        });
+        return {
+          payload: {
+            photos: [],
+          },
+        };
+      },
+    });
+
+    const result = await executeNodes(
+      {
+        action: "photos_latest",
+        node: NODE_ID,
+      },
+      { modelHasVision: false },
+    );
+
+    expect(result.content ?? []).toEqual([]);
+    expect(result.details).toEqual([]);
+  });
+
+  it("returns MEDIA paths and no inline images when model has no vision", async () => {
+    setupPhotosLatestMock({ remoteIp: "198.51.100.42" });
+
+    const result = await executePhotosLatest({ modelHasVision: false });
+
+    expectNoImages(result);
+    expect(result.content ?? []).toEqual([]);
+    const details =
+      (result.details as { photos?: Array<Record<string, unknown>> } | undefined)?.photos ?? [];
+    expect(details[0]).toMatchObject({
+      width: 1,
+      height: 1,
+      createdAt: "2026-03-04T00:00:00Z",
+    });
+    expect(expectFirstMediaUrl(result)).toMatch(/openclaw-camera-snap-.*\.jpg$/);
+  });
+
+  it("includes inline image blocks when model has vision", async () => {
+    setupPhotosLatestMock();
+
+    const result = await executePhotosLatest({ modelHasVision: true });
+
+    expectSingleImage(result, { mimeType: "image/jpeg" });
+    expect(expectFirstMediaUrl(result)).toMatch(/openclaw-camera-snap-.*\.jpg$/);
   });
 });
 
@@ -518,10 +659,9 @@ describe("nodes run", () => {
       onApprovalRequest: (approvalParams) => {
         expect(approvalParams).toMatchObject({
           id: expect.any(String),
-          command: "echo hi",
-          commandArgv: ["echo", "hi"],
           systemRunPlan: expect.objectContaining({
             argv: ["echo", "hi"],
+            commandText: "echo hi",
           }),
           nodeId: NODE_ID,
           host: "node",
@@ -576,3 +716,81 @@ describe("nodes run", () => {
     );
   });
 });
+
+describe("nodes invoke", () => {
+  it("allows metadata-only camera.list via generic invoke", async () => {
+    setupNodeInvokeMock({
+      onInvoke: (invokeParams) => {
+        expect(invokeParams).toMatchObject({
+          command: "camera.list",
+          params: {},
+        });
+        return {
+          payload: {
+            devices: [{ id: "cam-back", name: "Back Camera" }],
+          },
+        };
+      },
+    });
+
+    const result = await executeNodes({
+      action: "invoke",
+      node: NODE_ID,
+      invokeCommand: "camera.list",
+    });
+
+    expect(result.details).toMatchObject({
+      payload: {
+        devices: [{ id: "cam-back", name: "Back Camera" }],
+      },
+    });
+  });
+
+  it("blocks media invoke commands to avoid base64 context bloat", async () => {
+    await expect(
+      executeNodes({
+        action: "invoke",
+        node: NODE_ID,
+        invokeCommand: "photos.latest",
+        invokeParamsJson: '{"limit":1}',
+      }),
+    ).rejects.toThrow(/use action="photos_latest"/i);
+  });
+
+  it("allows media invoke commands when explicitly enabled", async () => {
+    setupNodeInvokeMock({
+      onInvoke: (invokeParams) => {
+        expect(invokeParams).toMatchObject({
+          command: "photos.latest",
+          params: { limit: 1 },
+        });
+        return {
+          payload: {
+            photos: [{ format: "jpg", base64: "aGVsbG8=", width: 1, height: 1 }],
+          },
+        };
+      },
+    });
+
+    const result = await executeNodes(
+      {
+        action: "invoke",
+        node: NODE_ID,
+        invokeCommand: "photos.latest",
+        invokeParamsJson: '{"limit":1}',
+      },
+      { allowMediaInvokeCommands: true },
+    );
+
+    expect(result.details).toMatchObject({
+      payload: {
+        photos: [{ format: "jpg", base64: "aGVsbG8=", width: 1, height: 1 }],
+      },
+    });
+  });
+});
+async function loadOpenClawToolsForTest(): Promise<void> {
+  vi.resetModules();
+  await import("./test-helpers/fast-core-tools.js");
+  ({ createOpenClawTools } = await import("./openclaw-tools.js"));
+}

@@ -18,6 +18,7 @@ export const AgentDefaultsSchema = z
   .object({
     model: AgentModelSchema.optional(),
     imageModel: AgentModelSchema.optional(),
+    imageGenerationModel: AgentModelSchema.optional(),
     pdfModel: AgentModelSchema.optional(),
     pdfMaxBytesMb: z.number().positive().optional(),
     pdfMaxPages: z.number().int().positive().optional(),
@@ -40,6 +41,9 @@ export const AgentDefaultsSchema = z
     skipBootstrap: z.boolean().optional(),
     bootstrapMaxChars: z.number().int().positive().optional(),
     bootstrapTotalMaxChars: z.number().int().positive().optional(),
+    bootstrapPromptTruncationWarning: z
+      .union([z.literal("off"), z.literal("once"), z.literal("always")])
+      .optional(),
     userTimezone: z.string().optional(),
     timeFormat: z.union([z.literal("auto"), z.literal("12"), z.literal("24")]).optional(),
     envelopeTimezone: z.string().optional(),
@@ -88,10 +92,23 @@ export const AgentDefaultsSchema = z
         keepRecentTokens: z.number().int().positive().optional(),
         reserveTokensFloor: z.number().int().nonnegative().optional(),
         maxHistoryShare: z.number().min(0.1).max(0.9).optional(),
+        customInstructions: z.string().optional(),
         identifierPolicy: z
           .union([z.literal("strict"), z.literal("off"), z.literal("custom")])
           .optional(),
         identifierInstructions: z.string().optional(),
+        recentTurnsPreserve: z.number().int().min(0).max(12).optional(),
+        qualityGuard: z
+          .object({
+            enabled: z.boolean().optional(),
+            maxRetries: z.number().int().nonnegative().optional(),
+          })
+          .strict()
+          .optional(),
+        postIndexSync: z.enum(["off", "async", "await"]).optional(),
+        postCompactionSections: z.array(z.string()).optional(),
+        model: z.string().optional(),
+        timeoutSeconds: z.number().int().positive().optional(),
         memoryFlush: z
           .object({
             enabled: z.boolean().optional(),
@@ -168,7 +185,7 @@ export const AgentDefaultsSchema = z
           .describe(
             "Maximum number of active children a single agent session can spawn (default: 5).",
           ),
-        archiveAfterMinutes: z.number().int().positive().optional(),
+        archiveAfterMinutes: z.number().int().min(0).optional(),
         model: AgentModelSchema.optional(),
         thinking: z.string().optional(),
         runTimeoutSeconds: z.number().int().min(0).optional(),

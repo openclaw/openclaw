@@ -1,11 +1,11 @@
+import { isAllowedParsedChatSender } from "openclaw/plugin-sdk/allow-from";
 import {
-  isAllowedParsedChatSender,
   parseChatAllowTargetPrefixes,
   parseChatTargetPrefixesOrThrow,
   type ParsedChatTarget,
   resolveServicePrefixedAllowTarget,
   resolveServicePrefixedTarget,
-} from "openclaw/plugin-sdk";
+} from "openclaw/plugin-sdk/imessage-core";
 
 export type BlueBubblesService = "imessage" | "sms" | "auto";
 
@@ -235,6 +235,63 @@ export function looksLikeBlueBubblesTargetId(raw: string, normalized?: string): 
     }
   }
   return false;
+}
+
+export function looksLikeBlueBubblesExplicitTargetId(raw: string, normalized?: string): boolean {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return false;
+  }
+  const candidate = stripBlueBubblesPrefix(trimmed);
+  if (!candidate) {
+    return false;
+  }
+  const lowered = candidate.toLowerCase();
+  if (/^(imessage|sms|auto):/.test(lowered)) {
+    return true;
+  }
+  if (
+    /^(chat_id|chatid|chat|chat_guid|chatguid|guid|chat_identifier|chatidentifier|chatident|group):/.test(
+      lowered,
+    )
+  ) {
+    return true;
+  }
+  if (parseRawChatGuid(candidate) || looksLikeRawChatIdentifier(candidate)) {
+    return true;
+  }
+  if (normalized) {
+    const normalizedTrimmed = normalized.trim();
+    if (!normalizedTrimmed) {
+      return false;
+    }
+    const normalizedLower = normalizedTrimmed.toLowerCase();
+    if (
+      /^(imessage|sms|auto):/.test(normalizedLower) ||
+      /^(chat_id|chat_guid|chat_identifier):/.test(normalizedLower)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function inferBlueBubblesTargetChatType(raw: string): "direct" | "group" | undefined {
+  try {
+    const parsed = parseBlueBubblesTarget(raw);
+    if (parsed.kind === "handle") {
+      return "direct";
+    }
+    if (parsed.kind === "chat_guid") {
+      return parsed.chatGuid.includes(";+;") ? "group" : "direct";
+    }
+    if (parsed.kind === "chat_id" || parsed.kind === "chat_identifier") {
+      return "group";
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
 }
 
 export function parseBlueBubblesTarget(raw: string): BlueBubblesTarget {

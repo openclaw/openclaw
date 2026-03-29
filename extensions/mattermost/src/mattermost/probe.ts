@@ -1,5 +1,5 @@
-import type { BaseProbeResult } from "openclaw/plugin-sdk";
 import { normalizeMattermostBaseUrl, readMattermostError, type MattermostUser } from "./client.js";
+import type { BaseProbeResult } from "./runtime-api.js";
 
 export type MattermostProbe = BaseProbeResult & {
   status?: number | null;

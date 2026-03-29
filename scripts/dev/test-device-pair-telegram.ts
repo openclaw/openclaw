@@ -1,7 +1,15 @@
 import { loadConfig } from "../../src/config/config.js";
+import { sendMessageTelegram } from "../../src/plugin-sdk/telegram-runtime.js";
 import { matchPluginCommand, executePluginCommand } from "../../src/plugins/commands.js";
 import { loadOpenClawPlugins } from "../../src/plugins/loader.js";
-import { sendMessageTelegram } from "../../src/telegram/send.js";
+
+function writeStdoutLine(...parts: string[]): void {
+  process.stdout.write(`${parts.join(" ")}\n`);
+}
+
+function writeStderrLine(message: string): void {
+  process.stderr.write(`${message}\n`);
+}
 
 const args = process.argv.slice(2);
 const getArg = (flag: string, short?: string) => {
@@ -21,8 +29,7 @@ const getArg = (flag: string, short?: string) => {
 const chatId = getArg("--chat", "-c");
 const accountId = getArg("--account", "-a");
 if (!chatId) {
-  // eslint-disable-next-line no-console
-  console.error(
+  writeStderrLine(
     "Usage: bun scripts/dev/test-device-pair-telegram.ts --chat <telegram-chat-id> [--account <accountId>]",
   );
   process.exit(1);
@@ -33,8 +40,7 @@ loadOpenClawPlugins({ config: cfg });
 
 const match = matchPluginCommand("/pair");
 if (!match) {
-  // eslint-disable-next-line no-console
-  console.error("/pair plugin command not registered.");
+  writeStderrLine("/pair plugin command not registered.");
   process.exit(1);
 }
 
@@ -58,5 +64,4 @@ if (result.text) {
   });
 }
 
-// eslint-disable-next-line no-console
-console.log("Sent split /pair messages to", chatId, accountId ? `(${accountId})` : "");
+writeStdoutLine("Sent split /pair messages to", chatId, accountId ? `(${accountId})` : "");

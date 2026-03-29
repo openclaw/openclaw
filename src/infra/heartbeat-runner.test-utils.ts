@@ -2,14 +2,19 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { vi } from "vitest";
-import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
-import { setTelegramRuntime } from "../../extensions/telegram/src/runtime.js";
 import * as replyModule from "../auto-reply/reply.js";
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createPluginRuntime } from "../plugins/runtime/index.js";
+import { createPluginRuntime, type PluginRuntime } from "../plugins/runtime/index.js";
+import { loadBundledPluginTestApiSync } from "../test-utils/bundled-plugin-public-surface.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
+
+const { telegramPlugin, setTelegramRuntime } = loadBundledPluginTestApiSync<{
+  telegramPlugin: ChannelPlugin;
+  setTelegramRuntime: (runtime: PluginRuntime) => void;
+}>("telegram");
 
 export type HeartbeatSessionSeed = {
   sessionId?: string;

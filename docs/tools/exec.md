@@ -30,7 +30,7 @@ Background sessions are scoped per agent; `process` only sees sessions from the 
 Notes:
 
 - `host` defaults to `sandbox`.
-- `elevated` is ignored when sandboxing is off (exec already runs on the host).
+- `elevated` forces `host=gateway`; it is only available when elevated access is enabled for the current session/provider.
 - `gateway`/`node` approvals are controlled by `~/.openclaw/exec-approvals.json`.
 - `node` requires a paired node (companion app or headless node host).
 - If multiple nodes are available, set `exec.node` or `tools.exec.node` to select one.
@@ -41,9 +41,9 @@ Notes:
 - Host execution (`gateway`/`node`) rejects `env.PATH` and loader overrides (`LD_*`/`DYLD_*`) to
   prevent binary hijacking or injected code.
 - OpenClaw sets `OPENCLAW_SHELL=exec` in the spawned command environment (including PTY and sandbox execution) so shell/profile rules can detect exec-tool context.
-- Important: sandboxing is **off by default**. If sandboxing is off and `host=sandbox` is explicitly
-  configured/requested, exec now fails closed instead of silently running on the gateway host.
-  Enable sandboxing or use `host=gateway` with approvals.
+- Important: sandboxing is **off by default**. If sandboxing is off and exec resolves to
+  `host=sandbox` (including the implicit default), exec fails closed instead of silently
+  running on the gateway host. Enable sandboxing or use `host=gateway` with approvals.
 - Script preflight checks (for common Python/Node shell-syntax mistakes) only inspect files inside the
   effective `workdir` boundary. If a script path resolves outside `workdir`, preflight is skipped for
   that file.
@@ -56,6 +56,7 @@ Notes:
 - `tools.exec.security` (default: `deny` for sandbox, `allowlist` for gateway + node when unset)
 - `tools.exec.ask` (default: `on-miss`)
 - `tools.exec.node` (default: unset)
+- `tools.exec.strictInlineEval` (default: false): when true, inline interpreter eval forms such as `python -c`, `node -e`, `ruby -e`, `perl -e`, `php -r`, `lua -e`, and `osascript -e` always require explicit approval and are never persisted by `allow-always`.
 - `tools.exec.pathPrepend`: list of directories to prepend to `PATH` for exec runs (gateway + sandbox only).
 - `tools.exec.safeBins`: stdin-only safe binaries that can run without explicit allowlist entries. For behavior details, see [Safe bins](/tools/exec-approvals#safe-bins-stdin-only).
 - `tools.exec.safeBinTrustedDirs`: additional explicit directories trusted for `safeBins` path checks. `PATH` entries are never auto-trusted. Built-in defaults are `/bin` and `/usr/bin`.
@@ -143,6 +144,8 @@ Use the two controls for different jobs:
 
 Do not treat `safeBins` as a generic allowlist, and do not add interpreter/runtime binaries (for example `python3`, `node`, `ruby`, `bash`). If you need those, use explicit allowlist entries and keep approval prompts enabled.
 `openclaw security audit` warns when interpreter/runtime `safeBins` entries are missing explicit profiles, and `openclaw doctor --fix` can scaffold missing custom `safeBinProfiles` entries.
+`openclaw security audit` and `openclaw doctor` also warn when you explicitly add broad-behavior bins such as `jq` back into `safeBins`.
+If you explicitly allowlist interpreters, enable `tools.exec.strictInlineEval` so inline code-eval forms still require a fresh approval.
 
 For full policy details and examples, see [Exec approvals](/tools/exec-approvals#safe-bins-stdin-only) and [Safe bins versus allowlist](/tools/exec-approvals#safe-bins-versus-allowlist).
 
@@ -181,16 +184,17 @@ Paste (bracketed by default):
 { "tool": "process", "action": "paste", "sessionId": "<id>", "text": "line1\nline2\n" }
 ```
 
-## apply_patch (experimental)
+## apply_patch
 
 `apply_patch` is a subtool of `exec` for structured multi-file edits.
-Enable it explicitly:
+It is enabled by default for OpenAI and OpenAI Codex models. Use config only
+when you want to disable it or restrict it to specific models:
 
 ```json5
 {
   tools: {
     exec: {
-      applyPatch: { enabled: true, workspaceOnly: true, allowModels: ["gpt-5.2"] },
+      applyPatch: { workspaceOnly: true, allowModels: ["gpt-5.2"] },
     },
   },
 }
@@ -199,6 +203,7 @@ Enable it explicitly:
 Notes:
 
 - Only available for OpenAI/OpenAI Codex models.
-- Tool policy still applies; `allow: ["exec"]` implicitly allows `apply_patch`.
+- Tool policy still applies; `allow: ["write"]` implicitly allows `apply_patch`.
 - Config lives under `tools.exec.applyPatch`.
+- `tools.exec.applyPatch.enabled` defaults to `true`; set it to `false` to disable the tool for OpenAI models.
 - `tools.exec.applyPatch.workspaceOnly` defaults to `true` (workspace-contained). Set it to `false` only if you intentionally want `apply_patch` to write/delete outside the workspace directory.

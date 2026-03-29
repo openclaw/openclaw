@@ -3,6 +3,7 @@ import type { Api, AssistantMessage, Model } from "@mariozechner/pi-ai";
 import type { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import type { SessionSystemPromptReport } from "../../../config/sessions/types.js";
+import type { ContextEngine } from "../../../context-engine/types.js";
 import type { PluginHookBeforeAgentStartResult } from "../../../plugins/types.js";
 import type { MessagingToolSend } from "../../pi-embedded-messaging.js";
 import type { NormalizedUsage } from "../../usage.js";
@@ -14,6 +15,14 @@ type EmbeddedRunAttemptBase = Omit<
 >;
 
 export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
+  /** Pluggable context engine for ingest/assemble/compact lifecycle. */
+  contextEngine?: ContextEngine;
+  /** Resolved model context window in tokens for assemble/compact budgeting. */
+  contextTokenBudget?: number;
+  /** Auth profile resolved for this attempt's provider/model call. */
+  authProfileId?: string;
+  /** Source for the resolved auth profile (user-locked or automatic). */
+  authProfileIdSource?: "auto" | "user";
   provider: string;
   modelId: string;
   model: Model<Api>;
@@ -30,6 +39,8 @@ export type EmbeddedRunAttemptResult = {
   timedOutDuringCompaction: boolean;
   promptError: unknown;
   sessionIdUsed: string;
+  bootstrapPromptWarningSignaturesSeen?: string[];
+  bootstrapPromptWarningSignature?: string;
   systemPromptReport?: SessionSystemPromptReport;
   messagesSnapshot: AgentMessage[];
   assistantTexts: string[];
@@ -43,6 +54,7 @@ export type EmbeddedRunAttemptResult = {
     actionFingerprint?: string;
   };
   didSendViaMessagingTool: boolean;
+  didSendDeterministicApprovalPrompt?: boolean;
   messagingToolSentTexts: string[];
   messagingToolSentMediaUrls: string[];
   messagingToolSentTargets: MessagingToolSend[];
@@ -52,4 +64,6 @@ export type EmbeddedRunAttemptResult = {
   compactionCount?: number;
   /** Client tool call detected (OpenResponses hosted tools). */
   clientToolCall?: { name: string; params: Record<string, unknown> };
+  /** True when sessions_yield tool was called during this attempt. */
+  yieldDetected?: boolean;
 };

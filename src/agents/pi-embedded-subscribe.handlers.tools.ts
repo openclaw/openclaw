@@ -1,5 +1,9 @@
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import {
+  buildExecApprovalPendingReplyPayload,
+  buildExecApprovalUnavailableReplyPayload,
+} from "../infra/exec-approval-reply.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { normalizeTextForComparison } from "./pi-embedded-helpers.js";
@@ -9,9 +13,9 @@ import type {
   ToolHandlerContext,
 } from "./pi-embedded-subscribe.handlers.types.js";
 import {
+  extractToolResultMediaArtifact,
   extractMessagingToolSend,
   extractToolErrorMessage,
-  extractToolResultMediaPaths,
   extractToolResultText,
   filterToolResultMediaUrls,
   isToolResultError,
@@ -139,7 +143,98 @@ function collectMessagingMediaUrlsFromToolResult(result: unknown): string[] {
   return urls;
 }
 
-function emitToolResultOutput(params: {
+function queuePendingToolMedia(
+  ctx: ToolHandlerContext,
+  mediaReply: { mediaUrls: string[]; audioAsVoice?: boolean },
+) {
+  const seen = new Set(ctx.state.pendingToolMediaUrls);
+  for (const mediaUrl of mediaReply.mediaUrls) {
+    if (seen.has(mediaUrl)) {
+      continue;
+    }
+    seen.add(mediaUrl);
+    ctx.state.pendingToolMediaUrls.push(mediaUrl);
+  }
+  if (mediaReply.audioAsVoice) {
+    ctx.state.pendingToolAudioAsVoice = true;
+  }
+}
+
+function readExecApprovalPendingDetails(result: unknown): {
+  approvalId: string;
+  approvalSlug: string;
+  expiresAtMs?: number;
+  host: "gateway" | "node";
+  command: string;
+  cwd?: string;
+  nodeId?: string;
+  warningText?: string;
+} | null {
+  if (!result || typeof result !== "object") {
+    return null;
+  }
+  const outer = result as Record<string, unknown>;
+  const details =
+    outer.details && typeof outer.details === "object" && !Array.isArray(outer.details)
+      ? (outer.details as Record<string, unknown>)
+      : outer;
+  if (details.status !== "approval-pending") {
+    return null;
+  }
+  const approvalId = typeof details.approvalId === "string" ? details.approvalId.trim() : "";
+  const approvalSlug = typeof details.approvalSlug === "string" ? details.approvalSlug.trim() : "";
+  const command = typeof details.command === "string" ? details.command : "";
+  const host = details.host === "node" ? "node" : details.host === "gateway" ? "gateway" : null;
+  if (!approvalId || !approvalSlug || !command || !host) {
+    return null;
+  }
+  return {
+    approvalId,
+    approvalSlug,
+    expiresAtMs: typeof details.expiresAtMs === "number" ? details.expiresAtMs : undefined,
+    host,
+    command,
+    cwd: typeof details.cwd === "string" ? details.cwd : undefined,
+    nodeId: typeof details.nodeId === "string" ? details.nodeId : undefined,
+    warningText: typeof details.warningText === "string" ? details.warningText : undefined,
+  };
+}
+
+function readExecApprovalUnavailableDetails(result: unknown): {
+  reason: "initiating-platform-disabled" | "initiating-platform-unsupported" | "no-approval-route";
+  warningText?: string;
+  channelLabel?: string;
+  sentApproverDms?: boolean;
+} | null {
+  if (!result || typeof result !== "object") {
+    return null;
+  }
+  const outer = result as Record<string, unknown>;
+  const details =
+    outer.details && typeof outer.details === "object" && !Array.isArray(outer.details)
+      ? (outer.details as Record<string, unknown>)
+      : outer;
+  if (details.status !== "approval-unavailable") {
+    return null;
+  }
+  const reason =
+    details.reason === "initiating-platform-disabled" ||
+    details.reason === "initiating-platform-unsupported" ||
+    details.reason === "no-approval-route"
+      ? details.reason
+      : null;
+  if (!reason) {
+    return null;
+  }
+  return {
+    reason,
+    warningText: typeof details.warningText === "string" ? details.warningText : undefined,
+    channelLabel: typeof details.channelLabel === "string" ? details.channelLabel : undefined,
+    sentApproverDms: details.sentApproverDms === true,
+  };
+}
+
+async function emitToolResultOutput(params: {
   ctx: ToolHandlerContext;
   toolName: string;
   meta?: string;
@@ -148,33 +243,87 @@ function emitToolResultOutput(params: {
   sanitizedResult: unknown;
 }) {
   const { ctx, toolName, meta, isToolError, result, sanitizedResult } = params;
-  if (!ctx.params.onToolResult) {
+  const hasStructuredMedia =
+    result &&
+    typeof result === "object" &&
+    (result as { details?: unknown }).details &&
+    typeof (result as { details?: unknown }).details === "object" &&
+    !Array.isArray((result as { details?: unknown }).details) &&
+    typeof ((result as { details?: { media?: unknown } }).details?.media ?? undefined) ===
+      "object" &&
+    !Array.isArray((result as { details?: { media?: unknown } }).details?.media);
+  const approvalPending = readExecApprovalPendingDetails(result);
+  if (!isToolError && approvalPending) {
+    if (!ctx.params.onToolResult) {
+      return;
+    }
+    try {
+      await ctx.params.onToolResult(
+        buildExecApprovalPendingReplyPayload({
+          approvalId: approvalPending.approvalId,
+          approvalSlug: approvalPending.approvalSlug,
+          command: approvalPending.command,
+          cwd: approvalPending.cwd,
+          host: approvalPending.host,
+          nodeId: approvalPending.nodeId,
+          expiresAtMs: approvalPending.expiresAtMs,
+          warningText: approvalPending.warningText,
+        }),
+      );
+      ctx.state.deterministicApprovalPromptSent = true;
+    } catch {
+      // ignore delivery failures
+    }
+    return;
+  }
+
+  const approvalUnavailable = readExecApprovalUnavailableDetails(result);
+  if (!isToolError && approvalUnavailable) {
+    if (!ctx.params.onToolResult) {
+      return;
+    }
+    try {
+      await ctx.params.onToolResult?.(
+        buildExecApprovalUnavailableReplyPayload({
+          reason: approvalUnavailable.reason,
+          warningText: approvalUnavailable.warningText,
+          channelLabel: approvalUnavailable.channelLabel,
+          sentApproverDms: approvalUnavailable.sentApproverDms,
+        }),
+      );
+      ctx.state.deterministicApprovalPromptSent = true;
+    } catch {
+      // ignore delivery failures
+    }
     return;
   }
 
   if (ctx.shouldEmitToolOutput()) {
     const outputText = extractToolResultText(sanitizedResult);
     if (outputText) {
-      ctx.emitToolOutput(toolName, meta, outputText);
+      ctx.emitToolOutput(toolName, meta, outputText, result);
     }
-    return;
+    if (!hasStructuredMedia) {
+      return;
+    }
   }
 
   if (isToolError) {
     return;
   }
 
-  // emitToolOutput() already handles MEDIA: directives when enabled; this path
-  // only sends raw media URLs for non-verbose delivery mode.
-  const mediaPaths = filterToolResultMediaUrls(toolName, extractToolResultMediaPaths(result));
-  if (mediaPaths.length === 0) {
+  const mediaReply = extractToolResultMediaArtifact(result);
+  if (!mediaReply) {
     return;
   }
-  try {
-    void ctx.params.onToolResult({ mediaUrls: mediaPaths });
-  } catch {
-    // ignore delivery failures
+  const mediaUrls = filterToolResultMediaUrls(toolName, mediaReply.mediaUrls, result);
+  if (mediaUrls.length === 0) {
+    return;
   }
+  queuePendingToolMedia(ctx, {
+    mediaUrls,
+    ...(mediaReply.audioAsVoice ? { audioAsVoice: true } : {}),
+  });
 }
 
 export async function handleToolExecutionStart(
@@ -427,7 +576,7 @@ export async function handleToolExecutionEnd(
     `embedded run tool end: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
   );
 
-  emitToolResultOutput({ ctx, toolName, meta, isToolError, result, sanitizedResult });
+  await emitToolResultOutput({ ctx, toolName, meta, isToolError, result, sanitizedResult });
 
   // Run after_tool_call plugin hook (fire-and-forget)
   const hookRunnerAfter = ctx.hookRunner ?? getGlobalHookRunner();

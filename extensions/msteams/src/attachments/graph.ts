@@ -1,4 +1,4 @@
-import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk";
+import { fetchWithSsrFGuard, type SsrFPolicy } from "../../runtime-api.js";
 import { getMSTeamsRuntime } from "../runtime.js";
 import { downloadMSTeamsAttachments } from "./download.js";
 import { downloadAndStoreMSTeamsRemoteMedia } from "./remote-media.js";

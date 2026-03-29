@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { runAcpClientInteractive } from "../acp/client.js";
 import { readSecretFromFile } from "../acp/secret-file.js";
 import { serveAcpGateway } from "../acp/server.js";
+import { normalizeAcpProvenanceMode } from "../acp/types.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
@@ -45,6 +46,7 @@ export function registerAcpCli(program: Command) {
     .option("--require-existing", "Fail if the session key/label does not exist", false)
     .option("--reset-session", "Reset the session key before first use", false)
     .option("--no-prefix-cwd", "Do not prefix prompts with the working directory", false)
+    .option("--provenance <mode>", "ACP provenance mode: off, meta, or meta+receipt")
     .option("-v, --verbose", "Verbose logging to stderr", false)
     .addHelpText(
       "after",
@@ -72,6 +74,10 @@ export function registerAcpCli(program: Command) {
         if (opts.password) {
           warnSecretCliFlag("--password");
         }
+        const provenanceMode = normalizeAcpProvenanceMode(opts.provenance as string | undefined);
+        if (opts.provenance && !provenanceMode) {
+          throw new Error("Invalid --provenance value. Use off, meta, or meta+receipt.");
+        }
         await serveAcpGateway({
           gatewayUrl: opts.url as string | undefined,
           gatewayToken,
@@ -81,6 +87,7 @@ export function registerAcpCli(program: Command) {
           requireExistingSession: Boolean(opts.requireExisting),
           resetSession: Boolean(opts.resetSession),
           prefixCwd: !opts.noPrefixCwd,
+          provenanceMode,
           verbose: Boolean(opts.verbose),
         });
       } catch (err) {

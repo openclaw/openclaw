@@ -3,7 +3,10 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { buildSecretRefCredentialMatrix } from "./credential-matrix.js";
-import { discoverConfigSecretTargetsByIds } from "./target-registry.js";
+import {
+  discoverConfigSecretTargetsByIds,
+  resolveConfigSecretTargetByPath,
+} from "./target-registry.js";
 
 describe("secret target registry", () => {
   it("stays in sync with docs/reference/secretref-user-supplied-credentials-matrix.json", () => {
@@ -58,12 +61,12 @@ describe("secret target registry", () => {
     };
 
     const supportedFromDocs = readMarkedCredentialList({
-      start: "<!-- secretref-supported-list-start -->",
-      end: "<!-- secretref-supported-list-end -->",
+      start: '[//]: # "secretref-supported-list-start"',
+      end: '[//]: # "secretref-supported-list-end"',
     });
     const unsupportedFromDocs = readMarkedCredentialList({
-      start: "<!-- secretref-unsupported-list-start -->",
-      end: "<!-- secretref-unsupported-list-end -->",
+      start: '[//]: # "secretref-unsupported-list-start"',
+      end: '[//]: # "secretref-unsupported-list-end"',
     });
 
     const supportedFromMatrix = new Set(
@@ -95,5 +98,16 @@ describe("secret target registry", () => {
     expect(targets).toHaveLength(1);
     expect(targets[0]?.entry.id).toBe("talk.apiKey");
     expect(targets[0]?.path).toBe("talk.apiKey");
+  });
+
+  it("resolves config targets by exact path including sibling ref metadata", () => {
+    const target = resolveConfigSecretTargetByPath(["channels", "googlechat", "serviceAccount"]);
+    expect(target).not.toBeNull();
+    expect(target?.entry.id).toBe("channels.googlechat.serviceAccount");
+    expect(target?.refPathSegments).toEqual(["channels", "googlechat", "serviceAccountRef"]);
+  });
+
+  it("returns null when no config target path matches", () => {
+    expect(resolveConfigSecretTargetByPath(["gateway", "auth", "mode"])).toBeNull();
   });
 });

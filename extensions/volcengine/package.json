@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/volcengine-provider",
+  "version": "2026.3.28",
+  "private": true,
+  "description": "OpenClaw Volcengine provider plugin",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

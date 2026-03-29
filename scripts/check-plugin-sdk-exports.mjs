@@ -11,6 +11,7 @@
 import { readFileSync, existsSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { pluginSdkSubpaths } from "./lib/plugin-sdk-entries.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const distFile = resolve(__dirname, "..", "dist", "plugin-sdk", "index.js");
@@ -41,6 +42,8 @@ const exportedNames = exportMatch[1]
 
 const exportSet = new Set(exportedNames);
 
+const requiredRuntimeShimEntries = ["compat.js", "root-alias.cjs"];
+
 // Critical functions that channel extension plugins import from openclaw/plugin-sdk.
 // If any of these are missing, plugins will fail at runtime with:
 //   TypeError: (0 , _pluginSdk.<name>) is not a function
@@ -62,6 +65,7 @@ const requiredExports = [
   "resolveChannelMediaMaxBytes",
   "warnMissingProviderGroupPolicyFallbackOnce",
   "emptyPluginConfigSchema",
+  "onDiagnosticEvent",
   "normalizePluginHttpPath",
   "registerPluginHttpRoute",
   "DEFAULT_ACCOUNT_ID",
@@ -76,10 +80,33 @@ for (const name of requiredExports) {
   }
 }
 
+for (const entry of pluginSdkSubpaths) {
+  const jsPath = resolve(__dirname, "..", "dist", "plugin-sdk", `${entry}.js`);
+  const dtsPath = resolve(__dirname, "..", "dist", "plugin-sdk", `${entry}.d.ts`);
+  if (!existsSync(jsPath)) {
+    console.error(`MISSING SUBPATH JS: dist/plugin-sdk/${entry}.js`);
+    missing += 1;
+  }
+  if (!existsSync(dtsPath)) {
+    console.error(`MISSING SUBPATH DTS: dist/plugin-sdk/${entry}.d.ts`);
+    missing += 1;
+  }
+}
+
+for (const entry of requiredRuntimeShimEntries) {
+  const shimPath = resolve(__dirname, "..", "dist", "plugin-sdk", entry);
+  if (!existsSync(shimPath)) {
+    console.error(`MISSING RUNTIME SHIM: dist/plugin-sdk/${entry}`);
+    missing += 1;
+  }
+}
+
 if (missing > 0) {
-  console.error(`\nERROR: ${missing} required export(s) missing from dist/plugin-sdk/index.js.`);
+  console.error(
+    `\nERROR: ${missing} required plugin-sdk artifact(s) missing (named exports or subpath files).`,
+  );
   console.error("This will break channel extension plugins at runtime.");
-  console.error("Check src/plugin-sdk/index.ts and rebuild.");
+  console.error("Check src/plugin-sdk/index.ts, subpath entries, and rebuild.");
   process.exit(1);
 }
 

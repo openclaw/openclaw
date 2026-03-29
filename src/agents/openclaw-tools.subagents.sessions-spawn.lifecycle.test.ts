@@ -16,11 +16,25 @@ const fastModeEnv = vi.hoisted(() => {
   return { previous };
 });
 
-vi.mock("./pi-embedded.js", () => ({
-  isEmbeddedPiRunActive: () => false,
-  isEmbeddedPiRunStreaming: () => false,
-  queueEmbeddedPiMessage: () => false,
-  waitForEmbeddedPiRunEnd: async () => true,
+const acpSpawnMocks = vi.hoisted(() => ({
+  spawnAcpDirect: vi.fn(),
+}));
+
+vi.mock("./pi-embedded.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./pi-embedded.js")>();
+  return {
+    ...actual,
+    isEmbeddedPiRunActive: () => false,
+    isEmbeddedPiRunStreaming: () => false,
+    queueEmbeddedPiMessage: () => false,
+    waitForEmbeddedPiRunEnd: async () => true,
+  };
+});
+
+vi.mock("./acp-spawn.js", () => ({
+  ACP_SPAWN_MODES: ["run", "session"],
+  ACP_SPAWN_STREAM_TARGETS: ["parent"],
+  spawnAcpDirect: (...args: unknown[]) => acpSpawnMocks.spawnAcpDirect(...args),
 }));
 
 vi.mock("./tools/agent-step.js", () => ({
@@ -118,6 +132,7 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     });
     resetSubagentRegistryForTests();
     callGatewayMock.mockClear();
+    acpSpawnMocks.spawnAcpDirect.mockReset();
   });
 
   afterAll(() => {
@@ -307,6 +322,92 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     expect(deletedKey?.startsWith("agent:main:subagent:")).toBe(true);
   });
 
+  it("tracks ACP run-mode spawns for auto-announce via agent.wait", async () => {
+    let deletedKey: string | undefined;
+    acpSpawnMocks.spawnAcpDirect.mockResolvedValue({
+      status: "accepted",
+      childSessionKey: "agent:codex:acp:child-1",
+      runId: "run-acp-1",
+      mode: "run",
+    });
+    const ctx = setupSessionsSpawnGatewayMock({
+      includeChatHistory: true,
+      ...buildDiscordCleanupHooks((key) => {
+        deletedKey = key;
+      }),
+      agentWaitResult: { status: "ok", startedAt: 3000, endedAt: 4000 },
+    });
+
+    const tool = await getDiscordGroupSpawnTool();
+    const result = await tool.execute("call-acp", {
+      runtime: "acp",
+      task: "do thing",
+      agentId: "codex",
+      runTimeoutSeconds: RUN_TIMEOUT_SECONDS,
+      cleanup: "delete",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      childSessionKey: "agent:codex:acp:child-1",
+      runId: "run-acp-1",
+    });
+    await waitFor(
+      () =>
+        ctx.waitCalls.some((call) => call.runId === "run-acp-1") &&
+        Boolean(deletedKey) &&
+        ctx.calls.some((call) => call.method === "agent"),
+    );
+
+    expect(acpSpawnMocks.spawnAcpDirect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: "do thing",
+        agentId: "codex",
+      }),
+      expect.objectContaining({
+        agentSessionKey: "discord:group:req",
+      }),
+    );
+    const announceCall = ctx.calls.find((call) => call.method === "agent");
+    const announceParams = announceCall?.params as
+      | { sessionKey?: string; deliver?: boolean; message?: string }
+      | undefined;
+    expect(announceParams?.sessionKey).toBe("agent:main:discord:group:req");
+    expect(announceParams?.deliver).toBe(false);
+    expect(announceParams?.message).toContain("do thing");
+    expect(deletedKey).toBe("agent:codex:acp:child-1");
+  });
+
+  it('does not track ACP spawns through auto-announce when streamTo="parent"', async () => {
+    acpSpawnMocks.spawnAcpDirect.mockResolvedValue({
+      status: "accepted",
+      childSessionKey: "agent:codex:acp:child-2",
+      runId: "run-acp-2",
+      mode: "run",
+    });
+    const ctx = setupSessionsSpawnGatewayMock({
+      includeChatHistory: true,
+      agentWaitResult: { status: "ok", startedAt: 5000, endedAt: 6000 },
+    });
+
+    const tool = await getDiscordGroupSpawnTool();
+    const result = await tool.execute("call-acp-parent", {
+      runtime: "acp",
+      task: "stream progress",
+      agentId: "codex",
+      runTimeoutSeconds: RUN_TIMEOUT_SECONDS,
+      streamTo: "parent",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      childSessionKey: "agent:codex:acp:child-2",
+      runId: "run-acp-2",
+    });
+    expect(ctx.waitCalls).toHaveLength(0);
+    expect(ctx.calls.filter((call) => call.method === "agent")).toHaveLength(0);
+  });
+
   it("sessions_spawn reports timed out when agent.wait returns timeout", async () => {
     const ctx = setupSessionsSpawnGatewayMock({
       includeChatHistory: true,
@@ -359,6 +460,8 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
       startedAt: 1000,
       endedAt: 2000,
     });
+
+    await waitFor(() => ctx.calls.filter((call) => call.method === "agent").length >= 2);
 
     const agentCalls = ctx.calls.filter((call) => call.method === "agent");
     expect(agentCalls).toHaveLength(2);

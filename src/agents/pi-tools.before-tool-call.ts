@@ -2,9 +2,14 @@ import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { copyPluginToolMeta } from "../plugins/tools.js";
+import { PluginApprovalResolutions, type PluginApprovalResolution } from "../plugins/types.js";
+import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { isPlainObject } from "../utils.js";
+import { copyChannelAgentToolMeta } from "./channel-tools.js";
 import { normalizeToolName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
+import { callGatewayTool } from "./tools/gateway.js";
 
 export type HookContext = {
   agentId?: string;
@@ -24,11 +29,42 @@ const MAX_TRACKED_ADJUSTED_PARAMS = 1024;
 const LOOP_WARNING_BUCKET_SIZE = 10;
 const MAX_LOOP_WARNING_KEYS = 256;
 
+const loadBeforeToolCallRuntime = createLazyRuntimeSurface(
+  () => import("./pi-tools.before-tool-call.runtime.js"),
+  ({ beforeToolCallRuntime }) => beforeToolCallRuntime,
+);
+
 function buildAdjustedParamsKey(params: { runId?: string; toolCallId: string }): string {
   if (params.runId && params.runId.trim()) {
     return `${params.runId}:${params.toolCallId}`;
   }
   return params.toolCallId;
+}
+
+function mergeParamsWithApprovalOverrides(
+  originalParams: unknown,
+  approvalParams?: unknown,
+): unknown {
+  if (approvalParams && isPlainObject(approvalParams)) {
+    if (isPlainObject(originalParams)) {
+      return { ...originalParams, ...approvalParams };
+    }
+    return approvalParams;
+  }
+  return originalParams;
+}
+
+function isAbortSignalCancellation(err: unknown, signal?: AbortSignal): boolean {
+  if (!signal?.aborted) {
+    return false;
+  }
+  if (err === signal.reason) {
+    return true;
+  }
+  if (err instanceof Error && err.name === "AbortError") {
+    return true;
+  }
+  return false;
 }
 
 function shouldEmitLoopWarning(state: SessionState, warningKey: string, count: number): boolean {
@@ -62,8 +98,7 @@ async function recordLoopOutcome(args: {
     return;
   }
   try {
-    const { getDiagnosticSessionState } = await import("../logging/diagnostic-session-state.js");
-    const { recordToolCallOutcome } = await import("./tool-loop-detection.js");
+    const { getDiagnosticSessionState, recordToolCallOutcome } = await loadBeforeToolCallRuntime();
     const sessionState = getDiagnosticSessionState({
       sessionKey: args.ctx.sessionKey,
       sessionId: args.ctx?.agentId,
@@ -86,15 +121,14 @@ export async function runBeforeToolCallHook(args: {
   params: unknown;
   toolCallId?: string;
   ctx?: HookContext;
+  signal?: AbortSignal;
 }): Promise<HookOutcome> {
   const toolName = normalizeToolName(args.toolName || "tool");
   const params = args.params;
 
   if (args.ctx?.sessionKey) {
-    const { getDiagnosticSessionState } = await import("../logging/diagnostic-session-state.js");
-    const { logToolLoopAction } = await import("../logging/diagnostic.js");
-    const { detectToolCallLoop, recordToolCall } = await import("./tool-loop-detection.js");
-
+    const { getDiagnosticSessionState, logToolLoopAction, detectToolCallLoop, recordToolCall } =
+      await loadBeforeToolCallRuntime();
     const sessionState = getDiagnosticSessionState({
       sessionKey: args.ctx.sessionKey,
       sessionId: args.ctx?.agentId,
@@ -151,18 +185,18 @@ export async function runBeforeToolCallHook(args: {
     const normalizedParams = isPlainObject(params) ? params : {};
     const toolContext = {
       toolName,
-      ...(args.ctx?.agentId ? { agentId: args.ctx.agentId } : {}),
-      ...(args.ctx?.sessionKey ? { sessionKey: args.ctx.sessionKey } : {}),
-      ...(args.ctx?.sessionId ? { sessionId: args.ctx.sessionId } : {}),
-      ...(args.ctx?.runId ? { runId: args.ctx.runId } : {}),
-      ...(args.toolCallId ? { toolCallId: args.toolCallId } : {}),
+      ...(args.ctx?.agentId && { agentId: args.ctx.agentId }),
+      ...(args.ctx?.sessionKey && { sessionKey: args.ctx.sessionKey }),
+      ...(args.ctx?.sessionId && { sessionId: args.ctx.sessionId }),
+      ...(args.ctx?.runId && { runId: args.ctx.runId }),
+      ...(args.toolCallId && { toolCallId: args.toolCallId }),
     };
     const hookResult = await hookRunner.runBeforeToolCall(
       {
         toolName,
         params: normalizedParams,
-        ...(args.ctx?.runId ? { runId: args.ctx.runId } : {}),
-        ...(args.toolCallId ? { toolCallId: args.toolCallId } : {}),
+        ...(args.ctx?.runId && { runId: args.ctx.runId }),
+        ...(args.toolCallId && { toolCallId: args.toolCallId }),
       },
       toolContext,
     );
@@ -174,11 +208,152 @@ export async function runBeforeToolCallHook(args: {
       };
     }
 
-    if (hookResult?.params && isPlainObject(hookResult.params)) {
-      if (isPlainObject(params)) {
-        return { blocked: false, params: { ...params, ...hookResult.params } };
+    if (hookResult?.requireApproval) {
+      const approval = hookResult.requireApproval;
+      const safeOnResolution = (resolution: PluginApprovalResolution): void => {
+        const onResolution = approval.onResolution;
+        if (typeof onResolution !== "function") {
+          return;
+        }
+        try {
+          void Promise.resolve(onResolution(resolution)).catch((err) => {
+            log.warn(`plugin onResolution callback failed: ${String(err)}`);
+          });
+        } catch (err) {
+          log.warn(`plugin onResolution callback failed: ${String(err)}`);
+        }
+      };
+      try {
+        const requestResult = await callGatewayTool<{
+          id?: string;
+          status?: string;
+          decision?: string | null;
+        }>(
+          "plugin.approval.request",
+          // Buffer beyond the approval timeout so the gateway can clean up
+          // and respond before the client-side RPC timeout fires.
+          { timeoutMs: (approval.timeoutMs ?? 120_000) + 10_000 },
+          {
+            pluginId: approval.pluginId,
+            title: approval.title,
+            description: approval.description,
+            severity: approval.severity,
+            toolName,
+            toolCallId: args.toolCallId,
+            agentId: args.ctx?.agentId,
+            sessionKey: args.ctx?.sessionKey,
+            timeoutMs: approval.timeoutMs ?? 120_000,
+            twoPhase: true,
+          },
+          { expectFinal: false },
+        );
+        const id = requestResult?.id;
+        if (!id) {
+          safeOnResolution(PluginApprovalResolutions.CANCELLED);
+          return {
+            blocked: true,
+            reason: approval.description || "Plugin approval request failed",
+          };
+        }
+        const hasImmediateDecision = Object.prototype.hasOwnProperty.call(
+          requestResult ?? {},
+          "decision",
+        );
+        let decision: string | null | undefined;
+        if (hasImmediateDecision) {
+          decision = requestResult?.decision;
+          if (decision === null) {
+            safeOnResolution(PluginApprovalResolutions.CANCELLED);
+            return {
+              blocked: true,
+              reason: "Plugin approval unavailable (no approval route)",
+            };
+          }
+        } else {
+          // Wait for the decision, but abort early if the agent run is cancelled
+          // so the user isn't blocked for the full approval timeout.
+          const waitPromise = callGatewayTool<{
+            id?: string;
+            decision?: string | null;
+          }>(
+            "plugin.approval.waitDecision",
+            // Buffer beyond the approval timeout so the gateway can clean up
+            // and respond before the client-side RPC timeout fires.
+            { timeoutMs: (approval.timeoutMs ?? 120_000) + 10_000 },
+            { id },
+          );
+          let waitResult: { id?: string; decision?: string | null } | undefined;
+          if (args.signal) {
+            let onAbort: (() => void) | undefined;
+            const abortPromise = new Promise<never>((_, reject) => {
+              if (args.signal!.aborted) {
+                reject(args.signal!.reason);
+                return;
+              }
+              onAbort = () => reject(args.signal!.reason);
+              args.signal!.addEventListener("abort", onAbort, { once: true });
+            });
+            try {
+              waitResult = await Promise.race([waitPromise, abortPromise]);
+            } finally {
+              if (onAbort) {
+                args.signal.removeEventListener("abort", onAbort);
+              }
+            }
+          } else {
+            waitResult = await waitPromise;
+          }
+          decision = waitResult?.decision;
+        }
+        const resolution: PluginApprovalResolution =
+          decision === PluginApprovalResolutions.ALLOW_ONCE ||
+          decision === PluginApprovalResolutions.ALLOW_ALWAYS ||
+          decision === PluginApprovalResolutions.DENY
+            ? decision
+            : PluginApprovalResolutions.TIMEOUT;
+        safeOnResolution(resolution);
+        if (
+          decision === PluginApprovalResolutions.ALLOW_ONCE ||
+          decision === PluginApprovalResolutions.ALLOW_ALWAYS
+        ) {
+          return {
+            blocked: false,
+            params: mergeParamsWithApprovalOverrides(params, hookResult.params),
+          };
+        }
+        if (decision === PluginApprovalResolutions.DENY) {
+          return { blocked: true, reason: "Denied by user" };
+        }
+        const timeoutBehavior = approval.timeoutBehavior ?? "deny";
+        if (timeoutBehavior === "allow") {
+          return {
+            blocked: false,
+            params: mergeParamsWithApprovalOverrides(params, hookResult.params),
+          };
+        }
+        return { blocked: true, reason: "Approval timed out" };
+      } catch (err) {
+        safeOnResolution(PluginApprovalResolutions.CANCELLED);
+        if (isAbortSignalCancellation(err, args.signal)) {
+          log.warn(`plugin approval wait cancelled by run abort: ${String(err)}`);
+          return {
+            blocked: true,
+            reason: "Approval cancelled (run aborted)",
+          };
+        }
+        log.warn(`plugin approval gateway request failed, falling back to block: ${String(err)}`);
+        return {
+          blocked: true,
+          reason: "Plugin approval required (gateway unavailable)",
+        };
       }
-      return { blocked: false, params: hookResult.params };
+    }
+
+    if (hookResult?.params) {
+      return {
+        blocked: false,
+        params: mergeParamsWithApprovalOverrides(params, hookResult.params),
+      };
     }
   } catch (err) {
     const toolCallId = args.toolCallId ? ` toolCallId=${args.toolCallId}` : "";
@@ -205,6 +380,7 @@ export function wrapToolWithBeforeToolCallHook(
         params,
         toolCallId,
         ctx,
+        signal,
       });
       if (outcome.blocked) {
         throw new Error(outcome.reason);
@@ -242,6 +418,8 @@ export function wrapToolWithBeforeToolCallHook(
       }
     },
   };
+  copyPluginToolMeta(tool, wrappedTool);
+  copyChannelAgentToolMeta(tool as never, wrappedTool as never);
   Object.defineProperty(wrappedTool, BEFORE_TOOL_CALL_WRAPPED, {
     value: true,
     enumerable: true,
@@ -266,5 +444,6 @@ export const __testing = {
   buildAdjustedParamsKey,
   adjustedParamsByToolCallId,
   runBeforeToolCallHook,
+  mergeParamsWithApprovalOverrides,
   isPlainObject,
 };

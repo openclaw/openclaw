@@ -25,10 +25,13 @@ Troubleshooting: [/automation/troubleshooting](/automation/troubleshooting)
 - Jobs persist under `~/.openclaw/cron/` so restarts don’t lose schedules.
 - Two execution styles:
   - **Main session**: enqueue a system event, then run on the next heartbeat.
-  - **Isolated**: run a dedicated agent turn in `cron:<jobId>`, with delivery (announce by default or none).
+  - **Isolated**: run a dedicated agent turn in `cron:<jobId>` or a custom session, with delivery (announce by default or none).
+  - **Current session**: bind to the session where the cron is created (`sessionTarget: "current"`).
+  - **Custom session**: run in a persistent named session (`sessionTarget: "session:custom-id"`).
 - Wakeups are first-class: a job can request “wake now” vs “next heartbeat”.
 - Webhook posting is per job via `delivery.mode = "webhook"` + `delivery.to = "<url>"`.
 - Legacy fallback remains for stored jobs with `notify: true` when `cron.webhook` is set, migrate those jobs to webhook delivery mode.
+- For upgrades, `openclaw doctor --fix` can normalize legacy cron store fields before the scheduler touches them.
 
 ## Quick start (actionable)
 
@@ -85,6 +88,14 @@ Think of a cron job as: **when** to run + **what** to do.
 2. **Choose where it runs**
    - `sessionTarget: "main"` → run during the next heartbeat with main context.
    - `sessionTarget: "isolated"` → run a dedicated agent turn in `cron:<jobId>`.
+   - `sessionTarget: "current"` → bind to the current session (resolved at creation time to `session:<sessionKey>`).
+   - `sessionTarget: "session:custom-id"` → run in a persistent named session that maintains context across runs.
+
+   Default behavior (unchanged):
+   - `systemEvent` payloads default to `main`
+   - `agentTurn` payloads default to `isolated`
+
+   To use current session binding, explicitly set `sessionTarget: "current"`.
 
 3. **Choose the payload**
    - Main session → `payload.kind = "systemEvent"`
@@ -146,12 +157,13 @@ See [Heartbeat](/gateway/heartbeat).
 
 #### Isolated jobs (dedicated cron sessions)
 
-Isolated jobs run a dedicated agent turn in session `cron:<jobId>`.
+Isolated jobs run a dedicated agent turn in session `cron:<jobId>` or a custom session.
 
 Key behaviors:
 
 - Prompt is prefixed with `[cron:<jobId> <job name>]` for traceability.
-- Each run starts a **fresh session id** (no prior conversation carry-over).
+- Each run starts a **fresh session id** (no prior conversation carry-over), unless using a custom session.
+- Custom sessions (`session:xxx`) persist context across runs, enabling workflows like daily standups that build on previous summaries.
 - Default behavior: if `delivery` is omitted, isolated jobs announce a summary (`delivery.mode = "announce"`).
 - `delivery.mode` chooses what happens:
   - `announce`: deliver a summary to the target channel and post a brief summary to the main session.
@@ -176,6 +188,7 @@ Common `agentTurn` fields:
 - `message`: required text prompt.
 - `model` / `thinking`: optional overrides (see below).
 - `timeoutSeconds`: optional timeout override.
+- `lightContext`: optional lightweight bootstrap mode for jobs that do not need workspace bootstrap file injection.
 
 Delivery config:
 
@@ -235,12 +248,20 @@ Resolution priority:
 2. Hook-specific defaults (e.g., `hooks.gmail.model`)
 3. Agent config default
 
+### Lightweight bootstrap context
+
+Isolated jobs (`agentTurn`) can set `lightContext: true` to run with lightweight bootstrap context.
+
+- Use this for scheduled chores that do not need workspace bootstrap file injection.
+- In practice, the embedded runtime runs with `bootstrapContextMode: "lightweight"`, which keeps cron bootstrap context empty on purpose.
+- CLI equivalents: `openclaw cron add --light-context ...` and `openclaw cron edit --light-context`.
+
 ### Delivery (channel + target)
 
 Isolated jobs can deliver output to a channel via the top-level `delivery` config:
 
 - `delivery.mode`: `announce` (channel delivery), `webhook` (HTTP POST), or `none`.
-- `delivery.channel`: `whatsapp` / `telegram` / `discord` / `slack` / `mattermost` (plugin) / `signal` / `imessage` / `last`.
+- `delivery.channel`: `whatsapp` / `telegram` / `discord` / `slack` / `signal` / `imessage` / `irc` / `googlechat` / `line` / `last`, plus extension channels like `msteams` / `mattermost` (plugins).
 - `delivery.to`: channel-specific recipient target.
 
 `announce` delivery is only valid for isolated jobs (`sessionTarget: "isolated"`).
@@ -252,6 +273,7 @@ If `delivery.channel` or `delivery.to` is omitted, cron can fall back to the mai
 Target format reminders:
 
 - Slack/Discord/Mattermost (plugin) targets should use explicit prefixes (e.g. `channel:<id>`, `user:<id>`) to avoid ambiguity.
+  Mattermost bare 26-char IDs are resolved **user-first** (DM if user exists, channel otherwise) — use `user:<id>` or `channel:<id>` for deterministic routing.
 - Telegram topics should use the `:topic:` form (see below).
 
 #### Telegram delivery targets (topics / forum threads)
@@ -298,7 +320,8 @@ Recurring, isolated job with delivery:
   "wakeMode": "next-heartbeat",
   "payload": {
     "kind": "agentTurn",
-    "message": "Summarize overnight updates."
+    "message": "Summarize overnight updates.",
+    "lightContext": true
   },
   "delivery": {
     "mode": "announce",
@@ -309,12 +332,42 @@ Recurring, isolated job with delivery:
 }
 ```
 
+Recurring job bound to current session (auto-resolved at creation):
+
+```json
+{
+  "name": "Daily standup",
+  "schedule": { "kind": "cron", "expr": "0 9 * * *" },
+  "sessionTarget": "current",
+  "payload": {
+    "kind": "agentTurn",
+    "message": "Summarize yesterday's progress."
+  }
+}
+```
+
+Recurring job in a custom persistent session:
+
+```json
+{
+  "name": "Project monitor",
+  "schedule": { "kind": "every", "everyMs": 300000 },
+  "sessionTarget": "session:project-alpha-monitor",
+  "payload": {
+    "kind": "agentTurn",
+    "message": "Check project status and update the running log."
+  }
+}
+```
+
 Notes:
 
 - `schedule.kind`: `at` (`at`), `every` (`everyMs`), or `cron` (`expr`, optional `tz`).
-- `schedule.at` accepts ISO 8601 (timezone optional; treated as UTC when omitted).
+- `schedule.at` accepts ISO 8601. Tool/API values without a timezone are treated as UTC; the CLI also accepts `openclaw cron add|edit --at "<offset-less-iso>" --tz <iana>` for local wall-clock one-shots.
 - `everyMs` is milliseconds.
-- `sessionTarget` must be `"main"` or `"isolated"` and must match `payload.kind`.
+- `sessionTarget`: `"main"`, `"isolated"`, `"current"`, or `"session:<custom-id>"`.
+- `"current"` is resolved to `"session:<sessionKey>"` at creation time.
+- Custom sessions (`session:xxx`) maintain persistent context across runs.
 - Optional fields: `agentId`, `description`, `enabled`, `deleteAfterRun` (defaults to true for `at`),
   `delivery`.
 - `wakeMode` defaults to `"now"` when omitted.
@@ -360,6 +413,7 @@ When a job fails, OpenClaw classifies errors as **transient** (retryable) or **p
 ### Transient errors (retried)
 
 - Rate limit (429, too many requests, resource exhausted)
+- Provider overload (for example Anthropic `529 overloaded_error`, overload fallback summaries)
 - Network errors (timeout, ECONNRESET, fetch failed, socket)
 - Server errors (5xx)
 - Cloudflare-related errors
@@ -397,7 +451,7 @@ Configure `cron.retry` to override these defaults (see [Configuration](/automati
     retry: {
       maxAttempts: 3,
       backoffMs: [60000, 120000, 300000],
-      retryOn: ["rate_limit", "network", "server_error"],
+      retryOn: ["rate_limit", "overloaded", "network", "server_error"],
     },
     webhook: "https://example.invalid/legacy", // deprecated fallback for stored notify:true jobs
     webhookToken: "replace-with-dedicated-webhook-token", // optional bearer token for webhook mode
@@ -609,6 +663,8 @@ openclaw cron run <jobId>
 openclaw cron run <jobId> --due
 ```
 
+`cron.run` now acknowledges once the manual run is queued, not after the job finishes. Successful queue responses look like `{ ok: true, enqueued: true, runId }`. If the job is already running or `--due` finds nothing due, the response stays `{ ok: true, ran: false, reason }`. Use `openclaw cron runs --id <jobId>` or the `cron.runs` gateway method to inspect the eventual finished entry.
+
 Edit an existing job (patch fields):
 
 ```bash
@@ -644,7 +700,7 @@ openclaw system event --mode now --text "Next heartbeat: check battery."
 
 ## Troubleshooting
 
-### “Nothing runs”
+### "Nothing runs"
 
 - Check cron is enabled: `cron.enabled` and `OPENCLAW_SKIP_CRON`.
 - Check the Gateway is running continuously (cron runs inside the Gateway process).
@@ -655,7 +711,7 @@ openclaw system event --mode now --text "Next heartbeat: check battery."
 - OpenClaw applies exponential retry backoff for recurring jobs after consecutive errors:
   30s, 1m, 5m, 15m, then 60m between retries.
 - Backoff resets automatically after the next successful run.
-- One-shot (`at`) jobs retry transient errors (rate limit, network, server_error) up to 3 times with backoff; permanent errors disable immediately. See [Retry policy](/automation/cron-jobs#retry-policy).
+- One-shot (`at`) jobs retry transient errors (rate limit, overloaded, network, server_error) up to 3 times with backoff; permanent errors disable immediately. See [Retry policy](/automation/cron-jobs#retry-policy).
 
 ### Telegram delivers to the wrong place
 

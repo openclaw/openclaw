@@ -123,6 +123,13 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.restartReasons).toContain("gateway.port");
   });
 
+  it("restarts the gateway for browser plugin config changes", () => {
+    const plan = buildGatewayReloadPlan(["browser.enabled"]);
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartReasons).toContain("browser.enabled");
+    expect(plan.hotReasons).toEqual([]);
+  });
+
   it("restarts the Gmail watcher for hooks.gmail changes", () => {
     const plan = buildGatewayReloadPlan(["hooks.gmail.account"]);
     expect(plan.restartGateway).toBe(false);
@@ -159,6 +166,14 @@ describe("buildGatewayReloadPlan", () => {
     );
   });
 
+  it("restarts heartbeat when agents.defaults.models allowlist changes", () => {
+    const plan = buildGatewayReloadPlan(["agents.defaults.models"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartHeartbeat).toBe(true);
+    expect(plan.hotReasons).toContain("agents.defaults.models");
+    expect(plan.noopPaths).toEqual([]);
+  });
+
   it("hot-reloads health monitor when channelHealthCheckMinutes changes", () => {
     const plan = buildGatewayReloadPlan(["gateway.channelHealthCheckMinutes"]);
     expect(plan.restartGateway).toBe(false);
@@ -190,6 +205,11 @@ describe("buildGatewayReloadPlan", () => {
   });
 
   it.each([
+    {
+      path: "browser.enabled",
+      expectRestartGateway: true,
+      expectRestartReason: "browser.enabled",
+    },
     {
       path: "gateway.channelHealthCheckMinutes",
       expectRestartGateway: false,

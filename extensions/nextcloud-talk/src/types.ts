@@ -4,7 +4,7 @@ import type {
   DmPolicy,
   GroupPolicy,
   SecretInput,
-} from "openclaw/plugin-sdk";
+} from "../runtime-api.js";
 
 export type { DmPolicy, GroupPolicy };
 
@@ -75,6 +75,8 @@ export type NextcloudTalkAccountConfig = {
   responsePrefix?: string;
   /** Media upload max size in MB. */
   mediaMaxMb?: number;
+  /** Allow fetching from private/internal IP addresses (e.g. localhost). Required for self-hosted Nextcloud on LAN/VPN. */
+  allowPrivateNetwork?: boolean;
 };
 
 export type NextcloudTalkConfig = {

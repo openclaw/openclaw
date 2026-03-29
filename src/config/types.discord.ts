@@ -1,4 +1,3 @@
-import type { DiscordPluralKitConfig } from "../discord/pluralkit.js";
 import type {
   BlockStreamingChunkConfig,
   BlockStreamingCoalesceConfig,
@@ -8,12 +7,21 @@ import type {
   OutboundRetryConfig,
   ReplyToMode,
 } from "./types.base.js";
-import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
+import type {
+  ChannelHealthMonitorConfig,
+  ChannelHeartbeatVisibilityConfig,
+} from "./types.channels.js";
 import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
+import type { SecretInput } from "./types.secrets.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 import type { TtsConfig } from "./types.tts.js";
 
 export type DiscordStreamMode = "off" | "partial" | "block" | "progress";
+
+export type DiscordPluralKitConfig = {
+  enabled?: boolean;
+  token?: string;
+};
 
 export type DiscordDmConfig = {
   /** If false, ignore all incoming Discord DMs. Default: true. */
@@ -51,6 +59,12 @@ export type DiscordGuildChannelConfig = {
   systemPrompt?: string;
   /** If false, omit thread starter context for this channel (default: true). */
   includeThreadStarter?: boolean;
+  /** If true, automatically create a thread for each new message in this channel. */
+  autoThread?: boolean;
+  /** Archive duration (minutes) for auto-created threads. Valid values: 60, 1440, 4320, 10080. */
+  autoArchiveDuration?: "60" | "1440" | "4320" | "10080" | 60 | 1440 | 4320 | 10080;
+  /** Naming strategy for auto-created threads. "message" uses message text; "generated" renames with an LLM title. */
+  autoThreadName?: "message" | "generated";
 };
 
 export type DiscordReactionNotificationMode = "off" | "own" | "all" | "allowlist";
@@ -218,11 +232,11 @@ export type DiscordAccountConfig = {
   configWrites?: boolean;
   /** If false, do not start this Discord account. Default: true. */
   enabled?: boolean;
-  token?: string;
+  token?: SecretInput;
   /** HTTP(S) proxy URL for Discord gateway WebSocket connections. */
   proxy?: string;
-  /** Allow bot-authored messages to trigger replies (default: false). */
-  allowBots?: boolean;
+  /** Allow bot-authored messages to trigger replies (default: false). Set "mentions" to gate on mentions. */
+  allowBots?: boolean | "mentions";
   /**
    * Break-glass override: allow mutable identity matching (names/tags/slugs) in allowlists.
    * Default behavior is ID-only matching.
@@ -294,6 +308,8 @@ export type DiscordAccountConfig = {
   guilds?: Record<string, DiscordGuildEntry>;
   /** Heartbeat visibility settings for this channel. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /** Channel health monitor overrides for this channel/account. */
+  healthMonitor?: ChannelHealthMonitorConfig;
   /** Exec approval forwarding configuration. */
   execApprovals?: DiscordExecApprovalConfig;
   /** Agent-controlled interactive components (buttons, select menus). */
@@ -330,10 +346,20 @@ export type DiscordAccountConfig = {
   /** Streaming URL (Twitch/YouTube). Required when activityType=1. */
   activityUrl?: string;
   /**
+   * In-process worker settings for queued inbound Discord runs.
+   * This is separate from Carbon's eventQueue listener budget.
+   */
+  inboundWorker?: {
+    /**
+     * Max time (ms) a queued inbound run may execute before OpenClaw aborts it.
+     * Defaults to 1800000 (30 minutes). Set 0 to disable the worker-owned timeout.
+     */
+    runTimeoutMs?: number;
+  };
+  /**
    * Carbon EventQueue configuration. Controls how Discord gateway events are processed.
-   * The most important option is `listenerTimeout` which defaults to 30s in Carbon --
-   * too short for LLM calls with extended thinking. Set a higher value (e.g. 120000)
-   * to prevent the event queue from killing long-running message handlers.
+   * `listenerTimeout` only covers gateway listener work such as normalization and enqueue.
+   * It does not control the lifetime of queued inbound agent turns.
    */
   eventQueue?: {
     /** Max time (ms) a single listener can run before being killed. Default: 120000. */
@@ -351,3 +377,9 @@ export type DiscordConfig = {
   /** Optional default account id when multiple accounts are configured. */
   defaultAccount?: string;
 } & DiscordAccountConfig;
+
+declare module "./types.channels.js" {
+  interface ChannelsConfig {
+    discord?: DiscordConfig;
+  }
+}

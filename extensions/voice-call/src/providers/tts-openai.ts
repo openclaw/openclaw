@@ -1,3 +1,5 @@
+import { convertPcmToMulaw8k } from "../telephony-audio.js";
+
 /**
  * OpenAI TTS Provider
  *
@@ -64,6 +66,16 @@ export const OPENAI_TTS_VOICES = [
 
 export type OpenAITTSVoice = (typeof OPENAI_TTS_VOICES)[number];
 
+function trimToUndefined(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function resolveOpenAITtsInstructions(model: string, instructions?: string): string | undefined {
+  const next = trimToUndefined(instructions);
+  return next && model.includes("gpt-4o-mini-tts") ? next : undefined;
+}
+
 /**
  * OpenAI TTS Provider for generating speech audio.
  */
@@ -75,13 +87,14 @@ export class OpenAITTSProvider {
   private instructions?: string;
 
   constructor(config: OpenAITTSConfig = {}) {
-    this.apiKey = config.apiKey || process.env.OPENAI_API_KEY || "";
+    this.apiKey =
+      trimToUndefined(config.apiKey) ?? trimToUndefined(process.env.OPENAI_API_KEY) ?? "";
     // Default to gpt-4o-mini-tts for intelligent realtime applications
-    this.model = config.model || "gpt-4o-mini-tts";
+    this.model = trimToUndefined(config.model) ?? "gpt-4o-mini-tts";
     // Default to coral - good balance of quality and natural tone
-    this.voice = (config.voice as OpenAITTSVoice) || "coral";
-    this.speed = config.speed || 1.0;
-    this.instructions = config.instructions;
+    this.voice = (trimToUndefined(config.voice) as OpenAITTSVoice | undefined) ?? "coral";
+    this.speed = config.speed ?? 1.0;
+    this.instructions = trimToUndefined(config.instructions);
 
     if (!this.apiKey) {
       throw new Error("OpenAI API key required (set OPENAI_API_KEY or pass apiKey)");
@@ -102,9 +115,11 @@ export class OpenAITTSProvider {
       speed: this.speed,
     };
 
-    // Add instructions if using gpt-4o-mini-tts model
-    const effectiveInstructions = instructions || this.instructions;
-    if (effectiveInstructions && this.model.includes("gpt-4o-mini-tts")) {
+    const effectiveInstructions = resolveOpenAITtsInstructions(
+      this.model,
+      trimToUndefined(instructions) ?? this.instructions,
+    );
+    if (effectiveInstructions) {
       body.instructions = effectiveInstructions;
     }
 
@@ -134,98 +149,9 @@ export class OpenAITTSProvider {
     // Get raw PCM from OpenAI (24kHz, 16-bit signed LE, mono)
     const pcm24k = await this.synthesize(text);
 
-    // Resample from 24kHz to 8kHz
-    const pcm8k = resample24kTo8k(pcm24k);
-
-    // Encode to mu-law
-    return pcmToMulaw(pcm8k);
+    // Convert from 24kHz PCM to Twilio-compatible 8kHz mu-law
+    return convertPcmToMulaw8k(pcm24k, 24000);
   }
-}
-
-/**
- * Resample 24kHz PCM to 8kHz using linear interpolation.
- * Input/output: 16-bit signed little-endian mono.
- */
-function resample24kTo8k(input: Buffer): Buffer {
-  const inputSamples = input.length / 2;
-  const outputSamples = Math.floor(inputSamples / 3);
-  const output = Buffer.alloc(outputSamples * 2);
-
-  for (let i = 0; i < outputSamples; i++) {
-    // Calculate position in input (3:1 ratio)
-    const srcPos = i * 3;
-    const srcIdx = srcPos * 2;
-
-    if (srcIdx + 3 < input.length) {
-      // Linear interpolation between samples
-      const s0 = input.readInt16LE(srcIdx);
-      const s1 = input.readInt16LE(srcIdx + 2);
-      const frac = srcPos % 1 || 0;
-      const sample = Math.round(s0 + frac * (s1 - s0));
-      output.writeInt16LE(clamp16(sample), i * 2);
-    } else {
-      // Last sample
-      output.writeInt16LE(input.readInt16LE(srcIdx), i * 2);
-    }
-  }
-
-  return output;
-}
-
-/**
- * Clamp value to 16-bit signed integer range.
- */
-function clamp16(value: number): number {
-  return Math.max(-32768, Math.min(32767, value));
-}
-
-/**
- * Convert 16-bit PCM to 8-bit mu-law.
- * Standard G.711 mu-law encoding for telephony.
- */
-function pcmToMulaw(pcm: Buffer): Buffer {
-  const samples = pcm.length / 2;
-  const mulaw = Buffer.alloc(samples);
-
-  for (let i = 0; i < samples; i++) {
-    const sample = pcm.readInt16LE(i * 2);
-    mulaw[i] = linearToMulaw(sample);
-  }
-
-  return mulaw;
-}
-
-/**
- * Convert a single 16-bit linear sample to 8-bit mu-law.
- * Implements ITU-T G.711 mu-law encoding.
- */
-function linearToMulaw(sample: number): number {
-  const BIAS = 132;
-  const CLIP = 32635;
-
-  // Get sign bit
-  const sign = sample < 0 ? 0x80 : 0;
-  if (sample < 0) {
-    sample = -sample;
-  }
-
-  // Clip to prevent overflow
-  if (sample > CLIP) {
-    sample = CLIP;
-  }
-
-  // Add bias and find segment
-  sample += BIAS;
-  let exponent = 7;
-  for (let expMask = 0x4000; (sample & expMask) === 0 && exponent > 0; exponent--, expMask >>= 1) {
-    // Find the segment (exponent)
-  }
-
-  // Extract mantissa bits
-  const mantissa = (sample >> (exponent + 3)) & 0x0f;
-
-  // Combine into mu-law byte (inverted for transmission)
-  return ~(sign | (exponent << 4) | mantissa) & 0xff;
 }
 
 /**

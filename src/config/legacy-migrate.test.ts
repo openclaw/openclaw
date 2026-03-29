@@ -1,9 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { migrateLegacyConfig } from "./legacy-migrate.js";
-import { WHISPER_BASE_AUDIO_MODEL } from "./legacy-migrate.test-helpers.js";
 
 describe("legacy migrate audio transcription", () => {
-  it("moves routing.transcribeAudio into tools.media.audio.models", () => {
+  it("does not rewrite removed routing.transcribeAudio migrations", () => {
     const res = migrateLegacyConfig({
       routing: {
         transcribeAudio: {
@@ -13,12 +12,11 @@ describe("legacy migrate audio transcription", () => {
       },
     });
 
-    expect(res.changes).toContain("Moved routing.transcribeAudio → tools.media.audio.models.");
-    expect(res.config?.tools?.media?.audio).toEqual(WHISPER_BASE_AUDIO_MODEL);
-    expect((res.config as { routing?: unknown } | null)?.routing).toBeUndefined();
+    expect(res.changes).toEqual([]);
+    expect(res.config).toBeNull();
   });
 
-  it("keeps existing tools media model and drops legacy routing value", () => {
+  it("does not rewrite removed routing.transcribeAudio migrations when new config exists", () => {
     const res = migrateLegacyConfig({
       routing: {
         transcribeAudio: {
@@ -34,11 +32,8 @@ describe("legacy migrate audio transcription", () => {
       },
     });
 
-    expect(res.changes).toContain(
-      "Removed routing.transcribeAudio (tools.media.audio.models already set).",
-    );
-    expect(res.config?.tools?.media?.audio?.models).toEqual([{ command: "existing", type: "cli" }]);
-    expect((res.config as { routing?: unknown } | null)?.routing).toBeUndefined();
+    expect(res.changes).toEqual([]);
+    expect(res.config).toBeNull();
   });
 
   it("drops invalid audio.transcription payloads", () => {
@@ -57,7 +52,7 @@ describe("legacy migrate audio transcription", () => {
 });
 
 describe("legacy migrate mention routing", () => {
-  it("moves routing.groupChat.requireMention into channel group defaults", () => {
+  it("does not rewrite removed routing.groupChat.requireMention migrations", () => {
     const res = migrateLegacyConfig({
       routing: {
         groupChat: {
@@ -66,18 +61,11 @@ describe("legacy migrate mention routing", () => {
       },
     });
 
-    expect(res.changes).toContain(
-      'Moved routing.groupChat.requireMention → channels.telegram.groups."*".requireMention.',
-    );
-    expect(res.changes).toContain(
-      'Moved routing.groupChat.requireMention → channels.imessage.groups."*".requireMention.',
-    );
-    expect(res.config?.channels?.telegram?.groups?.["*"]?.requireMention).toBe(true);
-    expect(res.config?.channels?.imessage?.groups?.["*"]?.requireMention).toBe(true);
-    expect((res.config as { routing?: unknown } | null)?.routing).toBeUndefined();
+    expect(res.changes).toEqual([]);
+    expect(res.config).toBeNull();
   });
 
-  it("moves channels.telegram.requireMention into groups.*.requireMention", () => {
+  it("does not rewrite removed channels.telegram.requireMention migrations", () => {
     const res = migrateLegacyConfig({
       channels: {
         telegram: {
@@ -86,13 +74,149 @@ describe("legacy migrate mention routing", () => {
       },
     });
 
+    expect(res.changes).toEqual([]);
+    expect(res.config).toBeNull();
+  });
+});
+
+describe("legacy migrate heartbeat config", () => {
+  it("moves top-level heartbeat into agents.defaults.heartbeat", () => {
+    const res = migrateLegacyConfig({
+      heartbeat: {
+        model: "anthropic/claude-3-5-haiku-20241022",
+        every: "30m",
+      },
+    });
+
+    expect(res.changes).toContain("Moved heartbeat → agents.defaults.heartbeat.");
+    expect(res.config?.agents?.defaults?.heartbeat).toEqual({
+      model: "anthropic/claude-3-5-haiku-20241022",
+      every: "30m",
+    });
+    expect((res.config as { heartbeat?: unknown } | null)?.heartbeat).toBeUndefined();
+  });
+
+  it("moves top-level heartbeat visibility into channels.defaults.heartbeat", () => {
+    const res = migrateLegacyConfig({
+      heartbeat: {
+        showOk: true,
+        showAlerts: false,
+        useIndicator: false,
+      },
+    });
+
+    expect(res.changes).toContain("Moved heartbeat visibility → channels.defaults.heartbeat.");
+    expect(res.config?.channels?.defaults?.heartbeat).toEqual({
+      showOk: true,
+      showAlerts: false,
+      useIndicator: false,
+    });
+    expect((res.config as { heartbeat?: unknown } | null)?.heartbeat).toBeUndefined();
+  });
+
+  it("keeps explicit agents.defaults.heartbeat values when merging top-level heartbeat", () => {
+    const res = migrateLegacyConfig({
+      heartbeat: {
+        model: "anthropic/claude-3-5-haiku-20241022",
+        every: "30m",
+      },
+      agents: {
+        defaults: {
+          heartbeat: {
+            every: "1h",
+            target: "telegram",
+          },
+        },
+      },
+    });
+
     expect(res.changes).toContain(
-      'Moved telegram.requireMention → channels.telegram.groups."*".requireMention.',
+      "Merged heartbeat → agents.defaults.heartbeat (filled missing fields from legacy; kept explicit agents.defaults values).",
     );
-    expect(res.config?.channels?.telegram?.groups?.["*"]?.requireMention).toBe(false);
-    expect(
-      (res.config?.channels?.telegram as { requireMention?: unknown } | undefined)?.requireMention,
-    ).toBeUndefined();
+    expect(res.config?.agents?.defaults?.heartbeat).toEqual({
+      every: "1h",
+      target: "telegram",
+      model: "anthropic/claude-3-5-haiku-20241022",
+    });
+    expect((res.config as { heartbeat?: unknown } | null)?.heartbeat).toBeUndefined();
+  });
+
+  it("keeps explicit channels.defaults.heartbeat values when merging top-level heartbeat visibility", () => {
+    const res = migrateLegacyConfig({
+      heartbeat: {
+        showOk: true,
+        showAlerts: true,
+      },
+      channels: {
+        defaults: {
+          heartbeat: {
+            showOk: false,
+            useIndicator: false,
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toContain(
+      "Merged heartbeat visibility → channels.defaults.heartbeat (filled missing fields from legacy; kept explicit channels.defaults values).",
+    );
+    expect(res.config?.channels?.defaults?.heartbeat).toEqual({
+      showOk: false,
+      showAlerts: true,
+      useIndicator: false,
+    });
+    expect((res.config as { heartbeat?: unknown } | null)?.heartbeat).toBeUndefined();
+  });
+
+  it("preserves agents.defaults.heartbeat precedence over top-level heartbeat legacy key", () => {
+    const res = migrateLegacyConfig({
+      agents: {
+        defaults: {
+          heartbeat: {
+            every: "1h",
+            target: "telegram",
+          },
+        },
+      },
+      heartbeat: {
+        every: "30m",
+        target: "discord",
+        model: "anthropic/claude-3-5-haiku-20241022",
+      },
+    });
+
+    expect(res.config?.agents?.defaults?.heartbeat).toEqual({
+      every: "1h",
+      target: "telegram",
+      model: "anthropic/claude-3-5-haiku-20241022",
+    });
+    expect((res.config as { heartbeat?: unknown } | null)?.heartbeat).toBeUndefined();
+  });
+
+  it("drops blocked prototype keys when migrating top-level heartbeat", () => {
+    const res = migrateLegacyConfig(
+      JSON.parse(
+        '{"heartbeat":{"every":"30m","__proto__":{"polluted":true},"showOk":true}}',
+      ) as Record<string, unknown>,
+    );
+
+    const heartbeat = res.config?.agents?.defaults?.heartbeat as
+      | Record<string, unknown>
+      | undefined;
+    expect(heartbeat?.every).toBe("30m");
+    expect((heartbeat as { polluted?: unknown } | undefined)?.polluted).toBeUndefined();
+    expect(Object.prototype.hasOwnProperty.call(heartbeat ?? {}, "__proto__")).toBe(false);
+    expect(res.config?.channels?.defaults?.heartbeat).toEqual({ showOk: true });
+  });
+
+  it("records a migration change when removing empty top-level heartbeat", () => {
+    const res = migrateLegacyConfig({
+      heartbeat: {},
+    });
+
+    expect(res.changes).toContain("Removed empty top-level heartbeat.");
+    expect(res.config).not.toBeNull();
+    expect((res.config as { heartbeat?: unknown } | null)?.heartbeat).toBeUndefined();
   });
 });
 

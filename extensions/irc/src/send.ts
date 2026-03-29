@@ -1,3 +1,5 @@
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
 import { resolveIrcAccount } from "./accounts.js";
 import type { IrcClient } from "./client.js";
 import { connectIrcClient } from "./client.js";
@@ -8,6 +10,7 @@ import { getIrcRuntime } from "./runtime.js";
 import type { CoreConfig } from "./types.js";
 
 type SendIrcOptions = {
+  cfg?: CoreConfig;
   accountId?: string;
   replyTo?: string;
   target?: string;
@@ -18,6 +21,20 @@ export type SendIrcResult = {
   messageId: string;
   target: string;
 };
+
+function recordIrcOutboundActivity(accountId: string): void {
+  try {
+    getIrcRuntime().channel.activity.record({
+      channel: "irc",
+      accountId,
+      direction: "outbound",
+    });
+  } catch (error) {
+    if (!(error instanceof Error) || error.message !== "IRC runtime not initialized") {
+      throw error;
+    }
+  }
+}
 
 function resolveTarget(to: string, opts?: SendIrcOptions): string {
   const fromArg = normalizeIrcMessagingTarget(to);
@@ -37,7 +54,7 @@ export async function sendMessageIrc(
   opts: SendIrcOptions = {},
 ): Promise<SendIrcResult> {
   const runtime = getIrcRuntime();
-  const cfg = runtime.config.loadConfig() as CoreConfig;
+  const cfg = (opts.cfg ?? runtime.config.loadConfig()) as CoreConfig;
   const account = resolveIrcAccount({
     cfg,
     accountId: opts.accountId,
@@ -50,12 +67,12 @@ export async function sendMessageIrc(
   }
 
   const target = resolveTarget(to, opts);
-  const tableMode = runtime.channel.text.resolveMarkdownTableMode({
+  const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "irc",
     accountId: account.accountId,
   });
-  const prepared = runtime.channel.text.convertMarkdownTables(text.trim(), tableMode);
+  const prepared = convertMarkdownTables(text.trim(), tableMode);
   const payload = opts.replyTo ? `${prepared}\n\n[reply:${opts.replyTo}]` : prepared;
 
   if (!payload.trim()) {
@@ -75,11 +92,7 @@ export async function sendMessageIrc(
     transient.quit("sent");
   }
 
-  runtime.channel.activity.record({
-    channel: "irc",
-    accountId: account.accountId,
-    direction: "outbound",
-  });
+  recordIrcOutboundActivity(account.accountId);
 
   return {
     messageId: makeIrcMessageId(),

@@ -1,4 +1,4 @@
-import type { RuntimeEnv } from "openclaw/plugin-sdk";
+import type { RuntimeEnv } from "../../api.js";
 import { extractMessageText } from "./utils.js";
 
 /**

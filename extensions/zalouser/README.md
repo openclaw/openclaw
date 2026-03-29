@@ -6,7 +6,7 @@ OpenClaw extension for Zalo Personal Account messaging via native `zca-js` integ
 
 ## Features
 
-- Channel plugin integration with onboarding + QR login
+- Channel plugin integration with setup wizard + QR login
 - In-process listener/sender via `zca-js` (no external CLI)
 - Multi-account support
 - Agent tool integration (`zalouser`)
@@ -30,8 +30,9 @@ openclaw plugins install @openclaw/zalouser
 ### Option B: local source checkout
 
 ```bash
-openclaw plugins install ./extensions/zalouser
-cd ./extensions/zalouser && pnpm install
+PLUGIN_SRC=./path/to/local/zalouser-plugin
+openclaw plugins install "$PLUGIN_SRC"
+cd "$PLUGIN_SRC" && pnpm install
 ```
 
 Restart the Gateway after install.

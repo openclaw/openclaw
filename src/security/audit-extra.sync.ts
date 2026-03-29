@@ -1,18 +1,15 @@
-import { isToolAllowedByPolicies } from "../agents/pi-tools.policy.js";
-import {
-  resolveSandboxConfigForAgent,
-  resolveSandboxToolPolicyForAgent,
-} from "../agents/sandbox.js";
+import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { isDangerousNetworkMode, normalizeNetworkMode } from "../agents/sandbox/network-mode.js";
 /**
  * Synchronous security audit collector functions.
  *
  * These functions analyze config-based security properties without I/O.
  */
+import { resolveSandboxToolPolicyForAgent } from "../agents/sandbox/tool-policy.js";
 import type { SandboxToolPolicy } from "../agents/sandbox/types.js";
 import { getBlockedBindReason } from "../agents/sandbox/validate-sandbox-security.js";
+import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
 import { resolveToolProfilePolicy } from "../agents/tool-policy.js";
-import { resolveBrowserConfig } from "../browser/config.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -21,10 +18,13 @@ import {
 } from "../config/model-input.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
+import { resolveAllowedAgentIds } from "../gateway/hooks-policy.js";
 import {
   DEFAULT_DANGEROUS_NODE_COMMANDS,
   resolveNodeCommandAllowlist,
 } from "../gateway/node-command-policy.js";
+import { resolveBrowserConfig } from "../plugin-sdk/browser-runtime.js";
+import { hasBundledWebSearchCredential } from "../plugins/bundled-web-search-registry.js";
 import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
 import { pickSandboxToolPolicy } from "./audit-tool-policy.js";
 
@@ -240,6 +240,61 @@ function looksLikeNodeCommandPattern(value: string): boolean {
   return /\s/.test(value) || value.includes("group:");
 }
 
+function editDistance(a: string, b: string): number {
+  if (a === b) {
+    return 0;
+  }
+  if (!a) {
+    return b.length;
+  }
+  if (!b) {
+    return a.length;
+  }
+
+  const dp: number[] = Array.from({ length: b.length + 1 }, (_, j) => j);
+
+  for (let i = 1; i <= a.length; i++) {
+    let prev = dp[0];
+    dp[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const temp = dp[j];
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      dp[j] = Math.min(dp[j] + 1, dp[j - 1] + 1, prev + cost);
+      prev = temp;
+    }
+  }
+
+  return dp[b.length];
+}
+
+function suggestKnownNodeCommands(unknown: string, known: Set<string>): string[] {
+  const needle = unknown.trim();
+  if (!needle) {
+    return [];
+  }
+
+  // Fast path: prefix-ish suggestions.
+  const prefix = needle.includes(".") ? needle.split(".").slice(0, 2).join(".") : needle;
+  const prefixHits = Array.from(known)
+    .filter((cmd) => cmd.startsWith(prefix))
+    .slice(0, 3);
+  if (prefixHits.length > 0) {
+    return prefixHits;
+  }
+
+  // Fuzzy: Levenshtein over a small-ish known set.
+  const ranked = Array.from(known)
+    .map((cmd) => ({ cmd, d: editDistance(needle, cmd) }))
+    .toSorted((a, b) => a.d - b.d || a.cmd.localeCompare(b.cmd));
+
+  const best = ranked[0]?.d ?? Infinity;
+  const threshold = Math.max(2, Math.min(4, best));
+  return ranked
+    .filter((r) => r.d <= threshold)
+    .slice(0, 3)
+    .map((r) => r.cmd);
+}
+
 function resolveToolPolicies(params: {
   cfg: OpenClawConfig;
   agentTools?: AgentToolsConfig;
@@ -272,14 +327,7 @@ function resolveToolPolicies(params: {
 }
 
 function hasWebSearchKey(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
-  const search = cfg.tools?.web?.search;
-  return Boolean(
-    search?.apiKey ||
-    search?.perplexity?.apiKey ||
-    env.BRAVE_API_KEY ||
-    env.PERPLEXITY_API_KEY ||
-    env.OPENROUTER_API_KEY,
-  );
+  return hasBundledWebSearchCredential({ config: cfg, env });
 }
 
 function isWebSearchEnabled(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
@@ -612,6 +660,7 @@ export function collectHooksHardeningFindings(
   const allowRequestSessionKey = cfg.hooks?.allowRequestSessionKey === true;
   const defaultSessionKey =
     typeof cfg.hooks?.defaultSessionKey === "string" ? cfg.hooks.defaultSessionKey.trim() : "";
+  const allowedAgentIds = resolveAllowedAgentIds(cfg.hooks?.allowedAgentIds);
   const allowedPrefixes = Array.isArray(cfg.hooks?.allowedSessionKeyPrefixes)
     ? cfg.hooks.allowedSessionKeyPrefixes
         .map((prefix) => prefix.trim())
@@ -627,6 +676,18 @@ export function collectHooksHardeningFindings(
       detail:
         "Hook agent runs without explicit sessionKey use generated per-request keys. Set hooks.defaultSessionKey to keep hook ingress scoped to a known session.",
       remediation: 'Set hooks.defaultSessionKey (for example, "hook:ingress").',
+    });
+  }
+
+  if (allowedAgentIds === undefined) {
+    findings.push({
+      checkId: "hooks.allowed_agent_ids_unrestricted",
+      severity: remoteExposure ? "critical" : "warn",
+      title: "Hook agent routing allows any configured agent",
+      detail:
+        "hooks.allowedAgentIds is unset or includes '*', so authenticated hook callers may route to any configured agent id.",
+      remediation:
+        'Set hooks.allowedAgentIds to an explicit allowlist (for example, ["hooks", "main"]) or [] to deny explicit agent routing.',
     });
   }
 
@@ -944,9 +1005,17 @@ export function collectNodeDenyCommandPatternFindings(cfg: OpenClawConfig): Secu
     );
   }
   if (unknownExact.length > 0) {
-    detailParts.push(
-      `Unknown command names (not in defaults/allowCommands): ${unknownExact.join(", ")}`,
-    );
+    const unknownDetails = unknownExact
+      .map((entry) => {
+        const suggestions = suggestKnownNodeCommands(entry, knownCommands);
+        if (suggestions.length === 0) {
+          return entry;
+        }
+        return `${entry} (did you mean: ${suggestions.join(", ")})`;
+      })
+      .join(", ");
+
+    detailParts.push(`Unknown command names (not in defaults/allowCommands): ${unknownDetails}`);
   }
   const examples = Array.from(knownCommands).slice(0, 8);
 

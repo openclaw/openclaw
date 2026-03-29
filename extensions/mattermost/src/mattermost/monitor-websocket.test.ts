@@ -1,5 +1,5 @@
-import type { RuntimeEnv } from "openclaw/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
+import type { RuntimeEnv } from "../../runtime-api.js";
 import {
   createMattermostConnectOnce,
   type MattermostWebSocketLike,

@@ -1,12 +1,13 @@
-import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "openclaw/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "../../runtime-api.js";
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.js";
 import { setMSTeamsRuntime } from "../runtime.js";
 import { createMSTeamsMessageHandler } from "./message-handler.js";
 
 describe("msteams monitor handler authz", () => {
-  it("does not treat DM pairing-store entries as group allowlist entries", async () => {
+  function createDeps(cfg: OpenClawConfig) {
     const readAllowFromStore = vi.fn(async () => ["attacker-aad"]);
+    const upsertPairingRequest = vi.fn(async () => null);
     setMSTeamsRuntime({
       logging: { shouldLogVerbose: () => false },
       channel: {
@@ -22,7 +23,7 @@ describe("msteams monitor handler authz", () => {
         },
         pairing: {
           readAllowFromStore,
-          upsertPairingRequest: vi.fn(async () => null),
+          upsertPairingRequest,
         },
         text: {
           hasControlCommand: () => false,
@@ -35,16 +36,7 @@ describe("msteams monitor handler authz", () => {
     };
 
     const deps: MSTeamsMessageHandlerDeps = {
-      cfg: {
-        channels: {
-          msteams: {
-            dmPolicy: "pairing",
-            allowFrom: [],
-            groupPolicy: "allowlist",
-            groupAllowFrom: [],
-          },
-        },
-      } as OpenClawConfig,
+      cfg,
       runtime: { error: vi.fn() } as unknown as RuntimeEnv,
       appId: "test-app",
       adapter: {} as MSTeamsMessageHandlerDeps["adapter"],
@@ -64,6 +56,21 @@ describe("msteams monitor handler authz", () => {
         error: vi.fn(),
       } as unknown as MSTeamsMessageHandlerDeps["log"],
     };
+
+    return { conversationStore, deps, readAllowFromStore, upsertPairingRequest };
+  }
+
+  it("does not treat DM pairing-store entries as group allowlist entries", async () => {
+    const { conversationStore, deps, readAllowFromStore } = createDeps({
+      channels: {
+        msteams: {
+          dmPolicy: "pairing",
+          allowFrom: [],
+          groupPolicy: "allowlist",
+          groupAllowFrom: [],
+        },
+      },
+    } as OpenClawConfig);
 
     const handler = createMSTeamsMessageHandler(deps);
     await handler({
@@ -95,5 +102,188 @@ describe("msteams monitor handler authz", () => {
       accountId: "default",
     });
     expect(conversationStore.upsert).not.toHaveBeenCalled();
+  });
+
+  it("does not widen sender auth when only a teams route allowlist is configured", async () => {
+    const { conversationStore, deps } = createDeps({
+      channels: {
+        msteams: {
+          dmPolicy: "pairing",
+          allowFrom: [],
+          groupPolicy: "allowlist",
+          groupAllowFrom: [],
+          teams: {
+            team123: {
+              channels: {
+                "19:group@thread.tacv2": { requireMention: false },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig);
+
+    const handler = createMSTeamsMessageHandler(deps);
+    await handler({
+      activity: {
+        id: "msg-1",
+        type: "message",
+        text: "hello",
+        from: {
+          id: "attacker-id",
+          aadObjectId: "attacker-aad",
+          name: "Attacker",
+        },
+        recipient: {
+          id: "bot-id",
+          name: "Bot",
+        },
+        conversation: {
+          id: "19:group@thread.tacv2",
+          conversationType: "groupChat",
+        },
+        channelData: {
+          team: { id: "team123", name: "Team 123" },
+          channel: { name: "General" },
+        },
+        attachments: [],
+      },
+      sendActivity: vi.fn(async () => undefined),
+    } as unknown as Parameters<typeof handler>[0]);
+
+    expect(conversationStore.upsert).not.toHaveBeenCalled();
+  });
+
+  it("keeps the DM pairing path wired through shared access resolution", async () => {
+    const { deps, upsertPairingRequest } = createDeps({
+      channels: {
+        msteams: {
+          dmPolicy: "pairing",
+          allowFrom: [],
+        },
+      },
+    } as OpenClawConfig);
+
+    const handler = createMSTeamsMessageHandler(deps);
+    await handler({
+      activity: {
+        id: "msg-pairing",
+        type: "message",
+        text: "hello",
+        from: {
+          id: "new-user-id",
+          aadObjectId: "new-user-aad",
+          name: "New User",
+        },
+        recipient: {
+          id: "bot-id",
+          name: "Bot",
+        },
+        conversation: {
+          id: "a:personal-chat",
+          conversationType: "personal",
+        },
+        channelData: {},
+        attachments: [],
+      },
+      sendActivity: vi.fn(async () => undefined),
+    } as unknown as Parameters<typeof handler>[0]);
+
+    expect(upsertPairingRequest).toHaveBeenCalledWith({
+      channel: "msteams",
+      accountId: "default",
+      id: "new-user-aad",
+      meta: { name: "New User" },
+    });
+  });
+
+  it("logs an info drop reason when dmPolicy allowlist rejects a sender", async () => {
+    const { deps } = createDeps({
+      channels: {
+        msteams: {
+          dmPolicy: "allowlist",
+          allowFrom: ["trusted-aad"],
+        },
+      },
+    } as OpenClawConfig);
+
+    const handler = createMSTeamsMessageHandler(deps);
+    await handler({
+      activity: {
+        id: "msg-drop-dm",
+        type: "message",
+        text: "hello",
+        from: {
+          id: "attacker-id",
+          aadObjectId: "attacker-aad",
+          name: "Attacker",
+        },
+        recipient: {
+          id: "bot-id",
+          name: "Bot",
+        },
+        conversation: {
+          id: "a:personal-chat",
+          conversationType: "personal",
+        },
+        channelData: {},
+        attachments: [],
+      },
+      sendActivity: vi.fn(async () => undefined),
+    } as unknown as Parameters<typeof handler>[0]);
+
+    expect(deps.log.info).toHaveBeenCalledWith(
+      "dropping dm (not allowlisted)",
+      expect.objectContaining({
+        sender: "attacker-aad",
+        dmPolicy: "allowlist",
+        reason: "dmPolicy=allowlist (not allowlisted)",
+      }),
+    );
+  });
+
+  it("logs an info drop reason when group policy has an empty allowlist", async () => {
+    const { deps } = createDeps({
+      channels: {
+        msteams: {
+          dmPolicy: "pairing",
+          allowFrom: [],
+          groupPolicy: "allowlist",
+          groupAllowFrom: [],
+        },
+      },
+    } as OpenClawConfig);
+
+    const handler = createMSTeamsMessageHandler(deps);
+    await handler({
+      activity: {
+        id: "msg-drop-group",
+        type: "message",
+        text: "hello",
+        from: {
+          id: "attacker-id",
+          aadObjectId: "attacker-aad",
+          name: "Attacker",
+        },
+        recipient: {
+          id: "bot-id",
+          name: "Bot",
+        },
+        conversation: {
+          id: "19:group@thread.tacv2",
+          conversationType: "groupChat",
+        },
+        channelData: {},
+        attachments: [],
+      },
+      sendActivity: vi.fn(async () => undefined),
+    } as unknown as Parameters<typeof handler>[0]);
+
+    expect(deps.log.info).toHaveBeenCalledWith(
+      "dropping group message (groupPolicy: allowlist, no allowlist)",
+      expect.objectContaining({
+        conversationId: "19:group@thread.tacv2",
+      }),
+    );
   });
 });

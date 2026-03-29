@@ -1,35 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isXaiProvider, stripXaiUnsupportedKeywords } from "./clean-for-xai.js";
-
-describe("isXaiProvider", () => {
-  it("matches direct xai provider", () => {
-    expect(isXaiProvider("xai")).toBe(true);
-  });
-
-  it("matches x-ai provider string", () => {
-    expect(isXaiProvider("x-ai")).toBe(true);
-  });
-
-  it("matches openrouter with x-ai model id", () => {
-    expect(isXaiProvider("openrouter", "x-ai/grok-4.1-fast")).toBe(true);
-  });
-
-  it("does not match openrouter with non-xai model id", () => {
-    expect(isXaiProvider("openrouter", "openai/gpt-4o")).toBe(false);
-  });
-
-  it("does not match openai provider", () => {
-    expect(isXaiProvider("openai")).toBe(false);
-  });
-
-  it("does not match google provider", () => {
-    expect(isXaiProvider("google")).toBe(false);
-  });
-
-  it("handles undefined provider", () => {
-    expect(isXaiProvider(undefined)).toBe(false);
-  });
-});
+import { stripXaiUnsupportedKeywords } from "../../plugin-sdk/provider-tools.js";
 
 describe("stripXaiUnsupportedKeywords", () => {
   it("strips minLength and maxLength from string properties", () => {

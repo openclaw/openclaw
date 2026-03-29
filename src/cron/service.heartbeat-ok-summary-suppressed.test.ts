@@ -86,7 +86,7 @@ describe("cron isolated job HEARTBEAT_OK summary suppression (#32013)", () => {
     expect(requestHeartbeatNow).not.toHaveBeenCalled();
   });
 
-  it("still enqueues real cron summaries as system events", async () => {
+  it("does not revive legacy main-session relay for real cron summaries", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.now();
 
@@ -109,10 +109,7 @@ describe("cron isolated job HEARTBEAT_OK summary suppression (#32013)", () => {
 
     await runScheduledCron(cron);
 
-    // Real summaries SHOULD be enqueued.
-    expect(enqueueSystemEvent).toHaveBeenCalledWith(
-      expect.stringContaining("Weather update"),
-      expect.objectContaining({ agentId: undefined }),
-    );
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(requestHeartbeatNow).not.toHaveBeenCalled();
   });
 });
