@@ -35,18 +35,26 @@ export async function resolveVisibleSessionKeys(params: {
     a2aPolicy,
     cfg,
   });
-  const limit =
-    typeof params.limit === "number" && Number.isFinite(params.limit)
-      ? Math.max(1, Math.floor(params.limit))
-      : 1000;
+  // Omit `limit` unless the caller set it: default cap would drop visible keys for
+  // workspaces with more sessions than the slice, breaking search/recall FTS filtering.
+  const listParams: {
+    includeGlobal: boolean;
+    includeUnknown: boolean;
+    spawnedBy?: string;
+    limit?: number;
+  } = {
+    includeGlobal: !restrictToSpawned,
+    includeUnknown: !restrictToSpawned,
+  };
+  if (restrictToSpawned) {
+    listParams.spawnedBy = effectiveRequesterKey;
+  }
+  if (typeof params.limit === "number" && Number.isFinite(params.limit)) {
+    listParams.limit = Math.max(1, Math.floor(params.limit));
+  }
   const list = await callGateway<{ sessions: Array<{ key?: unknown }> }>({
     method: "sessions.list",
-    params: {
-      limit,
-      includeGlobal: !restrictToSpawned,
-      includeUnknown: !restrictToSpawned,
-      spawnedBy: restrictToSpawned ? effectiveRequesterKey : undefined,
-    },
+    params: listParams,
   });
   const sessions = Array.isArray(list?.sessions) ? list.sessions : [];
   const visible = new Set<string>();

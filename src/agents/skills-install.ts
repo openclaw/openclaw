@@ -108,7 +108,6 @@ async function collectSkillInstallScanWarnings(params: {
         return { warnings, builtinScan, blockedMessage: policy.message };
       }
     }
-
     if (summary.critical > 0) {
       const criticalDetails = summary.findings
         .filter((finding) => finding.severity === "critical")

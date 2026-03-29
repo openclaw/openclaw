@@ -60,6 +60,8 @@ const BASE_METHODS = [
   "secrets.reload",
   "secrets.resolve",
   "sessions.list",
+  "sessions.search",
+  "sessions.recall",
   "sessions.subscribe",
   "sessions.unsubscribe",
   "sessions.messages.subscribe",

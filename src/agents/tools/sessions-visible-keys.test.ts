@@ -60,7 +60,6 @@ describe("resolveVisibleSessionKeys", () => {
     expect(callGatewayMock).toHaveBeenCalledWith({
       method: "sessions.list",
       params: {
-        limit: 1000,
         includeGlobal: false,
         includeUnknown: false,
         spawnedBy: "agent:main:main",
