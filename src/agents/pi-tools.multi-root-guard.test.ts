@@ -203,6 +203,33 @@ describe("assertAliasSafe", () => {
           await fs.writeFile(secretFile, "secret");
           await fs.symlink(secretFile, aliasFile);
 
+          const roots = makeRoots({ path: dataDir, kind: "dir", access: "rw" });
+
+          expect(() => validatePathAgainstRoots(aliasFile, "write", roots)).not.toThrow();
+          await expect(
+            assertAliasSafe(aliasFile, roots, {
+              operation: "write",
+              allowFinalSymlinkForUnlink: true,
+            }),
+          ).resolves.toBeUndefined();
+        },
+      );
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rejects unlinks when a canonical read-only file root is stricter than an alias rw dir root",
+    async () => {
+      await withTempDir(
+        { prefix: "openclaw-fs-roots-", parentDir: process.cwd() },
+        async (root) => {
+          const dataDir = path.join(root, "data");
+          await fs.mkdir(dataDir, { recursive: true });
+          const secretFile = path.join(dataDir, "secret.txt");
+          const aliasFile = path.join(dataDir, "alias.txt");
+          await fs.writeFile(secretFile, "secret");
+          await fs.symlink(secretFile, aliasFile);
+
           const roots = makeRoots(
             { path: dataDir, kind: "dir", access: "rw" },
             { path: secretFile, kind: "file", access: "ro" },
@@ -214,7 +241,7 @@ describe("assertAliasSafe", () => {
               operation: "write",
               allowFinalSymlinkForUnlink: true,
             }),
-          ).resolves.toBeUndefined();
+          ).rejects.toThrow(/read-only file root/);
         },
       );
     },

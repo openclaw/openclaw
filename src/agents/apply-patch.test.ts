@@ -521,6 +521,40 @@ describe("applyPatch", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "rejects deleting a symlink alias when a canonical read-only file root is stricter",
+    async () => {
+      await withTempDir(async (dir) => {
+        const allowedDir = await fs.mkdtemp(path.join(path.dirname(dir), "openclaw-patch-roots-"));
+        const secretFile = path.join(allowedDir, "secret.txt");
+        const linkPath = path.join(allowedDir, "link.txt");
+        await fs.writeFile(secretFile, "keep\n", "utf8");
+        await fs.symlink(secretFile, linkPath);
+
+        const patch = `*** Begin Patch
+*** Delete File: ${linkPath}
+*** End Patch`;
+
+        try {
+          await expect(
+            applyPatch(patch, {
+              cwd: dir,
+              workspaceOnly: false,
+              roots: resolveRoots([
+                { path: allowedDir, kind: "dir", access: "rw" },
+                { path: secretFile, kind: "file", access: "ro" },
+              ]),
+            }),
+          ).rejects.toThrow(/read-only file root/i);
+          await expect(fs.lstat(linkPath)).resolves.toBeDefined();
+          expect(await fs.readFile(secretFile, "utf8")).toBe("keep\n");
+        } finally {
+          await fs.rm(allowedDir, { recursive: true, force: true });
+        }
+      });
+    },
+  );
+
   it("allows deleting a symlink itself even if it points outside cwd", async () => {
     await withTempDir(async (dir) => {
       const outsideDir = await fs.mkdtemp(path.join(path.dirname(dir), "openclaw-patch-outside-"));

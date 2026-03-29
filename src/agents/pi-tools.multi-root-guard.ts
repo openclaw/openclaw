@@ -96,10 +96,6 @@ export async function assertAliasSafe(
     policy,
   });
 
-  if (options?.allowFinalSymlinkForUnlink || options?.allowFinalHardlinkForUnlink) {
-    return;
-  }
-
   await validateCanonicalTargetAgainstRoots(resolvedPath, options?.operation ?? "read", roots);
 }
 
