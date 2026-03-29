@@ -439,6 +439,39 @@ describe("self-chat is_from_me=true handling (Bruce Phase 2 fix)", () => {
     expect(decision).toEqual({ kind: "drop", reason: "agent echo in self-chat" });
   });
 
+  it("drops self-chat echo when outbound cache stored numeric id but inbound also carries a guid", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-24T12:00:00Z"));
+
+    const echoCache = createSentMessageCache();
+    const selfChatCache = createSelfChatCache();
+
+    const scope = "default:imessage:+15551234567";
+    echoCache.remember(scope, { text: "Numeric id echo", messageId: "123709" });
+
+    vi.advanceTimersByTime(1000);
+
+    const decision = resolveIMessageInboundDecision(
+      createParams({
+        message: {
+          id: 123709,
+          guid: "p:0/GUID-different-shape",
+          sender: "+15551234567",
+          chat_identifier: "+15551234567",
+          text: "Numeric id echo",
+          is_from_me: true,
+          is_group: false,
+        },
+        messageText: "Numeric id echo",
+        bodyText: "Numeric id echo",
+        echoCache,
+        selfChatCache,
+      }),
+    );
+
+    expect(decision).toEqual({ kind: "drop", reason: "agent echo in self-chat" });
+  });
+
   it("does not drop a real self-chat image just because a recent agent image used the same placeholder", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-24T12:00:00Z"));

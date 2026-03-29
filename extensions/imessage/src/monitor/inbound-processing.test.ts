@@ -75,13 +75,10 @@ describe("resolveIMessageInboundDecision echo detection", () => {
     });
 
     expect(decision).toEqual({ kind: "drop", reason: "echo" });
-    expect(echoHas).toHaveBeenCalledWith(
-      "default:imessage:+15555550123",
-      expect.objectContaining({
-        text: "Reasoning:\n_step_",
-        messageId: "42",
-      }),
-    );
+    expect(echoHas).toHaveBeenNthCalledWith(1, "default:imessage:+15555550123", {
+      messageId: "42",
+    });
+    expect(echoHas).toHaveBeenCalledTimes(1);
   });
 
   it("matches attachment-only echoes by bodyText placeholder", () => {
@@ -100,12 +97,17 @@ describe("resolveIMessageInboundDecision echo detection", () => {
     });
 
     expect(decision).toEqual({ kind: "drop", reason: "echo" });
-    expect(echoHas).toHaveBeenCalledWith(
+    expect(echoHas).toHaveBeenNthCalledWith(1, "default:imessage:+15555550123", {
+      messageId: "42",
+    });
+    expect(echoHas).toHaveBeenNthCalledWith(
+      2,
       "default:imessage:+15555550123",
-      expect.objectContaining({
+      {
         text: "<media:image>",
         messageId: "42",
-      }),
+      },
+      undefined,
     );
   });
 
