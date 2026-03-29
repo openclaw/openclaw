@@ -46,11 +46,7 @@ function which(cmd) {
 }
 
 function resolveRunner() {
-  const pnpm = which("pnpm");
-  if (pnpm) {
-    return { cmd: pnpm, kind: "pnpm" };
-  }
-  return null;
+  return { cmd: "pnpm", kind: "pnpm" };
 }
 
 export function shouldUseShellForCommand(cmd, platform = process.platform) {
@@ -92,7 +88,7 @@ function createSpawnOptions(cmd, args, envOverride) {
 function run(cmd, args) {
   let child;
   try {
-    child = spawn(cmd, args, createSpawnOptions(cmd, args));
+    child = spawn(cmd, args, { ...createSpawnOptions(cmd, args), shell: true });
   } catch (err) {
     console.error(`Failed to launch ${cmd}:`, err);
     process.exit(1);
@@ -113,7 +109,7 @@ function run(cmd, args) {
 function runSync(cmd, args, envOverride) {
   let result;
   try {
-    result = spawnSync(cmd, args, createSpawnOptions(cmd, args, envOverride));
+    result = spawnSync(cmd, args, { ...createSpawnOptions(cmd, args, envOverride), shell: true });
   } catch (err) {
     console.error(`Failed to launch ${cmd}:`, err);
     process.exit(1);

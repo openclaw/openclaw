@@ -1,3 +1,5 @@
+import { ensureCustomApiRegistered } from "../../custom-api-registry.js";
+import { streamLMStudioNative, streamSimpleLMStudioNative } from "../../lmstudio-native-provider.js";
 import fs from "node:fs/promises";
 import os from "node:os";
 import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
@@ -49,7 +51,6 @@ import {
   listChannelSupportedActions,
   resolveChannelMessageToolHints,
 } from "../../channel-tools.js";
-import { ensureCustomApiRegistered } from "../../custom-api-registry.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { resolveOpenClawDocsPath } from "../../docs-path.js";
 import { isTimeoutError } from "../../failover-error.js";
@@ -146,6 +147,9 @@ import {
 import { pruneProcessedHistoryImages } from "./history-image-prune.js";
 import { detectAndLoadPromptImages } from "./images.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
+
+// Register LM Studio Native API provider on module load
+ensureCustomApiRegistered("lmstudio-native" as any, streamLMStudioNative as any);
 
 type PromptBuildHookRunner = {
   hasHooks: (hookName: "before_prompt_build" | "before_agent_start") => boolean;
