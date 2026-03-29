@@ -9,7 +9,7 @@ import { setFeishuRuntime } from "./src/runtime.js";
 import { registerFeishuSubagentHooks } from "./src/subagent-hooks.js";
 import { registerFeishuWikiTools } from "./src/wiki.js";
 
-let feishuToolsRegistered = false;
+let registeredRegistry: object | null = null;
 
 export { feishuPlugin } from "./src/channel.js";
 export { setFeishuRuntime } from "./src/runtime.js";
@@ -70,8 +70,10 @@ export default defineChannelPluginEntry({
   plugin: feishuPlugin,
   setRuntime: setFeishuRuntime,
   registerFull(api) {
-    if (feishuToolsRegistered) return;
-    feishuToolsRegistered = true;
+    // Registry-bound guard: re-register when a new registry instance is
+    // created (e.g. during in-process gateway restarts).
+    if (registeredRegistry === api.registry) return;
+    registeredRegistry = api.registry;
     registerFeishuSubagentHooks(api);
     registerFeishuDocTools(api);
     registerFeishuChatTools(api);
