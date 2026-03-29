@@ -21,8 +21,9 @@ describe("resolveExplicitToolsAlsoAllow", () => {
         list: [{ id: "work", tools: { alsoAllow: ["nodes"] } }],
       },
     } as unknown as OpenClawConfig;
-    expect(resolveExplicitToolsAlsoAllow({ config: cfg, agentId: "work" }).sort()).toEqual(
-      ["gateway", "nodes"].sort(),
+    expect(resolveExplicitToolsAlsoAllow({ config: cfg, agentId: "work" }).toSorted()).toEqual(
+      ["gateway", "nodes"].toSorted(),
+
     );
   });
 });
