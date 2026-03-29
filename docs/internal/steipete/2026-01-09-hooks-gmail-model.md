@@ -1,7 +1,8 @@
 ---
 title: "hooks.gmail.model for Gmail PubSub Processing"
 summary: "Spec for hooks.gmail.model - cheaper model for Gmail PubSub processing"
-author: "Peter Steinberger"
+author: "Peter Steinberger <steipete@gmail.com>"
+github_username: "steipete"
 created: "2026-01-09"
 read_when:
   - Implementing hooks.gmail.model feature

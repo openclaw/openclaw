@@ -1,7 +1,8 @@
 ---
 title: "Telegram Allowlist Hardening"
 summary: "Telegram allowlist hardening: prefix + whitespace normalization"
-author: "Marcus Neves"
+author: "Marcus Neves <2423436+mneves75@users.noreply.github.com>"
+github_username: "mneves75"
 created: "2026-01-05"
 read_when:
   - Reviewing historical Telegram allowlist changes

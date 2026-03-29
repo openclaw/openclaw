@@ -1,7 +1,8 @@
 ---
 title: "Cron Add Hardening"
 summary: "Harden cron.add input handling, align schemas, and improve cron UI/agent tooling"
-author: "Marcus Neves"
+author: "Marcus Neves <2423436+mneves75@users.noreply.github.com>"
+github_username: "mneves75"
 created: "2026-01-06"
 read_when:
   - Debugging invalid `cron.add` payloads

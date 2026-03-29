@@ -1,7 +1,8 @@
 ---
 title: "Onboarding and Config Protocol"
 summary: "RPC protocol notes for setup wizard and config schema"
-author: "Peter Steinberger"
+author: "Peter Steinberger <steipete@gmail.com>"
+github_username: "steipete"
 created: "2026-01-03"
 read_when: "Changing setup wizard steps or config schema endpoints"
 ---

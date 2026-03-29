@@ -1,7 +1,8 @@
 ---
 title: "OpenResponses Gateway Plan"
 summary: "Plan: Add OpenResponses /v1/responses endpoint and deprecate chat completions cleanly"
-author: "Ryan Lisse"
+author: "Ryan Lisse <ryan@ryanlisse.com>"
+github_username: "RyanLisse"
 created: "2026-01-20"
 read_when:
   - Designing or implementing `/v1/responses` gateway support

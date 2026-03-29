@@ -1,7 +1,8 @@
 ---
 title: "Model Config Exploration"
 summary: "Exploration: model config, auth profiles, and fallback behavior"
-author: "Peter Steinberger"
+author: "Peter Steinberger <steipete@gmail.com>"
+github_username: "steipete"
 created: "2026-01-05"
 read_when:
   - Exploring future model selection + auth profile ideas
