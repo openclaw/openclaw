@@ -74,27 +74,6 @@ function resolveLocalAvatarPath(params: {
 }
 
 export function resolveAgentAvatar(cfg: OpenClawConfig, agentId: string): AgentAvatarResolution {
-  // Special case: "user" refers to the user avatar override from ui.userAvatar
-  if (agentId === "user") {
-    const userAvatar = normalizeAvatarValue(cfg.ui?.userAvatar);
-    if (!userAvatar) {
-      return { kind: "none", reason: "missing" };
-    }
-    if (isAvatarHttpUrl(userAvatar)) {
-      return { kind: "remote", url: userAvatar };
-    }
-    if (isAvatarDataUrl(userAvatar)) {
-      return { kind: "data", url: userAvatar };
-    }
-    // Resolve relative to the default workspace root (mirrors agent avatar handling)
-    const defaultWorkspace = cfg.agents?.defaults?.workspace || process.cwd();
-    const resolved = resolveLocalAvatarPath({ raw: userAvatar, workspaceDir: defaultWorkspace });
-    if (!resolved.ok) {
-      return { kind: "none", reason: resolved.reason };
-    }
-    return { kind: "local", filePath: resolved.filePath };
-  }
-
   const source = resolveAvatarSource(cfg, agentId);
   if (!source) {
     return { kind: "none", reason: "missing" };

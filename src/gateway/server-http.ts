@@ -17,6 +17,12 @@ import { handleSlackHttpRequest } from "../plugin-sdk/slack.js";
 import { resolveHookExternalContentSource as resolveHookExternalContentSourceFromSession } from "../security/external-content.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import {
+  isAvatarDataUrl,
+  isAvatarHttpUrl,
+} from "../shared/avatar-policy.js";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import { resolveLocalAvatarPath } from "../agents/identity-avatar.js";
+import {
   AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH,
   createAuthRateLimiter,
   normalizeRateLimitClientIp,
@@ -959,9 +965,28 @@ export function createGatewayHttpServer(opts: {
           run: () =>
             handleControlUiAvatarRequest(req, res, {
               basePath: controlUiBasePath,
-              resolveAvatar: (agentId) => resolveAgentAvatar(configSnapshot, agentId),
+              resolveAvatar: (agentId) => {
+                if (agentId === "user") {
+                  // Resolve user avatar from config.ui.userAvatar
+                  const raw = configSnapshot.ui?.userAvatar?.trim();
+                  if (!raw) {
+                    return { kind: "none", reason: "missing" };
+                  }
+                  if (isAvatarHttpUrl(raw) || isAvatarDataUrl(raw)) {
+                    return { kind: isAvatarHttpUrl(raw) ? "remote" : "data", url: raw };
+                  }
+                  // Resolve relative to the default workspace (same as agent avatars)
+                  const workspaceDir = resolveAgentWorkspaceDir(configSnapshot, "default");
+                  const resolved = resolveLocalAvatarPath({ raw, workspaceDir });
+                  if (!resolved.ok) {
+                    return { kind: "none", reason: resolved.reason };
+                  }
+                  return { kind: "local", filePath: resolved.filePath };
+                }
+                return resolveAgentAvatar(configSnapshot, agentId);
+              },
             }),
-        });
+            });
         requestStages.push({
           name: "control-ui-http",
           run: () =>
