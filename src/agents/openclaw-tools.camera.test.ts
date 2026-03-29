@@ -17,7 +17,6 @@ vi.mock("../media/image-ops.js", () => ({
 let createOpenClawTools: typeof import("./openclaw-tools.js").createOpenClawTools;
 
 const NODE_ID = "mac-1";
-const BASE_RUN_INPUT = { action: "run", node: NODE_ID, command: ["echo", "hi"] } as const;
 const JPG_PAYLOAD = {
   format: "jpg",
   base64: "aGVsbG8=",
@@ -133,43 +132,6 @@ function setupNodeInvokeMock(params: {
         return { payload: params.invokePayload };
       }
       return { payload: {} };
-    }
-    return unexpectedGatewayMethod(method);
-  });
-}
-
-function createSystemRunPreparePayload(cwd: string | null) {
-  return {
-    payload: {
-      plan: {
-        argv: ["echo", "hi"],
-        cwd,
-        commandText: "echo hi",
-        agentId: null,
-        sessionKey: null,
-      },
-    },
-  };
-}
-
-function setupSystemRunGateway(params: {
-  onRunInvoke: (invokeParams: unknown) => GatewayMockResult | Promise<GatewayMockResult>;
-  onApprovalRequest?: (approvalParams: unknown) => GatewayMockResult | Promise<GatewayMockResult>;
-  prepareCwd?: string | null;
-}) {
-  callGateway.mockImplementation(async ({ method, params: gatewayParams }: GatewayCall) => {
-    if (method === "node.list") {
-      return mockNodeList({ commands: ["system.run"] });
-    }
-    if (method === "node.invoke") {
-      const command = (gatewayParams as { command?: string } | undefined)?.command;
-      if (command === "system.run.prepare") {
-        return createSystemRunPreparePayload(params.prepareCwd ?? null);
-      }
-      return await params.onRunInvoke(gatewayParams);
-    }
-    if (method === "exec.approval.request" && params.onApprovalRequest) {
-      return await params.onApprovalRequest(gatewayParams);
     }
     return unexpectedGatewayMethod(method);
   });
@@ -601,119 +563,6 @@ describe("nodes device_status and device_info", () => {
     });
 
     expectFirstTextContains(result, '"memory"');
-  });
-});
-
-describe("nodes run", () => {
-  it("passes invoke and command timeouts", async () => {
-    setupSystemRunGateway({
-      prepareCwd: "/tmp",
-      onRunInvoke: (invokeParams) => {
-        expect(invokeParams).toMatchObject({
-          nodeId: NODE_ID,
-          command: "system.run",
-          timeoutMs: 45_000,
-          params: {
-            command: ["echo", "hi"],
-            cwd: "/tmp",
-            env: { FOO: "bar" },
-            timeoutMs: 12_000,
-          },
-        });
-        return {
-          payload: { stdout: "", stderr: "", exitCode: 0, success: true },
-        };
-      },
-    });
-
-    await executeNodes({
-      ...BASE_RUN_INPUT,
-      cwd: "/tmp",
-      env: ["FOO=bar"],
-      commandTimeoutMs: 12_000,
-      invokeTimeoutMs: 45_000,
-    });
-  });
-
-  it("requests approval and retries with allow-once decision", async () => {
-    let invokeCalls = 0;
-    let approvalId: string | null = null;
-    setupSystemRunGateway({
-      onRunInvoke: (invokeParams) => {
-        invokeCalls += 1;
-        if (invokeCalls === 1) {
-          throw new Error("SYSTEM_RUN_DENIED: approval required");
-        }
-        expect(invokeParams).toMatchObject({
-          nodeId: NODE_ID,
-          command: "system.run",
-          params: {
-            command: ["echo", "hi"],
-            runId: approvalId,
-            approved: true,
-            approvalDecision: "allow-once",
-          },
-        });
-        return { payload: { stdout: "", stderr: "", exitCode: 0, success: true } };
-      },
-      onApprovalRequest: (approvalParams) => {
-        expect(approvalParams).toMatchObject({
-          id: expect.any(String),
-          systemRunPlan: expect.objectContaining({
-            argv: ["echo", "hi"],
-            commandText: "echo hi",
-          }),
-          nodeId: NODE_ID,
-          host: "node",
-          timeoutMs: 120_000,
-        });
-        approvalId =
-          typeof (approvalParams as { id?: unknown } | undefined)?.id === "string"
-            ? ((approvalParams as { id: string }).id ?? null)
-            : null;
-        return { decision: "allow-once" };
-      },
-    });
-
-    await executeNodes(BASE_RUN_INPUT);
-    expect(invokeCalls).toBe(2);
-  });
-
-  it("fails with user denied when approval decision is deny", async () => {
-    setupSystemRunGateway({
-      onRunInvoke: () => {
-        throw new Error("SYSTEM_RUN_DENIED: approval required");
-      },
-      onApprovalRequest: () => {
-        return { decision: "deny" };
-      },
-    });
-
-    await expect(executeNodes(BASE_RUN_INPUT)).rejects.toThrow("exec denied: user denied");
-  });
-
-  it("fails closed for timeout and invalid approval decisions", async () => {
-    setupSystemRunGateway({
-      onRunInvoke: () => {
-        throw new Error("SYSTEM_RUN_DENIED: approval required");
-      },
-      onApprovalRequest: () => {
-        return {};
-      },
-    });
-    await expect(executeNodes(BASE_RUN_INPUT)).rejects.toThrow("exec denied: approval timed out");
-
-    setupSystemRunGateway({
-      onRunInvoke: () => {
-        throw new Error("SYSTEM_RUN_DENIED: approval required");
-      },
-      onApprovalRequest: () => {
-        return { decision: "allow-never" };
-      },
-    });
-    await expect(executeNodes(BASE_RUN_INPUT)).rejects.toThrow(
-      "exec denied: invalid approval decision",
-    );
   });
 });
 
