@@ -114,37 +114,37 @@
       "nativeStreaming": true,
       "userTokenReadOnly": true,
       "channels": {
-        "C_MARKET_SIGNALS": {
+        "${SLACK_CHANNEL_MARKET_SIGNALS}": {
           "allow": true,
           "requireMention": true,
           "allowBots": true
         },
-        "C_RESEARCH": {
+        "${SLACK_CHANNEL_RESEARCH}": {
           "allow": true,
           "requireMention": true,
           "allowBots": true
         },
-        "C_QUANT_SIGNALS": {
+        "${SLACK_CHANNEL_QUANT_SIGNALS}": {
           "allow": true,
           "requireMention": true,
           "allowBots": true
         },
-        "C_CONTRARIAN": {
+        "${SLACK_CHANNEL_CONTRARIAN}": {
           "allow": true,
           "requireMention": true,
           "allowBots": true
         },
-        "C_DISPATCH": {
+        "${SLACK_CHANNEL_DISPATCH}": {
           "allow": true,
           "requireMention": true,
           "allowBots": true
         },
-        "C_PORTFOLIO_DAILY": {
+        "${SLACK_CHANNEL_PORTFOLIO_DAILY}": {
           "allow": true,
           "requireMention": true,
           "allowBots": false
         },
-        "C_PORTFOLIO_WEEKLY": {
+        "${SLACK_CHANNEL_PORTFOLIO_WEEKLY}": {
           "allow": true,
           "requireMention": true,
           "allowBots": false
