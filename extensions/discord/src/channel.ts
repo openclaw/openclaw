@@ -41,6 +41,7 @@ import {
 } from "./directory-config.js";
 import {
   getDiscordExecApprovalApprovers,
+  isDiscordExecApprovalApprover,
   isDiscordExecApprovalClientEnabled,
   shouldSuppressLocalDiscordExecApprovalPrompt,
 } from "./exec-approvals.js";
@@ -492,6 +493,16 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
         },
       },
       execApprovals: {
+        authorizeCommand: ({ cfg, accountId, senderId, kind }) =>
+          isDiscordExecApprovalApprover({ cfg, accountId, senderId })
+            ? { authorized: true }
+            : {
+                authorized: false,
+                reason:
+                  kind === "plugin"
+                    ? "❌ You are not authorized to approve plugin requests on Discord."
+                    : "❌ You are not authorized to approve exec requests on Discord.",
+              },
         getInitiatingSurfaceState: ({ cfg, accountId }) =>
           getDiscordExecApprovalApprovers({ cfg, accountId }).length > 0
             ? { kind: "enabled" }

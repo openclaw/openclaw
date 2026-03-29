@@ -466,6 +466,15 @@ export type ChannelLifecycleAdapter = {
 };
 
 export type ChannelExecApprovalAdapter = {
+  authorizeCommand?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    senderId?: string | null;
+    kind: "exec" | "plugin";
+  }) => {
+    authorized: boolean;
+    reason?: string;
+  };
   getInitiatingSurfaceState?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
