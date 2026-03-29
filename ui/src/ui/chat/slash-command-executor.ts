@@ -192,7 +192,7 @@ async function executeModel(
       ]);
       const session = resolveCurrentSession(sessions, sessionKey);
       const rawModel = session?.model || sessions?.defaults?.model || "default";
-      const modelProvider = session?.modelProvider ?? sessions?.defaults?.modelProvider ?? null;
+      const modelProvider = session?.modelProvider ?? null;
       const model = buildQualifiedChatModelValue(rawModel, modelProvider);
       const available = models.map((m: ModelCatalogEntry) =>
         buildQualifiedChatModelValue(m.id, m.provider),

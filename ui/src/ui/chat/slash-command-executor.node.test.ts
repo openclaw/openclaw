@@ -241,7 +241,6 @@ describe("executeSlashCommand directives", () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "sessions.list") {
         return {
-          defaults: { modelProvider: "openai", model: "default-model" },
           sessions: [
             row("agent:main:main", {
               model: "gpt-4.1-mini",
@@ -273,6 +272,34 @@ describe("executeSlashCommand directives", () => {
     );
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
     expect(request).toHaveBeenNthCalledWith(2, "models.list", {});
+  });
+
+  it("does not qualify the current model with the defaults provider when the session has no modelProvider", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.list") {
+        return {
+          defaults: { modelProvider: "openai", model: "default-model" },
+          sessions: [
+            row("agent:main:main", {
+              model: "claude-sonnet-4-6",
+            }),
+          ],
+        };
+      }
+      if (method === "models.list") {
+        return { models: [] };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "main",
+      "model",
+      "",
+    );
+
+    expect(result.content).toBe("**Current model:** `claude-sonnet-4-6`");
   });
 
   it("mirrors resolved provider-qualified model refs after /model changes", async () => {
