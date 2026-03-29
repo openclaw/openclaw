@@ -101,8 +101,8 @@ Add Amazon Bedrock Guardrails support to the `amazon-bedrock` extension plugin. 
     - Test: non-Anthropic model with guardrail — verify non-Anthropic model ID gets both `guardrailConfig` and `cacheRetention: "none"`
     - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5, 2.1, 2.2, 2.3, 2.5, 3.1, 3.2, 3.3_
 
-- [ ] 5. Update documentation
-  - [ ] 5.1 Add Guardrails section to `docs/providers/bedrock.md`
+- [x] 5. Update documentation
+  - [x] 5.1 Add Guardrails section to `docs/providers/bedrock.md`
     - Add a new "Guardrails" section after the existing "Notes" section
     - Include a configuration example showing the `guardrail` object with `guardrailIdentifier`, `guardrailVersion`, `streamProcessingMode`, and `trace`
     - Note that `guardrailIdentifier` accepts both guardrail IDs and full ARNs
