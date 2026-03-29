@@ -6,15 +6,26 @@ import { afterEach, describe, expect, it } from "vitest";
 
 function runFixNpmPermissions(env: NodeJS.ProcessEnv): void {
   const installerPath = path.join(process.cwd(), "scripts", "install.sh");
+  const isolatedEnv: NodeJS.ProcessEnv = {
+    // Keep installer tests deterministic even when non-isolated suites mutate npm env vars.
+    PATH: process.env.PATH ?? "",
+    HOME: env.HOME ?? process.env.HOME ?? "",
+    USER: process.env.USER,
+    LOGNAME: process.env.LOGNAME,
+    SHELL: process.env.SHELL,
+    TMPDIR: process.env.TMPDIR,
+    TMP: process.env.TMP,
+    TEMP: process.env.TEMP,
+    OS: env.OS,
+    NPM_CONFIG_PREFIX: env.NPM_CONFIG_PREFIX,
+    npm_config_prefix: env.NPM_CONFIG_PREFIX,
+    INSTALLER_PATH: installerPath,
+    OPENCLAW_INSTALL_SH_NO_RUN: "1",
+  };
   execFileSync("bash", ["-lc", 'source "$INSTALLER_PATH" && fix_npm_permissions'], {
     cwd: process.cwd(),
     encoding: "utf-8",
-    env: {
-      ...process.env,
-      ...env,
-      INSTALLER_PATH: installerPath,
-      OPENCLAW_INSTALL_SH_NO_RUN: "1",
-    },
+    env: isolatedEnv,
   });
 }
 

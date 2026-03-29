@@ -24,10 +24,11 @@ describe("security fix", () => {
     return dir;
   };
 
-  const createFixEnv = (stateDir: string, configPath: string) => ({
-    ...process.env,
+  const createFixEnv = (stateDir: string, configPath: string): NodeJS.ProcessEnv => ({
+    // Keep this test environment hermetic; unrelated suites can mutate process.env.
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_CONFIG_PATH: configPath,
+    OPENCLAW_OAUTH_DIR: path.join(stateDir, "credentials"),
   });
 
   const writeJsonConfig = async (configPath: string, config: Record<string, unknown>) => {
