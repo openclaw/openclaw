@@ -93,7 +93,10 @@ describe("installTestEnv", () => {
     expect(testEnv.tempHome).not.toBe(realHome);
     expect(process.env.HOME).toBe(testEnv.tempHome);
     expect(process.env.OPENCLAW_TEST_HOME).toBe(testEnv.tempHome);
-    expect(process.env.TEST_PROFILE_ONLY).toBe("from-profile");
+    // .profile sourcing requires /bin/bash and is skipped on Windows.
+    if (process.platform !== "win32") {
+      expect(process.env.TEST_PROFILE_ONLY).toBe("from-profile");
+    }
 
     const copiedConfigPath = path.join(testEnv.tempHome, ".openclaw", "openclaw.json");
     const copiedConfig = JSON.parse(fs.readFileSync(copiedConfigPath, "utf8")) as {
@@ -134,6 +137,9 @@ describe("installTestEnv", () => {
 
     expect(testEnv.tempHome).toBe(realHome);
     expect(process.env.HOME).toBe(realHome);
-    expect(process.env.TEST_PROFILE_ONLY).toBe("from-profile");
+    // .profile sourcing requires /bin/bash and is skipped on Windows.
+    if (process.platform !== "win32") {
+      expect(process.env.TEST_PROFILE_ONLY).toBe("from-profile");
+    }
   });
 });

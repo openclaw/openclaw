@@ -46,6 +46,10 @@ function resolveHomeRelativePath(input: string, homeDir: string): string {
 }
 
 function loadProfileEnv(homeDir = os.homedir()): void {
+  // .profile sourcing relies on /bin/bash which is unavailable on Windows.
+  if (process.platform === "win32") {
+    return;
+  }
   const profilePath = path.join(homeDir, ".profile");
   if (!fs.existsSync(profilePath)) {
     return;
