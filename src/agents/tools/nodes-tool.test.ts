@@ -8,8 +8,6 @@ const gatewayMocks = vi.hoisted(() => ({
 const nodeUtilsMocks = vi.hoisted(() => ({
   resolveNodeId: vi.fn(async () => "node-1"),
   resolveNode: vi.fn(async () => ({ nodeId: "node-1", remoteIp: "127.0.0.1" })),
-  listNodes: vi.fn(async () => [] as Array<{ nodeId: string; commands?: string[] }>),
-  resolveNodeIdFromList: vi.fn(() => "node-1"),
 }));
 
 const nodesCameraMocks = vi.hoisted(() => ({
@@ -48,8 +46,6 @@ vi.mock("./gateway.js", () => ({
 vi.mock("./nodes-utils.js", () => ({
   resolveNodeId: nodeUtilsMocks.resolveNodeId,
   resolveNode: nodeUtilsMocks.resolveNode,
-  listNodes: nodeUtilsMocks.listNodes,
-  resolveNodeIdFromList: nodeUtilsMocks.resolveNodeIdFromList,
 }));
 
 vi.mock("../../cli/nodes-camera.js", () => ({
@@ -77,8 +73,6 @@ async function loadFreshNodesToolModuleForTest() {
   vi.doMock("./nodes-utils.js", () => ({
     resolveNodeId: nodeUtilsMocks.resolveNodeId,
     resolveNode: nodeUtilsMocks.resolveNode,
-    listNodes: nodeUtilsMocks.listNodes,
-    resolveNodeIdFromList: nodeUtilsMocks.resolveNodeIdFromList,
   }));
   vi.doMock("../../cli/nodes-camera.js", () => ({
     cameraTempPath: nodesCameraMocks.cameraTempPath,
@@ -148,50 +142,15 @@ describe("createNodesTool screen_record duration guardrails", () => {
     );
   });
 
-  it("omits rawCommand when preparing wrapped argv execution", async () => {
-    nodeUtilsMocks.listNodes.mockResolvedValue([
-      {
-        nodeId: "node-1",
-        commands: ["system.run"],
-      },
-    ]);
-    gatewayMocks.callGatewayTool.mockImplementation(async (_method, _opts, payload) => {
-      if (payload?.command === "system.run.prepare") {
-        return {
-          payload: {
-            plan: {
-              argv: ["bash", "-lc", "echo hi"],
-              cwd: null,
-              commandText: 'bash -lc "echo hi"',
-              commandPreview: "echo hi",
-              agentId: null,
-              sessionKey: null,
-            },
-          },
-        };
-      }
-      if (payload?.command === "system.run") {
-        return { payload: { ok: true } };
-      }
-      throw new Error(`unexpected command: ${String(payload?.command)}`);
-    });
+  it("rejects the removed run action", async () => {
     const tool = createNodesTool();
 
-    await tool.execute("call-1", {
-      action: "run",
-      node: "macbook",
-      command: ["bash", "-lc", "echo hi"],
-    });
-
-    const prepareCall = gatewayMocks.callGatewayTool.mock.calls.find(
-      (call) => call[2]?.command === "system.run.prepare",
-    )?.[2];
-    expect(prepareCall).toBeTruthy();
-    expect(prepareCall?.params).toMatchObject({
-      command: ["bash", "-lc", "echo hi"],
-      agentId: "main",
-    });
-    expect(prepareCall?.params).not.toHaveProperty("rawCommand");
+    await expect(
+      tool.execute("call-1", {
+        action: "run",
+        node: "macbook",
+      }),
+    ).rejects.toThrow("Unknown action: run");
   });
   it("returns camera snaps via details.media.mediaUrls", async () => {
     gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
@@ -384,5 +343,17 @@ describe("createNodesTool screen_record duration guardrails", () => {
       { requestId: "req-1" },
       { scopes: ["operator.write"] },
     );
+  });
+
+  it("blocks invokeCommand system.run so exec stays the only shell path", async () => {
+    const tool = createNodesTool();
+
+    await expect(
+      tool.execute("call-1", {
+        action: "invoke",
+        node: "macbook",
+        invokeCommand: "system.run",
+      }),
+    ).rejects.toThrow('invokeCommand "system.run" is reserved for shell execution');
   });
 });
