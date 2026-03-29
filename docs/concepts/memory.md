@@ -56,9 +56,7 @@ For details on how search works, tuning options, and provider setup, see
 
 ## Memory backends
 
-OpenClaw has two backends for indexing and searching memory:
-
-<CardGroup cols={2}>
+<CardGroup cols={3}>
 <Card title="Builtin (default)" icon="database" href="/concepts/memory-builtin">
 SQLite-based. Works out of the box with keyword search, vector similarity, and
 hybrid search. No extra dependencies.
@@ -66,6 +64,10 @@ hybrid search. No extra dependencies.
 <Card title="QMD" icon="magnifying-glass" href="/concepts/memory-qmd">
 Local-first sidecar with reranking, query expansion, and the ability to index
 directories outside the workspace.
+</Card>
+<Card title="Honcho" icon="brain" href="/concepts/memory-honcho">
+AI-native cross-session memory with user modeling, semantic search, and
+multi-agent awareness. Plugin install.
 </Card>
 </CardGroup>
 
@@ -93,6 +95,7 @@ openclaw memory index --force   # Rebuild the index
 
 - [Builtin Memory Engine](/concepts/memory-builtin) -- default SQLite backend
 - [QMD Memory Engine](/concepts/memory-qmd) -- advanced local-first sidecar
+- [Honcho Memory](/concepts/memory-honcho) -- AI-native cross-session memory
 - [Memory Search](/concepts/memory-search) -- search pipeline, providers, and
   tuning
 - [Memory configuration reference](/reference/memory-config) -- all config knobs
