@@ -875,7 +875,7 @@ describe("tts", () => {
       },
       {
         name: "tagged text is synthesized",
-        payload: { text: "[[tts:text]]Hello world[[/tts:text]]" },
+        payload: { text: "[[tts:text]]\nHello world\n[[/tts:text]]" },
         expectedFetchCalls: 1,
         expectSamePayload: false,
       },

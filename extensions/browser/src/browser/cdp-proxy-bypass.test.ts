@@ -175,12 +175,17 @@ describe("cdp-proxy-bypass", () => {
 
     it("skips when no proxy env is set", async () => {
       delete process.env.HTTP_PROXY;
+      delete process.env.http_proxy;
       delete process.env.HTTPS_PROXY;
+      delete process.env.https_proxy;
       delete process.env.ALL_PROXY;
+      delete process.env.all_proxy;
       delete process.env.NO_PROXY;
+      delete process.env.no_proxy;
 
       await withNoProxyForLocalhost(async () => {
         expect(process.env.NO_PROXY).toBeUndefined();
+        expect(process.env.no_proxy).toBeUndefined();
       });
     });
 
