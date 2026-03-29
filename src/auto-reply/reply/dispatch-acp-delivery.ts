@@ -79,6 +79,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
   inboundAudio: boolean;
   sessionTtsAuto?: TtsAutoMode;
   ttsChannel?: string;
+  suppressUserDelivery?: boolean;
   shouldRouteToOriginating: boolean;
   originatingChannel?: string;
   originatingTo?: string;
@@ -182,6 +183,10 @@ export function createAcpDispatchDeliveryCoordinator(params: {
 
     if (hasOutboundReplyContent(payload, { trimText: true })) {
       await startReplyLifecycleOnce();
+    }
+
+    if (params.suppressUserDelivery) {
+      return false;
     }
 
     const ttsPayload = meta?.skipTts

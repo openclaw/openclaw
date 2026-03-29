@@ -192,4 +192,33 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
 
     expect(onReplyStart).not.toHaveBeenCalled();
   });
+
+  it("keeps parent-owned background ACP child delivery silent while preserving accumulated output", async () => {
+    const dispatcher = createDispatcher();
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig(),
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        Surface: "telegram",
+        SessionKey: "agent:codex-acp:session-1",
+      }),
+      dispatcher,
+      inboundAudio: false,
+      suppressUserDelivery: true,
+      shouldRouteToOriginating: true,
+      originatingChannel: "telegram",
+      originatingTo: "telegram:123",
+    });
+
+    const blockDelivered = await coordinator.deliver("block", { text: "working on it" });
+    const finalDelivered = await coordinator.deliver("final", { text: "done" });
+    await coordinator.settleVisibleText();
+
+    expect(blockDelivered).toBe(false);
+    expect(finalDelivered).toBe(false);
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(coordinator.getAccumulatedBlockText()).toBe("working on it");
+    expect(coordinator.hasDeliveredVisibleText()).toBe(false);
+  });
 });

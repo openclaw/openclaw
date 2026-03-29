@@ -1,8 +1,12 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { BARE_SESSION_RESET_PROMPT } from "../../auto-reply/reply/session-reset-prompt.js";
+import { findTaskByRunId, resetTaskRegistryForTests } from "../../tasks/task-registry.js";
+import { withTempDir } from "../../test-helpers/temp-dir.js";
 import { agentHandlers } from "./agent.js";
 import { expectSubagentFollowupReactivation } from "./subagent-followup.test-helpers.js";
 import type { GatewayRequestContext } from "./types.js";
+
+const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
 
 const mocks = vi.hoisted(() => ({
   loadSessionEntry: vi.fn(),
@@ -302,6 +306,15 @@ async function invokeAgentIdentityGet(
 }
 
 describe("gateway agent handler", () => {
+  afterEach(() => {
+    if (ORIGINAL_STATE_DIR === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
+    }
+    resetTaskRegistryForTests();
+  });
+
   it("preserves ACP metadata from the current stored session entry", async () => {
     const existingAcpMeta = {
       backend: "acpx",
@@ -815,6 +828,30 @@ describe("gateway agent handler", () => {
     expect(callArgs.channel).toBe("telegram");
     expect(callArgs.messageChannel).toBe("webchat");
     expect(callArgs.runContext?.messageChannel).toBe("webchat");
+  });
+
+  it("tracks async gateway agent runs in the shared task registry", async () => {
+    await withTempDir({ prefix: "openclaw-gateway-agent-task-" }, async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      primeMainAgentRun();
+
+      await invokeAgent(
+        {
+          message: "background cli task",
+          sessionKey: "agent:main:main",
+          idempotencyKey: "task-registry-agent-run",
+        },
+        { reqId: "task-registry-agent-run" },
+      );
+
+      expect(findTaskByRunId("task-registry-agent-run")).toMatchObject({
+        source: "background_cli",
+        runtime: "cli",
+        childSessionKey: "agent:main:main",
+        status: "running",
+      });
+    });
   });
 
   it("handles missing cliSessionIds gracefully", async () => {

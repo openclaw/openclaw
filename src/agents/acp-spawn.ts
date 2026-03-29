@@ -26,8 +26,10 @@ import {
 import { parseDurationMs } from "../cli/parse-duration.js";
 import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { loadSessionStore, resolveStorePath, type SessionEntry } from "../config/sessions.js";
+import { resolveStorePath } from "../config/sessions/paths.js";
+import { loadSessionStore } from "../config/sessions/store.js";
 import { resolveSessionTranscriptFile } from "../config/sessions/transcript.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { callGateway } from "../gateway/call.js";
 import { areHeartbeatsEnabled } from "../infra/heartbeat-wake.js";
 import { resolveConversationIdFromTargets } from "../infra/outbound/conversation-id.js";
@@ -42,6 +44,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { createTaskRecord } from "../tasks/task-registry.js";
 import {
   deliveryContextFromSession,
   formatConversationTarget,
@@ -710,15 +713,11 @@ function resolveAcpSpawnBootstrapDeliveryPlan(params: {
   const hasDeliveryTarget = Boolean(params.requester.origin?.channel && inferredDeliveryTo);
 
   // Thread-bound session spawns always deliver inline to their bound thread.
-  // Run-mode spawns use stream-to-parent when the requester is a subagent
-  // orchestrator with an active heartbeat relay route. For all other run-mode
-  // spawns from non-subagent requester sessions, fall back to inline delivery
-  // so the result reaches the originating channel.
+  // Background run-mode spawns should stay internal and report back through
+  // the parent task lifecycle notifier instead of letting the child ACP
+  // session write raw output directly into the originating channel.
   const useInlineDelivery =
-    hasDeliveryTarget &&
-    !params.effectiveStreamToParent &&
-    (params.spawnMode === "session" ||
-      (!params.requester.isSubagentSession && !params.requestThreadBinding));
+    hasDeliveryTarget && !params.effectiveStreamToParent && params.spawnMode === "session";
 
   return {
     useInlineDelivery,
@@ -953,6 +952,29 @@ export async function spawnAcpDirect(
       });
     }
     parentRelay?.notifyStarted();
+    try {
+      createTaskRecord({
+        source: "sessions_spawn",
+        runtime: "acp",
+        requesterSessionKey: requesterInternalKey,
+        requesterOrigin: requesterState.origin,
+        childSessionKey: sessionKey,
+        runId: childRunId,
+        bindingTargetKind: "session",
+        label: params.label,
+        task: params.task,
+        status: "running",
+        deliveryStatus: requesterInternalKey.trim() ? "pending" : "parent_missing",
+        startedAt: Date.now(),
+        streamLogPath,
+      });
+    } catch (error) {
+      log.warn("Failed to create background task for ACP spawn", {
+        sessionKey,
+        runId: childRunId,
+        error,
+      });
+    }
     return {
       status: "accepted",
       childSessionKey: sessionKey,
@@ -961,6 +983,29 @@ export async function spawnAcpDirect(
       ...(streamLogPath ? { streamLogPath } : {}),
       note: spawnMode === "session" ? ACP_SPAWN_SESSION_ACCEPTED_NOTE : ACP_SPAWN_ACCEPTED_NOTE,
     };
+  }
+
+  try {
+    createTaskRecord({
+      source: "sessions_spawn",
+      runtime: "acp",
+      requesterSessionKey: requesterInternalKey,
+      requesterOrigin: requesterState.origin,
+      childSessionKey: sessionKey,
+      runId: childRunId,
+      bindingTargetKind: "session",
+      label: params.label,
+      task: params.task,
+      status: "running",
+      deliveryStatus: requesterInternalKey.trim() ? "pending" : "parent_missing",
+      startedAt: Date.now(),
+    });
+  } catch (error) {
+    log.warn("Failed to create background task for ACP spawn", {
+      sessionKey,
+      runId: childRunId,
+      error,
+    });
   }
 
   return {

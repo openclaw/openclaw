@@ -6,7 +6,8 @@ import {
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
 } from "../config/config.js";
-import * as sessionConfig from "../config/sessions.js";
+import * as sessionPaths from "../config/sessions/paths.js";
+import * as sessionStore from "../config/sessions/store.js";
 import * as sessionTranscript from "../config/sessions/transcript.js";
 import * as gatewayCall from "../gateway/call.js";
 import * as heartbeatWake from "../infra/heartbeat-wake.js";
@@ -17,6 +18,7 @@ import {
   type SessionBindingPlacement,
   type SessionBindingRecord,
 } from "../infra/outbound/session-binding-service.js";
+import { resetTaskRegistryForTests } from "../tasks/task-registry.js";
 import * as acpSpawnParentStream from "./acp-spawn-parent-stream.js";
 
 function createDefaultSpawnConfig(): OpenClawConfig {
@@ -78,8 +80,8 @@ const hoisted = vi.hoisted(() => {
 
 const callGatewaySpy = vi.spyOn(gatewayCall, "callGateway");
 const getAcpSessionManagerSpy = vi.spyOn(acpSessionManager, "getAcpSessionManager");
-const loadSessionStoreSpy = vi.spyOn(sessionConfig, "loadSessionStore");
-const resolveStorePathSpy = vi.spyOn(sessionConfig, "resolveStorePath");
+const loadSessionStoreSpy = vi.spyOn(sessionStore, "loadSessionStore");
+const resolveStorePathSpy = vi.spyOn(sessionPaths, "resolveStorePath");
 const resolveSessionTranscriptFileSpy = vi.spyOn(sessionTranscript, "resolveSessionTranscriptFile");
 const areHeartbeatsEnabledSpy = vi.spyOn(heartbeatWake, "areHeartbeatsEnabled");
 const startAcpSpawnParentStreamRelaySpy = vi.spyOn(
@@ -250,6 +252,7 @@ function enableLineCurrentConversationBindings(): void {
 describe("spawnAcpDirect", () => {
   beforeEach(() => {
     replaceSpawnConfig(createDefaultSpawnConfig());
+    resetTaskRegistryForTests();
     hoisted.areHeartbeatsEnabledMock.mockReset().mockReturnValue(true);
 
     hoisted.callGatewayMock.mockReset();
@@ -414,6 +417,7 @@ describe("spawnAcpDirect", () => {
   });
 
   afterEach(() => {
+    resetTaskRegistryForTests();
     sessionBindingServiceTesting.resetSessionBindingAdaptersForTests();
     clearRuntimeConfigSnapshot();
   });
@@ -673,15 +677,15 @@ describe("spawnAcpDirect", () => {
 
   it.each([
     {
-      name: "inlines delivery for run-mode spawns from non-subagent requester sessions",
+      name: "does not inline delivery for run-mode spawns from non-subagent requester sessions",
       ctx: createRequesterContext(),
       expectedAgentCall: {
-        deliver: true,
-        channel: "telegram",
-        to: "telegram:6098642967",
-        threadId: "1",
+        deliver: false,
+        channel: undefined,
+        to: undefined,
+        threadId: undefined,
       } satisfies AgentCallParams,
-      expectTranscriptPersistence: true,
+      expectTranscriptPersistence: false,
     },
     {
       name: "does not inline delivery for run-mode spawns from subagent requester sessions",
