@@ -9,7 +9,12 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
-import { loadTaskRegistryFromDisk, saveTaskRegistryToDisk } from "./task-registry.store.js";
+import {
+  getTaskRegistryHooks,
+  getTaskRegistryStore,
+  resetTaskRegistryRuntimeForTests,
+  type TaskRegistryHookEvent,
+} from "./task-registry.store.js";
 import type {
   TaskBindingTargetKind,
   TaskDeliveryStatus,
@@ -44,8 +49,27 @@ function cloneTaskRecord(record: TaskRecord): TaskRecord {
   };
 }
 
+function snapshotTaskRecords(source: ReadonlyMap<string, TaskRecord>): TaskRecord[] {
+  return [...source.values()].map((record) => cloneTaskRecord(record));
+}
+
+function emitTaskRegistryHookEvent(createEvent: () => TaskRegistryHookEvent): void {
+  const hooks = getTaskRegistryHooks();
+  if (!hooks?.onEvent) {
+    return;
+  }
+  try {
+    hooks.onEvent(createEvent());
+  } catch (error) {
+    log.warn("Task registry hook failed", {
+      event: "task-registry",
+      error,
+    });
+  }
+}
+
 function persistTaskRegistry() {
-  saveTaskRegistryToDisk(tasks);
+  getTaskRegistryStore().saveSnapshot(tasks);
 }
 
 function ensureDeliveryStatus(requesterSessionKey: string): TaskDeliveryStatus {
@@ -256,7 +280,7 @@ function restoreTaskRegistryOnce() {
   }
   restoreAttempted = true;
   try {
-    const restored = loadTaskRegistryFromDisk();
+    const restored = getTaskRegistryStore().loadSnapshot();
     if (restored.size === 0) {
       return;
     }
@@ -264,6 +288,10 @@ function restoreTaskRegistryOnce() {
       tasks.set(taskId, task);
     }
     rebuildRunIdIndex();
+    emitTaskRegistryHookEvent(() => ({
+      kind: "restored",
+      tasks: snapshotTaskRecords(tasks),
+    }));
   } catch (error) {
     log.warn("Failed to restore task registry", { error });
   }
@@ -285,6 +313,11 @@ function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskRecord | nu
     rebuildRunIdIndex();
   }
   persistTaskRegistry();
+  emitTaskRegistryHookEvent(() => ({
+    kind: "upserted",
+    task: cloneTaskRecord(next),
+    previous: cloneTaskRecord(current),
+  }));
   return cloneTaskRecord(next);
 }
 
@@ -718,6 +751,10 @@ export function createTaskRecord(params: {
   tasks.set(taskId, record);
   addRunIdIndex(taskId, record.runId);
   persistTaskRegistry();
+  emitTaskRegistryHookEvent(() => ({
+    kind: "upserted",
+    task: cloneTaskRecord(record),
+  }));
   return cloneTaskRecord(record);
 }
 
@@ -958,6 +995,11 @@ export function deleteTaskRecordById(taskId: string): boolean {
   tasks.delete(taskId);
   rebuildRunIdIndex();
   persistTaskRegistry();
+  emitTaskRegistryHookEvent(() => ({
+    kind: "deleted",
+    taskId: current.taskId,
+    previous: cloneTaskRecord(current),
+  }));
   return true;
 }
 
@@ -965,6 +1007,7 @@ export function resetTaskRegistryForTests(opts?: { persist?: boolean }) {
   tasks.clear();
   taskIdsByRunId.clear();
   restoreAttempted = false;
+  resetTaskRegistryRuntimeForTests();
   if (listenerStop) {
     listenerStop();
     listenerStop = null;
