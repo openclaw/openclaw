@@ -74,4 +74,52 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
       model: undefined,
     });
   });
+
+  it("applies compaction.model override with provider/model format", () => {
+    const result = buildEmbeddedCompactionRuntimeContext({
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+      config: {
+        agents: { defaults: { compaction: { model: "anthropic/claude-opus-4-6" } } },
+      } as OpenClawConfig,
+      provider: "ollama",
+      modelId: "minimax-m2.7:cloud",
+      authProfileId: "ollama:default",
+    });
+    expect(result.provider).toBe("anthropic");
+    expect(result.model).toBe("claude-opus-4-6");
+    // Auth profile dropped because provider changed
+    expect(result.authProfileId).toBeUndefined();
+  });
+
+  it("applies compaction.model override with model-only format", () => {
+    const result = buildEmbeddedCompactionRuntimeContext({
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+      config: {
+        agents: { defaults: { compaction: { model: "gpt-4o" } } },
+      } as OpenClawConfig,
+      provider: "openai",
+      modelId: "gpt-3.5-turbo",
+      authProfileId: "openai:p1",
+    });
+    expect(result.provider).toBe("openai");
+    expect(result.model).toBe("gpt-4o");
+    // Auth profile preserved because provider didn't change
+    expect(result.authProfileId).toBe("openai:p1");
+  });
+
+  it("uses session model when no compaction.model override configured", () => {
+    const result = buildEmbeddedCompactionRuntimeContext({
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+      config: {} as OpenClawConfig,
+      provider: "ollama",
+      modelId: "minimax-m2.7:cloud",
+      authProfileId: "ollama:default",
+    });
+    expect(result.provider).toBe("ollama");
+    expect(result.model).toBe("minimax-m2.7:cloud");
+    expect(result.authProfileId).toBe("ollama:default");
+  });
 });
