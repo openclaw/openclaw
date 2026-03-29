@@ -21,6 +21,7 @@ vi.mock("../config/plugin-auto-enable.js", () => ({
 
 let resolvePluginTools: typeof import("./tools.js").resolvePluginTools;
 let resetPluginRuntimeStateForTest: typeof import("./runtime.js").resetPluginRuntimeStateForTest;
+let setActivePluginRegistry: typeof import("./runtime.js").setActivePluginRegistry;
 
 function makeTool(name: string) {
   return {
@@ -204,7 +205,7 @@ describe("resolvePluginTools optional tools", () => {
       config,
       changes: [],
     }));
-    ({ resetPluginRuntimeStateForTest } = await import("./runtime.js"));
+    ({ resetPluginRuntimeStateForTest, setActivePluginRegistry } = await import("./runtime.js"));
     resetPluginRuntimeStateForTest();
     ({ resolvePluginTools } = await import("./tools.js"));
   });
@@ -344,5 +345,40 @@ describe("resolvePluginTools optional tools", () => {
 
     expectResolvedToolNames(tools, ["optional_tool"]);
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+  });
+
+  it("reuses the active registry for gateway-bindable tool loads before reloading", () => {
+    const activeRegistry = createOptionalDemoActiveRegistry();
+    setActivePluginRegistry(activeRegistry as never, "gateway-startup");
+    resolveRuntimePluginRegistryMock.mockReturnValue(undefined);
+
+    const tools = resolvePluginTools(
+      createResolveToolsParams({
+        toolAllowlist: ["optional_tool"],
+        allowGatewaySubagentBinding: true,
+      }),
+    );
+
+    expectResolvedToolNames(tools, ["optional_tool"]);
+    expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+  });
+
+  it("loads plugin tools when gateway-bindable tool loads have no active registry", () => {
+    setOptionalDemoRegistry();
+
+    const tools = resolvePluginTools(
+      createResolveToolsParams({
+        toolAllowlist: ["optional_tool"],
+        allowGatewaySubagentBinding: true,
+      }),
+    );
+
+    expectResolvedToolNames(tools, ["optional_tool"]);
+    expectLoaderCall({
+      runtimeOptions: {
+        allowGatewaySubagentBinding: true,
+      },
+    });
   });
 });

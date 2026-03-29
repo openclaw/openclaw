@@ -157,7 +157,6 @@ export const __testing = {
   resolvePluginRuntimeModulePath,
   shouldPreferNativeJiti,
   getCompatibleActivePluginRegistry,
-  isGatewayScopedLoad,
   resolvePluginLoadCacheContext,
   get maxPluginRegistryCacheEntries() {
     return pluginRegistryCacheEntryCap;
@@ -306,22 +305,6 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
   };
 }
 
-/**
- * Returns true when the load options include gateway-specific fields that
- * restrict or reshape the plugin set (onlyPluginIds, coreGatewayHandlers,
- * includeSetupOnlyChannelPlugins, preferSetupRuntimeForChannelPlugins).
- * When these are absent the caller wants the full plugin set and the active
- * gateway registry is a safe superset.
- */
-function isGatewayScopedLoad(options: PluginLoadOptions): boolean {
-  return Boolean(
-    options.onlyPluginIds?.length ||
-    options.coreGatewayHandlers ||
-    options.includeSetupOnlyChannelPlugins ||
-    options.preferSetupRuntimeForChannelPlugins,
-  );
-}
-
 function getCompatibleActivePluginRegistry(
   options: PluginLoadOptions = {},
 ): PluginRegistry | undefined {
@@ -347,41 +330,7 @@ export function resolveRuntimePluginRegistry(
   if (!options || !hasExplicitCompatibilityInputs(options)) {
     return getCompatibleActivePluginRegistry();
   }
-  const compatible = getCompatibleActivePluginRegistry(options);
-  if (compatible) {
-    return compatible;
-  }
-  // When the caller does not restrict the plugin set with gateway-specific
-  // fields (onlyPluginIds, coreGatewayHandlers, etc.), the active registry
-  // set during gateway startup is a safe superset of what the caller needs.
-  // Reuse it to avoid a redundant load that may miss already-activated
-  // plugin state (tool registrations, hooks, memory providers).
-  //
-  // Safety: this fallback fires when cache keys differ but the caller is not
-  // gateway-scoped. In the single-gateway-per-process model, sub-agent callers
-  // (tools.ts, memory-runtime.ts, channel-resolution.ts) share the same
-  // workspaceDir, config, and env as the gateway — the only fields that produce
-  // a different cache key are the gateway-specific ones that isGatewayScopedLoad
-  // already guards against.
-  //
-  // The gateway loads plugins via resolveGatewayStartupPluginIds which scopes
-  // to configured channels, referenced providers, and explicitly enabled plugins.
-  // Bundled plugins outside that set are intentionally inactive in this process —
-  // they have no registered tools, hooks, or providers. A fresh loadOpenClawPlugins
-  // call without onlyPluginIds would create a registry containing those unactivated
-  // plugins AND replace the gateway's fully-initialized one, which is strictly worse.
-  //
-  // If a future multi-workspace model is introduced, this fallback should be
-  // narrowed to also verify workspaceDir/config parity.
-  if (!isGatewayScopedLoad(options)) {
-    const active = getActivePluginRegistry();
-    if (active) {
-      defaultLogger().debug("resolve-registry: returning active via non-gateway-scoped fallback");
-      return active;
-    }
-  }
-  defaultLogger().debug("resolve-registry: triggering fresh load");
-  return loadOpenClawPlugins(options);
+  return getCompatibleActivePluginRegistry(options) ?? loadOpenClawPlugins(options);
 }
 
 function validatePluginConfig(params: {
