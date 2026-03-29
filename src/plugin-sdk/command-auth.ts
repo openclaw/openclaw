@@ -1,4 +1,16 @@
+import { resolveAgentConfig, resolveSessionAgentId } from "../agents/agent-scope.js";
+import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
+import { buildStatusReply } from "../auto-reply/reply/commands-status.js";
+import type { CommandContext } from "../auto-reply/reply/commands-types.js";
+import type {
+  ElevatedLevel,
+  ReasoningLevel,
+  ThinkLevel,
+  VerboseLevel,
+} from "../auto-reply/thinking.js";
+import type { ReplyPayload } from "../auto-reply/types.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { loadSessionEntry } from "../gateway/session-utils.js";
 import { resolveDmGroupAccessWithLists } from "../security/dm-policy-shared.js";
 export {
   createPreCryptoDirectDmAuthorizer,
@@ -71,6 +83,7 @@ export {
   resolveSkillCommandInvocation,
 } from "../auto-reply/skill-commands.js";
 export type { SkillCommandSpec } from "../agents/skills.js";
+export type { CommandContext } from "../auto-reply/reply/commands-types.js";
 export { buildCommandsPaginationKeyboard } from "../auto-reply/reply/commands-info.js";
 export {
   buildModelsProviderData,
@@ -85,6 +98,54 @@ export {
   buildCommandsMessagePaginated,
   buildHelpMessage,
 } from "../auto-reply/status.js";
+
+export async function resolveDirectStatusReplyForSession(params: {
+  cfg: OpenClawConfig;
+  command: CommandContext;
+  sessionKey: string;
+  isGroup: boolean;
+  defaultGroupActivation: () => "always" | "mention";
+}): Promise<ReplyPayload | undefined> {
+  const statusTargetSessionKey = params.sessionKey.trim();
+  if (!statusTargetSessionKey) {
+    return undefined;
+  }
+  const statusLoaded = loadSessionEntry(statusTargetSessionKey);
+  const statusCfg = statusLoaded.cfg ?? params.cfg;
+  const statusEntry = statusLoaded.entry;
+  const statusAgentId = resolveSessionAgentId({
+    sessionKey: statusTargetSessionKey,
+    config: statusCfg,
+  });
+  const statusModel = resolveDefaultModelForAgent({
+    cfg: statusCfg,
+    agentId: statusAgentId,
+  });
+  return await buildStatusReply({
+    cfg: statusCfg,
+    command: params.command,
+    sessionEntry: statusEntry,
+    sessionKey: statusTargetSessionKey,
+    parentSessionKey: statusEntry?.parentSessionKey,
+    sessionScope: undefined,
+    storePath: statusLoaded.storePath,
+    provider:
+      statusEntry?.providerOverride?.trim() ||
+      statusEntry?.modelProvider?.trim() ||
+      statusModel.provider,
+    model: statusEntry?.modelOverride?.trim() || statusEntry?.model?.trim() || statusModel.model,
+    contextTokens: statusEntry?.contextTokens ?? 0,
+    resolvedThinkLevel: statusEntry?.thinkingLevel as ThinkLevel | undefined,
+    resolvedFastMode: statusEntry?.fastMode,
+    resolvedVerboseLevel: (statusEntry?.verboseLevel as VerboseLevel | undefined) ?? "off",
+    resolvedReasoningLevel: (statusEntry?.reasoningLevel as ReasoningLevel | undefined) ?? "off",
+    resolvedElevatedLevel: statusEntry?.elevatedLevel as ElevatedLevel | undefined,
+    resolveDefaultThinkingLevel: async () =>
+      resolveAgentConfig(statusCfg, statusAgentId)?.thinkingDefault,
+    isGroup: params.isGroup,
+    defaultGroupActivation: params.defaultGroupActivation,
+  });
+}
 
 export type ResolveSenderCommandAuthorizationParams = {
   cfg: OpenClawConfig;

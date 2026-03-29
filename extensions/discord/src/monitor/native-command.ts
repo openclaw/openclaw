@@ -15,7 +15,9 @@ import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import {
   resolveCommandAuthorizedFromAuthorizers,
+  resolveDirectStatusReplyForSession,
   resolveNativeCommandSessionTargets,
+  type CommandContext,
 } from "openclaw/plugin-sdk/command-auth";
 import {
   buildCommandTextFromArgs,
@@ -1015,6 +1017,51 @@ async function dispatchDiscordCommandInteraction(params: {
     targetSessionKey: effectiveRoute.sessionKey,
     boundSessionKey,
   });
+  if (!suppressReplies && (command.nativeName ?? command.key) === "status") {
+    const statusTargetSessionKey = commandTargetSessionKey?.trim() || sessionKey;
+    const statusCommand: CommandContext = {
+      surface: "discord",
+      channel: "discord",
+      channelId,
+      ownerList: [],
+      senderIsOwner: commandAuthorized,
+      isAuthorizedSender: commandAuthorized,
+      senderId: sender.id,
+      abortKey: statusTargetSessionKey,
+      rawBodyNormalized: prompt,
+      commandBodyNormalized: prompt,
+      from: isDirectMessage
+        ? `discord:${user.id}`
+        : isGroupDm
+          ? `discord:group:${channelId}`
+          : `discord:channel:${channelId}`,
+      to: `slash:${user.id}`,
+    };
+    const statusReply = await resolveDirectStatusReplyForSession({
+      cfg,
+      command: statusCommand,
+      sessionKey: statusTargetSessionKey,
+      isGroup: isGuild || isGroupDm,
+      defaultGroupActivation: () => (!isDirectMessage && !isGroupDm ? "mention" : "always"),
+    });
+    if (statusReply && hasRenderableReplyPayload(statusReply)) {
+      await deliverDiscordInteractionReply({
+        interaction,
+        payload: statusReply,
+        textLimit: resolveTextChunkLimit(cfg, "discord", accountId, {
+          fallbackLimit: 2000,
+        }),
+        maxLinesPerMessage: resolveDiscordMaxLinesPerMessage({
+          cfg,
+          discordConfig,
+          accountId,
+        }),
+        preferFollowUp,
+        chunkMode: resolveChunkMode(cfg, "discord", accountId),
+      });
+      return;
+    }
+  }
   const ctxPayload = buildDiscordNativeCommandContext({
     prompt,
     commandArgs: commandArgs ?? {},
