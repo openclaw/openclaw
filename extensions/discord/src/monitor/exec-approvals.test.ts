@@ -757,7 +757,7 @@ describe("DiscordExecApprovalHandler plugin approvals", () => {
     const handler = createHandler({ enabled: true, approvers: ["123"] });
     mockSuccessfulDmDelivery({
       noteChannelId: "999888777",
-      expectedNoteText: "I sent the allowed approvers DMs",
+      expectedNoteText: "I sent approval DMs to the approvers for this account",
       throwOnUnexpectedRoute: true,
     });
 
@@ -1237,7 +1237,7 @@ describe("DiscordExecApprovalHandler delivery routing", () => {
 
     mockSuccessfulDmDelivery({
       noteChannelId: "999888777",
-      expectedNoteText: "I sent the allowed approvers DMs",
+      expectedNoteText: "I sent approval DMs to the approvers for this account",
       throwOnUnexpectedRoute: true,
     });
 
@@ -1247,7 +1247,7 @@ describe("DiscordExecApprovalHandler delivery routing", () => {
       Routes.channelMessages("999888777"),
       expect.objectContaining({
         body: expect.objectContaining({
-          content: expect.stringContaining("I sent the allowed approvers DMs"),
+          content: expect.stringContaining("I sent approval DMs to the approvers for this account"),
         }),
       }),
     );
