@@ -439,7 +439,8 @@ function resolveConfigBackedProviderAuth(params: { provider: string; config?: Op
     }) ?? resolveXaiConfigFallbackAuth(params);
   const apiKey = synthetic?.apiKey?.trim();
   if (!apiKey) {
-    if (shouldTraceProviderAuth(params.provider)) {
+    const hasProviderConfig = !!params.config?.models?.providers?.[params.provider];
+    if (hasProviderConfig && shouldTraceProviderAuth(params.provider)) {
       log.info("[xai-auth] bootstrap config fallback: no config-backed key found");
     }
     return undefined;
