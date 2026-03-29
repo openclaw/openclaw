@@ -150,6 +150,27 @@ describe("sessions view", () => {
     expect(secondary?.textContent?.trim()).toBe("agent:main:cron:abc-123");
   });
 
+  it("matches filter query against resolved session display title", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(
+          buildResult({
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: Date.now(),
+          }),
+        ),
+        searchQuery: "main session",
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const link = container.querySelector(".session-link") as HTMLAnchorElement | null;
+    expect(link?.textContent?.trim()).toBe("Main Session");
+  });
+
   it("deselects only the current page from the header checkbox", async () => {
     const onSelectPage = vi.fn();
     const onDeselectPage = vi.fn();
