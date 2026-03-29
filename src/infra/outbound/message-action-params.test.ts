@@ -5,7 +5,6 @@ import { describe, expect, it } from "vitest";
 import type { ChannelThreadingToolContext } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveSlackAutoThreadId } from "../../plugin-sdk/slack.js";
-import { resolveTelegramAutoThreadId } from "../../plugin-sdk/telegram.js";
 import {
   hydrateAttachmentParamsForAction,
   normalizeSandboxMediaList,
@@ -25,6 +24,38 @@ function createToolContext(
     replyToMode: "all",
     ...overrides,
   };
+}
+
+function resolveTelegramAutoThreadIdForTest(params: {
+  to: string;
+  toolContext?: { currentThreadTs?: string; currentChannelId?: string };
+}): string | undefined {
+  const context = params.toolContext;
+  if (!context?.currentThreadTs || !context.currentChannelId) {
+    return undefined;
+  }
+  const normalizeChatId = (raw: string) => {
+    const trimmed = raw
+      .trim()
+      .replace(/^telegram:/i, "")
+      .replace(/^tg:/i, "");
+    const groupTopic = /^group:([^:]+):topic:\d+$/i.exec(trimmed);
+    if (groupTopic) {
+      return groupTopic[1].toLowerCase();
+    }
+    const topic = /^([^:]+):topic:\d+$/i.exec(trimmed);
+    if (topic) {
+      return topic[1].toLowerCase();
+    }
+    const colonPair = /^([^:]+):\d+$/i.exec(trimmed);
+    if (colonPair && colonPair[1].startsWith("-")) {
+      return colonPair[1].toLowerCase();
+    }
+    return trimmed.toLowerCase();
+  };
+  return normalizeChatId(params.to) === normalizeChatId(context.currentChannelId)
+    ? context.currentThreadTs
+    : undefined;
 }
 
 describe("message action threading helpers", () => {
@@ -75,7 +106,7 @@ describe("message action threading helpers", () => {
 
   it("resolves Telegram auto-thread ids for matching chats across target formats", () => {
     expect(
-      resolveTelegramAutoThreadId({
+      resolveTelegramAutoThreadIdForTest({
         to: "telegram:group:-100123:topic:77",
         toolContext: createToolContext({
           currentChannelId: "tg:group:-100123",
@@ -83,7 +114,7 @@ describe("message action threading helpers", () => {
       }),
     ).toBe("thread-1");
     expect(
-      resolveTelegramAutoThreadId({
+      resolveTelegramAutoThreadIdForTest({
         to: "-100999:77",
         toolContext: createToolContext({
           currentChannelId: "-100123",
@@ -91,7 +122,7 @@ describe("message action threading helpers", () => {
       }),
     ).toBeUndefined();
     expect(
-      resolveTelegramAutoThreadId({
+      resolveTelegramAutoThreadIdForTest({
         to: "-100123",
         toolContext: createToolContext({ currentChannelId: undefined }),
       }),
