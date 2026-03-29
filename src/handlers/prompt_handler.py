@@ -2,10 +2,15 @@
 
 Contains handle_prompt() and _handle_prompt_inner() — the core
 user-message processing pipeline that routes through brigades.
+
+v15.1: Multi-turn context bridge + bare URL auto-execution.
 """
 
 import asyncio
+import re
 import time
+from collections import deque
+from typing import Deque, Dict, List, Tuple
 
 import structlog
 from aiogram.types import ForceReply, Message
@@ -14,6 +19,86 @@ from src.boot import PROMPT_COUNTER
 from src.intent_classifier import classify_intent
 
 logger = structlog.get_logger("PromptHandler")
+
+# ---------------------------------------------------------------------------
+# v15.1: Chat History Bridge — per-user multi-turn context
+# ---------------------------------------------------------------------------
+_MAX_HISTORY_TURNS = 5
+_MAX_TURN_CHARS = 400  # truncate long messages in history to save context budget
+
+# Type alias: each turn is (user_prompt, assistant_response)
+ChatHistory = Deque[Tuple[str, str]]
+
+
+def _get_chat_history(gateway, user_id: int) -> ChatHistory:
+    """Return (lazily init) per-user chat history deque."""
+    if not hasattr(gateway, "_chat_history"):
+        gateway._chat_history: Dict[int, ChatHistory] = {}
+    if user_id not in gateway._chat_history:
+        gateway._chat_history[user_id] = deque(maxlen=_MAX_HISTORY_TURNS)
+    return gateway._chat_history[user_id]
+
+
+def _build_history_prefix(history: ChatHistory) -> str:
+    """Format last N turns as a context prefix for the current prompt."""
+    if not history:
+        return ""
+    lines: List[str] = ["[CHAT HISTORY — last conversation turns]:"]
+    for user_msg, bot_resp in history:
+        u = user_msg[:_MAX_TURN_CHARS] + ("…" if len(user_msg) > _MAX_TURN_CHARS else "")
+        b = bot_resp[:_MAX_TURN_CHARS] + ("…" if len(bot_resp) > _MAX_TURN_CHARS else "")
+        lines.append(f"User: {u}")
+        lines.append(f"Assistant: {b}")
+    lines.append("")
+    lines.append("[CURRENT TASK]:")
+    return "\n".join(lines) + "\n"
+
+
+# ---------------------------------------------------------------------------
+# v15.1: Bare URL Auto-Execution — detect and inject action instructions
+# ---------------------------------------------------------------------------
+_YOUTUBE_RE = re.compile(r"(?:youtube\.com/watch|youtu\.be/|youtube\.com/shorts/)", re.I)
+_URL_ONLY_RE = re.compile(
+    r"^\s*(https?://\S+)\s*$",  # prompt is ONLY a URL (with optional whitespace)
+    re.I,
+)
+_URL_DOMINANT_RE = re.compile(
+    r"^\s*(https?://\S+)\s*(.{0,20})\s*$",  # URL + up to 20 chars (e.g. "вот" / "check this")
+    re.I,
+)
+
+_YT_AUTO_INSTRUCTION = (
+    "Проанализируй это видео. Используй инструмент youtube_parser для извлечения транскрипта, "
+    "затем предоставь подробный анализ содержания на языке пользователя."
+)
+_WEB_AUTO_INSTRUCTION = (
+    "Открой и проанализируй содержимое этой ссылки. Используй brave_web_search или fetch "
+    "для получения данных со страницы, затем предоставь краткий анализ."
+)
+
+
+def _enrich_bare_url(prompt: str) -> str:
+    """If prompt is a bare URL (or URL + trivial filler), inject an action directive.
+
+    Returns enriched prompt or the original if no injection needed.
+    """
+    # Reject prompts with multiple URLs — likely a comparison/list, not a bare link
+    if len(re.findall(r"https?://", prompt)) > 1:
+        return prompt
+    m = _URL_ONLY_RE.match(prompt) or _URL_DOMINANT_RE.match(prompt)
+    if not m:
+        return prompt
+    url = m.group(1)
+    if _YOUTUBE_RE.search(url):
+        enriched = f"{_YT_AUTO_INSTRUCTION}\n\nURL: {url}"
+    else:
+        enriched = f"{_WEB_AUTO_INSTRUCTION}\n\nURL: {url}"
+    logger.info(
+        "v15.1 bare URL auto-execution injected",
+        url=url[:120],
+        is_youtube=bool(_YOUTUBE_RE.search(url)),
+    )
+    return enriched
 
 
 async def handle_prompt(gateway, message: Message):
@@ -96,6 +181,9 @@ async def _handle_prompt_inner(gateway, message: Message, prompt: str):
         if hasattr(gateway, 'memory_gc'):
             gateway.memory_gc._persistent_summary = ""
             gateway.memory_gc._compression_count = 0
+        # v15.1: also clear chat history on session reset
+        if hasattr(gateway, '_chat_history'):
+            gateway._chat_history.clear()
         logger.info("Session context auto-reset triggered", limit=reset_limit)
         await message.reply(
             f"🔄 **Внимание:** Достигнут лимит сессии ({reset_limit} сообщений). "
@@ -106,6 +194,31 @@ async def _handle_prompt_inner(gateway, message: Message, prompt: str):
     # 1. Intent Classification
     if not is_reply:
         brigade = await classify_intent(gateway, prompt)
+
+    # -------------------------------------------------------------------
+    # v15.1: Bare URL auto-execution — inject action directive BEFORE
+    # intent routing so the enriched prompt flows through the full pipeline.
+    # Must happen after intent classification (brigade already selected).
+    # -------------------------------------------------------------------
+    prompt = _enrich_bare_url(prompt)
+
+    # -------------------------------------------------------------------
+    # v15.1: Multi-turn context bridge — prepend chat history so the LLM
+    # sees previous conversation turns. Skipped for ask_user replies
+    # (they already carry context from the original prompt).
+    # -------------------------------------------------------------------
+    user_id = message.from_user.id
+    if not is_reply:
+        history = _get_chat_history(gateway, user_id)
+        history_prefix = _build_history_prefix(history)
+        if history_prefix:
+            prompt = history_prefix + prompt
+            logger.info(
+                "v15.1 chat history injected",
+                user_id=user_id,
+                turns=len(history),
+                prefix_len=len(history_prefix),
+            )
 
     # 2. Execute Pipeline (Chain-of-Agents) or Fast Path
     is_fast_path = (brigade == "General")
@@ -237,6 +350,15 @@ async def _handle_prompt_inner(gateway, message: Message, prompt: str):
         llm_response += "\n\n⚠️ _Внимание: обнаружен высокий риск галлюцинации. Проверьте факты._"
         logger.warning("Hallucination risk HIGH", flags=hall_result.flags,
                        suspicious=hall_result.suspicious_claims[:3])
+
+    # -------------------------------------------------------------------
+    # v15.1: Record turn in chat history for multi-turn context bridge.
+    # Store the ORIGINAL user message (before history prefix injection)
+    # paired with the final LLM response.
+    # -------------------------------------------------------------------
+    _original_user_msg = message.text or ""
+    _hist = _get_chat_history(gateway, message.from_user.id)
+    _hist.append((_original_user_msg, llm_response[:_MAX_TURN_CHARS]))
 
     # Record pipeline history
     gateway._pipeline_history.append({
