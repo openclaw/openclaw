@@ -463,23 +463,57 @@ describe("validateAnthropicTurns strips dangling tool_use blocks", () => {
     ]);
   });
 
-  it("should not modify messages when next is not user", () => {
+  it("should not modify messages when next is a non-user message", () => {
     const msgs = asMessages([
       { role: "user", content: [{ type: "text", text: "Use tool" }] },
       {
         role: "assistant",
         content: [{ type: "toolUse", id: "tool-1", name: "test", input: {} }],
       },
-      // Next is assistant, not user - should not strip
+      // Next is assistant, not user - keep as-is because the assistant turn is not terminal.
       { role: "assistant", content: [{ type: "text", text: "Continue" }] },
     ]);
 
     const result = validateAnthropicTurns(msgs);
 
     expect(result).toHaveLength(3);
-    // Original tool_use should be preserved
     const assistantContent = (result[1] as { content?: unknown[] }).content;
     expect(assistantContent).toEqual([{ type: "toolUse", id: "tool-1", name: "test", input: {} }]);
+  });
+
+  it("strips dangling tool_use blocks from a terminal assistant message", () => {
+    const msgs = asMessages([
+      { role: "user", content: [{ type: "text", text: "Use tool" }] },
+      {
+        role: "assistant",
+        content: [
+          { type: "toolUse", id: "tool-1", name: "test", input: {} },
+          { type: "text", text: "I'll check that" },
+        ],
+      },
+    ]);
+
+    const result = validateAnthropicTurns(msgs);
+
+    expect(result).toHaveLength(2);
+    const assistantContent = (result[1] as { content?: unknown[] }).content;
+    expect(assistantContent).toEqual([{ type: "text", text: "I'll check that" }]);
+  });
+
+  it("inserts fallback text when terminal assistant content is only dangling tool_use", () => {
+    const msgs = asMessages([
+      { role: "user", content: [{ type: "text", text: "Use tool" }] },
+      {
+        role: "assistant",
+        content: [{ type: "toolUse", id: "tool-1", name: "test", input: {} }],
+      },
+    ]);
+
+    const result = validateAnthropicTurns(msgs);
+
+    expect(result).toHaveLength(2);
+    const assistantContent = (result[1] as { content?: unknown[] }).content;
+    expect(assistantContent).toEqual([{ type: "text", text: "[tool calls omitted]" }]);
   });
 
   it("is replay-safe across repeated validation passes", () => {

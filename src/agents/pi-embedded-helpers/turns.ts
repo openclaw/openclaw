@@ -40,14 +40,18 @@ function stripDanglingAnthropicToolUses(messages: AgentMessage[]): AgentMessage[
         ? ((nextMsg as { role?: unknown }).role as string | undefined)
         : undefined;
 
-    // If next message is not user, keep the assistant message as-is
+    // If there is no following user message, any tool_use blocks in this final
+    // assistant turn are necessarily dangling and must be stripped before replaying
+    // the transcript back to Anthropic.
     if (nextMsgRole !== "user") {
-      result.push(msg);
-      continue;
+      if (nextMsgRole !== undefined) {
+        result.push(msg);
+        continue;
+      }
     }
 
     // Collect tool_use_ids from the next user message's tool_result blocks
-    const nextUserMsg = nextMsg as {
+    const nextUserMsg = (nextMsg ?? {}) as {
       content?: AnthropicContentBlock[];
     };
     const validToolUseIds = new Set<string>();
