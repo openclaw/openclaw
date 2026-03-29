@@ -140,3 +140,12 @@ changelog/fragments/
 
 # Local scratch workspace
 .tmp/
+.openclaw/workspace-state.json
+
+# Personal files (never commit)
+HEARTBEAT.md
+SOUL.md
+TOOLS.md
+IDENTITY.md
+USER.md
+
