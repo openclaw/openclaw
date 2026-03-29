@@ -1,6 +1,7 @@
 node_modules
 **/node_modules/
 .env
+fly.private.toml
 docker-compose.extra.yml
 dist
 pnpm-lock.yaml

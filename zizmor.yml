@@ -2,16 +2,23 @@
 # https://docs.zizmor.sh/configuration/
 
 rules:
-  # Disable unpinned-uses - pinning to SHA hashes is a significant change
-  # that should be done deliberately, not enforced by pre-commit
+  # unpinned-uses: catch third-party (non GitHub-owned) actions using floating
+  # tags. GitHub-owned actions (actions/*, github/*) are lower risk.
+  # TODO: progressively pin all actions to SHA digests.
   unpinned-uses:
-    disable: true
+    ignore:
+      - "actions/*"
+      - "github/*"
+      - "gradle/*"
+      - "android-actions/*"
 
-  # Disable excessive-permissions for now - adding explicit permissions
-  # blocks requires careful review of each workflow's needs
+  # excessive-permissions: warn on workflows that request write permissions
+  # without explicit need. Read-only workflows should declare permissions: {}
+  # or permissions: read-all.
   excessive-permissions:
-    disable: true
+    disable: false
 
-  # Disable artipacked (persist-credentials) - low confidence finding
+  # artipacked: re-enable but at high confidence only — low-confidence
+  # persist-credentials findings are too noisy on this repo.
   artipacked:
-    disable: true
+    disable: false
