@@ -77,7 +77,8 @@ function shouldApplyOpenAIAttributionHeaders(model: {
   return undefined;
 }
 
-function shouldForceResponsesStore(model: {
+/** @internal Exported for testing. */
+export function shouldForceResponsesStore(model: {
   api?: unknown;
   provider?: unknown;
   baseUrl?: unknown;
@@ -94,6 +95,12 @@ function shouldForceResponsesStore(model: {
   }
   if (!OPENAI_RESPONSES_PROVIDERS.has(model.provider)) {
     return false;
+  }
+  // Allow explicit opt-in for proxy setups (e.g. security proxies like Aegis
+  // that forward to OpenAI). When compat.supportsStore is explicitly true,
+  // force store=true even for non-direct URLs.
+  if (model.compat?.supportsStore === true) {
+    return true;
   }
   return isDirectOpenAIBaseUrl(model.baseUrl);
 }
@@ -138,7 +145,13 @@ function shouldEnableOpenAIResponsesServerCompaction(
   if (configured === true) {
     return true;
   }
-  return model.provider === "openai";
+  // supportsStore opt-in should NOT implicitly enable compaction defaults.
+  // Proxies that accept store may not support context_management fields.
+  // Only default to compaction for direct OpenAI URLs.
+  if (model.provider === "openai" && isDirectOpenAIBaseUrl(model.baseUrl)) {
+    return true;
+  }
+  return false;
 }
 
 function shouldStripResponsesStore(
