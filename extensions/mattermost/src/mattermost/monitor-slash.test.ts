@@ -10,15 +10,19 @@ const resolveCallbackUrl = vi.hoisted(() => vi.fn());
 const resolveSlashCommandConfig = vi.hoisted(() => vi.fn());
 const activateSlashCommands = vi.hoisted(() => vi.fn());
 
-vi.mock("../runtime-api.js", () => ({
+vi.mock("./runtime-api.js", () => ({
   listSkillCommandsForAgents,
   parseStrictPositiveInteger,
 }));
 
-vi.mock("./client.js", () => ({
-  fetchMattermostUserTeams,
-  normalizeMattermostBaseUrl,
-}));
+vi.mock("./client.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./client.js")>();
+  return {
+    ...actual,
+    fetchMattermostUserTeams,
+    normalizeMattermostBaseUrl,
+  };
+});
 
 vi.mock("./slash-commands.js", () => ({
   DEFAULT_COMMAND_SPECS: [

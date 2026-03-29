@@ -6,17 +6,13 @@ const resolveAllowlistMatchSimple = vi.hoisted(() => vi.fn());
 const resolveControlCommandGate = vi.hoisted(() => vi.fn());
 const resolveEffectiveAllowFromLists = vi.hoisted(() => vi.fn());
 
-vi.mock("./runtime-api.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./runtime-api.js")>();
-  return {
-    ...actual,
-    evaluateSenderGroupAccessForPolicy,
-    isDangerousNameMatchingEnabled,
-    resolveAllowlistMatchSimple,
-    resolveControlCommandGate,
-    resolveEffectiveAllowFromLists,
-  };
-});
+vi.mock("./runtime-api.js", () => ({
+  evaluateSenderGroupAccessForPolicy,
+  isDangerousNameMatchingEnabled,
+  resolveAllowlistMatchSimple,
+  resolveControlCommandGate,
+  resolveEffectiveAllowFromLists,
+}));
 
 describe("mattermost monitor auth", () => {
   beforeEach(() => {
