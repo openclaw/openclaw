@@ -17,7 +17,7 @@ export function createRuntimeSystem(): PluginRuntime["system"] {
         reason,
         agentId,
         sessionKey,
-        heartbeat: heartbeat ? { target: heartbeat.target } : undefined,
+        heartbeat: heartbeat ? { target: heartbeat.target, model: heartbeat.model } : undefined,
       });
     },
     runCommandWithTimeout,
