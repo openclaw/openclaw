@@ -1081,6 +1081,17 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       record.error = enableState.reason;
       registry.plugins.push(record);
       seenIds.set(pluginId, candidate.origin);
+      if (
+        enableState.reason === "not in allowlist" &&
+        cfg &&
+        manifestRecord.channels.length > 0 &&
+        manifestRecord.channels.some((channelId) => isChannelConfigured(cfg, channelId))
+      ) {
+        logger.warn(
+          `[plugins] ${pluginId}: channel plugin is disabled because it is not in plugins.allow — ` +
+            `add "${pluginId}" to plugins.allow to enable the ${manifestRecord.channels.join("/")} channel`,
+        );
+      }
       continue;
     }
     if (!enableState.enabled) {
