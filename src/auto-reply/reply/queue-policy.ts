@@ -7,8 +7,12 @@ export function resolveActiveRunQueueAction(params: {
   isHeartbeat: boolean;
   shouldFollowup: boolean;
   queueMode: QueueSettings["mode"];
+  forceRunNowWhenActive?: boolean;
 }): ActiveRunQueueAction {
   if (!params.isActive) {
+    return "run-now";
+  }
+  if (params.forceRunNowWhenActive) {
     return "run-now";
   }
   if (params.isHeartbeat) {

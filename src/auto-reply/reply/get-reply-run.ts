@@ -7,6 +7,7 @@ import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
+  resolveSessionTranscriptPath,
 } from "../../config/sessions/paths.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { logVerbose } from "../../globals.js";
@@ -57,6 +58,12 @@ let sessionStoreRuntimePromise: Promise<
   typeof import("../../config/sessions/store.runtime.js")
 > | null = null;
 
+const FAST_LANE_MAX_PROMPT_CHARS = 80;
+const FAST_LANE_QUICK_MESSAGE_PATTERN =
+  /^(?:yes|no|ok|okay|sure|thanks|thx|got it|cancel|stop|never mind|nevermind|what time is it\??)$/i;
+const FAST_LANE_SYSTEM_PROMPT =
+  "Fast-lane turn: keep response concise and do not call tools unless absolutely required.";
+
 function loadPiEmbeddedRuntime() {
   piEmbeddedRuntimePromise ??= import("../../agents/pi-embedded.runtime.js");
   return piEmbeddedRuntimePromise;
@@ -80,6 +87,20 @@ function loadSessionUpdatesRuntime() {
 function loadSessionStoreRuntime() {
   sessionStoreRuntimePromise ??= import("../../config/sessions/store.runtime.js");
   return sessionStoreRuntimePromise;
+}
+
+function isFastLaneCandidateMessage(text: string, cfg: OpenClawConfig): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return false;
+  }
+  if (trimmed.length > FAST_LANE_MAX_PROMPT_CHARS || trimmed.includes("\n")) {
+    return false;
+  }
+  if (hasControlCommand(trimmed, cfg)) {
+    return false;
+  }
+  return FAST_LANE_QUICK_MESSAGE_PATTERN.test(trimmed);
 }
 
 function buildResetSessionNoticeText(params: {
@@ -518,7 +539,7 @@ export async function runPreparedReply(
     isNewSession,
   });
   const authProfileIdSource = sessionEntry?.authProfileOverrideSource;
-  const followupRun = {
+  let followupRun = {
     prompt: queuedBody,
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
     summaryLine: baseBodyTrimmedRaw,
@@ -583,6 +604,34 @@ export async function runPreparedReply(
       ...(isReasoningTagProvider(provider) ? { enforceFinalTag: true } : {}),
     },
   };
+  const shouldUseFastLane =
+    isActive &&
+    shouldFollowup &&
+    !isStreaming &&
+    isFastLaneCandidateMessage(baseBodyTrimmedRaw, cfg);
+  let forceRunNowWhenActive = false;
+  if (shouldUseFastLane) {
+    const transientSessionId = `fastlane-${crypto.randomUUID()}`;
+    const transientSessionFile = resolveSessionTranscriptPath(
+      transientSessionId,
+      agentId,
+      ctx.MessageThreadId,
+    );
+    followupRun = {
+      ...followupRun,
+      run: {
+        ...followupRun.run,
+        sessionId: transientSessionId,
+        // Empty key forces embedded runner laneing to fall back to transient sessionId.
+        sessionKey: "",
+        sessionFile: transientSessionFile,
+        extraSystemPrompt: [followupRun.run.extraSystemPrompt, FAST_LANE_SYSTEM_PROMPT]
+          .filter(Boolean)
+          .join("\n\n"),
+      },
+    };
+    forceRunNowWhenActive = true;
+  }
 
   const { runReplyAgent } = await loadAgentRunnerRuntime();
   return runReplyAgent({
@@ -593,6 +642,7 @@ export async function runPreparedReply(
     shouldSteer,
     shouldFollowup,
     isActive,
+    forceRunNowWhenActive,
     isRunActive: () => isEmbeddedPiRunActive(sessionIdFinal),
     isStreaming,
     opts,
