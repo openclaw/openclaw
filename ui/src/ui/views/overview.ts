@@ -225,7 +225,7 @@ export function renderOverview(props: OverviewProps) {
                     <input
                       type=${props.showGatewayToken ? "text" : "password"}
                       autocomplete="off"
-                      style="flex: 1 1 0%; min-width: 0; width: 100%; box-sizing: border-box;"
+                      style="flex: 1 1 0%; min-width: 0; box-sizing: border-box;"
                       .value=${props.settings.token}
                       @input=${(e: Event) => {
                         const v = (e.target as HTMLInputElement).value;
