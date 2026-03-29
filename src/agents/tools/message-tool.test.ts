@@ -107,6 +107,10 @@ function getActionEnum(properties: Record<string, unknown>) {
   return (properties.action as { enum?: string[] } | undefined)?.enum ?? [];
 }
 
+function getToolRequired(tool: ReturnType<CreateMessageTool>) {
+  return (tool.parameters as { required?: string[] }).required ?? [];
+}
+
 beforeAll(async () => {
   ({ setActivePluginRegistry } = await import("../../plugins/runtime.js"));
   ({ createTestRegistry } = await import("../../test-utils/channel-plugins.js"));
@@ -431,6 +435,7 @@ describe("message tool schema scoping", () => {
       });
       const properties = getToolProperties(tool);
       const actionEnum = getActionEnum(properties);
+      const required = getToolRequired(tool);
 
       if (expectComponents) {
         expect(properties.components).toBeDefined();
@@ -456,6 +461,9 @@ describe("message tool schema scoping", () => {
           )?.items?.items?.properties ?? {};
         expect(buttonItemProps.style).toBeDefined();
       }
+      expect(required).not.toContain("buttons");
+      expect(required).not.toContain("components");
+      expect(required).not.toContain("blocks");
       for (const action of expectedActions) {
         expect(actionEnum).toContain(action);
       }

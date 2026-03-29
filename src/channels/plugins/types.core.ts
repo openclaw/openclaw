@@ -49,6 +49,11 @@ export type ChannelMessageActionDiscoveryContext = {
  * sends from cron or isolated agents.
  */
 export type ChannelMessageToolSchemaContribution = {
+  /**
+   * Provider-specific top-level fields for the shared `message` tool.
+   * These contributions are surfaced as optional fields; action handlers own
+   * any provider-specific conditional validation beyond presence/shape.
+   */
   properties: Record<string, TSchema>;
   visibility?: "current-channel" | "all-configured";
 };
