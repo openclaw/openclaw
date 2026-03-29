@@ -655,6 +655,18 @@ export function buildAgentSystemPrompt(params: {
     );
   }
 
+  // Dedicated model identity statement, separate from the pipe-delimited
+  // Runtime metadata line below. The Runtime line (model=X) is a compact
+  // key=value pair that models — especially non-Anthropic ones — may not
+  // reliably parse for self-identification. This prominent line ensures
+  // the agent can accurately report its model when asked, even after
+  // mid-session switches across providers (e.g. Anthropic → Google).
+  if (runtimeInfo?.model) {
+    lines.push(
+      `**Your model identity**: You are running as \`${runtimeInfo.model}\`. This is your actual model — use this when asked what model you are.`,
+    );
+  }
+
   lines.push(
     "## Runtime",
     buildRuntimeLine(runtimeInfo, runtimeChannel, runtimeCapabilities, params.defaultThinkLevel),

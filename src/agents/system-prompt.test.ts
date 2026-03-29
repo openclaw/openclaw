@@ -791,3 +791,147 @@ describe("buildSubagentSystemPrompt", () => {
     }
   });
 });
+
+/**
+ * Dedicated model identity line in the system prompt.
+ *
+ * The OpenClaw system prompt carries model information in two places:
+ *   1. A dedicated "**Your model identity**" line — prominent, unambiguous,
+ *      designed for the model to self-report accurately when asked "what model
+ *      are you?"
+ *   2. The pipe-delimited `## Runtime` metadata line (`model=X`) — a compact
+ *      machine-readable summary that models may not reliably parse.
+ *
+ * These tests verify that:
+ *   - The dedicated line appears when runtimeInfo.model is set and is absent
+ *     when it is not.
+ *   - The dedicated line appears BEFORE the ## Runtime section (ordering
+ *     matters because models weight earlier prompt content more heavily).
+ *   - The Runtime line still carries its own `model=` field independently.
+ *   - When autoroute switches the running model away from the default_model,
+ *     both values are present and distinct.
+ */
+describe("model identity line", () => {
+  const buildWithModel = (model?: string, defaultModel?: string) =>
+    buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      runtimeInfo: {
+        agentId: "work",
+        host: "host",
+        os: "macOS",
+        arch: "arm64",
+        node: "v20",
+        ...(model ? { model } : {}),
+        ...(defaultModel ? { defaultModel } : {}),
+      },
+    });
+
+  it("includes the dedicated model identity line when runtimeInfo.model is set", () => {
+    const prompt = buildWithModel("anthropic/claude-sonnet-4");
+
+    expect(prompt).toContain(
+      "**Your model identity**: You are running as `anthropic/claude-sonnet-4`.",
+    );
+    expect(prompt).toContain("This is your actual model");
+  });
+
+  it("omits the dedicated model identity line when runtimeInfo.model is absent", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      runtimeInfo: {
+        agentId: "work",
+        host: "host",
+        os: "macOS",
+        arch: "arm64",
+        node: "v20",
+      },
+    });
+
+    expect(prompt).not.toContain("**Your model identity**");
+  });
+
+  it("omits the dedicated model identity line when runtimeInfo is entirely absent", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+    });
+
+    expect(prompt).not.toContain("**Your model identity**");
+  });
+
+  it("places the model identity line BEFORE the ## Runtime section", () => {
+    const prompt = buildWithModel("anthropic/claude-sonnet-4");
+
+    const identityIndex = prompt.indexOf("**Your model identity**");
+    const runtimeIndex = prompt.indexOf("## Runtime");
+
+    expect(identityIndex).toBeGreaterThan(-1);
+    expect(runtimeIndex).toBeGreaterThan(-1);
+    expect(identityIndex).toBeLessThan(runtimeIndex);
+  });
+
+  it("does not duplicate model info — identity line and Runtime line each state it once", () => {
+    const model = "anthropic/claude-sonnet-4";
+    const prompt = buildWithModel(model);
+
+    const identityMatches = prompt.split(`running as \`${model}\``).length - 1;
+    expect(identityMatches).toBe(1);
+
+    const runtimeMatches = prompt.split(`model=${model}`).length - 1;
+    expect(runtimeMatches).toBe(1);
+  });
+
+  it("shows both model and default_model when autoroute switches the running model", () => {
+    const runningModel = "google/gemini-2.5-pro";
+    const defaultModel = "anthropic/claude-opus-4-5";
+    const prompt = buildWithModel(runningModel, defaultModel);
+
+    expect(prompt).toContain(`**Your model identity**: You are running as \`${runningModel}\`.`);
+    expect(prompt).toContain(`model=${runningModel}`);
+    expect(prompt).toContain(`default_model=${defaultModel}`);
+
+    const identityLine = prompt
+      .split("\n")
+      .find((line) => line.includes("**Your model identity**"));
+    expect(identityLine).toBeDefined();
+    expect(identityLine).not.toContain(defaultModel);
+  });
+
+  it("buildRuntimeLine independently carries model= regardless of the identity line", () => {
+    const line = buildRuntimeLine(
+      {
+        agentId: "work",
+        host: "host",
+        os: "macOS",
+        arch: "arm64",
+        node: "v20",
+        model: "openai/gpt-4.1",
+        defaultModel: "anthropic/claude-opus-4-5",
+      },
+      "telegram",
+      ["inlineButtons"],
+      "low",
+    );
+
+    expect(line).toContain("model=openai/gpt-4.1");
+    expect(line).toContain("default_model=anthropic/claude-opus-4-5");
+    expect(line).not.toContain("**Your model identity**");
+  });
+
+  it("buildRuntimeLine omits model= when runtimeInfo.model is absent", () => {
+    const line = buildRuntimeLine(
+      {
+        agentId: "work",
+        host: "host",
+        os: "macOS",
+        arch: "arm64",
+        node: "v20",
+      },
+      "telegram",
+      [],
+      "off",
+    );
+
+    expect(line).not.toContain("model=");
+    expect(line).toContain("agent=work");
+  });
+});
