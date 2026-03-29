@@ -9,7 +9,7 @@ import {
   resolveListedDefaultAccountId,
   resolveAccountWithDefaultFallback,
   type OpenClawConfig,
-} from "openclaw/plugin-sdk/account-resolution";
+} from "openclaw/plugin-sdk/account-core";
 import {
   listBoundAccountIds,
   resolveDefaultAgentBoundAccountId,
