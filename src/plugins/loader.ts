@@ -331,7 +331,7 @@ export function resolveRuntimePluginRegistry(
   if (!options || !hasExplicitCompatibilityInputs(options)) {
     return getCompatibleActivePluginRegistry();
   }
-  return getCompatibleActivePluginRegistry(options) ?? loadOpenClawPlugins(options);
+  return getCompatibleActivePluginRegistry(options) ?? loadOpenClawPlugins({ ...options, ...(getActivePluginRegistry() ? { activate: false, cache: false } : {}) });
 }
 
 function validatePluginConfig(params: {
