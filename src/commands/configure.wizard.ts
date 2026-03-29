@@ -237,7 +237,9 @@ export async function runConfigureWizard(
     const prompter = createClackPrompter();
 
     const snapshot = await readConfigFileSnapshot();
-    const baseConfig: OpenClawConfig = snapshot.valid ? snapshot.config : {};
+    const baseConfig: OpenClawConfig = snapshot.valid
+      ? (snapshot.sourceConfig ?? snapshot.config)
+      : {};
 
     if (snapshot.exists) {
       const title = snapshot.valid ? "Existing config detected" : "Invalid config";
