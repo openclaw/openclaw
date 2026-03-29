@@ -8,7 +8,7 @@ import {
 } from "../auto-reply/thinking.js";
 import type { SessionsPatchResult } from "../gateway/protocol/index.js";
 import { formatRelativeTimestamp } from "../infra/format-time/format-relative.ts";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { helpText, parseCommand } from "./commands.js";
 import type { ChatLog } from "./components/chat-log.js";
 import {
@@ -52,6 +52,37 @@ type CommandHandlerContext = {
 
 function isBtwCommand(text: string): boolean {
   return /^\/btw(?::|\s|$)/i.test(text.trim());
+}
+
+export function buildSessionPickerSearchText(params: {
+  session: {
+    key: string;
+    displayName?: string;
+    label?: string;
+    subject?: string;
+    sessionId?: string;
+    lastMessagePreview?: string;
+    derivedTitle?: string;
+  };
+  formattedKey: string;
+}): string {
+  const parsed = parseAgentSessionKey(params.session.key);
+  const restKey = parsed?.rest;
+  const tailKey = restKey?.split(":").filter(Boolean).at(-1);
+  return [
+    params.formattedKey,
+    params.session.displayName,
+    params.session.label,
+    params.session.subject,
+    params.session.derivedTitle,
+    params.session.sessionId,
+    params.session.key,
+    restKey,
+    tailKey,
+    params.session.lastMessagePreview,
+  ]
+    .filter(Boolean)
+    .join(" ");
 }
 
 export function createCommandHandlers(context: CommandHandlerContext) {
@@ -182,16 +213,10 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           value: session.key,
           label,
           description,
-          searchText: [
-            session.displayName,
-            session.label,
-            session.subject,
-            session.sessionId,
-            session.key,
-            session.lastMessagePreview,
-          ]
-            .filter(Boolean)
-            .join(" "),
+          searchText: buildSessionPickerSearchText({
+            session,
+            formattedKey,
+          }),
         };
       });
       const selector = createFilterableSelectList(items, 9);

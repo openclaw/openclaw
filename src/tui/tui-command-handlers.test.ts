@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createCommandHandlers } from "./tui-command-handlers.js";
+import { buildSessionPickerSearchText, createCommandHandlers } from "./tui-command-handlers.js";
 
 type LoadHistoryMock = ReturnType<typeof vi.fn> & (() => Promise<void>);
 type SetActivityStatusMock = ReturnType<typeof vi.fn> & ((text: string) => void);
@@ -81,6 +81,28 @@ function createHarness(params?: {
     state,
   };
 }
+
+describe("buildSessionPickerSearchText", () => {
+  it("includes named main session fragments and derived metadata", () => {
+    const searchText = buildSessionPickerSearchText({
+      formattedKey: "main:alpha",
+      session: {
+        key: "agent:main:main:alpha",
+        displayName: "Sprint Inbox",
+        label: "alpha",
+        subject: "Roadmap",
+        sessionId: "sess-123",
+        derivedTitle: "Alpha planning",
+        lastMessagePreview: "Let's ship this",
+      },
+    });
+
+    expect(searchText).toContain("main:alpha");
+    expect(searchText).toContain("agent:main:main:alpha");
+    expect(searchText).toContain("alpha");
+    expect(searchText).toContain("Alpha planning");
+  });
+});
 
 describe("tui command handlers", () => {
   it("renders the sending indicator before chat.send resolves", async () => {
