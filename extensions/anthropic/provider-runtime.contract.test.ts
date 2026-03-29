@@ -1,3 +1,3 @@
-import { describeAnthropicProviderRuntimeContract } from "../../test/helpers/extensions/provider-runtime-contract.js";
+import { describeAnthropicProviderRuntimeContract } from "../../test/helpers/plugins/provider-runtime-contract.js";
 
 describeAnthropicProviderRuntimeContract();

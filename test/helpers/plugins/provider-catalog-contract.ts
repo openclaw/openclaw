@@ -5,6 +5,7 @@ import {
   expectCodexMissingAuthHint,
 } from "../../../src/plugins/provider-runtime.test-support.js";
 import type { ProviderPlugin } from "../../../src/plugins/types.js";
+import { loadBundledPluginPublicSurfaceSync } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 import { registerProviderPlugin, requireRegisteredProvider } from "./provider-registration.js";
 
 const PROVIDER_CATALOG_CONTRACT_TIMEOUT_MS = 300_000;
@@ -48,7 +49,12 @@ export function describeOpenAIProviderCatalogContract() {
     () => {
       beforeAll(async () => {
         vi.resetModules();
-        const openaiPlugin = await import("../../../extensions/openai/index.ts");
+        const openaiPlugin = loadBundledPluginPublicSurfaceSync<{
+          default: Parameters<typeof registerProviderPlugin>[0]["plugin"];
+        }>({
+          pluginId: "openai",
+          artifactBasename: "index.js",
+        });
         openaiProviders = registerProviderPlugin({
           plugin: openaiPlugin.default,
           id: "openai",

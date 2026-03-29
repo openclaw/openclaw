@@ -12,6 +12,7 @@ import {
   buildExecutionPlan,
   explainExecutionTarget,
 } from "../../scripts/test-planner/planner.mjs";
+import { bundledPluginFile } from "../helpers/bundled-plugin-paths.js";
 
 describe("test planner", () => {
   it("builds a capability-aware plan for mid-memory local runs", () => {
@@ -195,7 +196,10 @@ describe("test planner", () => {
         surfaces: [],
         passthroughArgs: [
           "src/auto-reply/reply/followup-runner.test.ts",
-          "extensions/discord/src/monitor/message-handler.preflight.acp-bindings.test.ts",
+          bundledPluginFile(
+            "discord",
+            "src/monitor/message-handler.preflight.acp-bindings.test.ts",
+          ),
         ],
       },
       {

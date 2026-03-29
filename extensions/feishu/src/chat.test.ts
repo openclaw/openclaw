@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createTestPluginApi } from "../../../test/helpers/extensions/plugin-api.js";
-import { createPluginRuntimeMock } from "../../../test/helpers/extensions/plugin-runtime-mock.js";
+import { createTestPluginApi } from "../../../test/helpers/plugins/plugin-api.js";
+import { createPluginRuntimeMock } from "../../../test/helpers/plugins/plugin-runtime-mock.js";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());

@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { stageBundledPluginRuntime } from "../../scripts/stage-bundled-plugin-runtime.mjs";
+import { bundledDistPluginFile } from "../../test/helpers/bundled-plugin-paths.js";
 import { loadPluginBoundaryModuleWithJiti } from "./runtime/runtime-plugin-boundary.js";
 
 type LightModule = {
@@ -44,10 +45,10 @@ function createBundledWhatsAppRuntimeFixture() {
       2,
     ),
     "openclaw.mjs": "export {};\n",
-    "dist/extensions/whatsapp/index.js": "export default {};\n",
-    "dist/extensions/whatsapp/light-runtime-api.js":
+    [bundledDistPluginFile("whatsapp", "index.js")]: "export default {};\n",
+    [bundledDistPluginFile("whatsapp", "light-runtime-api.js")]:
       'export { getActiveWebListener } from "../../active-listener.js";\n',
-    "dist/extensions/whatsapp/runtime-api.js":
+    [bundledDistPluginFile("whatsapp", "runtime-api.js")]:
       'export { getActiveWebListener, setActiveWebListener } from "../../active-listener.js";\n',
     "dist/active-listener.js": [
       'const key = Symbol.for("openclaw.whatsapp.activeListenerState");',

@@ -34,7 +34,6 @@
     },
     "install": {
       "npmSpec": "@openclaw/nostr",
-      "localPath": "extensions/nostr",
       "defaultChoice": "npm",
       "minHostVersion": ">=2026.3.28"
     },

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
+import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
 import {
   createImageLifecycleCore,
   createImageUpdate,
@@ -9,7 +9,7 @@ import {
   getZaloRuntimeMock,
   resetLifecycleTestState,
   sendMessageMock,
-} from "../../../test/helpers/extensions/zalo-lifecycle.js";
+} from "../../../test/helpers/plugins/zalo-lifecycle.js";
 
 describe("Zalo polling image handling", () => {
   const {

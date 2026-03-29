@@ -4,7 +4,7 @@ import {
   createTestWizardPrompter,
   runSetupWizardFinalize,
   type WizardPrompter,
-} from "../../../test/helpers/extensions/setup-wizard.js";
+} from "../../../test/helpers/plugins/setup-wizard.js";
 import { slackSetupWizard } from "./setup-surface.js";
 
 describe("slackSetupWizard.finalize", () => {

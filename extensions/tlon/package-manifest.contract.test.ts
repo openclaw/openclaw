@@ -1,4 +1,4 @@
-import { describePackageManifestContract } from "../../test/helpers/extensions/package-manifest-contract.js";
+import { describePackageManifestContract } from "../../test/helpers/plugins/package-manifest-contract.js";
 
 describePackageManifestContract({
   pluginId: "tlon",

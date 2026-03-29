@@ -1,3 +1,3 @@
-import { describeWebSearchProviderContracts } from "../../test/helpers/extensions/web-search-provider-contract.js";
+import { describeWebSearchProviderContracts } from "../../test/helpers/plugins/web-search-provider-contract.js";
 
 describeWebSearchProviderContracts("xai");

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { NON_ENV_SECRETREF_MARKER } from "../../src/agents/model-auth-markers.js";
 import { capturePluginRegistration } from "../../src/plugins/captured-registration.js";
 import { createNonExitingRuntime } from "../../src/runtime.js";
-import { withEnv } from "../../test/helpers/extensions/env.js";
+import { withEnv } from "../../test/helpers/plugins/env.js";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import xaiPlugin from "./index.js";
 import { resolveXaiCatalogEntry } from "./model-definitions.js";

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withServer } from "../../../test/helpers/http-test-server.js";
 import {
   createLifecycleMonitorSetup,
   createTextUpdate,
@@ -8,8 +9,7 @@ import {
   sendMessageMock,
   settleAsyncWork,
   startWebhookLifecycleMonitor,
-} from "../../../test/helpers/extensions/zalo-lifecycle.js";
-import { withServer } from "../../../test/helpers/http-test-server.js";
+} from "../../../test/helpers/plugins/zalo-lifecycle.js";
 import type { PluginRuntime } from "../runtime-api.js";
 
 describe("Zalo reply-once lifecycle", () => {

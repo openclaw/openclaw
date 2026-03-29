@@ -7,7 +7,7 @@ import { mockPinnedHostnameResolution } from "../../../../src/test-helpers/ssrf.
 import {
   type FetchMock,
   withFetchPreconnect,
-} from "../../../../test/helpers/extensions/fetch-mock.js";
+} from "../../../../test/helpers/plugins/fetch-mock.js";
 import {
   fetchWithSlackAuth,
   resolveSlackAttachmentContent,

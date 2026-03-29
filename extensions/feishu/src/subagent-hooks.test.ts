@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getRequiredHookHandler,
   registerHookHandlersForTest,
-} from "../../../test/helpers/extensions/subagent-hooks.js";
+} from "../../../test/helpers/plugins/subagent-hooks.js";
 import type { ClawdbotConfig, OpenClawPluginApi } from "../runtime-api.js";
 import { registerFeishuSubagentHooks } from "./subagent-hooks.js";
 import {

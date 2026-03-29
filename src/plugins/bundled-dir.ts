@@ -81,7 +81,7 @@ export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): 
     // ignore
   }
 
-  // bun --compile: ship a sibling `extensions/` next to the executable.
+  // bun --compile: ship a sibling bundled plugin tree next to the executable.
   try {
     const execDir = path.dirname(process.execPath);
     const siblingBuilt = path.join(execDir, "dist", "extensions");
@@ -96,7 +96,7 @@ export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): 
     // ignore
   }
 
-  // npm/dev: walk up from this module to find `extensions/` at the package root.
+  // npm/dev: walk up from this module to find the bundled plugin tree at the package root.
   try {
     let cursor = path.dirname(fileURLToPath(import.meta.url));
     for (let i = 0; i < 6; i += 1) {

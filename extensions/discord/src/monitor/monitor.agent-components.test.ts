@@ -6,12 +6,12 @@ import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import * as securityRuntime from "openclaw/plugin-sdk/security-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../../../src/infra/system-events.ts";
+import { expectPairingReplyText } from "../../../../test/helpers/pairing-reply.js";
 import {
   readAllowFromStoreMock,
   resetDiscordComponentRuntimeMocks,
   upsertPairingRequestMock,
-} from "../../../../test/helpers/extensions/discord-component-runtime.js";
-import { expectPairingReplyText } from "../../../../test/helpers/pairing-reply.js";
+} from "../../../../test/helpers/plugins/discord-component-runtime.js";
 import { createAgentComponentButton, createAgentSelectMenu } from "./agent-components.js";
 
 describe("agent components", () => {

@@ -1,5 +1,9 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  bundledDistPluginRootAt,
+  bundledPluginRootAt,
+} from "../../../../test/helpers/bundled-plugin-paths.js";
 import type { BundledPluginSource } from "../../../plugins/bundled-sources.js";
 import * as bundledSources from "../../../plugins/bundled-sources.js";
 import {
@@ -18,8 +22,9 @@ function bundled(pluginId: string, localPath: string): BundledPluginSource {
 
 describe("bundled plugin load path repair", () => {
   beforeEach(() => {
+    const packageRoot = "/app/node_modules/openclaw";
     vi.spyOn(bundledSources, "resolveBundledPluginSources").mockReturnValue(
-      new Map([["feishu", bundled("feishu", "/app/node_modules/openclaw/dist/extensions/feishu")]]),
+      new Map([["feishu", bundled("feishu", bundledDistPluginRootAt(packageRoot, "feishu"))]]),
     );
   });
 
@@ -29,8 +34,8 @@ describe("bundled plugin load path repair", () => {
 
   it("detects legacy bundled plugin paths that still point at source extensions", () => {
     const packageRoot = path.resolve("app-node-modules", "openclaw");
-    const legacyPath = path.join(packageRoot, "extensions", "feishu");
-    const bundledPath = path.join(packageRoot, "dist", "extensions", "feishu");
+    const legacyPath = bundledPluginRootAt(packageRoot, "feishu");
+    const bundledPath = bundledDistPluginRootAt(packageRoot, "feishu");
     vi.spyOn(bundledSources, "resolveBundledPluginSources").mockReturnValue(
       new Map([["feishu", bundled("feishu", bundledPath)]]),
     );
@@ -55,8 +60,8 @@ describe("bundled plugin load path repair", () => {
 
   it("rewrites legacy bundled paths during doctor repair", () => {
     const packageRoot = path.resolve("app-node-modules", "openclaw");
-    const legacyPath = path.join(packageRoot, "extensions", "feishu");
-    const bundledPath = path.join(packageRoot, "dist", "extensions", "feishu");
+    const legacyPath = bundledPluginRootAt(packageRoot, "feishu");
+    const bundledPath = bundledDistPluginRootAt(packageRoot, "feishu");
     vi.spyOn(bundledSources, "resolveBundledPluginSources").mockReturnValue(
       new Map([["feishu", bundled("feishu", bundledPath)]]),
     );
@@ -77,8 +82,8 @@ describe("bundled plugin load path repair", () => {
 
   it("derives legacy paths from the bundled directory name instead of plugin id", () => {
     const packageRoot = path.resolve("app-node-modules", "openclaw");
-    const legacyPath = path.join(packageRoot, "extensions", "kimi-coding");
-    const bundledPath = path.join(packageRoot, "dist", "extensions", "kimi-coding");
+    const legacyPath = bundledPluginRootAt(packageRoot, "kimi-coding");
+    const bundledPath = bundledDistPluginRootAt(packageRoot, "kimi-coding");
     vi.spyOn(bundledSources, "resolveBundledPluginSources").mockReturnValue(
       new Map([["kimi", bundled("kimi", bundledPath)]]),
     );
@@ -103,8 +108,8 @@ describe("bundled plugin load path repair", () => {
 
   it("matches legacy bundled paths with a trailing slash", () => {
     const packageRoot = path.resolve("app-node-modules", "openclaw");
-    const legacyPath = `${path.join(packageRoot, "extensions", "feishu")}${path.sep}`;
-    const bundledPath = path.join(packageRoot, "dist", "extensions", "feishu");
+    const legacyPath = `${bundledPluginRootAt(packageRoot, "feishu")}${path.sep}`;
+    const bundledPath = bundledDistPluginRootAt(packageRoot, "feishu");
     vi.spyOn(bundledSources, "resolveBundledPluginSources").mockReturnValue(
       new Map([["feishu", bundled("feishu", bundledPath)]]),
     );

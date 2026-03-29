@@ -7,7 +7,7 @@ import {
   createConfigWithFallbacks,
   createLegacyProviderConfig,
   EXPECTED_FALLBACKS,
-} from "../../test/helpers/extensions/onboard-config.js";
+} from "../../test/helpers/plugins/onboard-config.js";
 import { buildMistralModelDefinition as buildBundledMistralModelDefinition } from "./model-definitions.js";
 import {
   applyMistralConfig,

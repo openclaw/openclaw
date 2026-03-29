@@ -8,12 +8,12 @@ import {
 import {
   createDirectoryTestRuntime,
   expectDirectorySurface,
-} from "../../../test/helpers/extensions/directory.ts";
+} from "../../../test/helpers/plugins/directory.ts";
 import {
   createPluginSetupWizardConfigure,
   createQueuedWizardPrompter,
   runSetupWizardConfigure,
-} from "../../../test/helpers/extensions/setup-wizard.js";
+} from "../../../test/helpers/plugins/setup-wizard.js";
 import { whatsappPlugin } from "./channel.js";
 import {
   resolveWhatsAppGroupRequireMention,

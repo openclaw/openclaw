@@ -1,3 +1,3 @@
-import { describeGithubCopilotProviderDiscoveryContract } from "../../test/helpers/extensions/provider-discovery-contract.js";
+import { describeGithubCopilotProviderDiscoveryContract } from "../../test/helpers/plugins/provider-discovery-contract.js";
 
 describeGithubCopilotProviderDiscoveryContract();

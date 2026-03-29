@@ -1,4 +1,4 @@
-import { GENERATED_BUNDLED_PLUGIN_METADATA } from "../plugins/bundled-plugin-metadata.generated.js";
+import { listBundledPluginMetadata } from "../plugins/bundled-plugin-metadata.js";
 import type { PluginPackageChannel } from "../plugins/manifest.js";
 import { CHAT_CHANNEL_ORDER, type ChatChannelId } from "./ids.js";
 import type { ChannelMeta } from "./plugins/types.js";
@@ -64,7 +64,7 @@ function toChatChannelMeta(params: {
 function buildChatChannelMetaById(): Record<ChatChannelId, ChatChannelMeta> {
   const entries = new Map<ChatChannelId, ChatChannelMeta>();
 
-  for (const entry of GENERATED_BUNDLED_PLUGIN_METADATA) {
+  for (const entry of listBundledPluginMetadata()) {
     const channel =
       entry.packageManifest && "channel" in entry.packageManifest
         ? entry.packageManifest.channel

@@ -6,7 +6,7 @@ import {
   resolveAgentRoute,
   setActivePluginRegistry,
   type OpenClawConfig,
-} from "../../../../../test/helpers/extensions/matrix-monitor-route.js";
+} from "../../../../../test/helpers/plugins/matrix-monitor-route.js";
 import { matrixPlugin } from "../../channel.js";
 import { resolveMatrixInboundRoute } from "./route.js";
 

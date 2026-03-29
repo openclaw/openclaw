@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createDirectoryTestRuntime,
   expectDirectorySurface,
-} from "../../../test/helpers/extensions/directory.js";
+} from "../../../test/helpers/plugins/directory.js";
 import type { OpenClawConfig, RuntimeEnv } from "../runtime-api.js";
 import { msteamsPlugin } from "./channel.js";
 import { resolveMSTeamsOutboundSessionRoute } from "./session-route.js";

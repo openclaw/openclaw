@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { loadIncludePatternsFromEnv } from "../vitest.extensions.config.ts";
+import { bundledPluginFile } from "./helpers/bundled-plugin-paths.js";
 import { createPatternFileHelper } from "./helpers/pattern-file.js";
 
 const patternFiles = createPatternFileHelper("openclaw-vitest-extensions-config-");
@@ -15,22 +16,25 @@ describe("extensions vitest include patterns", () => {
 
   it("loads include patterns from a JSON file", () => {
     const filePath = patternFiles.writePatternFile("include.json", [
-      "extensions/feishu/index.test.ts",
+      bundledPluginFile("feishu", "index.test.ts"),
       42,
       "",
-      "extensions/msteams/src/monitor.test.ts",
+      bundledPluginFile("msteams", "src/monitor.test.ts"),
     ]);
 
     expect(
       loadIncludePatternsFromEnv({
         OPENCLAW_VITEST_INCLUDE_FILE: filePath,
       }),
-    ).toEqual(["extensions/feishu/index.test.ts", "extensions/msteams/src/monitor.test.ts"]);
+    ).toEqual([
+      bundledPluginFile("feishu", "index.test.ts"),
+      bundledPluginFile("msteams", "src/monitor.test.ts"),
+    ]);
   });
 
   it("throws when the configured file is not a JSON array", () => {
     const filePath = patternFiles.writePatternFile("include.json", {
-      include: ["extensions/feishu/index.test.ts"],
+      include: [bundledPluginFile("feishu", "index.test.ts")],
     });
 
     expect(() =>

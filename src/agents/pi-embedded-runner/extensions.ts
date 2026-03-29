@@ -3,12 +3,12 @@ import type { ExtensionFactory, SessionManager } from "@mariozechner/pi-coding-a
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
-import { setCompactionSafeguardRuntime } from "../pi-extensions/compaction-safeguard-runtime.js";
-import compactionSafeguardExtension from "../pi-extensions/compaction-safeguard.js";
-import contextPruningExtension from "../pi-extensions/context-pruning.js";
-import { setContextPruningRuntime } from "../pi-extensions/context-pruning/runtime.js";
-import { computeEffectiveSettings } from "../pi-extensions/context-pruning/settings.js";
-import { makeToolPrunablePredicate } from "../pi-extensions/context-pruning/tools.js";
+import { setCompactionSafeguardRuntime } from "../pi-hooks/compaction-safeguard-runtime.js";
+import compactionSafeguardExtension from "../pi-hooks/compaction-safeguard.js";
+import contextPruningExtension from "../pi-hooks/context-pruning.js";
+import { setContextPruningRuntime } from "../pi-hooks/context-pruning/runtime.js";
+import { computeEffectiveSettings } from "../pi-hooks/context-pruning/settings.js";
+import { makeToolPrunablePredicate } from "../pi-hooks/context-pruning/tools.js";
 import { ensurePiCompactionReserveTokens } from "../pi-settings.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "./cache-ttl.js";
 

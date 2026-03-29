@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   createDirectoryTestRuntime,
   expectDirectorySurface,
-} from "../../../test/helpers/extensions/directory.js";
+} from "../../../test/helpers/plugins/directory.js";
 import type { OpenClawConfig, RuntimeEnv } from "../runtime-api.js";
 import { zaloPlugin } from "./channel.js";
 

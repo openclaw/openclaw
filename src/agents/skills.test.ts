@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { installedPluginRoot } from "../../test/helpers/bundled-plugin-paths.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -210,7 +211,13 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
     );
     expect(
       commands.find((entry) => entry.skillName === "workflows:review")?.sourceFilePath,
-    ).toContain("/.openclaw/extensions/compound-bundle/commands/workflows-review.md");
+    ).toContain(
+      path.join(
+        installedPluginRoot(path.join(workspaceDir, ".openclaw"), "compound-bundle"),
+        "commands",
+        "workflows-review.md",
+      ),
+    );
   });
 });
 

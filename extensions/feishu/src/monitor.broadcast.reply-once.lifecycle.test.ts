@@ -9,8 +9,8 @@ import {
   runFeishuLifecycleSequence,
   setFeishuLifecycleStateDir,
   setupFeishuLifecycleHandler,
-} from "../../../test/helpers/extensions/feishu-lifecycle.js";
-import { createNonExitingRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
+} from "../../../test/helpers/plugins/feishu-lifecycle.js";
+import { createNonExitingRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
 import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
 import { FeishuConfigSchema } from "./config-schema.js";
 import { getFeishuLifecycleTestMocks } from "./lifecycle.test-support.js";

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { BUNDLED_PLUGIN_PATH_PREFIX } from "./helpers/bundled-plugin-paths.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 
@@ -35,14 +36,14 @@ function findExtensionImports(source: string): string[] {
 }
 
 describe("non-extension test boundaries", () => {
-  it("keeps extension-owned behavior suites under extensions/", () => {
+  it("keeps plugin-owned behavior suites under the bundled plugin tree", () => {
     const testFiles = [
       ...walk(path.join(repoRoot, "src")),
       ...walk(path.join(repoRoot, "test")),
       ...walk(path.join(repoRoot, "packages")),
     ].filter(
       (file) =>
-        !file.startsWith("extensions/") &&
+        !file.startsWith(BUNDLED_PLUGIN_PATH_PREFIX) &&
         !file.startsWith("test/helpers/") &&
         !file.startsWith("ui/"),
     );

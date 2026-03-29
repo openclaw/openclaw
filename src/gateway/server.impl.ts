@@ -50,6 +50,7 @@ import { enqueueSystemEvent } from "../infra/system-events.js";
 import { scheduleGatewayUpdateCheck } from "../infra/update-startup.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
+import { resolveBundledPluginInstallCommandHint } from "../plugins/bundled-sources.js";
 import { resolveConfiguredDeferredChannelPluginIds } from "../plugins/channel-plugin-ids.js";
 import { getGlobalHookRunner, runGlobalGatewayStopSafely } from "../plugins/hook-runner-global.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
@@ -542,7 +543,10 @@ export async function startGatewayServer(
       issue: matrixInstallPathIssue,
       pluginLabel: "Matrix",
       defaultInstallCommand: "openclaw plugins install @openclaw/matrix",
-      repoInstallCommand: "openclaw plugins install ./extensions/matrix",
+      repoInstallCommand: resolveBundledPluginInstallCommandHint({
+        pluginId: "matrix",
+        workspaceDir: process.cwd(),
+      }),
       formatCommand: formatCliCommand,
     });
     log.warn(

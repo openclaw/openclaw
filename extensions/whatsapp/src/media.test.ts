@@ -7,7 +7,7 @@ import { resolveStateDir } from "../../../src/config/paths.js";
 import { resolvePreferredOpenClawTmpDir } from "../../../src/infra/tmp-openclaw-dir.js";
 import { optimizeImageToPng } from "../../../src/media/image-ops.js";
 import { mockPinnedHostnameResolution } from "../../../src/test-helpers/ssrf.js";
-import { captureEnv } from "../../../test/helpers/extensions/env.js";
+import { captureEnv } from "../../../test/helpers/plugins/env.js";
 
 let LocalMediaAccessError: typeof import("./media.js").LocalMediaAccessError;
 let loadWebMedia: typeof import("./media.js").loadWebMedia;

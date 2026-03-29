@@ -4,7 +4,7 @@ import {
   createTestWizardPrompter,
   runSetupWizardConfigure,
   type WizardPrompter,
-} from "../../../test/helpers/extensions/setup-wizard.js";
+} from "../../../test/helpers/plugins/setup-wizard.js";
 import type { OpenClawConfig } from "../api.js";
 import { tlonPlugin } from "./channel.js";
 import { TlonAuthorizationSchema, TlonConfigSchema } from "./config-schema.js";

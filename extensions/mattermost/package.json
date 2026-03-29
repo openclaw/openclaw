@@ -34,7 +34,6 @@
     },
     "install": {
       "npmSpec": "@openclaw/mattermost",
-      "localPath": "extensions/mattermost",
       "defaultChoice": "npm",
       "minHostVersion": ">=2026.3.28"
     }

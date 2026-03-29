@@ -5,7 +5,7 @@ import {
   createTestWizardPrompter,
   runSetupWizardFinalize,
   runSetupWizardPrepare,
-} from "../../../test/helpers/extensions/setup-wizard.js";
+} from "../../../test/helpers/plugins/setup-wizard.js";
 import { resolveTelegramAllowFromEntries } from "./setup-core.js";
 import { telegramSetupWizard } from "./setup-surface.js";
 

@@ -5,7 +5,7 @@ import {
   createTestWizardPrompter,
   runSetupWizardConfigure,
   type WizardPrompter,
-} from "../../../test/helpers/extensions/setup-wizard.js";
+} from "../../../test/helpers/plugins/setup-wizard.js";
 import { listAccountIds, resolveAccount } from "./accounts.js";
 import { synologyChatPlugin } from "./channel.js";
 import { SynologyChatChannelConfigSchema } from "./config-schema.js";

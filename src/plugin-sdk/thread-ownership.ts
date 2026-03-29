@@ -1,5 +1,5 @@
 // Narrow plugin-sdk surface for the bundled thread-ownership plugin.
-// Keep this list additive and scoped to symbols used under extensions/thread-ownership.
+// Keep this list additive and scoped to the bundled thread-ownership surface.
 
 export { definePluginEntry } from "./plugin-entry.js";
 export type { OpenClawConfig } from "../config/config.js";

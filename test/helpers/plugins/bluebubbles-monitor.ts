@@ -1,12 +1,27 @@
+import type { HistoryEntry, PluginRuntime } from "openclaw/plugin-sdk/bluebubbles";
 import { vi } from "vitest";
-import type { BlueBubblesHistoryFetchResult } from "../../../extensions/bluebubbles/src/history.js";
-import {
-  _resetBlueBubblesShortIdState,
-  clearBlueBubblesWebhookSecurityStateForTest,
-} from "../../../extensions/bluebubbles/src/monitor.js";
-import type { PluginRuntime } from "../../../extensions/bluebubbles/src/runtime-api.js";
-import { setBlueBubblesRuntime } from "../../../extensions/bluebubbles/src/runtime.js";
+import { loadBundledPluginPublicSurfaceSync } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 import { createPluginRuntimeMock } from "./plugin-runtime-mock.js";
+
+type BlueBubblesHistoryFetchResult = {
+  entries: HistoryEntry[];
+  resolved: boolean;
+};
+
+const { _resetBlueBubblesShortIdState, clearBlueBubblesWebhookSecurityStateForTest } =
+  loadBundledPluginPublicSurfaceSync<{
+    _resetBlueBubblesShortIdState: () => void;
+    clearBlueBubblesWebhookSecurityStateForTest: () => void;
+  }>({
+    pluginId: "bluebubbles",
+    artifactBasename: "src/monitor.js",
+  });
+const { setBlueBubblesRuntime } = loadBundledPluginPublicSurfaceSync<{
+  setBlueBubblesRuntime: (runtime: PluginRuntime) => void;
+}>({
+  pluginId: "bluebubbles",
+  artifactBasename: "src/runtime.js",
+});
 
 export type DispatchReplyParams = Parameters<
   PluginRuntime["channel"]["reply"]["dispatchReplyWithBufferedBlockDispatcher"]

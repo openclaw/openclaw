@@ -4,7 +4,7 @@ import {
   expectPendingUntilAbort,
   startAccountAndTrackLifecycle,
   waitForStartedMocks,
-} from "../../../test/helpers/extensions/start-account-lifecycle.js";
+} from "../../../test/helpers/plugins/start-account-lifecycle.js";
 import type { ResolvedZaloAccount } from "./accounts.js";
 
 const hoisted = vi.hoisted(() => ({

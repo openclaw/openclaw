@@ -7,13 +7,13 @@ import {
   createSendCfgThreadingRuntime,
   expectProvidedCfgSkipsRuntimeLoad,
   expectRuntimeCfgFallback,
-} from "../../../test/helpers/extensions/send-config.js";
-import { createStartAccountContext } from "../../../test/helpers/extensions/start-account-context.js";
+} from "../../../test/helpers/plugins/send-config.js";
+import { createStartAccountContext } from "../../../test/helpers/plugins/start-account-context.js";
 import {
   expectStopPendingUntilAbort,
   startAccountAndTrackLifecycle,
   waitForStartedMocks,
-} from "../../../test/helpers/extensions/start-account-lifecycle.js";
+} from "../../../test/helpers/plugins/start-account-lifecycle.js";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
 import type { CoreConfig } from "./types.js";
 

@@ -39,7 +39,6 @@
     },
     "install": {
       "npmSpec": "@openclaw/feishu",
-      "localPath": "extensions/feishu",
       "defaultChoice": "npm",
       "minHostVersion": ">=2026.3.28"
     },

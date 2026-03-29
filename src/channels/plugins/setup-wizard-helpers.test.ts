@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   resolveSetupWizardAllowFromEntries,
   resolveSetupWizardGroupAllowlist,
-} from "../../../test/helpers/extensions/setup-wizard.js";
+} from "../../../test/helpers/plugins/setup-wizard.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import {

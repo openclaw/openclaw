@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { installedPluginRoot } from "../../../test/helpers/bundled-plugin-paths.js";
 import { createPluginRecord, createPluginStatusReport } from "../../plugins/status.test-helpers.js";
+
+const WORKSPACE_PLUGIN_ROOT = installedPluginRoot("/tmp/workspace/.openclaw", "superpowers");
 
 const {
   readConfigFileSnapshotMock,
@@ -70,7 +73,7 @@ describe("handleCommands /plugins toggle", () => {
           createPluginRecord({
             id: "superpowers",
             format: "bundle",
-            source: "/tmp/workspace/.openclaw/extensions/superpowers",
+            source: WORKSPACE_PLUGIN_ROOT,
             enabled: false,
             status: "disabled",
           }),
@@ -110,7 +113,7 @@ describe("handleCommands /plugins toggle", () => {
           createPluginRecord({
             id: "superpowers",
             format: "bundle",
-            source: "/tmp/workspace/.openclaw/extensions/superpowers",
+            source: WORKSPACE_PLUGIN_ROOT,
             enabled: true,
           }),
         ],

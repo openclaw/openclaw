@@ -1,3 +1,3 @@
-import { describeVllmProviderDiscoveryContract } from "../../test/helpers/extensions/provider-discovery-contract.js";
+import { describeVllmProviderDiscoveryContract } from "../../test/helpers/plugins/provider-discovery-contract.js";
 
 describeVllmProviderDiscoveryContract();

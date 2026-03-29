@@ -12,8 +12,8 @@ import {
   restoreFeishuLifecycleStateDir,
   setFeishuLifecycleStateDir,
   setupFeishuLifecycleHandler,
-} from "../../../test/helpers/extensions/feishu-lifecycle.js";
-import { createRuntimeEnv } from "../../../test/helpers/extensions/runtime-env.js";
+} from "../../../test/helpers/plugins/feishu-lifecycle.js";
+import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
 import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
 import { resetProcessedFeishuCardActionTokensForTests } from "./card-action.js";
 import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";

@@ -5,7 +5,7 @@ import {
   applyDiscoveredContextWindows,
   resolveContextTokensForModel,
 } from "./context.js";
-import { createSessionManagerRuntimeRegistry } from "./pi-extensions/session-manager-runtime-registry.js";
+import { createSessionManagerRuntimeRegistry } from "./pi-hooks/session-manager-runtime-registry.js";
 
 describe("applyDiscoveredContextWindows", () => {
   it("keeps the smallest context window when the same bare model id appears under multiple providers", () => {

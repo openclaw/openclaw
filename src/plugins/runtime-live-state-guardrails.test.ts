@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { bundledPluginFile } from "../../test/helpers/bundled-plugin-paths.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -12,7 +13,7 @@ const LIVE_RUNTIME_STATE_GUARDS: Record<
     forbidden: readonly string[];
   }
 > = {
-  "extensions/whatsapp/src/active-listener.ts": {
+  [bundledPluginFile("whatsapp", "src/active-listener.ts")]: {
     required: ["globalThis", 'Symbol.for("openclaw.whatsapp.activeListenerState")'],
     forbidden: ["resolveGlobalSingleton"],
   },
