@@ -45,6 +45,7 @@ async function createSharedMatrixClient(params: {
     accountId: params.auth.accountId,
     allowPrivateNetwork: params.auth.allowPrivateNetwork,
     ssrfPolicy: params.auth.ssrfPolicy,
+    dispatcherPolicy: params.auth.dispatcherPolicy,
   });
   return {
     client,
