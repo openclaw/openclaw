@@ -216,6 +216,18 @@ describe("sendDiscordComponentMessage", () => {
     expect(text).toBe("Submit your feedback\n[Open form]");
   });
 
+  it("buildComponentTranscriptText falls back to default modal trigger label when triggerLabel absent", () => {
+    const text = buildComponentTranscriptText({
+      text: "Submit your feedback",
+      modal: {
+        title: "Feedback form",
+        fields: [{ type: "text", name: "comment", label: "Comment" }],
+      },
+    });
+
+    expect(text).toBe("Submit your feedback\n[Open form]");
+  });
+
   it("buildComponentTranscriptText omits section thumbnail accessories", () => {
     const text = buildComponentTranscriptText({
       blocks: [

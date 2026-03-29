@@ -179,8 +179,9 @@ export function buildComponentTranscriptText(spec: DiscordComponentMessageSpec):
         break;
     }
   }
-  if (spec.modal?.triggerLabel?.trim()) {
-    parts.push(`[${spec.modal.triggerLabel.trim()}]`);
+  if (spec.modal) {
+    const label = spec.modal.triggerLabel?.trim() || "Open form";
+    parts.push(`[${label}]`);
   }
   return parts.join("\n");
 }
