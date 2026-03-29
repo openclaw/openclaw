@@ -30,8 +30,6 @@ const SUBAGENT_TOOL_DENY_ALWAYS = [
   // Status/scheduling - main agent coordinates
   "session_status",
   "cron",
-  // Memory - pass relevant info in spawn prompt instead
-  // (removed: memory_search, memory_get — read-only, essential for multi-agent setups)
   // Direct session sends - subagents communicate through announce chain
   "sessions_send",
 ];
