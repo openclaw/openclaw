@@ -31,6 +31,7 @@ function sanitizeBootstrapFiles(
   warn?: (message: string) => void,
 ): WorkspaceBootstrapFile[] {
   const sanitized: WorkspaceBootstrapFile[] = [];
+  const seenPaths = new Set<string>();
   for (const file of files) {
     const pathValue = typeof file.path === "string" ? file.path.trim() : "";
     if (!pathValue) {
@@ -39,6 +40,10 @@ function sanitizeBootstrapFiles(
       );
       continue;
     }
+    if (seenPaths.has(pathValue)) {
+      continue;
+    }
+    seenPaths.add(pathValue);
     sanitized.push({ ...file, path: pathValue });
   }
   return sanitized;
