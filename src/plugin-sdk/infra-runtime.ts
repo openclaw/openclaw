@@ -42,4 +42,5 @@ export * from "../infra/transport-ready.js";
 export * from "../infra/wsl.ts";
 export * from "../utils/fetch-timeout.js";
 export { createRuntimeOutboundDelegates } from "../channels/plugins/runtime-forwarders.js";
+export type * from "../infra/net/ssrf.js";
 export * from "./ssrf-policy.js";
