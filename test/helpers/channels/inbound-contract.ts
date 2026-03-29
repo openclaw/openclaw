@@ -36,11 +36,23 @@ const { createInboundSlackTestContext, prepareSlackMessage } = loadBundledPlugin
     opts: { source: string };
   }) => Promise<SlackPrepareResult>;
 }>("slack");
-const telegramHarnessModuleId = resolveRelativeBundledPluginPublicModuleId({
-  fromModuleUrl: import.meta.url,
-  pluginId: "telegram",
-  artifactBasename: "src/bot-message-context.test-harness.js",
-});
+const { telegramHarnessModuleId, signalApiModuleId, whatsAppTestApiModuleId } = vi.hoisted(() => ({
+  telegramHarnessModuleId: resolveRelativeBundledPluginPublicModuleId({
+    fromModuleUrl: import.meta.url,
+    pluginId: "telegram",
+    artifactBasename: "src/bot-message-context.test-harness.js",
+  }),
+  signalApiModuleId: resolveRelativeBundledPluginPublicModuleId({
+    fromModuleUrl: import.meta.url,
+    pluginId: "signal",
+    artifactBasename: "api.js",
+  }),
+  whatsAppTestApiModuleId: resolveRelativeBundledPluginPublicModuleId({
+    fromModuleUrl: import.meta.url,
+    pluginId: "whatsapp",
+    artifactBasename: "test-api.js",
+  }),
+}));
 
 async function buildTelegramMessageContextForTest(params: {
   cfg: OpenClawConfig;
@@ -54,17 +66,6 @@ async function buildTelegramMessageContextForTest(params: {
   };
   return await telegramHarnessModule.buildTelegramMessageContextForTest(params);
 }
-
-const signalApiModuleId = resolveRelativeBundledPluginPublicModuleId({
-  fromModuleUrl: import.meta.url,
-  pluginId: "signal",
-  artifactBasename: "api.js",
-});
-const whatsAppTestApiModuleId = resolveRelativeBundledPluginPublicModuleId({
-  fromModuleUrl: import.meta.url,
-  pluginId: "whatsapp",
-  artifactBasename: "test-api.js",
-});
 
 const dispatchInboundMessageMock = vi.hoisted(() =>
   vi.fn(
