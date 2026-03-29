@@ -24,7 +24,7 @@ openclaw plugins install @openclaw/matrix
 Install from a local checkout:
 
 ```bash
-openclaw plugins install ./extensions/matrix
+openclaw plugins install ./path/to/local/matrix-plugin
 ```
 
 See [Plugins](/tools/plugin) for plugin behavior and install rules.
@@ -188,6 +188,8 @@ done:
 - Preview edits cost extra Matrix API calls. Leave streaming off if you want the most conservative rate-limit behavior.
 
 ## Encryption and verification
+
+In encrypted (E2EE) rooms, outbound image events use `thumbnail_file` so image previews are encrypted alongside the full attachment. Unencrypted rooms still use plain `thumbnail_url`. No configuration is needed — the plugin detects E2EE state automatically.
 
 ### Bot to bot rooms
 

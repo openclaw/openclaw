@@ -10,7 +10,7 @@
         "reason": "Measured ~35% faster under threads than forks on base config after removing process.chdir() from the test."
       },
       {
-        "file": "src/agents/pi-extensions/compaction-safeguard.test.ts",
+        "file": "src/agents/pi-hooks/compaction-safeguard.test.ts",
         "reason": "Measured ~27% faster under threads than forks on base config after removing process.chdir() from the test."
       },
       {
