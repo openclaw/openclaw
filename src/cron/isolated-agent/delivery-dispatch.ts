@@ -14,8 +14,9 @@ import { resolveAgentOutboundIdentity } from "../../infra/outbound/identity.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { logWarn, logError } from "../../logger.js";
-import type { CronJob, CronRunTelemetry } from "../types.js";
+import type { CronDeliveryTarget, CronJob, CronRunTelemetry } from "../types.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
+import { resolveDeliveryTarget } from "./delivery-target.js";
 import { pickSummaryFromOutput } from "./helpers.js";
 import type { RunCronAgentTurnResult } from "./run.js";
 import {
@@ -108,6 +109,7 @@ export type DispatchCronDeliveryState = {
   result?: RunCronAgentTurnResult;
   delivered: boolean;
   deliveryAttempted: boolean;
+  sendOccurred?: boolean;
   summary?: string;
   outputText?: string;
   synthesizedText?: string;
@@ -356,6 +358,7 @@ export async function dispatchCronDelivery(
   // remains the only source of delivered state.
   let delivered = skipMessagingToolDelivery;
   let deliveryAttempted = skipMessagingToolDelivery;
+  let sendOccurred = false;
   const failDeliveryTarget = (error: string) =>
     params.withRunSession({
       status: "error",
@@ -478,6 +481,9 @@ export async function dispatchCronDelivery(
         : await runDelivery();
       // Only mark delivered when ALL payloads succeeded (no partial failure).
       delivered = deliveryResults.length > 0 && !hadPartialFailure;
+      // Fan-out to additional cron targets keys off sendOccurred (run.ts); it must
+      // mean full primary success, not "some payload best-effort send happened".
+      sendOccurred = delivered;
       // Intentionally leave partial success uncached: replay may duplicate the
       // successful subset, but caching it here would permanently drop the
       // failed payloads by converting the replay into delivered=true.
@@ -682,6 +688,7 @@ export async function dispatchCronDelivery(
           result: directResult,
           delivered,
           deliveryAttempted,
+          sendOccurred,
           summary,
           outputText,
           synthesizedText,
@@ -695,6 +702,7 @@ export async function dispatchCronDelivery(
           result: finalizedTextResult,
           delivered,
           deliveryAttempted,
+          sendOccurred,
           summary,
           outputText,
           synthesizedText,
@@ -707,9 +715,110 @@ export async function dispatchCronDelivery(
   return {
     delivered,
     deliveryAttempted,
+    sendOccurred,
     summary,
     outputText,
     synthesizedText,
     deliveryPayloads,
   };
+}
+
+export type AdditionalTargetsDeliveryParams = {
+  cfg: OpenClawConfig;
+  deps: CliDeps;
+  agentId: string;
+  agentSessionKey: string;
+  targets: CronDeliveryTarget[];
+  payloads: ReplyPayload[];
+  bestEffort: boolean;
+  abortSignal?: AbortSignal;
+};
+
+export type AdditionalTargetResult = {
+  channel: string;
+  to: string;
+  delivered: boolean;
+  error?: string;
+};
+
+/**
+ * After primary delivery succeeds, fan out the same payloads to each
+ * additional target. Each target is independent — one failure does not
+ * block the others.
+ */
+export async function deliverToAdditionalTargets(
+  params: AdditionalTargetsDeliveryParams,
+): Promise<AdditionalTargetResult[]> {
+  const results: AdditionalTargetResult[] = [];
+  const identity = resolveAgentOutboundIdentity(params.cfg, params.agentId);
+  const session = buildOutboundSessionContext({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    sessionKey: params.agentSessionKey,
+  });
+
+  for (const target of params.targets) {
+    try {
+      const resolved = await resolveDeliveryTarget(params.cfg, params.agentId, {
+        channel: target.channel,
+        to: target.to,
+        accountId: target.accountId,
+        sessionKey: params.agentSessionKey,
+      });
+      if (!resolved.ok) {
+        const errMsg = resolved.error.message;
+        logWarn(
+          `[additional-delivery] failed to resolve target ${target.channel}:${target.to}: ${errMsg}`,
+        );
+        results.push({
+          channel: target.channel,
+          to: target.to,
+          delivered: false,
+          error: errMsg,
+        });
+        continue;
+      }
+      const deliveryResults = await deliverOutboundPayloads({
+        cfg: params.cfg,
+        channel: resolved.channel,
+        to: resolved.to,
+        accountId: resolved.accountId,
+        threadId: resolved.threadId,
+        payloads: params.payloads,
+        session,
+        identity,
+        bestEffort: params.bestEffort,
+        deps: createOutboundSendDeps(params.deps),
+        abortSignal: params.abortSignal,
+      });
+      const delivered = deliveryResults.length > 0 && deliveryResults.every((r) => r.messageId);
+      if (delivered) {
+        results.push({ channel: target.channel, to: target.to, delivered: true });
+      } else {
+        const emptyMsg =
+          deliveryResults.length === 0
+            ? "no payloads returned"
+            : "one or more payloads missing messageId";
+        logWarn(
+          `[additional-delivery] delivery to ${target.channel}:${target.to} incomplete: ${emptyMsg}`,
+        );
+        results.push({
+          channel: target.channel,
+          to: target.to,
+          delivered: false,
+          error: emptyMsg,
+        });
+      }
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      logWarn(`[additional-delivery] delivery to ${target.channel}:${target.to} failed: ${errMsg}`);
+      results.push({
+        channel: target.channel,
+        to: target.to,
+        delivered: false,
+        error: errMsg,
+      });
+    }
+  }
+  return results;
 }

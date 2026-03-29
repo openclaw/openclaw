@@ -84,6 +84,93 @@ describe("resolveCronDeliveryPlan", () => {
     expect(plan.to).toBe("123");
     expect(plan.accountId).toBe("bot-a");
   });
+
+  it("resolves additionalTargets with valid channel and to", () => {
+    const plan = resolveCronDeliveryPlan(
+      makeJob({
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "123",
+          additionalTargets: [
+            { channel: "signal", to: "+15550001111" },
+            { channel: "discord", to: "channel-456", accountId: "bot-b" },
+          ],
+        },
+      }),
+    );
+    expect(plan.additionalTargets).toHaveLength(2);
+    expect(plan.additionalTargets?.[0]).toEqual({
+      channel: "signal",
+      to: "+15550001111",
+    });
+    expect(plan.additionalTargets?.[1]).toEqual({
+      channel: "discord",
+      to: "channel-456",
+      accountId: "bot-b",
+    });
+  });
+
+  it("normalizes additionalTargets channel and to casing and trimming", () => {
+    const plan = resolveCronDeliveryPlan(
+      makeJob({
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "123",
+          additionalTargets: [{ channel: "  TeLeGrAm  ", to: "  user-abc  " }],
+        },
+      }),
+    );
+    expect(plan.additionalTargets?.[0]).toEqual({
+      channel: "telegram",
+      to: "user-abc",
+    });
+  });
+
+  it("filters out invalid additionalTargets missing channel or to", () => {
+    const plan = resolveCronDeliveryPlan(
+      makeJob({
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "123",
+          additionalTargets: [
+            { channel: "signal", to: "+15550001111" },
+            { channel: "" } as never,
+            { to: "user-abc" } as never,
+            { channel: "discord", to: "channel-456", accountId: " " },
+          ],
+        },
+      }),
+    );
+    expect(plan.additionalTargets).toHaveLength(2);
+    expect(plan.additionalTargets?.[0].channel).toBe("signal");
+    expect(plan.additionalTargets?.[1].channel).toBe("discord");
+  });
+
+  it("returns undefined additionalTargets when delivery is not defined", () => {
+    const plan = resolveCronDeliveryPlan(
+      makeJob({
+        delivery: undefined,
+      }),
+    );
+    expect(plan.additionalTargets).toBeUndefined();
+  });
+
+  it("returns undefined additionalTargets when array is empty", () => {
+    const plan = resolveCronDeliveryPlan(
+      makeJob({
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "123",
+          additionalTargets: [],
+        },
+      }),
+    );
+    expect(plan.additionalTargets).toBeUndefined();
+  });
 });
 
 describe("resolveFailureDestination", () => {

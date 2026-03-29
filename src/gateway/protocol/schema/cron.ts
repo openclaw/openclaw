@@ -174,11 +174,21 @@ export const CronFailureDestinationSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const CronDeliveryTargetSchema = Type.Object(
+  {
+    channel: Type.Union([Type.Literal("last"), NonEmptyString]),
+    to: NonEmptyString,
+    accountId: Type.Optional(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
+
 const CronDeliverySharedProperties = {
   channel: Type.Optional(Type.Union([Type.Literal("last"), NonEmptyString])),
   accountId: Type.Optional(NonEmptyString),
   bestEffort: Type.Optional(Type.Boolean()),
   failureDestination: Type.Optional(CronFailureDestinationSchema),
+  additionalTargets: Type.Optional(Type.Array(CronDeliveryTargetSchema)),
 };
 
 const CronDeliveryNoopSchema = Type.Object(

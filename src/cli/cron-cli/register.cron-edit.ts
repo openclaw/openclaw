@@ -80,6 +80,14 @@ export function registerCronEditCommand(cron: Command) {
         "--failure-alert-account-id <id>",
         "Account ID for failure alert channel (multi-account setups)",
       )
+      .option(
+        "--additional-channel <channel>",
+        `Additional delivery channel (${getCronChannelOptions()})`,
+      )
+      .option("--additional-to <dest>", "Additional delivery destination")
+      .option("--additional-account <id>", "Channel account id for additional delivery target")
+      .option("--remove-additional-target <index>", "Remove additional target by 1-based index")
+      .option("--clear-additional-targets", "Remove all additional delivery targets", false)
       .action(async (id, opts) => {
         try {
           if (opts.session === "main" && opts.message) {
@@ -238,6 +246,87 @@ export function registerCronEditCommand(cron: Command) {
               delivery.bestEffort = opts.bestEffortDeliver;
             }
             patch.delivery = delivery;
+          }
+
+          const hasAdditionalChannel =
+            typeof opts.additionalChannel === "string" && opts.additionalChannel.trim();
+          const hasAdditionalTo = typeof opts.additionalTo === "string" && opts.additionalTo.trim();
+          const hasAdditionalAccount =
+            typeof opts.additionalAccount === "string" && opts.additionalAccount.trim();
+          const hasRemoveAdditionalTarget =
+            typeof opts.removeAdditionalTarget === "string" && opts.removeAdditionalTarget.trim();
+          const hasClearAdditionalTargets = opts.clearAdditionalTargets === true;
+
+          if (
+            hasAdditionalChannel ||
+            hasAdditionalTo ||
+            hasAdditionalAccount ||
+            hasRemoveAdditionalTarget ||
+            hasClearAdditionalTargets
+          ) {
+            const listed = (await callGatewayFromCli("cron.list", opts, {
+              includeDisabled: true,
+            })) as { jobs?: CronJob[] } | null;
+            const existing = (listed?.jobs ?? []).find((job) => job.id === id);
+            if (!existing) {
+              throw new Error(`unknown cron job id: ${id}`);
+            }
+
+            const existingTargets = existing.delivery?.additionalTargets ?? [];
+
+            let updatedTargets: { channel: string; to: string; accountId?: string }[] = [];
+
+            if (hasClearAdditionalTargets) {
+              updatedTargets = [];
+            } else if (hasRemoveAdditionalTarget) {
+              const index = Number.parseInt(String(opts.removeAdditionalTarget), 10);
+              if (!Number.isFinite(index) || index < 1 || index > existingTargets.length) {
+                throw new Error(
+                  `Invalid --remove-additional-target (must be 1-${existingTargets.length}).`,
+                );
+              }
+              updatedTargets = existingTargets.filter((_, i) => i !== index - 1);
+            } else {
+              updatedTargets = [...existingTargets];
+              if (hasAdditionalChannel || hasAdditionalTo || hasAdditionalAccount) {
+                const newTarget: { channel: string; to: string; accountId?: string } = {
+                  channel: hasAdditionalChannel ? String(opts.additionalChannel).trim() : "",
+                  to: hasAdditionalTo ? String(opts.additionalTo).trim() : "",
+                  accountId: hasAdditionalAccount
+                    ? String(opts.additionalAccount).trim()
+                    : undefined,
+                };
+                if (!newTarget.channel) {
+                  throw new Error(
+                    "--additional-channel is required when adding an additional target.",
+                  );
+                }
+                if (!newTarget.to) {
+                  throw new Error("--additional-to is required when adding an additional target.");
+                }
+                updatedTargets.push(newTarget);
+              }
+            }
+
+            const delivery = patch.delivery as Record<string, unknown> | undefined;
+            if (delivery) {
+              delivery.additionalTargets = updatedTargets;
+            } else {
+              const newDelivery: Record<string, unknown> = { additionalTargets: updatedTargets };
+              // Seed announce mode for legacy jobs that store delivery config in
+              // payload fields (deliver/channel/to) instead of a delivery object.
+              // Without mode, mergeCronDelivery defaults to "none" and silently
+              // disables the job's primary announcements.
+              if (!existing.delivery && existing.payload.kind === "agentTurn") {
+                const p = existing.payload;
+                const legacyActive =
+                  p.deliver === true || (p.deliver !== false && Boolean(p.to || p.channel));
+                if (legacyActive) {
+                  newDelivery.mode = "announce";
+                }
+              }
+              patch.delivery = newDelivery;
+            }
           }
 
           const hasFailureAlertAfter = typeof opts.failureAlertAfter === "string";

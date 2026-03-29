@@ -624,7 +624,19 @@ export function applyJobPatch(
     }
   }
   if (patch.delivery) {
-    job.delivery = mergeCronDelivery(job.delivery, patch.delivery);
+    let effectiveDeliveryPatch = patch.delivery;
+    // When a legacy job (no delivery object, delivery config in payload fields)
+    // receives a delivery patch without an explicit mode, seed "announce" so
+    // mergeCronDelivery doesn't default to "none" and silently disable delivery.
+    if (!effectiveDeliveryPatch.mode && !job.delivery && job.payload.kind === "agentTurn") {
+      const p = job.payload;
+      const legacyActive =
+        p.deliver === true || (p.deliver !== false && Boolean(p.to || p.channel));
+      if (legacyActive) {
+        effectiveDeliveryPatch = { ...effectiveDeliveryPatch, mode: "announce" };
+      }
+    }
+    job.delivery = mergeCronDelivery(job.delivery, effectiveDeliveryPatch);
   }
   if ("failureAlert" in patch) {
     job.failureAlert = mergeCronFailureAlert(job.failureAlert, patch.failureAlert);
@@ -791,6 +803,7 @@ function mergeCronDelivery(
     accountId: existing?.accountId,
     bestEffort: existing?.bestEffort,
     failureDestination: existing?.failureDestination,
+    additionalTargets: existing?.additionalTargets,
   };
 
   if (typeof patch.mode === "string") {
@@ -840,6 +853,11 @@ function mergeCronDelivery(
       }
       next.failureDestination = nextFd;
     }
+  }
+  if ("additionalTargets" in patch) {
+    next.additionalTargets = Array.isArray(patch.additionalTargets)
+      ? patch.additionalTargets
+      : undefined;
   }
 
   return next;

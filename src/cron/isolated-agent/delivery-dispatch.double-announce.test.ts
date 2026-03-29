@@ -456,7 +456,9 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     const second = await dispatchCronDelivery(params as never);
 
     expect(first.delivered).toBe(false);
+    expect(first.sendOccurred).toBe(false);
     expect(second.delivered).toBe(false);
+    expect(second.sendOccurred).toBe(false);
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(2);
   });
 
@@ -570,5 +572,130 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Additional-targets fan-out guard: run.ts gates fan-out on
+// `deliveryResult.sendOccurred` (full primary success this run; false on replay
+// cache hits). These tests verify delivered=false / sendOccurred=false in
+// failure/skip paths so extra channels do not receive output incorrectly.
+// ---------------------------------------------------------------------------
+
+describe("dispatchCronDelivery — delivered=false prevents additional-targets fan-out", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetCompletedDirectCronDeliveriesForTests();
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(expectsSubagentFollowup).mockReturnValue(false);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+    vi.mocked(readDescendantSubagentFallbackReply).mockResolvedValue(undefined);
+    vi.mocked(waitForDescendantSubagentSummary).mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("unresolved delivery target (non-bestEffort) returns delivered=false", async () => {
+    const params = makeBaseParams({ synthesizedText: "Morning briefing." });
+    params.resolvedDelivery = {
+      ok: false,
+      error: { message: "channel not configured" },
+    } as never;
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.delivered).toBe(false);
+    expect(state.result).toBeDefined();
+    expect(state.result!.status).toBe("error");
+    // Neither state.delivered nor result.delivered should be true
+    expect(state.result!.delivered).toBeUndefined();
+  });
+
+  it("unresolved delivery target (bestEffort) returns delivered=false with ok status", async () => {
+    const params = makeBaseParams({ synthesizedText: "Morning briefing." });
+    params.resolvedDelivery = {
+      ok: false,
+      error: { message: "channel not configured" },
+    } as never;
+    (params as Record<string, unknown>).deliveryBestEffort = true;
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.delivered).toBe(false);
+    expect(state.result).toBeDefined();
+    expect(state.result!.status).toBe("ok");
+    expect(state.result!.delivered).toBeUndefined();
+  });
+
+  it("delivery not requested returns delivered=false", async () => {
+    const params = makeBaseParams({
+      synthesizedText: "Done.",
+      deliveryRequested: false,
+    });
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.delivered).toBe(false);
+    expect(state.result).toBeUndefined();
+  });
+
+  it("permanent delivery error returns delivered=false", async () => {
+    vi.mocked(deliverOutboundPayloads).mockRejectedValue(new Error("chat not found"));
+
+    const params = makeBaseParams({ synthesizedText: "Report." });
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.delivered).toBe(false);
+    expect(state.sendOccurred).toBe(false);
+    expect(state.result).toBeDefined();
+    expect(state.result!.status).toBe("error");
+    expect(state.result!.delivered).toBeUndefined();
+  });
+
+  it("transient error (bestEffort) exhausts retries, delivered=false sendOccurred=false", async () => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    vi.mocked(deliverOutboundPayloads).mockRejectedValue(new Error("gateway timeout"));
+
+    const params = makeBaseParams({ synthesizedText: "Report." });
+    (params as Record<string, unknown>).deliveryBestEffort = true;
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.delivered).toBe(false);
+    expect(state.sendOccurred).toBe(false);
+    expect(state.result).toBeUndefined();
+  });
+
+  it("successful delivery returns delivered=true", async () => {
+    vi.mocked(deliverOutboundPayloads).mockResolvedValue([{ ok: true } as never]);
+
+    const params = makeBaseParams({ synthesizedText: "Briefing ready." });
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.delivered).toBe(true);
+    expect(state.sendOccurred).toBe(true);
+  });
+
+  it("SILENT_REPLY_TOKEN suppresses send, sendOccurred=false blocks fan-out", async () => {
+    const params = makeBaseParams({ synthesizedText: "NO_REPLY" });
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.sendOccurred).toBe(false);
+    expect(vi.mocked(deliverOutboundPayloads)).not.toHaveBeenCalled();
+  });
+
+  it("replay cache-hit sets delivered=true but sendOccurred=false (no fan-out)", async () => {
+    vi.mocked(deliverOutboundPayloads).mockResolvedValue([{ ok: true } as never]);
+
+    const params = makeBaseParams({ synthesizedText: "Replay-safe cron update." });
+    const first = await dispatchCronDelivery(params);
+    const second = await dispatchCronDelivery(params);
+
+    expect(first.delivered).toBe(true);
+    expect(first.sendOccurred).toBe(true);
+    expect(second.delivered).toBe(true);
+    expect(second.sendOccurred).toBe(false);
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
   });
 });
