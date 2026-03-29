@@ -285,14 +285,14 @@ describe("normalizeReplyPayload", () => {
   it("leaves complex Options lines as plain text", () => {
     const result = normalizeReplyPayload(
       {
-        text: "ACP runtime choices.\nOptions: host=sandbox|gateway|node, security=deny|allowlist|full.",
+        text: "ACP runtime choices.\nOptions: host=auto|sandbox|gateway|node, security=deny|allowlist|full.",
       },
       { enableSlackInteractiveReplies: true },
     );
 
     expect(result).not.toBeNull();
     expect(result!.text).toBe(
-      "ACP runtime choices.\nOptions: host=sandbox|gateway|node, security=deny|allowlist|full.",
+      "ACP runtime choices.\nOptions: host=auto|sandbox|gateway|node, security=deny|allowlist|full.",
     );
     expect(result!.interactive).toBeUndefined();
   });

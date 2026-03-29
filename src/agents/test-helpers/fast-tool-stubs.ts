@@ -24,8 +24,11 @@ vi.mock("../tools/web-tools.js", () => ({
   createWebFetchTool: () => null,
 }));
 
-vi.mock("../../plugins/tools.js", () => ({
-  resolvePluginTools: () => [],
-  getPluginToolMeta: () => undefined,
-  copyPluginToolMeta: (_source: unknown, target: unknown) => target,
-}));
+vi.mock("../../plugins/tools.js", async (importOriginal) => {
+  const mod = await importOriginal<typeof import("../../plugins/tools.js")>();
+  return {
+    ...mod,
+    resolvePluginTools: () => [],
+    getPluginToolMeta: () => undefined,
+  };
+});

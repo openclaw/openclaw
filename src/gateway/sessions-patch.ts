@@ -19,6 +19,7 @@ import {
 } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { normalizeExecTarget } from "../infra/exec-approvals.js";
 import {
   isAcpSessionKey,
   isSubagentSessionKey,
@@ -38,14 +39,6 @@ import {
 
 function invalid(message: string): { ok: false; error: ErrorShape } {
   return { ok: false, error: errorShape(ErrorCodes.INVALID_REQUEST, message) };
-}
-
-function normalizeExecHost(raw: string): "sandbox" | "gateway" | "node" | undefined {
-  const normalized = raw.trim().toLowerCase();
-  if (normalized === "sandbox" || normalized === "gateway" || normalized === "node") {
-    return normalized;
-  }
-  return undefined;
 }
 
 function normalizeExecSecurity(raw: string): "deny" | "allowlist" | "full" | undefined {
@@ -326,9 +319,9 @@ export async function applySessionsPatchToStore(params: {
     if (raw === null) {
       delete next.execHost;
     } else if (raw !== undefined) {
-      const normalized = normalizeExecHost(String(raw));
+      const normalized = normalizeExecTarget(String(raw)) ?? undefined;
       if (!normalized) {
-        return invalid('invalid execHost (use "sandbox"|"gateway"|"node")');
+        return invalid('invalid execHost (use "auto"|"sandbox"|"gateway"|"node")');
       }
       next.execHost = normalized;
     }
