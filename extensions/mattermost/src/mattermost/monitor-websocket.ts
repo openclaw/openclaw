@@ -1,9 +1,9 @@
 import { safeParseJsonWithSchema, safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
 import { z } from "openclaw/plugin-sdk/zod";
 import WebSocket from "ws";
-import type { ChannelAccountSnapshot, RuntimeEnv } from "../runtime-api.js";
 import { MattermostPostSchema, type MattermostPost } from "./client.js";
 import { rawDataToString } from "./monitor-helpers.js";
+import type { ChannelAccountSnapshot, RuntimeEnv } from "./runtime-api.js";
 
 export type MattermostEventPayload = {
   event?: string;
