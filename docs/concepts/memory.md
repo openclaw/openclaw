@@ -1,12 +1,12 @@
 ---
-title: "Memory"
+title: "Memory Overview"
 summary: "How OpenClaw remembers things across sessions"
 read_when:
   - You want to understand how memory works
   - You want to know what memory files to write
 ---
 
-# Memory
+# Memory Overview
 
 OpenClaw remembers things by writing **plain Markdown files** in your agent's
 workspace. The model only "remembers" what gets saved to disk -- there is no
@@ -61,7 +61,7 @@ For details on how search works, tuning options, and provider setup, see
 SQLite-based. Works out of the box with keyword search, vector similarity, and
 hybrid search. No extra dependencies.
 </Card>
-<Card title="QMD" icon="magnifying-glass" href="/concepts/memory-qmd">
+<Card title="QMD" icon="search" href="/concepts/memory-qmd">
 Local-first sidecar with reranking, query expansion, and the ability to index
 directories outside the workspace.
 </Card>

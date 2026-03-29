@@ -86,6 +86,17 @@ Settings live under `plugins.entries["openclaw-honcho"].config`:
 For self-hosted instances, point `baseUrl` to your local server (for example
 `http://localhost:8000`) and omit the API key.
 
+## Migrating existing memory
+
+If you have existing workspace memory files (`USER.md`, `MEMORY.md`,
+`IDENTITY.md`, `memory/`, `canvas/`), `openclaw honcho setup` detects and
+offers to migrate them.
+
+<Info>
+Migration is non-destructive -- files are uploaded to Honcho. Originals are
+never deleted or moved.
+</Info>
+
 ## How it works
 
 After every AI turn, the conversation is persisted to Honcho. Both user and
