@@ -401,8 +401,13 @@ export function createDiscordGatewayReconnectController(params: {
     if (!params.gateway) {
       return;
     }
-    params.gateway.options.reconnect = { maxAttempts: 0 };
-    params.gateway.disconnect();
+    // Use the listener-stripping disconnect to avoid Carbon's automatic
+    // reconnection path. Previously we set maxAttempts=0 and called
+    // gateway.disconnect(), but Carbon's handleReconnectionAttempt treats
+    // 0 >= 0 as "exhausted" and emits a crash-level error before the
+    // lifecycle sets lifecycleStopping=true. Stripping the socket close
+    // listeners first prevents the reconnection handler from firing at all.
+    void disconnectGatewaySocketWithoutAutoReconnect();
   };
   const ensureStartupReady = async () => {
     if (!params.gateway || params.gateway.isConnected || shouldStop()) {
