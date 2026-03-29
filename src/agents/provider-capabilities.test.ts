@@ -7,6 +7,16 @@ const resolveProviderCapabilitiesWithPluginMock = vi.fn((params: { provider: str
         providerFamily: "anthropic",
         dropThinkingBlockModelHints: ["claude"],
       };
+    case "anthropic-vertex":
+      return {
+        providerFamily: "anthropic",
+        dropThinkingBlockModelHints: ["claude"],
+      };
+    case "amazon-bedrock":
+      return {
+        providerFamily: "anthropic",
+        dropThinkingBlockModelHints: ["claude"],
+      };
     case "openai":
       return {
         providerFamily: "openai",
