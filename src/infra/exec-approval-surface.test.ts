@@ -34,6 +34,7 @@ async function loadExecApprovalSurfaceModule() {
   vi.doMock("../channels/plugins/index.js", () => ({
     getChannelPlugin: (...args: unknown[]) => getChannelPluginMock(...args),
     listChannelPlugins: (...args: unknown[]) => listChannelPluginsMock(...args),
+    resolveChannelApprovalAdapter: (plugin?: { approvals?: unknown } | null) => plugin?.approvals,
   }));
   vi.doMock("../utils/message-channel.js", () => ({
     INTERNAL_MESSAGE_CHANNEL: "web",
@@ -82,7 +83,7 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
     getChannelPluginMock.mockImplementation((channel: string) =>
       channel === "telegram"
         ? {
-            execApprovals: {
+            approvals: {
               auth: {
                 getInitiatingSurfaceState: () => ({ kind: "enabled" }),
               },
@@ -90,7 +91,7 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
           }
         : channel === "discord"
           ? {
-              execApprovals: {
+              approvals: {
                 auth: {
                   getInitiatingSurfaceState: () => ({ kind: "disabled" }),
                 },
@@ -131,7 +132,7 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
     getChannelPluginMock.mockImplementation((channel: string) =>
       channel === "telegram"
         ? {
-            execApprovals: {
+            approvals: {
               auth: {
                 getInitiatingSurfaceState: () => ({ kind: "disabled" }),
               },
@@ -177,14 +178,14 @@ describe("hasConfiguredExecApprovalDmRoute", () => {
     {
       plugins: [
         {
-          execApprovals: {
+          approvals: {
             delivery: {
               hasConfiguredDmRoute: () => false,
             },
           },
         },
         {
-          execApprovals: {
+          approvals: {
             delivery: {
               hasConfiguredDmRoute: () => true,
             },
@@ -196,21 +197,21 @@ describe("hasConfiguredExecApprovalDmRoute", () => {
     {
       plugins: [
         {
-          execApprovals: {
+          approvals: {
             delivery: {
               hasConfiguredDmRoute: () => false,
             },
           },
         },
         {
-          execApprovals: {
+          approvals: {
             delivery: {
               hasConfiguredDmRoute: () => false,
             },
           },
         },
         {
-          execApprovals: undefined,
+          approvals: undefined,
         },
       ],
       expected: false,

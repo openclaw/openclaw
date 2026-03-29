@@ -5,7 +5,12 @@ import {
   normalizeChannelId,
 } from "../channels/plugins/index.js";
 import { resolveInstallableChannelPlugin } from "../commands/channel-setup/channel-plugin-resolution.js";
-import { loadConfig, writeConfigFile, type OpenClawConfig } from "../config/config.js";
+import {
+  loadConfig,
+  readConfigFileSnapshot,
+  replaceConfigFile,
+  type OpenClawConfig,
+} from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { setVerbose } from "../globals.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
@@ -131,6 +136,7 @@ export async function runChannelLogin(
   opts: ChannelAuthOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
+  const sourceSnapshotPromise = readConfigFileSnapshot().catch(() => null);
   const autoEnabled = applyPluginAutoEnable({
     config: loadConfig(),
     env: process.env,
@@ -143,7 +149,10 @@ export async function runChannelLogin(
     runtime,
   );
   if (autoEnabled.changes.length > 0 || configChanged) {
-    await writeConfigFile(cfg);
+    await replaceConfigFile({
+      nextConfig: cfg,
+      baseHash: (await sourceSnapshotPromise)?.hash,
+    });
   }
   const login = plugin.auth?.login;
   if (!login) {
@@ -165,6 +174,7 @@ export async function runChannelLogout(
   opts: ChannelAuthOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
+  const sourceSnapshotPromise = readConfigFileSnapshot().catch(() => null);
   const autoEnabled = applyPluginAutoEnable({
     config: loadConfig(),
     env: process.env,
@@ -177,7 +187,10 @@ export async function runChannelLogout(
     runtime,
   );
   if (autoEnabled.changes.length > 0 || configChanged) {
-    await writeConfigFile(cfg);
+    await replaceConfigFile({
+      nextConfig: cfg,
+      baseHash: (await sourceSnapshotPromise)?.hash,
+    });
   }
   const logoutAccount = plugin.gateway?.logoutAccount;
   if (!logoutAccount) {

@@ -40,16 +40,21 @@ vi.mock("../config/config.js", async (importOriginal) => {
   return {
     ...actual,
     loadConfig: () => mockConfig,
+    resolveGatewayPort: () => 18789,
   };
 });
 
-vi.mock("../config/sessions.js", () => ({
-  loadSessionStore: (storePath: string) => loadSessionStoreMock(storePath),
-  resolveAgentIdFromSessionKey: (sessionKey: string) =>
-    resolveAgentIdFromSessionKeyMock(sessionKey),
-  resolveMainSessionKey: (cfg: unknown) => resolveMainSessionKeyMock(cfg),
-  resolveStorePath: (store: unknown, options: unknown) => resolveStorePathMock(store, options),
-}));
+vi.mock("../config/sessions.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/sessions.js")>();
+  return {
+    ...actual,
+    loadSessionStore: (storePath: string) => loadSessionStoreMock(storePath),
+    resolveAgentIdFromSessionKey: (sessionKey: string) =>
+      resolveAgentIdFromSessionKeyMock(sessionKey),
+    resolveMainSessionKey: (cfg: unknown) => resolveMainSessionKeyMock(cfg),
+    resolveStorePath: (store: unknown, options: unknown) => resolveStorePathMock(store, options),
+  };
+});
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: (request: unknown) => callGatewayMock(request),
@@ -89,12 +94,10 @@ vi.mock("./subagent-registry-runtime.js", async (importOriginal) => {
     ...subagentRegistryRuntimeMock,
   };
 });
+import { runSubagentAnnounceFlow } from "./subagent-announce.js";
 
 describe("subagent announce seam flow", () => {
-  let runSubagentAnnounceFlow: (typeof import("./subagent-announce.js"))["runSubagentAnnounceFlow"];
-
   beforeEach(() => {
-    vi.resetModules();
     agentSpy.mockClear();
     sessionsDeleteSpy.mockClear();
     callGatewayMock.mockReset().mockImplementation(async (req: unknown) => {
@@ -150,7 +153,6 @@ describe("subagent announce seam flow", () => {
   });
 
   it("suppresses ANNOUNCE_SKIP delivery while still deleting the child session", async () => {
-    ({ runSubagentAnnounceFlow } = await import("./subagent-announce.js"));
     const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:test",
       childRunId: "run-direct-skip-whitespace",
@@ -181,7 +183,6 @@ describe("subagent announce seam flow", () => {
   });
 
   it("keeps lifecycle hooks enabled when deleting a completed session-mode child session", async () => {
-    ({ runSubagentAnnounceFlow } = await import("./subagent-announce.js"));
     const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:test",
       childRunId: "run-session-delete-cleanup",
@@ -236,7 +237,6 @@ describe("subagent announce seam flow", () => {
     isEmbeddedPiRunActiveMock.mockReturnValue(true);
     queueEmbeddedPiMessageMock.mockReturnValue(true);
 
-    ({ runSubagentAnnounceFlow } = await import("./subagent-announce.js"));
     const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:test",
       childRunId: "run-origin-provider-steer",
