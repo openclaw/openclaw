@@ -34,7 +34,9 @@ const defaultImportPiSdk = () => import("./pi-model-discovery-runtime.js");
 let importPiSdk = defaultImportPiSdk;
 let modelSuppressionPromise: Promise<typeof import("./model-suppression.runtime.js")> | undefined;
 
-const NON_PI_NATIVE_MODEL_PROVIDERS = new Set(["deepseek", "kilocode"]);
+// Allow configured catalog entries to declare capabilities for custom providers
+// whose discovered `/models` payloads omit image/document support metadata.
+const NON_PI_NATIVE_MODEL_PROVIDERS = new Set(["deepseek", "kilocode", "rightcode"]);
 
 function shouldLogModelCatalogTiming(): boolean {
   return process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
@@ -112,21 +114,30 @@ function mergeConfiguredOptInProviderModels(params: {
     return;
   }
 
-  const seen = new Set(
-    params.models.map(
-      (entry) => `${entry.provider.toLowerCase().trim()}::${entry.id.toLowerCase().trim()}`,
-    ),
+  const seen = new Map(
+    params.models.map((entry, index) => [
+      `${entry.provider.toLowerCase().trim()}::${entry.id.toLowerCase().trim()}`,
+      index,
+    ]),
   );
 
   for (const entry of configured) {
     const key = `${entry.provider.toLowerCase().trim()}::${entry.id.toLowerCase().trim()}`;
-    if (seen.has(key)) {
+    const existingIndex = seen.get(key);
+    if (existingIndex !== undefined) {
+      if (entry.input) {
+        params.models[existingIndex] = { ...params.models[existingIndex], input: entry.input };
+      }
       continue;
     }
     params.models.push(entry);
-    seen.add(key);
+    seen.set(key, params.models.length - 1);
   }
 }
+
+export const __testing = {
+  mergeConfiguredOptInProviderModels,
+};
 
 export function resetModelCatalogCacheForTest() {
   modelCatalogPromise = null;

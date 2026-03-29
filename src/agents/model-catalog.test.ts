@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
-import { __setModelCatalogImportForTest, loadModelCatalog } from "./model-catalog.js";
+import { __setModelCatalogImportForTest, __testing as modelCatalogTesting, loadModelCatalog } from "./model-catalog.js";
 import {
   installModelCatalogTestHooks,
   mockCatalogImportFailThenRecover,
@@ -351,5 +351,43 @@ describe("loadModelCatalog", () => {
     );
     expect(matches).toHaveLength(1);
     expect(matches[0]?.name).toBe("Kilo Auto");
+  });
+  it("overrides existing rightcode catalog input capability from configured model input", () => {
+    const models = [
+      {
+        id: "rightcode/v1",
+        provider: "rightcode",
+        name: "RightCode V1",
+        input: ["text"],
+      },
+    ];
+
+    modelCatalogTesting.mergeConfiguredOptInProviderModels({
+      config: {
+        models: {
+          providers: {
+            rightcode: {
+              baseUrl: "https://api.rightcode.ai/v1",
+              api: "openai-completions",
+              models: [
+                {
+                  id: "rightcode/v1",
+                  name: "Configured RightCode V1",
+                  input: ["image"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128000,
+                  maxTokens: 8192,
+                },
+              ],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      models,
+    });
+
+    expect(models).toHaveLength(1);
+    expect(models[0]?.name).toBe("RightCode V1");
+    expect(models[0]?.input).toEqual(["image"]);
   });
 });
