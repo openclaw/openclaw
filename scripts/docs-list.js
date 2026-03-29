@@ -20,7 +20,7 @@ if (!statSync(DOCS_DIR).isDirectory()) {
   process.exit(1);
 }
 
-const EXCLUDED_DIRS = new Set(["archive", "research"]);
+const EXCLUDED_DIRS = new Set(["archive", "internal", "research"]);
 
 /**
  * @param {unknown[]} values
