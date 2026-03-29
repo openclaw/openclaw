@@ -12,7 +12,7 @@ read_when:
 OpenClaw can keep agents from getting stuck in repeated tool-call patterns.
 The guard is **enabled by default**.
 
-It uses gradual escalation — warning at 10 identical calls, blocking at 30 — so legitimate varied tool use is unaffected.
+It uses gradual escalation — warning at 10 identical calls, blocking at 20 — so legitimate varied tool use is unaffected.
 
 ## Why this exists
 
