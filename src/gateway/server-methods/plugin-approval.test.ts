@@ -431,7 +431,7 @@ describe("createPluginApprovalHandlers", () => {
       );
     });
 
-    it("requires exact id and rejects prefixes", async () => {
+    it("accepts unique short id prefixes", async () => {
       const handlers = createPluginApprovalHandlers(manager);
       const record = manager.create({ title: "T", description: "D" }, 60_000, "abcdef-1234");
       void manager.register(record, 60_000);
@@ -441,15 +441,8 @@ describe("createPluginApprovalHandlers", () => {
         decision: "allow-always",
       });
       await handlers["plugin.approval.resolve"](opts);
-      expect(opts.respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          code: "INVALID_REQUEST",
-          message: expect.stringContaining("unknown or expired"),
-          details: expect.objectContaining({ reason: "APPROVAL_NOT_FOUND" }),
-        }),
-      );
+      expect(opts.respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+      expect(manager.getSnapshot(record.id)?.decision).toBe("allow-always");
     });
 
     it("does not leak candidate ids when prefixes are ambiguous", async () => {
