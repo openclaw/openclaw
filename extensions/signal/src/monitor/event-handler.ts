@@ -123,6 +123,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     mediaTypes?: string[];
     commandAuthorized: boolean;
     wasMentioned?: boolean;
+    replyToId?: string;
     replyToBody?: string;
     replyToSender?: string;
     replyToIsQuote?: boolean;
@@ -217,6 +218,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       Provider: "signal" as const,
       Surface: "signal" as const,
       MessageSid: entry.messageId,
+      ReplyToId: entry.replyToId,
       ReplyToBody: entry.replyToBody,
       ReplyToSender: entry.replyToSender,
       ReplyToIsQuote: entry.replyToIsQuote,
@@ -878,6 +880,17 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const senderName = envelope.sourceName ?? senderDisplay;
     const messageId =
       typeof envelope.timestamp === "number" ? String(envelope.timestamp) : undefined;
+
+    // Extract quote metadata for reply context (mirrors Telegram's describeReplyTarget)
+    const signalQuote = dataMessage.quote
+      ? {
+          id: dataMessage.quote.id != null ? String(dataMessage.quote.id) : undefined,
+          author:
+            dataMessage.quote.author ?? dataMessage.quote.authorNumber ?? undefined,
+          text: dataMessage.quote.text?.trim() || undefined,
+        }
+      : undefined;
+
     await inboundDebouncer.enqueue({
       senderName,
       senderDisplay,
@@ -896,6 +909,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       mediaTypes: mediaTypes.length > 0 ? mediaTypes : undefined,
       commandAuthorized,
       wasMentioned: effectiveWasMentioned,
+      replyToId:
+        dataMessage?.quote?.id != null ? String(dataMessage.quote.id) : undefined,
       replyToBody: visibleQuoteText || undefined,
       replyToSender: visibleQuoteSender,
       replyToIsQuote: visibleQuoteText ? true : undefined,
