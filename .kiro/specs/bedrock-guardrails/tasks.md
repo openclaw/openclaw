@@ -7,13 +7,13 @@ Add Amazon Bedrock Guardrails support to the `amazon-bedrock` extension plugin. 
 ## Environment Setup
 
 - [ ] 0. Prepare development environment
-  - [ ] 0.1 Install pnpm 10.32.1
+  - [x] 0.1 Install pnpm 10.32.1
     - The repo declares `"packageManager": "pnpm@10.32.1"` — all scripts, CI, and lockfile depend on pnpm
     - Run: `npm install -g pnpm@10.32.1`
     - Alternative: `npm install -g corepack && corepack enable && corepack prepare pnpm@10.32.1 --activate`
     - Verify: `pnpm --version` should output `10.32.1`
 
-  - [ ] 0.2 Enable Windows Developer Mode (if not already enabled)
+  - [x] 0.2 Enable Windows Developer Mode (if not already enabled)
     - pnpm uses symlinks for `node_modules` — Windows requires Developer Mode or an elevated terminal for symlink creation
     - Settings > For Developers > Developer Mode toggle
     - Without this, `pnpm install` may fail with `EPERM` errors on symlink creation
@@ -24,12 +24,12 @@ Add Amazon Bedrock Guardrails support to the `amazon-bedrock` extension plugin. 
     - Requires reboot to take effect
     - Also ensure git is configured: `git config --system core.longpaths true`
 
-  - [ ] 0.4 Install dependencies
+  - [x] 0.4 Install dependencies
     - Run: `pnpm install`
     - This pulls all devDependencies (Vitest, fast-check, TypeScript, Oxlint, Oxfmt) and extension deps (`@aws-sdk/client-bedrock` for the amazon-bedrock extension)
     - Watch for patch application warnings — the repo uses `pnpm.patchedDependencies` with Unix-style patch files; if patches fail, check `.gitattributes` is preserving line endings on `.patch` files
 
-  - [ ] 0.5 Verify the toolchain works
+  - [x] 0.5 Verify the toolchain works
     - Run: `pnpm build` — type-check + compile (may need `NODE_OPTIONS=--max-old-space-size=8192` if OOM on this large monorepo)
     - Run: `pnpm check` — lint + format check via Oxlint/Oxfmt
     - Run: `pnpm test:extension amazon-bedrock` — scoped test for the extension we're modifying
