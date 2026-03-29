@@ -11,6 +11,7 @@ import {
   writeConfigFile,
 } from "../../config/config.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
+import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
 import {
@@ -1023,8 +1024,10 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     postUpdateConfigSnapshot = {
       ...configSnapshot,
       parsed: next,
-      resolved: next,
-      config: next,
+      sourceConfig: asResolvedSourceConfig(next),
+      resolved: asResolvedSourceConfig(next),
+      runtimeConfig: asRuntimeConfig(next),
+      config: asRuntimeConfig(next),
     };
     if (!opts.json) {
       defaultRuntime.log(theme.muted(`Update channel set to ${requestedChannel}.`));

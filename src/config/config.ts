@@ -4,6 +4,7 @@ export {
   clearRuntimeConfigSnapshot,
   registerConfigWriteListener,
   createConfigIO,
+  getRuntimeConfig,
   getRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshot,
   projectConfigOntoRuntimeSourceSnapshot,
@@ -12,6 +13,8 @@ export {
   parseConfigJson5,
   readConfigFileSnapshot,
   readConfigFileSnapshotForWrite,
+  readSourceConfigSnapshot,
+  readSourceConfigSnapshotForWrite,
   resetConfigRuntimeState,
   resolveConfigSnapshotHash,
   setRuntimeConfigSnapshotRefreshHandler,
@@ -20,6 +23,7 @@ export {
 } from "./io.js";
 export type { ConfigWriteNotification } from "./io.js";
 export { migrateLegacyConfig } from "./legacy-migrate.js";
+export { ConfigMutationConflictError, mutateConfigFile, replaceConfigFile } from "./mutate.js";
 export * from "./paths.js";
 export * from "./runtime-overrides.js";
 export * from "./types.js";

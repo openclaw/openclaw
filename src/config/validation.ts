@@ -21,14 +21,13 @@ import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "../shared/net
 import { isRecord } from "../utils.js";
 import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-dirs.js";
 import { appendAllowedValuesHint, summarizeAllowedValues } from "./allowed-values.js";
-import { getBundledChannelConfigSchemaMap } from "./bundled-channel-config-runtime.js";
 import { collectChannelSchemaMetadata } from "./channel-config-metadata.js";
-import { applyAgentDefaults, applyModelDefaults, applySessionDefaults } from "./defaults.js";
 import {
   listLegacyWebSearchConfigPaths,
   normalizeLegacyWebSearchConfig,
 } from "./legacy-web-search.js";
 import { findLegacyConfigIssues } from "./legacy.js";
+import { materializeRuntimeConfig } from "./materialize.js";
 import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
@@ -41,7 +40,6 @@ type AllowedValuesCollection = {
   incomplete: boolean;
   hasValues: boolean;
 };
-type JsonSchemaNode = Record<string, unknown>;
 
 const CUSTOM_EXPECTED_ONE_OF_RE = /expected one of ((?:"[^"]+"(?:\|"?[^"]+"?)*)+)/i;
 
@@ -66,128 +64,7 @@ function formatConfigPath(segments: readonly ConfigPathSegment[]): string {
   return segments.join(".");
 }
 
-function toJsonSchemaNode(value: unknown): JsonSchemaNode | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  return value as JsonSchemaNode;
-}
-
-function getSchemaCombinatorBranches(node: JsonSchemaNode): JsonSchemaNode[] {
-  const keys = ["anyOf", "oneOf", "allOf"] as const;
-  const branches: JsonSchemaNode[] = [];
-  for (const key of keys) {
-    const value = node[key];
-    if (!Array.isArray(value)) {
-      continue;
-    }
-    for (const entry of value) {
-      const child = toJsonSchemaNode(entry);
-      if (child) {
-        branches.push(child);
-      }
-    }
-  }
-  return branches;
-}
-
-function collectAllowedValuesFromSchemaNode(node: JsonSchemaNode): AllowedValuesCollection {
-  if (Object.prototype.hasOwnProperty.call(node, "const")) {
-    return { values: [node.const], incomplete: false, hasValues: true };
-  }
-
-  const enumValues = node.enum;
-  if (Array.isArray(enumValues)) {
-    return { values: enumValues, incomplete: false, hasValues: enumValues.length > 0 };
-  }
-
-  if (node.type === "boolean") {
-    return { values: [true, false], incomplete: false, hasValues: true };
-  }
-
-  const branches = getSchemaCombinatorBranches(node);
-  if (branches.length === 0) {
-    return { values: [], incomplete: true, hasValues: false };
-  }
-
-  const collected: unknown[] = [];
-  for (const branch of branches) {
-    const result = collectAllowedValuesFromSchemaNode(branch);
-    if (result.incomplete || !result.hasValues) {
-      return { values: [], incomplete: true, hasValues: false };
-    }
-    collected.push(...result.values);
-  }
-
-  return { values: collected, incomplete: false, hasValues: collected.length > 0 };
-}
-
-function advanceSchemaNodes(node: JsonSchemaNode, segment: ConfigPathSegment): JsonSchemaNode[] {
-  const branches = getSchemaCombinatorBranches(node);
-  if (branches.length > 0) {
-    return branches.flatMap((branch) => advanceSchemaNodes(branch, segment));
-  }
-
-  if (typeof segment === "number") {
-    const items = toJsonSchemaNode(node.items);
-    return items ? [items] : [];
-  }
-
-  const properties = toJsonSchemaNode(node.properties);
-  const propertyNode = properties ? toJsonSchemaNode(properties[segment]) : null;
-  if (propertyNode) {
-    return [propertyNode];
-  }
-
-  const additionalProperties = toJsonSchemaNode(node.additionalProperties);
-  return additionalProperties ? [additionalProperties] : [];
-}
-
-function collectAllowedValuesFromSchemaPath(
-  root: JsonSchemaNode,
-  path: readonly ConfigPathSegment[],
-): AllowedValuesCollection {
-  let currentNodes = [root];
-  for (const segment of path) {
-    currentNodes = currentNodes.flatMap((node) => advanceSchemaNodes(node, segment));
-    if (currentNodes.length === 0) {
-      return { values: [], incomplete: false, hasValues: false };
-    }
-  }
-
-  const collected: unknown[] = [];
-  for (const node of currentNodes) {
-    const result = collectAllowedValuesFromSchemaNode(node);
-    if (result.incomplete || !result.hasValues) {
-      return { values: [], incomplete: true, hasValues: false };
-    }
-    collected.push(...result.values);
-  }
-
-  return { values: collected, incomplete: false, hasValues: collected.length > 0 };
-}
-
-function collectAllowedValuesFromConfigPath(
-  path: readonly ConfigPathSegment[],
-): AllowedValuesCollection {
-  if (path[0] === "channels" && typeof path[1] === "string") {
-    const channelSchema = getBundledChannelConfigSchemaMap().get(path[1]);
-    const schemaRoot = toJsonSchemaNode(channelSchema?.schema);
-    if (schemaRoot) {
-      return collectAllowedValuesFromSchemaPath(schemaRoot, path.slice(2));
-    }
-  }
-
-  return { values: [], incomplete: false, hasValues: false };
-}
-
 function collectAllowedValuesFromCustomIssue(record: UnknownIssueRecord): AllowedValuesCollection {
-  const path = toConfigPathSegments(record.path);
-  const schemaValues = collectAllowedValuesFromConfigPath(path);
-  if (schemaValues.hasValues && !schemaValues.incomplete) {
-    return schemaValues;
-  }
-
   const message = typeof record.message === "string" ? record.message : "";
   const expectedMatch = message.match(CUSTOM_EXPECTED_ONE_OF_RE);
   if (expectedMatch?.[1]) {
@@ -195,6 +72,9 @@ function collectAllowedValuesFromCustomIssue(record: UnknownIssueRecord): Allowe
     return { values, incomplete: false, hasValues: values.length > 0 };
   }
 
+  // Custom Zod issues usually come from superRefine rules, not enum schemas.
+  // Avoid bundled channel schema lookup here: it can pull in runtime plugin
+  // metadata during validation error formatting and hang on some bootstrap paths.
   return { values: [], incomplete: false, hasValues: false };
 }
 
@@ -438,7 +318,7 @@ export function validateConfigObject(
   }
   return {
     ok: true,
-    config: applyModelDefaults(applyAgentDefaults(applySessionDefaults(result.config))),
+    config: materializeRuntimeConfig(result.config, "snapshot"),
   };
 }
 

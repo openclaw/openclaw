@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import {
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
@@ -477,7 +477,7 @@ export function scheduleGatewaySigusr1Restart(opts?: {
         emitGatewayRestart();
         return;
       }
-      const cfg = loadConfig();
+      const cfg = getRuntimeConfig();
       deferGatewayRestartUntilIdle({
         getPendingCount: pendingCheck,
         maxWaitMs: cfg.gateway?.reload?.deferralTimeoutMs,

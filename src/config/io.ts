@@ -17,17 +17,6 @@ import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { VERSION } from "../version.js";
 import { DuplicateAgentDirError, findDuplicateAgentDirs } from "./agent-dirs.js";
 import { maintainConfigBackups } from "./backup-rotation.js";
-import {
-  applyCompactionDefaults,
-  applyContextPruningDefaults,
-  applyAgentDefaults,
-  applyLoggingDefaults,
-  applyMessageDefaults,
-  applyModelDefaults,
-  applySessionDefaults,
-  applyTalkConfigNormalization,
-  applyTalkApiKey,
-} from "./defaults.js";
 import { restoreEnvVarRefs } from "./env-preserve.js";
 import {
   type EnvSubstitutionWarning,
@@ -43,9 +32,12 @@ import {
 } from "./includes.js";
 import { migrateLegacyConfig } from "./legacy-migrate.js";
 import { findLegacyConfigIssues } from "./legacy.js";
+import {
+  asResolvedSourceConfig,
+  asRuntimeConfig,
+  materializeRuntimeConfig,
+} from "./materialize.js";
 import { applyMergePatch } from "./merge-patch.js";
-import { normalizeExecSafeBinProfilesInConfig } from "./normalize-exec-safe-bin.js";
-import { normalizeConfigPaths } from "./normalize-paths.js";
 import { resolveConfigPath, resolveDefaultConfigCandidates, resolveStateDir } from "./paths.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
 import { applyConfigOverrides } from "./runtime-overrides.js";
@@ -249,6 +241,8 @@ export type ConfigWriteNotification = {
   configPath: string;
   sourceConfig: OpenClawConfig;
   runtimeConfig: OpenClawConfig;
+  persistedHash: string;
+  writtenAtMs: number;
 };
 
 export class ConfigRuntimeRefreshError extends Error {
@@ -1637,6 +1631,38 @@ type ReadConfigFileSnapshotInternalResult = {
   envSnapshotForRestore?: Record<string, string | undefined>;
 };
 
+function createConfigFileSnapshot(params: {
+  path: string;
+  exists: boolean;
+  raw: string | null;
+  parsed: unknown;
+  sourceConfig: OpenClawConfig;
+  valid: boolean;
+  runtimeConfig: OpenClawConfig;
+  hash?: string;
+  issues: ConfigFileSnapshot["issues"];
+  warnings: ConfigFileSnapshot["warnings"];
+  legacyIssues: LegacyConfigIssue[];
+}): ConfigFileSnapshot {
+  const sourceConfig = asResolvedSourceConfig(params.sourceConfig);
+  const runtimeConfig = asRuntimeConfig(params.runtimeConfig);
+  return {
+    path: params.path,
+    exists: params.exists,
+    raw: params.raw,
+    parsed: params.parsed,
+    sourceConfig,
+    resolved: sourceConfig,
+    valid: params.valid,
+    runtimeConfig,
+    config: runtimeConfig,
+    hash: params.hash,
+    issues: params.issues,
+    warnings: params.warnings,
+    legacyIssues: params.legacyIssues,
+  };
+}
+
 async function finalizeReadConfigSnapshotInternalResult(
   deps: Required<ConfigIoDeps>,
   result: ReadConfigFileSnapshotInternalResult,
@@ -1700,17 +1726,19 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       warnOnConfigMiskeys(effectiveConfigRaw, deps.logger);
       if (typeof effectiveConfigRaw !== "object" || effectiveConfigRaw === null) {
         observeLoadConfigSnapshot({
-          path: configPath,
-          exists: true,
-          raw: effectiveRaw,
-          parsed: effectiveParsed,
-          resolved: {},
-          valid: true,
-          config: {},
-          hash,
-          issues: [],
-          warnings: [],
-          legacyIssues: legacyResolution.sourceLegacyIssues,
+          ...createConfigFileSnapshot({
+            path: configPath,
+            exists: true,
+            raw: effectiveRaw,
+            parsed: effectiveParsed,
+            sourceConfig: {},
+            valid: true,
+            runtimeConfig: {},
+            hash,
+            issues: [],
+            warnings: [],
+            legacyIssues: legacyResolution.sourceLegacyIssues,
+          }),
         });
         return {};
       }
@@ -1724,17 +1752,19 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       const validated = validateConfigObjectWithPlugins(effectiveConfigRaw, { env: deps.env });
       if (!validated.ok) {
         observeLoadConfigSnapshot({
-          path: configPath,
-          exists: true,
-          raw: effectiveRaw,
-          parsed: effectiveParsed,
-          resolved: coerceConfig(effectiveConfigRaw),
-          valid: false,
-          config: coerceConfig(effectiveConfigRaw),
-          hash,
-          issues: validated.issues,
-          warnings: validated.warnings,
-          legacyIssues: legacyResolution.sourceLegacyIssues,
+          ...createConfigFileSnapshot({
+            path: configPath,
+            exists: true,
+            raw: effectiveRaw,
+            parsed: effectiveParsed,
+            sourceConfig: coerceConfig(effectiveConfigRaw),
+            valid: false,
+            runtimeConfig: coerceConfig(effectiveConfigRaw),
+            hash,
+            issues: validated.issues,
+            warnings: validated.warnings,
+            legacyIssues: legacyResolution.sourceLegacyIssues,
+          }),
         });
         const details = validated.issues
           .map(
@@ -1761,31 +1791,21 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         deps.logger.warn(`Config warnings:\\n${details}`);
       }
       warnIfConfigFromFuture(validated.config, deps.logger);
-      const cfg = applyTalkConfigNormalization(
-        applyModelDefaults(
-          applyCompactionDefaults(
-            applyContextPruningDefaults(
-              applyAgentDefaults(
-                applySessionDefaults(applyLoggingDefaults(applyMessageDefaults(validated.config))),
-              ),
-            ),
-          ),
-        ),
-      );
-      normalizeConfigPaths(cfg);
-      normalizeExecSafeBinProfilesInConfig(cfg);
+      const cfg = materializeRuntimeConfig(validated.config, "load");
       observeLoadConfigSnapshot({
-        path: configPath,
-        exists: true,
-        raw: effectiveRaw,
-        parsed: effectiveParsed,
-        resolved: coerceConfig(effectiveConfigRaw),
-        valid: true,
-        config: cfg,
-        hash,
-        issues: [],
-        warnings: validated.warnings,
-        legacyIssues: legacyResolution.sourceLegacyIssues,
+        ...createConfigFileSnapshot({
+          path: configPath,
+          exists: true,
+          raw: effectiveRaw,
+          parsed: effectiveParsed,
+          sourceConfig: coerceConfig(effectiveConfigRaw),
+          valid: true,
+          runtimeConfig: cfg,
+          hash,
+          issues: [],
+          warnings: validated.warnings,
+          legacyIssues: legacyResolution.sourceLegacyIssues,
+        }),
       });
 
       const duplicates = findDuplicateAgentDirs(cfg, {
@@ -1865,32 +1885,22 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     const exists = deps.fs.existsSync(configPath);
     if (!exists) {
       const hash = hashConfigRaw(null);
-      const config = applyTalkApiKey(
-        applyTalkConfigNormalization(
-          applyModelDefaults(
-            applyCompactionDefaults(
-              applyContextPruningDefaults(
-                applyAgentDefaults(applySessionDefaults(applyMessageDefaults({}))),
-              ),
-            ),
-          ),
-        ),
-      );
+      const config = materializeRuntimeConfig({}, "missing");
       const legacyIssues: LegacyConfigIssue[] = [];
       return await finalizeReadConfigSnapshotInternalResult(deps, {
-        snapshot: {
+        snapshot: createConfigFileSnapshot({
           path: configPath,
           exists: false,
           raw: null,
           parsed: {},
-          resolved: {},
+          sourceConfig: {},
           valid: true,
-          config,
+          runtimeConfig: config,
           hash,
           issues: [],
           warnings: [],
           legacyIssues,
-        },
+        }),
       });
     }
 
@@ -1900,19 +1910,19 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       const parsedRes = parseConfigJson5(raw, deps.json5);
       if (!parsedRes.ok) {
         return await finalizeReadConfigSnapshotInternalResult(deps, {
-          snapshot: {
+          snapshot: createConfigFileSnapshot({
             path: configPath,
             exists: true,
             raw,
             parsed: {},
-            resolved: {},
+            sourceConfig: {},
             valid: false,
-            config: {},
+            runtimeConfig: {},
             hash: rawHash,
             issues: [{ path: "", message: `JSON5 parse failed: ${parsedRes.error}` }],
             warnings: [],
             legacyIssues: [],
-          },
+          }),
         });
       }
 
@@ -1936,19 +1946,21 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
             ? err.message
             : `Include resolution failed: ${String(err)}`;
         return await finalizeReadConfigSnapshotInternalResult(deps, {
-          snapshot: {
+          snapshot: createConfigFileSnapshot({
             path: configPath,
             exists: true,
             raw: effectiveRaw,
             parsed: effectiveParsed,
-            resolved: coerceConfig(effectiveParsed),
+            sourceConfig: coerceConfig(parsedRes.parsed),
+            // Keep the recovered root file payload here when read healing kicked in.
+            sourceConfig: coerceConfig(effectiveParsed),
             valid: false,
-            config: coerceConfig(effectiveParsed),
+            runtimeConfig: coerceConfig(effectiveParsed),
             hash,
             issues: [{ path: "", message }],
             warnings: [],
             legacyIssues: [],
-          },
+          }),
         });
       }
 
@@ -1969,51 +1981,40 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       const validated = validateConfigObjectWithPlugins(effectiveConfigRaw, { env: deps.env });
       if (!validated.ok) {
         return await finalizeReadConfigSnapshotInternalResult(deps, {
-          snapshot: {
+          snapshot: createConfigFileSnapshot({
             path: configPath,
             exists: true,
             raw: effectiveRaw,
             parsed: effectiveParsed,
-            resolved: coerceConfig(effectiveConfigRaw),
+            sourceConfig: coerceConfig(effectiveConfigRaw),
             valid: false,
-            config: coerceConfig(effectiveConfigRaw),
+            runtimeConfig: coerceConfig(effectiveConfigRaw),
             hash,
             issues: validated.issues,
             warnings: [...validated.warnings, ...envVarWarnings],
             legacyIssues: legacyResolution.sourceLegacyIssues,
-          },
+          }),
         });
       }
 
       warnIfConfigFromFuture(validated.config, deps.logger);
-      const snapshotConfig = normalizeConfigPaths(
-        applyTalkApiKey(
-          applyTalkConfigNormalization(
-            applyModelDefaults(
-              applyAgentDefaults(
-                applySessionDefaults(applyLoggingDefaults(applyMessageDefaults(validated.config))),
-              ),
-            ),
-          ),
-        ),
-      );
-      normalizeExecSafeBinProfilesInConfig(snapshotConfig);
+      const snapshotConfig = materializeRuntimeConfig(validated.config, "snapshot");
       return await finalizeReadConfigSnapshotInternalResult(deps, {
-        snapshot: {
+        snapshot: createConfigFileSnapshot({
           path: configPath,
           exists: true,
           raw: effectiveRaw,
           parsed: effectiveParsed,
           // Use resolvedConfigRaw (after $include and ${ENV} substitution but BEFORE runtime defaults)
           // for config set/unset operations (issue #6070)
-          resolved: coerceConfig(effectiveConfigRaw),
+          sourceConfig: coerceConfig(effectiveConfigRaw),
           valid: true,
-          config: snapshotConfig,
+          runtimeConfig: snapshotConfig,
           hash,
           issues: [],
           warnings: [...validated.warnings, ...envVarWarnings],
           legacyIssues: legacyResolution.sourceLegacyIssues,
-        },
+        }),
         envSnapshotForRestore: readResolution.envSnapshotForRestore,
       });
     } catch (err) {
@@ -2037,19 +2038,19 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         message = `read failed: ${String(err)}`;
       }
       return await finalizeReadConfigSnapshotInternalResult(deps, {
-        snapshot: {
+        snapshot: createConfigFileSnapshot({
           path: configPath,
           exists: true,
           raw: null,
           parsed: {},
-          resolved: {},
+          sourceConfig: {},
           valid: false,
-          config: {},
+          runtimeConfig: {},
           hash: hashConfigRaw(null),
           issues: [{ path: "", message }],
           warnings: [],
           legacyIssues: [],
-        },
+        }),
       });
     }
   }
@@ -2070,7 +2071,10 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     };
   }
 
-  async function writeConfigFile(cfg: OpenClawConfig, options: ConfigWriteOptions = {}) {
+  async function writeConfigFile(
+    cfg: OpenClawConfig,
+    options: ConfigWriteOptions = {},
+  ): Promise<{ persistedHash: string }> {
     clearConfigCache();
     let persistCandidate: unknown = cfg;
     const { snapshot } = await readConfigFileSnapshotInternal();
@@ -2333,7 +2337,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
             undefined,
             await deps.fs.promises.stat(configPath).catch(() => null),
           );
-          return;
+          return { persistedHash: nextHash };
         }
         await deps.fs.promises.unlink(tmp).catch(() => {
           // best-effort
@@ -2347,6 +2351,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         undefined,
         await deps.fs.promises.stat(configPath).catch(() => null),
       );
+      return { persistedHash: nextHash };
     } catch (err) {
       await appendWriteAudit("failed", err);
       throw err;
@@ -2491,6 +2496,10 @@ export function loadConfig(): OpenClawConfig {
   return runtimeConfigSnapshot ?? config;
 }
 
+export function getRuntimeConfig(): OpenClawConfig {
+  return loadConfig();
+}
+
 export async function readBestEffortConfig(): Promise<OpenClawConfig> {
   const snapshot = await readConfigFileSnapshot();
   return snapshot.valid ? loadConfig() : snapshot.config;
@@ -2500,8 +2509,16 @@ export async function readConfigFileSnapshot(): Promise<ConfigFileSnapshot> {
   return await createConfigIO().readConfigFileSnapshot();
 }
 
+export async function readSourceConfigSnapshot(): Promise<ConfigFileSnapshot> {
+  return await readConfigFileSnapshot();
+}
+
 export async function readConfigFileSnapshotForWrite(): Promise<ReadConfigFileSnapshotForWriteResult> {
   return await createConfigIO().readConfigFileSnapshotForWrite();
+}
+
+export async function readSourceConfigSnapshotForWrite(): Promise<ReadConfigFileSnapshotForWriteResult> {
+  return await readConfigFileSnapshotForWrite();
 }
 
 export async function writeConfigFile(
@@ -2518,7 +2535,7 @@ export async function writeConfigFile(
   }
   const sameConfigPath =
     options.expectedConfigPath === undefined || options.expectedConfigPath === io.configPath;
-  await io.writeConfigFile(nextCfg, {
+  const writeResult = await io.writeConfigFile(nextCfg, {
     envSnapshotForRestore: sameConfigPath ? options.envSnapshotForRestore : undefined,
     unsetPaths: options.unsetPaths,
   });
@@ -2530,6 +2547,8 @@ export async function writeConfigFile(
       configPath: io.configPath,
       sourceConfig: nextCfg,
       runtimeConfig: runtimeConfigSnapshot,
+      persistedHash: writeResult.persistedHash,
+      writtenAtMs: Date.now(),
     });
   };
   // Keep the last-known-good runtime snapshot active until the specialized refresh path
