@@ -1,113 +1,54 @@
 ---
 title: "Session Pruning"
-summary: "How session pruning trims old tool results to reduce context bloat and improve cache efficiency"
+summary: "Trimming old tool results to keep context lean and caching efficient"
 read_when:
-  - You want to reduce LLM context growth from tool outputs
-  - You are tuning agents.defaults.contextPruning
+  - You want to reduce context growth from tool outputs
+  - You want to understand Anthropic prompt cache optimization
 ---
 
 # Session Pruning
 
-Session pruning trims **old tool results** from the in-memory context before
-each LLM call. It does **not** rewrite the on-disk session history (JSONL) --
-it only affects what gets sent to the model for that request.
+Session pruning trims **old tool results** from the context before each LLM
+call. It reduces context bloat from accumulated tool outputs (exec results, file
+reads, search results) without touching your conversation messages.
 
-## Why prune
+<Info>
+Pruning is in-memory only -- it does not modify the on-disk session transcript.
+Your full history is always preserved.
+</Info>
 
-Long-running sessions accumulate tool outputs (exec results, file reads, search
-results). These inflate the context window, increasing cost and eventually
-forcing [compaction](/concepts/compaction). Pruning removes stale tool output so
-the model sees a leaner context on each turn.
+## Why it matters
 
-Pruning is also important for **Anthropic prompt caching**. When a session goes
-idle past the cache TTL, the next request re-caches the full prompt. Pruning
-reduces the cache-write size for that first post-TTL request, which directly
-reduces cost.
+Long sessions accumulate tool output that inflates the context window. This
+increases cost and can force [compaction](/concepts/compaction) sooner than
+necessary.
+
+Pruning is especially valuable for **Anthropic prompt caching**. After the cache
+TTL expires, the next request re-caches the full prompt. Pruning reduces the
+cache-write size, directly lowering cost.
 
 ## How it works
 
-Pruning runs in `cache-ttl` mode, which is the only supported mode:
-
-1. **Check the clock** -- pruning only runs if the last Anthropic API call for
-   the session is older than `ttl` (default `5m`).
-2. **Find prunable messages** -- only `toolResult` messages are eligible. User
-   and assistant messages are never modified.
-3. **Protect recent context** -- the last `keepLastAssistants` assistant
-   messages (default `3`) and all tool results after that cutoff are preserved.
-4. **Soft-trim** oversized tool results -- keep the head and tail, insert
-   `...`, and append a note with the original size.
-5. **Hard-clear** remaining eligible results -- replace the entire content with
-   a placeholder.
-6. **Reset the TTL** -- subsequent requests keep cache until `ttl` expires
-   again.
-
-### What gets skipped
-
-- Tool results containing **image blocks** are never trimmed.
-- If there are not enough assistant messages to establish the cutoff, pruning
-  is skipped entirely.
-- Pruning currently only activates for Anthropic API calls (and OpenRouter
-  Anthropic models).
+1. Wait for the cache TTL to expire (default 5 minutes).
+2. Find old tool results (user and assistant messages are never touched).
+3. **Soft-trim** oversized results -- keep the head and tail, insert `...`.
+4. **Hard-clear** the rest -- replace with a placeholder.
+5. Reset the TTL so follow-up requests reuse the fresh cache.
 
 ## Smart defaults
 
-OpenClaw auto-configures pruning for Anthropic profiles:
+OpenClaw auto-enables pruning for Anthropic profiles:
 
-| Profile type         | Pruning             | Heartbeat | Cache retention    |
-| -------------------- | ------------------- | --------- | ------------------ |
-| OAuth or setup-token | `cache-ttl` enabled | `1h`      | (provider default) |
-| API key              | `cache-ttl` enabled | `30m`     | `short` (5 min)    |
+| Profile type         | Pruning enabled | Heartbeat |
+| -------------------- | --------------- | --------- |
+| OAuth or setup-token | Yes             | 1 hour    |
+| API key              | Yes             | 30 min    |
 
-If you set any of these values explicitly, OpenClaw does not override them.
+If you set explicit values, OpenClaw does not override them.
 
-Match `ttl` to your model `cacheRetention` policy for best results (`short` =
-5 min, `long` = 1 hour).
+## Enable or disable
 
-## Pruning vs compaction
-
-|                | Pruning                           | Compaction                      |
-| -------------- | --------------------------------- | ------------------------------- |
-| **What**       | Trims tool result messages        | Summarizes conversation history |
-| **Persisted?** | No (in-memory, per request)       | Yes (in JSONL transcript)       |
-| **Scope**      | Tool results only                 | Entire conversation             |
-| **Trigger**    | Every LLM call (when TTL expired) | Context window threshold        |
-
-Built-in tools already truncate their own output. Pruning is an additional layer
-that prevents long-running chats from accumulating too much tool output over
-time. See [Compaction](/concepts/compaction) for the summarization approach.
-
-## Configuration
-
-### Defaults (when enabled)
-
-| Setting                 | Default                             | Description                                      |
-| ----------------------- | ----------------------------------- | ------------------------------------------------ |
-| `ttl`                   | `5m`                                | Prune only after this idle period                |
-| `keepLastAssistants`    | `3`                                 | Protect tool results near recent assistant turns |
-| `softTrimRatio`         | `0.3`                               | Context ratio for soft-trim eligibility          |
-| `hardClearRatio`        | `0.5`                               | Context ratio for hard-clear eligibility         |
-| `minPrunableToolChars`  | `50000`                             | Minimum tool result size to consider             |
-| `softTrim.maxChars`     | `4000`                              | Max chars after soft-trim                        |
-| `softTrim.headChars`    | `1500`                              | Head portion to keep                             |
-| `softTrim.tailChars`    | `1500`                              | Tail portion to keep                             |
-| `hardClear.enabled`     | `true`                              | Enable hard-clear stage                          |
-| `hardClear.placeholder` | `[Old tool result content cleared]` | Replacement text                                 |
-
-### Examples
-
-Disable pruning (default state):
-
-```json5
-{
-  agents: {
-    defaults: {
-      contextPruning: { mode: "off" },
-    },
-  },
-}
-```
-
-Enable TTL-aware pruning:
+Pruning is off by default for non-Anthropic providers. To enable:
 
 ```json5
 {
@@ -119,40 +60,21 @@ Enable TTL-aware pruning:
 }
 ```
 
-Restrict pruning to specific tools:
+To disable: set `mode: "off"`.
 
-```json5
-{
-  agents: {
-    defaults: {
-      contextPruning: {
-        mode: "cache-ttl",
-        tools: {
-          allow: ["exec", "read"],
-          deny: ["*image*"],
-        },
-      },
-    },
-  },
-}
-```
+## Pruning vs compaction
 
-Tool selection supports `*` wildcards, deny wins over allow, matching is
-case-insensitive, and an empty allow list means all tools are allowed.
+|            | Pruning            | Compaction              |
+| ---------- | ------------------ | ----------------------- |
+| **What**   | Trims tool results | Summarizes conversation |
+| **Saved?** | No (per-request)   | Yes (in transcript)     |
+| **Scope**  | Tool results only  | Entire conversation     |
 
-## Context window estimation
+They complement each other -- pruning keeps tool output lean between
+compaction cycles.
 
-Pruning estimates the context window (chars = tokens x 4). The base window is
-resolved in this order:
-
-1. `models.providers.*.models[].contextWindow` override.
-2. Model definition `contextWindow` from the model registry.
-3. Default `200000` tokens.
-
-If `agents.defaults.contextTokens` is set, it caps the resolved window.
-
-## Related
+## Further reading
 
 - [Compaction](/concepts/compaction) -- summarization-based context reduction
-- [Session Management](/concepts/session) -- session lifecycle and routing
-- [Gateway Configuration](/gateway/configuration) -- full config reference
+- [Gateway Configuration](/gateway/configuration) -- all pruning config knobs
+  (`contextPruning.*`)

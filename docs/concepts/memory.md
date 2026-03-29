@@ -1,228 +1,97 @@
 ---
 title: "Memory"
-summary: "How OpenClaw memory works -- file layout, backends, search, and automatic flush"
+summary: "How OpenClaw remembers things across sessions"
 read_when:
-  - You want the memory file layout and workflow
-  - You want to understand memory search and backends
-  - You want to tune the automatic pre-compaction memory flush
+  - You want to understand how memory works
+  - You want to know what memory files to write
 ---
 
 # Memory
 
-OpenClaw memory is **plain Markdown in the agent workspace**. The files are the
-source of truth -- the model only "remembers" what gets written to disk.
+OpenClaw remembers things by writing **plain Markdown files** in your agent's
+workspace. The model only "remembers" what gets saved to disk -- there is no
+hidden state.
 
-Memory search tools are provided by the active memory plugin (default:
-`memory-core`). Disable memory plugins with `plugins.slots.memory = "none"`.
+## How it works
 
-## File layout
+Your agent has two places to store memories:
 
-The default workspace uses two memory layers:
+- **`MEMORY.md`** -- long-term memory. Durable facts, preferences, and
+  decisions. Loaded at the start of every DM session.
+- **`memory/YYYY-MM-DD.md`** -- daily notes. Running context and observations.
+  Today and yesterday's notes are loaded automatically.
 
-| Path                   | Purpose                  | Loaded at session start    |
-| ---------------------- | ------------------------ | -------------------------- |
-| `memory/YYYY-MM-DD.md` | Daily log (append-only)  | Today + yesterday          |
-| `MEMORY.md`            | Curated long-term memory | Yes (main DM session only) |
+These files live in the agent workspace (default `~/.openclaw/workspace`).
 
-If both `MEMORY.md` and `memory.md` exist at the workspace root, OpenClaw loads
-both (deduplicated by realpath so symlinks are not injected twice). `MEMORY.md`
-is only loaded in the main, private session -- never in group contexts.
-
-These files live under the agent workspace (`agents.defaults.workspace`, default
-`~/.openclaw/workspace`). See [Agent workspace](/concepts/agent-workspace) for
-the full layout.
-
-## When to write memory
-
-- **Decisions, preferences, and durable facts** go to `MEMORY.md`.
-- **Day-to-day notes and running context** go to `memory/YYYY-MM-DD.md`.
-- If someone says "remember this," **write it down** (do not keep it in RAM).
-- If you want something to stick, **ask the bot to write it** into memory.
+<Tip>
+If you want your agent to remember something, just ask it: "Remember that I
+prefer TypeScript." It will write it to the appropriate file.
+</Tip>
 
 ## Memory tools
 
-OpenClaw exposes two agent-facing tools:
+The agent has two tools for working with memory:
 
-- **`memory_search`** -- semantic recall over indexed snippets. Uses the active
-  memory backend's search pipeline (vector similarity, keyword matching, or
-  hybrid).
-- **`memory_get`** -- targeted read of a specific Markdown file or line range.
-  Degrades gracefully when a file does not exist (returns empty text instead of
-  an error).
+- **`memory_search`** -- finds relevant notes using semantic search, even when
+  the wording differs from the original.
+- **`memory_get`** -- reads a specific memory file or line range.
 
-## Memory backends
-
-OpenClaw supports two memory backends that control how `memory_search` indexes
-and retrieves content:
-
-### Builtin (default)
-
-The builtin backend uses a per-agent SQLite database with optional extensions:
-
-- **FTS5 full-text search** for keyword matching (BM25 scoring).
-- **sqlite-vec** for in-database vector similarity (falls back to in-process
-  cosine similarity when unavailable).
-- **Hybrid search** combining BM25 + vector scores for best-of-both-worlds
-  retrieval.
-- **CJK support** via configurable trigram tokenization with short-substring
-  fallback.
-
-The builtin backend works out of the box with no extra dependencies. For
-embedding vectors, configure an embedding provider (OpenAI, Gemini, Voyage,
-Mistral, Ollama, or local GGUF). Without an embedding provider, only keyword
-search is available.
-
-Index location: `~/.openclaw/memory/<agentId>.sqlite`
-
-### QMD (experimental)
-
-[QMD](https://github.com/tobi/qmd) is a local-first search sidecar that
-combines BM25 + vectors + reranking in a single binary. Set
-`memory.backend = "qmd"` to opt in.
-
-Key differences from the builtin backend:
-
-- Runs as a subprocess (Bun + node-llama-cpp), auto-downloads GGUF models.
-- Supports advanced post-processing: reranking, query expansion.
-- Can index extra directories beyond the workspace (`memory.qmd.paths`).
-- Can optionally index session transcripts (`memory.qmd.sessions`).
-- Falls back to the builtin backend if QMD is unavailable.
-
-QMD requires a separate install (`bun install -g https://github.com/tobi/qmd`)
-and a SQLite build that allows extensions. See the
-[Memory configuration reference](/reference/memory-config) for full setup.
+Both tools are provided by the active memory plugin (default: `memory-core`).
 
 ## Memory search
 
-When an embedding provider is configured, `memory_search` uses semantic vector
-search to find relevant notes even when the wording differs from the query.
-Hybrid search (BM25 + vector) is enabled by default when both FTS5 and
-embeddings are available.
+When an embedding provider is configured, `memory_search` uses **hybrid
+search** -- combining vector similarity (semantic meaning) with keyword matching
+(exact terms like IDs and code symbols). This works out of the box once you have
+an API key for any supported provider.
 
-For details on how search works -- embedding providers, hybrid scoring, MMR
-diversity re-ranking, temporal decay, and tuning -- see
+<Info>
+OpenClaw auto-detects your embedding provider from available API keys. If you
+have an OpenAI, Gemini, Voyage, or Mistral key configured, memory search is
+enabled automatically.
+</Info>
+
+For details on how search works, tuning options, and provider setup, see
 [Memory Search](/concepts/memory-search).
 
-### Embedding provider auto-selection
+## Memory backends
 
-If `memorySearch.provider` is not set, OpenClaw auto-selects the first available
-provider in this order:
+OpenClaw has two backends for indexing and searching memory:
 
-1. `local` -- if `memorySearch.local.modelPath` is configured and exists.
-2. `openai` -- if an OpenAI key can be resolved.
-3. `gemini` -- if a Gemini key can be resolved.
-4. `voyage` -- if a Voyage key can be resolved.
-5. `mistral` -- if a Mistral key can be resolved.
+**Builtin (default)** -- uses a per-agent SQLite database. Works out of the box
+with no extra dependencies. Supports keyword search, vector similarity, and
+hybrid search with CJK support.
 
-If none can be resolved, memory search stays disabled until configured. Ollama
-is supported but not auto-selected (set `memorySearch.provider = "ollama"`
-explicitly).
+**QMD** -- a local-first search sidecar that adds reranking, query expansion,
+and the ability to index directories outside the workspace (like project docs or
+session transcripts). Set `memory.backend = "qmd"` to switch.
 
-## Additional memory paths
-
-Index Markdown files outside the default workspace layout:
-
-```json5
-{
-  agents: {
-    defaults: {
-      memorySearch: {
-        extraPaths: ["../team-docs", "/srv/shared-notes/overview.md"],
-      },
-    },
-  },
-}
-```
-
-Paths can be absolute or workspace-relative. Directories are scanned
-recursively for `.md` files. Symlinks are ignored.
-
-## Multimodal memory (Gemini)
-
-When using `gemini-embedding-2-preview`, OpenClaw can index image and audio
-files from `memorySearch.extraPaths`:
-
-```json5
-{
-  agents: {
-    defaults: {
-      memorySearch: {
-        provider: "gemini",
-        model: "gemini-embedding-2-preview",
-        extraPaths: ["assets/reference", "voice-notes"],
-        multimodal: {
-          enabled: true,
-          modalities: ["image", "audio"],
-        },
-      },
-    },
-  },
-}
-```
-
-Search queries remain text, but Gemini can compare them against indexed
-image/audio embeddings. `memory_get` still reads Markdown only.
-
-See the [Memory configuration reference](/reference/memory-config) for supported
-formats and limitations.
+See the [Memory configuration reference](/reference/memory-config) for backend
+setup and all config knobs.
 
 ## Automatic memory flush
 
-When a session is close to auto-compaction, OpenClaw runs a **silent turn** that
-reminds the model to write durable notes before the context is summarized. This
-prevents important information from being lost during compaction.
+Before [compaction](/concepts/compaction) summarizes your conversation, OpenClaw
+runs a silent turn that reminds the agent to save important context to memory
+files. This is on by default -- you do not need to configure anything.
 
-Controlled by `agents.defaults.compaction.memoryFlush`:
+<Tip>
+The memory flush prevents context loss during compaction. If your agent has
+important facts in the conversation that are not yet written to a file, they
+will be saved automatically before the summary happens.
+</Tip>
 
-```json5
-{
-  agents: {
-    defaults: {
-      compaction: {
-        memoryFlush: {
-          enabled: true, // default
-          softThresholdTokens: 4000, // how far below compaction threshold to trigger
-        },
-      },
-    },
-  },
-}
+## CLI
+
+```bash
+openclaw memory status          # Check index status and provider
+openclaw memory search "query"  # Search from the command line
+openclaw memory index --force   # Rebuild the index
 ```
-
-Details:
-
-- **Triggers** when context usage crosses
-  `contextWindow - reserveTokensFloor - softThresholdTokens`.
-- **Runs silently** -- prompts include `NO_REPLY` so nothing is delivered to the
-  user.
-- **Once per compaction cycle** (tracked in `sessions.json`).
-- **Skipped** when the workspace is read-only (`workspaceAccess: "ro"` or
-  `"none"`).
-- The active memory plugin owns the flush prompt and path policy. The default
-  `memory-core` plugin writes to `memory/YYYY-MM-DD.md`.
-
-For the full compaction lifecycle, see [Compaction](/concepts/compaction).
-
-## CLI commands
-
-| Command                          | Description                                |
-| -------------------------------- | ------------------------------------------ |
-| `openclaw memory status`         | Show memory index status and provider info |
-| `openclaw memory search <query>` | Search memory from the command line        |
-| `openclaw memory index`          | Force a reindex of memory files            |
-
-Add `--agent <id>` to target a specific agent, `--deep` for extended
-diagnostics, or `--json` for machine-readable output.
-
-See [CLI: memory](/cli/memory) for the full command reference.
 
 ## Further reading
 
-- [Memory Search](/concepts/memory-search) -- how search works, hybrid search,
-  MMR, temporal decay
+- [Memory Search](/concepts/memory-search) -- search pipeline, providers, and
+  tuning
 - [Memory configuration reference](/reference/memory-config) -- all config knobs
-  for providers, QMD, hybrid search, batch indexing, and multimodal
 - [Compaction](/concepts/compaction) -- how compaction interacts with memory
-  flush
-- [Session Management Deep Dive](/reference/session-management-compaction) --
-  internal session and compaction lifecycle
