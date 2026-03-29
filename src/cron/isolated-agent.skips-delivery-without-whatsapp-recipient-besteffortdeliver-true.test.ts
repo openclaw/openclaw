@@ -281,13 +281,23 @@ describe("runCronIsolatedAgentTurn", () => {
 
   it("delivers explicit targets with final-payload text", async () => {
     await withTelegramAnnounceFixture(async ({ home, storePath, deps }) => {
-      await assertExplicitTelegramTargetDelivery({
+      mockAgentPayloads([{ text: "Working on it..." }, { text: "Final weather summary" }]);
+      const res = await runExplicitTelegramAnnounceTurn({
         home,
         storePath,
         deps,
-        payloads: [{ text: "Working on it..." }, { text: "Final weather summary" }],
-        expectedText: "Final weather summary",
       });
+
+      expectDeliveredOk(res);
+      expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+      expect(deps.sendMessageTelegram).toHaveBeenCalledTimes(2);
+      const sendMessageTelegramCalls = vi.mocked(
+        deps.sendMessageTelegram as (...args: unknown[]) => unknown,
+      ).mock.calls;
+      expect(sendMessageTelegramCalls).toEqual([
+        ["123", "Working on it...", expect.objectContaining({ cfg: expect.any(Object) })],
+        ["123", "Final weather summary", expect.objectContaining({ cfg: expect.any(Object) })],
+      ]);
     });
   });
 

@@ -71,26 +71,37 @@ export function pickLastNonEmptyTextFromPayloads(
   return undefined;
 }
 
+function isDeliverablePayload(payload: DeliveryPayload) {
+  const hasInteractive = (payload?.interactive?.blocks?.length ?? 0) > 0;
+  const hasChannelData = Object.keys(payload?.channelData ?? {}).length > 0;
+  return hasOutboundReplyContent(payload, { trimText: true }) || hasInteractive || hasChannelData;
+}
+
 export function pickLastDeliverablePayload(payloads: DeliveryPayload[]) {
-  const isDeliverable = (p: DeliveryPayload) => {
-    const hasInteractive = (p?.interactive?.blocks?.length ?? 0) > 0;
-    const hasChannelData = Object.keys(p?.channelData ?? {}).length > 0;
-    return hasOutboundReplyContent(p, { trimText: true }) || hasInteractive || hasChannelData;
-  };
   for (let i = payloads.length - 1; i >= 0; i--) {
     if (payloads[i]?.isError) {
       continue;
     }
-    if (isDeliverable(payloads[i])) {
+    if (isDeliverablePayload(payloads[i])) {
       return payloads[i];
     }
   }
   for (let i = payloads.length - 1; i >= 0; i--) {
-    if (isDeliverable(payloads[i])) {
+    if (isDeliverablePayload(payloads[i])) {
       return payloads[i];
     }
   }
   return undefined;
+}
+
+export function pickDeliverablePayloads(payloads: DeliveryPayload[]) {
+  const successfulPayloads = payloads.filter(
+    (payload) => payload?.isError !== true && isDeliverablePayload(payload),
+  );
+  if (successfulPayloads.length > 0) {
+    return successfulPayloads;
+  }
+  return payloads.filter(isDeliverablePayload);
 }
 
 /**
@@ -114,13 +125,15 @@ export function resolveCronPayloadOutcome(params: {
   const summary = pickSummaryFromPayloads(params.payloads) ?? pickSummaryFromOutput(firstText);
   const outputText = pickLastNonEmptyTextFromPayloads(params.payloads);
   const synthesizedText = outputText?.trim() || summary?.trim() || undefined;
-  const deliveryPayload = pickLastDeliverablePayload(params.payloads);
+  const pickedDeliveryPayloads = pickDeliverablePayloads(params.payloads);
+  const deliveryPayload = pickedDeliveryPayloads[pickedDeliveryPayloads.length - 1];
   const deliveryPayloads =
-    deliveryPayload !== undefined
-      ? [deliveryPayload]
+    pickedDeliveryPayloads.length > 0
+      ? pickedDeliveryPayloads
       : synthesizedText
         ? [{ text: synthesizedText }]
         : [];
+  // Only the last delivered payload controls downstream finalize-text safeguards.
   const deliveryPayloadHasStructuredContent =
     deliveryPayload?.mediaUrl !== undefined ||
     (deliveryPayload?.mediaUrls?.length ?? 0) > 0 ||
