@@ -50,9 +50,7 @@ export function renderNodes(props: NodesProps) {
   const bindingState = resolveBindingsState(props);
   const approvalsState = resolveExecApprovalsState(props);
   return html`
-    ${renderExecApprovals(approvalsState)}
-    ${renderBindings(bindingState)}
-    ${renderDevices(props)}
+    ${renderExecApprovals(approvalsState)} ${renderBindings(bindingState)} ${renderDevices(props)}
     <section class="card">
       <div class="row" style="justify-content: space-between;">
         <div>
@@ -128,7 +126,8 @@ function renderDevices(props: NodesProps) {
 function renderPendingDevice(req: PendingDevice, props: NodesProps) {
   const name = req.displayName?.trim() || req.deviceId;
   const age = typeof req.ts === "number" ? formatRelativeTimestamp(req.ts) : "n/a";
-  const role = req.role?.trim() ? `role: ${req.role}` : "role: -";
+  const roleValue = req.role?.trim() || formatList(req.roles);
+  const scopesValue = formatList(req.scopes);
   const repair = req.isRepair ? " · repair" : "";
   const ip = req.remoteIp ? ` · ${req.remoteIp}` : "";
   return html`
@@ -137,7 +136,7 @@ function renderPendingDevice(req: PendingDevice, props: NodesProps) {
         <div class="list-title">${name}</div>
         <div class="list-sub">${req.deviceId}${ip}</div>
         <div class="muted" style="margin-top: 6px;">
-          ${role} · requested ${age}${repair}
+          role: ${roleValue} · scopes: ${scopesValue} · requested ${age}${repair}
         </div>
       </div>
       <div class="list-meta">
@@ -295,7 +294,6 @@ function renderBindings(state: BindingState) {
             `
           : nothing
       }
-
       ${
         !state.ready
           ? html`<div class="row" style="margin-top: 12px; gap: 12px;">
@@ -325,10 +323,7 @@ function renderBindings(state: BindingState) {
                       <option value="" ?selected=${defaultValue === ""}>Any node</option>
                       ${state.nodes.map(
                         (node) =>
-                          html`<option
-                            value=${node.id}
-                            ?selected=${defaultValue === node.id}
-                          >
+                          html`<option value=${node.id} ?selected=${defaultValue === node.id}>
                             ${node.label}
                           </option>`,
                       )}
@@ -391,10 +386,7 @@ function renderAgentBinding(agent: BindingAgent, state: BindingState) {
             </option>
             ${state.nodes.map(
               (node) =>
-                html`<option
-                  value=${node.id}
-                  ?selected=${bindingValue === node.id}
-                >
+                html`<option value=${node.id} ?selected=${bindingValue === node.id}>
                   ${node.label}
                 </option>`,
             )}

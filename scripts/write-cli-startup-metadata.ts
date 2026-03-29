@@ -1,6 +1,7 @@
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { pathToFileURL } from "node:url";
 
 function dedupe(values: string[]): string[] {
   const seen = new Set<string>();
@@ -75,8 +76,37 @@ function readBundledChannelCatalogIds(): string[] {
     .map((entry) => entry.id);
 }
 
+async function renderBundledRootHelpText(): Promise<string> {
+  const bundleName = readdirSync(distDir).find(
+    (entry) => entry.startsWith("root-help-") && entry.endsWith(".js"),
+  );
+  if (!bundleName) {
+    throw new Error("No root-help bundle found in dist; cannot write CLI startup metadata.");
+  }
+  const moduleUrl = pathToFileURL(path.join(distDir, bundleName)).href;
+  const mod = (await import(moduleUrl)) as { outputRootHelp?: () => void };
+  if (typeof mod.outputRootHelp !== "function") {
+    throw new Error(`Bundle ${bundleName} does not export outputRootHelp.`);
+  }
+
+  let output = "";
+  const originalWrite = process.stdout.write.bind(process.stdout);
+  const captureWrite: typeof process.stdout.write = ((chunk: string | Uint8Array) => {
+    output += String(chunk);
+    return true;
+  }) as typeof process.stdout.write;
+  process.stdout.write = captureWrite;
+  try {
+    mod.outputRootHelp();
+  } finally {
+    process.stdout.write = originalWrite;
+  }
+  return output;
+}
+
 const catalog = readBundledChannelCatalogIds();
 const channelOptions = dedupe([...CORE_CHANNEL_ORDER, ...catalog]);
+const rootHelpText = await renderBundledRootHelpText();
 
 mkdirSync(distDir, { recursive: true });
 writeFileSync(
@@ -85,6 +115,7 @@ writeFileSync(
     {
       generatedBy: "scripts/write-cli-startup-metadata.ts",
       channelOptions,
+      rootHelpText,
     },
     null,
     2,

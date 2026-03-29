@@ -1,4 +1,6 @@
-import type { AcpRuntimeEvent, AcpSessionUpdateTag } from "openclaw/plugin-sdk/acpx";
+import { safeParseJsonWithSchema } from "openclaw/plugin-sdk/extension-shared";
+import { z } from "zod";
+import type { AcpRuntimeEvent, AcpSessionUpdateTag } from "../../runtime-api.js";
 import {
   asOptionalBoolean,
   asOptionalString,
@@ -9,18 +11,18 @@ import {
   isRecord,
 } from "./shared.js";
 
+const AcpxJsonObjectSchema = z.record(z.string(), z.unknown());
+
+const AcpxErrorEventSchema = z.object({
+  type: z.literal("error"),
+  message: z.string().trim().min(1).catch("acpx reported an error"),
+  code: z.string().optional(),
+  retryable: z.boolean().optional(),
+});
+
 export function toAcpxErrorEvent(value: unknown): AcpxErrorEvent | null {
-  if (!isRecord(value)) {
-    return null;
-  }
-  if (asTrimmedString(value.type) !== "error") {
-    return null;
-  }
-  return {
-    message: asTrimmedString(value.message) || "acpx reported an error",
-    code: asOptionalString(value.code),
-    retryable: asOptionalBoolean(value.retryable),
-  };
+  const parsed = AcpxErrorEventSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
 }
 
 export function parseJsonLines(value: string): AcpxJsonObject[] {
@@ -30,13 +32,9 @@ export function parseJsonLines(value: string): AcpxJsonObject[] {
     if (!trimmed) {
       continue;
     }
-    try {
-      const parsed = JSON.parse(trimmed) as unknown;
-      if (isRecord(parsed)) {
-        events.push(parsed);
-      }
-    } catch {
-      // Ignore malformed lines; callers handle missing typed events via exit code.
+    const parsed = safeParseJsonWithSchema(AcpxJsonObjectSchema, trimmed);
+    if (parsed) {
+      events.push(parsed);
     }
   }
   return events;
@@ -200,18 +198,12 @@ export function parsePromptEventLine(line: string): AcpRuntimeEvent | null {
   if (!trimmed) {
     return null;
   }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(trimmed);
-  } catch {
+  const parsed = safeParseJsonWithSchema(AcpxJsonObjectSchema, trimmed);
+  if (!parsed) {
     return {
       type: "status",
       text: trimmed,
     };
-  }
-
-  if (!isRecord(parsed)) {
-    return null;
   }
 
   const structured = resolveStructuredPromptPayload(parsed);

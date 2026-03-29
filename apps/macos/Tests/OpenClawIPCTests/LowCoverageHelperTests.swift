@@ -169,6 +169,11 @@ struct LowCoverageHelperTests {
 
         #expect(PortGuardian._testIsExpected(
             command: "node",
+            fullCommand: "openclaw-gateway",
+            port: 18789, mode: .local) == true)
+
+        #expect(PortGuardian._testIsExpected(
+            command: "node",
             fullCommand: "node /path/to/gateway-daemon",
             port: 18789, mode: .local) == true)
     }
@@ -214,6 +219,32 @@ struct LowCoverageHelperTests {
 
         #expect(handler._testTextEncodingName(for: "text/html") == "utf-8")
         #expect(handler._testTextEncodingName(for: "application/octet-stream") == nil)
+    }
+
+    @Test @MainActor func `canvas scheme handler blocks symlink escapes`() throws {
+        let root = FileManager().temporaryDirectory
+            .appendingPathComponent("canvas-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager().removeItem(at: root) }
+        try FileManager().createDirectory(at: root, withIntermediateDirectories: true)
+
+        let session = root.appendingPathComponent("main", isDirectory: true)
+        try FileManager().createDirectory(at: session, withIntermediateDirectories: true)
+
+        let outside = root.deletingLastPathComponent().appendingPathComponent("canvas-secret-\(UUID().uuidString).txt")
+        defer { try? FileManager().removeItem(at: outside) }
+        try "top-secret".write(to: outside, atomically: true, encoding: .utf8)
+
+        let symlink = session.appendingPathComponent("index.html")
+        try FileManager().createSymbolicLink(at: symlink, withDestinationURL: outside)
+
+        let handler = CanvasSchemeHandler(root: root)
+        let url = try #require(CanvasScheme.makeURL(session: "main", path: "index.html"))
+        let response = handler._testResponse(for: url)
+        let body = String(data: response.data, encoding: .utf8) ?? ""
+
+        #expect(response.mime == "text/html")
+        #expect(body.contains("Forbidden"))
+        #expect(!body.contains("top-secret"))
     }
 
     @Test @MainActor func `menu context card injector inserts and finds index`() {

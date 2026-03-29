@@ -1,9 +1,12 @@
 import {
+  createDedupeCache,
   formatInboundFromLabel as formatInboundFromLabelShared,
+  rawDataToString,
   resolveThreadSessionKeys as resolveThreadSessionKeysShared,
   type OpenClawConfig,
-} from "openclaw/plugin-sdk/mattermost";
-export { createDedupeCache, rawDataToString } from "openclaw/plugin-sdk/mattermost";
+} from "./runtime-api.js";
+
+export { createDedupeCache, rawDataToString };
 
 export type ResponsePrefixContext = {
   model?: string;

@@ -1,8 +1,4 @@
 import {
-  promptSecretRefForSetup,
-  resolveSecretInputModeForEnvSelection,
-} from "../commands/auth-choice.apply-helpers.js";
-import {
   normalizeGatewayTokenInput,
   randomToken,
   validateGatewayPasswordInput,
@@ -23,6 +19,8 @@ import {
 } from "../gateway/gateway-config-prompts.shared.js";
 import { DEFAULT_DANGEROUS_NODE_COMMANDS } from "../gateway/node-command-policy.js";
 import { findTailscaleBinary } from "../infra/tailscale.js";
+import { resolveSecretInputModeForEnvSelection } from "../plugins/provider-auth-mode.js";
+import { promptSecretRefForSetup } from "../plugins/provider-auth-ref.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { validateIPv4AddressInput } from "../shared/net/ipv4.js";
 import type { WizardPrompter } from "./prompts.js";
@@ -295,6 +293,23 @@ export async function configureGatewayForSetup(
       },
     },
   };
+
+  if (
+    flow === "quickstart" &&
+    bind === "loopback" &&
+    nextConfig.gateway?.controlUi?.allowInsecureAuth === undefined
+  ) {
+    nextConfig = {
+      ...nextConfig,
+      gateway: {
+        ...nextConfig.gateway,
+        controlUi: {
+          ...nextConfig.gateway?.controlUi,
+          allowInsecureAuth: true,
+        },
+      },
+    };
+  }
 
   nextConfig = ensureControlUiAllowedOriginsForNonLoopbackBind(nextConfig, {
     requireControlUiEnabled: true,

@@ -59,3 +59,9 @@ export type IrcConfig = {
   /** Optional default account id when multiple accounts are configured. */
   defaultAccount?: string;
 } & IrcAccountConfig;
+
+declare module "./types.channels.js" {
+  interface ChannelsConfig {
+    irc?: IrcConfig;
+  }
+}

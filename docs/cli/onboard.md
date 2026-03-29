@@ -1,5 +1,5 @@
 ---
-summary: "CLI reference for `openclaw onboard` (interactive setup wizard)"
+summary: "CLI reference for `openclaw onboard` (interactive onboarding)"
 read_when:
   - You want guided setup for gateway, workspace, auth, channels, and skills
 title: "onboard"
@@ -7,11 +7,11 @@ title: "onboard"
 
 # `openclaw onboard`
 
-Interactive setup wizard (local or remote Gateway setup).
+Interactive onboarding for local or remote Gateway setup.
 
 ## Related guides
 
-- CLI onboarding hub: [Setup Wizard (CLI)](/start/wizard)
+- CLI onboarding hub: [Onboarding (CLI)](/start/wizard)
 - Onboarding overview: [Onboarding Overview](/start/onboarding-overview)
 - CLI onboarding reference: [CLI Setup Reference](/start/wizard-cli-reference)
 - CLI automation: [CLI Automation](/start/wizard-cli-automation)
@@ -140,6 +140,9 @@ Flow notes:
 
 - `quickstart`: minimal prompts, auto-generates a gateway token.
 - `manual`: full prompts for port/bind/auth (alias of `advanced`).
+- In the web-search step, choosing **Grok** can trigger a separate follow-up
+  prompt to enable `x_search` with the same `XAI_API_KEY` and optionally pick
+  an `x_search` model. Other web-search providers do not show that prompt.
 - Local onboarding DM scope behavior: [CLI Setup Reference](/start/wizard-cli-reference#outputs-and-internals).
 - Fastest first chat: `openclaw dashboard` (Control UI, no channel setup).
 - Custom Provider: connect any OpenAI or Anthropic compatible endpoint,

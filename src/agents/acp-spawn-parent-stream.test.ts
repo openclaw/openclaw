@@ -1,9 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { emitAgentEvent } from "../infra/agent-events.js";
-import {
-  resolveAcpSpawnStreamLogPath,
-  startAcpSpawnParentStreamRelay,
-} from "./acp-spawn-parent-stream.js";
+import { mergeMockedModule } from "../test-utils/vitest-module-mocks.js";
 
 const enqueueSystemEventMock = vi.fn();
 const requestHeartbeatNowMock = vi.fn();
@@ -15,9 +11,14 @@ vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
 }));
 
-vi.mock("../infra/heartbeat-wake.js", () => ({
-  requestHeartbeatNow: (...args: unknown[]) => requestHeartbeatNowMock(...args),
-}));
+vi.mock("../infra/heartbeat-wake.js", async (importOriginal) => {
+  return await mergeMockedModule(
+    await importOriginal<typeof import("../infra/heartbeat-wake.js")>(),
+    () => ({
+      requestHeartbeatNow: (...args: unknown[]) => requestHeartbeatNowMock(...args),
+    }),
+  );
+});
 
 vi.mock("../acp/runtime/session-meta.js", () => ({
   readAcpSessionEntry: (...args: unknown[]) => readAcpSessionEntryMock(...args),
@@ -28,18 +29,58 @@ vi.mock("../config/sessions/paths.js", () => ({
   resolveSessionFilePathOptions: (...args: unknown[]) => resolveSessionFilePathOptionsMock(...args),
 }));
 
+let emitAgentEvent: typeof import("../infra/agent-events.js").emitAgentEvent;
+let resolveAcpSpawnStreamLogPath: typeof import("./acp-spawn-parent-stream.js").resolveAcpSpawnStreamLogPath;
+let startAcpSpawnParentStreamRelay: typeof import("./acp-spawn-parent-stream.js").startAcpSpawnParentStreamRelay;
+
+async function loadFreshAcpSpawnParentStreamModulesForTest() {
+  vi.resetModules();
+  vi.doMock("../infra/system-events.js", () => ({
+    enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
+  }));
+  vi.doMock("../infra/heartbeat-wake.js", async () => {
+    return await mergeMockedModule(
+      await vi.importActual<typeof import("../infra/heartbeat-wake.js")>(
+        "../infra/heartbeat-wake.js",
+      ),
+      () => ({
+        requestHeartbeatNow: (...args: unknown[]) => requestHeartbeatNowMock(...args),
+      }),
+    );
+  });
+  vi.doMock("../acp/runtime/session-meta.js", () => ({
+    readAcpSessionEntry: (...args: unknown[]) => readAcpSessionEntryMock(...args),
+  }));
+  vi.doMock("../config/sessions/paths.js", () => ({
+    resolveSessionFilePath: (...args: unknown[]) => resolveSessionFilePathMock(...args),
+    resolveSessionFilePathOptions: (...args: unknown[]) =>
+      resolveSessionFilePathOptionsMock(...args),
+  }));
+  const [agentEvents, relayModule] = await Promise.all([
+    import("../infra/agent-events.js"),
+    import("./acp-spawn-parent-stream.js"),
+  ]);
+  return {
+    emitAgentEvent: agentEvents.emitAgentEvent,
+    resolveAcpSpawnStreamLogPath: relayModule.resolveAcpSpawnStreamLogPath,
+    startAcpSpawnParentStreamRelay: relayModule.startAcpSpawnParentStreamRelay,
+  };
+}
+
 function collectedTexts() {
   return enqueueSystemEventMock.mock.calls.map((call) => String(call[0] ?? ""));
 }
 
 describe("startAcpSpawnParentStreamRelay", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     enqueueSystemEventMock.mockClear();
     requestHeartbeatNowMock.mockClear();
     readAcpSessionEntryMock.mockReset();
     resolveSessionFilePathMock.mockReset();
     resolveSessionFilePathOptionsMock.mockReset();
     resolveSessionFilePathOptionsMock.mockImplementation((value: unknown) => value);
+    ({ emitAgentEvent, resolveAcpSpawnStreamLogPath, startAcpSpawnParentStreamRelay } =
+      await loadFreshAcpSpawnParentStreamModulesForTest());
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-04T01:00:00.000Z"));
   });

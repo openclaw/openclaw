@@ -29,13 +29,11 @@ const fixturePath = path.resolve(
 const fixture = JSON.parse(fs.readFileSync(fixturePath, "utf8")) as Fixture;
 
 describe("system-run approval mismatch contract fixtures", () => {
-  for (const entry of fixture.cases) {
-    test(entry.name, () => {
-      const result = toSystemRunApprovalMismatchError({
-        runId: entry.runId,
-        match: entry.match,
-      });
-      expect(result).toEqual(entry.expected);
+  test.each(fixture.cases)("$name", (entry) => {
+    const result = toSystemRunApprovalMismatchError({
+      runId: entry.runId,
+      match: entry.match,
     });
-  }
+    expect(result).toEqual(entry.expected);
+  });
 });

@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { createServer } from "node:http";
-import { isWSL2Sync } from "../../src/infra/wsl.js";
+import { isWSL2Sync } from "openclaw/plugin-sdk/runtime-env";
 import { resolveOAuthClientConfig } from "./oauth.credentials.js";
 import { AUTH_URL, REDIRECT_URI, SCOPES } from "./oauth.shared.js";
 

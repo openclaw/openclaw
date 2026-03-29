@@ -590,4 +590,44 @@ describe("tui-event-handlers: handleAgentEvent", () => {
 
     expect(loadHistory).toHaveBeenCalledTimes(1);
   });
+
+  it("does not reload history for local run with empty final when another run is active (#53115)", () => {
+    const { state, loadHistory, noteLocalRunId, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-main" },
+    });
+
+    noteLocalRunId("run-local-empty");
+
+    handleChatEvent({
+      runId: "run-local-empty",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+    });
+
+    expect(state.activeChatRunId).toBe("run-main");
+    expect(loadHistory).not.toHaveBeenCalled();
+  });
+
+  it("flushes deferred history reload after the newer local run finishes", () => {
+    const { state, loadHistory, noteLocalRunId, handleChatEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-main" },
+    });
+
+    noteLocalRunId("run-local-empty");
+    handleChatEvent({
+      runId: "run-local-empty",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+    });
+
+    noteLocalRunId("run-main");
+    handleChatEvent({
+      runId: "run-main",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "done" }] },
+    });
+
+    expect(loadHistory).toHaveBeenCalledTimes(1);
+  });
 });

@@ -117,7 +117,7 @@ Gateway credential resolution follows one shared contract across call/probe/stat
   - password: `OPENCLAW_GATEWAY_PASSWORD` -> `gateway.remote.password` -> `gateway.auth.password`
 - Node-host local-mode exception: `gateway.remote.token` / `gateway.remote.password` are ignored.
 - Remote probe/status token checks are strict by default: they use `gateway.remote.token` only (no local token fallback) when targeting remote mode.
-- Legacy `CLAWDBOT_GATEWAY_*` env vars are only used by compatibility call paths; probe/status/auth resolution uses `OPENCLAW_GATEWAY_*` only.
+- Gateway env overrides use `OPENCLAW_GATEWAY_*` only.
 
 ## Chat UI over SSH
 
@@ -126,7 +126,7 @@ WebChat no longer uses a separate HTTP port. The SwiftUI chat UI connects direct
 - Forward `18789` over SSH (see above), then connect clients to `ws://127.0.0.1:18789`.
 - On macOS, prefer the app’s “Remote over SSH” mode, which manages the tunnel automatically.
 
-## macOS app “Remote over SSH”
+## macOS app "Remote over SSH"
 
 The macOS menu bar app can drive the same setup end-to-end (remote status checks, WebChat, and Voice Wake forwarding).
 

@@ -18,7 +18,7 @@ NC='\033[0m' # No Color
 DEFAULT_TAGLINE="All your chats, one OpenClaw."
 NODE_DEFAULT_MAJOR=24
 NODE_MIN_MAJOR=22
-NODE_MIN_MINOR=16
+NODE_MIN_MINOR=14
 NODE_MIN_VERSION="${NODE_MIN_MAJOR}.${NODE_MIN_MINOR}"
 
 ORIGINAL_PATH="${PATH:-}"
@@ -939,28 +939,6 @@ append_holiday_taglines() {
         "2025-12-15"|"2025-12-16"|"2025-12-17"|"2025-12-18"|"2025-12-19"|"2025-12-20"|"2025-12-21"|"2025-12-22"|"2026-12-05"|"2026-12-06"|"2026-12-07"|"2026-12-08"|"2026-12-09"|"2026-12-10"|"2026-12-11"|"2026-12-12"|"2027-12-25"|"2027-12-26"|"2027-12-27"|"2027-12-28"|"2027-12-29"|"2027-12-30"|"2027-12-31"|"2028-01-01") TAGLINES+=("$HOLIDAY_HANUKKAH") ;;
     esac
 }
-
-map_legacy_env() {
-    local key="$1"
-    local legacy="$2"
-    if [[ -z "${!key:-}" && -n "${!legacy:-}" ]]; then
-        printf -v "$key" '%s' "${!legacy}"
-    fi
-}
-
-map_legacy_env "OPENCLAW_TAGLINE_INDEX" "CLAWDBOT_TAGLINE_INDEX"
-map_legacy_env "OPENCLAW_NO_ONBOARD" "CLAWDBOT_NO_ONBOARD"
-map_legacy_env "OPENCLAW_NO_PROMPT" "CLAWDBOT_NO_PROMPT"
-map_legacy_env "OPENCLAW_DRY_RUN" "CLAWDBOT_DRY_RUN"
-map_legacy_env "OPENCLAW_INSTALL_METHOD" "CLAWDBOT_INSTALL_METHOD"
-map_legacy_env "OPENCLAW_VERSION" "CLAWDBOT_VERSION"
-map_legacy_env "OPENCLAW_BETA" "CLAWDBOT_BETA"
-map_legacy_env "OPENCLAW_GIT_DIR" "CLAWDBOT_GIT_DIR"
-map_legacy_env "OPENCLAW_GIT_UPDATE" "CLAWDBOT_GIT_UPDATE"
-map_legacy_env "OPENCLAW_NPM_LOGLEVEL" "CLAWDBOT_NPM_LOGLEVEL"
-map_legacy_env "OPENCLAW_VERBOSE" "CLAWDBOT_VERBOSE"
-map_legacy_env "OPENCLAW_PROFILE" "CLAWDBOT_PROFILE"
-map_legacy_env "OPENCLAW_INSTALL_SH_NO_RUN" "CLAWDBOT_INSTALL_SH_NO_RUN"
 
 pick_tagline() {
     append_holiday_taglines

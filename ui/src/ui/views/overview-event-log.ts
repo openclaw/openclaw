@@ -16,7 +16,7 @@ export function renderOverviewEventLog(props: OverviewEventLogProps) {
   const visible = props.events.slice(0, 20);
 
   return html`
-    <details class="card ov-event-log">
+    <details class="card ov-event-log" open>
       <summary class="ov-expandable-toggle">
         <span class="nav-item__icon">${icons.radio}</span>
         ${t("overview.eventLog.title")}
@@ -30,7 +30,9 @@ export function renderOverviewEventLog(props: OverviewEventLogProps) {
               <span class="ov-event-log-name">${entry.event}</span>
               ${
                 entry.payload
-                  ? html`<span class="ov-event-log-payload muted">${formatEventPayload(entry.payload).slice(0, 120)}</span>`
+                  ? html`<span class="ov-event-log-payload muted"
+                    >${formatEventPayload(entry.payload).slice(0, 120)}</span
+                  >`
                   : nothing
               }
             </div>

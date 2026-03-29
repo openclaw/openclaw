@@ -89,11 +89,11 @@ final class ExecApprovalsGatewayPrompter {
     private static func shouldAsk(security: ExecSecurity, ask: ExecAsk) -> Bool {
         switch ask {
         case .always:
-            return true
+            true
         case .onMiss:
-            return security == .allowlist
+            security == .allowlist
         case .off:
-            return false
+            false
         }
     }
 
@@ -113,21 +113,21 @@ final class ExecApprovalsGatewayPrompter {
         let mode = AppStateStore.shared.connectionMode
         let activeSession = WebChatManager.shared.activeSessionKey?.trimmingCharacters(in: .whitespacesAndNewlines)
         let requestSession = request.request.sessionKey?.trimmingCharacters(in: .whitespacesAndNewlines)
-        
+
         // Read-only resolve to avoid disk writes on the MainActor
         let approvals = ExecApprovalsStore.resolveReadOnly(agentId: request.request.agentId)
         let security = approvals.agent.security
         let ask = approvals.agent.ask
-        
+
         let shouldAsk = Self.shouldAsk(security: security, ask: ask)
-        
+
         let canPresent = shouldAsk && Self.shouldPresent(
             mode: mode,
             activeSession: activeSession,
             requestSession: requestSession,
             lastInputSeconds: Self.lastInputSeconds(),
             thresholdSeconds: 120)
-        
+
         return PresentationDecision(
             shouldAsk: shouldAsk,
             canPresent: canPresent,

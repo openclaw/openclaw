@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import {
   buildCanonicalSentMessageHookContext,
   deriveInboundMessageHookContext,
+  toPluginInboundClaimEvent,
   toPluginInboundClaimContext,
   toInternalMessagePreprocessedContext,
   toInternalMessageReceivedContext,
@@ -65,6 +66,32 @@ describe("message hook mappers", () => {
 
     expect(canonical.content).toBe("override-content");
     expect(canonical.messageId).toBe("override-msg");
+  });
+
+  it("preserves multi-attachment arrays for inbound claim metadata", () => {
+    const canonical = deriveInboundMessageHookContext(
+      makeInboundCtx({
+        MediaPath: undefined,
+        MediaType: undefined,
+        MediaPaths: ["/tmp/tree.jpg", "/tmp/ramp.jpg"],
+        MediaTypes: ["image/jpeg", "image/jpeg"],
+      }),
+    );
+
+    expect(canonical.mediaPath).toBe("/tmp/tree.jpg");
+    expect(canonical.mediaType).toBe("image/jpeg");
+    expect(canonical.mediaPaths).toEqual(["/tmp/tree.jpg", "/tmp/ramp.jpg"]);
+    expect(canonical.mediaTypes).toEqual(["image/jpeg", "image/jpeg"]);
+    expect(toPluginInboundClaimEvent(canonical)).toEqual(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          mediaPath: "/tmp/tree.jpg",
+          mediaType: "image/jpeg",
+          mediaPaths: ["/tmp/tree.jpg", "/tmp/ramp.jpg"],
+          mediaTypes: ["image/jpeg", "image/jpeg"],
+        }),
+      }),
+    );
   });
 
   it("maps canonical inbound context to plugin/internal received payloads", () => {

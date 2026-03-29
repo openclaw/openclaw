@@ -263,26 +263,31 @@ export const ToolPolicySchema = ToolPolicyBaseSchema.superRefine((value, ctx) =>
 export const ToolsWebSearchSchema = z
   .object({
     enabled: z.boolean().optional(),
-    provider: z
-      .union([
-        z.literal("brave"),
-        z.literal("firecrawl"),
-        z.literal("perplexity"),
-        z.literal("grok"),
-        z.literal("gemini"),
-        z.literal("kimi"),
-        z.literal("playwright-mcp"),
-      ])
-      .optional(),
-    apiKey: SecretInputSchema.optional().register(sensitive),
+    provider: z.string().optional(),
     maxResults: z.number().int().positive().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
     cacheTtlMinutes: z.number().nonnegative().optional(),
-    perplexity: z
+    apiKey: SecretInputSchema.optional().register(sensitive),
+    brave: z
       .object({
         apiKey: SecretInputSchema.optional().register(sensitive),
-        // Legacy Sonar/OpenRouter compatibility fields.
-        // Setting either opts Perplexity back into the chat-completions path.
+        baseUrl: z.string().optional(),
+        model: z.string().optional(),
+        mode: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+    firecrawl: z
+      .object({
+        apiKey: SecretInputSchema.optional().register(sensitive),
+        baseUrl: z.string().optional(),
+        model: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+    gemini: z
+      .object({
+        apiKey: SecretInputSchema.optional().register(sensitive),
         baseUrl: z.string().optional(),
         model: z.string().optional(),
       })
@@ -291,22 +296,9 @@ export const ToolsWebSearchSchema = z
     grok: z
       .object({
         apiKey: SecretInputSchema.optional().register(sensitive),
+        baseUrl: z.string().optional(),
         model: z.string().optional(),
         inlineCitations: z.boolean().optional(),
-      })
-      .strict()
-      .optional(),
-    gemini: z
-      .object({
-        apiKey: SecretInputSchema.optional().register(sensitive),
-        model: z.string().optional(),
-      })
-      .strict()
-      .optional(),
-    firecrawl: z
-      .object({
-        apiKey: SecretInputSchema.optional().register(sensitive),
-        baseUrl: z.string().optional(),
       })
       .strict()
       .optional(),
@@ -318,17 +310,11 @@ export const ToolsWebSearchSchema = z
       })
       .strict()
       .optional(),
-    brave: z
+    perplexity: z
       .object({
-        mode: z.union([z.literal("web"), z.literal("llm-context")]).optional(),
-      })
-      .strict()
-      .optional(),
-    playwrightMcp: z
-      .object({
-        serverUrl: z.string().optional(),
-        defaultEngine: z.enum(["google", "duckduckgo", "bing", "naver"]).optional(),
-        includeNaverForProductSearch: z.boolean().optional(),
+        apiKey: SecretInputSchema.optional().register(sensitive),
+        baseUrl: z.string().optional(),
+        model: z.string().optional(),
       })
       .strict()
       .optional(),
@@ -341,6 +327,7 @@ export const ToolsWebFetchSchema = z
     enabled: z.boolean().optional(),
     maxChars: z.number().int().positive().optional(),
     maxCharsCap: z.number().int().positive().optional(),
+    maxResponseBytes: z.number().int().positive().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
     cacheTtlMinutes: z.number().nonnegative().optional(),
     maxRedirects: z.number().int().nonnegative().optional(),
@@ -361,10 +348,24 @@ export const ToolsWebFetchSchema = z
   .strict()
   .optional();
 
+export const ToolsWebXSearchSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    apiKey: SecretInputSchema.optional().register(sensitive),
+    model: z.string().optional(),
+    inlineCitations: z.boolean().optional(),
+    maxTurns: z.number().int().optional(),
+    timeoutSeconds: z.number().int().positive().optional(),
+    cacheTtlMinutes: z.number().nonnegative().optional(),
+  })
+  .strict()
+  .optional();
+
 export const ToolsWebSchema = z
   .object({
     search: ToolsWebSearchSchema,
     fetch: ToolsWebFetchSchema,
+    x_search: ToolsWebXSearchSchema,
   })
   .strict()
   .optional();
@@ -437,6 +438,7 @@ const ToolExecBaseShape = {
   node: z.string().optional(),
   pathPrepend: z.array(z.string()).optional(),
   safeBins: z.array(z.string()).optional(),
+  strictInlineEval: z.boolean().optional(),
   safeBinTrustedDirs: z.array(z.string()).optional(),
   safeBinProfiles: z.record(z.string(), ToolExecSafeBinProfileSchema).optional(),
   backgroundMs: z.number().int().positive().optional(),
@@ -618,16 +620,7 @@ export const MemorySearchSchema = z
       })
       .strict()
       .optional(),
-    provider: z
-      .union([
-        z.literal("openai"),
-        z.literal("local"),
-        z.literal("gemini"),
-        z.literal("voyage"),
-        z.literal("mistral"),
-        z.literal("ollama"),
-      ])
-      .optional(),
+    provider: z.string().optional(),
     remote: z
       .object({
         baseUrl: z.string().optional(),
@@ -646,17 +639,7 @@ export const MemorySearchSchema = z
       })
       .strict()
       .optional(),
-    fallback: z
-      .union([
-        z.literal("openai"),
-        z.literal("gemini"),
-        z.literal("local"),
-        z.literal("voyage"),
-        z.literal("mistral"),
-        z.literal("ollama"),
-        z.literal("none"),
-      ])
-      .optional(),
+    fallback: z.string().optional(),
     model: z.string().optional(),
     outputDimensionality: z.number().int().positive().optional(),
     local: z
@@ -781,6 +764,11 @@ export const AgentEntrySchema = z
     workspace: z.string().optional(),
     agentDir: z.string().optional(),
     model: AgentModelSchema.optional(),
+    thinkingDefault: z
+      .enum(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive"])
+      .optional(),
+    reasoningDefault: z.enum(["on", "off", "stream"]).optional(),
+    fastModeDefault: z.boolean().optional(),
     skills: z.array(z.string()).optional(),
     memorySearch: MemorySearchSchema,
     humanDelay: HumanDelaySchema.optional(),

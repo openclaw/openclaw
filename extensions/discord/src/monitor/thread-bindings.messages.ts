@@ -1,6 +1,6 @@
 export {
-  formatThreadBindingDurationLabel,
   resolveThreadBindingFarewellText,
   resolveThreadBindingIntroText,
   resolveThreadBindingThreadName,
-} from "../../../../src/channels/thread-bindings-messages.js";
+  formatThreadBindingDurationLabel,
+} from "openclaw/plugin-sdk/conversation-runtime";

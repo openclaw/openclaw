@@ -1,5 +1,6 @@
 {
   "id": "xai",
+  "enabledByDefault": true,
   "providers": ["xai"],
   "providerAuthEnvVars": {
     "xai": ["XAI_API_KEY"]
@@ -19,9 +20,78 @@
       "cliDescription": "xAI API key"
     }
   ],
+  "uiHints": {
+    "webSearch.apiKey": {
+      "label": "Grok Search API Key",
+      "help": "xAI API key for Grok web search (fallback: XAI_API_KEY env var).",
+      "sensitive": true
+    },
+    "webSearch.model": {
+      "label": "Grok Search Model",
+      "help": "Grok model override for web search."
+    },
+    "webSearch.inlineCitations": {
+      "label": "Inline Citations",
+      "help": "Include inline markdown citations in Grok responses."
+    },
+    "codeExecution.enabled": {
+      "label": "Enable Code Execution",
+      "help": "Enable the code_execution tool for remote xAI sandbox analysis."
+    },
+    "codeExecution.model": {
+      "label": "Code Execution Model",
+      "help": "xAI model override for code_execution."
+    },
+    "codeExecution.maxTurns": {
+      "label": "Code Execution Max Turns",
+      "help": "Optional max internal tool turns xAI may use for code_execution."
+    },
+    "codeExecution.timeoutSeconds": {
+      "label": "Code Execution Timeout",
+      "help": "Timeout in seconds for code_execution requests."
+    }
+  },
+  "contracts": {
+    "webSearchProviders": ["grok"],
+    "tools": ["code_execution", "x_search"]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {}
+    "properties": {
+      "webSearch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "apiKey": {
+            "type": ["string", "object"]
+          },
+          "model": {
+            "type": "string"
+          },
+          "inlineCitations": {
+            "type": "boolean"
+          }
+        }
+      },
+      "codeExecution": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "model": {
+            "type": "string"
+          },
+          "maxTurns": {
+            "type": "number"
+          },
+          "timeoutSeconds": {
+            "type": "number"
+          }
+        }
+      }
+    }
   }
 }

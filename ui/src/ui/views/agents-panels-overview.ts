@@ -1,5 +1,10 @@
 import { html, nothing } from "lit";
-import type { AgentIdentityResult, AgentsFilesListResult, AgentsListResult } from "../types.ts";
+import type {
+  AgentIdentityResult,
+  AgentsFilesListResult,
+  AgentsListResult,
+  ModelCatalogEntry,
+} from "../types.ts";
 import {
   buildModelOptions,
   normalizeModelValue,
@@ -23,6 +28,7 @@ export function renderAgentOverview(params: {
   configLoading: boolean;
   configSaving: boolean;
   configDirty: boolean;
+  modelCatalog: ModelCatalogEntry[];
   onConfigReload: () => void;
   onConfigSave: () => void;
   onModelChange: (agentId: string, modelId: string | null) => void;
@@ -94,7 +100,9 @@ export function renderAgentOverview(params: {
               class="workspace-link mono"
               @click=${() => onSelectPanel("files")}
               title="Open Files tab"
-            >${workspace}</button>
+            >
+              ${workspace}
+            </button>
           </div>
         </div>
         <div class="agent-kv">
@@ -128,25 +136,30 @@ export function renderAgentOverview(params: {
             >
               ${
                 isDefault
-                  ? nothing
-                  : html`
-                      <option value="">
-                        ${defaultPrimary ? `Inherit default (${defaultPrimary})` : "Inherit default"}
-                      </option>
+                  ? html`
+                      <option value="">Not set</option>
                     `
+                  : html`
+                    <option value="">
+                      ${defaultPrimary ? `Inherit default (${defaultPrimary})` : "Inherit default"}
+                    </option>
+                  `
               }
-              ${buildModelOptions(configForm, effectivePrimary ?? undefined)}
+              ${buildModelOptions(configForm, effectivePrimary ?? undefined, params.modelCatalog)}
             </select>
           </label>
           <div class="field">
             <span>Fallbacks</span>
-            <div class="agent-chip-input" @click=${(e: Event) => {
-              const container = e.currentTarget as HTMLElement;
-              const input = container.querySelector("input");
-              if (input) {
-                input.focus();
-              }
-            }}>
+            <div
+              class="agent-chip-input"
+              @click=${(e: Event) => {
+                const container = e.currentTarget as HTMLElement;
+                const input = container.querySelector("input");
+                if (input) {
+                  input.focus();
+                }
+              }}
+            >
               ${fallbackChips.map(
                 (chip, i) => html`
                   <span class="chip">
@@ -156,7 +169,9 @@ export function renderAgentOverview(params: {
                       class="chip-remove"
                       ?disabled=${disabled}
                       @click=${() => removeChip(i)}
-                    >&times;</button>
+                    >
+                      &times;
+                    </button>
                   </span>
                 `,
               )}
@@ -177,7 +192,12 @@ export function renderAgentOverview(params: {
           </div>
         </div>
         <div class="agent-model-actions">
-          <button type="button" class="btn btn--sm" ?disabled=${configLoading} @click=${onConfigReload}>
+          <button
+            type="button"
+            class="btn btn--sm"
+            ?disabled=${configLoading}
+            @click=${onConfigReload}
+          >
             Reload Config
           </button>
           <button

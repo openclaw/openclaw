@@ -101,15 +101,27 @@ export function renderNostrProfileForm(params: {
             placeholder=${placeholder ?? ""}
             maxlength=${maxLength ?? 2000}
             rows="3"
-            style="width: 100%; padding: 8px; border: 1px solid var(--border-color); border-radius: 4px; resize: vertical; font-family: inherit;"
+            style="width: 100%; padding: 8px; border: 1px solid var(--border-color); border-radius: var(--radius-sm); resize: vertical; font-family: inherit;"
             @input=${(e: InputEvent) => {
               const target = e.target as HTMLTextAreaElement;
               callbacks.onFieldChange(field, target.value);
             }}
             ?disabled=${state.saving}
           ></textarea>
-          ${help ? html`<div style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">${help}</div>` : nothing}
-          ${error ? html`<div style="font-size: 12px; color: var(--danger-color); margin-top: 2px;">${error}</div>` : nothing}
+          ${
+            help
+              ? html`<div style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">
+                ${help}
+              </div>`
+              : nothing
+          }
+          ${
+            error
+              ? html`<div style="font-size: 12px; color: var(--danger-color); margin-top: 2px;">
+                ${error}
+              </div>`
+              : nothing
+          }
         </div>
       `;
     }
@@ -125,15 +137,27 @@ export function renderNostrProfileForm(params: {
           .value=${value}
           placeholder=${placeholder ?? ""}
           maxlength=${maxLength ?? 256}
-          style="width: 100%; padding: 8px; border: 1px solid var(--border-color); border-radius: 4px;"
+          style="width: 100%; padding: 8px; border: 1px solid var(--border-color); border-radius: var(--radius-sm);"
           @input=${(e: InputEvent) => {
             const target = e.target as HTMLInputElement;
             callbacks.onFieldChange(field, target.value);
           }}
           ?disabled=${state.saving}
         />
-        ${help ? html`<div style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">${help}</div>` : nothing}
-        ${error ? html`<div style="font-size: 12px; color: var(--danger-color); margin-top: 2px;">${error}</div>` : nothing}
+        ${
+          help
+            ? html`<div style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">
+              ${help}
+            </div>`
+            : nothing
+        }
+        ${
+          error
+            ? html`<div style="font-size: 12px; color: var(--danger-color); margin-top: 2px;">
+              ${error}
+            </div>`
+            : nothing
+        }
       </div>
     `;
   };
@@ -164,8 +188,13 @@ export function renderNostrProfileForm(params: {
   };
 
   return html`
-    <div class="nostr-profile-form" style="padding: 16px; background: var(--bg-secondary); border-radius: 8px; margin-top: 12px;">
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+    <div
+      class="nostr-profile-form"
+      style="padding: 16px; background: var(--bg-secondary); border-radius: var(--radius-md); margin-top: 12px;"
+    >
+      <div
+        style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;"
+      >
         <div style="font-weight: 600; font-size: 16px;">Edit Profile</div>
         <div style="font-size: 12px; color: var(--text-muted);">Account: ${accountId}</div>
       </div>
@@ -175,63 +204,57 @@ export function renderNostrProfileForm(params: {
           ? html`<div class="callout danger" style="margin-bottom: 12px;">${state.error}</div>`
           : nothing
       }
-
       ${
         state.success
           ? html`<div class="callout success" style="margin-bottom: 12px;">${state.success}</div>`
           : nothing
       }
-
       ${renderPicturePreview()}
-
       ${renderField("name", "Username", {
         placeholder: "satoshi",
         maxLength: 256,
         help: "Short username (e.g., satoshi)",
       })}
-
       ${renderField("displayName", "Display Name", {
         placeholder: "Satoshi Nakamoto",
         maxLength: 256,
         help: "Your full display name",
       })}
-
       ${renderField("about", "Bio", {
         type: "textarea",
         placeholder: "Tell people about yourself...",
         maxLength: 2000,
         help: "A brief bio or description",
       })}
-
       ${renderField("picture", "Avatar URL", {
         type: "url",
         placeholder: "https://example.com/avatar.jpg",
         help: "HTTPS URL to your profile picture",
       })}
-
       ${
         state.showAdvanced
           ? html`
-            <div style="border-top: 1px solid var(--border-color); padding-top: 12px; margin-top: 12px;">
-              <div style="font-weight: 500; margin-bottom: 12px; color: var(--text-muted);">Advanced</div>
+            <div
+              style="border-top: 1px solid var(--border-color); padding-top: 12px; margin-top: 12px;"
+            >
+              <div style="font-weight: 500; margin-bottom: 12px; color: var(--text-muted);">
+                Advanced
+              </div>
 
               ${renderField("banner", "Banner URL", {
                 type: "url",
                 placeholder: "https://example.com/banner.jpg",
                 help: "HTTPS URL to a banner image",
               })}
-
               ${renderField("website", "Website", {
                 type: "url",
                 placeholder: "https://example.com",
                 help: "Your personal website",
               })}
-
               ${renderField("nip05", "NIP-05 Identifier", {
                 placeholder: "you@example.com",
                 help: "Verifiable identifier (e.g., you@domain.com)",
               })}
-
               ${renderField("lud16", "Lightning Address", {
                 placeholder: "you@getalby.com",
                 help: "Lightning address for tips (LUD-16)",
@@ -258,20 +281,11 @@ export function renderNostrProfileForm(params: {
           ${state.importing ? "Importing..." : "Import from Relays"}
         </button>
 
-        <button
-          class="btn"
-          @click=${callbacks.onToggleAdvanced}
-        >
+        <button class="btn" @click=${callbacks.onToggleAdvanced}>
           ${state.showAdvanced ? "Hide Advanced" : "Show Advanced"}
         </button>
 
-        <button
-          class="btn"
-          @click=${callbacks.onCancel}
-          ?disabled=${state.saving}
-        >
-          Cancel
-        </button>
+        <button class="btn" @click=${callbacks.onCancel} ?disabled=${state.saving}>Cancel</button>
       </div>
 
       ${

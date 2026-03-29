@@ -1,7 +1,7 @@
 ---
 read_when:
   - 你想通过引导式设置来配置 Gateway 网关、工作区、身份验证、渠道和 Skills
-summary: "`openclaw onboard` 的 CLI 参考（交互式设置向导）"
+summary: "`openclaw onboard` 的 CLI 参考（交互式新手引导）"
 title: onboard
 x-i18n:
   generated_at: "2026-03-16T06:21:32Z"
@@ -14,11 +14,11 @@ x-i18n:
 
 # `openclaw onboard`
 
-交互式设置向导（本地或远程 Gateway 网关设置）。
+交互式新手引导（本地或远程 Gateway 网关设置）。
 
 ## 相关指南
 
-- CLI 新手引导中心：[设置向导（CLI）](/start/wizard)
+- CLI 新手引导中心：[CLI 新手引导](/start/wizard)
 - 新手引导概览：[新手引导概览](/start/onboarding-overview)
 - CLI 新手引导参考：[CLI 设置参考](/start/wizard-cli-reference)
 - CLI 自动化：[CLI 自动化](/start/wizard-cli-automation)

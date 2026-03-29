@@ -1,17 +1,13 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_EMOJIS } from "../../../../src/channels/status-reactions.js";
-import {
-  createBaseDiscordMessageContext,
-  createDiscordDirectMessageContextOverrides,
-} from "./message-handler.test-harness.js";
-import {
-  __testing as threadBindingTesting,
-  createThreadBindingManager,
-} from "./thread-bindings.js";
 
 const sendMocks = vi.hoisted(() => ({
-  reactMessageDiscord: vi.fn(async () => {}),
-  removeReactionDiscord: vi.fn(async () => {}),
+  reactMessageDiscord: vi.fn<
+    (channelId: string, messageId: string, emoji: string, opts?: unknown) => Promise<void>
+  >(async () => {}),
+  removeReactionDiscord: vi.fn<
+    (channelId: string, messageId: string, emoji: string, opts?: unknown) => Promise<void>
+  >(async () => {}),
 }));
 function createMockDraftStream() {
   return {
@@ -25,8 +21,15 @@ function createMockDraftStream() {
 }
 
 const deliveryMocks = vi.hoisted(() => ({
-  editMessageDiscord: vi.fn(async () => ({})),
-  deliverDiscordReply: vi.fn(async () => {}),
+  editMessageDiscord: vi.fn<
+    (
+      channelId: string,
+      messageId: string,
+      payload: unknown,
+      opts?: unknown,
+    ) => Promise<import("discord-api-types/v10").APIMessage>
+  >(async () => ({ id: "m1" }) as import("discord-api-types/v10").APIMessage),
+  deliverDiscordReply: vi.fn<(params: unknown) => Promise<void>>(async () => {}),
   createDiscordDraftStream: vi.fn(() => createMockDraftStream()),
 }));
 const editMessageDiscord = deliveryMocks.editMessageDiscord;
@@ -54,76 +57,112 @@ type DispatchInboundParams = {
   };
 };
 const dispatchInboundMessage = vi.hoisted(() =>
-  vi.fn(async (_params?: DispatchInboundParams) => ({
+  vi.fn<
+    (
+      params?: DispatchInboundParams,
+    ) => Promise<{ queuedFinal: boolean; counts: { final: number; tool: number; block: number } }>
+  >(async (_params?: DispatchInboundParams) => ({
     queuedFinal: false,
     counts: { final: 0, tool: 0, block: 0 },
   })),
 );
-const recordInboundSession = vi.hoisted(() => vi.fn(async () => {}));
+const recordInboundSession = vi.hoisted(() =>
+  vi.fn<(params?: unknown) => Promise<void>>(async () => {}),
+);
 const configSessionsMocks = vi.hoisted(() => ({
-  readSessionUpdatedAt: vi.fn(() => undefined),
-  resolveStorePath: vi.fn(() => "/tmp/openclaw-discord-process-test-sessions.json"),
+  readSessionUpdatedAt: vi.fn<(params?: unknown) => number | undefined>(() => undefined),
+  resolveStorePath: vi.fn<(path?: unknown, opts?: unknown) => string>(
+    () => "/tmp/openclaw-discord-process-test-sessions.json",
+  ),
 }));
 const readSessionUpdatedAt = configSessionsMocks.readSessionUpdatedAt;
 const resolveStorePath = configSessionsMocks.resolveStorePath;
+let createBaseDiscordMessageContext: typeof import("./message-handler.test-harness.js").createBaseDiscordMessageContext;
+let createDiscordDirectMessageContextOverrides: typeof import("./message-handler.test-harness.js").createDiscordDirectMessageContextOverrides;
+let threadBindingTesting: typeof import("./thread-bindings.js").__testing;
+let createThreadBindingManager: typeof import("./thread-bindings.js").createThreadBindingManager;
+let processDiscordMessage: typeof import("./message-handler.process.js").processDiscordMessage;
 
-vi.mock("../send.js", () => ({
-  reactMessageDiscord: sendMocks.reactMessageDiscord,
-  removeReactionDiscord: sendMocks.removeReactionDiscord,
-}));
+const sendModule = await import("../send.js");
+vi.spyOn(sendModule, "reactMessageDiscord").mockImplementation(
+  async (channelId, messageId, emoji, opts) => {
+    await sendMocks.reactMessageDiscord(channelId, messageId, emoji, opts);
+    return { ok: true };
+  },
+);
+vi.spyOn(sendModule, "removeReactionDiscord").mockImplementation(
+  async (channelId, messageId, emoji, opts) => {
+    await sendMocks.removeReactionDiscord(channelId, messageId, emoji, opts);
+    return { ok: true };
+  },
+);
 
-vi.mock("../send.messages.js", () => ({
-  editMessageDiscord: deliveryMocks.editMessageDiscord,
-}));
+const sendMessagesModule = await import("../send.messages.js");
+vi.spyOn(sendMessagesModule, "editMessageDiscord").mockImplementation(
+  ((
+    channelId: Parameters<typeof sendMessagesModule.editMessageDiscord>[0],
+    messageId: Parameters<typeof sendMessagesModule.editMessageDiscord>[1],
+    payload: Parameters<typeof sendMessagesModule.editMessageDiscord>[2],
+    opts: Parameters<typeof sendMessagesModule.editMessageDiscord>[3],
+  ) => deliveryMocks.editMessageDiscord(channelId, messageId, payload, opts) as never) as never,
+);
 
-vi.mock("../draft-stream.js", () => ({
-  createDiscordDraftStream: deliveryMocks.createDiscordDraftStream,
-}));
+const draftStreamModule = await import("../draft-stream.js");
+vi.spyOn(draftStreamModule, "createDiscordDraftStream").mockImplementation(
+  deliveryMocks.createDiscordDraftStream,
+);
 
-vi.mock("./reply-delivery.js", () => ({
-  deliverDiscordReply: deliveryMocks.deliverDiscordReply,
-}));
+const replyDeliveryModule = await import("./reply-delivery.js");
+vi.spyOn(replyDeliveryModule, "deliverDiscordReply").mockImplementation(
+  ((params: Parameters<typeof replyDeliveryModule.deliverDiscordReply>[0]) =>
+    deliveryMocks.deliverDiscordReply(params) as never) as never,
+);
 
-vi.mock("../../../../src/auto-reply/dispatch.js", () => ({
-  dispatchInboundMessage,
-}));
-
-vi.mock("../../../../src/auto-reply/reply/reply-dispatcher.js", () => ({
-  createReplyDispatcherWithTyping: vi.fn(
-    (opts: { deliver: (payload: unknown, info: { kind: string }) => Promise<void> | void }) => ({
-      dispatcher: {
-        sendToolResult: vi.fn(() => true),
-        sendBlockReply: vi.fn((payload: unknown) => {
-          void opts.deliver(payload as never, { kind: "block" });
-          return true;
-        }),
-        sendFinalReply: vi.fn((payload: unknown) => {
-          void opts.deliver(payload as never, { kind: "final" });
-          return true;
-        }),
-        waitForIdle: vi.fn(async () => {}),
-        getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
-        markComplete: vi.fn(),
-      },
-      replyOptions: {},
-      markDispatchIdle: vi.fn(),
-      markRunComplete: vi.fn(),
+const replyRuntimeModule = await import("openclaw/plugin-sdk/reply-runtime");
+vi.spyOn(replyRuntimeModule, "dispatchInboundMessage").mockImplementation(
+  ((params: Parameters<typeof replyRuntimeModule.dispatchInboundMessage>[0]) =>
+    dispatchInboundMessage(params as DispatchInboundParams) as never) as never,
+);
+vi.spyOn(replyRuntimeModule, "createReplyDispatcherWithTyping").mockImplementation(((opts: {
+  deliver: (payload: unknown, info: { kind: string }) => Promise<void> | void;
+}) => ({
+  dispatcher: {
+    sendToolResult: vi.fn(() => true),
+    sendBlockReply: vi.fn((payload: unknown) => {
+      void opts.deliver(payload as never, { kind: "block" });
+      return true;
     }),
-  ),
-}));
+    sendFinalReply: vi.fn((payload: unknown) => {
+      void opts.deliver(payload as never, { kind: "final" });
+      return true;
+    }),
+    waitForIdle: vi.fn(async () => {}),
+    getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+    markComplete: vi.fn(),
+  },
+  replyOptions: {},
+  markDispatchIdle: vi.fn(),
+  markRunComplete: vi.fn(),
+})) as never);
 
-vi.mock("../../../../src/channels/session.js", () => ({
-  recordInboundSession,
-}));
+const conversationRuntimeModule = await import("openclaw/plugin-sdk/conversation-runtime");
+vi.spyOn(conversationRuntimeModule, "recordInboundSession").mockImplementation(
+  ((params: Parameters<typeof conversationRuntimeModule.recordInboundSession>[0]) =>
+    recordInboundSession(params) as never) as never,
+);
 
-vi.mock("../../../../src/config/sessions.js", () => ({
-  readSessionUpdatedAt: configSessionsMocks.readSessionUpdatedAt,
-  resolveStorePath: configSessionsMocks.resolveStorePath,
-}));
+const configRuntimeModule = await import("openclaw/plugin-sdk/config-runtime");
+vi.spyOn(configRuntimeModule, "readSessionUpdatedAt").mockImplementation(
+  ((params: Parameters<typeof configRuntimeModule.readSessionUpdatedAt>[0]) =>
+    configSessionsMocks.readSessionUpdatedAt(params) as never) as never,
+);
+vi.spyOn(configRuntimeModule, "resolveStorePath").mockImplementation(
+  ((
+    path: Parameters<typeof configRuntimeModule.resolveStorePath>[0],
+    opts: Parameters<typeof configRuntimeModule.resolveStorePath>[1],
+  ) => configSessionsMocks.resolveStorePath(path, opts) as never) as never,
+);
 
-const { processDiscordMessage } = await import("./message-handler.process.js");
-
-const createBaseContext = createBaseDiscordMessageContext;
 const BASE_CHANNEL_ROUTE = {
   agentId: "main",
   channel: "discord",
@@ -131,6 +170,18 @@ const BASE_CHANNEL_ROUTE = {
   sessionKey: "agent:main:discord:channel:c1",
   mainSessionKey: "agent:main:main",
 } as const;
+
+async function createBaseContext(
+  ...args: Parameters<typeof createBaseDiscordMessageContext>
+): Promise<Awaited<ReturnType<typeof createBaseDiscordMessageContext>>> {
+  return await createBaseDiscordMessageContext(...args);
+}
+
+function createDirectMessageContextOverrides(
+  ...args: Parameters<typeof createDiscordDirectMessageContextOverrides>
+): ReturnType<typeof createDiscordDirectMessageContextOverrides> {
+  return createDiscordDirectMessageContextOverrides(...args);
+}
 
 function mockDispatchSingleBlockReply(payload: { text: string; isReasoning?: boolean }) {
   dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
@@ -148,6 +199,15 @@ async function processStreamOffDiscordMessage() {
   // oxlint-disable-next-line typescript/no-explicit-any
   await processDiscordMessage(ctx as any);
 }
+
+beforeAll(async () => {
+  vi.useRealTimers();
+  ({ createBaseDiscordMessageContext, createDiscordDirectMessageContextOverrides } =
+    await import("./message-handler.test-harness.js"));
+  ({ __testing: threadBindingTesting, createThreadBindingManager } =
+    await import("./thread-bindings.js"));
+  ({ processDiscordMessage } = await import("./message-handler.process.js"));
+});
 
 beforeEach(() => {
   vi.useRealTimers();
@@ -413,7 +473,7 @@ describe("processDiscordMessage ack reactions", () => {
 describe("processDiscordMessage session routing", () => {
   it("stores DM lastRoute with user target for direct-session continuity", async () => {
     const ctx = await createBaseContext({
-      ...createDiscordDirectMessageContextOverrides(),
+      ...createDirectMessageContextOverrides(),
       message: {
         id: "m1",
         channelId: "dm1",
@@ -530,6 +590,12 @@ describe("processDiscordMessage draft streaming", () => {
   it("accepts streaming=true alias for partial preview mode", async () => {
     await runSingleChunkFinalScenario({ streaming: true, maxLinesPerMessage: 5 });
     expectSinglePreviewEdit();
+  });
+
+  it("keeps preview streaming off by default when streaming is unset", async () => {
+    await runSingleChunkFinalScenario({ maxLinesPerMessage: 5 });
+    expect(editMessageDiscord).not.toHaveBeenCalled();
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
   });
 
   it("falls back to standard send when final needs multiple chunks", async () => {

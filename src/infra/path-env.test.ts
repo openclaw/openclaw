@@ -33,6 +33,10 @@ vi.mock("node:fs", async (importOriginal) => {
   return { ...wrapped, default: wrapped };
 });
 
+vi.mock("./env.js", () => ({
+  isTruthyEnvValue: (value?: string) => value === "1" || value === "true",
+}));
+
 let ensureOpenClawCliOnPath: typeof import("./path-env.js").ensureOpenClawCliOnPath;
 
 describe("ensureOpenClawCliOnPath", () => {
@@ -93,10 +97,29 @@ describe("ensureOpenClawCliOnPath", () => {
     return (process.env.PATH ?? "").split(path.delimiter);
   }
 
+  function resetBootstrapEnv(pathValue = "/usr/bin") {
+    process.env.PATH = pathValue;
+    delete process.env.OPENCLAW_PATH_BOOTSTRAPPED;
+    delete process.env.OPENCLAW_ALLOW_PROJECT_LOCAL_BIN;
+    delete process.env.HOMEBREW_PREFIX;
+    delete process.env.HOMEBREW_BREW_FILE;
+    delete process.env.XDG_BIN_HOME;
+  }
+
+  function expectPathsAfter(parts: string[], anchor: string, expectedPaths: string[]) {
+    const anchorIndex = parts.indexOf(anchor);
+    expect(anchorIndex).toBeGreaterThanOrEqual(0);
+    for (const expectedPath of expectedPaths) {
+      expect(
+        parts.indexOf(expectedPath),
+        `${expectedPath} should come after ${anchor}`,
+      ).toBeGreaterThan(anchorIndex);
+    }
+  }
+
   it("prepends the bundled app bin dir when a sibling openclaw exists", () => {
     const { tmp, appBinDir, appCli } = setupAppCliRoot("case-bundled");
-    process.env.PATH = "/usr/bin";
-    delete process.env.OPENCLAW_PATH_BOOTSTRAPPED;
+    resetBootstrapEnv();
 
     const updated = bootstrapPath({
       execPath: appCli,
@@ -119,16 +142,15 @@ describe("ensureOpenClawCliOnPath", () => {
     expect(process.env.PATH).toBe("/bin");
   });
 
-  it("prepends mise shims when available", () => {
-    const { tmp, appBinDir, appCli } = setupAppCliRoot("case-mise");
+  it("appends mise shims after system dirs", () => {
+    const { tmp, appCli } = setupAppCliRoot("case-mise");
     const miseDataDir = path.join(tmp, "mise");
     const shimsDir = path.join(miseDataDir, "shims");
     setDir(miseDataDir);
     setDir(shimsDir);
 
     process.env.MISE_DATA_DIR = miseDataDir;
-    process.env.PATH = "/usr/bin";
-    delete process.env.OPENCLAW_PATH_BOOTSTRAPPED;
+    resetBootstrapEnv();
 
     const updated = bootstrapPath({
       execPath: appCli,
@@ -136,10 +158,7 @@ describe("ensureOpenClawCliOnPath", () => {
       homeDir: tmp,
       platform: "darwin",
     });
-    const appBinIndex = updated.indexOf(appBinDir);
-    const shimsIndex = updated.indexOf(shimsDir);
-    expect(appBinIndex).toBeGreaterThanOrEqual(0);
-    expect(shimsIndex).toBeGreaterThan(appBinIndex);
+    expectPathsAfter(updated, "/usr/bin", [shimsDir]);
   });
 
   it.each([
@@ -163,9 +182,7 @@ describe("ensureOpenClawCliOnPath", () => {
       setDir(localBinDir);
       setExe(localCli);
 
-      process.env.PATH = "/usr/bin";
-      delete process.env.OPENCLAW_PATH_BOOTSTRAPPED;
-      delete process.env.OPENCLAW_ALLOW_PROJECT_LOCAL_BIN;
+      resetBootstrapEnv();
 
       const withoutOptIn = bootstrapPath({
         execPath: appCli,
@@ -175,8 +192,7 @@ describe("ensureOpenClawCliOnPath", () => {
       });
       expect(withoutOptIn.includes(localBinDir)).toBe(false);
 
-      process.env.PATH = "/usr/bin";
-      delete process.env.OPENCLAW_PATH_BOOTSTRAPPED;
+      resetBootstrapEnv();
       if (envValue === undefined) {
         delete process.env.OPENCLAW_ALLOW_PROJECT_LOCAL_BIN;
       } else {
@@ -190,10 +206,7 @@ describe("ensureOpenClawCliOnPath", () => {
         platform: "darwin",
         ...(allowProjectLocalBin === undefined ? {} : { allowProjectLocalBin }),
       });
-      const usrBinIndex = withOptIn.indexOf("/usr/bin");
-      const localIndex = withOptIn.indexOf(localBinDir);
-      expect(usrBinIndex).toBeGreaterThanOrEqual(0);
-      expect(localIndex).toBeGreaterThan(usrBinIndex);
+      expectPathsAfter(withOptIn, "/usr/bin", [localBinDir]);
     },
   );
 
@@ -205,9 +218,8 @@ describe("ensureOpenClawCliOnPath", () => {
     setDir(path.join(tmp, ".local"));
     setDir(localBin);
 
-    process.env.PATH = "/usr/bin";
+    resetBootstrapEnv();
     process.env.XDG_BIN_HOME = xdgBinHome;
-    delete process.env.OPENCLAW_PATH_BOOTSTRAPPED;
 
     const updated = bootstrapPath({
       execPath: appCli,
@@ -218,32 +230,98 @@ describe("ensureOpenClawCliOnPath", () => {
     expect(updated.indexOf(xdgBinHome)).toBeLessThan(updated.indexOf(localBin));
   });
 
-  it("prepends Linuxbrew dirs when present", () => {
-    const tmp = abs("/tmp/openclaw-path/case-linuxbrew");
-    const execDir = path.join(tmp, "exec");
-    setDir(tmp);
-    setDir(execDir);
+  it("places ~/.local/bin AFTER /usr/bin to prevent PATH hijack", () => {
+    const { tmp, appCli } = setupAppCliRoot("case-path-hijack");
+    const localBin = path.join(tmp, ".local", "bin");
+    setDir(path.join(tmp, ".local"));
+    setDir(localBin);
 
-    const linuxbrewDir = path.join(tmp, ".linuxbrew");
-    const linuxbrewBin = path.join(linuxbrewDir, "bin");
-    const linuxbrewSbin = path.join(linuxbrewDir, "sbin");
-    setDir(linuxbrewDir);
-    setDir(linuxbrewBin);
-    setDir(linuxbrewSbin);
+    resetBootstrapEnv("/usr/bin:/bin");
 
-    process.env.PATH = "/usr/bin";
-    delete process.env.OPENCLAW_PATH_BOOTSTRAPPED;
-    delete process.env.HOMEBREW_PREFIX;
-    delete process.env.HOMEBREW_BREW_FILE;
-    delete process.env.XDG_BIN_HOME;
-
-    const parts = bootstrapPath({
-      execPath: path.join(execDir, "node"),
+    const updated = bootstrapPath({
+      execPath: appCli,
       cwd: tmp,
       homeDir: tmp,
       platform: "linux",
     });
-    expect(parts[0]).toBe(linuxbrewBin);
-    expect(parts[1]).toBe(linuxbrewSbin);
+    expectPathsAfter(updated, "/usr/bin", [localBin]);
+  });
+
+  it("places all user-writable home dirs after system dirs", () => {
+    const { tmp, appCli } = setupAppCliRoot("case-user-writable-after-system");
+    const localBin = path.join(tmp, ".local", "bin");
+    const pnpmBin = path.join(tmp, ".local", "share", "pnpm");
+    const bunBin = path.join(tmp, ".bun", "bin");
+    const yarnBin = path.join(tmp, ".yarn", "bin");
+    setDir(path.join(tmp, ".local"));
+    setDir(localBin);
+    setDir(path.join(tmp, ".local", "share"));
+    setDir(pnpmBin);
+    setDir(path.join(tmp, ".bun"));
+    setDir(bunBin);
+    setDir(path.join(tmp, ".yarn"));
+    setDir(yarnBin);
+
+    resetBootstrapEnv("/usr/bin:/bin");
+
+    const updated = bootstrapPath({
+      execPath: appCli,
+      cwd: tmp,
+      homeDir: tmp,
+      platform: "linux",
+    });
+    expectPathsAfter(updated, "/usr/bin", [localBin, pnpmBin, bunBin, yarnBin]);
+  });
+
+  it.each([
+    {
+      name: "appends Homebrew dirs after immutable OS dirs",
+      setup: () => {
+        const { tmp, appCli } = setupAppCliRoot("case-homebrew-after-system");
+        setDir("/opt/homebrew/bin");
+        setDir("/usr/local/bin");
+        resetBootstrapEnv("/usr/bin:/bin");
+        return {
+          params: {
+            execPath: appCli,
+            cwd: tmp,
+            homeDir: tmp,
+            platform: "darwin" as const,
+          },
+          expectedPaths: ["/opt/homebrew/bin", "/usr/local/bin"],
+          anchor: "/usr/bin",
+        };
+      },
+    },
+    {
+      name: "appends Linuxbrew dirs after system dirs",
+      setup: () => {
+        const tmp = abs("/tmp/openclaw-path/case-linuxbrew");
+        const execDir = path.join(tmp, "exec");
+        setDir(tmp);
+        setDir(execDir);
+        const linuxbrewDir = path.join(tmp, ".linuxbrew");
+        const linuxbrewBin = path.join(linuxbrewDir, "bin");
+        const linuxbrewSbin = path.join(linuxbrewDir, "sbin");
+        setDir(linuxbrewDir);
+        setDir(linuxbrewBin);
+        setDir(linuxbrewSbin);
+        resetBootstrapEnv();
+        return {
+          params: {
+            execPath: path.join(execDir, "node"),
+            cwd: tmp,
+            homeDir: tmp,
+            platform: "linux" as const,
+          },
+          expectedPaths: [linuxbrewBin, linuxbrewSbin],
+          anchor: "/usr/bin",
+        };
+      },
+    },
+  ])("$name", ({ setup }) => {
+    const { params, expectedPaths, anchor } = setup();
+    const updated = bootstrapPath(params);
+    expectPathsAfter(updated, anchor, expectedPaths);
   });
 });

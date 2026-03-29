@@ -1,5 +1,5 @@
 import { html, nothing } from "lit";
-import { t, i18n, SUPPORTED_LOCALES, type Locale } from "../../i18n/index.ts";
+import { t, i18n, SUPPORTED_LOCALES, type Locale, isSupportedLocale } from "../../i18n/index.ts";
 import type { EventLogEntry } from "../app-events.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../external-link.ts";
 import { formatRelativeTimestamp, formatDurationHuman } from "../format.ts";
@@ -14,6 +14,7 @@ import type {
   SessionsUsageResult,
   SkillStatusReport,
 } from "../types.ts";
+import { renderConnectCommand } from "./connect-command.ts";
 import { renderOverviewAttention } from "./overview-attention.ts";
 import { renderOverviewCards } from "./overview-cards.ts";
 import { renderOverviewEventLog } from "./overview-event-log.ts";
@@ -84,9 +85,7 @@ export function renderOverview(props: OverviewProps) {
           <span class="mono">openclaw devices list</span><br />
           <span class="mono">openclaw devices approve &lt;requestId&gt;</span>
         </div>
-        <div style="margin-top: 6px; font-size: 12px;">
-          ${t("overview.pairing.mobileHint")}
-        </div>
+        <div style="margin-top: 6px; font-size: 12px;">${t("overview.pairing.mobileHint")}</div>
         <div style="margin-top: 6px">
           <a
             class="session-link"
@@ -165,7 +164,9 @@ export function renderOverview(props: OverviewProps) {
       <div class="muted" style="margin-top: 8px">
         ${t("overview.insecure.hint", { url: "http://127.0.0.1:18789" })}
         <div style="margin-top: 6px">
-          ${t("overview.insecure.stayHttp", { config: "gateway.controlUi.allowInsecureAuth: true" })}
+          ${t("overview.insecure.stayHttp", {
+            config: "gateway.controlUi.allowInsecureAuth: true",
+          })}
         </div>
         <div style="margin-top: 6px">
           <a
@@ -190,7 +191,9 @@ export function renderOverview(props: OverviewProps) {
     `;
   })();
 
-  const currentLocale = i18n.getLocale();
+  const currentLocale = isSupportedLocale(props.settings.locale)
+    ? props.settings.locale
+    : i18n.getLocale();
 
   return html`
     <section class="grid">
@@ -295,7 +298,9 @@ export function renderOverview(props: OverviewProps) {
             >
               ${SUPPORTED_LOCALES.map((loc) => {
                 const key = loc.replace(/-([a-zA-Z])/g, (_, c) => c.toUpperCase());
-                return html`<option value=${loc}>${t(`languages.${key}`)}</option>`;
+                return html`<option value=${loc} ?selected=${currentLocale === loc}>
+                  ${t(`languages.${key}`)}
+                </option>`;
               })}
             </select>
           </label>
@@ -303,32 +308,44 @@ export function renderOverview(props: OverviewProps) {
         <div class="row" style="margin-top: 14px;">
           <button class="btn" @click=${() => props.onConnect()}>${t("common.connect")}</button>
           <button class="btn" @click=${() => props.onRefresh()}>${t("common.refresh")}</button>
-          <span class="muted">${
-            isTrustedProxy ? t("overview.access.trustedProxy") : t("overview.access.connectHint")
-          }</span>
+          <span class="muted"
+            >${
+              isTrustedProxy ? t("overview.access.trustedProxy") : t("overview.access.connectHint")
+            }</span
+          >
         </div>
         ${
           !props.connected
             ? html`
-                <div class="login-gate__help" style="margin-top: 16px;">
-                  <div class="login-gate__help-title">${t("overview.connection.title")}</div>
-                  <ol class="login-gate__steps">
-                    <li>${t("overview.connection.step1")}<code>openclaw gateway run</code></li>
-                    <li>${t("overview.connection.step2")}<code>openclaw dashboard --no-open</code></li>
-                    <li>${t("overview.connection.step3")}</li>
-                    <li>${t("overview.connection.step4")}<code>openclaw doctor --generate-gateway-token</code></li>
-                  </ol>
-                  <div class="login-gate__docs">
-                    ${t("overview.connection.docsHint")}
-                    <a
-                      class="session-link"
-                      href="https://docs.openclaw.ai/web/dashboard"
-                      target="_blank"
-                      rel="noreferrer"
-                    >${t("overview.connection.docsLink")}</a>
-                  </div>
+              <div class="login-gate__help" style="margin-top: 16px;">
+                <div class="login-gate__help-title">${t("overview.connection.title")}</div>
+                <ol class="login-gate__steps">
+                  <li>
+                    ${t("overview.connection.step1")}
+                    ${renderConnectCommand("openclaw gateway run")}
+                  </li>
+                  <li>
+                    ${t("overview.connection.step2")} ${renderConnectCommand("openclaw dashboard")}
+                  </li>
+                  <li>${t("overview.connection.step3")}</li>
+                  <li>
+                    ${t("overview.connection.step4")}<code
+                      >openclaw doctor --generate-gateway-token</code
+                    >
+                  </li>
+                </ol>
+                <div class="login-gate__docs">
+                  ${t("overview.connection.docsHint")}
+                  <a
+                    class="session-link"
+                    href="https://docs.openclaw.ai/web/dashboard"
+                    target="_blank"
+                    rel="noreferrer"
+                    >${t("overview.connection.docsLink")}</a
+                  >
                 </div>
-              `
+              </div>
+            `
             : nothing
         }
       </div>
@@ -354,7 +371,11 @@ export function renderOverview(props: OverviewProps) {
           <div class="stat">
             <div class="stat-label">${t("overview.snapshot.lastChannelsRefresh")}</div>
             <div class="stat-value">
-              ${props.lastChannelsRefresh ? formatRelativeTimestamp(props.lastChannelsRefresh) : t("common.na")}
+              ${
+                props.lastChannelsRefresh
+                  ? formatRelativeTimestamp(props.lastChannelsRefresh)
+                  : t("common.na")
+              }
             </div>
           </div>
         </div>
@@ -362,15 +383,13 @@ export function renderOverview(props: OverviewProps) {
           props.lastError
             ? html`<div class="callout danger" style="margin-top: 14px;">
               <div>${props.lastError}</div>
-              ${pairingHint ?? ""}
-              ${authHint ?? ""}
-              ${insecureContextHint ?? ""}
+              ${pairingHint ?? ""} ${authHint ?? ""} ${insecureContextHint ?? ""}
             </div>`
             : html`
-                <div class="callout" style="margin-top: 14px">
-                  ${t("overview.snapshot.channelsHint")}
-                </div>
-              `
+              <div class="callout" style="margin-top: 14px">
+                ${t("overview.snapshot.channelsHint")}
+              </div>
+            `
         }
       </div>
     </section>
@@ -386,21 +405,18 @@ export function renderOverview(props: OverviewProps) {
       presenceCount: props.presenceCount,
       onNavigate: props.onNavigate,
     })}
-
     ${renderOverviewAttention({ items: props.attentionItems })}
 
     <div class="ov-section-divider"></div>
 
-    <div class="ov-bottom-grid" style="margin-top: 18px;">
+    <div class="ov-bottom-grid">
       ${renderOverviewEventLog({
         events: props.eventLog,
       })}
-
       ${renderOverviewLogTail({
         lines: props.overviewLogLines,
         onRefreshLogs: props.onRefreshLogs,
       })}
     </div>
-
   `;
 }

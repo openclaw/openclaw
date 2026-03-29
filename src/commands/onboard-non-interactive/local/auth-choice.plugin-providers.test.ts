@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../../../config/config.js";
 import { applyNonInteractivePluginProviderChoice } from "./auth-choice.plugin-providers.js";
 
 const resolvePreferredProviderForAuthChoice = vi.hoisted(() => vi.fn(async () => undefined));
-vi.mock("../../auth-choice.preferred-provider.js", () => ({
+vi.mock("../../../plugins/provider-auth-choice-preference.js", () => ({
   resolvePreferredProviderForAuthChoice,
 }));
 
@@ -11,10 +11,11 @@ const resolveOwningPluginIdsForProvider = vi.hoisted(() => vi.fn(() => undefined
 const resolveProviderPluginChoice = vi.hoisted(() => vi.fn());
 const resolvePluginProviders = vi.hoisted(() => vi.fn(() => []));
 vi.mock("./auth-choice.plugin-providers.runtime.js", () => ({
-  resolveOwningPluginIdsForProvider,
-  resolveProviderPluginChoice,
-  resolvePluginProviders,
-  PROVIDER_PLUGIN_CHOICE_PREFIX: "provider-plugin:",
+  authChoicePluginProvidersRuntime: {
+    resolveOwningPluginIdsForProvider,
+    resolveProviderPluginChoice,
+    resolvePluginProviders,
+  },
 }));
 
 beforeEach(() => {
@@ -64,5 +65,45 @@ describe("applyNonInteractivePluginProviderChoice", () => {
     expect(resolveProviderPluginChoice).toHaveBeenCalledOnce();
     expect(runNonInteractive).toHaveBeenCalledOnce();
     expect(result).toEqual({ plugins: { allow: ["vllm"] } });
+  });
+
+  it("enables owning plugin ids when they differ from the provider id", async () => {
+    const runtime = createRuntime();
+    const runNonInteractive = vi.fn(async () => ({ plugins: { allow: ["demo-plugin"] } }));
+    resolveOwningPluginIdsForProvider.mockReturnValue(["demo-plugin"] as never);
+    resolvePluginProviders.mockReturnValue([
+      { id: "demo-provider", pluginId: "demo-plugin" },
+    ] as never);
+    resolveProviderPluginChoice.mockReturnValue({
+      provider: { id: "demo-provider", pluginId: "demo-plugin", label: "Demo Provider" },
+      method: { runNonInteractive },
+    });
+
+    const result = await applyNonInteractivePluginProviderChoice({
+      nextConfig: { agents: { defaults: {} } } as OpenClawConfig,
+      authChoice: "provider-plugin:demo-provider:custom",
+      opts: {} as never,
+      runtime: runtime as never,
+      baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
+      resolveApiKey: vi.fn(),
+      toApiKeyCredential: vi.fn(),
+    });
+
+    expect(resolvePluginProviders).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          plugins: expect.objectContaining({
+            allow: expect.arrayContaining(["demo-provider", "demo-plugin"]),
+            entries: expect.objectContaining({
+              "demo-provider": expect.objectContaining({ enabled: true }),
+              "demo-plugin": expect.objectContaining({ enabled: true }),
+            }),
+          }),
+        }),
+        onlyPluginIds: ["demo-plugin"],
+      }),
+    );
+    expect(runNonInteractive).toHaveBeenCalledOnce();
+    expect(result).toEqual({ plugins: { allow: ["demo-plugin"] } });
   });
 });

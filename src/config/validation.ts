@@ -1,6 +1,8 @@
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { CHANNEL_IDS, normalizeChatChannelId } from "../channels/registry.js";
+import { withBundledPluginAllowlistCompat } from "../plugins/bundled-compat.js";
+import { listBundledWebSearchPluginIds } from "../plugins/bundled-web-search-ids.js";
 import {
   normalizePluginsConfig,
   resolveEffectiveEnableState,
@@ -19,7 +21,13 @@ import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "../shared/net
 import { isRecord } from "../utils.js";
 import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-dirs.js";
 import { appendAllowedValuesHint, summarizeAllowedValues } from "./allowed-values.js";
+import { getBundledChannelConfigSchemaMap } from "./bundled-channel-config-runtime.js";
+import { collectChannelSchemaMetadata } from "./channel-config-metadata.js";
 import { applyAgentDefaults, applyModelDefaults, applySessionDefaults } from "./defaults.js";
+import {
+  listLegacyWebSearchConfigPaths,
+  normalizeLegacyWebSearchConfig,
+} from "./legacy-web-search.js";
 import { findLegacyConfigIssues } from "./legacy.js";
 import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
 import { OpenClawSchema } from "./zod-schema.js";
@@ -27,17 +35,167 @@ import { OpenClawSchema } from "./zod-schema.js";
 const LEGACY_REMOVED_PLUGIN_IDS = new Set(["google-antigravity-auth", "google-gemini-cli-auth"]);
 
 type UnknownIssueRecord = Record<string, unknown>;
+type ConfigPathSegment = string | number;
 type AllowedValuesCollection = {
   values: unknown[];
   incomplete: boolean;
   hasValues: boolean;
 };
+type JsonSchemaNode = Record<string, unknown>;
+
+const CUSTOM_EXPECTED_ONE_OF_RE = /expected one of ((?:"[^"]+"(?:\|"?[^"]+"?)*)+)/i;
 
 function toIssueRecord(value: unknown): UnknownIssueRecord | null {
   if (!value || typeof value !== "object") {
     return null;
   }
   return value as UnknownIssueRecord;
+}
+
+function toConfigPathSegments(path: unknown): ConfigPathSegment[] {
+  if (!Array.isArray(path)) {
+    return [];
+  }
+  return path.filter((segment): segment is ConfigPathSegment => {
+    const segmentType = typeof segment;
+    return segmentType === "string" || segmentType === "number";
+  });
+}
+
+function formatConfigPath(segments: readonly ConfigPathSegment[]): string {
+  return segments.join(".");
+}
+
+function toJsonSchemaNode(value: unknown): JsonSchemaNode | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return value as JsonSchemaNode;
+}
+
+function getSchemaCombinatorBranches(node: JsonSchemaNode): JsonSchemaNode[] {
+  const keys = ["anyOf", "oneOf", "allOf"] as const;
+  const branches: JsonSchemaNode[] = [];
+  for (const key of keys) {
+    const value = node[key];
+    if (!Array.isArray(value)) {
+      continue;
+    }
+    for (const entry of value) {
+      const child = toJsonSchemaNode(entry);
+      if (child) {
+        branches.push(child);
+      }
+    }
+  }
+  return branches;
+}
+
+function collectAllowedValuesFromSchemaNode(node: JsonSchemaNode): AllowedValuesCollection {
+  if (Object.prototype.hasOwnProperty.call(node, "const")) {
+    return { values: [node.const], incomplete: false, hasValues: true };
+  }
+
+  const enumValues = node.enum;
+  if (Array.isArray(enumValues)) {
+    return { values: enumValues, incomplete: false, hasValues: enumValues.length > 0 };
+  }
+
+  if (node.type === "boolean") {
+    return { values: [true, false], incomplete: false, hasValues: true };
+  }
+
+  const branches = getSchemaCombinatorBranches(node);
+  if (branches.length === 0) {
+    return { values: [], incomplete: true, hasValues: false };
+  }
+
+  const collected: unknown[] = [];
+  for (const branch of branches) {
+    const result = collectAllowedValuesFromSchemaNode(branch);
+    if (result.incomplete || !result.hasValues) {
+      return { values: [], incomplete: true, hasValues: false };
+    }
+    collected.push(...result.values);
+  }
+
+  return { values: collected, incomplete: false, hasValues: collected.length > 0 };
+}
+
+function advanceSchemaNodes(node: JsonSchemaNode, segment: ConfigPathSegment): JsonSchemaNode[] {
+  const branches = getSchemaCombinatorBranches(node);
+  if (branches.length > 0) {
+    return branches.flatMap((branch) => advanceSchemaNodes(branch, segment));
+  }
+
+  if (typeof segment === "number") {
+    const items = toJsonSchemaNode(node.items);
+    return items ? [items] : [];
+  }
+
+  const properties = toJsonSchemaNode(node.properties);
+  const propertyNode = properties ? toJsonSchemaNode(properties[segment]) : null;
+  if (propertyNode) {
+    return [propertyNode];
+  }
+
+  const additionalProperties = toJsonSchemaNode(node.additionalProperties);
+  return additionalProperties ? [additionalProperties] : [];
+}
+
+function collectAllowedValuesFromSchemaPath(
+  root: JsonSchemaNode,
+  path: readonly ConfigPathSegment[],
+): AllowedValuesCollection {
+  let currentNodes = [root];
+  for (const segment of path) {
+    currentNodes = currentNodes.flatMap((node) => advanceSchemaNodes(node, segment));
+    if (currentNodes.length === 0) {
+      return { values: [], incomplete: false, hasValues: false };
+    }
+  }
+
+  const collected: unknown[] = [];
+  for (const node of currentNodes) {
+    const result = collectAllowedValuesFromSchemaNode(node);
+    if (result.incomplete || !result.hasValues) {
+      return { values: [], incomplete: true, hasValues: false };
+    }
+    collected.push(...result.values);
+  }
+
+  return { values: collected, incomplete: false, hasValues: collected.length > 0 };
+}
+
+function collectAllowedValuesFromConfigPath(
+  path: readonly ConfigPathSegment[],
+): AllowedValuesCollection {
+  if (path[0] === "channels" && typeof path[1] === "string") {
+    const channelSchema = getBundledChannelConfigSchemaMap().get(path[1]);
+    const schemaRoot = toJsonSchemaNode(channelSchema?.schema);
+    if (schemaRoot) {
+      return collectAllowedValuesFromSchemaPath(schemaRoot, path.slice(2));
+    }
+  }
+
+  return { values: [], incomplete: false, hasValues: false };
+}
+
+function collectAllowedValuesFromCustomIssue(record: UnknownIssueRecord): AllowedValuesCollection {
+  const path = toConfigPathSegments(record.path);
+  const schemaValues = collectAllowedValuesFromConfigPath(path);
+  if (schemaValues.hasValues && !schemaValues.incomplete) {
+    return schemaValues;
+  }
+
+  const message = typeof record.message === "string" ? record.message : "";
+  const expectedMatch = message.match(CUSTOM_EXPECTED_ONE_OF_RE);
+  if (expectedMatch?.[1]) {
+    const values = [...expectedMatch[1].matchAll(/"([^"]+)"/g)].map((match) => match[1]);
+    return { values, incomplete: false, hasValues: values.length > 0 };
+  }
+
+  return { values: [], incomplete: false, hasValues: false };
 }
 
 function collectAllowedValuesFromIssue(issue: unknown): AllowedValuesCollection {
@@ -61,6 +219,10 @@ function collectAllowedValuesFromIssue(issue: unknown): AllowedValuesCollection 
       return { values: [true, false], incomplete: false, hasValues: true };
     }
     return { values: [], incomplete: true, hasValues: false };
+  }
+
+  if (code === "custom") {
+    return collectAllowedValuesFromCustomIssue(record);
   }
 
   if (code !== "invalid_union") {
@@ -116,14 +278,7 @@ function collectAllowedValuesFromUnknownIssue(issue: unknown): unknown[] {
 
 function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue {
   const record = toIssueRecord(issue);
-  const path = Array.isArray(record?.path)
-    ? record.path
-        .filter((segment): segment is string | number => {
-          const segmentType = typeof segment;
-          return segmentType === "string" || segmentType === "number";
-        })
-        .join(".")
-    : "";
+  const path = formatConfigPath(toConfigPathSegments(record?.path));
   const message = typeof record?.message === "string" ? record.message : "Invalid input";
   const allowedValuesSummary = summarizeAllowedValues(collectAllowedValuesFromUnknownIssue(issue));
 
@@ -229,7 +384,8 @@ function validateGatewayTailscaleBind(config: OpenClawConfig): ConfigValidationI
 export function validateConfigObjectRaw(
   raw: unknown,
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
-  const legacyIssues = findLegacyConfigIssues(raw);
+  const normalizedRaw = normalizeLegacyWebSearchConfig(raw);
+  const legacyIssues = findLegacyConfigIssues(normalizedRaw);
   if (legacyIssues.length > 0) {
     return {
       ok: false,
@@ -239,14 +395,15 @@ export function validateConfigObjectRaw(
       })),
     };
   }
-  const validated = OpenClawSchema.safeParse(raw);
+  const validated = OpenClawSchema.safeParse(normalizedRaw);
   if (!validated.success) {
     return {
       ok: false,
       issues: validated.error.issues.map((issue) => mapZodIssueToConfigIssue(issue)),
     };
   }
-  const duplicates = findDuplicateAgentDirs(validated.data as OpenClawConfig);
+  const validatedConfig = validated.data as OpenClawConfig;
+  const duplicates = findDuplicateAgentDirs(validatedConfig);
   if (duplicates.length > 0) {
     return {
       ok: false,
@@ -258,17 +415,17 @@ export function validateConfigObjectRaw(
       ],
     };
   }
-  const avatarIssues = validateIdentityAvatar(validated.data as OpenClawConfig);
+  const avatarIssues = validateIdentityAvatar(validatedConfig);
   if (avatarIssues.length > 0) {
     return { ok: false, issues: avatarIssues };
   }
-  const gatewayTailscaleBindIssues = validateGatewayTailscaleBind(validated.data as OpenClawConfig);
+  const gatewayTailscaleBindIssues = validateGatewayTailscaleBind(validatedConfig);
   if (gatewayTailscaleBindIssues.length > 0) {
     return { ok: false, issues: gatewayTailscaleBindIssues };
   }
   return {
     ok: true,
-    config: validated.data as OpenClawConfig,
+    config: validatedConfig,
   };
 }
 
@@ -322,7 +479,12 @@ function validateConfigObjectWithPluginsBase(
 
   const config = base.config;
   const issues: ConfigValidationIssue[] = [];
-  const warnings: ConfigValidationIssue[] = [];
+  const warnings: ConfigValidationIssue[] = listLegacyWebSearchConfigPaths(raw).map((path) => ({
+    path,
+    message:
+      `${path} is deprecated for web search provider config. ` +
+      "Move it under plugins.entries.<plugin>.config.webSearch.*; OpenClaw mapped it automatically for compatibility.",
+  }));
   const hasExplicitPluginsConfig =
     isRecord(raw) && Object.prototype.hasOwnProperty.call(raw, "plugins");
 
@@ -338,18 +500,65 @@ function validateConfigObjectWithPluginsBase(
     registry: ReturnType<typeof loadPluginManifestRegistry>;
     knownIds?: Set<string>;
     normalizedPlugins?: ReturnType<typeof normalizePluginsConfig>;
+    channelSchemas?: Map<
+      string,
+      {
+        schema?: Record<string, unknown>;
+      }
+    >;
   };
 
   let registryInfo: RegistryInfo | null = null;
+  let compatConfig: OpenClawConfig | null | undefined;
+
+  const ensureCompatConfig = (): OpenClawConfig => {
+    if (compatConfig !== undefined) {
+      return compatConfig ?? config;
+    }
+
+    const allow = config.plugins?.allow;
+    if (!Array.isArray(allow) || allow.length === 0) {
+      compatConfig = config;
+      return config;
+    }
+
+    const bundledWebSearchPluginIds = new Set(listBundledWebSearchPluginIds());
+    const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
+    const seenCompatPluginIds = new Set<string>();
+    const compatPluginIds = loadPluginManifestRegistry({
+      config,
+      workspaceDir: workspaceDir ?? undefined,
+      env: opts.env,
+    })
+      .plugins.filter((plugin) => {
+        if (seenCompatPluginIds.has(plugin.id)) {
+          return false;
+        }
+        seenCompatPluginIds.add(plugin.id);
+        return plugin.origin === "bundled" && bundledWebSearchPluginIds.has(plugin.id);
+      })
+      .map((plugin) => plugin.id)
+      .toSorted((left, right) => left.localeCompare(right));
+
+    compatConfig = withBundledPluginAllowlistCompat({
+      config,
+      pluginIds: compatPluginIds,
+    });
+    return compatConfig ?? config;
+  };
 
   const ensureRegistry = (): RegistryInfo => {
     if (registryInfo) {
       return registryInfo;
     }
 
-    const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
+    const effectiveConfig = ensureCompatConfig();
+    const workspaceDir = resolveAgentWorkspaceDir(
+      effectiveConfig,
+      resolveDefaultAgentId(effectiveConfig),
+    );
     const registry = loadPluginManifestRegistry({
-      config,
+      config: effectiveConfig,
       workspaceDir: workspaceDir ?? undefined,
       env: opts.env,
     });
@@ -383,9 +592,70 @@ function validateConfigObjectWithPluginsBase(
   const ensureNormalizedPlugins = (): ReturnType<typeof normalizePluginsConfig> => {
     const info = ensureRegistry();
     if (!info.normalizedPlugins) {
-      info.normalizedPlugins = normalizePluginsConfig(config.plugins);
+      info.normalizedPlugins = normalizePluginsConfig(ensureCompatConfig().plugins);
     }
     return info.normalizedPlugins;
+  };
+
+  const ensureChannelSchemas = (): Map<
+    string,
+    {
+      schema?: Record<string, unknown>;
+    }
+  > => {
+    const info = ensureRegistry();
+    if (!info.channelSchemas) {
+      info.channelSchemas = new Map(
+        collectChannelSchemaMetadata(info.registry).map(
+          (entry) => [entry.id, { schema: entry.configSchema }] as const,
+        ),
+      );
+    }
+    return info.channelSchemas;
+  };
+
+  let mutatedConfig = config;
+  let channelsCloned = false;
+  let pluginsCloned = false;
+  let pluginEntriesCloned = false;
+
+  const replaceChannelConfig = (channelId: string, nextValue: unknown) => {
+    if (!channelsCloned) {
+      mutatedConfig = {
+        ...mutatedConfig,
+        channels: {
+          ...mutatedConfig.channels,
+        },
+      };
+      channelsCloned = true;
+    }
+    (mutatedConfig.channels as Record<string, unknown>)[channelId] = nextValue;
+  };
+
+  const replacePluginEntryConfig = (pluginId: string, nextValue: Record<string, unknown>) => {
+    if (!pluginsCloned) {
+      mutatedConfig = {
+        ...mutatedConfig,
+        plugins: {
+          ...mutatedConfig.plugins,
+        },
+      };
+      pluginsCloned = true;
+    }
+    if (!pluginEntriesCloned) {
+      mutatedConfig.plugins = {
+        ...mutatedConfig.plugins,
+        entries: {
+          ...mutatedConfig.plugins?.entries,
+        },
+      };
+      pluginEntriesCloned = true;
+    }
+    const currentEntry = mutatedConfig.plugins?.entries?.[pluginId];
+    mutatedConfig.plugins!.entries![pluginId] = {
+      ...currentEntry,
+      config: nextValue,
+    };
   };
 
   const allowedChannels = new Set<string>(["defaults", "modelByChannel", ...CHANNEL_IDS]);
@@ -409,7 +679,32 @@ function validateConfigObjectWithPluginsBase(
           path: `channels.${trimmed}`,
           message: `unknown channel id: ${trimmed}`,
         });
+        continue;
       }
+
+      const channelSchema = ensureChannelSchemas().get(trimmed)?.schema;
+      if (!channelSchema) {
+        continue;
+      }
+      const result = validateJsonSchemaValue({
+        schema: channelSchema,
+        cacheKey: `channel:${trimmed}`,
+        value: config.channels[trimmed],
+        applyDefaults: true,
+      });
+      if (!result.ok) {
+        for (const error of result.errors) {
+          issues.push({
+            path:
+              error.path === "<root>" ? `channels.${trimmed}` : `channels.${trimmed}.${error.path}`,
+            message: `invalid config: ${error.message}`,
+            allowedValues: error.allowedValues,
+            allowedValuesHiddenCount: error.allowedValuesHiddenCount,
+          });
+        }
+        continue;
+      }
+      replaceChannelConfig(trimmed, result.value);
     }
   }
 
@@ -465,7 +760,7 @@ function validateConfigObjectWithPluginsBase(
     if (issues.length > 0) {
       return { ok: false, issues, warnings };
     }
-    return { ok: true, config, warnings };
+    return { ok: true, config: mutatedConfig, warnings };
   }
 
   const { registry } = ensureRegistry();
@@ -514,7 +809,7 @@ function validateConfigObjectWithPluginsBase(
       continue;
     }
     if (!knownIds.has(pluginId)) {
-      pushMissingPluginIssue("plugins.allow", pluginId);
+      pushMissingPluginIssue("plugins.allow", pluginId, { warnOnly: true });
     }
   }
 
@@ -585,6 +880,7 @@ function validateConfigObjectWithPluginsBase(
           schema: record.configSchema,
           cacheKey: record.schemaCacheKey ?? record.manifestPath ?? pluginId,
           value: entry?.config ?? {},
+          applyDefaults: true,
         });
         if (!res.ok) {
           for (const error of res.errors) {
@@ -595,6 +891,8 @@ function validateConfigObjectWithPluginsBase(
               allowedValuesHiddenCount: error.allowedValuesHiddenCount,
             });
           }
+        } else if (entry || entryHasConfig) {
+          replacePluginEntryConfig(pluginId, res.value as Record<string, unknown>);
         }
       } else if (record.format === "bundle") {
         // Compatible bundles currently expose no native OpenClaw config schema.
@@ -619,5 +917,5 @@ function validateConfigObjectWithPluginsBase(
     return { ok: false, issues, warnings };
   }
 
-  return { ok: true, config, warnings };
+  return { ok: true, config: mutatedConfig, warnings };
 }

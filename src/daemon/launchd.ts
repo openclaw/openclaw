@@ -458,14 +458,13 @@ export async function stopLaunchAgent({ stdout, env }: GatewayServiceControlArgs
   stdout.write(`${formatLine("Stopped LaunchAgent", `${domain}/${label}`)}\n`);
 }
 
-export async function installLaunchAgent({
+async function writeLaunchAgentPlist({
   env,
-  stdout,
   programArguments,
   workingDirectory,
   environment,
   description,
-}: GatewayServiceInstallArgs): Promise<{ plistPath: string }> {
+}: Omit<GatewayServiceInstallArgs, "stdout">): Promise<{ plistPath: string; stdoutPath: string }> {
   const { logDir, stdoutPath, stderrPath } = resolveGatewayLogPaths(env);
   await ensureSecureDirectory(logDir);
 
@@ -501,23 +500,50 @@ export async function installLaunchAgent({
   });
   await fs.writeFile(plistPath, plist, { encoding: "utf8", mode: LAUNCH_AGENT_PLIST_MODE });
   await fs.chmod(plistPath, LAUNCH_AGENT_PLIST_MODE).catch(() => undefined);
+  return { plistPath, stdoutPath };
+}
 
-  await execLaunchctl(["bootout", domain, plistPath]);
-  await execLaunchctl(["unload", plistPath]);
+export async function stageLaunchAgent({
+  stdout,
+  ...args
+}: GatewayServiceInstallArgs): Promise<{ plistPath: string }> {
+  const { plistPath, stdoutPath } = await writeLaunchAgentPlist(args);
+  writeFormattedLines(
+    stdout,
+    [
+      { label: "Staged LaunchAgent", value: plistPath },
+      { label: "Logs", value: stdoutPath },
+    ],
+    { leadingBlankLine: true },
+  );
+  return { plistPath };
+}
+
+async function activateLaunchAgent(params: { env: GatewayServiceEnv; plistPath: string }) {
+  const domain = resolveGuiDomain();
+  const label = resolveLaunchAgentLabel({ env: params.env });
+
+  await execLaunchctl(["bootout", domain, params.plistPath]);
+  await execLaunchctl(["unload", params.plistPath]);
   // launchd can persist "disabled" state even after bootout + plist removal; clear it before bootstrap.
   await bootstrapLaunchAgentOrThrow({
     domain,
     serviceTarget: `${domain}/${label}`,
-    plistPath,
+    plistPath: params.plistPath,
     actionHint: "openclaw gateway install --force",
   });
+}
+
+export async function installLaunchAgent(
+  args: GatewayServiceInstallArgs,
+): Promise<{ plistPath: string }> {
+  const { plistPath, stdoutPath } = await writeLaunchAgentPlist(args);
+  await activateLaunchAgent({ env: args.env, plistPath });
   // `bootstrap` already loads RunAtLoad agents. Avoid `kickstart -k` here:
   // on slow macOS guests it SIGTERMs the freshly booted gateway and pushes the
   // real listener startup past setup's health deadline.
-
-  // Ensure we don't end up writing to a clack spinner line (wizards show progress without a newline).
   writeFormattedLines(
-    stdout,
+    args.stdout,
     [
       { label: "Installed LaunchAgent", value: plistPath },
       { label: "Logs", value: stdoutPath },

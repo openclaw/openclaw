@@ -111,8 +111,9 @@ describe("model-selection", () => {
       expect(normalizeProviderId("Z.ai")).toBe("zai");
       expect(normalizeProviderId("z-ai")).toBe("zai");
       expect(normalizeProviderId("OpenCode-Zen")).toBe("opencode");
-      expect(normalizeProviderId("qwen")).toBe("qwen-portal");
-      expect(normalizeProviderId("kimi-code")).toBe("kimi-coding");
+      expect(normalizeProviderId("qwen")).toBe("qwen");
+      expect(normalizeProviderId("kimi-code")).toBe("kimi");
+      expect(normalizeProviderId("kimi-coding")).toBe("kimi");
       expect(normalizeProviderId("bedrock")).toBe("amazon-bedrock");
       expect(normalizeProviderId("aws-bedrock")).toBe("amazon-bedrock");
       expect(normalizeProviderId("amazon-bedrock")).toBe("amazon-bedrock");
@@ -194,10 +195,19 @@ describe("model-selection", () => {
         expected: { provider: "google", model: "gemini-3.1-flash-lite-preview" },
       },
       {
+        name: "normalizes deprecated xai grok 4.20 beta ids",
+        variants: [
+          "xai/grok-4.20-experimental-beta-0304-reasoning",
+          "grok-4.20-experimental-beta-0304-reasoning",
+        ],
+        defaultProvider: "xai",
+        expected: { provider: "xai", model: "grok-4.20-beta-latest-reasoning" },
+      },
+      {
         name: "keeps OpenAI codex refs on the openai provider",
-        variants: ["openai/gpt-5.3-codex", "gpt-5.3-codex"],
+        variants: ["openai/gpt-5.4", "gpt-5.4"],
         defaultProvider: "openai",
-        expected: { provider: "openai", model: "gpt-5.3-codex" },
+        expected: { provider: "openai", model: "gpt-5.4" },
       },
       {
         name: "preserves openrouter native model prefixes",
@@ -237,9 +247,9 @@ describe("model-selection", () => {
       },
       {
         name: "keeps already-suffixed codex variants unchanged",
-        variants: ["openai/gpt-5.3-codex-codex"],
+        variants: ["openai/gpt-5.4-codex-codex"],
         defaultProvider: "anthropic",
-        expected: { provider: "openai", model: "gpt-5.3-codex-codex" },
+        expected: { provider: "openai", model: "gpt-5.4-codex-codex" },
       },
       {
         name: "normalizes gemini 3.1 flash-lite ids for google-vertex",
@@ -680,6 +690,28 @@ describe("model-selection", () => {
       ]);
       const result = resolveConfiguredRefForTest(cfg);
       expect(result).toEqual({ provider: "anthropic", model: "claude-opus-4-6" });
+    });
+
+    it("can skip plugin-backed model normalization for display-only callers", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "google-vertex/gemini-3.1-flash-lite" },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = resolveConfiguredModelRef({
+        cfg,
+        defaultProvider: "anthropic",
+        defaultModel: "claude-opus-4-6",
+        allowPluginNormalization: false,
+      });
+
+      expect(result).toEqual({
+        provider: "google-vertex",
+        model: "gemini-3.1-flash-lite",
+      });
     });
 
     it("should fall back to hardcoded default when no custom providers have models", () => {

@@ -1,35 +1,44 @@
-import { resolveIdentityNamePrefix } from "../../../../../src/agents/identity.js";
-import { resolveChunkMode, resolveTextChunkLimit } from "../../../../../src/auto-reply/chunk.js";
-import { shouldComputeCommandAuthorized } from "../../../../../src/auto-reply/command-detection.js";
-import { formatInboundEnvelope } from "../../../../../src/auto-reply/envelope.js";
-import type { getReplyFromConfig } from "../../../../../src/auto-reply/reply.js";
+import { resolveIdentityNamePrefix } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  resolveInboundSessionEnvelopeContext,
+  toLocationContext,
+} from "openclaw/plugin-sdk/channel-inbound";
+import { formatInboundEnvelope } from "openclaw/plugin-sdk/channel-inbound";
+import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
+import { shouldComputeCommandAuthorized } from "openclaw/plugin-sdk/command-auth";
+import type { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+import { recordSessionMetaFromInbound } from "openclaw/plugin-sdk/config-runtime";
+import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import {
   buildHistoryContextFromEntries,
   type HistoryEntry,
-} from "../../../../../src/auto-reply/reply/history.js";
-import { finalizeInboundContext } from "../../../../../src/auto-reply/reply/inbound-context.js";
-import { dispatchReplyWithBufferedBlockDispatcher } from "../../../../../src/auto-reply/reply/provider-dispatcher.js";
-import type { ReplyPayload } from "../../../../../src/auto-reply/types.js";
-import { toLocationContext } from "../../../../../src/channels/location.js";
-import { createReplyPrefixOptions } from "../../../../../src/channels/reply-prefix.js";
-import { resolveInboundSessionEnvelopeContext } from "../../../../../src/channels/session-envelope.js";
-import type { loadConfig } from "../../../../../src/config/config.js";
-import { resolveMarkdownTableMode } from "../../../../../src/config/markdown-tables.js";
-import { recordSessionMetaFromInbound } from "../../../../../src/config/sessions.js";
-import { logVerbose, shouldLogVerbose } from "../../../../../src/globals.js";
-import type { getChildLogger } from "../../../../../src/logging.js";
-import { getAgentScopedMediaLocalRoots } from "../../../../../src/media/local-roots.js";
+} from "openclaw/plugin-sdk/reply-history";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
+import type { getReplyFromConfig } from "openclaw/plugin-sdk/reply-runtime";
+import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
+import { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/reply-runtime";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import {
   resolveInboundLastRouteSessionKey,
   type resolveAgentRoute,
-} from "../../../../../src/routing/resolve-route.js";
+} from "openclaw/plugin-sdk/routing";
+import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
+import type { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
   readStoreAllowFromForDmPolicy,
   resolvePinnedMainDmOwnerFromAllowlist,
   resolveDmGroupAccessWithCommandGate,
-} from "../../../../../src/security/dm-policy-shared.js";
-import { jidToE164, normalizeE164 } from "../../../../../src/utils.js";
+} from "openclaw/plugin-sdk/security-runtime";
+import { jidToE164, normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
 import { resolveWhatsAppAccount } from "../../accounts.js";
+import {
+  getPrimaryIdentityId,
+  getReplyContext,
+  getSelfIdentity,
+  getSenderIdentity,
+} from "../../identity.js";
 import { newConnectionId } from "../../reconnect.js";
 import { formatError } from "../../session.js";
 import { deliverWebReply } from "../deliver-reply.js";
@@ -59,8 +68,10 @@ async function resolveWhatsAppCommandAuthorized(params: {
   }
 
   const isGroup = params.msg.chatType === "group";
+  const sender = getSenderIdentity(params.msg);
+  const self = getSelfIdentity(params.msg);
   const senderE164 = normalizeE164(
-    isGroup ? (params.msg.senderE164 ?? "") : (params.msg.senderE164 ?? params.msg.from ?? ""),
+    isGroup ? (sender.e164 ?? "") : (sender.e164 ?? params.msg.from ?? ""),
   );
   if (!senderE164) {
     return false;
@@ -81,11 +92,7 @@ async function resolveWhatsAppCommandAuthorized(params: {
         dmPolicy,
       });
   const dmAllowFrom =
-    configuredAllowFrom.length > 0
-      ? configuredAllowFrom
-      : params.msg.selfE164
-        ? [params.msg.selfE164]
-        : [];
+    configuredAllowFrom.length > 0 ? configuredAllowFrom : self.e164 ? [self.e164] : [];
   const access = resolveDmGroupAccessWithCommandGate({
     isGroup,
     dmPolicy,
@@ -241,11 +248,14 @@ export async function processMessage(params: {
     whatsappInboundLog.debug(`Inbound body: ${elide(combinedBody, 400)}`);
   }
 
+  const sender = getSenderIdentity(params.msg);
+  const self = getSelfIdentity(params.msg);
+  const replyTo = getReplyContext(params.msg);
   const dmRouteTarget =
     params.msg.chatType !== "group"
       ? (() => {
-          if (params.msg.senderE164) {
-            return normalizeE164(params.msg.senderE164);
+          if (sender.e164) {
+            return normalizeE164(sender.e164);
           }
           // In direct chats, `msg.from` is already the canonical conversation id.
           if (params.msg.from.includes("@")) {
@@ -269,7 +279,7 @@ export async function processMessage(params: {
     ? await resolveWhatsAppCommandAuthorized({ cfg: params.cfg, msg: params.msg })
     : undefined;
   const configuredResponsePrefix = params.cfg.messages?.responsePrefix;
-  const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
+  const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
     cfg: params.cfg,
     agentId: params.route.agentId,
     channel: "whatsapp",
@@ -277,10 +287,10 @@ export async function processMessage(params: {
   });
   const isSelfChat =
     params.msg.chatType !== "group" &&
-    Boolean(params.msg.selfE164) &&
-    normalizeE164(params.msg.from) === normalizeE164(params.msg.selfE164 ?? "");
+    Boolean(self.e164) &&
+    normalizeE164(params.msg.from) === normalizeE164(self.e164 ?? "");
   const responsePrefix =
-    prefixOptions.responsePrefix ??
+    replyPipeline.responsePrefix ??
     (configuredResponsePrefix === undefined && isSelfChat
       ? resolveIdentityNamePrefix(params.cfg, params.route.agentId)
       : undefined);
@@ -307,9 +317,9 @@ export async function processMessage(params: {
     SessionKey: params.route.sessionKey,
     AccountId: params.route.accountId,
     MessageSid: params.msg.id,
-    ReplyToId: params.msg.replyToId,
-    ReplyToBody: params.msg.replyToBody,
-    ReplyToSender: params.msg.replyToSender,
+    ReplyToId: replyTo?.id,
+    ReplyToBody: replyTo?.body,
+    ReplyToSender: replyTo?.sender?.label,
     MediaPath: params.msg.mediaPath,
     MediaUrl: params.msg.mediaUrl,
     MediaType: params.msg.mediaType,
@@ -319,11 +329,11 @@ export async function processMessage(params: {
     GroupMembers: formatGroupMembers({
       participants: params.msg.groupParticipants,
       roster: params.groupMemberNames.get(params.groupHistoryKey),
-      fallbackE164: params.msg.senderE164,
+      fallbackE164: sender.e164 ?? undefined,
     }),
-    SenderName: params.msg.senderName,
-    SenderId: params.msg.senderJid?.trim() || params.msg.senderE164,
-    SenderE164: params.msg.senderE164,
+    SenderName: sender.name ?? undefined,
+    SenderId: getPrimaryIdentityId(sender) ?? undefined,
+    SenderE164: sender.e164 ?? undefined,
     CommandAuthorized: commandAuthorized,
     WasMentioned: params.msg.wasMentioned,
     ...(params.msg.location ? toLocationContext(params.msg.location) : {}),
@@ -393,7 +403,7 @@ export async function processMessage(params: {
     cfg: params.cfg,
     replyResolver: params.replyResolver,
     dispatcherOptions: {
-      ...prefixOptions,
+      ...replyPipeline,
       responsePrefix,
       onHeartbeatStrip: () => {
         if (!didLogHeartbeatStrip) {
@@ -429,10 +439,11 @@ export async function processMessage(params: {
         });
         const fromDisplay =
           params.msg.chatType === "group" ? conversationId : (params.msg.from ?? "unknown");
-        const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
+        const reply = resolveSendableOutboundReplyParts(payload);
+        const hasMedia = reply.hasMedia;
         whatsappOutboundLog.info(`Auto-replied to ${fromDisplay}${hasMedia ? " (media)" : ""}`);
         if (shouldLogVerbose()) {
-          const preview = payload.text != null ? elide(payload.text, 400) : "<media>";
+          const preview = payload.text != null ? elide(reply.text, 400) : "<media>";
           whatsappOutboundLog.debug(`Reply body: ${preview}${hasMedia ? " (media)" : ""}`);
         }
       },
