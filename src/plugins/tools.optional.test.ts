@@ -208,6 +208,8 @@ describe("resolvePluginTools optional tools", () => {
     ({ resetPluginRuntimeStateForTest, setActivePluginRegistry } = await import("./runtime.js"));
     resetPluginRuntimeStateForTest();
     ({ resolvePluginTools } = await import("./tools.js"));
+    ({ resetPluginRuntimeStateForTest, setActivePluginRegistry } = await import("./runtime.js"));
+    resetPluginRuntimeStateForTest();
   });
 
   it("skips optional tools without explicit allowlist", () => {
@@ -349,7 +351,7 @@ describe("resolvePluginTools optional tools", () => {
 
   it("reuses the active registry for gateway-bindable tool loads before reloading", () => {
     const activeRegistry = createOptionalDemoActiveRegistry();
-    setActivePluginRegistry(activeRegistry as never, "gateway-startup");
+    setActivePluginRegistry(activeRegistry as never, "gateway-startup", "gateway-bindable");
     resolveRuntimePluginRegistryMock.mockReturnValue(undefined);
 
     const tools = resolvePluginTools(
@@ -380,5 +382,31 @@ describe("resolvePluginTools optional tools", () => {
         allowGatewaySubagentBinding: true,
       },
     });
+  });
+
+  it("reloads when gateway binding would otherwise reuse a default-mode active registry", () => {
+    setActivePluginRegistry(
+      {
+        tools: [],
+        diagnostics: [],
+      } as never,
+      "default-registry",
+      "default",
+    );
+    setOptionalDemoRegistry();
+
+    resolvePluginTools({
+      context: createContext() as never,
+      allowGatewaySubagentBinding: true,
+      toolAllowlist: ["optional_tool"],
+    });
+
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimeOptions: {
+          allowGatewaySubagentBinding: true,
+        },
+      }),
+    );
   });
 });
