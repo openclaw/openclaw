@@ -4,12 +4,12 @@ import path from "node:path";
 import { getModel } from "@mariozechner/pi-ai";
 import { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
 import OpenAI from "openai";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
+import { encodePngRgba, fillPixel } from "openclaw/plugin-sdk/media-runtime";
 import * as providerAuth from "openclaw/plugin-sdk/provider-auth-runtime";
+import type { ResolvedTtsConfig } from "openclaw/plugin-sdk/speech-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../src/config/config.js";
-import { loadConfig } from "../../src/config/config.js";
-import { encodePngRgba, fillPixel } from "../../src/media/png-encode.js";
-import type { ResolvedTtsConfig } from "../../src/tts/tts.js";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,

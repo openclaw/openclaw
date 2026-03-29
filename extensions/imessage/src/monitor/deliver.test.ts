@@ -1,5 +1,5 @@
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { RuntimeEnv } from "../../../../src/runtime.js";
 
 const sendMessageIMessageMock = vi.hoisted(() =>
   vi.fn().mockImplementation(async (_to: string, message: string) => ({
