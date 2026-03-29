@@ -205,6 +205,8 @@ export function loadBundledPluginPublicSurfaceModuleSync<T>(params: {
   }
   fs.closeSync(opened.fd);
 
+  // Reentrant callers may capture this placeholder during synchronous loading,
+  // but they must not read its properties until the outer load completes.
   const reentrantPlaceholder: Record<PropertyKey, unknown> = {};
   inProgressFacadeModules.set(location.modulePath, reentrantPlaceholder);
   try {
