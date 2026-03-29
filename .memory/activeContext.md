@@ -16,7 +16,11 @@
 ## Completed Checklist
 
 - [x] Fix `recovery.test.ts` path and assertion mismatches
-- [ ] Stable UUIDs in `flushRecallCounts` (`database.ts`)
-- [ ] Mutex locking for `WorkingMemoryBuffer`
-- [ ] Flush on stop and reduced flush interval (5m)
-- [ ] Robust prompt escaping in `graph.ts`
+- [x] Stable UUIDs in `flushRecallCounts` (`database.ts`)
+- [x] Mutex locking for `WorkingMemoryBuffer`
+- [x] Flush on stop and reduced flush interval (5m)
+- [x] Robust prompt escaping in `graph.ts`
+- [x] Rate Limiter Fast-Lane and sleep interrupts (`limiter.ts`)
+- [x] GraphDB Inverted Index for fast search (`graph.ts`)
+- [x] N+1 Batch Delete optimizations (`database.ts`, `dream.ts`)
+- [x] Fix Recall Count Race Condition (`database.ts`)

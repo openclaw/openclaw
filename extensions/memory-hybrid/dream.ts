@@ -234,9 +234,8 @@ export class DreamService {
         emotionScore: 0,
       });
 
-      for (const item of cluster) {
-        await this.db.delete(item.id);
-      }
+      const idsToDelete = cluster.map((item) => item.id);
+      await this.db.deleteBatch(idsToDelete);
       mergedCount++;
     }
 

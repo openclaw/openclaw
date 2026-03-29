@@ -312,20 +312,35 @@ export class GraphDB {
     return this.withLock(async () => {
       if (texts.length === 0) return [];
 
-      // Case-insensitive matching
       const lowerTexts = texts.map((t) => t.toLowerCase());
 
-      // Require entity names to be at least 3 chars to avoid false positives
-      // (e.g. a node named "is" would match every text)
-      const matching = this.edges.filter((e) =>
-        lowerTexts.some(
-          (text) =>
-            (e.source.length >= 4 && text.includes(e.source.toLowerCase())) ||
-            (e.target.length >= 4 && text.includes(e.target.toLowerCase())),
-        ),
-      );
+      // 1. Find matching node IDs first (O(Nodes) which is << O(Edges))
+      const matchingNodes = new Set<string>();
+      for (const nodeId of this.nodes.keys()) {
+        const lowerId = nodeId.toLowerCase();
+        if (lowerId.length < 4) continue;
+        // Check if any text includes this node ID
+        for (let i = 0; i < lowerTexts.length; i++) {
+          if (lowerTexts[i].includes(lowerId)) {
+            matchingNodes.add(nodeId);
+            break;
+          }
+        }
+      }
 
-      return matching.slice(0, limit);
+      if (matchingNodes.size === 0) return [];
+
+      // 2. Fetch edges using the adjacency list O(1) per matching node
+      const edgeIndices = new Set<number>();
+      for (const nodeId of matchingNodes) {
+        const indices = this.adjacencyList.get(nodeId);
+        if (indices) {
+          for (const idx of indices) edgeIndices.add(idx);
+        }
+      }
+
+      const matchingEdges = Array.from(edgeIndices).map((idx) => this.edges[idx]);
+      return matchingEdges.slice(0, limit);
     });
   }
 

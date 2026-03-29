@@ -24,19 +24,30 @@ export class ApiRateLimiter {
   private processing = false;
   private minDelayMs: number;
   private maxRequestsPerMinute: number;
-
-  // Track tokens for RPM (simpler than full bucket for 15 RPM)
+  private wakeupResolver: (() => void) | null = null;
   private tokens: number[] = [];
 
   constructor(options: LimiterOptions = {}) {
-    this.minDelayMs = options.minDelayMs ?? 2000; // 2s default for Gemini burst
-    this.maxRequestsPerMinute = options.maxRequestsPerMinute ?? 15; // Gemini free tier limit
+    this.minDelayMs = options.minDelayMs ?? 2000;
+    this.maxRequestsPerMinute = options.maxRequestsPerMinute ?? 15;
   }
 
   /**
-   * Execute a task (API call) through the limiter.
-   * Tasks with higher priority jump to the front of the queue.
+   * Interruptible sleep. Wakes up immediately if wakeupResolver is called.
    */
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      let timeout: any;
+      const wake = () => {
+        clearTimeout(timeout);
+        this.wakeupResolver = null;
+        resolve();
+      };
+      this.wakeupResolver = wake;
+      timeout = setTimeout(wake, ms);
+    });
+  }
+
   public async execute<T>(
     fn: () => Promise<T>,
     priority: TaskPriority = TaskPriority.NORMAL,
@@ -55,6 +66,11 @@ export class ApiRateLimiter {
       this.queue.push(task);
       this.sortQueue();
 
+      // If we are sleeping (waiting for LOW tasks), wake up to re-evaluate for HIGH tasks
+      if (this.wakeupResolver) {
+        this.wakeupResolver();
+      }
+
       if (!this.processing) {
         this.processNext();
       }
@@ -62,8 +78,6 @@ export class ApiRateLimiter {
   }
 
   private sortQueue(): void {
-    // Sort by priority first (lower number = higher priority),
-    // then by FIFO (earlier queuedAt first)
     this.queue.sort((a, b) => {
       if (a.priority !== b.priority) return a.priority - b.priority;
       return a.queuedAt - b.queuedAt;
@@ -78,47 +92,59 @@ export class ApiRateLimiter {
 
     this.processing = true;
 
-    // Check constraints
     const now = Date.now();
     const timeSinceLast = now - this.lastRequestTime;
+
+    // Peek first without shifting (we might need to wait for quota)
+    const task = this.queue[0];
 
     // 1. Burst protection (minDelayMs)
     if (timeSinceLast < this.minDelayMs) {
       const wait = this.minDelayMs - timeSinceLast;
-      await new Promise((r) => setTimeout(r, wait));
-      return this.processNext(); // Check again after waiting
+      await this.sleep(wait);
+      return this.processNext();
     }
 
-    // 2. RPM protection
+    // 2. RPM protection with FAST-LANE logic
     this.cleanupTokens(now);
-    if (this.tokens.length >= this.maxRequestsPerMinute) {
-      // Wait until the oldest token expires (60s after its creation)
-      const oldestToken = this.tokens[0];
-      const wait = Math.max(0, 60000 - (now - oldestToken));
+
+    // Background tasks (LOW) can only use 70% of the token bucket.
+    // High/Normal tasks get the full bucket.
+    const isBackground = task.priority > TaskPriority.NORMAL;
+    const effectiveMax = isBackground
+      ? Math.max(1, Math.floor(this.maxRequestsPerMinute * 0.7))
+      : this.maxRequestsPerMinute;
+
+    if (this.tokens.length >= effectiveMax) {
+      // Find the token that blocks this request from running
+      const tokenIndexToWait = this.tokens.length - effectiveMax;
+      const blockingToken = this.tokens[tokenIndexToWait];
+      const wait = Math.max(0, 60000 - (now - blockingToken));
+
       if (wait > 0) {
-        await new Promise((r) => setTimeout(r, wait));
+        await this.sleep(wait + 10); // Sleep until it expires
         return this.processNext();
       }
     }
 
-    const task = this.queue.shift();
-    if (!task) {
+    // Constraints met, execute top task
+    const activeTask = this.queue.shift();
+    if (!activeTask) {
       this.processing = false;
       return;
     }
 
-    // Execute!
     this.lastRequestTime = Date.now();
     this.tokens.push(this.lastRequestTime);
 
     try {
-      const result = await task.fn();
-      task.resolve(result);
+      const result = await activeTask.fn();
+      activeTask.resolve(result);
     } catch (err) {
-      task.reject(err);
+      activeTask.reject(err);
     }
 
-    // Move to next one (with slight delay to avoid tight loop race)
+    // Release sync event loop briefly before continuing
     setImmediate(() => this.processNext());
   }
 

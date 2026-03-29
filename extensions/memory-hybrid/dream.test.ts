@@ -50,6 +50,7 @@ describe("DreamService (Safe Pulsing Brain)", () => {
       listAll: vi.fn().mockResolvedValue([]),
       store: vi.fn().mockResolvedValue(true),
       delete: vi.fn().mockResolvedValue(true),
+      deleteBatch: vi.fn().mockResolvedValue(true),
       flushRecallCounts: vi.fn().mockResolvedValue(0),
       deleteOldUnused: vi.fn().mockResolvedValue(0),
     };
@@ -164,6 +165,6 @@ describe("DreamService (Safe Pulsing Brain)", () => {
 
     expect(mergeFactsBatch).toHaveBeenCalled();
     expect(mockDb.store).toHaveBeenCalled();
-    expect(mockDb.delete).toHaveBeenCalledTimes(2);
+    expect(mockDb.deleteBatch).toHaveBeenCalledTimes(1);
   });
 });

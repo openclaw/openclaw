@@ -411,6 +411,26 @@ export class MemoryDB {
     return true;
   }
 
+  /**
+   * Batch delete memories efficiently. Replaces N+1 single deletes.
+   */
+  async deleteBatch(ids: string[]): Promise<boolean> {
+    if (ids.length === 0) return true;
+    await this.ensureInitialized();
+    const validIds = ids
+      .filter((id) => UUID_REGEX.test(id))
+      .map((id) => `'${id}'`)
+      .join(", ");
+
+    if (validIds) {
+      await this.table!.delete(`id IN (${validIds})`);
+      for (const id of ids) {
+        this.recallCountDeltas.delete(id);
+      }
+    }
+    return true;
+  }
+
   async count(): Promise<number> {
     await this.ensureInitialized();
     return this.table!.countRows();
@@ -484,15 +504,20 @@ export class MemoryDB {
     }
   }
 
+  private isFlushing = false;
+
   /** Flush recall counts to DB. */
   async flushRecallCounts(): Promise<number> {
+    if (this.isFlushing) return 0;
     if (this.recallCountDeltas.size === 0) return 0;
-    await this.ensureInitialized();
 
-    const entriesToFlush = Array.from(this.recallCountDeltas.entries());
-    const ids = entriesToFlush.map(([id]) => id);
+    this.isFlushing = true;
 
     try {
+      await this.ensureInitialized();
+      const entriesToFlush = Array.from(this.recallCountDeltas.entries());
+      const ids = entriesToFlush.map(([id]) => id);
+
       const existingRows = await this.getByIds(ids);
       if (existingRows.length === 0) {
         this.recallCountDeltas.clear();
@@ -545,6 +570,8 @@ export class MemoryDB {
       const msg = error instanceof Error ? error.message : String(error);
       this.logger.warn(`[memory-hybrid] flushRecallCounts failed: ${msg}`);
       return 0;
+    } finally {
+      this.isFlushing = false;
     }
   }
 
