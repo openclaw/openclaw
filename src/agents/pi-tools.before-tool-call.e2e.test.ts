@@ -369,12 +369,13 @@ describe("before_tool_call requireApproval handling", () => {
     vi.mocked(callGatewayTool).mockReset();
   });
 
-  it("blocks without triggering approval when both block and requireApproval are set", async () => {
+  it("blocks without triggering approval when both hard block and requireApproval are set", async () => {
     const { callGatewayTool } = await import("./tools/gateway.js");
     const mockCallGateway = vi.mocked(callGatewayTool);
 
     hookRunner.runBeforeToolCall.mockResolvedValue({
       block: true,
+      blockMode: "hard",
       blockReason: "Blocked by security plugin",
       requireApproval: {
         title: "Should not reach gateway",
@@ -392,6 +393,40 @@ describe("before_tool_call requireApproval handling", () => {
     expect(result.blocked).toBe(true);
     expect(result).toHaveProperty("reason", "Blocked by security plugin");
     expect(mockCallGateway).not.toHaveBeenCalled();
+  });
+
+  it("requests approval when both soft block and requireApproval are set", async () => {
+    const { callGatewayTool } = await import("./tools/gateway.js");
+    const mockCallGateway = vi.mocked(callGatewayTool);
+
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      block: true,
+      blockMode: "soft",
+      blockReason: "Needs approval first",
+      requireApproval: {
+        title: "Sensitive",
+        description: "Needs approval first",
+        pluginId: "soft-approver",
+      },
+    });
+
+    mockCallGateway.mockResolvedValueOnce({ id: "server-id-soft", status: "accepted" });
+    mockCallGateway.mockResolvedValueOnce({ id: "server-id-soft", decision: "allow-once" });
+
+    const result = await runBeforeToolCallHook({
+      toolName: "bash",
+      params: { command: "rm -rf" },
+      ctx: { agentId: "main", sessionKey: "main" },
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(mockCallGateway).toHaveBeenCalledTimes(2);
+    expect(mockCallGateway).toHaveBeenCalledWith(
+      "plugin.approval.request",
+      expect.any(Object),
+      expect.objectContaining({ pluginId: "soft-approver", twoPhase: true }),
+      { expectFinal: false },
+    );
   });
 
   it("calls gateway RPC and unblocks on allow-once", async () => {
