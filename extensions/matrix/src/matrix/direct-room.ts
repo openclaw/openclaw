@@ -21,10 +21,29 @@ export function isStrictDirectMembership(params: {
   selfUserId?: string | null;
   remoteUserId?: string | null;
   joinedMembers?: readonly string[] | null;
+  isDirectFlag?: boolean | null;
 }): boolean {
   const selfUserId = trimMaybeString(params.selfUserId);
   const remoteUserId = trimMaybeString(params.remoteUserId);
   const joinedMembers = params.joinedMembers ?? [];
+
+  // Priority 1: is_direct flag is authoritative (Matrix protocol standard)
+  if (params.isDirectFlag === true) {
+    return Boolean(
+      selfUserId &&
+      remoteUserId &&
+      joinedMembers.includes(selfUserId) &&
+      joinedMembers.includes(remoteUserId),
+    );
+  }
+
+  // Priority 2: explicit is_direct=false means not a DM
+  if (params.isDirectFlag === false) {
+    return false;
+  }
+
+  // Priority 3: fallback to 2-member check only when is_direct is unavailable
+  // This preserves backward compatibility for rooms without is_direct flag
   return Boolean(
     selfUserId &&
     remoteUserId &&
@@ -49,16 +68,20 @@ export async function hasDirectMatrixMemberFlag(
   client: MatrixClient,
   roomId: string,
   userId?: string | null,
-): Promise<boolean> {
+): Promise<boolean | null> {
   const normalizedUserId = trimMaybeString(userId);
   if (!normalizedUserId) {
-    return false;
+    return null;
   }
   try {
     const state = await client.getRoomStateEvent(roomId, "m.room.member", normalizedUserId);
-    return state?.is_direct === true;
+    // Return explicit true/false if is_direct field exists, null otherwise
+    if (state && typeof state === "object" && "is_direct" in state) {
+      return state.is_direct === true;
+    }
+    return null;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -79,11 +102,29 @@ export async function inspectMatrixDirectRoomEvidence(params: {
       ? trimMaybeString(params.selfUserId)
       : trimMaybeString(await params.client.getUserId().catch(() => null));
   const joinedMembers = await readJoinedMatrixMembers(params.client, params.roomId);
+
+  // Check is_direct flag for both users (authoritative Matrix protocol signal)
+  const isDirectViaRemote = await hasDirectMatrixMemberFlag(
+    params.client,
+    params.roomId,
+    params.remoteUserId,
+  );
+  const isDirectViaSelf = await hasDirectMatrixMemberFlag(params.client, params.roomId, selfUserId);
+
+  // Use is_direct flag if available from either user (true or false)
+  // Fall back to null only if both are unavailable
+  const isDirectFlag: boolean | null =
+    isDirectViaRemote !== null ? isDirectViaRemote : isDirectViaSelf;
+
   const strict = isStrictDirectMembership({
     selfUserId,
     remoteUserId: params.remoteUserId,
     joinedMembers,
+    isDirectFlag,
   });
+
+  const viaMemberState = isDirectViaRemote === true || isDirectViaSelf === true;
+
   if (!strict) {
     return {
       joinedMembers,
@@ -94,9 +135,7 @@ export async function inspectMatrixDirectRoomEvidence(params: {
   return {
     joinedMembers,
     strict,
-    viaMemberState:
-      (await hasDirectMatrixMemberFlag(params.client, params.roomId, params.remoteUserId)) ||
-      (await hasDirectMatrixMemberFlag(params.client, params.roomId, selfUserId)),
+    viaMemberState,
   };
 }
 

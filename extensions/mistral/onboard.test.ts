@@ -76,4 +76,18 @@ describe("mistral onboard", () => {
       ...EXPECTED_FALLBACKS,
     ]);
   });
+
+  it("applies Mistral compat settings to default model during onboarding", () => {
+    const cfg = applyMistralProviderConfig({});
+    const defaultModel = cfg.models?.providers?.mistral?.models?.find(
+      (model) => model.id === "mistral-large-latest",
+    );
+
+    // Verify compat settings are applied to prevent 422 errors
+    expect(defaultModel?.compat).toMatchObject({
+      supportsStore: false,
+      supportsReasoningEffort: false,
+      maxTokensField: "max_tokens",
+    });
+  });
 });

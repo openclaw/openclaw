@@ -26,6 +26,12 @@ import {
 } from "./subagent-followup.js";
 
 function normalizeDeliveryTarget(channel: string, to: string): string {
+  // Defensive: ensure channel and to are strings (TypeScript type narrowing)
+  if (typeof channel !== "string" || typeof to !== "string") {
+    throw new Error(
+      `normalizeDeliveryTarget: channel and to must be strings, got channel=${typeof channel}, to=${typeof to}`,
+    );
+  }
   const channelLower = channel.trim().toLowerCase();
   const toTrimmed = to.trim();
   if (channelLower === "feishu" || channelLower === "lark") {
