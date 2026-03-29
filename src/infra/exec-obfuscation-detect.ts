@@ -186,14 +186,17 @@ const OBFUSCATION_PATTERNS: ObfuscationPattern[] = [
   },
   {
     id: "var-expansion-obfuscation",
-    // Narrowed: require the expanded variable to feed into an execution context
-    // (eval, exec, sh/bash/etc., or process substitution). The original broad regex
-    // matched any short-var assignment chain — including legitimate shell patterns like
-    // `case $x in ... ;;` or `taskfile=a.txt; log=b.log` — causing false positives.
-    // Real obfuscation: a=ZWNoby4=; b=$(echo $a|base64 -d); eval $b
+    // Narrowed: require the expanded variable to feed into an execution context.
+    // The original broad regex matched any short-var assignment chain — including
+    // legitimate shell patterns like `case $x in ... ;;` or `taskfile=a.txt; log=b.log`.
+    // Real obfuscation patterns:
+    //   (a) pipe to shell:  a=ZWNoby4=; b=$(echo $a|base64 -d); eval $b
+    //   (b) direct exec:    c=cat; p=/etc/passwd; $c $p   (var used as command)
+    // We match (a) via pipe-to-shell / eval / exec suffix, and (b) via short-var chain
+    // where the final token IS the variable expansion (i.e. expansion in command position).
     description: "Variable assignment chain with expansion into execution context (potential obfuscation)",
     regex:
-      /(?:[a-zA-Z_]\w{0,2}=[^;\s]+\s*;\s*){2,}[^$]*\$(?:[a-zA-Z_]|\{[a-zA-Z_])[^|&;\n]*(?:\|\s*(?:sh|bash|zsh|dash|ksh|fish)\b|;\s*(?:eval|exec)\b)/,
+      /(?:(?:[a-zA-Z_]\w{0,2}=[^;\s]+;\s*){2,}\s*\$[a-zA-Z_])|(?:(?:[a-zA-Z_]\w{0,9}=[^;\s]+\s*;\s*){2,}[^$]*\$(?:[a-zA-Z_]|\{[a-zA-Z_])[^|&;\n]*(?:\|\s*(?:sh|bash|zsh|dash|ksh|fish)\b|;\s*(?:eval|exec)\b))/,
   },
 ];
 
