@@ -354,7 +354,17 @@ export function handleControlUiHttpRequest(
       agentId: identity.agentId,
       basePath,
     });
-    const userAvatar = config ? resolveUserAvatar(config) : null;
+
+    // Resolve user avatar with same URL transformation as assistant avatar.
+    // Use a fixed agentId "user" for user avatar path resolution.
+    const rawUserAvatar = config ? resolveUserAvatar(config) : null;
+    const userAvatar = rawUserAvatar
+      ? resolveAssistantAvatarUrl({
+          avatar: rawUserAvatar,
+          agentId: "user",
+          basePath,
+        })
+      : null;
     if (req.method === "HEAD") {
       res.statusCode = 200;
       res.setHeader("Content-Type", "application/json; charset=utf-8");

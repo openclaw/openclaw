@@ -74,6 +74,47 @@ function resolveLocalAvatarPath(params: {
 }
 
 export function resolveAgentAvatar(cfg: OpenClawConfig, agentId: string): AgentAvatarResolution {
+  // Special case: "user" refers to the user avatar override from ui.userAvatar
+  if (agentId === "user") {
+    const userAvatar = normalizeAvatarValue(cfg.ui?.userAvatar);
+    if (!userAvatar) {
+      return { kind: "none", reason: "missing" };
+    }
+    if (isAvatarHttpUrl(userAvatar)) {
+      return { kind: "remote", url: userAvatar };
+    }
+    if (isAvatarDataUrl(userAvatar)) {
+      return { kind: "data", url: userAvatar };
+    }
+    // Treat relative user avatar paths as relative to the default workspace's avatars dir.
+    // This mirrors how agent avatars are stored (in their workspace/avatars/).
+    const defaultWorkspace = cfg.agents?.defaults?.workspace || process.cwd();
+    const workspaceDir = resolveExistingPath(defaultWorkspace);
+    const resolved =
+      userAvatar.startsWith("~") || path.isAbsolute(userAvatar)
+        ? resolveUserPath(userAvatar)
+        : path.resolve(workspaceDir, "avatars", userAvatar);
+    const realPath = resolveExistingPath(resolved);
+    if (!isPathWithinRoot(workspaceDir, realPath)) {
+      return { kind: "none", reason: "outside_workspace" };
+    }
+    if (!isSupportedLocalAvatarExtension(realPath)) {
+      return { kind: "none", reason: "unsupported_extension" };
+    }
+    try {
+      const stat = fs.statSync(realPath);
+      if (!stat.isFile()) {
+        return { kind: "none", reason: "missing" };
+      }
+      if (stat.size > AVATAR_MAX_BYTES) {
+        return { kind: "none", reason: "too_large" };
+      }
+    } catch {
+      return { kind: "none", reason: "missing" };
+    }
+    return { kind: "local", filePath: realPath };
+  }
+
   const source = resolveAvatarSource(cfg, agentId);
   if (!source) {
     return { kind: "none", reason: "missing" };

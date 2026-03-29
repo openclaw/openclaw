@@ -319,13 +319,27 @@ export async function resolveGatewayListenHosts(
 
   const canBind = opts?.canBindToHost ?? canBindToHost;
 
-  // For 0.0.0.0 (bind all IPv4), if IPv6 is available, bind to :: only.
-  // :: accepts both IPv4 and IPv6 connections on most systems (dual-stack).
+  // For 0.0.0.0 (bind all IPv4), we want to ensure both IPv4 and IPv6 connectivity.
+  // On systems with dual-stack (default Linux/macOS, net.ipv6only=0), binding to ::
+  // automatically accepts IPv4-mapped addresses, and binding to 0.0.0.0 afterwards would
+  // fail with EADDRINUSE. On IPv6-only systems (net.ipv6only=1), :: does NOT accept
+  // IPv4, so we must bind both 0.0.0.0 and :: separately.
   if (bindHost === "0.0.0.0") {
-    if (await canBind("::")) {
-      return ["::"];
+    const ipv6Available = await canBind("::");
+    if (!ipv6Available) {
+      return ["0.0.0.0"]; // IPv6 not available, IPv4 only
     }
-    return ["0.0.0.0"];
+
+    // Check if :: and 0.0.0.0 conflict (dual-stack case).
+    // If 0.0.0.0 can still bind after ::, then they are independent (IPv6-only).
+    // We test by attempting to bind 0.0.0.0 IN ISOLATION (not after ::).
+    const ipv4Independent = await canBind("0.0.0.0");
+    if (ipv4Independent) {
+      // System is IPv6-only or custom config; bind both to keep IPv4 reachable.
+      return ["0.0.0.0", "::"];
+    }
+    // Dual-stack: :: covers both IPv4 and IPv6, just bind it.
+    return ["::"];
   }
 
   // For 127.0.0.1, try to add ::1 for IPv6 loopback
