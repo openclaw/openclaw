@@ -93,6 +93,9 @@ export default defineChannelPluginEntry({
   (typically via `createPluginRuntimeStore`).
 - `registerFull` only runs when `api.registrationMode === "full"`. It is skipped
   during setup-only loading.
+- For plugin-owned root CLI commands, prefer `api.registerCli(..., { descriptors: [...] })`
+  when you want the command to stay lazy-loaded without disappearing from the
+  root CLI parse tree.
 
 ## `defineSetupPluginEntry`
 
@@ -134,6 +137,14 @@ register(api) {
   api.registerService(/* ... */);
 }
 ```
+
+For CLI registrars specifically:
+
+- use `descriptors` when the registrar owns one or more root commands and you
+  want OpenClaw to lazy-load the real CLI module on first invocation
+- make sure those descriptors cover every top-level command root exposed by the
+  registrar
+- use `commands` alone only for eager compatibility paths
 
 ## Plugin shapes
 

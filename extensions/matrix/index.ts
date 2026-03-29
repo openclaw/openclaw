@@ -44,7 +44,15 @@ export default defineChannelPluginEntry({
         const { registerMatrixCli } = await import("./src/cli.js");
         registerMatrixCli({ program });
       },
-      { commands: ["matrix"] },
+      {
+        descriptors: [
+          {
+            name: "matrix",
+            description: "Manage Matrix accounts, verification, devices, and profile state",
+            hasSubcommands: true,
+          },
+        ],
+      },
     );
   },
 });
