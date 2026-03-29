@@ -5,6 +5,7 @@ import type { SubagentEndReason } from "../context-engine/types.js";
 import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resetTaskRegistryForTests } from "../tasks/task-registry.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { ensureRuntimePluginsLoaded } from "./runtime-plugins.js";
 import { resetAnnounceQueuesForTests } from "./subagent-announce-queue.js";
@@ -555,6 +556,7 @@ export function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
   endedHookInFlightRunIds.clear();
   clearAllPendingLifecycleErrors();
   resetAnnounceQueuesForTests();
+  resetTaskRegistryForTests({ persist: opts?.persist });
   stopSweeper();
   restoreAttempted = false;
   if (listenerStop) {
