@@ -6,10 +6,24 @@ import { afterEach, describe, expect, it } from "vitest";
 
 function runFixNpmPermissions(env: NodeJS.ProcessEnv): void {
   const installerPath = path.join(process.cwd(), "scripts", "install.sh");
+  const resolvedHome = env.HOME ?? process.env.HOME ?? "";
+  const userNpmrc = path.join(resolvedHome, ".npmrc");
+  const pathEntries = Array.from(
+    new Set([
+      path.dirname(process.execPath),
+      "/usr/local/bin",
+      "/opt/homebrew/bin",
+      "/usr/bin",
+      "/bin",
+      "/usr/sbin",
+      "/sbin",
+      ...(process.env.PATH ?? "").split(path.delimiter).filter(Boolean),
+    ]),
+  );
   const isolatedEnv: NodeJS.ProcessEnv = {
     // Keep installer tests deterministic even when non-isolated suites mutate npm env vars.
-    PATH: process.env.PATH ?? "",
-    HOME: env.HOME ?? process.env.HOME ?? "",
+    PATH: pathEntries.join(path.delimiter),
+    HOME: resolvedHome,
     USER: process.env.USER,
     LOGNAME: process.env.LOGNAME,
     SHELL: process.env.SHELL,
@@ -19,6 +33,8 @@ function runFixNpmPermissions(env: NodeJS.ProcessEnv): void {
     OS: env.OS,
     NPM_CONFIG_PREFIX: env.NPM_CONFIG_PREFIX,
     npm_config_prefix: env.NPM_CONFIG_PREFIX,
+    NPM_CONFIG_USERCONFIG: userNpmrc,
+    npm_config_userconfig: userNpmrc,
     INSTALLER_PATH: installerPath,
     OPENCLAW_INSTALL_SH_NO_RUN: "1",
   };

@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { resolveChannelAllowFromPath } from "../pairing/pairing-store.js";
+import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { fixSecurityFootguns } from "./fix.js";
 
 const isWindows = process.platform === "win32";
@@ -78,10 +80,16 @@ describe("security fix", () => {
   const writeWhatsAppAllowFromStore = async (stateDir: string, allowFrom: string[]) => {
     const credsDir = path.join(stateDir, "credentials");
     await fs.mkdir(credsDir, { recursive: true });
-    await fs.writeFile(
-      path.join(credsDir, "whatsapp-allowFrom.json"),
-      `${JSON.stringify({ version: 1, allowFrom }, null, 2)}\n`,
-      "utf-8",
+    const payload = `${JSON.stringify({ version: 1, allowFrom }, null, 2)}\n`;
+    const env = createFixEnv(stateDir, path.join(stateDir, "openclaw.json"));
+    const targetPaths = new Set<string>([
+      resolveChannelAllowFromPath("whatsapp", env),
+      resolveChannelAllowFromPath("whatsapp", env, DEFAULT_ACCOUNT_ID),
+    ]);
+    await Promise.all(
+      [...targetPaths].map(async (targetPath) => {
+        await fs.writeFile(targetPath, payload, "utf-8");
+      }),
     );
   };
 
