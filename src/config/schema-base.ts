@@ -1,6 +1,12 @@
+import { isSensitiveUrlConfigPath } from "../shared/net/redact-sensitive-url.js";
 import { VERSION } from "../version.js";
 import type { ConfigUiHints } from "./schema.hints.js";
-import { buildBaseHints, mapSensitivePaths } from "./schema.hints.js";
+import {
+  applySensitiveUrlHints,
+  buildBaseHints,
+  collectMatchingSchemaPaths,
+  mapSensitivePaths,
+} from "./schema.hints.js";
 import { asSchemaObject, cloneSchema } from "./schema.shared.js";
 import { applyDerivedTags } from "./schema.tags.js";
 import { OpenClawSchema } from "./zod-schema.js";
@@ -61,9 +67,15 @@ function computeBaseConfigSchemaStablePayload(): BaseConfigSchemaStablePayload {
     unrepresentable: "any",
   });
   schema.title = "OpenClawConfig";
+  const baseHints = mapSensitivePaths(OpenClawSchema, "", buildBaseHints());
+  const sensitiveUrlPaths = collectMatchingSchemaPaths(
+    OpenClawSchema,
+    "",
+    isSensitiveUrlConfigPath,
+  );
   const stablePayload = {
     schema: stripChannelSchema(schema),
-    uiHints: applyDerivedTags(mapSensitivePaths(OpenClawSchema, "", buildBaseHints())),
+    uiHints: applyDerivedTags(applySensitiveUrlHints(baseHints, sensitiveUrlPaths)),
     version: VERSION,
   } satisfies BaseConfigSchemaStablePayload;
   baseConfigSchemaStablePayload = stablePayload;

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   isSensitiveUrlQueryParamName,
+  isSensitiveUrlConfigPath,
+  SENSITIVE_URL_HINT_TAG,
+  hasSensitiveUrlHintTag,
   redactSensitiveUrl,
   redactSensitiveUrlLikeString,
 } from "./redact-sensitive-url.js";
@@ -38,5 +41,19 @@ describe("isSensitiveUrlQueryParamName", () => {
     expect(isSensitiveUrlQueryParamName("token")).toBe(true);
     expect(isSensitiveUrlQueryParamName("refresh_token")).toBe(true);
     expect(isSensitiveUrlQueryParamName("safe")).toBe(false);
+  });
+});
+
+describe("sensitive URL config metadata", () => {
+  it("recognizes config paths that may embed URL secrets", () => {
+    expect(isSensitiveUrlConfigPath("models.providers.*.baseUrl")).toBe(true);
+    expect(isSensitiveUrlConfigPath("mcp.servers.remote.url")).toBe(true);
+    expect(isSensitiveUrlConfigPath("gateway.remote.url")).toBe(false);
+  });
+
+  it("uses an explicit url-secret hint tag", () => {
+    expect(SENSITIVE_URL_HINT_TAG).toBe("url-secret");
+    expect(hasSensitiveUrlHintTag({ tags: [SENSITIVE_URL_HINT_TAG] })).toBe(true);
+    expect(hasSensitiveUrlHintTag({ tags: ["security"] })).toBe(false);
   });
 });
