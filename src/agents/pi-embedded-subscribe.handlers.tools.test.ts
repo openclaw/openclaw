@@ -77,7 +77,7 @@ describe("handleToolExecutionStart read path checks", () => {
   });
 
   it("does not warn when read tool uses file alias", async () => {
-    const { ctx, warn } = createTestContext();
+    const { ctx, warn, onBlockReplyFlush } = createTestContext();
 
     const evt: ToolExecutionStartEvent = {
       type: "tool_execution_start",
@@ -88,11 +88,12 @@ describe("handleToolExecutionStart read path checks", () => {
 
     await handleToolExecutionStart(ctx, evt);
 
+    expect(onBlockReplyFlush).toHaveBeenCalledTimes(1);
     expect(warn).not.toHaveBeenCalled();
   });
 
   it("does not warn when read tool uses filePath alias", async () => {
-    const { ctx, warn } = createTestContext();
+    const { ctx, warn, onBlockReplyFlush } = createTestContext();
 
     const evt: ToolExecutionStartEvent = {
       type: "tool_execution_start",
@@ -103,6 +104,7 @@ describe("handleToolExecutionStart read path checks", () => {
 
     await handleToolExecutionStart(ctx, evt);
 
+    expect(onBlockReplyFlush).toHaveBeenCalledTimes(1);
     expect(warn).not.toHaveBeenCalled();
   });
 
