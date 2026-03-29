@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { ChannelConfiguredBindingProvider, ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -376,21 +376,8 @@ function mockReadySession(params: {
   return sessionKey;
 }
 
-beforeAll(async () => {
+beforeEach(async () => {
   vi.resetModules();
-  persistentBindingsResolveModule = await import("./persistent-bindings.resolve.js");
-  lifecycleBindingsModule = await import("./persistent-bindings.lifecycle.js");
-  persistentBindings = {
-    resolveConfiguredAcpBindingRecord:
-      persistentBindingsResolveModule.resolveConfiguredAcpBindingRecord,
-    resolveConfiguredAcpBindingSpecBySessionKey:
-      persistentBindingsResolveModule.resolveConfiguredAcpBindingSpecBySessionKey,
-    ensureConfiguredAcpBindingSession: lifecycleBindingsModule.ensureConfiguredAcpBindingSession,
-    resetAcpSessionInPlace: lifecycleBindingsModule.resetAcpSessionInPlace,
-  };
-});
-
-beforeEach(() => {
   setActivePluginRegistry(
     createTestRegistry([
       {
@@ -418,6 +405,16 @@ beforeEach(() => {
   managerMocks.initializeSession.mockReset().mockResolvedValue(undefined);
   managerMocks.updateSessionRuntimeOptions.mockReset().mockResolvedValue(undefined);
   sessionMetaMocks.readAcpSessionEntry.mockReset().mockReturnValue(undefined);
+  persistentBindingsResolveModule = await import("./persistent-bindings.resolve.js");
+  lifecycleBindingsModule = await import("./persistent-bindings.lifecycle.js");
+  persistentBindings = {
+    resolveConfiguredAcpBindingRecord:
+      persistentBindingsResolveModule.resolveConfiguredAcpBindingRecord,
+    resolveConfiguredAcpBindingSpecBySessionKey:
+      persistentBindingsResolveModule.resolveConfiguredAcpBindingSpecBySessionKey,
+    ensureConfiguredAcpBindingSession: lifecycleBindingsModule.ensureConfiguredAcpBindingSession,
+    resetAcpSessionInPlace: lifecycleBindingsModule.resetAcpSessionInPlace,
+  };
 });
 
 describe("resolveConfiguredAcpBindingRecord", () => {
