@@ -26,6 +26,7 @@ import type {
   ModelProviderAuthMode,
   ModelProviderConfig,
 } from "../config/types.js";
+import type { ModelCompatConfig } from "../config/types.models.js";
 import type { OperatorScope } from "../gateway/method-scopes.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hooks.js";
@@ -885,6 +886,17 @@ export type ProviderPlugin = {
   normalizeResolvedModel?: (
     ctx: ProviderNormalizeResolvedModelContext,
   ) => ProviderRuntimeModel | null | undefined;
+  /**
+   * Provider-owned compat contribution for resolved models outside direct
+   * provider ownership.
+   *
+   * Use this when a plugin can recognize its vendor's models behind another
+   * OpenAI-compatible transport (for example OpenRouter or a custom base URL)
+   * and needs to contribute compat flags without taking over the provider.
+   */
+  contributeResolvedModelCompat?: (
+    ctx: ProviderNormalizeResolvedModelContext,
+  ) => Partial<ModelCompatConfig> | null | undefined;
   /**
    * Provider-owned model-id normalization.
    *

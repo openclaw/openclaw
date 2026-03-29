@@ -3,6 +3,7 @@ import type { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ModelDefinitionConfig } from "../../config/types.js";
 import {
+  applyProviderResolvedModelCompatWithPlugins,
   buildProviderUnknownModelHintWithPlugin,
   clearProviderRuntimeHookCache,
   normalizeProviderTransportWithPlugin,
@@ -36,6 +37,9 @@ type InlineProviderConfig = {
 };
 
 type ProviderRuntimeHooks = {
+  applyProviderResolvedModelCompatWithPlugins?: (
+    params: Parameters<typeof applyProviderResolvedModelCompatWithPlugins>[0],
+  ) => unknown;
   buildProviderUnknownModelHintWithPlugin: (
     params: Parameters<typeof buildProviderUnknownModelHintWithPlugin>[0],
   ) => string | undefined;
@@ -52,6 +56,7 @@ type ProviderRuntimeHooks = {
 };
 
 const DEFAULT_PROVIDER_RUNTIME_HOOKS: ProviderRuntimeHooks = {
+  applyProviderResolvedModelCompatWithPlugins,
   buildProviderUnknownModelHintWithPlugin,
   prepareProviderDynamicModel,
   runProviderDynamicModel,
@@ -121,9 +126,20 @@ function normalizeResolvedModel(params: {
       model: normalizedInputModel,
     },
   }) as Model<Api> | undefined;
+  const compatNormalized = runtimeHooks.applyProviderResolvedModelCompatWithPlugins?.({
+    provider: params.provider,
+    config: params.cfg,
+    context: {
+      config: params.cfg,
+      agentDir: params.agentDir,
+      provider: params.provider,
+      modelId: normalizedInputModel.id,
+      model: (pluginNormalized ?? normalizedInputModel) as never,
+    },
+  }) as Model<Api> | undefined;
   return normalizeResolvedProviderModel({
     provider: params.provider,
-    model: pluginNormalized ?? normalizedInputModel,
+    model: compatNormalized ?? pluginNormalized ?? normalizedInputModel,
   });
 }
 
