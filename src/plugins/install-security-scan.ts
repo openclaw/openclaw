@@ -2,6 +2,12 @@ type InstallScanLogger = {
   warn?: (message: string) => void;
 };
 
+export type InstallSecurityScanResult = {
+  blocked?: {
+    reason: string;
+  };
+};
+
 async function loadInstallSecurityScanRuntime() {
   return await import("./install-security-scan.runtime.js");
 }
@@ -10,9 +16,9 @@ export async function scanBundleInstallSource(params: {
   logger: InstallScanLogger;
   pluginId: string;
   sourceDir: string;
-}) {
+}): Promise<InstallSecurityScanResult | undefined> {
   const { scanBundleInstallSourceRuntime } = await loadInstallSecurityScanRuntime();
-  await scanBundleInstallSourceRuntime(params);
+  return await scanBundleInstallSourceRuntime(params);
 }
 
 export async function scanPackageInstallSource(params: {
@@ -20,7 +26,7 @@ export async function scanPackageInstallSource(params: {
   logger: InstallScanLogger;
   packageDir: string;
   pluginId: string;
-}) {
+}): Promise<InstallSecurityScanResult | undefined> {
   const { scanPackageInstallSourceRuntime } = await loadInstallSecurityScanRuntime();
-  await scanPackageInstallSourceRuntime(params);
+  return await scanPackageInstallSourceRuntime(params);
 }
