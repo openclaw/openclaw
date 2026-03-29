@@ -82,6 +82,12 @@ describe("formatAssistantErrorText", () => {
     );
     expect(formatAssistantErrorText(msg)).toBe("LLM error server_error: Something exploded");
   });
+  it("sanitizes Codex error-prefixed JSON payloads", () => {
+    const msg = makeAssistantError(
+      'Codex error: {"type":"error","error":{"message":"Something exploded","type":"server_error"},"sequence_number":2}',
+    );
+    expect(formatAssistantErrorText(msg)).toBe("LLM error server_error: Something exploded");
+  });
   it("returns a friendly billing message for credit balance errors", () => {
     const msg = makeAssistantError("Your credit balance is too low to access the Anthropic API.");
     const result = formatAssistantErrorText(msg);
@@ -121,6 +127,58 @@ describe("formatAssistantErrorText", () => {
     expect(formatAssistantErrorText(msg)).toContain("rate limit reached");
   });
 
+  it("surfaces provider-specific rate limit message with reset time (#54433)", () => {
+    const msg = makeAssistantError(
+      "You have hit your ChatGPT usage limit (go plan). Try again in ~4381 min.",
+    );
+    const result = formatAssistantErrorText(msg);
+    expect(result).toContain("4381 min");
+    expect(result).toContain("go plan");
+    expect(result).not.toBe("⚠️ API rate limit reached. Please try again later.");
+  });
+
+  it("surfaces provider-specific rate limit message from JSON payload (#54433)", () => {
+    const msg = makeAssistantError(
+      '429 {"type":"error","error":{"type":"rate_limit_error","message":"Rate limit reached. Try again in 30 seconds."}}',
+    );
+    const result = formatAssistantErrorText(msg);
+    expect(result).toContain("30 seconds");
+    expect(result).not.toBe("⚠️ API rate limit reached. Please try again later.");
+  });
+
+  it("returns generic rate limit message when no specific details are present", () => {
+    const msg = makeAssistantError("429 Too Many Requests");
+    expect(formatAssistantErrorText(msg)).toBe(
+      "⚠️ API rate limit reached. Please try again later.",
+    );
+  });
+
+  it("strips leading HTTP status code prefix from non-JSON rate limit messages", () => {
+    const msg = makeAssistantError("429 Your quota has been exhausted, try again in 24 hours");
+    const result = formatAssistantErrorText(msg);
+    expect(result).toContain("try again in 24 hours");
+    expect(result).not.toMatch(/^⚠️ 429\b/);
+    expect(result).toBe("⚠️ Your quota has been exhausted, try again in 24 hours");
+  });
+
+  it("falls back to generic copy for HTML quota pages", () => {
+    const msg = makeAssistantError(
+      "429 <!DOCTYPE html><html><body>Your quota is exhausted</body></html>",
+    );
+    expect(formatAssistantErrorText(msg)).toBe(
+      "⚠️ API rate limit reached. Please try again later.",
+    );
+  });
+
+  it("falls back to generic copy for prefixed HTML rate-limit pages", () => {
+    const msg = makeAssistantError(
+      "Error: 521 <!DOCTYPE html><html><body>rate limit</body></html>",
+    );
+    expect(formatAssistantErrorText(msg)).toBe(
+      "⚠️ API rate limit reached. Please try again later.",
+    );
+  });
+
   it("returns a friendly message for empty stream chunk errors", () => {
     const msg = makeAssistantError("request ended without sending any chunks");
     expect(formatAssistantErrorText(msg)).toBe("LLM request timed out.");
@@ -157,7 +215,7 @@ describe("formatRawAssistantErrorForUi", () => {
     expect(text).toContain("HTTP 429");
     expect(text).toContain("rate_limit_error");
     expect(text).toContain("Rate limited.");
-    expect(text).toContain("req_123");
+    expect(text).not.toContain("req_123");
   });
 
   it("renders a generic unknown error message when raw is empty", () => {
@@ -168,6 +226,10 @@ describe("formatRawAssistantErrorForUi", () => {
     expect(formatRawAssistantErrorForUi("500 Internal Server Error")).toBe(
       "HTTP 500: Internal Server Error",
     );
+  });
+
+  it("formats colon-delimited HTTP status lines", () => {
+    expect(formatRawAssistantErrorForUi("HTTP 410: No body")).toBe("HTTP 410: No body");
   });
 
   it("sanitizes HTML error pages into a clean unavailable message", () => {

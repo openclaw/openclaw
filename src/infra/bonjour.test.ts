@@ -329,6 +329,37 @@ describe("gateway bonjour advertiser", () => {
     await started.stop();
   });
 
+  it("suppresses ciao self-probe retry console noise while advertising", async () => {
+    enableAdvertiserUnitMode();
+
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const advertise = vi.fn().mockResolvedValue(undefined);
+    mockCiaoService({ advertise, destroy });
+
+    const originalConsoleLog = console.log;
+    const baseConsoleLog = vi.fn();
+    console.log = baseConsoleLog as typeof console.log;
+
+    try {
+      const started = await startGatewayBonjourAdvertiser({
+        gatewayPort: 18789,
+        sshPort: 2222,
+      });
+
+      console.log(
+        "[test._openclaw-gw._tcp.local.] failed probing with reason: Error: Can't probe for a service which is announced already. Received announcing for service test._openclaw-gw._tcp.local.. Trying again in 2 seconds!",
+      );
+      console.log("ordinary console line");
+
+      expect(baseConsoleLog).toHaveBeenCalledTimes(1);
+      expect(baseConsoleLog).toHaveBeenCalledWith("ordinary console line");
+
+      await started.stop();
+    } finally {
+      console.log = originalConsoleLog;
+    }
+  });
+
   it("recreates the advertiser when ciao gets stuck announcing", async () => {
     enableAdvertiserUnitMode();
     vi.useFakeTimers();

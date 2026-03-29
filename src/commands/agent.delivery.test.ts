@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -32,28 +32,12 @@ vi.mock("../infra/outbound/targets.js", async () => {
 
 let deliverAgentCommandResult: typeof import("./agent/delivery.js").deliverAgentCommandResult;
 
-async function loadFreshAgentDeliveryModuleForTest() {
-  vi.resetModules();
-  vi.doMock("../channels/plugins/index.js", () => ({
-    getChannelPlugin: mocks.getChannelPlugin,
-    normalizeChannelId: (value: string) => value,
-  }));
-  vi.doMock("../infra/outbound/deliver.js", () => ({
-    deliverOutboundPayloads: mocks.deliverOutboundPayloads,
-  }));
-  vi.doMock("../infra/outbound/targets.js", async () => {
-    const actual = await vi.importActual<typeof import("../infra/outbound/targets.js")>(
-      "../infra/outbound/targets.js",
-    );
-    return {
-      ...actual,
-      resolveOutboundTarget: mocks.resolveOutboundTarget,
-    };
-  });
-  return await import("./agent/delivery.js");
-}
-
 describe("deliverAgentCommandResult", () => {
+  beforeAll(async () => {
+    vi.resetModules();
+    ({ deliverAgentCommandResult } = await import("./agent/delivery.js"));
+  });
+
   function createRuntime(): RuntimeEnv {
     return {
       log: vi.fn(),
@@ -100,11 +84,9 @@ describe("deliverAgentCommandResult", () => {
     return { runtime };
   }
 
-  beforeEach(async () => {
+  beforeEach(() => {
     mocks.deliverOutboundPayloads.mockClear();
     mocks.resolveOutboundTarget.mockClear();
-
-    ({ deliverAgentCommandResult } = await loadFreshAgentDeliveryModuleForTest());
   });
 
   it("prefers explicit accountId for outbound delivery", async () => {

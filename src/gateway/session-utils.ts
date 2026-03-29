@@ -10,12 +10,12 @@ import {
   resolveDefaultModelForAgent,
 } from "../agents/model-selection.js";
 import {
-  getSubagentRunByChildSessionKey,
+  getLatestSubagentRunByChildSessionKey,
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
   listSubagentRunsForController,
   resolveSubagentSessionStatus,
-} from "../agents/subagent-registry.js";
+} from "../agents/subagent-registry-read.js";
 import { type OpenClawConfig, loadConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
@@ -257,20 +257,38 @@ function resolveChildSessionKeys(
   controllerSessionKey: string,
   store: Record<string, SessionEntry>,
 ): string[] | undefined {
-  const childSessionKeys = new Set(
-    listSubagentRunsForController(controllerSessionKey)
-      .map((entry) => entry.childSessionKey)
-      .filter((value) => typeof value === "string" && value.trim().length > 0),
-  );
+  const childSessionKeys = new Set<string>();
+  for (const entry of listSubagentRunsForController(controllerSessionKey)) {
+    const childSessionKey = entry.childSessionKey?.trim();
+    if (!childSessionKey) {
+      continue;
+    }
+    const latest = getLatestSubagentRunByChildSessionKey(childSessionKey);
+    const latestControllerSessionKey =
+      latest?.controllerSessionKey?.trim() || latest?.requesterSessionKey?.trim();
+    if (latestControllerSessionKey !== controllerSessionKey) {
+      continue;
+    }
+    childSessionKeys.add(childSessionKey);
+  }
   for (const [key, entry] of Object.entries(store)) {
     if (!entry || key === controllerSessionKey) {
       continue;
     }
     const spawnedBy = entry.spawnedBy?.trim();
     const parentSessionKey = entry.parentSessionKey?.trim();
-    if (spawnedBy === controllerSessionKey || parentSessionKey === controllerSessionKey) {
-      childSessionKeys.add(key);
+    if (spawnedBy !== controllerSessionKey && parentSessionKey !== controllerSessionKey) {
+      continue;
     }
+    const latest = getLatestSubagentRunByChildSessionKey(key);
+    if (latest) {
+      const latestControllerSessionKey =
+        latest.controllerSessionKey?.trim() || latest.requesterSessionKey?.trim();
+      if (latestControllerSessionKey !== controllerSessionKey) {
+        continue;
+      }
+    }
+    childSessionKeys.add(key);
   }
   const childSessions = Array.from(childSessionKeys);
   return childSessions.length > 0 ? childSessions : undefined;
@@ -339,39 +357,75 @@ export function loadSessionEntry(sessionKey: string) {
   const cfg = loadConfig();
   const canonicalKey = resolveSessionStoreKey({ cfg, sessionKey });
   const agentId = resolveSessionStoreAgentId(cfg, canonicalKey);
-  const { storePath, store, match } = resolveGatewaySessionStoreLookup({
+  const { storePath, store } = resolveGatewaySessionStoreLookup({
     cfg,
     key: sessionKey.trim(),
     canonicalKey,
     agentId,
   });
-  const legacyKey = match?.key !== canonicalKey ? match?.key : undefined;
-  return { cfg, storePath, store, entry: match?.entry, canonicalKey, legacyKey };
+  const target = resolveGatewaySessionStoreTarget({
+    cfg,
+    key: sessionKey.trim(),
+    store,
+  });
+  const freshestMatch = resolveFreshestSessionStoreMatchFromStoreKeys(store, target.storeKeys);
+  const legacyKey = freshestMatch?.key !== canonicalKey ? freshestMatch?.key : undefined;
+  return { cfg, storePath, store, entry: freshestMatch?.entry, canonicalKey, legacyKey };
 }
 
-/**
- * Find a session entry by exact or case-insensitive key match.
- * Returns both the entry and the actual store key it was found under,
- * so callers can clean up legacy mixed-case keys when they differ from canonicalKey.
- */
-function findStoreMatch(
+export function resolveFreshestSessionStoreMatchFromStoreKeys(
+  store: Record<string, SessionEntry>,
+  storeKeys: string[],
+): { key: string; entry: SessionEntry } | undefined {
+  const matches = storeKeys
+    .map((key) => {
+      const entry = store[key];
+      return entry ? { key, entry } : undefined;
+    })
+    .filter((match): match is { key: string; entry: SessionEntry } => match !== undefined);
+  if (matches.length === 0) {
+    return undefined;
+  }
+  if (matches.length === 1) {
+    return matches[0];
+  }
+  return [...matches].toSorted((a, b) => (b.entry.updatedAt ?? 0) - (a.entry.updatedAt ?? 0))[0];
+}
+
+export function resolveFreshestSessionEntryFromStoreKeys(
+  store: Record<string, SessionEntry>,
+  storeKeys: string[],
+): SessionEntry | undefined {
+  return resolveFreshestSessionStoreMatchFromStoreKeys(store, storeKeys)?.entry;
+}
+
+function findFreshestStoreMatch(
   store: Record<string, SessionEntry>,
   ...candidates: string[]
 ): { entry: SessionEntry; key: string } | undefined {
-  // Exact match first.
+  const matches = new Map<string, { entry: SessionEntry; key: string }>();
   for (const candidate of candidates) {
-    if (candidate && store[candidate]) {
-      return { entry: store[candidate], key: candidate };
+    const trimmed = candidate.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const exact = store[trimmed];
+    if (exact) {
+      matches.set(trimmed, { entry: exact, key: trimmed });
+    }
+    for (const key of findStoreKeysIgnoreCase(store, trimmed)) {
+      const entry = store[key];
+      if (entry) {
+        matches.set(key, { entry, key });
+      }
     }
   }
-  // Case-insensitive scan for ALL candidates.
-  const loweredSet = new Set(candidates.filter(Boolean).map((c) => c.toLowerCase()));
-  for (const key of Object.keys(store)) {
-    if (loweredSet.has(key.toLowerCase())) {
-      return { entry: store[key], key };
-    }
+  if (matches.size === 0) {
+    return undefined;
   }
-  return undefined;
+  return [...matches.values()].toSorted(
+    (a, b) => (b.entry.updatedAt ?? 0) - (a.entry.updatedAt ?? 0),
+  )[0];
 }
 
 /**
@@ -432,10 +486,14 @@ export function migrateAndPruneGatewaySessionStoreKey(params: {
     store: params.store,
   });
   const primaryKey = target.canonicalKey;
-  if (!params.store[primaryKey]) {
-    const existingKey = target.storeKeys.find((candidate) => Boolean(params.store[candidate]));
-    if (existingKey) {
-      params.store[primaryKey] = params.store[existingKey];
+  const freshestMatch = resolveFreshestSessionStoreMatchFromStoreKeys(
+    params.store,
+    target.storeKeys,
+  );
+  if (freshestMatch) {
+    const currentPrimary = params.store[primaryKey];
+    if (!currentPrimary || (freshestMatch.entry.updatedAt ?? 0) > (currentPrimary.updatedAt ?? 0)) {
+      params.store[primaryKey] = freshestMatch.entry;
     }
   }
   pruneLegacyStoreKeys({
@@ -728,7 +786,7 @@ function resolveGatewaySessionStoreLookup(params: {
   };
   let selectedStorePath = fallback.storePath;
   let selectedStore = params.initialStore ?? loadSessionStore(fallback.storePath);
-  let selectedMatch = findStoreMatch(selectedStore, ...scanTargets);
+  let selectedMatch = findFreshestStoreMatch(selectedStore, ...scanTargets);
   let selectedUpdatedAt = selectedMatch?.entry.updatedAt ?? Number.NEGATIVE_INFINITY;
 
   for (let index = 1; index < candidates.length; index += 1) {
@@ -737,7 +795,7 @@ function resolveGatewaySessionStoreLookup(params: {
       continue;
     }
     const store = loadSessionStore(candidate.storePath);
-    const match = findStoreMatch(store, ...scanTargets);
+    const match = findFreshestStoreMatch(store, ...scanTargets);
     if (!match) {
       continue;
     }
@@ -1055,7 +1113,9 @@ export function buildGatewaySessionRow(params: {
   const deliveryFields = normalizeSessionDeliveryFields(entry);
   const parsedAgent = parseAgentSessionKey(key);
   const sessionAgentId = normalizeAgentId(parsedAgent?.agentId ?? resolveDefaultAgentId(cfg));
-  const subagentRun = getSubagentRunByChildSessionKey(key);
+  const subagentRun = getLatestSubagentRunByChildSessionKey(key);
+  const subagentOwner =
+    subagentRun?.controllerSessionKey?.trim() || subagentRun?.requesterSessionKey?.trim();
   const subagentStatus = subagentRun ? resolveSubagentSessionStatus(subagentRun) : undefined;
   const subagentStartedAt = subagentRun ? getSubagentSessionStartedAt(subagentRun) : undefined;
   const subagentEndedAt = subagentRun ? subagentRun.endedAt : undefined;
@@ -1133,7 +1193,12 @@ export function buildGatewaySessionRow(params: {
 
   return {
     key,
-    spawnedBy: entry?.spawnedBy,
+    spawnedBy: subagentOwner || entry?.spawnedBy,
+    spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,
+    forkedFromParent: entry?.forkedFromParent,
+    spawnDepth: entry?.spawnDepth,
+    subagentRole: entry?.subagentRole,
+    subagentControlScope: entry?.subagentControlScope,
     kind: classifySessionKey(key, entry),
     label: entry?.label,
     displayName,
@@ -1150,6 +1215,7 @@ export function buildGatewaySessionRow(params: {
     systemSent: entry?.systemSent,
     abortedLastRun: entry?.abortedLastRun,
     thinkingLevel: entry?.thinkingLevel,
+    fastMode: entry?.fastMode,
     verboseLevel: entry?.verboseLevel,
     reasoningLevel: entry?.reasoningLevel,
     elevatedLevel: entry?.elevatedLevel,
@@ -1163,7 +1229,7 @@ export function buildGatewaySessionRow(params: {
     startedAt: subagentRun ? subagentStartedAt : entry?.startedAt,
     endedAt: subagentRun ? subagentEndedAt : entry?.endedAt,
     runtimeMs: subagentRun ? subagentRuntimeMs : entry?.runtimeMs,
-    parentSessionKey: entry?.parentSessionKey,
+    parentSessionKey: subagentOwner || entry?.parentSessionKey,
     childSessions,
     responseUsage: entry?.responseUsage,
     modelProvider,
@@ -1173,6 +1239,7 @@ export function buildGatewaySessionRow(params: {
     lastChannel: deliveryFields.lastChannel ?? entry?.lastChannel,
     lastTo: deliveryFields.lastTo ?? entry?.lastTo,
     lastAccountId: deliveryFields.lastAccountId ?? entry?.lastAccountId,
+    lastThreadId: deliveryFields.lastThreadId ?? entry?.lastThreadId,
   };
 }
 
@@ -1248,7 +1315,13 @@ export function listSessionsFromStore(params: {
       if (key === "unknown" || key === "global") {
         return false;
       }
-      return entry?.spawnedBy === spawnedBy;
+      const latest = getLatestSubagentRunByChildSessionKey(key);
+      if (latest) {
+        const latestControllerSessionKey =
+          latest.controllerSessionKey?.trim() || latest.requesterSessionKey?.trim();
+        return latestControllerSessionKey === spawnedBy;
+      }
+      return entry?.spawnedBy === spawnedBy || entry?.parentSessionKey === spawnedBy;
     })
     .filter(([, entry]) => {
       if (!label) {

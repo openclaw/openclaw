@@ -9,7 +9,8 @@ import type {
 import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { firstDefined, normalizeAllowFrom, type NormalizedAllowFrom } from "../bot-access.js";
-import type { TelegramStreamMode } from "./types.js";
+import { normalizeTelegramReplyToMessageId } from "../outbound-params.js";
+import type { TelegramGetChat, TelegramStreamMode } from "./types.js";
 
 const TELEGRAM_GENERAL_TOPIC_ID = 1;
 
@@ -17,6 +18,52 @@ export type TelegramThreadSpec = {
   id?: number;
   scope: "dm" | "forum" | "none";
 };
+
+export function extractTelegramForumFlag(value: unknown): boolean | undefined {
+  if (!value || typeof value !== "object" || !("is_forum" in value)) {
+    return undefined;
+  }
+  const forum = value.is_forum;
+  return typeof forum === "boolean" ? forum : undefined;
+}
+
+export async function resolveTelegramForumFlag(params: {
+  chatId: string | number;
+  chatType?: Chat["type"];
+  isGroup: boolean;
+  isForum?: boolean;
+  getChat?: TelegramGetChat;
+}): Promise<boolean> {
+  if (typeof params.isForum === "boolean") {
+    return params.isForum;
+  }
+  if (!params.isGroup || params.chatType !== "supergroup" || !params.getChat) {
+    return false;
+  }
+  try {
+    return extractTelegramForumFlag(await params.getChat(params.chatId)) === true;
+  } catch {
+    return false;
+  }
+}
+
+// Preserve recovered forum metadata so downstream handlers do not need to re-query getChat.
+export function withResolvedTelegramForumFlag<T extends { chat: object }>(
+  message: T,
+  isForum: boolean,
+): T {
+  const current = extractTelegramForumFlag(message.chat);
+  if (current === isForum) {
+    return message;
+  }
+  return {
+    ...message,
+    chat: {
+      ...message.chat,
+      is_forum: isForum,
+    },
+  };
+}
 
 export async function resolveTelegramGroupAllowFromContext(params: {
   chatId: string | number;
@@ -154,6 +201,26 @@ export function buildTelegramThreadParams(thread?: TelegramThreadSpec | null) {
   }
 
   return { message_thread_id: normalized };
+}
+
+/**
+ * Build a Telegram routing target that keeps real topic/thread ids in-band.
+ *
+ * This is used by generic reply plumbing that may not always carry a separate
+ * `threadId` field through every hop. General forum topic stays chat-scoped
+ * because Telegram rejects `message_thread_id=1` for message sends.
+ */
+export function buildTelegramRoutingTarget(
+  chatId: number | string,
+  thread?: TelegramThreadSpec | null,
+): string {
+  const base = `telegram:${chatId}`;
+  const threadParams = buildTelegramThreadParams(thread);
+  const messageThreadId = threadParams?.message_thread_id;
+  if (typeof messageThreadId !== "number") {
+    return base;
+  }
+  return `${base}:topic:${messageThreadId}`;
 }
 
 /**
@@ -369,14 +436,7 @@ export function expandTextLinks(text: string, entities?: TelegramTextLinkEntity[
 }
 
 export function resolveTelegramReplyId(raw?: string): number | undefined {
-  if (!raw) {
-    return undefined;
-  }
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed)) {
-    return undefined;
-  }
-  return parsed;
+  return normalizeTelegramReplyToMessageId(raw);
 }
 
 export type TelegramReplyTarget = {

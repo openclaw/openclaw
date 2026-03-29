@@ -1,6 +1,6 @@
 import { setTimeout as scheduleNativeTimeout } from "node:timers";
 import { setTimeout as sleep } from "node:timers/promises";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AcpSessionRuntimeOptions, SessionAcpMeta } from "../../config/sessions/types.js";
 import type { AcpRuntime, AcpRuntimeCapabilities } from "../runtime/types.js";
@@ -35,6 +35,7 @@ vi.mock("../runtime/registry.js", async (importOriginal) => {
 
 let AcpSessionManager: typeof import("./manager.js").AcpSessionManager;
 let AcpRuntimeError: typeof import("../runtime/errors.js").AcpRuntimeError;
+let resetAcpSessionManagerForTests: typeof import("./manager.js").__testing.resetAcpSessionManagerForTests;
 
 const baseCfg = {
   acp: {
@@ -149,10 +150,17 @@ function extractRuntimeOptionsFromUpserts(): Array<AcpSessionRuntimeOptions | un
 }
 
 describe("AcpSessionManager", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     vi.resetModules();
-    ({ AcpSessionManager } = await import("./manager.js"));
+    ({
+      AcpSessionManager,
+      __testing: { resetAcpSessionManagerForTests },
+    } = await import("./manager.js"));
     ({ AcpRuntimeError } = await import("../runtime/errors.js"));
+  });
+
+  beforeEach(() => {
+    resetAcpSessionManagerForTests();
     vi.useRealTimers();
     hoisted.listAcpSessionEntriesMock.mockReset().mockResolvedValue([]);
     hoisted.readAcpSessionEntryMock.mockReset();
@@ -688,7 +696,7 @@ describe("AcpSessionManager", () => {
       id: "acpx",
       runtime: runtimeState.runtime,
     });
-    const sessionKey = "agent:codex:acp:binding:discord:default:deadbeef";
+    const sessionKey = "agent:codex:acp:binding:demo-binding:default:deadbeef";
     hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
       const key = (paramsUnknown as { sessionKey?: string }).sessionKey ?? sessionKey;
       return {
@@ -731,7 +739,7 @@ describe("AcpSessionManager", () => {
       id: "acpx",
       runtime: runtimeState.runtime,
     });
-    const sessionKey = "agent:codex:acp:binding:discord:default:oneshot";
+    const sessionKey = "agent:codex:acp:binding:demo-binding:default:oneshot";
     hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
       const key = (paramsUnknown as { sessionKey?: string }).sessionKey ?? sessionKey;
       return {
@@ -803,7 +811,7 @@ describe("AcpSessionManager", () => {
       id: "acpx",
       runtime: runtimeState.runtime,
     });
-    const sessionKey = "agent:codex:acp:binding:discord:default:retry-fresh";
+    const sessionKey = "agent:codex:acp:binding:demo-binding:default:retry-fresh";
     let currentMeta: SessionAcpMeta = {
       ...readySessionMeta(),
       runtimeSessionName: sessionKey,
@@ -1389,6 +1397,47 @@ describe("AcpSessionManager", () => {
         yield {
           type: "error" as const,
           message: "acpx exited with code 1",
+        };
+      })
+      .mockImplementationOnce(async function* () {
+        yield { type: "done" as const };
+      });
+
+    const manager = new AcpSessionManager();
+    await expect(
+      manager.runTurn({
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:session-1",
+        text: "do work",
+        mode: "prompt",
+        requestId: "run-1",
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(runtimeState.ensureSession).toHaveBeenCalledTimes(2);
+    expect(runtimeState.runTurn).toHaveBeenCalledTimes(2);
+    const states = extractStatesFromUpserts();
+    expect(states).toContain("running");
+    expect(states).toContain("idle");
+    expect(states).not.toContain("error");
+  });
+
+  it("retries once with a fresh runtime handle after an early acpx signal exit", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:codex:acp:session-1",
+      storeSessionKey: "agent:codex:acp:session-1",
+      acp: readySessionMeta(),
+    });
+    runtimeState.runTurn
+      .mockImplementationOnce(async function* () {
+        yield {
+          type: "error" as const,
+          message: "acpx exited with signal SIGTERM",
         };
       })
       .mockImplementationOnce(async function* () {

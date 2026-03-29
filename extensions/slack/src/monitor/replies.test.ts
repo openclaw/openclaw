@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendMock = vi.fn();
 vi.mock("../send.js", () => ({
@@ -21,9 +21,12 @@ function baseParams(overrides?: Record<string, unknown>) {
 }
 
 describe("deliverReplies identity passthrough", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     vi.resetModules();
     ({ deliverReplies } = await import("./replies.js"));
+  });
+
+  beforeEach(() => {
     sendMock.mockReset();
   });
   it("passes identity to sendMessageSlack for text replies", async () => {

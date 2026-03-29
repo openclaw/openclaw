@@ -1,7 +1,9 @@
-import { matrixPlugin, setMatrixRuntime } from "../../extensions/matrix/index.js";
-import { msteamsPlugin } from "../../extensions/msteams/index.js";
-import { nostrPlugin } from "../../extensions/nostr/index.js";
-import { tlonPlugin } from "../../extensions/tlon/index.js";
+import { googlechatPlugin } from "../../extensions/googlechat/test-api.js";
+import { matrixPlugin, setMatrixRuntime } from "../../extensions/matrix/test-api.js";
+import { msteamsPlugin } from "../../extensions/msteams/test-api.js";
+import { nostrPlugin } from "../../extensions/nostr/test-api.js";
+import { tlonPlugin } from "../../extensions/tlon/test-api.js";
+import { whatsappPlugin } from "../../extensions/whatsapp/test-api.js";
 import { bundledChannelPlugins } from "../channels/plugins/bundled.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -40,6 +42,8 @@ export function setDefaultChannelPluginRegistryForTests(): void {
     msteamsPlugin,
     nostrPlugin,
     tlonPlugin,
+    googlechatPlugin,
+    whatsappPlugin,
   ].map((plugin) => ({
     pluginId: plugin.id,
     plugin,

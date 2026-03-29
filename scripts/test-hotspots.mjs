@@ -1,50 +1,37 @@
 import {
-  collectVitestFileDurations,
-  readJsonFile,
-  runVitestJsonReport,
-} from "./test-report-utils.mjs";
+  formatMs,
+  loadVitestReportFromArgs,
+  parseVitestReportArgs,
+} from "./lib/vitest-report-cli-utils.mjs";
+import { collectVitestFileDurations } from "./test-report-utils.mjs";
 
-function parseArgs(argv) {
-  const args = {
-    config: "vitest.unit.config.ts",
-    limit: 20,
-    reportPath: "",
-  };
-  for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i];
-    if (arg === "--config") {
-      args.config = argv[i + 1] ?? args.config;
-      i += 1;
-      continue;
-    }
-    if (arg === "--limit") {
-      const parsed = Number.parseInt(argv[i + 1] ?? "", 10);
-      if (Number.isFinite(parsed) && parsed > 0) {
-        args.limit = parsed;
-      }
-      i += 1;
-      continue;
-    }
-    if (arg === "--report") {
-      args.reportPath = argv[i + 1] ?? "";
-      i += 1;
-      continue;
-    }
-  }
-  return args;
+if (process.argv.slice(2).includes("--help")) {
+  console.log(
+    [
+      "Usage: node scripts/test-hotspots.mjs [options]",
+      "",
+      "Print the slowest test files from a Vitest JSON report.",
+      "",
+      "Options:",
+      "  --config <path>    Vitest config to run when no report is supplied",
+      "  --report <path>    Reuse an existing Vitest JSON report",
+      "  --limit <count>    Number of files to print (default: 20)",
+      "  --help             Show this help text",
+      "",
+      "Examples:",
+      "  node scripts/test-hotspots.mjs",
+      "  node scripts/test-hotspots.mjs --config vitest.channels.config.ts --limit 10",
+      "  node scripts/test-hotspots.mjs --report /tmp/vitest-report.json",
+    ].join("\n"),
+  );
+  process.exit(0);
 }
 
-function formatMs(value) {
-  return `${value.toFixed(1)}ms`;
-}
-
-const opts = parseArgs(process.argv.slice(2));
-const reportPath = runVitestJsonReport({
-  config: opts.config,
-  reportPath: opts.reportPath,
-  prefix: "openclaw-vitest-hotspots",
+const opts = parseVitestReportArgs(process.argv.slice(2), {
+  config: "vitest.unit.config.ts",
+  limit: 20,
 });
-const report = readJsonFile(reportPath);
+const report = loadVitestReportFromArgs(opts, "openclaw-vitest-hotspots");
 const fileResults = collectVitestFileDurations(report).toSorted(
   (a, b) => b.durationMs - a.durationMs,
 );

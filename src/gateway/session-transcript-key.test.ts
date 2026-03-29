@@ -113,4 +113,32 @@ describe("resolveSessionKeyForTranscriptFile", () => {
     expect(resolveSessionKeyForTranscriptFile("   ")).toBeUndefined();
     expect(loadCombinedSessionStoreForGatewayMock).not.toHaveBeenCalled();
   });
+
+  it("prefers the deterministic session key when duplicate sessionIds share a transcript path", () => {
+    const store = {
+      "agent:other:main": { sessionId: "run-dup", updatedAt: now + 1 },
+      "agent:main:acp:run-dup": { sessionId: "run-dup", updatedAt: now },
+    } satisfies Record<string, SessionEntry>;
+    loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+      storePath: "(multiple)",
+      store,
+    });
+    resolveSessionTranscriptCandidatesMock.mockReturnValue(["/tmp/shared.jsonl"]);
+
+    expect(resolveSessionKeyForTranscriptFile("/tmp/shared.jsonl")).toBe("agent:main:acp:run-dup");
+  });
+
+  it("prefers the freshest matching session when different sessionIds share a transcript path", () => {
+    const store = {
+      "agent:main:older": { sessionId: "sess-old", updatedAt: now },
+      "agent:main:newer": { sessionId: "sess-new", updatedAt: now + 10 },
+    } satisfies Record<string, SessionEntry>;
+    loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+      storePath: "(multiple)",
+      store,
+    });
+    resolveSessionTranscriptCandidatesMock.mockReturnValue(["/tmp/shared.jsonl"]);
+
+    expect(resolveSessionKeyForTranscriptFile("/tmp/shared.jsonl")).toBe("agent:main:newer");
+  });
 });

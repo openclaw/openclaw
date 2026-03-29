@@ -52,6 +52,7 @@ export type FileWithThumbnailInfo = {
   size?: number;
   mimetype?: string;
   thumbnail_url?: string;
+  thumbnail_file?: EncryptedFile;
   thumbnail_info?: {
     w?: number;
     h?: number;

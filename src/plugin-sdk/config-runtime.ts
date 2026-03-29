@@ -9,6 +9,7 @@ export {
 } from "../config/io.js";
 export { logConfigUpdated } from "../config/logging.js";
 export { updateConfig } from "../commands/models/shared.js";
+export { resolveChannelModelOverride } from "../channels/model-overrides.js";
 export { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 export {
   resolveChannelGroupPolicy,
@@ -46,6 +47,11 @@ export { resolveAgentMaxConcurrent } from "../config/agent-limits.js";
 export { loadCronStore, resolveCronStorePath, saveCronStore } from "../cron/store.js";
 export { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
 export { coerceSecretRef } from "../config/types.secrets.js";
+export {
+  resolveConfiguredSecretInputString,
+  resolveConfiguredSecretInputWithFallback,
+  resolveRequiredConfiguredSecretRefInputString,
+} from "../gateway/resolve-configured-secret-input-string.js";
 export type {
   DiscordAccountConfig,
   DiscordActionConfig,
@@ -73,7 +79,11 @@ export type {
   TelegramInlineButtonsScope,
   TelegramNetworkConfig,
   TelegramTopicConfig,
+  TtsAutoMode,
   TtsConfig,
+  TtsMode,
+  TtsModelOverrideConfig,
+  TtsProvider,
 } from "../config/types.js";
 export {
   loadSessionStore,

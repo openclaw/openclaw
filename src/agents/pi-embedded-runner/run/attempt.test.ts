@@ -1,8 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import type { OpenClawConfig } from "../../../config/config.js";
+import {
+  isOllamaCompatProvider,
+  resolveOllamaBaseUrlForRun,
+  resolveOllamaCompatNumCtxEnabled,
+  shouldInjectOllamaCompatNumCtx,
+  wrapOllamaCompatNumCtx,
+} from "../../../plugin-sdk/ollama.js";
 import { appendBootstrapPromptWarning } from "../../bootstrap-budget.js";
-import { resolveOllamaBaseUrlForRun } from "../../ollama-stream.js";
 import { buildAgentSystemPrompt } from "../../system-prompt.js";
 import { buildEmbeddedSystemPrompt } from "../system-prompt.js";
 import {
@@ -10,21 +16,18 @@ import {
   buildSessionsYieldContextMessage,
   composeSystemPromptWithHookContext,
   persistSessionsYieldContextMessage,
-  isOllamaCompatProvider,
   prependSystemPromptAddition,
   queueSessionsYieldInterruptMessage,
   resolveAttemptFsWorkspaceOnly,
-  resolveOllamaCompatNumCtxEnabled,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
   stripSessionsYieldArtifacts,
   shouldInjectHeartbeatPrompt,
-  shouldInjectOllamaCompatNumCtx,
   decodeHtmlEntitiesInObject,
-  wrapOllamaCompatNumCtx,
   wrapStreamFnRepairMalformedToolCallArguments,
   wrapStreamFnSanitizeMalformedToolCalls,
   wrapStreamFnTrimToolCallNames,
+  resolveEmbeddedAgentStreamFn,
 } from "./attempt.js";
 import { shouldInjectHeartbeatPromptForTrigger } from "./trigger-policy.js";
 
@@ -1805,6 +1808,50 @@ describe("shouldInjectOllamaCompatNumCtx", () => {
         providerId: "ollama",
       }),
     ).toBe(false);
+  });
+});
+
+describe("resolveEmbeddedAgentStreamFn", () => {
+  it("keeps the session-managed HTTP stream when no override applies", () => {
+    const currentStreamFn = vi.fn();
+
+    const resolved = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: currentStreamFn as never,
+      shouldUseWebSocketTransport: false,
+      sessionId: "session-1",
+      model: { provider: "xai" } as never,
+    });
+
+    expect(resolved).toBe(currentStreamFn);
+  });
+
+  it("keeps the session-managed HTTP stream when websocket auth is unavailable", () => {
+    const currentStreamFn = vi.fn();
+
+    const resolved = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: currentStreamFn as never,
+      shouldUseWebSocketTransport: true,
+      wsApiKey: undefined,
+      sessionId: "session-1",
+      model: { provider: "xai" } as never,
+    });
+
+    expect(resolved).toBe(currentStreamFn);
+  });
+
+  it("prefers a provider-owned stream override when present", () => {
+    const currentStreamFn = vi.fn();
+    const providerStreamFn = vi.fn();
+
+    const resolved = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: currentStreamFn as never,
+      providerStreamFn: providerStreamFn as never,
+      shouldUseWebSocketTransport: false,
+      sessionId: "session-1",
+      model: { provider: "xai" } as never,
+    });
+
+    expect(resolved).toBe(providerStreamFn);
   });
 });
 

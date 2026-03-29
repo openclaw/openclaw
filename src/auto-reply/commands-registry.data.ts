@@ -1,50 +1,11 @@
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
-import { COMMAND_ARG_FORMATTERS } from "./commands-args.js";
-import type {
-  ChatCommandDefinition,
-  CommandCategory,
-  CommandScope,
-} from "./commands-registry.types.js";
-import { listThinkingLevels } from "./thinking.js";
-
-type DefineChatCommandInput = {
-  key: string;
-  nativeName?: string;
-  description: string;
-  args?: ChatCommandDefinition["args"];
-  argsParsing?: ChatCommandDefinition["argsParsing"];
-  formatArgs?: ChatCommandDefinition["formatArgs"];
-  argsMenu?: ChatCommandDefinition["argsMenu"];
-  acceptsArgs?: boolean;
-  textAlias?: string;
-  textAliases?: string[];
-  scope?: CommandScope;
-  category?: CommandCategory;
-};
-
-function defineChatCommand(command: DefineChatCommandInput): ChatCommandDefinition {
-  const aliases = (command.textAliases ?? (command.textAlias ? [command.textAlias] : []))
-    .map((alias) => alias.trim())
-    .filter(Boolean);
-  const scope =
-    command.scope ?? (command.nativeName ? (aliases.length ? "both" : "native") : "text");
-  const acceptsArgs = command.acceptsArgs ?? Boolean(command.args?.length);
-  const argsParsing = command.argsParsing ?? (command.args?.length ? "positional" : "none");
-  return {
-    key: command.key,
-    nativeName: command.nativeName,
-    description: command.description,
-    acceptsArgs,
-    args: command.args,
-    argsParsing,
-    formatArgs: command.formatArgs,
-    argsMenu: command.argsMenu,
-    textAliases: aliases,
-    scope,
-    category: command.category,
-  };
-}
+import {
+  assertCommandRegistry,
+  buildBuiltinChatCommands,
+  defineChatCommand,
+} from "./commands-registry.shared.js";
+import type { ChatCommandDefinition } from "./commands-registry.types.js";
 
 type ChannelPlugin = ReturnType<typeof listChannelPlugins>[number];
 
@@ -56,71 +17,6 @@ function defineDockCommand(plugin: ChannelPlugin): ChatCommandDefinition {
     textAliases: [`/dock-${plugin.id}`, `/dock_${plugin.id}`],
     category: "docks",
   });
-}
-
-function registerAlias(commands: ChatCommandDefinition[], key: string, ...aliases: string[]): void {
-  const command = commands.find((entry) => entry.key === key);
-  if (!command) {
-    throw new Error(`registerAlias: unknown command key: ${key}`);
-  }
-  const existing = new Set(command.textAliases.map((alias) => alias.trim().toLowerCase()));
-  for (const alias of aliases) {
-    const trimmed = alias.trim();
-    if (!trimmed) {
-      continue;
-    }
-    const lowered = trimmed.toLowerCase();
-    if (existing.has(lowered)) {
-      continue;
-    }
-    existing.add(lowered);
-    command.textAliases.push(trimmed);
-  }
-}
-
-function assertCommandRegistry(commands: ChatCommandDefinition[]): void {
-  const keys = new Set<string>();
-  const nativeNames = new Set<string>();
-  const textAliases = new Set<string>();
-  for (const command of commands) {
-    if (keys.has(command.key)) {
-      throw new Error(`Duplicate command key: ${command.key}`);
-    }
-    keys.add(command.key);
-
-    const nativeName = command.nativeName?.trim();
-    if (command.scope === "text") {
-      if (nativeName) {
-        throw new Error(`Text-only command has native name: ${command.key}`);
-      }
-      if (command.textAliases.length === 0) {
-        throw new Error(`Text-only command missing text alias: ${command.key}`);
-      }
-    } else if (!nativeName) {
-      throw new Error(`Native command missing native name: ${command.key}`);
-    } else {
-      const nativeKey = nativeName.toLowerCase();
-      if (nativeNames.has(nativeKey)) {
-        throw new Error(`Duplicate native command: ${nativeName}`);
-      }
-      nativeNames.add(nativeKey);
-    }
-
-    if (command.scope === "native" && command.textAliases.length > 0) {
-      throw new Error(`Native-only command has text aliases: ${command.key}`);
-    }
-
-    for (const alias of command.textAliases) {
-      if (!alias.startsWith("/")) {
-        throw new Error(`Command alias missing leading '/': ${alias}`);
-      }
-      const aliasKey = alias.toLowerCase();
-      if (textAliases.has(aliasKey)) {
-        throw new Error(`Duplicate command alias: ${alias}`);
-      }
-      textAliases.add(aliasKey);
-    }
-  }
 }
 
 let cachedCommands: ChatCommandDefinition[] | null = null;
@@ -824,17 +720,11 @@ function buildChatCommands(): ChatCommandDefinition[] {
         },
       ],
     }),
+    ...buildBuiltinChatCommands(),
     ...listChannelPlugins()
       .filter((plugin) => plugin.capabilities.nativeCommands)
       .map((plugin) => defineDockCommand(plugin)),
   ];
-
-  registerAlias(commands, "whoami", "/id");
-  registerAlias(commands, "think", "/thinking", "/t");
-  registerAlias(commands, "verbose", "/v");
-  registerAlias(commands, "reasoning", "/reason");
-  registerAlias(commands, "elevated", "/elev");
-  registerAlias(commands, "steer", "/tell");
 
   assertCommandRegistry(commands);
   return commands;

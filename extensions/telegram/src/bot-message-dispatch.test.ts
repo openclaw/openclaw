@@ -1,5 +1,5 @@
 import type { Bot } from "grammy";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import {
   createSequencedTestDraftStream,
@@ -32,6 +32,7 @@ const buildModelsProviderData = vi.hoisted(() =>
     byProvider: new Map<string, Set<string>>(),
     providers: [],
     resolvedDefault: { provider: "openai", model: "gpt-test" },
+    modelNames: new Map<string, string>(),
   })),
 );
 const listSkillCommandsForAgents = vi.hoisted(() => vi.fn(() => []));
@@ -120,9 +121,11 @@ const telegramDepsForTest: TelegramBotDeps = {
 describe("dispatchTelegramMessage draft streaming", () => {
   type TelegramMessageContext = Parameters<typeof dispatchTelegramMessage>[0]["context"];
 
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
     ({ dispatchTelegramMessage } = await import("./bot-message-dispatch.js"));
+  });
+
+  beforeEach(() => {
     createTelegramDraftStream.mockClear();
     dispatchReplyWithBufferedBlockDispatcher.mockClear();
     deliverReplies.mockClear();

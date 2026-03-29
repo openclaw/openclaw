@@ -140,6 +140,36 @@ describe("web session", () => {
     readSpy.mockRestore();
   });
 
+  it("logWebSelfId prints cached lid details when creds include a lid", () => {
+    const existsSpy = vi.spyOn(fsSync, "existsSync").mockImplementation((p) => {
+      if (typeof p !== "string") {
+        return false;
+      }
+      return p.endsWith("creds.json");
+    });
+    const readSpy = vi.spyOn(fsSync, "readFileSync").mockImplementation((p) => {
+      if (typeof p === "string" && p.endsWith("creds.json")) {
+        return JSON.stringify({
+          me: { id: "12345@s.whatsapp.net", lid: "777@lid" },
+        });
+      }
+      throw new Error(`unexpected readFileSync path: ${String(p)}`);
+    });
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    logWebSelfId("/tmp/wa-creds", runtime as never, true);
+
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("Web Channel: +12345 (jid 12345@s.whatsapp.net, lid 777@lid)"),
+    );
+    existsSpy.mockRestore();
+    readSpy.mockRestore();
+  });
+
   it("formatError prints Boom-like payload message", () => {
     const err = {
       error: {

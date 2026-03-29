@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
+import type { PluginApprovalRequest } from "../../../src/infra/plugin-approvals.js";
 import type { PluginRuntime } from "../../../src/plugins/runtime/types.js";
 import { createStartAccountContext } from "../../../test/helpers/extensions/start-account-context.js";
 import type { ResolvedTelegramAccount } from "./accounts.js";
@@ -7,7 +8,7 @@ import * as auditModule from "./audit.js";
 import { telegramPlugin } from "./channel.js";
 import * as monitorModule from "./monitor.js";
 import * as probeModule from "./probe.js";
-import { setTelegramRuntime } from "./runtime.js";
+import { clearTelegramRuntime, setTelegramRuntime } from "./runtime.js";
 
 const probeTelegramMock = vi.hoisted(() => vi.fn());
 const collectTelegramUnmentionedGroupIdsMock = vi.hoisted(() => vi.fn());
@@ -78,7 +79,16 @@ function installTelegramRuntime(telegram?: Record<string, unknown>) {
   } as unknown as PluginRuntime);
 }
 
-function installGatewayRuntime(params?: { probeOk?: boolean; botUsername?: string }) {
+function installGatewayRuntime(params?: {
+  probeOk?: boolean;
+  botUsername?: string;
+  runtimeHelpers?: {
+    probeTelegram?: typeof probeModule.probeTelegram;
+    collectTelegramUnmentionedGroupIds?: typeof auditModule.collectTelegramUnmentionedGroupIds;
+    auditTelegramGroupMembership?: typeof auditModule.auditTelegramGroupMembership;
+    monitorTelegramProvider?: typeof monitorModule.monitorTelegramProvider;
+  };
+}) {
   const monitorTelegramProvider = vi
     .spyOn(monitorModule, "monitorTelegramProvider")
     .mockImplementation(async () => undefined);
@@ -106,7 +116,15 @@ function installGatewayRuntime(params?: { probeOk?: boolean; botUsername?: strin
       groups: [],
       elapsedMs: 0,
     }));
-  installTelegramRuntime();
+  installTelegramRuntime({
+    probeTelegram: params?.runtimeHelpers?.probeTelegram ?? probeTelegram,
+    collectTelegramUnmentionedGroupIds:
+      params?.runtimeHelpers?.collectTelegramUnmentionedGroupIds ?? collectUnmentionedGroupIds,
+    auditTelegramGroupMembership:
+      params?.runtimeHelpers?.auditTelegramGroupMembership ?? auditGroupMembership,
+    monitorTelegramProvider:
+      params?.runtimeHelpers?.monitorTelegramProvider ?? monitorTelegramProvider,
+  });
   return {
     monitorTelegramProvider,
     probeTelegram,
@@ -144,8 +162,29 @@ function installSendMessageRuntime(
   return sendMessageTelegram;
 }
 
+function createPluginApprovalRequest(
+  overrides: Partial<PluginApprovalRequest["request"]> = {},
+): PluginApprovalRequest {
+  return {
+    id: "plugin:12345678-1234-1234-1234-1234567890ab",
+    request: {
+      title: "Sensitive plugin action",
+      description: "The plugin requested a sensitive operation.",
+      severity: "warning",
+      toolName: "plugin.tool",
+      pluginId: "plugin-test",
+      agentId: "agent-main",
+      sessionKey: "agent:agent-main:telegram:12345",
+      ...overrides,
+    },
+    createdAtMs: 1_000,
+    expiresAtMs: 61_000,
+  };
+}
+
 afterEach(() => {
-  vi.restoreAllMocks();
+  clearTelegramRuntime();
+  vi.clearAllMocks();
 });
 
 describe("telegramPlugin groups", () => {
@@ -266,13 +305,70 @@ describe("telegramPlugin duplicate token guard", () => {
     expect(monitorTelegramProvider).toHaveBeenCalled();
   });
 
-  it("passes account proxy and network settings into Telegram probes", async () => {
-    const runtimeProbeTelegram = vi.fn(async () => {
-      throw new Error("runtime probe should not be used");
+  it("falls back to direct probe helpers when Telegram runtime is uninitialized", async () => {
+    try {
+      clearTelegramRuntime();
+      const cfg = createCfg();
+      const account = resolveAccount(cfg, "ops");
+
+      await expect(
+        telegramPlugin.status!.probeAccount!({
+          account,
+          timeoutMs: 1234,
+          cfg,
+        }),
+      ).resolves.toEqual(
+        expect.objectContaining({
+          ok: expect.any(Boolean),
+          elapsedMs: expect.any(Number),
+        }),
+      );
+    } finally {
+      installTelegramRuntime();
+    }
+  });
+
+  it("prefers runtime Telegram helpers over imported module mocks when runtime is set", async () => {
+    probeTelegramMock.mockReset();
+    const runtimeProbeTelegram = vi.fn(async () => ({
+      ok: true,
+      bot: { username: "runtimebot" },
+      elapsedMs: 7,
+    }));
+    probeTelegramMock.mockResolvedValue({
+      ok: true,
+      bot: { username: "modulebot" },
+      elapsedMs: 1,
     });
     installTelegramRuntime({
       probeTelegram: runtimeProbeTelegram,
     });
+
+    const cfg = createCfg();
+    const account = resolveAccount(cfg, "ops");
+
+    await expect(
+      telegramPlugin.status!.probeAccount!({
+        account,
+        timeoutMs: 4321,
+        cfg,
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      bot: { username: "runtimebot" },
+      elapsedMs: 7,
+    });
+    expect(runtimeProbeTelegram).toHaveBeenCalledWith("token-ops", 4321, {
+      accountId: "ops",
+      proxyUrl: undefined,
+      network: undefined,
+      apiRoot: undefined,
+    });
+    expect(probeTelegramMock).not.toHaveBeenCalled();
+  });
+
+  it("passes account proxy and network settings into Telegram probes", async () => {
+    installGatewayRuntime();
     probeTelegramMock.mockResolvedValue({
       ok: true,
       bot: { username: "opsbot" },
@@ -295,20 +391,10 @@ describe("telegramPlugin duplicate token guard", () => {
         dnsResultOrder: "ipv4first",
       },
     });
-    expect(runtimeProbeTelegram).not.toHaveBeenCalled();
   });
 
   it("passes account proxy and network settings into Telegram membership audits", async () => {
-    const runtimeCollectUnmentionedGroupIds = vi.fn(() => {
-      throw new Error("runtime audit helper should not be used");
-    });
-    const runtimeAuditGroupMembership = vi.fn(async () => {
-      throw new Error("runtime audit helper should not be used");
-    });
-    installTelegramRuntime({
-      collectUnmentionedGroupIds: runtimeCollectUnmentionedGroupIds,
-      auditGroupMembership: runtimeAuditGroupMembership,
-    });
+    installGatewayRuntime();
     collectTelegramUnmentionedGroupIdsMock.mockReturnValue({
       groupIds: ["-100123"],
       unresolvedGroups: 0,
@@ -352,8 +438,6 @@ describe("telegramPlugin duplicate token guard", () => {
       },
       timeoutMs: 5000,
     });
-    expect(runtimeCollectUnmentionedGroupIds).not.toHaveBeenCalled();
-    expect(runtimeAuditGroupMembership).not.toHaveBeenCalled();
   });
 
   it("forwards mediaLocalRoots to sendMessageTelegram for outbound media sends", async () => {
@@ -409,6 +493,34 @@ describe("telegramPlugin duplicate token guard", () => {
       }),
     );
     expect(result).toMatchObject({ channel: "telegram", messageId: "tg-2" });
+  });
+
+  it("preserves accountId for pairing approval sends", async () => {
+    const sendMessageTelegram = vi.fn(async () => ({ messageId: "tg-pair" }));
+    const resolveTelegramToken = vi.fn(() => ({ token: "token-ops", source: "config" }));
+    const cfg = createCfg();
+    installTelegramRuntime({
+      sendMessageTelegram,
+      resolveTelegramToken,
+    });
+
+    await telegramPlugin.pairing?.notifyApproval?.({
+      cfg,
+      id: "12345",
+      accountId: "ops",
+    });
+
+    expect(resolveTelegramToken).toHaveBeenCalledWith(cfg, {
+      accountId: "ops",
+    });
+    expect(sendMessageTelegram).toHaveBeenCalledWith(
+      "12345",
+      expect.any(String),
+      expect.objectContaining({
+        token: "token-ops",
+        accountId: "ops",
+      }),
+    );
   });
 
   it("sends outbound payload media lists and keeps buttons on the first message only", async () => {
@@ -468,12 +580,131 @@ describe("telegramPlugin duplicate token guard", () => {
     expect(result).toMatchObject({ channel: "telegram", messageId: "tg-4" });
   });
 
+  it("builds plugin approval pending payload with callback ids that preserve allow-always", () => {
+    const request = createPluginApprovalRequest();
+    const payload = telegramPlugin.execApprovals?.buildPluginPendingPayload?.({
+      cfg: createCfg(),
+      request,
+      target: { channel: "telegram", to: "12345" },
+      nowMs: 2_000,
+    });
+
+    expect(payload?.text).toContain("Plugin approval required");
+    const channelData = payload?.channelData as
+      | {
+          execApproval?: { approvalId?: string; approvalSlug?: string };
+          telegram?: { buttons?: Array<Array<{ text: string; callback_data: string }>> };
+        }
+      | undefined;
+    expect(channelData?.execApproval?.approvalId).toBe(request.id);
+    expect(channelData?.execApproval?.approvalSlug).toBe(request.id);
+    const buttons = channelData?.telegram?.buttons;
+    expect(buttons).toBeDefined();
+    expect(buttons?.[0]?.some((button) => button.text === "Allow Always")).toBe(true);
+    for (const row of buttons ?? []) {
+      for (const button of row) {
+        expect(Buffer.byteLength(button.callback_data, "utf8")).toBeLessThanOrEqual(64);
+      }
+    }
+  });
+
   it("ignores accounts with missing tokens during duplicate-token checks", async () => {
     const cfg = createCfg();
     cfg.channels!.telegram!.accounts!.ops = {} as never;
 
     const alertsAccount = resolveAccount(cfg, "alerts");
     expect(await telegramPlugin.config.isConfigured!(alertsAccount, cfg)).toBe(true);
+  });
+
+  // Regression: https://github.com/openclaw/openclaw/issues/53876
+  // Single-bot setup with channel-level token should report configured.
+  it("reports configured for single-bot setup with channel-level token", async () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: "single-bot-token",
+          enabled: true,
+        },
+      },
+    } as OpenClawConfig;
+
+    const account = resolveAccount(cfg, "default");
+    expect(await telegramPlugin.config.isConfigured!(account, cfg)).toBe(true);
+  });
+
+  // Regression: https://github.com/openclaw/openclaw/issues/53876
+  // Binding-created non-default accountId in single-bot setup should report configured.
+  it("reports configured for binding-created accountId in single-bot setup", async () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: "single-bot-token",
+          enabled: true,
+        },
+      },
+    } as OpenClawConfig;
+
+    const account = resolveAccount(cfg, "bot-main");
+    expect(account.token).toBe("single-bot-token");
+    expect(await telegramPlugin.config.isConfigured!(account, cfg)).toBe(true);
+  });
+
+  // Regression: multi-bot guard — unknown binding-created accountId in multi-bot
+  // setup must NOT be reported as configured, matching resolveTelegramToken behaviour.
+  it("reports not configured for unknown binding-created accountId in multi-bot setup", async () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: "channel-level-token",
+          enabled: true,
+          accounts: {
+            knownBot: { botToken: "known-bot-token" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const account = resolveAccount(cfg, "unknownBot");
+    expect(await telegramPlugin.config.isConfigured!(account, cfg)).toBe(false);
+    expect(telegramPlugin.config.unconfiguredReason?.(account, cfg)).toContain("unknown accountId");
+  });
+
+  // Regression: multi-bot guard must use full normalization (same as resolveTelegramToken)
+  // so that account keys like "Carey Notifications" resolve to "carey-notifications".
+  it("multi-bot guard normalizes account keys with spaces and mixed case", async () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: "channel-level-token",
+          enabled: true,
+          accounts: {
+            "Carey Notifications": { botToken: "carey-token" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    // "carey-notifications" is the normalized form of "Carey Notifications"
+    const account = resolveAccount(cfg, "carey-notifications");
+    expect(await telegramPlugin.config.isConfigured!(account, cfg)).toBe(true);
+  });
+
+  // Regression: configured_unavailable token (e.g. unreadable tokenFile) should
+  // NOT be reported as configured — runtime would fail to authenticate.
+  it("reports not configured when token is configured_unavailable", async () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          tokenFile: "/nonexistent/path/to/token",
+          enabled: true,
+        },
+      },
+    } as OpenClawConfig;
+
+    const account = resolveAccount(cfg, "default");
+    // tokenFile is configured but file doesn't exist → configured_unavailable
+    expect(await telegramPlugin.config.isConfigured!(account, cfg)).toBe(false);
+    expect(telegramPlugin.config.unconfiguredReason?.(account, cfg)).toContain("unavailable");
   });
 
   it("does not crash startup when a resolved account token is undefined", async () => {

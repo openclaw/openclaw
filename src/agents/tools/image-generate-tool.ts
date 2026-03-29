@@ -1,6 +1,7 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
+import { parseImageGenerationModelRef } from "../../image-generation/model-ref.js";
 import {
   generateImage,
   listRuntimeImageGenerationProviders,
@@ -15,6 +16,7 @@ import { saveMediaBuffer } from "../../media/store.js";
 import { loadWebMedia } from "../../media/web-media.js";
 import { getProviderEnvVars } from "../../secrets/provider-env-vars.js";
 import { resolveUserPath } from "../../utils.js";
+import { normalizeProviderId } from "../provider-id.js";
 import { ToolInputError, readNumberParam, readStringParam } from "./common.js";
 import { decodeDataUrl } from "./image-tool.helpers.js";
 import {
@@ -235,23 +237,6 @@ function normalizeReferenceImages(args: Record<string, unknown>): string[] {
   return normalized;
 }
 
-function parseImageGenerationModelRef(
-  raw: string | undefined,
-): { provider: string; model: string } | null {
-  const trimmed = raw?.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const slashIndex = trimmed.indexOf("/");
-  if (slashIndex <= 0 || slashIndex === trimmed.length - 1) {
-    return null;
-  }
-  return {
-    provider: trimmed.slice(0, slashIndex).trim(),
-    model: trimmed.slice(slashIndex + 1).trim(),
-  };
-}
-
 function resolveSelectedImageGenerationProvider(params: {
   config?: OpenClawConfig;
   imageGenerationModelConfig: ToolModelConfig;
@@ -263,10 +248,11 @@ function resolveSelectedImageGenerationProvider(params: {
   if (!selectedRef) {
     return undefined;
   }
+  const selectedProvider = normalizeProviderId(selectedRef.provider);
   return listRuntimeImageGenerationProviders({ config: params.config }).find(
     (provider) =>
-      provider.id === selectedRef.provider ||
-      (provider.aliases ?? []).includes(selectedRef.provider),
+      normalizeProviderId(provider.id) === selectedProvider ||
+      (provider.aliases ?? []).some((alias) => normalizeProviderId(alias) === selectedProvider),
   );
 }
 
@@ -358,7 +344,7 @@ type ImageGenerateSandboxConfig = {
 async function loadReferenceImages(params: {
   imageInputs: string[];
   maxBytes?: number;
-  localRoots: string[];
+  workspaceDir?: string;
   sandboxConfig: { root: string; bridge: SandboxFsBridge; workspaceOnly: boolean } | null;
 }): Promise<
   Array<{
@@ -418,6 +404,14 @@ async function loadReferenceImages(params: {
           };
     const resolvedPath = isDataUrl ? null : resolvedPathInfo.resolved;
 
+    const localRoots = resolveMediaToolLocalRoots(
+      params.workspaceDir,
+      {
+        workspaceOnly: params.sandboxConfig?.workspaceOnly === true,
+      },
+      resolvedPath ? [resolvedPath] : undefined,
+    );
+
     const media = isDataUrl
       ? decodeDataUrl(resolvedImage)
       : params.sandboxConfig
@@ -428,7 +422,7 @@ async function loadReferenceImages(params: {
           })
         : await loadWebMedia(resolvedPath ?? resolvedImage, {
             maxBytes: params.maxBytes,
-            localRoots: params.localRoots,
+            localRoots,
           });
     if (media.kind !== "image") {
       throw new ToolInputError(`Unsupported media type: ${media.kind}`);
@@ -487,9 +481,6 @@ export function createImageGenerateTool(options?: {
   }
   const effectiveCfg =
     applyImageGenerationModelConfigDefaults(cfg, imageGenerationModelConfig) ?? cfg;
-  const localRoots = resolveMediaToolLocalRoots(options?.workspaceDir, {
-    workspaceOnly: options?.fsPolicy?.workspaceOnly === true,
-  });
   const sandboxConfig =
     options?.sandbox && options.sandbox.root.trim()
       ? {
@@ -565,7 +556,7 @@ export function createImageGenerateTool(options?: {
       const count = resolveRequestedCount(params);
       const loadedReferenceImages = await loadReferenceImages({
         imageInputs,
-        localRoots,
+        workspaceDir: options?.workspaceDir,
         sandboxConfig,
       });
       const inputImages = loadedReferenceImages.map((entry) => entry.sourceImage);

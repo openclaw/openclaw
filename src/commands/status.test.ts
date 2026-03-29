@@ -1,6 +1,7 @@
 import type { Mock } from "vitest";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
+import { createCompatibilityNotice } from "../plugins/status.test-helpers.js";
 import { captureEnv } from "../test-utils/env.js";
 
 let envSnapshot: ReturnType<typeof captureEnv>;
@@ -139,6 +140,40 @@ function createDefaultProbeGatewayResult(): ProbeGatewayResult {
   };
 }
 
+function createDefaultSecurityAuditResult() {
+  return {
+    ts: 0,
+    summary: { critical: 1, warn: 1, info: 2 },
+    findings: [
+      {
+        checkId: "test.critical",
+        severity: "critical",
+        title: "Test critical finding",
+        detail: "Something is very wrong\nbut on two lines",
+        remediation: "Do the thing",
+      },
+      {
+        checkId: "test.warn",
+        severity: "warn",
+        title: "Test warning finding",
+        detail: "Something is maybe wrong",
+      },
+      {
+        checkId: "test.info",
+        severity: "info",
+        title: "Test info finding",
+        detail: "FYI only",
+      },
+      {
+        checkId: "test.info2",
+        severity: "info",
+        title: "Another info finding",
+        detail: "More FYI",
+      },
+    ],
+  };
+}
+
 async function withEnvVar<T>(key: string, value: string, run: () => Promise<T>): Promise<T> {
   const prevValue = process.env[key];
   process.env[key] = value;
@@ -175,37 +210,7 @@ const mocks = vi.hoisted(() => ({
     scope: "per-sender",
     agents: [{ id: "main", name: "Main" }],
   }),
-  runSecurityAudit: vi.fn().mockResolvedValue({
-    ts: 0,
-    summary: { critical: 1, warn: 1, info: 2 },
-    findings: [
-      {
-        checkId: "test.critical",
-        severity: "critical",
-        title: "Test critical finding",
-        detail: "Something is very wrong\nbut on two lines",
-        remediation: "Do the thing",
-      },
-      {
-        checkId: "test.warn",
-        severity: "warn",
-        title: "Test warning finding",
-        detail: "Something is maybe wrong",
-      },
-      {
-        checkId: "test.info",
-        severity: "info",
-        title: "Test info finding",
-        detail: "FYI only",
-      },
-      {
-        checkId: "test.info2",
-        severity: "info",
-        title: "Another info finding",
-        detail: "More FYI",
-      },
-    ],
-  }),
+  runSecurityAudit: vi.fn().mockResolvedValue(createDefaultSecurityAuditResult()),
   buildPluginCompatibilityNotices: vi.fn((): PluginCompatibilityNotice[] => []),
 }));
 
@@ -217,8 +222,8 @@ vi.mock("../channels/config-presence.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../memory/index.js", () => ({
-  getMemorySearchManager: vi.fn(async ({ agentId }: { agentId: string }) => ({
+vi.mock("../plugins/memory-runtime.js", () => ({
+  getActiveMemorySearchManager: vi.fn(async ({ agentId }: { agentId: string }) => ({
     manager: {
       probeVectorAvailability: vi.fn(async () => true),
       status: () => ({
@@ -311,7 +316,7 @@ vi.mock("../channels/plugins/index.js", () => ({
       },
     ] as unknown,
 }));
-vi.mock("../../extensions/whatsapp/src/session.js", () => ({
+vi.mock("../plugins/runtime/runtime-whatsapp-boundary.js", () => ({
   webAuthExists: mocks.webAuthExists,
   getWebAuthAgeMs: mocks.getWebAuthAgeMs,
   readWebSelfId: mocks.readWebSelfId,
@@ -399,6 +404,12 @@ vi.mock("../daemon/service.js", () => ({
       sourcePath: "/tmp/Library/LaunchAgents/ai.openclaw.gateway.plist",
     }),
   }),
+  readGatewayServiceState: async () => ({
+    installed: true,
+    loaded: true,
+    running: true,
+    runtime: { status: "running", pid: 1234 },
+  }),
 }));
 vi.mock("../daemon/node-service.js", () => ({
   resolveNodeService: () => ({
@@ -471,37 +482,7 @@ describe("statusCommand", () => {
     mocks.hasPotentialConfiguredChannels.mockReset();
     mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
     mocks.runSecurityAudit.mockReset();
-    mocks.runSecurityAudit.mockResolvedValue({
-      ts: 0,
-      summary: { critical: 1, warn: 1, info: 2 },
-      findings: [
-        {
-          checkId: "test.critical",
-          severity: "critical",
-          title: "Test critical finding",
-          detail: "Something is very wrong\nbut on two lines",
-          remediation: "Do the thing",
-        },
-        {
-          checkId: "test.warn",
-          severity: "warn",
-          title: "Test warning finding",
-          detail: "Something is maybe wrong",
-        },
-        {
-          checkId: "test.info",
-          severity: "info",
-          title: "Test info finding",
-          detail: "FYI only",
-        },
-        {
-          checkId: "test.info2",
-          severity: "info",
-          title: "Another info finding",
-          detail: "More FYI",
-        },
-      ],
-    });
+    mocks.runSecurityAudit.mockResolvedValue(createDefaultSecurityAuditResult());
     runtimeLogMock.mockClear();
     (runtime.error as Mock<(...args: unknown[]) => void>).mockClear();
   });
@@ -509,13 +490,7 @@ describe("statusCommand", () => {
   it("prints JSON when requested", async () => {
     mocks.hasPotentialConfiguredChannels.mockReturnValue(false);
     mocks.buildPluginCompatibilityNotices.mockReturnValue([
-      {
-        pluginId: "legacy-plugin",
-        code: "legacy-before-agent-start",
-        severity: "warn",
-        message:
-          "still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
-      },
+      createCompatibilityNotice({ pluginId: "legacy-plugin", code: "legacy-before-agent-start" }),
     ]);
     await statusCommand({ json: true }, runtime as never);
     const payload = JSON.parse(String(runtimeLogMock.mock.calls[0]?.[0]));
@@ -570,13 +545,7 @@ describe("statusCommand", () => {
 
   it("prints formatted lines otherwise", async () => {
     mocks.buildPluginCompatibilityNotices.mockReturnValue([
-      {
-        pluginId: "legacy-plugin",
-        code: "legacy-before-agent-start",
-        severity: "warn",
-        message:
-          "still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
-      },
+      createCompatibilityNotice({ pluginId: "legacy-plugin", code: "legacy-before-agent-start" }),
     ]);
     const logs = await runStatusAndGetLogs();
     for (const token of [
