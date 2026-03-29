@@ -536,9 +536,10 @@ export async function runSubagentAnnounceFlow(params: {
       announceType,
       expectsCompletionMessage,
     });
-    if (getGlobalHookRunner()?.hasHooks("before_subagent_result_deliver")) {
+    const hookRunner = getGlobalHookRunner();
+    if (hookRunner?.hasHooks("before_subagent_result_deliver")) {
       try {
-        const guardResult = await getGlobalHookRunner()!.runBeforeSubagentResultDeliver(
+        const guardResult = await hookRunner.runBeforeSubagentResultDeliver(
           {
             childSessionKey: params.childSessionKey,
             childRunId: params.childRunId,
@@ -589,6 +590,14 @@ export async function runSubagentAnnounceFlow(params: {
         outcome = { status: "error", error: blockedReason };
       }
     }
+    const finalStatusLabel =
+      outcome.status === "ok"
+        ? "completed successfully"
+        : outcome.status === "timeout"
+          ? "timed out"
+          : outcome.status === "error"
+            ? `failed: ${outcome.error || "unknown error"}`
+            : "finished with unknown status";
     const statsLine = await buildCompactAnnounceStatsLine({
       sessionKey: params.childSessionKey,
       startedAt: params.startedAt,
@@ -603,7 +612,7 @@ export async function runSubagentAnnounceFlow(params: {
         announceType,
         taskLabel,
         status: outcome.status,
-        statusLabel,
+        statusLabel: finalStatusLabel,
         result: findings,
         statsLine,
         replyInstruction,

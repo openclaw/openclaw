@@ -268,6 +268,42 @@ describe("subagent announce seam flow", () => {
     );
   });
 
+  it("recomputes statusLabel when before_subagent_result_deliver blocks child output", async () => {
+    hookRunnerState.hasBeforeSubagentResultDeliverHook = true;
+    hookRunnerState.runBeforeSubagentResultDeliver.mockResolvedValueOnce({
+      decision: "deny",
+      reason: "blocked by guard",
+    });
+
+    ({ runSubagentAnnounceFlow } = await import("./subagent-announce.js"));
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-guarded-deny",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "summarize",
+      timeoutMs: 10,
+      cleanup: "delete",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "original child result",
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    expect(agentSpy.mock.calls[0]?.[0]?.params?.internalEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          status: "error",
+          statusLabel: "failed: blocked by guard",
+          result: "blocked by guard",
+        }),
+      ]),
+    );
+  });
+
   it("uses origin.provider for channel-specific queue settings in active announce delivery", async () => {
     mockConfig = {
       session: {
