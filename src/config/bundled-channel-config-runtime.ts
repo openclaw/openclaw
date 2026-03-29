@@ -42,7 +42,7 @@ function buildBundledChannelMaps(
     }
   }
 
-  for (const entry of listBundledPluginMetadata()) {
+  for (const entry of listBundledPluginMetadata({ includeChannelConfigs: true })) {
     const channelConfigs = entry.manifest.channelConfigs;
     if (!channelConfigs) {
       continue;
