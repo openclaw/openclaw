@@ -239,5 +239,5 @@ export function registerFeishuDriveTools(api: OpenClawPluginApi) {
     { name: "feishu_drive" },
   );
 
-  api.logger.info?.(`feishu_drive: Registered feishu_drive tool`);
+  api.logger.debug?.(`feishu_drive: Registered feishu_drive tool`);
 }
