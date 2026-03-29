@@ -1,0 +1,11 @@
+{
+  "id": "fish-audio",
+  "contracts": {
+    "speechProviders": ["fish-audio"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
