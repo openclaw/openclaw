@@ -1,9 +1,10 @@
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import { SsrFBlockedError, type SsrFPolicy } from "../infra/net/ssrf.js";
 import { type AriaSnapshotNode, formatAriaSnapshot, type RawAXNode } from "./cdp.js";
 import {
   assertBrowserNavigationAllowed,
   assertBrowserNavigationRedirectChainAllowed,
   assertBrowserNavigationResultAllowed,
+  InvalidBrowserNavigationUrlError,
   withRequestTimeBrowserNavigationGuard,
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
@@ -22,6 +23,10 @@ import {
   type WithSnapshotForAI,
 } from "./pw-session.js";
 import { withPageScopedCdpClient } from "./pw-session.page-cdp.js";
+
+function isBrowserNavigationPolicyError(err: unknown): boolean {
+  return err instanceof SsrFBlockedError || err instanceof InvalidBrowserNavigationUrlError;
+}
 
 export async function snapshotAriaViaPlaywright(opts: {
   cdpUrl: string;
@@ -212,7 +217,9 @@ export async function navigateViaPlaywright(opts: {
     });
   } catch (err) {
     if (!isRetryableNavigateError(err)) {
-      await page.close().catch(() => {});
+      if (isBrowserNavigationPolicyError(err)) {
+        await page.close().catch(() => {});
+      }
       throw err;
     }
     // Extension relays can briefly drop CDP during renderer swaps/navigation.

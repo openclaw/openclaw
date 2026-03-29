@@ -118,4 +118,28 @@ describe("pw-tools-core.snapshot navigate guard", () => {
     expect(goto).toHaveBeenCalledTimes(1);
     expect(close).toHaveBeenCalledTimes(1);
   });
+
+  it("does not close the tab on ordinary non-retryable navigate failures", async () => {
+    const goto = vi.fn(async () => {
+      throw new Error("page.goto: net::ERR_NAME_NOT_RESOLVED");
+    });
+    const close = vi.fn(async () => {});
+    setPwToolsCoreCurrentPage({
+      close,
+      route: vi.fn(async () => {}),
+      unroute: vi.fn(async () => {}),
+      goto,
+      url: vi.fn(() => "about:blank"),
+    });
+
+    await expect(
+      mod.navigateViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        url: "https://missing.example.test",
+        ssrfPolicy: { allowPrivateNetwork: true },
+      }),
+    ).rejects.toBeInstanceOf(Error);
+
+    expect(close).not.toHaveBeenCalled();
+  });
 });
