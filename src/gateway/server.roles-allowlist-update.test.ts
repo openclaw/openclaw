@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
-import { CONFIG_PATH } from "../config/config.js";
 import type { DeviceIdentity } from "../infra/device-identity.js";
 import { resolveRestartSentinelPath } from "../infra/restart-sentinel.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -77,6 +76,14 @@ const approveAllPendingPairings = async () => {
     });
   }
 };
+
+function getGatewayTestConfigPath(): string {
+  const configPath = process.env.OPENCLAW_CONFIG_PATH;
+  if (!configPath) {
+    throw new Error("OPENCLAW_CONFIG_PATH is required in the gateway test environment");
+  }
+  return configPath;
+}
 
 const connectNodeClientWithPairing = async (params: Parameters<typeof connectNodeClient>[0]) => {
   try {
@@ -171,8 +178,9 @@ describe("gateway update.run", () => {
     process.on("SIGUSR1", sigusr1);
 
     try {
-      await fs.mkdir(path.dirname(CONFIG_PATH), { recursive: true });
-      await fs.writeFile(CONFIG_PATH, JSON.stringify({ update: { channel: "beta" } }, null, 2));
+      const configPath = getGatewayTestConfigPath();
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, JSON.stringify({ update: { channel: "beta" } }, null, 2));
       const updateMock = vi.mocked(runGatewayUpdate);
       updateMock.mockClear();
 
