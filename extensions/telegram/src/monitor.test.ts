@@ -658,8 +658,12 @@ describe("monitorTelegramProvider (grammY)", () => {
 
     expect(stop).toHaveBeenCalledTimes(1);
     expect(computeBackoff).not.toHaveBeenCalled();
-    expect(sleepWithAbort).not.toHaveBeenCalled();
     expect(runSpy).toHaveBeenCalledTimes(1);
+    for (const call of sleepWithAbort.mock.calls as unknown as Array<[number, AbortSignal]>) {
+      expect(call[0]).toBe(30000);
+      expect(call[1]).toBeInstanceOf(AbortSignal);
+      expect(call[1].aborted).toBe(true);
+    }
   });
 
   it("passes configured webhookHost to webhook listener", async () => {

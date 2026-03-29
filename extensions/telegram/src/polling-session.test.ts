@@ -282,8 +282,8 @@ describe("TelegramPollingSession", () => {
       expect(runMock).toHaveBeenCalledTimes(2);
       expect(firstRunnerStop).toHaveBeenCalledTimes(1);
       expect(botStop).toHaveBeenCalled();
-      expect(log).toHaveBeenCalledWith(expect.stringContaining("Polling stall detected"));
       expect(log).toHaveBeenCalledWith(expect.stringContaining("polling stall detected"));
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("forcing restart"));
     } finally {
       watchdogHarness.restore();
     }
