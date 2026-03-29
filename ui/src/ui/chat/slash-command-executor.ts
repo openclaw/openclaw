@@ -47,6 +47,8 @@ export type SlashCommandResult = {
   };
   /** When set, the caller should track this as the active run (enables Abort, blocks concurrent sends). */
   trackRunId?: string;
+  /** When set, the caller should surface a visible pending item tied to the current run. */
+  pendingCurrentRun?: boolean;
 };
 
 export type SlashCommandContext = {
@@ -737,7 +739,10 @@ async function executeSteer(
       deliver: false,
       idempotencyKey: generateUUID(),
     });
-    return { content: resolved.label ? `Steered \`${resolved.label}\`.` : "Steered." };
+    return {
+      content: resolved.label ? `Steered \`${resolved.label}\`.` : "Steered.",
+      pendingCurrentRun: resolved.key === sessionKey,
+    };
   } catch (err) {
     return { content: `Failed to steer: ${String(err)}` };
   }
