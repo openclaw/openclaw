@@ -86,6 +86,7 @@ describe("web search provider auto-detection", () => {
     delete process.env.GEMINI_API_KEY;
     delete process.env.KIMI_API_KEY;
     delete process.env.MOONSHOT_API_KEY;
+    delete process.env.SEARXNG_BASE_URL;
     delete process.env.PERPLEXITY_API_KEY;
     delete process.env.OPENROUTER_API_KEY;
     delete process.env.XAI_API_KEY;
@@ -171,5 +172,49 @@ describe("web search provider auto-detection", () => {
         typeof resolveSearchProvider
       >[0]),
     ).toBe("gemini");
+  });
+
+  it("auto-detects searxng when only SEARXNG_BASE_URL is set", () => {
+    process.env.SEARXNG_BASE_URL = "http://localhost:8888";
+    expect(resolveSearchProvider({})).toBe("searxng");
+  });
+
+  it("explicit searxng provider is resolved correctly", () => {
+    expect(
+      resolveSearchProvider({ provider: "searxng" } as unknown as Parameters<
+        typeof resolveSearchProvider
+      >[0]),
+    ).toBe("searxng");
+  });
+
+  it("searxng loses to providers with API keys in auto-detection", () => {
+    process.env.BRAVE_API_KEY = "test-brave-key"; // pragma: allowlist secret
+    process.env.SEARXNG_BASE_URL = "http://localhost:8888";
+    expect(resolveSearchProvider({})).toBe("brave");
+  });
+});
+
+describe("web search searxng config", () => {
+  it("accepts searxng provider and config", () => {
+    const res = validateConfigObject(
+      buildWebSearchProviderConfig({
+        provider: "searxng",
+        providerConfig: {
+          baseUrl: "http://localhost:8888",
+        },
+      }),
+    );
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts searxng provider with no extra config", () => {
+    const res = validateConfigObject(
+      buildWebSearchProviderConfig({
+        provider: "searxng",
+      }),
+    );
+
+    expect(res.ok).toBe(true);
   });
 });

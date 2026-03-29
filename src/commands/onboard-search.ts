@@ -10,7 +10,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { SecretInputMode } from "./onboard-types.js";
 
-export type SearchProvider = "brave" | "gemini" | "grok" | "kimi" | "perplexity";
+export type SearchProvider = "brave" | "gemini" | "grok" | "kimi" | "perplexity" | "searxng";
 
 type SearchProviderEntry = {
   value: SearchProvider;
@@ -62,6 +62,14 @@ export const SEARCH_PROVIDER_OPTIONS: readonly SearchProviderEntry[] = [
     placeholder: "pplx-...",
     signupUrl: "https://www.perplexity.ai/settings/api",
   },
+  {
+    value: "searxng",
+    label: "SearXNG",
+    hint: "Self-hosted meta-search · no API key needed",
+    envKeys: ["SEARXNG_BASE_URL"],
+    placeholder: "http://localhost:8888",
+    signupUrl: "https://docs.searxng.org/",
+  },
 ] as const;
 
 export function hasKeyInEnv(entry: SearchProviderEntry): boolean {
@@ -81,6 +89,9 @@ function rawKeyValue(config: OpenClawConfig, provider: SearchProvider): unknown 
       return search?.kimi?.apiKey;
     case "perplexity":
       return search?.perplexity?.apiKey;
+    case "searxng":
+      // SearXNG uses baseUrl instead of apiKey; return it so "configured" checks pass.
+      return search?.searxng?.baseUrl;
   }
 }
 
@@ -143,6 +154,10 @@ export function applySearchKey(
       break;
     case "perplexity":
       search.perplexity = { ...search.perplexity, apiKey: key };
+      break;
+    case "searxng":
+      // key is the base URL for SearXNG, not an API key.
+      search.searxng = { ...search.searxng, baseUrl: typeof key === "string" ? key : undefined };
       break;
   }
   return {
@@ -273,12 +288,14 @@ export async function setupSearch(
     return applySearchKey(config, choice, ref);
   }
 
+  const isSearxng = choice === "searxng";
+  const inputLabel = isSearxng ? "instance URL" : "API key";
   const keyInput = await prompter.text({
     message: keyConfigured
-      ? `${entry.label} API key (leave blank to keep current)`
+      ? `${entry.label} ${inputLabel} (leave blank to keep current)`
       : envAvailable
-        ? `${entry.label} API key (leave blank to use env var)`
-        : `${entry.label} API key`,
+        ? `${entry.label} ${inputLabel} (leave blank to use env var)`
+        : `${entry.label} ${inputLabel}`,
     placeholder: keyConfigured ? "Leave blank to keep current" : entry.placeholder,
   });
 
@@ -298,8 +315,10 @@ export async function setupSearch(
 
   await prompter.note(
     [
-      "No API key stored — web_search won't work until a key is available.",
-      `Get your key at: ${entry.signupUrl}`,
+      isSearxng
+        ? "No instance URL stored — web_search won't work until a SearXNG URL is configured."
+        : "No API key stored — web_search won't work until a key is available.",
+      isSearxng ? `Deploy SearXNG: ${entry.signupUrl}` : `Get your key at: ${entry.signupUrl}`,
       "Docs: https://docs.openclaw.ai/tools/web",
     ].join("\n"),
     "Web search",

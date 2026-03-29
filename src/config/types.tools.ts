@@ -441,8 +441,8 @@ export type ToolsConfig = {
     search?: {
       /** Enable web search tool (default: true when API key is present). */
       enabled?: boolean;
-      /** Search provider ("brave", "gemini", "grok", "kimi", or "perplexity"). */
-      provider?: "brave" | "gemini" | "grok" | "kimi" | "perplexity";
+      /** Search provider ("brave", "gemini", "grok", "kimi", "perplexity", or "searxng"). */
+      provider?: "brave" | "gemini" | "grok" | "kimi" | "perplexity" | "searxng";
       /** Brave Search API key (optional; defaults to BRAVE_API_KEY env var). */
       apiKey?: SecretInput;
       /** Default search results count (1-10). */
@@ -489,6 +489,11 @@ export type ToolsConfig = {
         baseUrl?: string;
         /** @deprecated Legacy Sonar/OpenRouter field. Ignored by Search API. */
         model?: string;
+      };
+      /** SearXNG-specific configuration (used when provider="searxng"). */
+      searxng?: {
+        /** Base URL of the SearXNG instance (defaults to SEARXNG_BASE_URL env var or "http://localhost:8888"). */
+        baseUrl?: string;
       };
     };
     fetch?: {

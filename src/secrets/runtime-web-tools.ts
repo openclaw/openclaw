@@ -10,7 +10,7 @@ import {
   type SecretDefaults,
 } from "./runtime-shared.js";
 
-const WEB_SEARCH_PROVIDERS = ["brave", "gemini", "grok", "kimi", "perplexity"] as const;
+const WEB_SEARCH_PROVIDERS = ["brave", "gemini", "grok", "kimi", "perplexity", "searxng"] as const;
 const PERPLEXITY_DIRECT_BASE_URL = "https://api.perplexity.ai";
 const DEFAULT_PERPLEXITY_BASE_URL = "https://openrouter.ai/api/v1";
 const PERPLEXITY_KEY_PREFIXES = ["pplx-"];
@@ -329,6 +329,9 @@ function envVarsForProvider(provider: WebSearchProvider): string[] {
   if (provider === "kimi") {
     return ["KIMI_API_KEY", "MOONSHOT_API_KEY"];
   }
+  if (provider === "searxng") {
+    return ["SEARXNG_BASE_URL"];
+  }
   return ["PERPLEXITY_API_KEY", "OPENROUTER_API_KEY"];
 }
 
@@ -338,6 +341,15 @@ function resolveProviderKeyValue(
 ): unknown {
   if (provider === "brave") {
     return search.apiKey;
+  }
+  if (provider === "searxng") {
+    // SearXNG uses baseUrl, not apiKey. Return it so secret-resolution still
+    // recognises the provider as "configured".
+    const scoped = search.searxng;
+    if (!isRecord(scoped)) {
+      return undefined;
+    }
+    return scoped.baseUrl;
   }
   const scoped = search[provider];
   if (!isRecord(scoped)) {
