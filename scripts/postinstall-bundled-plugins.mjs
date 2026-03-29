@@ -6,37 +6,57 @@
 import { execSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
-const isGlobal = process.env.npm_config_global === "true";
-if (!isGlobal) {
-  process.exit(0);
-}
+export const BUNDLED_PLUGIN_INSTALL_TARGETS = [
+  {
+    pluginId: "acpx",
+    sentinelPath: join("node_modules", "acpx", "package.json"),
+  },
+];
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const extensionsDir = join(__dirname, "..", "dist", "extensions");
+const DEFAULT_EXTENSIONS_DIR = join(__dirname, "..", "dist", "extensions");
 
-// Extensions whose runtime deps include platform-specific binaries and therefore
-// cannot be pre-bundled. Add entries here if new extensions share this pattern.
-const NEEDS_INSTALL = ["acpx"];
+export function createNestedNpmInstallEnv(env = process.env) {
+  const nextEnv = { ...env };
+  delete nextEnv.npm_config_global;
+  delete nextEnv.npm_config_prefix;
+  return nextEnv;
+}
 
-for (const ext of NEEDS_INSTALL) {
-  const extDir = join(extensionsDir, ext);
-  if (!existsSync(join(extDir, "package.json"))) {
-    continue;
+export function runBundledPluginPostinstall(params = {}) {
+  const env = params.env ?? process.env;
+  if (env.npm_config_global !== "true") {
+    return;
   }
-  // Skip if already installed (node_modules/.bin present).
-  if (existsSync(join(extDir, "node_modules", ".bin"))) {
-    continue;
+  const extensionsDir = params.extensionsDir ?? DEFAULT_EXTENSIONS_DIR;
+  const exec = params.execSync ?? execSync;
+  const pathExists = params.existsSync ?? existsSync;
+  const log = params.log ?? console;
+
+  for (const target of BUNDLED_PLUGIN_INSTALL_TARGETS) {
+    const extDir = join(extensionsDir, target.pluginId);
+    if (!pathExists(join(extDir, "package.json"))) {
+      continue;
+    }
+    if (pathExists(join(extDir, target.sentinelPath))) {
+      continue;
+    }
+    try {
+      exec("npm install --omit=dev --no-save --package-lock=false", {
+        cwd: extDir,
+        env: createNestedNpmInstallEnv(env),
+        stdio: "pipe",
+      });
+      log.log(`[postinstall] installed bundled plugin deps: ${target.pluginId}`);
+    } catch (e) {
+      // Non-fatal: gateway will surface the missing dep via doctor.
+      log.warn(`[postinstall] could not install deps for ${target.pluginId}: ${String(e)}`);
+    }
   }
-  try {
-    execSync("npm install --omit=dev --no-save --package-lock=false", {
-      cwd: extDir,
-      stdio: "pipe",
-    });
-    console.log(`[postinstall] installed bundled plugin deps: ${ext}`);
-  } catch (e) {
-    // Non-fatal: gateway will surface the missing dep via doctor.
-    console.warn(`[postinstall] could not install deps for ${ext}: ${String(e)}`);
-  }
+}
+
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  runBundledPluginPostinstall();
 }
