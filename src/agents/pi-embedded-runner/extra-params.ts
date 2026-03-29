@@ -403,12 +403,14 @@ function applyPostPluginStreamWrappers(
     ctx.agent.streamFn = createOpenAIFastModeWrapper(ctx.agent.streamFn);
   }
 
-  const openAIServiceTier = resolveOpenAIServiceTier(ctx.effectiveExtraParams);
-  if (openAIServiceTier) {
-    log.debug(
-      `applying OpenAI service_tier=${openAIServiceTier} for ${ctx.provider}/${ctx.modelId}`,
-    );
-    ctx.agent.streamFn = createOpenAIServiceTierWrapper(ctx.agent.streamFn, openAIServiceTier);
+  if (ctx.provider === "openai" || ctx.provider === "openai-codex") {
+    const openAIServiceTier = resolveOpenAIServiceTier(ctx.effectiveExtraParams);
+    if (openAIServiceTier) {
+      log.debug(
+        `applying OpenAI service_tier=${openAIServiceTier} for ${ctx.provider}/${ctx.modelId}`,
+      );
+      ctx.agent.streamFn = createOpenAIServiceTierWrapper(ctx.agent.streamFn, openAIServiceTier);
+    }
   }
 
   // Work around upstream pi-ai hardcoding `store: false` for Responses API.

@@ -2181,6 +2181,41 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.service_tier).toBe("standard_only");
   });
 
+  it("does not warn for valid Anthropic serviceTier values", () => {
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => undefined);
+    try {
+      const payload = runResponsesPayloadMutationCase({
+        applyProvider: "anthropic",
+        applyModelId: "claude-sonnet-4-5",
+        cfg: {
+          agents: {
+            defaults: {
+              models: {
+                "anthropic/claude-sonnet-4-5": {
+                  params: {
+                    serviceTier: "standard_only",
+                  },
+                },
+              },
+            },
+          },
+        },
+        model: {
+          api: "anthropic-messages",
+          provider: "anthropic",
+          id: "claude-sonnet-4-5",
+          baseUrl: "https://api.anthropic.com",
+        } as unknown as Model<"anthropic-messages">,
+        payload: {},
+      });
+
+      expect(payload.service_tier).toBe("standard_only");
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
   it("accepts snake_case Anthropic service_tier params", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "anthropic",
