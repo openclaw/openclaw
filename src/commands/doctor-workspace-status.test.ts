@@ -30,6 +30,7 @@ vi.mock("../plugins/status.js", () => ({
 async function runNoteWorkspaceStatusForTest(
   loadResult: ReturnType<typeof createPluginLoadResult>,
   compatibilityWarnings: string[] = [],
+  options?: Parameters<(typeof import("./doctor-workspace-status.js"))["noteWorkspaceStatus"]>[1],
 ) {
   resolveDefaultAgentIdMock.mockReturnValue("default");
   resolveAgentWorkspaceDirMock.mockReturnValue("/workspace");
@@ -44,7 +45,7 @@ async function runNoteWorkspaceStatusForTest(
 
   const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
   const { noteWorkspaceStatus } = await import("./doctor-workspace-status.js");
-  noteWorkspaceStatus({});
+  noteWorkspaceStatus({}, options);
   return noteSpy;
 }
 
@@ -153,6 +154,30 @@ describe("noteWorkspaceStatus", () => {
       expect(String(compatibilityCalls[0]?.[0])).toContain(
         "legacy-plugin still uses legacy before_agent_start",
       );
+    } finally {
+      noteSpy.mockRestore();
+    }
+  });
+
+  it("skips plugin status loading when includePluginStatus is false", async () => {
+    const noteSpy = await runNoteWorkspaceStatusForTest(
+      createPluginLoadResult({
+        plugins: [
+          createPluginRecord({
+            id: "modern-plugin",
+            name: "Modern Plugin",
+            providerIds: ["modern"],
+          }),
+        ],
+      }),
+      [],
+      { includePluginStatus: false },
+    );
+    try {
+      expect(buildPluginStatusReportMock).not.toHaveBeenCalled();
+      expect(buildPluginCompatibilityWarningsMock).not.toHaveBeenCalled();
+      expect(noteSpy.mock.calls.some(([, title]) => title === "Plugins")).toBe(false);
+      expect(noteSpy.mock.calls.some(([, title]) => title === "Plugin compatibility")).toBe(false);
     } finally {
       noteSpy.mockRestore();
     }

@@ -379,7 +379,9 @@ async function runSystemdLingerHealth(ctx: DoctorHealthFlowContext): Promise<voi
 }
 
 async function runWorkspaceStatusHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  noteWorkspaceStatus(ctx.cfg);
+  const skipPluginStatus =
+    ctx.options.nonInteractive === true && process.env.OPENCLAW_UPDATE_IN_PROGRESS === "1";
+  noteWorkspaceStatus(ctx.cfg, { includePluginStatus: !skipPluginStatus });
 }
 
 async function runBootstrapSizeHealth(ctx: DoctorHealthFlowContext): Promise<void> {

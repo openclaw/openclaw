@@ -5,7 +5,12 @@ import { buildPluginCompatibilityWarnings, buildPluginStatusReport } from "../pl
 import { note } from "../terminal/note.js";
 import { detectLegacyWorkspaceDirs, formatLegacyWorkspaceWarning } from "./doctor-workspace.js";
 
-export function noteWorkspaceStatus(cfg: OpenClawConfig) {
+export function noteWorkspaceStatus(
+  cfg: OpenClawConfig,
+  options: {
+    includePluginStatus?: boolean;
+  } = {},
+) {
   const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
   const legacyWorkspace = detectLegacyWorkspaceDirs({ workspaceDir });
   if (legacyWorkspace.legacyDirs.length > 0) {
@@ -24,6 +29,10 @@ export function noteWorkspaceStatus(cfg: OpenClawConfig) {
     ].join("\n"),
     "Skills status",
   );
+
+  if (options.includePluginStatus === false) {
+    return { workspaceDir };
+  }
 
   const pluginRegistry = buildPluginStatusReport({
     config: cfg,
