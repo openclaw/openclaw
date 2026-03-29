@@ -84,6 +84,31 @@ describe("resolveIMessageInboundDecision echo detection", () => {
     );
   });
 
+  it("matches attachment-only echoes by bodyText placeholder", () => {
+    const echoHas = vi.fn((_scope: string, lookup: { text?: string; messageId?: string }) => {
+      return lookup.text === "<media:image>" && lookup.messageId === "42";
+    });
+
+    const decision = resolveDecision({
+      message: {
+        id: 42,
+        text: "",
+      },
+      messageText: "",
+      bodyText: "<media:image>",
+      echoCache: { has: echoHas },
+    });
+
+    expect(decision).toEqual({ kind: "drop", reason: "echo" });
+    expect(echoHas).toHaveBeenCalledWith(
+      "default:imessage:+15555550123",
+      expect.objectContaining({
+        text: "<media:image>",
+        messageId: "42",
+      }),
+    );
+  });
+
   it("drops reflected self-chat duplicates after seeing the from-me copy", () => {
     const selfChatCache = createSelfChatCache();
     const createdAt = "2026-03-02T20:58:10.649Z";
