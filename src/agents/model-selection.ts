@@ -333,6 +333,38 @@ export function resolveModelRefFromString(params: {
   return { ref: parsed };
 }
 
+function resolveOpenRouterCompatAlias(params: {
+  raw: string;
+  cfg: OpenClawConfig;
+  allowPluginNormalization?: boolean;
+}): ModelRef | null {
+  const normalized = params.raw.trim().toLowerCase();
+  if (normalized === "openrouter:auto") {
+    return normalizeModelRef("openrouter", "auto", {
+      allowPluginNormalization: params.allowPluginNormalization,
+    });
+  }
+  if (normalized !== "openrouter:free") {
+    return null;
+  }
+
+  const configuredModels = params.cfg.agents?.defaults?.models ?? {};
+  for (const keyRaw of Object.keys(configuredModels)) {
+    const key = String(keyRaw ?? "").trim();
+    if (!key.startsWith("openrouter/")) {
+      continue;
+    }
+    const parsed = parseModelRef(key, DEFAULT_PROVIDER, {
+      allowPluginNormalization: params.allowPluginNormalization,
+    });
+    if (parsed?.provider === "openrouter" && parsed.model.endsWith(":free")) {
+      return parsed;
+    }
+  }
+
+  return null;
+}
+
 export function resolveConfiguredModelRef(params: {
   cfg: OpenClawConfig;
   defaultProvider: string;
@@ -352,6 +384,15 @@ export function resolveConfiguredModelRef(params: {
       const aliasMatch = aliasIndex.byAlias.get(aliasKey);
       if (aliasMatch) {
         return aliasMatch.ref;
+      }
+
+      const openRouterCompat = resolveOpenRouterCompatAlias({
+        raw: trimmed,
+        cfg: params.cfg,
+        allowPluginNormalization: params.allowPluginNormalization,
+      });
+      if (openRouterCompat) {
+        return openRouterCompat;
       }
 
       // Default to anthropic if no provider is specified, but warn as this is deprecated.

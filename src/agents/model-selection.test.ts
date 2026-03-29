@@ -589,6 +589,49 @@ describe("model-selection", () => {
   });
 
   describe("resolveConfiguredModelRef", () => {
+    it("resolves openrouter:auto to canonical openrouter/auto", () => {
+      const cfg: Partial<OpenClawConfig> = {
+        agents: {
+          defaults: {
+            model: { primary: "openrouter:auto" },
+          },
+        },
+      };
+
+      const result = resolveConfiguredModelRef({
+        cfg: cfg as OpenClawConfig,
+        defaultProvider: "anthropic",
+        defaultModel: "claude-opus-4-6",
+      });
+
+      expect(result).toEqual({ provider: "openrouter", model: "openrouter/auto" });
+    });
+
+    it("resolves openrouter:free to the first configured concrete free OpenRouter model", () => {
+      const cfg: Partial<OpenClawConfig> = {
+        agents: {
+          defaults: {
+            model: { primary: "openrouter:free" },
+            models: {
+              "openrouter/meta-llama/llama-3.3-70b-instruct:free": {},
+              "openrouter/openai/gpt-oss-20b:free": {},
+            },
+          },
+        },
+      };
+
+      const result = resolveConfiguredModelRef({
+        cfg: cfg as OpenClawConfig,
+        defaultProvider: "anthropic",
+        defaultModel: "claude-opus-4-6",
+      });
+
+      expect(result).toEqual({
+        provider: "openrouter",
+        model: "meta-llama/llama-3.3-70b-instruct:free",
+      });
+    });
+
     it("should fall back to anthropic and warn if provider is missing for non-alias", () => {
       setLoggerOverride({ level: "silent", consoleLevel: "warn" });
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
