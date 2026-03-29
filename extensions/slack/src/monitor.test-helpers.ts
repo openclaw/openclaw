@@ -178,6 +178,7 @@ export const defaultSlackTestConfig = () => ({
 });
 
 export function resetSlackTestState(config: Record<string, unknown> = defaultSlackTestConfig()) {
+  const globalState = globalThis as { __slackLastAppOptions?: unknown };
   slackTestState.config = config;
   slackTestState.sendMock.mockReset().mockResolvedValue(undefined);
   slackTestState.replyMock.mockReset();
@@ -188,6 +189,7 @@ export function resetSlackTestState(config: Record<string, unknown> = defaultSla
     code: "PAIRCODE",
     created: true,
   });
+  globalState.__slackLastAppOptions = undefined;
   getSlackHandlers()?.clear();
 }
 

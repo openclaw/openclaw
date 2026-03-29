@@ -276,6 +276,16 @@ describe("monitorSlackProvider tool results", () => {
     expect(options.ignoreSelf).toBe(false);
   });
 
+  it("clears captured Slack app options when test state resets", async () => {
+    await runSlackMessageOnce(monitorSlackProvider, {
+      event: makeSlackMessageEvent(),
+    });
+    expect(getLastSlackAppOptions()).toBeDefined();
+
+    resetSlackTestState(defaultSlackTestConfig());
+    expect(getLastSlackAppOptions()).toBeUndefined();
+  });
+
   it("skips tool summaries with responsePrefix", async () => {
     await runDefaultMessageAndExpectSentText("PFX final reply");
   });
