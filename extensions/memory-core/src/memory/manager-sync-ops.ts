@@ -56,6 +56,7 @@ type MemoryIndexMeta = {
   chunkTokens: number;
   chunkOverlap: number;
   vectorDims?: number;
+  ftsTokenizer?: string;
 };
 
 type MemorySyncProgressState = {
@@ -362,6 +363,7 @@ export abstract class MemoryManagerSyncOps {
       cacheEnabled: this.cache.enabled,
       ftsTable: FTS_TABLE,
       ftsEnabled: this.fts.enabled,
+      ftsTokenizer: this.settings.store.fts.tokenizer,
     });
     this.fts.available = result.ftsAvailable;
     if (result.ftsError) {
@@ -1028,7 +1030,8 @@ export abstract class MemoryManagerSyncOps {
       meta.scopeHash !== configuredScopeHash ||
       meta.chunkTokens !== this.settings.chunking.tokens ||
       meta.chunkOverlap !== this.settings.chunking.overlap ||
-      (vectorReady && !meta?.vectorDims);
+      (vectorReady && !meta?.vectorDims) ||
+      (meta.ftsTokenizer ?? "unicode61") !== this.settings.store.fts.tokenizer;
     try {
       if (needsFullReindex) {
         if (
@@ -1220,6 +1223,7 @@ export abstract class MemoryManagerSyncOps {
         scopeHash: this.resolveConfiguredScopeHash(),
         chunkTokens: this.settings.chunking.tokens,
         chunkOverlap: this.settings.chunking.overlap,
+        ftsTokenizer: this.settings.store.fts.tokenizer,
       };
       if (!nextMeta) {
         throw new Error("Failed to compute memory index metadata for reindexing.");
@@ -1292,6 +1296,7 @@ export abstract class MemoryManagerSyncOps {
       scopeHash: this.resolveConfiguredScopeHash(),
       chunkTokens: this.settings.chunking.tokens,
       chunkOverlap: this.settings.chunking.overlap,
+      ftsTokenizer: this.settings.store.fts.tokenizer,
     };
     if (this.vector.available && this.vector.dims) {
       nextMeta.vectorDims = this.vector.dims;
@@ -1306,9 +1311,10 @@ export abstract class MemoryManagerSyncOps {
     this.db.exec(`DELETE FROM chunks`);
     if (this.fts.enabled && this.fts.available) {
       try {
-        this.db.exec(`DELETE FROM ${FTS_TABLE}`);
+        this.db.exec(`DROP TABLE IF EXISTS ${FTS_TABLE}`);
       } catch {}
     }
+    this.ensureSchema();
     this.dropVectorTable();
     this.vector.dims = undefined;
     this.sessionsDirtyFiles.clear();
