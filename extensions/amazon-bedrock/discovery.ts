@@ -239,10 +239,23 @@ export async function discoverBedrockModels(params: {
 export async function resolveImplicitBedrockProvider(params: {
   config?: { models?: { bedrockDiscovery?: BedrockDiscoveryConfig } };
   env?: NodeJS.ProcessEnv;
+  bearerToken?: string;
 }): Promise<ModelProviderConfig | null> {
-  const env = params.env ?? process.env;
+  const baseEnv = params.env ?? process.env;
   const discoveryConfig = params.config?.models?.bedrockDiscovery;
   const enabled = discoveryConfig?.enabled;
+
+  // If a bearer token is provided via plugin config and not already present, inject it.
+  // Set on process.env so the AWS SDK client picks it up, and also build an augmented
+  // env for credential detection below in case params.env is a separate object.
+  let env = baseEnv;
+  if (params.bearerToken && !baseEnv["AWS_BEARER_TOKEN_BEDROCK"]?.trim()) {
+    process.env["AWS_BEARER_TOKEN_BEDROCK"] = params.bearerToken;
+    if (baseEnv !== process.env) {
+      env = { ...baseEnv, AWS_BEARER_TOKEN_BEDROCK: params.bearerToken };
+    }
+  }
+
   const hasAwsCreds = resolveAwsSdkEnvVarName(env) !== undefined;
   if (enabled === false) {
     return null;

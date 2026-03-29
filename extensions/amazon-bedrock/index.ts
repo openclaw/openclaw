@@ -3,6 +3,7 @@ import {
   createBedrockNoCacheWrapper,
   isAnthropicBedrockModel,
 } from "openclaw/plugin-sdk/provider-stream";
+import { normalizeSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import {
   mergeImplicitBedrockProvider,
   resolveBedrockConfigApiKey,
@@ -25,9 +26,14 @@ export default definePluginEntry({
       catalog: {
         order: "simple",
         run: async (ctx) => {
+          const pluginConfig = ctx.config.plugins?.entries?.["amazon-bedrock"]?.config as
+            | Record<string, unknown>
+            | undefined;
+          const bearerToken = normalizeSecretInputString(pluginConfig?.bearerToken) ?? undefined;
           const implicit = await resolveImplicitBedrockProvider({
             config: ctx.config,
             env: ctx.env,
+            bearerToken,
           });
           if (!implicit) {
             return null;

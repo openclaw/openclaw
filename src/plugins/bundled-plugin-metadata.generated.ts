@@ -150,7 +150,17 @@ export const GENERATED_BUNDLED_PLUGIN_METADATA = [
       configSchema: {
         type: "object",
         additionalProperties: false,
-        properties: {},
+        properties: {
+          bearerToken: {
+            type: ["string", "object"],
+            description:
+              'AWS bearer token for Bedrock API access. Supports secret refs like { source: "env", provider: "default", id: "AWS_BEARER_TOKEN_BEDROCK" }',
+          },
+          region: {
+            type: "string",
+            description: "AWS region for Bedrock API calls. Defaults to us-east-1.",
+          },
+        },
       },
       enabledByDefault: true,
       providers: ["amazon-bedrock"],
