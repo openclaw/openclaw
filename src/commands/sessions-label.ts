@@ -7,6 +7,11 @@ import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-cha
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 
+function isSessionsResolveNotFoundError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : typeof err === "string" ? err : "";
+  return message.trimStart().startsWith("No session found:");
+}
+
 export type SessionsLabelCommandOpts = {
   session: string;
   label?: string;
@@ -64,10 +69,16 @@ export async function sessionsLabelCommand(opts: SessionsLabelCommandOpts, runti
         password: opts.password?.trim() || undefined,
         timeoutMs,
       });
-    } catch {
-      runtime.error(
-        `Unknown session key: ${sessionKey}. Run "openclaw sessions" to find the correct key, or pass --force to create a new entry.`,
-      );
+    } catch (err) {
+      if (isSessionsResolveNotFoundError(err)) {
+        runtime.error(
+          `Unknown session key: ${sessionKey}. Run "openclaw sessions" to find the correct key, or pass --force to create a new entry.`,
+        );
+        runtime.exit(1);
+        return;
+      }
+      const message = formatErrorMessage(err);
+      runtime.error(message);
       runtime.exit(1);
       return;
     }

@@ -154,6 +154,18 @@ describe("sessionsLabelCommand", () => {
     );
   });
 
+  it("surfaces preflight gateway errors instead of rewriting them as unknown session key", async () => {
+    mocks.callGateway.mockRejectedValueOnce(
+      new Error("gateway timeout after 5000ms\nconnection details"),
+    );
+    const { runtime, errors, exits } = makeRuntime();
+    await sessionsLabelCommand({ session: "agent:main:main", label: "x" }, runtime);
+    expect(errors.some((e) => e.includes("gateway timeout"))).toBe(true);
+    expect(errors.some((e) => e.toLowerCase().includes("unknown session key"))).toBe(false);
+    expect(exits).toContain(1);
+    expect(mocks.callGateway).toHaveBeenCalledTimes(1);
+  });
+
   it("preflights with sessions.resolve so aliases match patch canonicalization", async () => {
     mocks.callGateway
       .mockResolvedValueOnce({ ok: true, key: "agent:main:main" })
