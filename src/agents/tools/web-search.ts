@@ -720,12 +720,8 @@ function resolveSearxngConfig(search?: WebSearchConfig): SearxngConfig {
   return searxng as SearxngConfig;
 }
 
-function resolveSearxngBaseUrl(config: SearxngConfig): string {
-  return (
-    config.baseUrl?.trim() ||
-    normalizeSecretInput(process.env.SEARXNG_BASE_URL) ||
-    DEFAULT_SEARXNG_BASE_URL
-  );
+function resolveSearxngBaseUrl(config: SearxngConfig): string | undefined {
+  return config.baseUrl?.trim() || normalizeSecretInput(process.env.SEARXNG_BASE_URL) || undefined;
 }
 
 function resolvePerplexityConfig(search?: WebSearchConfig): PerplexityConfig {
@@ -2077,10 +2073,13 @@ export function createWebSearchTool(options?: {
       // do not touch Perplexity-only credential surfaces during tool construction.
       const perplexityRuntime =
         provider === "perplexity" ? resolvePerplexityTransport(perplexityConfig) : undefined;
-      // SearXNG does not require an API key — only a reachable base URL.
+      // SearXNG uses a base URL instead of an API key. Resolve it early so we
+      // can surface an actionable error when no URL is configured at all.
+      const resolvedSearxngUrl =
+        provider === "searxng" ? resolveSearxngBaseUrl(searxngConfig) : undefined;
       const apiKey =
         provider === "searxng"
-          ? "unused"
+          ? resolvedSearxngUrl || undefined
           : provider === "perplexity"
             ? perplexityRuntime?.apiKey
             : provider === "grok"
@@ -2120,6 +2119,7 @@ export function createWebSearchTool(options?: {
       if (
         language &&
         provider !== "brave" &&
+        provider !== "searxng" &&
         !(provider === "perplexity" && supportsStructuredPerplexityFilters)
       ) {
         return jsonResult({
@@ -2127,7 +2127,7 @@ export function createWebSearchTool(options?: {
           message:
             provider === "perplexity"
               ? "language filtering is only supported by the native Perplexity Search API path. Remove Perplexity baseUrl/model overrides or use a direct PERPLEXITY_API_KEY to enable it."
-              : `language filtering is not supported by the ${provider} provider. Only Brave and Perplexity support language filtering.`,
+              : `language filtering is not supported by the ${provider} provider. Only Brave, Perplexity, and SearXNG support language filtering.`,
           docs: "https://docs.openclaw.ai/tools/web",
         });
       }
