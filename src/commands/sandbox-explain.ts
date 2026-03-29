@@ -20,7 +20,7 @@ import {
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
-import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { type RuntimeEnv } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
@@ -314,9 +314,7 @@ export async function sandboxExplainCommand(
   }
 
   const rich = isRich();
-  const title = rich
-    ? colorize(theme.accent, "Sandbox explain")
-    : "Sandbox explain";
+  const title = colorize(rich, theme.accent, "Sandbox explain");
   const lines = [
     title,
     `Agent: ${resolvedAgentId}`,
@@ -331,13 +329,11 @@ export async function sandboxExplainCommand(
     `Elevated allowedByConfig: ${elevatedAllowedByConfig ? "yes" : "no"}`,
   ];
   if (elevatedFailures.length > 0) {
-    lines.push(
-      `Elevated failures: ${elevatedFailures.map((failure) => failure.key).join(", ")}`,
-    );
+    lines.push(`Elevated failures: ${elevatedFailures.map((failure) => failure.key).join(", ")}`);
   }
   if (fixIt.length > 0) {
     lines.push(`Fix-it: ${fixIt.join(", ")}`);
   }
   lines.push(`Docs: ${formatDocsLink(SANDBOX_DOCS_URL)}`);
-  writeRuntimeJson(runtime, lines.join("\n"));
+  runtime.log(`${lines.join("\n")}\n`);
 }
