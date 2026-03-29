@@ -1192,6 +1192,14 @@ export type WebSearchRuntimeMetadataContext = {
   };
 };
 
+export type WebSearchProviderSetupContext = {
+  config: OpenClawConfig;
+  runtime: RuntimeEnv;
+  prompter: WizardPrompter;
+  quickstartDefaults?: boolean;
+  secretInputMode?: SecretInputMode;
+};
+
 export type WebSearchProviderPlugin = {
   id: WebSearchProviderId;
   label: string;
@@ -1219,6 +1227,7 @@ export type WebSearchProviderPlugin = {
   getConfiguredCredentialValue?: (config?: OpenClawConfig) => unknown;
   setConfiguredCredentialValue?: (configTarget: OpenClawConfig, value: unknown) => void;
   applySelectionConfig?: (config: OpenClawConfig) => OpenClawConfig;
+  runSetup?: (ctx: WebSearchProviderSetupContext) => OpenClawConfig | Promise<OpenClawConfig>;
   resolveRuntimeMetadata?: (
     ctx: WebSearchRuntimeMetadataContext,
   ) => Partial<RuntimeWebSearchMetadata> | Promise<Partial<RuntimeWebSearchMetadata>>;
