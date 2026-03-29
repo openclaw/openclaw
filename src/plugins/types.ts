@@ -2489,10 +2489,7 @@ export type PluginHookHandlerMap = {
   before_tool_result_deliver: (
     event: PluginHookBeforeToolResultDeliverEvent,
     ctx: PluginHookBeforeToolResultDeliverContext,
-  ) =>
-    | PluginHookBeforeToolResultDeliverResult
-    | Promise<PluginHookBeforeToolResultDeliverResult | void>
-    | void;
+  ) => PluginHookBeforeToolResultDeliverResult | void;
   tool_result_persist: (
     event: PluginHookToolResultPersistEvent,
     ctx: PluginHookToolResultPersistContext,
