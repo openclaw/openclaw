@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import {
+  isTelegramExecApprovalAuthorizedSender,
   isTelegramExecApprovalApprover,
   isTelegramExecApprovalClientEnabled,
   isTelegramExecApprovalTargetRecipient,
@@ -163,6 +164,53 @@ describe("telegram exec approvals", () => {
       expect(
         isTelegramExecApprovalTargetRecipient({ cfg, senderId: "12345", accountId: "any-account" }),
       ).toBe(true);
+    });
+
+    it("requires active target forwarding mode", () => {
+      const cfg = {
+        channels: { telegram: { botToken: "tok" } },
+        approvals: {
+          exec: {
+            enabled: true,
+            mode: "session",
+            targets: [{ channel: "telegram", to: "12345" }],
+          },
+        },
+      } as OpenClawConfig;
+      expect(isTelegramExecApprovalTargetRecipient({ cfg, senderId: "12345" })).toBe(false);
+    });
+
+    it("normalizes prefixed Telegram DM targets", () => {
+      const cfg = buildTargetConfig([{ channel: "telegram", to: "tg:12345" }]);
+      expect(isTelegramExecApprovalTargetRecipient({ cfg, senderId: "12345" })).toBe(true);
+    });
+
+    it("normalizes accountId matching", () => {
+      const cfg = buildTargetConfig([{ channel: "telegram", to: "12345", accountId: "Work Bot" }]);
+      expect(
+        isTelegramExecApprovalTargetRecipient({ cfg, senderId: "12345", accountId: "work-bot" }),
+      ).toBe(true);
+    });
+  });
+
+  describe("isTelegramExecApprovalAuthorizedSender", () => {
+    it("accepts explicit approvers", () => {
+      const cfg = buildConfig({ enabled: true, approvers: ["123"] });
+      expect(isTelegramExecApprovalAuthorizedSender({ cfg, senderId: "123" })).toBe(true);
+    });
+
+    it("accepts active forwarded DM targets", () => {
+      const cfg = {
+        channels: { telegram: { botToken: "tok" } },
+        approvals: {
+          exec: {
+            enabled: true,
+            mode: "targets",
+            targets: [{ channel: "telegram", to: "12345" }],
+          },
+        },
+      } as OpenClawConfig;
+      expect(isTelegramExecApprovalAuthorizedSender({ cfg, senderId: "12345" })).toBe(true);
     });
   });
 });
