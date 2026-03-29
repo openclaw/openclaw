@@ -669,7 +669,7 @@ function validateConfigObjectWithPluginsBase(
         schema: channelSchema,
         cacheKey: `channel:${trimmed}`,
         value: config.channels[trimmed],
-        applyDefaults: true,
+        applyDefaults: opts.applyDefaults,
       });
       if (!result.ok) {
         for (const error of result.errors) {
@@ -859,7 +859,7 @@ function validateConfigObjectWithPluginsBase(
           schema: record.configSchema,
           cacheKey: record.schemaCacheKey ?? record.manifestPath ?? pluginId,
           value: entry?.config ?? {},
-          applyDefaults: true,
+          applyDefaults: opts.applyDefaults,
         });
         if (!res.ok) {
           for (const error of res.errors) {

@@ -353,6 +353,60 @@ describe("config io write", () => {
     });
   });
 
+  it("does not leak channel plugin AJV defaults into persisted config (issue #56772)", async () => {
+    // Regression test for #56772: when a channel config with AJV schema defaults
+    // (e.g., BlueBubbles enrichGroupParticipantsFromContacts) is loaded via
+    // readConfigFileSnapshot, the snapshot.config contains those defaults.
+    // Writing back snapshot.config (as doctor does) must NOT persist those
+    // AJV-injected defaults to disk.
+    await withSuiteHome(async (home) => {
+      const { configPath, io, snapshot } = await writeConfigAndCreateIo({
+        home,
+        initialConfig: {
+          gateway: { port: 18789 },
+          channels: {
+            telegram: {
+              dmPolicy: "pairing",
+            },
+          },
+        },
+      });
+
+      // Simulate doctor: clone snapshot.config, make a small change, write back.
+      const next = structuredClone(snapshot.config);
+      const gateway =
+        next.gateway && typeof next.gateway === "object"
+          ? (next.gateway as Record<string, unknown>)
+          : {};
+      next.gateway = {
+        ...gateway,
+        auth: { mode: "token" },
+      };
+      await io.writeConfigFile(next);
+
+      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as Record<
+        string,
+        unknown
+      >;
+
+      // The persisted config should contain only explicitly set values.
+      expect(persisted.gateway).toEqual({
+        port: 18789,
+        auth: { mode: "token" },
+      });
+      expect(persisted.channels).toEqual({
+        telegram: {
+          dmPolicy: "pairing",
+        },
+      });
+
+      // Core Zod defaults must not leak.
+      expect(persisted).not.toHaveProperty("agents.defaults");
+      expect(persisted).not.toHaveProperty("messages.ackReaction");
+      expect(persisted).not.toHaveProperty("sessions.persistence");
+    });
+  });
+
   it("does not reintroduce Slack/Discord legacy dm.policy defaults when writing", async () => {
     await withSuiteHome(async (home) => {
       const { configPath, io, snapshot } = await writeConfigAndCreateIo({

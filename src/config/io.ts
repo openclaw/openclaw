@@ -2127,9 +2127,11 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     //
     // We use only the root file's parsed content (no $include resolution) to avoid
     // pulling values from included files into the root config on write-back.
-    // Apply env restoration to validated.config (which has runtime defaults stripped
-    // per issue #6070) rather than the raw caller input.
-    let cfgToWrite = validated.config;
+    // Use persistCandidate (the merge-patched value before validation) rather than
+    // validated.config, because plugin/channel AJV validation may inject schema
+    // defaults (e.g., enrichGroupParticipantsFromContacts) that should not be
+    // persisted to disk (issue #56772).
+    let cfgToWrite = persistCandidate as OpenClawConfig;
     try {
       if (deps.fs.existsSync(configPath)) {
         const currentRaw = await deps.fs.promises.readFile(configPath, "utf-8");

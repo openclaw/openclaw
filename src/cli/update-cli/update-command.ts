@@ -638,12 +638,14 @@ async function maybeRestartService(params: {
             invocationCwd: params.invocationCwd,
           });
         } catch (err) {
-          if (!params.opts.json) {
-            defaultRuntime.log(
-              theme.warn(
-                `Failed to refresh gateway service environment from updated install: ${String(err)}`,
-              ),
-            );
+          // Always log the refresh failure so callers can detect it (issue #56772).
+          // Previously this was silently suppressed in --json mode, hiding the root
+          // cause and preventing auto-update callers from detecting the failure.
+          const message = `Failed to refresh gateway service environment from updated install: ${String(err)}`;
+          if (params.opts.json) {
+            defaultRuntime.error(message);
+          } else {
+            defaultRuntime.log(theme.warn(message));
           }
         }
       }
