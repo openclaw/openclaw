@@ -76,4 +76,39 @@ describe("config hooks module paths", () => {
       "hooks.internal.handlers.0.module",
     );
   });
+
+  it("accepts hooks.mappings[].channel runtime plugin ids", () => {
+    const res = validateConfigObjectWithPlugins({
+      agents: { list: [{ id: "pi" }] },
+      hooks: {
+        mappings: [
+          {
+            match: { path: "custom" },
+            action: "agent",
+            channel: "feishu",
+            messageTemplate: "hello",
+          },
+        ],
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects blank hooks.mappings[].channel values", () => {
+    expectRejectedIssuePath(
+      {
+        agents: { list: [{ id: "pi" }] },
+        hooks: {
+          mappings: [
+            {
+              match: { path: "custom" },
+              action: "agent",
+              channel: "   ",
+            },
+          ],
+        },
+      },
+      "hooks.mappings.0.channel",
+    );
+  });
 });
