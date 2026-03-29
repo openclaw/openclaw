@@ -28,7 +28,7 @@ export {
   HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING,
   normalizeXaiModelId,
   XAI_TOOL_SCHEMA_PROFILE,
-} from "./xai.js";
+} from "../../extensions/xai/api.js";
 export {
   isMiniMaxModernModelId,
   MINIMAX_DEFAULT_MODEL_ID,
@@ -87,7 +87,7 @@ export {
   type OllamaModelWithContext,
   type OllamaTagModel,
   type OllamaTagsResponse,
-} from "./ollama-surface.js";
+} from "../../extensions/ollama/api.js";
 export {
   buildSyntheticModelDefinition,
   SYNTHETIC_BASE_URL,
@@ -130,9 +130,9 @@ export {
   OLLAMA_DEFAULT_CONTEXT_WINDOW,
   OLLAMA_DEFAULT_COST,
   OLLAMA_DEFAULT_MAX_TOKENS,
-} from "./ollama-surface.js";
-export { VLLM_DEFAULT_BASE_URL } from "./vllm.js";
-export { SGLANG_DEFAULT_BASE_URL } from "./sglang.js";
+} from "../../extensions/ollama/api.js";
+export { VLLM_DEFAULT_BASE_URL } from "../../extensions/vllm/api.js";
+export { SGLANG_DEFAULT_BASE_URL } from "../../extensions/sglang/api.js";
 export {
   buildKilocodeModelDefinition,
   KILOCODE_BASE_URL,
