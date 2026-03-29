@@ -275,17 +275,25 @@ export function createAnthropicBetaHeadersWrapper(
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
     const isOauth = isAnthropicOAuthApiKey(options?.apiKey);
+    // When apiKey is null, the auth controller did not thread the credential
+    // into stream options (regression from the split-auth-controller refactor).
+    // Defensively treat unresolved keys as potentially OAuth so we don't inject
+    // the context-1m beta that Anthropic rejects for OAuth/setup-token auth.
+    const maybeOauth = isOauth || options?.apiKey == null;
     const requestedContext1m = betas.includes(ANTHROPIC_CONTEXT_1M_BETA);
     const effectiveBetas =
-      isOauth && requestedContext1m
+      maybeOauth && requestedContext1m
         ? betas.filter((beta) => beta !== ANTHROPIC_CONTEXT_1M_BETA)
         : betas;
-    if (isOauth && requestedContext1m) {
+    if (maybeOauth && requestedContext1m) {
       log.warn(
         `ignoring context1m for OAuth token auth on ${model.provider}/${model.id}; Anthropic rejects context-1m beta with OAuth auth`,
       );
     }
 
+    // When apiKey is unresolved, pi-ai's createClient() will handle the
+    // correct OAuth vs API-key beta selection at request time.  Use the
+    // default set here to avoid overwriting pi-ai's headers.
     const piAiBetas = isOauth
       ? (PI_AI_OAUTH_ANTHROPIC_BETAS as readonly string[])
       : (PI_AI_DEFAULT_ANTHROPIC_BETAS as readonly string[]);
