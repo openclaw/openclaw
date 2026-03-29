@@ -179,6 +179,7 @@ Docs: https://docs.openclaw.ai
 - Telegram/forum topics: keep native `/new` and `/reset` routed to the active topic by preserving the topic target on forum-thread command context. (#35963)
 - Status/port diagnostics: treat single-process dual-stack loopback gateway listeners as healthy in `openclaw status --all`, suppressing false “port already in use” conflict warnings. (#53398) Thanks @DanWebb1949.
 - Memory/builtin: keep memory-file indexing active in FTS-only mode (no embedding provider) so forced reindexes no longer swap in an empty index and wipe existing memory chunks. (#42714) Thanks @asamimei.
+- CLI/status: detect node-only hosts in `openclaw status` and `openclaw status --all`, show the configured remote gateway target instead of a false local `ECONNREFUSED`, and suppress contradictory local-gateway diagnosis output.
 
 ## 2026.3.24
 
