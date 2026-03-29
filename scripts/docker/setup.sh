@@ -24,6 +24,12 @@ require_cmd() {
   fi
 }
 
+run_docker_build() {
+  # Dockerfile uses BuildKit-only syntax (RUN --mount=type=cache). Force
+  # BuildKit so hosts defaulting to the legacy builder do not fail.
+  DOCKER_BUILDKIT=1 docker build "$@"
+}
+
 is_truthy_value() {
   local raw="${1:-}"
   raw="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')"
@@ -464,7 +470,7 @@ upsert_env "$ENV_FILE" \
 
 if [[ "$IMAGE_NAME" == "openclaw:local" ]]; then
   echo "==> Building Docker image: $IMAGE_NAME"
-  docker build \
+  run_docker_build \
     --build-arg "OPENCLAW_DOCKER_APT_PACKAGES=${OPENCLAW_DOCKER_APT_PACKAGES}" \
     --build-arg "OPENCLAW_EXTENSIONS=${OPENCLAW_EXTENSIONS}" \
     --build-arg "OPENCLAW_INSTALL_DOCKER_CLI=${OPENCLAW_INSTALL_DOCKER_CLI:-}" \
@@ -536,7 +542,7 @@ if [[ -n "$SANDBOX_ENABLED" ]]; then
   # Build sandbox image if Dockerfile.sandbox exists.
   if [[ -f "$ROOT_DIR/Dockerfile.sandbox" ]]; then
     echo "Building sandbox image: openclaw-sandbox:bookworm-slim"
-    docker build \
+    run_docker_build \
       -t "openclaw-sandbox:bookworm-slim" \
       -f "$ROOT_DIR/Dockerfile.sandbox" \
       "$ROOT_DIR"
