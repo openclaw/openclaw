@@ -122,6 +122,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     mediaTypes?: string[];
     commandAuthorized: boolean;
     wasMentioned?: boolean;
+    replyToId?: string;
     replyToBody?: string;
     replyToSender?: string;
     replyToIsQuote?: boolean;
@@ -216,6 +217,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       Provider: "signal" as const,
       Surface: "signal" as const,
       MessageSid: entry.messageId,
+      ReplyToId: entry.replyToId,
       ReplyToBody: entry.replyToBody,
       ReplyToSender: entry.replyToSender,
       ReplyToIsQuote: entry.replyToIsQuote,
@@ -549,14 +551,19 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         sender,
       });
     const quoteText = normalizeOptionalString(dataMessage?.quote?.text) ?? "";
-    const { contextVisibilityMode, quoteSenderAllowed, visibleQuoteText, visibleQuoteSender } =
-      resolveSignalQuoteContext({
-        cfg: deps.cfg,
-        accountId: deps.accountId,
-        isGroup,
-        dataMessage,
-        effectiveGroupAllow,
-      });
+    const {
+      contextVisibilityMode,
+      decision: quoteVisibilityDecision,
+      quoteSenderAllowed,
+      visibleQuoteText,
+      visibleQuoteSender,
+    } = resolveSignalQuoteContext({
+      cfg: deps.cfg,
+      accountId: deps.accountId,
+      isGroup,
+      dataMessage,
+      effectiveGroupAllow,
+    });
     if (quoteText && !visibleQuoteText && isGroup) {
       logVerbose(
         `signal: drop quote context (mode=${contextVisibilityMode}, sender_allowed=${quoteSenderAllowed ? "yes" : "no"})`,
@@ -820,6 +827,15 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       }
     }
 
+    const quote = dataMessage.quote ?? undefined;
+    const quotedId =
+      quote?.id !== undefined && quote?.id !== null && String(quote.id).trim().length > 0
+        ? String(quote.id).trim()
+        : undefined;
+    const hasVisibleQuoteContext = quoteVisibilityDecision.include
+      ? Boolean(quotedId || visibleQuoteText || visibleQuoteSender)
+      : false;
+    const visibleQuoteId = hasVisibleQuoteContext ? quotedId : undefined;
     const bodyText = messageText || placeholder || visibleQuoteText || "";
     if (!bodyText) {
       return;
@@ -872,9 +888,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       mediaTypes: mediaTypes.length > 0 ? mediaTypes : undefined,
       commandAuthorized,
       wasMentioned: effectiveWasMentioned,
+      replyToId: visibleQuoteId,
       replyToBody: visibleQuoteText || undefined,
       replyToSender: visibleQuoteSender,
-      replyToIsQuote: visibleQuoteText ? true : undefined,
+      replyToIsQuote: hasVisibleQuoteContext ? true : undefined,
     });
   };
 }

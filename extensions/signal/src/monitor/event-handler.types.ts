@@ -39,7 +39,15 @@ export type SignalDataMessage = {
   } | null;
   quote?: {
     text?: string | null;
-    author?: string | null;
+    id?: number | string | null;
+    author?:
+      | string
+      | {
+          number?: string | null;
+          uuid?: string | null;
+          name?: string | null;
+        }
+      | null;
     authorUuid?: string | null;
   } | null;
   reaction?: SignalReactionMessage | null;

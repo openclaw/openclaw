@@ -89,6 +89,39 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(String(contextWithBody.Body ?? "")).not.toContain("[from:");
   });
 
+  it("surfaces quoted Signal reply context in MsgContext", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        // oxlint-disable-next-line typescript/no-explicit-any
+        cfg: { messages: { inbound: { debounceMs: 0 } } } as any,
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        dataMessage: {
+          message: "my reply",
+          attachments: [],
+          quote: {
+            id: 1700000000999,
+            text: "not really, no",
+            author: {
+              number: "+15550009999",
+              name: "Sagan",
+            },
+          },
+        },
+      }),
+    );
+
+    expect(capture.ctx).toBeTruthy();
+    expect(capture.ctx?.ReplyToId).toBe("1700000000999");
+    expect(capture.ctx?.ReplyToBody).toBe("not really, no");
+    expect(capture.ctx?.ReplyToSender).toBe("Sagan");
+    expect(capture.ctx?.ReplyToIsQuote).toBe(true);
+  });
+
   it("normalizes direct chat To/OriginatingTo targets to canonical Signal ids", async () => {
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({
