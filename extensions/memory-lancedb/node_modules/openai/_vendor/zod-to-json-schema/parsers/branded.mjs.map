@@ -1,0 +1,1 @@
+{"version":3,"file":"branded.mjs","sourceRoot":"","sources":["../../../src/_vendor/zod-to-json-schema/parsers/branded.ts"],"names":[],"mappings":"OACO,EAAE,QAAQ,EAAE;AAGnB,MAAM,UAAU,eAAe,CAAC,IAAwB,EAAE,IAAU;IAClE,OAAO,QAAQ,CAAC,IAAI,CAAC,IAAI,CAAC,IAAI,EAAE,IAAI,CAAC,CAAC;AACxC,CAAC"}

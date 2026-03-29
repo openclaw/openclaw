@@ -13,18 +13,17 @@ import {
 } from "../../../src/plugin-sdk/zalo.js";
 import { sendPayloadWithChunkedTextAndMedia as sendZalouserPayloadWithChunkedTextAndMedia } from "../../../src/plugin-sdk/zalouser.js";
 import { loadBundledPluginTestApiSync } from "../../../src/test-utils/bundled-plugin-public-surface.js";
+type ParseZalouserOutboundTarget = (raw: string) => { threadId: string; isGroup: boolean };
 
-type ChannelSendResponse = { ok?: boolean; messageId?: string };
-type SendMessageZalo = (
-  to: string,
-  text: string,
-  options: Record<string, unknown>,
-) => Promise<ChannelSendResponse>;
-type SendMessageZalouser = (
-  threadId: string,
-  text: string,
-  options: Record<string, unknown>,
-) => Promise<ChannelSendResponse>;
+const { discordOutbound } = loadBundledPluginTestApiSync<{
+  discordOutbound: ChannelOutboundAdapter;
+}>("discord");
+const { whatsappOutbound } = loadBundledPluginTestApiSync<{
+  whatsappOutbound: ChannelOutboundAdapter;
+}>("whatsapp");
+const { parseZalouserOutboundTarget } = loadBundledPluginTestApiSync<{
+  parseZalouserOutboundTarget: ParseZalouserOutboundTarget;
+}>("zalouser");
 
 type PayloadHarnessParams = {
   payload: ReplyPayload;
@@ -39,9 +38,6 @@ function buildChannelSendResult(channel: string, result: Record<string, unknown>
 }
 
 function createDiscordHarness(params: PayloadHarnessParams) {
-  const { discordOutbound } = loadBundledPluginTestApiSync<{
-    discordOutbound: ChannelOutboundAdapter;
-  }>("discord");
   const sendDiscord = vi.fn();
   primeChannelOutboundSendMock(
     sendDiscord,
@@ -65,9 +61,6 @@ function createDiscordHarness(params: PayloadHarnessParams) {
 }
 
 function createWhatsAppHarness(params: PayloadHarnessParams) {
-  const { whatsappOutbound } = loadBundledPluginTestApiSync<{
-    whatsappOutbound: ChannelOutboundAdapter;
-  }>("whatsapp");
   const sendWhatsApp = vi.fn();
   primeChannelOutboundSendMock(sendWhatsApp, { messageId: "wa-1" }, params.sendResults);
   const ctx = {
@@ -110,15 +103,8 @@ function createDirectTextMediaHarness(params: PayloadHarnessParams) {
 }
 
 function createZaloHarness(params: PayloadHarnessParams) {
-  const sendMessageZalo = vi.fn<SendMessageZalo>().mockResolvedValue({
-    ok: true,
-    messageId: "zl-1",
-  });
-  primeChannelOutboundSendMock(
-    sendMessageZalo,
-    { ok: true, messageId: "zl-1" },
-    params.sendResults,
-  );
+  const sendZalo = vi.fn();
+  primeChannelOutboundSendMock(sendZalo, { ok: true, messageId: "zl-1" }, params.sendResults);
   const ctx = {
     cfg: {},
     to: "123456789",
@@ -134,7 +120,7 @@ function createZaloHarness(params: PayloadHarnessParams) {
         sendText: async (nextCtx) =>
           buildChannelSendResult(
             "zalo",
-            await sendMessageZalo(nextCtx.to, nextCtx.text, {
+            await sendZalo(nextCtx.to, nextCtx.text, {
               accountId: undefined,
               cfg: nextCtx.cfg,
             }),
@@ -142,7 +128,7 @@ function createZaloHarness(params: PayloadHarnessParams) {
         sendMedia: async (nextCtx) =>
           buildChannelSendResult(
             "zalo",
-            await sendMessageZalo(nextCtx.to, nextCtx.text, {
+            await sendZalo(nextCtx.to, nextCtx.text, {
               accountId: undefined,
               cfg: nextCtx.cfg,
               mediaUrl: nextCtx.mediaUrl,
@@ -150,24 +136,14 @@ function createZaloHarness(params: PayloadHarnessParams) {
           ),
         emptyResult: { channel: "zalo", messageId: "" },
       }),
-    sendMock: sendMessageZalo,
+    sendMock: sendZalo,
     to: ctx.to,
   };
 }
 
 function createZalouserHarness(params: PayloadHarnessParams) {
-  const { parseZalouserOutboundTarget } = loadBundledPluginTestApiSync<{
-    parseZalouserOutboundTarget: (raw: string) => { threadId: string; isGroup: boolean };
-  }>("zalouser");
-  const sendMessageZalouser = vi.fn<SendMessageZalouser>().mockResolvedValue({
-    ok: true,
-    messageId: "zlu-1",
-  });
-  primeChannelOutboundSendMock(
-    sendMessageZalouser,
-    { ok: true, messageId: "zlu-1" },
-    params.sendResults,
-  );
+  const sendZalouser = vi.fn();
+  primeChannelOutboundSendMock(sendZalouser, { ok: true, messageId: "zlu-1" }, params.sendResults);
   const ctx = {
     cfg: {},
     to: "user:987654321",
@@ -182,7 +158,7 @@ function createZalouserHarness(params: PayloadHarnessParams) {
           const target = parseZalouserOutboundTarget(nextCtx.to);
           return buildChannelSendResult(
             "zalouser",
-            await sendMessageZalouser(target.threadId, nextCtx.text, {
+            await sendZalouser(target.threadId, nextCtx.text, {
               profile: "default",
               isGroup: target.isGroup,
               textMode: "markdown",
@@ -195,7 +171,7 @@ function createZalouserHarness(params: PayloadHarnessParams) {
           const target = parseZalouserOutboundTarget(nextCtx.to);
           return buildChannelSendResult(
             "zalouser",
-            await sendMessageZalouser(target.threadId, nextCtx.text, {
+            await sendZalouser(target.threadId, nextCtx.text, {
               profile: "default",
               isGroup: target.isGroup,
               mediaUrl: nextCtx.mediaUrl,
@@ -207,7 +183,7 @@ function createZalouserHarness(params: PayloadHarnessParams) {
         },
         emptyResult: { channel: "zalouser", messageId: "" },
       }),
-    sendMock: sendMessageZalouser,
+    sendMock: sendZalouser,
     to: "987654321",
   };
 }

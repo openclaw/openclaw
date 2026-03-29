@@ -1,0 +1,52 @@
+{
+  "name": "https-proxy-agent",
+  "version": "8.0.0",
+  "type": "module",
+  "description": "An HTTP(s) proxy `http.Agent` implementation for HTTPS",
+  "exports": {
+    "import": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/TooTallNate/proxy-agents.git",
+    "directory": "packages/https-proxy-agent"
+  },
+  "keywords": [
+    "https",
+    "proxy",
+    "endpoint",
+    "agent"
+  ],
+  "author": "Nathan Rajlich <nathan@tootallnate.net> (http://n8.io/)",
+  "license": "MIT",
+  "dependencies": {
+    "debug": "^4.3.4",
+    "agent-base": "8.0.0"
+  },
+  "devDependencies": {
+    "@types/async-retry": "^1.4.5",
+    "@types/debug": "^4.1.7",
+    "@types/node": "^22.13.0",
+    "async-listen": "^3.0.0",
+    "async-retry": "^1.3.3",
+    "typescript": "^5.1.6",
+    "proxy": "3.0.0",
+    "tsconfig": "0.0.0"
+  },
+  "engines": {
+    "node": ">= 14"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest --exclude test/e2e.test.ts",
+    "test-e2e": "vitest run test/e2e.test.ts",
+    "lint": "eslint --ext .ts",
+    "pack": "node ../../scripts/pack.mjs"
+  }
+}

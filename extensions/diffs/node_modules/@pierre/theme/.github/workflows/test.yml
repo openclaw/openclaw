@@ -1,0 +1,66 @@
+name: Test & Build
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run TypeScript compilation check
+        run: npx tsc --noEmit
+
+      - name: Build theme files
+        run: npm run build
+
+      - name: Run tests
+        run: npm test
+
+      - name: Verify theme files exist
+        run: |
+          if [ ! -f "themes/pierre-light.json" ]; then
+            echo "❌ pierre-light.json not generated"
+            exit 1
+          fi
+          if [ ! -f "themes/pierre-dark.json" ]; then
+            echo "❌ pierre-dark.json not generated"
+            exit 1
+          fi
+          echo "✅ All theme files generated successfully"
+
+      - name: Check file sizes
+        run: |
+          light_size=$(wc -c < themes/pierre-light.json)
+          dark_size=$(wc -c < themes/pierre-dark.json)
+
+          echo "📊 Theme file sizes:"
+          echo "  - pierre-light.json: $light_size bytes"
+          echo "  - pierre-dark.json: $dark_size bytes"
+
+          # Sanity check - themes should be at least 10KB
+          if [ $light_size -lt 10000 ]; then
+            echo "❌ pierre-light.json seems too small ($light_size bytes)"
+            exit 1
+          fi
+          if [ $dark_size -lt 10000 ]; then
+            echo "❌ pierre-dark.json seems too small ($dark_size bytes)"
+            exit 1
+          fi
+
+          echo "✅ Theme files are properly sized"

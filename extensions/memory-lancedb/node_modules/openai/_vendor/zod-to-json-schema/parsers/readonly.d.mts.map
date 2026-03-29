@@ -1,0 +1,1 @@
+{"version":3,"file":"readonly.d.mts","sourceRoot":"","sources":["../../../src/_vendor/zod-to-json-schema/parsers/readonly.ts"],"names":[],"mappings":"OAAO,EAAE,cAAc,EAAE,MAAM,QAAQ;OAEhC,EAAE,IAAI,EAAE;AAEf,eAAO,MAAM,gBAAgB,GAAI,KAAK,cAAc,CAAC,GAAG,CAAC,EAAE,MAAM,IAAI,sDAEpE,CAAC"}

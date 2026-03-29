@@ -1,0 +1,52 @@
+#!/usr/bin/env node
+
+const { spawnSync } = require('child_process');
+
+const commands = {
+  migrate: {
+    description: 'Run migrations to update to the latest major SDK version',
+    fn: () => {
+      const result = spawnSync(
+        'npx',
+        [
+          '-y',
+          'https://github.com/stainless-api/migrate-ts/releases/download/0.0.3/stainless-api-migrate-0.0.3.tgz',
+          '--migrationConfig',
+          require.resolve('./migration-config.json'),
+          ...process.argv.slice(3),
+        ],
+        { stdio: 'inherit' },
+      );
+      if (result.status !== 0) {
+        process.exit(result.status);
+      }
+    },
+  },
+};
+
+function exitWithHelp() {
+  console.log(`Usage: openai <subcommand>`);
+  console.log();
+  console.log('Subcommands:');
+
+  for (const [name, info] of Object.entries(commands)) {
+    console.log(`  ${name}  ${info.description}`);
+  }
+
+  console.log();
+  process.exit(1);
+}
+
+if (process.argv.length < 3) {
+  exitWithHelp();
+}
+
+const commandName = process.argv[2];
+
+const command = commands[commandName];
+if (!command) {
+  console.log(`Unknown subcommand ${commandName}.`);
+  exitWithHelp();
+}
+
+command.fn();

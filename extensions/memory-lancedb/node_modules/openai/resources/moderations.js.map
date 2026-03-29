@@ -1,0 +1,1 @@
+{"version":3,"file":"moderations.js","sourceRoot":"","sources":["../src/resources/moderations.ts"],"names":[],"mappings":";AAAA,sFAAsF;;;AAEtF,kDAA+C;AAI/C;;GAEG;AACH,MAAa,WAAY,SAAQ,sBAAW;IAC1C;;;OAGG;IACH,MAAM,CAAC,IAA4B,EAAE,OAAwB;QAC3D,OAAO,IAAI,CAAC,OAAO,CAAC,IAAI,CAAC,cAAc,EAAE,EAAE,IAAI,EAAE,GAAG,OAAO,EAAE,CAAC,CAAC;IACjE,CAAC;CACF;AARD,kCAQC"}

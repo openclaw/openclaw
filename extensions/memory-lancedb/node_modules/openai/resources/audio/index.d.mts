@@ -1,0 +1,5 @@
+export { Audio, type AudioModel, type AudioResponseFormat } from "./audio.mjs";
+export { Speech, type SpeechModel, type SpeechCreateParams } from "./speech.mjs";
+export { Transcriptions, type Transcription, type TranscriptionDiarized, type TranscriptionDiarizedSegment, type TranscriptionInclude, type TranscriptionSegment, type TranscriptionStreamEvent, type TranscriptionTextDeltaEvent, type TranscriptionTextDoneEvent, type TranscriptionTextSegmentEvent, type TranscriptionVerbose, type TranscriptionWord, type TranscriptionCreateResponse, type TranscriptionCreateParams, type TranscriptionCreateParamsNonStreaming, type TranscriptionCreateParamsStreaming, } from "./transcriptions.mjs";
+export { Translations, type Translation, type TranslationVerbose, type TranslationCreateResponse, type TranslationCreateParams, } from "./translations.mjs";
+//# sourceMappingURL=index.d.mts.map

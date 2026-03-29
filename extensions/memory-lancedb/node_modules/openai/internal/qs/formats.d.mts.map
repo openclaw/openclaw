@@ -1,0 +1,1 @@
+{"version":3,"file":"formats.d.mts","sourceRoot":"","sources":["../../src/internal/qs/formats.ts"],"names":[],"mappings":"OAAO,KAAK,EAAE,MAAM,EAAE;AAEtB,eAAO,MAAM,cAAc,EAAE,MAAkB,CAAC;AAChD,eAAO,MAAM,iBAAiB,GAAI,GAAG,WAAW,WAAc,CAAC;AAC/D,eAAO,MAAM,UAAU,EAAE,MAAM,CAAC,MAAM,EAAE,CAAC,GAAG,EAAE,WAAW,KAAK,MAAM,CAGnE,CAAC;AACF,eAAO,MAAM,OAAO,YAAY,CAAC;AACjC,eAAO,MAAM,OAAO,YAAY,CAAC"}

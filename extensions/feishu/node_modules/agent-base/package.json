@@ -1,0 +1,48 @@
+{
+  "name": "agent-base",
+  "version": "8.0.0",
+  "type": "module",
+  "description": "Turn a function into an `http.Agent` instance",
+  "exports": {
+    "import": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/TooTallNate/proxy-agents.git",
+    "directory": "packages/agent-base"
+  },
+  "keywords": [
+    "http",
+    "agent",
+    "base",
+    "barebones",
+    "https"
+  ],
+  "author": "Nathan Rajlich <nathan@tootallnate.net> (http://n8.io/)",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/debug": "^4.1.7",
+    "@types/node": "^22.13.0",
+    "@types/semver": "^7.3.13",
+    "@types/ws": "^8.5.4",
+    "async-listen": "^3.0.0",
+    "typescript": "^5.1.6",
+    "ws": "^8.13.0",
+    "tsconfig": "0.0.0"
+  },
+  "engines": {
+    "node": ">= 14"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest",
+    "lint": "eslint . --ext .ts",
+    "pack": "node ../../scripts/pack.mjs"
+  }
+}

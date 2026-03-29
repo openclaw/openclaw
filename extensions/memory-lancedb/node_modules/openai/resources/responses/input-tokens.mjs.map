@@ -1,0 +1,1 @@
+{"version":3,"file":"input-tokens.mjs","sourceRoot":"","sources":["../../src/resources/responses/input-tokens.ts"],"names":[],"mappings":"AAAA,sFAAsF;OAE/E,EAAE,WAAW,EAAE;AAMtB,MAAM,OAAO,WAAY,SAAQ,WAAW;IAC1C;;;;;;;;;;OAUG;IACH,KAAK,CACH,OAAiD,EAAE,EACnD,OAAwB;QAExB,OAAO,IAAI,CAAC,OAAO,CAAC,IAAI,CAAC,yBAAyB,EAAE,EAAE,IAAI,EAAE,GAAG,OAAO,EAAE,CAAC,CAAC;IAC5E,CAAC;CACF"}

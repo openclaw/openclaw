@@ -1,0 +1,1 @@
+{"version":3,"file":"graders.mjs","sourceRoot":"","sources":["../../src/resources/graders/graders.ts"],"names":[],"mappings":"AAAA,sFAAsF;OAE/E,EAAE,WAAW,EAAE;OACf,KAAK,eAAe;OACpB,EAEL,YAAY,GAOb;AAED,MAAM,OAAO,OAAQ,SAAQ,WAAW;IAAxC;;QACE,iBAAY,GAAiC,IAAI,eAAe,CAAC,YAAY,CAAC,IAAI,CAAC,OAAO,CAAC,CAAC;IAC9F,CAAC;CAAA;AAED,OAAO,CAAC,YAAY,GAAG,YAAY,CAAC"}

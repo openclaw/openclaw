@@ -1,8 +1,8 @@
 import { EventEmitter } from "node:events";
 import { RateLimitError } from "@buape/carbon";
+import { AcpRuntimeError } from "openclaw/plugin-sdk/acp-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { AcpRuntimeError } from "../../../../src/acp/runtime/errors.js";
-import type { OpenClawConfig } from "../../../../src/config/config.js";
 import {
   baseConfig,
   baseRuntime,
@@ -605,7 +605,7 @@ describe("monitorDiscordProvider", () => {
 
   it("registers plugin commands from the real registry as native Discord commands", async () => {
     const { clearPluginCommands, getPluginCommandSpecs, registerPluginCommand } =
-      await import("../../../../src/plugins/commands.js");
+      await import("openclaw/plugin-sdk/plugin-runtime");
     clearPluginCommands();
     listNativeCommandSpecsForConfigMock.mockReturnValue([
       { name: "status", description: "Status", acceptsArgs: false },

@@ -1,0 +1,1 @@
+{"version":3,"file":"request-options.js","sourceRoot":"","sources":["../src/internal/request-options.ts"],"names":[],"mappings":";AAAA,sFAAsF;;;AAuF/E,MAAM,eAAe,GAAmB,CAAC,EAAE,OAAO,EAAE,IAAI,EAAE,EAAE,EAAE;IACnE,OAAO;QACL,WAAW,EAAE;YACX,cAAc,EAAE,kBAAkB;SACnC;QACD,IAAI,EAAE,IAAI,CAAC,SAAS,CAAC,IAAI,CAAC;KAC3B,CAAC;AACJ,CAAC,CAAC;AAPW,QAAA,eAAe,mBAO1B"}

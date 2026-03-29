@@ -1,0 +1,1038 @@
+{
+  "pkg": "openai",
+  "githubRepo": "https://github.com/openai/openai-node",
+  "clientClass": "OpenAI",
+  "methods": [
+    {
+      "base": "chat.completions",
+      "name": "delete",
+      "oldName": "del"
+    },
+    {
+      "base": "chat.completions",
+      "name": "stream",
+      "oldBase": "beta.chat.completions"
+    },
+    {
+      "base": "chat.completions",
+      "name": "parse",
+      "oldBase": "beta.chat.completions"
+    },
+    {
+      "base": "chat.completions",
+      "name": "runTools",
+      "oldBase": "beta.chat.completions"
+    },
+    {
+      "base": "files",
+      "name": "delete",
+      "oldName": "del"
+    },
+    {
+      "base": "models",
+      "name": "delete",
+      "oldName": "del"
+    },
+    {
+      "base": "fineTuning.checkpoints.permissions",
+      "name": "delete",
+      "params": [
+        {
+          "type": "param",
+          "key": "permission_id",
+          "location": "path"
+        },
+        {
+          "type": "params",
+          "maybeOverload": false
+        },
+        {
+          "type": "options"
+        }
+      ],
+      "oldName": "del",
+      "oldParams": [
+        {
+          "type": "param",
+          "key": "fine_tuned_model_checkpoint",
+          "location": "path"
+        },
+        {
+          "type": "param",
+          "key": "permission_id",
+          "location": "path"
+        },
+        {
+          "type": "options"
+        }
+      ]
+    },
+    {
+      "base": "vectorStores",
+      "name": "delete",
+      "oldName": "del"
+    },
+    {
+      "base": "vectorStores.files",
+      "name": "retrieve",
+      "params": [
+        {
+          "type": "param",
+          "key": "file_id",
+          "location": "path"
+        },
+        {
+          "type": "params",
+          "maybeOverload": false
+        },
+        {
+          "type": "options"
+        }
+      ],
+      "oldParams": [
+        {
+          "type": "param",
+          "key": "vector_store_id",
+          "location": "path"
+        },
+        {
+          "type": "param",
+          "key": "file_id",
+          "location": "path"
+        },
+        {
+          "type": "options"
+        }
+      ]
+    },
+    {
+      "base": "vectorStores.files",
+      "name": "update",
+      "params": [
+        {
+          "type": "param",
+          "key": "file_id",
+          "location": "path"
+        },
+        {
+          "type": "params",
+          "maybeOverload": false
+        },
+        {
+          "type": "options"
+        }
+      ],
+      "oldParams": [
+        {
+          "type": "param",
+          "key": "vector_store_id",
+          "location": "path"
+        },
+        {
+          "type": "param",
+          "key": "file_id",
+          "location": "path"
+        },
+        {
+          "type": "params",
+          "maybeOverload": false
+        },
+        {
+          "type": "options"
+        }
+      ]
+    },
+    {
+      "base": "vectorStores.files",
+      "name": "delete",
+      "params": [
+        {
+          "type": "param",
+          "key": "file_id",
+          "location": "path"
+        },
+        {
+          "type": "params",
+          "maybeOverload": false
+        },
+        {
+          "type": "options"
+        }
+      ],
+      "oldName": "del",
+      "oldParams": [
+        {
+          "type": "param",
+          "key": "vector_store_id",
+          "location": "path"
+        },
+        {
+          "type": "param",
+          "key": "file_id",
+          "location": "path"
+        },
+        {
+          "type": "options"
+        }
+      ]
+    },
+    {
+      "base": "vectorStores.files",
+      "name": "content",
+      "params": [
+        {
+          "type": "param",
+          "key": "file_id",
+          "location": "path"
+        },
+        {
+          "type": "params",
+          "maybeOverload": false
+        },
+        {
+          "type": "options"
+        }
+      ],
+      "oldParams": [
+        {
+          "type": "param",
+          "key": "vector_store_id",
+          "location": "path"
+        },
+        {
+          "type": "param",
+          "key": "file_id",
+          "location": "path"
+        },
+        {
+          "type": "options"
+        }
+      ]
+    },
+    {
+      "base": "vectorStores.fileBatches",
+      "name": "retrieve",
+      "params": [
+        {
+          "type": "param",
+          "key": "batch_id",
+          "location": "path"
+        },
+        {
+          "type": "params",
+          "maybeOverload": false
+        },
+        {
+          "type": "options"
+        }
+      ],
+      "oldParams": [
+        {
+          "type": "param",
+          "key": "vector_store_id",
+          "location": "path"
+        },
+        {
+          "type": "param",
+          "key": "batch_id",
+          "location": "path"
+        },
+        {
+          "type": "options"
+        }
+      ]
+    },
+    {
+      "base": "vectorStores.fileBatches",
+      "name": "cancel",
+      "params": [
+        {
+          "type": "param",
+          "key": "batch_id",
+          "location": "path"
+        },
+        {
+          "type": "params",
+          "maybeOverload": false
+        },
+        {
+          "type": "options"
+        }
+      ],
+      "oldParams": [
+        {
+          "type": "param",
+          "key": "vector_store_id",
+          "location": "path"
+        },
+        {
+          "type": "param",
+          "key": "batch_id",
+          "location": "path"
+        },
+        {
+          "type": "options"
+        }
+      ]
+    },
+    {
+      "base": "vectorStores.fileBatches",
+      "name": "listFiles",
+      "params": [
+        {
+          "type": "param",
+          "key": "batch_id",
+          "location": "path"
+        },
+        {
+          "type": "params",
+          "maybeOverload": false
+        },
+        {
+          "type": "options"
+        }
+      ],
+      "oldParams": [
+        {
+          "type": "param",
+          "key": "vector_store_id",
+          "location": "path"
+        },
+        {
+          "type": "param",
+          "key": "batch_id",
+          "location": "path"
+        },
+        {
+          "type": "params",
+          "maybeOverload": true
+        },
+        {
+          "type": "options"
+        }
+      ]
+    },
+    {
+      "base": "beta.assistants",
+      "name": "delete",
+      "oldName": "del"
+    },
+    {
+      "base": "beta.threads",
+      "name": "delete",
+      "oldName": "del"
+    },
+    {
+      "base": "beta.threads.runs",
+      "name": "retrieve",
+      "params": [
+        {
+          "type": "param",
+          "key": "run_id",
+          "location": "path"
+        },
+        {
+          "type": "params",
+          "maybeOverload": false
+        },
+        {
+          "type": "options"
+        }
+      ],
+      "oldParams": [
+        {
+          "type": "param",
+          "key": "thread_id",
+          "location": "path"
+        },
+        {
+          "type": "param",
+          "key": "run_id",
+          "location": "path"
+        },
+        {
+          "type": "options"
+        }
+      ]
+    },
+    {
+      "base": "beta.threads.runs",
+      "name": "update",
+      "params": [
+        {
+          "type": "param",
+          "key": "run_id",
+          "location": "path"
+        },
+        {
+          "type": "params",
+          "maybeOverload": false
+        },
+        {
+          "type": "options"
+        }
+      ],
+      "oldParams": [
+        {
+          "type": "param",
+          "key": "thread_id",
+          "location": "path"
+        },
+        {
+          "type": "param",
+          "key": "run_id",
+          "location": "path"
+        },
+        {
+          "type": "params",
+          "maybeOverload": false
+        },
+        {
+          "type": "options"
+        }
+      ]
+    },
+    {
+      "base": "beta.threads.runs",
+      "name": "cancel",
+      "params": [
+        {
+          "type": "param",
+          "key": "run_id",
+          "location": "path"
+        },
+        {
+          "type": "params",
+          "maybeOverload": false
+        },
+        {
+          "type": "options"
+        }
+      ],
+      "oldParams": [
+        {
+          "type": "param",
+          "key": "thread_id",
+          "location": "path"
+        },
+        {
+          "type": "param",
+          "key": "run_id",
+          "location": "path"
+        },
+        {
+          "type": "options"
+        }
+      ]
+    },
+    {
+      "base": "beta.threads.runs",
+      "name": "submitToolOutputs",
+      "params": [
+        {
+          "type": "param",
+          "key": "run_id",
+          "location": "path"
+        },
+        {
+          "type": "params",
+          "maybeOverload": false
+        },
+        {
+          "type": "options"
+        }
+      ],
+      "oldParams": [
+        {
+          "type": "param",
+          "key": "thread_id",
+          "location": "path"
+        },
+        {
+          "type": "param",
+          "key": "run_id",
+          "location": "path"
+        },
+        {
+          "type": "params",
+          "maybeOverload": false
+        },
+        {
+          "type": "options"
+        }
+      ]
+    },
+    {
+      "base": "beta.threads.runs.steps",
+      "name": "retrieve",
+      "params": [
+        {
+          "type": "param",
+          "key": "step_id",
+          "location": "path"
+        },
+        {
+          "type": "params",
+          "maybeOverload": false
+        },
+        {
+          "type": "options"
+        }
+      ],
+      "oldParams": [
+        {
+          "type": "param",
+          "key": "thread_id",
+          "location": "path"
+        },
+        {
+          "type": "param",
+          "key": "run_id",
+          "location": "path"
+        },
+        {
+          "type": "param",
+          "key": "step_id",
+          "location": "path"
+        },
+        {
+          "type": "params",
+          "maybeOverload": true
+        },
+        {
+          "type": "options"
+        }
+      ]
+    },
+    {
+      "base": "beta.threads.runs.steps",
+      "name": "list",
+      "params": [
+        {
+          "type": "param",
+          "key": "run_id",
+          "location": "path"
+        },
+        {
+          "type": "params",
+          "maybeOverload": false
+        },
+        {
+          "type": "options"
+        }
+      ],
+      "oldParams": [
+        {
+          "type": "param",
+          "key": "thread_id",
+          "location": "path"
+        },
+        {
+          "type": "param",
+          "key": "run_id",
+          "location": "path"
+        },
+        {
+          "type": "params",
+          "maybeOverload": true
+        },
+        {
+          "type": "options"
+        }
+      ]
+    },
+    {
+      "base": "beta.threads.messages",
+      "name": "retrieve",
+      "params": [
+        {
+          "type": "param",
+          "key": "message_id",
+          "location": "path"
+        },
+        {
+          "type": "params",
+          "maybeOverload": false
+        },
+        {
+          "type": "options"
+        }
+      ],
+      "oldParams": [
+        {
+          "type": "param",
+          "key": "thread_id",
+          "location": "path"
+        },
+        {
+          "type": "param",
+          "key": "message_id",
+          "location": "path"
+        },
+        {
+          "type": "options"
+        }
+      ]
+    },
+    {
+      "base": "beta.threads.messages",
+      "name": "update",
+      "params": [
+        {
+          "type": "param",
+          "key": "message_id",
+          "location": "path"
+        },
+        {
+          "type": "params",
+          "maybeOverload": false
+        },
+        {
+          "type": "options"
+        }
+      ],
+      "oldParams": [
+        {
+          "type": "param",
+          "key": "thread_id",
+          "location": "path"
+        },
+        {
+          "type": "param",
+          "key": "message_id",
+          "location": "path"
+        },
+        {
+          "type": "params",
+          "maybeOverload": false
+        },
+        {
+          "type": "options"
+        }
+      ]
+    },
+    {
+      "base": "beta.threads.messages",
+      "name": "delete",
+      "params": [
+        {
+          "type": "param",
+          "key": "message_id",
+          "location": "path"
+        },
+        {
+          "type": "params",
+          "maybeOverload": false
+        },
+        {
+          "type": "options"
+        }
+      ],
+      "oldName": "del",
+      "oldParams": [
+        {
+          "type": "param",
+          "key": "thread_id",
+          "location": "path"
+        },
+        {
+          "type": "param",
+          "key": "message_id",
+          "location": "path"
+        },
+        {
+          "type": "options"
+        }
+      ]
+    },
+    {
+      "base": "responses",
+      "name": "delete",
+      "oldName": "del"
+    },
+    {
+      "base": "evals",
+      "name": "delete",
+      "oldName": "del"
+    },
+    {
+      "base": "evals.runs",
+      "name": "retrieve",
+      "params": [
+        {
+          "type": "param",
+          "key": "run_id",
+          "location": "path"
+        },
+        {
+          "type": "params",
+          "maybeOverload": false
+        },
+        {
+          "type": "options"
+        }
+      ],
+      "oldParams": [
+        {
+          "type": "param",
+          "key": "eval_id",
+          "location": "path"
+        },
+        {
+          "type": "param",
+          "key": "run_id",
+          "location": "path"
+        },
+        {
+          "type": "options"
+        }
+      ]
+    },
+    {
+      "base": "evals.runs",
+      "name": "delete",
+      "params": [
+        {
+          "type": "param",
+          "key": "run_id",
+          "location": "path"
+        },
+        {
+          "type": "params",
+          "maybeOverload": false
+        },
+        {
+          "type": "options"
+        }
+      ],
+      "oldName": "del",
+      "oldParams": [
+        {
+          "type": "param",
+          "key": "eval_id",
+          "location": "path"
+        },
+        {
+          "type": "param",
+          "key": "run_id",
+          "location": "path"
+        },
+        {
+          "type": "options"
+        }
+      ]
+    },
+    {
+      "base": "evals.runs",
+      "name": "cancel",
+      "params": [
+        {
+          "type": "param",
+          "key": "run_id",
+          "location": "path"
+        },
+        {
+          "type": "params",
+          "maybeOverload": false
+        },
+        {
+          "type": "options"
+        }
+      ],
+      "oldParams": [
+        {
+          "type": "param",
+          "key": "eval_id",
+          "location": "path"
+        },
+        {
+          "type": "param",
+          "key": "run_id",
+          "location": "path"
+        },
+        {
+          "type": "options"
+        }
+      ]
+    },
+    {
+      "base": "evals.runs.outputItems",
+      "name": "retrieve",
+      "params": [
+        {
+          "type": "param",
+          "key": "output_item_id",
+          "location": "path"
+        },
+        {
+          "type": "params",
+          "maybeOverload": false
+        },
+        {
+          "type": "options"
+        }
+      ],
+      "oldParams": [
+        {
+          "type": "param",
+          "key": "eval_id",
+          "location": "path"
+        },
+        {
+          "type": "param",
+          "key": "run_id",
+          "location": "path"
+        },
+        {
+          "type": "param",
+          "key": "output_item_id",
+          "location": "path"
+        },
+        {
+          "type": "options"
+        }
+      ]
+    },
+    {
+      "base": "evals.runs.outputItems",
+      "name": "list",
+      "params": [
+        {
+          "type": "param",
+          "key": "run_id",
+          "location": "path"
+        },
+        {
+          "type": "params",
+          "maybeOverload": false
+        },
+        {
+          "type": "options"
+        }
+      ],
+      "oldParams": [
+        {
+          "type": "param",
+          "key": "eval_id",
+          "location": "path"
+        },
+        {
+          "type": "param",
+          "key": "run_id",
+          "location": "path"
+        },
+        {
+          "type": "params",
+          "maybeOverload": true
+        },
+        {
+          "type": "options"
+        }
+      ]
+    },
+    {
+      "base": "containers",
+      "name": "delete",
+      "oldName": "del"
+    },
+    {
+      "base": "containers.files",
+      "name": "retrieve",
+      "params": [
+        {
+          "type": "param",
+          "key": "file_id",
+          "location": "path"
+        },
+        {
+          "type": "params",
+          "maybeOverload": false
+        },
+        {
+          "type": "options"
+        }
+      ],
+      "oldParams": [
+        {
+          "type": "param",
+          "key": "container_id",
+          "location": "path"
+        },
+        {
+          "type": "param",
+          "key": "file_id",
+          "location": "path"
+        },
+        {
+          "type": "options"
+        }
+      ]
+    },
+    {
+      "base": "containers.files",
+      "name": "delete",
+      "params": [
+        {
+          "type": "param",
+          "key": "file_id",
+          "location": "path"
+        },
+        {
+          "type": "params",
+          "maybeOverload": false
+        },
+        {
+          "type": "options"
+        }
+      ],
+      "oldName": "del",
+      "oldParams": [
+        {
+          "type": "param",
+          "key": "container_id",
+          "location": "path"
+        },
+        {
+          "type": "param",
+          "key": "file_id",
+          "location": "path"
+        },
+        {
+          "type": "options"
+        }
+      ]
+    },
+    {
+      "base": "containers.files.content",
+      "name": "retrieve",
+      "params": [
+        {
+          "type": "param",
+          "key": "file_id",
+          "location": "path"
+        },
+        {
+          "type": "params",
+          "maybeOverload": false
+        },
+        {
+          "type": "options"
+        }
+      ],
+      "oldParams": [
+        {
+          "type": "param",
+          "key": "container_id",
+          "location": "path"
+        },
+        {
+          "type": "param",
+          "key": "file_id",
+          "location": "path"
+        },
+        {
+          "type": "options"
+        }
+      ]
+    },
+    {
+      "base": "skills.versions",
+      "name": "retrieve",
+      "params": [
+        {
+          "type": "param",
+          "key": "version",
+          "location": "path"
+        },
+        {
+          "type": "params",
+          "maybeOverload": false
+        },
+        {
+          "type": "options"
+        }
+      ],
+      "oldParams": [
+        {
+          "type": "param",
+          "key": "skill_id",
+          "location": "path"
+        },
+        {
+          "type": "param",
+          "key": "version",
+          "location": "path"
+        },
+        {
+          "type": "options"
+        }
+      ]
+    },
+    {
+      "base": "skills.versions",
+      "name": "delete",
+      "params": [
+        {
+          "type": "param",
+          "key": "version",
+          "location": "path"
+        },
+        {
+          "type": "params",
+          "maybeOverload": false
+        },
+        {
+          "type": "options"
+        }
+      ],
+      "oldParams": [
+        {
+          "type": "param",
+          "key": "skill_id",
+          "location": "path"
+        },
+        {
+          "type": "param",
+          "key": "version",
+          "location": "path"
+        },
+        {
+          "type": "options"
+        }
+      ]
+    },
+    {
+      "base": "skills.versions.content",
+      "name": "retrieve",
+      "params": [
+        {
+          "type": "param",
+          "key": "version",
+          "location": "path"
+        },
+        {
+          "type": "params",
+          "maybeOverload": false
+        },
+        {
+          "type": "options"
+        }
+      ],
+      "oldParams": [
+        {
+          "type": "param",
+          "key": "skill_id",
+          "location": "path"
+        },
+        {
+          "type": "param",
+          "key": "version",
+          "location": "path"
+        },
+        {
+          "type": "options"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "name": "@discordjs/voice",
+  "version": "0.19.2",
+  "description": "Implementation of the Discord Voice API for Node.js",
+  "exports": {
+    ".": {
+      "require": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "import": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      }
+    }
+  },
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "directories": {
+    "lib": "src",
+    "test": "__tests__"
+  },
+  "files": [
+    "dist"
+  ],
+  "contributors": [
+    "Crawl <icrawltogo@gmail.com>",
+    "Amish Shah <amishshah.2k@gmail.com>",
+    "SpaceEEC <spaceeec@yahoo.com>",
+    "Vlad Frangu <me@vladfrangu.dev>",
+    "Aura Román <kyradiscord@gmail.com>"
+  ],
+  "license": "Apache-2.0",
+  "keywords": [
+    "discord",
+    "discord.js",
+    "audio",
+    "voice",
+    "streaming"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/discordjs/discord.js.git",
+    "directory": "packages/voice"
+  },
+  "bugs": {
+    "url": "https://github.com/discordjs/discord.js/issues"
+  },
+  "homepage": "https://discord.js.org",
+  "funding": "https://github.com/discordjs/discord.js?sponsor",
+  "dependencies": {
+    "@snazzah/davey": "^0.1.9",
+    "@types/ws": "^8.18.1",
+    "discord-api-types": "^0.38.41",
+    "prism-media": "^1.3.5",
+    "tslib": "^2.8.1",
+    "ws": "^8.19.0"
+  },
+  "devDependencies": {
+    "@discordjs/opus": "^0.10.0",
+    "@favware/cliff-jumper": "^6.0.0",
+    "@noble/ciphers": "^2.1.1",
+    "@types/node": "^22.19.11",
+    "@vitest/coverage-v8": "^4.0.18",
+    "cross-env": "^10.1.0",
+    "esbuild-plugin-version-injector": "^1.2.1",
+    "eslint": "^9.39.2",
+    "eslint-config-neon": "^0.3.2",
+    "eslint-formatter-compact": "^9.0.1",
+    "eslint-formatter-pretty": "^7.0.0",
+    "prettier": "^3.8.1",
+    "tsup": "^8.5.1",
+    "turbo": "^2.8.10",
+    "typescript": "~5.9.3",
+    "vitest": "^4.0.18",
+    "vitest-websocket-mock": "^0.5.0",
+    "@discordjs/api-extractor": "^7.52.7",
+    "@discordjs/scripts": "^0.1.0"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "build": "tsc --noEmit && tsup && node scripts/postbuild.mjs",
+    "build:docs": "tsc -p tsconfig.docs.json",
+    "test": "vitest run --config ../../vitest.config.ts",
+    "lint": "prettier --check . && cross-env TIMING=1 eslint --format=pretty src __tests__",
+    "format": "prettier --write . && cross-env TIMING=1 eslint --fix --format=pretty src __tests__",
+    "fmt": "pnpm run format",
+    "docs": "pnpm run build:docs && api-extractor run --local --minify && generate-split-documentation",
+    "changelog": "git cliff --prepend ./CHANGELOG.md -u -c ./cliff.toml -r ../../ --include-path 'packages/voice/*'",
+    "release": "cliff-jumper"
+  }
+}

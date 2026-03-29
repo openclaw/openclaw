@@ -1,171 +1,97 @@
 ---
 title: "Memory Search"
-summary: "How OpenClaw memory search works -- embedding providers, hybrid search, MMR, and temporal decay"
+summary: "How memory search finds relevant notes using embeddings and hybrid retrieval"
 read_when:
-  - You want to understand how memory_search retrieves results
-  - You want to tune hybrid search, MMR, or temporal decay
+  - You want to understand how memory_search works
   - You want to choose an embedding provider
+  - You want to tune search quality
 ---
 
 # Memory Search
 
-OpenClaw indexes workspace memory files (`MEMORY.md` and `memory/*.md`) into
-chunks (~400 tokens, 80-token overlap) and searches them with `memory_search`.
-This page explains how the search pipeline works and how to tune it. For the
-file layout and memory basics, see [Memory](/concepts/memory).
+`memory_search` finds relevant notes from your memory files, even when the
+wording differs from the original text. It works by indexing memory into small
+chunks and searching them using embeddings, keywords, or both.
 
-## Search pipeline
+## Quick start
 
-```
-Query -> Embedding -> Vector Search ─┐
-                                     ├─> Weighted Merge -> Temporal Decay -> MMR -> Top-K
-Query -> Tokenize  -> BM25 Search  ──┘
-```
-
-Both retrieval paths run in parallel when hybrid search is enabled. If either
-path is unavailable (no embeddings or no FTS5), the other runs alone.
-
-## Embedding providers
-
-The default `memory-core` plugin ships built-in adapters for these providers:
-
-| Provider   | Adapter ID | Auto-selected        | Notes                               |
-| ---------- | ---------- | -------------------- | ----------------------------------- |
-| Local GGUF | `local`    | Yes (first priority) | node-llama-cpp, ~0.6 GB model       |
-| OpenAI     | `openai`   | Yes                  | `text-embedding-3-small` default    |
-| Gemini     | `gemini`   | Yes                  | Supports multimodal (images, audio) |
-| Voyage     | `voyage`   | Yes                  |                                     |
-| Mistral    | `mistral`  | Yes                  |                                     |
-| Ollama     | `ollama`   | No (explicit only)   | Local/self-hosted                   |
-
-Auto-selection picks the first provider whose API key can be resolved. Set
-`memorySearch.provider` explicitly to override.
-
-Remote embeddings require an API key for the embedding provider. OpenClaw
-resolves keys from auth profiles, `models.providers.*.apiKey`, or environment
-variables. Codex OAuth covers chat/completions only and does not satisfy
-embedding requests.
-
-### Quick start
-
-Enable memory search with OpenAI embeddings:
+If you have an OpenAI, Gemini, Voyage, or Mistral API key configured, memory
+search works automatically. To set a provider explicitly:
 
 ```json5
 {
   agents: {
     defaults: {
       memorySearch: {
-        provider: "openai",
-        model: "text-embedding-3-small",
+        provider: "openai", // or "gemini", "local", "ollama", etc.
       },
     },
   },
 }
 ```
 
-Or use local embeddings (no API key needed):
+For local embeddings with no API key, use `provider: "local"` (requires
+node-llama-cpp).
 
-```json5
-{
-  agents: {
-    defaults: {
-      memorySearch: {
-        provider: "local",
-      },
-    },
-  },
-}
+## Supported providers
+
+| Provider | ID        | Needs API key | Notes                         |
+| -------- | --------- | ------------- | ----------------------------- |
+| OpenAI   | `openai`  | Yes           | Auto-detected, fast           |
+| Gemini   | `gemini`  | Yes           | Supports image/audio indexing |
+| Voyage   | `voyage`  | Yes           | Auto-detected                 |
+| Mistral  | `mistral` | Yes           | Auto-detected                 |
+| Ollama   | `ollama`  | No            | Local, must set explicitly    |
+| Local    | `local`   | No            | GGUF model, ~0.6 GB download  |
+
+## How search works
+
+OpenClaw runs two retrieval paths in parallel and merges the results:
+
+```mermaid
+flowchart LR
+    Q["Query"] --> E["Embedding"]
+    Q --> T["Tokenize"]
+    E --> VS["Vector Search"]
+    T --> BM["BM25 Search"]
+    VS --> M["Weighted Merge"]
+    BM --> M
+    M --> R["Top Results"]
 ```
 
-Local mode uses node-llama-cpp and may require `pnpm approve-builds` to build
-the native addon.
+- **Vector search** finds notes with similar meaning ("gateway host" matches
+  "the machine running OpenClaw").
+- **BM25 keyword search** finds exact matches (IDs, error strings, config
+  keys).
 
-## Hybrid search (BM25 + vector)
+If only one path is available (no embeddings or no FTS), the other runs alone.
 
-When both FTS5 and embeddings are available, OpenClaw combines two retrieval
-signals:
+## Improving search quality
 
-- **Vector similarity** -- semantic matching. Good at paraphrases ("Mac Studio
-  gateway host" vs "the machine running the gateway").
-- **BM25 keyword relevance** -- exact token matching. Good at IDs, code symbols,
-  error strings, and config keys.
+Two optional features help when you have a large note history:
 
-### How scores are merged
+### Temporal decay
 
-1. Retrieve a candidate pool from each side (top
-   `maxResults x candidateMultiplier`).
-2. Convert BM25 rank to a 0-1 score: `textScore = 1 / (1 + max(0, bm25Rank))`.
-3. Union candidates by chunk ID and compute:
-   `finalScore = vectorWeight x vectorScore + textWeight x textScore`.
+Old notes gradually lose ranking weight so recent information surfaces first.
+With the default half-life of 30 days, a note from last month scores at 50% of
+its original weight. Evergreen files like `MEMORY.md` are never decayed.
 
-Weights are normalized to 1.0, so they behave as percentages. If either path is
-unavailable, the other runs alone with no hard failure.
+<Tip>
+Enable temporal decay if your agent has months of daily notes and stale
+information keeps outranking recent context.
+</Tip>
 
-### CJK support
+### MMR (diversity)
 
-FTS5 uses configurable trigram tokenization with a short-substring fallback so
-Chinese, Japanese, and Korean text is searchable. CJK-heavy text is weighted
-correctly during chunk-size estimation, and surrogate-pair characters are
-preserved during fine splits.
+Reduces redundant results. If five notes all mention the same router config, MMR
+ensures the top results cover different topics instead of repeating.
 
-## Post-processing
+<Tip>
+Enable MMR if `memory_search` keeps returning near-duplicate snippets from
+different daily notes.
+</Tip>
 
-After merging scores, two optional stages refine the result list:
-
-### Temporal decay (recency boost)
-
-Daily notes accumulate over months. Without decay, a well-worded note from six
-months ago can outrank yesterday's update on the same topic.
-
-Temporal decay applies an exponential multiplier based on age:
-
-```
-decayedScore = score x e^(-lambda x ageInDays)
-```
-
-With the default half-life of 30 days:
-
-| Age      | Score retained |
-| -------- | -------------- |
-| Today    | 100%           |
-| 7 days   | ~84%           |
-| 30 days  | 50%            |
-| 90 days  | 12.5%          |
-| 180 days | ~1.6%          |
-
-**Evergreen files are never decayed** -- `MEMORY.md` and non-dated files in
-`memory/` (like `memory/projects.md`) always rank at full score. Dated daily
-files use the date from the filename.
-
-**When to enable:** Your agent has months of daily notes and stale information
-outranks recent context.
-
-### MMR re-ranking (diversity)
-
-When search returns results, multiple chunks may contain similar or overlapping
-content. MMR (Maximal Marginal Relevance) re-ranks results to balance relevance
-with diversity.
-
-How it works:
-
-1. Start with the highest-scoring result.
-2. Iteratively select the next result that maximizes:
-   `lambda x relevance - (1 - lambda) x max_similarity_to_already_selected`.
-3. Similarity is measured using Jaccard text similarity on tokenized content.
-
-The `lambda` parameter controls the trade-off:
-
-- `1.0` -- pure relevance (no diversity penalty).
-- `0.0` -- maximum diversity (ignores relevance).
-- Default: `0.7` (balanced, slight relevance bias).
-
-**When to enable:** `memory_search` returns redundant or near-duplicate
-snippets, especially with daily notes that repeat similar information.
-
-## Configuration
-
-Both post-processing features and hybrid search weights are configured under
-`memorySearch.query.hybrid`:
+### Enable both
 
 ```json5
 {
@@ -174,18 +100,8 @@ Both post-processing features and hybrid search weights are configured under
       memorySearch: {
         query: {
           hybrid: {
-            enabled: true,
-            vectorWeight: 0.7,
-            textWeight: 0.3,
-            candidateMultiplier: 4,
-            mmr: {
-              enabled: true, // default: false
-              lambda: 0.7,
-            },
-            temporalDecay: {
-              enabled: true, // default: false
-              halfLifeDays: 30,
-            },
+            mmr: { enabled: true },
+            temporalDecay: { enabled: true },
           },
         },
       },
@@ -194,55 +110,32 @@ Both post-processing features and hybrid search weights are configured under
 }
 ```
 
-You can enable either feature independently:
+## Multimodal memory
 
-- **MMR only** -- many similar notes but age does not matter.
-- **Temporal decay only** -- recency matters but results are already diverse.
-- **Both** -- recommended for agents with large, long-running daily note
-  histories.
+With Gemini Embedding 2, you can index images and audio files alongside
+Markdown. Search queries remain text, but they match against visual and audio
+content. See the [Memory configuration reference](/reference/memory-config) for
+setup.
 
-## Session memory search (experimental)
+## Session memory search
 
-You can optionally index session transcripts and surface them via
-`memory_search`. This is gated behind an experimental flag:
-
-```json5
-{
-  agents: {
-    defaults: {
-      memorySearch: {
-        experimental: { sessionMemory: true },
-        sources: ["memory", "sessions"],
-      },
-    },
-  },
-}
-```
-
-Session indexing is opt-in and runs asynchronously. Results can be slightly stale
-until background sync finishes. Session logs live on disk, so treat filesystem
-access as the trust boundary.
+You can optionally index session transcripts so `memory_search` can recall
+earlier conversations. This is opt-in via
+`memorySearch.experimental.sessionMemory`. See the
+[configuration reference](/reference/memory-config) for details.
 
 ## Troubleshooting
 
-**`memory_search` returns nothing?**
+**No results?** Run `openclaw memory status` to check the index. If empty, run
+`openclaw memory index --force`.
 
-- Check `openclaw memory status` -- is the index populated?
-- Verify an embedding provider is configured and has a valid key.
-- Run `openclaw memory index --force` to trigger a full reindex.
+**Only keyword matches?** Your embedding provider may not be configured. Check
+`openclaw memory status --deep`.
 
-**Results are all keyword matches, no semantic results?**
-
-- Embeddings may not be configured. Check `openclaw memory status --deep`.
-- If using `local`, ensure node-llama-cpp built successfully.
-
-**CJK text not found?**
-
-- FTS5 trigram tokenization handles CJK. If results are missing, run
-  `openclaw memory index --force` to rebuild the FTS index.
+**CJK text not found?** Rebuild the FTS index with
+`openclaw memory index --force`.
 
 ## Further reading
 
 - [Memory](/concepts/memory) -- file layout, backends, tools
 - [Memory configuration reference](/reference/memory-config) -- all config knobs
-  including QMD, batch indexing, embedding cache, sqlite-vec, and multimodal

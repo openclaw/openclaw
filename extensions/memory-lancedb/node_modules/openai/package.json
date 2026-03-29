@@ -1,0 +1,244 @@
+{
+  "name": "openai",
+  "version": "6.33.0",
+  "description": "The official TypeScript library for the OpenAI API",
+  "author": "OpenAI <support@openai.com>",
+  "types": "./index.d.ts",
+  "main": "./index.js",
+  "type": "commonjs",
+  "repository": "github:openai/openai-node",
+  "license": "Apache-2.0",
+  "packageManager": "yarn@1.22.22",
+  "files": [
+    "**/*"
+  ],
+  "private": false,
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "test": "./scripts/test",
+    "build": "./scripts/build",
+    "format": "./scripts/format",
+    "tsn": "ts-node -r tsconfig-paths/register",
+    "lint": "./scripts/lint",
+    "fix": "./scripts/format"
+  },
+  "dependencies": {},
+  "peerDependencies": {
+    "ws": "^8.18.0",
+    "zod": "^3.25 || ^4.0"
+  },
+  "peerDependenciesMeta": {
+    "ws": {
+      "optional": true
+    },
+    "zod": {
+      "optional": true
+    }
+  },
+  "bin": {
+    "openai": "bin/cli"
+  },
+  "overrides": {
+    "minimatch": "^9.0.5"
+  },
+  "pnpm": {
+    "overrides": {
+      "minimatch": "^9.0.5"
+    }
+  },
+  "resolutions": {
+    "minimatch": "^9.0.5"
+  },
+  "exports": {
+    ".": {
+      "require": {
+        "types": "./index.d.ts",
+        "default": "./index.js"
+      },
+      "types": "./index.d.mts",
+      "default": "./index.mjs"
+    },
+    "./_vendor/*.mjs": {
+      "default": "./_vendor/*.mjs"
+    },
+    "./_vendor/*.js": {
+      "default": "./_vendor/*.js"
+    },
+    "./_vendor/*": {
+      "import": "./_vendor/*.mjs",
+      "require": "./_vendor/*.js"
+    },
+    "./api-promise": {
+      "import": "./api-promise.mjs",
+      "require": "./api-promise.js"
+    },
+    "./api-promise.js": {
+      "default": "./api-promise.js"
+    },
+    "./api-promise.mjs": {
+      "default": "./api-promise.mjs"
+    },
+    "./azure": {
+      "import": "./azure.mjs",
+      "require": "./azure.js"
+    },
+    "./azure.js": {
+      "default": "./azure.js"
+    },
+    "./azure.mjs": {
+      "default": "./azure.mjs"
+    },
+    "./beta/*.mjs": {
+      "default": "./beta/*.mjs"
+    },
+    "./beta/*.js": {
+      "default": "./beta/*.js"
+    },
+    "./beta/*": {
+      "import": "./beta/*.mjs",
+      "require": "./beta/*.js"
+    },
+    "./client": {
+      "import": "./client.mjs",
+      "require": "./client.js"
+    },
+    "./client.js": {
+      "default": "./client.js"
+    },
+    "./client.mjs": {
+      "default": "./client.mjs"
+    },
+    "./core/*.mjs": {
+      "default": "./core/*.mjs"
+    },
+    "./core/*.js": {
+      "default": "./core/*.js"
+    },
+    "./core/*": {
+      "import": "./core/*.mjs",
+      "require": "./core/*.js"
+    },
+    "./error": {
+      "import": "./error.mjs",
+      "require": "./error.js"
+    },
+    "./error.js": {
+      "default": "./error.js"
+    },
+    "./error.mjs": {
+      "default": "./error.mjs"
+    },
+    "./helpers/*.mjs": {
+      "default": "./helpers/*.mjs"
+    },
+    "./helpers/*.js": {
+      "default": "./helpers/*.js"
+    },
+    "./helpers/*": {
+      "import": "./helpers/*.mjs",
+      "require": "./helpers/*.js"
+    },
+    "./index": {
+      "import": "./index.mjs",
+      "require": "./index.js"
+    },
+    "./index.js": {
+      "default": "./index.js"
+    },
+    "./index.mjs": {
+      "default": "./index.mjs"
+    },
+    "./lib/*.mjs": {
+      "default": "./lib/*.mjs"
+    },
+    "./lib/*.js": {
+      "default": "./lib/*.js"
+    },
+    "./lib/*": {
+      "import": "./lib/*.mjs",
+      "require": "./lib/*.js"
+    },
+    "./pagination": {
+      "import": "./pagination.mjs",
+      "require": "./pagination.js"
+    },
+    "./pagination.js": {
+      "default": "./pagination.js"
+    },
+    "./pagination.mjs": {
+      "default": "./pagination.mjs"
+    },
+    "./realtime/*.mjs": {
+      "default": "./realtime/*.mjs"
+    },
+    "./realtime/*.js": {
+      "default": "./realtime/*.js"
+    },
+    "./realtime/*": {
+      "import": "./realtime/*.mjs",
+      "require": "./realtime/*.js"
+    },
+    "./resource": {
+      "import": "./resource.mjs",
+      "require": "./resource.js"
+    },
+    "./resource.js": {
+      "default": "./resource.js"
+    },
+    "./resource.mjs": {
+      "default": "./resource.mjs"
+    },
+    "./resources/*.mjs": {
+      "default": "./resources/*.mjs"
+    },
+    "./resources/*.js": {
+      "default": "./resources/*.js"
+    },
+    "./resources/*": {
+      "import": "./resources/*.mjs",
+      "require": "./resources/*.js"
+    },
+    "./resources": {
+      "import": "./resources.mjs",
+      "require": "./resources.js"
+    },
+    "./resources.js": {
+      "default": "./resources.js"
+    },
+    "./resources.mjs": {
+      "default": "./resources.mjs"
+    },
+    "./streaming": {
+      "import": "./streaming.mjs",
+      "require": "./streaming.js"
+    },
+    "./streaming.js": {
+      "default": "./streaming.js"
+    },
+    "./streaming.mjs": {
+      "default": "./streaming.mjs"
+    },
+    "./uploads": {
+      "import": "./uploads.mjs",
+      "require": "./uploads.js"
+    },
+    "./uploads.js": {
+      "default": "./uploads.js"
+    },
+    "./uploads.mjs": {
+      "default": "./uploads.mjs"
+    },
+    "./version": {
+      "import": "./version.mjs",
+      "require": "./version.js"
+    },
+    "./version.js": {
+      "default": "./version.js"
+    },
+    "./version.mjs": {
+      "default": "./version.mjs"
+    }
+  }
+}

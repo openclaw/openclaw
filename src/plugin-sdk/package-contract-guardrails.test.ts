@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -166,6 +166,45 @@ function buildLegacyPluginSourceAlias(): string {
   return ["openclaw", ["plugin", "source"].join("-")].join("/") + "/";
 }
 
+function collectExtensionFiles(dir: string): string[] {
+  const entries = readdirSync(dir, { withFileTypes: true });
+  const files: string[] = [];
+  for (const entry of entries) {
+    if (entry.name === "dist" || entry.name === "node_modules") {
+      continue;
+    }
+    const nextPath = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...collectExtensionFiles(nextPath));
+      continue;
+    }
+    if (!entry.isFile() || !/\.(?:[cm]?ts|tsx|mts|cts)$/.test(entry.name)) {
+      continue;
+    }
+    files.push(nextPath);
+  }
+  return files;
+}
+
+function collectExtensionCoreImportLeaks(): Array<{ file: string; specifier: string }> {
+  const leaks: Array<{ file: string; specifier: string }> = [];
+  const importPattern = /\b(?:import|export)\b[\s\S]*?\bfrom\s*["']((?:\.\.\/)+src\/[^"']+)["']/g;
+  for (const file of collectExtensionFiles(resolve(REPO_ROOT, "extensions"))) {
+    const source = readFileSync(file, "utf8");
+    for (const match of source.matchAll(importPattern)) {
+      const specifier = match[1];
+      if (!specifier) {
+        continue;
+      }
+      leaks.push({
+        file: file.replaceAll(`${REPO_ROOT}/`, ""),
+        specifier,
+      });
+    }
+  }
+  return leaks;
+}
+
 describe("plugin-sdk package contract guardrails", () => {
   it("keeps package.json exports aligned with built plugin-sdk entrypoints", () => {
     expect(collectPluginSdkPackageExports()).toEqual([...pluginSdkEntrypoints].toSorted());
@@ -243,5 +282,9 @@ describe("plugin-sdk package contract guardrails", () => {
   it("keeps generated facade types on package-style module specifiers", () => {
     expect(readGeneratedFacadeTypeMap()).not.toContain("../../extensions/");
     expect(readGeneratedFacadeTypeMap()).not.toContain(buildLegacyPluginSourceAlias());
+  });
+
+  it("keeps extension sources on public sdk or local package seams", () => {
+    expect(collectExtensionCoreImportLeaks()).toEqual([]);
   });
 });

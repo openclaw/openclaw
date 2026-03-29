@@ -243,6 +243,12 @@ export type RuntimeConfigSnapshotRefreshHandler = {
   clearOnRefreshFailure?: () => void;
 };
 
+export type ConfigWriteNotification = {
+  configPath: string;
+  sourceConfig: OpenClawConfig;
+  runtimeConfig: OpenClawConfig;
+};
+
 export class ConfigRuntimeRefreshError extends Error {
   constructor(message: string, options?: { cause?: unknown }) {
     super(message, options);
@@ -2077,6 +2083,17 @@ let runtimeConfigSnapshot: OpenClawConfig | null = null;
 let runtimeConfigSourceSnapshot: OpenClawConfig | null = null;
 let runtimeConfigSnapshotPath: string | null = null;
 let runtimeConfigSnapshotRefreshHandler: RuntimeConfigSnapshotRefreshHandler | null = null;
+const configWriteListeners = new Set<(event: ConfigWriteNotification) => void>();
+
+function notifyConfigWriteListeners(event: ConfigWriteNotification): void {
+  for (const listener of configWriteListeners) {
+    try {
+      listener(event);
+    } catch {
+      // Best-effort observer path only; successful writes must still complete.
+    }
+  }
+}
 
 export function clearConfigCache(): void {
   resetConfigRuntimeState();
@@ -2084,6 +2101,15 @@ export function clearConfigCache(): void {
 
 function resolveRuntimeConfigSnapshotPath(): string {
   return resolveConfigPathForDeps(normalizeDeps({}));
+}
+
+export function registerConfigWriteListener(
+  listener: (event: ConfigWriteNotification) => void,
+): () => void {
+  configWriteListeners.add(listener);
+  return () => {
+    configWriteListeners.delete(listener);
+  };
 }
 
 export function setRuntimeConfigSnapshot(
@@ -2218,6 +2244,16 @@ export async function writeConfigFile(
     envSnapshotForRestore: sameConfigPath ? options.envSnapshotForRestore : undefined,
     unsetPaths: options.unsetPaths,
   });
+  const notifyCommittedWrite = () => {
+    if (!runtimeConfigSnapshot) {
+      return;
+    }
+    notifyConfigWriteListeners({
+      configPath: io.configPath,
+      sourceConfig: nextCfg,
+      runtimeConfig: runtimeConfigSnapshot,
+    });
+  };
   // Keep the last-known-good runtime snapshot active until the specialized refresh path
   // succeeds, so concurrent readers do not observe unresolved SecretRefs mid-refresh.
   const refreshHandler = runtimeConfigSnapshotRefreshHandler;
@@ -2225,6 +2261,7 @@ export async function writeConfigFile(
     try {
       const refreshed = await refreshHandler.refresh({ sourceConfig: nextCfg });
       if (refreshed) {
+        notifyCommittedWrite();
         return;
       }
     } catch (error) {
@@ -2245,12 +2282,15 @@ export async function writeConfigFile(
     // subsequent writes still get secret-preservation merge-patch (hadBothSnapshots stays true).
     const fresh = io.loadConfig();
     setRuntimeConfigSnapshot(fresh, nextCfg);
+    notifyCommittedWrite();
     return;
   }
   if (hadRuntimeSnapshot) {
     const fresh = io.loadConfig();
     setRuntimeConfigSnapshot(fresh);
+    notifyCommittedWrite();
     return;
   }
   setRuntimeConfigSnapshot(io.loadConfig());
+  notifyCommittedWrite();
 }

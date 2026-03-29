@@ -1,0 +1,1 @@
+{"version":3,"file":"RunnableFunction.mjs","sourceRoot":"","sources":["../src/lib/RunnableFunction.ts"],"names":[],"mappings":"AA+EA,MAAM,UAAU,2BAA2B,CACzC,EAAO;IAEP,OAAO,OAAQ,EAAU,CAAC,KAAK,KAAK,UAAU,CAAC;AACjD,CAAC;AAkBD;;;GAGG;AACH,MAAM,OAAO,mBAAmB;IAI9B,YAAY,KAAsC;QAChD,IAAI,CAAC,IAAI,GAAG,UAAU,CAAC;QACvB,IAAI,CAAC,QAAQ,GAAG,KAAK,CAAC;IACxB,CAAC;CACF"}
