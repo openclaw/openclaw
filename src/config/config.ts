@@ -2,6 +2,7 @@ export {
   clearConfigCache,
   ConfigRuntimeRefreshError,
   clearRuntimeConfigSnapshot,
+  registerConfigWriteListener,
   createConfigIO,
   getRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshot,
@@ -17,6 +18,7 @@ export {
   setRuntimeConfigSnapshot,
   writeConfigFile,
 } from "./io.js";
+export type { ConfigWriteNotification } from "./io.js";
 export { migrateLegacyConfig } from "./legacy-migrate.js";
 export * from "./paths.js";
 export * from "./runtime-overrides.js";
