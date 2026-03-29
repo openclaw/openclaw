@@ -1,11 +1,83 @@
 {
   "id": "jira-cloud",
   "name": "Jira Cloud",
-  "description": "Jira Cloud skill pack for triage, planning, and release follow-up workflows.",
+  "description": "Jira Cloud tools and skill pack for issue management workflows.",
   "skills": ["./skills"],
+  "providerAuthEnvVars": {
+    "jira-cloud": ["JIRA_CLOUD_SITE_URL", "JIRA_CLOUD_EMAIL", "JIRA_CLOUD_API_TOKEN"]
+  },
+  "uiHints": {
+    "siteUrl": {
+      "label": "Jira Site URL",
+      "help": "Your Jira Cloud site URL, for example https://example.atlassian.net"
+    },
+    "email": {
+      "label": "Jira Email",
+      "help": "Atlassian account email for API token auth."
+    },
+    "apiToken": {
+      "label": "Jira API Token",
+      "help": "Atlassian API token used with email for Basic auth.",
+      "sensitive": true
+    }
+  },
+  "contracts": {
+    "tools": [
+      "jira_healthcheck",
+      "jira_list_projects",
+      "jira_search_issues",
+      "jira_get_issue",
+      "jira_create_issue",
+      "jira_add_comment",
+      "jira_list_transitions",
+      "jira_transition_issue",
+      "jira_assign_issue",
+      "jira_get_create_metadata"
+    ]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {}
+    "required": ["email", "apiToken"],
+    "anyOf": [{ "required": ["siteUrl"] }, { "required": ["baseUrl"] }],
+    "properties": {
+      "siteUrl": {
+        "type": "string",
+        "pattern": "^https://[A-Za-z0-9.-]+\\.atlassian\\.net/?$"
+      },
+      "baseUrl": {
+        "type": "string",
+        "pattern": "^https://[A-Za-z0-9.-]+\\.atlassian\\.net/?$"
+      },
+      "email": {
+        "type": "string",
+        "minLength": 3
+      },
+      "apiToken": {
+        "type": ["string", "object"]
+      },
+      "defaultProjectKey": {
+        "type": "string",
+        "pattern": "^[A-Za-z][A-Za-z0-9_]{0,49}$"
+      },
+      "defaultIssueType": {
+        "type": "string",
+        "minLength": 1
+      },
+      "requestTimeoutMs": {
+        "type": "integer",
+        "minimum": 1000,
+        "maximum": 60000
+      },
+      "retryCount": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 5
+      },
+      "userAgent": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
   }
 }
