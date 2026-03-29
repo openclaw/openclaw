@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import {
-  loadBundledPluginPublicSurfaceSync,
+  loadBundledPluginPublicSurface,
   resolveRelativeBundledPluginPublicModuleId,
 } from "../../test-utils/bundled-plugin-public-surface.js";
 import { registerProviders, requireProvider } from "./testkit.js";
@@ -217,25 +217,25 @@ describe("provider discovery contract", () => {
       { default: modelStudioPlugin },
       { default: cloudflareAiGatewayPlugin },
     ] = await Promise.all([
-      loadBundledPluginPublicSurfaceSync<{
+      loadBundledPluginPublicSurface<{
         default: Parameters<typeof registerProviders>[0];
       }>({ pluginId: "github-copilot", artifactBasename: "index.js" }),
-      loadBundledPluginPublicSurfaceSync<{
+      loadBundledPluginPublicSurface<{
         default: Parameters<typeof registerProviders>[0];
       }>({ pluginId: "ollama", artifactBasename: "index.js" }),
-      loadBundledPluginPublicSurfaceSync<{
+      loadBundledPluginPublicSurface<{
         default: Parameters<typeof registerProviders>[0];
       }>({ pluginId: "vllm", artifactBasename: "index.js" }),
-      loadBundledPluginPublicSurfaceSync<{
+      loadBundledPluginPublicSurface<{
         default: Parameters<typeof registerProviders>[0];
       }>({ pluginId: "sglang", artifactBasename: "index.js" }),
-      loadBundledPluginPublicSurfaceSync<{
+      loadBundledPluginPublicSurface<{
         default: Parameters<typeof registerProviders>[0];
       }>({ pluginId: "minimax", artifactBasename: "index.js" }),
-      loadBundledPluginPublicSurfaceSync<{
+      loadBundledPluginPublicSurface<{
         default: Parameters<typeof registerProviders>[0];
       }>({ pluginId: "modelstudio", artifactBasename: "index.js" }),
-      loadBundledPluginPublicSurfaceSync<{
+      loadBundledPluginPublicSurface<{
         default: Parameters<typeof registerProviders>[0];
       }>({ pluginId: "cloudflare-ai-gateway", artifactBasename: "index.js" }),
     ]);

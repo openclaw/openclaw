@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "../../../src/config/config.js";
 import type { ModelDefinitionConfig } from "../../../src/config/types.models.js";
 import { registerProviders, requireProvider } from "../../../src/plugins/contracts/testkit.js";
 import {
-  loadBundledPluginPublicSurfaceSync,
+  loadBundledPluginPublicSurface,
   resolveRelativeBundledPluginPublicModuleId,
 } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 
@@ -186,25 +186,25 @@ function installDiscoveryHooks(state: DiscoveryState) {
       { default: modelStudioPlugin },
       { default: cloudflareAiGatewayPlugin },
     ] = await Promise.all([
-      loadBundledPluginPublicSurfaceSync<{
+      loadBundledPluginPublicSurface<{
         default: Parameters<typeof registerProviders>[0];
       }>({ pluginId: "github-copilot", artifactBasename: "index.js" }),
-      loadBundledPluginPublicSurfaceSync<{
+      loadBundledPluginPublicSurface<{
         default: Parameters<typeof registerProviders>[0];
       }>({ pluginId: "ollama", artifactBasename: "index.js" }),
-      loadBundledPluginPublicSurfaceSync<{
+      loadBundledPluginPublicSurface<{
         default: Parameters<typeof registerProviders>[0];
       }>({ pluginId: "vllm", artifactBasename: "index.js" }),
-      loadBundledPluginPublicSurfaceSync<{
+      loadBundledPluginPublicSurface<{
         default: Parameters<typeof registerProviders>[0];
       }>({ pluginId: "sglang", artifactBasename: "index.js" }),
-      loadBundledPluginPublicSurfaceSync<{
+      loadBundledPluginPublicSurface<{
         default: Parameters<typeof registerProviders>[0];
       }>({ pluginId: "minimax", artifactBasename: "index.js" }),
-      loadBundledPluginPublicSurfaceSync<{
+      loadBundledPluginPublicSurface<{
         default: Parameters<typeof registerProviders>[0];
       }>({ pluginId: "modelstudio", artifactBasename: "index.js" }),
-      loadBundledPluginPublicSurfaceSync<{
+      loadBundledPluginPublicSurface<{
         default: Parameters<typeof registerProviders>[0];
       }>({ pluginId: "cloudflare-ai-gateway", artifactBasename: "index.js" }),
     ]);
