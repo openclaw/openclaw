@@ -25,7 +25,7 @@ import {
   shouldPreserveTransientCooldownProbeSlot,
   shouldUseTransientCooldownProbeSlot,
 } from "./failover-policy.js";
-import { LiveSessionModelSwitchError } from "./live-model-switch.js";
+import type { LiveSessionModelSwitchError } from "./live-model-switch.js";
 import { logModelFallbackDecision } from "./model-fallback-observation.js";
 import type { FallbackAttempt, ModelCandidate } from "./model-fallback.types.js";
 import {
@@ -40,6 +40,22 @@ import type { FailoverReason } from "./pi-embedded-helpers.js";
 import { isLikelyContextOverflowError } from "./pi-embedded-helpers.js";
 
 const log = createSubsystemLogger("model-fallback");
+
+/**
+ * Structural check for {@link LiveSessionModelSwitchError} that works across
+ * module-boundary duplicates and serialized/rehydrated errors where
+ * `instanceof` would fail.  Mirrors the pattern used in
+ * `src/process/command-queue.ts` (`isExpectedNonErrorLaneFailure`).
+ */
+export function isLiveSessionModelSwitchError(err: unknown): err is LiveSessionModelSwitchError {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    (err as Record<string, unknown>).name === "LiveSessionModelSwitchError" &&
+    typeof (err as Record<string, unknown>).provider === "string" &&
+    typeof (err as Record<string, unknown>).model === "string"
+  );
+}
 
 /**
  * Structured error thrown when all model fallback candidates have been
@@ -181,7 +197,7 @@ async function runFallbackCandidate<T>(params: {
     // the run with the updated model selection.  Letting it fall through here
     // would cause the fallback loop to skip the current candidate and try the
     // next one, effectively inverting the intended model order (#57063).
-    if (params.rethrowLiveSwitch && err instanceof LiveSessionModelSwitchError) {
+    if (params.rethrowLiveSwitch && isLiveSessionModelSwitchError(err)) {
       throw err;
     }
     // Normalize abort-wrapped rate-limit errors (e.g. Google Vertex RESOURCE_EXHAUSTED)

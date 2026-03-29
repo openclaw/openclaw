@@ -7,8 +7,11 @@ import {
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionBinding } from "../../agents/cli-session.js";
-import { LiveSessionModelSwitchError } from "../../agents/live-model-switch.js";
-import { runWithModelFallback, isFallbackSummaryError } from "../../agents/model-fallback.js";
+import {
+  runWithModelFallback,
+  isFallbackSummaryError,
+  isLiveSessionModelSwitchError,
+} from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
@@ -621,7 +624,7 @@ export async function runAgentTurnWithFallback(params: {
 
       break;
     } catch (err) {
-      if (err instanceof LiveSessionModelSwitchError) {
+      if (isLiveSessionModelSwitchError(err)) {
         modelSwitchRestarts++;
         if (modelSwitchRestarts > MAX_MODEL_SWITCH_RESTARTS) {
           throw new Error(
