@@ -50,6 +50,7 @@ afterEach(() => {
 describe("installTestEnv", () => {
   it("keeps live tests on a temp HOME while copying config and auth state", () => {
     const realHome = createTempHome();
+    const priorIsolatedHome = createTempHome();
     writeFile(path.join(realHome, ".profile"), "export TEST_PROFILE_ONLY=from-profile\n");
     writeFile(
       path.join(realHome, "custom-openclaw.json5"),
@@ -87,6 +88,8 @@ describe("installTestEnv", () => {
     process.env.OPENCLAW_LIVE_TEST = "1";
     process.env.OPENCLAW_LIVE_TEST_QUIET = "1";
     process.env.OPENCLAW_CONFIG_PATH = "~/custom-openclaw.json5";
+    process.env.OPENCLAW_TEST_HOME = priorIsolatedHome;
+    process.env.OPENCLAW_STATE_DIR = path.join(priorIsolatedHome, ".openclaw");
 
     const testEnv = installTestEnv();
     cleanupFns.push(testEnv.cleanup);
