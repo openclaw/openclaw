@@ -836,6 +836,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
               );
               const mediaTimeout = 45000; // Per-media timeout: 45s.
               for (const mediaUrl of toolMediaUrls) {
+                const ac = new AbortController();
                 try {
                   const result = await Promise.race([
                     sendMediaAuto({
@@ -845,16 +846,26 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
                       accountId: account.accountId,
                       replyToId: event.messageId,
                       account,
+                    }).then((r) => {
+                      if (ac.signal.aborted) {
+                        log?.info(
+                          `[qqbot:${account.accountId}] Tool fallback sendMedia completed after timeout, suppressing late delivery`,
+                        );
+                        return {
+                          channel: "qqbot",
+                          error: "Media send completed after timeout (suppressed)",
+                        } as typeof r;
+                      }
+                      return r;
                     }),
                     new Promise<{ channel: string; error: string }>((resolve) =>
-                      setTimeout(
-                        () =>
-                          resolve({
-                            channel: "qqbot",
-                            error: `Tool fallback media send timeout (${mediaTimeout / 1000}s)`,
-                          }),
-                        mediaTimeout,
-                      ),
+                      setTimeout(() => {
+                        ac.abort();
+                        resolve({
+                          channel: "qqbot",
+                          error: `Tool fallback media send timeout (${mediaTimeout / 1000}s)`,
+                        });
+                      }, mediaTimeout),
                     ),
                   ]);
                   if (result.error) {

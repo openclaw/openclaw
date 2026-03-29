@@ -341,6 +341,65 @@ function collectRecentLogFiles(logDirs: string[]): LogCandidate[] {
   return candidates;
 }
 
+/**
+ * Read the last N lines of a file without loading the entire file into memory.
+ * Uses a reverse-read strategy: reads fixed-size chunks from the end of the
+ * file until the requested number of newline characters are found.
+ *
+ * Also estimates the total line count from the file size and the average bytes
+ * per line observed in the tail portion (exact count is not feasible for
+ * multi-GB files without a full scan).
+ */
+function tailFileLines(
+  filePath: string,
+  maxLines: number,
+): { tail: string[]; totalFileLines: number } {
+  const fd = fs.openSync(filePath, "r");
+  try {
+    const stat = fs.fstatSync(fd);
+    const fileSize = stat.size;
+    if (fileSize === 0) {
+      return { tail: [], totalFileLines: 0 };
+    }
+
+    const CHUNK_SIZE = 64 * 1024;
+    const chunks: Buffer[] = [];
+    let bytesRead = 0;
+    let position = fileSize;
+    let newlineCount = 0;
+
+    while (position > 0 && newlineCount <= maxLines) {
+      const readSize = Math.min(CHUNK_SIZE, position);
+      position -= readSize;
+      const buf = Buffer.alloc(readSize);
+      fs.readSync(fd, buf, 0, readSize, position);
+      chunks.unshift(buf);
+      bytesRead += readSize;
+
+      for (let i = 0; i < readSize; i++) {
+        if (buf[i] === 0x0a) newlineCount++;
+      }
+    }
+
+    const tailContent = Buffer.concat(chunks).toString("utf8");
+    const allLines = tailContent.split("\n");
+
+    const tail = allLines.slice(-maxLines);
+
+    let totalFileLines: number;
+    if (bytesRead >= fileSize) {
+      totalFileLines = allLines.length;
+    } else {
+      const avgBytesPerLine = bytesRead / Math.max(allLines.length, 1);
+      totalFileLines = Math.round(fileSize / avgBytesPerLine);
+    }
+
+    return { tail, totalFileLines };
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 registerCommand({
   name: "bot-logs",
   description: "导出本地日志文件",
@@ -389,10 +448,7 @@ registerCommand({
     const MAX_LINES_PER_FILE = 1000;
     for (const logFile of recentFiles) {
       try {
-        const content = fs.readFileSync(logFile.filePath, "utf8");
-        const allLines = content.split("\n");
-        const totalFileLines = allLines.length;
-        const tail = allLines.slice(-MAX_LINES_PER_FILE);
+        const { tail, totalFileLines } = tailFileLines(logFile.filePath, MAX_LINES_PER_FILE);
         if (tail.length > 0) {
           const fileName = path.basename(logFile.filePath);
           lines.push(

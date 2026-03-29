@@ -483,14 +483,24 @@ async function sendVoiceWithTimeout(
     account.config?.voiceDirectUploadFormats;
   const transcodeEnabled = account.config?.audioFormatPolicy?.transcodeEnabled !== false;
   const voiceTimeout = 45000;
+  const ac = new AbortController();
   try {
     const result = await Promise.race([
-      sendVoice(target, voicePath, uploadFormats, transcodeEnabled),
+      sendVoice(target, voicePath, uploadFormats, transcodeEnabled).then((r) => {
+        if (ac.signal.aborted) {
+          log?.info(`${prefix} sendVoice completed after timeout, suppressing late delivery`);
+          return {
+            channel: "qqbot",
+            error: "Voice send completed after timeout (suppressed)",
+          } as typeof r;
+        }
+        return r;
+      }),
       new Promise<{ channel: string; error: string }>((resolve) =>
-        setTimeout(
-          () => resolve({ channel: "qqbot", error: "Voice send timed out and was skipped" }),
-          voiceTimeout,
-        ),
+        setTimeout(() => {
+          ac.abort();
+          resolve({ channel: "qqbot", error: "Voice send timed out and was skipped" });
+        }, voiceTimeout),
       ),
     ]);
     if (result.error) log?.error(`${prefix} sendVoice error: ${result.error}`);
