@@ -251,14 +251,13 @@ describe("exec host env validation", () => {
     }
   });
 
-  it("defaults implicit exec host to gateway when sandbox runtime is unavailable", async () => {
+  it("routes implicit auto host to gateway when sandbox runtime is unavailable", async () => {
     const tool = createExecTool({ security: "full", ask: "off" });
 
     const result = await tool.execute("call1", {
       command: "echo ok",
     });
-    const output = normalizeText(result.content.find((c) => c.type === "text")?.text);
-    expect(output).toContain("ok");
+    expect(normalizeText(result.content.find((c) => c.type === "text")?.text)).toBe("ok");
   });
 
   it("fails closed when sandbox host is explicitly configured without sandbox runtime", async () => {
@@ -268,6 +267,6 @@ describe("exec host env validation", () => {
       tool.execute("call1", {
         command: "echo ok",
       }),
-    ).rejects.toThrow(/sandbox runtime is unavailable/);
+    ).rejects.toThrow(/requires a sandbox runtime/);
   });
 });
