@@ -427,7 +427,7 @@ describe("gateway server sessions", () => {
     ws.close();
   });
 
-  test("sessions.list surfaces transcript usage fallbacks and parent child relationships", async () => {
+  test("sessions.list surfaces transcript usage and model fallbacks from the transcript", async () => {
     const { dir } = await createSessionStoreDir();
     testState.agentConfig = {
       models: {
@@ -477,7 +477,7 @@ describe("gateway server sessions", () => {
           sessionId: "sess-child",
           updatedAt: Date.now() - 1_000,
           modelProvider: "anthropic",
-          model: "claude-sonnet-4-6",
+          model: "claude-sonnet-4-5",
           parentSessionKey: "agent:main:main",
           totalTokens: 0,
           totalTokensFresh: false,
@@ -499,6 +499,8 @@ describe("gateway server sessions", () => {
         totalTokensFresh?: boolean;
         contextTokens?: number;
         estimatedCostUsd?: number;
+        modelProvider?: string;
+        model?: string;
       }>;
     }>(ws, "sessions.list", {});
 
@@ -513,6 +515,8 @@ describe("gateway server sessions", () => {
     expect(child?.totalTokensFresh).toBe(true);
     expect(child?.contextTokens).toBe(1_048_576);
     expect(child?.estimatedCostUsd).toBe(0.0042);
+    expect(child?.modelProvider).toBe("anthropic");
+    expect(child?.model).toBe("claude-sonnet-4-6");
 
     ws.close();
   });
