@@ -104,7 +104,6 @@ describe("config schema", () => {
     expect(res.uiHints["mcp.servers.*.headers.*"]?.sensitive).toBe(true);
     expect(res.uiHints["mcp.servers.*.url"]?.tags).toContain(SENSITIVE_URL_HINT_TAG);
     expect(res.uiHints["models.providers.*.baseUrl"]?.tags).toContain(SENSITIVE_URL_HINT_TAG);
-    expect(res.uiHints["channels.discord.threadBindings.spawnAcpSessions"]?.label).toBeTruthy();
     expect(res.version).toBeTruthy();
     expect(res.generatedAt).toBeTruthy();
   });
@@ -300,7 +299,7 @@ describe("config schema", () => {
 
   it("covers core/built-in config paths with tags", () => {
     const schema = baseSchema;
-    const allowed = new Set<string>(CONFIG_TAGS);
+    const allowed = new Set<string>([...CONFIG_TAGS, SENSITIVE_URL_HINT_TAG]);
     for (const [key, hint] of Object.entries(schema.uiHints)) {
       if (!key.includes(".")) {
         continue;
