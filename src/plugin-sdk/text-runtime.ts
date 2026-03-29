@@ -6,6 +6,7 @@ export * from "../logging/logger.js";
 export * from "../logging/redact.js";
 export * from "../logging/redact-identifier.js";
 export * from "../markdown/ir.js";
+export * from "../markdown/render-aware-chunking.js";
 export * from "../markdown/render.js";
 export * from "../markdown/tables.js";
 export * from "../markdown/whatsapp.js";
