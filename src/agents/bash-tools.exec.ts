@@ -329,7 +329,9 @@ export function createExecTool(
       if (elevatedRequested) {
         logInfo(`exec: elevated command ${truncateMiddle(params.command, 120)}`);
       }
-      const configuredHost = defaults?.host ?? "sandbox";
+      // Keep the implicit host aligned with the active runtime: host-first unless a sandbox
+      // runtime is actually available for this session, while still honoring explicit overrides.
+      const configuredHost = defaults?.host ?? (defaults?.sandbox ? "sandbox" : "gateway");
       const requestedHost = normalizeExecHost(params.host) ?? null;
       let host: ExecHost = requestedHost ?? configuredHost;
       if (!elevatedRequested && requestedHost && requestedHost !== configuredHost) {
@@ -358,8 +360,9 @@ export function createExecTool(
       }
 
       const sandbox = host === "sandbox" ? defaults?.sandbox : undefined;
-      // Never fall through to direct host exec when the selected host was sandbox.
-      if (host === "sandbox" && !sandbox) {
+      const sandboxHostConfigured = defaults?.host === "sandbox" || requestedHost === "sandbox";
+      // Never fall through to direct host exec when sandbox was selected explicitly.
+      if (host === "sandbox" && !sandbox && sandboxHostConfigured) {
         throw new Error(
           [
             "exec host resolved to sandbox, but sandbox runtime is unavailable for this session.",
