@@ -10,7 +10,7 @@
         "reason": "Measured ~35% faster under threads than forks on base config after removing process.chdir() from the test."
       },
       {
-        "file": "src/agents/pi-extensions/compaction-safeguard.test.ts",
+        "file": "src/agents/pi-hooks/compaction-safeguard.test.ts",
         "reason": "Measured ~27% faster under threads than forks on base config after removing process.chdir() from the test."
       },
       {
@@ -185,6 +185,14 @@
       {
         "file": "extensions/tavily/src/tavily-search-tool.test.ts",
         "reason": "This search-tool suite hoists the Tavily client mock and imports lazily; keep it isolated so shared extension workers do not bypass the mocked client via cached modules."
+      },
+      {
+        "file": "extensions/xai/provider.contract.test.ts",
+        "reason": "This xAI provider contract suite validates the bundled provider registration produced by defineSingleProviderPluginEntry; keep it in its own forked extension lane so shared workers cannot poison that registry with hoisted plugin-sdk mocks from unrelated extension files."
+      },
+      {
+        "file": "extensions/xai/web-search-provider.contract.test.ts",
+        "reason": "This xAI web-search contract suite validates the bundled Grok web-search registration from the same xAI plugin entry; keep it isolated so shared extension workers do not reuse hoisted plugin-sdk web-search mocks from unrelated extension files."
       }
     ]
   },

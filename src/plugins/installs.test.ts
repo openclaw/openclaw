@@ -1,6 +1,35 @@
 import { describe, expect, it } from "vitest";
 import { buildNpmResolutionInstallFields, recordPluginInstall } from "./installs.js";
 
+function expectRecordedInstall(pluginId: string, next: ReturnType<typeof recordPluginInstall>) {
+  expect(next.plugins?.installs?.[pluginId]).toMatchObject({
+    source: "npm",
+    spec: `${pluginId}@latest`,
+  });
+  expect(typeof next.plugins?.installs?.[pluginId]?.installedAt).toBe("string");
+}
+
+function createExpectedResolutionFields(
+  overrides: Partial<ReturnType<typeof buildNpmResolutionInstallFields>>,
+) {
+  return {
+    resolvedName: undefined,
+    resolvedVersion: undefined,
+    resolvedSpec: undefined,
+    integrity: undefined,
+    shasum: undefined,
+    resolvedAt: undefined,
+    ...overrides,
+  };
+}
+
+function expectResolutionFieldsCase(params: {
+  input: Parameters<typeof buildNpmResolutionInstallFields>[0];
+  expected: ReturnType<typeof buildNpmResolutionInstallFields>;
+}) {
+  expect(buildNpmResolutionInstallFields(params.input)).toEqual(params.expected);
+}
+
 describe("buildNpmResolutionInstallFields", () => {
   it.each([
     {
@@ -13,39 +42,35 @@ describe("buildNpmResolutionInstallFields", () => {
         shasum: "deadbeef",
         resolvedAt: "2026-02-22T00:00:00.000Z",
       },
-      expected: {
+      expected: createExpectedResolutionFields({
         resolvedName: "@openclaw/demo",
         resolvedVersion: "1.2.3",
         resolvedSpec: "@openclaw/demo@1.2.3",
         integrity: "sha512-abc",
         shasum: "deadbeef",
         resolvedAt: "2026-02-22T00:00:00.000Z",
-      },
+      }),
     },
     {
       name: "returns undefined fields when resolution is missing",
       input: undefined,
-      expected: {
-        resolvedName: undefined,
-        resolvedVersion: undefined,
-        resolvedSpec: undefined,
-        integrity: undefined,
-        shasum: undefined,
-        resolvedAt: undefined,
-      },
+      expected: createExpectedResolutionFields({}),
     },
-  ] as const)("$name", ({ input, expected }) => {
-    expect(buildNpmResolutionInstallFields(input)).toEqual(expected);
-  });
+    {
+      name: "keeps missing partial resolution fields undefined",
+      input: {
+        name: "@openclaw/demo",
+      },
+      expected: createExpectedResolutionFields({
+        resolvedName: "@openclaw/demo",
+      }),
+    },
+  ] as const)("$name", expectResolutionFieldsCase);
 });
 
 describe("recordPluginInstall", () => {
   it("stores install metadata for the plugin id", () => {
     const next = recordPluginInstall({}, { pluginId: "demo", source: "npm", spec: "demo@latest" });
-    expect(next.plugins?.installs?.demo).toMatchObject({
-      source: "npm",
-      spec: "demo@latest",
-    });
-    expect(typeof next.plugins?.installs?.demo?.installedAt).toBe("string");
+    expectRecordedInstall("demo", next);
   });
 });

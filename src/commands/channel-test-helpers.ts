@@ -1,14 +1,32 @@
-import { matrixPlugin, setMatrixRuntime } from "../../extensions/matrix/test-api.js";
-import { msteamsPlugin } from "../../extensions/msteams/test-api.js";
-import { nostrPlugin } from "../../extensions/nostr/test-api.js";
-import { tlonPlugin } from "../../extensions/tlon/test-api.js";
-import { whatsappPlugin } from "../../extensions/whatsapp/test-api.js";
-import { bundledChannelPlugins } from "../channels/plugins/bundled.js";
+import { listBundledChannelPlugins } from "../channels/plugins/bundled.js";
+import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import type { PluginRuntime } from "../plugins/runtime/index.js";
+import { loadBundledPluginTestApiSync } from "../test-utils/bundled-plugin-public-surface.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { getChannelSetupWizardAdapter } from "./channel-setup/registry.js";
 import type { ChannelSetupWizardAdapter } from "./channel-setup/types.js";
 import type { ChannelChoice } from "./onboard-types.js";
+
+const { googlechatPlugin } = loadBundledPluginTestApiSync<{
+  googlechatPlugin: ChannelPlugin;
+}>("googlechat");
+const { matrixPlugin, setMatrixRuntime } = loadBundledPluginTestApiSync<{
+  matrixPlugin: ChannelPlugin;
+  setMatrixRuntime: (runtime: PluginRuntime) => void;
+}>("matrix");
+const { msteamsPlugin } = loadBundledPluginTestApiSync<{
+  msteamsPlugin: ChannelPlugin;
+}>("msteams");
+const { nostrPlugin } = loadBundledPluginTestApiSync<{
+  nostrPlugin: ChannelPlugin;
+}>("nostr");
+const { tlonPlugin } = loadBundledPluginTestApiSync<{
+  tlonPlugin: ChannelPlugin;
+}>("tlon");
+const { whatsappPlugin } = loadBundledPluginTestApiSync<{
+  whatsappPlugin: ChannelPlugin;
+}>("whatsapp");
 
 type ChannelSetupWizardAdapterPatch = Partial<
   Pick<
@@ -36,11 +54,12 @@ export function setDefaultChannelPluginRegistryForTests(): void {
     },
   } as Parameters<typeof setMatrixRuntime>[0]);
   const channels = [
-    ...bundledChannelPlugins,
+    ...listBundledChannelPlugins(),
     matrixPlugin,
     msteamsPlugin,
     nostrPlugin,
     tlonPlugin,
+    googlechatPlugin,
     whatsappPlugin,
   ].map((plugin) => ({
     pluginId: plugin.id,

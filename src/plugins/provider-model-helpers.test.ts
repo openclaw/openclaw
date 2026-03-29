@@ -17,6 +17,47 @@ function createContext(models: ProviderRuntimeModel[]): ProviderResolveDynamicMo
   };
 }
 
+function createTemplateModel(
+  id: string,
+  overrides: Partial<ProviderRuntimeModel> = {},
+): ProviderRuntimeModel {
+  return {
+    id,
+    name: id,
+    provider: "test-provider",
+    api: "openai-completions",
+    ...overrides,
+  } as ProviderRuntimeModel;
+}
+
+function expectClonedTemplateModel(
+  params: Parameters<typeof cloneFirstTemplateModel>[0],
+  expected: Record<string, unknown> | undefined,
+) {
+  const model = cloneFirstTemplateModel(params);
+  if (expected == null) {
+    expect(model).toBeUndefined();
+    return;
+  }
+  expect(model).toMatchObject(expected);
+}
+
+function expectPrefixMatch(params: {
+  id: string;
+  candidates: readonly string[];
+  expected: boolean;
+}) {
+  expect(matchesExactOrPrefix(params.id, params.candidates)).toBe(params.expected);
+}
+
+function expectPrefixMatchCase(params: {
+  id: string;
+  candidates: readonly string[];
+  expected: boolean;
+}) {
+  expectPrefixMatch(params);
+}
+
 describe("cloneFirstTemplateModel", () => {
   it.each([
     {
@@ -25,14 +66,7 @@ describe("cloneFirstTemplateModel", () => {
         providerId: "test-provider",
         modelId: " next-model ",
         templateIds: ["missing", "template-a", "template-b"],
-        ctx: createContext([
-          {
-            id: "template-a",
-            name: "Template A",
-            provider: "test-provider",
-            api: "openai-completions",
-          } as ProviderRuntimeModel,
-        ]),
+        ctx: createContext([createTemplateModel("template-a", { name: "Template A" })]),
         patch: { reasoning: true },
       },
       expected: {
@@ -54,21 +88,26 @@ describe("cloneFirstTemplateModel", () => {
       expected: undefined,
     },
   ] as const)("$name", ({ params, expected }) => {
-    const model = cloneFirstTemplateModel(params);
-    if (expected == null) {
-      expect(model).toBeUndefined();
-      return;
-    }
-    expect(model).toMatchObject(expected);
+    expectClonedTemplateModel(params, expected);
   });
 });
 
 describe("matchesExactOrPrefix", () => {
   it.each([
-    ["MiniMax-M2.7", ["minimax-m2.7"], true],
-    ["minimax-m2.7-highspeed", ["MiniMax-M2.7"], true],
-    ["glm-5", ["minimax-m2.7"], false],
-  ] as const)("matches %s against prefixes", (id, candidates, expected) => {
-    expect(matchesExactOrPrefix(id, candidates)).toBe(expected);
-  });
+    {
+      id: "MiniMax-M2.7",
+      candidates: ["minimax-m2.7"],
+      expected: true,
+    },
+    {
+      id: "minimax-m2.7-highspeed",
+      candidates: ["MiniMax-M2.7"],
+      expected: true,
+    },
+    {
+      id: "glm-5",
+      candidates: ["minimax-m2.7"],
+      expected: false,
+    },
+  ] as const)("matches $id against prefixes", expectPrefixMatchCase);
 });

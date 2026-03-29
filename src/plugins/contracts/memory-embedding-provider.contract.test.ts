@@ -1,46 +1,16 @@
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../../config/config.js";
 import { getRegisteredMemoryEmbeddingProvider } from "../memory-embedding-providers.js";
-import { createPluginRegistry, type PluginRecord } from "../registry.js";
-import type { PluginRuntime } from "../runtime/types.js";
-import { createPluginRecord } from "../status.test-helpers.js";
-import type { OpenClawPluginApi } from "../types.js";
-
-function registerTestPlugin(params: {
-  registry: ReturnType<typeof createPluginRegistry>;
-  config: OpenClawConfig;
-  record: PluginRecord;
-  register(api: OpenClawPluginApi): void;
-}) {
-  params.registry.registry.plugins.push(params.record);
-  params.register(
-    params.registry.createApi(params.record, {
-      config: params.config,
-    }),
-  );
-}
+import { createPluginRegistryFixture, registerVirtualTestPlugin } from "./testkit.js";
 
 describe("memory embedding provider registration", () => {
   it("only allows memory plugins to register adapters", () => {
-    const config = {} as OpenClawConfig;
-    const registry = createPluginRegistry({
-      logger: {
-        info() {},
-        warn() {},
-        error() {},
-        debug() {},
-      },
-      runtime: {} as PluginRuntime,
-    });
+    const { config, registry } = createPluginRegistryFixture();
 
-    registerTestPlugin({
+    registerVirtualTestPlugin({
       registry,
       config,
-      record: createPluginRecord({
-        id: "not-memory",
-        name: "Not Memory",
-        source: "/virtual/not-memory/index.ts",
-      }),
+      id: "not-memory",
+      name: "Not Memory",
       register(api) {
         api.registerMemoryEmbeddingProvider({
           id: "forbidden",
@@ -61,26 +31,14 @@ describe("memory embedding provider registration", () => {
   });
 
   it("records the owning memory plugin id for registered adapters", () => {
-    const config = {} as OpenClawConfig;
-    const registry = createPluginRegistry({
-      logger: {
-        info() {},
-        warn() {},
-        error() {},
-        debug() {},
-      },
-      runtime: {} as PluginRuntime,
-    });
+    const { config, registry } = createPluginRegistryFixture();
 
-    registerTestPlugin({
+    registerVirtualTestPlugin({
       registry,
       config,
-      record: createPluginRecord({
-        id: "memory-core",
-        name: "Memory Core",
-        kind: "memory",
-        source: "/virtual/memory-core/index.ts",
-      }),
+      id: "memory-core",
+      name: "Memory Core",
+      kind: "memory",
       register(api) {
         api.registerMemoryEmbeddingProvider({
           id: "demo-embedding",

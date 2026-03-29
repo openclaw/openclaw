@@ -11,5 +11,3 @@ export type {
 export { applyNativeStreamingUsageCompat } from "./models-config.providers.policy.js";
 export { enforceSourceManagedProviderSecrets } from "./models-config.providers.source-managed.js";
 export { resolveOllamaApiBase } from "../plugin-sdk/ollama-surface.js";
-export { normalizeGoogleModelId } from "../plugin-sdk/google.js";
-export { normalizeXaiModelId } from "../plugin-sdk/xai.js";

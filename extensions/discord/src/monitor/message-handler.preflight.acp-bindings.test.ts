@@ -1,6 +1,6 @@
 import * as conversationRuntime from "openclaw/plugin-sdk/conversation-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createConfiguredBindingConversationRuntimeModuleMock } from "../../../../test/helpers/extensions/configured-binding-runtime.js";
+import { createConfiguredBindingConversationRuntimeModuleMock } from "../../../../test/helpers/plugins/configured-binding-runtime.js";
 
 const ensureConfiguredBindingRouteReadyMock = vi.hoisted(() => vi.fn());
 const resolveConfiguredBindingRouteMock = vi.hoisted(() => vi.fn());
@@ -305,7 +305,7 @@ describe("preflightDiscordMessage configured ACP bindings", () => {
           author: message.author,
           message,
         }),
-        guildEntries: createAllowedGuildEntries(true),
+        guildEntries: createAllowedGuildEntries(false),
       }),
     );
 

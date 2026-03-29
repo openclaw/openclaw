@@ -1,30 +1,11 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createHookRunner } from "./hooks.js";
+import { addStaticTestHooks } from "./hooks.test-helpers.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "./registry.js";
 import type {
   PluginHookBeforeModelResolveResult,
   PluginHookBeforePromptBuildResult,
-  PluginHookRegistration,
 } from "./types.js";
-
-function addTypedHook(
-  registry: PluginRegistry,
-  hookName: "before_model_resolve" | "before_prompt_build",
-  pluginId: string,
-  handler: () =>
-    | PluginHookBeforeModelResolveResult
-    | PluginHookBeforePromptBuildResult
-    | Promise<PluginHookBeforeModelResolveResult | PluginHookBeforePromptBuildResult>,
-  priority?: number,
-) {
-  registry.typedHooks.push({
-    pluginId,
-    hookName,
-    handler,
-    priority,
-    source: "test",
-  } as PluginHookRegistration);
-}
 
 describe("phase hooks merger", () => {
   let registry: PluginRegistry;
@@ -33,81 +14,105 @@ describe("phase hooks merger", () => {
     registry = createEmptyPluginRegistry();
   });
 
-  it("before_model_resolve keeps higher-priority override values", async () => {
-    addTypedHook(
-      registry,
-      "before_model_resolve",
-      "low",
-      () => ({ modelOverride: "demo-low-priority-model" }),
-      1,
-    );
-    addTypedHook(
-      registry,
-      "before_model_resolve",
-      "high",
-      () => ({
+  async function runPhaseHook(params: {
+    hookName: "before_model_resolve" | "before_prompt_build";
+    hooks: ReadonlyArray<{
+      pluginId: string;
+      result: PluginHookBeforeModelResolveResult | PluginHookBeforePromptBuildResult;
+      priority?: number;
+    }>;
+  }) {
+    addStaticTestHooks(registry, {
+      hookName: params.hookName,
+      hooks: [...params.hooks],
+    });
+    const runner = createHookRunner(registry);
+    if (params.hookName === "before_model_resolve") {
+      return await runner.runBeforeModelResolve({ prompt: "test" }, {});
+    }
+    return await runner.runBeforePromptBuild({ prompt: "test", messages: [] }, {});
+  }
+
+  async function expectPhaseHookMerge(params: {
+    hookName: "before_model_resolve" | "before_prompt_build";
+    hooks: ReadonlyArray<{
+      pluginId: string;
+      result: PluginHookBeforeModelResolveResult | PluginHookBeforePromptBuildResult;
+      priority?: number;
+    }>;
+    expected: Record<string, unknown>;
+  }) {
+    const result = await runPhaseHook(params);
+    expect(result).toEqual(expect.objectContaining(params.expected));
+  }
+
+  it.each([
+    {
+      name: "before_model_resolve keeps higher-priority override values",
+      hookName: "before_model_resolve" as const,
+      hooks: [
+        { pluginId: "low", result: { modelOverride: "demo-low-priority-model" }, priority: 1 },
+        {
+          pluginId: "high",
+          result: {
+            modelOverride: "demo-high-priority-model",
+            providerOverride: "demo-provider",
+          },
+          priority: 10,
+        },
+      ],
+      expected: {
         modelOverride: "demo-high-priority-model",
         providerOverride: "demo-provider",
-      }),
-      10,
-    );
-
-    const runner = createHookRunner(registry);
-    const result = await runner.runBeforeModelResolve({ prompt: "test" }, {});
-
-    expect(result?.modelOverride).toBe("demo-high-priority-model");
-    expect(result?.providerOverride).toBe("demo-provider");
-  });
-
-  it("before_prompt_build concatenates prependContext and preserves systemPrompt precedence", async () => {
-    addTypedHook(
-      registry,
-      "before_prompt_build",
-      "high",
-      () => ({ prependContext: "context A", systemPrompt: "system A" }),
-      10,
-    );
-    addTypedHook(
-      registry,
-      "before_prompt_build",
-      "low",
-      () => ({ prependContext: "context B" }),
-      1,
-    );
-
-    const runner = createHookRunner(registry);
-    const result = await runner.runBeforePromptBuild({ prompt: "test", messages: [] }, {});
-
-    expect(result?.prependContext).toBe("context A\n\ncontext B");
-    expect(result?.systemPrompt).toBe("system A");
-  });
-
-  it("before_prompt_build concatenates prependSystemContext and appendSystemContext", async () => {
-    addTypedHook(
-      registry,
-      "before_prompt_build",
-      "first",
-      () => ({
-        prependSystemContext: "prepend A",
-        appendSystemContext: "append A",
-      }),
-      10,
-    );
-    addTypedHook(
-      registry,
-      "before_prompt_build",
-      "second",
-      () => ({
-        prependSystemContext: "prepend B",
-        appendSystemContext: "append B",
-      }),
-      1,
-    );
-
-    const runner = createHookRunner(registry);
-    const result = await runner.runBeforePromptBuild({ prompt: "test", messages: [] }, {});
-
-    expect(result?.prependSystemContext).toBe("prepend A\n\nprepend B");
-    expect(result?.appendSystemContext).toBe("append A\n\nappend B");
+      },
+    },
+    {
+      name: "before_prompt_build concatenates prependContext and preserves systemPrompt precedence",
+      hookName: "before_prompt_build" as const,
+      hooks: [
+        {
+          pluginId: "high",
+          result: { prependContext: "context A", systemPrompt: "system A" },
+          priority: 10,
+        },
+        {
+          pluginId: "low",
+          result: { prependContext: "context B" },
+          priority: 1,
+        },
+      ],
+      expected: {
+        prependContext: "context A\n\ncontext B",
+        systemPrompt: "system A",
+      },
+    },
+    {
+      name: "before_prompt_build concatenates prependSystemContext and appendSystemContext",
+      hookName: "before_prompt_build" as const,
+      hooks: [
+        {
+          pluginId: "first",
+          result: {
+            prependSystemContext: "prepend A",
+            appendSystemContext: "append A",
+          },
+          priority: 10,
+        },
+        {
+          pluginId: "second",
+          result: {
+            prependSystemContext: "prepend B",
+            appendSystemContext: "append B",
+          },
+          priority: 1,
+        },
+      ],
+      expected: {
+        prependSystemContext: "prepend A\n\nprepend B",
+        appendSystemContext: "append A\n\nappend B",
+      },
+    },
+  ] as const)("$name", async ({ hookName, hooks, expected }) => {
+    await expectPhaseHookMerge({ hookName, hooks, expected });
   });
 });

@@ -6,19 +6,23 @@
 import type { BedrockDiscoveryConfig, ModelDefinitionConfig } from "../config/types.models.js";
 
 export type { ModelApi, ModelProviderConfig } from "../config/types.models.js";
-export type { BedrockDiscoveryConfig, ModelDefinitionConfig } from "../config/types.models.js";
+export type {
+  BedrockDiscoveryConfig,
+  ModelCompatConfig,
+  ModelDefinitionConfig,
+} from "../config/types.models.js";
 export type { ProviderPlugin } from "../plugins/types.js";
 export type { KilocodeModelCatalogEntry } from "../plugins/provider-model-kilocode.js";
 
 export { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 export {
+  applyModelCompatPatch,
+  hasToolSchemaProfile,
   hasNativeWebSearchTool,
-  HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING,
   normalizeModelCompat,
+  resolveUnsupportedToolSchemaKeywords,
   resolveToolCallArgumentsEncoding,
-  usesXaiToolSchemaProfile,
-  XAI_TOOL_SCHEMA_PROFILE,
-} from "../agents/model-compat.js";
+} from "../plugins/provider-model-compat.js";
 export { normalizeProviderId } from "../agents/provider-id.js";
 export {
   createMoonshotThinkingWrapper,

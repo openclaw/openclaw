@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import * as subsystemModule from "../../../src/logging/subsystem.js";
-import { withEnv } from "../../../test/helpers/extensions/env.js";
+import { withEnv } from "../../../test/helpers/plugins/env.js";
 import {
   listTelegramAccountIds,
   resetMissingDefaultWarnFlag,
