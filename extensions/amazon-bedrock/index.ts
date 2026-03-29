@@ -9,6 +9,13 @@ import {
   resolveImplicitBedrockProvider,
 } from "./api.js";
 
+type GuardrailConfig = {
+  guardrailIdentifier: string;
+  guardrailVersion: string;
+  streamProcessingMode?: "sync" | "async";
+  trace?: "enabled" | "disabled" | "enabled_full";
+};
+
 const PROVIDER_ID = "amazon-bedrock";
 const CLAUDE_46_MODEL_RE = /claude-(?:opus|sonnet)-4(?:\.|-)6(?:$|[-.])/i;
 

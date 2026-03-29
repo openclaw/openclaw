@@ -40,7 +40,8 @@ The `configSchema.properties` gains a `guardrail` object:
     "properties": {
       "guardrailIdentifier": { "type": "string" },
       "guardrailVersion": { "type": "string" },
-      "streamProcessingMode": { "type": "string", "enum": ["sync", "async"] }
+      "streamProcessingMode": { "type": "string", "enum": ["sync", "async"] },
+      "trace": { "type": "string", "enum": ["enabled", "disabled", "enabled_full"] }
     },
     "required": ["guardrailIdentifier", "guardrailVersion"]
   }
@@ -58,6 +59,7 @@ type GuardrailConfig = {
   guardrailIdentifier: string;
   guardrailVersion: string;
   streamProcessingMode?: "sync" | "async";
+  trace?: "enabled" | "disabled" | "enabled_full";
 };
 ```
 
@@ -89,11 +91,14 @@ The `patchPayload` callback passed to `streamWithPayloadPatch`:
   if (guardrailConfig.streamProcessingMode) {
     gc.streamProcessingMode = guardrailConfig.streamProcessingMode;
   }
+  if (guardrailConfig.trace) {
+    gc.trace = guardrailConfig.trace;
+  }
   payload.guardrailConfig = gc;
 }
 ```
 
-This always sets `guardrailIdentifier` and `guardrailVersion`, and conditionally includes `streamProcessingMode` only when specified.
+This always sets `guardrailIdentifier` and `guardrailVersion`, and conditionally includes `streamProcessingMode` and `trace` only when specified.
 
 ### 5. Registration Wiring (`register(api)`)
 
@@ -121,6 +126,7 @@ type BedrockPluginConfig = {
     guardrailIdentifier: string;
     guardrailVersion: string;
     streamProcessingMode?: "sync" | "async";
+    trace?: "enabled" | "disabled" | "enabled_full";
   };
 };
 ```
@@ -134,6 +140,7 @@ type BedrockPluginConfig = {
     guardrailIdentifier: string;   // e.g. "abc123" or full ARN
     guardrailVersion: string;      // e.g. "1" or "DRAFT"
     streamProcessingMode?: string; // "sync" | "async", omitted if not configured
+    trace?: string;                // "enabled" | "disabled" | "enabled_full", omitted if not configured
   }
 }
 ```
@@ -142,11 +149,11 @@ type BedrockPluginConfig = {
 
 *A property is a characteristic or behavior that should hold true across all valid executions of a system — essentially, a formal statement about what the system should do. Properties serve as the bridge between human-readable specifications and machine-verifiable correctness guarantees.*
 
-### Property 1: streamProcessingMode rejects invalid values
+### Property 1: streamProcessingMode and trace reject invalid values
 
-*For any* string that is not `"sync"` or `"async"`, validating a guardrail config with that string as `streamProcessingMode` should be rejected by the schema.
+*For any* string that is not `"sync"` or `"async"`, validating a guardrail config with that string as `streamProcessingMode` should be rejected by the schema. Similarly, *for any* string that is not `"enabled"`, `"disabled"`, or `"enabled_full"`, validating a guardrail config with that string as `trace` should be rejected by the schema.
 
-**Validates: Requirements 1.4**
+**Validates: Requirements 1.4, 1.6**
 
 ### Property 2: Absent guardrail config means no injection
 
@@ -156,7 +163,7 @@ type BedrockPluginConfig = {
 
 ### Property 3: Guardrail config round-trip into payload
 
-*For any* valid `guardrailIdentifier` string, `guardrailVersion` string, and optional `streamProcessingMode` value (`"sync"` or `"async"` or absent), the injected `guardrailConfig` in the outgoing payload should contain exactly `guardrailIdentifier` and `guardrailVersion` matching the config, and should include `streamProcessingMode` if and only if it was specified in the config.
+*For any* valid `guardrailIdentifier` string, `guardrailVersion` string, optional `streamProcessingMode` value (`"sync"` or `"async"` or absent), and optional `trace` value (`"enabled"`, `"disabled"`, `"enabled_full"`, or absent), the injected `guardrailConfig` in the outgoing payload should contain exactly `guardrailIdentifier` and `guardrailVersion` matching the config, and should include `streamProcessingMode` and `trace` if and only if they were specified in the config.
 
 **Validates: Requirements 2.1, 2.2, 2.3**
 
@@ -176,6 +183,7 @@ type BedrockPluginConfig = {
 
 - **Missing guardrail config**: When `guardrail` is omitted from plugin config, the plugin silently skips guardrail injection. No error, no warning. This is the default path.
 - **Invalid streamProcessingMode**: The JSON Schema `enum` constraint rejects values other than `"sync"` or `"async"` at config validation time, before the plugin's `register()` is called. The plugin does not need runtime validation for this field.
+- **Invalid trace**: The JSON Schema `enum` constraint rejects values other than `"enabled"`, `"disabled"`, or `"enabled_full"` at config validation time.
 - **Missing guardrailIdentifier or guardrailVersion**: The JSON Schema `required` constraint on the `guardrail` object rejects configs missing these fields at validation time.
 - **AWS-side guardrail errors**: If the guardrail ID/version is invalid or the IAM role lacks `bedrock:ApplyGuardrail`, the Bedrock API returns an error. This is handled by the existing pi-ai stream error path — no special handling needed in the plugin.
 - **onPayload chain failures**: `streamWithPayloadPatch` preserves the original `onPayload` callback. If the original callback throws, the error propagates normally through the stream pipeline.
@@ -188,8 +196,8 @@ Specific example and edge-case tests:
 
 1. **Schema shape validation**: Verify `openclaw.plugin.json` contains the `guardrail` object with correct property types, required fields, and enum constraint.
 2. **No guardrail config**: Register the plugin without a `guardrail` config, call `wrapStreamFn`, and verify no `guardrailConfig` appears in the payload.
-3. **Guardrail with streamProcessingMode**: Register with a full guardrail config including `streamProcessingMode: "sync"`, verify the payload contains all three fields.
-4. **Guardrail without streamProcessingMode**: Register with guardrail config omitting `streamProcessingMode`, verify the payload contains only `guardrailIdentifier` and `guardrailVersion`.
+3. **Guardrail with all optional fields**: Register with a full guardrail config including `streamProcessingMode: "sync"` and `trace: "enabled"`, verify the payload contains all four fields.
+4. **Guardrail without optional fields**: Register with guardrail config omitting `streamProcessingMode` and `trace`, verify the payload contains only `guardrailIdentifier` and `guardrailVersion`.
 5. **Anthropic model with guardrail**: Verify an Anthropic model ID gets `guardrailConfig` injected but does not get `cacheRetention: "none"`.
 6. **Non-Anthropic model with guardrail**: Verify a non-Anthropic model ID gets both `guardrailConfig` and `cacheRetention: "none"`.
 7. **Documentation content**: Verify `docs/providers/bedrock.md` contains a Guardrails section with the required configuration example and IAM permission note.
@@ -199,10 +207,10 @@ Specific example and edge-case tests:
 Each correctness property is implemented as a single property-based test using `fast-check` (already available in the repo's test dependencies or easily added). Each test runs a minimum of 100 iterations.
 
 Each property test must be tagged with a comment referencing the design property:
-- **Feature: bedrock-guardrails, Property 1: streamProcessingMode rejects invalid values**
+- **Feature: bedrock-guardrails, Property 1: streamProcessingMode and trace reject invalid values**
 - **Feature: bedrock-guardrails, Property 2: Absent guardrail config means no injection**
 - **Feature: bedrock-guardrails, Property 3: Guardrail config round-trip into payload**
 - **Feature: bedrock-guardrails, Property 4: onPayload chain preservation**
 - **Feature: bedrock-guardrails, Property 5: Guardrail injection composes with cache behavior for all model types**
 
-Property tests validate universal properties across randomly generated inputs (model IDs, guardrail identifiers, versions, streamProcessingMode presence). Unit tests cover specific examples, edge cases, and documentation checks. Together they provide comprehensive coverage.
+Property tests validate universal properties across randomly generated inputs (model IDs, guardrail identifiers, versions, streamProcessingMode presence, trace presence). Unit tests cover specific examples, edge cases, and documentation checks. Together they provide comprehensive coverage.

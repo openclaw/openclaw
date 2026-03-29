@@ -43,15 +43,15 @@ Add Amazon Bedrock Guardrails support to the `amazon-bedrock` extension plugin. 
 
 ## Tasks
 
-- [ ] 1. Extend config schema and define GuardrailConfig type
-  - [ ] 1.1 Add `guardrail` object to `configSchema.properties` in `extensions/amazon-bedrock/openclaw.plugin.json`
+- [x] 1. Extend config schema and define GuardrailConfig type
+  - [x] 1.1 Add `guardrail` object to `configSchema.properties` in `extensions/amazon-bedrock/openclaw.plugin.json`
     - Add `guardrail` as an optional object property with `additionalProperties: false`
-    - Define `guardrailIdentifier` (string), `guardrailVersion` (string), `streamProcessingMode` (string, enum: `["sync", "async"]`)
+    - Define `guardrailIdentifier` (string), `guardrailVersion` (string), `streamProcessingMode` (string, enum: `["sync", "async"]`), `trace` (string, enum: `["enabled", "disabled", "enabled_full"]`)
     - Set `required: ["guardrailIdentifier", "guardrailVersion"]` on the `guardrail` object
     - _Requirements: 1.1, 1.2, 1.3, 1.4_
 
-  - [ ] 1.2 Add `GuardrailConfig` type in `extensions/amazon-bedrock/index.ts`
-    - Define a local `GuardrailConfig` type with `guardrailIdentifier: string`, `guardrailVersion: string`, `streamProcessingMode?: "sync" | "async"`
+  - [x] 1.2 Add `GuardrailConfig` type in `extensions/amazon-bedrock/index.ts`
+    - Define a local `GuardrailConfig` type with `guardrailIdentifier: string`, `guardrailVersion: string`, `streamProcessingMode?: "sync" | "async"`, `trace?: "enabled" | "disabled" | "enabled_full"`
     - _Requirements: 1.1, 1.2, 1.3_
 
 - [ ] 2. Implement guardrail wrapper factory and wire into registration
@@ -59,7 +59,7 @@ Add Amazon Bedrock Guardrails support to the `amazon-bedrock` extension plugin. 
     - Import `streamWithPayloadPatch` from `openclaw/plugin-sdk/provider-stream`
     - Create a function that takes the inner `wrapStreamFn` callback and a `GuardrailConfig`, returns a new `wrapStreamFn` callback
     - The returned callback calls the inner `wrapStreamFn` first (preserving cache behavior), then applies `streamWithPayloadPatch` on the result to inject `guardrailConfig` into the payload
-    - Always set `guardrailIdentifier` and `guardrailVersion`; conditionally include `streamProcessingMode` only when specified
+    - Always set `guardrailIdentifier` and `guardrailVersion`; conditionally include `streamProcessingMode` and `trace` only when specified
     - _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5, 3.1, 3.2_
 
   - [ ] 2.2 Wire guardrail wrapper in `register(api)` in `extensions/amazon-bedrock/index.ts`
@@ -68,9 +68,9 @@ Add Amazon Bedrock Guardrails support to the `amazon-bedrock` extension plugin. 
     - If `guardrail` is absent, use the existing `wrapStreamFn` unchanged
     - _Requirements: 1.5, 2.1, 3.3_
 
-  - [ ]* 2.3 Write property test: streamProcessingMode rejects invalid values
-    - **Property 1: streamProcessingMode rejects invalid values**
-    - **Validates: Requirements 1.4**
+  - [ ]* 2.3 Write property test: streamProcessingMode and trace reject invalid values
+    - **Property 1: streamProcessingMode and trace reject invalid values**
+    - **Validates: Requirements 1.4, 1.6**
 
   - [ ]* 2.4 Write property test: Absent guardrail config means no injection
     - **Property 2: Absent guardrail config means no injection**
@@ -95,8 +95,8 @@ Add Amazon Bedrock Guardrails support to the `amazon-bedrock` extension plugin. 
   - [ ]* 4.1 Write unit tests in `extensions/amazon-bedrock/index.test.ts`
     - Test: schema shape validation — verify `openclaw.plugin.json` contains the `guardrail` object with correct property types, required fields, and enum constraint
     - Test: no guardrail config — register without `guardrail`, call `wrapStreamFn`, verify no `guardrailConfig` in payload
-    - Test: guardrail with `streamProcessingMode` — register with full config including `streamProcessingMode: "sync"`, verify payload contains all three fields
-    - Test: guardrail without `streamProcessingMode` — register omitting `streamProcessingMode`, verify payload contains only `guardrailIdentifier` and `guardrailVersion`
+    - Test: guardrail with all optional fields — register with full config including `streamProcessingMode: "sync"` and `trace: "enabled"`, verify payload contains all four fields
+    - Test: guardrail without optional fields — register omitting `streamProcessingMode` and `trace`, verify payload contains only `guardrailIdentifier` and `guardrailVersion`
     - Test: Anthropic model with guardrail — verify Anthropic model ID gets `guardrailConfig` but not `cacheRetention: "none"`
     - Test: non-Anthropic model with guardrail — verify non-Anthropic model ID gets both `guardrailConfig` and `cacheRetention: "none"`
     - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5, 2.1, 2.2, 2.3, 2.5, 3.1, 3.2, 3.3_
@@ -104,7 +104,7 @@ Add Amazon Bedrock Guardrails support to the `amazon-bedrock` extension plugin. 
 - [ ] 5. Update documentation
   - [ ] 5.1 Add Guardrails section to `docs/providers/bedrock.md`
     - Add a new "Guardrails" section after the existing "Notes" section
-    - Include a configuration example showing the `guardrail` object with `guardrailIdentifier`, `guardrailVersion`, and `streamProcessingMode`
+    - Include a configuration example showing the `guardrail` object with `guardrailIdentifier`, `guardrailVersion`, `streamProcessingMode`, and `trace`
     - Note that `guardrailIdentifier` accepts both guardrail IDs and full ARNs
     - Note the required IAM permission: `bedrock:ApplyGuardrail`
     - _Requirements: 4.1, 4.2, 4.3, 4.4_
