@@ -35,6 +35,8 @@ describe("browser chrome launch args", () => {
         color: "#FF4500",
         driver: "openclaw",
         attachOnly: false,
+        headless: undefined,
+        executablePath: undefined,
       },
       userDataDir: "/tmp/openclaw-test-user-data",
     });
