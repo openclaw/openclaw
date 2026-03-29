@@ -34,7 +34,9 @@ export function createBaseSignalEventHandlerDeps(
   };
 }
 
-export function createSignalReceiveEvent(envelopeOverrides: Record<string, unknown> = {}) {
+export function createSignalReceiveEvent(overrides: Record<string, unknown> = {}) {
+  // oxlint-disable-next-line typescript/no-explicit-any
+  const { envelope: envelopeOverrides, ...restOverrides } = overrides as any;
   return {
     event: "receive",
     data: JSON.stringify({
@@ -42,7 +44,8 @@ export function createSignalReceiveEvent(envelopeOverrides: Record<string, unkno
         sourceNumber: "+15550001111",
         sourceName: "Alice",
         timestamp: 1700000000000,
-        ...envelopeOverrides,
+        ...(envelopeOverrides ?? {}),
+        ...restOverrides,
       },
     }),
   };

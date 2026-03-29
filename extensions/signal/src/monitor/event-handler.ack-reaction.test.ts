@@ -144,7 +144,7 @@ describe("Signal ACK reactions", () => {
     const handler = createSignalEventHandler(deps);
     await handler(
       createSignalReceiveEvent({
-        envelope: { source: "+15550001111", sourceDevice: 1 },
+        envelope: { sourceNumber: "+15550001111", sourceDevice: 1, timestamp: undefined },
         dataMessage: { message: "hello", timestamp: 1700000000001 },
       }),
     );
@@ -162,7 +162,7 @@ describe("Signal ACK reactions", () => {
     const handler = createSignalEventHandler(deps);
     await handler(
       createSignalReceiveEvent({
-        envelope: { source: "+15550001111", sourceDevice: 1 },
+        envelope: { sourceNumber: "+15550001111", sourceDevice: 1, timestamp: undefined },
         dataMessage: { message: "hello" },
       }),
     );
