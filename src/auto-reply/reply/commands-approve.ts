@@ -8,6 +8,7 @@ import {
 import {
   isTelegramExecApprovalApprover,
   isTelegramExecApprovalClientEnabled,
+  isTelegramExecApprovalTargetRecipient,
 } from "../../plugin-sdk/telegram-runtime.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import { requireGatewayClientScopeForInternalChannel } from "./command-gates.js";
@@ -140,16 +141,13 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
       senderId: params.command.senderId,
     };
 
+    const isImplicitTargetApprover = isTelegramExecApprovalTargetRecipient(telegramApproverContext);
+
     if (!isPluginId) {
-      if (
-        !isTelegramExecApprovalClientEnabled({ cfg: params.cfg, accountId: params.ctx.AccountId })
-      ) {
-        return {
-          shouldContinue: false,
-          reply: { text: "❌ Telegram exec approvals are not enabled for this bot account." },
-        };
-      }
-      if (!isTelegramExecApprovalApprover(telegramApproverContext)) {
+      const isExplicitApprover =
+        isTelegramExecApprovalClientEnabled({ cfg: params.cfg, accountId: params.ctx.AccountId }) &&
+        isTelegramExecApprovalApprover(telegramApproverContext);
+      if (!isExplicitApprover && !isImplicitTargetApprover) {
         return {
           shouldContinue: false,
           reply: { text: "❌ You are not authorized to approve exec requests on Telegram." },
@@ -160,7 +158,7 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
     // Keep plugin-ID routing independent from exec approval client enablement so
     // forwarded plugin approvals remain resolvable, but still require explicit
     // Telegram approver membership for security parity.
-    if (isPluginId && !isTelegramExecApprovalApprover(telegramApproverContext)) {
+    if (isPluginId && !isTelegramExecApprovalApprover(telegramApproverContext) && !isImplicitTargetApprover) {
       return {
         shouldContinue: false,
         reply: { text: "❌ You are not authorized to approve plugin requests on Telegram." },
