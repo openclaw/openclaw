@@ -4,6 +4,7 @@ import {
   buildExecApprovalPendingReplyPayload,
   buildExecApprovalUnavailableReplyPayload,
 } from "../infra/exec-approval-reply.js";
+import { readSnakeCaseParamRaw } from "../param-key.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { normalizeTextForComparison } from "./pi-embedded-helpers.js";
@@ -76,6 +77,20 @@ function extendExecMeta(toolName: string, args: unknown, meta?: string): string 
   }
   const suffix = flags.join(" · ");
   return meta ? `${meta} · ${suffix}` : suffix;
+}
+
+function readReadToolPathArg(args: unknown): string {
+  if (!args || typeof args !== "object") {
+    return "";
+  }
+  const record = args as Record<string, unknown>;
+  for (const key of ["path", "filePath", "file"] as const) {
+    const value = readSnakeCaseParamRaw(record, key);
+    if (typeof value === "string") {
+      return value.trim();
+    }
+  }
+  return "";
 }
 
 function pushUniqueMediaUrl(urls: string[], seen: Set<string>, value: unknown): void {
@@ -346,14 +361,7 @@ export async function handleToolExecutionStart(
   toolStartData.set(buildToolStartKey(runId, toolCallId), { startTime: Date.now(), args });
 
   if (toolName === "read") {
-    const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
-    const filePathValue =
-      typeof record.path === "string"
-        ? record.path
-        : typeof record.file_path === "string"
-          ? record.file_path
-          : "";
-    const filePath = filePathValue.trim();
+    const filePath = readReadToolPathArg(args);
     if (!filePath) {
       const argsPreview = typeof args === "string" ? args.slice(0, 200) : undefined;
       ctx.log.warn(
