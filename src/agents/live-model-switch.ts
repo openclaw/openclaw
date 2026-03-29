@@ -116,11 +116,17 @@ export function hasDifferentLiveSessionModelSelection(
   if (!next) {
     return false;
   }
-  return (
-    current.provider !== next.provider ||
-    current.model !== next.model ||
-    (current.authProfileId?.trim() || undefined) !== next.authProfileId ||
-    (current.authProfileId?.trim() ? current.authProfileIdSource : undefined) !==
-      next.authProfileIdSource
-  );
+  const currentAuthProfileId = current.authProfileId?.trim() || undefined;
+  const nextAuthProfileId = next.authProfileId?.trim() || undefined;
+  const currentAuthProfileIdSource = currentAuthProfileId ? current.authProfileIdSource : undefined;
+  const nextAuthProfileIdSource = nextAuthProfileId ? next.authProfileIdSource : undefined;
+  const authSelectionDiffers =
+    currentAuthProfileId === nextAuthProfileId
+      ? currentAuthProfileIdSource !== nextAuthProfileIdSource
+      : currentAuthProfileId && !nextAuthProfileId
+        ? currentAuthProfileIdSource !== "auto"
+        : !currentAuthProfileId && nextAuthProfileId
+          ? nextAuthProfileIdSource !== "auto"
+          : true;
+  return current.provider !== next.provider || current.model !== next.model || authSelectionDiffers;
 }

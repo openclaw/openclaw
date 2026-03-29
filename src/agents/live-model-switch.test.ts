@@ -162,4 +162,64 @@ describe("live model switch", () => {
       ),
     ).toBe(false);
   });
+
+  it("treats a missing persisted auth profile as unchanged when the current selection is auto", async () => {
+    const { hasDifferentLiveSessionModelSelection } = await loadModule();
+
+    expect(
+      hasDifferentLiveSessionModelSelection(
+        {
+          provider: "openai",
+          model: "gpt-5.4",
+          authProfileId: "openai:default",
+          authProfileIdSource: "auto",
+        },
+        {
+          provider: "openai",
+          model: "gpt-5.4",
+        },
+      ),
+    ).toBe(false);
+  });
+
+  it("treats a persisted auto auth profile as unchanged when the current selection has not pinned one yet", async () => {
+    const { hasDifferentLiveSessionModelSelection } = await loadModule();
+
+    expect(
+      hasDifferentLiveSessionModelSelection(
+        {
+          provider: "openai",
+          model: "gpt-5.4",
+          authProfileIdSource: "auto",
+        },
+        {
+          provider: "openai",
+          model: "gpt-5.4",
+          authProfileId: "openai:default",
+          authProfileIdSource: "auto",
+        },
+      ),
+    ).toBe(false);
+  });
+
+  it("still detects real auto auth profile changes", async () => {
+    const { hasDifferentLiveSessionModelSelection } = await loadModule();
+
+    expect(
+      hasDifferentLiveSessionModelSelection(
+        {
+          provider: "openai",
+          model: "gpt-5.4",
+          authProfileId: "openai:default",
+          authProfileIdSource: "auto",
+        },
+        {
+          provider: "openai",
+          model: "gpt-5.4",
+          authProfileId: "openai:secondary",
+          authProfileIdSource: "auto",
+        },
+      ),
+    ).toBe(true);
+  });
 });
