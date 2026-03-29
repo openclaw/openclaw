@@ -3,7 +3,7 @@ import {
   createPluginSetupWizardConfigure,
   createTestWizardPrompter,
   runSetupWizardConfigure,
-} from "../../../test/helpers/extensions/setup-wizard.js";
+} from "../../../test/helpers/plugins/setup-wizard.js";
 import type { OpenClawConfig } from "../runtime-api.js";
 import "./zalo-js.test-mocks.js";
 import { zalouserPlugin } from "./channel.js";

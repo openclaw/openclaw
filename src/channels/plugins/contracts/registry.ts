@@ -2,19 +2,16 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expect, vi } from "vitest";
-import { createBlueBubblesConversationBindingManager } from "../../../../extensions/bluebubbles/api.js";
-import { createIMessageConversationBindingManager } from "../../../../extensions/imessage/api.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
   getSessionBindingService,
   type SessionBindingCapabilities,
   type SessionBindingRecord,
 } from "../../../infra/outbound/session-binding-service.js";
-import {
-  discordThreadBindingTesting,
-  createDiscordThreadBindingManager,
-} from "../../../plugin-sdk/discord.js";
+import { createBlueBubblesConversationBindingManager } from "../../../plugin-sdk/bluebubbles.js";
+import { createDiscordThreadBindingManager } from "../../../plugin-sdk/discord.js";
 import { createFeishuThreadBindingManager } from "../../../plugin-sdk/feishu.js";
+import { createIMessageConversationBindingManager } from "../../../plugin-sdk/imessage.js";
 import {
   listLineAccountIds,
   resolveDefaultLineAccountId,
@@ -26,8 +23,9 @@ import {
   setMatrixRuntime,
 } from "../../../plugin-sdk/matrix.js";
 import { createTelegramThreadBindingManager } from "../../../plugin-sdk/telegram-runtime.js";
+import { loadBundledPluginTestApiSync } from "../../../test-utils/bundled-plugin-public-surface.js";
 import {
-  bundledChannelPlugins,
+  listBundledChannelPlugins,
   requireBundledChannelPlugin,
   setBundledChannelRuntime,
 } from "../bundled.js";
@@ -38,6 +36,16 @@ import {
   sessionBindingContractChannelIds,
   type SessionBindingContractChannelId,
 } from "./manifest.js";
+
+const { discordThreadBindingTesting } = loadBundledPluginTestApiSync<{
+  discordThreadBindingTesting: {
+    resetThreadBindingsForTests: () => void;
+  };
+}>("discord");
+
+function buildBundledPluginModuleId(pluginId: string, artifactBasename: string): string {
+  return ["..", "..", "..", "..", "extensions", pluginId, artifactBasename].join("/");
+}
 
 type PluginContractEntry = {
   id: string;
@@ -210,10 +218,9 @@ setBundledChannelRuntime("line", {
   },
 } as never);
 
-vi.mock("../../../../extensions/matrix/runtime-api.js", async () => {
-  const actual = await vi.importActual<
-    typeof import("../../../../extensions/matrix/runtime-api.js")
-  >("../../../../extensions/matrix/runtime-api.js");
+vi.mock(buildBundledPluginModuleId("matrix", "runtime-api.js"), async () => {
+  const matrixRuntimeApiModuleId = buildBundledPluginModuleId("matrix", "runtime-api.js");
+  const actual = await vi.importActual(matrixRuntimeApiModuleId);
   return {
     ...actual,
     sendMessageMatrix: sendMessageMatrixMock,
@@ -252,7 +259,7 @@ async function createContractMatrixThreadBindingManager() {
   });
 }
 
-export const pluginContractRegistry: PluginContractEntry[] = bundledChannelPlugins.map(
+export const pluginContractRegistry: PluginContractEntry[] = listBundledChannelPlugins().map(
   (plugin) => ({
     id: plugin.id,
     plugin,
@@ -607,7 +614,7 @@ export const statusContractRegistry: StatusContractEntry[] = [
   },
 ];
 
-export const surfaceContractRegistry: SurfaceContractEntry[] = bundledChannelPlugins.map(
+export const surfaceContractRegistry: SurfaceContractEntry[] = listBundledChannelPlugins().map(
   (plugin) => ({
     id: plugin.id,
     plugin,

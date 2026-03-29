@@ -6,7 +6,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import {
   __resetGatewayModelPricingCacheForTest,
   __setGatewayModelPricingForTest,
-} from "../gateway/model-pricing-cache.js";
+} from "../gateway/model-pricing-cache-state.js";
 import {
   __resetUsageFormatCachesForTest,
   estimateUsageCost,
@@ -221,6 +221,37 @@ describe("usage-format", () => {
       output: 15,
       cacheRead: 0.25,
       cacheWrite: 0,
+    });
+  });
+
+  it("can skip plugin-backed model normalization for display-only cost lookup", () => {
+    const config = {
+      models: {
+        providers: {
+          "google-vertex": {
+            models: [
+              {
+                id: "gemini-3.1-flash-lite",
+                cost: { input: 7, output: 8, cacheRead: 0.7, cacheWrite: 0.8 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      resolveModelCostConfig({
+        provider: "google-vertex",
+        model: "gemini-3.1-flash-lite",
+        config,
+        allowPluginNormalization: false,
+      }),
+    ).toEqual({
+      input: 7,
+      output: 8,
+      cacheRead: 0.7,
+      cacheWrite: 0.8,
     });
   });
 });

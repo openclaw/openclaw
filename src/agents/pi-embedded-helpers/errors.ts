@@ -174,6 +174,18 @@ function isReasoningConstraintErrorMessage(raw: string): boolean {
   );
 }
 
+function isInvalidStreamingEventOrderError(raw: string): boolean {
+  if (!raw) {
+    return false;
+  }
+  const lower = raw.toLowerCase();
+  return (
+    lower.includes("unexpected event order") &&
+    lower.includes("message_start") &&
+    lower.includes("message_stop")
+  );
+}
+
 function hasRateLimitTpmHint(raw: string): boolean {
   const lower = raw.toLowerCase();
   return /\btpm\b/i.test(lower) || lower.includes("tokens per minute");
@@ -484,6 +496,25 @@ export function classifyFailoverReasonFromHttpStatus(
   if (status === 408) {
     return "timeout";
   }
+  if (status === 410) {
+    // HTTP 410 is only a true session-expiry signal when the payload says the
+    // remote session/conversation is gone. Generic 410/no-body responses from
+    // OpenAI-compatible proxies are better treated as retryable transport-path
+    // failures so we do not clear session state or poison auth-profile health.
+    if (message && isCliSessionExpiredErrorMessage(message)) {
+      return "session_expired";
+    }
+    if (message && isBillingErrorMessage(message)) {
+      return "billing";
+    }
+    if (message && isAuthPermanentErrorMessage(message)) {
+      return "auth_permanent";
+    }
+    if (message && isAuthErrorMessage(message)) {
+      return "auth";
+    }
+    return "timeout";
+  }
   if (status === 503) {
     if (message && isOverloadedErrorMessage(message)) {
       return "overloaded";
@@ -666,6 +697,10 @@ export function formatAssistantErrorText(
     );
   }
 
+  if (isInvalidStreamingEventOrderError(raw)) {
+    return "LLM request failed: provider returned an invalid streaming response. Please try again.";
+  }
+
   // Catch role ordering errors - including JSON-wrapped and "400" prefix variants
   if (
     /incorrect role information|roles must alternate|400.*role|"message".*role.*information/i.test(
@@ -756,6 +791,10 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
 
     if (isBillingErrorMessage(trimmed)) {
       return BILLING_ERROR_USER_MESSAGE;
+    }
+
+    if (isInvalidStreamingEventOrderError(trimmed)) {
+      return "LLM request failed: provider returned an invalid streaming response. Please try again.";
     }
 
     if (isRawApiErrorPayload(trimmed) || isLikelyHttpErrorText(trimmed)) {
@@ -973,6 +1012,11 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
   if (isModelNotFoundErrorMessage(raw)) {
     return "model_not_found";
   }
+  const trimmed = raw.trim();
+  const leadingStatus = extractLeadingHttpStatus(trimmed);
+  if (leadingStatus?.code === 410) {
+    return classifyFailoverReasonFromHttpStatus(leadingStatus.code, leadingStatus.rest);
+  }
   const reasonFrom402Text = classifyFailoverReasonFrom402Text(raw);
   if (reasonFrom402Text) {
     return reasonFrom402Text;
@@ -988,7 +1032,7 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
   }
   if (isTransientHttpError(raw)) {
     // 529 is always overloaded, even without explicit overload keywords in the body.
-    const status = extractLeadingHttpStatus(raw.trim());
+    const status = extractLeadingHttpStatus(trimmed);
     if (status?.code === 529) {
       return "overloaded";
     }

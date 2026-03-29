@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/discord",
-  "version": "2026.3.27",
+  "version": "2026.3.28",
   "description": "OpenClaw Discord channel plugin",
   "type": "module",
   "dependencies": {
@@ -14,7 +14,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.3.27"
+    "openclaw": ">=2026.3.28"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -34,13 +34,13 @@
       "docsPath": "/channels/discord",
       "docsLabel": "discord",
       "blurb": "very well supported right now.",
-      "systemImage": "bubble.left.and.bubble.right"
+      "systemImage": "bubble.left.and.bubble.right",
+      "markdownCapable": true
     },
     "install": {
       "npmSpec": "@openclaw/discord",
-      "localPath": "extensions/discord",
       "defaultChoice": "npm",
-      "minHostVersion": ">=2026.3.27"
+      "minHostVersion": ">=2026.3.28"
     },
     "bundle": {
       "stageRuntimeDependencies": true

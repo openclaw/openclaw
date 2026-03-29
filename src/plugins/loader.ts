@@ -301,6 +301,7 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     includeSetupOnlyChannelPlugins,
     preferSetupRuntimeForChannelPlugins,
     shouldActivate: options.activate !== false,
+    runtimeSubagentMode: resolveRuntimeSubagentMode(options.runtimeOptions),
     cacheKey,
   };
 }
@@ -768,8 +769,12 @@ function warnAboutUntrackedLoadedPlugins(params: {
   }
 }
 
-function activatePluginRegistry(registry: PluginRegistry, cacheKey: string): void {
-  setActivePluginRegistry(registry, cacheKey);
+function activatePluginRegistry(
+  registry: PluginRegistry,
+  cacheKey: string,
+  runtimeSubagentMode: "default" | "explicit" | "gateway-bindable",
+): void {
+  setActivePluginRegistry(registry, cacheKey, runtimeSubagentMode);
   initializeGlobalHookRunner(registry);
 }
 
@@ -790,6 +795,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     preferSetupRuntimeForChannelPlugins,
     shouldActivate,
     cacheKey,
+    runtimeSubagentMode,
   } = resolvePluginLoadCacheContext(options);
   const logger = options.logger ?? defaultLogger();
   const validateOnly = options.mode === "validate";
@@ -805,7 +811,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         runtime: cached.memoryRuntime,
       });
       if (shouldActivate) {
-        activatePluginRegistry(cached.registry, cacheKey);
+        activatePluginRegistry(cached.registry, cacheKey, runtimeSubagentMode);
       }
       return cached.registry;
     }
@@ -824,7 +830,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   const getJiti = (modulePath: string) => {
     const tryNative = shouldPreferNativeJiti(modulePath);
     // Pass loader's moduleUrl so the openclaw root can always be resolved even when
-    // loading external plugins from outside the installation directory (e.g. ~/.openclaw/extensions/).
+    // loading external plugins from outside the managed install directory.
     const aliasMap = buildPluginLoaderAliasMap(
       modulePath,
       process.argv[1],
@@ -1396,7 +1402,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     });
   }
   if (shouldActivate) {
-    activatePluginRegistry(registry, cacheKey);
+    activatePluginRegistry(registry, cacheKey, runtimeSubagentMode);
   }
   return registry;
 }
