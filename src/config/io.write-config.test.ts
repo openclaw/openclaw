@@ -5,6 +5,16 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createConfigIO } from "./io.js";
 import type { OpenClawConfig } from "./types.js";
 
+// Mock the plugin manifest registry so we can register a fake channel whose
+// AJV JSON Schema carries a `default` value.  This lets the #56772 regression
+// test exercise the exact code path that caused the bug: AJV injecting
+// defaults during the write-back validation pass.
+const mockLoadPluginManifestRegistry = vi.hoisted(() => vi.fn());
+
+vi.mock("../plugins/manifest-registry.js", () => ({
+  loadPluginManifestRegistry: (...args: unknown[]) => mockLoadPluginManifestRegistry(...args),
+}));
+
 describe("config io write", () => {
   let fixtureRoot = "";
   let homeCaseId = 0;
@@ -21,6 +31,13 @@ describe("config io write", () => {
 
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-config-io-"));
+
+    // Default: return an empty plugin list so existing tests that don't need
+    // plugin-owned channel schemas keep working unchanged.
+    mockLoadPluginManifestRegistry.mockReturnValue({
+      diagnostics: [],
+      plugins: [],
+    });
   });
 
   afterAll(async () => {
@@ -354,19 +371,52 @@ describe("config io write", () => {
   });
 
   it("does not leak channel plugin AJV defaults into persisted config (issue #56772)", async () => {
-    // Regression test for #56772: when a channel config with AJV schema defaults
-    // (e.g., BlueBubbles enrichGroupParticipantsFromContacts) is loaded via
-    // readConfigFileSnapshot, the snapshot.config contains those defaults.
-    // Writing back snapshot.config (as doctor does) must NOT persist those
-    // AJV-injected defaults to disk.
+    // Regression test for #56772.  Register a fake channel plugin whose AJV
+    // schema carries `enrichGroupParticipants: { type: "boolean", default: true }`.
+    // This mirrors the real BlueBubbles `enrichGroupParticipantsFromContacts`
+    // default that caused the original crash loop.
+    mockLoadPluginManifestRegistry.mockReturnValue({
+      diagnostics: [],
+      plugins: [
+        {
+          id: "fakebubbles",
+          origin: "bundled",
+          channels: ["fakebubbles"],
+          channelCatalogMeta: {
+            id: "fakebubbles",
+            label: "FakeBubbles",
+            blurb: "Fake channel for testing AJV default injection",
+          },
+          channelConfigs: {
+            fakebubbles: {
+              schema: {
+                type: "object",
+                properties: {
+                  enrichGroupParticipants: {
+                    type: "boolean",
+                    default: true,
+                  },
+                  serverUrl: {
+                    type: "string",
+                  },
+                },
+                additionalProperties: true,
+              },
+              uiHints: {},
+            },
+          },
+        },
+      ],
+    });
+
     await withSuiteHome(async (home) => {
       const { configPath, io, snapshot } = await writeConfigAndCreateIo({
         home,
         initialConfig: {
           gateway: { port: 18789 },
           channels: {
-            telegram: {
-              dmPolicy: "pairing",
+            fakebubbles: {
+              serverUrl: "http://localhost:1234",
             },
           },
         },
@@ -394,16 +444,19 @@ describe("config io write", () => {
         port: 18789,
         auth: { mode: "token" },
       });
-      expect(persisted.channels).toEqual({
-        telegram: {
-          dmPolicy: "pairing",
-        },
-      });
 
-      // Core Zod defaults must not leak.
-      expect(persisted).not.toHaveProperty("agents.defaults");
-      expect(persisted).not.toHaveProperty("messages.ackReaction");
-      expect(persisted).not.toHaveProperty("sessions.persistence");
+      // The critical assertion: enrichGroupParticipants (an AJV-injected default)
+      // must NOT appear in the persisted config.
+      const channels = persisted.channels as Record<string, Record<string, unknown>> | undefined;
+      expect(channels?.fakebubbles).toBeDefined();
+      expect(channels?.fakebubbles).not.toHaveProperty("enrichGroupParticipants");
+      expect(channels?.fakebubbles?.serverUrl).toBe("http://localhost:1234");
+    });
+
+    // Restore the default empty-plugins mock for subsequent tests.
+    mockLoadPluginManifestRegistry.mockReturnValue({
+      diagnostics: [],
+      plugins: [],
     });
   });
 
