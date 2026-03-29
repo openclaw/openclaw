@@ -1803,6 +1803,7 @@ export type PluginHookName =
   | "subagent_ended"
   | "gateway_start"
   | "gateway_stop"
+  | "plugin_updated"
   | "before_dispatch";
 
 export const PLUGIN_HOOK_NAMES = [
@@ -1831,6 +1832,7 @@ export const PLUGIN_HOOK_NAMES = [
   "subagent_ended",
   "gateway_start",
   "gateway_stop",
+  "plugin_updated",
   "before_dispatch",
 ] as const satisfies readonly PluginHookName[];
 
@@ -2337,6 +2339,32 @@ export type PluginHookGatewayStopEvent = {
   reason?: string;
 };
 
+// plugin_updated hook
+export type PluginHookPluginUpdatedEvent = {
+  /**
+   * Canonical plugin id after update resolution.
+   * (Can differ from requestedPluginId when legacy keys migrate.)
+   */
+  pluginId: string;
+  /** Plugin id that was requested by the update command, before migration. */
+  requestedPluginId: string;
+  /** Install source used for this update operation. */
+  source: "npm" | "marketplace" | "clawhub";
+  /** Recorded install spec after update (npm spec / marketplace slug / clawhub spec). */
+  spec?: string;
+  /** Version detected before update. */
+  previousVersion?: string;
+  /** Version detected after update. */
+  nextVersion?: string;
+  /** Absolute install path of the updated plugin. */
+  installPath: string;
+};
+
+export type PluginHookPluginUpdatedContext = {
+  /** Which command triggered this update dispatch. */
+  trigger: "plugins_update";
+};
+
 // Hook handler types mapped by hook name
 export type PluginHookHandlerMap = {
   before_model_resolve: (
@@ -2442,6 +2470,10 @@ export type PluginHookHandlerMap = {
   gateway_stop: (
     event: PluginHookGatewayStopEvent,
     ctx: PluginHookGatewayContext,
+  ) => Promise<void> | void;
+  plugin_updated: (
+    event: PluginHookPluginUpdatedEvent,
+    ctx: PluginHookPluginUpdatedContext,
   ) => Promise<void> | void;
 };
 

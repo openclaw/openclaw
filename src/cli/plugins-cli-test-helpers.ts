@@ -21,6 +21,10 @@ export const uninstallPlugin = vi.fn();
 export const updateNpmInstalledPlugins = vi.fn();
 export const updateNpmInstalledHookPacks = vi.fn();
 export const promptYesNo = vi.fn();
+export const ensurePluginRegistryLoaded = vi.fn();
+export const getGlobalHookRunner = vi.fn();
+export const hasPluginUpdatedHooks = vi.fn();
+export const runPluginUpdatedForPlugin = vi.fn();
 export const installPluginFromNpmSpec = vi.fn();
 export const installPluginFromPath = vi.fn();
 export const installPluginFromClawHub = vi.fn();
@@ -86,6 +90,14 @@ vi.mock("../plugins/uninstall.js", () => ({
 
 vi.mock("../plugins/update.js", () => ({
   updateNpmInstalledPlugins: (...args: unknown[]) => updateNpmInstalledPlugins(...args),
+}));
+
+vi.mock("./plugin-registry.js", () => ({
+  ensurePluginRegistryLoaded: (...args: unknown[]) => ensurePluginRegistryLoaded(...args),
+}));
+
+vi.mock("../plugins/hook-runner-global.js", () => ({
+  getGlobalHookRunner: (...args: unknown[]) => getGlobalHookRunner(...args),
 }));
 
 vi.mock("../hooks/update.js", () => ({
@@ -155,6 +167,10 @@ export function resetPluginsCliTestState() {
   updateNpmInstalledPlugins.mockReset();
   updateNpmInstalledHookPacks.mockReset();
   promptYesNo.mockReset();
+  ensurePluginRegistryLoaded.mockReset();
+  getGlobalHookRunner.mockReset();
+  hasPluginUpdatedHooks.mockReset();
+  runPluginUpdatedForPlugin.mockReset();
   installPluginFromNpmSpec.mockReset();
   installPluginFromPath.mockReset();
   installPluginFromClawHub.mockReset();
@@ -218,6 +234,12 @@ export function resetPluginsCliTestState() {
     config: {} as OpenClawConfig,
   });
   promptYesNo.mockResolvedValue(true);
+  hasPluginUpdatedHooks.mockReturnValue(false);
+  runPluginUpdatedForPlugin.mockResolvedValue(false);
+  getGlobalHookRunner.mockReturnValue({
+    hasHooks: (...args: unknown[]) => hasPluginUpdatedHooks(...args),
+    runPluginUpdatedForPlugin: (...args: unknown[]) => runPluginUpdatedForPlugin(...args),
+  });
   installPluginFromPath.mockResolvedValue({ ok: false, error: "path install disabled in test" });
   installPluginFromNpmSpec.mockResolvedValue({
     ok: false,

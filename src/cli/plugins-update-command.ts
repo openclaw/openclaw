@@ -3,9 +3,11 @@ import type { HookInstallRecord } from "../config/types.hooks.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { updateNpmInstalledHookPacks } from "../hooks/update.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
-import { updateNpmInstalledPlugins } from "../plugins/update.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { type PluginUpdatedLifecycleEvent, updateNpmInstalledPlugins } from "../plugins/update.js";
 import { defaultRuntime } from "../runtime.js";
 import { theme } from "../terminal/theme.js";
+import { ensurePluginRegistryLoaded } from "./plugin-registry.js";
 import {
   extractInstalledNpmHookPackageName,
   extractInstalledNpmPackageName,
@@ -91,6 +93,7 @@ export async function runPluginUpdateCommand(params: {
   id?: string;
   opts: { all?: boolean; dryRun?: boolean };
 }) {
+  const runLifecycleEvents: PluginUpdatedLifecycleEvent[] = [];
   const cfg = loadConfig();
   const logger = {
     info: (msg: string) => defaultRuntime.log(msg),
@@ -122,6 +125,9 @@ export async function runPluginUpdateCommand(params: {
     specOverrides: pluginSelection.specOverrides,
     dryRun: params.opts.dryRun,
     logger,
+    onPluginUpdated: (event) => {
+      runLifecycleEvents.push(event);
+    },
     onIntegrityDrift: async (drift) => {
       const specLabel = drift.resolvedSpec ?? drift.spec;
       defaultRuntime.log(
@@ -185,6 +191,31 @@ export async function runPluginUpdateCommand(params: {
 
   if (!params.opts.dryRun && (pluginResult.changed || hookResult.changed)) {
     await writeConfigFile(hookResult.config);
+
+    if (runLifecycleEvents.length > 0) {
+      try {
+        ensurePluginRegistryLoaded({ scope: "all" });
+        const hookRunner = getGlobalHookRunner();
+        if (hookRunner?.hasHooks("plugin_updated")) {
+          for (const event of runLifecycleEvents) {
+            try {
+              await hookRunner.runPluginUpdatedForPlugin(event.pluginId, event, {
+                trigger: "plugins_update",
+              });
+            } catch (err) {
+              defaultRuntime.log(
+                theme.warn(`plugin_updated hook failed for "${event.pluginId}": ${String(err)}`),
+              );
+            }
+          }
+        }
+      } catch (err) {
+        defaultRuntime.log(
+          theme.warn(`Could not initialize plugin_updated lifecycle hooks: ${String(err)}`),
+        );
+      }
+    }
+
     defaultRuntime.log("Restart the gateway to load plugins and hooks.");
   }
 }

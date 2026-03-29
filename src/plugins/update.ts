@@ -14,6 +14,7 @@ import {
 } from "./install.js";
 import { buildNpmResolutionInstallFields, recordPluginInstall } from "./installs.js";
 import { installPluginFromMarketplace } from "./marketplace.js";
+import type { PluginHookPluginUpdatedEvent } from "./types.js";
 
 export type PluginUpdateLogger = {
   info?: (message: string) => void;
@@ -46,6 +47,8 @@ export type PluginUpdateIntegrityDriftParams = {
   resolvedVersion?: string;
   dryRun: boolean;
 };
+
+export type PluginUpdatedLifecycleEvent = PluginHookPluginUpdatedEvent;
 
 export type PluginChannelSyncSummary = {
   switchedToBundled: string[];
@@ -260,6 +263,7 @@ export async function updateNpmInstalledPlugins(params: {
   dryRun?: boolean;
   specOverrides?: Record<string, string>;
   onIntegrityDrift?: (params: PluginUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
+  onPluginUpdated?: (event: PluginUpdatedLifecycleEvent) => void | Promise<void>;
 }): Promise<PluginUpdateSummary> {
   const logger = params.logger ?? {};
   const installs = params.config.plugins?.installs ?? {};
@@ -567,11 +571,30 @@ export async function updateNpmInstalledPlugins(params: {
         marketplacePlugin: record.marketplacePlugin,
       });
     }
+
+    const isVersionChanged = !(currentVersion && nextVersion && currentVersion === nextVersion);
+
+    if (params.onPluginUpdated && isVersionChanged) {
+      try {
+        await params.onPluginUpdated({
+          pluginId: resolvedPluginId,
+          requestedPluginId: pluginId,
+          source: record.source,
+          spec: effectiveSpec,
+          previousVersion: currentVersion ?? undefined,
+          nextVersion: nextVersion ?? undefined,
+          installPath: result.targetDir,
+        });
+      } catch (error) {
+        logger.warn?.(`plugin_updated callback failed for "${resolvedPluginId}": ${String(error)}`);
+      }
+    }
+
     changed = true;
 
     const currentLabel = currentVersion ?? "unknown";
     const nextLabel = nextVersion ?? "unknown";
-    if (currentVersion && nextVersion && currentVersion === nextVersion) {
+    if (!isVersionChanged) {
       outcomes.push({
         pluginId,
         status: "unchanged",

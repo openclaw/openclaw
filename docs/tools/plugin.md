@@ -265,6 +265,7 @@ Hook guard behavior for typed lifecycle hooks:
 - `before_tool_call`: `{ block: false }` is a no-op and does not clear an earlier block.
 - `message_sending`: `{ cancel: true }` is terminal; lower-priority handlers are skipped.
 - `message_sending`: `{ cancel: false }` is a no-op and does not clear an earlier cancel.
+- `plugin_updated`: fires after `openclaw plugins update` applies a plugin upgrade; useful for post-upgrade migration tasks.
 
 For full typed hook behavior, see [SDK Overview](/plugins/sdk-overview#hook-decision-semantics).
 

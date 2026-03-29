@@ -1,3 +1,6 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { bundledPluginRootAt } from "../../test/helpers/bundled-plugin-paths.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -604,6 +607,93 @@ describe("updateNpmInstalledPlugins", () => {
       marketplaceSource: "vincentkoc/claude-marketplace",
       marketplacePlugin: "claude-bundle",
     });
+  });
+
+  it("emits onPluginUpdated with resolved plugin metadata after successful updates", async () => {
+    installPluginFromNpmSpecMock.mockResolvedValue({
+      ok: true,
+      pluginId: "@openclaw/voice-call",
+      targetDir: "/tmp/openclaw-voice-call",
+      version: "0.0.2",
+      extensions: ["index.ts"],
+    });
+    const onPluginUpdated = vi.fn();
+
+    await updateNpmInstalledPlugins({
+      config: {
+        plugins: {
+          installs: {
+            "voice-call": {
+              source: "npm",
+              spec: "@openclaw/voice-call",
+              installPath: "/tmp/voice-call",
+            },
+          },
+        },
+      },
+      pluginIds: ["voice-call"],
+      onPluginUpdated,
+    });
+
+    expect(onPluginUpdated).toHaveBeenCalledWith({
+      pluginId: "@openclaw/voice-call",
+      requestedPluginId: "voice-call",
+      source: "npm",
+      spec: "@openclaw/voice-call",
+      previousVersion: undefined,
+      nextVersion: "0.0.2",
+      installPath: "/tmp/openclaw-voice-call",
+    });
+  });
+
+  it("does not emit onPluginUpdated when the installed version is unchanged", async () => {
+    const installRoot = await mkdtemp(join(tmpdir(), "openclaw-plugin-update-"));
+    await writeFile(
+      join(installRoot, "package.json"),
+      JSON.stringify({ name: "openclaw-codex-app-server", version: "0.2.0-beta.4" }),
+      "utf8",
+    );
+
+    installPluginFromNpmSpecMock.mockResolvedValue({
+      ok: true,
+      pluginId: "openclaw-codex-app-server",
+      targetDir: "/tmp/openclaw-codex-app-server",
+      version: "0.2.0-beta.4",
+      extensions: ["index.ts"],
+    });
+    const onPluginUpdated = vi.fn();
+
+    try {
+      const result = await updateNpmInstalledPlugins({
+        config: {
+          plugins: {
+            installs: {
+              "openclaw-codex-app-server": {
+                source: "npm",
+                spec: "openclaw-codex-app-server@beta",
+                installPath: installRoot,
+                version: "0.2.0-beta.4",
+              },
+            },
+          },
+        },
+        pluginIds: ["openclaw-codex-app-server"],
+        onPluginUpdated,
+      });
+
+      expect(onPluginUpdated).not.toHaveBeenCalled();
+      expect(result.outcomes).toEqual([
+        {
+          pluginId: "openclaw-codex-app-server",
+          status: "unchanged",
+          currentVersion: "0.2.0-beta.4",
+          nextVersion: "0.2.0-beta.4",
+          message: "openclaw-codex-app-server already at 0.2.0-beta.4.",
+        },
+      ]);
+    } finally {
+      await rm(installRoot, { recursive: true, force: true });
+    }
   });
 });
 

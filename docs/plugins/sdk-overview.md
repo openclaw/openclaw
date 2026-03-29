@@ -201,6 +201,10 @@ AI CLI backend such as `claude-cli` or `codex-cli`.
 - `message_sending`: returning `{ cancel: true }` is terminal. Once any handler sets it, lower-priority handlers are skipped.
 - `message_sending`: returning `{ cancel: false }` is treated as no decision (same as omitting `cancel`), not as an override.
 
+### Notable typed lifecycle hooks
+
+- `plugin_updated`: fires after `openclaw plugins update` successfully updates a plugin. Use this to run post-upgrade migrations (for example, skill sync) from plugin code.
+
 ### API object fields
 
 | Field                    | Type                      | Description                                               |

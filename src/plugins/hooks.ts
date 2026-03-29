@@ -33,6 +33,8 @@ import type {
   PluginHookGatewayContext,
   PluginHookGatewayStartEvent,
   PluginHookGatewayStopEvent,
+  PluginHookPluginUpdatedEvent,
+  PluginHookPluginUpdatedContext,
   PluginHookMessageContext,
   PluginHookMessageReceivedEvent,
   PluginHookMessageSendingEvent,
@@ -106,6 +108,8 @@ export type {
   PluginHookGatewayContext,
   PluginHookGatewayStartEvent,
   PluginHookGatewayStopEvent,
+  PluginHookPluginUpdatedEvent,
+  PluginHookPluginUpdatedContext,
 };
 
 export type HookRunnerLogger = {
@@ -282,6 +286,35 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     });
 
     await Promise.all(promises);
+  }
+
+  /**
+   * Run a fire-and-forget hook for a single plugin id.
+   * Returns true when at least one targeted handler existed.
+   */
+  async function runTargetedVoidHook<K extends PluginHookName>(
+    hookName: K,
+    pluginId: string,
+    event: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[0],
+    ctx: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[1],
+  ): Promise<boolean> {
+    const hooks = getHooksForNameAndPlugin(registry, hookName, pluginId);
+    if (hooks.length === 0) {
+      return false;
+    }
+
+    logger?.debug?.(`[hooks] running ${hookName} for ${pluginId} (${hooks.length} handlers)`);
+
+    const promises = hooks.map(async (hook) => {
+      try {
+        await (hook.handler as (event: unknown, ctx: unknown) => Promise<void>)(event, ctx);
+      } catch (err) {
+        handleHookError({ hookName, pluginId: hook.pluginId, error: err });
+      }
+    });
+
+    await Promise.all(promises);
+    return true;
   }
 
   /**
@@ -977,6 +1010,29 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     return runVoidHook("gateway_stop", event, ctx);
   }
 
+  /**
+   * Run plugin_updated hook for all registered handlers.
+   * Kept as a broadcast variant for future non-targeted lifecycle dispatch.
+   */
+  async function runPluginUpdated(
+    event: PluginHookPluginUpdatedEvent,
+    ctx: PluginHookPluginUpdatedContext,
+  ): Promise<void> {
+    return runVoidHook("plugin_updated", event, ctx);
+  }
+
+  /**
+   * Run plugin_updated hook for one plugin id.
+   * Returns true when a targeted handler existed.
+   */
+  async function runPluginUpdatedForPlugin(
+    pluginId: string,
+    event: PluginHookPluginUpdatedEvent,
+    ctx: PluginHookPluginUpdatedContext,
+  ): Promise<boolean> {
+    return await runTargetedVoidHook("plugin_updated", pluginId, event, ctx);
+  }
+
   // =========================================================================
   // Utility
   // =========================================================================
@@ -1030,6 +1086,8 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     // Gateway hooks
     runGatewayStart,
     runGatewayStop,
+    runPluginUpdated,
+    runPluginUpdatedForPlugin,
     // Utility
     hasHooks,
     getHookCount,
