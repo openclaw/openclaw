@@ -169,6 +169,13 @@ const SETUP_BARREL_GUARDS: GuardedSource[] = [
   },
 ];
 
+const CHANNEL_CONFIG_SCHEMA_GUARDS: GuardedSource[] = [
+  {
+    path: bundledPluginFile("tlon", "src/config-schema.ts"),
+    forbiddenPatterns: [/["']openclaw\/plugin-sdk\/core["']/],
+  },
+];
+
 const LOCAL_EXTENSION_API_BARREL_GUARDS = [
   "acpx",
   "bluebubbles",
@@ -465,6 +472,15 @@ describe("channel import guardrails", () => {
         expect(importBlock, `${source.path} setup import should not match ${pattern}`).not.toMatch(
           pattern,
         );
+      }
+    }
+  });
+
+  it("keeps channel config schemas off the broad core sdk barrel", () => {
+    for (const source of CHANNEL_CONFIG_SCHEMA_GUARDS) {
+      const text = readSource(source.path);
+      for (const pattern of source.forbiddenPatterns) {
+        expect(text, `${source.path} should not match ${pattern}`).not.toMatch(pattern);
       }
     }
   });
