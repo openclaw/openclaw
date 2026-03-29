@@ -21,6 +21,7 @@ import {
   armTimer,
   emit,
   executeJobCoreWithTimeout,
+  normalizeCronRunErrorText,
   runMissedJobs,
   stopTimer,
   wake,
@@ -491,14 +492,14 @@ async function finishPreparedManualRun(
   try {
     coreResult = await executeJobCoreWithTimeout(state, executionJob);
   } catch (err) {
-    coreResult = { status: "error", error: String(err) };
+    coreResult = { status: "error", error: normalizeCronRunErrorText(err) };
   }
   const endedAt = state.deps.nowMs();
   updateTaskRecordById(taskId, {
     status:
       coreResult.status === "ok" || coreResult.status === "skipped"
         ? "succeeded"
-        : coreResult.error === "cron: job execution timed out"
+        : normalizeCronRunErrorText(coreResult.error) === "cron: job execution timed out"
           ? "timed_out"
           : "failed",
     endedAt,

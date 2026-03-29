@@ -1,8 +1,10 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { findTaskByRunId, resetTaskRegistryForTests } from "../../tasks/task-registry.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
 import type { CronJob } from "../types.js";
-import { start, stop } from "./ops.js";
+import { run, start, stop } from "./ops.js";
 import { createCronServiceState } from "./state.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
@@ -23,6 +25,40 @@ function createInterruptedMainJob(now: number): CronJob {
     state: {
       nextRunAtMs: now - 60_000,
       runningAtMs: now - 30 * 60_000,
+    },
+  };
+}
+
+function createDueIsolatedJob(now: number): CronJob {
+  return {
+    id: "isolated-timeout",
+    name: "isolated timeout",
+    enabled: true,
+    createdAtMs: now - 60_000,
+    updatedAtMs: now - 60_000,
+    schedule: { kind: "every", everyMs: 60_000, anchorMs: now - 60_000 },
+    sessionTarget: "isolated",
+    wakeMode: "next-heartbeat",
+    payload: { kind: "agentTurn", message: "do work" },
+    sessionKey: "agent:main:main",
+    state: { nextRunAtMs: now - 1 },
+  };
+}
+
+function createMissedIsolatedJob(now: number): CronJob {
+  return {
+    id: "startup-timeout",
+    name: "startup timeout",
+    enabled: true,
+    createdAtMs: now - 86_400_000,
+    updatedAtMs: now - 30 * 60_000,
+    schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
+    sessionTarget: "isolated",
+    wakeMode: "next-heartbeat",
+    payload: { kind: "agentTurn", message: "should timeout" },
+    sessionKey: "agent:main:main",
+    state: {
+      nextRunAtMs: now - 60_000,
     },
   };
 }
@@ -75,6 +111,89 @@ describe("cron service ops seam coverage", () => {
     expect(delays.some((delay) => delay > 0)).toBe(true);
 
     timeoutSpy.mockRestore();
+    stop(state);
+  });
+
+  it("records timed out manual runs as timed_out in the shared task registry", async () => {
+    const { storePath } = await makeStorePath();
+    const stateRoot = path.dirname(path.dirname(storePath));
+    const now = Date.parse("2026-03-23T12:00:00.000Z");
+    const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = stateRoot;
+    resetTaskRegistryForTests();
+
+    await writeCronStoreSnapshot({
+      storePath,
+      jobs: [createDueIsolatedJob(now)],
+    });
+
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      log: logger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => {
+        throw new Error("cron: job execution timed out");
+      }),
+    });
+
+    await run(state, "isolated-timeout");
+
+    expect(findTaskByRunId(`cron:isolated-timeout:${now}`)).toMatchObject({
+      runtime: "cron",
+      status: "timed_out",
+      sourceId: "isolated-timeout",
+    });
+
+    if (originalStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = originalStateDir;
+    }
+    resetTaskRegistryForTests();
+  });
+
+  it("records startup catch-up timeouts as timed_out in the shared task registry", async () => {
+    const { storePath } = await makeStorePath();
+    const stateRoot = path.dirname(path.dirname(storePath));
+    const now = Date.parse("2026-03-23T12:00:00.000Z");
+    const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = stateRoot;
+    resetTaskRegistryForTests();
+
+    await writeCronStoreSnapshot({
+      storePath,
+      jobs: [createMissedIsolatedJob(now)],
+    });
+
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      log: logger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeatNow: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => {
+        throw new Error("cron: job execution timed out");
+      }),
+    });
+
+    await start(state);
+
+    expect(findTaskByRunId(`cron:startup-timeout:${now}`)).toMatchObject({
+      runtime: "cron",
+      status: "timed_out",
+      sourceId: "startup-timeout",
+    });
+
+    if (originalStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = originalStateDir;
+    }
+    resetTaskRegistryForTests();
     stop(state);
   });
 });
