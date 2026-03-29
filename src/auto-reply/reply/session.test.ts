@@ -1780,6 +1780,64 @@ describe("drainFormattedSystemEvents", () => {
       vi.useRealTimers();
     }
   });
+
+  it("suppresses routine WhatsApp gateway connect and disconnect banners", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-03-17T07:32:00Z"));
+
+      enqueueSystemEvent("WhatsApp gateway connected as +15551234567.", {
+        sessionKey: "agent:main:main",
+      });
+      enqueueSystemEvent("WhatsApp gateway disconnected (status 428)", {
+        sessionKey: "agent:main:main",
+      });
+
+      const result = await drainFormattedSystemEvents({
+        cfg: {} as OpenClawConfig,
+        sessionKey: "agent:main:main",
+        isMainSession: false,
+        isNewSession: false,
+      });
+
+      expect(result).toBeUndefined();
+    } finally {
+      resetSystemEventsForTest();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps non-routine WhatsApp system events while filtering routine gateway flaps", async () => {
+    vi.useFakeTimers();
+    try {
+      const timestamp = new Date("2026-03-17T07:32:00Z");
+      const expectedTimestamp = formatZonedTimestamp(timestamp, { displaySeconds: true });
+      vi.setSystemTime(timestamp);
+
+      enqueueSystemEvent("WhatsApp gateway connected as +15551234567.", {
+        sessionKey: "agent:main:main",
+      });
+      enqueueSystemEvent("WhatsApp session logged out. Run relink.", {
+        sessionKey: "agent:main:main",
+      });
+
+      const result = await drainFormattedSystemEvents({
+        cfg: {} as OpenClawConfig,
+        sessionKey: "agent:main:main",
+        isMainSession: false,
+        isNewSession: false,
+      });
+
+      expect(expectedTimestamp).toBeDefined();
+      expect(result).toContain(
+        `System: [${expectedTimestamp}] WhatsApp session logged out. Run relink.`,
+      );
+      expect(result).not.toContain("WhatsApp gateway connected");
+    } finally {
+      resetSystemEventsForTest();
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("persistSessionUsageUpdate", () => {
