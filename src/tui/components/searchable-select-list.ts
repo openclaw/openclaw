@@ -330,24 +330,14 @@ export class SearchableSelectList implements Component {
       return;
     }
 
-    const allowVimNav = !this.searchInput.getValue().trim();
-
     // Navigation keys
-    if (
-      matchesKey(keyData, "up") ||
-      matchesKey(keyData, "ctrl+p") ||
-      (allowVimNav && keyData === "k")
-    ) {
+    if (matchesKey(keyData, "up") || matchesKey(keyData, "ctrl+p")) {
       this.selectedIndex = Math.max(0, this.selectedIndex - 1);
       this.notifySelectionChange();
       return;
     }
 
-    if (
-      matchesKey(keyData, "down") ||
-      matchesKey(keyData, "ctrl+n") ||
-      (allowVimNav && keyData === "j")
-    ) {
+    if (matchesKey(keyData, "down") || matchesKey(keyData, "ctrl+n")) {
       this.selectedIndex = Math.min(this.filteredItems.length - 1, this.selectedIndex + 1);
       this.notifySelectionChange();
       return;

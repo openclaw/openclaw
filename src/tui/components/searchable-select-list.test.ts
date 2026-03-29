@@ -124,6 +124,34 @@ describe("SearchableSelectList", () => {
     }
   });
 
+  it("keeps model-search rows within width when filtering by m", () => {
+    const items = [
+      { value: "minimax-cn/MiniMax-M2", label: "minimax-cn/MiniMax-M2", description: "MiniMax M2" },
+      {
+        value: "minimax-cn/MiniMax-M2.1",
+        label: "minimax-cn/MiniMax-M2.1",
+        description: "MiniMax M2.1",
+      },
+      {
+        value: "mistral/codestral-latest",
+        label: "mistral/codestral-latest",
+        description: "Codestral",
+      },
+      {
+        value: "mistral/devstral-medium-latest",
+        label: "mistral/devstral-medium-latest",
+        description: "Devstral Medium",
+      },
+    ];
+    const list = new SearchableSelectList(items, 9, ansiHighlightTheme);
+    typeInput(list, "m");
+
+    const width = 209;
+    for (const line of list.render(width)) {
+      expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+    }
+  });
+
   it("ignores ANSI escape codes in search matching", () => {
     const items = [
       { value: "styled", label: "\u001b[32mopenai/gpt-4\u001b[0m", description: "Styled label" },
@@ -264,6 +292,24 @@ describe("SearchableSelectList", () => {
     list.handleInput("\x1b[B");
 
     expect(list.getSelectedItem()?.value).toBe("anthropic/claude-3-sonnet");
+  });
+
+  it("types j and k into search input instead of intercepting as vim navigation", () => {
+    const items = [
+      { value: "alpha", label: "alpha" },
+      { value: "kilo", label: "kilo" },
+      { value: "juliet", label: "juliet" },
+    ];
+
+    const jList = new SearchableSelectList(items, 5, mockTheme);
+    jList.handleInput("j");
+    expect(jList.getSelectedItem()?.value).toBe("juliet");
+    expect(stripAnsi(jList.render(80)[0] ?? "")).toContain("j");
+
+    const kList = new SearchableSelectList(items, 5, mockTheme);
+    kList.handleInput("k");
+    expect(kList.getSelectedItem()?.value).toBe("kilo");
+    expect(stripAnsi(kList.render(80)[0] ?? "")).toContain("k");
   });
 
   it("calls onSelect when enter is pressed", () => {
