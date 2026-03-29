@@ -160,6 +160,63 @@ describe("sessions-list-tool", () => {
     });
   });
 
+  it("includes sessionFile field in sessions_list results when present", async () => {
+    const gatewayCallMock = vi.fn(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "sessions.list") {
+        return {
+          path: "/tmp/sessions.json",
+          sessions: [
+            {
+              key: "agent:main:main",
+              kind: "direct",
+              sessionId: "sess-abc",
+              sessionFile: "/home/user/.openclaw/agents/main/sessions/sess-abc.jsonl",
+            },
+          ],
+        };
+      }
+      return {};
+    });
+
+    vi.doMock("../../gateway/call.js", () => ({
+      callGateway: gatewayCallMock,
+    }));
+    vi.doMock("./sessions-helpers.js", async () => {
+      const actual =
+        await vi.importActual<typeof import("./sessions-helpers.js")>("./sessions-helpers.js");
+      return {
+        ...actual,
+        createAgentToAgentPolicy: () => ({}),
+        createSessionVisibilityGuard: async () => ({
+          check: () => ({ allowed: true }),
+        }),
+        resolveEffectiveSessionToolsVisibility: () => "all",
+        resolveSandboxedSessionToolContext: () => ({
+          mainKey: "main",
+          alias: "main",
+          requesterInternalKey: undefined,
+          restrictToSpawned: false,
+        }),
+      };
+    });
+
+    const { createSessionsListTool } = await import("./sessions-list-tool.js");
+    const tool = createSessionsListTool({ config: {} as never });
+
+    const result = await tool.execute("call-sf", {});
+    const details = result.details as {
+      sessions?: Array<{
+        sessionId?: string;
+        sessionFile?: string;
+      }>;
+    };
+
+    expect(details.sessions?.[0]?.sessionFile).toBe(
+      "/home/user/.openclaw/agents/main/sessions/sess-abc.jsonl",
+    );
+  });
+
   it("keeps live session setting metadata in sessions_list results", async () => {
     const gatewayCallMock = vi.fn(async (opts: unknown) => {
       const request = opts as { method?: string };
