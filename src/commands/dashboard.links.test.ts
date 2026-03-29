@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const resolveGatewayPortMock = vi.hoisted(() => vi.fn());
@@ -63,11 +63,9 @@ function mockSnapshot(token: unknown = "abc") {
 }
 
 describe("dashboardCommand", () => {
-  beforeAll(async () => {
+  beforeEach(async () => {
+    vi.resetModules();
     ({ dashboardCommand } = await import("./dashboard.js"));
-  });
-
-  beforeEach(() => {
     resetRuntime();
     readConfigFileSnapshotMock.mockClear();
     resolveGatewayPortMock.mockClear();
