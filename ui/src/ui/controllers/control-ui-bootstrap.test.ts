@@ -23,6 +23,7 @@ describe("loadControlUiBootstrapConfig", () => {
       assistantName: "Assistant",
       assistantAvatar: null,
       assistantAgentId: null,
+      userAvatar: null,
       serverVersion: null,
     };
 
@@ -49,6 +50,7 @@ describe("loadControlUiBootstrapConfig", () => {
       assistantName: "Assistant",
       assistantAvatar: null,
       assistantAgentId: null,
+      userAvatar: null,
       serverVersion: null,
     };
 
@@ -72,6 +74,7 @@ describe("loadControlUiBootstrapConfig", () => {
       assistantName: "Assistant",
       assistantAvatar: null,
       assistantAgentId: null,
+      userAvatar: null,
       serverVersion: null,
     };
 
