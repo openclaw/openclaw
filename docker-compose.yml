@@ -14,7 +14,7 @@ services:
       ## Replace 7897 with the port your proxy is actually listening on your host machine.
       # HTTP_PROXY: "socks5h://host.docker.internal:7897"
       # HTTPS_PROXY: "socks5h://host.docker.internal:7897"
-      # NO_PROXY: "localhost,*.local,127.0.0.1,10.*.*.*,172.*.*.*,192.168.*.*"
+      # NO_PROXY: "localhost,127.0.0.1,.local,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
     # extra_hosts:
     #   - "host.docker.internal:host-gateway"
     volumes:

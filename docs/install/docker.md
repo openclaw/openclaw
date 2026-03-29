@@ -145,12 +145,16 @@ If your host routes outbound traffic through a local proxy (such as Clash Verge,
 # In openclaw-gateway.environment:
 # HTTP_PROXY: "socks5h://host.docker.internal:7897"
 # HTTPS_PROXY: "socks5h://host.docker.internal:7897"
-# NO_PROXY: "localhost,*.local,127.0.0.1,10.*.*.*,172.*.*.*,192.168.*.*"
+# NO_PROXY: "localhost,127.0.0.1,.local,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
 ```
 
 > **Note:**
 > Replace `7897` with the port your proxy is actually listening on your host machine.
-> For Linux, ensure you add `extra_hosts: - "host.docker.internal:host-gateway"` to make `host.docker.internal` available inside the container.
+> For Linux, ensure you add the following to the `openclaw-gateway` service to make `host.docker.internal` resolve inside the container:
+> ```yaml
+> extra_hosts:
+>   - "host.docker.internal:host-gateway"
+> ```
 
 This ensures all outbound requests from the gateway container are routed through your local proxy.
 
