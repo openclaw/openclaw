@@ -740,6 +740,53 @@ describe("OpenResponses HTTP API (e2e)", () => {
     await ensureResponseConsumed(res);
   });
 
+  it("preserves non-stream reasoning segment boundaries when snapshots share prefixes", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommand.mockImplementationOnce((async (opts: unknown) => {
+      const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
+      emitAgentEvent({
+        runId,
+        stream: "thinking-raw",
+        data: { rawText: "Shared prefix", rawDelta: "Shared prefix" },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "thinking-raw",
+        data: {
+          rawText: "Shared prefix and second segment",
+          rawDelta: "Shared prefix and second segment",
+        },
+      });
+      return {
+        payloads: [{ text: "Final answer." }],
+      };
+    }) as never);
+
+    const res = await postResponses(port, {
+      stream: false,
+      model: "openclaw",
+      input: "explain this",
+    });
+
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as {
+      status?: string;
+      output?: Array<Record<string, unknown>>;
+    };
+    expect(json.status).toBe("completed");
+    expect(json.output?.map((item) => item.type)).toEqual(["reasoning", "message"]);
+    expect((json.output?.[0]?.content as string | undefined) ?? "").toBe(
+      "Shared prefix\n\nShared prefix and second segment",
+    );
+    expect(
+      ((json.output?.[1]?.content as Array<Record<string, unknown>> | undefined)?.[0]?.text as
+        | string
+        | undefined) ?? "",
+    ).toBe("Final answer.");
+    await ensureResponseConsumed(res);
+  });
+
   it("falls back to payload text for streamed function_call responses", async () => {
     const port = enabledPort;
     agentCommand.mockClear();
@@ -790,7 +837,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
     expect(events.some((event) => event.data === "[DONE]")).toBe(true);
   });
 
-  it("streams incremental reasoning deltas and emits reasoning.done before output_item.done in tool-call mode", async () => {
+  it("streams reset-aware reasoning deltas and emits a single reasoning.done in tool-call mode", async () => {
     const port = enabledPort;
     agentCommand.mockClear();
     agentCommand.mockImplementationOnce((async (opts: unknown) => {
@@ -798,12 +845,21 @@ describe("OpenResponses HTTP API (e2e)", () => {
       emitAgentEvent({
         runId,
         stream: "thinking-raw",
-        data: { rawText: "First segment", rawDelta: "First segment" },
+        data: { rawText: "Shared prefix", rawDelta: "Shared prefix" },
       });
       emitAgentEvent({
         runId,
         stream: "thinking-raw",
-        data: { rawText: "Second segment", rawDelta: "Second segment" },
+        data: {
+          rawText: "Shared prefix and second segment",
+          rawDelta: "Shared prefix and second segment",
+        },
+      });
+      // Simulate providers that emit lifecycle end before the command returns.
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "end" },
       });
       return {
         payloads: [{ text: "Let me check that." }],
@@ -835,9 +891,12 @@ describe("OpenResponses HTTP API (e2e)", () => {
       .filter((event) => event.event === "response.reasoning.delta")
       .map((event) => JSON.parse(event.data) as { delta?: string });
     expect(reasoningDeltas.map((event) => event.delta)).toEqual([
-      "First segment",
-      "\n\nSecond segment",
+      "Shared prefix",
+      "\n\nShared prefix and second segment",
     ]);
+
+    const reasoningDoneEvents = events.filter((event) => event.event === "response.reasoning.done");
+    expect(reasoningDoneEvents).toHaveLength(1);
 
     const reasoningDoneIndex = events.findIndex(
       (event) => event.event === "response.reasoning.done",
@@ -849,9 +908,9 @@ describe("OpenResponses HTTP API (e2e)", () => {
     expect(firstOutputItemDoneIndex).toBeGreaterThanOrEqual(0);
     expect(reasoningDoneIndex).toBeLessThan(firstOutputItemDoneIndex);
 
-    const reasoningDone = events[reasoningDoneIndex];
+    const reasoningDone = reasoningDoneEvents[0];
     expect((JSON.parse(reasoningDone?.data ?? "{}") as { text?: string }).text).toBe(
-      "First segment\n\nSecond segment",
+      "Shared prefix\n\nShared prefix and second segment",
     );
     expect(events.some((event) => event.data === "[DONE]")).toBe(true);
   });

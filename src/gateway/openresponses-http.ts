@@ -695,18 +695,35 @@ export async function handleOpenResponsesHttpRequest(
   if (!stream) {
     let collectedThinking = "";
     let currentThinkingSegment = "";
+    const flushCurrentThinkingSegment = () => {
+      if (!currentThinkingSegment) {
+        return;
+      }
+      collectedThinking += (collectedThinking ? "\n\n" : "") + currentThinkingSegment;
+      currentThinkingSegment = "";
+    };
+    const isNewThinkingSegment = (raw: string, rawDelta?: string) => {
+      if (!currentThinkingSegment) {
+        return false;
+      }
+      // rawDelta===raw means upstream reset the snapshot baseline, so this is
+      // a new segment even when the next segment shares a prefix.
+      if (rawDelta && rawDelta === raw) {
+        return true;
+      }
+      return !raw.startsWith(currentThinkingSegment);
+    };
     const unsubThinking = onAgentEvent((evt) => {
       if (evt.runId !== responseId || evt.stream !== "thinking-raw") {
         return;
       }
       const raw = typeof evt.data?.rawText === "string" ? evt.data.rawText : "";
+      const rawDelta = typeof evt.data?.rawDelta === "string" ? evt.data.rawDelta : undefined;
       if (!raw) {
         return;
       }
-      // rawText is cumulative within a block. Only flush the previous segment
-      // when the new value does NOT extend it (indicates a new thinking block).
-      if (currentThinkingSegment && !raw.startsWith(currentThinkingSegment)) {
-        collectedThinking += (collectedThinking ? "\n\n" : "") + currentThinkingSegment;
+      if (isNewThinkingSegment(raw, rawDelta)) {
+        flushCurrentThinkingSegment();
       }
       currentThinkingSegment = raw;
     });
@@ -726,10 +743,7 @@ export async function handleOpenResponsesHttpRequest(
       });
 
       unsubThinking();
-      if (currentThinkingSegment) {
-        collectedThinking += (collectedThinking ? "\n\n" : "") + currentThinkingSegment;
-        currentThinkingSegment = "";
-      }
+      flushCurrentThinkingSegment();
 
       const usage = extractUsageFromResult(result);
       const meta = (result as { meta?: unknown } | null)?.meta;
@@ -819,9 +833,7 @@ export async function handleOpenResponsesHttpRequest(
       sendJson(res, 200, response);
     } catch (err) {
       unsubThinking();
-      if (currentThinkingSegment) {
-        collectedThinking += (collectedThinking ? "\n\n" : "") + currentThinkingSegment;
-      }
+      flushCurrentThinkingSegment();
       logWarn(`openresponses: non-stream response failed: ${String(err)}`);
       const response = createResponseResource({
         id: responseId,
@@ -851,6 +863,42 @@ export async function handleOpenResponsesHttpRequest(
   let finalUsage: Usage | undefined;
   let finalizeRequested: { status: ResponseResource["status"]; text: string } | null = null;
   const reasoningItemId = `reasoning_${randomUUID()}`;
+  let reasoningDoneEmitted = false;
+  const appendThinkingSegment = (segment: string) => {
+    if (!segment) {
+      return;
+    }
+    accumulatedThinking += (accumulatedThinking ? "\n\n" : "") + segment;
+  };
+  const flushCurrentStreamThinkingSegment = () => {
+    if (!currentStreamThinkingSegment) {
+      return;
+    }
+    appendThinkingSegment(currentStreamThinkingSegment);
+    currentStreamThinkingSegment = "";
+  };
+  const isNewStreamThinkingSegment = (raw: string, rawDelta?: string) => {
+    if (!currentStreamThinkingSegment) {
+      return false;
+    }
+    // rawDelta===raw means upstream reset the snapshot baseline, so this is
+    // a new segment even when the next segment shares a prefix.
+    if (rawDelta && rawDelta === raw) {
+      return true;
+    }
+    return !raw.startsWith(currentStreamThinkingSegment);
+  };
+  const emitReasoningDoneOnce = () => {
+    if (!accumulatedThinking || reasoningDoneEmitted) {
+      return;
+    }
+    writeSseEvent(res, {
+      type: "response.reasoning.done",
+      item_id: reasoningItemId,
+      text: accumulatedThinking,
+    });
+    reasoningDoneEmitted = true;
+  };
 
   const maybeFinalize = () => {
     if (closed) {
@@ -971,18 +1019,22 @@ export async function handleOpenResponsesHttpRequest(
 
     if (evt.stream === "thinking-raw") {
       const raw = typeof evt.data?.rawText === "string" ? evt.data.rawText : "";
-      const rawDelta = typeof evt.data?.rawDelta === "string" ? evt.data.rawDelta : "";
-      if (!raw || !rawDelta) {
+      const rawDelta = typeof evt.data?.rawDelta === "string" ? evt.data.rawDelta : undefined;
+      if (!raw) {
         return;
       }
-      let delta = rawDelta;
-      if (currentStreamThinkingSegment && !raw.startsWith(currentStreamThinkingSegment)) {
-        accumulatedThinking += (accumulatedThinking ? "\n\n" : "") + currentStreamThinkingSegment;
-        // New thinking segment starts; preserve the same separator used in
-        // final aggregated reasoning output.
-        delta = `\n\n${rawDelta}`;
+      const startsNewSegment = isNewStreamThinkingSegment(raw, rawDelta);
+      if (startsNewSegment) {
+        flushCurrentStreamThinkingSegment();
       }
       currentStreamThinkingSegment = raw;
+
+      let delta = rawDelta ?? raw;
+      if (startsNewSegment) {
+        // New thinking segment starts; preserve the same separator used in
+        // final aggregated reasoning output.
+        delta = `\n\n${delta}`;
+      }
 
       writeSseEvent(res, {
         type: "response.reasoning.delta",
@@ -1014,17 +1066,8 @@ export async function handleOpenResponsesHttpRequest(
     if (evt.stream === "lifecycle") {
       const phase = evt.data?.phase;
       if (phase === "end" || phase === "error") {
-        if (currentStreamThinkingSegment) {
-          accumulatedThinking += (accumulatedThinking ? "\n\n" : "") + currentStreamThinkingSegment;
-          currentStreamThinkingSegment = "";
-        }
-        if (accumulatedThinking) {
-          writeSseEvent(res, {
-            type: "response.reasoning.done",
-            item_id: reasoningItemId,
-            text: accumulatedThinking,
-          });
-        }
+        flushCurrentStreamThinkingSegment();
+        emitReasoningDoneOnce();
         const fallback = accumulatedText || accumulatedThinking || "No response from OpenClaw.";
         const finalStatus = phase === "error" ? "failed" : "completed";
         requestFinalize(finalStatus, fallback);
@@ -1067,18 +1110,8 @@ export async function handleOpenResponsesHttpRequest(
         pendingToolCalls.length > 0
       ) {
         // Flush any pending thinking segment before closing the stream.
-        if (currentStreamThinkingSegment) {
-          if (
-            !accumulatedThinking ||
-            !currentStreamThinkingSegment.startsWith(accumulatedThinking)
-          ) {
-            accumulatedThinking +=
-              (accumulatedThinking ? "\n\n" : "") + currentStreamThinkingSegment;
-          } else {
-            accumulatedThinking = currentStreamThinkingSegment;
-          }
-          currentStreamThinkingSegment = "";
-        }
+        flushCurrentStreamThinkingSegment();
+        emitReasoningDoneOnce();
 
         const functionCall = pendingToolCalls[0];
         const usage = finalUsage ?? createEmptyUsage();
@@ -1105,13 +1138,6 @@ export async function handleOpenResponsesHttpRequest(
           content_index: 0,
           part: { type: "output_text", text: finalText },
         });
-        if (accumulatedThinking) {
-          writeSseEvent(res, {
-            type: "response.reasoning.done",
-            item_id: reasoningItemId,
-            text: accumulatedThinking,
-          });
-        }
 
         const completedItem = createAssistantOutputItem({
           id: outputItemId,
