@@ -332,7 +332,7 @@ export function resolveMemoryBackendConfig(params: {
   );
 
   // Combine QMD-specific paths with memorySearch extraPaths
-  const allQmdPaths = [...(qmdCfg?.paths ?? []), ...searchExtraPaths];
+  const allQmdPaths: MemoryQmdIndexPath[] = [...(qmdCfg?.paths ?? []), ...searchExtraPaths];
 
   const collections = [
     ...resolveDefaultCollections(includeDefaultMemory, workspaceDir, nameSet, normalizedAgentId),
