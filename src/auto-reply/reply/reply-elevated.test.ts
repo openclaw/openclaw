@@ -3,12 +3,12 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { MsgContext } from "../templating.js";
 import { resolveElevatedPermissions } from "./reply-elevated.js";
 
-function buildConfig(allowFrom: string[]): OpenClawConfig {
+function buildConfig(allowFrom: string[], provider: string = "whatsapp"): OpenClawConfig {
   return {
     tools: {
       elevated: {
         allowFrom: {
-          whatsapp: allowFrom,
+          [provider]: allowFrom,
         },
       },
     },
@@ -87,5 +87,24 @@ describe("resolveElevatedPermissions", () => {
         SenderUsername: "owner_username",
       },
     });
+  });
+
+  it("uses normalized provider key when allowFrom key casing differs", () => {
+    const result = resolveElevatedPermissions({
+      cfg: buildConfig(["*"], "telegram"),
+      agentId: "main",
+      provider: "Telegram",
+      ctx: buildContext({
+        Provider: "Telegram",
+        Surface: "Telegram",
+        SenderId: "12345",
+        From: "12345",
+        SenderE164: undefined,
+      }),
+    });
+
+    expect(result.enabled).toBe(true);
+    expect(result.allowed).toBe(true);
+    expect(result.failures).toHaveLength(0);
   });
 });
