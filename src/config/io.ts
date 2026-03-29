@@ -31,6 +31,7 @@ import {
   resolveConfigIncludes,
 } from "./includes.js";
 import { migrateLegacyConfig } from "./legacy-migrate.js";
+import { normalizeLegacyWebSearchConfig } from "./legacy-web-search.js";
 import { findLegacyConfigIssues } from "./legacy.js";
 import {
   asResolvedSourceConfig,
@@ -2131,7 +2132,9 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     // validated.config, because plugin/channel AJV validation may inject schema
     // defaults (e.g., enrichGroupParticipantsFromContacts) that should not be
     // persisted to disk (issue #56772).
-    let cfgToWrite = persistCandidate as OpenClawConfig;
+    // Apply legacy web-search normalization so that migration results are still
+    // persisted even though we bypass validated.config.
+    let cfgToWrite = normalizeLegacyWebSearchConfig(persistCandidate) as OpenClawConfig;
     try {
       if (deps.fs.existsSync(configPath)) {
         const currentRaw = await deps.fs.promises.readFile(configPath, "utf-8");
