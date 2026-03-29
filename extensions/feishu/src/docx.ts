@@ -18,6 +18,7 @@ import {
   mergeTableCells,
 } from "./docx-table-ops.js";
 import type { FeishuDocxBlock, FeishuDocxBlockChild } from "./docx-types.js";
+import { logFeishuRegistrationOnce } from "./register-log-once.js";
 import { getFeishuRuntime } from "./runtime.js";
 import {
   createFeishuToolClient,
@@ -1575,6 +1576,10 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
   }
 
   if (registered.length > 0) {
-    api.logger.info?.(`feishu_doc: Registered ${registered.join(", ")}`);
+    logFeishuRegistrationOnce(
+      api.logger,
+      "feishu_doc",
+      `feishu_doc: Registered ${registered.join(", ")}`,
+    );
   }
 }

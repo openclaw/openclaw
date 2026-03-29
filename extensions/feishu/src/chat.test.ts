@@ -13,6 +13,7 @@ vi.mock("./client.js", () => ({
 }));
 
 let registerFeishuChatTools: typeof import("./chat.js").registerFeishuChatTools;
+let resetFeishuRegistrationLogOnceForTests: typeof import("./register-log-once.js").resetFeishuRegistrationLogOnceForTests;
 
 describe("registerFeishuChatTools", () => {
   function createChatToolApi(params: {
@@ -46,6 +47,8 @@ describe("registerFeishuChatTools", () => {
 
   beforeEach(async () => {
     ({ registerFeishuChatTools } = await import("./chat.js"));
+    ({ resetFeishuRegistrationLogOnceForTests } = await import("./register-log-once.js"));
+    resetFeishuRegistrationLogOnceForTests();
   });
 
   it("registers feishu_chat and handles info/members actions", async () => {
@@ -139,5 +142,31 @@ describe("registerFeishuChatTools", () => {
       }),
     );
     expect(registerTool).not.toHaveBeenCalled();
+  });
+
+  it("emits the registration info log only once across repeated registrations", () => {
+    const registerTool = vi.fn();
+    const info = vi.fn();
+    const api = createChatToolApi({
+      config: {
+        channels: {
+          feishu: {
+            enabled: true,
+            appId: "app_id",
+            appSecret: "app_secret", // pragma: allowlist secret
+            tools: { chat: true },
+          },
+        },
+      },
+      registerTool,
+    });
+    api.logger.info = info;
+
+    registerFeishuChatTools(api);
+    registerFeishuChatTools(api);
+
+    expect(registerTool).toHaveBeenCalledTimes(2);
+    expect(info).toHaveBeenCalledTimes(1);
+    expect(info).toHaveBeenCalledWith("feishu_chat: Registered feishu_chat tool");
   });
 });

@@ -1,6 +1,7 @@
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { listEnabledFeishuAccounts } from "./accounts.js";
+import { logFeishuRegistrationOnce } from "./register-log-once.js";
 import { createFeishuToolClient, resolveAnyEnabledFeishuToolsConfig } from "./tool-account.js";
 import {
   jsonToolResult,
@@ -228,5 +229,5 @@ export function registerFeishuWikiTools(api: OpenClawPluginApi) {
     { name: "feishu_wiki" },
   );
 
-  api.logger.info?.(`feishu_wiki: Registered feishu_wiki tool`);
+  logFeishuRegistrationOnce(api.logger, "feishu_wiki", "feishu_wiki: Registered feishu_wiki tool");
 }
