@@ -248,7 +248,8 @@ describe("handleControlUiHttpRequest", () => {
         );
         expect(handled).toBe(true);
         const parsed = parseBootstrapPayload(end);
-        expect(parsed.userAvatar).toBe("user-custom.png");
+        // userAvatar is now resolved through resolveAssistantAvatarUrl (agentId "user")
+        expect(parsed.userAvatar).toBe("/avatar/user");
       },
     });
   });
