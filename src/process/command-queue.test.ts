@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { importFreshModule } from "../../test/helpers/import-fresh.js";
+import { CommandLane } from "./lanes.js";
 
 const diagnosticMocks = vi.hoisted(() => ({
   logLaneEnqueue: vi.fn(),
@@ -70,6 +71,9 @@ describe("command queue", () => {
       waitForActiveTasks,
     } = await import("./command-queue.js"));
     resetAllLanes();
+    // Queue state is global across module instances, so reset main lane
+    // concurrency explicitly to avoid cross-file leakage.
+    setCommandLaneConcurrency(CommandLane.Main, 1);
     diagnosticMocks.logLaneEnqueue.mockClear();
     diagnosticMocks.logLaneDequeue.mockClear();
     diagnosticMocks.diag.debug.mockClear();
