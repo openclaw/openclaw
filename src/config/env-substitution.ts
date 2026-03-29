@@ -39,6 +39,8 @@ export class MissingEnvVarError extends Error {
   }
 }
 
+// For "escaped" tokens, `name` holds the full inner content including any `:-…` suffix (e.g. "VAR:-fallback").
+// For "substitution" tokens, `name` holds only the variable name (e.g. "VAR").
 type EnvToken =
   | { kind: "escaped"; name: string; end: number }
   | { kind: "substitution"; name: string; defaultValue?: string; end: number };
@@ -51,14 +53,16 @@ function parseEnvTokenAt(value: string, index: number): EnvToken | null {
   const next = value[index + 1];
   const afterNext = value[index + 2];
 
-  // Escaped: $${VAR} -> ${VAR}
+  // Escaped: $${VAR} -> ${VAR} or $${VAR:-default} -> ${VAR:-default}
   if (next === "$" && afterNext === "{") {
     const start = index + 3;
     const end = value.indexOf("}", start);
     if (end !== -1) {
-      const name = value.slice(start, end);
-      if (ENV_VAR_NAME_PATTERN.test(name)) {
-        return { kind: "escaped", name, end };
+      const inner = value.slice(start, end);
+      const sepIdx = inner.indexOf(":-");
+      const rawName = sepIdx !== -1 ? inner.slice(0, sepIdx) : inner;
+      if (ENV_VAR_NAME_PATTERN.test(rawName)) {
+        return { kind: "escaped", name: inner, end };
       }
     }
   }
@@ -131,6 +135,8 @@ function substituteString(
         }
         if (opts?.onMissing) {
           opts.onMissing({ varName: token.name, configPath });
+          // onMissing is only reachable when token.defaultValue is undefined (no default),
+          // so reconstructing ${token.name} without a default suffix is always accurate.
           // Preserve the original placeholder so the value is visibly unresolved.
           chunks.push(`\${${token.name}}`);
           i = token.end;

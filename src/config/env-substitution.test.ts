@@ -195,6 +195,32 @@ describe("resolveConfigEnvVars", () => {
     });
   });
 
+  describe("escape with default syntax ($${VAR:-fallback})", () => {
+    it("escape with default syntax: $${VAR:-fallback} with VAR unset is literal", () => {
+      expect(resolveConfigEnvVars("$${VAR:-fallback}", {})).toBe("${VAR:-fallback}");
+    });
+
+    it("escape with default syntax: $${VAR:-fallback} with VAR set is still literal", () => {
+      expect(resolveConfigEnvVars("$${VAR:-fallback}", { VAR: "actual" })).toBe("${VAR:-fallback}");
+    });
+
+    it("escape with default syntax: mixed real default and escaped default", () => {
+      expect(resolveConfigEnvVars("${REAL:-default}/$${LITERAL:-default}", {})).toBe(
+        "default/${LITERAL:-default}",
+      );
+    });
+
+    it("real sub, escape, real sub in sequence", () => {
+      expect(resolveConfigEnvVars("${A:-x}/$${B:-y}/${C:-z}", {})).toBe("x/${B:-y}/z");
+    });
+
+    it("escape with URL default is preserved as literal", () => {
+      expect(resolveConfigEnvVars("$${VAR:-https://url.example.com}", {})).toBe(
+        "${VAR:-https://url.example.com}",
+      );
+    });
+  });
+
   describe("pattern matching rules", () => {
     it("leaves non-matching placeholders unchanged", () => {
       const scenarios: SubstitutionScenario[] = [
@@ -437,6 +463,10 @@ describe("resolveConfigEnvVars", () => {
     it("returns false for escaped placeholders", () => {
       expect(containsEnvVarReference("$${ESCAPED}")).toBe(false);
       expect(containsEnvVarReference("prefix-$${ESCAPED}-suffix")).toBe(false);
+    });
+
+    it("escaped with default syntax is not a reference", () => {
+      expect(containsEnvVarReference("$${VAR:-default}")).toBe(false);
     });
 
     it("detects references mixed with escaped placeholders", () => {

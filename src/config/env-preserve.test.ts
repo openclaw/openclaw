@@ -194,6 +194,18 @@ describe("restoreEnvVarRefs", () => {
     expect(result).toEqual({ token: "${OPT_TOKEN:-}" });
   });
 
+  it("keeps incoming value when it differs from empty default", () => {
+    // ${VAR:-} has an empty default; if incoming is non-empty, the caller set it explicitly
+    const result = restoreEnvVarRefs("set-value", "${VAR:-}", env);
+    expect(result).toBe("set-value");
+  });
+
+  it("correctly round-trips $${VAR:-default} escape sequence back to original", () => {
+    // $${VAR:-default} is an escape literal — should be restored to $${VAR:-default}, not evaluated
+    const result = restoreEnvVarRefs("${VAR:-default}", "$${VAR:-default}", env);
+    expect(result).toBe("$${VAR:-default}");
+  });
+
   it("does not confuse $${VAR} escape with ${VAR} substitution", () => {
     // Config has both: an escaped ref and a real ref
     const incoming = {
