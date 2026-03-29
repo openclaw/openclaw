@@ -11,6 +11,7 @@ export {
   parseConfigJson5,
   readConfigFileSnapshot,
   readConfigFileSnapshotForWrite,
+  resetConfigRuntimeState,
   resolveConfigSnapshotHash,
   setRuntimeConfigSnapshotRefreshHandler,
   setRuntimeConfigSnapshot,

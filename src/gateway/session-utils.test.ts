@@ -6,7 +6,7 @@ import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
 } from "../agents/subagent-registry.js";
-import { clearConfigCache, writeConfigFile } from "../config/config.js";
+import { resetConfigRuntimeState, writeConfigFile } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
@@ -306,7 +306,7 @@ describe("gateway session utils", () => {
   });
 
   test("loadSessionEntry reads discovered stores from non-round-tripping agent dirs", async () => {
-    clearConfigCache();
+    resetConfigRuntimeState();
     try {
       await withStateDirEnv("session-utils-load-entry-", async ({ stateDir }) => {
         const retiredSessionsDir = path.join(stateDir, "agents", "Retired Agent", "sessions");
@@ -326,7 +326,7 @@ describe("gateway session utils", () => {
           },
           agents: { list: [{ id: "main", default: true }] },
         });
-        clearConfigCache();
+        resetConfigRuntimeState();
 
         const loaded = loadSessionEntry("agent:retired-agent:main");
 
@@ -334,12 +334,12 @@ describe("gateway session utils", () => {
         expect(loaded.entry?.sessionId).toBe("sess-retired");
       });
     } finally {
-      clearConfigCache();
+      resetConfigRuntimeState();
     }
   });
 
   test("loadSessionEntry prefers the freshest duplicate row for a logical key", async () => {
-    clearConfigCache();
+    resetConfigRuntimeState();
     try {
       await withStateDirEnv("session-utils-load-entry-freshest-", async ({ stateDir }) => {
         const sessionsDir = path.join(stateDir, "agents", "main", "sessions");
@@ -364,19 +364,19 @@ describe("gateway session utils", () => {
           },
           agents: { list: [{ id: "main", default: true }] },
         });
-        clearConfigCache();
+        resetConfigRuntimeState();
 
         const loaded = loadSessionEntry("agent:main:main");
 
         expect(loaded.entry?.sessionId).toBe("sess-fresh");
       });
     } finally {
-      clearConfigCache();
+      resetConfigRuntimeState();
     }
   });
 
   test("loadSessionEntry prefers the freshest duplicate row across discovered stores", async () => {
-    clearConfigCache();
+    resetConfigRuntimeState();
     try {
       await withStateDirEnv("session-utils-load-entry-cross-store-", async ({ stateDir }) => {
         const canonicalSessionsDir = path.join(stateDir, "agents", "main", "sessions");
@@ -415,14 +415,14 @@ describe("gateway session utils", () => {
           },
           agents: { list: [{ id: "main", default: true }] },
         });
-        clearConfigCache();
+        resetConfigRuntimeState();
 
         const loaded = loadSessionEntry("agent:main:main");
 
         expect(loaded.entry?.sessionId).toBe("sess-canonical-fresh");
       });
     } finally {
-      clearConfigCache();
+      resetConfigRuntimeState();
     }
   });
 
