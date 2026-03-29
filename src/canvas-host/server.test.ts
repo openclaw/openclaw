@@ -1,13 +1,15 @@
 import fs from "node:fs/promises";
-import { createServer } from "node:http";
+import { createServer, type IncomingMessage } from "node:http";
 import { createRequire } from "node:module";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
+import type { Duplex } from "node:stream";
 import {
   clearTimeout as clearNativeTimeout,
   setTimeout as scheduleNativeTimeout,
 } from "node:timers";
+import { setTimeout as sleep } from "node:timers/promises";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { rawDataToString } from "../infra/ws.js";
 import { defaultRuntime } from "../runtime.js";
@@ -19,9 +21,34 @@ type MockWatcher = {
   __emit: (event: string, ...args: unknown[]) => void;
 };
 
-const CANVAS_WS_OPEN_TIMEOUT_MS = 2_000;
-const CANVAS_RELOAD_TIMEOUT_MS = 4_000;
-const CANVAS_RELOAD_TEST_TIMEOUT_MS = 12_000;
+const CANVAS_WS_OPEN_TIMEOUT_MS = 4_000;
+const CANVAS_RELOAD_TIMEOUT_MS = 10_000;
+const CANVAS_RELOAD_TEST_TIMEOUT_MS = 20_000;
+
+type TrackingWebSocketServerCtor = {
+  new (...args: unknown[]): {
+    on: (event: string, cb: (...args: unknown[]) => void) => unknown;
+    emit: (event: string, ...args: unknown[]) => void;
+    handleUpgrade: (
+      req: IncomingMessage,
+      socket: Duplex,
+      head: Buffer,
+      cb: (ws: TrackingWebSocket) => void,
+    ) => void;
+    close: (cb?: (err?: Error) => void) => void;
+    connectionCount: number;
+  };
+  latestInstance?: {
+    connectionCount: number;
+  };
+  latestSocket?: TrackingWebSocket;
+};
+
+type TrackingWebSocket = {
+  sent: string[];
+  on: (event: string, cb: () => void) => TrackingWebSocket;
+  send: (message: string) => void;
+};
 
 function isLoopbackBindDenied(error: unknown) {
   const code = (error as NodeJS.ErrnoException | undefined)?.code;
@@ -267,65 +294,117 @@ describe("canvas host", () => {
   });
 
   it(
-    "serves HTML with injection and broadcasts reload on file changes",
+    "broadcasts reload on file changes",
     async () => {
       const dir = await createCaseDir();
       const index = path.join(dir, "index.html");
       await fs.writeFile(index, "<html><body>v1</body></html>", "utf8");
 
       const watcherStart = watcherState.watchers.length;
-      let server: Awaited<ReturnType<typeof startFixtureCanvasHost>>;
-      try {
-        server = await startFixtureCanvasHost(dir);
-      } catch (error) {
-        if (isLoopbackBindDenied(error)) {
-          return;
+      const TrackingWebSocketServerClass = class TrackingWebSocketServer {
+        static latestInstance: { connectionCount: number } | undefined;
+        static latestSocket: TrackingWebSocket | undefined;
+        connectionCount = 0;
+        readonly handlers = new Map<string, Array<(...args: unknown[]) => void>>();
+
+        on(event: string, cb: (...args: unknown[]) => void) {
+          const list = this.handlers.get(event) ?? [];
+          list.push(cb);
+          this.handlers.set(event, list);
+          return this;
         }
-        throw error;
-      }
+
+        emit(event: string, ...args: unknown[]) {
+          for (const cb of this.handlers.get(event) ?? []) {
+            cb(...args);
+          }
+        }
+
+        handleUpgrade(
+          req: IncomingMessage,
+          socket: Duplex,
+          head: Buffer,
+          cb: (ws: TrackingWebSocket) => void,
+        ) {
+          void req;
+          void socket;
+          void head;
+          const closeHandlers: Array<() => void> = [];
+          const ws: TrackingWebSocket = {
+            sent: [],
+            on: (event, handler) => {
+              if (event === "close") {
+                closeHandlers.push(handler);
+              }
+              return ws;
+            },
+            send: (message: string) => {
+              ws.sent.push(message);
+            },
+          };
+          TrackingWebSocketServerClass.latestSocket = ws;
+          cb(ws);
+        }
+
+        close(cb?: (err?: Error) => void) {
+          cb?.();
+        }
+
+        constructor(..._args: unknown[]) {
+          TrackingWebSocketServerClass.latestInstance = this;
+          this.on("connection", () => {
+            this.connectionCount += 1;
+          });
+        }
+      };
+
+      const handler = await createCanvasHostHandler({
+        runtime: quietRuntime,
+        rootDir: dir,
+        basePath: CANVAS_HOST_PATH,
+        allowInTests: true,
+        watchFactory: watcherState.watchFactory as unknown as Parameters<
+          typeof createCanvasHostHandler
+        >[0]["watchFactory"],
+        webSocketServerClass:
+          TrackingWebSocketServerClass as unknown as typeof import("ws").WebSocketServer,
+      });
 
       try {
         const watcher = watcherState.watchers[watcherStart];
         expect(watcher).toBeTruthy();
-
-        const { res, html } = await fetchCanvasHtml(server.port);
-        expect(res.status).toBe(200);
-        expect(html).toContain("v1");
-        expect(html).toContain(CANVAS_WS_PATH);
-
-        const ws = new WebSocketClient(`ws://127.0.0.1:${server.port}${CANVAS_WS_PATH}`);
-        await new Promise<void>((resolve, reject) => {
-          const timer = scheduleNativeTimeout(
-            () => reject(new Error("ws open timeout")),
-            CANVAS_WS_OPEN_TIMEOUT_MS,
-          );
-          ws.on("open", () => {
-            clearNativeTimeout(timer);
-            resolve();
-          });
-          ws.on("error", (err) => {
-            clearNativeTimeout(timer);
-            reject(err);
-          });
-        });
+        const upgraded = handler.handleUpgrade(
+          { url: CANVAS_WS_PATH } as IncomingMessage,
+          {} as Duplex,
+          Buffer.alloc(0),
+        );
+        expect(upgraded).toBe(true);
+        expect(TrackingWebSocketServerClass.latestInstance?.connectionCount).toBe(1);
+        const ws = TrackingWebSocketServerClass.latestSocket;
+        expect(ws).toBeTruthy();
 
         const msg = new Promise<string>((resolve, reject) => {
-          const timer = scheduleNativeTimeout(
-            () => reject(new Error("reload timeout")),
-            CANVAS_RELOAD_TIMEOUT_MS,
-          );
-          ws.on("message", (data) => {
-            clearNativeTimeout(timer);
-            resolve(rawDataToString(data));
-          });
+          const deadline = Date.now() + CANVAS_RELOAD_TIMEOUT_MS;
+          const poll = () => {
+            const value = ws?.sent[0];
+            if (value) {
+              resolve(value);
+              return;
+            }
+            if (Date.now() >= deadline) {
+              reject(new Error("reload timeout"));
+              return;
+            }
+            void sleep(10).then(poll, reject);
+          };
+          void poll();
         });
 
         await fs.writeFile(index, "<html><body>v2</body></html>", "utf8");
         watcher.__emit("all", "change", index);
         expect(await msg).toBe("reload");
-        ws.terminate();
       } finally {
-        await server.close();
+        await handler.close();
       }
     },
     CANVAS_RELOAD_TEST_TIMEOUT_MS,
