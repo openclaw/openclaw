@@ -41,6 +41,10 @@ export default definePluginEntry({
         },
       },
       resolveConfigApiKey: ({ env }) => resolveBedrockConfigApiKey(env),
+      capabilities: {
+        providerFamily: "anthropic",
+        dropThinkingBlockModelHints: ["claude"],
+      },
       wrapStreamFn: ({ modelId, streamFn }) =>
         isAnthropicBedrockModel(modelId) ? streamFn : createBedrockNoCacheWrapper(streamFn),
       resolveDefaultThinkingLevel: ({ modelId }) =>
