@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import tsdownConfig from "../../tsdown.config.ts";
 
@@ -15,6 +17,30 @@ function entryKeys(config: TsdownConfigEntry): string[] {
     return [];
   }
   return Object.keys(config.entry);
+}
+
+function listRuntimeFacadeEntryKeys(): string[] {
+  const srcRoot = path.resolve(process.cwd(), "src");
+  const entries: string[] = [];
+
+  function walk(dir: string) {
+    for (const dirent of fs.readdirSync(dir, { withFileTypes: true })) {
+      const fullPath = path.join(dir, dirent.name);
+      if (dirent.isDirectory()) {
+        walk(fullPath);
+        continue;
+      }
+      if (!dirent.isFile() || !dirent.name.endsWith(".runtime.ts")) {
+        continue;
+      }
+      entries.push(
+        path.relative(srcRoot, fullPath).slice(0, -".ts".length).split(path.sep).join("/"),
+      );
+    }
+  }
+
+  walk(srcRoot);
+  return entries.toSorted();
 }
 
 describe("tsdown config", () => {
@@ -62,5 +88,13 @@ describe("tsdown config", () => {
           : false,
       ),
     ).toBe(false);
+  });
+
+  it("emits runtime facades as stable dist entries", () => {
+    const configs = asConfigArray(tsdownConfig);
+    const distGraph = configs.find((config) => entryKeys(config).includes("index"));
+
+    expect(distGraph).toBeDefined();
+    expect(entryKeys(distGraph!)).toEqual(expect.arrayContaining(listRuntimeFacadeEntryKeys()));
   });
 });

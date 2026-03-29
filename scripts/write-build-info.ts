@@ -1,13 +1,13 @@
 import { execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
-const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const distDir = path.join(rootDir, "dist");
-const pkgPath = path.join(rootDir, "package.json");
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-const readPackageVersion = () => {
+type ExecSyncLike = typeof execSync;
+
+export function readPackageVersion(pkgPath: string) {
   try {
     const raw = fs.readFileSync(pkgPath, "utf8");
     const parsed = JSON.parse(raw) as { version?: string };
@@ -15,33 +15,117 @@ const readPackageVersion = () => {
   } catch {
     return null;
   }
-};
+}
 
-const resolveCommit = () => {
-  const envCommit = process.env.GIT_COMMIT?.trim() || process.env.GIT_SHA?.trim();
-  if (envCommit) {
-    return envCommit;
-  }
+function readGitText(
+  command: string,
+  options: {
+    rootDir: string;
+    execSyncImpl?: ExecSyncLike;
+  },
+): string | null {
+  const execSyncImpl = options.execSyncImpl ?? execSync;
   try {
-    return execSync("git rev-parse HEAD", {
-      cwd: rootDir,
+    const raw = execSyncImpl(command, {
+      cwd: options.rootDir,
       stdio: ["ignore", "pipe", "ignore"],
-    })
-      .toString()
-      .trim();
+    });
+    return raw.toString().trim();
   } catch {
     return null;
   }
-};
+}
 
-const version = readPackageVersion();
-const commit = resolveCommit();
+export function resolveCommit(
+  options: {
+    rootDir?: string;
+    env?: NodeJS.ProcessEnv;
+    execSyncImpl?: ExecSyncLike;
+  } = {},
+) {
+  const env = options.env ?? process.env;
+  const rootDir = options.rootDir ?? repoRoot;
+  const envCommit = env.GIT_COMMIT?.trim() || env.GIT_SHA?.trim();
+  if (envCommit) {
+    return envCommit;
+  }
+  return readGitText("git rev-parse HEAD", {
+    rootDir,
+    execSyncImpl: options.execSyncImpl,
+  });
+}
 
-const buildInfo = {
-  version,
-  commit,
-  builtAt: new Date().toISOString(),
-};
+export function resolveDisplayVersionMarker(
+  options: {
+    rootDir?: string;
+    env?: NodeJS.ProcessEnv;
+    execSyncImpl?: ExecSyncLike;
+  } = {},
+) {
+  const env = options.env ?? process.env;
+  const rootDir = options.rootDir ?? repoRoot;
+  const explicitMarker = env.OPENCLAW_DISPLAY_VERSION_MARKER?.trim();
+  if (explicitMarker) {
+    return explicitMarker;
+  }
+  const gitStatus = readGitText("git status --porcelain --untracked-files=normal", {
+    rootDir,
+    execSyncImpl: options.execSyncImpl,
+  });
+  return gitStatus ? "dirty" : null;
+}
 
-fs.mkdirSync(distDir, { recursive: true });
-fs.writeFileSync(path.join(distDir, "build-info.json"), `${JSON.stringify(buildInfo, null, 2)}\n`);
+export function createBuildInfo(
+  options: {
+    rootDir?: string;
+    env?: NodeJS.ProcessEnv;
+    now?: Date;
+    execSyncImpl?: ExecSyncLike;
+  } = {},
+) {
+  const rootDir = options.rootDir ?? repoRoot;
+  const pkgPath = path.join(rootDir, "package.json");
+  return {
+    version: readPackageVersion(pkgPath),
+    displayVersionMarker: resolveDisplayVersionMarker({
+      rootDir,
+      env: options.env,
+      execSyncImpl: options.execSyncImpl,
+    }),
+    commit: resolveCommit({
+      rootDir,
+      env: options.env,
+      execSyncImpl: options.execSyncImpl,
+    }),
+    builtAt: (options.now ?? new Date()).toISOString(),
+  };
+}
+
+export function writeBuildInfo(
+  options: {
+    rootDir?: string;
+    distDir?: string;
+    env?: NodeJS.ProcessEnv;
+    now?: Date;
+    execSyncImpl?: ExecSyncLike;
+  } = {},
+) {
+  const rootDir = options.rootDir ?? repoRoot;
+  const distDir = options.distDir ?? path.join(rootDir, "dist");
+  const buildInfo = createBuildInfo({
+    rootDir,
+    env: options.env,
+    now: options.now,
+    execSyncImpl: options.execSyncImpl,
+  });
+  fs.mkdirSync(distDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(distDir, "build-info.json"),
+    `${JSON.stringify(buildInfo, null, 2)}\n`,
+  );
+  return buildInfo;
+}
+
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  writeBuildInfo();
+}

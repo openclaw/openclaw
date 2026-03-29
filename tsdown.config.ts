@@ -109,6 +109,36 @@ function buildBundledHookEntries(): Record<string, string> {
 
 const bundledHookEntries = buildBundledHookEntries();
 
+function buildRuntimeFacadeEntries(): Record<string, string> {
+  const srcRoot = path.join(process.cwd(), "src");
+  const entries: Record<string, string> = {};
+
+  if (!fs.existsSync(srcRoot)) {
+    return entries;
+  }
+
+  function walk(dir: string) {
+    for (const dirent of fs.readdirSync(dir, { withFileTypes: true })) {
+      const fullPath = path.join(dir, dirent.name);
+      if (dirent.isDirectory()) {
+        walk(fullPath);
+        continue;
+      }
+      if (!dirent.isFile() || !dirent.name.endsWith(".runtime.ts")) {
+        continue;
+      }
+      const relativePath = path.relative(srcRoot, fullPath);
+      const entryName = relativePath.slice(0, -".ts".length).split(path.sep).join("/");
+      entries[entryName] = fullPath;
+    }
+  }
+
+  walk(srcRoot);
+  return entries;
+}
+
+const runtimeFacadeEntries = buildRuntimeFacadeEntries();
+
 function buildCoreDistEntries(): Record<string, string> {
   return {
     index: "src/index.ts",
@@ -128,6 +158,7 @@ function buildCoreDistEntries(): Record<string, string> {
     "plugins/build-smoke-entry": "src/plugins/build-smoke-entry.ts",
     "plugins/runtime/index": "src/plugins/runtime/index.ts",
     "llm-slug-generator": "src/hooks/llm-slug-generator.ts",
+    ...runtimeFacadeEntries,
   };
 }
 
