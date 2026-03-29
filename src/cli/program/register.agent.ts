@@ -41,7 +41,11 @@ export function registerAgentCommands(program: Command, args: { agentChannelOpti
       "Run the embedded agent locally (requires model provider API keys in your shell)",
       false,
     )
-    .option("--deliver", "Send the agent's reply back to the selected channel", false)
+    .option(
+      "--deliver",
+      "Deliver the message directly to the selected channel (bypasses LLM)",
+      false,
+    )
     .option("--json", "Output result as JSON", false)
     .option(
       "--timeout <seconds>",

@@ -138,4 +138,23 @@ describe("agentCliCommand", () => {
       expect(runtime.log).toHaveBeenCalledWith("local");
     });
   });
+
+  it("routes --deliver through the gateway (channel runtime may be gateway-side)", async () => {
+    await withTempStore(async () => {
+      mockGatewaySuccessReply();
+
+      await agentCliCommand(
+        {
+          message: "notification",
+          to: "+1555",
+          deliver: true,
+          channel: "signal",
+        },
+        runtime,
+      );
+
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      expect(agentCommand).not.toHaveBeenCalled();
+    });
+  });
 });
