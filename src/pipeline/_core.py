@@ -682,6 +682,15 @@ class PipelineExecutor:
             except Exception as _mac_err:
                 logger.debug("MAC enrichment failed (non-fatal)", error=str(_mac_err))
 
+            # v16.0: Obsidian Brigade Logic override
+            try:
+                from src.pipeline._logic_provider import get_brigade_logic
+                _obsidian_logic = get_brigade_logic(brigade)
+                if _obsidian_logic:
+                    system_prompt += _obsidian_logic
+            except Exception as _obs_err:
+                logger.debug("Obsidian logic provider failed (non-fatal)", error=str(_obs_err))
+
             # П4-fix v14.8 → усилено в v14.9: антигаллюцинационная директива для YouTube
             if _yt_transcript_injected and role_name in ("Researcher", "Analyst", "Summarizer"):
                 _yt_directive = (
@@ -1122,6 +1131,16 @@ class PipelineExecutor:
                 self._counterfactual.save_to_memory(self._supermemory)
             except Exception as _cc_err:
                 logger.debug("Counterfactual credit save failed (non-fatal)", error=str(_cc_err))
+
+        # v16.0: Log to Obsidian Learning_Log.md
+        try:
+            from src.pipeline._logic_provider import record_learning
+            if final_response and not final_response.startswith("⚠️"):
+                record_learning(prompt, "", final_response)
+            else:
+                record_learning(prompt, final_response, "Execution failed or produced warnings")
+        except Exception as _ll_err:
+            logger.debug("Obsidian LearningLog write failed", error=str(_ll_err))
 
         logger.info(f"Pipeline COMPLETE: brigade={brigade}, steps={len(steps_results)}")
 

@@ -360,5 +360,40 @@ async def run_extension(extension_name: str, command: str, args: Optional[List[s
     except Exception as e:
         return f"Failed to run extension {extension_name}: {e}"
 
+@mcp.tool()
+async def export_vault_for_notebooklm() -> str:
+    """
+    Simulate NotebookLM Context Bridge. 
+    Collects all .md files in the .obsidian vault and concatenates them into a single Mega-source.
+    Returns the concatenated content, stripped of heavy tags.
+    """
+    obsidian_dir = os.path.join(_project_root, ".obsidian")
+    if not os.path.exists(obsidian_dir):
+        return "Obsidian vault not found."
+
+    mega_source = []
+    
+    # Recursively scan .obsidian for .md files
+    for root, _, files in os.walk(obsidian_dir):
+        for f in files:
+            if f.endswith(".md"):
+                fpath = os.path.join(root, f)
+                try:
+                    with open(fpath, "r", encoding="utf-8") as file_obj:
+                        content = file_obj.read()
+                        
+                        # Apply naive stripping of heavy tags if necessary
+                        # For now, just concatenate clearly
+                        mega_source.append(f"## Document: {f}\n\n{content.strip()}\n")
+                except Exception as e:
+                    # Ignore unreadable files
+                    pass
+
+    if not mega_source:
+        return "No markdown files found in Obsidian vault."
+
+    return "\n\n---\n\n".join(mega_source)
+
+
 if __name__ == "__main__":
     mcp.run()

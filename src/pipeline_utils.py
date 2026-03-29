@@ -438,12 +438,14 @@ _ANTI_REFUSAL_PROTOCOL = _ZERO_SHOT_AUTONOMY_PROTOCOL
 
 # v15.0: Role-specific execution mandates — inspired by MetaGPT role goals/constraints
 _RESEARCHER_EXECUTION_MANDATE = (
-    "\n\n[EXECUTION MANDATE — RESEARCHER v15.2]"
+    "\n\n[EXECUTION MANDATE — RESEARCHER v16.0]"
     "\nТы ОБЯЗАН вызвать инструменты поиска и вернуть РЕАЛЬНЫЕ данные."
     "\nНе пиши 'Я бы выполнил поиск...' — ВЫПОЛНИ поиск."
     "\nНе пиши 'Рекомендую проверить...' — ПРОВЕРЬ и выдай результат."
     "\nЕсли видишь URL — твоё ПЕРВОЕ действие ОБЯЗАНО быть вызовом web_search или youtube_parser. НЕ пытайся угадать содержимое ссылки."
-    "\nМинимальный артефакт: структурированные данные из инструментов + твой анализ."
+    "\n[CITATION GROUNDING]: При работе с памятью или хранилищем файлов (export_vault_for_notebooklm) ИМИТИРУЙСТИЛЬ NotebookLM."
+    "\nОБЯЗАТЕЛЬНО добавляй кликабельные ссылки на исходные файлы в формате [[FileName#Anchor]] к каждому утверждению."
+    "\nМинимальный артефакт: структурированные данные из инструментов + твой анализ с Markdown-цитатами к источникам."
 )
 
 _CODER_EXECUTION_MANDATE = (

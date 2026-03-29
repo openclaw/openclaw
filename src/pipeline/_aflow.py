@@ -168,6 +168,27 @@ class AFlowEngine:
                     brigade=brigade,
                 )
 
+        # v16.0: Obsidian dynamic instructions override
+        try:
+            from src.pipeline._logic_provider import get_instruction_override
+            custom_chain, instruction_ctx = get_instruction_override(prompt)
+            if instruction_ctx:
+                prompt = prompt + instruction_ctx
+                enriched_prompt = enriched_prompt + instruction_ctx
+            
+            if custom_chain:
+                _valid_custom = [r for r in custom_chain if r in available_roles]
+                if len(_valid_custom) >= 2:
+                    logger.info("AFlow: using Obsidian override chain", chain=_valid_custom)
+                    return AFlowResult(
+                        chain=_valid_custom,
+                        source="obsidian_override",
+                        confidence=1.0,
+                        reasoning="Overridden by Obsidian #instruction tag",
+                    )
+        except Exception as _obs_err:
+            logger.debug("Obsidian logic provider failed (non-fatal)", error=str(_obs_err))
+
         # Stage 1: Heuristic fast-path
         heuristic = self._match_heuristic(enriched_prompt, available_roles)
         if heuristic:
