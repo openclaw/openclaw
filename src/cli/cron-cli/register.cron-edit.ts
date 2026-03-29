@@ -302,8 +302,7 @@ export function registerCronEditCommand(cron: Command) {
                   if (existingMode === "webhook") {
                     throw new Error("--thread-id is not supported for webhook delivery jobs");
                   }
-                  const ec = existingChannel.toLowerCase();
-                  if (existingChannel && ec !== "telegram") {
+                  if (existingChannel.toLowerCase() !== "telegram") {
                     throw new Error("--thread-id requires --channel telegram");
                   }
                 }
