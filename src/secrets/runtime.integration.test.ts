@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ensureAuthProfileStore, type AuthProfileStore } from "../agents/auth-profiles.js";
 import {
   clearConfigCache,
+  clearRuntimeConfigSnapshot,
   loadConfig,
   type OpenClawConfig,
   writeConfigFile,
@@ -130,6 +131,7 @@ describe("secrets runtime snapshot integration", () => {
     vi.restoreAllMocks();
     envSnapshot.restore();
     clearSecretsRuntimeSnapshot();
+    clearRuntimeConfigSnapshot();
     clearConfigCache();
   });
 
