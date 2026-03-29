@@ -2000,6 +2000,34 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     expect(resolved).toBe(currentStreamFn);
   });
 
+  it("does not enable websocket transport for non-openai providers even when flag is set", () => {
+    const currentStreamFn = vi.fn();
+
+    const resolved = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: currentStreamFn as never,
+      shouldUseWebSocketTransport: true,
+      wsApiKey: "sk-***",
+      sessionId: "session-1",
+      model: { provider: "xai" } as never,
+    });
+
+    expect(resolved).toBe(currentStreamFn);
+  });
+
+  it("uses websocket transport for normalized openai provider values", () => {
+    const currentStreamFn = vi.fn();
+
+    const resolved = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: currentStreamFn as never,
+      shouldUseWebSocketTransport: true,
+      wsApiKey: "sk-***",
+      sessionId: "session-1",
+      model: { provider: "  OpenAI  " } as never,
+    });
+
+    expect(resolved).not.toBe(currentStreamFn);
+  });
+
   it("prefers a provider-owned stream override when present", () => {
     const currentStreamFn = vi.fn();
     const providerStreamFn = vi.fn();

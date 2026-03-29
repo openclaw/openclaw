@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../../../config/config.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
+import { normalizeProviderId } from "../../provider-id.js";
 
 export const ATTEMPT_CACHE_TTL_CUSTOM_TYPE = "openclaw.cache-ttl";
 
@@ -35,9 +36,12 @@ export function shouldUseOpenAIWebSocketTransport(params: {
   provider: string;
   modelApi?: string | null;
 }): boolean {
+  const provider = normalizeProviderId(params.provider);
+  const modelApi = params.modelApi?.trim().toLowerCase();
+
   return (
-    (params.modelApi === "openai-responses" && params.provider === "openai") ||
-    (params.modelApi === "openai-codex-responses" && params.provider === "openai-codex")
+    (modelApi === "openai-responses" && provider === "openai") ||
+    (modelApi === "openai-codex-responses" && provider === "openai-codex")
   );
 }
 

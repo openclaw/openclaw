@@ -20,6 +20,15 @@ describe("openai websocket transport selection", () => {
     ).toBe(true);
   });
 
+  it("normalizes provider and modelApi before matching", () => {
+    expect(
+      shouldUseOpenAIWebSocketTransport({
+        provider: "  OpenAI  ",
+        modelApi: " OpenAI-Responses ",
+      }),
+    ).toBe(true);
+  });
+
   it("rejects mismatched OpenAI websocket transport pairs", () => {
     expect(
       shouldUseOpenAIWebSocketTransport({
