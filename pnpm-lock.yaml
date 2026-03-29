@@ -72,9 +72,6 @@ importers:
       '@napi-rs/canvas':
         specifier: ^0.1.89
         version: 0.1.92
-      '@openclaw/plugin-package-contract':
-        specifier: workspace:*
-        version: link:packages/plugin-package-contract
       '@sinclair/typebox':
         specifier: 0.34.49
         version: 0.34.49
@@ -190,6 +187,9 @@ importers:
       '@lit/context':
         specifier: ^1.1.6
         version: 1.1.6
+      '@openclaw/plugin-package-contract':
+        specifier: workspace:*
+        version: link:packages/plugin-package-contract
       '@types/express':
         specifier: ^5.0.6
         version: 5.0.6

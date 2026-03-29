@@ -132,7 +132,12 @@ function collectPluginSdkAliases(params: {
   const realSpecifiers = new Set<string>();
   const stubSpecifiers = new Set<string>();
   const visitedFiles = new Set<string>();
-  const stubPath = path.join(params.root, "test", "helpers", "extensions", "plugin-sdk-stub.cjs");
+  const stubPathCandidates = [
+    path.join(params.root, "test", "helpers", "plugins", "plugin-sdk-stub.cjs"),
+    path.join(params.root, "test", "helpers", "extensions", "plugin-sdk-stub.cjs"),
+  ];
+  const stubPath =
+    stubPathCandidates.find((candidate) => existsSync(candidate)) ?? stubPathCandidates[0];
   const explicitRealSpecifiers = new Set(params.realPluginSdkSpecifiers ?? []);
 
   function visitModule(filePath: string, rootModule: boolean): void {

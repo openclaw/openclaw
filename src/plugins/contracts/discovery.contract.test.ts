@@ -1,10 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
-import {
-  loadBundledPluginPublicSurfaceSync,
-  resolveRelativeBundledPluginPublicModuleId,
-} from "../../test-utils/bundled-plugin-public-surface.js";
 import { registerProviders, requireProvider } from "./testkit.js";
 
 const resolveCopilotApiTokenMock = vi.hoisted(() => vi.fn());
@@ -140,26 +136,10 @@ function runCatalog(params: {
 
 describe("provider discovery contract", () => {
   beforeEach(async () => {
-    const githubCopilotTokenModuleId = resolveRelativeBundledPluginPublicModuleId({
-      fromModuleUrl: import.meta.url,
-      pluginId: "github-copilot",
-      artifactBasename: "token.js",
-    });
-    const ollamaApiModuleId = resolveRelativeBundledPluginPublicModuleId({
-      fromModuleUrl: import.meta.url,
-      pluginId: "ollama",
-      artifactBasename: "api.js",
-    });
-    const vllmApiModuleId = resolveRelativeBundledPluginPublicModuleId({
-      fromModuleUrl: import.meta.url,
-      pluginId: "vllm",
-      artifactBasename: "api.js",
-    });
-    const sglangApiModuleId = resolveRelativeBundledPluginPublicModuleId({
-      fromModuleUrl: import.meta.url,
-      pluginId: "sglang",
-      artifactBasename: "api.js",
-    });
+    const githubCopilotTokenModuleId = "../../../extensions/github-copilot/token.ts";
+    const ollamaApiModuleId = "../../../extensions/ollama/api.ts";
+    const vllmApiModuleId = "../../../extensions/vllm/api.ts";
+    const sglangApiModuleId = "../../../extensions/sglang/api.ts";
     vi.resetModules();
     vi.doMock("openclaw/plugin-sdk/agent-runtime", async () => {
       // Import the direct source module, not the mocked subpath, so bundled
@@ -217,27 +197,13 @@ describe("provider discovery contract", () => {
       { default: modelStudioPlugin },
       { default: cloudflareAiGatewayPlugin },
     ] = await Promise.all([
-      loadBundledPluginPublicSurfaceSync<{
-        default: Parameters<typeof registerProviders>[0];
-      }>({ pluginId: "github-copilot", artifactBasename: "index.js" }),
-      loadBundledPluginPublicSurfaceSync<{
-        default: Parameters<typeof registerProviders>[0];
-      }>({ pluginId: "ollama", artifactBasename: "index.js" }),
-      loadBundledPluginPublicSurfaceSync<{
-        default: Parameters<typeof registerProviders>[0];
-      }>({ pluginId: "vllm", artifactBasename: "index.js" }),
-      loadBundledPluginPublicSurfaceSync<{
-        default: Parameters<typeof registerProviders>[0];
-      }>({ pluginId: "sglang", artifactBasename: "index.js" }),
-      loadBundledPluginPublicSurfaceSync<{
-        default: Parameters<typeof registerProviders>[0];
-      }>({ pluginId: "minimax", artifactBasename: "index.js" }),
-      loadBundledPluginPublicSurfaceSync<{
-        default: Parameters<typeof registerProviders>[0];
-      }>({ pluginId: "modelstudio", artifactBasename: "index.js" }),
-      loadBundledPluginPublicSurfaceSync<{
-        default: Parameters<typeof registerProviders>[0];
-      }>({ pluginId: "cloudflare-ai-gateway", artifactBasename: "index.js" }),
+      import("../../../extensions/github-copilot/index.ts"),
+      import("../../../extensions/ollama/index.ts"),
+      import("../../../extensions/vllm/index.ts"),
+      import("../../../extensions/sglang/index.ts"),
+      import("../../../extensions/minimax/index.ts"),
+      import("../../../extensions/modelstudio/index.ts"),
+      import("../../../extensions/cloudflare-ai-gateway/index.ts"),
     ]);
     githubCopilotProvider = requireProvider(
       registerProviders(githubCopilotPlugin),

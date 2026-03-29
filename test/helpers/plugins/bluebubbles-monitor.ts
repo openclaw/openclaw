@@ -1,5 +1,10 @@
 import type { HistoryEntry, PluginRuntime } from "openclaw/plugin-sdk/bluebubbles";
 import { vi } from "vitest";
+import {
+  _resetBlueBubblesShortIdState as resetSourceBlueBubblesShortIdState,
+  clearBlueBubblesWebhookSecurityStateForTest as clearSourceBlueBubblesWebhookSecurityStateForTest,
+} from "../../../extensions/bluebubbles/src/monitor.js";
+import { setBlueBubblesRuntime as setSourceBlueBubblesRuntime } from "../../../extensions/bluebubbles/src/runtime.js";
 import { loadBundledPluginPublicSurfaceSync } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 import { createPluginRuntimeMock } from "./plugin-runtime-mock.js";
 
@@ -148,7 +153,9 @@ export function resetBlueBubblesMonitorTestState(params: {
   extraReset?: () => void;
 }) {
   vi.clearAllMocks();
+  resetSourceBlueBubblesShortIdState();
   _resetBlueBubblesShortIdState();
+  clearSourceBlueBubblesWebhookSecurityStateForTest();
   clearBlueBubblesWebhookSecurityStateForTest();
   params.extraReset?.();
   params.fetchHistoryMock.mockResolvedValue({ entries: [], resolved: true });
@@ -158,5 +165,7 @@ export function resetBlueBubblesMonitorTestState(params: {
   params.hasControlCommandMock.mockReturnValue(false);
   params.resolveCommandAuthorizedFromAuthorizersMock.mockReturnValue(false);
   params.buildMentionRegexesMock.mockReturnValue([/\bbert\b/i]);
-  setBlueBubblesRuntime(params.createRuntime());
+  const runtime = params.createRuntime();
+  setSourceBlueBubblesRuntime(runtime);
+  setBlueBubblesRuntime(runtime);
 }

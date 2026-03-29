@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadBundledPluginPublicSurfaceModuleSync } from "../plugin-sdk/facade-runtime.js";
@@ -6,6 +7,8 @@ import {
   type BundledPluginMetadata,
 } from "../plugins/bundled-plugin-metadata.js";
 import { resolveLoaderPackageRoot } from "../plugins/sdk-alias.js";
+
+const PUBLIC_SURFACE_SOURCE_EXTENSIONS = [".ts", ".mts", ".js", ".mjs", ".cts", ".cjs"] as const;
 
 const OPENCLAW_PACKAGE_ROOT =
   resolveLoaderPackageRoot({
@@ -46,12 +49,25 @@ export function resolveRelativeBundledPluginPublicModuleId(params: {
 }): string {
   const metadata = findBundledPluginMetadata(params.pluginId);
   const fromFilePath = fileURLToPath(params.fromModuleUrl);
-  const targetPath = path.resolve(
+  const sourceBaseName = params.artifactBasename.replace(/\.js$/u, "");
+  let targetPath = path.resolve(
     OPENCLAW_PACKAGE_ROOT,
     "extensions",
     metadata.dirName,
     params.artifactBasename,
   );
+  for (const ext of PUBLIC_SURFACE_SOURCE_EXTENSIONS) {
+    const candidate = path.resolve(
+      OPENCLAW_PACKAGE_ROOT,
+      "extensions",
+      metadata.dirName,
+      `${sourceBaseName}${ext}`,
+    );
+    if (fs.existsSync(candidate)) {
+      targetPath = candidate;
+      break;
+    }
+  }
   const relativePath = path
     .relative(path.dirname(fromFilePath), targetPath)
     .replaceAll(path.sep, "/");

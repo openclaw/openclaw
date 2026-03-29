@@ -50,10 +50,14 @@ function collectPluginSdkSubpathReferences() {
 }
 
 function readRootPackageJson(): {
+  name?: string;
+  version?: string;
   dependencies?: Record<string, string>;
   optionalDependencies?: Record<string, string>;
 } {
   return JSON.parse(readFileSync(resolve(REPO_ROOT, "package.json"), "utf8")) as {
+    name?: string;
+    version?: string;
     dependencies?: Record<string, string>;
     optionalDependencies?: Record<string, string>;
   };
@@ -98,19 +102,26 @@ function resolvePackageManagerCommand(name: "npm" | "pnpm"): string {
 }
 
 function packOpenClawToTempDir(packDir: string): string {
-  const raw = execFileSync(
+  const rootPackageJson = readRootPackageJson();
+  execFileSync(
     resolvePackageManagerCommand("npm"),
-    ["pack", "--ignore-scripts", "--json", "--pack-destination", packDir],
+    ["pack", "--ignore-scripts", "--pack-destination", packDir],
     {
       cwd: REPO_ROOT,
-      encoding: "utf8",
-      env: { ...process.env, COREPACK_ENABLE_DOWNLOAD_PROMPT: "0" },
+      env: {
+        ...process.env,
+        COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
+        npm_config_loglevel: "error",
+      },
+      stdio: ["ignore", "ignore", "inherit"],
     },
   );
-  const parsed = JSON.parse(raw) as Array<{ filename?: string }>;
-  const filename = parsed[0]?.filename?.trim();
+  const packageName = rootPackageJson.name?.replace(/^@/u, "").replaceAll("/", "-");
+  const packageVersion = rootPackageJson.version?.trim();
+  const filename =
+    packageName && packageVersion ? `${packageName}-${packageVersion}.tgz` : undefined;
   if (!filename) {
-    throw new Error(`npm pack did not return a filename: ${raw}`);
+    throw new Error("package.json must include name and version to resolve npm pack output");
   }
   return join(packDir, filename);
 }
@@ -197,7 +208,7 @@ describe("plugin-sdk package contract guardrails", () => {
 
       execFileSync(
         resolvePackageManagerCommand("pnpm"),
-        ["add", "--offline", "--ignore-scripts", archivePath],
+        ["add", "--prefer-offline", "--ignore-scripts", archivePath],
         {
           cwd: consumerDir,
           encoding: "utf8",
