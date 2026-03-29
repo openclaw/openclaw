@@ -11,8 +11,9 @@ read_when:
 # Memory configuration reference
 
 This page covers the full configuration surface for OpenClaw memory search. For
-the conceptual overview (file layout, memory tools, when to write memory, and the
-automatic flush), see [Memory](/concepts/memory).
+the conceptual overview, see [Memory](/concepts/memory). For how the search
+pipeline works (hybrid search, MMR, temporal decay), see
+[Memory Search](/concepts/memory-search).
 
 ## Memory search defaults
 
