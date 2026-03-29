@@ -154,7 +154,7 @@ describe("discordPlugin outbound", () => {
       enabled: true,
       approvers: ["123"],
     };
-    const payload = discordPlugin.execApprovals?.buildPluginPendingPayload?.({
+    const payload = discordPlugin.execApprovals?.render?.plugin?.buildPendingPayload?.({
       cfg,
       request: createPluginApprovalRequest(),
       target: { channel: "discord", to: "user:123" },
@@ -179,7 +179,7 @@ describe("discordPlugin outbound", () => {
       enabled: true,
       approvers: ["123"],
     };
-    const payload = discordPlugin.execApprovals?.buildPluginPendingPayload?.({
+    const payload = discordPlugin.execApprovals?.render?.plugin?.buildPendingPayload?.({
       cfg,
       request: createPluginApprovalRequest({
         title: "Heads up @everyone <@123> <@&456>",
@@ -210,7 +210,7 @@ describe("discordPlugin outbound", () => {
   });
 
   it("falls back to non-interactive plugin approval pending payload when Discord exec approvals are disabled", () => {
-    const payload = discordPlugin.execApprovals?.buildPluginPendingPayload?.({
+    const payload = discordPlugin.execApprovals?.render?.plugin?.buildPendingPayload?.({
       cfg: createCfg(),
       request: createPluginApprovalRequest(),
       target: { channel: "discord", to: "user:123" },
@@ -230,7 +230,7 @@ describe("discordPlugin outbound", () => {
   });
 
   it("builds rich plugin approval resolved payloads when request snapshot is available", () => {
-    const payload = discordPlugin.execApprovals?.buildPluginResolvedPayload?.({
+    const payload = discordPlugin.execApprovals?.render?.plugin?.buildResolvedPayload?.({
       cfg: createCfg(),
       resolved: createPluginApprovalResolved(createPluginApprovalRequest().request),
       target: { channel: "discord", to: "user:123" },
@@ -245,7 +245,7 @@ describe("discordPlugin outbound", () => {
   });
 
   it("falls back to plain text plugin resolved payload when request snapshot is missing", () => {
-    const payload = discordPlugin.execApprovals?.buildPluginResolvedPayload?.({
+    const payload = discordPlugin.execApprovals?.render?.plugin?.buildResolvedPayload?.({
       cfg: createCfg(),
       resolved: createPluginApprovalResolved(undefined),
       target: { channel: "discord", to: "user:123" },

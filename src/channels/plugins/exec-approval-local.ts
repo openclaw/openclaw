@@ -13,7 +13,7 @@ export function shouldSuppressLocalExecApprovalPrompt(params: {
     return false;
   }
   return (
-    getChannelPlugin(channel)?.execApprovals?.shouldSuppressLocalPrompt?.({
+    getChannelPlugin(channel)?.execApprovals?.delivery?.shouldSuppressLocalPrompt?.({
       cfg: params.cfg,
       accountId: params.accountId,
       payload: params.payload,
