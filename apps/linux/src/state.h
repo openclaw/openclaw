@@ -80,6 +80,31 @@ typedef struct {
     int config_issues_count;
 } HealthState;
 
+/* ---------- Runtime Mode (proof-oriented) ----------
+ *
+ * A separate semantic dimension from AppState. AppState answers "what
+ * lifecycle/readiness class are we in?" RuntimeMode answers "what kind
+ * of runtime situation was observed from the available evidence?"
+ *
+ * These names describe what the app can actually infer — they do NOT
+ * claim lifecycle ownership ("started by us") or macOS-style attach
+ * knowledge ("adopted existing").
+ */
+typedef enum {
+    RUNTIME_NONE,                             /* no runtime evidence gathered yet */
+    RUNTIME_EXPECTED_SERVICE_HEALTHY,          /* expected systemd unit active + endpoint healthy */
+    RUNTIME_HEALTHY_OUTSIDE_EXPECTED_SERVICE,  /* endpoint healthy, expected unit not the active explanation */
+    RUNTIME_LISTENER_PRESENT_UNRESPONSIVE,     /* TCP connected (probe-proven), health/protocol failed */
+    RUNTIME_LISTENER_PRESENT_UNVERIFIED,       /* something answered, not validated as healthy OpenClaw */
+    RUNTIME_SERVICE_ACTIVE_NOT_PROVEN,         /* service manager says active, runtime proof missing */
+    RUNTIME_UNKNOWN,                           /* fallback */
+} RuntimeMode;
+
+typedef struct {
+    const char *label;       /* e.g. "Expected Service Healthy" */
+    const char *explanation; /* human-readable detail for diagnostics */
+} RuntimeModePresentation;
+
 void state_init(void);
 void health_state_clear(HealthState *hs);
 void state_update_systemd(const SystemdState *sys_state);
@@ -88,6 +113,10 @@ void state_update_health(const HealthState *health_state);
 AppState state_get_current(void);
 const char* state_get_current_string(void);
 guint64 state_get_health_generation(void);
+
+RuntimeMode state_get_runtime_mode(void);
+gboolean health_state_listener_proven(const HealthState *hs);
+void runtime_mode_describe(RuntimeMode mode, RuntimeModePresentation *out);
 
 SystemdState* state_get_systemd(void);
 HealthState* state_get_health(void);

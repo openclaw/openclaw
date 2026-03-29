@@ -24,11 +24,15 @@
 #include "state.h"
 
 static AppState current_state = STATE_NEEDS_SETUP;
+static RuntimeMode current_runtime_mode = RUNTIME_NONE;
 static SystemdState current_sys_state = {0};
 static HealthState current_health_state = {0};
 static guint64 current_health_generation = 0;
 static gboolean initial_hydration_done = FALSE;
 static gboolean initial_refresh_fired = FALSE;
+
+/* Defined in runtime_mode.c — internal to the state module */
+extern RuntimeMode runtime_mode_compute(const SystemdState *sys, const HealthState *health);
 
 static AppState compute_state(void) {
     gboolean has_health_data = (current_health_state.last_updated > 0);
@@ -122,6 +126,7 @@ static AppState compute_state(void) {
 
 void state_init(void) {
     current_state = STATE_NEEDS_SETUP;
+    current_runtime_mode = RUNTIME_NONE;
     initial_hydration_done = FALSE;
     initial_refresh_fired = FALSE;
 
@@ -219,6 +224,7 @@ void state_update_systemd(const SystemdState *sys_state) {
      */
 
     AppState new_state = compute_state();
+    current_runtime_mode = runtime_mode_compute(&current_sys_state, &current_health_state);
 
     gboolean should_trigger_refresh = (!initial_refresh_fired || became_active || became_inactive || unit_changed);
     if (should_trigger_refresh) {
@@ -253,7 +259,9 @@ void state_update_health(const HealthState *health_state) {
     current_health_state.auth_source = g_strdup(health_state->auth_source);
     current_health_state.last_error = g_strdup(health_state->last_error);
 
-    trigger_updates(compute_state());
+    AppState new_state = compute_state();
+    current_runtime_mode = runtime_mode_compute(&current_sys_state, &current_health_state);
+    trigger_updates(new_state);
 }
 
 AppState state_get_current(void) {
@@ -276,6 +284,10 @@ const char* state_get_current_string(void) {
         case STATE_ERROR: return "Error";
         default: return "Unknown";
     }
+}
+
+RuntimeMode state_get_runtime_mode(void) {
+    return current_runtime_mode;
 }
 
 SystemdState* state_get_systemd(void) {

@@ -38,6 +38,7 @@ sources = [
   'src/gateway_ws.c',
   'src/gateway_client.c',
   'src/state.c',
+  'src/runtime_mode.c',
   'src/readiness.c',
   'src/notify.c',
   'src/diagnostics.c',
@@ -66,7 +67,7 @@ install_data('ai.openclaw.Companion.desktop',
 
 # Local Tests
 test_state_exe = executable('test_state',
-  ['tests/test_state.c', 'src/state.c', 'src/readiness.c', 'src/log.c'],
+  ['tests/test_state.c', 'src/state.c', 'src/runtime_mode.c', 'src/readiness.c', 'src/log.c'],
   dependencies : [glib_dep, gio_dep])
 test('state', test_state_exe)
 
@@ -79,6 +80,16 @@ test_readiness_exe = executable('test_readiness',
   ['tests/test_readiness.c', 'src/readiness.c'],
   dependencies : [glib_dep])
 test('readiness', test_readiness_exe)
+
+test_runtime_mode_exe = executable('test_runtime_mode',
+  ['tests/test_runtime_mode.c', 'src/state.c', 'src/runtime_mode.c', 'src/readiness.c', 'src/log.c'],
+  dependencies : [glib_dep, gio_dep])
+test('runtime_mode', test_runtime_mode_exe)
+
+test_runtime_mode_pres_exe = executable('test_runtime_mode_presentation',
+  ['tests/test_runtime_mode_presentation.c', 'src/runtime_mode.c'],
+  dependencies : [glib_dep])
+test('runtime_mode_presentation', test_runtime_mode_pres_exe)
 
 test_gateway_exe = executable('test_gateway',
   ['tests/test_gateway.c', 'src/gateway_config.c', 'src/gateway_protocol.c', 'src/log.c'],

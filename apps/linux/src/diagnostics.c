@@ -57,6 +57,16 @@ static gchar* build_diagnostics_text(void) {
         g_string_append_printf(out, "Next:   %s\n", ri.next_action);
     }
 
+    /* Runtime mode */
+    RuntimeMode rm = state_get_runtime_mode();
+    RuntimeModePresentation rmp;
+    runtime_mode_describe(rm, &rmp);
+    g_string_append_printf(out, "\n=== Runtime Mode ===\n");
+    g_string_append_printf(out, "Mode: %s\n", rmp.label ? rmp.label : "Unknown");
+    g_string_append_printf(out, "Detail: %s\n", rmp.explanation ? rmp.explanation : "N/A");
+    g_string_append_printf(out, "Listener Proven: %s\n",
+        health_state_listener_proven(health) ? "Yes" : "No");
+
     /* Systemd service context */
     g_string_append_printf(out, "\n=== Systemd Service ===\n");
     g_string_append_printf(out, "Unit: %s\n", sys->unit_name ? sys->unit_name : "N/A");
