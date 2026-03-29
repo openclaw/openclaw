@@ -1,4 +1,4 @@
-import { resolveNormalizedAccountEntry } from "openclaw/plugin-sdk/account-resolution";
+import { resolveNormalizedAccountEntry } from "openclaw/plugin-sdk/account-core";
 import type { BaseTokenResolution } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/core";

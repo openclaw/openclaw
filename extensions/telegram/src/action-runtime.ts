@@ -11,7 +11,7 @@ import {
   resolvePollMaxSelections,
   type OpenClawConfig,
   type TelegramActionConfig,
-} from "../runtime-api.js";
+} from "openclaw/plugin-sdk/telegram-core";
 import { createTelegramActionGate, resolveTelegramPollActionGateState } from "./accounts.js";
 import type { TelegramButtonStyle, TelegramInlineButtons } from "./button-types.js";
 import { resolveTelegramInlineButtons } from "./button-types.js";

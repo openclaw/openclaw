@@ -1,4 +1,4 @@
-import { resolveNormalizedAccountEntry } from "openclaw/plugin-sdk/account-resolution";
+import { resolveNormalizedAccountEntry } from "openclaw/plugin-sdk/account-core";
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import {
   adaptScopedAccountAccessor,
@@ -11,7 +11,7 @@ import {
   normalizeAccountId,
   type ChannelPlugin,
   type OpenClawConfig,
-} from "../runtime-api.js";
+} from "openclaw/plugin-sdk/telegram-core";
 import { inspectTelegramAccount } from "./account-inspect.js";
 import {
   listTelegramAccountIds,
