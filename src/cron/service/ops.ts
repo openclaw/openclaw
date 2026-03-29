@@ -1,5 +1,6 @@
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
+import { createTaskRecord, updateTaskRecordById } from "../../tasks/task-registry.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
 import { normalizeCronCreateDeliveryInput } from "./initial-delivery.js";
 import {
@@ -358,6 +359,7 @@ type PreparedManualRun =
       ok: true;
       ran: true;
       jobId: string;
+      taskId: string;
       startedAt: number;
       executionJob: CronJob;
     }
@@ -448,11 +450,27 @@ async function prepareManualRun(
     // force-reload from disk cannot start the same job concurrently.
     await persist(state);
     emit(state, { jobId: job.id, action: "started", runAtMs: preflight.now });
+    const task = createTaskRecord({
+      runtime: "cron",
+      sourceId: job.id,
+      requesterSessionKey: "",
+      childSessionKey: job.sessionKey,
+      agentId: job.agentId,
+      runId: `cron:${job.id}:${preflight.now}`,
+      label: job.name,
+      task: job.name || job.id,
+      status: "running",
+      deliveryStatus: "not_applicable",
+      notifyPolicy: "silent",
+      startedAt: preflight.now,
+      lastEventAt: preflight.now,
+    });
     const executionJob = JSON.parse(JSON.stringify(job)) as CronJob;
     return {
       ok: true,
       ran: true,
       jobId: job.id,
+      taskId: task.taskId,
       startedAt: preflight.now,
       executionJob,
     } as const;
@@ -467,6 +485,7 @@ async function finishPreparedManualRun(
   const executionJob = prepared.executionJob;
   const startedAt = prepared.startedAt;
   const jobId = prepared.jobId;
+  const taskId = prepared.taskId;
 
   let coreResult: Awaited<ReturnType<typeof executeJobCoreWithTimeout>>;
   try {
@@ -475,6 +494,18 @@ async function finishPreparedManualRun(
     coreResult = { status: "error", error: String(err) };
   }
   const endedAt = state.deps.nowMs();
+  updateTaskRecordById(taskId, {
+    status:
+      coreResult.status === "ok" || coreResult.status === "skipped"
+        ? "succeeded"
+        : coreResult.error === "cron: job execution timed out"
+          ? "timed_out"
+          : "failed",
+    endedAt,
+    lastEventAt: endedAt,
+    error: coreResult.status === "error" ? coreResult.error : undefined,
+    terminalSummary: coreResult.summary ?? undefined,
+  });
 
   await locked(state, async () => {
     await ensureLoaded(state, { skipRecompute: true });

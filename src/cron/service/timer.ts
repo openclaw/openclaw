@@ -2,6 +2,7 @@ import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
 import type { CronConfig, CronRetryOn } from "../../config/types.cron.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
+import { createTaskRecord, updateTaskRecordById } from "../../tasks/task-registry.js";
 import { resolveCronDeliveryPlan } from "../delivery.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
 import type {
@@ -46,6 +47,7 @@ const DEFAULT_FAILURE_ALERT_COOLDOWN_MS = 60 * 60_000; // 1 hour
 type TimedCronRunOutcome = CronRunOutcome &
   CronRunTelemetry & {
     jobId: string;
+    taskId: string;
     delivered?: boolean;
     deliveryAttempted?: boolean;
     startedAt: number;
@@ -474,6 +476,18 @@ export function applyJobResult(
 }
 
 function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOutcome): void {
+  updateTaskRecordById(result.taskId, {
+    status:
+      result.status === "ok" || result.status === "skipped"
+        ? "succeeded"
+        : result.error === timeoutErrorMessage()
+          ? "timed_out"
+          : "failed",
+    endedAt: result.endedAt,
+    lastEventAt: result.endedAt,
+    error: result.status === "error" ? result.error : undefined,
+    terminalSummary: result.summary ?? undefined,
+  });
   const store = state.store;
   if (!store) {
     return;
@@ -630,10 +644,31 @@ export async function onTimer(state: CronServiceState) {
       job.state.runningAtMs = startedAt;
       emit(state, { jobId: job.id, action: "started", runAtMs: startedAt });
       const jobTimeoutMs = resolveCronJobTimeoutMs(job);
+      const task = createTaskRecord({
+        runtime: "cron",
+        sourceId: job.id,
+        requesterSessionKey: "",
+        childSessionKey: job.sessionKey,
+        agentId: job.agentId,
+        runId: `cron:${job.id}:${startedAt}`,
+        label: job.name,
+        task: job.name || job.id,
+        status: "running",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+        startedAt,
+        lastEventAt: startedAt,
+      });
 
       try {
         const result = await executeJobCoreWithTimeout(state, job);
-        return { jobId: id, ...result, startedAt, endedAt: state.deps.nowMs() };
+        return {
+          jobId: id,
+          taskId: task.taskId,
+          ...result,
+          startedAt,
+          endedAt: state.deps.nowMs(),
+        };
       } catch (err) {
         const errorText = isAbortError(err) ? timeoutErrorMessage() : String(err);
         state.deps.log.warn(
@@ -642,6 +677,7 @@ export async function onTimer(state: CronServiceState) {
         );
         return {
           jobId: id,
+          taskId: task.taskId,
           status: "error",
           error: errorText,
           startedAt,
@@ -926,11 +962,27 @@ async function runStartupCatchupCandidate(
   candidate: StartupCatchupCandidate,
 ): Promise<TimedCronRunOutcome> {
   const startedAt = state.deps.nowMs();
+  const task = createTaskRecord({
+    runtime: "cron",
+    sourceId: candidate.job.id,
+    requesterSessionKey: "",
+    childSessionKey: candidate.job.sessionKey,
+    agentId: candidate.job.agentId,
+    runId: `cron:${candidate.job.id}:${startedAt}`,
+    label: candidate.job.name,
+    task: candidate.job.name || candidate.job.id,
+    status: "running",
+    deliveryStatus: "not_applicable",
+    notifyPolicy: "silent",
+    startedAt,
+    lastEventAt: startedAt,
+  });
   emit(state, { jobId: candidate.job.id, action: "started", runAtMs: startedAt });
   try {
     const result = await executeJobCoreWithTimeout(state, candidate.job);
     return {
       jobId: candidate.jobId,
+      taskId: task.taskId,
       status: result.status,
       error: result.error,
       summary: result.summary,
@@ -946,6 +998,7 @@ async function runStartupCatchupCandidate(
   } catch (err) {
     return {
       jobId: candidate.jobId,
+      taskId: task.taskId,
       status: "error",
       error: String(err),
       startedAt,
