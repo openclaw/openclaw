@@ -20,9 +20,35 @@ import {
   createProviderApiKeyResolver,
   createProviderAuthResolver,
 } from "./models-config.providers.secrets.js";
-import { findNormalizedProviderValue } from "./provider-id.js";
+import { findNormalizedProviderValue, normalizeProviderId } from "./provider-id.js";
 
 const log = createSubsystemLogger("agents/model-providers");
+
+/** The default built-in provider that is always probed even if not in config. */
+const ALWAYS_PROBE_PROVIDER_IDS: ReadonlySet<string> = new Set(["anthropic"]);
+
+/**
+ * Check whether a provider plugin (by id or aliases) matches a configured
+ * provider in `models.providers`. Returns true when:
+ * - No providers are configured (backward compat: probe everything).
+ * - The provider id is in {@link ALWAYS_PROBE_PROVIDER_IDS}.
+ * - The provider id or any of its aliases/hookAliases appears in the config.
+ */
+function isProviderConfiguredForDiscovery(
+  provider: { id: string; aliases?: readonly string[]; hookAliases?: readonly string[] },
+  configuredProviders: Record<string, unknown> | undefined | null,
+): boolean {
+  if (!configuredProviders || Object.keys(configuredProviders).length === 0) {
+    return true;
+  }
+  if (ALWAYS_PROBE_PROVIDER_IDS.has(normalizeProviderId(provider.id))) {
+    return true;
+  }
+  const idsToCheck = [provider.id, ...(provider.aliases ?? []), ...(provider.hookAliases ?? [])];
+  return idsToCheck.some(
+    (id) => findNormalizedProviderValue(configuredProviders, id) !== undefined,
+  );
+}
 
 const PROVIDER_IMPLICIT_MERGERS: Partial<
   Record<
@@ -162,7 +188,11 @@ async function resolvePluginImplicitProviders(
   const byOrder = groupPluginDiscoveryProvidersByOrder(providers);
   const discovered: Record<string, ProviderConfig> = {};
   const catalogConfig = buildPluginCatalogConfig(ctx);
+  const configuredProviders = ctx.config?.models?.providers;
   for (const provider of byOrder[order]) {
+    if (!isProviderConfiguredForDiscovery(provider, configuredProviders)) {
+      continue;
+    }
     const resolveCatalogProviderApiKey = (providerId?: string) => {
       const resolvedProviderId = providerId?.trim() || provider.id;
       const resolved = ctx.resolveProviderApiKey(resolvedProviderId);
