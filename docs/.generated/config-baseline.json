@@ -1240,6 +1240,16 @@
       "hasChildren": true
     },
     {
+      "path": "agents.defaults.contextPruning.cacheMedia",
+      "kind": "core",
+      "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "agents.defaults.contextPruning.hardClear",
       "kind": "core",
       "type": "object",
