@@ -105,12 +105,109 @@ function shouldAddMismatchHint(error: unknown) {
   return error instanceof Error && error.message.includes(EDIT_MISMATCH_MESSAGE);
 }
 
-function appendMismatchHint(error: Error, currentContent: string): Error {
+/**
+ * Find the most similar region in the file to the given oldText using
+ * line-level similarity scoring. Returns the best matching line range
+ * with a context snippet so the model can self-correct.
+ */
+function findBestMatchRegion(
+  content: string,
+  oldText: string,
+): { lineStart: number; snippet: string; score: number } | null {
+  const contentLines = content.split("\n");
+  const oldLines = oldText.split("\n");
+  if (oldLines.length === 0 || contentLines.length === 0) {
+    return null;
+  }
+
+  let bestScore = 0;
+  let bestStart = 0;
+
+  // Slide a window the size of oldText lines across the file
+  const windowSize = oldLines.length;
+  for (let start = 0; start <= contentLines.length - windowSize; start++) {
+    let matching = 0;
+    for (let j = 0; j < windowSize; j++) {
+      const contentLine = contentLines[start + j].trimEnd();
+      const oldLine = oldLines[j].trimEnd();
+      if (contentLine === oldLine) {
+        matching++;
+      } else if (
+        contentLine.trim() === oldLine.trim() ||
+        contentLine.includes(oldLine.trim()) ||
+        oldLine.includes(contentLine.trim())
+      ) {
+        matching += 0.5;
+      }
+    }
+    const score = matching / windowSize;
+    if (score > bestScore) {
+      bestScore = score;
+      bestStart = start;
+    }
+  }
+
+  // Also try single-line match for single-line oldText in multi-line files
+  if (windowSize === 1) {
+    const trimmedOld = oldLines[0].trim();
+    if (trimmedOld.length > 0) {
+      for (let i = 0; i < contentLines.length; i++) {
+        if (contentLines[i].includes(trimmedOld)) {
+          return {
+            lineStart: i + 1,
+            snippet: contentLines
+              .slice(Math.max(0, i - 1), i + 2)
+              .map((l, idx) => `${Math.max(1, i) + idx}| ${l}`)
+              .join("\n"),
+            score: 0.9,
+          };
+        }
+      }
+    }
+  }
+
+  // Only return if the match is somewhat meaningful (>20% line overlap)
+  if (bestScore < 0.2) {
+    return null;
+  }
+
+  const contextStart = Math.max(0, bestStart - 1);
+  const contextEnd = Math.min(contentLines.length, bestStart + windowSize + 1);
+  const snippet = contentLines
+    .slice(contextStart, contextEnd)
+    .map((l, idx) => `${contextStart + idx + 1}| ${l}`)
+    .join("\n");
+
+  return { lineStart: bestStart + 1, snippet, score: bestScore };
+}
+
+function appendMismatchHint(error: Error, currentContent: string, oldText?: string): Error {
+  const parts: string[] = [error.message];
+
+  // Try to find the most similar region if oldText is available
+  if (oldText && oldText.length > 0) {
+    const match = findBestMatchRegion(normalizeToLF(currentContent), normalizeToLF(oldText));
+    if (match) {
+      const pct = Math.round(match.score * 100);
+      parts.push(
+        `\nBest matching region (${pct}% similar) near line ${match.lineStart}:\n${match.snippet}`,
+      );
+      parts.push(
+        "\nHint: check for whitespace differences, extra/missing lines, or outdated content in your oldText.",
+      );
+      const enhanced = new Error(parts.join(""));
+      enhanced.stack = error.stack;
+      return enhanced;
+    }
+  }
+
+  // Fall back to showing file head if no similar region found
   const snippet =
     currentContent.length <= EDIT_MISMATCH_HINT_LIMIT
       ? currentContent
       : `${currentContent.slice(0, EDIT_MISMATCH_HINT_LIMIT)}\n... (truncated)`;
-  const enhanced = new Error(`${error.message}\nCurrent file contents:\n${snippet}`);
+  parts.push(`\nCurrent file contents:\n${snippet}`);
+  const enhanced = new Error(parts.join(""));
   enhanced.stack = error.stack;
   return enhanced;
 }
@@ -177,7 +274,7 @@ export function wrapEditToolWithRecovery(
           err instanceof Error &&
           shouldAddMismatchHint(err)
         ) {
-          throw appendMismatchHint(err, currentContent);
+          throw appendMismatchHint(err, currentContent, oldText);
         }
 
         throw err;
