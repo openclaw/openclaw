@@ -254,7 +254,11 @@ export function resolveExecTarget(params: {
   }
   const selectedTarget = requestedTarget ?? configuredTarget;
   const effectiveHost =
-    selectedTarget === "auto" ? (params.sandboxAvailable ? "sandbox" : "gateway") : selectedTarget;
+    selectedTarget === "auto"
+      ? params.sandboxAvailable
+        ? "sandbox"
+        : "gateway"
+      : selectedTarget;
   return {
     configuredTarget,
     requestedTarget,
