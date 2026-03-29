@@ -253,26 +253,6 @@ export interface PluginSdkFacadeTypeMap {
     };
     types: {};
   };
-  "imessage-policy": {
-    module: typeof import("@openclaw/imessage/api.js");
-    sourceModules: {
-      source1: {
-        module: typeof import("@openclaw/imessage/api.js");
-      };
-    };
-    types: {};
-  };
-  "imessage-runtime": {
-    module: typeof import("@openclaw/imessage/runtime-api.js");
-    sourceModules: {
-      source1: {
-        module: typeof import("@openclaw/imessage/runtime-api.js");
-      };
-    };
-    types: {
-      IMessageProbe: import("@openclaw/imessage/runtime-api.js").IMessageProbe;
-    };
-  };
   "irc-surface": {
     module: typeof import("@openclaw/irc/api.js");
     sourceModules: {
@@ -679,18 +659,6 @@ export interface PluginSdkFacadeTypeMap {
       };
     };
     types: {};
-  };
-  "telegram-runtime-surface": {
-    module: typeof import("@openclaw/telegram/runtime-api.js");
-    sourceModules: {
-      source1: {
-        module: typeof import("@openclaw/telegram/runtime-api.js");
-      };
-    };
-    types: {
-      TelegramApiOverride: import("@openclaw/telegram/runtime-api.js").TelegramApiOverride;
-      TelegramProbe: import("@openclaw/telegram/runtime-api.js").TelegramProbe;
-    };
   };
   "telegram-surface": {
     module: typeof import("@openclaw/telegram/api.js");
