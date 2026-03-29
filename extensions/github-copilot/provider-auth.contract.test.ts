@@ -1,3 +1,3 @@
-import { describeGithubCopilotProviderAuthContract } from "../../test/helpers/extensions/provider-auth-contract.js";
+import { describeGithubCopilotProviderAuthContract } from "../../test/helpers/plugins/provider-auth-contract.js";
 
 describeGithubCopilotProviderAuthContract();

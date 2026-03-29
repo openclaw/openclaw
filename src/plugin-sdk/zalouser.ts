@@ -1,5 +1,5 @@
 // Private helper surface for the bundled zalouser plugin.
-// Keep this list additive and scoped to symbols used under extensions/zalouser.
+// Keep this list additive and scoped to the bundled Zalo user surface.
 
 import { createOptionalChannelSetupSurface } from "./channel-setup.js";
 

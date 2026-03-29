@@ -10,7 +10,7 @@ WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-$HOME/.openclaw/workspace}"
 PROFILE_FILE="${OPENCLAW_PROFILE_FILE:-$HOME/.profile}"
 CLI_TOOLS_DIR="${OPENCLAW_DOCKER_CLI_TOOLS_DIR:-$HOME/.cache/openclaw/docker-cli-tools}"
 ACP_AGENT="${OPENCLAW_LIVE_ACP_BIND_AGENT:-claude}"
-# Keep in sync with extensions/acpx/src/config.ts ACPX_PINNED_VERSION.
+# Keep in sync with the pinned ACPX version used by the bundled ACP runtime.
 ACPX_VERSION="${OPENCLAW_DOCKER_ACPX_VERSION:-0.3.1}"
 
 case "$ACP_AGENT" in

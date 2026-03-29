@@ -4,11 +4,15 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
+import {
+  BUNDLED_PLUGIN_PATH_PREFIX,
+  BUNDLED_PLUGIN_ROOT_DIR,
+} from "./lib/bundled-plugin-paths.mjs";
 import { optionalBundledClusterSet } from "./lib/optional-bundled-clusters.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const srcRoot = path.join(repoRoot, "src");
-const extensionsRoot = path.join(repoRoot, "extensions");
+const extensionsRoot = path.join(repoRoot, BUNDLED_PLUGIN_ROOT_DIR);
 const testRoot = path.join(repoRoot, "test");
 const workspacePackagePaths = ["ui/package.json"];
 const MAX_SCAN_BYTES = 2 * 1024 * 1024;
@@ -168,7 +172,7 @@ function normalizePluginSdkFamily(resolvedPath) {
 }
 
 function resolveOptionalClusterFromPath(resolvedPath) {
-  if (resolvedPath.startsWith("extensions/")) {
+  if (resolvedPath.startsWith(BUNDLED_PLUGIN_PATH_PREFIX)) {
     const cluster = resolvedPath.split("/")[1];
     return optionalBundledClusterSet.has(cluster) ? cluster : null;
   }
@@ -426,7 +430,7 @@ function packageClusterMeta(relativePackagePath) {
     cluster,
     packageName: null,
     packagePath: relativePackagePath,
-    reachability: relativePackagePath.startsWith("extensions/")
+    reachability: relativePackagePath.startsWith(BUNDLED_PLUGIN_PATH_PREFIX)
       ? "extension-workspace"
       : "workspace",
   };
@@ -777,7 +781,7 @@ export function describeSeamKinds(relativePath, source) {
       relativePath,
     );
   const isChannelMediaAdapterPath =
-    (relativePath.startsWith("extensions/") &&
+    (relativePath.startsWith(BUNDLED_PLUGIN_PATH_PREFIX) &&
       /(outbound|outbound-adapter|reply-delivery|send|delivery|messenger|channel(?:\.runtime)?)\.ts$/.test(
         relativePath,
       )) ||

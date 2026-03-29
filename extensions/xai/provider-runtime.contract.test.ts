@@ -1,3 +1,3 @@
-import { describeXAIProviderRuntimeContract } from "../../test/helpers/extensions/provider-runtime-contract.js";
+import { describeXAIProviderRuntimeContract } from "../../test/helpers/plugins/provider-runtime-contract.js";
 
 describeXAIProviderRuntimeContract();

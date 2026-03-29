@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getRequiredHookHandler,
   registerHookHandlersForTest,
-} from "../../../test/helpers/extensions/subagent-hooks.js";
+} from "../../../test/helpers/plugins/subagent-hooks.js";
 
 type ThreadBindingRecord = {
   accountId: string;
