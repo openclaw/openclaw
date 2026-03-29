@@ -147,6 +147,10 @@
         "reason": "This provider test hoists a client mock and imports the provider lazily; keep it in its own forked lane so shared extension workers do not reuse a previously cached module under test."
       },
       {
+        "file": "extensions/browser/src/browser/chrome.test.ts",
+        "reason": "This Chrome CDP helper suite opens mock WebSocket servers and stubs global fetch state; keep it isolated so shared extension workers do not inherit stale browser probe state from neighboring files."
+      },
+      {
         "file": "extensions/firecrawl/src/firecrawl-scrape-tool.test.ts",
         "reason": "This scrape-tool suite hoists client mocks and imports the tool lazily; keep it in its own forked lane so shared extension workers cannot bypass the mocked client via cached modules."
       },
@@ -157,6 +161,26 @@
       {
         "file": "extensions/firecrawl/src/firecrawl-search-tool.test.ts",
         "reason": "This tool suite hoists the Firecrawl client mock and imports lazily; keep it isolated so shared extension workers cannot leak cached implementations across files."
+      },
+      {
+        "file": "extensions/feishu/src/monitor.acp-init-failure.lifecycle.test.ts",
+        "reason": "This Feishu websocket lifecycle suite can stall only in the shared extensions swarm when reconnect state bleeds across files; keep it isolated so ACP init-failure teardown stays deterministic."
+      },
+      {
+        "file": "extensions/feishu/src/monitor.bot-menu.lifecycle.test.ts",
+        "reason": "This Feishu websocket lifecycle suite can stall only in the shared extensions swarm when reconnect state bleeds across files; keep it isolated so bot-menu lifecycle teardown stays deterministic."
+      },
+      {
+        "file": "extensions/feishu/src/monitor.broadcast.reply-once.lifecycle.test.ts",
+        "reason": "This Feishu websocket lifecycle suite can stall only in the shared extensions swarm when reconnect state bleeds across files; keep it isolated so broadcast reply-once teardown stays deterministic."
+      },
+      {
+        "file": "extensions/feishu/src/monitor.card-action.lifecycle.test.ts",
+        "reason": "This Feishu websocket lifecycle suite shares the same reconnect helpers and module state; keep it isolated with the other Feishu lifecycle files so card-action runs do not inherit cross-file websocket state."
+      },
+      {
+        "file": "extensions/feishu/src/monitor.reply-once.lifecycle.test.ts",
+        "reason": "This Feishu websocket lifecycle suite can stall only in the shared extensions swarm when reconnect state bleeds across files; keep it isolated so reply-once teardown stays deterministic."
       },
       {
         "file": "extensions/line/src/download.test.ts",
