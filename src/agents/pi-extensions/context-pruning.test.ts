@@ -269,6 +269,34 @@ describe("context-pruning", () => {
     expect(toolText(findToolResult(next, "t3"))).toContain("z".repeat(20_000));
   });
 
+  it("accounts for CJK Extension B text when deciding whether to prune", () => {
+    const extensionBText = "𠀀".repeat(50);
+    const messages: AgentMessage[] = [
+      makeUser(extensionBText),
+      makeToolResult({
+        toolCallId: "t1",
+        toolName: "exec",
+        text: "keep me",
+      }),
+    ];
+
+    const next = pruneContextMessages({
+      messages,
+      settings: makeAggressiveSettings({
+        keepLastAssistants: 0,
+        softTrimRatio: 1,
+        hardClearRatio: 1,
+        minPrunableToolChars: 0,
+        hardClear: { enabled: true, placeholder: "[cleared]" },
+      }),
+      ctx: CONTEXT_WINDOW_1000,
+      contextWindowTokensOverride: 40,
+      isToolPrunable: () => true,
+    });
+
+    expect(toolText(findToolResult(next, "t1"))).toBe("[cleared]");
+  });
+
   it("uses contextWindow override when ctx.model is missing", () => {
     const messages = makeSimpleToolPruningMessages(true);
 
