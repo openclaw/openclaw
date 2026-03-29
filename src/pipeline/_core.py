@@ -97,11 +97,20 @@ _NUMBERED_RE = re.compile(
     re.DOTALL,
 )
 
+# v15.3: Action verbs that signal a new sub-task in unnumbered paragraphs
+_ACTION_VERBS_RE = re.compile(
+    r"^(?:Сделай|Проанализируй|Напиши|Найди|Создай|Проверь|Check|Create|Write|Find|Analyze|Build|Implement|Audit|Auditor:)",
+    re.IGNORECASE,
+)
+# Minimum prompt length to attempt semantic paragraph splitting
+_SEMANTIC_MIN_LEN = 300
+
 # Keyword → brigade mapping (reused from intent_classifier)
 _BRIGADE_KEYWORDS: dict[str, list[str]] = {
     "Dmarket-Dev": [
         "dmarket", "buy", "sell", "trade", "price", "skin", "inventory",
         "купить", "продать", "торговля", "скин", "инвентарь", "арбитраж",
+        "pyo3", "подпис", "hft", "latency",
     ],
     "Research-Ops": [
         "research", "найди", "поищи", "youtube", "видео", "video",
@@ -127,19 +136,60 @@ def _route_subtask(text: str) -> str:
 
 
 def _decompose_multi_task(prompt: str) -> list[tuple[str, str]]:
-    """Split a numbered-list prompt into (sub_task_text, brigade) pairs.
+    """Split a prompt into (sub_task_text, brigade) pairs.
 
-    Returns an empty list if the prompt doesn't look like a multi-task list.
+    v15.3: Two-pass strategy:
+    1. Try numbered-list regex ("1. ... 2. ...").
+    2. Fallback: semantic paragraph splitting — split on \n\n or \n,
+       keeping paragraphs that start with an action verb as separate tasks.
+
+    Returns an empty list if the prompt doesn't look like a multi-task.
     """
+    # --- Pass 1: numbered-list regex ---
     matches = _NUMBERED_RE.findall(prompt)
-    if len(matches) < 2:
+    if len(matches) >= 2:
+        sub_tasks: list[tuple[str, str]] = []
+        for _num, body in matches:
+            body = body.strip()
+            if body:
+                brigade = _route_subtask(body)
+                sub_tasks.append((body, brigade))
+        return sub_tasks
+
+    # --- Pass 2: semantic paragraph splitting (v15.3) ---
+    # Strip any [CHAT HISTORY] prefix before analysing paragraphs
+    analysis_text = prompt
+    if "[CURRENT TASK]:" in prompt:
+        analysis_text = prompt.split("[CURRENT TASK]:", 1)[1].strip()
+
+    if len(analysis_text) < _SEMANTIC_MIN_LEN:
         return []
-    sub_tasks: list[tuple[str, str]] = []
-    for _num, body in matches:
-        body = body.strip()
-        if body:
-            brigade = _route_subtask(body)
-            sub_tasks.append((body, brigade))
+
+    # Split on double-newline first; fallback to single-newline
+    paragraphs = [p.strip() for p in re.split(r"\n\n+", analysis_text) if p.strip()]
+    if len(paragraphs) < 2:
+        paragraphs = [p.strip() for p in analysis_text.split("\n") if p.strip()]
+
+    # Keep only paragraphs that look like actionable tasks (action verb at start)
+    action_paragraphs: list[str] = []
+    # First paragraph is always the context/intro — include it as a task too
+    # if it contains a URL or is long enough
+    for para in paragraphs:
+        if _ACTION_VERBS_RE.search(para):
+            action_paragraphs.append(para)
+        elif re.search(r"https?://", para) and len(para) > 40:
+            # URL-bearing paragraphs are implicit research tasks
+            action_paragraphs.append(para)
+
+    if len(action_paragraphs) < 2:
+        return []
+
+    sub_tasks = []
+    for para in action_paragraphs:
+        brigade = _route_subtask(para)
+        sub_tasks.append((para, brigade))
+    logger.info("Semantic decomposer activated (v15.3)",
+                n_paragraphs=len(paragraphs), n_tasks=len(sub_tasks))
     return sub_tasks
 
 
@@ -409,7 +459,7 @@ class PipelineExecutor:
         # --- v14.4: Multi-Task Decomposer (P1-1 / P1-3 hotfix) ---
         # If the prompt contains a numbered list (1. ... 2. ...) and is long enough,
         # decompose into sub-tasks and route each to the best-matching brigade.
-        if not task_type and len(prompt) > 500:
+        if not task_type and len(prompt) > 200:
             sub_tasks = _decompose_multi_task(prompt)
             if len(sub_tasks) >= 2:
                 logger.info(
@@ -476,8 +526,17 @@ class PipelineExecutor:
                 if lats_result.best_answer:
                     logger.info("LATS completed", depth=lats_result.depth_reached,
                                 score=lats_result.best_score, early_exit=lats_result.early_exit)
+                    # v15.3: Wrap LATS reasoning trace in <think> so it's hidden from user
+                    _lats_answer = lats_result.best_answer
+                    _lats_trace = "\n".join(
+                        f"[D{n.depth}] {n.thought[:120]}"
+                        for n in lats_result.tree_trace
+                        if n.thought != "[ROOT]" and n.thought != _lats_answer
+                    )
+                    if _lats_trace:
+                        _lats_answer = f"<think>\n{_lats_trace}\n</think>\n\n{_lats_answer}"
                     return {
-                        "final_response": lats_result.best_answer,
+                        "final_response": _lats_answer,
                         "brigade": brigade,
                         "chain_executed": ["LATS_TreeSearch"],
                         "steps": [{"role": "LATS_TreeSearch", "model": lats_model, "response": lats_result.best_answer}],

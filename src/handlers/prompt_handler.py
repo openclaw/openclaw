@@ -340,6 +340,11 @@ async def _handle_prompt_inner(gateway, message: Message, prompt: str):
         return
 
     llm_response = result["final_response"]
+
+    # v15.3: Strip <think>...</think> LATS reasoning traces before showing to user
+    import re as _re
+    llm_response = _re.sub(r"<think>[\s\S]*?</think>\s*", "", llm_response).strip()
+
     chain_str = " → ".join(result["chain_executed"])
     display_brigade = f"{actual_brigade} ⚡" if is_fast_path else actual_brigade
     _pipeline_elapsed = time.time() - _pipeline_start

@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional
 import structlog
 
 from src.ai.agents._shared import call_vllm
+from src.pipeline_utils import _CRITICAL_EXECUTION_DIRECTIVES
 
 logger = structlog.get_logger("LATS")
 
@@ -254,7 +255,12 @@ class LATSEngine:
                 f"Task:\n{prompt}\n\n"
                 f"Previous reasoning path:\n{context}\n\n"
                 f"Generate approach #{idx + 1} to solve this task. "
-                f"Be specific and concrete in 2-4 sentences."
+                f"Be specific and concrete in 2-4 sentences.\n\n"
+                f"CRITICAL: If your approach requires external data (watching a video, "
+                f"searching documentation, fetching a URL), you MUST output the "
+                f"corresponding <tool_call> XML immediately (e.g. web_search, "
+                f"youtube_parser). DO NOT just write a plan — EXECUTE the plan."
+                + _CRITICAL_EXECUTION_DIRECTIVES
             )
             raw = await call_vllm(
                 self.vllm_url,
