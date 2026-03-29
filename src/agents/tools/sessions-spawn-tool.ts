@@ -267,10 +267,12 @@ export function createSessionsSpawnTool(
               spawnMode: trackedSpawnMode,
             });
           } catch (err) {
+            // Best-effort only: the ACP turn was already started above, so deleting the
+            // child session record here does not guarantee the in-flight run was aborted.
             await cleanupUntrackedAcpSession(childSessionKey);
             return jsonResult({
               status: "error",
-              error: `Failed to register ACP run: ${summarizeError(err)}`,
+              error: `Failed to register ACP run: ${summarizeError(err)}. Cleanup was attempted, but the already-started ACP run may still finish in the background.`,
               childSessionKey,
               runId: childRunId,
             });
