@@ -15,7 +15,7 @@ export function createVeniceE2EE(options: VeniceE2EEOptions) {
     dcapVerifier,
   } = options;
   let _session: E2EESession | null = null;
-  let _pendingSession: Promise<E2EESession> | null = null;
+  const _pendingSessions = new Map<string, Promise<E2EESession>>();
 
   async function fetchAttestation(
     modelId: string,
@@ -36,13 +36,15 @@ export function createVeniceE2EE(options: VeniceE2EEOptions) {
       return _session;
     }
 
-    // Deduplicate concurrent calls for the same session
-    if (_pendingSession) return _pendingSession;
-    _pendingSession = _createSessionInner(modelId);
+    // Deduplicate concurrent calls for the same model
+    const pending = _pendingSessions.get(modelId);
+    if (pending) return pending;
+    const promise = _createSessionInner(modelId);
+    _pendingSessions.set(modelId, promise);
     try {
-      return await _pendingSession;
+      return await promise;
     } finally {
-      _pendingSession = null;
+      _pendingSessions.delete(modelId);
     }
   }
 
@@ -68,8 +70,9 @@ export function createVeniceE2EE(options: VeniceE2EEOptions) {
 
     const aesKey = await deriveAESKey(keypair.privateKey, modelPubKeyHex);
 
-    // Zeroize old session private key before replacing
-    if (_session) _session.privateKey.fill(0);
+    // Don't zeroize old session key here — active streams may still hold
+    // a reference and need it for per-chunk decryption. Key material is
+    // only zeroized on explicit clearSession() calls.
 
     _session = {
       ...keypair,
