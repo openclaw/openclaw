@@ -14,11 +14,12 @@ export function resolveApprovalCommandAuthorization(params: {
     return { authorized: true };
   }
   return (
-    getChannelPlugin(channel)?.execApprovals?.auth?.authorizeCommand?.({
+    getChannelPlugin(channel)?.auth?.authorizeActorAction?.({
       cfg: params.cfg,
       accountId: params.accountId,
       senderId: params.senderId,
-      kind: params.kind,
+      action: "approve",
+      approvalKind: params.kind,
     }) ?? { authorized: true }
   );
 }
