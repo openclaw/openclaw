@@ -1,10 +1,7 @@
 import {
-  resolvePayloadMediaUrls,
-  sendPayloadMediaSequence,
-  sendPayloadMediaSequenceAndFinalize,
-  sendPayloadMediaSequenceOrFallback,
-  sendTextMediaPayload,
+  sendTextMediaPayload
 } from "openclaw/plugin-sdk/reply-payload";
+import { recordChannelActivity } from "../../../analytics/index.js";
 import { chunkText } from "../../../auto-reply/chunk.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { OutboundSendDeps } from "../../../infra/outbound/deliver.js";
@@ -32,7 +29,7 @@ export {
   sendPayloadMediaSequence,
   sendPayloadMediaSequenceAndFinalize,
   sendPayloadMediaSequenceOrFallback,
-  sendTextMediaPayload,
+  sendTextMediaPayload
 } from "openclaw/plugin-sdk/reply-payload";
 
 export function resolveScopedChannelMediaMaxBytes(params: {
@@ -110,28 +107,74 @@ export function createDirectTextMediaOutbound<
     sendPayload: async (ctx) =>
       await sendTextMediaPayload({ channel: params.channel, ctx, adapter: outbound }),
     sendText: async ({ cfg, to, text, accountId, deps, replyToId }) => {
-      return await sendDirect({
-        cfg,
-        to,
-        text,
-        accountId,
-        deps,
-        replyToId,
-        buildOptions: params.buildTextOptions,
-      });
+      const sendStartTime = Date.now();
+      try {
+        const result = await sendDirect({
+          cfg,
+          to,
+          text,
+          accountId,
+          deps,
+          replyToId,
+          buildOptions: params.buildTextOptions,
+        });
+        
+        // Record successful message send
+        recordChannelActivity({
+          channelId: params.channel,
+          eventType: "message",
+          success: true,
+          duration: Date.now() - sendStartTime
+        });
+        
+        return result;
+      } catch (error) {
+        // Record failed message send
+        recordChannelActivity({
+          channelId: params.channel,
+          eventType: "message",
+          success: false,
+          duration: Date.now() - sendStartTime,
+          error: error instanceof Error ? error.message : String(error)
+        });
+        throw error;
+      }
     },
     sendMedia: async ({ cfg, to, text, mediaUrl, mediaLocalRoots, accountId, deps, replyToId }) => {
-      return await sendDirect({
-        cfg,
-        to,
-        text,
-        mediaUrl,
-        mediaLocalRoots,
-        accountId,
-        deps,
-        replyToId,
-        buildOptions: params.buildMediaOptions,
-      });
+      const sendStartTime = Date.now();
+      try {
+        const result = await sendDirect({
+          cfg,
+          to,
+          text,
+          mediaUrl,
+          mediaLocalRoots,
+          accountId,
+          deps,
+          replyToId,
+          buildOptions: params.buildMediaOptions,
+        });
+        
+        // Record successful media send
+        recordChannelActivity({
+          channelId: params.channel,
+          eventType: "message",
+          success: true,
+          duration: Date.now() - sendStartTime
+        });
+        
+        return result;
+      } catch (error) {
+        // Record failed media send
+        recordChannelActivity({
+          channelId: params.channel,
+          eventType: "message",
+          success: false,
+          duration: Date.now() - sendStartTime,
+          error: error instanceof Error ? error.message : String(error)
+        });
+        throw error;
+      }
     },
   };
   return outbound;

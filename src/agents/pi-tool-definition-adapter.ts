@@ -4,6 +4,7 @@ import type {
   AgentToolUpdateCallback,
 } from "@mariozechner/pi-agent-core";
 import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
+import { recordToolExecution } from "../analytics/index.js";
 import { logDebug, logError } from "../logger.js";
 import { isPlainObject } from "../utils.js";
 import type { ClientToolDefinition } from "./pi-embedded-runner/run/params.js";
@@ -126,7 +127,10 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
       parameters: tool.parameters,
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
         const { toolCallId, params, onUpdate, signal } = splitToolExecuteArgs(args);
+        const toolStartTime = Date.now();
         let executeParams = params;
+        let executionError: string | undefined;
+        
         try {
           if (!beforeHookWrapped) {
             const hookOutcome = await runBeforeToolCallHook({
@@ -144,6 +148,16 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
             toolName: normalizedName,
             result: rawResult,
           });
+          
+          // Record successful tool execution
+          const toolDuration = Date.now() - toolStartTime;
+          recordToolExecution({
+            toolName: normalizedName,
+            sessionId: "", // Will be populated by context if available
+            duration: toolDuration,
+            success: true
+          });
+          
           return result;
         } catch (err) {
           if (signal?.aborted) {
@@ -157,10 +171,22 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
             throw err;
           }
           const described = describeToolExecutionError(err);
+          executionError = described.message;
+          
           if (described.stack && described.stack !== described.message) {
             logDebug(`tools: ${normalizedName} failed stack:\n${described.stack}`);
           }
           logError(`[tools] ${normalizedName} failed: ${described.message}`);
+
+          // Record failed tool execution
+          const toolDuration = Date.now() - toolStartTime;
+          recordToolExecution({
+            toolName: normalizedName,
+            sessionId: "", // Will be populated by context if available
+            duration: toolDuration,
+            success: false,
+            error: executionError
+          });
 
           return buildToolExecutionErrorResult({
             toolName: normalizedName,

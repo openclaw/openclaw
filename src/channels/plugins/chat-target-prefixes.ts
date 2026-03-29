@@ -92,7 +92,7 @@ export function resolveServicePrefixedTarget<TService extends string, TTarget>(p
     }
     const remainder = stripPrefix(params.trimmed, prefix);
     if (!remainder) {
-      throw new Error(`${prefix} target is required`);
+      throw new Error(`${prefix} target is required (e.g., ${prefix}123 or ${prefix}@username)`);
     }
     const remainderLower = remainder.toLowerCase();
     if (params.isChatTarget(remainderLower)) {

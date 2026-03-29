@@ -4,6 +4,7 @@ import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
+import { recordAgentExecution } from "../../analytics/index.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionBinding } from "../../agents/cli-session.js";
@@ -147,6 +148,7 @@ export async function runAgentTurnWithFallback(params: {
   const directlySentBlockKeys = new Set<string>();
 
   const runId = params.opts?.runId ?? crypto.randomUUID();
+  const executionStartTime = Date.now();
   const normalizeReplyMediaPaths = createReplyMediaPathNormalizer({
     cfg: params.followupRun.run.config,
     sessionKey: params.sessionKey,
@@ -802,6 +804,21 @@ export async function runAgentTurnWithFallback(params: {
       }
     }
   }
+
+  const executionDuration = Date.now() - executionStartTime;
+  const executionSuccess = !runResult?.meta?.error;
+  
+  // Record agent execution metrics
+  recordAgentExecution({
+    agentId: params.followupRun.run.agentId,
+    sessionId: params.followupRun.run.sessionId,
+    duration: executionDuration,
+    success: executionSuccess,
+    error: runResult?.meta?.error?.message,
+    tokensUsed: runResult?.meta?.agentMeta?.usage?.total,
+    cost: undefined, // Cost calculation would need to be implemented separately
+    toolCount: runResult?.meta?.pendingToolCalls?.length || 0
+  });
 
   return {
     kind: "success",

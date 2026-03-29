@@ -47,10 +47,10 @@ describe("WizardSession", () => {
     expect(done.status).toBe("done");
   });
 
-  test("invalid answers throw", async () => {
+  test("invalid answers throw with descriptive error", async () => {
     const session = noteRunner();
     const first = await session.next();
-    await expect(session.answer("bad-id", null)).rejects.toThrow(/wizard: no pending step/i);
+    await expect(session.answer("bad-id", null)).rejects.toThrow(/Cannot answer step "bad-id": no pending step with that ID./i);
     if (!first.step) {
       throw new Error("expected first step");
     }
@@ -70,5 +70,17 @@ describe("WizardSession", () => {
     const done = await session.next();
     expect(done.done).toBe(true);
     expect(done.status).toBe("cancelled");
+  });
+
+  test("awaitAnswer throws with descriptive error when session not running", async () => {
+    const session = new WizardSession(async (prompter) => {
+      await prompter.text({ message: "Name" });
+    });
+
+    session.cancel();
+    
+    await expect(
+      session.awaitAnswer({ id: "test", type: "text", message: "test", executor: "client" })
+    ).rejects.toThrow(/Cannot await answer: wizard session is cancelled./i);
   });
 });

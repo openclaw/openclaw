@@ -70,7 +70,7 @@ export type WebChannel = "web";
 
 export function assertWebChannel(input: string): asserts input is WebChannel {
   if (input !== "web") {
-    throw new Error("Web channel must be 'web'");
+    throw new Error(`Invalid channel "${input}". Web channel must be 'web'.`);
   }
 }
 

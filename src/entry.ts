@@ -14,6 +14,11 @@ import { ensureOpenClawExecMarkerOnProcess } from "./infra/openclaw-exec-env.js"
 import { installProcessWarningFilter } from "./infra/warning-filter.js";
 import { attachChildProcessBridge } from "./process/child-process-bridge.js";
 
+// Initialize analytics early to track startup
+import { recordSystemMetric } from "./analytics/index.js";
+
+const startupStartTime = Date.now();
+
 const ENTRY_WRAPPER_PAIRS = [
   { wrapperBasename: "openclaw.mjs", entryBasename: "entry.js" },
   { wrapperBasename: "openclaw.js", entryBasename: "entry.js" },
@@ -199,9 +204,31 @@ function runMainOrRootHelp(argv: string[]): void {
   if (tryHandleRootHelpFastPath(argv)) {
     return;
   }
+  
+  // Record startup completion time
+  const startupDuration = Date.now() - startupStartTime;
+  recordSystemMetric({
+    eventType: "startup",
+    success: true,
+    duration: startupDuration,
+    properties: {
+      nodeVersion: process.version,
+      platform: process.platform,
+      arch: process.arch
+    }
+  });
+  
   import("./cli/run-main.js")
     .then(({ runCli }) => runCli(argv))
     .catch((error) => {
+      // Record startup failure
+      recordSystemMetric({
+        eventType: "startup",
+        success: false,
+        duration: Date.now() - startupStartTime,
+        error: error instanceof Error ? error.message : String(error)
+      });
+      
       console.error(
         "[openclaw] Failed to start CLI:",
         error instanceof Error ? (error.stack ?? error.message) : error,

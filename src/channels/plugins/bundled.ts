@@ -238,7 +238,8 @@ export function getBundledChannelPlugin(id: ChannelId): ChannelPlugin | undefine
 export function requireBundledChannelPlugin(id: ChannelId): ChannelPlugin {
   const plugin = getBundledChannelPlugin(id);
   if (!plugin) {
-    throw new Error(`missing bundled channel plugin: ${id}`);
+    const availablePlugins = Array.from(getBundledChannelState().pluginsById.keys()).join(", ");
+    throw new Error(`Missing bundled channel plugin "${id}". Available plugins: ${availablePlugins}`);
   }
   return plugin;
 }
@@ -246,7 +247,8 @@ export function requireBundledChannelPlugin(id: ChannelId): ChannelPlugin {
 export function setBundledChannelRuntime(id: ChannelId, runtime: PluginRuntime): void {
   const setter = getBundledChannelState().runtimeSettersById.get(id);
   if (!setter) {
-    throw new Error(`missing bundled channel runtime setter: ${id}`);
+    const availablePlugins = Array.from(getBundledChannelState().runtimeSettersById.keys()).join(", ");
+    throw new Error(`Missing bundled channel runtime setter for "${id}". Available plugins with runtime setters: ${availablePlugins}`);
   }
   setter(runtime);
 }

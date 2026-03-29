@@ -192,7 +192,7 @@ export class WizardSession {
   async answer(stepId: string, value: unknown): Promise<void> {
     const deferred = this.answerDeferred.get(stepId);
     if (!deferred) {
-      throw new Error("wizard: no pending step");
+      throw new Error(`Cannot answer step "${stepId}": no pending step with that ID.`);
     }
     this.answerDeferred.delete(stepId);
     this.currentStep = null;
@@ -237,7 +237,7 @@ export class WizardSession {
 
   async awaitAnswer(step: WizardStep): Promise<unknown> {
     if (this.status !== "running") {
-      throw new Error("wizard: session not running");
+      throw new Error(`Cannot await answer: wizard session is ${this.status}.`);
     }
     this.pushStep(step);
     const deferred = createDeferred<unknown>();

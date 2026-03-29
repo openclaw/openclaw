@@ -34,7 +34,7 @@ function resolveDefaultSummarizeTextDeps(): SummarizeTextDeps {
 
 export function requireInRange(value: number, min: number, max: number, label: string): void {
   if (!Number.isFinite(value) || value < min || value > max) {
-    throw new Error(`${label} must be between ${min} and ${max}`);
+    throw new Error(`Invalid ${label}: ${value}. Must be between ${min} and ${max}.`);
   }
 }
 
@@ -45,7 +45,7 @@ export function normalizeLanguageCode(code?: string): string | undefined {
   }
   const normalized = trimmed.toLowerCase();
   if (!/^[a-z]{2}$/.test(normalized)) {
-    throw new Error("languageCode must be a 2-letter ISO 639-1 code (e.g. en, de, fr)");
+    throw new Error(`Invalid language code "${code}". Must be a 2-letter ISO 639-1 code (e.g. en, de, fr).`);
   }
   return normalized;
 }
@@ -59,7 +59,7 @@ export function normalizeApplyTextNormalization(mode?: string): "auto" | "on" | 
   if (normalized === "auto" || normalized === "on" || normalized === "off") {
     return normalized;
   }
-  throw new Error("applyTextNormalization must be one of: auto, on, off");
+  throw new Error(`Invalid text normalization mode "${mode}". Must be one of: auto, on, off.`);
 }
 
 export function normalizeSeed(seed?: number): number | undefined {
@@ -68,7 +68,7 @@ export function normalizeSeed(seed?: number): number | undefined {
   }
   const next = Math.floor(seed);
   if (!Number.isFinite(next) || next < 0 || next > 4_294_967_295) {
-    throw new Error("seed must be between 0 and 4294967295");
+    throw new Error(`Invalid seed value: ${seed}. Must be between 0 and 4294967295.`);
   }
   return next;
 }
@@ -123,7 +123,7 @@ export async function summarizeText(
 ): Promise<SummarizeResult> {
   const { text, targetLength, cfg, config, timeoutMs } = params;
   if (targetLength < 100 || targetLength > 10_000) {
-    throw new Error(`Invalid targetLength: ${targetLength}`);
+    throw new Error(`Invalid targetLength: ${targetLength}. Must be between 100 and 10,000 characters.`);
   }
 
   const startTime = Date.now();
@@ -173,7 +173,7 @@ export async function summarizeText(
         .trim();
 
       if (!summary) {
-        throw new Error("No summary returned");
+        throw new Error("No summary returned from model. Try adjusting the target length or model configuration.");
       }
 
       return {
