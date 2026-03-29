@@ -849,10 +849,51 @@ describe("runDiscordGatewayLifecycle", () => {
     abortController.abort();
 
     await expect(lifecyclePromise).resolves.toBeUndefined();
-    expect(runtimeLog).not.toHaveBeenCalledWith(
+    expect(runtimeLog).toHaveBeenCalledWith(
       expect.stringContaining("ignoring expected reconnect-exhausted during shutdown"),
     );
-    expect(runtimeError).toHaveBeenCalledWith(expect.stringContaining("Max reconnect attempts"));
+    expect(runtimeError).not.toHaveBeenCalledWith(
+      expect.stringContaining("Max reconnect attempts"),
+    );
+  });
+
+  it("suppresses reconnect-exhausted delivered through the active lifecycle after abort", async () => {
+    const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
+    const abortController = new AbortController();
+
+    const emitter = new EventEmitter();
+    const gateway: MockGateway = {
+      isConnected: true,
+      options: { intents: 0, reconnect: { maxAttempts: 50 } } as GatewayPlugin["options"],
+      disconnect: vi.fn(),
+      connect: vi.fn(),
+      emitter,
+    };
+    getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+
+    waitForDiscordGatewayStopMock.mockImplementationOnce(
+      async (waitParams: WaitForDiscordGatewayStopParams) => {
+        abortController.abort();
+        const decision = waitParams.onGatewayEvent?.(
+          createGatewayEvent(
+            "reconnect-exhausted",
+            "Max reconnect attempts (0) reached after code 1005",
+          ),
+        );
+        expect(decision).toBe("stop");
+      },
+    );
+
+    const { lifecycleParams, runtimeLog, runtimeError } = createLifecycleHarness({ gateway });
+    lifecycleParams.abortSignal = abortController.signal;
+
+    await expect(runDiscordGatewayLifecycle(lifecycleParams)).resolves.toBeUndefined();
+    expect(runtimeLog).toHaveBeenCalledWith(
+      expect.stringContaining("ignoring expected reconnect-exhausted during shutdown"),
+    );
+    expect(runtimeError).not.toHaveBeenCalledWith(
+      expect.stringContaining("Max reconnect attempts"),
+    );
   });
 
   it("rejects reconnect-exhausted queued before startup when shutdown has not begun", async () => {
