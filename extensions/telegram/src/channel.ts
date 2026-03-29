@@ -2,11 +2,7 @@ import {
   buildDmGroupAccountAllowlistAdapter,
   createNestedAllowlistOverrideResolver,
 } from "openclaw/plugin-sdk/allowlist-config-edit";
-import {
-  buildPluginApprovalPendingReplyPayload,
-  buildPluginApprovalRequestMessage,
-  createApproverRestrictedNativeApprovalAdapter,
-} from "openclaw/plugin-sdk/approval-runtime";
+import { createApproverRestrictedNativeApprovalAdapter } from "openclaw/plugin-sdk/approval-runtime";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import { createAllowlistProviderRouteAllowlistWarningCollector } from "openclaw/plugin-sdk/channel-policy";
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
@@ -44,14 +40,12 @@ import {
   type ResolvedTelegramAccount,
 } from "./accounts.js";
 import { resolveTelegramAutoThreadId } from "./action-threading.js";
-import { buildTelegramExecApprovalButtons } from "./approval-buttons.js";
 import * as auditModule from "./audit.js";
 import { buildTelegramGroupPeerId } from "./bot/helpers.js";
 import {
   listTelegramDirectoryGroupsFromConfig,
   listTelegramDirectoryPeersFromConfig,
 } from "./directory-config.js";
-import { buildTelegramExecApprovalPendingPayload } from "./exec-approval-forwarding.js";
 import {
   getTelegramExecApprovalApprovers,
   isTelegramExecApprovalApprover,
@@ -493,30 +487,6 @@ export const telegramPlugin = createChatChannelPlugin({
             accountId: target.accountId ?? undefined,
             ...(Number.isFinite(threadId) ? { messageThreadId: threadId } : {}),
           }).catch(() => {});
-        },
-      },
-      render: {
-        exec: {
-          buildPendingPayload: ({ request, nowMs }) =>
-            buildTelegramExecApprovalPendingPayload({ request, nowMs }),
-        },
-        plugin: {
-          buildPendingPayload: ({ request, nowMs }) => {
-            const buttons = buildTelegramExecApprovalButtons(request.id);
-            return buildPluginApprovalPendingReplyPayload({
-              request,
-              nowMs,
-              text: buildPluginApprovalRequestMessage(request, nowMs),
-              approvalSlug: request.id,
-              channelData: buttons
-                ? {
-                    telegram: {
-                      buttons,
-                    },
-                  }
-                : undefined,
-            });
-          },
         },
       },
     },
