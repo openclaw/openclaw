@@ -277,9 +277,20 @@ function stageLiveTestState(params: {
   realHome: string;
   tempHome: string;
 }): void {
-  const realStateDir = params.env.OPENCLAW_STATE_DIR?.trim()
-    ? resolveHomeRelativePath(params.env.OPENCLAW_STATE_DIR, params.realHome)
+  const rawStateDir = params.env.OPENCLAW_STATE_DIR?.trim();
+  let realStateDir = rawStateDir
+    ? resolveHomeRelativePath(rawStateDir, params.realHome)
     : path.join(params.realHome, ".openclaw");
+  const priorIsolatedHome = params.env.OPENCLAW_TEST_HOME?.trim();
+  const snapshotHome = params.env.HOME?.trim();
+  if (
+    priorIsolatedHome &&
+    snapshotHome &&
+    snapshotHome !== priorIsolatedHome &&
+    realStateDir === path.join(priorIsolatedHome, ".openclaw")
+  ) {
+    realStateDir = path.join(params.realHome, ".openclaw");
+  }
   const tempStateDir = path.join(params.tempHome, ".openclaw");
   fs.mkdirSync(tempStateDir, { recursive: true });
 
