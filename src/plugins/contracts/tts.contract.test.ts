@@ -524,6 +524,16 @@ describe("tts", () => {
       expect(result.hasDirective).toBe(true);
     });
 
+    it("parses [[TTS:TEXT]] blocks case-insensitively", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true });
+      const input = ["Intro", "[[TTS:TEXT]]", "uppercase block text", "[[/TTS:TEXT]]"].join("\n");
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.ttsText).toBe("uppercase block text");
+      expect(result.cleanedText).toBe("Intro");
+      expect(result.hasDirective).toBe(true);
+    });
+
     it("preserves surrounding blank lines in cleanedText after directive removal", () => {
       // Removing the directive line collapses one newline from the surrounding
       // blank lines, resulting in three consecutive newlines (\n\n\n).

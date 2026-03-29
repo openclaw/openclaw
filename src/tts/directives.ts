@@ -47,7 +47,6 @@ function resolveDirectiveProviderConfig(
 }
 
 function parseStandaloneDirectiveBody(trimmedLine: string): string | undefined {
-function parseStandaloneDirectiveBody(trimmedLine: string): string | undefined {
   const match = /^\[\[tts:([^\]]+)\]\]$/u.exec(trimmedLine);
   if (!match) {
     return undefined;
@@ -69,8 +68,9 @@ function parseTtsDirectiveLines(text: string): ParsedTtsDirectiveLines {
 
   for (const line of lines) {
     const trimmedLine = line.trim();
+    const normalizedLine = trimmedLine.toLowerCase();
     if (state === "normal") {
-      if (trimmedLine === "[[tts:text]]") {
+      if (normalizedLine === "[[tts:text]]") {
         pendingTtsStartLine = line;
         currentTtsBlockLines = [];
         state = "in_tts_text_block";
@@ -88,7 +88,7 @@ function parseTtsDirectiveLines(text: string): ParsedTtsDirectiveLines {
       continue;
     }
 
-    if (trimmedLine === "[[/tts:text]]") {
+    if (normalizedLine === "[[/tts:text]]") {
       ttsTextBlocks.push(currentTtsBlockLines.join(newline));
       pendingTtsStartLine = undefined;
       currentTtsBlockLines = [];
