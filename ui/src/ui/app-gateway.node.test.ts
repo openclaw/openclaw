@@ -131,12 +131,17 @@ function createHost() {
     assistantAgentId: null,
     serverVersion: null,
     sessionKey: "main",
+    basePath: "",
+    chatMessage: "",
     chatMessages: [],
+    chatAttachments: [],
+    chatQueue: [],
     chatToolMessages: [],
     chatStreamSegments: [],
     chatStream: null,
     chatStreamStartedAt: null,
     chatRunId: null,
+    chatSending: false,
     toolStreamById: new Map(),
     toolStreamOrder: [],
     toolStreamSyncTimer: null,
@@ -195,9 +200,9 @@ describe("connectGateway", () => {
     expect(host.lastError).toBeNull();
 
     secondClient.emitGap(20, 24);
-    expect(host.lastError).toBe(
-      "event gap detected (expected seq 20, got 24); refresh recommended",
-    );
+    expect(gatewayClientInstances).toHaveLength(3);
+    expect(secondClient.stop).toHaveBeenCalledTimes(1);
+    expect(host.lastError).toBeNull();
   });
 
   it("ignores stale client onEvent callbacks after reconnect", () => {
