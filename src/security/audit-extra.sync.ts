@@ -219,6 +219,13 @@ function listKnownNodeCommands(cfg: OpenClawConfig): Set<string> {
       }
     }
   }
+  // Also include known dangerous commands, which are valid but restricted
+  for (const cmd of DEFAULT_DANGEROUS_NODE_COMMANDS) {
+    const normalized = normalizeNodeCommand(cmd);
+    if (normalized) {
+      out.add(normalized);
+    }
+  }
   return out;
 }
 
