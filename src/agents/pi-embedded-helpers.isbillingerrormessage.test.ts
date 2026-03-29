@@ -842,6 +842,7 @@ describe("classifyFailoverReason", () => {
       classifyFailoverReason("HTTP 401 rate limit exceeded while validating credentials"),
     ).toBe("auth");
     expect(classifyFailoverReason("HTTP 401 insufficient quota")).toBe("auth");
+    expect(classifyFailoverReason("401 session expired")).toBe("auth");
     expect(classifyFailoverReason("403 quota exceeded: access denied for this API key")).toBe(
       "auth",
     );
