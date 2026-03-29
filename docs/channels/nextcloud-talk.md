@@ -22,7 +22,7 @@ openclaw plugins install @openclaw/nextcloud-talk
 Local checkout (when running from a git repo):
 
 ```bash
-openclaw plugins install ./extensions/nextcloud-talk
+openclaw plugins install ./path/to/local/nextcloud-talk-plugin
 ```
 
 If you choose Nextcloud Talk during setup and a git checkout is detected,
