@@ -598,6 +598,81 @@ describe("spawnAcpDirect", () => {
 
   it.each([
     {
+      name: "canonical line target",
+      agentTo: "line:U1234567890abcdef1234567890abcdef",
+      expectedConversationId: "U1234567890abcdef1234567890abcdef",
+    },
+    {
+      name: "typed line user target",
+      agentTo: "line:user:U1234567890abcdef1234567890abcdef",
+      expectedConversationId: "U1234567890abcdef1234567890abcdef",
+    },
+    {
+      name: "typed line group target",
+      agentTo: "line:group:C1234567890abcdef1234567890abcdef",
+      expectedConversationId: "C1234567890abcdef1234567890abcdef",
+    },
+    {
+      name: "typed line room target",
+      agentTo: "line:room:R1234567890abcdef1234567890abcdef",
+      expectedConversationId: "R1234567890abcdef1234567890abcdef",
+    },
+  ])(
+    "resolves LINE ACP conversation ids from $name",
+    async ({ agentTo, expectedConversationId }) => {
+      enableLineCurrentConversationBindings();
+      hoisted.sessionBindingBindMock.mockImplementationOnce(
+        async (input: {
+          targetSessionKey: string;
+          conversation: { accountId: string; conversationId: string };
+          metadata?: Record<string, unknown>;
+        }) =>
+          createSessionBinding({
+            targetSessionKey: input.targetSessionKey,
+            conversation: {
+              channel: "line",
+              accountId: input.conversation.accountId,
+              conversationId: input.conversation.conversationId,
+            },
+            metadata: {
+              boundBy:
+                typeof input.metadata?.boundBy === "string" ? input.metadata.boundBy : "system",
+              agentId: "codex",
+            },
+          }),
+      );
+
+      const result = await spawnAcpDirect(
+        {
+          task: "Investigate flaky tests",
+          agentId: "codex",
+          mode: "session",
+          thread: true,
+        },
+        {
+          agentSessionKey: `agent:main:line:direct:${expectedConversationId}`,
+          agentChannel: "line",
+          agentAccountId: "default",
+          agentTo,
+        },
+      );
+
+      expect(result.status).toBe("accepted");
+      expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          placement: "current",
+          conversation: expect.objectContaining({
+            channel: "line",
+            accountId: "default",
+            conversationId: expectedConversationId,
+          }),
+        }),
+      );
+    },
+  );
+
+  it.each([
+    {
       name: "inlines delivery for run-mode spawns from non-subagent requester sessions",
       ctx: createRequesterContext(),
       expectedAgentCall: {

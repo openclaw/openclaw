@@ -369,7 +369,7 @@ function resolveConversationIdForThreadBinding(params: {
   const channel = params.channel?.trim().toLowerCase();
   const target = params.to?.trim() || "";
   if (channel === "line") {
-    const prefixed = target.match(/^line:(?:user|group|room):([UCR][a-f0-9]{32})$/i)?.[1];
+    const prefixed = target.match(/^line:(?:(?:user|group|room):)?([UCR][a-f0-9]{32})$/i)?.[1];
     if (prefixed) {
       return prefixed;
     }
@@ -638,7 +638,9 @@ async function bindPreparedAcpThread(params: {
   });
   if (!binding.conversation.conversationId) {
     throw new Error(
-      `Failed to create and bind a ${params.preparedBinding.channel} thread for this ACP session.`,
+      params.preparedBinding.placement === "child"
+        ? `Failed to create and bind a ${params.preparedBinding.channel} thread for this ACP session.`
+        : `Failed to bind the current ${params.preparedBinding.channel} conversation for this ACP session.`,
     );
   }
 
@@ -669,7 +671,8 @@ function resolveAcpSpawnBootstrapDeliveryPlan(params: {
   requester: AcpSpawnRequesterState;
   binding: SessionBindingRecord | null;
 }): AcpSpawnBootstrapDeliveryPlan {
-  // For thread-bound ACP spawns, force bootstrap delivery to the new child thread.
+  // Child-thread ACP spawns deliver bootstrap output to the new thread; current-conversation
+  // binds deliver back to the originating target.
   const boundThreadIdRaw = params.binding?.conversation.conversationId;
   const boundThreadId = boundThreadIdRaw ? String(boundThreadIdRaw).trim() || undefined : undefined;
   const fallbackThreadIdRaw = params.requester.origin?.threadId;
