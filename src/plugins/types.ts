@@ -2151,6 +2151,8 @@ export type PluginHookBeforeToolCallResult = {
    */
   blockMode?: "hard" | "soft";
   blockReason?: string;
+  /** Internal provenance used by the hook runner — plugins should not set this. */
+  blockOwnerPluginId?: string;
   requireApproval?: {
     title: string;
     description: string;

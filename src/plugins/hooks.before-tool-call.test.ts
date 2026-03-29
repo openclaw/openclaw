@@ -236,6 +236,34 @@ describe("before_tool_call hook merger — requireApproval", () => {
         params: { source: "approver", safe: true },
       },
     },
+    {
+      name: "does not let a lower-priority approver convert another plugin's soft block into approval",
+      hooks: [
+        {
+          pluginId: "soft-blocker",
+          result: {
+            block: true,
+            blockMode: "soft",
+            blockReason: "needs explicit clear",
+          },
+          priority: 100,
+        },
+        {
+          pluginId: "approver",
+          result: {
+            requireApproval: {
+              title: "Needs approval",
+              description: "Approval needed",
+            },
+          },
+          priority: 50,
+        },
+      ],
+      expected: {
+        block: true,
+        blockReason: "needs explicit clear",
+      },
+    },
   ] as const)("$name", async ({ hooks, expected }) => {
     const result = await runBeforeToolCallWithHooks(registry, hooks);
     expectRequireApprovalResult(result, expected);

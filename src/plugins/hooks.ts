@@ -713,20 +713,28 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
           let block = acc?.block;
           let blockMode = acc?.blockMode;
           let blockReason = acc?.blockReason;
+          let blockOwnerPluginId = acc?.blockOwnerPluginId;
 
           if (next.block === true) {
             block = true;
             blockMode = normalizeBlockMode(next.blockMode);
             blockReason = lastDefined(blockReason, next.blockReason);
+            blockOwnerPluginId = reg.pluginId;
           } else if (next.block === false) {
             if (block === true && normalizeBlockMode(blockMode) === "soft") {
               block = undefined;
               blockMode = undefined;
               blockReason = undefined;
+              blockOwnerPluginId = undefined;
             }
           } else {
             blockReason = lastDefined(blockReason, next.blockReason);
           }
+          const softBlockOwnedByAnotherPlugin =
+            block === true &&
+            normalizeBlockMode(blockMode) === "soft" &&
+            Boolean(blockOwnerPluginId) &&
+            blockOwnerPluginId !== reg.pluginId;
 
           return {
             params: freezeParamsForDifferentPlugin
@@ -735,14 +743,21 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
             block,
             blockMode,
             blockReason,
+            blockOwnerPluginId,
             requireApproval:
               acc?.requireApproval ??
-              (next.requireApproval
-                ? { ...next.requireApproval, pluginId: reg.pluginId }
-                : undefined),
+              (softBlockOwnedByAnotherPlugin
+                ? undefined
+                : next.requireApproval
+                  ? {
+                      ...next.requireApproval,
+                      pluginId: reg.pluginId,
+                    }
+                  : undefined),
           };
         },
-        shouldStop: (result) => result.block === true && normalizeBlockMode(result.blockMode) === "hard",
+        shouldStop: (result) =>
+          result.block === true && normalizeBlockMode(result.blockMode) === "hard",
         terminalLabel: "block=true(hard)",
       },
     );
