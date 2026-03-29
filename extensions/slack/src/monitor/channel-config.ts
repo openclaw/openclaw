@@ -4,7 +4,10 @@ import {
   resolveChannelEntryMatchWithFallback,
   type ChannelMatchSource,
 } from "openclaw/plugin-sdk/channel-targets";
-import type { SlackReactionNotificationMode } from "openclaw/plugin-sdk/config-runtime";
+import type {
+  ReplyToMode,
+  SlackReactionNotificationMode,
+} from "openclaw/plugin-sdk/config-runtime";
 import type { SlackMessageEvent } from "../types.js";
 import { allowListMatches, normalizeAllowListLower, normalizeSlackSlug } from "./allow-list.js";
 
@@ -15,6 +18,7 @@ export type SlackChannelConfigResolved = {
   users?: Array<string | number>;
   skills?: string[];
   systemPrompt?: string;
+  replyToMode?: ReplyToMode;
   matchKey?: string;
   matchSource?: ChannelMatchSource;
 };
@@ -27,6 +31,7 @@ export type SlackChannelConfigEntry = {
   users?: Array<string | number>;
   skills?: string[];
   systemPrompt?: string;
+  replyToMode?: ReplyToMode;
 };
 
 export type SlackChannelConfigEntries = Record<string, SlackChannelConfigEntry>;
@@ -145,6 +150,7 @@ export function resolveSlackChannelConfig(params: {
   const users = firstDefined(resolved.users, fallback?.users);
   const skills = firstDefined(resolved.skills, fallback?.skills);
   const systemPrompt = firstDefined(resolved.systemPrompt, fallback?.systemPrompt);
+  const replyToMode = firstDefined(resolved.replyToMode, fallback?.replyToMode);
   const result: SlackChannelConfigResolved = {
     allowed,
     requireMention,
@@ -152,6 +158,7 @@ export function resolveSlackChannelConfig(params: {
     users,
     skills,
     systemPrompt,
+    replyToMode,
   };
   return applyChannelMatchMeta(result, match);
 }
