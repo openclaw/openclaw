@@ -82,10 +82,10 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
   const resolveDirectMemberFlag = async (
     roomId: string,
     userId?: string | null,
-  ): Promise<boolean> => {
+  ): Promise<boolean | null> => {
     const normalizedUserId = userId?.trim();
     if (!normalizedUserId) {
-      return false;
+      return null;
     }
     const cacheKey = `${roomId}\n${normalizedUserId}`;
     const cached = directMemberFlagCache.get(cacheKey);
@@ -113,10 +113,19 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
       const { roomId, senderId } = params;
       const selfUserId = params.selfUserId ?? (await ensureSelfUserId());
       const joinedMembers = await resolveJoinedMembers(roomId);
+
+      // Check is_direct flag from local user's membership state only.
+      // Do NOT trust remote sender's is_direct (CWE-285: improper authorization).
+      // In Matrix, m.room.member.content.is_direct is set by each member themselves,
+      // so a malicious remote user could manipulate it to bypass DM/room policies.
+      const directViaSelf = await resolveDirectMemberFlag(roomId, selfUserId);
+      const isDirectFlag: boolean | null = directViaSelf;
+
       const strictDirectMembership = isStrictDirectMembership({
         selfUserId,
         remoteUserId: senderId,
         joinedMembers,
+        isDirectFlag,
       });
 
       try {

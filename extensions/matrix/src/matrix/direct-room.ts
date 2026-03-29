@@ -21,10 +21,28 @@ export function isStrictDirectMembership(params: {
   selfUserId?: string | null;
   remoteUserId?: string | null;
   joinedMembers?: readonly string[] | null;
+  isDirectFlag?: boolean | null;
 }): boolean {
   const selfUserId = trimMaybeString(params.selfUserId);
   const remoteUserId = trimMaybeString(params.remoteUserId);
   const joinedMembers = params.joinedMembers ?? [];
+
+  // Only trust is_direct from local user's membership state (selfUserId).
+  // Remote user's is_direct is NOT trusted (CWE-285: authorization bypass).
+
+  // When local user's is_direct=true, verify it's a true 2-person DM
+  if (params.isDirectFlag === true) {
+    return Boolean(
+      selfUserId &&
+      remoteUserId &&
+      joinedMembers.length === 2 &&
+      joinedMembers.includes(selfUserId) &&
+      joinedMembers.includes(remoteUserId),
+    );
+  }
+
+  // When is_direct=false or null, fall back to strict 2-member check
+  // This prevents attackers from forcing non-DM classification with is_direct=false
   return Boolean(
     selfUserId &&
     remoteUserId &&
@@ -49,16 +67,25 @@ export async function hasDirectMatrixMemberFlag(
   client: MatrixClient,
   roomId: string,
   userId?: string | null,
-): Promise<boolean> {
+): Promise<boolean | null> {
   const normalizedUserId = trimMaybeString(userId);
   if (!normalizedUserId) {
-    return false;
+    return null;
   }
   try {
     const state = await client.getRoomStateEvent(roomId, "m.room.member", normalizedUserId);
-    return state?.is_direct === true;
+    // Return true if is_direct is explicitly true, false if explicitly false, null if absent
+    if (state?.is_direct === true) {
+      return true;
+    }
+    if (state?.is_direct === false) {
+      return false;
+    }
+    // is_direct field is absent from the membership event
+    return null;
   } catch {
-    return false;
+    // API/network error - treat as unavailable
+    return null;
   }
 }
 
@@ -95,8 +122,9 @@ export async function inspectMatrixDirectRoomEvidence(params: {
     joinedMembers,
     strict,
     viaMemberState:
-      (await hasDirectMatrixMemberFlag(params.client, params.roomId, params.remoteUserId)) ||
-      (await hasDirectMatrixMemberFlag(params.client, params.roomId, selfUserId)),
+      (await hasDirectMatrixMemberFlag(params.client, params.roomId, params.remoteUserId)) ===
+        true ||
+      (await hasDirectMatrixMemberFlag(params.client, params.roomId, selfUserId)) === true,
   };
 }
 
