@@ -41,6 +41,12 @@ async function runPluginStopHooks(): Promise<void> {
  */
 function classifyGatewayError(err: unknown): "unreachable" | "server" {
   if (!(err instanceof Error)) return "unreachable";
+  // GatewayClientRequestError means the gateway was reachable and returned an error response.
+  // Check this FIRST — before any substring heuristics — because the server-side error message
+  // can contain arbitrary text (including "econnrefused", "connect failed", etc.) that would
+  // otherwise trip the connection-level checks below and incorrectly classify a reachable
+  // gateway error as "unreachable".
+  if (err.constructor?.name === "GatewayClientRequestError") return "server";
   const msg = err.message.toLowerCase();
   // Connection-level errors: ECONNREFUSED, WebSocket failures, timeout before connect, etc.
   if (
@@ -52,8 +58,6 @@ function classifyGatewayError(err: unknown): "unreachable" | "server" {
   ) {
     return "unreachable";
   }
-  // GatewayClientRequestError means the gateway was reachable and returned an error response
-  if (err.constructor?.name === "GatewayClientRequestError") return "server";
   // Remote-mode misconfiguration: gateway was configured but URL is missing — surface to user
   if (msg.includes("gateway remote mode misconfigured")) return "server";
   // Unsupported method: gateway is reachable but doesn't expose this RPC method
