@@ -1,9 +1,9 @@
-import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-models";
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   buildSyntheticModelDefinition,
   SYNTHETIC_BASE_URL,
   SYNTHETIC_MODEL_CATALOG,
-} from "./api.js";
+} from "./models.js";
 
 export function buildSyntheticProvider(): ModelProviderConfig {
   return {

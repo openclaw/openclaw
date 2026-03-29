@@ -4,9 +4,18 @@ import { sessionBindingContractChannelIds } from "./manifest.js";
 const discordSessionBindingAdapterChannels = ["discord"] as const;
 
 describe("channel contract registry", () => {
-  it("keeps core session binding coverage aligned with built-in adapters", () => {
+  function expectSessionBindingCoverage(expectedChannelIds: readonly string[]) {
     expect([...sessionBindingContractChannelIds]).toEqual(
-      expect.arrayContaining([...discordSessionBindingAdapterChannels, "telegram"]),
+      expect.arrayContaining([...expectedChannelIds]),
     );
+  }
+
+  it.each([
+    {
+      name: "keeps core session binding coverage aligned with built-in adapters",
+      expectedChannelIds: [...discordSessionBindingAdapterChannels, "telegram"],
+    },
+  ] as const)("$name", ({ expectedChannelIds }) => {
+    expectSessionBindingCoverage(expectedChannelIds);
   });
 });

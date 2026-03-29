@@ -1,26 +1,54 @@
 import fs from "node:fs";
 import path from "node:path";
 import ts from "typescript";
+import { bundledPluginFile } from "./bundled-plugin-paths.mjs";
+
+function pluginSource(dirName, artifactBasename = "api.js") {
+  return `@openclaw/${dirName}/${artifactBasename}`;
+}
+
+function runtimeApiSourcePath(dirName) {
+  return bundledPluginFile(dirName, "runtime-api.ts");
+}
 
 export const GENERATED_PLUGIN_SDK_FACADES = [
   {
+    subpath: "amazon-bedrock",
+    source: pluginSource("amazon-bedrock", "api.js"),
+    exports: [
+      "discoverBedrockModels",
+      "mergeImplicitBedrockProvider",
+      "resetBedrockDiscoveryCacheForTest",
+      "resolveBedrockConfigApiKey",
+      "resolveImplicitBedrockProvider",
+    ],
+  },
+  {
     subpath: "anthropic-vertex",
-    source: "../../extensions/anthropic-vertex/api.js",
+    source: pluginSource("anthropic-vertex", "api.js"),
     exports: [
       "ANTHROPIC_VERTEX_DEFAULT_MODEL_ID",
       "buildAnthropicVertexProvider",
+      "hasAnthropicVertexAvailableAuth",
+      "hasAnthropicVertexCredentials",
+      "mergeImplicitAnthropicVertexProvider",
+      "resolveAnthropicVertexClientRegion",
+      "resolveAnthropicVertexConfigApiKey",
+      "resolveImplicitAnthropicVertexProvider",
+      "resolveAnthropicVertexProjectId",
       "resolveAnthropicVertexRegion",
+      "resolveAnthropicVertexRegionFromBaseUrl",
     ],
   },
   {
     subpath: "discord-account",
-    source: "../../extensions/discord/api.js",
+    source: pluginSource("discord", "api.js"),
     exports: ["resolveDiscordAccount", "ResolvedDiscordAccount"],
     typeExports: ["ResolvedDiscordAccount"],
   },
   {
     subpath: "discord-runtime-surface",
-    source: "../../extensions/discord/runtime-api.js",
+    source: pluginSource("discord", "runtime-api.js"),
     exports: [
       "addRoleDiscord",
       "auditDiscordChannelPermissions",
@@ -83,12 +111,12 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   },
   {
     subpath: "discord-session-key",
-    source: "../../extensions/discord/session-key-api.js",
+    source: pluginSource("discord", "session-key-api.js"),
     exports: ["normalizeExplicitDiscordSessionKey"],
   },
   {
     subpath: "discord-surface",
-    source: "../../extensions/discord/api.js",
+    source: pluginSource("discord", "api.js"),
     exports: [
       "buildDiscordComponentMessage",
       "collectDiscordStatusIssues",
@@ -99,6 +127,8 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
       "DiscordSendResult",
       "handleDiscordMessageAction",
       "inspectDiscordAccount",
+      "isDiscordExecApprovalApprover",
+      "isDiscordExecApprovalClientEnabled",
       "InspectedDiscordAccount",
       "listDiscordAccountIds",
       "listDiscordDirectoryGroupsFromConfig",
@@ -111,23 +141,25 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
       "resolveDefaultDiscordAccountId",
       "resolveDiscordAccount",
       "resolveDiscordChannelId",
+      "resolveDiscordRuntimeGroupPolicy",
       "resolveDiscordGroupRequireMention",
       "resolveDiscordGroupToolPolicy",
     ],
     typeExports: [
       "DiscordComponentMessageSpec",
+      "DiscordProbe",
       "DiscordSendComponents",
       "DiscordSendEmbeds",
       "DiscordSendResult",
+      "DiscordTokenResolution",
       "InspectedDiscordAccount",
       "ResolvedDiscordAccount",
     ],
   },
   {
     subpath: "discord-thread-bindings",
-    source: "../../extensions/discord/runtime-api.js",
+    source: pluginSource("discord", "runtime-api.js"),
     exports: [
-      "__testing",
       "autoBindSpawnedDiscordSubagent",
       "createThreadBindingManager",
       "getThreadBindingManager",
@@ -147,17 +179,17 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   },
   {
     subpath: "discord-timeouts",
-    source: "../../extensions/discord/api.js",
+    source: pluginSource("discord", "timeouts.js"),
     exports: ["DISCORD_DEFAULT_INBOUND_WORKER_TIMEOUT_MS", "DISCORD_DEFAULT_LISTENER_TIMEOUT_MS"],
   },
   {
     subpath: "anthropic-cli",
-    source: "../../extensions/anthropic/api.js",
+    source: pluginSource("anthropic", "api.js"),
     exports: ["CLAUDE_CLI_BACKEND_ID", "isClaudeCliProvider"],
   },
   {
     subpath: "bluebubbles-policy",
-    source: "../../extensions/bluebubbles/api.js",
+    source: pluginSource("bluebubbles", "api.js"),
     exports: [
       "isAllowedBlueBubblesSender",
       "resolveBlueBubblesGroupRequireMention",
@@ -166,7 +198,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   },
   {
     subpath: "browser",
-    source: "../../extensions/browser/runtime-api.js",
+    source: pluginSource("browser", "runtime-api.js"),
     exports: [
       "browserHandlers",
       "createBrowserPluginService",
@@ -177,12 +209,117 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   },
   {
     subpath: "browser-runtime",
-    source: "../../extensions/browser/runtime-api.js",
-    exportAll: true,
+    source: pluginSource("browser", "runtime-api.js"),
+    exports: [
+      "BrowserBridge",
+      "BrowserCreateProfileResult",
+      "BrowserDeleteProfileResult",
+      "BrowserExecutable",
+      "BrowserFormField",
+      "BrowserResetProfileResult",
+      "BrowserRouteRegistrar",
+      "BrowserServerState",
+      "BrowserStatus",
+      "BrowserTab",
+      "BrowserTransport",
+      "DEFAULT_AI_SNAPSHOT_MAX_CHARS",
+      "DEFAULT_BROWSER_EVALUATE_ENABLED",
+      "DEFAULT_OPENCLAW_BROWSER_COLOR",
+      "DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME",
+      "DEFAULT_UPLOAD_DIR",
+      "OpenClawPluginApi",
+      "OpenClawPluginToolContext",
+      "OpenClawPluginToolFactory",
+      "ProfileStatus",
+      "ResolvedBrowserConfig",
+      "ResolvedBrowserProfile",
+      "SnapshotResult",
+      "applyBrowserProxyPaths",
+      "browserAct",
+      "browserArmDialog",
+      "browserArmFileChooser",
+      "browserCloseTab",
+      "browserConsoleMessages",
+      "browserCreateProfile",
+      "browserDeleteProfile",
+      "browserFocusTab",
+      "browserHandlers",
+      "browserNavigate",
+      "browserOpenTab",
+      "browserPdfSave",
+      "browserProfiles",
+      "browserResetProfile",
+      "browserScreenshotAction",
+      "browserSnapshot",
+      "browserStart",
+      "browserStatus",
+      "browserStop",
+      "browserTabAction",
+      "browserTabs",
+      "closeTrackedBrowserTabsForSessions",
+      "createBrowserControlContext",
+      "createBrowserPluginService",
+      "createBrowserRouteContext",
+      "createBrowserRouteDispatcher",
+      "createBrowserRuntimeState",
+      "createBrowserTool",
+      "definePluginEntry",
+      "ensureBrowserControlAuth",
+      "getBrowserControlState",
+      "getBrowserProfileCapabilities",
+      "handleBrowserGatewayRequest",
+      "installBrowserAuthMiddleware",
+      "installBrowserCommonMiddleware",
+      "isPersistentBrowserProfileMutation",
+      "movePathToTrash",
+      "normalizeBrowserFormField",
+      "normalizeBrowserFormFieldValue",
+      "normalizeBrowserRequestPath",
+      "parseBrowserMajorVersion",
+      "persistBrowserProxyFiles",
+      "readBrowserVersion",
+      "redactCdpUrl",
+      "registerBrowserCli",
+      "registerBrowserRoutes",
+      "resolveBrowserConfig",
+      "resolveBrowserControlAuth",
+      "resolveExistingPathsWithinRoot",
+      "resolveGoogleChromeExecutableForPlatform",
+      "resolveProfile",
+      "resolveRequestedBrowserProfile",
+      "runBrowserProxyCommand",
+      "startBrowserBridgeServer",
+      "startBrowserControlServiceFromConfig",
+      "stopBrowserBridgeServer",
+      "stopBrowserControlService",
+      "stopBrowserRuntime",
+      "trackSessionBrowserTab",
+      "untrackSessionBrowserTab",
+    ],
+    typeExports: [
+      "BrowserBridge",
+      "BrowserCreateProfileResult",
+      "BrowserDeleteProfileResult",
+      "BrowserExecutable",
+      "BrowserFormField",
+      "BrowserResetProfileResult",
+      "BrowserRouteRegistrar",
+      "BrowserServerState",
+      "BrowserStatus",
+      "BrowserTab",
+      "BrowserTransport",
+      "OpenClawPluginApi",
+      "OpenClawPluginToolContext",
+      "OpenClawPluginToolFactory",
+      "ProfileStatus",
+      "ResolvedBrowserConfig",
+      "ResolvedBrowserProfile",
+      "SnapshotResult",
+    ],
   },
   {
     subpath: "cloudflare-ai-gateway",
-    source: "../../extensions/cloudflare-ai-gateway/api.js",
+    source: pluginSource("cloudflare-ai-gateway", "api.js"),
     exports: [
       "applyCloudflareAiGatewayConfig",
       "applyCloudflareAiGatewayProviderConfig",
@@ -196,7 +333,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   },
   {
     subpath: "byteplus",
-    source: "../../extensions/byteplus/api.js",
+    source: pluginSource("byteplus", "api.js"),
     exports: [
       "buildBytePlusCodingProvider",
       "buildBytePlusModelDefinition",
@@ -209,7 +346,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   },
   {
     subpath: "chutes",
-    source: "../../extensions/chutes/api.js",
+    source: pluginSource("chutes", "api.js"),
     exports: [
       "applyChutesApiKeyConfig",
       "applyChutesConfig",
@@ -225,7 +362,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   },
   {
     subpath: "deepseek",
-    source: "../../extensions/deepseek/api.js",
+    source: pluginSource("deepseek", "api.js"),
     exports: [
       "buildDeepSeekModelDefinition",
       "buildDeepSeekProvider",
@@ -235,10 +372,12 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   },
   {
     subpath: "feishu-conversation",
-    source: "../../extensions/feishu/api.js",
+    source: pluginSource("feishu", "api.js"),
     exports: [
       "buildFeishuConversationId",
       "createFeishuThreadBindingManager",
+      "feishuSessionBindingAdapterChannels",
+      "feishuThreadBindingTesting",
       "parseFeishuDirectConversationId",
       "parseFeishuConversationId",
       "parseFeishuTargetId",
@@ -246,31 +385,37 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   },
   {
     subpath: "google",
-    source: "../../extensions/google/api.js",
+    source: pluginSource("google", "api.js"),
     exports: [
       "applyGoogleGeminiModelDefault",
-      "createGoogleThinkingPayloadWrapper",
       "DEFAULT_GOOGLE_API_BASE_URL",
       "GOOGLE_GEMINI_DEFAULT_MODEL",
+      "isGoogleGenerativeAiApi",
+      "normalizeAntigravityModelId",
       "normalizeGoogleApiBaseUrl",
+      "normalizeGoogleGenerativeAiBaseUrl",
       "normalizeGoogleModelId",
+      "normalizeGoogleProviderConfig",
       "parseGeminiAuth",
-      "sanitizeGoogleThinkingPayload",
+      "resolveGoogleGenerativeAiApiOrigin",
+      "resolveGoogleGenerativeAiTransport",
+      "shouldNormalizeGoogleProviderConfig",
+      "shouldNormalizeGoogleGenerativeAiProviderConfig",
     ],
   },
   {
     subpath: "feishu-setup",
-    source: "../../extensions/feishu/api.js",
+    source: pluginSource("feishu", "api.js"),
     exports: ["feishuSetupAdapter", "feishuSetupWizard"],
   },
   {
     subpath: "github-copilot-login",
-    source: "../../extensions/github-copilot/api.js",
+    source: pluginSource("github-copilot", "api.js"),
     exports: ["githubCopilotLoginCommand"],
   },
   {
     subpath: "huggingface",
-    source: "../../extensions/huggingface/api.js",
+    source: pluginSource("huggingface", "api.js"),
     exports: [
       "buildHuggingfaceModelDefinition",
       "buildHuggingfaceProvider",
@@ -284,7 +429,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   },
   {
     subpath: "imessage-targets",
-    source: "../../extensions/imessage/api.js",
+    source: pluginSource("imessage", "api.js"),
     exports: [
       "normalizeIMessageHandle",
       "parseChatAllowTargetPrefixes",
@@ -297,17 +442,23 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   },
   {
     subpath: "image-generation-runtime",
-    source: "../../extensions/image-generation-core/runtime-api.js",
-    exportAll: true,
+    source: pluginSource("image-generation-core", "runtime-api.js"),
+    exports: [
+      "generateImage",
+      "listRuntimeImageGenerationProviders",
+      "GenerateImageParams",
+      "GenerateImageRuntimeResult",
+    ],
+    typeExports: ["GenerateImageParams", "GenerateImageRuntimeResult"],
   },
   {
     subpath: "kimi-coding",
-    source: "../../extensions/kimi-coding/api.js",
+    source: pluginSource("kimi-coding", "api.js"),
     exports: ["buildKimiCodingProvider"],
   },
   {
     subpath: "kilocode",
-    source: "../../extensions/kilocode/api.js",
+    source: pluginSource("kilocode", "api.js"),
     exports: [
       "buildKilocodeProvider",
       "buildKilocodeProviderWithDiscovery",
@@ -326,21 +477,23 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   },
   {
     subpath: "imessage-policy",
-    source: "../../extensions/imessage/api.js",
+    source: pluginSource("imessage", "api.js"),
     exports: [
       "normalizeIMessageHandle",
+      "resolveIMessageRuntimeGroupPolicy",
       "resolveIMessageGroupRequireMention",
       "resolveIMessageGroupToolPolicy",
     ],
   },
   {
     subpath: "imessage-runtime",
-    source: "../../extensions/imessage/runtime-api.js",
+    source: pluginSource("imessage", "runtime-api.js"),
     exports: ["monitorIMessageProvider", "probeIMessage", "sendMessageIMessage"],
+    typeExports: ["IMessageProbe"],
   },
   {
     subpath: "irc-surface",
-    source: "../../extensions/irc/api.js",
+    source: pluginSource("irc", "api.js"),
     exports: [
       "ircSetupAdapter",
       "ircSetupWizard",
@@ -351,22 +504,38 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   },
   {
     subpath: "media-understanding-runtime",
-    source: "../../extensions/media-understanding-core/runtime-api.js",
-    exportAll: true,
+    source: pluginSource("media-understanding-core", "runtime-api.js"),
+    exports: [
+      "describeImageFile",
+      "describeImageFileWithModel",
+      "describeVideoFile",
+      "runMediaUnderstandingFile",
+      "transcribeAudioFile",
+      "RunMediaUnderstandingFileParams",
+      "RunMediaUnderstandingFileResult",
+    ],
+    typeExports: ["RunMediaUnderstandingFileParams", "RunMediaUnderstandingFileResult"],
   },
   {
     subpath: "memory-core-engine-runtime",
-    source: "../../extensions/memory-core/runtime-api.js",
-    exportAll: true,
+    source: pluginSource("memory-core", "runtime-api.js"),
+    exports: [
+      "BuiltinMemoryEmbeddingProviderDoctorMetadata",
+      "getBuiltinMemoryEmbeddingProviderDoctorMetadata",
+      "getMemorySearchManager",
+      "listBuiltinAutoSelectMemoryEmbeddingProviderDoctorMetadata",
+      "MemoryIndexManager",
+    ],
+    typeExports: ["BuiltinMemoryEmbeddingProviderDoctorMetadata"],
   },
   {
     subpath: "mattermost-policy",
-    source: "../../extensions/mattermost/api.js",
+    source: pluginSource("mattermost", "api.js"),
     exports: ["isMattermostSenderAllowed"],
   },
   {
     subpath: "litellm",
-    source: "../../extensions/litellm/api.js",
+    source: pluginSource("litellm", "api.js"),
     exports: [
       "applyLitellmConfig",
       "applyLitellmProviderConfig",
@@ -378,8 +547,8 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   },
   {
     subpath: "line-runtime",
-    source: "../../extensions/line/runtime-api.js",
-    runtimeApiPreExportsPath: "extensions/line/runtime-api.ts",
+    source: pluginSource("line", "runtime-api.js"),
+    runtimeApiPreExportsPath: runtimeApiSourcePath("line"),
     typeExports: [
       "Action",
       "CardAction",
@@ -406,7 +575,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   },
   {
     subpath: "line-surface",
-    source: "../../extensions/line/runtime-api.js",
+    source: pluginSource("line", "runtime-api.js"),
     exports: [
       "CardAction",
       "createActionCard",
@@ -443,7 +612,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   },
   {
     subpath: "matrix-helper",
-    source: "../../extensions/matrix/api.js",
+    source: pluginSource("matrix", "api.js"),
     exports: [
       "findMatrixAccountEntry",
       "getMatrixScopedEnvVarNames",
@@ -459,17 +628,21 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   },
   {
     subpath: "matrix-runtime-surface",
-    source: "../../extensions/matrix/runtime-api.js",
+    source: pluginSource("matrix", "runtime-api.js"),
     exports: ["resolveMatrixAccountStringValues", "setMatrixRuntime"],
   },
   {
     subpath: "matrix-surface",
-    source: "../../extensions/matrix/api.js",
-    exports: ["createMatrixThreadBindingManager", "resetMatrixThreadBindingsForTests"],
+    source: pluginSource("matrix", "api.js"),
+    exports: [
+      "createMatrixThreadBindingManager",
+      "matrixSessionBindingAdapterChannels",
+      "resetMatrixThreadBindingsForTests",
+    ],
   },
   {
     subpath: "matrix-thread-bindings",
-    source: "../../extensions/matrix/api.js",
+    source: pluginSource("matrix", "api.js"),
     exports: [
       "setMatrixThreadBindingIdleTimeoutBySessionKey",
       "setMatrixThreadBindingMaxAgeBySessionKey",
@@ -477,16 +650,27 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   },
   {
     subpath: "openrouter",
-    source: "../../extensions/openrouter/api.js",
-    exports: ["buildOpenrouterProvider", "OPENROUTER_DEFAULT_MODEL_REF"],
+    source: pluginSource("openrouter", "api.js"),
+    exports: [
+      "applyOpenrouterConfig",
+      "applyOpenrouterProviderConfig",
+      "buildOpenrouterProvider",
+      "OPENROUTER_DEFAULT_MODEL_REF",
+    ],
   },
   {
     subpath: "minimax",
-    source: "../../extensions/minimax/api.js",
+    source: pluginSource("minimax", "api.js"),
     exports: [
+      "applyMinimaxApiConfig",
+      "applyMinimaxApiConfigCn",
+      "applyMinimaxApiProviderConfig",
+      "applyMinimaxApiProviderConfigCn",
       "buildMinimaxPortalProvider",
       "buildMinimaxProvider",
       "isMiniMaxModernModelId",
+      "MINIMAX_API_BASE_URL",
+      "MINIMAX_CN_API_BASE_URL",
       "MINIMAX_DEFAULT_MODEL_ID",
       "MINIMAX_DEFAULT_MODEL_REF",
       "MINIMAX_TEXT_MODEL_CATALOG",
@@ -496,8 +680,9 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   },
   {
     subpath: "modelstudio",
-    source: "../../extensions/modelstudio/api.js",
+    source: pluginSource("modelstudio", "api.js"),
     exports: [
+      "applyModelStudioNativeStreamingUsageCompat",
       "buildModelStudioDefaultModelDefinition",
       "buildModelStudioModelDefinition",
       "MODELSTUDIO_BASE_URL",
@@ -509,12 +694,13 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
       "MODELSTUDIO_STANDARD_CN_BASE_URL",
       "MODELSTUDIO_STANDARD_GLOBAL_BASE_URL",
       "MODELSTUDIO_MODEL_CATALOG",
+      "isNativeModelStudioBaseUrl",
       "buildModelStudioProvider",
     ],
   },
   {
     subpath: "modelstudio-definitions",
-    source: "../../extensions/modelstudio/api.js",
+    source: pluginSource("modelstudio", "api.js"),
     exports: [
       "buildModelStudioDefaultModelDefinition",
       "buildModelStudioModelDefinition",
@@ -529,22 +715,61 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   },
   {
     subpath: "moonshot",
-    source: "../../extensions/moonshot/api.js",
-    exports: ["buildMoonshotProvider"],
+    source: pluginSource("moonshot", "api.js"),
+    exports: [
+      "applyMoonshotNativeStreamingUsageCompat",
+      "buildMoonshotProvider",
+      "isNativeMoonshotBaseUrl",
+      "MOONSHOT_BASE_URL",
+      "MOONSHOT_CN_BASE_URL",
+      "MOONSHOT_DEFAULT_MODEL_ID",
+      "MOONSHOT_DEFAULT_MODEL_REF",
+    ],
+  },
+  {
+    subpath: "mistral",
+    source: pluginSource("mistral", "api.js"),
+    exports: [
+      "applyMistralConfig",
+      "applyMistralProviderConfig",
+      "buildMistralModelDefinition",
+      "buildMistralProvider",
+      "MISTRAL_BASE_URL",
+      "MISTRAL_DEFAULT_MODEL_ID",
+      "MISTRAL_DEFAULT_MODEL_REF",
+    ],
   },
   {
     subpath: "nvidia",
-    source: "../../extensions/nvidia/api.js",
+    source: pluginSource("nvidia", "api.js"),
     exports: ["buildNvidiaProvider"],
   },
   {
     subpath: "ollama",
-    source: "../../extensions/ollama/runtime-api.js",
-    exportAll: true,
+    source: pluginSource("ollama", "runtime-api.js"),
+    exports: [
+      "buildAssistantMessage",
+      "buildOllamaChatRequest",
+      "convertToOllamaMessages",
+      "createOllamaEmbeddingProvider",
+      "createConfiguredOllamaCompatNumCtxWrapper",
+      "createConfiguredOllamaCompatStreamWrapper",
+      "createConfiguredOllamaStreamFn",
+      "createOllamaStreamFn",
+      "DEFAULT_OLLAMA_EMBEDDING_MODEL",
+      "isOllamaCompatProvider",
+      "OLLAMA_NATIVE_BASE_URL",
+      "parseNdjsonStream",
+      "resolveOllamaBaseUrlForRun",
+      "resolveOllamaCompatNumCtxEnabled",
+      "shouldInjectOllamaCompatNumCtx",
+      "wrapOllamaCompatNumCtx",
+    ],
+    typeExports: ["OllamaEmbeddingClient", "OllamaEmbeddingProvider"],
   },
   {
     subpath: "ollama-surface",
-    source: "../../extensions/ollama/api.js",
+    source: pluginSource("ollama", "api.js"),
     exports: [
       "buildOllamaModelDefinition",
       "buildOllamaProvider",
@@ -568,7 +793,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   },
   {
     subpath: "openai",
-    source: "../../extensions/openai/api.js",
+    source: pluginSource("openai", "api.js"),
     exports: [
       "applyOpenAIConfig",
       "applyOpenAIProviderConfig",
@@ -585,7 +810,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   },
   {
     subpath: "opencode",
-    source: "../../extensions/opencode/api.js",
+    source: pluginSource("opencode", "api.js"),
     exports: [
       "applyOpencodeZenConfig",
       "applyOpencodeZenModelDefault",
@@ -596,7 +821,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   },
   {
     subpath: "opencode-go",
-    source: "../../extensions/opencode-go/api.js",
+    source: pluginSource("opencode-go", "api.js"),
     exports: [
       "applyOpencodeGoConfig",
       "applyOpencodeGoModelDefault",
@@ -606,18 +831,18 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   },
   {
     subpath: "qianfan",
-    source: "../../extensions/qianfan/api.js",
+    source: pluginSource("qianfan", "api.js"),
     exports: ["QIANFAN_BASE_URL", "QIANFAN_DEFAULT_MODEL_ID", "buildQianfanProvider"],
   },
   {
     subpath: "signal-account",
-    source: "../../extensions/signal/api.js",
+    source: pluginSource("signal", "api.js"),
     exports: ["resolveSignalAccount", "ResolvedSignalAccount"],
     typeExports: ["ResolvedSignalAccount"],
   },
   {
     subpath: "signal-surface",
-    source: "../../extensions/signal/api.js",
+    source: pluginSource("signal", "api.js"),
     exports: [
       "isSignalSenderAllowed",
       "listEnabledSignalAccounts",
@@ -633,22 +858,64 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
       "signalMessageActions",
       "SignalSender",
     ],
-    typeExports: ["ResolvedSignalAccount", "SignalSender"],
+    typeExports: ["ResolvedSignalAccount", "SignalProbe", "SignalSender"],
   },
   {
     subpath: "provider-reasoning",
-    source: "../../extensions/ollama/api.js",
+    source: pluginSource("ollama", "api.js"),
     exports: ["isReasoningModelHeuristic"],
   },
   {
     subpath: "speech-runtime",
-    source: "../../extensions/speech-core/runtime-api.js",
-    exportAll: true,
+    source: pluginSource("speech-core", "runtime-api.js"),
+    exports: [
+      "_test",
+      "buildTtsSystemPromptHint",
+      "getLastTtsAttempt",
+      "getResolvedSpeechProviderConfig",
+      "getTtsMaxLength",
+      "getTtsProvider",
+      "isSummarizationEnabled",
+      "isTtsEnabled",
+      "isTtsProviderConfigured",
+      "listSpeechVoices",
+      "maybeApplyTtsToPayload",
+      "ResolvedTtsConfig",
+      "ResolvedTtsModelOverrides",
+      "resolveTtsAutoMode",
+      "resolveTtsConfig",
+      "resolveTtsPrefsPath",
+      "resolveTtsProviderOrder",
+      "setLastTtsAttempt",
+      "setSummarizationEnabled",
+      "setTtsAutoMode",
+      "setTtsEnabled",
+      "setTtsMaxLength",
+      "setTtsProvider",
+      "synthesizeSpeech",
+      "textToSpeech",
+      "textToSpeechTelephony",
+      "TtsDirectiveOverrides",
+      "TtsDirectiveParseResult",
+      "TtsResult",
+      "TtsSynthesisResult",
+      "TtsTelephonyResult",
+    ],
+    typeExports: [
+      "ResolvedTtsConfig",
+      "ResolvedTtsModelOverrides",
+      "TtsDirectiveOverrides",
+      "TtsDirectiveParseResult",
+      "TtsResult",
+      "TtsSynthesisResult",
+      "TtsTelephonyResult",
+    ],
   },
   {
     subpath: "sglang",
-    source: "../../extensions/sglang/api.js",
+    source: pluginSource("sglang", "api.js"),
     exports: [
+      "buildSglangProvider",
       "SGLANG_DEFAULT_API_KEY_ENV_VAR",
       "SGLANG_DEFAULT_BASE_URL",
       "SGLANG_MODEL_PLACEHOLDER",
@@ -657,8 +924,10 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   },
   {
     subpath: "synthetic",
-    source: "../../extensions/synthetic/api.js",
+    source: pluginSource("synthetic", "api.js"),
     exports: [
+      "applySyntheticConfig",
+      "applySyntheticProviderConfig",
       "buildSyntheticModelDefinition",
       "buildSyntheticProvider",
       "SYNTHETIC_BASE_URL",
@@ -668,18 +937,18 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   },
   {
     subpath: "slack-target-parser",
-    source: "../../extensions/slack/api.js",
+    source: pluginSource("slack", "api.js"),
     exports: ["parseSlackTarget", "resolveSlackChannelId"],
   },
   {
     subpath: "slack-account",
-    source: "../../extensions/slack/api.js",
+    source: pluginSource("slack", "api.js"),
     exports: ["resolveSlackAccount", "ResolvedSlackAccount"],
     typeExports: ["ResolvedSlackAccount"],
   },
   {
     subpath: "slack-runtime-surface",
-    source: "../../extensions/slack/runtime-api.js",
+    source: pluginSource("slack", "runtime-api.js"),
     exports: [
       "handleSlackAction",
       "listSlackDirectoryGroupsLive",
@@ -695,7 +964,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   },
   {
     subpath: "slack-surface",
-    source: "../../extensions/slack/api.js",
+    source: pluginSource("slack", "api.js"),
     exports: [
       "buildSlackThreadingToolContext",
       "createSlackWebClient",
@@ -722,6 +991,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
       "resolveDefaultSlackAccountId",
       "resolveSlackAutoThreadId",
       "resolveSlackGroupRequireMention",
+      "resolveSlackRuntimeGroupPolicy",
       "resolveSlackGroupToolPolicy",
       "resolveSlackReplyToMode",
       "ResolvedSlackAccount",
@@ -733,11 +1003,11 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
       "removeSlackReaction",
       "unpinSlackMessage",
     ],
-    typeExports: ["InspectedSlackAccount", "ResolvedSlackAccount"],
+    typeExports: ["InspectedSlackAccount", "ResolvedSlackAccount", "SlackProbe"],
   },
   {
     subpath: "together",
-    source: "../../extensions/together/api.js",
+    source: pluginSource("together", "api.js"),
     exports: [
       "applyTogetherConfig",
       "buildTogetherModelDefinition",
@@ -749,7 +1019,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   },
   {
     subpath: "venice",
-    source: "../../extensions/venice/api.js",
+    source: pluginSource("venice", "api.js"),
     exports: [
       "buildVeniceModelDefinition",
       "buildVeniceProvider",
@@ -761,18 +1031,18 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   },
   {
     subpath: "telegram-account",
-    source: "../../extensions/telegram/api.js",
+    source: pluginSource("telegram", "api.js"),
     exports: ["resolveTelegramAccount", "ResolvedTelegramAccount"],
     typeExports: ["ResolvedTelegramAccount"],
   },
   {
     subpath: "telegram-allow-from",
-    source: "../../extensions/telegram/api.js",
+    source: pluginSource("telegram", "api.js"),
     exports: ["isNumericTelegramUserId", "normalizeTelegramAllowFromEntry"],
   },
   {
     subpath: "telegram-runtime-surface",
-    source: "../../extensions/telegram/runtime-api.js",
+    source: pluginSource("telegram", "runtime-api.js"),
     exports: [
       "auditTelegramGroupMembership",
       "buildTelegramExecApprovalPendingPayload",
@@ -788,6 +1058,8 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
       "probeTelegram",
       "reactMessageTelegram",
       "renameForumTopicTelegram",
+      "resetTelegramThreadBindingsForTests",
+      "resolveTelegramRuntimeGroupPolicy",
       "resolveTelegramToken",
       "sendMessageTelegram",
       "sendPollTelegram",
@@ -805,7 +1077,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   },
   {
     subpath: "telegram-surface",
-    source: "../../extensions/telegram/api.js",
+    source: pluginSource("telegram", "api.js"),
     exports: [
       "buildBrowseProvidersButton",
       "buildModelsKeyboard",
@@ -819,7 +1091,9 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
       "inspectTelegramAccount",
       "InspectedTelegramAccount",
       "isTelegramExecApprovalApprover",
+      "isTelegramExecApprovalAuthorizedSender",
       "isTelegramExecApprovalClientEnabled",
+      "isTelegramExecApprovalTargetRecipient",
       "listTelegramAccountIds",
       "listTelegramDirectoryGroupsFromConfig",
       "listTelegramDirectoryPeersFromConfig",
@@ -851,11 +1125,13 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
       "StickerMetadata",
       "TelegramButtonStyle",
       "TelegramInlineButtons",
+      "TelegramProbe",
+      "TelegramTokenResolution",
     ],
   },
   {
     subpath: "vercel-ai-gateway",
-    source: "../../extensions/vercel-ai-gateway/api.js",
+    source: pluginSource("vercel-ai-gateway", "api.js"),
     exports: [
       "buildVercelAiGatewayProvider",
       "discoverVercelAiGatewayModels",
@@ -871,7 +1147,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   },
   {
     subpath: "volcengine",
-    source: "../../extensions/volcengine/api.js",
+    source: pluginSource("volcengine", "api.js"),
     exports: [
       "buildDoubaoCodingProvider",
       "buildDoubaoModelDefinition",
@@ -884,8 +1160,9 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   },
   {
     subpath: "vllm",
-    source: "../../extensions/vllm/api.js",
+    source: pluginSource("vllm", "api.js"),
     exports: [
+      "buildVllmProvider",
       "VLLM_DEFAULT_API_KEY_ENV_VAR",
       "VLLM_DEFAULT_BASE_URL",
       "VLLM_MODEL_PLACEHOLDER",
@@ -894,8 +1171,10 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   },
   {
     subpath: "xai",
-    source: "../../extensions/xai/api.js",
+    source: pluginSource("xai", "api.js"),
     exports: [
+      "applyXaiConfig",
+      "applyXaiProviderConfig",
       "applyXaiModelCompat",
       "buildXaiCatalogModels",
       "buildXaiModelDefinition",
@@ -915,9 +1194,10 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   },
   {
     subpath: "xiaomi",
-    source: "../../extensions/xiaomi/api.js",
+    source: pluginSource("xiaomi", "api.js"),
     exports: [
       "applyXiaomiConfig",
+      "applyXiaomiProviderConfig",
       "buildXiaomiProvider",
       "XIAOMI_DEFAULT_MODEL_ID",
       "XIAOMI_DEFAULT_MODEL_REF",
@@ -925,7 +1205,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   },
   {
     subpath: "zai",
-    source: "../../extensions/zai/api.js",
+    source: pluginSource("zai", "api.js"),
     exports: [
       "applyZaiConfig",
       "applyZaiProviderConfig",
@@ -939,12 +1219,15 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   },
   {
     subpath: "whatsapp-targets",
-    source: "../../extensions/whatsapp/api.js",
+    source: pluginSource("whatsapp", "api.js"),
     exports: ["isWhatsAppGroupJid", "isWhatsAppUserTarget", "normalizeWhatsAppTarget"],
   },
   {
     subpath: "whatsapp-surface",
-    source: "../../extensions/whatsapp/api.js",
+    source: pluginSource("whatsapp", "api.js"),
+    exportSources: {
+      DEFAULT_WEB_MEDIA_BYTES: pluginSource("whatsapp", "constants.js"),
+    },
     exports: [
       "DEFAULT_WEB_MEDIA_BYTES",
       "hasAnyWhatsAppAuth",
@@ -955,6 +1238,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
       "resolveWhatsAppGroupRequireMention",
       "resolveWhatsAppGroupToolPolicy",
       "resolveWhatsAppOutboundTarget",
+      "whatsappAccessControlTesting",
     ],
     typeExports: [
       "WebChannelStatus",
@@ -965,8 +1249,13 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   },
   {
     subpath: "zalo-setup",
-    source: "../../extensions/zalo/api.js",
-    exports: ["zaloSetupAdapter", "zaloSetupWizard"],
+    source: pluginSource("zalo", "api.js"),
+    exports: [
+      "evaluateZaloGroupAccess",
+      "resolveZaloRuntimeGroupPolicy",
+      "zaloSetupAdapter",
+      "zaloSetupWizard",
+    ],
   },
 ];
 
@@ -976,6 +1265,12 @@ export const GENERATED_PLUGIN_SDK_FACADES_BY_SUBPATH = Object.fromEntries(
 
 export const GENERATED_PLUGIN_SDK_FACADES_LABEL = "plugin-sdk-facades";
 export const GENERATED_PLUGIN_SDK_FACADES_SCRIPT = "scripts/generate-plugin-sdk-facades.mjs";
+export const GENERATED_PLUGIN_SDK_FACADE_TYPES_OUTPUT =
+  "src/generated/plugin-sdk-facade-type-map.generated.ts";
+
+function rewriteFacadeTypeImportSpecifier(sourcePath) {
+  return sourcePath;
+}
 
 const MODULE_RESOLUTION_OPTIONS = {
   allowJs: true,
@@ -988,6 +1283,55 @@ const MODULE_RESOLUTION_OPTIONS = {
 };
 const MODULE_RESOLUTION_HOST = ts.createCompilerHost(MODULE_RESOLUTION_OPTIONS, true);
 const sourceExportKindsCache = new Map();
+
+function listFacadeEntrySourcePaths(entry) {
+  return Array.from(new Set([entry.source, ...Object.values(entry.exportSources ?? {})]));
+}
+
+function buildFacadeSourceModuleKey(sourceIndex) {
+  return `source${sourceIndex + 1}`;
+}
+
+function isPrimitiveTypeLike(type) {
+  if (type.isUnion()) {
+    return type.types.every((member) => isPrimitiveTypeLike(member));
+  }
+  const primitiveFlags =
+    ts.TypeFlags.StringLike |
+    ts.TypeFlags.NumberLike |
+    ts.TypeFlags.BooleanLike |
+    ts.TypeFlags.BigIntLike |
+    ts.TypeFlags.ESSymbolLike |
+    ts.TypeFlags.Null |
+    ts.TypeFlags.Undefined |
+    ts.TypeFlags.Void;
+  return Boolean(type.flags & primitiveFlags);
+}
+
+function isArrayTypeLike(checker, type) {
+  if (type.isUnion()) {
+    return type.types.every((member) => isArrayTypeLike(checker, member));
+  }
+  return checker.isArrayType(type) || checker.isTupleType(type);
+}
+
+function normalizeFacadeSourceParts(sourcePath) {
+  const packageSourceMatch = /^@openclaw\/([^/]+)\/([^/]+)$/u.exec(sourcePath);
+  if (packageSourceMatch) {
+    return {
+      dirName: packageSourceMatch[1],
+      artifactBasename: packageSourceMatch[2],
+    };
+  }
+  const match = /^\.\.\/\.\.\/extensions\/([^/]+)\/([^/]+)$/u.exec(sourcePath);
+  if (!match) {
+    throw new Error(`Unsupported plugin-sdk facade source: ${sourcePath}`);
+  }
+  return {
+    dirName: match[1],
+    artifactBasename: match[2],
+  };
+}
 
 function collectRuntimeApiPreExports(repoRoot, runtimeApiPath) {
   const absolutePath = path.join(repoRoot, runtimeApiPath);
@@ -1029,7 +1373,10 @@ function collectRuntimeApiPreExports(repoRoot, runtimeApiPath) {
 }
 
 function resolveFacadeSourceTypescriptPath(repoRoot, sourcePath) {
-  const absolutePath = path.join(repoRoot, sourcePath);
+  const packageSourceMatch = /^@openclaw\/([^/]+)\/(.+)$/u.exec(sourcePath);
+  const absolutePath = packageSourceMatch
+    ? path.resolve(repoRoot, "extensions", packageSourceMatch[1], packageSourceMatch[2])
+    : path.resolve(repoRoot, "src/plugin-sdk", sourcePath);
   const candidates = [absolutePath.replace(/\.js$/, ".ts"), absolutePath.replace(/\.js$/, ".tsx")];
   return candidates.find((candidate) => fs.existsSync(candidate));
 }
@@ -1068,9 +1415,18 @@ function resolveFacadeSourceExportKinds(repoRoot, sourcePath) {
       const symbol =
         exported.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(exported) : exported;
       const flags = symbol.flags;
+      const declaration =
+        symbol.valueDeclaration ?? exported.valueDeclaration ?? exported.declarations?.[0];
+      const typeAtLocation = declaration
+        ? checker.getTypeOfSymbolAtLocation(symbol, declaration)
+        : checker.getDeclaredTypeOfSymbol(symbol);
       exportKinds.set(exported.getName(), {
         type: Boolean(flags & ts.SymbolFlags.Type),
         value: Boolean(flags & ts.SymbolFlags.Value),
+        functionLike: Boolean(flags & (ts.SymbolFlags.Function | ts.SymbolFlags.Method)),
+        callable: typeAtLocation.getCallSignatures().length > 0,
+        arrayLike: isArrayTypeLike(checker, typeAtLocation),
+        primitiveLike: isPrimitiveTypeLike(typeAtLocation),
       });
     }
   }
@@ -1080,33 +1436,39 @@ function resolveFacadeSourceExportKinds(repoRoot, sourcePath) {
 }
 
 export function buildPluginSdkFacadeModule(entry, params = {}) {
-  if (entry.exportAll) {
-    return [
-      `// Generated by ${GENERATED_PLUGIN_SDK_FACADES_SCRIPT}. Do not edit manually.`,
-      `export * from "${entry.source}";`,
-      "",
-    ].join("\n");
-  }
-  const exportNames = entry.runtimeApiPreExportsPath
-    ? collectRuntimeApiPreExports(params.repoRoot, entry.runtimeApiPreExportsPath)
-    : entry.exports;
+  const sourceExportKinds = params.repoRoot
+    ? resolveFacadeSourceExportKinds(params.repoRoot, entry.source)
+    : new Map();
+  const exportNames = entry.exportAll
+    ? Array.from(sourceExportKinds.keys()).toSorted((left, right) => left.localeCompare(right))
+    : entry.runtimeApiPreExportsPath
+      ? collectRuntimeApiPreExports(params.repoRoot, entry.runtimeApiPreExportsPath)
+      : entry.exports;
   const explicitTypeExports = new Set(entry.typeExports ?? []);
   const valueExports = [];
   const typeExports = [];
-  const exportKinds =
-    params.repoRoot && exportNames?.length
-      ? resolveFacadeSourceExportKinds(params.repoRoot, entry.source)
-      : new Map();
+  const valueExportsBySource = new Map();
+  let needsLazyArrayHelper = false;
+  let needsLazyObjectHelper = false;
   for (const exportName of exportNames ?? []) {
     if (explicitTypeExports.has(exportName)) {
       continue;
     }
-    const kind = exportKinds.get(exportName);
+    const kind = sourceExportKinds.get(exportName);
     if (kind?.type && !kind.value) {
       typeExports.push(exportName);
       continue;
     }
     valueExports.push(exportName);
+    if (kind?.arrayLike) {
+      needsLazyArrayHelper = true;
+    } else if (!kind?.functionLike && !kind?.callable && !kind?.primitiveLike) {
+      needsLazyObjectHelper = true;
+    }
+    const sourcePath = entry.exportSources?.[exportName] ?? entry.source;
+    const exportsForSource = valueExportsBySource.get(sourcePath) ?? [];
+    exportsForSource.push(exportName);
+    valueExportsBySource.set(sourcePath, exportsForSource);
   }
   for (const typeExport of entry.typeExports ?? []) {
     if (!typeExports.includes(typeExport)) {
@@ -1114,14 +1476,120 @@ export function buildPluginSdkFacadeModule(entry, params = {}) {
     }
   }
   const lines = [`// Generated by ${GENERATED_PLUGIN_SDK_FACADES_SCRIPT}. Do not edit manually.`];
+  if (valueExports.length || typeExports.length) {
+    lines.push(
+      'import type { PluginSdkFacadeTypeMap } from "../generated/plugin-sdk-facade-type-map.generated.js";',
+    );
+    lines.push(`type FacadeEntry = PluginSdkFacadeTypeMap[${JSON.stringify(entry.subpath)}];`);
+    lines.push('type FacadeModule = FacadeEntry["module"];');
+    for (const [sourceIndex] of listFacadeEntrySourcePaths(entry).entries()) {
+      if (sourceIndex === 0) {
+        continue;
+      }
+      lines.push(
+        `type FacadeModule${sourceIndex + 1} = FacadeEntry["sourceModules"][${JSON.stringify(buildFacadeSourceModuleKey(sourceIndex))}]["module"];`,
+      );
+    }
+  }
   if (valueExports.length) {
-    const exports = valueExports.join(",\n  ");
-    lines.push("export {", `  ${exports},`, `} from "${entry.source}";`);
+    const runtimeImports = ["loadBundledPluginPublicSurfaceModuleSync"];
+    if (needsLazyArrayHelper) {
+      runtimeImports.unshift("createLazyFacadeArrayValue");
+    }
+    if (needsLazyObjectHelper) {
+      runtimeImports.unshift("createLazyFacadeObjectValue");
+    }
+    lines.push(`import { ${runtimeImports.join(", ")} } from "./facade-runtime.js";`);
+    for (const [sourceIndex, sourcePath] of listFacadeEntrySourcePaths(entry).entries()) {
+      if (!valueExportsBySource.has(sourcePath)) {
+        continue;
+      }
+      const { dirName: sourceDirName, artifactBasename: sourceArtifactBasename } =
+        normalizeFacadeSourceParts(sourcePath);
+      const loaderSuffix = sourceIndex === 0 ? "" : String(sourceIndex + 1);
+      const moduleTypeName = sourceIndex === 0 ? "FacadeModule" : `FacadeModule${sourceIndex + 1}`;
+      lines.push("");
+      lines.push(`function loadFacadeModule${loaderSuffix}(): ${moduleTypeName} {`);
+      lines.push(`  return loadBundledPluginPublicSurfaceModuleSync<${moduleTypeName}>({`);
+      lines.push(`    dirName: ${JSON.stringify(sourceDirName)},`);
+      lines.push(`    artifactBasename: ${JSON.stringify(sourceArtifactBasename)},`);
+      lines.push("  });");
+      lines.push("}");
+    }
+  }
+  if (valueExports.length) {
+    const sourceIndexByPath = new Map(
+      listFacadeEntrySourcePaths(entry).map((sourcePath, index) => [sourcePath, index]),
+    );
+    for (const exportName of valueExports) {
+      const kind = sourceExportKinds.get(exportName);
+      const sourcePath = entry.exportSources?.[exportName] ?? entry.source;
+      const sourceIndex = sourceIndexByPath.get(sourcePath) ?? 0;
+      const loaderSuffix = sourceIndex === 0 ? "" : String(sourceIndex + 1);
+      const moduleTypeName = sourceIndex === 0 ? "FacadeModule" : `FacadeModule${sourceIndex + 1}`;
+      if (kind?.functionLike || kind?.callable) {
+        lines.push(
+          `export const ${exportName}: ${moduleTypeName}[${JSON.stringify(exportName)}] = ((...args) =>`,
+        );
+        lines.push(
+          `  loadFacadeModule${loaderSuffix}()[${JSON.stringify(exportName)}](...args)) as ${moduleTypeName}[${JSON.stringify(exportName)}];`,
+        );
+        continue;
+      }
+      if (kind?.arrayLike) {
+        lines.push(
+          `export const ${exportName}: ${moduleTypeName}[${JSON.stringify(exportName)}] = createLazyFacadeArrayValue(() => loadFacadeModule${loaderSuffix}()[${JSON.stringify(exportName)}] as unknown as readonly unknown[]) as ${moduleTypeName}[${JSON.stringify(exportName)}];`,
+        );
+        continue;
+      }
+      if (!kind?.primitiveLike) {
+        lines.push(
+          `export const ${exportName}: ${moduleTypeName}[${JSON.stringify(exportName)}] = createLazyFacadeObjectValue(() => loadFacadeModule${loaderSuffix}()[${JSON.stringify(exportName)}] as object) as ${moduleTypeName}[${JSON.stringify(exportName)}];`,
+        );
+        continue;
+      }
+      lines.push(
+        `export const ${exportName}: ${moduleTypeName}[${JSON.stringify(exportName)}] = loadFacadeModule${loaderSuffix}()[${JSON.stringify(exportName)}];`,
+      );
+    }
   }
   if (typeExports.length) {
-    const exportedTypes = typeExports.join(",\n  ");
-    lines.push("export type {", `  ${exportedTypes},`, `} from "${entry.source}";`);
+    for (const exportedType of typeExports) {
+      lines.push(
+        `export type ${exportedType} = FacadeEntry["types"][${JSON.stringify(exportedType)}];`,
+      );
+    }
   }
+  lines.push("");
+  return lines.join("\n");
+}
+
+export function buildPluginSdkFacadeTypeMapModule(entries) {
+  const lines = [`// Generated by ${GENERATED_PLUGIN_SDK_FACADES_SCRIPT}. Do not edit manually.`];
+  lines.push("export interface PluginSdkFacadeTypeMap {");
+  for (const entry of entries) {
+    const moduleImportPath = rewriteFacadeTypeImportSpecifier(entry.source);
+    lines.push(`  ${JSON.stringify(entry.subpath)}: {`);
+    lines.push(`    module: typeof import(${JSON.stringify(moduleImportPath)});`);
+    lines.push("    sourceModules: {");
+    for (const [sourceIndex, sourcePath] of listFacadeEntrySourcePaths(entry).entries()) {
+      const rewrittenSourcePath = rewriteFacadeTypeImportSpecifier(sourcePath);
+      lines.push(`      ${JSON.stringify(buildFacadeSourceModuleKey(sourceIndex))}: {`);
+      lines.push(`        module: typeof import(${JSON.stringify(rewrittenSourcePath)});`);
+      lines.push("      };");
+    }
+    lines.push("    };");
+    lines.push("    types: {");
+    for (const exportedType of entry.typeExports ?? []) {
+      const typeImportPath = rewriteFacadeTypeImportSpecifier(entry.source);
+      lines.push(
+        `      ${JSON.stringify(exportedType)}: import(${JSON.stringify(typeImportPath)}).${exportedType};`,
+      );
+    }
+    lines.push("    };");
+    lines.push("  };");
+  }
+  lines.push("}");
   lines.push("");
   return lines.join("\n");
 }

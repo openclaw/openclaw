@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/matrix",
-  "version": "2026.3.26",
+  "version": "2026.3.29",
   "description": "OpenClaw Matrix channel plugin",
   "type": "module",
   "dependencies": {
@@ -14,7 +14,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.3.26"
+    "openclaw": ">=2026.3.29"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -23,7 +23,8 @@
   },
   "openclaw": {
     "extensions": [
-      "./index.ts"
+      "./index.ts",
+      "./src/plugin-entry.runtime.ts"
     ],
     "setupEntry": "./setup-entry.ts",
     "channel": {
@@ -38,9 +39,8 @@
     },
     "install": {
       "npmSpec": "@openclaw/matrix",
-      "localPath": "extensions/matrix",
       "defaultChoice": "npm",
-      "minHostVersion": ">=2026.3.26"
+      "minHostVersion": ">=2026.3.29"
     },
     "releaseChecks": {
       "rootDependencyMirrorAllowlist": [

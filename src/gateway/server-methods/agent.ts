@@ -26,7 +26,11 @@ import { classifySessionKeyShape, normalizeAgentId } from "../../routing/session
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
-import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
+import { createTaskRecord } from "../../tasks/task-registry.js";
+import {
+  normalizeDeliveryContext,
+  normalizeSessionDeliveryFields,
+} from "../../utils/delivery-context.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,
@@ -134,6 +138,11 @@ function emitSessionsChanged(
             chatType: sessionRow.chatType,
             origin: sessionRow.origin,
             spawnedBy: sessionRow.spawnedBy,
+            spawnedWorkspaceDir: sessionRow.spawnedWorkspaceDir,
+            forkedFromParent: sessionRow.forkedFromParent,
+            spawnDepth: sessionRow.spawnDepth,
+            subagentRole: sessionRow.subagentRole,
+            subagentControlScope: sessionRow.subagentControlScope,
             label: sessionRow.label,
             displayName: sessionRow.displayName,
             deliveryContext: sessionRow.deliveryContext,
@@ -152,6 +161,7 @@ function emitSessionsChanged(
             lastChannel: sessionRow.lastChannel,
             lastTo: sessionRow.lastTo,
             lastAccountId: sessionRow.lastAccountId,
+            lastThreadId: sessionRow.lastThreadId,
             totalTokens: sessionRow.totalTokens,
             totalTokensFresh: sessionRow.totalTokensFresh,
             contextTokens: sessionRow.contextTokens,
@@ -178,6 +188,30 @@ function dispatchAgentRunFromGateway(params: {
   respond: GatewayRequestHandlerOptions["respond"];
   context: GatewayRequestHandlerOptions["context"];
 }) {
+  if (params.ingressOpts.sessionKey?.trim()) {
+    try {
+      createTaskRecord({
+        source: "background_cli",
+        runtime: "cli",
+        requesterSessionKey: params.ingressOpts.sessionKey,
+        requesterOrigin: normalizeDeliveryContext({
+          channel: params.ingressOpts.channel,
+          to: params.ingressOpts.to,
+          accountId: params.ingressOpts.accountId,
+          threadId: params.ingressOpts.threadId,
+        }),
+        childSessionKey: params.ingressOpts.sessionKey,
+        runId: params.runId,
+        bindingTargetKind: "session",
+        task: params.ingressOpts.message,
+        status: "running",
+        deliveryStatus: "not_applicable",
+        startedAt: Date.now(),
+      });
+    } catch {
+      // Best-effort only: background task tracking must not block agent runs.
+    }
+  }
   void agentCommandFromIngress(params.ingressOpts, defaultRuntime, params.context.deps)
     .then((result) => {
       const payload = {
@@ -494,6 +528,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         lastChannel: deliveryFields.lastChannel ?? entry?.lastChannel,
         lastTo: deliveryFields.lastTo ?? entry?.lastTo,
         lastAccountId: deliveryFields.lastAccountId ?? entry?.lastAccountId,
+        lastThreadId: deliveryFields.lastThreadId ?? entry?.lastThreadId,
         modelOverride: entry?.modelOverride,
         providerOverride: entry?.providerOverride,
         label: labelValue,

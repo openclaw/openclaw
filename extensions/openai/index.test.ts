@@ -4,7 +4,7 @@ import path from "node:path";
 import { getModel } from "@mariozechner/pi-ai";
 import { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
 import OpenAI from "openai";
-import * as providerAuth from "openclaw/plugin-sdk/provider-auth";
+import * as providerAuth from "openclaw/plugin-sdk/provider-auth-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../src/config/config.js";
 import { loadConfig } from "../../src/config/config.js";
@@ -13,7 +13,7 @@ import type { ResolvedTtsConfig } from "../../src/tts/tts.js";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
-} from "../../test/helpers/extensions/provider-registration.js";
+} from "../../test/helpers/plugins/provider-registration.js";
 import { buildOpenAIImageGenerationProvider } from "./image-generation-provider.js";
 import plugin from "./index.js";
 
@@ -22,7 +22,7 @@ const runtimeMocks = vi.hoisted(() => ({
   refreshOpenAICodexToken: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/infra-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   ensureGlobalUndiciEnvProxyDispatcher: runtimeMocks.ensureGlobalUndiciEnvProxyDispatcher,
 }));
 

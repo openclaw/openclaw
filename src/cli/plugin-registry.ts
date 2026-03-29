@@ -28,20 +28,30 @@ function scopeRank(scope: typeof pluginRegistryLoaded): number {
   }
 }
 
+function activeRegistrySatisfiesScope(
+  scope: PluginRegistryScope,
+  active: ReturnType<typeof getActivePluginRegistry>,
+  expectedChannelPluginIds: readonly string[],
+): boolean {
+  if (!active) {
+    return false;
+  }
+  const activeChannelPluginIds = new Set(active.channels.map((entry) => entry.plugin.id));
+  switch (scope) {
+    case "configured-channels":
+    case "channels":
+      return (
+        active.channels.length > 0 &&
+        expectedChannelPluginIds.every((pluginId) => activeChannelPluginIds.has(pluginId))
+      );
+    case "all":
+      return false;
+  }
+}
+
 export function ensurePluginRegistryLoaded(options?: { scope?: PluginRegistryScope }): void {
   const scope = options?.scope ?? "all";
   if (scopeRank(pluginRegistryLoaded) >= scopeRank(scope)) {
-    return;
-  }
-  const active = getActivePluginRegistry();
-  // Tests (and callers) can pre-seed a registry (e.g. `test/setup.ts`); avoid
-  // doing an expensive load when we already have plugins/channels/tools.
-  if (
-    pluginRegistryLoaded === "none" &&
-    active &&
-    (active.plugins.length > 0 || active.channels.length > 0 || active.tools.length > 0)
-  ) {
-    pluginRegistryLoaded = "all";
     return;
   }
   const config = loadConfig();
@@ -50,6 +60,30 @@ export function ensurePluginRegistryLoaded(options?: { scope?: PluginRegistrySco
     resolvedConfig,
     resolveDefaultAgentId(resolvedConfig),
   );
+  const expectedChannelPluginIds =
+    scope === "configured-channels"
+      ? resolveConfiguredChannelPluginIds({
+          config: resolvedConfig,
+          workspaceDir,
+          env: process.env,
+        })
+      : scope === "channels"
+        ? resolveChannelPluginIds({
+            config: resolvedConfig,
+            workspaceDir,
+            env: process.env,
+          })
+        : [];
+  const active = getActivePluginRegistry();
+  // Tests (and callers) can pre-seed a registry (e.g. `test/setup.ts`); avoid
+  // doing an expensive load when we already have plugins/channels/tools.
+  if (
+    pluginRegistryLoaded === "none" &&
+    activeRegistrySatisfiesScope(scope, active, expectedChannelPluginIds)
+  ) {
+    pluginRegistryLoaded = scope;
+    return;
+  }
   const logger: PluginLogger = {
     info: (msg) => log.info(msg),
     warn: (msg) => log.warn(msg),
@@ -63,19 +97,11 @@ export function ensurePluginRegistryLoaded(options?: { scope?: PluginRegistrySco
     throwOnLoadError: true,
     ...(scope === "configured-channels"
       ? {
-          onlyPluginIds: resolveConfiguredChannelPluginIds({
-            config: resolvedConfig,
-            workspaceDir,
-            env: process.env,
-          }),
+          onlyPluginIds: expectedChannelPluginIds,
         }
       : scope === "channels"
         ? {
-            onlyPluginIds: resolveChannelPluginIds({
-              config: resolvedConfig,
-              workspaceDir,
-              env: process.env,
-            }),
+            onlyPluginIds: expectedChannelPluginIds,
           }
         : {}),
   });

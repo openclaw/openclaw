@@ -28,12 +28,17 @@ function createCompatRateLimitError(
   body: { message: string; retry_after: number; global: boolean },
   request?: Request,
 ): RateLimitError {
+  const compatRequest =
+    request ??
+    new Request("https://discord.com/api/v10/channels/789/messages", {
+      method: "POST",
+    });
   const RateLimitErrorCtor = RateLimitError as unknown as new (
     response: Response,
     body: { message: string; retry_after: number; global: boolean },
     request?: Request,
   ) => RateLimitError;
-  return new RateLimitErrorCtor(response, body, request);
+  return new RateLimitErrorCtor(response, body, compatRequest);
 }
 
 beforeAll(async () => {

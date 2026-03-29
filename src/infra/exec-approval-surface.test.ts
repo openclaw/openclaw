@@ -19,9 +19,13 @@ async function loadExecApprovalSurfaceModule() {
   normalizeMessageChannelMock.mockImplementation((value?: string | null) =>
     typeof value === "string" ? value.trim().toLowerCase() : undefined,
   );
-  vi.doMock("../config/config.js", () => ({
-    loadConfig: (...args: unknown[]) => loadConfigMock(...args),
-  }));
+  vi.doMock("../config/config.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../config/config.js")>();
+    return {
+      ...actual,
+      loadConfig: (...args: unknown[]) => loadConfigMock(...args),
+    };
+  });
   vi.doMock("../channels/plugins/index.js", () => ({
     getChannelPlugin: (...args: unknown[]) => getChannelPluginMock(...args),
     listChannelPlugins: (...args: unknown[]) => listChannelPluginsMock(...args),
@@ -39,22 +43,33 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
     await loadExecApprovalSurfaceModule();
   });
 
-  it("treats web UI, terminal UI, and missing channels as enabled", () => {
-    expect(resolveExecApprovalInitiatingSurfaceState({ channel: null })).toEqual({
-      kind: "enabled",
-      channel: undefined,
-      channelLabel: "this platform",
-    });
-    expect(resolveExecApprovalInitiatingSurfaceState({ channel: "tui" })).toEqual({
-      kind: "enabled",
+  it.each([
+    {
+      channel: null,
+      expected: {
+        kind: "enabled",
+        channel: undefined,
+        channelLabel: "this platform",
+      },
+    },
+    {
       channel: "tui",
-      channelLabel: "terminal UI",
-    });
-    expect(resolveExecApprovalInitiatingSurfaceState({ channel: "web" })).toEqual({
-      kind: "enabled",
+      expected: {
+        kind: "enabled",
+        channel: "tui",
+        channelLabel: "terminal UI",
+      },
+    },
+    {
       channel: "web",
-      channelLabel: "Web UI",
-    });
+      expected: {
+        kind: "enabled",
+        channel: "web",
+        channelLabel: "Web UI",
+      },
+    },
+  ])("treats built-in initiating surface %j", ({ channel, expected }) => {
+    expect(resolveExecApprovalInitiatingSurfaceState({ channel })).toEqual(expected);
   });
 
   it("uses the provided cfg for telegram and discord client enablement", () => {
@@ -138,40 +153,42 @@ describe("hasConfiguredExecApprovalDmRoute", () => {
     await loadExecApprovalSurfaceModule();
   });
 
-  it("returns true when any enabled account routes approvals to DM or both", () => {
-    listChannelPluginsMock.mockReturnValueOnce([
-      {
-        execApprovals: {
-          hasConfiguredDmRoute: () => false,
+  it.each([
+    {
+      plugins: [
+        {
+          execApprovals: {
+            hasConfiguredDmRoute: () => false,
+          },
         },
-      },
-      {
-        execApprovals: {
-          hasConfiguredDmRoute: () => true,
+        {
+          execApprovals: {
+            hasConfiguredDmRoute: () => true,
+          },
         },
-      },
-    ]);
-
-    expect(hasConfiguredExecApprovalDmRoute({} as never)).toBe(true);
-  });
-
-  it("returns false when no plugin reports a DM route", () => {
-    listChannelPluginsMock.mockReturnValueOnce([
-      {
-        execApprovals: {
-          hasConfiguredDmRoute: () => false,
+      ],
+      expected: true,
+    },
+    {
+      plugins: [
+        {
+          execApprovals: {
+            hasConfiguredDmRoute: () => false,
+          },
         },
-      },
-      {
-        execApprovals: {
-          hasConfiguredDmRoute: () => false,
+        {
+          execApprovals: {
+            hasConfiguredDmRoute: () => false,
+          },
         },
-      },
-      {
-        execApprovals: undefined,
-      },
-    ]);
-
-    expect(hasConfiguredExecApprovalDmRoute({} as never)).toBe(false);
+        {
+          execApprovals: undefined,
+        },
+      ],
+      expected: false,
+    },
+  ])("reports whether any plugin routes approvals to DM for %j", ({ plugins, expected }) => {
+    listChannelPluginsMock.mockReturnValueOnce(plugins);
+    expect(hasConfiguredExecApprovalDmRoute({} as never)).toBe(expected);
   });
 });

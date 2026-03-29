@@ -1,5 +1,5 @@
 // Private helper surface for the bundled feishu plugin.
-// Keep this list additive and scoped to symbols used under extensions/feishu.
+// Keep this list additive and scoped to the bundled Feishu surface.
 
 export type { HistoryEntry } from "../auto-reply/reply/history.js";
 export {
@@ -13,6 +13,7 @@ export { logTypingFailure } from "../channels/logging.js";
 export type { AllowlistMatch } from "../channels/plugins/allowlist-match.js";
 export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
 export { createActionGate } from "../agents/tools/common.js";
+export { chunkTextForOutbound } from "./text-chunking.js";
 export {
   buildSingleChannelSecretPromptState,
   addWildcardAllowFrom,

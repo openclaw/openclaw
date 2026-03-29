@@ -1265,14 +1265,19 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                           },
                           toolSchemaProfile: {
                             type: "string",
-                            const: "xai",
+                          },
+                          unsupportedToolSchemaKeywords: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                              minLength: 1,
+                            },
                           },
                           nativeWebSearchTool: {
                             type: "boolean",
                           },
                           toolCallArgumentsEncoding: {
                             type: "string",
-                            const: "html-entities",
                           },
                           requiresMistralToolIds: {
                             type: "boolean",
@@ -2027,6 +2032,24 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       },
                       path: {
                         type: "string",
+                      },
+                      fts: {
+                        type: "object",
+                        properties: {
+                          tokenizer: {
+                            anyOf: [
+                              {
+                                type: "string",
+                                const: "unicode61",
+                              },
+                              {
+                                type: "string",
+                                const: "trigram",
+                              },
+                            ],
+                          },
+                        },
+                        additionalProperties: false,
                       },
                       vector: {
                         type: "object",
@@ -3590,6 +3613,24 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                         },
                         path: {
                           type: "string",
+                        },
+                        fts: {
+                          type: "object",
+                          properties: {
+                            tokenizer: {
+                              anyOf: [
+                                {
+                                  type: "string",
+                                  const: "unicode61",
+                                },
+                                {
+                                  type: "string",
+                                  const: "trigram",
+                                },
+                              ],
+                            },
+                          },
+                          additionalProperties: false,
                         },
                         vector: {
                           type: "object",
@@ -5627,6 +5668,101 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       },
                     },
                     additionalProperties: false,
+                  },
+                },
+                additionalProperties: false,
+              },
+              x_search: {
+                type: "object",
+                properties: {
+                  enabled: {
+                    type: "boolean",
+                  },
+                  apiKey: {
+                    anyOf: [
+                      {
+                        type: "string",
+                      },
+                      {
+                        oneOf: [
+                          {
+                            type: "object",
+                            properties: {
+                              source: {
+                                type: "string",
+                                const: "env",
+                              },
+                              provider: {
+                                type: "string",
+                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                              },
+                              id: {
+                                type: "string",
+                                pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                              },
+                            },
+                            required: ["source", "provider", "id"],
+                            additionalProperties: false,
+                          },
+                          {
+                            type: "object",
+                            properties: {
+                              source: {
+                                type: "string",
+                                const: "file",
+                              },
+                              provider: {
+                                type: "string",
+                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                              },
+                              id: {
+                                type: "string",
+                              },
+                            },
+                            required: ["source", "provider", "id"],
+                            additionalProperties: false,
+                          },
+                          {
+                            type: "object",
+                            properties: {
+                              source: {
+                                type: "string",
+                                const: "exec",
+                              },
+                              provider: {
+                                type: "string",
+                                pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                              },
+                              id: {
+                                type: "string",
+                              },
+                            },
+                            required: ["source", "provider", "id"],
+                            additionalProperties: false,
+                          },
+                        ],
+                      },
+                    ],
+                  },
+                  model: {
+                    type: "string",
+                  },
+                  inlineCitations: {
+                    type: "boolean",
+                  },
+                  maxTurns: {
+                    type: "integer",
+                    minimum: -9007199254740991,
+                    maximum: 9007199254740991,
+                  },
+                  timeoutSeconds: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  cacheTtlMinutes: {
+                    type: "number",
+                    minimum: 0,
                   },
                 },
                 additionalProperties: false,
@@ -9216,44 +9352,8 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   type: "boolean",
                 },
                 channel: {
-                  anyOf: [
-                    {
-                      type: "string",
-                      const: "last",
-                    },
-                    {
-                      type: "string",
-                      const: "whatsapp",
-                    },
-                    {
-                      type: "string",
-                      const: "telegram",
-                    },
-                    {
-                      type: "string",
-                      const: "discord",
-                    },
-                    {
-                      type: "string",
-                      const: "irc",
-                    },
-                    {
-                      type: "string",
-                      const: "slack",
-                    },
-                    {
-                      type: "string",
-                      const: "signal",
-                    },
-                    {
-                      type: "string",
-                      const: "imessage",
-                    },
-                    {
-                      type: "string",
-                      const: "msteams",
-                    },
-                  ],
+                  type: "string",
+                  minLength: 1,
                 },
                 to: {
                   type: "string",
@@ -12839,6 +12939,42 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       help: "Timeout in seconds for Firecrawl requests.",
       tags: ["performance", "tools"],
     },
+    "tools.web.x_search.enabled": {
+      label: "Enable X Search Tool",
+      help: "Enable the x_search tool (requires XAI_API_KEY or tools.web.x_search.apiKey).",
+      tags: ["tools"],
+    },
+    "tools.web.x_search.apiKey": {
+      label: "xAI API Key",
+      help: "xAI API key for X search (fallback: XAI_API_KEY env var).",
+      tags: ["security", "auth", "tools"],
+      sensitive: true,
+    },
+    "tools.web.x_search.model": {
+      label: "X Search Model",
+      help: 'Model to use for X search (default: "grok-4-1-fast-non-reasoning").',
+      tags: ["models", "tools"],
+    },
+    "tools.web.x_search.inlineCitations": {
+      label: "X Search Inline Citations",
+      help: "Keep inline citations from xAI in x_search responses when available (default: false).",
+      tags: ["tools"],
+    },
+    "tools.web.x_search.maxTurns": {
+      label: "X Search Max Turns",
+      help: "Optional max internal search/tool turns xAI may use per x_search request. Omit to let xAI choose.",
+      tags: ["performance", "tools"],
+    },
+    "tools.web.x_search.timeoutSeconds": {
+      label: "X Search Timeout (sec)",
+      help: "Timeout in seconds for x_search requests.",
+      tags: ["performance", "tools"],
+    },
+    "tools.web.x_search.cacheTtlMinutes": {
+      label: "X Search Cache TTL (min)",
+      help: "Cache TTL in minutes for x_search results.",
+      tags: ["performance", "storage", "tools"],
+    },
     "gateway.controlUi.basePath": {
       label: "Control UI Base Path",
       help: "Optional URL prefix where the Control UI is served (e.g. /openclaw).",
@@ -15251,7 +15387,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     },
     "plugins.installs.*.installPath": {
       label: "Plugin Install Path",
-      help: "Resolved install directory (usually ~/.openclaw/extensions/<id>).",
+      help: "Resolved install directory for the installed plugin bundle.",
       tags: ["storage"],
     },
     "plugins.installs.*.version": {
@@ -15374,6 +15510,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       tags: ["security", "auth"],
     },
   },
-  version: "2026.3.26",
+  version: "2026.3.29",
   generatedAt: "2026-03-22T21:17:33.302Z",
 } as const satisfies BaseConfigSchemaResponse;

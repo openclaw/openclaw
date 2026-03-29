@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/telegram",
-  "version": "2026.3.26",
+  "version": "2026.3.29",
   "private": true,
   "description": "OpenClaw Telegram channel plugin",
   "type": "module",
@@ -22,7 +22,13 @@
       "docsPath": "/channels/telegram",
       "docsLabel": "telegram",
       "blurb": "simplest way to get started — register a bot with @BotFather and get going.",
-      "systemImage": "paperplane"
+      "systemImage": "paperplane",
+      "selectionDocsPrefix": "",
+      "selectionDocsOmitLabel": true,
+      "selectionExtras": [
+        "https://openclaw.ai"
+      ],
+      "markdownCapable": true
     },
     "bundle": {
       "stageRuntimeDependencies": true

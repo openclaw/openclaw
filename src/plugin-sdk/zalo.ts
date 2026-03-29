@@ -1,5 +1,5 @@
 // Private helper surface for the bundled zalo plugin.
-// Keep this list additive and scoped to symbols used under extensions/zalo.
+// Keep this list additive and scoped to the bundled Zalo surface.
 
 export { jsonResult, readStringParam } from "../agents/tools/common.js";
 export type { ReplyPayload } from "../auto-reply/types.js";
@@ -63,6 +63,7 @@ export type { WizardPrompter } from "../wizard/prompts.js";
 export { formatAllowFromLowercase, isNormalizedSenderAllowed } from "./allow-from.js";
 export { zaloSetupAdapter } from "./zalo-setup.js";
 export { zaloSetupWizard } from "./zalo-setup.js";
+export { evaluateZaloGroupAccess, resolveZaloRuntimeGroupPolicy } from "./zalo-setup.js";
 export {
   resolveDirectDmAuthorizationOutcome,
   resolveSenderCommandAuthorizationWithRuntime,

@@ -14,6 +14,7 @@ import {
   resolveTestRunExitCode,
 } from "../../scripts/test-parallel-utils.mjs";
 import { loadTestCatalog } from "../../scripts/test-planner/catalog.mjs";
+import { bundledPluginFile } from "../helpers/bundled-plugin-paths.js";
 
 const clearPlannerShardEnv = (env) => {
   const nextEnv = { ...env };
@@ -54,10 +55,10 @@ const sharedTargetedUnitProxyFiles = (() => {
 
 const targetedChannelProxyFiles = [
   ...sharedTargetedChannelProxyFiles,
-  "extensions/discord/src/monitor/message-handler.preflight.acp-bindings.test.ts",
-  "extensions/discord/src/monitor/monitor.agent-components.test.ts",
-  "extensions/telegram/src/bot.create-telegram-bot.test.ts",
-  "extensions/whatsapp/src/monitor-inbox.streams-inbound-messages.test.ts",
+  bundledPluginFile("discord", "src/monitor/message-handler.preflight.acp-bindings.test.ts"),
+  bundledPluginFile("discord", "src/monitor/monitor.agent-components.test.ts"),
+  bundledPluginFile("telegram", "src/bot.create-telegram-bot.test.ts"),
+  bundledPluginFile("whatsapp", "src/monitor-inbox.streams-inbound-messages.test.ts"),
 ];
 
 const targetedUnitProxyFiles = [
@@ -88,6 +89,7 @@ function runPlannerPlan(args: string[], envOverrides: NodeJS.ProcessEnv = {}): s
     cwd: REPO_ROOT,
     env: createPlannerEnv(envOverrides),
     encoding: "utf8",
+    stdio: ["pipe", "pipe", "pipe"],
   });
 }
 
@@ -388,6 +390,17 @@ describe("scripts/test-parallel lane planning", () => {
     expect(output).toContain("pool=forks");
   });
 
+  it("routes targeted contract tests through the contracts config", () => {
+    const output = runPlannerPlan([
+      "--explain",
+      "src/channels/plugins/contracts/registry-backed.contract.test.ts",
+    ]);
+
+    expect(output).toContain("surface=contracts");
+    expect(output).toContain("vitest.contracts.config.ts");
+    expect(output).not.toContain("vitest.unit.config.ts");
+  });
+
   it("prints the planner-backed CI manifest as JSON", () => {
     const output = runPlannerPlan(["--ci-manifest"], {
       GITHUB_EVENT_NAME: "pull_request",
@@ -460,6 +473,24 @@ describe("scripts/test-parallel lane planning", () => {
     expect(output).toContain("unit-deliver-isolated filters=1");
   });
 
+  it("prints collect-all failure policy in planner output for wrapper-native flag", () => {
+    const output = runPlannerPlan(["--plan", "--collect-failures", "--surface", "unit"]);
+
+    expect(output).toContain("failurePolicy=collect-all");
+  });
+
+  it("maps --bail=0 to collect-all failure policy in planner output", () => {
+    const output = runPlannerPlan(["--plan", "--surface", "unit", "--", "--bail=0"]);
+
+    expect(output).toContain("failurePolicy=collect-all");
+  });
+
+  it("rejects wrapper-level positive --bail values", () => {
+    expect(() => runPlannerPlan(["--plan", "--surface", "unit", "--", "--bail=2"])).toThrowError(
+      /Unsupported wrapper-level --bail value/u,
+    );
+  });
+
   it("rejects removed machine-name profiles", () => {
     expect(() => runPlannerPlan(["--plan", "--profile", "macmini"])).toThrowError(
       /Unsupported test profile "macmini"/u,
@@ -470,6 +501,13 @@ describe("scripts/test-parallel lane planning", () => {
     expect(() => runPlannerPlan(["--plan", "--surface", "channel"])).toThrowError(
       /Unsupported --surface value\(s\): channel/u,
     );
+  });
+
+  it("supports the explicit contracts surface", () => {
+    const output = runPlannerPlan(["--plan", "--surface", "contracts"]);
+
+    expect(output).toContain("contracts filters=all");
+    expect(output).toContain("surface=contracts");
   });
 
   it("rejects wrapper --files values that look like options", () => {

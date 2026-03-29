@@ -1,4 +1,4 @@
-import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-models";
+import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { MINIMAX_DEFAULT_MODEL_ID, MINIMAX_TEXT_MODEL_CATALOG } from "./provider-models.js";
 
 export const DEFAULT_MINIMAX_BASE_URL = "https://api.minimax.io/v1";

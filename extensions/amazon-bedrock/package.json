@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/amazon-bedrock-provider",
-  "version": "2026.3.26",
+  "version": "2026.3.29",
   "private": true,
   "description": "OpenClaw Amazon Bedrock provider plugin",
   "type": "module",

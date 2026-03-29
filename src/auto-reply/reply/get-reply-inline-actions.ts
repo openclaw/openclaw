@@ -226,6 +226,7 @@ export async function handleInlineActions(params: {
         agentAccountId: (ctx as { AccountId?: string }).AccountId,
         agentTo: ctx.OriginatingTo ?? ctx.To,
         agentThreadId: ctx.MessageThreadId ?? undefined,
+        requesterAgentIdOverride: agentId,
         agentDir,
         workspaceDir,
         config: cfg,

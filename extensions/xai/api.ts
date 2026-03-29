@@ -1,4 +1,12 @@
+import {
+  applyModelCompatPatch,
+  normalizeProviderId,
+} from "openclaw/plugin-sdk/provider-model-shared";
+import type { ModelCompatConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import { XAI_UNSUPPORTED_SCHEMA_KEYWORDS } from "openclaw/plugin-sdk/provider-tools";
+
 export { buildXaiProvider } from "./provider-catalog.js";
+export { applyXaiConfig, applyXaiProviderConfig } from "./onboard.js";
 export {
   buildXaiCatalogModels,
   buildXaiModelDefinition,
@@ -10,50 +18,76 @@ export {
   XAI_DEFAULT_MAX_TOKENS,
 } from "./model-definitions.js";
 export { isModernXaiModel, resolveXaiForwardCompatModel } from "./provider-models.js";
+export { normalizeXaiModelId } from "./model-id.js";
 
 export const XAI_TOOL_SCHEMA_PROFILE = "xai";
 export const HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING = "html-entities";
 
-export function applyXaiModelCompat<T extends { compat?: unknown }>(model: T): T {
-  const patch = {
+export function resolveXaiModelCompatPatch(): ModelCompatConfig {
+  return {
     toolSchemaProfile: XAI_TOOL_SCHEMA_PROFILE,
+    unsupportedToolSchemaKeywords: Array.from(XAI_UNSUPPORTED_SCHEMA_KEYWORDS),
     nativeWebSearchTool: true,
     toolCallArgumentsEncoding: HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING,
-  } satisfies Record<string, unknown>;
-  const compat =
-    model.compat && typeof model.compat === "object"
-      ? (model.compat as Record<string, unknown>)
-      : undefined;
-  if (compat && Object.entries(patch).every(([key, value]) => compat[key] === value)) {
-    return model;
-  }
-  return {
-    ...model,
-    compat: {
-      ...compat,
-      ...patch,
-    } as T extends { compat?: infer TCompat } ? TCompat : never,
-  } as T;
+  };
 }
 
-export function normalizeXaiModelId(id: string): string {
-  if (id === "grok-4-fast-reasoning") {
-    return "grok-4-fast";
+export function applyXaiModelCompat<T extends { compat?: unknown }>(model: T): T {
+  return applyModelCompatPatch(
+    model as T & { compat?: ModelCompatConfig },
+    resolveXaiModelCompatPatch(),
+  ) as T;
+}
+
+function isXaiBaseUrl(baseUrl: unknown): boolean {
+  if (typeof baseUrl !== "string" || !baseUrl.trim()) {
+    return false;
   }
-  if (id === "grok-4-1-fast-reasoning") {
-    return "grok-4-1-fast";
+  try {
+    return new URL(baseUrl).hostname.toLowerCase() === "api.x.ai";
+  } catch {
+    return baseUrl.toLowerCase().includes("api.x.ai");
   }
-  if (id === "grok-4.20-experimental-beta-0304-reasoning") {
-    return "grok-4.20-beta-latest-reasoning";
+}
+
+function isXaiModelHint(modelId: string): boolean {
+  return modelId.trim().toLowerCase().startsWith("x-ai/");
+}
+
+function shouldUseXaiResponsesTransport(params: {
+  provider: string;
+  api?: unknown;
+  baseUrl?: unknown;
+}): boolean {
+  if (params.api !== "openai-completions") {
+    return false;
   }
-  if (id === "grok-4.20-experimental-beta-0304-non-reasoning") {
-    return "grok-4.20-beta-latest-non-reasoning";
+  if (isXaiBaseUrl(params.baseUrl)) {
+    return true;
   }
-  if (id === "grok-4.20-reasoning") {
-    return "grok-4.20-beta-latest-reasoning";
+  return normalizeProviderId(params.provider) === "xai" && !params.baseUrl;
+}
+
+export function shouldContributeXaiCompat(params: {
+  modelId: string;
+  model: { api?: unknown; baseUrl?: unknown };
+}): boolean {
+  if (params.model.api !== "openai-completions") {
+    return false;
   }
-  if (id === "grok-4.20-non-reasoning") {
-    return "grok-4.20-beta-latest-non-reasoning";
+  return isXaiBaseUrl(params.model.baseUrl) || isXaiModelHint(params.modelId);
+}
+
+export function resolveXaiTransport(params: {
+  provider: string;
+  api?: unknown;
+  baseUrl?: unknown;
+}): { api: "openai-responses"; baseUrl?: string } | undefined {
+  if (!shouldUseXaiResponsesTransport(params)) {
+    return undefined;
   }
-  return id;
+  return {
+    api: "openai-responses",
+    baseUrl: typeof params.baseUrl === "string" ? params.baseUrl : undefined,
+  };
 }

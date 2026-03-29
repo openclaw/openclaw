@@ -1,6 +1,7 @@
 // Shared config/runtime boundary for plugins that need config loading,
 // config writes, or session-store helpers without importing src internals.
 
+export { resolveDefaultAgentId } from "../agents/agent-scope.js";
 export {
   getRuntimeConfigSnapshot,
   loadConfig,
@@ -47,6 +48,11 @@ export { resolveAgentMaxConcurrent } from "../config/agent-limits.js";
 export { loadCronStore, resolveCronStorePath, saveCronStore } from "../cron/store.js";
 export { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
 export { coerceSecretRef } from "../config/types.secrets.js";
+export {
+  resolveConfiguredSecretInputString,
+  resolveConfiguredSecretInputWithFallback,
+  resolveRequiredConfiguredSecretRefInputString,
+} from "../gateway/resolve-configured-secret-input-string.js";
 export type {
   DiscordAccountConfig,
   DiscordActionConfig,
@@ -92,6 +98,7 @@ export {
   type SessionScope,
 } from "../config/sessions.js";
 export { resolveGroupSessionKey } from "../config/sessions/group.js";
+export { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
 export {
   evaluateSessionFreshness,
   resolveChannelResetConfig,

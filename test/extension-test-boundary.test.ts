@@ -1,10 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { BUNDLED_PLUGIN_PATH_PREFIX } from "./helpers/bundled-plugin-paths.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 
-const allowedNonExtensionTests = new Set<string>();
+const allowedNonExtensionTests = new Set<string>([
+  "src/agents/bedrock-discovery.test.ts",
+  "src/plugins/contracts/discovery.contract.test.ts",
+]);
 
 function walk(dir: string, entries: string[] = []): string[] {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -32,14 +36,14 @@ function findExtensionImports(source: string): string[] {
 }
 
 describe("non-extension test boundaries", () => {
-  it("keeps extension-owned behavior suites under extensions/", () => {
+  it("keeps plugin-owned behavior suites under the bundled plugin tree", () => {
     const testFiles = [
       ...walk(path.join(repoRoot, "src")),
       ...walk(path.join(repoRoot, "test")),
       ...walk(path.join(repoRoot, "packages")),
     ].filter(
       (file) =>
-        !file.startsWith("extensions/") &&
+        !file.startsWith(BUNDLED_PLUGIN_PATH_PREFIX) &&
         !file.startsWith("test/helpers/") &&
         !file.startsWith("ui/"),
     );

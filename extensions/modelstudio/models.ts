@@ -1,4 +1,7 @@
-import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-models";
+import type {
+  ModelDefinitionConfig,
+  ModelProviderConfig,
+} from "openclaw/plugin-sdk/provider-model-shared";
 
 export const MODELSTUDIO_BASE_URL = "https://coding-intl.dashscope.aliyuncs.com/v1";
 export const MODELSTUDIO_GLOBAL_BASE_URL = MODELSTUDIO_BASE_URL;
@@ -90,6 +93,62 @@ export const MODELSTUDIO_MODEL_CATALOG: ReadonlyArray<ModelDefinitionConfig> = [
     maxTokens: 32_768,
   },
 ];
+
+function normalizeModelStudioBaseUrl(baseUrl: string | undefined): string {
+  const trimmed = baseUrl?.trim();
+  if (!trimmed) {
+    return "";
+  }
+  try {
+    const url = new URL(trimmed);
+    url.hash = "";
+    url.search = "";
+    return url.toString().replace(/\/+$/, "").toLowerCase();
+  } catch {
+    return trimmed.replace(/\/+$/, "").toLowerCase();
+  }
+}
+
+export function isNativeModelStudioBaseUrl(baseUrl: string | undefined): boolean {
+  const normalized = normalizeModelStudioBaseUrl(baseUrl);
+  return (
+    normalized === MODELSTUDIO_BASE_URL ||
+    normalized === MODELSTUDIO_CN_BASE_URL ||
+    normalized === MODELSTUDIO_STANDARD_CN_BASE_URL ||
+    normalized === MODELSTUDIO_STANDARD_GLOBAL_BASE_URL
+  );
+}
+
+function withStreamingUsageCompat(provider: ModelProviderConfig): ModelProviderConfig {
+  if (!Array.isArray(provider.models) || provider.models.length === 0) {
+    return provider;
+  }
+
+  let changed = false;
+  const models = provider.models.map((model) => {
+    if (model.compat?.supportsUsageInStreaming !== undefined) {
+      return model;
+    }
+    changed = true;
+    return {
+      ...model,
+      compat: {
+        ...model.compat,
+        supportsUsageInStreaming: true,
+      },
+    };
+  });
+
+  return changed ? { ...provider, models } : provider;
+}
+
+export function applyModelStudioNativeStreamingUsageCompat(
+  provider: ModelProviderConfig,
+): ModelProviderConfig {
+  return isNativeModelStudioBaseUrl(provider.baseUrl)
+    ? withStreamingUsageCompat(provider)
+    : provider;
+}
 
 export function buildModelStudioModelDefinition(params: {
   id: string;

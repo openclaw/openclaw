@@ -6,6 +6,7 @@ import {
 } from "../channels/plugins/index.js";
 import { resolveInstallableChannelPlugin } from "../commands/channel-setup/channel-plugin-resolution.js";
 import { loadConfig, writeConfigFile, type OpenClawConfig } from "../config/config.js";
+import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { setVerbose } from "../globals.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
@@ -25,17 +26,17 @@ function supportsChannelAuthMode(plugin: ChannelPlugin, mode: ChannelAuthMode): 
 }
 
 function isConfiguredAuthPlugin(plugin: ChannelPlugin, cfg: OpenClawConfig): boolean {
-  const channels = cfg.channels as Record<string, unknown> | undefined;
   const key = plugin.id;
-  if (
-    !channels ||
-    isBlockedObjectKey(key) ||
-    !Object.prototype.hasOwnProperty.call(channels, key)
-  ) {
+  if (isBlockedObjectKey(key)) {
     return false;
   }
-  const channelCfg = channels[key];
-  if (!channelCfg || typeof channelCfg !== "object") {
+  const channelCfg = (cfg.channels as Record<string, unknown> | undefined)?.[key];
+  if (
+    channelCfg &&
+    typeof channelCfg === "object" &&
+    "enabled" in channelCfg &&
+    (channelCfg as { enabled?: unknown }).enabled === false
+  ) {
     return false;
   }
 
@@ -130,14 +131,18 @@ export async function runChannelLogin(
   opts: ChannelAuthOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const loadedCfg = loadConfig();
+  const autoEnabled = applyPluginAutoEnable({
+    config: loadConfig(),
+    env: process.env,
+  });
+  const loadedCfg = autoEnabled.config;
   const { cfg, configChanged, channelInput, plugin } = await resolveChannelPluginForMode(
     opts,
     "login",
     loadedCfg,
     runtime,
   );
-  if (configChanged) {
+  if (autoEnabled.changes.length > 0 || configChanged) {
     await writeConfigFile(cfg);
   }
   const login = plugin.auth?.login;
@@ -160,14 +165,18 @@ export async function runChannelLogout(
   opts: ChannelAuthOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const loadedCfg = loadConfig();
+  const autoEnabled = applyPluginAutoEnable({
+    config: loadConfig(),
+    env: process.env,
+  });
+  const loadedCfg = autoEnabled.config;
   const { cfg, configChanged, channelInput, plugin } = await resolveChannelPluginForMode(
     opts,
     "logout",
     loadedCfg,
     runtime,
   );
-  if (configChanged) {
+  if (autoEnabled.changes.length > 0 || configChanged) {
     await writeConfigFile(cfg);
   }
   const logoutAccount = plugin.gateway?.logoutAccount;

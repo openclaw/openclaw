@@ -1,13 +1,13 @@
-import {
-  isDiscordExecApprovalApprover,
-  isDiscordExecApprovalClientEnabled,
-} from "../../../extensions/discord/api.js";
 import { callGateway } from "../../gateway/call.js";
 import { ErrorCodes } from "../../gateway/protocol/index.js";
 import { logVerbose } from "../../globals.js";
 import {
+  isDiscordExecApprovalApprover,
+  isDiscordExecApprovalClientEnabled,
+} from "../../plugin-sdk/discord-surface.js";
+import {
+  isTelegramExecApprovalAuthorizedSender,
   isTelegramExecApprovalApprover,
-  isTelegramExecApprovalClientEnabled,
 } from "../../plugin-sdk/telegram-runtime.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import { requireGatewayClientScopeForInternalChannel } from "./command-gates.js";
@@ -132,6 +132,7 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
   const isPluginId = parsed.id.startsWith("plugin:");
   let discordExecApprovalDeniedReply: { shouldContinue: false; reply: { text: string } } | null =
     null;
+  let isTelegramExplicitApprover = false;
 
   if (params.command.channel === "telegram") {
     const telegramApproverContext = {
@@ -139,28 +140,16 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
       accountId: params.ctx.AccountId,
       senderId: params.command.senderId,
     };
+    isTelegramExplicitApprover = isTelegramExecApprovalApprover(telegramApproverContext);
 
-    if (!isPluginId) {
-      if (
-        !isTelegramExecApprovalClientEnabled({ cfg: params.cfg, accountId: params.ctx.AccountId })
-      ) {
-        return {
-          shouldContinue: false,
-          reply: { text: "❌ Telegram exec approvals are not enabled for this bot account." },
-        };
-      }
-      if (!isTelegramExecApprovalApprover(telegramApproverContext)) {
-        return {
-          shouldContinue: false,
-          reply: { text: "❌ You are not authorized to approve exec requests on Telegram." },
-        };
-      }
+    if (!isPluginId && !isTelegramExecApprovalAuthorizedSender(telegramApproverContext)) {
+      return {
+        shouldContinue: false,
+        reply: { text: "❌ You are not authorized to approve exec requests on Telegram." },
+      };
     }
 
-    // Keep plugin-ID routing independent from exec approval client enablement so
-    // forwarded plugin approvals remain resolvable, but still require explicit
-    // Telegram approver membership for security parity.
-    if (isPluginId && !isTelegramExecApprovalApprover(telegramApproverContext)) {
+    if (isPluginId && !isTelegramExplicitApprover) {
       return {
         shouldContinue: false,
         reply: { text: "❌ You are not authorized to approve plugin requests on Telegram." },
@@ -261,6 +250,12 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
       await callApprovalMethod("exec.approval.resolve");
     } catch (err) {
       if (isApprovalNotFoundError(err)) {
+        if (params.command.channel === "telegram" && !isTelegramExplicitApprover) {
+          return {
+            shouldContinue: false,
+            reply: { text: `❌ Failed to submit approval: ${String(err)}` },
+          };
+        }
         try {
           await callApprovalMethod("plugin.approval.resolve");
         } catch (pluginErr) {

@@ -145,4 +145,101 @@ describe("ensurePluginRegistryLoaded", () => {
       }),
     );
   });
+
+  it("does not treat a pre-seeded partial registry as all scope", async () => {
+    const config = {
+      plugins: { enabled: true },
+      channels: { "demo-channel-a": { enabled: true } },
+    };
+
+    mocks.loadConfig.mockReturnValue(config);
+    mocks.applyPluginAutoEnable.mockReturnValue({ config, changes: [] });
+    mocks.getActivePluginRegistry.mockReturnValue({
+      plugins: [],
+      channels: [{ plugin: { id: "demo-channel-a" } }],
+      tools: [],
+    });
+
+    const { ensurePluginRegistryLoaded } = await import("./plugin-registry.js");
+
+    ensurePluginRegistryLoaded({ scope: "all" });
+
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledTimes(1);
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config,
+        throwOnLoadError: true,
+        workspaceDir: "/tmp/workspace",
+      }),
+    );
+  });
+
+  it("does not treat a tools-only pre-seeded registry as channel scope", async () => {
+    const config = {
+      plugins: { enabled: true },
+      channels: { "demo-channel-a": { enabled: true } },
+    };
+
+    mocks.loadConfig.mockReturnValue(config);
+    mocks.applyPluginAutoEnable.mockReturnValue({ config, changes: [] });
+    mocks.getActivePluginRegistry.mockReturnValue({
+      plugins: [],
+      channels: [],
+      tools: [{ pluginId: "demo-tool" }],
+    });
+
+    const { ensurePluginRegistryLoaded } = await import("./plugin-registry.js");
+
+    ensurePluginRegistryLoaded({ scope: "configured-channels" });
+
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledTimes(1);
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config,
+        throwOnLoadError: true,
+        workspaceDir: "/tmp/workspace",
+      }),
+    );
+  });
+
+  it("reloads when a pre-seeded channel registry is missing the configured channel plugin ids", async () => {
+    const config = {
+      plugins: { enabled: true },
+      channels: {
+        "demo-channel-a": {
+          botToken: "demo-bot-token",
+          appToken: "demo-app-token",
+        },
+      },
+    };
+
+    mocks.loadConfig.mockReturnValue(config);
+    mocks.applyPluginAutoEnable.mockReturnValue({ config, changes: [] });
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        { id: "demo-channel-a", channels: ["demo-channel-a"] },
+        { id: "demo-channel-b", channels: ["demo-channel-b"] },
+      ],
+      diagnostics: [],
+    });
+    mocks.getActivePluginRegistry.mockReturnValue({
+      plugins: [{ id: "demo-channel-b" }],
+      channels: [{ plugin: { id: "demo-channel-b" } }],
+      tools: [],
+    });
+
+    const { ensurePluginRegistryLoaded } = await import("./plugin-registry.js");
+
+    ensurePluginRegistryLoaded({ scope: "configured-channels" });
+
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledTimes(1);
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config,
+        onlyPluginIds: ["demo-channel-a"],
+        throwOnLoadError: true,
+        workspaceDir: "/tmp/workspace",
+      }),
+    );
+  });
 });

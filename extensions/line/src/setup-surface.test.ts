@@ -2,17 +2,18 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import ts from "typescript";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { loadRuntimeApiExportTypesViaJiti } from "../../../test/helpers/extensions/jiti-runtime-api.ts";
+import { bundledPluginRoot } from "../../../test/helpers/bundled-plugin-paths.js";
+import { loadRuntimeApiExportTypesViaJiti } from "../../../test/helpers/plugins/jiti-runtime-api.ts";
 import {
   createPluginSetupWizardConfigure,
   createTestWizardPrompter,
   runSetupWizardConfigure,
   type WizardPrompter,
-} from "../../../test/helpers/extensions/setup-wizard.js";
-import { createStartAccountContext } from "../../../test/helpers/extensions/start-account-context.js";
+} from "../../../test/helpers/plugins/setup-wizard.js";
+import { createStartAccountContext } from "../../../test/helpers/plugins/start-account-context.js";
 import type { OpenClawConfig, PluginRuntime, ResolvedLineAccount } from "../api.js";
 import { linePlugin } from "./channel.js";
-import { setLineRuntime } from "./runtime.js";
+import { clearLineRuntime, setLineRuntime } from "./runtime.js";
 
 const { getBotInfoMock, MessagingApiClientMock } = vi.hoisted(() => {
   const getBotInfoMock = vi.fn();
@@ -28,13 +29,14 @@ vi.mock("@line/bot-sdk", () => ({
 
 const lineConfigure = createPluginSetupWizardConfigure(linePlugin);
 let probeLineBot: typeof import("./probe.js").probeLineBot;
+const LINE_SRC_PREFIX = `../../${bundledPluginRoot("line")}/src/`;
 
 function normalizeModuleSpecifier(specifier: string): string | null {
   if (specifier.startsWith("./src/")) {
     return specifier;
   }
-  if (specifier.startsWith("../../extensions/line/src/")) {
-    return `./src/${specifier.slice("../../extensions/line/src/".length)}`;
+  if (specifier.startsWith(LINE_SRC_PREFIX)) {
+    return `./src/${specifier.slice(LINE_SRC_PREFIX.length)}`;
   }
   return null;
 }
@@ -186,6 +188,7 @@ describe("probeLineBot", () => {
   });
 
   afterEach(() => {
+    clearLineRuntime();
     vi.useRealTimers();
     getBotInfoMock.mockClear();
   });
@@ -214,6 +217,41 @@ describe("probeLineBot", () => {
 
     expect(result.ok).toBe(true);
     expect(result.bot?.userId).toBe("U123");
+  });
+});
+
+describe("linePlugin status.probeAccount", () => {
+  it("falls back to the direct probe helper when runtime is not initialized", async () => {
+    MessagingApiClientMock.mockReset();
+    MessagingApiClientMock.mockImplementation(function () {
+      return { getBotInfo: getBotInfoMock };
+    });
+    getBotInfoMock.mockResolvedValue({
+      displayName: "OpenClaw",
+      userId: "U123",
+      basicId: "@openclaw",
+      pictureUrl: "https://example.com/bot.png",
+    });
+
+    const { linePlugin: freshLinePlugin } = await import("./channel.js");
+    const { clearLineRuntime: clearFreshLineRuntime } = await import("./runtime.js");
+    const { probeLineBot: directProbeLineBot } = await import("./probe.js");
+    clearFreshLineRuntime();
+    const params = {
+      cfg: {} as OpenClawConfig,
+      account: {
+        accountId: "default",
+        enabled: true,
+        channelAccessToken: "token",
+        channelSecret: "secret",
+        tokenSource: "config",
+      } as ResolvedLineAccount,
+      timeoutMs: 50,
+    };
+
+    await expect(freshLinePlugin.status!.probeAccount!(params)).resolves.toEqual(
+      await directProbeLineBot("token", 50),
+    );
   });
 });
 
