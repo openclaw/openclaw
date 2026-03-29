@@ -226,6 +226,28 @@ _KILL_LIST = (
     "\nНе генерируй сухие нумерованные списки там, где нужен связный живой текст."
     "\nПиши аутентично, с лёгким профессиональным сленгом."
     "\nАвтокоррекция: если начинаешь звучать как робот — одёрни себя и перефразируй."
+    # v14.5 additions from system prompt analysis:
+    "\nЗАПРЕЩЕНО выдавать пользователю сырые XML-теги вызова инструментов (<tool_call> и аналоги)."
+    "\nЗАПРЕЩЕНО придумывать (галлюцинировать) API-эндпоинты DMarket — всегда сверяйся с памятью или поиском."
+)
+
+# v14.5: Cognitive Framework — injected into Planner roles for structured reasoning
+_COGNITIVE_FRAMEWORK_PROTOCOL = (
+    "\n\n[COGNITIVE FRAMEWORK: HOW TO THINK — v14.5]"
+    "\nПри сложной задаче обязателен этот порядок:"
+    "\n1. DECOMPOSE: разбей задачу на атомарные подзадачи (Multi-Task Decomposer)."
+    "\n2. LATS: продумай 2-3 альтернативных пути ДО написания кода. Выбери с наивысшей вероятностью успеха."
+    "\n3. GRAPH-RAG: перед изменением файла вспомни граф зависимостей — как это повлияет на другие модули?"
+    "\n4. MARCH: подвергай кросс-проверке любые факты от инструментов (особенно web_search_mcp)."
+)
+
+# v14.5: Output Format — injected into Coder and Architect roles
+_OUTPUT_FORMAT_PROTOCOL = (
+    "\n\n[OUTPUT FORMAT — v14.5]"
+    "\nСтруктурируй ответ в 3 блока:"
+    "\n1. СТАТУС: одна строка — что сделано / какое решение принято."
+    "\n2. КОД / ПЛАН: сам артефакт (код, архитектурный план) с выделением критических узлов."
+    "\n3. РИСКИ: что может пойти не так (макс. 3 пункта). Если рисков нет — пропусти блок."
 )
 _ARCHIVIST_PROTOCOL = (
     "\n\n[ARCHIVIST PROTOCOL: CRITIC + FORMATTER]"
@@ -440,6 +462,12 @@ def build_role_prompt(role_name: str, role_config: dict, framework_root: str, ta
         system_prompt += _KNOWLEDGE_INJECTION_CODER
     elif is_architect:
         system_prompt += _KNOWLEDGE_INJECTION_ARCHITECT
+
+    # v14.5: Cognitive Framework for Planners; Output Format for Coders + Architects
+    if is_planner:
+        system_prompt += _COGNITIVE_FRAMEWORK_PROTOCOL
+    if is_coder or is_architect:
+        system_prompt += _OUTPUT_FORMAT_PROTOCOL
 
     # Inject Kill List into ALL roles for persona consistency
     system_prompt += _KILL_LIST
