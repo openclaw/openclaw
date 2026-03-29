@@ -1,16 +1,18 @@
-import {
-  INTERNAL_MESSAGE_CHANNEL,
-  isDeliverableMessageChannel,
-  normalizeMessageChannel,
-} from "../utils/message-channel.js";
+import { loadConfig } from "../config/config.js";
+import { resolveExecApprovalInitiatingSurfaceState } from "./exec-approval-surface.js";
 
-export function hasApprovalTurnSourceRoute(params: { turnSourceChannel?: string | null }): boolean {
-  const channel = normalizeMessageChannel(params.turnSourceChannel);
-  if (!channel) {
+export function hasApprovalTurnSourceRoute(params: {
+  turnSourceChannel?: string | null;
+  turnSourceAccountId?: string | null;
+}): boolean {
+  if (!params.turnSourceChannel?.trim()) {
     return false;
   }
-  if (channel === INTERNAL_MESSAGE_CHANNEL || channel === "tui") {
-    return true;
-  }
-  return isDeliverableMessageChannel(channel);
+  return (
+    resolveExecApprovalInitiatingSurfaceState({
+      channel: params.turnSourceChannel,
+      accountId: params.turnSourceAccountId,
+      cfg: loadConfig(),
+    }).kind === "enabled"
+  );
 }

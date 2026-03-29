@@ -1,19 +1,52 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const loadConfigMock = vi.hoisted(() => vi.fn());
+const resolveExecApprovalInitiatingSurfaceStateMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../config/config.js", () => ({
+  loadConfig: () => loadConfigMock(),
+}));
+
+vi.mock("./exec-approval-surface.js", () => ({
+  resolveExecApprovalInitiatingSurfaceState: (...args: unknown[]) =>
+    resolveExecApprovalInitiatingSurfaceStateMock(...args),
+}));
+
 import { hasApprovalTurnSourceRoute } from "./approval-turn-source.js";
 
 describe("hasApprovalTurnSourceRoute", () => {
-  it("accepts operator UI turn sources", () => {
-    expect(hasApprovalTurnSourceRoute({ turnSourceChannel: "webchat" })).toBe(true);
-    expect(hasApprovalTurnSourceRoute({ turnSourceChannel: "tui" })).toBe(true);
+  beforeEach(() => {
+    loadConfigMock.mockReset();
+    resolveExecApprovalInitiatingSurfaceStateMock.mockReset();
+    loadConfigMock.mockReturnValue({ loaded: true });
   });
 
-  it("accepts deliverable chat channels", () => {
-    expect(hasApprovalTurnSourceRoute({ turnSourceChannel: "slack" })).toBe(true);
-    expect(hasApprovalTurnSourceRoute({ turnSourceChannel: "discord" })).toBe(true);
+  it("returns true when the initiating surface is enabled", () => {
+    resolveExecApprovalInitiatingSurfaceStateMock.mockReturnValue({ kind: "enabled" });
+
+    expect(
+      hasApprovalTurnSourceRoute({
+        turnSourceChannel: "slack",
+        turnSourceAccountId: "work",
+      }),
+    ).toBe(true);
+    expect(resolveExecApprovalInitiatingSurfaceStateMock).toHaveBeenCalledWith({
+      channel: "slack",
+      accountId: "work",
+      cfg: { loaded: true },
+    });
   });
 
-  it("rejects missing or unknown turn sources", () => {
-    expect(hasApprovalTurnSourceRoute({ turnSourceChannel: undefined })).toBe(false);
+  it("returns false when the initiating surface is disabled or unsupported", () => {
+    resolveExecApprovalInitiatingSurfaceStateMock.mockReturnValueOnce({ kind: "disabled" });
+    expect(hasApprovalTurnSourceRoute({ turnSourceChannel: "discord" })).toBe(false);
+
+    resolveExecApprovalInitiatingSurfaceStateMock.mockReturnValueOnce({ kind: "unsupported" });
     expect(hasApprovalTurnSourceRoute({ turnSourceChannel: "unknown-channel" })).toBe(false);
+  });
+
+  it("returns false when there is no turn-source channel", () => {
+    expect(hasApprovalTurnSourceRoute({ turnSourceChannel: undefined })).toBe(false);
+    expect(resolveExecApprovalInitiatingSurfaceStateMock).not.toHaveBeenCalled();
   });
 });

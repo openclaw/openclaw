@@ -126,10 +126,7 @@ export function isTelegramExecApprovalAuthorizedSender(params: {
   accountId?: string | null;
   senderId?: string | null;
 }): boolean {
-  return (
-    (isTelegramExecApprovalClientEnabled(params) && isTelegramExecApprovalApprover(params)) ||
-    isTelegramExecApprovalTargetRecipient(params)
-  );
+  return isTelegramExecApprovalApprover(params) || isTelegramExecApprovalTargetRecipient(params);
 }
 
 export function resolveTelegramExecApprovalTarget(params: {
