@@ -35,34 +35,36 @@ export function createApproverRestrictedNativeApprovalAdapter(params: {
 
   return {
     auth: {
-      authorizeCommand: ({
+      authorizeActorAction: ({
         cfg,
         accountId,
         senderId,
-        kind,
+        approvalKind,
       }: {
         cfg: OpenClawConfig;
         accountId?: string | null;
         senderId?: string | null;
-        kind: ApprovalKind;
+        action: "approve";
+        approvalKind: ApprovalKind;
       }) => {
         const authorized =
-          kind === "plugin"
+          approvalKind === "plugin"
             ? pluginSenderAuth({ cfg, accountId, senderId })
             : params.isExecAuthorizedSender({ cfg, accountId, senderId });
         return authorized
           ? { authorized: true }
           : {
               authorized: false,
-              reason: `❌ You are not authorized to approve ${kind} requests on ${params.channelLabel}.`,
+              reason: `❌ You are not authorized to approve ${approvalKind} requests on ${params.channelLabel}.`,
             };
       },
-      getInitiatingSurfaceState: ({
+      getActionAvailabilityState: ({
         cfg,
         accountId,
       }: {
         cfg: OpenClawConfig;
         accountId?: string | null;
+        action: "approve";
       }) =>
         params.hasApprovers({ cfg, accountId })
           ? ({ kind: "enabled" } as const)
