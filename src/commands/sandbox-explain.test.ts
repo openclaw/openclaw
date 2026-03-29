@@ -1,6 +1,20 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 const SANDBOX_EXPLAIN_TEST_TIMEOUT_MS = process.platform === "win32" ? 45_000 : 30_000;
+
+function createSessionStorePath() {
+  return path.join(
+    os.tmpdir(),
+    `openclaw-sandbox-explain-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.json`,
+  );
+}
+
+function writeSessionStore(storePath: string, entries: Record<string, unknown>) {
+  fs.writeFileSync(storePath, JSON.stringify(entries, null, 2));
+}
 
 let mockCfg: unknown = {};
 
@@ -139,19 +153,75 @@ describe("sandbox explain command", () => {
     };
 
     const logs: string[] = [];
-    await sandboxExplainCommand(
-      { json: true, session: "agent:main:discord:serverx:direct:7890" },
-      {
-        log: (msg: string) => logs.push(msg),
-        error: (msg: string) => logs.push(msg),
-        exit: (_code: number) => {},
-      } as unknown as Parameters<typeof sandboxExplainCommand>[1],
-    );
+    await sandboxExplainCommand({ json: true, session: "agent:main:discord:serverx:direct:7890" }, {
+      log: (msg: string) => logs.push(msg),
+      error: (msg: string) => logs.push(msg),
+      exit: (_code: number) => {},
+    } as unknown as Parameters<typeof sandboxExplainCommand>[1]);
 
     const parsed = JSON.parse(logs.join(""));
     expect(parsed.elevated.channel).toBe("discord");
     expect(parsed.elevated.accountId).toBe("serverx");
     expect(parsed.elevated.allowedByConfig).toBe(true);
     expect(parsed.elevated.allowFrom.global).toEqual(["7890"]);
+  });
+
+  it("uses lastAccountId from session metadata for Discord fallback diagnostics", async () => {
+    const storePath = createSessionStorePath();
+    writeSessionStore(storePath, {
+      "agent:main:main": {
+        lastChannel: "discord",
+        lastAccountId: "serverx",
+      },
+    });
+
+    mockCfg = {
+      channels: {
+        discord: {
+          accounts: {
+            serverx: {
+              allowFrom: ["7890"],
+            },
+          },
+        },
+      },
+      tools: {
+        elevated: { enabled: true },
+      },
+      session: { store: storePath },
+    };
+
+    const logs: string[] = [];
+    await sandboxExplainCommand({ json: true, session: "agent:main:main" }, {
+      log: (msg: string) => logs.push(msg),
+      error: (msg: string) => logs.push(msg),
+      exit: (_code: number) => {},
+    } as unknown as Parameters<typeof sandboxExplainCommand>[1]);
+
+    const parsed = JSON.parse(logs.join(""));
+    expect(parsed.elevated.channel).toBe("discord");
+    expect(parsed.elevated.accountId).toBe("serverx");
+    expect(parsed.elevated.allowedByConfig).toBe(true);
+    expect(parsed.elevated.allowFrom.global).toEqual(["7890"]);
+  });
+
+  it("ignores non-channel session prefixes when inferring diagnostics provider", async () => {
+    mockCfg = {
+      tools: {
+        elevated: { enabled: true },
+      },
+      session: { store: "/tmp/openclaw-test-sessions-{agentId}.json" },
+    };
+
+    const logs: string[] = [];
+    await sandboxExplainCommand({ json: true, session: "agent:main:cron:job-1" }, {
+      log: (msg: string) => logs.push(msg),
+      error: (msg: string) => logs.push(msg),
+      exit: (_code: number) => {},
+    } as unknown as Parameters<typeof sandboxExplainCommand>[1]);
+
+    const parsed = JSON.parse(logs.join(""));
+    expect(parsed.elevated.channel).toBeUndefined();
+    expect(parsed.elevated.failures).toEqual([]);
   });
 });

@@ -4,7 +4,7 @@ import {
   resolveSandboxToolPolicyForAgent,
 } from "../agents/sandbox.js";
 import { resolveElevatedChannelFallbackAllowFrom } from "../auto-reply/reply/reply-elevated.js";
-import { normalizeAnyChannelId } from "../channels/registry.js";
+import { normalizeAnyChannelId, normalizeChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import {
@@ -57,6 +57,33 @@ function normalizeExplainSessionKey(params: {
   });
 }
 
+type SandboxExplainSessionStoreEntry = {
+  lastChannel?: string;
+  channel?: string;
+  // Legacy keys (pre-rename).
+  lastProvider?: string;
+  provider?: string;
+  lastAccountId?: string;
+  deliveryContext?: {
+    accountId?: string;
+  };
+  origin?: {
+    accountId?: string;
+  };
+};
+
+function loadSandboxExplainSessionStoreEntry(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  sessionKey: string;
+}): SandboxExplainSessionStoreEntry | undefined {
+  const storePath = resolveStorePath(params.cfg.session?.store, {
+    agentId: params.agentId,
+  });
+  const store = loadSessionStore(storePath);
+  return store[params.sessionKey] as SandboxExplainSessionStoreEntry | undefined;
+}
+
 function inferProviderFromSessionKey(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
@@ -84,7 +111,7 @@ function inferProviderFromSessionKey(params: {
   if (candidate === INTERNAL_MESSAGE_CHANNEL) {
     return INTERNAL_MESSAGE_CHANNEL;
   }
-  return normalizeAnyChannelId(candidate) ?? candidate;
+  return normalizeChannelId(candidate) ?? normalizeAnyChannelId(candidate) ?? undefined;
 }
 
 function inferAccountIdFromSessionKey(params: {
@@ -115,24 +142,30 @@ function inferAccountIdFromSessionKey(params: {
   return accountId || undefined;
 }
 
+function resolveAccountId(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  sessionKey: string;
+}): string | undefined {
+  const entry = loadSandboxExplainSessionStoreEntry(params);
+  const fromSession = inferAccountIdFromSessionKey({
+    cfg: params.cfg,
+    sessionKey: params.sessionKey,
+  });
+  const fromStore =
+    entry?.lastAccountId?.trim() ||
+    entry?.deliveryContext?.accountId?.trim() ||
+    entry?.origin?.accountId?.trim() ||
+    undefined;
+  return fromStore ?? fromSession;
+}
+
 function resolveActiveChannel(params: {
   cfg: OpenClawConfig;
   agentId: string;
   sessionKey: string;
 }): string | undefined {
-  const storePath = resolveStorePath(params.cfg.session?.store, {
-    agentId: params.agentId,
-  });
-  const store = loadSessionStore(storePath);
-  const entry = store[params.sessionKey] as
-    | {
-        lastChannel?: string;
-        channel?: string;
-        // Legacy keys (pre-rename).
-        lastProvider?: string;
-        provider?: string;
-      }
-    | undefined;
+  const entry = loadSandboxExplainSessionStoreEntry(params);
   const candidate = (
     entry?.lastChannel ??
     entry?.channel ??
@@ -145,12 +178,9 @@ function resolveActiveChannel(params: {
   if (candidate === INTERNAL_MESSAGE_CHANNEL) {
     return INTERNAL_MESSAGE_CHANNEL;
   }
-  const normalized = normalizeAnyChannelId(candidate);
+  const normalized = normalizeChannelId(candidate) ?? normalizeAnyChannelId(candidate);
   if (normalized) {
     return normalized;
-  }
-  if (candidate) {
-    return candidate;
   }
   return inferProviderFromSessionKey({
     cfg: params.cfg,
@@ -197,8 +227,9 @@ export async function sandboxExplainCommand(
     agentId: resolvedAgentId,
     sessionKey,
   });
-  const accountId = inferAccountIdFromSessionKey({
+  const accountId = resolveAccountId({
     cfg,
+    agentId: resolvedAgentId,
     sessionKey,
   });
 
