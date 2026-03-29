@@ -76,72 +76,82 @@ function resolveHomeRelativePath(input: string, homeDir: string): string {
   return path.resolve(trimmed);
 }
 
+function applyProfileEnvEntries(entries: Iterable<string>): number {
+  let applied = 0;
+  for (const entry of entries) {
+    if (!entry) {
+      continue;
+    }
+    const idx = entry.indexOf("=");
+    if (idx <= 0) {
+      continue;
+    }
+    const key = entry.slice(0, idx);
+    if (!key || (process.env[key] ?? "") !== "") {
+      continue;
+    }
+    process.env[key] = entry.slice(idx + 1);
+    applied += 1;
+  }
+  return applied;
+}
+
+function stripProfileValueQuotes(value: string): string {
+  const trimmed = value.trim();
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    return trimmed.slice(1, -1);
+  }
+  return trimmed;
+}
+
+function parseProfileEnvFallback(profilePath: string): number {
+  const profile = fs.readFileSync(profilePath, "utf8");
+  const entries: string[] = [];
+  for (const line of profile.split(/\r?\n/u)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) {
+      continue;
+    }
+    const assignment = trimmed.startsWith("export ")
+      ? trimmed.slice("export ".length).trim()
+      : trimmed;
+    const match = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/u.exec(assignment);
+    if (!match) {
+      continue;
+    }
+    const [, key, rawValue] = match;
+    entries.push(`${key}=${stripProfileValueQuotes(rawValue)}`);
+  }
+  return applyProfileEnvEntries(entries);
+}
+
 function loadProfileEnv(homeDir = os.homedir()): void {
   const profilePath = path.join(homeDir, ".profile");
   if (!fs.existsSync(profilePath)) {
     return;
   }
-  const applyEntry = (entry: string) => {
-    const idx = entry.indexOf("=");
-    if (idx <= 0) {
-      return false;
-    }
-    const key = entry.slice(0, idx).trim();
-    if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(key) || (process.env[key] ?? "") !== "") {
-      return false;
-    }
-    process.env[key] = entry.slice(idx + 1);
-    return true;
-  };
-  const countAppliedEntries = (entries: Iterable<string>) => {
-    let applied = 0;
-    for (const entry of entries) {
-      if (applyEntry(entry)) {
-        applied += 1;
-      }
-    }
-    return applied;
-  };
+
+  let applied = 0;
   try {
-    const output = execFileSync(
-      "/bin/bash",
-      ["-lc", `set -a; source "${profilePath}" >/dev/null 2>&1; env -0`],
-      { encoding: "utf8" },
-    );
-    const applied = countAppliedEntries(output.split("\0").filter(Boolean));
-    if (applied > 0 && !isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST_QUIET)) {
-      console.log(`[live] loaded ${applied} env vars from ~/.profile`);
+    if (fs.existsSync("/bin/bash")) {
+      const output = execFileSync(
+        "/bin/bash",
+        ["-lc", `set -a; source "${profilePath}" >/dev/null 2>&1; env -0`],
+        { encoding: "utf8" },
+      );
+      applied = applyProfileEnvEntries(output.split("\0"));
+    } else {
+      applied = parseProfileEnvFallback(profilePath);
     }
   } catch {
-    try {
-      const fallbackEntries = fs
-        .readFileSync(profilePath, "utf8")
-        .split(/\r?\n/u)
-        .map((line) => line.trim())
-        .filter((line) => line && !line.startsWith("#"))
-        .map((line) => line.replace(/^export\s+/u, ""))
-        .map((line) => {
-          const match = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/u);
-          if (!match) {
-            return "";
-          }
-          let value = match[2].trim();
-          if (
-            (value.startsWith('"') && value.endsWith('"')) ||
-            (value.startsWith("'") && value.endsWith("'"))
-          ) {
-            value = value.slice(1, -1);
-          }
-          return `${match[1]}=${value}`;
-        })
-        .filter(Boolean);
-      const applied = countAppliedEntries(fallbackEntries);
-      if (applied > 0 && !isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST_QUIET)) {
-        console.log(`[live] loaded ${applied} env vars from ~/.profile`);
-      }
-    } catch {
-      // ignore profile load failures
-    }
+    applied = parseProfileEnvFallback(profilePath);
+  }
+
+  if (applied > 0 && !isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST_QUIET)) {
+    console.log(`[live] loaded ${applied} env vars from ~/.profile`);
   }
 }
 

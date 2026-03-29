@@ -220,7 +220,6 @@ describe("installTestEnv", () => {
   it("falls back to parsing ~/.profile when bash is unavailable", async () => {
     const realHome = createTempHome();
     writeFile(path.join(realHome, ".profile"), "export TEST_PROFILE_ONLY=from-profile\n");
-
     process.env.HOME = realHome;
     process.env.USERPROFILE = realHome;
     process.env.OPENCLAW_LIVE_TEST = "1";
