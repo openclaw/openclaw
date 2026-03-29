@@ -107,7 +107,7 @@ describe("agentCliCommand", () => {
     });
   });
 
-  it("falls back to embedded agent when gateway fails", async () => {
+  it("falls back to embedded agent when gateway fails with a recoverable error", async () => {
     await withTempStore(async () => {
       vi.mocked(callGateway).mockRejectedValue(new Error("gateway not connected"));
       mockLocalAgentReply();
@@ -117,6 +117,34 @@ describe("agentCliCommand", () => {
       expect(callGateway).toHaveBeenCalledTimes(1);
       expect(agentCommand).toHaveBeenCalledTimes(1);
       expect(runtime.log).toHaveBeenCalledWith("local");
+    });
+  });
+
+  it("fails closed on gateway timeout instead of falling back to embedded", async () => {
+    await withTempStore(async () => {
+      vi.mocked(callGateway).mockRejectedValue(new Error("gateway timeout after 930000ms"));
+      mockLocalAgentReply();
+
+      await expect(agentCliCommand({ message: "hi", to: "+1555" }, runtime)).rejects.toThrow(
+        /without embedded fallback/i,
+      );
+
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      expect(agentCommand).not.toHaveBeenCalled();
+    });
+  });
+
+  it("fails closed on gateway closed instead of falling back to embedded", async () => {
+    await withTempStore(async () => {
+      vi.mocked(callGateway).mockRejectedValue(new Error("gateway closed (1006 abnormal closure)"));
+      mockLocalAgentReply();
+
+      await expect(agentCliCommand({ message: "hi", to: "+1555" }, runtime)).rejects.toThrow(
+        /without embedded fallback/i,
+      );
+
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      expect(agentCommand).not.toHaveBeenCalled();
     });
   });
 

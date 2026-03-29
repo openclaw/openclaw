@@ -178,6 +178,16 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
   return response;
 }
 
+function shouldFailClosedAgentGatewayError(err: unknown): boolean {
+  const message =
+    typeof err === "string"
+      ? err.toLowerCase()
+      : err instanceof Error
+        ? err.message.toLowerCase()
+        : "";
+  return message.includes("gateway timeout") || message.includes("gateway closed");
+}
+
 export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv, deps?: CliDeps) {
   const localOpts = {
     ...opts,
@@ -191,6 +201,12 @@ export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv, d
   try {
     return await agentViaGatewayCommand(opts, runtime);
   } catch (err) {
+    if (shouldFailClosedAgentGatewayError(err)) {
+      throw new Error(
+        `Gateway agent failed without embedded fallback because the request may still be active remotely: ${String(err)}`,
+        { cause: err },
+      );
+    }
     runtime.error?.(`Gateway agent failed; falling back to embedded: ${String(err)}`);
     return await agentCommand(localOpts, runtime, deps);
   }
