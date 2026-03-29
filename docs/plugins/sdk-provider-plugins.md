@@ -23,6 +23,7 @@ API key auth, and dynamic model resolution.
 ## Walkthrough
 
 <Steps>
+  <a id="step-1-package-and-manifest"></a>
   <Step title="Package and manifest">
     <CodeGroup>
     ```json package.json
@@ -318,9 +319,10 @@ API key auth, and dynamic model resolution.
 
   </Step>
 
-  <Step title="Add extra capabilities (optional)">
-    A provider plugin can register speech, media understanding, image
-    generation, and web search alongside text inference:
+<a id="step-5-add-extra-capabilities"></a>
+<Step title="Add extra capabilities (optional)">
+A provider plugin can register speech, media understanding, image
+generation, and web search alongside text inference:
 
     ```typescript
     register(api) {
@@ -359,11 +361,12 @@ API key auth, and dynamic model resolution.
 
   </Step>
 
-  <Step title="Test">
-    ```typescript src/provider.test.ts
-    import { describe, it, expect } from "vitest";
-    // Export your provider config object from index.ts or a dedicated file
-    import { acmeProvider } from "./provider.js";
+<a id="step-6-test"></a>
+<Step title="Test">
+```typescript src/provider.test.ts
+import { describe, it, expect } from "vitest";
+// Export your provider config object from index.ts or a dedicated file
+import { acmeProvider } from "./provider.js";
 
     describe("acme-ai provider", () => {
       it("resolves dynamic models", () => {
