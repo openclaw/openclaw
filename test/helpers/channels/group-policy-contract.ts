@@ -1,18 +1,18 @@
 import { expect, it } from "vitest";
-import { __testing as discordMonitorTesting } from "../../../extensions/discord/src/monitor/provider.js";
-import { __testing as imessageMonitorTesting } from "../../../extensions/imessage/src/monitor/monitor-provider.js";
-import { __testing as slackMonitorTesting } from "../../../extensions/slack/src/monitor/provider.js";
-import { resolveTelegramRuntimeGroupPolicy } from "../../../extensions/telegram/runtime-api.js";
-import { whatsappAccessControlTesting } from "../../../extensions/whatsapp/api.js";
+import { installChannelRuntimeGroupPolicyFallbackSuite } from "../../../src/channels/plugins/contracts/suites.js";
+import { resolveDiscordRuntimeGroupPolicy } from "../../../src/plugin-sdk/discord-surface.js";
+import { resolveIMessageRuntimeGroupPolicy } from "../../../src/plugin-sdk/imessage-policy.js";
+import { resolveSlackRuntimeGroupPolicy } from "../../../src/plugin-sdk/slack-surface.js";
+import { resolveTelegramRuntimeGroupPolicy } from "../../../src/plugin-sdk/telegram-runtime-surface.js";
+import { whatsappAccessControlTesting } from "../../../src/plugin-sdk/whatsapp-surface.js";
 import {
   evaluateZaloGroupAccess,
   resolveZaloRuntimeGroupPolicy,
-} from "../../../extensions/zalo/api.js";
-import { installChannelRuntimeGroupPolicyFallbackSuite } from "../../../src/channels/plugins/contracts/suites.js";
+} from "../../../src/plugin-sdk/zalo-setup.js";
 
 export function installSlackGroupPolicyContractSuite() {
   installChannelRuntimeGroupPolicyFallbackSuite({
-    resolve: slackMonitorTesting.resolveSlackRuntimeGroupPolicy,
+    resolve: resolveSlackRuntimeGroupPolicy,
     configuredLabel: "keeps open default when channels.slack is configured",
     defaultGroupPolicyUnderTest: "open",
     missingConfigLabel: "fails closed when channels.slack is missing and no defaults are set",
@@ -42,7 +42,7 @@ export function installWhatsAppGroupPolicyContractSuite() {
 
 export function installIMessageGroupPolicyContractSuite() {
   installChannelRuntimeGroupPolicyFallbackSuite({
-    resolve: imessageMonitorTesting.resolveIMessageRuntimeGroupPolicy,
+    resolve: resolveIMessageRuntimeGroupPolicy,
     configuredLabel: "keeps open fallback when channels.imessage is configured",
     defaultGroupPolicyUnderTest: "disabled",
     missingConfigLabel: "fails closed when channels.imessage is missing and no defaults are set",
@@ -52,7 +52,7 @@ export function installIMessageGroupPolicyContractSuite() {
 
 export function installDiscordGroupPolicyContractSuite() {
   installChannelRuntimeGroupPolicyFallbackSuite({
-    resolve: discordMonitorTesting.resolveDiscordRuntimeGroupPolicy,
+    resolve: resolveDiscordRuntimeGroupPolicy,
     configuredLabel: "keeps open default when channels.discord is configured",
     defaultGroupPolicyUnderTest: "open",
     missingConfigLabel: "fails closed when channels.discord is missing and no defaults are set",
@@ -60,7 +60,7 @@ export function installDiscordGroupPolicyContractSuite() {
   });
 
   it("respects explicit provider policy", () => {
-    const resolved = discordMonitorTesting.resolveDiscordRuntimeGroupPolicy({
+    const resolved = resolveDiscordRuntimeGroupPolicy({
       providerConfigPresent: false,
       groupPolicy: "disabled",
     });

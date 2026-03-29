@@ -30,9 +30,9 @@ function isLineUserTarget(target: string): boolean {
 function hasLineSpecificMediaOptions(lineData: LineChannelDataWithMedia): boolean {
   return Boolean(
     lineData.mediaKind ??
-      lineData.previewImageUrl?.trim() ??
-      (typeof lineData.durationMs === "number" ? lineData.durationMs : undefined) ??
-      lineData.trackingId?.trim(),
+    lineData.previewImageUrl?.trim() ??
+    (typeof lineData.durationMs === "number" ? lineData.durationMs : undefined) ??
+    lineData.trackingId?.trim(),
   );
 }
 

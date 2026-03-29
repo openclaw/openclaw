@@ -334,7 +334,7 @@ export type ChannelThreadingAdapter = {
   allowExplicitReplyTagsWhenOff?: boolean;
   /**
    * Deprecated alias for allowExplicitReplyTagsWhenOff.
-   * Kept for compatibility with older extensions/docks.
+   * Kept for compatibility with older plugin surfaces.
    */
   allowTagsWhenOff?: boolean;
   buildToolContext?: (params: {
