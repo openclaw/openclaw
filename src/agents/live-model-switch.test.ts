@@ -77,6 +77,31 @@ describe("live model switch", () => {
     });
   });
 
+  it("treats legacy manual auth profile overrides as user-selected", async () => {
+    state.loadSessionStoreMock.mockReturnValue({
+      main: {
+        authProfileOverride: "profile-gpt",
+      },
+    });
+
+    const { resolveLiveSessionModelSelection } = await loadModule();
+
+    expect(
+      resolveLiveSessionModelSelection({
+        cfg: { session: { store: "/tmp/custom-store.json" } },
+        sessionKey: "main",
+        agentId: "reply",
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.4",
+      }),
+    ).toEqual({
+      provider: "openai",
+      model: "gpt-5.4",
+      authProfileId: "profile-gpt",
+      authProfileIdSource: "user",
+    });
+  });
+
   it("falls back to the current attempt when the session has no explicit override", async () => {
     const { resolveLiveSessionModelSelection } = await loadModule();
 
@@ -221,5 +246,25 @@ describe("live model switch", () => {
         },
       ),
     ).toBe(true);
+  });
+
+  it("treats a missing current auth profile source as unchanged for legacy manual overrides", async () => {
+    const { hasDifferentLiveSessionModelSelection } = await loadModule();
+
+    expect(
+      hasDifferentLiveSessionModelSelection(
+        {
+          provider: "openai",
+          model: "gpt-5.4",
+          authProfileId: "profile-gpt",
+        },
+        {
+          provider: "openai",
+          model: "gpt-5.4",
+          authProfileId: "profile-gpt",
+          authProfileIdSource: "user",
+        },
+      ),
+    ).toBe(false);
   });
 });

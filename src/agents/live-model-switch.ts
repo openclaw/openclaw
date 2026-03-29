@@ -24,6 +24,16 @@ export class LiveSessionModelSwitchError extends Error {
   }
 }
 
+function normalizeSelectedAuthProfileSource(
+  authProfileId: string | undefined,
+  authProfileIdSource: string | undefined,
+): "auto" | "user" | undefined {
+  if (!authProfileId) {
+    return undefined;
+  }
+  return authProfileIdSource === "auto" ? "auto" : "user";
+}
+
 function resolvePersistedAuthProfileSelection(
   entry: Pick<
     SessionEntry,
@@ -31,16 +41,14 @@ function resolvePersistedAuthProfileSelection(
   >,
 ): Pick<LiveSessionModelSelection, "authProfileId" | "authProfileIdSource"> {
   const authProfileId = entry.authProfileOverride?.trim() || undefined;
-  if (!authProfileId) {
-    return {
-      authProfileId: undefined,
-      authProfileIdSource: undefined,
-    };
-  }
   const authProfileIdSource =
-    entry.authProfileOverrideSource ??
-    (typeof entry.authProfileOverrideCompactionCount === "number" ? "auto" : "user");
-  if (authProfileIdSource !== "user") {
+    entry.authProfileOverrideSource === "auto"
+      ? "auto"
+      : normalizeSelectedAuthProfileSource(
+          authProfileId,
+          typeof entry.authProfileOverrideCompactionCount === "number" ? "auto" : "user",
+        );
+  if (!authProfileId || authProfileIdSource !== "user") {
     return {
       authProfileId: undefined,
       authProfileIdSource: undefined,
@@ -118,8 +126,14 @@ export function hasDifferentLiveSessionModelSelection(
   }
   const currentAuthProfileId = current.authProfileId?.trim() || undefined;
   const nextAuthProfileId = next.authProfileId?.trim() || undefined;
-  const currentAuthProfileIdSource = currentAuthProfileId ? current.authProfileIdSource : undefined;
-  const nextAuthProfileIdSource = nextAuthProfileId ? next.authProfileIdSource : undefined;
+  const currentAuthProfileIdSource = normalizeSelectedAuthProfileSource(
+    currentAuthProfileId,
+    current.authProfileIdSource,
+  );
+  const nextAuthProfileIdSource = normalizeSelectedAuthProfileSource(
+    nextAuthProfileId,
+    next.authProfileIdSource,
+  );
   const authSelectionDiffers =
     currentAuthProfileId === nextAuthProfileId
       ? currentAuthProfileIdSource !== nextAuthProfileIdSource
