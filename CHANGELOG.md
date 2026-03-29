@@ -195,6 +195,8 @@ Docs: https://docs.openclaw.ai
 - Control UI/agents: add a "Not set" placeholder to the default agent model selector dropdown. (#53411) Thanks @BunsDev.
 - Runtime/install: lower the supported Node 22 floor to `22.14+` while continuing to recommend Node 24, so npm installs and self-updates do not strand Node 22.14 users on older releases.
 - CLI/update: preflight the target npm package `engines.node` before `openclaw update` runs a global package install, so outdated Node runtimes fail with a clear upgrade message instead of attempting an unsupported latest release.
+- Agents/BTW: force `/btw` side questions to disable provider reasoning so Anthropic adaptive-thinking sessions stop failing with `No BTW response generated`. Fixes #55376. Thanks @Catteres and @vincentkoc.
+- Auth profiles/OAuth: refresh runtime auth snapshots when saving rotated credentials so OAuth providers do not reuse consumed refresh tokens after the first token rotation. Fixes #55389. Thanks @sam26880 and @vincentkoc.
 
 ### Fixes
 
