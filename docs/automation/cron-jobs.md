@@ -155,6 +155,25 @@ They must use `payload.kind = "systemEvent"`.
 This is the best fit when you want the normal heartbeat prompt + main-session context.
 See [Heartbeat](/gateway/heartbeat).
 
+##### HEARTBEAT.md Integration for Main Session Jobs
+
+**Important:** Main session cron jobs use a specialized prompt (`buildCronEventPrompt`) that does **not** include the "Read HEARTBEAT.md" instruction from the default heartbeat prompt.
+
+If you want your cron events to trigger tasks defined in `HEARTBEAT.md`, add the following to your `AGENTS.md`:
+
+```markdown
+## Cron System Event Handling
+
+When you receive a cron system event (prompt contains "A scheduled reminder has been triggered"):
+1. Read `HEARTBEAT.md` to find the task configuration for this event (e.g., `daily_morning_brief`)
+2. Execute the task (e.g., send daily brief, wake-up call, etc.)
+3. Report completion to the user
+```
+
+This workaround is necessary because the cron event prompt is designed to be self-contained and does not automatically reference `HEARTBEAT.md`.
+
+**Related Issue:** [#11726](https://github.com/openclaw/openclaw/issues/11726)
+
 #### Isolated jobs (dedicated cron sessions)
 
 Isolated jobs run a dedicated agent turn in session `cron:<jobId>` or a custom session.

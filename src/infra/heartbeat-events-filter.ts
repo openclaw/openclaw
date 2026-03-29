@@ -3,6 +3,11 @@ import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 // Build a dynamic prompt for cron events by embedding the actual event content.
 // This ensures the model sees the reminder text directly instead of relying on
 // "shown in the system messages above" which may not be visible in context.
+// 
+// Note: The prompt intentionally omits "Read HEARTBEAT.md" because cron events
+// are meant to be self-contained reminders. If you need HEARTBEAT.md integration,
+// configure your agent's AGENTS.md to check HEARTBEAT.md when receiving system events.
+// See: https://github.com/openclaw/openclaw/issues/11726
 export function buildCronEventPrompt(
   pendingEvents: string[],
   opts?: {

@@ -214,6 +214,23 @@ Think of it like a human reviewing their journal and updating their mental model
 
 The goal: Be helpful without being annoying. Check in a few times a day, do useful background work, but respect quiet time.
 
+### Handling Cron System Events
+
+If you use Main Session Cron jobs (`--session main --system-event`), add this section to handle cron events:
+
+```markdown
+## Cron System Event Handling
+
+When your prompt contains "A scheduled reminder has been triggered":
+1. Read `HEARTBEAT.md` to find the task configuration for the event
+2. Execute the task (e.g., daily brief, wake-up call, calendar check)
+3. Report completion to the user
+
+Example event texts: `daily_morning_brief`, `calendar_sync`, `weekly_review`
+```
+
+This is necessary because cron event prompts do not include the "Read HEARTBEAT.md" instruction by default.
+
 ## Make It Yours
 
 This is a starting point. Add your own conventions, style, and rules as you figure out what works.
