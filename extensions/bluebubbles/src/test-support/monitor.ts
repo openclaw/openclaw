@@ -1,11 +1,11 @@
 import type { HistoryEntry, PluginRuntime } from "openclaw/plugin-sdk/bluebubbles";
 import { vi } from "vitest";
+import { createPluginRuntimeMock } from "../../../../test/helpers/plugins/plugin-runtime-mock.js";
 import {
   _resetBlueBubblesShortIdState,
   clearBlueBubblesWebhookSecurityStateForTest,
-} from "../../../extensions/bluebubbles/src/monitor.js";
-import { setBlueBubblesRuntime } from "../../../extensions/bluebubbles/src/runtime.js";
-import { createPluginRuntimeMock } from "./plugin-runtime-mock.js";
+} from "../monitor.js";
+import { setBlueBubblesRuntime } from "../runtime.js";
 
 type BlueBubblesHistoryFetchResult = {
   entries: HistoryEntry[];

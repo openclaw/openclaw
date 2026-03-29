@@ -9,7 +9,7 @@ import {
   getFirstDiscordMessageHandlerParams,
   getProviderMonitorTestMocks,
   resetDiscordProviderMonitorMocks,
-} from "../../../../test/helpers/plugins/discord-provider.test-support.js";
+} from "../test-support/provider.test-support.js";
 
 const {
   clientConstructorOptionsMock,
@@ -604,14 +604,19 @@ describe("monitorDiscordProvider", () => {
   });
 
   it("registers plugin commands from the real registry as native Discord commands", async () => {
-    const { clearPluginCommands, getPluginCommandSpecs, registerPluginCommand } =
-      await import("openclaw/plugin-sdk/plugin-runtime");
+    const {
+      clearPluginCommands,
+      getPluginCommandSpecs: getRealPluginCommandSpecs,
+      registerPluginCommand,
+    } = await vi.importActual<typeof import("openclaw/plugin-sdk/plugin-runtime")>(
+      "openclaw/plugin-sdk/plugin-runtime",
+    );
     clearPluginCommands();
     listNativeCommandSpecsForConfigMock.mockReturnValue([
       { name: "status", description: "Status", acceptsArgs: false },
     ]);
     getPluginCommandSpecsMock.mockImplementation((provider?: string) =>
-      getPluginCommandSpecs(provider),
+      getRealPluginCommandSpecs(provider),
     );
 
     expect(

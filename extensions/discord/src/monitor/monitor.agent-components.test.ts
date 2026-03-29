@@ -11,7 +11,7 @@ import {
   readAllowFromStoreMock,
   resetDiscordComponentRuntimeMocks,
   upsertPairingRequestMock,
-} from "../../../../test/helpers/plugins/discord-component-runtime.js";
+} from "../test-support/component-runtime.js";
 import { createAgentComponentButton, createAgentSelectMenu } from "./agent-components.js";
 
 describe("agent components", () => {
