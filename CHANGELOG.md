@@ -28,6 +28,7 @@ Docs: https://docs.openclaw.ai
 - Memory/QMD: honor `memory.qmd.update.embedInterval` even when regular QMD update cadence is disabled or slower by arming a dedicated embed-cadence maintenance timer, while avoiding redundant timers when regular updates are already frequent enough. (#37326) Thanks @barronlroth.
 - Agents/memory flush: keep daily memory flush files append-only during embedded attempts so compaction writes do not overwrite earlier notes. (#53725) Thanks @HPluseven.
 - Web UI/markdown: stop bare auto-links from swallowing adjacent CJK text while preserving valid mixed-script path and query characters in rendered links. (#48410) Thanks @jnuyao.
+- Sandbox/browser: install `fonts-noto-cjk` in the sandbox browser image so screenshots render Chinese, Japanese, and Korean text correctly instead of tofu boxes. Fixes #35597. Thanks @carrotRakko and @vincentkoc.
 - Memory/FTS: add configurable trigram tokenization plus short-CJK substring fallback so memory search can find Chinese, Japanese, and Korean text without breaking mixed long-and-short queries. Thanks @carrotRakko.
 - Hooks/config: accept runtime channel plugin ids in `hooks.mappings[].channel` (for example `feishu`) instead of rejecting non-core channels during config validation. (#56226) Thanks @AiKrai001.
 - TUI/chat: keep optimistic outbound user messages visible during active runs by deferring local-run binding until the first gateway chat event reveals the real run id, preventing premature history reloads from wiping pending local sends. (#54722) Thanks @seanturner001.
