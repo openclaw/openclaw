@@ -655,6 +655,17 @@ export function buildAgentSystemPrompt(params: {
     );
   }
 
+  // MODELSELFAWARE-01: Dedicated model identity statement. This is separate
+  // from the pipe-delimited Runtime metadata line below, which models may
+  // not reliably parse. This prominent, unambiguous statement ensures the
+  // agent can accurately self-report its model, even after mid-session
+  // switches across providers (e.g. Anthropic → Google → OpenAI).
+  if (runtimeInfo?.model) {
+    lines.push(
+      `**Your model identity**: You are running as \`${runtimeInfo.model}\`. This is your actual model — use this when asked what model you are.`,
+    );
+  }
+
   lines.push(
     "## Runtime",
     buildRuntimeLine(runtimeInfo, runtimeChannel, runtimeCapabilities, params.defaultThinkLevel),

@@ -791,3 +791,186 @@ describe("buildSubagentSystemPrompt", () => {
     }
   });
 });
+
+/**
+ * MODELSELFAWARE-01: Dedicated model identity line in the system prompt.
+ *
+ * The OpenClaw system prompt carries model information in two places:
+ *   1. A dedicated "**Your model identity**" line — prominent, unambiguous,
+ *      designed for the model to self-report accurately when asked "what model
+ *      are you?"
+ *   2. The pipe-delimited `## Runtime` metadata line (`model=X`) — a compact
+ *      machine-readable summary that models may not reliably parse.
+ *
+ * These tests verify that:
+ *   - The dedicated line appears when runtimeInfo.model is set and is absent
+ *     when it is not.
+ *   - The dedicated line appears BEFORE the ## Runtime section (ordering
+ *     matters because models weight earlier prompt content more heavily).
+ *   - The Runtime line still carries its own `model=` field independently.
+ *   - When autoroute switches the running model away from the default_model,
+ *     both values are present and distinct.
+ */
+describe("MODELSELFAWARE-01 — model identity line", () => {
+  // Helper: build a prompt with the given runtimeInfo for reuse across tests.
+  const buildWithModel = (model?: string, defaultModel?: string) =>
+    buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      runtimeInfo: {
+        agentId: "work",
+        host: "host",
+        os: "macOS",
+        arch: "arm64",
+        node: "v20",
+        ...(model ? { model } : {}),
+        ...(defaultModel ? { defaultModel } : {}),
+      },
+    });
+
+  it("includes the dedicated model identity line when runtimeInfo.model is set", () => {
+    // When runtimeInfo.model is provided, the prompt must contain a
+    // human-readable identity statement so the agent can answer "what model
+    // are you?" without parsing the pipe-delimited Runtime line.
+    const prompt = buildWithModel("anthropic/claude-sonnet-4");
+
+    expect(prompt).toContain(
+      "**Your model identity**: You are running as `anthropic/claude-sonnet-4`.",
+    );
+    expect(prompt).toContain("This is your actual model");
+  });
+
+  it("omits the dedicated model identity line when runtimeInfo.model is absent", () => {
+    // When no model is known at runtime (e.g. early bootstrap or missing
+    // config), the identity line must not appear — avoids a confusing
+    // "running as `undefined`" in the prompt.
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      runtimeInfo: {
+        agentId: "work",
+        host: "host",
+        os: "macOS",
+        arch: "arm64",
+        node: "v20",
+        // model intentionally omitted
+      },
+    });
+
+    expect(prompt).not.toContain("**Your model identity**");
+    expect(prompt).not.toContain("This is your actual model");
+  });
+
+  it("omits the dedicated model identity line when runtimeInfo is entirely absent", () => {
+    // Edge case: no runtimeInfo at all. The identity line must not appear.
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+    });
+
+    expect(prompt).not.toContain("**Your model identity**");
+  });
+
+  it("places the model identity line BEFORE the ## Runtime section", () => {
+    // Ordering matters for prompt parsing: the dedicated identity line must
+    // come before ## Runtime so models encounter the unambiguous statement
+    // first, before the dense pipe-delimited metadata.
+    const prompt = buildWithModel("anthropic/claude-sonnet-4");
+
+    const identityIndex = prompt.indexOf("**Your model identity**");
+    const runtimeIndex = prompt.indexOf("## Runtime");
+
+    // Both must be present
+    expect(identityIndex).toBeGreaterThan(-1);
+    expect(runtimeIndex).toBeGreaterThan(-1);
+
+    // Identity line must appear earlier in the prompt than ## Runtime
+    expect(identityIndex).toBeLessThan(runtimeIndex);
+  });
+
+  it("does not duplicate model info — identity line and Runtime line each state it once", () => {
+    // The dedicated identity line and the Runtime metadata line both mention
+    // the model, but in different formats. Neither should cause the other to
+    // appear twice. We verify each format appears exactly once.
+    const model = "anthropic/claude-sonnet-4";
+    const prompt = buildWithModel(model);
+
+    // The dedicated identity statement (backtick-wrapped model name)
+    const identityPattern = `running as \`${model}\``;
+    const identityMatches = prompt.split(identityPattern).length - 1;
+    expect(identityMatches).toBe(1);
+
+    // The Runtime pipe-delimited field
+    const runtimePattern = `model=${model}`;
+    const runtimeMatches = prompt.split(runtimePattern).length - 1;
+    expect(runtimeMatches).toBe(1);
+  });
+
+  it("shows both model and default_model when autoroute switches the running model", () => {
+    // AUTOROUTE scenario: the running model differs from the tenant's
+    // default_model. The identity line should reflect the actual running
+    // model, while the Runtime line carries both model= and default_model=
+    // so the agent (and operators) can see the distinction.
+    const runningModel = "google/gemini-2.5-pro";
+    const defaultModel = "anthropic/claude-opus-4-5";
+    const prompt = buildWithModel(runningModel, defaultModel);
+
+    // Dedicated identity line shows the actual running model
+    expect(prompt).toContain(`**Your model identity**: You are running as \`${runningModel}\`.`);
+
+    // Runtime line carries both values
+    expect(prompt).toContain(`model=${runningModel}`);
+    expect(prompt).toContain(`default_model=${defaultModel}`);
+
+    // The identity line should NOT mention the default model — it's purely
+    // about what the agent IS, not what it was configured as.
+    const identityLine = prompt
+      .split("\n")
+      .find((line) => line.includes("**Your model identity**"));
+    expect(identityLine).toBeDefined();
+    expect(identityLine).not.toContain(defaultModel);
+  });
+
+  it("buildRuntimeLine independently carries model= regardless of the identity line", () => {
+    // Unit test for buildRuntimeLine: the pipe-delimited Runtime metadata
+    // must include model= when runtimeInfo.model is set, independent of
+    // whatever the full prompt does with the identity line.
+    const line = buildRuntimeLine(
+      {
+        agentId: "work",
+        host: "host",
+        os: "macOS",
+        arch: "arm64",
+        node: "v20",
+        model: "openai/gpt-4.1",
+        defaultModel: "anthropic/claude-opus-4-5",
+      },
+      "telegram",
+      ["inlineButtons"],
+      "low",
+    );
+
+    expect(line).toContain("model=openai/gpt-4.1");
+    expect(line).toContain("default_model=anthropic/claude-opus-4-5");
+    // The Runtime line should NOT contain the identity statement format
+    expect(line).not.toContain("**Your model identity**");
+  });
+
+  it("buildRuntimeLine omits model= when runtimeInfo.model is absent", () => {
+    // When no model is set, the Runtime line should not include a bare
+    // "model=" field that could confuse parsers.
+    const line = buildRuntimeLine(
+      {
+        agentId: "work",
+        host: "host",
+        os: "macOS",
+        arch: "arm64",
+        node: "v20",
+        // model intentionally omitted
+      },
+      "telegram",
+      [],
+      "off",
+    );
+
+    expect(line).not.toContain("model=");
+    expect(line).toContain("agent=work");
+  });
+});
