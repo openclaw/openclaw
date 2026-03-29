@@ -1,3 +1,3 @@
-import { describeOpenAIProviderCatalogContract } from "../../test/helpers/extensions/provider-catalog-contract.js";
+import { describeOpenAIProviderCatalogContract } from "../../test/helpers/plugins/provider-catalog-contract.js";
 
 describeOpenAIProviderCatalogContract();

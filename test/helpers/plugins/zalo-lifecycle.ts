@@ -1,20 +1,60 @@
 import { request as httpRequest } from "node:http";
+import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk/zalo";
 import { expect, vi } from "vitest";
-import type { ResolvedZaloAccount } from "../../../extensions/zalo/src/accounts.js";
-import {
-  clearZaloWebhookSecurityStateForTest,
-  monitorZaloProvider,
-} from "../../../extensions/zalo/src/monitor.js";
-import type { PluginRuntime } from "../../../extensions/zalo/src/runtime-api.js";
-import type { OpenClawConfig } from "../../../extensions/zalo/src/runtime-api.js";
-import { normalizeSecretInputString } from "../../../extensions/zalo/src/secret-input.js";
 import { createEmptyPluginRegistry } from "../../../src/plugins/registry.js";
 import { setActivePluginRegistry } from "../../../src/plugins/runtime.js";
+import {
+  loadBundledPluginPublicSurfaceSync,
+  resolveRelativeBundledPluginPublicModuleId,
+} from "../../../src/test-utils/bundled-plugin-public-surface.js";
 import { withServer } from "../http-test-server.js";
 import { createPluginRuntimeMock } from "./plugin-runtime-mock.js";
 import { createRuntimeEnv } from "./runtime-env.js";
 
 export { withServer };
+
+type ResolvedZaloAccount = {
+  accountId: string;
+  enabled: boolean;
+  token: string;
+  tokenSource: "env" | "config" | "configFile" | "none";
+  config: Record<string, unknown>;
+};
+
+const { clearZaloWebhookSecurityStateForTest, monitorZaloProvider } =
+  loadBundledPluginPublicSurfaceSync<{
+    clearZaloWebhookSecurityStateForTest: () => void;
+    monitorZaloProvider: (params: {
+      token: string;
+      account: ResolvedZaloAccount;
+      config: OpenClawConfig;
+      runtime: ReturnType<typeof createRuntimeEnv>;
+      abortSignal: AbortSignal;
+      useWebhook?: boolean;
+      webhookUrl?: string;
+      webhookSecret?: string;
+    }) => Promise<unknown>;
+  }>({
+    pluginId: "zalo",
+    artifactBasename: "src/monitor.js",
+  });
+const { normalizeSecretInputString } = loadBundledPluginPublicSurfaceSync<{
+  normalizeSecretInputString: (value: unknown) => string | undefined;
+}>({
+  pluginId: "zalo",
+  artifactBasename: "src/secret-input.js",
+});
+
+const zaloApiModuleId = resolveRelativeBundledPluginPublicModuleId({
+  fromModuleUrl: import.meta.url,
+  pluginId: "zalo",
+  artifactBasename: "src/api.js",
+});
+const zaloRuntimeModuleId = resolveRelativeBundledPluginPublicModuleId({
+  fromModuleUrl: import.meta.url,
+  pluginId: "zalo",
+  artifactBasename: "src/runtime.js",
+});
 
 const lifecycleMocks = vi.hoisted(() => ({
   setWebhookMock: vi.fn(async () => ({ ok: true, result: { url: "" } })),
@@ -39,8 +79,8 @@ export const sendMessageMock = lifecycleMocks.sendMessageMock;
 export const sendPhotoMock = lifecycleMocks.sendPhotoMock;
 export const getZaloRuntimeMock = lifecycleMocks.getZaloRuntimeMock;
 
-vi.mock("../../../extensions/zalo/src/api.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../extensions/zalo/src/api.js")>();
+vi.mock(zaloApiModuleId, async (importOriginal) => {
+  const actual = await importOriginal<object>();
   return {
     ...actual,
     deleteWebhook: lifecycleMocks.deleteWebhookMock,
@@ -53,7 +93,7 @@ vi.mock("../../../extensions/zalo/src/api.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../../../extensions/zalo/src/runtime.js", () => ({
+vi.mock(zaloRuntimeModuleId, () => ({
   getZaloRuntime: lifecycleMocks.getZaloRuntimeMock,
 }));
 
@@ -341,7 +381,11 @@ export async function startWebhookLifecycleMonitor(params: {
   setActivePluginRegistry(registry);
   const abort = new AbortController();
   const runtime = createRuntimeEnv();
-  const webhookUrl = params.webhookUrl ?? params.account.config?.webhookUrl;
+  const accountWebhookUrl =
+    typeof params.account.config?.webhookUrl === "string"
+      ? params.account.config.webhookUrl
+      : undefined;
+  const webhookUrl = params.webhookUrl ?? accountWebhookUrl;
   const webhookSecret =
     params.webhookSecret ?? normalizeSecretInputString(params.account.config?.webhookSecret);
   const run = monitorZaloProvider({
