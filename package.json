@@ -620,6 +620,10 @@
       "types": "./dist/plugin-sdk/memory-core-host-engine-storage.d.ts",
       "default": "./dist/plugin-sdk/memory-core-host-engine-storage.js"
     },
+    "./plugin-sdk/memory-core-host-engine-episodic": {
+      "types": "./dist/plugin-sdk/memory-core-host-engine-episodic.d.ts",
+      "default": "./dist/plugin-sdk/memory-core-host-engine-episodic.js"
+    },
     "./plugin-sdk/memory-core-host-multimodal": {
       "types": "./dist/plugin-sdk/memory-core-host-multimodal.d.ts",
       "default": "./dist/plugin-sdk/memory-core-host-multimodal.js"
