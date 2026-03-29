@@ -108,6 +108,24 @@ describe("issue #46341: recurring job transient error retry", () => {
     expect(nextRun).toBeLessThanOrEqual(ENDED_AT + 30_000);
   });
 
+  it("retries the internal scheduler timeout error with backoff on a recurring job", () => {
+    // "cron: job execution timed out" is the internal message from timeoutErrorMessage().
+    // The timeout pattern must match "timed out" (space-separated) not just "timeout".
+    const job = makeEveryJob(60 * 60_000);
+    const state = makeState();
+
+    applyJobResult(state, job, {
+      status: "error",
+      error: "cron: job execution timed out",
+      startedAt: NOW_MS,
+      endedAt: ENDED_AT,
+    });
+
+    const nextRun = job.state.nextRunAtMs!;
+    // Should retry within backoff (30s), not wait the full 60-minute schedule.
+    expect(nextRun).toBeLessThanOrEqual(ENDED_AT + 30_000);
+  });
+
   it("retries a 5xx server error with backoff on a recurring job", () => {
     const job = makeEveryJob(10 * 60_000); // every 10 minutes
     const state = makeState();
