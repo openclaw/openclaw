@@ -101,6 +101,7 @@ describe("resolveGatewayCompatibilityHttpOperatorScopes", () => {
       resolveGatewayCompatibilityHttpOperatorScopes({
         req,
         authResult: { ok: true, method: "token" },
+        fallbackScopes: CLI_DEFAULT_OPERATOR_SCOPES,
       }),
     ).toEqual(CLI_DEFAULT_OPERATOR_SCOPES);
   });
@@ -112,6 +113,7 @@ describe("resolveGatewayCompatibilityHttpOperatorScopes", () => {
       resolveGatewayCompatibilityHttpOperatorScopes({
         req,
         authResult: { ok: true, method: "password" },
+        fallbackScopes: CLI_DEFAULT_OPERATOR_SCOPES,
       }),
     ).toEqual(CLI_DEFAULT_OPERATOR_SCOPES);
   });
