@@ -18,7 +18,7 @@ const DEFAULT_VOICE_ID = "";
 const DEFAULT_MODEL = "s2-pro";
 const DEFAULT_LATENCY = "normal" as const;
 
-const FISH_AUDIO_MODELS = ["s2-pro", "s1", "s2"] as const;
+const FISH_AUDIO_MODELS = ["s2-pro", "s1"] as const;
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
