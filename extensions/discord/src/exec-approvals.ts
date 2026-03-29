@@ -1,4 +1,5 @@
 import { getExecApprovalReplyMetadata } from "openclaw/plugin-sdk/approval-runtime";
+import { resolveApprovalApprovers } from "openclaw/plugin-sdk/approval-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveDiscordAccount } from "./accounts.js";
@@ -20,44 +21,26 @@ function normalizeDiscordApproverId(value: string): string | undefined {
   }
 }
 
-function collectDiscordInferredApprovers(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-}): string[] {
-  const account = resolveDiscordAccount(params).config;
-  const inferred = new Set<string>();
-  for (const entry of [...(account.allowFrom ?? []), ...(account.dm?.allowFrom ?? [])]) {
-    const approverId = normalizeDiscordApproverId(String(entry));
-    if (approverId) {
-      inferred.add(approverId);
-    }
-  }
-  const defaultTo = account.defaultTo?.trim();
-  if (defaultTo) {
-    try {
-      const target = parseDiscordTarget(defaultTo);
-      if (target?.kind === "user") {
-        inferred.add(target.id);
-      }
-    } catch {
-      // Ignore ambiguous default targets; explicit approvers or allowFrom still work.
-    }
-  }
-  return [...inferred];
-}
-
 export function getDiscordExecApprovalApprovers(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): string[] {
-  const config = resolveDiscordAccount(params).config.execApprovals;
-  const explicit = (config?.approvers ?? [])
-    .map((entry) => normalizeDiscordApproverId(String(entry)))
-    .filter((entry): entry is string => Boolean(entry));
-  if (explicit.length > 0) {
-    return [...new Set(explicit)];
-  }
-  return collectDiscordInferredApprovers(params);
+  const account = resolveDiscordAccount(params).config;
+  return resolveApprovalApprovers({
+    explicit: account.execApprovals?.approvers,
+    allowFrom: account.allowFrom,
+    extraAllowFrom: account.dm?.allowFrom,
+    defaultTo: account.defaultTo,
+    normalizeApprover: (value) => normalizeDiscordApproverId(String(value)),
+    normalizeDefaultTo: (value) => {
+      try {
+        const target = parseDiscordTarget(value);
+        return target?.kind === "user" ? target.id : undefined;
+      } catch {
+        return undefined;
+      }
+    },
+  });
 }
 
 export function isDiscordExecApprovalClientEnabled(params: {
