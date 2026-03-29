@@ -7,7 +7,7 @@ import {
 } from "./auth.js";
 import { sendGatewayAuthFailure } from "./http-common.js";
 import { getBearerToken, getHeader } from "./http-utils.js";
-import { CLI_DEFAULT_OPERATOR_SCOPES, type OperatorScope } from "./method-scopes.js";
+import type { OperatorScope } from "./method-scopes.js";
 
 const OPERATOR_SCOPES_HEADER = "x-openclaw-scopes";
 
@@ -87,7 +87,7 @@ export function resolveGatewayCompatibilityHttpOperatorScopes(params: {
     return requested.scopes;
   }
   if (canImplicitlyTrustCompatibilityScopes(params.authResult)) {
-    return [...(params.fallbackScopes ?? CLI_DEFAULT_OPERATOR_SCOPES)];
+    return [...(params.fallbackScopes ?? [])];
   }
   return [];
 }

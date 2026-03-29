@@ -45,17 +45,11 @@ export async function handleGatewayPostJsonEndpoint(
   }
 
   if (opts.requiredOperatorMethod) {
-    const requestedScopes = opts.implicitCompatibilityOperatorScopes
-      ? resolveGatewayCompatibilityHttpOperatorScopes({
-          req,
-          authResult,
-          fallbackScopes: opts.implicitCompatibilityOperatorScopes,
-        })
-      : resolveGatewayCompatibilityHttpOperatorScopes({
-          req,
-          authResult,
-          fallbackScopes: [],
-        });
+    const requestedScopes = resolveGatewayCompatibilityHttpOperatorScopes({
+      req,
+      authResult,
+      fallbackScopes: opts.implicitCompatibilityOperatorScopes ?? [],
+    });
     const scopeAuth = authorizeOperatorScopesForMethod(
       opts.requiredOperatorMethod,
       requestedScopes,
