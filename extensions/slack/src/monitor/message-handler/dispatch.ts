@@ -560,7 +560,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       };
 
   let dispatchError: unknown;
-  let didAdvanceStatusReaction = false;
   let queuedFinal = false;
   let counts: { final?: number; block?: number } = {};
   try {
@@ -589,13 +588,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         onReasoningEnd: onDraftBoundary,
         onReasoningStream: statusReactionsEnabled
           ? async () => {
-              didAdvanceStatusReaction = true;
               await statusReactions.setThinking();
             }
           : undefined,
         onToolStart: statusReactionsEnabled
           ? async (payload) => {
-              didAdvanceStatusReaction = true;
               await statusReactions.setTool(payload.name);
             }
           : undefined,
@@ -646,9 +643,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       } else {
         void statusReactions.restoreInitial();
       }
-    } else if (didAdvanceStatusReaction) {
-      // Silent success should preserve the original ack instead of looking like
-      // we delivered a visible reply.
+    } else {
+      // Silent success should preserve queued state and clear any stall timers
+      // instead of transitioning to terminal/stall reactions after return.
       await statusReactions.restoreInitial();
     }
   }

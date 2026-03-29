@@ -94,6 +94,29 @@ describe("Slack status reaction lifecycle", () => {
     expect(active.has(DEFAULT_EMOJIS.error)).toBe(false);
   });
 
+  it("restoreInitial clears stall timers without re-adding queued emoji", async () => {
+    const { adapter, active } = createSlackMockAdapter();
+    const ctrl = createStatusReactionController({
+      enabled: true,
+      adapter,
+      initialEmoji: "eyes",
+      timing: { debounceMs: 0, stallSoftMs: 10, stallHardMs: 20 },
+    });
+
+    void ctrl.setQueued();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(active.has("eyes")).toBe(true);
+    expect(adapter.setReaction).toHaveBeenCalledTimes(1);
+
+    await ctrl.restoreInitial();
+    await vi.advanceTimersByTimeAsync(30);
+
+    expect(adapter.setReaction).toHaveBeenCalledTimes(1);
+    expect(active.has("eyes")).toBe(true);
+    expect(active.has(DEFAULT_EMOJIS.stallSoft)).toBe(false);
+    expect(active.has(DEFAULT_EMOJIS.stallHard)).toBe(false);
+  });
+
   it("does nothing when disabled", async () => {
     const { adapter, active } = createSlackMockAdapter();
     const ctrl = createStatusReactionController({

@@ -379,7 +379,14 @@ export function createStatusReactionController(params: {
       return;
     }
 
+    const alreadyInitial = currentEmoji === initialEmoji;
+    const initialAlreadyPending = pendingEmoji === initialEmoji;
     clearAllTimers();
+    if (alreadyInitial || initialAlreadyPending) {
+      pendingEmoji = "";
+      return;
+    }
+
     await enqueue(async () => {
       await applyEmoji(initialEmoji);
       pendingEmoji = "";
