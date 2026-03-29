@@ -3,8 +3,8 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { removePathIfExists } from "./runtime-postbuild-shared.mjs";
 
-function symlinkType() {
-  return process.platform === "win32" ? "junction" : "dir";
+function symlinkType(platform = process.platform) {
+  return platform === "win32" ? "junction" : "dir";
 }
 
 function relativeSymlinkTarget(sourcePath, targetPath) {
@@ -12,18 +12,43 @@ function relativeSymlinkTarget(sourcePath, targetPath) {
   return relativeTarget || ".";
 }
 
-function ensureSymlink(targetValue, targetPath, type) {
+function copyRuntimeOverlayFile(sourcePath, targetPath, fsImpl = fs) {
+  fsImpl.mkdirSync(path.dirname(targetPath), { recursive: true });
+  fsImpl.copyFileSync(sourcePath, targetPath);
+}
+
+function shouldCopyInsteadOfSymlink({ error, fsImpl = fs, platform = process.platform, sourcePath, type }) {
+  if (platform !== "win32" || !sourcePath || type === "dir" || type === "junction") {
+    return false;
+  }
+  if (!["EPERM", "EACCES"].includes(error?.code ?? "")) {
+    return false;
+  }
   try {
-    fs.symlinkSync(targetValue, targetPath, type);
+    return fsImpl.statSync(sourcePath).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function ensureSymlink(targetValue, targetPath, type, options = {}) {
+  const fsImpl = options.fsImpl ?? fs;
+  const platform = options.platform ?? process.platform;
+  try {
+    fsImpl.symlinkSync(targetValue, targetPath, type);
     return;
   } catch (error) {
+    if (shouldCopyInsteadOfSymlink({ error, fsImpl, platform, sourcePath: options.sourcePath, type })) {
+      copyRuntimeOverlayFile(options.sourcePath, targetPath, fsImpl);
+      return;
+    }
     if (error?.code !== "EEXIST") {
       throw error;
     }
   }
 
   try {
-    if (fs.lstatSync(targetPath).isSymbolicLink() && fs.readlinkSync(targetPath) === targetValue) {
+    if (fsImpl.lstatSync(targetPath).isSymbolicLink() && fsImpl.readlinkSync(targetPath) === targetValue) {
       return;
     }
   } catch {
@@ -31,11 +56,22 @@ function ensureSymlink(targetValue, targetPath, type) {
   }
 
   removePathIfExists(targetPath);
-  fs.symlinkSync(targetValue, targetPath, type);
+  try {
+    fsImpl.symlinkSync(targetValue, targetPath, type);
+  } catch (error) {
+    if (shouldCopyInsteadOfSymlink({ error, fsImpl, platform, sourcePath: options.sourcePath, type })) {
+      copyRuntimeOverlayFile(options.sourcePath, targetPath, fsImpl);
+      return;
+    }
+    throw error;
+  }
 }
 
-function symlinkPath(sourcePath, targetPath, type) {
-  ensureSymlink(relativeSymlinkTarget(sourcePath, targetPath), targetPath, type);
+function symlinkPath(sourcePath, targetPath, type, options = {}) {
+  ensureSymlink(relativeSymlinkTarget(sourcePath, targetPath), targetPath, type, {
+    ...options,
+    sourcePath,
+  });
 }
 
 function shouldWrapRuntimeJsFile(sourcePath) {
@@ -68,10 +104,11 @@ function writeRuntimeModuleWrapper(sourcePath, targetPath) {
   );
 }
 
-function stagePluginRuntimeOverlay(sourceDir, targetDir) {
-  fs.mkdirSync(targetDir, { recursive: true });
+function stagePluginRuntimeOverlay(sourceDir, targetDir, options = {}) {
+  const fsImpl = options.fsImpl ?? fs;
+  fsImpl.mkdirSync(targetDir, { recursive: true });
 
-  for (const dirent of fs.readdirSync(sourceDir, { withFileTypes: true })) {
+  for (const dirent of fsImpl.readdirSync(sourceDir, { withFileTypes: true })) {
     if (dirent.name === "node_modules") {
       continue;
     }
@@ -80,12 +117,12 @@ function stagePluginRuntimeOverlay(sourceDir, targetDir) {
     const targetPath = path.join(targetDir, dirent.name);
 
     if (dirent.isDirectory()) {
-      stagePluginRuntimeOverlay(sourcePath, targetPath);
+      stagePluginRuntimeOverlay(sourcePath, targetPath, options);
       continue;
     }
 
     if (dirent.isSymbolicLink()) {
-      ensureSymlink(fs.readlinkSync(sourcePath), targetPath);
+      ensureSymlink(fsImpl.readlinkSync(sourcePath), targetPath, undefined, options);
       continue;
     }
 
@@ -99,39 +136,46 @@ function stagePluginRuntimeOverlay(sourceDir, targetDir) {
     }
 
     if (shouldCopyRuntimeFile(sourcePath)) {
-      fs.copyFileSync(sourcePath, targetPath);
+      fsImpl.copyFileSync(sourcePath, targetPath);
       continue;
     }
 
-    symlinkPath(sourcePath, targetPath);
+    symlinkPath(sourcePath, targetPath, undefined, options);
   }
 }
 
 function linkPluginNodeModules(params) {
+  const fsImpl = params.fsImpl ?? fs;
+  const platform = params.platform ?? process.platform;
   const runtimeNodeModulesDir = path.join(params.runtimePluginDir, "node_modules");
   removePathIfExists(runtimeNodeModulesDir);
-  if (!fs.existsSync(params.sourcePluginNodeModulesDir)) {
+  if (!fsImpl.existsSync(params.sourcePluginNodeModulesDir)) {
     return;
   }
-  ensureSymlink(params.sourcePluginNodeModulesDir, runtimeNodeModulesDir, symlinkType());
+  ensureSymlink(params.sourcePluginNodeModulesDir, runtimeNodeModulesDir, symlinkType(platform), {
+    fsImpl,
+    platform,
+  });
 }
 
 export function stageBundledPluginRuntime(params = {}) {
+  const fsImpl = params.fsImpl ?? fs;
+  const platform = params.platform ?? process.platform;
   const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();
   const distRoot = path.join(repoRoot, "dist");
   const runtimeRoot = path.join(repoRoot, "dist-runtime");
   const distExtensionsRoot = path.join(distRoot, "extensions");
   const runtimeExtensionsRoot = path.join(runtimeRoot, "extensions");
 
-  if (!fs.existsSync(distExtensionsRoot)) {
+  if (!fsImpl.existsSync(distExtensionsRoot)) {
     removePathIfExists(runtimeRoot);
     return;
   }
 
   removePathIfExists(runtimeRoot);
-  fs.mkdirSync(runtimeExtensionsRoot, { recursive: true });
+  fsImpl.mkdirSync(runtimeExtensionsRoot, { recursive: true });
 
-  for (const dirent of fs.readdirSync(distExtensionsRoot, { withFileTypes: true })) {
+  for (const dirent of fsImpl.readdirSync(distExtensionsRoot, { withFileTypes: true })) {
     if (!dirent.isDirectory()) {
       continue;
     }
@@ -139,10 +183,12 @@ export function stageBundledPluginRuntime(params = {}) {
     const runtimePluginDir = path.join(runtimeExtensionsRoot, dirent.name);
     const distPluginNodeModulesDir = path.join(distPluginDir, "node_modules");
 
-    stagePluginRuntimeOverlay(distPluginDir, runtimePluginDir);
+    stagePluginRuntimeOverlay(distPluginDir, runtimePluginDir, { fsImpl, platform });
     linkPluginNodeModules({
       runtimePluginDir,
       sourcePluginNodeModulesDir: distPluginNodeModulesDir,
+      fsImpl,
+      platform,
     });
   }
 }
