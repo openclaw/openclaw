@@ -423,6 +423,48 @@ describe("cron tool", () => {
     expect(params?.sessionTarget).toBe("isolated");
   });
 
+  it("preserves outputHistory in agentTurn payload", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createCronTool({ agentSessionKey: "agent:main:discord:dm:buddy" });
+    await tool.execute("call-dedup", {
+      action: "add",
+      job: {
+        name: "daily-briefing",
+        schedule: { kind: "cron", expr: "0 8 * * *", tz: "Asia/Shanghai" },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "Send daily briefing", outputHistory: true },
+      },
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.add") as
+      | { payload?: { kind?: string; message?: string; outputHistory?: boolean } }
+      | undefined;
+    expect(params?.payload?.kind).toBe("agentTurn");
+    expect(params?.payload?.outputHistory).toBe(true);
+  });
+
+  it("recovers outputHistory in flat add params", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createCronTool();
+    await tool.execute("call-flat-oh", {
+      action: "add",
+      name: "flat-oh-job",
+      schedule: { kind: "at", at: new Date(123).toISOString() },
+      sessionTarget: "isolated",
+      message: "do stuff",
+      outputHistory: true,
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.add") as
+      | { payload?: { outputHistory?: boolean; message?: string } }
+      | undefined;
+    expect(params?.payload?.outputHistory).toBe(true);
+    expect(params?.payload?.message).toBe("do stuff");
+  });
+
   it("does not recover flat params when no meaningful job field is present", async () => {
     const tool = createTestCronTool();
     await expect(
@@ -550,5 +592,22 @@ describe("cron tool", () => {
     expect(params?.id).toBe("job-2");
     expect(params?.patch?.sessionTarget).toBe("main");
     expect(params?.patch?.failureAlert).toEqual({ after: 3, cooldownMs: 60_000 });
+  });
+
+  it("recovers outputHistory in flat patch params for update action", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createCronTool();
+    await tool.execute("call-update-flat-oh", {
+      action: "update",
+      jobId: "job-oh",
+      outputHistory: true,
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.update") as
+      | { id?: string; patch?: { payload?: { outputHistory?: boolean } } }
+      | undefined;
+    expect(params?.id).toBe("job-oh");
+    expect(params?.patch?.payload?.outputHistory).toBe(true);
   });
 });
