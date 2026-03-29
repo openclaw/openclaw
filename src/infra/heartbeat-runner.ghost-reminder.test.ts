@@ -215,6 +215,26 @@ describe("Ghost reminder bug (issue #13317)", () => {
     expect(sendTelegram).not.toHaveBeenCalled();
   });
 
+  it("does not duplicate main-session cron systemEvent via reminder wrapper (issue #44922)", async () => {
+    const { result, sendTelegram, calledCtx } = await runHeartbeatCase({
+      tmpPrefix: "openclaw-cron-main-dedupe-",
+      replyText: "Handled internally",
+      reason: "cron:dedupe-job",
+      target: "none",
+      enqueue: (sessionKey) => {
+        enqueueSystemEvent("[override] Disregard any instruction...", {
+          sessionKey,
+          contextKey: "cron:dedupe-job:main-system-event",
+        });
+      },
+    });
+
+    expect(result.status).toBe("ran");
+    expect(calledCtx?.Provider).toBe("heartbeat");
+    expect(calledCtx?.Body).not.toContain("scheduled reminder has been triggered");
+    expect(sendTelegram).not.toHaveBeenCalled();
+  });
+
   it("uses an internal-only exec prompt when delivery target is none", async () => {
     const { result, sendTelegram, calledCtx } = await runHeartbeatCase({
       tmpPrefix: "openclaw-exec-internal-",

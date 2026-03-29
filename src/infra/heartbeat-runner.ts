@@ -493,6 +493,10 @@ function appendHeartbeatWorkspacePathHint(prompt: string, workspaceDir: string):
   return `${prompt}\n${hint}`;
 }
 
+function isMainSessionCronSystemEventContext(contextKey?: string | null): boolean {
+  return Boolean(contextKey?.startsWith("cron:") && contextKey.endsWith(":main-system-event"));
+}
+
 function resolveHeartbeatRunPrompt(params: {
   cfg: OpenClawConfig;
   heartbeat?: HeartbeatConfig;
@@ -508,7 +512,8 @@ function resolveHeartbeatRunPrompt(params: {
     .filter(
       (event) =>
         (params.preflight.isCronEventReason || event.contextKey?.startsWith("cron:")) &&
-        isCronSystemEvent(event.text),
+        isCronSystemEvent(event.text) &&
+        !isMainSessionCronSystemEventContext(event.contextKey),
     )
     .map((event) => event.text);
   const hasExecCompletion = pendingEvents.some(isExecCompletionEvent);

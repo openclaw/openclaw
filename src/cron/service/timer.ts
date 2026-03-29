@@ -1059,7 +1059,9 @@ export async function executeJobCore(
     state.deps.enqueueSystemEvent(text, {
       agentId: job.agentId,
       sessionKey: targetMainSessionKey,
-      contextKey: `cron:${job.id}`,
+      // Mark as main-session injected event so heartbeat can avoid duplicating
+      // the same reminder text in an additional cron wrapper prompt.
+      contextKey: `cron:${job.id}:main-system-event`,
     });
     if (job.wakeMode === "now" && state.deps.runHeartbeatOnce) {
       const reason = `cron:${job.id}`;
