@@ -15,7 +15,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
  *
  * Each entry: { src: repo-root-relative source, dest: dist-relative dest }
  */
-const STATIC_EXTENSION_ASSETS = [
+export const STATIC_EXTENSION_ASSETS = [
   // acpx MCP proxy — co-deployed alongside the acpx index bundle so that
   // `path.resolve(dirname(import.meta.url), "mcp-proxy.mjs")` resolves correctly
   // at runtime (see extensions/acpx/src/runtime-internals/mcp-agent-command.ts).
@@ -25,15 +25,19 @@ const STATIC_EXTENSION_ASSETS = [
   },
 ];
 
-function copyStaticExtensionAssets() {
-  for (const { src, dest } of STATIC_EXTENSION_ASSETS) {
-    const srcPath = path.join(ROOT, src);
-    const destPath = path.join(ROOT, dest);
-    if (fs.existsSync(srcPath)) {
-      fs.mkdirSync(path.dirname(destPath), { recursive: true });
-      fs.copyFileSync(srcPath, destPath);
+export function copyStaticExtensionAssets(params = {}) {
+  const rootDir = params.rootDir ?? ROOT;
+  const assets = params.assets ?? STATIC_EXTENSION_ASSETS;
+  const fsImpl = params.fs ?? fs;
+  const warn = params.warn ?? console.warn;
+  for (const { src, dest } of assets) {
+    const srcPath = path.join(rootDir, src);
+    const destPath = path.join(rootDir, dest);
+    if (fsImpl.existsSync(srcPath)) {
+      fsImpl.mkdirSync(path.dirname(destPath), { recursive: true });
+      fsImpl.copyFileSync(srcPath, destPath);
     } else {
-      console.warn(`[runtime-postbuild] static asset not found, skipping: ${src}`);
+      warn(`[runtime-postbuild] static asset not found, skipping: ${src}`);
     }
   }
 }
