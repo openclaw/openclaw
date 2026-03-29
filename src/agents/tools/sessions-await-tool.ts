@@ -182,17 +182,25 @@ export function createSessionsAwaitTool(opts?: { agentSessionKey?: string }): An
             };
           }
           const refreshedRun = getSubagentRunByChildSessionKey(sessionKey);
-          if (refreshedRun && resolveRunOwnerSessionKey(refreshedRun) !== requesterSessionKey) {
+          const refreshedMatchesInitial = refreshedRun?.runId === initialRun.runId;
+          if (
+            refreshedMatchesInitial &&
+            resolveRunOwnerSessionKey(refreshedRun) !== requesterSessionKey
+          ) {
             return {
               sessionKey,
               status: "not_found" as const,
               error: "No registered run found for this session key",
             };
           }
-          // If cleanup evicts the run immediately after wait settles (cleanup=delete),
-          // preserve the run we originally resolved so we can still return a deterministic result.
-          const run = refreshedRun ?? initialRun;
+          // Pin refresh to the original runId so a newer run on the same child
+          // session key cannot be mixed into this await result.
+          const run = refreshedMatchesInitial ? refreshedRun : initialRun;
           const runId = initialRun.runId;
+          const newerActiveRunForSession =
+            refreshedRun != null &&
+            refreshedRun.runId !== runId &&
+            typeof refreshedRun.endedAt !== "number";
 
           const waitResp = waitResults.get(runId);
           const waitStatus = waitResp?.status;
@@ -207,7 +215,7 @@ export function createSessionsAwaitTool(opts?: { agentSessionKey?: string }): An
           if (isTimedOut) {
             // Restore auto-announce so the child can still deliver if it completes later.
             clearSuppressAutoAnnounce(runId);
-            if (cleanupDelete && runTimedOut) {
+            if (cleanupDelete && runTimedOut && !newerActiveRunForSession) {
               await deleteAwaitedChildSession({
                 sessionKey,
                 spawnMode: run.spawnMode,
@@ -252,7 +260,12 @@ export function createSessionsAwaitTool(opts?: { agentSessionKey?: string }): An
             waitStatus === "ok" ||
             (waitStatus === "error" && runEnded) ||
             (typeof waitResp === "undefined" && runEnded);
-          if (cleanupDelete && terminalForDelete && (!replyCaptureError || Boolean(replyText))) {
+          if (
+            cleanupDelete &&
+            !newerActiveRunForSession &&
+            terminalForDelete &&
+            (!replyCaptureError || Boolean(replyText))
+          ) {
             await deleteAwaitedChildSession({
               sessionKey,
               spawnMode: run.spawnMode,

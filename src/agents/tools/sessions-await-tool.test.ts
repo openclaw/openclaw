@@ -378,6 +378,60 @@ describe("sessions_await tool", () => {
     });
   });
 
+  it("pins cleanup/delete behavior to the originally awaited run id", async () => {
+    const childSessionKey = "agent:main:subagent:reused";
+    const initialRun = makeRun({
+      runId: "run-old",
+      childSessionKey,
+      cleanup: "delete",
+    });
+    const newerRun = makeRun({
+      runId: "run-new",
+      childSessionKey,
+      cleanup: "delete",
+      createdAt: Date.now() + 1_000,
+    });
+    let lookupCount = 0;
+    getSubagentRunByChildSessionKeyMock.mockImplementation((key: string) => {
+      if (key !== childSessionKey) {
+        return null;
+      }
+      lookupCount += 1;
+      return lookupCount === 1 ? initialRun : newerRun;
+    });
+    callGatewayMock.mockResolvedValue({ status: "ok" });
+    captureSubagentCompletionReplyMock.mockResolvedValue("old run done");
+
+    const tool = createSessionsAwaitTool({ agentSessionKey: REQUESTER_SESSION_KEY });
+    const result = await tool.execute("call-reused-session-key", {
+      sessionKeys: [childSessionKey],
+    });
+
+    const details = result.details as { status: string; results: Array<Record<string, unknown>> };
+    expect(details.status).toBe("ok");
+    expect(details.results).toHaveLength(1);
+    expect(details.results[0]).toMatchObject({
+      sessionKey: childSessionKey,
+      status: "completed",
+      runId: "run-old",
+      reply: "old run done",
+    });
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "agent.wait",
+        params: expect.objectContaining({
+          runId: "run-old",
+        }),
+      }),
+    );
+    expect(callGatewayMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "sessions.delete",
+      }),
+    );
+  });
+
   it("treats agent.wait transport failures as errors", async () => {
     const activeRun = makeRun({ runId: "run-transport-error" });
     getSubagentRunByChildSessionKeyMock.mockImplementation((key: string) =>
