@@ -241,17 +241,43 @@ export function buildFishAudioSpeechProvider(): SpeechProviderPlugin {
 
     parseDirectiveToken,
 
-    // Talk Mode — v2, stub for now
-    resolveTalkConfig: ({ baseTtsConfig }) =>
-      normalizeFishAudioProviderConfig(baseTtsConfig),
+    resolveTalkConfig: ({ baseTtsConfig, talkProviderConfig }) => {
+      const base = normalizeFishAudioProviderConfig(baseTtsConfig);
+      return {
+        ...base,
+        ...(talkProviderConfig.apiKey === undefined
+          ? {}
+          : {
+              apiKey: normalizeResolvedSecretInputString({
+                value: talkProviderConfig.apiKey,
+                path: "talk.providers.fish-audio.apiKey",
+              }),
+            }),
+        ...(trimToUndefined(talkProviderConfig.baseUrl) == null
+          ? {}
+          : { baseUrl: normalizeBaseUrl(trimToUndefined(talkProviderConfig.baseUrl)) }),
+        ...(trimToUndefined(talkProviderConfig.voiceId) == null
+          ? {}
+          : { voiceId: trimToUndefined(talkProviderConfig.voiceId) }),
+        ...(trimToUndefined(talkProviderConfig.model) == null
+          ? {}
+          : { model: normalizeModel(talkProviderConfig.model) }),
+        ...(talkProviderConfig.latency == null
+          ? {}
+          : { latency: normalizeLatency(talkProviderConfig.latency) }),
+        ...(asNumber(talkProviderConfig.speed) == null
+          ? {}
+          : { speed: asNumber(talkProviderConfig.speed) }),
+      };
+    },
 
     resolveTalkOverrides: ({ params }) => ({
       ...(trimToUndefined(params.voiceId) == null
         ? {}
         : { voiceId: trimToUndefined(params.voiceId) }),
-      ...(trimToUndefined(params.model) == null
+      ...(trimToUndefined(params.modelId) == null
         ? {}
-        : { model: trimToUndefined(params.model) }),
+        : { model: trimToUndefined(params.modelId) }),
       ...(asNumber(params.speed) == null
         ? {}
         : { speed: asNumber(params.speed) }),
@@ -314,10 +340,9 @@ export function buildFishAudioSpeechProvider(): SpeechProviderPlugin {
         referenceId: voiceId,
         model: trimToUndefined(overrides.model) ?? config.model,
         format,
-        latency:
-          normalizeLatency(overrides.latency) !== DEFAULT_LATENCY
-            ? normalizeLatency(overrides.latency)
-            : config.latency,
+        latency: overrides.latency != null
+          ? normalizeLatency(overrides.latency)
+          : config.latency,
         speed,
         temperature: asNumber(overrides.temperature) ?? config.temperature,
         topP: asNumber(overrides.topP) ?? config.topP,

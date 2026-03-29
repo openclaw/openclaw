@@ -5,7 +5,7 @@ Bundled [Fish Audio](https://fish.audio) TTS speech provider for OpenClaw.
 ## Features
 
 - Fish Audio S2-Pro, S1, and S2 model support
-- Dynamic voice listing (official voices + user's own cloned voices)
+- Dynamic voice listing (user's own cloned/trained voices via `self=true`)
 - Format-aware output: opus for voice notes (Telegram, WhatsApp), mp3 otherwise
 - Inline directives: voice, speed, model, latency, temperature, top_p
 - `voiceCompatible: true` for both formats
