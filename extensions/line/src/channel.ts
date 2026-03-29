@@ -17,7 +17,7 @@ function normalizeLineConversationId(raw?: string | null): string | null {
   if (!trimmed) {
     return null;
   }
-  const prefixed = trimmed.match(/^line:(?:user|group|room):(.+)$/i)?.[1];
+  const prefixed = trimmed.match(/^line:(?:(?:user|group|room):)?(.+)$/i)?.[1];
   return (prefixed ?? trimmed).trim() || null;
 }
 
