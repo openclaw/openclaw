@@ -1187,7 +1187,7 @@
   "dependencies": {
     "@agentclientprotocol/sdk": "0.17.0",
     "@anthropic-ai/vertex-sdk": "^0.14.4",
-    "@aws-sdk/client-bedrock": "^3.1018.0",
+    "@aws-sdk/client-bedrock": "^3.1019.0",
     "@clack/prompts": "^1.1.0",
     "@homebridge/ciao": "^1.3.5",
     "@line/bot-sdk": "^10.6.0",
@@ -1251,7 +1251,7 @@
     "oxlint": "^1.57.0",
     "oxlint-tsgolint": "^0.17.4",
     "signal-utils": "0.21.1",
-    "tsdown": "0.21.5",
+    "tsdown": "0.21.7",
     "tsx": "^4.21.0",
     "typescript": "^6.0.2",
     "vitest": "^4.1.2"
