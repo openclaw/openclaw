@@ -157,9 +157,11 @@ export async function sendMessageSignal(
     const resolved = await resolveOutboundAttachmentFromUrl(opts.mediaUrl.trim(), maxBytes, {
       localRoots: opts.mediaLocalRoots,
     });
-    // signal-cli may run on a remote host, so convert local file paths to
-    // data URIs so the attachment is sent inline via JSON-RPC.
-    const attachmentRef = await localFileToDataUri(resolved.path);
+    // Convert to data URI only for remote signal-cli (non-localhost baseUrl),
+    // since remote hosts cannot access local file paths. Local signal-cli
+    // can handle file paths directly and avoids unnecessary base64 encoding.
+    const isRemote = baseUrl != null && !/^https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/.test(baseUrl);
+    const attachmentRef = isRemote ? await localFileToDataUri(resolved.path) : resolved.path;
     attachments = [attachmentRef];
     const kind = kindFromMime(resolved.contentType ?? undefined);
     if (!message && kind) {

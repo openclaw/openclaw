@@ -675,8 +675,13 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         groupId,
         accountId: deps.accountId,
       });
-    // Signal can always detect mentions via structured data, even without regex patterns.
-    const canDetectMention = mentionRegexes.length > 0 || hasAnySignalMention || isReplyToBot;
+    // Signal provides structured mention data, so we can always detect bot mentions
+    // when an account identity (phone or UUID) is configured — regardless of whether
+    // the current message happens to contain any mentions.
+    const canDetectMention =
+      mentionRegexes.length > 0 ||
+      isReplyToBot ||
+      (isGroup && (deps.account != null || deps.accountUuid != null));
     const mentionGate = resolveMentionGatingWithBypass({
       isGroup,
       requireMention: Boolean(requireMention),
