@@ -1,10 +1,22 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { resolveChannelAllowFromPath } from "../pairing/pairing-store.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
-import { fixSecurityFootguns } from "./fix.js";
+
+type FixSecurityFootguns = typeof import("./fix.js").fixSecurityFootguns;
+
+async function runFixSecurityFootguns(
+  params: Parameters<FixSecurityFootguns>[0],
+): Promise<Awaited<ReturnType<FixSecurityFootguns>>> {
+  // This suite must use the real pairing/session-key modules; other files mock them.
+  vi.resetModules();
+  vi.doUnmock("../pairing/pairing-store.js");
+  vi.doUnmock("../routing/session-key.js");
+  const { fixSecurityFootguns } = await import("./fix.js");
+  return fixSecurityFootguns(params);
+}
 
 const isWindows = process.platform === "win32";
 
@@ -50,7 +62,7 @@ describe("security fix", () => {
 
   const runFixAndReadChannels = async (stateDir: string, configPath: string) => {
     const env = createFixEnv(stateDir, configPath);
-    const res = await fixSecurityFootguns({ env, stateDir, configPath });
+    const res = await runFixSecurityFootguns({ env, stateDir, configPath });
     const parsed = await readParsedConfig(configPath);
     return {
       res,
@@ -157,7 +169,7 @@ describe("security fix", () => {
     await writeWhatsAppAllowFromStore(stateDir, [" +15551234567 "]);
     const env = createFixEnv(stateDir, configPath);
 
-    const res = await fixSecurityFootguns({ env, stateDir, configPath });
+    const res = await runFixSecurityFootguns({ env, stateDir, configPath });
     expect(res.ok).toBe(true);
     expect(res.configWritten).toBe(true);
     expect(res.changes).toEqual(
@@ -223,7 +235,7 @@ describe("security fix", () => {
 
     const env = createFixEnv(stateDir, configPath);
 
-    const res = await fixSecurityFootguns({ env, stateDir, configPath });
+    const res = await runFixSecurityFootguns({ env, stateDir, configPath });
     expect(res.ok).toBe(false);
 
     await expectTightenedStateAndConfigPerms(stateDir, configPath);
@@ -271,7 +283,7 @@ describe("security fix", () => {
     await fs.writeFile(transcriptPath, '{"type":"session"}\n', "utf-8");
     await fs.chmod(transcriptPath, 0o644);
 
-    const res = await fixSecurityFootguns({
+    const res = await runFixSecurityFootguns({
       env: createFixEnv(stateDir, configPath),
       stateDir,
       configPath,
