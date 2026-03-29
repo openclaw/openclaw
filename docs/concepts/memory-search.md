@@ -48,10 +48,15 @@ node-llama-cpp).
 
 OpenClaw runs two retrieval paths in parallel and merges the results:
 
-```
-Query -> Embedding -> Vector Search ─┐
-                                     ├─> Merge -> Top Results
-Query -> Tokenize  -> BM25 Search  ──┘
+```mermaid
+flowchart LR
+    Q["Query"] --> E["Embedding"]
+    Q --> T["Tokenize"]
+    E --> VS["Vector Search"]
+    T --> BM["BM25 Search"]
+    VS --> M["Weighted Merge"]
+    BM --> M
+    M --> R["Top Results"]
 ```
 
 - **Vector search** finds notes with similar meaning ("gateway host" matches
