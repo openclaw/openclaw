@@ -19,7 +19,7 @@ export function formatRunStatus(entry: SubagentRunRecord) {
   if (!entry.endedAt) {
     return "running";
   }
-  if (!entry.cleanupCompletedAt && !entry.cleanupHandled && !entry.suppressAnnounceReason) {
+  if (!entry.cleanupCompletedAt && !entry.suppressAnnounceReason) {
     return "completing";
   }
   const status = entry.outcome?.status ?? "done";
@@ -75,8 +75,7 @@ export function resolveSubagentTargetFromRuns(params: {
   const isActive =
     params.isActive ??
     ((entry: SubagentRunRecord) =>
-      !entry.endedAt ||
-      (!entry.cleanupCompletedAt && !entry.cleanupHandled && !entry.suppressAnnounceReason));
+      !entry.endedAt || (!entry.cleanupCompletedAt && !entry.suppressAnnounceReason));
   const recentCutoff = Date.now() - params.recentWindowMinutes * 60_000;
   const numericOrder = [
     ...deduped.filter((entry) => isActive(entry)),

@@ -195,7 +195,7 @@ export function isActiveSubagentRun(
 ) {
   return (
     !entry.endedAt ||
-    (!entry.cleanupCompletedAt && !entry.cleanupHandled && !entry.suppressAnnounceReason) ||
+    (!entry.cleanupCompletedAt && !entry.suppressAnnounceReason) ||
     pendingDescendantCount(entry.childSessionKey) > 0
   );
 }
@@ -231,7 +231,7 @@ function resolveRunStatus(entry: SubagentRunRecord, options?: { pendingDescendan
     return "running";
   }
   // Run ended but cleanup (announce/descendant settle) is still in progress.
-  if (!entry.cleanupCompletedAt && !entry.cleanupHandled && !entry.suppressAnnounceReason) {
+  if (!entry.cleanupCompletedAt && !entry.suppressAnnounceReason) {
     return "completing";
   }
   const status = entry.outcome?.status ?? "done";

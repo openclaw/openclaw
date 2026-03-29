@@ -385,12 +385,23 @@ describe("subagents utils", () => {
     );
   });
 
-  it("returns done when cleanup is handled but cleanupCompletedAt is missing (legacy state)", () => {
+  it("returns completing when cleanup is in progress (cleanupHandled but not completed)", () => {
     expect(
       formatRunStatus({
         ...baseRun,
         endedAt: 2000,
         cleanupHandled: true,
+        outcome: { status: "ok" },
+      }),
+    ).toBe("completing");
+  });
+
+  it("returns done when suppressAnnounceReason is set (steer-restart/killed)", () => {
+    expect(
+      formatRunStatus({
+        ...baseRun,
+        endedAt: 2000,
+        suppressAnnounceReason: "steer-restart",
         outcome: { status: "ok" },
       }),
     ).toBe("done");

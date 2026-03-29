@@ -153,11 +153,7 @@ export function countActiveRunsForSessionFromRuns(
       count += 1;
       continue;
     }
-    if (
-      typeof entry.cleanupCompletedAt !== "number" &&
-      !entry.cleanupHandled &&
-      !entry.suppressAnnounceReason
-    ) {
+    if (typeof entry.cleanupCompletedAt !== "number" && !entry.suppressAnnounceReason) {
       count += 1;
       continue;
     }

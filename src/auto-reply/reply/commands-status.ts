@@ -193,7 +193,7 @@ export async function buildStatusReply(params: {
       const active = runs.filter(
         (entry) =>
           !entry.endedAt ||
-          (!entry.cleanupCompletedAt && !entry.cleanupHandled && !entry.suppressAnnounceReason) ||
+          (!entry.cleanupCompletedAt && !entry.suppressAnnounceReason) ||
           countPendingDescendantRuns(entry.childSessionKey) > 0,
       );
       const done = runs.length - active.length;

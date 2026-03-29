@@ -211,7 +211,7 @@ export function resolveSubagentTarget(
     label: (entry) => formatRunLabel(entry),
     isActive: (entry) =>
       !entry.endedAt ||
-      (!entry.cleanupCompletedAt && !entry.cleanupHandled && !entry.suppressAnnounceReason) ||
+      (!entry.cleanupCompletedAt && !entry.suppressAnnounceReason) ||
       Math.max(0, countPendingDescendantRuns(entry.childSessionKey)) > 0,
     errors: {
       missingTarget: "Missing subagent id.",
