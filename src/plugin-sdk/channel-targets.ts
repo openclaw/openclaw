@@ -24,6 +24,20 @@ export {
   type MessagingTargetParseOptions,
 } from "../channels/targets.js";
 export {
+  createAllowedChatSenderMatcher,
+  parseChatAllowTargetPrefixes,
+  parseChatTargetPrefixesOrThrow,
+  resolveServicePrefixedAllowTarget,
+  resolveServicePrefixedChatTarget,
+  resolveServicePrefixedOrChatAllowTarget,
+  resolveServicePrefixedTarget,
+  type ChatSenderAllowParams,
+  type ChatTargetPrefixesParams,
+  type ParsedChatAllowTarget,
+  type ParsedChatTarget,
+  type ServicePrefix,
+} from "../channels/plugins/chat-target-prefixes.js";
+export {
   buildUnresolvedTargetResults,
   resolveTargetsWithOptionalToken,
 } from "../channels/plugins/target-resolvers.js";

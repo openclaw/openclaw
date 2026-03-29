@@ -3,6 +3,7 @@ export type NodeMatchCandidate = {
   displayName?: string;
   remoteIp?: string;
   connected?: boolean;
+  clientId?: string;
 };
 
 export function normalizeNodeKey(value: string) {
@@ -18,6 +19,39 @@ function listKnownNodes(nodes: NodeMatchCandidate[]): string {
     .map((n) => n.displayName || n.remoteIp || n.nodeId)
     .filter(Boolean)
     .join(", ");
+}
+
+function formatNodeCandidateLabel(node: NodeMatchCandidate): string {
+  const label = node.displayName || node.remoteIp || node.nodeId;
+  const details = [`node=${node.nodeId}`];
+  if (typeof node.clientId === "string" && node.clientId.trim()) {
+    details.push(`client=${node.clientId.trim()}`);
+  }
+  return `${label} [${details.join(", ")}]`;
+}
+
+function isCurrentOpenClawClient(clientId: string | undefined): boolean {
+  const normalized = clientId?.trim().toLowerCase() ?? "";
+  return normalized.startsWith("openclaw-");
+}
+
+function isLegacyClawdbotClient(clientId: string | undefined): boolean {
+  const normalized = clientId?.trim().toLowerCase() ?? "";
+  return normalized.startsWith("clawdbot-") || normalized.startsWith("moldbot-");
+}
+
+function pickPreferredLegacyMigrationMatch(
+  matches: NodeMatchCandidate[],
+): NodeMatchCandidate | undefined {
+  const current = matches.filter((match) => isCurrentOpenClawClient(match.clientId));
+  if (current.length !== 1) {
+    return undefined;
+  }
+  const legacyCount = matches.filter((match) => isLegacyClawdbotClient(match.clientId)).length;
+  if (legacyCount === 0 || current.length + legacyCount !== matches.length) {
+    return undefined;
+  }
+  return current[0];
 }
 
 export function resolveNodeMatches(
@@ -71,9 +105,12 @@ export function resolveNodeIdFromCandidates(nodes: NodeMatchCandidate[], query: 
     return matches[0]?.nodeId ?? "";
   }
 
+  const preferred = pickPreferredLegacyMigrationMatch(matches);
+  if (preferred) {
+    return preferred.nodeId;
+  }
+
   throw new Error(
-    `ambiguous node: ${q} (matches: ${matches
-      .map((n) => n.displayName || n.remoteIp || n.nodeId)
-      .join(", ")})`,
+    `ambiguous node: ${q} (matches: ${matches.map(formatNodeCandidateLabel).join(", ")})`,
   );
 }

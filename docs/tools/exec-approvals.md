@@ -400,6 +400,9 @@ This shared text-command path uses the normal channel auth model for that conver
 originating chat can already send commands and receive replies, approval requests no longer need a
 separate channel-specific approval client just to stay pending.
 
+Discord and Telegram also support same-chat `/approve`, but those channels still use their
+resolved approver list for authorization even when the richer approval client is disabled.
+
 ### Rich approval clients
 
 Discord and Telegram can also act as richer exec approval clients with channel-specific config.
@@ -412,7 +415,9 @@ top of the shared same-chat `/approve` flow.
 
 Shared behavior:
 
-- only resolved approvers can approve or deny
+- Slack, Matrix, Microsoft Teams, and similar deliverable chats use the normal channel auth model
+  for same-chat `/approve`
+- for Discord and Telegram, only resolved approvers can approve or deny
 - Discord and Telegram approvers can be explicit (`execApprovals.approvers`) or inferred from existing owner config (`allowFrom`, plus direct-message `defaultTo` where supported)
 - the requester does not need to be an approver
 - the originating chat can approve directly with `/approve` when that chat already supports commands and replies
@@ -455,6 +460,14 @@ Exec lifecycle is surfaced as system messages:
 These are posted to the agent’s session after the node reports the event.
 Gateway-host exec approvals emit the same lifecycle events when the command finishes (and optionally when running longer than the threshold).
 Approval-gated execs reuse the approval id as the `runId` in these messages for easy correlation.
+
+## Denied approval behavior
+
+When an async exec approval is denied, OpenClaw prevents the agent from reusing
+output from any earlier run of the same command in the session. The denial reason
+is passed with explicit guidance that no command output is available, which stops
+the agent from claiming there is new output or repeating the denied command with
+stale results from a prior successful run.
 
 ## Implications
 

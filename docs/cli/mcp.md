@@ -410,13 +410,45 @@ Example config shape:
 }
 ```
 
-Typical fields:
+### Stdio transport
 
-- `command`
-- `args`
-- `env`
-- `cwd` or `workingDirectory`
-- `url`
+Launches a local child process and communicates over stdin/stdout.
+
+| Field                      | Description                       |
+| -------------------------- | --------------------------------- |
+| `command`                  | Executable to spawn (required)    |
+| `args`                     | Array of command-line arguments   |
+| `env`                      | Extra environment variables       |
+| `cwd` / `workingDirectory` | Working directory for the process |
+
+### SSE / HTTP transport
+
+Connects to a remote MCP server over HTTP Server-Sent Events.
+
+| Field     | Description                                                      |
+| --------- | ---------------------------------------------------------------- |
+| `url`     | HTTP or HTTPS URL of the remote server (required)                |
+| `headers` | Optional key-value map of HTTP headers (for example auth tokens) |
+
+Example:
+
+```json
+{
+  "mcp": {
+    "servers": {
+      "remote-tools": {
+        "url": "https://mcp.example.com",
+        "headers": {
+          "Authorization": "Bearer <token>"
+        }
+      }
+    }
+  }
+}
+```
+
+Sensitive values in `url` (userinfo) and `headers` are redacted in logs and
+status output.
 
 These commands manage saved config only. They do not start the channel bridge,
 open a live MCP client session, or prove the target server is reachable.
@@ -430,6 +462,6 @@ Current limits:
 - conversation discovery depends on existing Gateway session route metadata
 - no generic push protocol beyond the Claude-specific adapter
 - no message edit or react tools yet
-- no dedicated HTTP MCP transport yet
+- HTTP/SSE transport connects to a single remote server; no multiplexed upstream yet
 - `permissions_list_open` only includes approvals observed while the bridge is
   connected
