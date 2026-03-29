@@ -19,9 +19,12 @@ export const { signalOutbound } = loadBundledPluginTestApiSync<{
 export const { slackOutbound } = loadBundledPluginTestApiSync<{
   slackOutbound: ChannelOutboundAdapter;
 }>("slack");
-export const { telegramOutbound } = loadBundledPluginTestApiSync<{
+export const { telegramOutbound } = loadBundledPluginPublicSurfaceSync<{
   telegramOutbound: ChannelOutboundAdapter;
-}>("telegram");
+}>({
+  pluginId: "telegram",
+  artifactBasename: "src/outbound-adapter.js",
+});
 export const { whatsappOutbound } = loadBundledPluginTestApiSync<{
   whatsappOutbound: ChannelOutboundAdapter;
 }>("whatsapp");
