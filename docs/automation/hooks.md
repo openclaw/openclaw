@@ -511,7 +511,7 @@ Event fields:
 - **`targetName`**: Human-readable skill name or plugin id for the install target
 - **`sourcePath`**: Absolute path to the install target content being scanned
 - **`sourcePathKind`**: Whether the scanned content is a `file` or `directory`
-- **`source`**: Normalized install origin when available (for example `openclaw-bundled`, `openclaw-workspace`, `plugin-bundle`, `plugin-package`, or `plugin-file`)
+- **`origin`**: Normalized install origin when available (for example `openclaw-bundled`, `openclaw-workspace`, `plugin-bundle`, `plugin-package`, or `plugin-file`)
 - **`request`**: Provenance for the install request, including `kind`, `mode`, and optional `requestedSpecifier`
 - **`builtinScan`**: Structured result of the built-in scanner, including `status`, summary counts, findings, and optional `error`
 - **`skill`**: Skill install metadata when `targetType` is `skill`, including `installId` and the selected `installSpec`
