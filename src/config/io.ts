@@ -206,6 +206,8 @@ type ConfigObserveAuditRecord = {
   backupGid: number | null;
   backupGatewayMode: string | null;
   clobberedPath: string | null;
+  restoredFromBackup: boolean;
+  restoredBackupPath: string | null;
 };
 
 type ConfigAuditRecord = ConfigWriteAuditRecord | ConfigObserveAuditRecord;
@@ -933,6 +935,271 @@ function persistClobberedConfigSnapshotSync(params: {
   }
 }
 
+type SuspiciousConfigRecoverySyncResult = {
+  raw: string;
+  parsed: unknown;
+};
+
+async function maybeRecoverSuspiciousConfigRead(params: {
+  deps: Required<ConfigIoDeps>;
+  configPath: string;
+  raw: string;
+  parsed: unknown;
+}): Promise<{ raw: string; parsed: unknown }> {
+  const stat = await params.deps.fs.promises.stat(params.configPath).catch(() => null);
+  const now = new Date().toISOString();
+  const current: ConfigHealthFingerprint = {
+    hash: hashConfigRaw(params.raw),
+    bytes: Buffer.byteLength(params.raw, "utf-8"),
+    mtimeMs: stat?.mtimeMs ?? null,
+    ctimeMs: stat?.ctimeMs ?? null,
+    ...resolveConfigStatMetadata(stat),
+    hasMeta: hasConfigMeta(params.parsed),
+    gatewayMode: resolveGatewayMode(params.parsed),
+    observedAt: now,
+  };
+
+  let healthState = await readConfigHealthState(params.deps);
+  const entry = getConfigHealthEntry(healthState, params.configPath);
+  const backupPath = `${params.configPath}.bak`;
+  const backupBaseline =
+    entry.lastKnownGood ??
+    (await readConfigFingerprintForPath(params.deps, backupPath)) ??
+    undefined;
+  const suspicious = resolveConfigObserveSuspiciousReasons({
+    bytes: current.bytes,
+    hasMeta: current.hasMeta,
+    gatewayMode: current.gatewayMode,
+    parsed: params.parsed,
+    lastKnownGood: backupBaseline,
+  });
+  if (!suspicious.includes("update-channel-only-root")) {
+    return { raw: params.raw, parsed: params.parsed };
+  }
+
+  const suspiciousSignature = `${current.hash}:${suspicious.join(",")}`;
+  const backupRaw = await params.deps.fs.promises.readFile(backupPath, "utf-8").catch(() => null);
+  if (!backupRaw) {
+    return { raw: params.raw, parsed: params.parsed };
+  }
+  const backupParsedRes = parseConfigJson5(backupRaw, params.deps.json5);
+  if (!backupParsedRes.ok) {
+    return { raw: params.raw, parsed: params.parsed };
+  }
+  const backup = backupBaseline ?? (await readConfigFingerprintForPath(params.deps, backupPath));
+  if (!backup?.gatewayMode) {
+    return { raw: params.raw, parsed: params.parsed };
+  }
+
+  const clobberedPath = await persistClobberedConfigSnapshot({
+    deps: params.deps,
+    configPath: params.configPath,
+    raw: params.raw,
+    observedAt: now,
+  });
+
+  let restoredFromBackup = false;
+  try {
+    await params.deps.fs.promises.copyFile(backupPath, params.configPath);
+    restoredFromBackup = true;
+  } catch {
+    // Keep serving the backup payload for this read even if write-back fails.
+  }
+
+  params.deps.logger.warn(
+    `Config auto-restored from backup: ${params.configPath} (${suspicious.join(", ")})`,
+  );
+  await appendConfigAuditRecord(params.deps, {
+    ts: now,
+    source: "config-io",
+    event: "config.observe",
+    phase: "read",
+    configPath: params.configPath,
+    pid: process.pid,
+    ppid: process.ppid,
+    cwd: process.cwd(),
+    argv: process.argv.slice(0, 8),
+    execArgv: process.execArgv.slice(0, 8),
+    exists: true,
+    valid: true,
+    hash: current.hash,
+    bytes: current.bytes,
+    mtimeMs: current.mtimeMs,
+    ctimeMs: current.ctimeMs,
+    dev: current.dev,
+    ino: current.ino,
+    mode: current.mode,
+    nlink: current.nlink,
+    uid: current.uid,
+    gid: current.gid,
+    hasMeta: current.hasMeta,
+    gatewayMode: current.gatewayMode,
+    suspicious,
+    lastKnownGoodHash: entry.lastKnownGood?.hash ?? null,
+    lastKnownGoodBytes: entry.lastKnownGood?.bytes ?? null,
+    lastKnownGoodMtimeMs: entry.lastKnownGood?.mtimeMs ?? null,
+    lastKnownGoodCtimeMs: entry.lastKnownGood?.ctimeMs ?? null,
+    lastKnownGoodDev: entry.lastKnownGood?.dev ?? null,
+    lastKnownGoodIno: entry.lastKnownGood?.ino ?? null,
+    lastKnownGoodMode: entry.lastKnownGood?.mode ?? null,
+    lastKnownGoodNlink: entry.lastKnownGood?.nlink ?? null,
+    lastKnownGoodUid: entry.lastKnownGood?.uid ?? null,
+    lastKnownGoodGid: entry.lastKnownGood?.gid ?? null,
+    lastKnownGoodGatewayMode: entry.lastKnownGood?.gatewayMode ?? null,
+    backupHash: backup?.hash ?? null,
+    backupBytes: backup?.bytes ?? null,
+    backupMtimeMs: backup?.mtimeMs ?? null,
+    backupCtimeMs: backup?.ctimeMs ?? null,
+    backupDev: backup?.dev ?? null,
+    backupIno: backup?.ino ?? null,
+    backupMode: backup?.mode ?? null,
+    backupNlink: backup?.nlink ?? null,
+    backupUid: backup?.uid ?? null,
+    backupGid: backup?.gid ?? null,
+    backupGatewayMode: backup?.gatewayMode ?? null,
+    clobberedPath,
+    restoredFromBackup,
+    restoredBackupPath: backupPath,
+  });
+
+  healthState = setConfigHealthEntry(healthState, params.configPath, {
+    ...entry,
+    lastObservedSuspiciousSignature: suspiciousSignature,
+  });
+  await writeConfigHealthState(params.deps, healthState);
+  return { raw: backupRaw, parsed: backupParsedRes.parsed };
+}
+
+function maybeRecoverSuspiciousConfigReadSync(params: {
+  deps: Required<ConfigIoDeps>;
+  configPath: string;
+  raw: string;
+  parsed: unknown;
+}): SuspiciousConfigRecoverySyncResult {
+  const stat = params.deps.fs.statSync(params.configPath, { throwIfNoEntry: false }) ?? null;
+  const now = new Date().toISOString();
+  const current: ConfigHealthFingerprint = {
+    hash: hashConfigRaw(params.raw),
+    bytes: Buffer.byteLength(params.raw, "utf-8"),
+    mtimeMs: stat?.mtimeMs ?? null,
+    ctimeMs: stat?.ctimeMs ?? null,
+    ...resolveConfigStatMetadata(stat),
+    hasMeta: hasConfigMeta(params.parsed),
+    gatewayMode: resolveGatewayMode(params.parsed),
+    observedAt: now,
+  };
+
+  let healthState = readConfigHealthStateSync(params.deps);
+  const entry = getConfigHealthEntry(healthState, params.configPath);
+  const backupPath = `${params.configPath}.bak`;
+  const backupBaseline =
+    entry.lastKnownGood ?? readConfigFingerprintForPathSync(params.deps, backupPath) ?? undefined;
+  const suspicious = resolveConfigObserveSuspiciousReasons({
+    bytes: current.bytes,
+    hasMeta: current.hasMeta,
+    gatewayMode: current.gatewayMode,
+    parsed: params.parsed,
+    lastKnownGood: backupBaseline,
+  });
+  if (!suspicious.includes("update-channel-only-root")) {
+    return { raw: params.raw, parsed: params.parsed };
+  }
+
+  const suspiciousSignature = `${current.hash}:${suspicious.join(",")}`;
+  let backupRaw: string;
+  try {
+    backupRaw = params.deps.fs.readFileSync(backupPath, "utf-8");
+  } catch {
+    return { raw: params.raw, parsed: params.parsed };
+  }
+  const backupParsedRes = parseConfigJson5(backupRaw, params.deps.json5);
+  if (!backupParsedRes.ok) {
+    return { raw: params.raw, parsed: params.parsed };
+  }
+  const backup = backupBaseline ?? readConfigFingerprintForPathSync(params.deps, backupPath);
+  if (!backup?.gatewayMode) {
+    return { raw: params.raw, parsed: params.parsed };
+  }
+
+  const clobberedPath = persistClobberedConfigSnapshotSync({
+    deps: params.deps,
+    configPath: params.configPath,
+    raw: params.raw,
+    observedAt: now,
+  });
+
+  let restoredFromBackup = false;
+  try {
+    params.deps.fs.copyFileSync(backupPath, params.configPath);
+    restoredFromBackup = true;
+  } catch {
+    // Keep serving the backup payload for this read even if write-back fails.
+  }
+
+  params.deps.logger.warn(
+    `Config auto-restored from backup: ${params.configPath} (${suspicious.join(", ")})`,
+  );
+  appendConfigAuditRecordSync(params.deps, {
+    ts: now,
+    source: "config-io",
+    event: "config.observe",
+    phase: "read",
+    configPath: params.configPath,
+    pid: process.pid,
+    ppid: process.ppid,
+    cwd: process.cwd(),
+    argv: process.argv.slice(0, 8),
+    execArgv: process.execArgv.slice(0, 8),
+    exists: true,
+    valid: true,
+    hash: current.hash,
+    bytes: current.bytes,
+    mtimeMs: current.mtimeMs,
+    ctimeMs: current.ctimeMs,
+    dev: current.dev,
+    ino: current.ino,
+    mode: current.mode,
+    nlink: current.nlink,
+    uid: current.uid,
+    gid: current.gid,
+    hasMeta: current.hasMeta,
+    gatewayMode: current.gatewayMode,
+    suspicious,
+    lastKnownGoodHash: entry.lastKnownGood?.hash ?? null,
+    lastKnownGoodBytes: entry.lastKnownGood?.bytes ?? null,
+    lastKnownGoodMtimeMs: entry.lastKnownGood?.mtimeMs ?? null,
+    lastKnownGoodCtimeMs: entry.lastKnownGood?.ctimeMs ?? null,
+    lastKnownGoodDev: entry.lastKnownGood?.dev ?? null,
+    lastKnownGoodIno: entry.lastKnownGood?.ino ?? null,
+    lastKnownGoodMode: entry.lastKnownGood?.mode ?? null,
+    lastKnownGoodNlink: entry.lastKnownGood?.nlink ?? null,
+    lastKnownGoodUid: entry.lastKnownGood?.uid ?? null,
+    lastKnownGoodGid: entry.lastKnownGood?.gid ?? null,
+    lastKnownGoodGatewayMode: entry.lastKnownGood?.gatewayMode ?? null,
+    backupHash: backup?.hash ?? null,
+    backupBytes: backup?.bytes ?? null,
+    backupMtimeMs: backup?.mtimeMs ?? null,
+    backupCtimeMs: backup?.ctimeMs ?? null,
+    backupDev: backup?.dev ?? null,
+    backupIno: backup?.ino ?? null,
+    backupMode: backup?.mode ?? null,
+    backupNlink: backup?.nlink ?? null,
+    backupUid: backup?.uid ?? null,
+    backupGid: backup?.gid ?? null,
+    backupGatewayMode: backup?.gatewayMode ?? null,
+    clobberedPath,
+    restoredFromBackup,
+    restoredBackupPath: backupPath,
+  });
+
+  healthState = setConfigHealthEntry(healthState, params.configPath, {
+    ...entry,
+    lastObservedSuspiciousSignature: suspiciousSignature,
+  });
+  writeConfigHealthStateSync(params.deps, healthState);
+  return { raw: backupRaw, parsed: backupParsedRes.parsed };
+}
+
 function sameFingerprint(
   left: ConfigHealthFingerprint | undefined,
   right: ConfigHealthFingerprint,
@@ -1073,6 +1340,8 @@ async function observeConfigSnapshot(
     backupGid: backup?.gid ?? null,
     backupGatewayMode: backup?.gatewayMode ?? null,
     clobberedPath,
+    restoredFromBackup: false,
+    restoredBackupPath: null,
   });
 
   healthState = setConfigHealthEntry(healthState, snapshot.path, {
@@ -1199,6 +1468,8 @@ function observeConfigSnapshotSync(
     backupGid: backup?.gid ?? null,
     backupGatewayMode: backup?.gatewayMode ?? null,
     clobberedPath,
+    restoredFromBackup: false,
+    restoredBackupPath: null,
   });
 
   healthState = setConfigHealthEntry(healthState, snapshot.path, {
@@ -1404,14 +1675,22 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         return {};
       }
       const raw = deps.fs.readFileSync(configPath, "utf-8");
-      const hash = hashConfigRaw(raw);
       const parsed = deps.json5.parse(raw);
+      const recovered = maybeRecoverSuspiciousConfigReadSync({
+        deps,
+        configPath,
+        raw,
+        parsed,
+      });
+      const effectiveRaw = recovered.raw;
+      const effectiveParsed = recovered.parsed;
+      const hash = hashConfigRaw(effectiveRaw);
       const readResolution = resolveConfigForRead(
-        resolveConfigIncludesForRead(parsed, configPath, deps),
+        resolveConfigIncludesForRead(effectiveParsed, configPath, deps),
         deps.env,
       );
       const resolvedConfig = readResolution.resolvedConfigRaw;
-      const legacyResolution = resolveLegacyConfigForRead(resolvedConfig, parsed);
+      const legacyResolution = resolveLegacyConfigForRead(resolvedConfig, effectiveParsed);
       const effectiveConfigRaw = legacyResolution.effectiveConfigRaw;
       for (const w of readResolution.envWarnings) {
         deps.logger.warn(
@@ -1423,8 +1702,8 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         observeLoadConfigSnapshot({
           path: configPath,
           exists: true,
-          raw,
-          parsed,
+          raw: effectiveRaw,
+          parsed: effectiveParsed,
           resolved: {},
           valid: true,
           config: {},
@@ -1447,8 +1726,8 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         observeLoadConfigSnapshot({
           path: configPath,
           exists: true,
-          raw,
-          parsed,
+          raw: effectiveRaw,
+          parsed: effectiveParsed,
           resolved: coerceConfig(effectiveConfigRaw),
           valid: false,
           config: coerceConfig(effectiveConfigRaw),
@@ -1498,8 +1777,8 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       observeLoadConfigSnapshot({
         path: configPath,
         exists: true,
-        raw,
-        parsed,
+        raw: effectiveRaw,
+        parsed: effectiveParsed,
         resolved: coerceConfig(effectiveConfigRaw),
         valid: true,
         config: cfg,
@@ -1617,7 +1896,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
 
     try {
       const raw = deps.fs.readFileSync(configPath, "utf-8");
-      const hash = hashConfigRaw(raw);
+      const rawHash = hashConfigRaw(raw);
       const parsedRes = parseConfigJson5(raw, deps.json5);
       if (!parsedRes.ok) {
         return await finalizeReadConfigSnapshotInternalResult(deps, {
@@ -1629,7 +1908,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
             resolved: {},
             valid: false,
             config: {},
-            hash,
+            hash: rawHash,
             issues: [{ path: "", message: `JSON5 parse failed: ${parsedRes.error}` }],
             warnings: [],
             legacyIssues: [],
@@ -1638,9 +1917,19 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       }
 
       // Resolve $include directives
+      const recovered = await maybeRecoverSuspiciousConfigRead({
+        deps,
+        configPath,
+        raw,
+        parsed: parsedRes.parsed,
+      });
+      const effectiveRaw = recovered.raw;
+      const effectiveParsed = recovered.parsed;
+      const hash = hashConfigRaw(effectiveRaw);
+
       let resolved: unknown;
       try {
-        resolved = resolveConfigIncludesForRead(parsedRes.parsed, configPath, deps);
+        resolved = resolveConfigIncludesForRead(effectiveParsed, configPath, deps);
       } catch (err) {
         const message =
           err instanceof ConfigIncludeError
@@ -1650,11 +1939,11 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           snapshot: {
             path: configPath,
             exists: true,
-            raw,
-            parsed: parsedRes.parsed,
-            resolved: coerceConfig(parsedRes.parsed),
+            raw: effectiveRaw,
+            parsed: effectiveParsed,
+            resolved: coerceConfig(effectiveParsed),
             valid: false,
-            config: coerceConfig(parsedRes.parsed),
+            config: coerceConfig(effectiveParsed),
             hash,
             issues: [{ path: "", message }],
             warnings: [],
@@ -1674,7 +1963,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       }));
 
       const resolvedConfigRaw = readResolution.resolvedConfigRaw;
-      const legacyResolution = resolveLegacyConfigForRead(resolvedConfigRaw, parsedRes.parsed);
+      const legacyResolution = resolveLegacyConfigForRead(resolvedConfigRaw, effectiveParsed);
       const effectiveConfigRaw = legacyResolution.effectiveConfigRaw;
 
       const validated = validateConfigObjectWithPlugins(effectiveConfigRaw, { env: deps.env });
@@ -1683,8 +1972,8 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           snapshot: {
             path: configPath,
             exists: true,
-            raw,
-            parsed: parsedRes.parsed,
+            raw: effectiveRaw,
+            parsed: effectiveParsed,
             resolved: coerceConfig(effectiveConfigRaw),
             valid: false,
             config: coerceConfig(effectiveConfigRaw),
@@ -1713,8 +2002,8 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         snapshot: {
           path: configPath,
           exists: true,
-          raw,
-          parsed: parsedRes.parsed,
+          raw: effectiveRaw,
+          parsed: effectiveParsed,
           // Use resolvedConfigRaw (after $include and ${ENV} substitution but BEFORE runtime defaults)
           // for config set/unset operations (issue #6070)
           resolved: coerceConfig(effectiveConfigRaw),
