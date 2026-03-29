@@ -79,3 +79,21 @@ class AdaptiveTokenBudget:
     @staticmethod
     def _rough_token_count(text: str) -> int:
         return max(1, len(text) // 4)
+
+    @staticmethod
+    def _infer_task_type(prompt: str) -> str:
+        """B5-fix: вывод task_type из контента промпта."""
+        lower = prompt[:500].lower()
+        if any(kw in lower for kw in [
+            "код", "code", "функци", "function", "class ", "def ", "import ",
+            "напиши", "реализуй", "implement", "refactor", "рефактор",
+            "python", "typescript", "javascript", "rust", "binary_search",
+        ]):
+            return "code"
+        if any(kw in lower for kw in ["math", "матем", "вычисл", "формул", "уравнен"]):
+            return "math"
+        if any(kw in lower for kw in [
+            "research", "исследу", "анализ", "найди", "youtube", "http",
+        ]):
+            return "general"  # research stays general (1024 base is OK)
+        return "general"
