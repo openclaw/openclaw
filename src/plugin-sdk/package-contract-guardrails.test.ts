@@ -56,6 +56,17 @@ function readRootPackageJson(): {
   };
 }
 
+function readGeneratedFacadeTypeMap(): string {
+  return readFileSync(
+    resolve(REPO_ROOT, "src/generated/plugin-sdk-facade-type-map.generated.ts"),
+    "utf8",
+  );
+}
+
+function buildLegacyPluginSourceAlias(): string {
+  return ["openclaw", ["plugin", "source"].join("-")].join("/") + "/";
+}
+
 describe("plugin-sdk package contract guardrails", () => {
   it("keeps package.json exports aligned with built plugin-sdk entrypoints", () => {
     expect(collectPluginSdkPackageExports()).toEqual([...pluginSdkEntrypoints].toSorted());
@@ -90,5 +101,10 @@ describe("plugin-sdk package contract guardrails", () => {
 
     expect(dependencies["matrix-js-sdk"]).toBe("41.2.0");
     expect(optionalDependencies["@matrix-org/matrix-sdk-crypto-nodejs"]).toBe("^0.4.0");
+  });
+
+  it("keeps generated facade types on package-style module specifiers", () => {
+    expect(readGeneratedFacadeTypeMap()).not.toContain("../../extensions/");
+    expect(readGeneratedFacadeTypeMap()).not.toContain(buildLegacyPluginSourceAlias());
   });
 });

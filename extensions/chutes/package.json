@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/chutes-provider",
-  "version": "2026.3.28-beta.1",
+  "version": "2026.3.29",
   "private": true,
   "description": "OpenClaw Chutes.ai provider plugin",
   "type": "module",

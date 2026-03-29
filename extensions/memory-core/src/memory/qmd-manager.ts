@@ -184,6 +184,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   private readonly maxQmdOutputChars = MAX_QMD_OUTPUT_CHARS;
   private readonly sessionExporter: SessionExporterConfig | null;
   private updateTimer: NodeJS.Timeout | null = null;
+  private embedTimer: NodeJS.Timeout | null = null;
   private pendingUpdate: Promise<void> | null = null;
   private queuedForcedUpdate: Promise<void> | null = null;
   private queuedForcedRuns = 0;
@@ -289,6 +290,13 @@ export class QmdMemoryManager implements MemorySearchManager {
           log.warn(`qmd update failed (${String(err)})`);
         });
       }, this.qmd.update.intervalMs);
+    }
+    if (this.shouldScheduleEmbedTimer()) {
+      this.embedTimer = setInterval(() => {
+        void this.runUpdate("embed-interval").catch((err) => {
+          log.warn(`qmd embed interval update failed (${String(err)})`);
+        });
+      }, this.qmd.update.embedIntervalMs);
     }
   }
 
@@ -985,6 +993,10 @@ export class QmdMemoryManager implements MemorySearchManager {
       clearInterval(this.updateTimer);
       this.updateTimer = null;
     }
+    if (this.embedTimer) {
+      clearInterval(this.embedTimer);
+      this.embedTimer = null;
+    }
     this.queuedForcedRuns = 0;
     await this.pendingUpdate?.catch(() => undefined);
     await this.queuedForcedUpdate?.catch(() => undefined);
@@ -1109,6 +1121,18 @@ export class QmdMemoryManager implements MemorySearchManager {
       this.lastEmbedAt === null ||
       (embedIntervalMs > 0 && now - this.lastEmbedAt > embedIntervalMs)
     );
+  }
+
+  private shouldScheduleEmbedTimer(): boolean {
+    if (this.qmd.searchMode === "search") {
+      return false;
+    }
+    const embedIntervalMs = this.qmd.update.embedIntervalMs;
+    if (embedIntervalMs <= 0) {
+      return false;
+    }
+    const updateIntervalMs = this.qmd.update.intervalMs;
+    return updateIntervalMs <= 0 || updateIntervalMs > embedIntervalMs;
   }
 
   private noteEmbedFailure(reason: string, err: unknown): void {

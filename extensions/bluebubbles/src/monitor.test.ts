@@ -5,9 +5,11 @@ import {
   EMPTY_DISPATCH_RESULT,
   resetBlueBubblesMonitorTestState,
   type DispatchReplyParams,
-} from "../../../test/helpers/extensions/bluebubbles-monitor.js";
+} from "../../../test/helpers/plugins/bluebubbles-monitor.js";
 import type { ResolvedBlueBubblesAccount } from "./accounts.js";
 import { fetchBlueBubblesHistory } from "./history.js";
+import { createBlueBubblesDebounceRegistry } from "./monitor-debounce.js";
+import type { NormalizedWebhookMessage } from "./monitor-normalize.js";
 import { resetBlueBubblesSelfChatCache } from "./monitor-self-chat-cache.js";
 import { handleBlueBubblesWebhookRequest, resolveBlueBubblesMessageId } from "./monitor.js";
 import {
@@ -27,8 +29,6 @@ import {
   resetBlueBubblesParticipantContactNameCacheForTest,
   setBlueBubblesParticipantContactDepsForTest,
 } from "./participant-contact-names.js";
-import { createBlueBubblesDebounceRegistry } from "./monitor-debounce.js";
-import type { NormalizedWebhookMessage } from "./monitor-normalize.js";
 import type { OpenClawConfig, PluginRuntime } from "./runtime-api.js";
 
 // Mock dependencies
@@ -155,7 +155,10 @@ function installTimingAwareInboundDebouncer(core: PluginRuntime) {
   core.channel.debounce.createInboundDebouncer = vi.fn((params: any) => {
     // oxlint-disable-next-line typescript/no-explicit-any
     type Item = any;
-    const buckets = new Map<string, { items: Item[]; timer: ReturnType<typeof setTimeout> | null }>();
+    const buckets = new Map<
+      string,
+      { items: Item[]; timer: ReturnType<typeof setTimeout> | null }
+    >();
 
     const flush = async (key: string) => {
       const bucket = buckets.get(key);

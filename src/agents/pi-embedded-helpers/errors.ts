@@ -174,6 +174,18 @@ function isReasoningConstraintErrorMessage(raw: string): boolean {
   );
 }
 
+function isInvalidStreamingEventOrderError(raw: string): boolean {
+  if (!raw) {
+    return false;
+  }
+  const lower = raw.toLowerCase();
+  return (
+    lower.includes("unexpected event order") &&
+    lower.includes("message_start") &&
+    lower.includes("message_stop")
+  );
+}
+
 function hasRateLimitTpmHint(raw: string): boolean {
   const lower = raw.toLowerCase();
   return /\btpm\b/i.test(lower) || lower.includes("tokens per minute");
@@ -685,6 +697,10 @@ export function formatAssistantErrorText(
     );
   }
 
+  if (isInvalidStreamingEventOrderError(raw)) {
+    return "LLM request failed: provider returned an invalid streaming response. Please try again.";
+  }
+
   // Catch role ordering errors - including JSON-wrapped and "400" prefix variants
   if (
     /incorrect role information|roles must alternate|400.*role|"message".*role.*information/i.test(
@@ -775,6 +791,10 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
 
     if (isBillingErrorMessage(trimmed)) {
       return BILLING_ERROR_USER_MESSAGE;
+    }
+
+    if (isInvalidStreamingEventOrderError(trimmed)) {
+      return "LLM request failed: provider returned an invalid streaming response. Please try again.";
     }
 
     if (isRawApiErrorPayload(trimmed) || isLikelyHttpErrorText(trimmed)) {
