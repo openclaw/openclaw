@@ -27,6 +27,45 @@ export type EmbeddedCompactionRuntimeContext = {
   ownerNumbers?: string[];
 };
 
+/**
+ * Resolve the compaction model override from config, falling back to the
+ * caller-supplied provider/model. This ensures the runtime context always
+ * carries the correct compaction model regardless of which context engine
+ * handles the actual compact() call.
+ */
+function resolveCompactionModel(params: {
+  config?: OpenClawConfig;
+  provider?: string | null;
+  modelId?: string | null;
+  authProfileId?: string | null;
+}): { provider: string | undefined; model: string | undefined; authProfileId: string | undefined } {
+  const override = params.config?.agents?.defaults?.compaction?.model?.trim();
+  if (!override) {
+    return {
+      provider: params.provider ?? undefined,
+      model: params.modelId ?? undefined,
+      authProfileId: params.authProfileId ?? undefined,
+    };
+  }
+  const slashIdx = override.indexOf("/");
+  if (slashIdx > 0) {
+    const overrideProvider = override.slice(0, slashIdx).trim();
+    const overrideModel = override.slice(slashIdx + 1).trim() || undefined;
+    // When switching provider via override, drop the primary auth profile to
+    // avoid sending the wrong credentials.
+    const authProfileId =
+      overrideProvider !== (params.provider ?? "")?.trim()
+        ? undefined
+        : (params.authProfileId ?? undefined);
+    return { provider: overrideProvider, model: overrideModel, authProfileId };
+  }
+  return {
+    provider: params.provider ?? undefined,
+    model: override,
+    authProfileId: params.authProfileId ?? undefined,
+  };
+}
+
 export function buildEmbeddedCompactionRuntimeContext(params: {
   sessionKey?: string | null;
   messageChannel?: string | null;
@@ -50,6 +89,12 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
   extraSystemPrompt?: string;
   ownerNumbers?: string[];
 }): EmbeddedCompactionRuntimeContext {
+  const resolved = resolveCompactionModel({
+    config: params.config,
+    provider: params.provider,
+    modelId: params.modelId,
+    authProfileId: params.authProfileId,
+  });
   return {
     sessionKey: params.sessionKey ?? undefined,
     messageChannel: params.messageChannel ?? undefined,
@@ -58,15 +103,15 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
     currentChannelId: params.currentChannelId ?? undefined,
     currentThreadTs: params.currentThreadTs ?? undefined,
     currentMessageId: params.currentMessageId ?? undefined,
-    authProfileId: params.authProfileId ?? undefined,
+    authProfileId: resolved.authProfileId,
     workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     config: params.config,
     skillsSnapshot: params.skillsSnapshot,
     senderIsOwner: params.senderIsOwner,
     senderId: params.senderId ?? undefined,
-    provider: params.provider ?? undefined,
-    model: params.modelId ?? undefined,
+    provider: resolved.provider,
+    model: resolved.model,
     thinkLevel: params.thinkLevel,
     reasoningLevel: params.reasoningLevel,
     bashElevated: params.bashElevated,
