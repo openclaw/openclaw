@@ -1,40 +1,21 @@
 #!/usr/bin/env python3
-"""Test Ollama models for tool calling WITH tool definitions (like OpenClaw does)."""
+"""Test Ollama models for planning capability."""
 
 import json
 import subprocess
 import sys
 
-# This is a simplified version of what OpenClaw sends - tool definitions + message
-TOOL_DEFINITIONS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "sessions_spawn",
-            "description": "Spawn a subagent session",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "task": {"type": "string", "description": "Task for subagent"},
-                    "label": {"type": "string", "description": "Label for subagent"},
-                },
-                "required": ["task"],
-            },
-        },
-    }
-]
-
-PROMPT = """Use sessions_spawn to create a subagent with task='say hello' and label='test'."""
+PROMPT = """List the steps to make a cup of coffee. Output ONLY a numbered list, no explanation."""
 
 
 def test_model(model: str) -> dict:
-    """Test a single model with tool definitions and exponential backoff."""
+    """Test a single model for planning with exponential backoff."""
     result = {
         "model": model,
         "success": False,
         "output": "",
         "error": None,
-        "has_tool_call": False,
+        "has_numbered_list": False,
     }
 
     # Exponential backoff timeouts: 60s, 120s, 240s, 480s, 600s (max ~10min)
@@ -52,9 +33,8 @@ def test_model(model: str) -> dict:
                         {
                             "model": model,
                             "messages": [{"role": "user", "content": PROMPT}],
-                            "tools": TOOL_DEFINITIONS,
                             "stream": False,
-                            "options": {"num_predict": 500},
+                            "options": {"num_predict": 300},
                         }
                     ),
                 ],
@@ -77,22 +57,17 @@ def test_model(model: str) -> dict:
 
     try:
         data = json.loads(proc.stdout)
-        message = data.get("message", {})
+        output = data.get("message", {}).get("content", "").strip()
+        result["output"] = output
+
+        # Check if it generated a numbered list
+        lines = output.split("\n")
+        has_numbers = any(line.strip().startswith(str(i)) for i in range(1, 20) for line in lines)
+        if has_numbers:
+            result["success"] = True
+            result["has_numbered_list"] = True
     except json.JSONDecodeError as e:
         result["error"] = f"json error: {e}"
-        return result
-
-    # Check for structured tool_calls
-    tool_calls = message.get("tool_calls", [])
-    if tool_calls:
-        result["success"] = True
-        result["has_tool_call"] = True
-        result["output"] = f"tool_calls: {json.dumps(tool_calls)}"
-
-    # Also check if it's in content (text format)
-    content = message.get("content", "")
-    if "sessions_spawn" in content and "tool_call" not in result["output"].lower():
-        result["output"] = f"text (not tool_calls): {content[:200]}"
 
     return result
 
@@ -105,11 +80,11 @@ def main():
     data = json.loads(proc.stdout)
     models_with_size = [(m["name"], m.get("size", 0)) for m in data.get("models", [])]
 
-    # Sort by size (smallest first) - test all models
+    # Sort by size (smallest first)
     models_with_size.sort(key=lambda x: x[1])
     models = [m[0] for m in models_with_size]
 
-    print(f"Testing {len(models)} models for tool calling WITH tool definitions...")
+    print(f"Testing {len(models)} models for planning (smallest to largest)...")
     print("-" * 60)
 
     success_count = 0
@@ -120,7 +95,9 @@ def main():
 
         if result["success"]:
             success_count += 1
-            print(f"      → {result['output'][:100]}")
+            # Show snippet
+            snippet = result["output"][:80].replace("\n", " ")
+            print(f"      → {snippet}...")
 
         if result["error"]:
             print(f"      → error: {result['error']}")

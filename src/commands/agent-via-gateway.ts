@@ -42,6 +42,7 @@ export type AgentCliOpts = {
   verbose?: string;
   json?: boolean;
   timeout?: string;
+  maxTimeout?: string;
   deliver?: boolean;
   channel?: string;
   replyTo?: string;
@@ -63,6 +64,34 @@ function parseTimeoutSeconds(opts: { cfg: ReturnType<typeof loadConfig>; timeout
     throw new Error("--timeout must be a non-negative integer (seconds; 0 means no timeout)");
   }
   return raw;
+}
+
+function parseMaxTimeoutSeconds(opts: {
+  cfg: ReturnType<typeof loadConfig>;
+  maxTimeout?: string;
+  timeout: number;
+}) {
+  if (opts.maxTimeout !== undefined) {
+    const raw = Number.parseInt(String(opts.maxTimeout), 10);
+    if (Number.isNaN(raw) || raw <= 0) {
+      throw new Error("--max-timeout must be a positive integer (seconds)");
+    }
+    if (raw < opts.timeout) {
+      throw new Error("--max-timeout must be greater than or equal to --timeout");
+    }
+    return raw;
+  }
+  const configMaxTimeout = opts.cfg.agents?.defaults?.maxTimeoutSeconds;
+  if (configMaxTimeout !== undefined && configMaxTimeout > opts.timeout) {
+    return configMaxTimeout;
+  }
+  return opts.timeout;
+}
+
+const MAX_BACKOFF_RETRIES = 10;
+
+function calculateBackoffTimeout(currentTimeout: number, maxTimeout: number): number {
+  return Math.min(currentTimeout * 2, maxTimeout);
 }
 
 function formatPayloadForLog(payload: {
@@ -106,10 +135,12 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
     }
   }
   const timeoutSeconds = parseTimeoutSeconds({ cfg, timeout: opts.timeout });
-  const gatewayTimeoutMs =
-    timeoutSeconds === 0
-      ? NO_GATEWAY_TIMEOUT_MS // no timeout (timer-safe max)
-      : Math.max(10_000, (timeoutSeconds + 30) * 1000);
+  const maxTimeoutSeconds = parseMaxTimeoutSeconds({
+    cfg,
+    maxTimeout: opts.maxTimeout,
+    timeout: timeoutSeconds,
+  });
+  const useBackoff = maxTimeoutSeconds > timeoutSeconds;
 
   const sessionKey = resolveSessionKeyForRequest({
     cfg,
@@ -121,38 +152,78 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
   const channel = normalizeMessageChannel(opts.channel);
   const idempotencyKey = opts.runId?.trim() || randomIdempotencyKey();
 
+  let currentTimeoutSeconds = timeoutSeconds;
+  let retryCount = 0;
+  let lastError: Error | null = null;
+
+  const makeGatewayCall = async (timeout: number): Promise<GatewayAgentResponse> => {
+    const gatewayTimeoutMs =
+      timeout === 0 ? NO_GATEWAY_TIMEOUT_MS : Math.max(10_000, (timeout + 30) * 1000);
+
+    return await callGateway<GatewayAgentResponse>({
+      method: "agent",
+      params: {
+        message: body,
+        agentId,
+        to: opts.to,
+        replyTo: opts.replyTo,
+        sessionId: opts.sessionId,
+        sessionKey,
+        thinking: opts.thinking,
+        deliver: Boolean(opts.deliver),
+        channel,
+        replyChannel: opts.replyChannel,
+        replyAccountId: opts.replyAccount,
+        bestEffortDeliver: opts.bestEffortDeliver,
+        timeout,
+        lane: opts.lane,
+        extraSystemPrompt: opts.extraSystemPrompt,
+        idempotencyKey,
+      },
+      expectFinal: true,
+      timeoutMs: gatewayTimeoutMs,
+      clientName: GATEWAY_CLIENT_NAMES.CLI,
+      mode: GATEWAY_CLIENT_MODES.CLI,
+    });
+  };
+
   const response = await withProgress(
     {
       label: "Waiting for agent reply…",
       indeterminate: true,
       enabled: opts.json !== true,
     },
-    async () =>
-      await callGateway<GatewayAgentResponse>({
-        method: "agent",
-        params: {
-          message: body,
-          agentId,
-          to: opts.to,
-          replyTo: opts.replyTo,
-          sessionId: opts.sessionId,
-          sessionKey,
-          thinking: opts.thinking,
-          deliver: Boolean(opts.deliver),
-          channel,
-          replyChannel: opts.replyChannel,
-          replyAccountId: opts.replyAccount,
-          bestEffortDeliver: opts.bestEffortDeliver,
-          timeout: timeoutSeconds,
-          lane: opts.lane,
-          extraSystemPrompt: opts.extraSystemPrompt,
-          idempotencyKey,
-        },
-        expectFinal: true,
-        timeoutMs: gatewayTimeoutMs,
-        clientName: GATEWAY_CLIENT_NAMES.CLI,
-        mode: GATEWAY_CLIENT_MODES.CLI,
-      }),
+    async () => {
+      for (;;) {
+        try {
+          return await makeGatewayCall(currentTimeoutSeconds);
+        } catch (err) {
+          lastError = err instanceof Error ? err : new Error(String(err));
+          if (!useBackoff || timeoutSeconds === 0) {
+            throw lastError;
+          }
+          const errorMessage = lastError.message.toLowerCase();
+          const isTimeout = errorMessage.includes("timeout");
+          if (!isTimeout) {
+            throw lastError;
+          }
+          if (currentTimeoutSeconds >= maxTimeoutSeconds || retryCount >= MAX_BACKOFF_RETRIES) {
+            if (retryCount >= MAX_BACKOFF_RETRIES) {
+              runtime.log?.(`Reached max retries (${MAX_BACKOFF_RETRIES}), giving up.`);
+            } else {
+              runtime.log?.(`Reached max timeout (${maxTimeoutSeconds}s), giving up.`);
+            }
+            throw lastError;
+          }
+          retryCount++;
+          const nextTimeout = calculateBackoffTimeout(currentTimeoutSeconds, maxTimeoutSeconds);
+          runtime.log?.(
+            `Request timed out after ${currentTimeoutSeconds}s, retrying with ${nextTimeout}s timeout...`,
+          );
+          currentTimeoutSeconds = nextTimeout;
+        }
+      }
+    },
   );
 
   if (opts.json) {

@@ -47,6 +47,10 @@ export function registerAgentCommands(program: Command, args: { agentChannelOpti
       "--timeout <seconds>",
       "Override agent command timeout (seconds, default 600 or config value)",
     )
+    .option(
+      "--max-timeout <seconds>",
+      "Maximum timeout with exponential backoff (e.g., 10800 for 3 hours). Defaults to config agents.defaults.maxTimeoutSeconds.",
+    )
     .addHelpText(
       "after",
       () =>
@@ -67,6 +71,10 @@ ${formatHelpExamples([
   [
     'openclaw agent --agent ops --message "Generate report" --deliver --reply-channel slack --reply-to "#reports"',
     "Send reply to a different channel/target.",
+  ],
+  [
+    'openclaw agent --message "Complex analysis" --timeout 60 --max-timeout 10800',
+    "Start with 60s timeout, exponential backoff up to 3 hours.",
   ],
 ])}
 

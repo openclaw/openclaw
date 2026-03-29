@@ -138,4 +138,96 @@ describe("agentCliCommand", () => {
       expect(runtime.log).toHaveBeenCalledWith("local");
     });
   });
+
+  it("uses exponential backoff when --max-timeout > --timeout", async () => {
+    await withTempStore(
+      async () => {
+        vi.mocked(callGateway)
+          .mockRejectedValueOnce(new Error("gateway timeout after 60000ms"))
+          .mockRejectedValueOnce(new Error("gateway timeout after 120000ms"))
+          .mockResolvedValueOnce({
+            runId: "idem-1",
+            status: "ok",
+            result: {
+              payloads: [{ text: "success" }],
+              meta: { stub: true },
+            },
+          });
+
+        await agentCliCommand(
+          {
+            message: "hi",
+            to: "+1555",
+            timeout: "60",
+            maxTimeout: "300",
+          },
+          runtime,
+        );
+
+        expect(callGateway).toHaveBeenCalledTimes(3);
+        const firstCall = vi.mocked(callGateway).mock.calls[0]?.[0] as { timeoutMs?: number };
+        const secondCall = vi.mocked(callGateway).mock.calls[1]?.[0] as { timeoutMs?: number };
+        expect(firstCall.timeoutMs).toBe(90_000);
+        expect(secondCall.timeoutMs).toBe(150_000);
+        expect(runtime.log).toHaveBeenCalledWith(
+          "Request timed out after 60s, retrying with 120s timeout...",
+        );
+        expect(runtime.log).toHaveBeenCalledWith(
+          "Request timed out after 120s, retrying with 240s timeout...",
+        );
+      },
+      { agents: { defaults: { timeoutSeconds: 600 } } },
+    );
+  });
+
+  it("does not retry on non-timeout errors", async () => {
+    await withTempStore(
+      async () => {
+        vi.mocked(callGateway).mockRejectedValueOnce(new Error("gateway not connected"));
+
+        await agentCliCommand(
+          {
+            message: "hi",
+            to: "+1555",
+            timeout: "60",
+            maxTimeout: "300",
+          },
+          runtime,
+        );
+
+        expect(callGateway).toHaveBeenCalledTimes(1);
+        expect(agentCommand).toHaveBeenCalledTimes(1);
+      },
+      { agents: { defaults: { timeoutSeconds: 600 } } },
+    );
+  });
+
+  it("uses config maxTimeoutSeconds when CLI max-timeout not provided", async () => {
+    await withTempStore(
+      async () => {
+        vi.mocked(callGateway)
+          .mockRejectedValueOnce(new Error("gateway timeout after 60000ms"))
+          .mockResolvedValueOnce({
+            runId: "idem-1",
+            status: "ok",
+            result: {
+              payloads: [{ text: "success" }],
+              meta: { stub: true },
+            },
+          });
+
+        await agentCliCommand(
+          {
+            message: "hi",
+            to: "+1555",
+            timeout: "60",
+          },
+          runtime,
+        );
+
+        expect(callGateway).toHaveBeenCalledTimes(2);
+      },
+      { agents: { defaults: { timeoutSeconds: 600, maxTimeoutSeconds: 300 } } },
+    );
+  });
 });

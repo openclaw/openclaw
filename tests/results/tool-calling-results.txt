@@ -1,0 +1,64 @@
+Testing 45 models for tool calling WITH tool definitions...
+------------------------------------------------------------
+FAIL nomic-embed-text:v1.5
+FAIL nomic-embed-text:latest
+PASS qwen2.5:0.5b
+      → tool_calls: [{"id": "call_b3cjy3i1", "function": {"index": 0, "name": "sessions_spawn", "arguments":
+FAIL qwen2.5-coder:0.5b
+PASS qwen3:0.6b
+      → tool_calls: [{"id": "call_xehyuhij", "function": {"index": 0, "name": "sessions_spawn", "arguments":
+PASS granite4:350m
+      → tool_calls: [{"id": "call_ppdx200d", "function": {"index": 0, "name": "sessions_spawn", "arguments":
+FAIL deepseek-coder:1.3b
+FAIL gemma3:1b
+FAIL granite3-moe:1b
+FAIL yi-coder:1.5b
+FAIL qwen2.5-coder:1.5b
+FAIL deepseek-r1:1.5b
+FAIL bge-m3:latest
+FAIL qllama/bge-reranker-v2-m3:f16
+FAIL xitao/bge-reranker-v2-m3:latest
+FAIL granite3.1-moe:1b
+FAIL granite3.1-dense:2b
+FAIL starcoder2:3b
+FAIL qwen2.5-coder:3b
+PASS llama3.2:3b
+      → tool_calls: [{"id": "call_sx6z2r9i", "function": {"index": 0, "name": "sessions_spawn", "arguments":
+FAIL granite3.1-moe:3b
+PASS granite4:3b
+      → tool_calls: [{"id": "call_z8rxky9y", "function": {"index": 0, "name": "sessions_spawn", "arguments":
+PASS granite4:1b
+      → tool_calls: [{"id": "call_0tz8bvex", "function": {"index": 0, "name": "sessions_spawn", "arguments":
+FAIL MedAIBase/Qwen3-VL-Reranker:2b
+FAIL codellama:7b
+FAIL deepseek-coder:6.7b
+FAIL starcoder2:7b
+FAIL dolphin-mistral:7b
+FAIL dolphincoder:7b
+PASS mistral:7b
+      → tool_calls: [{"id": "call_0yzcotf6", "function": {"index": 0, "name": "sessions_spawn", "arguments":
+FAIL llama3:8B
+PASS llama3-groq-tool-use:8B
+      → tool_calls: [{"id": "call_ox965k8r", "function": {"index": 0, "name": "sessions_spawn", "arguments":
+FAIL deepseek-r1:7b
+PASS qwen2.5:7b-instruct
+      → tool_calls: [{"id": "call_ocblqnnb", "function": {"index": 0, "name": "sessions_spawn", "arguments":
+FAIL qwen2.5-coder:7b
+FAIL llava:latest
+PASS llama3.1:8B
+      → tool_calls: [{"id": "call_0ahxx7ap", "function": {"index": 0, "name": "sessions_spawn", "arguments":
+FAIL yi-coder:9b
+PASS mistral-nemo:latest
+      → tool_calls: [{"id": "call_ks0dfxd1", "function": {"index": 0, "name": "sessions_spawn", "arguments":
+FAIL qwen2.5-coder:14b
+FAIL dolphincoder:15b
+PASS gpt-oss:20b
+      → tool_calls: [{"id": "call_bnaa7j6d", "function": {"index": 0, "name": "sessions_spawn", "arguments":
+PASS mistral-small:latest
+      → tool_calls: [{"id": "call_7syrfww0", "function": {"index": 0, "name": "sessions_spawn", "arguments":
+PASS mistral-small3.2:latest
+      → tool_calls: [{"id": "call_59k6mhsc", "function": {"index": 0, "name": "sessions_spawn", "arguments":
+PASS mistral-small3.1:latest
+      → tool_calls: [{"id": "call_t8djelw3", "function": {"index": 0, "name": "sessions_spawn", "arguments":
+------------------------------------------------------------
+Success: 15/45

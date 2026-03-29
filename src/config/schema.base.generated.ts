@@ -2664,6 +2664,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                 exclusiveMinimum: 0,
                 maximum: 9007199254740991,
               },
+              maxTimeoutSeconds: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+              },
               mediaMaxMb: {
                 type: "number",
                 exclusiveMinimum: 0,
