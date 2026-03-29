@@ -69,6 +69,26 @@ const DEFAULT_PROVIDER_RUNTIME_HOOKS: ProviderRuntimeHooks = {
   normalizeProviderTransportWithPlugin,
 };
 
+const STATIC_PROVIDER_RUNTIME_HOOKS: ProviderRuntimeHooks = {
+  applyProviderResolvedModelCompatWithPlugins: () => undefined,
+  applyProviderResolvedTransportWithPlugin: () => undefined,
+  buildProviderUnknownModelHintWithPlugin: () => undefined,
+  prepareProviderDynamicModel: async () => {},
+  runProviderDynamicModel: () => undefined,
+  normalizeProviderResolvedModelWithPlugin: () => undefined,
+  normalizeProviderTransportWithPlugin: () => undefined,
+};
+
+function resolveRuntimeHooks(params?: {
+  runtimeHooks?: ProviderRuntimeHooks;
+  skipProviderRuntimeHooks?: boolean;
+}): ProviderRuntimeHooks {
+  if (params?.skipProviderRuntimeHooks) {
+    return STATIC_PROVIDER_RUNTIME_HOOKS;
+  }
+  return params?.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
+}
+
 function normalizeResolvedTransportApi(api: unknown): ModelDefinitionConfig["api"] | undefined {
   switch (api) {
     case "anthropic-messages":
@@ -573,6 +593,7 @@ export function resolveModel(
     authStorage?: AuthStorage;
     modelRegistry?: ModelRegistry;
     runtimeHooks?: ProviderRuntimeHooks;
+    skipProviderRuntimeHooks?: boolean;
   },
 ): {
   model?: Model<Api>;
@@ -583,13 +604,14 @@ export function resolveModel(
   const resolvedAgentDir = agentDir ?? resolveOpenClawAgentDir();
   const authStorage = options?.authStorage ?? discoverAuthStorage(resolvedAgentDir);
   const modelRegistry = options?.modelRegistry ?? discoverModels(authStorage, resolvedAgentDir);
+  const runtimeHooks = resolveRuntimeHooks(options);
   const model = resolveModelWithRegistry({
     provider,
     modelId,
     modelRegistry,
     cfg,
     agentDir: resolvedAgentDir,
-    runtimeHooks: options?.runtimeHooks,
+    runtimeHooks,
   });
   if (model) {
     return { model, authStorage, modelRegistry };
@@ -601,7 +623,7 @@ export function resolveModel(
       modelId,
       cfg,
       agentDir: resolvedAgentDir,
-      runtimeHooks: options?.runtimeHooks,
+      runtimeHooks,
     }),
     authStorage,
     modelRegistry,
@@ -618,6 +640,7 @@ export async function resolveModelAsync(
     modelRegistry?: ModelRegistry;
     retryTransientProviderRuntimeMiss?: boolean;
     runtimeHooks?: ProviderRuntimeHooks;
+    skipProviderRuntimeHooks?: boolean;
   },
 ): Promise<{
   model?: Model<Api>;
@@ -628,13 +651,14 @@ export async function resolveModelAsync(
   const resolvedAgentDir = agentDir ?? resolveOpenClawAgentDir();
   const authStorage = options?.authStorage ?? discoverAuthStorage(resolvedAgentDir);
   const modelRegistry = options?.modelRegistry ?? discoverModels(authStorage, resolvedAgentDir);
+  const runtimeHooks = resolveRuntimeHooks(options);
   const explicitModel = resolveExplicitModelWithRegistry({
     provider,
     modelId,
     modelRegistry,
     cfg,
     agentDir: resolvedAgentDir,
-    runtimeHooks: options?.runtimeHooks,
+    runtimeHooks,
   });
   if (explicitModel?.kind === "suppressed") {
     return {
@@ -643,14 +667,13 @@ export async function resolveModelAsync(
         modelId,
         cfg,
         agentDir: resolvedAgentDir,
-        runtimeHooks: options?.runtimeHooks,
+        runtimeHooks,
       }),
       authStorage,
       modelRegistry,
     };
   }
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
-  const runtimeHooks = options?.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
   const resolveDynamicAttempt = async (attemptOptions?: { clearHookCache?: boolean }) => {
     if (attemptOptions?.clearHookCache) {
       clearProviderRuntimeHookCache();
@@ -673,7 +696,7 @@ export async function resolveModelAsync(
       modelRegistry,
       cfg,
       agentDir: resolvedAgentDir,
-      runtimeHooks: options?.runtimeHooks,
+      runtimeHooks,
     });
   };
   let model =
@@ -694,7 +717,7 @@ export async function resolveModelAsync(
       modelId,
       cfg,
       agentDir: resolvedAgentDir,
-      runtimeHooks: options?.runtimeHooks,
+      runtimeHooks,
     }),
     authStorage,
     modelRegistry,
