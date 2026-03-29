@@ -18,6 +18,12 @@ import type { RunCronAgentTurnResult } from "./run.js";
 import { expectsSubagentFollowup, isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
 function normalizeDeliveryTarget(channel: string, to: string): string {
+  // Defensive: ensure channel and to are strings (TypeScript type narrowing)
+  if (typeof channel !== "string" || typeof to !== "string") {
+    throw new Error(
+      `normalizeDeliveryTarget: channel and to must be strings, got channel=${typeof channel}, to=${typeof to}`,
+    );
+  }
   const toTrimmed = to.trim();
   return normalizeTargetForProvider(channel, toTrimmed) ?? toTrimmed;
 }
@@ -413,11 +419,12 @@ export async function dispatchCronDelivery(
       resolveAgentOutboundIdentity,
     } = await loadDeliveryOutboundRuntime();
     const identity = resolveAgentOutboundIdentity(params.cfgWithAgentDefaults, params.agentId);
-    const deliveryIdempotencyKey = buildDirectCronDeliveryIdempotencyKey({
-      runSessionId: params.runSessionId,
-      delivery,
-    });
     try {
+      // Validate delivery target early and include in try/catch to avoid uncaught exceptions
+      const deliveryIdempotencyKey = buildDirectCronDeliveryIdempotencyKey({
+        runSessionId: params.runSessionId,
+        delivery,
+      });
       const rawPayloads =
         deliveryPayloads.length > 0
           ? deliveryPayloads
