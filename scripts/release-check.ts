@@ -134,6 +134,8 @@ export function collectBundledExtensionRootDependencyMirrorErrors(
         errors.push(
           `bundled extension '${extension.id}' manifest invalid | openclaw.releaseChecks.rootDependencyMirrorAllowlist entry '${entry}' must be mirrored in root runtime dependencies`,
         );
+      }
+      if (!extensionSpec || !rootSpec) {
         continue;
       }
       if (extensionSpec !== rootSpec) {
