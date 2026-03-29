@@ -1278,14 +1278,15 @@ export const sessionsHandlers: GatewayRequestHandlers = {
 
     // Phase 1: read-only scan under the write lock to locate the cut point.
     // Do NOT abort active runs yet; only do so after confirming a valid cut exists.
-    // allowReentrant: false ensures active runs holding this lock in the same process
-    // are blocked here, preventing the scan from racing with concurrent appends.
+    // Use the default reentrant lock here: active runs hold the session write lock for
+    // their entire attempt, so a non-reentrant lock here would deadlock (Phase 1 would
+    // block waiting for the run to release the lock, but Phase 2 cleanup — which aborts
+    // the run and releases the lock — cannot execute until Phase 1 returns). Phase 1 only
+    // reads; Phase 3c holds the non-reentrant lock for the destructive write after cleanup
+    // has confirmed the run has fully ended and released the lock.
     let cutLineIndex = -1;
     {
-      const scanLock = await acquireSessionWriteLock({
-        sessionFile: filePath,
-        allowReentrant: false,
-      });
+      const scanLock = await acquireSessionWriteLock({ sessionFile: filePath });
       try {
         let raw: string;
         try {
@@ -1352,8 +1353,10 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     // Re-scan for p.seq under the lock: sessions.compact now also acquires this lock
     // before rewriting the transcript, so all transcript writes are serialized and
     // line indices from Phase 1 are re-validated before the final swap.
-    // allowReentrant: false blocks any active run in the same process from holding
-    // the lock concurrently with the destructive rename/swap.
+    // allowReentrant: false is safe here: Phase 2 cleanup awaited the active run's full
+    // termination (abortEmbeddedPiRun + waitForEmbeddedPiRunEnd), so the run has already
+    // released the lock. Using non-reentrant ensures no new run that started between Phase 2
+    // and Phase 3c can append concurrently with the destructive rename/swap.
     let keptLines: string[] = [];
     let archived = "";
     let seqFoundInPhase3c = false;
