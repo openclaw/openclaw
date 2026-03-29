@@ -3,6 +3,7 @@ import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-hel
 
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const writeConfigFileMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const ensureWorkspaceAndSessionsMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 
 const wizardMocks = vi.hoisted(() => ({
   createClackPrompter: vi.fn(),
@@ -18,6 +19,21 @@ vi.mock("../wizard/clack-prompter.js", () => ({
   createClackPrompter: wizardMocks.createClackPrompter,
 }));
 
+vi.mock("./onboard-helpers.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./onboard-helpers.js")>()),
+  ensureWorkspaceAndSessions: ensureWorkspaceAndSessionsMock,
+}));
+
+vi.mock("./auth-choice.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./auth-choice.js")>()),
+  warnIfModelConfigLooksOff: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("./onboard-channels.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./onboard-channels.js")>()),
+  setupChannels: vi.fn().mockImplementation(async (cfg) => cfg),
+}));
+
 import { WizardCancelledError } from "../wizard/prompts.js";
 import { agentsAddCommand } from "./agents.js";
 
@@ -27,6 +43,7 @@ describe("agents add command", () => {
   beforeEach(() => {
     readConfigFileSnapshotMock.mockClear();
     writeConfigFileMock.mockClear();
+    ensureWorkspaceAndSessionsMock.mockClear();
     wizardMocks.createClackPrompter.mockClear();
     runtime.log.mockClear();
     runtime.error.mockClear();
@@ -69,5 +86,56 @@ describe("agents add command", () => {
 
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(writeConfigFileMock).not.toHaveBeenCalled();
+  });
+
+  it("passes skipBootstrap: true to ensureWorkspaceAndSessions when --skip-bootstrap is set (non-interactive)", async () => {
+    readConfigFileSnapshotMock.mockResolvedValue({ ...baseConfigSnapshot });
+
+    await agentsAddCommand(
+      { name: "myagent", workspace: "/tmp/ws", nonInteractive: true, skipBootstrap: true },
+      runtime,
+      { hasFlags: true },
+    );
+
+    expect(ensureWorkspaceAndSessionsMock).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.anything(),
+      expect.objectContaining({ skipBootstrap: true }),
+    );
+  });
+
+  it("passes skipBootstrap: false to ensureWorkspaceAndSessions when --skip-bootstrap is not set (non-interactive)", async () => {
+    readConfigFileSnapshotMock.mockResolvedValue({ ...baseConfigSnapshot });
+
+    await agentsAddCommand(
+      { name: "myagent", workspace: "/tmp/ws", nonInteractive: true },
+      runtime,
+      { hasFlags: true },
+    );
+
+    expect(ensureWorkspaceAndSessionsMock).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.anything(),
+      expect.objectContaining({ skipBootstrap: false }),
+    );
+  });
+
+  it("passes skipBootstrap: true to ensureWorkspaceAndSessions when --skip-bootstrap is set (interactive)", async () => {
+    readConfigFileSnapshotMock.mockResolvedValue({ ...baseConfigSnapshot });
+    wizardMocks.createClackPrompter.mockReturnValue({
+      intro: vi.fn().mockResolvedValue(undefined),
+      text: vi.fn().mockResolvedValue("/tmp/ws"),
+      confirm: vi.fn().mockResolvedValue(false),
+      note: vi.fn().mockResolvedValue(undefined),
+      outro: vi.fn().mockResolvedValue(undefined),
+    });
+
+    await agentsAddCommand({ name: "myagent", skipBootstrap: true }, runtime);
+
+    expect(ensureWorkspaceAndSessionsMock).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.anything(),
+      expect.objectContaining({ skipBootstrap: true }),
+    );
   });
 });

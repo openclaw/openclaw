@@ -154,6 +154,26 @@ describe("registerAgentCommands", () => {
     );
   });
 
+  it("forwards --skip-bootstrap flag to agentsAddCommand", async () => {
+    await runCli([
+      "agents",
+      "add",
+      "gamma",
+      "--workspace",
+      "/tmp/ws",
+      "--non-interactive",
+      "--skip-bootstrap",
+    ]);
+    expect(agentsAddCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "gamma",
+        skipBootstrap: true,
+      }),
+      runtime,
+      { hasFlags: true },
+    );
+  });
+
   it("runs agents list when root agents command is invoked", async () => {
     await runCli(["agents"]);
     expect(agentsListCommandMock).toHaveBeenCalledWith({}, runtime);

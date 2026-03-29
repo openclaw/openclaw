@@ -175,6 +175,11 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
     .option("--agent-dir <dir>", "Agent state directory for this agent")
     .option("--bind <channel[:accountId]>", "Route channel binding (repeatable)", collectOption, [])
     .option("--non-interactive", "Disable prompts; requires --workspace", false)
+    .option(
+      "--skip-bootstrap",
+      "Skip creating AGENTS.md, SOUL.md, and other bootstrap files",
+      false,
+    )
     .option("--json", "Output JSON summary", false)
     .action(async (name, opts, command) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
@@ -184,6 +189,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
           "agentDir",
           "bind",
           "nonInteractive",
+          "skipBootstrap",
         ]);
         await agentsAddCommand(
           {
@@ -193,6 +199,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
             agentDir: opts.agentDir as string | undefined,
             bind: Array.isArray(opts.bind) ? (opts.bind as string[]) : undefined,
             nonInteractive: Boolean(opts.nonInteractive),
+            skipBootstrap: Boolean(opts.skipBootstrap),
             json: Boolean(opts.json),
           },
           defaultRuntime,
