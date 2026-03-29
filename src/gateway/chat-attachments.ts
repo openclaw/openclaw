@@ -93,26 +93,14 @@ function isImageMime(mime?: string): boolean {
   return typeof mime === "string" && mime.startsWith("image/");
 }
 
-// Base64 string length corresponding to OFFLOAD_THRESHOLD_BYTES.
-// Payloads above this threshold always go through the offload branch where
-// correctness is guaranteed by verifyDecodedSize (a post-decode size check
-// that catches embedded invalid chars dropped silently by Buffer.from).
-// Inline payloads below this threshold are small enough for a full O(n)
-// character-class scan without materially blocking the event loop.
-const BASE64_INLINE_SCAN_MAX = Math.ceil((OFFLOAD_THRESHOLD_BYTES * 4) / 3 / 4) * 4; // ~2,666,668
-
 function isValidBase64(value: string): boolean {
   if (value.length === 0 || value.length % 4 !== 0) {
     return false;
   }
-  // Large payloads above BASE64_INLINE_SCAN_MAX always enter the offload branch
-  // where verifyDecodedSize provides a stronger post-decode guarantee.
-  // Skipping the O(n) scan here avoids blocking the event loop for payloads
-  // near maxBytes (~5 MB / ~6.7 M chars).
-  if (value.length > BASE64_INLINE_SCAN_MAX) {
-    return true;
-  }
-  // Small inline payloads: full scan is cheap and exact.
+  // A full O(n) regex scan is safe because the regex has no overlapping
+  // quantifiers and fails linearly without catastrophic backtracking.
+  // This prevents adversarial payloads padded with megabytes of whitespace
+  // from bypassing length thresholds.
   return /^[A-Za-z0-9+/]+={0,2}$/.test(value);
 }
 
@@ -147,8 +135,8 @@ function ensureExtension(label: string, mime: string): string {
  * Type guard for the return value of saveMediaBuffer.
  *
  * Also validates that the returned ID:
- *   - is a non-empty string
- *   - contains no path separators (/ or \) or null bytes
+ * - is a non-empty string
+ * - contains no path separators (/ or \) or null bytes
  *
  * This provides defence-in-depth before the ID is embedded in a
  * media://inbound/<id> URI and later resolved by resolveMediaBufferPath
@@ -247,8 +235,8 @@ function validateAttachmentBase64OrThrow(
  * refactor should unify all image references into a single ordered list.
  *
  * @throws {MediaOffloadError} When a filesystem error prevents saving an
- *   attachment to the media store. Callers should map this to a server-side
- *   5xx status rather than a client 4xx.
+ * attachment to the media store. Callers should map this to a server-side
+ * 5xx status rather than a client 4xx.
  */
 export async function parseMessageWithAttachments(
   message: string,
@@ -358,9 +346,8 @@ export async function parseMessageWithAttachments(
           const buffer = Buffer.from(b64, "base64");
 
           // Post-decode size validation for large payloads.
-          // isValidBase64 skips the O(n) regex for strings above BASE64_INLINE_SCAN_MAX;
-          // Buffer.from silently drops invalid chars, so a size mismatch reveals
-          // that the source contained embedded garbage.
+          // Provides defense-in-depth against silent truncation by Buffer.from
+          // if any malformed characters somehow bypassed prior validation.
           verifyDecodedSize(buffer, sizeBytes, label);
 
           const labelWithExt = ensureExtension(label, finalMime);
