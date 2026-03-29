@@ -399,6 +399,12 @@ async function resolveTrackedUpdateTarget(params: {
   };
 }
 
+/**
+ * Install a ClawHub skill under `{workspaceDir}/skills/{slug}` (see `resolveSkillInstallDir`).
+ *
+ * **`workspaceDir` contract:** pass the OpenClaw **config / workspace root** (e.g. `CONFIG_DIR`),
+ * not an already-suffixed `…/skills` directory — otherwise installs land in `…/skills/skills/…`.
+ */
 export async function installSkillFromClawHub(params: {
   workspaceDir: string;
   slug: string;

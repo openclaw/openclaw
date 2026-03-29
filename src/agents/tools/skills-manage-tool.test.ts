@@ -85,6 +85,37 @@ describe("skills_manage tool", () => {
     });
   });
 
+  it("approve refuses when SKILL.md is a symlink pointing outside the skill root", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    await withTempDir("openclaw-skills-manage-", async (workspaceDir) => {
+      const tool = createSkillsManageTool({ workspaceDir, agentSessionKey: "agent:main:main" });
+      const proposed = await tool.execute("call-1", {
+        action: "propose",
+        name: "symlink-md-target",
+        contents: "# Skill\n\nBody.",
+      });
+      const proposalId = String((getDetails(proposed).proposal as Record<string, unknown>).id);
+      const { rootPath } = resolveSkillRoot(workspaceDir, "workspace");
+      const skillDir = path.join(rootPath, "symlink-md-target");
+      await fs.mkdir(skillDir, { recursive: true });
+      const outsideFile = path.join(
+        await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-md-out-")),
+        "target.md",
+      );
+      await fs.writeFile(outsideFile, "secret", "utf8");
+      const skillMdPath = path.join(skillDir, "SKILL.md");
+      await fs.symlink(outsideFile, skillMdPath);
+      const approved = await tool.execute("call-md-symlink", {
+        action: "approve",
+        proposalId,
+      });
+      expect(getDetails(approved).ok).toBe(false);
+      expect(getStringField(getDetails(approved), "error")).toContain("symlink resolution");
+    });
+  });
+
   it("approve refuses proposal when resolved path escapes root via symlink", async () => {
     if (process.platform === "win32") {
       return;

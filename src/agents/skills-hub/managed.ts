@@ -223,7 +223,7 @@ export async function updateManagedSkills(params: {
       const updateResult =
         entry.source === "clawhub"
           ? await installSkillFromClawHub({
-              workspaceDir: rootDir,
+              workspaceDir: CONFIG_DIR,
               slug: entry.name,
               version: entry.ref,
               force: true,

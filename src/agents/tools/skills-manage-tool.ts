@@ -168,30 +168,87 @@ export function createSkillsManageTool(opts: {
           });
         }
 
-        await fs.mkdir(proposal.skillDir, { recursive: true });
-        let resolvedSkillDir: string;
-        let resolvedSkillMdPath: string;
+        await fs.mkdir(targetRoot.rootPath, { recursive: true });
         let resolvedAllowedRoot: string;
         try {
-          resolvedSkillDir = await fs.realpath(proposal.skillDir);
-          resolvedSkillMdPath = path.join(resolvedSkillDir, path.basename(proposal.skillMdPath));
           resolvedAllowedRoot = await fs.realpath(targetRoot.rootPath);
         } catch {
           return jsonResult({
             ok: false,
             action,
-            error: "could not resolve proposal paths",
+            error: "could not resolve skill root path",
           });
         }
-        if (
-          !isPathInside(resolvedAllowedRoot, resolvedSkillDir) ||
-          !isPathInside(resolvedAllowedRoot, resolvedSkillMdPath)
-        ) {
+        const relSkillDir = path.relative(targetRoot.rootPath, proposal.skillDir);
+        if (!relSkillDir || relSkillDir.startsWith("..") || path.isAbsolute(relSkillDir)) {
+          return jsonResult({
+            ok: false,
+            action,
+            error: "proposal path is outside allowed skill roots",
+          });
+        }
+        const relParts = path.normalize(relSkillDir).split(path.sep).filter(Boolean);
+        let resolvedSkillDir = resolvedAllowedRoot;
+        try {
+          for (const part of relParts) {
+            const nextPath = path.join(resolvedSkillDir, part);
+            const st = await fs.lstat(nextPath).catch(() => null);
+            if (!st) {
+              await fs.mkdir(nextPath);
+            } else if (!st.isDirectory() && !st.isSymbolicLink()) {
+              return jsonResult({
+                ok: false,
+                action,
+                error: "skill path blocked by a non-directory file",
+              });
+            }
+            const resolvedNext = await fs.realpath(nextPath);
+            if (!isPathInside(resolvedAllowedRoot, resolvedNext)) {
+              return jsonResult({
+                ok: false,
+                action,
+                error: "proposal path escapes allowed skill roots after symlink resolution",
+              });
+            }
+            resolvedSkillDir = resolvedNext;
+          }
+        } catch {
+          return jsonResult({
+            ok: false,
+            action,
+            error: "could not resolve proposal paths after mkdir",
+          });
+        }
+        const resolvedSkillMdPath = path.join(
+          resolvedSkillDir,
+          path.basename(proposal.skillMdPath),
+        );
+        if (!isPathInside(resolvedAllowedRoot, resolvedSkillMdPath)) {
           return jsonResult({
             ok: false,
             action,
             error: "proposal path escapes allowed skill roots after symlink resolution",
           });
+        }
+        const mdStat = await fs.lstat(resolvedSkillMdPath).catch(() => null);
+        if (mdStat?.isSymbolicLink()) {
+          let realMd: string;
+          try {
+            realMd = await fs.realpath(resolvedSkillMdPath);
+          } catch {
+            return jsonResult({
+              ok: false,
+              action,
+              error: "could not resolve SKILL.md path",
+            });
+          }
+          if (!isPathInside(resolvedAllowedRoot, realMd)) {
+            return jsonResult({
+              ok: false,
+              action,
+              error: "proposal path escapes allowed skill roots after symlink resolution",
+            });
+          }
         }
         await fs.writeFile(resolvedSkillMdPath, proposal.contents, "utf8");
         deleteProposal(proposalId);

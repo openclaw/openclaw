@@ -64,6 +64,7 @@ export type ProcessGatewayAllowlistParams = {
   warnings: string[];
   notifySessionKey?: string;
   sessionId?: string;
+  agentRunId?: string;
   approvalRunningNoticeMs: number;
   maxOutput: number;
   pendingMaxOutput: number;
@@ -192,6 +193,7 @@ export async function processGatewayAllowlist(
           params.workdir,
         ),
         ...buildExecApprovalTurnSourceContext(params),
+        agentRunId: params.agentRunId,
       });
     const {
       approvalId,
@@ -228,6 +230,7 @@ export async function processGatewayAllowlist(
         sessionKey: params.notifySessionKey,
         agentId: params.agentId,
         sessionId: params.sessionId,
+        agentRunId: params.agentRunId,
         onFailure: () =>
           void sendExecApprovalFollowupResult(
             followupTarget,
