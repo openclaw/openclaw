@@ -1,8 +1,8 @@
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
 import {
-  chunkMarkdownIR,
   markdownToIR,
   type MarkdownLinkSpan,
+  renderMarkdownIRChunksWithinLimit,
 } from "openclaw/plugin-sdk/text-runtime";
 import { renderMarkdownWithMarkers } from "openclaw/plugin-sdk/text-runtime";
 
@@ -148,7 +148,11 @@ export function markdownToSlackMrkdwnChunks(
     blockquotePrefix: "> ",
     tableMode: options.tableMode,
   });
-  const chunks = chunkMarkdownIR(ir, limit);
   const renderOptions = buildSlackRenderOptions();
-  return chunks.map((chunk) => renderMarkdownWithMarkers(chunk, renderOptions));
+  return renderMarkdownIRChunksWithinLimit({
+    ir,
+    limit,
+    renderChunk: (chunk) => renderMarkdownWithMarkers(chunk, renderOptions),
+    measureRendered: (rendered) => rendered.length,
+  }).map(({ rendered }) => rendered);
 }

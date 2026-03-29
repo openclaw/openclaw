@@ -878,6 +878,14 @@ function sliceLinkSpans(spans: MarkdownLinkSpan[], start: number, end: number): 
   return sliced;
 }
 
+export function sliceMarkdownIR(ir: MarkdownIR, start: number, end: number): MarkdownIR {
+  return {
+    text: ir.text.slice(start, end),
+    styles: sliceStyleSpans(ir.styles, start, end),
+    links: sliceLinkSpans(ir.links, start, end),
+  };
+}
+
 export function markdownToIR(markdown: string, options: MarkdownParseOptions = {}): MarkdownIR {
   return markdownToIRWithMeta(markdown, options).ir;
 }
