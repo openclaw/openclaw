@@ -4,6 +4,23 @@ Docs: https://docs.openclaw.ai
 
 ## 2026.3.2 (Unreleased)
 
+### [v14.9] Stress-Test 8-Bug Fix (Pipeline Reliability)
+
+#### Исправления
+
+- **B1 (CRITICAL): Step tracking теряет роли при JSON в ответе** — Analyst/Researcher/Summarizer шаги молча пропадали из `steps_results`, когда их ответ содержал валидный JSON (например ```json блоки). Добавлен fallback `steps_results.append()` после JSON-парсинга. (`src/pipeline/\_core.py`)
+- **B2 (HIGH): YouTube галлюцинация несмотря на grounding directive** — Директива "только данные из транскрипта" была в конце system_prompt со слабой формулировкой. Перенесена в НАЧАЛО промпта с маркерами ⛔/✅ и усилением "= галлюцинация = провал задачи". (`src/pipeline/_core.py`)
+- **B3 (MEDIUM): Analyst guardrail требует метрики для видео-анализа** — `validate_analyst()` всегда требовала keywords "metric/mean/CI" даже для качественных задач (YouTube, summary). Добавлен `task_hint` kwarg — для качественных задач проверка метрик пропускается. (`src/pipeline_schemas.py`, `src/pipeline/_core.py`)
+- **B4 (MEDIUM): AFlow LLM Stage 2 тратит 20-40с на пустые ответы free-tier** — Два concurrent `route_llm` вызова × 3 retry × 2 модели = 12+ API calls впустую. Обёрнуто в `asyncio.wait_for(timeout=8.0)` с fallback на static chain. (`src/pipeline/_aflow.py`)
+- **B5 (MEDIUM): Token budget 256 для задач генерации кода** — Короткие промпты (<30 tokens) с `task_type="general"` получали budget 256 даже для запросов "напиши функцию". Добавлен `_infer_task_type()` с детекцией keyword'ов кода → budget 2048. (`src/ai/inference/budget.py`)
+- **B6 (MEDIUM): Heuristic chain использует "Coder" — роли нет в OpenClaw-Core** — Chain `[Planner, Coder, Auditor]` терял Coder при фильтрации по доступным ролям. Добавлен `Executor_Architect` рядом с Coder — фильтр выбирает нужную роль автоматически. (`src/pipeline/_aflow.py`)
+- **B7 (HIGH): `<think>` теги утекают в ответ при незакрытых блоках** — Regex `<think>.*?</think>` не ловит незакрытый `<think>` без `</think>` (частый паттерн nemotron). Добавлен fallback regex `<think>.*$` во все 4 файла со stripping. (`src/openrouter_client.py`, `src/vllm_inference.py`, `src/pipeline_utils.py`, `src/pipeline/_core.py`)
+- **B8 (HIGH): Planner retry `call_openrouter()` crash — missing 5 args** — Retry path при "no JSON from Planner" вызывал `call_openrouter()` без `openrouter_config`, `vllm_url`, `model`, `fallback_model`, `mcp_client`. Передан полный набор параметров из `self.*`. (`src/pipeline/_core.py`)
+
+### [v14.8] YouTube 7-Bug Fix
+
+- Исправлены 7 ошибок анализа YouTube видео: 54 special_skills паттерна, 12 role guardrails.
+
 ### [v13.0-STABLE] Zero-Bug Mission Control (Phase 14–15)
 
 #### ЭТАП 1: Операция Чистое Небо — Zero-Bug Policy

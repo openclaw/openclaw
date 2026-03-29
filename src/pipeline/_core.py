@@ -812,10 +812,15 @@ class PipelineExecutor:
                     try:
                         if self.force_cloud:
                             new_response = await call_openrouter(
+                                openrouter_config=self.openrouter_config,
+                                vllm_url=self.vllm_url,
+                                model=model,
+                                fallback_model=role_config.get("fallback_model", model),
                                 system_prompt=system_prompt,
                                 user_prompt=step_prompt + "\n\n" + retry_prompt,
                                 role_name=role_name,
                                 role_config=role_config,
+                                mcp_client=active_mcp,
                                 config=self.config,
                             )
                         else:

@@ -169,13 +169,15 @@ async def call_vllm(
                                     data2 = await resp2.json()
                                     text = data2["choices"][0]["message"]["content"].strip()
                                     if not preserve_think:
-                                        text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+                                        text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+                                        text = re.sub(r"<think>.*$", "", text, flags=re.DOTALL).strip()
                                     return text
                                 return f"⚠️ vLLM Error after tool call ({resp2.status})"
                         else:
                             text = msg.get("content", "").strip()
                             if not preserve_think:
-                                text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+                                text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+                                text = re.sub(r"<think>.*$", "", text, flags=re.DOTALL).strip()
                             return text
                     else:
                         error_body = ""
@@ -197,7 +199,8 @@ async def call_vllm(
                                     retry_data = await retry_resp.json()
                                     text = retry_data["choices"][0]["message"]["content"].strip()
                                     if not preserve_think:
-                                        text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+                                        text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+                                        text = re.sub(r"<think>.*$", "", text, flags=re.DOTALL).strip()
                                     return text
                                 retry_body = await retry_resp.text()
                                 return f"⚠️ vLLM Error ({retry_resp.status}): {retry_body[:200]}"

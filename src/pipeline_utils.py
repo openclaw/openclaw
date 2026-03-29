@@ -107,6 +107,7 @@ def compress_for_next_step(role_name: str, response: str) -> str:
 
     # 3. Clean text: remove <think>, STAR labels, code blocks, MCP markers
     clean = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL)
+    clean = re.sub(r'<think>.*$', '', clean, flags=re.DOTALL)
     clean = re.sub(r'```json.*?```', '', clean, flags=re.DOTALL)
     clean = re.sub(r'\[MCP[^\]]*\].*?\n', '', clean)
     clean = re.sub(r'\[Proof of Work[^\]]*\].*?\n', '', clean)
@@ -167,6 +168,7 @@ def emergency_compress(step_prompt: str, ctx_threshold: int, role_name: str) -> 
 
     # Aggressive compression of pipeline context
     clean_ctx = re.sub(r'<think>.*?</think>', '', pipeline_ctx, flags=re.DOTALL)
+    clean_ctx = re.sub(r'<think>.*$', '', clean_ctx, flags=re.DOTALL)
     clean_ctx = re.sub(r'```json.*?```', '[JSON_BLOCK]', clean_ctx, flags=re.DOTALL)
     clean_ctx = re.sub(r'\n{2,}', '\n', clean_ctx).strip()
 
