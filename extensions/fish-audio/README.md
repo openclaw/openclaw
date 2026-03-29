@@ -37,11 +37,15 @@ Environment variable fallback: `FISH_AUDIO_API_KEY`.
 
 ## Directives
 
+All directive keys are provider-prefixed to avoid dispatch collisions with
+bundled providers (OpenAI, ElevenLabs) that claim generic keys like `voice`
+and `model`. Both `fishaudio_*` and shorter `fish_*` aliases are accepted.
+
 ```
-[[tts:voice=<ref_id>]]     Switch voice
-[[tts:speed=1.2]]          Prosody speed (0.5–2.0)
-[[tts:model=s1]]           Model override
-[[tts:latency=low]]        Latency mode
-[[tts:temperature=0.7]]    Sampling temperature
-[[tts:top_p=0.8]]          Top-p sampling
+[[tts:fishaudio_voice=<ref_id>]]     Switch voice (or fish_voice)
+[[tts:fishaudio_speed=1.2]]          Prosody speed 0.5–2.0 (or fish_speed)
+[[tts:fishaudio_model=s1]]           Model override (or fish_model)
+[[tts:fishaudio_latency=low]]        Latency mode (or fish_latency)
+[[tts:fishaudio_temperature=0.7]]    Sampling temperature (or fish_temperature)
+[[tts:fishaudio_top_p=0.8]]          Top-p sampling (or fish_top_p)
 ```

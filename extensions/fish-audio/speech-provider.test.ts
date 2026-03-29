@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isValidFishAudioVoiceId } from "./speech-provider.js";
+import { buildFishAudioSpeechProvider, isValidFishAudioVoiceId } from "./speech-provider.js";
 
 describe("fish-audio speech provider", () => {
   describe("isValidFishAudioVoiceId", () => {
@@ -35,6 +35,66 @@ describe("fish-audio speech provider", () => {
           false,
         );
       }
+    });
+  });
+
+  describe("parseDirectiveToken", () => {
+    const provider = buildFishAudioSpeechProvider();
+    const parse = provider.parseDirectiveToken!;
+
+    const policy = { allowVoice: true, allowModelId: true, allowVoiceSettings: true, allowProvider: true };
+
+    it("handles provider-prefixed voice keys", () => {
+      const voiceId = "8a2d42279389471993460b85340235c5";
+      for (const key of ["fishaudio_voice", "fish_voice", "fishaudio_voiceid"]) {
+        const result = parse({ key, value: voiceId, policy, currentOverrides: {} });
+        expect(result.handled, `${key} should be handled`).toBe(true);
+        expect(result.overrides?.voiceId).toBe(voiceId);
+      }
+    });
+
+    it("handles provider-prefixed model keys", () => {
+      for (const key of ["fishaudio_model", "fish_model"]) {
+        const result = parse({ key, value: "s1", policy, currentOverrides: {} });
+        expect(result.handled, `${key} should be handled`).toBe(true);
+        expect(result.overrides?.model).toBe("s1");
+      }
+    });
+
+    it("handles provider-prefixed speed keys", () => {
+      for (const key of ["fishaudio_speed", "fish_speed"]) {
+        const result = parse({ key, value: "1.5", policy, currentOverrides: {} });
+        expect(result.handled, `${key} should be handled`).toBe(true);
+        expect(result.overrides?.speed).toBe(1.5);
+      }
+    });
+
+    it("handles provider-prefixed latency keys", () => {
+      for (const key of ["fishaudio_latency", "fish_latency"]) {
+        const result = parse({ key, value: "low", policy, currentOverrides: {} });
+        expect(result.handled, `${key} should be handled`).toBe(true);
+        expect(result.overrides?.latency).toBe("low");
+      }
+    });
+
+    it("does NOT claim generic keys (voice, model, speed)", () => {
+      for (const key of ["voice", "model", "speed", "voiceid", "voice_id", "modelid", "model_id", "latency", "temperature", "temp", "top_p", "topp"]) {
+        const result = parse({ key, value: "anything", policy, currentOverrides: {} });
+        expect(result.handled, `generic key "${key}" should NOT be handled`).toBe(false);
+      }
+    });
+
+    it("rejects invalid voice ID with warning", () => {
+      const result = parse({ key: "fishaudio_voice", value: "bad!", policy, currentOverrides: {} });
+      expect(result.handled).toBe(true);
+      expect(result.warnings?.length).toBeGreaterThan(0);
+      expect(result.overrides).toBeUndefined();
+    });
+
+    it("validates speed range", () => {
+      const result = parse({ key: "fishaudio_speed", value: "5.0", policy, currentOverrides: {} });
+      expect(result.handled).toBe(true);
+      expect(result.warnings?.length).toBeGreaterThan(0);
     });
   });
 });

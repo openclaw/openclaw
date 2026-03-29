@@ -114,14 +114,17 @@ function readFishAudioProviderConfig(
 // ── Directive parsing ───────────────────────────────────────────────────────
 
 function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext) {
+  // Only claim provider-prefixed keys to avoid dispatch collisions.
+  // `parseTtsDirectives` stops at the first provider whose `parseDirectiveToken`
+  // returns `handled: true`, and bundled providers with lower `autoSelectOrder`
+  // (e.g. OpenAI at 10) are visited first. Generic keys like "voice" or "model"
+  // would be swallowed by earlier providers and never reach us.
+  // Convention matches ElevenLabs: `elevenlabs_voice`, `elevenlabs_model`, etc.
   try {
     switch (ctx.key) {
-      case "voice":
-      case "voiceid":
-      case "voice_id":
+      case "fishaudio_voice":
       case "fish_voice":
-      case "fishvoice":
-      case "reference_id":
+      case "fishaudio_voiceid":
         if (!ctx.policy.allowVoice) {
           return { handled: true };
         }
@@ -136,11 +139,8 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext) {
           overrides: { ...(ctx.currentOverrides ?? {}), voiceId: ctx.value },
         };
 
-      case "model":
-      case "modelid":
-      case "model_id":
+      case "fishaudio_model":
       case "fish_model":
-      case "fishmodel":
         if (!ctx.policy.allowModelId) {
           return { handled: true };
         }
@@ -149,7 +149,8 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext) {
           overrides: { ...(ctx.currentOverrides ?? {}), model: ctx.value },
         };
 
-      case "speed": {
+      case "fishaudio_speed":
+      case "fish_speed": {
         if (!ctx.policy.allowVoiceSettings) {
           return { handled: true };
         }
@@ -164,21 +165,20 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext) {
         };
       }
 
-      case "latency":
-      case "fish_latency":
+      case "fishaudio_latency":
+      case "fish_latency": {
         if (!ctx.policy.allowVoiceSettings) {
           return { handled: true };
         }
-        {
-          const lat = normalizeLatency(ctx.value);
-          return {
-            handled: true,
-            overrides: { ...(ctx.currentOverrides ?? {}), latency: lat },
-          };
-        }
+        const lat = normalizeLatency(ctx.value);
+        return {
+          handled: true,
+          overrides: { ...(ctx.currentOverrides ?? {}), latency: lat },
+        };
+      }
 
-      case "temperature":
-      case "temp": {
+      case "fishaudio_temperature":
+      case "fish_temperature": {
         if (!ctx.policy.allowVoiceSettings) {
           return { handled: true };
         }
@@ -193,8 +193,8 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext) {
         };
       }
 
-      case "top_p":
-      case "topp": {
+      case "fishaudio_top_p":
+      case "fish_top_p": {
         if (!ctx.policy.allowVoiceSettings) {
           return { handled: true };
         }
