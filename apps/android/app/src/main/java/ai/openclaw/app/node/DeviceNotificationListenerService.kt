@@ -6,12 +6,13 @@ import android.app.RemoteInput
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
+import androidx.core.app.NotificationManagerCompat
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
 
 private const val MAX_NOTIFICATION_TEXT_CHARS = 512
 private const val NOTIFICATIONS_CHANGED_EVENT = "notifications.changed"
@@ -240,8 +241,13 @@ class DeviceNotificationListenerService : NotificationListenerService() {
     }
 
     fun isAccessEnabled(context: Context): Boolean {
-      val manager = context.getSystemService(NotificationManager::class.java) ?: return false
-      return manager.isNotificationListenerAccessGranted(serviceComponent(context))
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+        val manager = context.getSystemService(NotificationManager::class.java) ?: return false
+        return manager.isNotificationListenerAccessGranted(serviceComponent(context))
+      } else {
+        val packageNames = NotificationManagerCompat.getEnabledListenerPackages(context)
+        return packageNames.contains(context.packageName)
+      }
     }
 
     fun snapshot(context: Context, enabled: Boolean = isAccessEnabled(context)): DeviceNotificationSnapshot {

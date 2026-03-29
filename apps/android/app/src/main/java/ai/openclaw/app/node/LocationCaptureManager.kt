@@ -4,7 +4,9 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.location.Location
+import android.location.LocationListener
 import android.location.LocationManager
+import android.os.Build
 import android.os.CancellationSignal
 import androidx.core.content.ContextCompat
 import java.time.Instant
@@ -13,6 +15,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
 
 class LocationCaptureManager(private val context: Context) {
   data class Payload(val payloadJson: String)
@@ -99,11 +102,25 @@ class LocationCaptureManager(private val context: Context) {
       providers.firstOrNull { manager.isProviderEnabled(it) }
         ?: throw IllegalStateException("LOCATION_UNAVAILABLE: no providers available")
     val location = withTimeout(timeoutMs.coerceAtLeast(1)) {
-      suspendCancellableCoroutine<Location?> { cont ->
-        val signal = CancellationSignal()
-        cont.invokeOnCancellation { signal.cancel() }
-        manager.getCurrentLocation(resolved, signal, context.mainExecutor) { location ->
-          cont.resume(location) { _, _, _ -> }
+      suspendCancellableCoroutine { cont ->
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+          val signal = CancellationSignal()
+          cont.invokeOnCancellation { signal.cancel() }
+          manager.getCurrentLocation(resolved, signal, context.mainExecutor) { location ->
+            cont.resume(location)
+          }
+        } else {
+          val listener = object : LocationListener {
+            override fun onLocationChanged(location: Location) {
+              manager.removeUpdates(this)
+              if (cont.isActive) {
+                cont.resume(location)
+              }
+            }
+          }
+          @Suppress("DEPRECATION")
+          manager.requestSingleUpdate(resolved, listener, context.mainLooper)
+          cont.invokeOnCancellation { manager.removeUpdates(listener) }
         }
       }
     }
