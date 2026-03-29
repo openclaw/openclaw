@@ -6,7 +6,7 @@ const resolveConfiguredBindingRouteMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../../../src/channels/plugins/binding-routing.js", async (importOriginal) => {
   const { createConfiguredBindingConversationRuntimeModuleMock } =
-    await import("../../../../test/helpers/plugins/configured-binding-runtime.js");
+    await import("../test-support/configured-binding-runtime.js");
   return await createConfiguredBindingConversationRuntimeModuleMock(
     {
       ensureConfiguredBindingRouteReadyMock,
