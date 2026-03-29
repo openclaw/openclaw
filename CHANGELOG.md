@@ -62,6 +62,7 @@ Docs: https://docs.openclaw.ai
 - iOS/Live Activities: mark the `ActivityKit` import in `LiveActivityManager.swift` as `@preconcurrency` so Xcode 26.4 / Swift 6 builds stop failing on strict concurrency checks. (#57180) Thanks @ngutman.
 - Plugins/Matrix: mirror the Matrix crypto WASM runtime dependency into the root packaged install and enforce root/plugin dependency parity so bundled Matrix E2EE crypto resolves correctly in shipped builds. (#57163) Thanks @gumadeiras.
 - Plugins/CLI: add descriptor-backed lazy plugin CLI registration so Matrix can keep its CLI module lazy-loaded without dropping `openclaw matrix ...` from parse-time command registration. (#57165) Thanks @gumadeiras.
+- Plugins/CLI: collect root-help plugin descriptors through a dedicated non-activating CLI metadata path so enabled plugins keep validated config semantics without triggering runtime-only plugin registration work, while preserving runtime CLI command registration for legacy channel plugins that still wire commands from full registration. (#57294) thanks @gumadeiras.
 
 ## 2026.3.28
 
