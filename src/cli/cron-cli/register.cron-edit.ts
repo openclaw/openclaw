@@ -279,11 +279,13 @@ export function registerCronEditCommand(cron: Command) {
               if (threadId && !/^\d+$/.test(threadId)) {
                 throw new Error("--thread-id must be a numeric value");
               }
+              const explicitChannel =
+                typeof opts.channel === "string" ? opts.channel.trim().toLowerCase() : "";
               if (
                 threadId &&
-                typeof opts.channel === "string" &&
-                opts.channel.trim() &&
-                opts.channel.trim().toLowerCase() !== "telegram"
+                explicitChannel &&
+                explicitChannel !== "telegram" &&
+                explicitChannel !== "last"
               ) {
                 throw new Error("--thread-id is only supported for Telegram channels");
               }
@@ -305,7 +307,8 @@ export function registerCronEditCommand(cron: Command) {
                   if (existingMode === "webhook") {
                     throw new Error("--thread-id is not supported for webhook delivery jobs");
                   }
-                  if (existingChannel && existingChannel.toLowerCase() !== "telegram") {
+                  const ec = existingChannel.toLowerCase();
+                  if (existingChannel && ec !== "telegram" && ec !== "last") {
                     throw new Error("--thread-id is only supported for Telegram channels");
                   }
                 }
