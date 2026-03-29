@@ -54,15 +54,15 @@ Add Amazon Bedrock Guardrails support to the `amazon-bedrock` extension plugin. 
     - Define a local `GuardrailConfig` type with `guardrailIdentifier: string`, `guardrailVersion: string`, `streamProcessingMode?: "sync" | "async"`, `trace?: "enabled" | "disabled" | "enabled_full"`
     - _Requirements: 1.1, 1.2, 1.3_
 
-- [ ] 2. Implement guardrail wrapper factory and wire into registration
-  - [ ] 2.1 Implement `createGuardrailWrapStreamFn` in `extensions/amazon-bedrock/index.ts`
+- [-] 2. Implement guardrail wrapper factory and wire into registration
+  - [x] 2.1 Implement `createGuardrailWrapStreamFn` in `extensions/amazon-bedrock/index.ts`
     - Import `streamWithPayloadPatch` from `openclaw/plugin-sdk/provider-stream`
     - Create a function that takes the inner `wrapStreamFn` callback and a `GuardrailConfig`, returns a new `wrapStreamFn` callback
     - The returned callback calls the inner `wrapStreamFn` first (preserving cache behavior), then applies `streamWithPayloadPatch` on the result to inject `guardrailConfig` into the payload
     - Always set `guardrailIdentifier` and `guardrailVersion`; conditionally include `streamProcessingMode` and `trace` only when specified
     - _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5, 3.1, 3.2_
 
-  - [ ] 2.2 Wire guardrail wrapper in `register(api)` in `extensions/amazon-bedrock/index.ts`
+  - [x] 2.2 Wire guardrail wrapper in `register(api)` in `extensions/amazon-bedrock/index.ts`
     - Read `api.pluginConfig` and extract the `guardrail` property
     - If `guardrail` is present with required fields, build a `GuardrailConfig` and wrap the existing `wrapStreamFn` with `createGuardrailWrapStreamFn`
     - If `guardrail` is absent, use the existing `wrapStreamFn` unchanged
