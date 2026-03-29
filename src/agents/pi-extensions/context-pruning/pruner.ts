@@ -542,6 +542,23 @@ export function pruneContextMessagesWithMediaCollection(params: {
           }
         }
       }
+    } else {
+      // Re-emit marker slots for soft-trimmed messages so they survive hard-clear.
+      // The soft-trim path already collected media refs; we just need to preserve
+      // the PRUNED_CONTEXT_IMAGE_MARKER placeholders that writePrunedMediaCaches
+      // will replace with [media cached:] markers.
+      const softTrimmedMsg = (next ?? messages)[i];
+      if (softTrimmedMsg?.role === "toolResult") {
+        for (const block of (softTrimmedMsg as unknown as ToolResultMessage).content) {
+          if ("text" in block && typeof block.text === "string") {
+            let remaining = block.text;
+            while (remaining.includes(PRUNED_CONTEXT_IMAGE_MARKER)) {
+              hardClearMediaMarkers.push(asText(PRUNED_CONTEXT_IMAGE_MARKER));
+              remaining = remaining.replace(PRUNED_CONTEXT_IMAGE_MARKER, "");
+            }
+          }
+        }
+      }
     }
 
     const beforeChars = estimateMessageChars(msg);
