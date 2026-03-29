@@ -466,8 +466,15 @@ async function writeSystemdUnit({
         Object.entries(environment).filter(([key]) => !dotEnvKeys.has(key)),
       );
     }
-  } catch {
-    // .env file is absent; fall back to inline environment variables.
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    if (err.code === "ENOENT") {
+      // .env file is absent; fall back to inline environment variables.
+    } else {
+      // For other errors (e.g., permission issues), surface the problem
+      // instead of silently falling back to inline environment variables.
+      throw error;
+    }
   }
 
   const serviceDescription = resolveGatewayServiceDescription({ env, environment, description });
