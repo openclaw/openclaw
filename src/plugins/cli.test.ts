@@ -1,6 +1,3 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
@@ -11,15 +8,6 @@ const mocks = vi.hoisted(() => ({
   memoryListAction: vi.fn(),
   loadOpenClawPlugins: vi.fn(),
   applyPluginAutoEnable: vi.fn(),
-  discoverOpenClawPlugins: vi.fn(),
-  loadPluginManifestRegistry: vi.fn(),
-  resolveEffectiveEnableState: vi.fn(),
-  resolveMemorySlotDecision: vi.fn(),
-  createJiti: vi.fn(),
-}));
-
-vi.mock("jiti", () => ({
-  createJiti: (...args: unknown[]) => mocks.createJiti(...args),
 }));
 
 vi.mock("./loader.js", () => ({
@@ -29,23 +17,6 @@ vi.mock("./loader.js", () => ({
 vi.mock("../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable: (...args: unknown[]) => mocks.applyPluginAutoEnable(...args),
 }));
-
-vi.mock("./discovery.js", () => ({
-  discoverOpenClawPlugins: (...args: unknown[]) => mocks.discoverOpenClawPlugins(...args),
-}));
-
-vi.mock("./manifest-registry.js", () => ({
-  loadPluginManifestRegistry: (...args: unknown[]) => mocks.loadPluginManifestRegistry(...args),
-}));
-
-vi.mock("./config-state.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./config-state.js")>();
-  return {
-    ...actual,
-    resolveEffectiveEnableState: (...args: unknown[]) => mocks.resolveEffectiveEnableState(...args),
-    resolveMemorySlotDecision: (...args: unknown[]) => mocks.resolveMemorySlotDecision(...args),
-  };
-});
 
 import { getPluginCliCommandDescriptors, registerPluginCliCommands } from "./cli.js";
 
@@ -142,22 +113,6 @@ describe("registerPluginCliCommands", () => {
     mocks.loadOpenClawPlugins.mockReturnValue(createCliRegistry());
     mocks.applyPluginAutoEnable.mockReset();
     mocks.applyPluginAutoEnable.mockImplementation(({ config }) => ({ config, changes: [] }));
-    mocks.discoverOpenClawPlugins.mockReset();
-    mocks.discoverOpenClawPlugins.mockReturnValue({
-      candidates: [],
-      diagnostics: [],
-    });
-    mocks.loadPluginManifestRegistry.mockReset();
-    mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [],
-      diagnostics: [],
-    });
-    mocks.resolveEffectiveEnableState.mockReset();
-    mocks.resolveEffectiveEnableState.mockReturnValue({ enabled: true });
-    mocks.resolveMemorySlotDecision.mockReset();
-    mocks.resolveMemorySlotDecision.mockReturnValue({ enabled: true });
-    mocks.createJiti.mockReset();
-    mocks.createJiti.mockReturnValue(() => ({}));
   });
 
   it("skips plugin CLI registrars when commands already exist", async () => {
@@ -195,165 +150,55 @@ describe("registerPluginCliCommands", () => {
     );
   });
 
-  it("captures channel plugin descriptors without using the activating loader", () => {
-    const tempRoot = mkdtempSync(path.join(tmpdir(), "openclaw-cli-descriptors-"));
-    const pluginRoot = path.join(tempRoot, "matrix");
-    const source = path.join(pluginRoot, "index.ts");
-    mkdirSync(pluginRoot, { recursive: true });
-    writeFileSync(source, "export default {}");
-    mocks.discoverOpenClawPlugins.mockReturnValue({
-      candidates: [],
-      diagnostics: [],
-    });
-    mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [
+  it("loads root-help descriptors through the non-activating loader path", () => {
+    const { rawConfig, autoEnabledConfig } = createAutoEnabledCliFixture();
+    mocks.applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
+    mocks.loadOpenClawPlugins.mockReturnValue({
+      cliRegistrars: [
         {
-          id: "matrix",
-          enabledByDefault: true,
-          format: "openclaw",
-          channels: ["matrix"],
-          providers: [],
-          cliBackends: [],
-          skills: [],
-          hooks: [],
-          origin: "bundled",
-          rootDir: pluginRoot,
-          source,
-          manifestPath: path.join(pluginRoot, "openclaw.plugin.json"),
+          pluginId: "matrix",
+          register: vi.fn(),
+          commands: ["matrix"],
+          descriptors: [
+            {
+              name: "matrix",
+              description: "Matrix channel utilities",
+              hasSubcommands: true,
+            },
+          ],
+          source: "bundled",
+        },
+        {
+          pluginId: "duplicate-matrix",
+          register: vi.fn(),
+          commands: ["matrix"],
+          descriptors: [
+            {
+              name: "matrix",
+              description: "Duplicate Matrix channel utilities",
+              hasSubcommands: true,
+            },
+          ],
+          source: "bundled",
         },
       ],
-      diagnostics: [],
     });
-    const registerFull = vi.fn();
-    mocks.createJiti.mockReturnValue(
-      () =>
-        ({
-          default: {
-            id: "matrix",
-            name: "Matrix",
-            description: "Matrix channel plugin",
-            channelPlugin: {},
-            register(api: {
-              registrationMode: "full" | "setup-only" | "setup-runtime";
-              registerChannel: (registration: unknown) => void;
-              registerCli: (
-                registrar: () => void,
-                opts: {
-                  descriptors: Array<{
-                    name: string;
-                    description: string;
-                    hasSubcommands: boolean;
-                  }>;
-                },
-              ) => void;
-            }) {
-              api.registerChannel({ plugin: {} });
-              api.registerCli(() => {}, {
-                descriptors: [
-                  {
-                    name: "matrix",
-                    description: "Matrix channel utilities",
-                    hasSubcommands: true,
-                  },
-                ],
-              });
-              if (api.registrationMode === "full") {
-                registerFull();
-              }
-            },
-          },
-        }) as never,
+
+    expect(getPluginCliCommandDescriptors(rawConfig)).toEqual([
+      {
+        name: "matrix",
+        description: "Matrix channel utilities",
+        hasSubcommands: true,
+      },
+    ]);
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: autoEnabledConfig,
+        activate: false,
+        cache: false,
+        captureCliMetadataOnly: true,
+      }),
     );
-
-    try {
-      expect(getPluginCliCommandDescriptors({} as OpenClawConfig)).toEqual([
-        {
-          name: "matrix",
-          description: "Matrix channel utilities",
-          hasSubcommands: true,
-        },
-      ]);
-      expect(registerFull).not.toHaveBeenCalled();
-      expect(mocks.loadOpenClawPlugins).not.toHaveBeenCalled();
-    } finally {
-      rmSync(tempRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("keeps non-channel descriptor capture in full registration mode", () => {
-    const tempRoot = mkdtempSync(path.join(tmpdir(), "openclaw-cli-descriptors-"));
-    const pluginRoot = path.join(tempRoot, "memory-core");
-    const source = path.join(pluginRoot, "index.ts");
-    mkdirSync(pluginRoot, { recursive: true });
-    writeFileSync(source, "export default {}");
-    mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "memory-core",
-          enabledByDefault: true,
-          format: "openclaw",
-          kind: "memory",
-          channels: [],
-          providers: [],
-          cliBackends: [],
-          skills: [],
-          hooks: [],
-          origin: "bundled",
-          rootDir: pluginRoot,
-          source,
-          manifestPath: path.join(pluginRoot, "openclaw.plugin.json"),
-        },
-      ],
-      diagnostics: [],
-    });
-    const seenModes: string[] = [];
-    mocks.createJiti.mockReturnValue(
-      () =>
-        ({
-          default: {
-            id: "memory-core",
-            name: "Memory (Core)",
-            description: "Memory plugin",
-            register(api: {
-              registrationMode: string;
-              registerCli: (
-                registrar: () => void,
-                opts: {
-                  descriptors: Array<{
-                    name: string;
-                    description: string;
-                    hasSubcommands: boolean;
-                  }>;
-                },
-              ) => void;
-            }) {
-              seenModes.push(api.registrationMode);
-              api.registerCli(() => {}, {
-                descriptors: [
-                  {
-                    name: "memory",
-                    description: "Memory commands",
-                    hasSubcommands: true,
-                  },
-                ],
-              });
-            },
-          },
-        }) as never,
-    );
-
-    try {
-      expect(getPluginCliCommandDescriptors({} as OpenClawConfig)).toEqual([
-        {
-          name: "memory",
-          description: "Memory commands",
-          hasSubcommands: true,
-        },
-      ]);
-      expect(seenModes).toEqual(["full"]);
-    } finally {
-      rmSync(tempRoot, { recursive: true, force: true });
-    }
   });
 
   it("lazy-registers descriptor-backed plugin commands on first invocation", async () => {

@@ -88,6 +88,15 @@ export type PluginLoadOptions = {
    * via package metadata because their setup entry covers the pre-listen startup surface.
    */
   preferSetupRuntimeForChannelPlugins?: boolean;
+  /**
+   * Capture CLI descriptors without activating plugin runtime side effects.
+   *
+   * Enabled channel plugins still load from their real entry file so
+   * descriptor registration can follow the normal plugin entry contract, but
+   * they register in setup-only mode to keep `registerFull(...)` work out of
+   * parse-time help paths.
+   */
+  captureCliMetadataOnly?: boolean;
   activate?: boolean;
   throwOnLoadError?: boolean;
 };
@@ -202,6 +211,7 @@ function buildCacheKey(params: {
   onlyPluginIds?: string[];
   includeSetupOnlyChannelPlugins?: boolean;
   preferSetupRuntimeForChannelPlugins?: boolean;
+  captureCliMetadataOnly?: boolean;
   runtimeSubagentMode?: "default" | "explicit" | "gateway-bindable";
   pluginSdkResolution?: PluginSdkResolutionPreference;
   coreGatewayMethodNames?: string[];
@@ -231,12 +241,13 @@ function buildCacheKey(params: {
   const setupOnlyKey = params.includeSetupOnlyChannelPlugins === true ? "setup-only" : "runtime";
   const startupChannelMode =
     params.preferSetupRuntimeForChannelPlugins === true ? "prefer-setup" : "full";
+  const cliMetadataMode = params.captureCliMetadataOnly === true ? "cli-metadata" : "default";
   const gatewayMethodsKey = JSON.stringify(params.coreGatewayMethodNames ?? []);
   return `${roots.workspace ?? ""}::${roots.global ?? ""}::${roots.stock ?? ""}::${JSON.stringify({
     ...params.plugins,
     installs,
     loadPaths,
-  })}::${scopeKey}::${setupOnlyKey}::${startupChannelMode}::${params.runtimeSubagentMode ?? "default"}::${params.pluginSdkResolution ?? "auto"}::${gatewayMethodsKey}`;
+  })}::${scopeKey}::${setupOnlyKey}::${startupChannelMode}::${cliMetadataMode}::${params.runtimeSubagentMode ?? "default"}::${params.pluginSdkResolution ?? "auto"}::${gatewayMethodsKey}`;
 }
 
 function normalizeScopedPluginIds(ids?: string[]): string[] | undefined {
@@ -269,7 +280,8 @@ function hasExplicitCompatibilityInputs(options: PluginLoadOptions): boolean {
     options.pluginSdkResolution !== undefined ||
     options.coreGatewayHandlers !== undefined ||
     options.includeSetupOnlyChannelPlugins === true ||
-    options.preferSetupRuntimeForChannelPlugins === true,
+    options.preferSetupRuntimeForChannelPlugins === true ||
+    options.captureCliMetadataOnly === true,
   );
 }
 
@@ -280,6 +292,7 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
   const onlyPluginIds = normalizeScopedPluginIds(options.onlyPluginIds);
   const includeSetupOnlyChannelPlugins = options.includeSetupOnlyChannelPlugins === true;
   const preferSetupRuntimeForChannelPlugins = options.preferSetupRuntimeForChannelPlugins === true;
+  const captureCliMetadataOnly = options.captureCliMetadataOnly === true;
   const coreGatewayMethodNames = Object.keys(options.coreGatewayHandlers ?? {}).toSorted();
   const cacheKey = buildCacheKey({
     workspaceDir: options.workspaceDir,
@@ -289,6 +302,7 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     onlyPluginIds,
     includeSetupOnlyChannelPlugins,
     preferSetupRuntimeForChannelPlugins,
+    captureCliMetadataOnly,
     runtimeSubagentMode: resolveRuntimeSubagentMode(options.runtimeOptions),
     pluginSdkResolution: options.pluginSdkResolution,
     coreGatewayMethodNames,
@@ -300,6 +314,7 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     onlyPluginIds,
     includeSetupOnlyChannelPlugins,
     preferSetupRuntimeForChannelPlugins,
+    captureCliMetadataOnly,
     shouldActivate: options.activate !== false,
     runtimeSubagentMode: resolveRuntimeSubagentMode(options.runtimeOptions),
     cacheKey,
@@ -793,6 +808,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     onlyPluginIds,
     includeSetupOnlyChannelPlugins,
     preferSetupRuntimeForChannelPlugins,
+    captureCliMetadataOnly,
     shouldActivate,
     cacheKey,
     runtimeSubagentMode,
@@ -1066,18 +1082,20 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     };
 
     const registrationMode = enableState.enabled
-      ? !validateOnly &&
-        shouldLoadChannelPluginInSetupRuntime({
-          manifestChannels: manifestRecord.channels,
-          setupSource: manifestRecord.setupSource,
-          startupDeferConfiguredChannelFullLoadUntilAfterListen:
-            manifestRecord.startupDeferConfiguredChannelFullLoadUntilAfterListen,
-          cfg,
-          env,
-          preferSetupRuntimeForChannelPlugins,
-        })
-        ? "setup-runtime"
-        : "full"
+      ? captureCliMetadataOnly && manifestRecord.channels.length > 0
+        ? "setup-only"
+        : !validateOnly &&
+            shouldLoadChannelPluginInSetupRuntime({
+              manifestChannels: manifestRecord.channels,
+              setupSource: manifestRecord.setupSource,
+              startupDeferConfiguredChannelFullLoadUntilAfterListen:
+                manifestRecord.startupDeferConfiguredChannelFullLoadUntilAfterListen,
+              cfg,
+              env,
+              preferSetupRuntimeForChannelPlugins,
+            })
+          ? "setup-runtime"
+          : "full"
       : includeSetupOnlyChannelPlugins && !validateOnly && manifestRecord.channels.length > 0
         ? "setup-only"
         : null;
@@ -1183,9 +1201,10 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     }
 
     const pluginRoot = safeRealpathOrResolve(candidate.rootDir);
-    const loadSource =
-      (registrationMode === "setup-only" || registrationMode === "setup-runtime") &&
-      manifestRecord.setupSource
+    const loadSource = captureCliMetadataOnly
+      ? candidate.source
+      : (registrationMode === "setup-only" || registrationMode === "setup-runtime") &&
+          manifestRecord.setupSource
         ? manifestRecord.setupSource
         : candidate.source;
     const opened = openBoundaryFileSync({
@@ -1221,6 +1240,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     }
 
     if (
+      !captureCliMetadataOnly &&
       (registrationMode === "setup-only" || registrationMode === "setup-runtime") &&
       manifestRecord.setupSource
     ) {

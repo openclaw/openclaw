@@ -1,30 +1,14 @@
-import fs from "node:fs";
 import type { Command } from "commander";
-import { createJiti } from "jiti";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { removeCommandByName } from "../cli/program/command-tree.js";
 import { registerLazyCommand } from "../cli/program/register-lazy-command.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
-import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { createCapturedPluginRegistration } from "./captured-registration.js";
-import {
-  normalizePluginsConfig,
-  resolveEffectiveEnableState,
-  resolveMemorySlotDecision,
-} from "./config-state.js";
-import { discoverOpenClawPlugins } from "./discovery.js";
 import { loadOpenClawPlugins, type PluginLoadOptions } from "./loader.js";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
-import {
-  buildPluginLoaderAliasMap,
-  buildPluginLoaderJitiOptions,
-  shouldPreferNativeJiti,
-} from "./sdk-alias.js";
 import type { OpenClawPluginCliCommandDescriptor } from "./types.js";
-import type { OpenClawPluginDefinition, OpenClawPluginModule, PluginLogger } from "./types.js";
+import type { PluginLogger } from "./types.js";
 
 const log = createSubsystemLogger("plugins");
 
@@ -34,39 +18,6 @@ type RegisterPluginCliOptions = {
   mode?: PluginCliRegistrationMode;
   primary?: string | null;
 };
-
-function resolvePluginModuleExport(moduleExport: unknown): {
-  definition?: OpenClawPluginDefinition;
-  register?: OpenClawPluginDefinition["register"];
-} {
-  const resolved =
-    moduleExport &&
-    typeof moduleExport === "object" &&
-    "default" in (moduleExport as Record<string, unknown>)
-      ? (moduleExport as { default: unknown }).default
-      : moduleExport;
-  if (typeof resolved === "function") {
-    return {
-      register: resolved as OpenClawPluginDefinition["register"],
-    };
-  }
-  if (resolved && typeof resolved === "object") {
-    const definition = resolved as OpenClawPluginDefinition;
-    return {
-      definition,
-      register: definition.register ?? definition.activate,
-    };
-  }
-  return {};
-}
-
-function isChannelPluginDefinition(definition: OpenClawPluginDefinition | undefined): boolean {
-  return Boolean(
-    definition &&
-    typeof definition === "object" &&
-    "channelPlugin" in (definition as Record<string, unknown>),
-  );
-}
 
 function canRegisterPluginCliLazily(entry: {
   commands: string[];
@@ -82,7 +33,10 @@ function canRegisterPluginCliLazily(entry: {
 function loadPluginCliRegistry(
   cfg?: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
-  loaderOptions?: Pick<PluginLoadOptions, "pluginSdkResolution">,
+  loaderOptions?: Pick<
+    PluginLoadOptions,
+    "pluginSdkResolution" | "activate" | "cache" | "captureCliMetadataOnly"
+  >,
 ) {
   const config = cfg ?? loadConfig();
   const resolvedConfig = applyPluginAutoEnable({ config, env: env ?? process.env }).config;
@@ -110,125 +64,19 @@ function loadPluginCliRegistry(
   };
 }
 
-// Root help only needs parse-time CLI metadata. Capture `registerCli(...)`
-// against a throwaway API so plugin runtime activation does not leak into
-// `openclaw --help`.
-function getPluginCliCommandDescriptorsFromMetadata(
+export function getPluginCliCommandDescriptors(
   cfg?: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
 ): OpenClawPluginCliCommandDescriptor[] {
-  const config = cfg ?? loadConfig();
-  const resolvedEnv = env ?? process.env;
-  const resolvedConfig = applyPluginAutoEnable({ config, env: resolvedEnv }).config;
-  const workspaceDir = resolveAgentWorkspaceDir(
-    resolvedConfig,
-    resolveDefaultAgentId(resolvedConfig),
-  );
-  const normalized = normalizePluginsConfig(resolvedConfig.plugins);
-  const discovery = discoverOpenClawPlugins({
-    workspaceDir,
-    extraPaths: normalized.loadPaths,
-    cache: false,
-    env: resolvedEnv,
-  });
-  const manifestRegistry = loadPluginManifestRegistry({
-    config: resolvedConfig,
-    workspaceDir,
-    cache: false,
-    env: resolvedEnv,
-    candidates: discovery.candidates,
-    diagnostics: discovery.diagnostics,
-  });
-  const jitiLoaders = new Map<string, ReturnType<typeof createJiti>>();
-  const getJiti = (modulePath: string) => {
-    const tryNative = shouldPreferNativeJiti(modulePath);
-    const aliasMap = buildPluginLoaderAliasMap(
-      modulePath,
-      process.argv[1],
-      import.meta.url,
-      undefined,
-    );
-    const cacheKey = JSON.stringify({
-      tryNative,
-      aliasMap: Object.entries(aliasMap).toSorted(([left], [right]) => left.localeCompare(right)),
+  try {
+    const { registry } = loadPluginCliRegistry(cfg, env, {
+      activate: false,
+      cache: false,
+      captureCliMetadataOnly: true,
     });
-    const cached = jitiLoaders.get(cacheKey);
-    if (cached) {
-      return cached;
-    }
-    const loader = createJiti(import.meta.url, {
-      ...buildPluginLoaderJitiOptions(aliasMap),
-      tryNative,
-    });
-    jitiLoaders.set(cacheKey, loader);
-    return loader;
-  };
-
-  const descriptors: OpenClawPluginCliCommandDescriptor[] = [];
-  const seen = new Set<string>();
-  let selectedMemoryPluginId: string | null = null;
-
-  for (const manifest of manifestRegistry.plugins) {
-    const enableState = resolveEffectiveEnableState({
-      id: manifest.id,
-      origin: manifest.origin,
-      config: normalized,
-      rootConfig: resolvedConfig,
-      enabledByDefault: manifest.enabledByDefault,
-    });
-    if (!enableState.enabled || manifest.format === "bundle") {
-      continue;
-    }
-    const memoryDecision = resolveMemorySlotDecision({
-      id: manifest.id,
-      kind: manifest.kind,
-      slot: normalized.slots.memory,
-      selectedId: selectedMemoryPluginId,
-    });
-    if (!memoryDecision.enabled) {
-      continue;
-    }
-    if (memoryDecision.selected && manifest.kind === "memory") {
-      selectedMemoryPluginId = manifest.id;
-    }
-
-    const opened = openBoundaryFileSync({
-      absolutePath: manifest.source,
-      rootPath: manifest.rootDir,
-      boundaryLabel: "plugin root",
-      rejectHardlinks: manifest.origin !== "bundled",
-      skipLexicalRootCheck: true,
-    });
-    if (!opened.ok) {
-      continue;
-    }
-
-    const safeSource = opened.path;
-    fs.closeSync(opened.fd);
-
-    let mod: OpenClawPluginModule | null = null;
-    try {
-      mod = getJiti(safeSource)(safeSource) as OpenClawPluginModule;
-    } catch {
-      continue;
-    }
-
-    const { definition, register } = resolvePluginModuleExport(mod);
-    if (typeof register !== "function") {
-      continue;
-    }
-
-    const captured = createCapturedPluginRegistration({
-      config: resolvedConfig,
-      registrationMode: isChannelPluginDefinition(definition) ? "setup-only" : "full",
-    });
-    try {
-      void register(captured.api);
-    } catch {
-      continue;
-    }
-
-    for (const entry of captured.cliRegistrars) {
+    const seen = new Set<string>();
+    const descriptors: OpenClawPluginCliCommandDescriptor[] = [];
+    for (const entry of registry.cliRegistrars) {
       for (const descriptor of entry.descriptors) {
         if (seen.has(descriptor.name)) {
           continue;
@@ -237,17 +85,7 @@ function getPluginCliCommandDescriptorsFromMetadata(
         descriptors.push(descriptor);
       }
     }
-  }
-
-  return descriptors;
-}
-
-export function getPluginCliCommandDescriptors(
-  cfg?: OpenClawConfig,
-  env?: NodeJS.ProcessEnv,
-): OpenClawPluginCliCommandDescriptor[] {
-  try {
-    return getPluginCliCommandDescriptorsFromMetadata(cfg, env);
+    return descriptors;
   } catch {
     return [];
   }

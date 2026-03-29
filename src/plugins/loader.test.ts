@@ -2597,6 +2597,193 @@ module.exports = {
     expect(registry.channels).toHaveLength(expectedChannels);
   });
 
+  it("passes validated plugin config into non-activating CLI metadata loads", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "config-cli",
+      filename: "config-cli.cjs",
+      body: `module.exports = {
+  id: "config-cli",
+  register(api) {
+    if (!api.pluginConfig || api.pluginConfig.token !== "ok") {
+      throw new Error("missing plugin config");
+    }
+    api.registerCli(() => {}, {
+      descriptors: [
+        {
+          name: "cfg",
+          description: "Config-backed CLI command",
+          hasSubcommands: true,
+        },
+      ],
+    });
+  },
+};`,
+    });
+    fs.writeFileSync(
+      path.join(plugin.dir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "config-cli",
+          configSchema: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              token: { type: "string" },
+            },
+            required: ["token"],
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      activate: false,
+      captureCliMetadataOnly: true,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["config-cli"],
+          entries: {
+            "config-cli": {
+              config: {
+                token: "ok",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(registry.cliRegistrars.flatMap((entry) => entry.commands)).toContain("cfg");
+    expect(registry.plugins.find((entry) => entry.id === "config-cli")?.status).toBe("loaded");
+  });
+
+  it("uses the real channel entry in setup-only mode for CLI metadata capture", () => {
+    useNoBundledPlugins();
+    const pluginDir = makeTempDir();
+    const fullMarker = path.join(pluginDir, "full-loaded.txt");
+    const setupMarker = path.join(pluginDir, "setup-loaded.txt");
+    const modeMarker = path.join(pluginDir, "registration-mode.txt");
+
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/cli-metadata-channel",
+          openclaw: {
+            extensions: ["./index.cjs"],
+            setupEntry: "./setup-entry.cjs",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "cli-metadata-channel",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+          channels: ["cli-metadata-channel"],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "index.cjs"),
+      `require("node:fs").writeFileSync(${JSON.stringify(fullMarker)}, "loaded", "utf-8");
+module.exports = {
+  id: "cli-metadata-channel",
+  register(api) {
+    require("node:fs").writeFileSync(
+      ${JSON.stringify(modeMarker)},
+      String(api.registrationMode),
+      "utf-8",
+    );
+    api.registerChannel({
+      plugin: {
+        id: "cli-metadata-channel",
+        meta: {
+          id: "cli-metadata-channel",
+          label: "CLI Metadata Channel",
+          selectionLabel: "CLI Metadata Channel",
+          docsPath: "/channels/cli-metadata-channel",
+          blurb: "cli metadata channel",
+        },
+        capabilities: { chatTypes: ["direct"] },
+        config: {
+          listAccountIds: () => [],
+          resolveAccount: () => ({ accountId: "default" }),
+        },
+        outbound: { deliveryMode: "direct" },
+      },
+    });
+    api.registerCli(() => {}, {
+      descriptors: [
+        {
+          name: "cli-metadata-channel",
+          description: "Channel CLI metadata",
+          hasSubcommands: true,
+        },
+      ],
+    });
+  },
+};`,
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "setup-entry.cjs"),
+      `require("node:fs").writeFileSync(${JSON.stringify(setupMarker)}, "loaded", "utf-8");
+module.exports = {
+  plugin: {
+    id: "cli-metadata-channel",
+    meta: {
+      id: "cli-metadata-channel",
+      label: "CLI Metadata Channel",
+      selectionLabel: "CLI Metadata Channel",
+      docsPath: "/channels/cli-metadata-channel",
+      blurb: "setup entry",
+    },
+    capabilities: { chatTypes: ["direct"] },
+    config: {
+      listAccountIds: () => [],
+      resolveAccount: () => ({ accountId: "default" }),
+    },
+    outbound: { deliveryMode: "direct" },
+  },
+};`,
+      "utf-8",
+    );
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      activate: false,
+      captureCliMetadataOnly: true,
+      config: {
+        plugins: {
+          load: { paths: [pluginDir] },
+          allow: ["cli-metadata-channel"],
+        },
+      },
+    });
+
+    expect(fs.existsSync(fullMarker)).toBe(true);
+    expect(fs.existsSync(setupMarker)).toBe(false);
+    expect(fs.readFileSync(modeMarker, "utf-8")).toBe("setup-only");
+    expect(registry.cliRegistrars.flatMap((entry) => entry.commands)).toContain(
+      "cli-metadata-channel",
+    );
+  });
+
   it("blocks before_prompt_build but preserves legacy model overrides when prompt injection is disabled", async () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
