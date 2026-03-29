@@ -7,6 +7,8 @@ export type JsonSchema = {
   tags?: string[];
   "x-tags"?: string[];
   properties?: Record<string, JsonSchema>;
+  /** When present, new object rows should include these keys so Zod validation does not fail on empty drafts. */
+  required?: string[];
   items?: JsonSchema | JsonSchema[];
   additionalProperties?: JsonSchema | boolean;
   enum?: unknown[];
@@ -29,6 +31,24 @@ export function schemaType(schema: JsonSchema): string | undefined {
   return schema.type;
 }
 
+/** Non-empty default for required string fields (e.g. `z.string().min(1)` rejects ""). */
+const REQUIRED_STRING_PLACEHOLDER = "placeholder";
+
+function ensureNonEmptyRequiredString(schema: JsonSchema, value: unknown): unknown {
+  const type = schemaType(schema);
+  if (type !== "string" || value !== "") {
+    return value;
+  }
+  const enums = schema.enum;
+  if (Array.isArray(enums) && enums.length > 0) {
+    const first = enums[0];
+    if (typeof first === "string" && first.length > 0) {
+      return first;
+    }
+  }
+  return REQUIRED_STRING_PLACEHOLDER;
+}
+
 export function defaultValue(schema?: JsonSchema): unknown {
   if (!schema) {
     return "";
@@ -36,10 +56,31 @@ export function defaultValue(schema?: JsonSchema): unknown {
   if (schema.default !== undefined) {
     return schema.default;
   }
+  if (Object.prototype.hasOwnProperty.call(schema, "const")) {
+    return schema.const;
+  }
   const type = schemaType(schema);
   switch (type) {
-    case "object":
+    case "object": {
+      const props = schema.properties;
+      const required = schema.required;
+      if (props && Array.isArray(required) && required.length > 0) {
+        const result: Record<string, unknown> = {};
+        for (const key of required) {
+          if (typeof key !== "string") {
+            continue;
+          }
+          const child = props[key];
+          if (!child) {
+            continue;
+          }
+          const value = ensureNonEmptyRequiredString(child, defaultValue(child));
+          result[key] = value;
+        }
+        return result;
+      }
       return {};
+    }
     case "array":
       return [];
     case "boolean":
