@@ -20,6 +20,7 @@ const ERROR_PATTERNS = {
     "high demand",
   ],
   timeout: [
+    "terminated",
     "timeout",
     "timed out",
     "deadline exceeded",
