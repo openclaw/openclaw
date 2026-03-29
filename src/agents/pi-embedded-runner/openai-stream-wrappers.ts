@@ -6,7 +6,6 @@ import { log } from "./logger.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
 type OpenAIServiceTier = "auto" | "default" | "flex" | "priority";
-type OpenAIReasoningEffort = "low" | "medium" | "high";
 
 const OPENAI_RESPONSES_APIS = new Set(["openai-responses"]);
 const OPENAI_RESPONSES_PROVIDERS = new Set(["openai", "azure-openai", "azure-openai-responses"]);
@@ -75,6 +74,28 @@ function shouldApplyOpenAIAttributionHeaders(model: {
     return "openai-codex";
   }
   return undefined;
+}
+
+function shouldApplyOpenAIServiceTier(model: {
+  api?: unknown;
+  provider?: unknown;
+  baseUrl?: unknown;
+}): boolean {
+  if (
+    model.provider === "openai" &&
+    model.api === "openai-responses" &&
+    isOpenAIPublicApiBaseUrl(model.baseUrl)
+  ) {
+    return true;
+  }
+  if (
+    model.provider === "openai-codex" &&
+    (model.api === "openai-codex-responses" || model.api === "openai-responses") &&
+    isOpenAICodexBaseUrl(model.baseUrl)
+  ) {
+    return true;
+  }
+  return false;
 }
 
 function shouldForceResponsesStore(model: {
@@ -263,44 +284,11 @@ export function resolveOpenAIFastMode(
   return normalized;
 }
 
-function resolveFastModeReasoningEffort(modelId: unknown): OpenAIReasoningEffort {
-  if (typeof modelId !== "string") {
-    return "low";
-  }
-  const normalized = modelId.trim().toLowerCase();
-  // Keep fast mode broadly compatible across GPT-5 family variants by using
-  // the lowest shared non-disabled effort that current transports accept.
-  if (normalized.startsWith("gpt-5")) {
-    return "low";
-  }
-  return "low";
-}
-
 function applyOpenAIFastModePayloadOverrides(params: {
   payloadObj: Record<string, unknown>;
   model: { provider?: unknown; id?: unknown; baseUrl?: unknown; api?: unknown };
 }): void {
-  if (params.payloadObj.reasoning === undefined) {
-    params.payloadObj.reasoning = {
-      effort: resolveFastModeReasoningEffort(params.model.id),
-    };
-  }
-
-  const existingText = params.payloadObj.text;
-  if (existingText === undefined) {
-    params.payloadObj.text = { verbosity: "low" };
-  } else if (existingText && typeof existingText === "object" && !Array.isArray(existingText)) {
-    const textObj = existingText as Record<string, unknown>;
-    if (textObj.verbosity === undefined) {
-      textObj.verbosity = "low";
-    }
-  }
-
-  if (
-    params.model.provider === "openai" &&
-    params.payloadObj.service_tier === undefined &&
-    isOpenAIPublicApiBaseUrl(params.model.baseUrl)
-  ) {
+  if (params.payloadObj.service_tier === undefined && shouldApplyOpenAIServiceTier(params.model)) {
     params.payloadObj.service_tier = "priority";
   }
 }
@@ -373,11 +361,7 @@ export function createOpenAIServiceTierWrapper(
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    if (
-      model.api !== "openai-responses" ||
-      model.provider !== "openai" ||
-      !isOpenAIPublicApiBaseUrl(model.baseUrl)
-    ) {
+    if (!shouldApplyOpenAIServiceTier(model)) {
       return underlying(model, context, options);
     }
     return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
