@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  buildOllamaChatRequest,
   createConfiguredOllamaStreamFn,
   createOllamaStreamFn,
   convertToOllamaMessages,
@@ -7,6 +8,24 @@ import {
   parseNdjsonStream,
   resolveOllamaBaseUrlForRun,
 } from "../plugin-sdk/ollama.js";
+import { applyExtraParamsToAgent } from "./pi-embedded-runner/extra-params.js";
+
+describe("buildOllamaChatRequest", () => {
+  it("omits tools when none are provided", () => {
+    expect(
+      buildOllamaChatRequest({
+        modelId: "qwen3.5:9b",
+        messages: [{ role: "user", content: "hello" }],
+        options: { num_ctx: 65536 },
+      }),
+    ).toEqual({
+      model: "qwen3.5:9b",
+      messages: [{ role: "user", content: "hello" }],
+      stream: true,
+      options: { num_ctx: 65536 },
+    });
+  });
+});
 
 describe("convertToOllamaMessages", () => {
   it("converts user text messages", () => {
@@ -642,6 +661,53 @@ describe("createOllamaStreamFn", () => {
         };
         expect(requestBody.options.num_ctx).toBe(131072);
         expect(requestBody.options.num_predict).toBe(123);
+      },
+    );
+  });
+
+  it("serializes top-level think=false when thinking is off", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async (fetchMock) => {
+        const agent = {
+          streamFn: createOllamaStreamFn("http://ollama-host:11434"),
+        };
+        applyExtraParamsToAgent(agent, undefined, "ollama", "qwen3.5:9b", undefined, "off");
+
+        const stream = await Promise.resolve(
+          agent.streamFn?.(
+            {
+              id: "qwen3.5:9b",
+              api: "ollama",
+              provider: "ollama",
+              contextWindow: 131072,
+            } as never,
+            {
+              messages: [{ role: "user", content: "hello" }],
+            } as never,
+            {} as never,
+          ),
+        );
+
+        if (!stream) {
+          throw new Error("Expected Ollama streamFn");
+        }
+
+        await collectStreamEvents(stream);
+
+        const [, requestInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+        if (typeof requestInit.body !== "string") {
+          throw new Error("Expected string request body");
+        }
+        const requestBody = JSON.parse(requestInit.body) as {
+          think?: boolean;
+          options?: { think?: boolean };
+        };
+        expect(requestBody.think).toBe(false);
+        expect(requestBody.options?.think).toBeUndefined();
       },
     );
   });

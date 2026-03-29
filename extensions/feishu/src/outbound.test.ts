@@ -53,6 +53,16 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
     resetOutboundMocks();
   });
 
+  it("chunks outbound text without requiring Feishu runtime initialization", () => {
+    const chunker = feishuOutbound.chunker;
+    if (!chunker) {
+      throw new Error("feishuOutbound.chunker missing");
+    }
+
+    expect(() => chunker("hello world", 5)).not.toThrow();
+    expect(chunker("hello world", 5)).toEqual(["hello", "world"]);
+  });
+
   async function createTmpImage(ext = ".png"): Promise<{ dir: string; file: string }> {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-feishu-outbound-"));
     const file = path.join(dir, `sample${ext}`);

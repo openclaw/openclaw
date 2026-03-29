@@ -11,7 +11,7 @@ import {
   type SessionBindingAdapter,
   type SessionBindingRecord,
 } from "openclaw/plugin-sdk/conversation-runtime";
-import { writeJsonAtomic } from "openclaw/plugin-sdk/infra-runtime";
+import { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
@@ -318,11 +318,7 @@ async function persistBindingsToDisk(params: {
         (entry) => entry.accountId === params.accountId,
       ),
   };
-  await writeJsonAtomic(resolveBindingsPath(params.accountId), payload, {
-    mode: 0o600,
-    trailingNewline: true,
-    ensureDirMode: 0o700,
-  });
+  await writeJsonFileAtomically(resolveBindingsPath(params.accountId), payload);
 }
 
 function listBindingsForAccount(accountId: string): TelegramThreadBindingRecord[] {
@@ -808,14 +804,16 @@ export function setTelegramThreadBindingMaxAgeBySessionKey(params: {
   });
 }
 
+export async function resetTelegramThreadBindingsForTests() {
+  for (const manager of getThreadBindingsState().managersByAccountId.values()) {
+    manager.stop();
+  }
+  await Promise.allSettled(getThreadBindingsState().persistQueueByAccountId.values());
+  getThreadBindingsState().persistQueueByAccountId.clear();
+  getThreadBindingsState().managersByAccountId.clear();
+  getThreadBindingsState().bindingsByAccountConversation.clear();
+}
+
 export const __testing = {
-  async resetTelegramThreadBindingsForTests() {
-    for (const manager of getThreadBindingsState().managersByAccountId.values()) {
-      manager.stop();
-    }
-    await Promise.allSettled(getThreadBindingsState().persistQueueByAccountId.values());
-    getThreadBindingsState().persistQueueByAccountId.clear();
-    getThreadBindingsState().managersByAccountId.clear();
-    getThreadBindingsState().bindingsByAccountConversation.clear();
-  },
+  resetTelegramThreadBindingsForTests,
 };

@@ -101,30 +101,28 @@ describe("createNestedAllowlistOverrideResolver", () => {
 });
 
 describe("createAccountScopedAllowlistNameResolver", () => {
-  it("returns empty results when the resolved account has no token", async () => {
+  it.each([
+    {
+      name: "returns empty results when the resolved account has no token",
+      token: "",
+      expected: [],
+    },
+    {
+      name: "delegates to the resolver when a token is present",
+      token: " secret ",
+      expected: [{ input: "a", resolved: true, name: "secret:a" }],
+    },
+  ])("$name", async ({ token, expected }) => {
     const resolveNames = createAccountScopedAllowlistNameResolver({
-      resolveAccount: () => ({ token: "" }),
-      resolveToken: (account) => account.token,
-      resolveNames: async ({ token, entries }) =>
-        entries.map((entry) => ({ input: `${token}:${entry}`, resolved: true })),
-    });
-
-    expect(await resolveNames({ cfg: {}, accountId: "alt", scope: "dm", entries: ["a"] })).toEqual(
-      [],
-    );
-  });
-
-  it("delegates to the resolver when a token is present", async () => {
-    const resolveNames = createAccountScopedAllowlistNameResolver({
-      resolveAccount: () => ({ token: " secret " }),
+      resolveAccount: () => ({ token }),
       resolveToken: (account) => account.token,
       resolveNames: async ({ token, entries }) =>
         entries.map((entry) => ({ input: entry, resolved: true, name: `${token}:${entry}` })),
     });
 
-    expect(await resolveNames({ cfg: {}, accountId: "alt", scope: "dm", entries: ["a"] })).toEqual([
-      { input: "a", resolved: true, name: "secret:a" },
-    ]);
+    expect(await resolveNames({ cfg: {}, accountId: "alt", scope: "dm", entries: ["a"] })).toEqual(
+      expected,
+    );
   });
 });
 
@@ -147,10 +145,14 @@ describe("buildDmGroupAccountAllowlistAdapter", () => {
     resolveGroupOverrides: (account) => account.groupOverrides,
   });
 
-  it("supports dm, group, and all scopes", () => {
-    expect(adapter.supportsScope?.({ scope: "dm" })).toBe(true);
-    expect(adapter.supportsScope?.({ scope: "group" })).toBe(true);
-    expect(adapter.supportsScope?.({ scope: "all" })).toBe(true);
+  const scopeCases: Array<{ scope: "dm" | "group" | "all"; expected: boolean }> = [
+    { scope: "dm", expected: true },
+    { scope: "group", expected: true },
+    { scope: "all", expected: true },
+  ];
+
+  it.each(scopeCases)("supports $scope scope", ({ scope, expected }) => {
+    expect(adapter.supportsScope?.({ scope })).toBe(expected);
   });
 
   it("reads dm/group config from the resolved account", () => {
@@ -200,10 +202,14 @@ describe("buildLegacyDmAccountAllowlistAdapter", () => {
     resolveGroupOverrides: (account) => account.groupOverrides,
   });
 
-  it("supports only dm scope", () => {
-    expect(adapter.supportsScope?.({ scope: "dm" })).toBe(true);
-    expect(adapter.supportsScope?.({ scope: "group" })).toBe(false);
-    expect(adapter.supportsScope?.({ scope: "all" })).toBe(false);
+  const scopeCases: Array<{ scope: "dm" | "group" | "all"; expected: boolean }> = [
+    { scope: "dm", expected: true },
+    { scope: "group", expected: false },
+    { scope: "all", expected: false },
+  ];
+
+  it.each(scopeCases)("supports $scope scope", ({ scope, expected }) => {
+    expect(adapter.supportsScope?.({ scope })).toBe(expected);
   });
 
   it("reads legacy dm config from the resolved account", () => {

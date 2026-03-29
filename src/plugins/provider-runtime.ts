@@ -1,6 +1,7 @@
 import type { AuthProfileCredential, OAuthCredential } from "../agents/auth-profiles/types.js";
 import { normalizeProviderId } from "../agents/provider-id.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { ModelProviderConfig } from "../config/types.js";
 import {
   resolveCatalogHookProviderPluginIds,
   resolveOwningPluginIdsForProvider,
@@ -19,10 +20,15 @@ import type {
   ProviderCreateStreamFnContext,
   ProviderDefaultThinkingPolicyContext,
   ProviderFetchUsageSnapshotContext,
+  ProviderNormalizeConfigContext,
+  ProviderNormalizeModelIdContext,
+  ProviderNormalizeResolvedModelContext,
+  ProviderNormalizeTransportContext,
   ProviderModernModelPolicyContext,
   ProviderPrepareExtraParamsContext,
   ProviderPrepareDynamicModelContext,
   ProviderPrepareRuntimeAuthContext,
+  ProviderResolveConfigApiKeyContext,
   ProviderResolveUsageAuthContext,
   ProviderPlugin,
   ProviderResolveDynamicModelContext,
@@ -39,7 +45,9 @@ function matchesProviderId(provider: ProviderPlugin, providerId: string): boolea
   if (normalizeProviderId(provider.id) === normalized) {
     return true;
   }
-  return (provider.aliases ?? []).some((alias) => normalizeProviderId(alias) === normalized);
+  return [...(provider.aliases ?? []), ...(provider.hookAliases ?? [])].some(
+    (alias) => normalizeProviderId(alias) === normalized,
+  );
 }
 
 let cachedHookProvidersWithoutConfig = new WeakMap<
@@ -78,6 +86,7 @@ function resolveHookProviderCacheBucket(params: {
 }
 
 function buildHookProviderCacheKey(params: {
+  config?: OpenClawConfig;
   workspaceDir?: string;
   onlyPluginIds?: string[];
   env?: NodeJS.ProcessEnv;
@@ -86,7 +95,7 @@ function buildHookProviderCacheKey(params: {
     workspaceDir: params.workspaceDir,
     env: params.env,
   });
-  return `${roots.workspace ?? ""}::${roots.global}::${roots.stock ?? ""}::${JSON.stringify(params.onlyPluginIds ?? [])}`;
+  return `${roots.workspace ?? ""}::${roots.global}::${roots.stock ?? ""}::${JSON.stringify(params.config ?? null)}::${JSON.stringify(params.onlyPluginIds ?? [])}`;
 }
 
 export function clearProviderRuntimeHookCache(): void {
@@ -116,6 +125,7 @@ function resolveProviderPluginsForHooks(params: {
     env,
   });
   const cacheKey = buildHookProviderCacheKey({
+    config: params.config,
     workspaceDir: params.workspaceDir,
     onlyPluginIds: params.onlyPluginIds,
     env,
@@ -213,6 +223,169 @@ export function normalizeProviderResolvedModelWithPlugin(params: {
   return (
     resolveProviderRuntimePlugin(params)?.normalizeResolvedModel?.(params.context) ?? undefined
   );
+}
+
+function resolveProviderCompatHookPlugins(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): ProviderPlugin[] {
+  const candidates = resolveProviderPluginsForHooks(params);
+  const owner = resolveProviderRuntimePlugin(params);
+  if (!owner) {
+    return candidates;
+  }
+
+  const ordered = [owner, ...candidates];
+  const seen = new Set<string>();
+  return ordered.filter((candidate) => {
+    const key = `${candidate.pluginId ?? ""}:${candidate.id}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+function applyCompatPatchToModel(
+  model: ProviderRuntimeModel,
+  patch: Record<string, unknown>,
+): ProviderRuntimeModel {
+  const compat =
+    model.compat && typeof model.compat === "object"
+      ? (model.compat as Record<string, unknown>)
+      : undefined;
+  if (Object.entries(patch).every(([key, value]) => compat?.[key] === value)) {
+    return model;
+  }
+  return {
+    ...model,
+    compat: {
+      ...compat,
+      ...patch,
+    },
+  };
+}
+
+export function applyProviderResolvedModelCompatWithPlugins(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderNormalizeResolvedModelContext;
+}): ProviderRuntimeModel | undefined {
+  let nextModel = params.context.model;
+  let changed = false;
+
+  for (const plugin of resolveProviderCompatHookPlugins(params)) {
+    const patch = plugin.contributeResolvedModelCompat?.({
+      ...params.context,
+      model: nextModel,
+    });
+    if (!patch || typeof patch !== "object") {
+      continue;
+    }
+    const patchedModel = applyCompatPatchToModel(nextModel, patch as Record<string, unknown>);
+    if (patchedModel === nextModel) {
+      continue;
+    }
+    nextModel = patchedModel;
+    changed = true;
+  }
+
+  return changed ? nextModel : undefined;
+}
+
+function resolveProviderHookPlugin(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): ProviderPlugin | undefined {
+  return (
+    resolveProviderRuntimePlugin(params) ??
+    resolveProviderPluginsForHooks({
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+    }).find((candidate) => matchesProviderId(candidate, params.provider))
+  );
+}
+
+export function normalizeProviderModelIdWithPlugin(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderNormalizeModelIdContext;
+}): string | undefined {
+  const plugin = resolveProviderHookPlugin(params);
+  const normalized = plugin?.normalizeModelId?.(params.context);
+  const trimmed = normalized?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+export function normalizeProviderTransportWithPlugin(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderNormalizeTransportContext;
+}): { api?: string | null; baseUrl?: string } | undefined {
+  const matchedPlugin = resolveProviderHookPlugin(params);
+  const normalizedMatched = matchedPlugin?.normalizeTransport?.(params.context);
+  if (normalizedMatched) {
+    return normalizedMatched;
+  }
+
+  for (const candidate of resolveProviderPluginsForHooks(params)) {
+    if (!candidate.normalizeTransport || candidate === matchedPlugin) {
+      continue;
+    }
+    const normalized = candidate.normalizeTransport(params.context);
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  return undefined;
+}
+
+export function normalizeProviderConfigWithPlugin(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderNormalizeConfigContext;
+}): ModelProviderConfig | undefined {
+  return resolveProviderHookPlugin(params)?.normalizeConfig?.(params.context) ?? undefined;
+}
+
+export function applyProviderNativeStreamingUsageCompatWithPlugin(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderNormalizeConfigContext;
+}): ModelProviderConfig | undefined {
+  return (
+    resolveProviderHookPlugin(params)?.applyNativeStreamingUsageCompat?.(params.context) ??
+    undefined
+  );
+}
+
+export function resolveProviderConfigApiKeyWithPlugin(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderResolveConfigApiKeyContext;
+}): string | undefined {
+  const resolved = resolveProviderHookPlugin(params)?.resolveConfigApiKey?.(params.context);
+  const trimmed = resolved?.trim();
+  return trimmed ? trimmed : undefined;
 }
 
 export function resolveProviderCapabilitiesWithPlugin(params: {

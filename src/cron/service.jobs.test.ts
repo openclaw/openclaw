@@ -214,30 +214,26 @@ describe("applyJobPatch", () => {
     }
   });
 
-  it("rejects webhook delivery without a valid http(s) target URL", () => {
+  it.each([
+    { name: "no delivery update", patch: { enabled: true } satisfies CronJobPatch },
+    {
+      name: "blank webhook target",
+      patch: { delivery: { mode: "webhook", to: "" } } satisfies CronJobPatch,
+    },
+    {
+      name: "non-http protocol",
+      patch: {
+        delivery: { mode: "webhook", to: "ftp://example.invalid" },
+      } satisfies CronJobPatch,
+    },
+    {
+      name: "invalid URL",
+      patch: { delivery: { mode: "webhook", to: "not-a-url" } } satisfies CronJobPatch,
+    },
+  ] as const)("rejects invalid webhook delivery target URL: $name", ({ patch }) => {
     const expectedError = "cron webhook delivery requires delivery.to to be a valid http(s) URL";
-    const cases = [
-      { name: "no delivery update", patch: { enabled: true } satisfies CronJobPatch },
-      {
-        name: "blank webhook target",
-        patch: { delivery: { mode: "webhook", to: "" } } satisfies CronJobPatch,
-      },
-      {
-        name: "non-http protocol",
-        patch: {
-          delivery: { mode: "webhook", to: "ftp://example.invalid" },
-        } satisfies CronJobPatch,
-      },
-      {
-        name: "invalid URL",
-        patch: { delivery: { mode: "webhook", to: "not-a-url" } } satisfies CronJobPatch,
-      },
-    ] as const;
-
-    for (const testCase of cases) {
-      const job = createMainSystemEventJob("job-webhook-invalid", { mode: "webhook" });
-      expect(() => applyJobPatch(job, testCase.patch), testCase.name).toThrow(expectedError);
-    }
+    const job = createMainSystemEventJob("job-webhook-invalid", { mode: "webhook" });
+    expect(() => applyJobPatch(job, patch)).toThrow(expectedError);
   });
 
   it("trims webhook delivery target URLs", () => {
@@ -309,70 +305,19 @@ describe("applyJobPatch", () => {
     );
   });
 
-  it("accepts Telegram delivery with t.me URL", () => {
-    const job = createIsolatedAgentTurnJob("job-telegram-tme", {
-      mode: "announce",
-      channel: "telegram",
-      to: "https://t.me/mychannel",
-    });
-
-    expect(() => applyJobPatch(job, { enabled: true })).not.toThrow();
-  });
-
-  it("accepts Telegram delivery with t.me URL (no https)", () => {
-    const job = createIsolatedAgentTurnJob("job-telegram-tme-no-https", {
-      mode: "announce",
-      channel: "telegram",
-      to: "t.me/mychannel",
-    });
-
-    expect(() => applyJobPatch(job, { enabled: true })).not.toThrow();
-  });
-
-  it("accepts Telegram delivery with valid target (plain chat id)", () => {
+  it.each([
+    { name: "t.me URL", to: "https://t.me/mychannel" },
+    { name: "t.me URL (no https)", to: "t.me/mychannel" },
+    { name: "valid target (plain chat id)", to: "-1001234567890" },
+    { name: "valid target (colon delimiter)", to: "-1001234567890:123" },
+    { name: "valid target (topic marker)", to: "-1001234567890:topic:456" },
+    { name: "@username", to: "@mybot" },
+    { name: "without target", to: undefined },
+  ] as const)("accepts Telegram delivery with $name", ({ to }) => {
     const job = createIsolatedAgentTurnJob("job-telegram-valid", {
       mode: "announce",
       channel: "telegram",
-      to: "-1001234567890",
-    });
-
-    expect(() => applyJobPatch(job, { enabled: true })).not.toThrow();
-  });
-
-  it("accepts Telegram delivery with valid target (colon delimiter)", () => {
-    const job = createIsolatedAgentTurnJob("job-telegram-valid-colon", {
-      mode: "announce",
-      channel: "telegram",
-      to: "-1001234567890:123",
-    });
-
-    expect(() => applyJobPatch(job, { enabled: true })).not.toThrow();
-  });
-
-  it("accepts Telegram delivery with valid target (topic marker)", () => {
-    const job = createIsolatedAgentTurnJob("job-telegram-valid-topic", {
-      mode: "announce",
-      channel: "telegram",
-      to: "-1001234567890:topic:456",
-    });
-
-    expect(() => applyJobPatch(job, { enabled: true })).not.toThrow();
-  });
-
-  it("accepts Telegram delivery without target", () => {
-    const job = createIsolatedAgentTurnJob("job-telegram-no-target", {
-      mode: "announce",
-      channel: "telegram",
-    });
-
-    expect(() => applyJobPatch(job, { enabled: true })).not.toThrow();
-  });
-
-  it("accepts Telegram delivery with @username", () => {
-    const job = createIsolatedAgentTurnJob("job-telegram-username", {
-      mode: "announce",
-      channel: "telegram",
-      to: "@mybot",
+      ...(to ? { to } : {}),
     });
 
     expect(() => applyJobPatch(job, { enabled: true })).not.toThrow();
@@ -401,27 +346,21 @@ describe("createJob rejects sessionTarget main for non-default agents", () => {
     ...(agentId !== undefined ? { agentId } : {}),
   });
 
-  it("allows creating a main-session job for the default agent", () => {
-    const state = createMockState(now, { defaultAgentId: "main" });
-    expect(() => createJob(state, mainJobInput())).not.toThrow();
-    expect(() => createJob(state, mainJobInput("main"))).not.toThrow();
+  it.each([
+    { name: "default agent", defaultAgentId: "main", agentId: undefined },
+    { name: "explicit default agent", defaultAgentId: "main", agentId: "main" },
+    { name: "case-insensitive defaultAgentId match", defaultAgentId: "Main", agentId: "MAIN" },
+  ] as const)("allows creating a main-session job for $name", ({ defaultAgentId, agentId }) => {
+    const state = createMockState(now, { defaultAgentId });
+    expect(() => createJob(state, mainJobInput(agentId))).not.toThrow();
   });
 
-  it("allows creating a main-session job when defaultAgentId matches (case-insensitive)", () => {
-    const state = createMockState(now, { defaultAgentId: "Main" });
-    expect(() => createJob(state, mainJobInput("MAIN"))).not.toThrow();
-  });
-
-  it("rejects creating a main-session job for a non-default agentId", () => {
-    const state = createMockState(now, { defaultAgentId: "main" });
-    expect(() => createJob(state, mainJobInput("custom-agent"))).toThrow(
-      'cron: sessionTarget "main" is only valid for the default agent',
-    );
-  });
-
-  it("rejects main-session job for non-default agent even without explicit defaultAgentId", () => {
-    const state = createMockState(now);
-    expect(() => createJob(state, mainJobInput("custom-agent"))).toThrow(
+  it.each([
+    { name: "non-default agentId", defaultAgentId: "main", agentId: "custom-agent" },
+    { name: "missing defaultAgentId", defaultAgentId: undefined, agentId: "custom-agent" },
+  ] as const)("rejects creating a main-session job for $name", ({ defaultAgentId, agentId }) => {
+    const state = createMockState(now, defaultAgentId ? { defaultAgentId } : undefined);
+    expect(() => createJob(state, mainJobInput(agentId))).toThrow(
       'cron: sessionTarget "main" is only valid for the default agent',
     );
   });
@@ -478,22 +417,19 @@ describe("applyJobPatch rejects sessionTarget main for non-default agents", () =
     agentId,
   });
 
-  it("rejects patching agentId to non-default on a main-session job", () => {
+  it.each([
+    { name: "rejects patching agentId to non-default", agentId: "custom-agent", shouldThrow: true },
+    { name: "allows patching agentId to the default agent", agentId: "main", shouldThrow: false },
+  ] as const)("$name on a main-session job", ({ agentId, shouldThrow }) => {
     const job = createMainJob();
-    expect(() =>
-      applyJobPatch(job, { agentId: "custom-agent" } as CronJobPatch, {
-        defaultAgentId: "main",
-      }),
-    ).toThrow('cron: sessionTarget "main" is only valid for the default agent');
-  });
-
-  it("allows patching agentId to the default agent on a main-session job", () => {
-    const job = createMainJob();
-    expect(() =>
-      applyJobPatch(job, { agentId: "main" } as CronJobPatch, {
-        defaultAgentId: "main",
-      }),
-    ).not.toThrow();
+    const patch = { agentId } as CronJobPatch;
+    if (shouldThrow) {
+      expect(() => applyJobPatch(job, patch, { defaultAgentId: "main" })).toThrow(
+        'cron: sessionTarget "main" is only valid for the default agent',
+      );
+      return;
+    }
+    expect(() => applyJobPatch(job, patch, { defaultAgentId: "main" })).not.toThrow();
   });
 });
 

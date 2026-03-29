@@ -2,7 +2,6 @@ import { normalizeProviderId } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { resolvePluginCapabilityProviders } from "../plugins/capability-provider-runtime.js";
-import { getActivePluginRegistryKey } from "../plugins/runtime.js";
 import type { ImageGenerationProviderPlugin } from "../plugins/types.js";
 
 const BUILTIN_IMAGE_GENERATION_PROVIDERS: readonly ImageGenerationProviderPlugin[] = [];
@@ -26,8 +25,6 @@ function resolvePluginImageGenerationProviders(
   return resolvePluginCapabilityProviders({
     key: "imageGenerationProviders",
     cfg,
-    useActiveRegistryWhen: (active) =>
-      (active?.imageGenerationProviders?.length ?? 0) > 0 || Boolean(getActivePluginRegistryKey()),
   });
 }
 

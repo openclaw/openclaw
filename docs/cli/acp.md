@@ -17,6 +17,10 @@ over WebSocket. It keeps ACP sessions mapped to Gateway session keys.
 runtime. It focuses on session routing, prompt delivery, and basic streaming
 updates.
 
+If you want an external MCP client to talk directly to OpenClaw channel
+conversations instead of hosting an ACP harness session, use
+[`openclaw mcp serve`](/cli/mcp) instead.
+
 ## Compatibility Matrix
 
 | ACP area                                                              | Status      | Notes                                                                                                                                                                                                                                            |

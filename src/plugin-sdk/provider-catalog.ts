@@ -1,45 +1,34 @@
 // Public provider catalog helpers for provider plugins.
 
-export type { ProviderCatalogContext, ProviderCatalogResult } from "../plugins/types.js";
-
+export type { ProviderCatalogContext, ProviderCatalogResult } from "./provider-catalog-shared.js";
 export {
   buildPairedProviderApiKeyCatalog,
   buildSingleProviderApiKeyCatalog,
   findCatalogTemplate,
-} from "../plugins/provider-catalog.js";
+} from "./provider-catalog-shared.js";
 export {
   ANTHROPIC_VERTEX_DEFAULT_MODEL_ID,
   buildAnthropicVertexProvider,
-} from "../../extensions/anthropic-vertex/api.js";
-export {
-  buildBytePlusCodingProvider,
-  buildBytePlusProvider,
-} from "../../extensions/byteplus/api.js";
-export { buildDeepSeekProvider } from "../../extensions/deepseek/api.js";
-export { buildHuggingfaceProvider } from "../../extensions/huggingface/api.js";
-export { buildKimiCodingProvider } from "../../extensions/kimi-coding/api.js";
-export {
-  buildKilocodeProvider,
-  buildKilocodeProviderWithDiscovery,
-} from "../../extensions/kilocode/api.js";
-export { buildMinimaxPortalProvider, buildMinimaxProvider } from "../../extensions/minimax/api.js";
+} from "./anthropic-vertex.js";
+export { buildBytePlusCodingProvider, buildBytePlusProvider } from "./byteplus.js";
+export { buildDeepSeekProvider } from "./deepseek.js";
+export { buildHuggingfaceProvider } from "./huggingface.js";
+export { buildKimiCodingProvider } from "./kimi-coding.js";
+export { buildKilocodeProvider, buildKilocodeProviderWithDiscovery } from "./kilocode.js";
+export { buildMinimaxPortalProvider, buildMinimaxProvider } from "./minimax.js";
 export {
   MODELSTUDIO_BASE_URL,
   MODELSTUDIO_DEFAULT_MODEL_ID,
   buildModelStudioProvider,
-} from "../../extensions/modelstudio/api.js";
-export { buildMoonshotProvider } from "../../extensions/moonshot/api.js";
-export { buildNvidiaProvider } from "../../extensions/nvidia/api.js";
-export { buildOpenAICodexProvider } from "../../extensions/openai/api.js";
-export { buildOpenrouterProvider } from "../../extensions/openrouter/api.js";
-export {
-  QIANFAN_BASE_URL,
-  QIANFAN_DEFAULT_MODEL_ID,
-  buildQianfanProvider,
-} from "../../extensions/qianfan/api.js";
-export { buildSyntheticProvider } from "../../extensions/synthetic/api.js";
-export { buildTogetherProvider } from "../../extensions/together/api.js";
-export { buildVeniceProvider } from "../../extensions/venice/api.js";
-export { buildVercelAiGatewayProvider } from "../../extensions/vercel-ai-gateway/api.js";
-export { buildDoubaoCodingProvider, buildDoubaoProvider } from "../../extensions/volcengine/api.js";
-export { XIAOMI_DEFAULT_MODEL_ID, buildXiaomiProvider } from "../../extensions/xiaomi/api.js";
+} from "./modelstudio.js";
+export { buildMoonshotProvider } from "./moonshot.js";
+export { buildNvidiaProvider } from "./nvidia.js";
+export { buildOpenAICodexProvider } from "./openai.js";
+export { buildOpenrouterProvider } from "./openrouter.js";
+export { QIANFAN_BASE_URL, QIANFAN_DEFAULT_MODEL_ID, buildQianfanProvider } from "./qianfan.js";
+export { buildSyntheticProvider } from "./synthetic.js";
+export { buildTogetherProvider } from "./together.js";
+export { buildVeniceProvider } from "./venice.js";
+export { buildVercelAiGatewayProvider } from "./vercel-ai-gateway.js";
+export { buildDoubaoCodingProvider, buildDoubaoProvider } from "./volcengine.js";
+export { XIAOMI_DEFAULT_MODEL_ID, buildXiaomiProvider } from "./xiaomi.js";
