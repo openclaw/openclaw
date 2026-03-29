@@ -1,68 +1,67 @@
-import os from "node:os";
-import path from "node:path";
-import { resolveStateDir } from "../config/paths.js";
-import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
+import {
+  loadTaskRegistrySnapshotFromJson,
+  saveTaskRegistrySnapshotToJson,
+} from "./task-registry.store.json.js";
 import type { TaskRecord } from "./task-registry.types.js";
 
-type PersistedTaskRegistry = {
-  version: 1;
-  tasks: Record<string, TaskRecord>;
+export type TaskRegistryStore = {
+  loadSnapshot: () => Map<string, TaskRecord>;
+  saveSnapshot: (tasks: ReadonlyMap<string, TaskRecord>) => void;
 };
 
-const TASK_REGISTRY_VERSION = 1 as const;
-
-function resolveTaskStateDir(env: NodeJS.ProcessEnv = process.env): string {
-  const explicit = env.OPENCLAW_STATE_DIR?.trim();
-  if (explicit) {
-    return resolveStateDir(env);
-  }
-  if (env.VITEST || env.NODE_ENV === "test") {
-    return path.join(os.tmpdir(), "openclaw-test-state", String(process.pid));
-  }
-  return resolveStateDir(env);
-}
-
-export function resolveTaskRegistryPath(): string {
-  return path.join(resolveTaskStateDir(process.env), "tasks", "runs.json");
-}
-
-export function loadTaskRegistryFromDisk(): Map<string, TaskRecord> {
-  const pathname = resolveTaskRegistryPath();
-  const raw = loadJsonFile(pathname);
-  if (!raw || typeof raw !== "object") {
-    return new Map();
-  }
-  const record = raw as Partial<PersistedTaskRegistry>;
-  if (record.version !== TASK_REGISTRY_VERSION) {
-    return new Map();
-  }
-  const tasksRaw = record.tasks;
-  if (!tasksRaw || typeof tasksRaw !== "object") {
-    return new Map();
-  }
-  const out = new Map<string, TaskRecord>();
-  for (const [taskId, entry] of Object.entries(tasksRaw)) {
-    if (!entry || typeof entry !== "object") {
-      continue;
+export type TaskRegistryHookEvent =
+  | {
+      kind: "restored";
+      tasks: TaskRecord[];
     }
-    const typed = entry;
-    if (!typed.taskId || typeof typed.taskId !== "string") {
-      continue;
+  | {
+      kind: "persisted";
+      tasks: TaskRecord[];
     }
-    out.set(taskId, typed);
-  }
-  return out;
+  | {
+      kind: "upserted";
+      task: TaskRecord;
+      previous?: TaskRecord;
+    }
+  | {
+      kind: "deleted";
+      taskId: string;
+      previous: TaskRecord;
+    };
+
+export type TaskRegistryHooks = {
+  onEvent?: (event: TaskRegistryHookEvent) => void;
+};
+
+const defaultTaskRegistryStore: TaskRegistryStore = {
+  loadSnapshot: loadTaskRegistrySnapshotFromJson,
+  saveSnapshot: saveTaskRegistrySnapshotToJson,
+};
+
+let configuredTaskRegistryStore: TaskRegistryStore = defaultTaskRegistryStore;
+let configuredTaskRegistryHooks: TaskRegistryHooks | null = null;
+
+export function getTaskRegistryStore(): TaskRegistryStore {
+  return configuredTaskRegistryStore;
 }
 
-export function saveTaskRegistryToDisk(tasks: Map<string, TaskRecord>) {
-  const pathname = resolveTaskRegistryPath();
-  const serialized: Record<string, TaskRecord> = {};
-  for (const [taskId, entry] of tasks.entries()) {
-    serialized[taskId] = entry;
+export function getTaskRegistryHooks(): TaskRegistryHooks | null {
+  return configuredTaskRegistryHooks;
+}
+
+export function configureTaskRegistryRuntime(params: {
+  store?: TaskRegistryStore;
+  hooks?: TaskRegistryHooks | null;
+}) {
+  if (params.store) {
+    configuredTaskRegistryStore = params.store;
   }
-  const out: PersistedTaskRegistry = {
-    version: TASK_REGISTRY_VERSION,
-    tasks: serialized,
-  };
-  saveJsonFile(pathname, out);
+  if ("hooks" in params) {
+    configuredTaskRegistryHooks = params.hooks ?? null;
+  }
+}
+
+export function resetTaskRegistryRuntimeForTests() {
+  configuredTaskRegistryStore = defaultTaskRegistryStore;
+  configuredTaskRegistryHooks = null;
 }
