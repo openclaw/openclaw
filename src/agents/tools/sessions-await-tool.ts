@@ -168,8 +168,10 @@ export function createSessionsAwaitTool(opts?: { agentSessionKey?: string }): An
 
           const waitResp = waitResults.get(runId);
           const waitStatus = waitResp?.status;
+          const runTimedOut = run.outcome?.status === "timeout";
           const isTimedOut =
             waitStatus === "timeout" ||
+            runTimedOut ||
             (typeof run.endedAt !== "number" && typeof waitResp === "undefined");
 
           if (isTimedOut) {
@@ -179,7 +181,9 @@ export function createSessionsAwaitTool(opts?: { agentSessionKey?: string }): An
               sessionKey,
               status: "timeout" as const,
               runId,
-              error: "Sub-agent did not complete within the timeout",
+              error: runTimedOut
+                ? "Sub-agent timed out"
+                : "Sub-agent did not complete within the timeout",
             };
           }
 

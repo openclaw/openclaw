@@ -175,6 +175,34 @@ describe("sessions_await tool", () => {
     expect(details.results.every((entry) => entry.status === "error")).toBe(true);
   });
 
+  it("classifies ended timeout outcomes as timeout", async () => {
+    const timedOutRun = makeRun({
+      runId: "run-timeout-ended",
+      childSessionKey: "agent:main:subagent:timeout-ended",
+      endedAt: Date.now(),
+      outcome: { status: "timeout" },
+    });
+    getSubagentRunByChildSessionKeyMock.mockImplementation((key: string) =>
+      key === "agent:main:subagent:timeout-ended" ? timedOutRun : null,
+    );
+
+    const tool = createSessionsAwaitTool({ agentSessionKey: REQUESTER_SESSION_KEY });
+    const result = await tool.execute("call-ended-timeout", {
+      sessionKeys: ["agent:main:subagent:timeout-ended"],
+    });
+
+    const details = result.details as { status: string; results: Array<Record<string, unknown>> };
+    expect(details.status).toBe("partial");
+    expect(details.results).toHaveLength(1);
+    expect(details.results[0]).toMatchObject({
+      sessionKey: "agent:main:subagent:timeout-ended",
+      status: "timeout",
+      runId: "run-timeout-ended",
+      error: "Sub-agent timed out",
+    });
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
   it("suppresses auto-announce for active runs before waiting", async () => {
     const activeRun = makeRun({ runId: "run-x" });
     getSubagentRunByChildSessionKeyMock.mockImplementation((key: string) =>

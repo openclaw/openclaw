@@ -157,4 +157,61 @@ describe("spawnSubagentDirect seam flow", () => {
     );
     expect(operations.indexOf("gateway:agent")).toBeGreaterThan(operations.indexOf("store:update"));
   });
+
+  it("restores auto-announce when waitForCompletion receives unexpected wait status", async () => {
+    const result = await spawnSubagentDirect(
+      {
+        task: "wait with malformed status",
+        waitForCompletion: true,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "discord",
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "accepted",
+      runId: "run-1",
+      completion: {
+        status: "error",
+        error: "unexpected agent.wait status: undefined",
+      },
+    });
+  });
+
+  it("restores auto-announce when waitForCompletion returns error status", async () => {
+    hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent") {
+        return { runId: "run-1" };
+      }
+      if (request.method === "agent.wait") {
+        return { status: "error", error: "run failed" };
+      }
+      if (request.method?.startsWith("sessions.")) {
+        return { ok: true };
+      }
+      return {};
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "wait returns error status",
+        waitForCompletion: true,
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        agentChannel: "discord",
+      },
+    );
+
+    expect(result).toMatchObject({
+      status: "accepted",
+      runId: "run-1",
+      completion: {
+        status: "error",
+        error: "run failed",
+      },
+    });
+  });
 });

@@ -269,6 +269,8 @@ async function waitForSpawnedSubagentCompletion(params: {
     });
 
     if (wait?.status === "error") {
+      // Restore auto-announce so a late completion/summary can still be delivered.
+      clearSuppressAutoAnnounce(params.runId);
       return {
         status: "error",
         waitTimeoutMs: timeoutMs,
@@ -285,6 +287,8 @@ async function waitForSpawnedSubagentCompletion(params: {
       };
     }
     if (wait?.status !== "ok") {
+      // Restore auto-announce so a late completion/summary can still be delivered.
+      clearSuppressAutoAnnounce(params.runId);
       return {
         status: "error",
         waitTimeoutMs: timeoutMs,
