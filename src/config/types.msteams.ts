@@ -12,6 +12,7 @@ import type {
 import type { DmConfig } from "./types.messages.js";
 import type { SecretInput } from "./types.secrets.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
+import type { TtsConfig } from "./types.tts.js";
 
 export type MSTeamsWebhookConfig = {
   /** Port for the webhook server. Default: 3978. */
@@ -22,6 +23,52 @@ export type MSTeamsWebhookConfig = {
 
 /** Reply style for MS Teams messages. */
 export type MSTeamsReplyStyle = "thread" | "top-level";
+
+/**
+ * Permission model for Teams voice.
+ *
+ * - "rsc-with-admin-media": RSC for join + tenant-wide Calls.AccessMedia.All (likely required).
+ * - "tenant-wide": full tenant-wide application permissions.
+ * - "rsc-only": pure RSC (pending spike validation — may not work for app-hosted media).
+ */
+export type MSTeamsVoicePermissionMode = "rsc-with-admin-media" | "tenant-wide" | "rsc-only";
+
+/**
+ * Voice/call support configuration for MS Teams.
+ *
+ * Teams live voice requires a separate Windows-based .NET media worker because
+ * Microsoft's Real-Time Media SDK is C#/.NET only. Without a configured worker,
+ * OpenClaw falls back to text and post-meeting transcript capabilities.
+ */
+export type MSTeamsVoiceConfig = {
+  /** Enable voice/call support. Default: false. */
+  enabled?: boolean;
+  /**
+   * Permission mode. Default: "rsc-with-admin-media".
+   * @see MSTeamsVoicePermissionMode
+   */
+  permissionMode?: MSTeamsVoicePermissionMode;
+  /** Meetings to auto-join on startup (tenant-wide mode only). */
+  autoJoin?: Array<{ joinUrl: string }>;
+  /** gRPC address of the .NET media worker. Default: "localhost:9442". */
+  workerAddress?: string;
+  /** TTS config overrides for voice output. */
+  tts?: TtsConfig;
+  /** Streaming STT provider. Default: "openai-realtime". */
+  sttProvider?: "openai-realtime" | "deepgram" | "whisper-file";
+  /** Silence detection duration (ms), forwarded to .NET worker. Default: 1000. */
+  silenceDurationMs?: number;
+  /** Min audio segment duration (seconds). Default: 0.35. */
+  minSegmentSeconds?: number;
+  /**
+   * Post-meeting transcript fallback mode (NOT real-time).
+   *
+   * - false: disabled (default).
+   * - "rsc": app-scoped, private-chat meetings only.
+   * - "tenant-wide": all meetings + ad hoc calls (requires application access policy).
+   */
+  transcriptFallback?: false | "rsc" | "tenant-wide";
+};
 
 /** Channel-level config for MS Teams. */
 export type MSTeamsChannelConfig = {
@@ -140,6 +187,12 @@ export type MSTeamsConfig = {
   feedbackReflection?: boolean;
   /** Minimum interval (ms) between reflections per session. Default: 300000 (5 min). */
   feedbackReflectionCooldownMs?: number;
+  /**
+   * Voice/call support configuration.
+   * Requires a Windows-based .NET Teams Voice Worker for live audio.
+   * Without a worker, OpenClaw falls back to text + transcript mode.
+   */
+  voice?: MSTeamsVoiceConfig;
 };
 
 declare module "./types.channels.js" {

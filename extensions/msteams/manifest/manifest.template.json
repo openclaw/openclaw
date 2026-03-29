@@ -1,0 +1,58 @@
+{
+  "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.24/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.24",
+  "version": "1.0.0",
+  "id": "{{APP_ID}}",
+  "developer": {
+    "name": "OpenClaw",
+    "websiteUrl": "https://openclaw.ai",
+    "privacyUrl": "https://openclaw.ai/privacy",
+    "termsOfUseUrl": "https://openclaw.ai/terms"
+  },
+  "name": {
+    "short": "OpenClaw Bot",
+    "full": "OpenClaw AI Assistant for Microsoft Teams"
+  },
+  "description": {
+    "short": "AI assistant with voice support",
+    "full": "OpenClaw AI assistant for Microsoft Teams with text messaging, post-meeting transcript processing, and optional real-time voice call capabilities (requires a Windows Teams Voice Worker)."
+  },
+  "icons": {
+    "color": "color.png",
+    "outline": "outline.png"
+  },
+  "accentColor": "#FFFFFF",
+  "bots": [
+    {
+      "botId": "{{APP_ID}}",
+      "scopes": ["personal", "team", "groupChat"],
+      "supportsFiles": true,
+      "supportsCalling": true,
+      "supportsVideo": false
+    }
+  ],
+  "permissions": ["identity", "messageTeamMembers"],
+  "validDomains": ["{{NGROK_SIGNALING_DOMAIN}}", "{{NGROK_CALLING_DOMAIN}}"],
+  "webApplicationInfo": {
+    "id": "{{APP_ID}}",
+    "resource": "api://{{NGROK_SIGNALING_DOMAIN}}/{{APP_ID}}"
+  },
+  "authorization": {
+    "permissions": {
+      "resourceSpecific": [
+        {
+          "name": "Calls.AccessMedia.Chat",
+          "type": "Application"
+        },
+        {
+          "name": "Calls.JoinGroupCalls.Chat",
+          "type": "Application"
+        },
+        {
+          "name": "OnlineMeetingTranscript.Read.Chat",
+          "type": "Application"
+        }
+      ]
+    }
+  }
+}
