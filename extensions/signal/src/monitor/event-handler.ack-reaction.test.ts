@@ -241,9 +241,9 @@ describe("Signal ACK reactions", () => {
     expect(sendReactionSignal).toHaveBeenCalled();
   });
 
-  it("sends ack for group messages when scope=group", async () => {
+  it("sends ack for group messages when scope=group-all", async () => {
     const deps = makeDeps({
-      messages: { ackReaction: "👀", ackReactionScope: "group" },
+      messages: { ackReaction: "👀", ackReactionScope: "group-all" },
     });
     const handler = createSignalEventHandler(deps);
     await handler(
