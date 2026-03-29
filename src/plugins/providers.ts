@@ -35,7 +35,37 @@ export function resolveBundledProviderCompatPluginIds(params: {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
+export function resolveEnabledProviderPluginIds(params: {
+  config?: PluginLoadOptions["config"];
+  workspaceDir?: string;
+  env?: PluginLoadOptions["env"];
+  onlyPluginIds?: string[];
+}): string[] {
+  const onlyPluginIdSet = params.onlyPluginIds ? new Set(params.onlyPluginIds) : null;
+  const registry = loadPluginManifestRegistry({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
+  const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
+  return registry.plugins
+    .filter(
+      (plugin) =>
+        plugin.providers.length > 0 &&
+        (!onlyPluginIdSet || onlyPluginIdSet.has(plugin.id)) &&
+        resolveEffectiveEnableState({
+          id: plugin.id,
+          origin: plugin.origin,
+          config: normalizedConfig,
+          rootConfig: params.config,
+        }).enabled,
+    )
+    .map((plugin) => plugin.id)
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
 export const __testing = {
+  resolveEnabledProviderPluginIds,
   resolveBundledProviderCompatPluginIds,
   withBundledProviderVitestCompat,
 } as const;

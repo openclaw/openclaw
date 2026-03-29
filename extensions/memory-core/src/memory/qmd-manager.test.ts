@@ -2025,6 +2025,140 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("runs periodic embed maintenance even when regular update scheduling is disabled", async () => {
+    vi.useFakeTimers();
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "query",
+          update: {
+            interval: "0s",
+            debounceMs: 0,
+            onBoot: false,
+            embedInterval: "5m",
+          },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    const { manager } = await createManager({ mode: "full" });
+
+    const commandCallsBefore = spawnMock.mock.calls.filter((call: unknown[]) => {
+      const args = call[1] as string[];
+      return args[0] === "update" || args[0] === "embed";
+    });
+    expect(commandCallsBefore).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+
+    const commandCalls = spawnMock.mock.calls
+      .map((call: unknown[]) => call[1] as string[])
+      .filter((args: string[]) => args[0] === "update" || args[0] === "embed");
+    expect(commandCalls).toEqual([["update"], ["embed"]]);
+
+    await manager.close();
+  });
+
+  it("runs periodic embed maintenance when embed cadence is faster than update cadence", async () => {
+    vi.useFakeTimers();
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "query",
+          update: {
+            interval: "20m",
+            debounceMs: 0,
+            onBoot: false,
+            embedInterval: "5m",
+          },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    const { manager } = await createManager({ mode: "full" });
+
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+
+    const commandCalls = spawnMock.mock.calls
+      .map((call: unknown[]) => call[1] as string[])
+      .filter((args: string[]) => args[0] === "update" || args[0] === "embed");
+    expect(commandCalls).toEqual([["update"], ["embed"]]);
+
+    await manager.close();
+  });
+
+  it("does not schedule redundant embed maintenance when regular updates are already more frequent", async () => {
+    vi.useFakeTimers();
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "query",
+          update: {
+            interval: "5m",
+            debounceMs: 0,
+            onBoot: false,
+            embedInterval: "20m",
+          },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    const { manager } = await createManager({ mode: "full" });
+
+    await vi.advanceTimersByTimeAsync(6 * 60_000);
+
+    const commandCalls = spawnMock.mock.calls
+      .map((call: unknown[]) => call[1] as string[])
+      .filter((args: string[]) => args[0] === "update" || args[0] === "embed");
+    expect(commandCalls).toEqual([["update"], ["embed"]]);
+
+    await manager.close();
+  });
+
+  it("does not arm periodic embed maintenance in search mode", async () => {
+    vi.useFakeTimers();
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "search",
+          update: {
+            interval: "0s",
+            debounceMs: 0,
+            onBoot: false,
+            embedInterval: "5m",
+          },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    const { manager } = await createManager({ mode: "full" });
+
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+
+    const commandCalls = spawnMock.mock.calls
+      .map((call: unknown[]) => call[1] as string[])
+      .filter((args: string[]) => args[0] === "update" || args[0] === "embed");
+    expect(commandCalls).toEqual([]);
+
+    await manager.close();
+  });
+
   it("skips qmd embed in search mode even for forced sync", async () => {
     cfg = {
       ...cfg,

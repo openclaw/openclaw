@@ -20,7 +20,7 @@ vi.mock("./mattermost/send.js", () => ({
   sendMessageMattermost: sendMessageMattermostMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/infra-runtime", async (importOriginal) => {
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   const original = (await importOriginal()) as Record<string, unknown>;
   return { ...original, fetchWithSsrFGuard: mockFetchGuard };
 });
@@ -85,6 +85,14 @@ function requireMattermostSendMedia() {
     throw new Error("mattermost outbound.sendMedia missing");
   }
   return sendMedia;
+}
+
+function requireMattermostChunker() {
+  const chunker = mattermostPlugin.outbound?.chunker;
+  if (!chunker) {
+    throw new Error("mattermost outbound.chunker missing");
+  }
+  return chunker;
 }
 
 function createMattermostActionContext(
@@ -394,6 +402,13 @@ describe("mattermostPlugin", () => {
   });
 
   describe("outbound", () => {
+    it("chunks outbound text without requiring Mattermost runtime initialization", () => {
+      const chunker = requireMattermostChunker();
+
+      expect(() => chunker("hello world", 5)).not.toThrow();
+      expect(chunker("hello world", 5)).toEqual(["hello", "world"]);
+    });
+
     it("forwards mediaLocalRoots on sendMedia", async () => {
       const sendMedia = requireMattermostSendMedia();
       const cfg = createMattermostTestConfig();

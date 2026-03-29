@@ -1,4 +1,5 @@
 export type { IMessageAccountConfig } from "../config/types.js";
+export type { IMessageProbe } from "./imessage-runtime.js";
 export type { OpenClawConfig } from "../config/config.js";
 export type {
   ChannelMessageActionContext,
@@ -30,6 +31,13 @@ export {
   looksLikeIMessageTargetId,
   normalizeIMessageMessagingTarget,
 } from "../channels/plugins/normalize/imessage.js";
+export {
+  parseChatAllowTargetPrefixes,
+  parseChatTargetPrefixesOrThrow,
+  resolveServicePrefixedAllowTarget,
+  resolveServicePrefixedTarget,
+  type ParsedChatTarget,
+} from "./imessage-targets.js";
 
 export {
   resolveAllowlistProviderRuntimeGroupPolicy,
@@ -43,6 +51,7 @@ export {
 export { IMessageConfigSchema } from "../config/zod-schema.providers-core.js";
 
 export { resolveChannelMediaMaxBytes } from "../channels/plugins/media-limits.js";
+export { chunkTextForOutbound } from "./text-chunking.js";
 export {
   buildComputedAccountStatusSnapshot,
   collectStatusIssuesFromLastError,

@@ -12,7 +12,7 @@ import {
 import { createStartAccountContext } from "../../../test/helpers/extensions/start-account-context.js";
 import type { OpenClawConfig, PluginRuntime, ResolvedLineAccount } from "../api.js";
 import { linePlugin } from "./channel.js";
-import { setLineRuntime } from "./runtime.js";
+import { clearLineRuntime, setLineRuntime } from "./runtime.js";
 
 const { getBotInfoMock, MessagingApiClientMock } = vi.hoisted(() => {
   const getBotInfoMock = vi.fn();
@@ -186,6 +186,7 @@ describe("probeLineBot", () => {
   });
 
   afterEach(() => {
+    clearLineRuntime();
     vi.useRealTimers();
     getBotInfoMock.mockClear();
   });
@@ -214,6 +215,41 @@ describe("probeLineBot", () => {
 
     expect(result.ok).toBe(true);
     expect(result.bot?.userId).toBe("U123");
+  });
+});
+
+describe("linePlugin status.probeAccount", () => {
+  it("falls back to the direct probe helper when runtime is not initialized", async () => {
+    MessagingApiClientMock.mockReset();
+    MessagingApiClientMock.mockImplementation(function () {
+      return { getBotInfo: getBotInfoMock };
+    });
+    getBotInfoMock.mockResolvedValue({
+      displayName: "OpenClaw",
+      userId: "U123",
+      basicId: "@openclaw",
+      pictureUrl: "https://example.com/bot.png",
+    });
+
+    const { linePlugin: freshLinePlugin } = await import("./channel.js");
+    const { clearLineRuntime: clearFreshLineRuntime } = await import("./runtime.js");
+    const { probeLineBot: directProbeLineBot } = await import("./probe.js");
+    clearFreshLineRuntime();
+    const params = {
+      cfg: {} as OpenClawConfig,
+      account: {
+        accountId: "default",
+        enabled: true,
+        channelAccessToken: "token",
+        channelSecret: "secret",
+        tokenSource: "config",
+      } as ResolvedLineAccount,
+      timeoutMs: 50,
+    };
+
+    await expect(freshLinePlugin.status!.probeAccount!(params)).resolves.toEqual(
+      await directProbeLineBot("token", 50),
+    );
   });
 });
 

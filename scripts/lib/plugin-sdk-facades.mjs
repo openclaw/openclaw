@@ -4,12 +4,31 @@ import ts from "typescript";
 
 export const GENERATED_PLUGIN_SDK_FACADES = [
   {
+    subpath: "amazon-bedrock",
+    source: "../../extensions/amazon-bedrock/api.js",
+    exports: [
+      "discoverBedrockModels",
+      "mergeImplicitBedrockProvider",
+      "resetBedrockDiscoveryCacheForTest",
+      "resolveBedrockConfigApiKey",
+      "resolveImplicitBedrockProvider",
+    ],
+  },
+  {
     subpath: "anthropic-vertex",
     source: "../../extensions/anthropic-vertex/api.js",
     exports: [
       "ANTHROPIC_VERTEX_DEFAULT_MODEL_ID",
       "buildAnthropicVertexProvider",
+      "hasAnthropicVertexAvailableAuth",
+      "hasAnthropicVertexCredentials",
+      "mergeImplicitAnthropicVertexProvider",
+      "resolveAnthropicVertexClientRegion",
+      "resolveAnthropicVertexConfigApiKey",
+      "resolveImplicitAnthropicVertexProvider",
+      "resolveAnthropicVertexProjectId",
       "resolveAnthropicVertexRegion",
+      "resolveAnthropicVertexRegionFromBaseUrl",
     ],
   },
   {
@@ -99,6 +118,8 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
       "DiscordSendResult",
       "handleDiscordMessageAction",
       "inspectDiscordAccount",
+      "isDiscordExecApprovalApprover",
+      "isDiscordExecApprovalClientEnabled",
       "InspectedDiscordAccount",
       "listDiscordAccountIds",
       "listDiscordDirectoryGroupsFromConfig",
@@ -111,14 +132,17 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
       "resolveDefaultDiscordAccountId",
       "resolveDiscordAccount",
       "resolveDiscordChannelId",
+      "resolveDiscordRuntimeGroupPolicy",
       "resolveDiscordGroupRequireMention",
       "resolveDiscordGroupToolPolicy",
     ],
     typeExports: [
       "DiscordComponentMessageSpec",
+      "DiscordProbe",
       "DiscordSendComponents",
       "DiscordSendEmbeds",
       "DiscordSendResult",
+      "DiscordTokenResolution",
       "InspectedDiscordAccount",
       "ResolvedDiscordAccount",
     ],
@@ -239,6 +263,8 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
     exports: [
       "buildFeishuConversationId",
       "createFeishuThreadBindingManager",
+      "feishuSessionBindingAdapterChannels",
+      "feishuThreadBindingTesting",
       "parseFeishuDirectConversationId",
       "parseFeishuConversationId",
       "parseFeishuTargetId",
@@ -249,13 +275,19 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
     source: "../../extensions/google/api.js",
     exports: [
       "applyGoogleGeminiModelDefault",
-      "createGoogleThinkingPayloadWrapper",
       "DEFAULT_GOOGLE_API_BASE_URL",
       "GOOGLE_GEMINI_DEFAULT_MODEL",
+      "isGoogleGenerativeAiApi",
+      "normalizeAntigravityModelId",
       "normalizeGoogleApiBaseUrl",
+      "normalizeGoogleGenerativeAiBaseUrl",
       "normalizeGoogleModelId",
+      "normalizeGoogleProviderConfig",
       "parseGeminiAuth",
-      "sanitizeGoogleThinkingPayload",
+      "resolveGoogleGenerativeAiApiOrigin",
+      "resolveGoogleGenerativeAiTransport",
+      "shouldNormalizeGoogleProviderConfig",
+      "shouldNormalizeGoogleGenerativeAiProviderConfig",
     ],
   },
   {
@@ -329,6 +361,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
     source: "../../extensions/imessage/api.js",
     exports: [
       "normalizeIMessageHandle",
+      "resolveIMessageRuntimeGroupPolicy",
       "resolveIMessageGroupRequireMention",
       "resolveIMessageGroupToolPolicy",
     ],
@@ -337,6 +370,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
     subpath: "imessage-runtime",
     source: "../../extensions/imessage/runtime-api.js",
     exports: ["monitorIMessageProvider", "probeIMessage", "sendMessageIMessage"],
+    typeExports: ["IMessageProbe"],
   },
   {
     subpath: "irc-surface",
@@ -465,7 +499,11 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   {
     subpath: "matrix-surface",
     source: "../../extensions/matrix/api.js",
-    exports: ["createMatrixThreadBindingManager", "resetMatrixThreadBindingsForTests"],
+    exports: [
+      "createMatrixThreadBindingManager",
+      "matrixSessionBindingAdapterChannels",
+      "resetMatrixThreadBindingsForTests",
+    ],
   },
   {
     subpath: "matrix-thread-bindings",
@@ -478,15 +516,26 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   {
     subpath: "openrouter",
     source: "../../extensions/openrouter/api.js",
-    exports: ["buildOpenrouterProvider", "OPENROUTER_DEFAULT_MODEL_REF"],
+    exports: [
+      "applyOpenrouterConfig",
+      "applyOpenrouterProviderConfig",
+      "buildOpenrouterProvider",
+      "OPENROUTER_DEFAULT_MODEL_REF",
+    ],
   },
   {
     subpath: "minimax",
     source: "../../extensions/minimax/api.js",
     exports: [
+      "applyMinimaxApiConfig",
+      "applyMinimaxApiConfigCn",
+      "applyMinimaxApiProviderConfig",
+      "applyMinimaxApiProviderConfigCn",
       "buildMinimaxPortalProvider",
       "buildMinimaxProvider",
       "isMiniMaxModernModelId",
+      "MINIMAX_API_BASE_URL",
+      "MINIMAX_CN_API_BASE_URL",
       "MINIMAX_DEFAULT_MODEL_ID",
       "MINIMAX_DEFAULT_MODEL_REF",
       "MINIMAX_TEXT_MODEL_CATALOG",
@@ -498,6 +547,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
     subpath: "modelstudio",
     source: "../../extensions/modelstudio/api.js",
     exports: [
+      "applyModelStudioNativeStreamingUsageCompat",
       "buildModelStudioDefaultModelDefinition",
       "buildModelStudioModelDefinition",
       "MODELSTUDIO_BASE_URL",
@@ -509,6 +559,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
       "MODELSTUDIO_STANDARD_CN_BASE_URL",
       "MODELSTUDIO_STANDARD_GLOBAL_BASE_URL",
       "MODELSTUDIO_MODEL_CATALOG",
+      "isNativeModelStudioBaseUrl",
       "buildModelStudioProvider",
     ],
   },
@@ -530,7 +581,28 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   {
     subpath: "moonshot",
     source: "../../extensions/moonshot/api.js",
-    exports: ["buildMoonshotProvider"],
+    exports: [
+      "applyMoonshotNativeStreamingUsageCompat",
+      "buildMoonshotProvider",
+      "isNativeMoonshotBaseUrl",
+      "MOONSHOT_BASE_URL",
+      "MOONSHOT_CN_BASE_URL",
+      "MOONSHOT_DEFAULT_MODEL_ID",
+      "MOONSHOT_DEFAULT_MODEL_REF",
+    ],
+  },
+  {
+    subpath: "mistral",
+    source: "../../extensions/mistral/api.js",
+    exports: [
+      "applyMistralConfig",
+      "applyMistralProviderConfig",
+      "buildMistralModelDefinition",
+      "buildMistralProvider",
+      "MISTRAL_BASE_URL",
+      "MISTRAL_DEFAULT_MODEL_ID",
+      "MISTRAL_DEFAULT_MODEL_REF",
+    ],
   },
   {
     subpath: "nvidia",
@@ -633,7 +705,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
       "signalMessageActions",
       "SignalSender",
     ],
-    typeExports: ["ResolvedSignalAccount", "SignalSender"],
+    typeExports: ["ResolvedSignalAccount", "SignalProbe", "SignalSender"],
   },
   {
     subpath: "provider-reasoning",
@@ -649,6 +721,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
     subpath: "sglang",
     source: "../../extensions/sglang/api.js",
     exports: [
+      "buildSglangProvider",
       "SGLANG_DEFAULT_API_KEY_ENV_VAR",
       "SGLANG_DEFAULT_BASE_URL",
       "SGLANG_MODEL_PLACEHOLDER",
@@ -659,6 +732,8 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
     subpath: "synthetic",
     source: "../../extensions/synthetic/api.js",
     exports: [
+      "applySyntheticConfig",
+      "applySyntheticProviderConfig",
       "buildSyntheticModelDefinition",
       "buildSyntheticProvider",
       "SYNTHETIC_BASE_URL",
@@ -722,6 +797,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
       "resolveDefaultSlackAccountId",
       "resolveSlackAutoThreadId",
       "resolveSlackGroupRequireMention",
+      "resolveSlackRuntimeGroupPolicy",
       "resolveSlackGroupToolPolicy",
       "resolveSlackReplyToMode",
       "ResolvedSlackAccount",
@@ -733,7 +809,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
       "removeSlackReaction",
       "unpinSlackMessage",
     ],
-    typeExports: ["InspectedSlackAccount", "ResolvedSlackAccount"],
+    typeExports: ["InspectedSlackAccount", "ResolvedSlackAccount", "SlackProbe"],
   },
   {
     subpath: "together",
@@ -788,6 +864,8 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
       "probeTelegram",
       "reactMessageTelegram",
       "renameForumTopicTelegram",
+      "resetTelegramThreadBindingsForTests",
+      "resolveTelegramRuntimeGroupPolicy",
       "resolveTelegramToken",
       "sendMessageTelegram",
       "sendPollTelegram",
@@ -851,6 +929,8 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
       "StickerMetadata",
       "TelegramButtonStyle",
       "TelegramInlineButtons",
+      "TelegramProbe",
+      "TelegramTokenResolution",
     ],
   },
   {
@@ -886,6 +966,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
     subpath: "vllm",
     source: "../../extensions/vllm/api.js",
     exports: [
+      "buildVllmProvider",
       "VLLM_DEFAULT_API_KEY_ENV_VAR",
       "VLLM_DEFAULT_BASE_URL",
       "VLLM_MODEL_PLACEHOLDER",
@@ -896,6 +977,8 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
     subpath: "xai",
     source: "../../extensions/xai/api.js",
     exports: [
+      "applyXaiConfig",
+      "applyXaiProviderConfig",
       "applyXaiModelCompat",
       "buildXaiCatalogModels",
       "buildXaiModelDefinition",
@@ -918,6 +1001,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
     source: "../../extensions/xiaomi/api.js",
     exports: [
       "applyXiaomiConfig",
+      "applyXiaomiProviderConfig",
       "buildXiaomiProvider",
       "XIAOMI_DEFAULT_MODEL_ID",
       "XIAOMI_DEFAULT_MODEL_REF",
@@ -955,6 +1039,7 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
       "resolveWhatsAppGroupRequireMention",
       "resolveWhatsAppGroupToolPolicy",
       "resolveWhatsAppOutboundTarget",
+      "whatsappAccessControlTesting",
     ],
     typeExports: [
       "WebChannelStatus",
@@ -966,7 +1051,12 @@ export const GENERATED_PLUGIN_SDK_FACADES = [
   {
     subpath: "zalo-setup",
     source: "../../extensions/zalo/api.js",
-    exports: ["zaloSetupAdapter", "zaloSetupWizard"],
+    exports: [
+      "evaluateZaloGroupAccess",
+      "resolveZaloRuntimeGroupPolicy",
+      "zaloSetupAdapter",
+      "zaloSetupWizard",
+    ],
   },
 ];
 

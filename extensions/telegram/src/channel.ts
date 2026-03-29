@@ -2,12 +2,12 @@ import {
   buildDmGroupAccountAllowlistAdapter,
   createNestedAllowlistOverrideResolver,
 } from "openclaw/plugin-sdk/allowlist-config-edit";
+import { buildPluginApprovalRequestMessage } from "openclaw/plugin-sdk/approval-runtime";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import { createAllowlistProviderRouteAllowlistWarningCollector } from "openclaw/plugin-sdk/channel-policy";
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
 import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
-import { buildPluginApprovalRequestMessage } from "openclaw/plugin-sdk/infra-runtime";
 import {
   resolveOutboundSendDep,
   type OutboundSendDeps,
@@ -223,6 +223,36 @@ function matchTelegramAcpConversation(params: {
   };
 }
 
+function resolveTelegramCommandConversation(params: {
+  threadId?: string;
+  originatingTo?: string;
+  commandTo?: string;
+  fallbackTo?: string;
+}) {
+  const chatId = [params.originatingTo, params.commandTo, params.fallbackTo]
+    .map((candidate) => {
+      const trimmed = candidate?.trim();
+      return trimmed ? parseTelegramTarget(trimmed).chatId.trim() : "";
+    })
+    .find((candidate) => candidate.length > 0);
+  if (!chatId) {
+    return null;
+  }
+  if (params.threadId) {
+    return {
+      conversationId: `${chatId}:topic:${params.threadId}`,
+      parentConversationId: chatId,
+    };
+  }
+  if (chatId.startsWith("-")) {
+    return null;
+  }
+  return {
+    conversationId: chatId,
+    parentConversationId: chatId,
+  };
+}
+
 function parseTelegramExplicitTarget(raw: string) {
   const target = parseTelegramTarget(raw);
   return {
@@ -371,6 +401,13 @@ export const telegramPlugin = createChatChannelPlugin({
           bindingConversationId: compiledBinding.conversationId,
           conversationId,
           parentConversationId,
+        }),
+      resolveCommandConversation: ({ threadId, originatingTo, commandTo, fallbackTo }) =>
+        resolveTelegramCommandConversation({
+          threadId,
+          originatingTo,
+          commandTo,
+          fallbackTo,
         }),
     },
     groups: {
@@ -693,13 +730,16 @@ export const telegramPlugin = createChatChannelPlugin({
       idLabel: "telegramUserId",
       message: PAIRING_APPROVED_MESSAGE,
       normalizeAllowEntry: createPairingPrefixStripper(/^(telegram|tg):/i),
-      notify: async ({ cfg, id, message }) => {
-        const { token } = getTelegramRuntime().channel.telegram.resolveTelegramToken(cfg);
+      notify: async ({ cfg, id, message, accountId }) => {
+        const { token } = getTelegramRuntime().channel.telegram.resolveTelegramToken(cfg, {
+          accountId,
+        });
         if (!token) {
           throw new Error("telegram token not configured");
         }
         await getTelegramRuntime().channel.telegram.sendMessageTelegram(id, message, {
           token,
+          accountId,
         });
       },
     },

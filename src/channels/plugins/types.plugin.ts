@@ -3,6 +3,7 @@ import type {
   ChannelAuthAdapter,
   ChannelCommandAdapter,
   ChannelConfigAdapter,
+  ChannelConversationBindingSupport,
   ChannelDirectoryAdapter,
   ChannelExecApprovalAdapter,
   ChannelResolverAdapter,
@@ -102,6 +103,7 @@ export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknow
   execApprovals?: ChannelExecApprovalAdapter;
   allowlist?: ChannelAllowlistAdapter;
   bindings?: ChannelConfiguredBindingProvider;
+  conversationBindings?: ChannelConversationBindingSupport;
   streaming?: ChannelStreamingAdapter;
   threading?: ChannelThreadingAdapter;
   messaging?: ChannelMessagingAdapter;

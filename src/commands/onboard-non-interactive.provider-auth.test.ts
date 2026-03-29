@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { MINIMAX_API_BASE_URL, MINIMAX_CN_API_BASE_URL } from "../plugin-sdk/minimax.js";
+import { OPENAI_DEFAULT_MODEL } from "../plugin-sdk/openai.js";
 import {
   ZAI_CODING_CN_BASE_URL,
   ZAI_CODING_GLOBAL_BASE_URL,
@@ -14,16 +16,12 @@ import {
   readJsonFile,
   type NonInteractiveRuntime,
 } from "./onboard-non-interactive.test-helpers.js";
-import { OPENAI_DEFAULT_MODEL } from "./openai-model-default.js";
 
 type OnboardEnv = {
   configPath: string;
   runtime: NonInteractiveRuntime;
 };
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
-
-const MINIMAX_API_BASE_URL = "https://api.minimax.io/anthropic";
-const MINIMAX_CN_API_BASE_URL = "https://api.minimaxi.com/anthropic";
 
 const ensureWorkspaceAndSessionsMock = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => {}));
 
@@ -47,7 +45,7 @@ vi.mock("./onboard-non-interactive/local/auth-choice.plugin-providers.js", async
     import("../plugins/provider-api-key-auth.runtime.js"),
     import("../plugins/provider-self-hosted-setup.js"),
     import("./zai-endpoint-detect.js"),
-    import("./openai-model-default.js"),
+    import("../plugin-sdk/openai.js"),
   ]);
 
   const ZAI_FALLBACKS = {
