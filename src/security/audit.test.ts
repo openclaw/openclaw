@@ -3819,6 +3819,31 @@ description: test skill
     );
   });
 
+  it("warns about dmScope=main when multi-user signals present", async () => {
+    const cfg = {
+      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+      tools: { elevated: { enabled: false } },
+    } satisfies OpenClawConfig;
+    const res = await audit(cfg);
+    const finding = res.findings.find(
+      (f) => f.checkId === "security.session.dm_scope_main_multi_user",
+    );
+    expect(finding).toBeDefined();
+    expect(finding?.severity).toBe("critical");
+    expect(finding?.detail).toContain("session.dmScope");
+    expect(finding?.remediation).toContain("per-channel-peer");
+  });
+
+  it("does not warn about dmScope when already set to per-channel-peer", async () => {
+    const cfg = {
+      session: { dmScope: "per-channel-peer" },
+      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+      tools: { elevated: { enabled: false } },
+    } satisfies OpenClawConfig;
+    const res = await audit(cfg);
+    expectNoFinding(res, "security.session.dm_scope_main_multi_user");
+  });
+
   describe("maybeProbeGateway auth selection", () => {
     const makeProbeCapture = () => {
       let capturedAuth: { token?: string; password?: string } | undefined;

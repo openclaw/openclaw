@@ -1355,5 +1355,27 @@ export function collectLikelyMultiUserSetupFindings(cfg: OpenClawConfig): Securi
       'If users may be mutually untrusted, split trust boundaries (separate gateways + credentials, ideally separate OS users/hosts). If you intentionally run shared-user access, set agents.defaults.sandbox.mode="all", keep tools.fs.workspaceOnly=true, deny runtime/fs/web tools unless required, and keep personal/private identities + credentials off that runtime.',
   });
 
+  // When multi-user signals are present and session.dmScope is still the
+  // insecure default ("main"), DM conversations from different users share
+  // the same session context — leaking private messages between users.
+  const dmScope = cfg.session?.dmScope ?? "main";
+  if (dmScope === "main") {
+    findings.push({
+      checkId: "security.session.dm_scope_main_multi_user",
+      severity: "critical",
+      title: 'DM sessions share context across users (session.dmScope is "main")',
+      detail:
+        'Multi-user signals are present but session.dmScope is "main" (the default). ' +
+        "All DM users share the same conversation context, which leaks private messages, " +
+        "tool outputs, and sensitive data between unrelated users. " +
+        "This is the most common privacy vulnerability in multi-user OpenClaw deployments.",
+      remediation:
+        "Run: " +
+        formatCliCommand('openclaw config set session.dmScope "per-channel-peer"') +
+        " to isolate DM sessions per sender. " +
+        'For multi-account channels, use "per-account-channel-peer" instead.',
+    });
+  }
+
   return findings;
 }
