@@ -351,21 +351,27 @@ function buildChannelManagementSchema() {
 function buildMessageToolSchemaProps(options: {
   includeInteractive: boolean;
   extraProperties?: Record<string, TSchema>;
+  /** When provided, only include property groups relevant to these actions. */
+  actions?: readonly string[];
 }) {
+  const hasAction = (prefixes: string[]) =>
+    !options.actions || options.actions.some((a) => prefixes.some((p) => a.startsWith(p)));
   return {
     ...buildRoutingSchema(),
     ...buildSendSchema(options),
-    ...buildReactionSchema(),
-    ...buildFetchSchema(),
-    ...buildPollSchema(),
+    ...(hasAction(["react"]) ? buildReactionSchema() : {}),
+    ...(hasAction(["read", "search", "fetch"]) ? buildFetchSchema() : {}),
+    ...(hasAction(["poll"]) ? buildPollSchema() : {}),
     ...buildChannelTargetSchema(),
-    ...buildStickerSchema(),
-    ...buildThreadSchema(),
-    ...buildEventSchema(),
-    ...buildModerationSchema(),
+    ...(hasAction(["sticker"]) ? buildStickerSchema() : {}),
+    ...(hasAction(["thread"]) ? buildThreadSchema() : {}),
+    ...(hasAction(["event"]) ? buildEventSchema() : {}),
+    ...(hasAction(["timeout", "kick", "ban"]) ? buildModerationSchema() : {}),
     ...buildGatewaySchema(),
-    ...buildChannelManagementSchema(),
-    ...buildPresenceSchema(),
+    ...(hasAction(["channel-create", "channel-edit", "category"])
+      ? buildChannelManagementSchema()
+      : {}),
+    ...(hasAction(["set-presence"]) ? buildPresenceSchema() : {}),
     ...options.extraProperties,
   };
 }
@@ -377,7 +383,7 @@ function buildMessageToolSchemaFromActions(
     extraProperties?: Record<string, TSchema>;
   },
 ) {
-  const props = buildMessageToolSchemaProps(options);
+  const props = buildMessageToolSchemaProps({ ...options, actions });
   return Type.Object({
     action: stringEnum(actions),
     ...props,
