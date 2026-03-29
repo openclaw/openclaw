@@ -7,13 +7,21 @@ function isToolCallBlockType(type: unknown): boolean {
   return type === "toolCall" || type === "toolUse" || type === "functionCall";
 }
 
-function extractBalancedJsonPrefix(raw: string): string | null {
+type BalancedJsonPrefix = {
+  json: string;
+  startIndex: number;
+};
+
+function extractBalancedJsonPrefix(raw: string): BalancedJsonPrefix | null {
   let start = 0;
-  while (start < raw.length && /\s/.test(raw[start] ?? "")) {
+  while (start < raw.length) {
+    const char = raw[start];
+    if (char === "{" || char === "[") {
+      break;
+    }
     start += 1;
   }
-  const startChar = raw[start];
-  if (startChar !== "{" && startChar !== "[") {
+  if (start >= raw.length) {
     return null;
   }
 
@@ -46,7 +54,7 @@ function extractBalancedJsonPrefix(raw: string): string | null {
     if (char === "}" || char === "]") {
       depth -= 1;
       if (depth === 0) {
-        return raw.slice(start, i + 1);
+        return { json: raw.slice(start, i + 1), startIndex: start };
       }
     }
   }
@@ -54,7 +62,9 @@ function extractBalancedJsonPrefix(raw: string): string | null {
 }
 
 const MAX_TOOLCALL_REPAIR_BUFFER_CHARS = 64_000;
+const MAX_TOOLCALL_REPAIR_LEADING_CHARS = 96;
 const MAX_TOOLCALL_REPAIR_TRAILING_CHARS = 3;
+const TOOLCALL_REPAIR_ALLOWED_LEADING_RE = /^[a-z0-9\s"'`.:/_\\-]+$/i;
 const TOOLCALL_REPAIR_ALLOWED_TRAILING_RE = /^[^\s{}[\]":,\\]{1,3}$/;
 
 function shouldAttemptMalformedToolCallRepair(partialJson: string, delta: string): boolean {
@@ -71,8 +81,22 @@ function shouldAttemptMalformedToolCallRepair(partialJson: string, delta: string
 
 type ToolCallArgumentRepair = {
   args: Record<string, unknown>;
+  leadingPrefix: string;
   trailingSuffix: string;
 };
+
+function isAllowedToolCallRepairLeadingPrefix(prefix: string): boolean {
+  if (!prefix) {
+    return true;
+  }
+  if (prefix.length > MAX_TOOLCALL_REPAIR_LEADING_CHARS) {
+    return false;
+  }
+  if (!TOOLCALL_REPAIR_ALLOWED_LEADING_RE.test(prefix)) {
+    return false;
+  }
+  return /^[.:'"`-]/.test(prefix) || /^(?:functions?|tools?)[._:/-]?/i.test(prefix);
+}
 
 function tryParseMalformedToolCallArguments(raw: string): ToolCallArgumentRepair | undefined {
   if (!raw.trim()) {
@@ -82,22 +106,32 @@ function tryParseMalformedToolCallArguments(raw: string): ToolCallArgumentRepair
     JSON.parse(raw);
     return undefined;
   } catch {
-    const jsonPrefix = extractBalancedJsonPrefix(raw);
-    if (!jsonPrefix) {
+    const extracted = extractBalancedJsonPrefix(raw);
+    if (!extracted) {
       return undefined;
     }
-    const suffix = raw.slice(raw.indexOf(jsonPrefix) + jsonPrefix.length).trim();
+    const leadingPrefix = raw.slice(0, extracted.startIndex).trim();
+    if (!isAllowedToolCallRepairLeadingPrefix(leadingPrefix)) {
+      return undefined;
+    }
+    const suffix = raw.slice(extracted.startIndex + extracted.json.length).trim();
+    if (leadingPrefix.length === 0 && suffix.length === 0) {
+      return undefined;
+    }
     if (
-      suffix.length === 0 ||
       suffix.length > MAX_TOOLCALL_REPAIR_TRAILING_CHARS ||
-      !TOOLCALL_REPAIR_ALLOWED_TRAILING_RE.test(suffix)
+      (suffix.length > 0 && !TOOLCALL_REPAIR_ALLOWED_TRAILING_RE.test(suffix))
     ) {
       return undefined;
     }
     try {
-      const parsed = JSON.parse(jsonPrefix) as unknown;
+      const parsed = JSON.parse(extracted.json) as unknown;
       return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-        ? { args: parsed as Record<string, unknown>, trailingSuffix: suffix }
+        ? {
+            args: parsed as Record<string, unknown>,
+            leadingPrefix,
+            trailingSuffix: suffix,
+          }
         : undefined;
     } catch {
       return undefined;
@@ -224,7 +258,7 @@ function wrapStreamRepairMalformedToolCallArguments(
                   if (!loggedRepairIndices.has(event.contentIndex)) {
                     loggedRepairIndices.add(event.contentIndex);
                     log.warn(
-                      `repairing Kimi tool call arguments after ${repair.trailingSuffix.length} trailing chars`,
+                      `repairing Kimi tool call arguments with ${repair.leadingPrefix.length} leading chars and ${repair.trailingSuffix.length} trailing chars`,
                     );
                   }
                 } else {
