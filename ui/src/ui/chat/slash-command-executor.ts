@@ -642,10 +642,6 @@ function resolveSteerSubagent(
     if (!key || !isSubagentSessionKey(key)) {
       continue;
     }
-    // P1: skip ended sessions so stale subagents are not targeted
-    if (session.endedAt) {
-      continue;
-    }
     const normalizedKey = key.toLowerCase();
     const parsed = parseAgentSessionKey(normalizedKey);
     const belongsToCurrentSession = isWithinCurrentSessionSubtree(
@@ -675,6 +671,10 @@ function resolveSteerSubagent(
  * Resolve an optional subagent target from the first word of args.
  * Returns the resolved session key and the remaining message, or
  * falls back to the current session key with the full args as message.
+ *
+ * Ended subagents are still resolved here so explicit `/steer <id> ...`
+ * can surface the correct "No active run matched" message and `/redirect <id> ...`
+ * can restart that specific session instead of silently steering the current one.
  */
 async function resolveSteerTarget(
   client: GatewayBrowserClient,
