@@ -10,6 +10,7 @@ import {
 } from "./scope-errors.ts";
 
 const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
+const chatHistoryRequestSerial = new WeakMap<ChatState, number>();
 
 function isSilentReplyStream(text: string): boolean {
   return SILENT_REPLY_PATTERN.test(text);
@@ -72,16 +73,22 @@ export async function loadChatHistory(state: ChatState) {
   if (!state.client || !state.connected) {
     return;
   }
+  const requestedSessionKey = state.sessionKey;
+  const requestSerial = (chatHistoryRequestSerial.get(state) ?? 0) + 1;
+  chatHistoryRequestSerial.set(state, requestSerial);
   state.chatLoading = true;
   state.lastError = null;
   try {
     const res = await state.client.request<{ messages?: Array<unknown>; thinkingLevel?: string }>(
       "chat.history",
       {
-        sessionKey: state.sessionKey,
+        sessionKey: requestedSessionKey,
         limit: 200,
       },
     );
+    if (chatHistoryRequestSerial.get(state) !== requestSerial) {
+      return;
+    }
     const messages = Array.isArray(res.messages) ? res.messages : [];
     state.chatMessages = messages.filter((message) => !isAssistantSilentReply(message));
     state.chatThinkingLevel = res.thinkingLevel ?? null;
@@ -91,6 +98,9 @@ export async function loadChatHistory(state: ChatState) {
     state.chatStream = null;
     state.chatStreamStartedAt = null;
   } catch (err) {
+    if (chatHistoryRequestSerial.get(state) !== requestSerial) {
+      return;
+    }
     if (isMissingOperatorReadScopeError(err)) {
       state.chatMessages = [];
       state.chatThinkingLevel = null;
@@ -99,7 +109,9 @@ export async function loadChatHistory(state: ChatState) {
       state.lastError = String(err);
     }
   } finally {
-    state.chatLoading = false;
+    if (chatHistoryRequestSerial.get(state) === requestSerial) {
+      state.chatLoading = false;
+    }
   }
 }
 

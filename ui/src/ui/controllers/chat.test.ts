@@ -662,4 +662,49 @@ describe("loadChatHistory", () => {
     expect(state.lastError).toContain("operator.read");
     expect(state.chatLoading).toBe(false);
   });
+
+  it("ignores stale responses when a newer session history request is in flight", async () => {
+    let resolveFirst: ((value: unknown) => void) | undefined;
+    const request = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve;
+          }),
+      )
+      .mockResolvedValueOnce({
+        messages: [{ role: "assistant", content: [{ type: "text", text: "new session" }] }],
+        thinkingLevel: "high",
+      });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const firstLoad = loadChatHistory(state);
+    state.sessionKey = "agent:alice:main";
+    const secondLoad = loadChatHistory(state);
+
+    resolveFirst?.({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "stale session" }] }],
+      thinkingLevel: "low",
+    });
+
+    await Promise.all([firstLoad, secondLoad]);
+
+    expect(request).toHaveBeenNthCalledWith(1, "chat.history", {
+      sessionKey: "main",
+      limit: 200,
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "chat.history", {
+      sessionKey: "agent:alice:main",
+      limit: 200,
+    });
+    expect(state.chatMessages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "new session" }] },
+    ]);
+    expect(state.chatThinkingLevel).toBe("high");
+    expect(state.chatLoading).toBe(false);
+  });
 });
