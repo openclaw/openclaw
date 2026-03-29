@@ -3,6 +3,8 @@ import type { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ModelDefinitionConfig } from "../../config/types.js";
 import {
+  applyProviderResolvedModelCompatWithPlugins,
+  applyProviderResolvedTransportWithPlugin,
   buildProviderUnknownModelHintWithPlugin,
   clearProviderRuntimeHookCache,
   normalizeProviderTransportWithPlugin,
@@ -36,6 +38,12 @@ type InlineProviderConfig = {
 };
 
 type ProviderRuntimeHooks = {
+  applyProviderResolvedModelCompatWithPlugins?: (
+    params: Parameters<typeof applyProviderResolvedModelCompatWithPlugins>[0],
+  ) => unknown;
+  applyProviderResolvedTransportWithPlugin?: (
+    params: Parameters<typeof applyProviderResolvedTransportWithPlugin>[0],
+  ) => unknown;
   buildProviderUnknownModelHintWithPlugin: (
     params: Parameters<typeof buildProviderUnknownModelHintWithPlugin>[0],
   ) => string | undefined;
@@ -52,6 +60,8 @@ type ProviderRuntimeHooks = {
 };
 
 const DEFAULT_PROVIDER_RUNTIME_HOOKS: ProviderRuntimeHooks = {
+  applyProviderResolvedModelCompatWithPlugins,
+  applyProviderResolvedTransportWithPlugin,
   buildProviderUnknownModelHintWithPlugin,
   prepareProviderDynamicModel,
   runProviderDynamicModel,
@@ -95,6 +105,36 @@ function sanitizeModelHeaders(
   return Object.keys(next).length > 0 ? next : undefined;
 }
 
+function applyResolvedTransportFallback(params: {
+  provider: string;
+  cfg?: OpenClawConfig;
+  runtimeHooks: ProviderRuntimeHooks;
+  model: Model<Api>;
+}): Model<Api> | undefined {
+  const normalized = params.runtimeHooks.normalizeProviderTransportWithPlugin({
+    provider: params.provider,
+    config: params.cfg,
+    context: {
+      provider: params.provider,
+      api: params.model.api,
+      baseUrl: params.model.baseUrl,
+    },
+  }) as { api?: Api | null; baseUrl?: string } | undefined;
+  if (!normalized) {
+    return undefined;
+  }
+  const nextApi = normalizeResolvedTransportApi(normalized.api) ?? params.model.api;
+  const nextBaseUrl = normalized.baseUrl ?? params.model.baseUrl;
+  if (nextApi === params.model.api && nextBaseUrl === params.model.baseUrl) {
+    return undefined;
+  }
+  return {
+    ...params.model,
+    api: nextApi,
+    baseUrl: nextBaseUrl,
+  };
+}
+
 function normalizeResolvedModel(params: {
   provider: string;
   model: Model<Api>;
@@ -121,9 +161,40 @@ function normalizeResolvedModel(params: {
       model: normalizedInputModel,
     },
   }) as Model<Api> | undefined;
+  const compatNormalized = runtimeHooks.applyProviderResolvedModelCompatWithPlugins?.({
+    provider: params.provider,
+    config: params.cfg,
+    context: {
+      config: params.cfg,
+      agentDir: params.agentDir,
+      provider: params.provider,
+      modelId: normalizedInputModel.id,
+      model: (pluginNormalized ?? normalizedInputModel) as never,
+    },
+  }) as Model<Api> | undefined;
+  const transportNormalized = runtimeHooks.applyProviderResolvedTransportWithPlugin?.({
+    provider: params.provider,
+    config: params.cfg,
+    context: {
+      config: params.cfg,
+      agentDir: params.agentDir,
+      provider: params.provider,
+      modelId: normalizedInputModel.id,
+      model: (compatNormalized ?? pluginNormalized ?? normalizedInputModel) as never,
+    },
+  }) as Model<Api> | undefined;
+  const fallbackTransportNormalized =
+    transportNormalized ??
+    applyResolvedTransportFallback({
+      provider: params.provider,
+      cfg: params.cfg,
+      runtimeHooks,
+      model: compatNormalized ?? pluginNormalized ?? normalizedInputModel,
+    });
   return normalizeResolvedProviderModel({
     provider: params.provider,
-    model: pluginNormalized ?? normalizedInputModel,
+    model:
+      fallbackTransportNormalized ?? compatNormalized ?? pluginNormalized ?? normalizedInputModel,
   });
 }
 

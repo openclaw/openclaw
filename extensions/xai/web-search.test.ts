@@ -1,7 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { NON_ENV_SECRETREF_MARKER } from "../../src/agents/model-auth-markers.js";
 import { capturePluginRegistration } from "../../src/plugins/captured-registration.js";
-import { withEnv } from "../../test/helpers/extensions/env.js";
+import { createNonExitingRuntime } from "../../src/runtime.js";
+import { withEnv } from "../../test/helpers/plugins/env.js";
+import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import xaiPlugin from "./index.js";
 import { resolveXaiCatalogEntry } from "./model-definitions.js";
 import { isModernXaiModel, resolveXaiForwardCompatModel } from "./provider-models.js";
@@ -108,6 +110,73 @@ describe("xai web search config resolution", () => {
         error: "missing_xai_api_key",
       });
     });
+  });
+
+  it("offers plugin-owned x_search setup after Grok is selected", async () => {
+    const provider = createXaiWebSearchProvider();
+    const select = vi.fn().mockResolvedValueOnce("yes").mockResolvedValueOnce("grok-4-1-fast");
+    const prompter = createWizardPrompter({
+      select: select as never,
+    });
+
+    const next = await provider.runSetup?.({
+      config: {
+        plugins: {
+          entries: {
+            xai: {
+              enabled: true,
+              config: {
+                webSearch: {
+                  apiKey: "xai-test-key",
+                },
+              },
+            },
+          },
+        },
+        tools: {
+          web: {
+            search: {
+              provider: "grok",
+              enabled: true,
+            },
+          },
+        },
+      },
+      runtime: createNonExitingRuntime(),
+      prompter,
+    });
+
+    expect(next?.tools?.web?.x_search).toMatchObject({
+      enabled: true,
+      model: "grok-4-1-fast",
+    });
+  });
+
+  it("keeps explicit x_search disablement untouched during provider-owned setup", async () => {
+    const provider = createXaiWebSearchProvider();
+    const config = {
+      tools: {
+        web: {
+          search: {
+            provider: "grok",
+            enabled: true,
+          },
+          x_search: {
+            enabled: false,
+          },
+        },
+      },
+    };
+    const prompter = createWizardPrompter({});
+
+    const next = await provider.runSetup?.({
+      config,
+      runtime: createNonExitingRuntime(),
+      prompter,
+    });
+
+    expect(next).toEqual(config);
+    expect(prompter.note).not.toHaveBeenCalled();
   });
 
   it("reuses the plugin web search api key for provider auth fallback", () => {

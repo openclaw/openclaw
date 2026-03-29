@@ -329,8 +329,9 @@ export function createExecTool(
       if (elevatedRequested) {
         logInfo(`exec: elevated command ${truncateMiddle(params.command, 120)}`);
       }
-      const configuredHost = defaults?.host ?? "sandbox";
-      const sandboxHostConfigured = defaults?.host === "sandbox";
+      // Keep the implicit host aligned with the active runtime: host-first unless a sandbox
+      // runtime is actually available for this session, while still honoring explicit overrides.
+      const configuredHost = defaults?.host ?? (defaults?.sandbox ? "sandbox" : "gateway");
       const requestedHost = normalizeExecHost(params.host) ?? null;
       let host: ExecHost = requestedHost ?? configuredHost;
       if (!elevatedRequested && requestedHost && requestedHost !== configuredHost) {
@@ -359,14 +360,12 @@ export function createExecTool(
       }
 
       const sandbox = host === "sandbox" ? defaults?.sandbox : undefined;
-      if (
-        host === "sandbox" &&
-        !sandbox &&
-        (sandboxHostConfigured || requestedHost === "sandbox")
-      ) {
+      const sandboxHostConfigured = defaults?.host === "sandbox" || requestedHost === "sandbox";
+      // Never fall through to direct host exec when sandbox was selected explicitly.
+      if (host === "sandbox" && !sandbox && sandboxHostConfigured) {
         throw new Error(
           [
-            "exec host=sandbox is configured, but sandbox runtime is unavailable for this session.",
+            "exec host resolved to sandbox, but sandbox runtime is unavailable for this session.",
             'Enable sandbox mode (`agents.defaults.sandbox.mode="non-main"` or `"all"`) or set tools.exec.host to "gateway"/"node".',
           ].join("\n"),
         );
@@ -382,7 +381,10 @@ export function createExecTool(
         });
         workdir = resolved.hostWorkdir;
         containerWorkdir = resolved.containerWorkdir;
-      } else {
+      } else if (host !== "node") {
+        // Skip local workdir resolution for remote node execution: the remote node's
+        // filesystem is not visible to the gateway, so resolveWorkdir() would incorrectly
+        // fall back to the gateway's cwd. The node is responsible for validating its own cwd.
         workdir = resolveWorkdir(rawWorkdir, warnings);
       }
 

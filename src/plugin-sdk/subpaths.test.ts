@@ -117,6 +117,17 @@ function expectSourceContains(subpath: string, snippet: string) {
   expect(readPluginSdkSource(subpath)).toContain(snippet);
 }
 
+function expectSourceOmitsSnippet(subpath: string, snippet: string) {
+  expect(readPluginSdkSource(subpath)).not.toContain(snippet);
+}
+
+function expectSourceOmitsImportPattern(subpath: string, specifier: string) {
+  const escapedSpecifier = specifier.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const source = readPluginSdkSource(subpath);
+  expect(source).not.toMatch(new RegExp(`\\bfrom\\s+["']${escapedSpecifier}["']`, "u"));
+  expect(source).not.toMatch(new RegExp(`\\bimport\\(\\s*["']${escapedSpecifier}["']\\s*\\)`, "u"));
+}
+
 describe("plugin-sdk subpath exports", () => {
   it("keeps the curated public list free of internal implementation subpaths", () => {
     for (const deniedSubpath of [
@@ -589,10 +600,28 @@ describe("plugin-sdk subpath exports", () => {
       "ssrfPolicyFromAllowPrivateNetwork",
     ]);
 
-    expectSourceMentions("provider-setup", [
-      "buildVllmProvider",
-      "discoverOpenAICompatibleSelfHostedProvider",
-    ]);
+    expectSourceContract("provider-setup", {
+      mentions: [
+        "applyProviderDefaultModel",
+        "discoverOpenAICompatibleLocalModels",
+        "discoverOpenAICompatibleSelfHostedProvider",
+      ],
+      omits: [
+        "buildOllamaProvider",
+        "configureOllamaNonInteractive",
+        "ensureOllamaModelPulled",
+        "promptAndConfigureOllama",
+        "promptAndConfigureVllm",
+        "buildVllmProvider",
+        "buildSglangProvider",
+        "OLLAMA_DEFAULT_BASE_URL",
+        "OLLAMA_DEFAULT_MODEL",
+        "VLLM_DEFAULT_BASE_URL",
+      ],
+    });
+    expectSourceOmitsSnippet("provider-setup", "./ollama-surface.js");
+    expectSourceOmitsImportPattern("provider-setup", "./vllm.js");
+    expectSourceOmitsImportPattern("provider-setup", "./sglang.js");
     expectSourceMentions("provider-auth", [
       "buildOauthProviderAuthResult",
       "generatePkceVerifierChallenge",
@@ -600,15 +629,6 @@ describe("plugin-sdk subpath exports", () => {
       "toFormUrlEncoded",
     ]);
     expectSourceOmits("core", ["buildOauthProviderAuthResult"]);
-    expectSourceContract("provider-models", {
-      mentions: ["applyOpenAIConfig", "buildKilocodeModelDefinition", "discoverHuggingfaceModels"],
-      omits: [
-        "buildMinimaxModelDefinition",
-        "buildMoonshotProvider",
-        "QIANFAN_BASE_URL",
-        "resolveZaiBaseUrl",
-      ],
-    });
     expectSourceContract("provider-model-shared", {
       mentions: ["DEFAULT_CONTEXT_TOKENS", "normalizeModelCompat", "cloneFirstTemplateModel"],
       omits: ["applyOpenAIConfig", "buildKilocodeModelDefinition", "discoverHuggingfaceModels"],
@@ -632,11 +652,20 @@ describe("plugin-sdk subpath exports", () => {
       "formatDocsLink",
     ]);
     expectSourceMentions("lazy-runtime", ["createLazyRuntimeSurface", "createLazyRuntimeModule"]);
-    expectSourceMentions("self-hosted-provider-setup", [
-      "buildVllmProvider",
-      "buildSglangProvider",
-      "configureOpenAICompatibleSelfHostedProviderNonInteractive",
-    ]);
+    expectSourceContract("self-hosted-provider-setup", {
+      mentions: [
+        "applyProviderDefaultModel",
+        "discoverOpenAICompatibleLocalModels",
+        "discoverOpenAICompatibleSelfHostedProvider",
+        "configureOpenAICompatibleSelfHostedProviderNonInteractive",
+      ],
+      omits: ["buildVllmProvider", "buildSglangProvider"],
+    });
+    expectSourceOmitsImportPattern("self-hosted-provider-setup", "./vllm.js");
+    expectSourceOmitsImportPattern("self-hosted-provider-setup", "./sglang.js");
+    expectSourceOmitsSnippet("agent-runtime", "./sglang.js");
+    expectSourceOmitsSnippet("agent-runtime", "./vllm.js");
+    expectSourceOmitsSnippet("xai-model-id", "./xai.js");
     expectSourceMentions("sandbox", ["registerSandboxBackend", "runPluginCommandWithTimeout"]);
 
     expectSourceMentions("secret-input", [

@@ -127,5 +127,8 @@ export function installWebSearchProviderContractSuite(params: {
     expect(tool?.description.trim()).not.toBe("");
     expect(tool?.parameters).toEqual(expect.any(Object));
     expect(typeof tool?.execute).toBe("function");
+    if (provider.runSetup) {
+      expect(typeof provider.runSetup).toBe("function");
+    }
   });
 }

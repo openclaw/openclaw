@@ -8,12 +8,12 @@ import {
 import {
   createDirectoryTestRuntime,
   expectDirectorySurface,
-} from "../../../test/helpers/extensions/directory.ts";
+} from "../../../test/helpers/plugins/directory.ts";
 import {
   createPluginSetupWizardConfigure,
   createQueuedWizardPrompter,
   runSetupWizardConfigure,
-} from "../../../test/helpers/extensions/setup-wizard.js";
+} from "../../../test/helpers/plugins/setup-wizard.js";
 import { whatsappPlugin } from "./channel.js";
 import {
   resolveWhatsAppGroupRequireMention,
@@ -23,6 +23,7 @@ import type { OpenClawConfig } from "./runtime-api.js";
 
 const hoisted = vi.hoisted(() => ({
   sendPollWhatsApp: vi.fn(async () => ({ messageId: "wa-poll-1", toJid: "1555@s.whatsapp.net" })),
+  handleWhatsAppAction: vi.fn(async () => ({ content: [{ type: "text", text: '{"ok":true}' }] })),
   loginWeb: vi.fn(async () => {}),
   pathExists: vi.fn(async () => false),
   listWhatsAppAccountIds: vi.fn(() => [] as string[]),
@@ -40,6 +41,7 @@ vi.mock("./runtime.js", () => ({
     channel: {
       whatsapp: {
         sendPollWhatsApp: hoisted.sendPollWhatsApp,
+        handleWhatsAppAction: hoisted.handleWhatsAppAction,
       },
     },
   }),
@@ -426,5 +428,150 @@ describe("whatsapp group policy", () => {
     expect(resolveWhatsAppGroupToolPolicy({ cfg, groupId: "other@g.us" })).toEqual({
       allow: ["message.send"],
     });
+  });
+});
+
+describe("whatsappPlugin actions.handleAction react messageId resolution", () => {
+  const baseCfg = {
+    channels: { whatsapp: { actions: { reactions: true }, allowFrom: ["*"] } },
+  } as OpenClawConfig;
+
+  beforeEach(() => {
+    hoisted.handleWhatsAppAction.mockClear();
+  });
+
+  it("uses explicit messageId when provided", async () => {
+    await whatsappPlugin.actions!.handleAction!({
+      channel: "whatsapp",
+      action: "react",
+      params: { messageId: "explicit-id", emoji: "👍", to: "+1555" },
+      cfg: baseCfg,
+      accountId: DEFAULT_ACCOUNT_ID,
+    });
+    expect(hoisted.handleWhatsAppAction).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: "explicit-id" }),
+      baseCfg,
+    );
+  });
+
+  it("falls back to toolContext.currentMessageId when messageId omitted", async () => {
+    await whatsappPlugin.actions!.handleAction!({
+      channel: "whatsapp",
+      action: "react",
+      params: { emoji: "❤️", to: "+1555" },
+      cfg: baseCfg,
+      accountId: DEFAULT_ACCOUNT_ID,
+      toolContext: {
+        currentChannelId: "whatsapp:+1555",
+        currentChannelProvider: "whatsapp",
+        currentMessageId: "ctx-msg-42",
+      },
+    });
+    expect(hoisted.handleWhatsAppAction).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: "ctx-msg-42" }),
+      baseCfg,
+    );
+  });
+
+  it("converts numeric toolContext messageId to string", async () => {
+    await whatsappPlugin.actions!.handleAction!({
+      channel: "whatsapp",
+      action: "react",
+      params: { emoji: "🎉", to: "+1555" },
+      cfg: baseCfg,
+      accountId: DEFAULT_ACCOUNT_ID,
+      toolContext: {
+        currentChannelId: "whatsapp:+1555",
+        currentChannelProvider: "whatsapp",
+        currentMessageId: 12345,
+      },
+    });
+    expect(hoisted.handleWhatsAppAction).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: "12345" }),
+      baseCfg,
+    );
+  });
+
+  it("throws ToolInputError when messageId missing and no toolContext", async () => {
+    const err = await whatsappPlugin.actions!.handleAction!({
+      channel: "whatsapp",
+      action: "react",
+      params: { emoji: "👍", to: "+1555" },
+      cfg: baseCfg,
+      accountId: DEFAULT_ACCOUNT_ID,
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).name).toBe("ToolInputError");
+  });
+
+  it("skips context fallback when targeting a different chat", async () => {
+    const err = await whatsappPlugin.actions!.handleAction!({
+      channel: "whatsapp",
+      action: "react",
+      params: { emoji: "👍", to: "+9999" },
+      cfg: baseCfg,
+      accountId: DEFAULT_ACCOUNT_ID,
+      toolContext: {
+        currentChannelId: "whatsapp:+1555",
+        currentChannelProvider: "whatsapp",
+        currentMessageId: "ctx-msg-42",
+      },
+    }).catch((e: unknown) => e);
+    // Different target chat → context fallback suppressed → ToolInputError
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).name).toBe("ToolInputError");
+  });
+
+  it("uses context fallback when target matches current chat (prefixed)", async () => {
+    await whatsappPlugin.actions!.handleAction!({
+      channel: "whatsapp",
+      action: "react",
+      params: { emoji: "👍", to: "+1555" },
+      cfg: baseCfg,
+      accountId: DEFAULT_ACCOUNT_ID,
+      toolContext: {
+        currentChannelId: "whatsapp:+1555",
+        currentChannelProvider: "whatsapp",
+        currentMessageId: "ctx-msg-42",
+      },
+    });
+    expect(hoisted.handleWhatsAppAction).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: "ctx-msg-42" }),
+      baseCfg,
+    );
+  });
+
+  it("skips context fallback when source is another provider", async () => {
+    const err = await whatsappPlugin.actions!.handleAction!({
+      channel: "whatsapp",
+      action: "react",
+      params: { emoji: "👍", to: "+1555" },
+      cfg: baseCfg,
+      accountId: DEFAULT_ACCOUNT_ID,
+      toolContext: {
+        currentChannelId: "telegram:-1003841603622",
+        currentChannelProvider: "telegram",
+        currentMessageId: "tg-msg-99",
+      },
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).name).toBe("ToolInputError");
+  });
+
+  it("skips context fallback when currentChannelId is missing with explicit target", async () => {
+    const err = await whatsappPlugin.actions!.handleAction!({
+      channel: "whatsapp",
+      action: "react",
+      params: { emoji: "👍", to: "+1555" },
+      cfg: baseCfg,
+      accountId: DEFAULT_ACCOUNT_ID,
+      toolContext: {
+        currentChannelProvider: "whatsapp",
+        currentMessageId: "ctx-msg-42",
+      },
+    }).catch((e: unknown) => e);
+    // WhatsApp source but no currentChannelId to compare → fallback suppressed
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).name).toBe("ToolInputError");
   });
 });

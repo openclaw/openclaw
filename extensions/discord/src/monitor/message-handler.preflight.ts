@@ -490,7 +490,7 @@ export async function preflightDiscordMessage(
   });
   const boundAgentId = boundSessionKey ? effectiveRoute.agentId : undefined;
   const isBoundThreadSession = Boolean(threadBinding && earlyThreadChannel);
-  const bypassMentionRequirement = isBoundThreadSession || Boolean(configuredBinding);
+  const bypassMentionRequirement = isBoundThreadSession;
   if (
     isBoundThreadBotSystemMessage({
       isBoundThreadSession,

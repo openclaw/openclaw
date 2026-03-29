@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { resolveProviderPluginChoice } from "../../src/plugins/provider-wizard.js";
-import { registerSingleProviderPlugin } from "../../test/helpers/extensions/plugin-registration.js";
+import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
 import deepseekPlugin from "./index.js";
 
 describe("deepseek provider plugin", () => {

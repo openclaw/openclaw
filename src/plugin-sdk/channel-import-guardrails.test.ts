@@ -2,12 +2,22 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import {
+  BUNDLED_PLUGIN_PATH_PREFIX,
+  BUNDLED_PLUGIN_ROOT_DIR,
+  bundledPluginFile,
+} from "../../test/helpers/bundled-plugin-paths.js";
 import { GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES } from "../plugins/public-artifacts.js";
 
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const REPO_ROOT = resolve(ROOT_DIR, "..");
 const ALLOWED_EXTENSION_PUBLIC_SURFACES = new Set(GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES);
 ALLOWED_EXTENSION_PUBLIC_SURFACES.add("test-api.js");
+const BUNDLED_EXTENSION_IDS = new Set(
+  readdirSync(resolve(REPO_ROOT, "extensions"), { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && entry.name !== "shared")
+    .map((entry) => entry.name),
+);
 const GUARDED_CHANNEL_EXTENSIONS = new Set([
   "bluebubbles",
   "discord",
@@ -39,42 +49,90 @@ type GuardedSource = {
 
 const SAME_CHANNEL_SDK_GUARDS: GuardedSource[] = [
   {
-    path: "extensions/discord/src/shared.ts",
+    path: bundledPluginFile("discord", "src/shared.ts"),
     forbiddenPatterns: [/["']openclaw\/plugin-sdk\/discord["']/, /plugin-sdk-internal\/discord/],
   },
   {
-    path: "extensions/slack/src/shared.ts",
+    path: bundledPluginFile("slack", "src/shared.ts"),
     forbiddenPatterns: [/["']openclaw\/plugin-sdk\/slack["']/, /plugin-sdk-internal\/slack/],
   },
   {
-    path: "extensions/telegram/src/shared.ts",
+    path: bundledPluginFile("telegram", "src/shared.ts"),
     forbiddenPatterns: [/["']openclaw\/plugin-sdk\/telegram["']/, /plugin-sdk-internal\/telegram/],
   },
   {
-    path: "extensions/imessage/src/shared.ts",
+    path: bundledPluginFile("telegram", "src/account-inspect.ts"),
+    forbiddenPatterns: [/["']openclaw\/plugin-sdk\/account-resolution["']/],
+  },
+  {
+    path: bundledPluginFile("telegram", "src/accounts.ts"),
+    forbiddenPatterns: [/["']openclaw\/plugin-sdk\/account-resolution["']/],
+  },
+  {
+    path: bundledPluginFile("telegram", "src/token.ts"),
+    forbiddenPatterns: [/["']openclaw\/plugin-sdk\/account-resolution["']/],
+  },
+  {
+    path: bundledPluginFile("telegram", "src/channel.ts"),
+    forbiddenPatterns: [/["']\.\.\/runtime-api\.js["']/],
+  },
+  {
+    path: bundledPluginFile("telegram", "src/action-runtime.ts"),
+    forbiddenPatterns: [/["']\.\.\/runtime-api\.js["']/],
+  },
+  {
+    path: bundledPluginFile("telegram", "src/accounts.ts"),
+    forbiddenPatterns: [/["']\.\.\/runtime-api\.js["']/],
+  },
+  {
+    path: bundledPluginFile("telegram", "src/account-inspect.ts"),
+    forbiddenPatterns: [/["']\.\.\/runtime-api\.js["']/],
+  },
+  {
+    path: bundledPluginFile("telegram", "src/api-fetch.ts"),
+    forbiddenPatterns: [/["']\.\.\/runtime-api\.js["']/],
+  },
+  {
+    path: bundledPluginFile("telegram", "src/channel.setup.ts"),
+    forbiddenPatterns: [/["']\.\.\/runtime-api\.js["']/],
+  },
+  {
+    path: bundledPluginFile("telegram", "src/probe.ts"),
+    forbiddenPatterns: [/["']\.\.\/runtime-api\.js["']/],
+  },
+  {
+    path: bundledPluginFile("telegram", "src/setup-core.ts"),
+    forbiddenPatterns: [/["']\.\.\/runtime-api\.js["']/],
+  },
+  {
+    path: bundledPluginFile("telegram", "src/token.ts"),
+    forbiddenPatterns: [/["']\.\.\/runtime-api\.js["']/],
+  },
+  {
+    path: bundledPluginFile("imessage", "src/shared.ts"),
     forbiddenPatterns: [/["']openclaw\/plugin-sdk\/imessage["']/, /plugin-sdk-internal\/imessage/],
   },
   {
-    path: "extensions/whatsapp/src/shared.ts",
+    path: bundledPluginFile("whatsapp", "src/shared.ts"),
     forbiddenPatterns: [/["']openclaw\/plugin-sdk\/whatsapp["']/, /plugin-sdk-internal\/whatsapp/],
   },
   {
-    path: "extensions/signal/src/shared.ts",
+    path: bundledPluginFile("signal", "src/shared.ts"),
     forbiddenPatterns: [/["']openclaw\/plugin-sdk\/signal["']/, /plugin-sdk-internal\/signal/],
   },
   {
-    path: "extensions/signal/src/runtime-api.ts",
+    path: bundledPluginFile("signal", "src/runtime-api.ts"),
     forbiddenPatterns: [/["']openclaw\/plugin-sdk\/signal["']/, /plugin-sdk-internal\/signal/],
   },
 ];
 
 const SETUP_BARREL_GUARDS: GuardedSource[] = [
   {
-    path: "extensions/signal/src/setup-core.ts",
+    path: bundledPluginFile("signal", "src/setup-core.ts"),
     forbiddenPatterns: [/\bformatCliCommand\b/, /\bformatDocsLink\b/],
   },
   {
-    path: "extensions/signal/src/setup-surface.ts",
+    path: bundledPluginFile("signal", "src/setup-surface.ts"),
     forbiddenPatterns: [
       /\bdetectBinary\b/,
       /\binstallSignalCli\b/,
@@ -83,36 +141,43 @@ const SETUP_BARREL_GUARDS: GuardedSource[] = [
     ],
   },
   {
-    path: "extensions/slack/src/setup-core.ts",
+    path: bundledPluginFile("slack", "src/setup-core.ts"),
     forbiddenPatterns: [/\bformatDocsLink\b/],
   },
   {
-    path: "extensions/slack/src/setup-surface.ts",
+    path: bundledPluginFile("slack", "src/setup-surface.ts"),
     forbiddenPatterns: [/\bformatDocsLink\b/],
   },
   {
-    path: "extensions/discord/src/setup-core.ts",
+    path: bundledPluginFile("discord", "src/setup-core.ts"),
     forbiddenPatterns: [/\bformatDocsLink\b/],
   },
   {
-    path: "extensions/discord/src/setup-surface.ts",
+    path: bundledPluginFile("discord", "src/setup-surface.ts"),
     forbiddenPatterns: [/\bformatDocsLink\b/],
   },
   {
-    path: "extensions/imessage/src/setup-core.ts",
+    path: bundledPluginFile("imessage", "src/setup-core.ts"),
     forbiddenPatterns: [/\bformatDocsLink\b/],
   },
   {
-    path: "extensions/imessage/src/setup-surface.ts",
+    path: bundledPluginFile("imessage", "src/setup-surface.ts"),
     forbiddenPatterns: [/\bdetectBinary\b/, /\bformatDocsLink\b/],
   },
   {
-    path: "extensions/telegram/src/setup-core.ts",
+    path: bundledPluginFile("telegram", "src/setup-core.ts"),
     forbiddenPatterns: [/\bformatCliCommand\b/, /\bformatDocsLink\b/],
   },
   {
-    path: "extensions/whatsapp/src/setup-surface.ts",
+    path: bundledPluginFile("whatsapp", "src/setup-surface.ts"),
     forbiddenPatterns: [/\bformatCliCommand\b/, /\bformatDocsLink\b/],
+  },
+];
+
+const CHANNEL_CONFIG_SCHEMA_GUARDS: GuardedSource[] = [
+  {
+    path: bundledPluginFile("tlon", "src/config-schema.ts"),
+    forbiddenPatterns: [/["']openclaw\/plugin-sdk\/core["']/],
   },
 ];
 
@@ -135,9 +200,11 @@ const LOCAL_EXTENSION_API_BARREL_GUARDS = [
   "msteams",
   "nextcloud-talk",
   "nostr",
+  "ollama",
   "open-prose",
   "phone-control",
   "copilot-proxy",
+  "sglang",
   "zai",
   "signal",
   "synology-chat",
@@ -146,16 +213,18 @@ const LOCAL_EXTENSION_API_BARREL_GUARDS = [
   "thread-ownership",
   "tlon",
   "voice-call",
+  "vllm",
   "whatsapp",
   "twitch",
+  "xai",
   "zalo",
   "zalouser",
 ] as const;
 
 const LOCAL_EXTENSION_API_BARREL_EXCEPTIONS = [
   // Direct import avoids a circular init path:
-  // accounts.ts -> runtime-api.ts -> src/plugin-sdk/matrix -> extensions/matrix/api.ts -> accounts.ts
-  "extensions/matrix/src/matrix/accounts.ts",
+  // accounts.ts -> runtime-api.ts -> src/plugin-sdk/matrix -> plugin api barrel -> accounts.ts
+  bundledPluginFile("matrix", "src/matrix/accounts.ts"),
 ] as const;
 
 const sourceTextCache = new Map<string, string>();
@@ -344,7 +413,9 @@ function getSourceAnalysis(path: string): SourceAnalysis {
   const analysis = {
     text,
     importSpecifiers,
-    extensionImports: importSpecifiers.filter((specifier) => specifier.includes("extensions/")),
+    extensionImports: importSpecifiers.filter((specifier) =>
+      specifier.includes(BUNDLED_PLUGIN_PATH_PREFIX),
+    ),
   } satisfies SourceAnalysis;
   sourceAnalysisCache.set(fullPath, analysis);
   return analysis;
@@ -356,7 +427,8 @@ function expectOnlyApprovedExtensionSeams(file: string, imports: string[]): void
     const resolved = specifier.startsWith(".")
       ? resolve(dirname(file), specifier).replaceAll("\\", "/")
       : normalized;
-    const extensionId = resolved.match(/extensions\/([^/]+)\//)?.[1] ?? null;
+    const extensionId =
+      resolved.match(new RegExp(`${BUNDLED_PLUGIN_ROOT_DIR}/([^/]+)/`))?.[1] ?? null;
     if (!extensionId || !GUARDED_CHANNEL_EXTENSIONS.has(extensionId)) {
       continue;
     }
@@ -370,7 +442,8 @@ function expectOnlyApprovedExtensionSeams(file: string, imports: string[]): void
 
 function expectNoSiblingExtensionPrivateSrcImports(file: string, imports: string[]): void {
   const normalizedFile = file.replaceAll("\\", "/");
-  const currentExtensionId = normalizedFile.match(/\/extensions\/([^/]+)\//)?.[1] ?? null;
+  const currentExtensionId =
+    normalizedFile.match(new RegExp(`/${BUNDLED_PLUGIN_ROOT_DIR}/([^/]+)/`))?.[1] ?? null;
   if (!currentExtensionId) {
     return;
   }
@@ -384,6 +457,27 @@ function expectNoSiblingExtensionPrivateSrcImports(file: string, imports: string
       continue;
     }
     expect.fail(`${file} should not import another extension's private src, got ${specifier}`);
+  }
+}
+
+function expectNoCrossPluginSdkFacadeImports(file: string, imports: string[]): void {
+  const normalizedFile = file.replaceAll("\\", "/");
+  const currentExtensionId =
+    normalizedFile.match(new RegExp(`/${BUNDLED_PLUGIN_ROOT_DIR}/([^/]+)/`))?.[1] ?? null;
+  if (!currentExtensionId) {
+    return;
+  }
+  for (const specifier of imports) {
+    if (!specifier.startsWith("openclaw/plugin-sdk/")) {
+      continue;
+    }
+    const targetSubpath = specifier.slice("openclaw/plugin-sdk/".length);
+    if (!BUNDLED_EXTENSION_IDS.has(targetSubpath) || targetSubpath === currentExtensionId) {
+      continue;
+    }
+    expect.fail(
+      `${file} should not import another bundled plugin facade, got ${specifier}. Promote shared helpers to a neutral plugin-sdk subpath instead.`,
+    );
   }
 }
 
@@ -404,6 +498,15 @@ describe("channel import guardrails", () => {
         expect(importBlock, `${source.path} setup import should not match ${pattern}`).not.toMatch(
           pattern,
         );
+      }
+    }
+  });
+
+  it("keeps channel config schemas off the broad core sdk barrel", () => {
+    for (const source of CHANNEL_CONFIG_SCHEMA_GUARDS) {
+      const text = readSource(source.path);
+      for (const pattern of source.forbiddenPatterns) {
+        expect(text, `${source.path} should not match ${pattern}`).not.toMatch(pattern);
       }
     }
   });
@@ -430,10 +533,10 @@ describe("channel import guardrails", () => {
     }
   });
 
-  it("keeps core production files off extension private src imports", () => {
+  it("keeps core production files off plugin-private src imports", () => {
     for (const file of collectCoreSourceFiles()) {
       const analysis = getSourceAnalysis(file);
-      expect(analysis.text, `${file} should not import extensions/*/src`).not.toMatch(
+      expect(analysis.text, `${file} should not import plugin-private src paths`).not.toMatch(
         /["'][^"']*extensions\/[^/"']+\/src\//,
       );
     }
@@ -442,6 +545,12 @@ describe("channel import guardrails", () => {
   it("keeps extension production files off other extensions' private src imports", () => {
     for (const file of collectExtensionSourceFiles()) {
       expectNoSiblingExtensionPrivateSrcImports(file, getSourceAnalysis(file).importSpecifiers);
+    }
+  });
+
+  it("keeps extension production files off other bundled plugin sdk facades", () => {
+    for (const file of collectExtensionSourceFiles()) {
+      expectNoCrossPluginSdkFacadeImports(file, getSourceAnalysis(file).importSpecifiers);
     }
   });
 

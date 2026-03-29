@@ -1,11 +1,4 @@
 import { vi } from "vitest";
-import { discordOutbound } from "../../../extensions/discord/test-api.js";
-import { whatsappOutbound } from "../../../extensions/whatsapp/test-api.js";
-import { sendMessageZalo } from "../../../extensions/zalo/test-api.js";
-import {
-  sendMessageZalouser,
-  parseZalouserOutboundTarget,
-} from "../../../extensions/zalouser/test-api.js";
 import type { ReplyPayload } from "../../../src/auto-reply/types.js";
 import {
   createSlackOutboundPayloadHarness,
@@ -13,22 +6,67 @@ import {
   primeChannelOutboundSendMock,
 } from "../../../src/channels/plugins/contracts/suites.js";
 import { createDirectTextMediaOutbound } from "../../../src/channels/plugins/outbound/direct-text-media.js";
+import type { ChannelOutboundAdapter } from "../../../src/channels/plugins/types.js";
 import {
   chunkTextForOutbound as chunkZaloTextForOutbound,
   sendPayloadWithChunkedTextAndMedia as sendZaloPayloadWithChunkedTextAndMedia,
 } from "../../../src/plugin-sdk/zalo.js";
 import { sendPayloadWithChunkedTextAndMedia as sendZalouserPayloadWithChunkedTextAndMedia } from "../../../src/plugin-sdk/zalouser.js";
+import {
+  loadBundledPluginTestApiSync,
+  resolveRelativeBundledPluginPublicModuleId,
+} from "../../../src/test-utils/bundled-plugin-public-surface.js";
 
-vi.mock("../../../extensions/zalo/test-api.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../extensions/zalo/test-api.js")>();
+type ChannelSendResponse = { ok?: boolean; messageId?: string };
+type SendMessageZalo = (
+  to: string,
+  text: string,
+  options: Record<string, unknown>,
+) => Promise<ChannelSendResponse>;
+type SendMessageZalouser = (
+  threadId: string,
+  text: string,
+  options: Record<string, unknown>,
+) => Promise<ChannelSendResponse>;
+type ParseZalouserOutboundTarget = (raw: string) => { threadId: string; isGroup: boolean };
+
+const { discordOutbound } = loadBundledPluginTestApiSync<{
+  discordOutbound: ChannelOutboundAdapter;
+}>("discord");
+const { whatsappOutbound } = loadBundledPluginTestApiSync<{
+  whatsappOutbound: ChannelOutboundAdapter;
+}>("whatsapp");
+const { sendMessageZalo } = loadBundledPluginTestApiSync<{
+  sendMessageZalo: SendMessageZalo;
+}>("zalo");
+const { sendMessageZalouser, parseZalouserOutboundTarget } = loadBundledPluginTestApiSync<{
+  sendMessageZalouser: SendMessageZalouser;
+  parseZalouserOutboundTarget: ParseZalouserOutboundTarget;
+}>("zalouser");
+
+const { zaloTestApiModuleId, zalouserTestApiModuleId } = vi.hoisted(() => ({
+  zaloTestApiModuleId: resolveRelativeBundledPluginPublicModuleId({
+    fromModuleUrl: import.meta.url,
+    pluginId: "zalo",
+    artifactBasename: "test-api.js",
+  }),
+  zalouserTestApiModuleId: resolveRelativeBundledPluginPublicModuleId({
+    fromModuleUrl: import.meta.url,
+    pluginId: "zalouser",
+    artifactBasename: "test-api.js",
+  }),
+}));
+
+vi.mock(zaloTestApiModuleId, async (importOriginal) => {
+  const actual = await importOriginal<object>();
   return {
     ...actual,
     sendMessageZalo: vi.fn().mockResolvedValue({ ok: true, messageId: "zl-1" }),
   };
 });
 
-vi.mock("../../../extensions/zalouser/test-api.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../extensions/zalouser/test-api.js")>();
+vi.mock(zalouserTestApiModuleId, async (importOriginal) => {
+  const actual = await importOriginal<object>();
   return {
     ...actual,
     listZalouserAccountIds: vi.fn(() => ["default"]),
