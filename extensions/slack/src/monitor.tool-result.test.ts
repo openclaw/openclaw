@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { expectPairingReplyText } from "../../../test/helpers/pairing-reply.js";
 import {
   defaultSlackTestConfig,
+  getLastSlackAppOptions,
   getSlackTestState,
   getSlackClient,
   getSlackHandlers,
@@ -253,6 +254,26 @@ describe("monitorSlackProvider tool results", () => {
 
     expect(client.auth.test).not.toHaveBeenCalled();
     expect(getSlackHandlers()?.size ?? 0).toBe(0);
+  });
+
+  it("starts socket mode with Bolt ignoreSelf disabled so reaction events are delivered", async () => {
+    slackTestState.config = {
+      channels: {
+        slack: {
+          enabled: true,
+          mode: "socket",
+          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+        },
+      },
+    };
+
+    await runSlackMessageOnce(monitorSlackProvider, {
+      event: makeSlackMessageEvent(),
+    });
+
+    const options = getLastSlackAppOptions() as { socketMode?: boolean; ignoreSelf?: boolean };
+    expect(options.socketMode).toBe(true);
+    expect(options.ignoreSelf).toBe(false);
   });
 
   it("skips tool summaries with responsePrefix", async () => {

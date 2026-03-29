@@ -308,6 +308,36 @@ describe("config plugin validation", () => {
     expectRemovedPluginWarnings(res, removedId, removedId);
   });
 
+  it("treats bundled provider auto-enable plugin ids as known during validation", async () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        plugins: {
+          allow: ["google"],
+          entries: {
+            google: { enabled: true },
+          },
+        },
+      },
+      {
+        env: {
+          ...suiteEnv(),
+          OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(suiteHome, "missing-bundled-plugins"),
+        },
+      },
+    );
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(
+      res.warnings.some(
+        (warning) =>
+          warning.path.includes("google") && warning.message.includes("plugin not found: google"),
+      ),
+    ).toBe(false);
+  });
+
   it("does not auto-allow config-loaded overrides of bundled web search plugin ids", async () => {
     const res = validateInSuite({
       plugins: {

@@ -1,6 +1,7 @@
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { CHANNEL_IDS, normalizeChatChannelId } from "../channels/registry.js";
+import { BUNDLED_AUTO_ENABLE_PROVIDER_PLUGIN_IDS } from "../plugins/bundled-capability-metadata.js";
 import { withBundledPluginAllowlistCompat } from "../plugins/bundled-compat.js";
 import { listBundledWebSearchPluginIds } from "../plugins/bundled-web-search-ids.js";
 import {
@@ -584,7 +585,10 @@ function validateConfigObjectWithPluginsBase(
   const ensureKnownIds = (): Set<string> => {
     const info = ensureRegistry();
     if (!info.knownIds) {
-      info.knownIds = new Set(info.registry.plugins.map((record) => record.id));
+      info.knownIds = new Set([
+        ...info.registry.plugins.map((record) => record.id),
+        ...Object.values(BUNDLED_AUTO_ENABLE_PROVIDER_PLUGIN_IDS),
+      ]);
     }
     return info.knownIds;
   };
