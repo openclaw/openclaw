@@ -12,7 +12,7 @@ function readManifest(relativePath: string): Manifest {
 }
 
 function parseFloor(range: string): [number, number, number] {
-  const match = /^>=(\d+)\.(\d+)\.(\d+)$/.exec(range);
+  const match = /^>=(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?$/.exec(range);
   if (!match) {
     throw new Error(`Unexpected openclaw peer range format: ${range}`);
   }
@@ -32,6 +32,10 @@ function gteVersion(a: [number, number, number], b: [number, number, number]): b
 }
 
 describe("extension openclaw peer dependency floors", () => {
+  it("parses prerelease peer floors without dropping the patched baseline", () => {
+    expect(parseFloor(">=2026.3.28-beta.1")).toEqual([2026, 3, 28]);
+  });
+
   it("keeps googlechat and memory-core peers in sync at or above the patched floor", () => {
     const manifests = [
       readManifest("extensions/googlechat/package.json"),
