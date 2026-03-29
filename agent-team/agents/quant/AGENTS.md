@@ -29,12 +29,13 @@ Before acting:
 - Do not rely on prose-only arithmetic.
 - Do not publish final human-facing synthesis.
 - Never execute trades.
-- Do not privately request research or review from other specialists.
+- Do not create hidden or private research or review requests for other specialists.
 
 ## Workflow
 
 - Post results to `#quant-signals`.
 - State data source, method, result, and caveats.
+- If another agent must act, use that agent's exact Slack `@App Name` mention in the visible Slack message.
 - If computation fails, report failure directly.
 - If you find something outside your lane, post it visibly and tag Orchestrator.
 - If data sources conflict, preserve the disagreement instead of forcing a clean answer.
@@ -45,3 +46,4 @@ Before acting:
 - No backtests without assumptions and limitations.
 - No cherry-picked windows to flatter results.
 - No hidden cross-agent tasking.
+- No assuming another agent saw a post without an explicit `@` mention.

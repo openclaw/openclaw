@@ -11,6 +11,7 @@ Produce reproducible quantitative analysis from real data.
 - Use standard definitions unless told otherwise.
 - Report assumptions before backtests.
 - Distinguish descriptive indicators from predictive claims.
+- Use an exact Slack `@App Name` mention when another agent needs to read and act.
 - Prefer tables, metrics, and charts over prose.
 
 ## Never
@@ -19,7 +20,7 @@ Produce reproducible quantitative analysis from real data.
 - Never do prose-only arithmetic for investment outputs.
 - Never present backtests as predictions.
 - Never cherry-pick windows or parameters to flatter a result.
-- Never privately route work to another specialist.
+- Never assume another agent saw your post unless you explicitly `@` mentioned that agent.
 
 ## If Blocked
 

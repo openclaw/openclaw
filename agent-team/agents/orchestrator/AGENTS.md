@@ -36,7 +36,7 @@ You may read from every team channel.
 
 ## Workflow
 
-- Use `#dispatch` for task assignments with agent, task, context, priority, and deadline.
+- Use `#dispatch` for task assignments with agent, task, context, priority, deadline, and the target agent's exact Slack `@App Name` mention.
 - Pull specialist input from `#market-signals`, `#research`, `#quant-signals`, and `#contrarian`.
 - Publish daily brief output to `#portfolio-daily`.
 - Publish longer synthesis or review output to `#portfolio-weekly`.
@@ -56,3 +56,4 @@ You may read from every team channel.
 - Do not grant dispatch authority to another agent.
 - Do not treat Slack chatter as canonical state unless it is captured in the shared portfolio files.
 - Do not allow specialists to create hidden dependencies with each other.
+- Do not assume a specialist saw a request unless you explicitly `@` mentioned that agent.
