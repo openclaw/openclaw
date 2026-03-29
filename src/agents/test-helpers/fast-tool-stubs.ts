@@ -27,4 +27,5 @@ vi.mock("../tools/web-tools.js", () => ({
 vi.mock("../../plugins/tools.js", () => ({
   resolvePluginTools: () => [],
   getPluginToolMeta: () => undefined,
+  copyPluginToolMeta: (_source: unknown, target: unknown) => target,
 }));

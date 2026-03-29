@@ -38,7 +38,7 @@ function runWritePlan(args: string[], input?: string) {
     mkdir: args[4] === "1",
   });
 
-  return spawnSync("sh", ["-c", plan.script, "moltbot-sandbox-fs", ...(plan.args ?? [])], {
+  return spawnSync("sh", ["-c", plan.script, "openclaw-sandbox-fs", ...(plan.args ?? [])], {
     input,
     encoding: "utf8",
     stdio: ["pipe", "pipe", "pipe"],
