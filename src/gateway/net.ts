@@ -312,13 +312,29 @@ export async function resolveGatewayListenHosts(
   bindHost: string,
   opts?: { canBindToHost?: (host: string) => Promise<boolean> },
 ): Promise<string[]> {
-  if (bindHost !== "127.0.0.1") {
+  // If bindHost is not loopback IPv4, keep existing logic
+  if (bindHost !== "127.0.0.1" && bindHost !== "0.0.0.0") {
     return [bindHost];
   }
+
   const canBind = opts?.canBindToHost ?? canBindToHost;
-  if (await canBind("::1")) {
-    return [bindHost, "::1"];
+
+  // For 0.0.0.0 (bind all IPv4), also try to bind to :: (all IPv6) if available
+  if (bindHost === "0.0.0.0") {
+    if (await canBind("::")) {
+      return ["0.0.0.0", "::"];
+    }
+    return ["0.0.0.0"];
   }
+
+  // For 127.0.0.1, try to add ::1 for IPv6 loopback
+  if (bindHost === "127.0.0.1") {
+    if (await canBind("::1")) {
+      return [bindHost, "::1"];
+    }
+    return [bindHost];
+  }
+
   return [bindHost];
 }
 

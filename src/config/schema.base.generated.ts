@@ -513,6 +513,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
             type: "string",
             pattern: "^#?[0-9a-fA-F]{6}$",
           },
+          userAvatar: {
+            type: "string",
+            maxLength: 200,
+          },
           assistant: {
             type: "object",
             properties: {

@@ -28,6 +28,7 @@ describe("handleControlUiHttpRequest", () => {
       assistantName: string;
       assistantAvatar: string;
       assistantAgentId: string;
+      userAvatar?: string | null;
     };
   }
 
@@ -223,6 +224,31 @@ describe("handleControlUiHttpRequest", () => {
         expect(parsed.assistantName).toBe("Ops");
         expect(parsed.assistantAvatar).toBe("/openclaw/avatar/main");
         expect(parsed.assistantAgentId).toBe("main");
+      },
+    });
+  });
+
+  it("includes userAvatar in bootstrap config when set", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { res, end } = makeMockHttpResponse();
+        const handled = handleControlUiHttpRequest(
+          { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
+          res,
+          {
+            root: { kind: "resolved", path: tmp },
+            config: {
+              agents: { defaults: { workspace: tmp } },
+              ui: {
+                assistant: { name: "Assistant", avatar: "assistant.png" },
+                userAvatar: "user-custom.png",
+              },
+            },
+          },
+        );
+        expect(handled).toBe(true);
+        const parsed = parseBootstrapPayload(end);
+        expect(parsed.userAvatar).toBe("user-custom.png");
       },
     });
   });

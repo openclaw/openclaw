@@ -13,6 +13,7 @@ import {
 const MAX_ASSISTANT_NAME = 50;
 const MAX_ASSISTANT_AVATAR = 200;
 const MAX_ASSISTANT_EMOJI = 16;
+const MAX_USER_AVATAR = 200;
 
 export const DEFAULT_ASSISTANT_IDENTITY: AssistantIdentity = {
   agentId: "main",
@@ -115,4 +116,21 @@ export function resolveAssistantIdentity(params: {
   const emoji = emojiCandidates.map((candidate) => normalizeEmojiValue(candidate)).find(Boolean);
 
   return { agentId, name, avatar, emoji };
+}
+
+/**
+ * Resolve user avatar from config.ui.userAvatar.
+ * Validates the avatar value using the same policy as assistant avatars.
+ *
+ * @param cfg - OpenClaw configuration
+ * @returns User avatar string if valid, otherwise null
+ */
+export function resolveUserAvatar(cfg: OpenClawConfig): string | null {
+  const raw = cfg.ui?.userAvatar;
+  if (!raw) {
+    return null;
+  }
+  const coerced = coerceIdentityValue(raw, MAX_USER_AVATAR);
+  const normalized = normalizeAvatarValue(coerced);
+  return normalized ?? null;
 }

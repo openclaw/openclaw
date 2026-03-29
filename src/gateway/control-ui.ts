@@ -11,7 +11,7 @@ import { isWithinDir } from "../infra/path-safety.js";
 import { openVerifiedFileSync } from "../infra/safe-open-sync.js";
 import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
-import { DEFAULT_ASSISTANT_IDENTITY, resolveAssistantIdentity } from "./assistant-identity.js";
+import { DEFAULT_ASSISTANT_IDENTITY, resolveAssistantIdentity, resolveUserAvatar } from "./assistant-identity.js";
 import {
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
   type ControlUiBootstrapConfig,
@@ -354,6 +354,7 @@ export function handleControlUiHttpRequest(
       agentId: identity.agentId,
       basePath,
     });
+    const userAvatar = config ? resolveUserAvatar(config) : null;
     if (req.method === "HEAD") {
       res.statusCode = 200;
       res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -366,6 +367,7 @@ export function handleControlUiHttpRequest(
       assistantName: identity.name,
       assistantAvatar: avatarValue ?? identity.avatar,
       assistantAgentId: identity.agentId,
+      userAvatar,
       serverVersion: resolveRuntimeServiceVersion(process.env),
     } satisfies ControlUiBootstrapConfig);
     return true;
