@@ -36,6 +36,7 @@ Docs: https://docs.openclaw.ai
 - Telegram/polling: keep the watchdog from aborting long-running reply delivery by treating recent non-polling API activity as bounded liveness instead of a hard stall. (#56343) Thanks @openperf.
 - Memory/FTS: keep provider-less keyword hits visible at the default memory-search threshold, so FTS-only recall works without requiring `--min-score 0`. (#56473) Thanks @opriz.
 - Memory/LanceDB: resolve runtime dependency manifest lookup from the bundled `extensions/memory-lancedb` path (including flattened dist chunks) so startup no longer fails with a missing `@lancedb/lancedb` dependency error. (#56623) Thanks @LUKSOAgent.
+- Tools/web_search: localize the shared search cache to module scope so same-process global symbol lookups can no longer inspect or mutate cached web-search responses. Thanks @vincentkoc.
 
 ## 2026.3.28
 
@@ -313,7 +314,6 @@ Docs: https://docs.openclaw.ai
 - Security/bash stop: route `/bash stop` through the hardened process-tree killer so invalid or attacker-influenced SIGKILL targets cannot escape the intended bash-session scope.
 - Security/installer: hide staged project `.npmrc` files during skill and package installs so npm registry and git settings inside the stage directory cannot hijack trusted installs.
 - Agents/tool-call repair: recover malformed Kimi/OpenRouter tool-call argument streams when provider preambles appear before JSON payloads, and fail closed on non-tool leading text so fragment strings do not leak into filesystem path arguments during sub-agent runs. (#56560) Thanks @Originalwhite.
-- Tools/web_search: localize the shared search cache to module scope so same-process global symbol lookups can no longer inspect or mutate cached web-search responses. Thanks @vincentkoc.
 
 ## 2026.3.23
 
