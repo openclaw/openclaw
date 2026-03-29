@@ -3,7 +3,10 @@ import { redactSecrets, truncate } from "./sanitize.js";
 export type JiraErrorCode =
   | "jira_timeout"
   | "jira_rate_limited"
-  | "jira_auth_failed"
+  | "jira_unauthorized"
+  | "jira_forbidden"
+  | "jira_not_found"
+  | "jira_conflict"
   | "jira_request_failed"
   | "jira_validation_failed"
   | "jira_polling_timeout";
@@ -67,4 +70,3 @@ export function normalizeJiraError(
     }),
   };
 }
-

@@ -68,8 +68,94 @@ describe("jira client", () => {
     const client = new JiraCloudClient(buildConfig(), { fetchImpl: fetchImpl as never });
 
     await expect(client.request("/rest/api/3/myself")).rejects.toMatchObject({
-      code: "jira_auth_failed",
+      code: "jira_unauthorized",
       status: 401,
+    });
+  });
+
+  it("maps 403, 404 and 409 with explicit codes", async () => {
+    const run = async (status: number) => {
+      const fetchImpl = vi.fn(async () => {
+        return new Response(JSON.stringify({ errorMessages: ["failure"] }), {
+          status,
+          headers: { "content-type": "application/json" },
+        });
+      });
+      const client = new JiraCloudClient(buildConfig({ retryCount: 0 }), {
+        fetchImpl: fetchImpl as never,
+      });
+      try {
+        await client.request("/rest/api/3/issue/OPS-1");
+      } catch (error) {
+        return error as { code?: string; status?: number };
+      }
+      throw new Error("Expected request to fail");
+    };
+
+    await expect(run(403)).resolves.toMatchObject({ code: "jira_forbidden", status: 403 });
+    await expect(run(404)).resolves.toMatchObject({ code: "jira_not_found", status: 404 });
+    await expect(run(409)).resolves.toMatchObject({ code: "jira_conflict", status: 409 });
+  });
+
+  it("uses retry-after when 429 provides it", async () => {
+    const sleep = vi.fn(async () => {});
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ errorMessages: ["slow down"] }), {
+          status: 429,
+          headers: { "content-type": "application/json", "retry-after": "2" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    const client = new JiraCloudClient(buildConfig(), {
+      fetchImpl: fetchImpl as never,
+      sleep,
+    });
+    await client.request("/rest/api/3/project/search");
+    expect(sleep).toHaveBeenCalledWith(2000);
+  });
+
+  it("applies fallback backoff when 429 has no retry-after", async () => {
+    const sleep = vi.fn(async () => {});
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ errorMessages: ["slow down"] }), {
+          status: 429,
+          headers: { "content-type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+    const client = new JiraCloudClient(buildConfig(), {
+      fetchImpl: fetchImpl as never,
+      sleep,
+    });
+    await client.request("/rest/api/3/project/search");
+    const firstSleepArg = (sleep.mock.calls as unknown as Array<[number]>)[0]?.[0];
+    expect(Number(firstSleepArg)).toBeGreaterThanOrEqual(250);
+  });
+
+  it("maps timeout errors explicitly", async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new DOMException("timed out", "AbortError");
+    });
+    const client = new JiraCloudClient(buildConfig({ retryCount: 0 }), {
+      fetchImpl: fetchImpl as never,
+    });
+
+    await expect(client.request("/rest/api/3/myself")).rejects.toMatchObject({
+      code: "jira_timeout",
     });
   });
 });

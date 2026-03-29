@@ -124,17 +124,41 @@ export class JiraCloudClient {
 
   private async buildHttpError(response: Response, retryable: boolean): Promise<JiraApiError> {
     const detail = await this.readResponseDetail(response);
-    if (response.status === 401 || response.status === 403) {
+    if (response.status === 401) {
       return new JiraApiError(
-        `Jira authentication failed (${response.status}).`,
-        "jira_auth_failed",
+        "Jira authentication failed (401 Unauthorized). Verify email/apiToken.",
+        "jira_unauthorized",
         response.status,
         false,
       );
     }
-    if (response.status === 400 || response.status === 404 || response.status === 409) {
+    if (response.status === 403) {
       return new JiraApiError(
-        `Jira validation failed (${response.status}): ${detail}`,
+        "Jira request forbidden (403). The account is authenticated but lacks permissions.",
+        "jira_forbidden",
+        response.status,
+        false,
+      );
+    }
+    if (response.status === 404) {
+      return new JiraApiError(
+        `Jira resource not found (404): ${detail}`,
+        "jira_not_found",
+        response.status,
+        false,
+      );
+    }
+    if (response.status === 409) {
+      return new JiraApiError(
+        `Jira conflict (409): ${detail}`,
+        "jira_conflict",
+        response.status,
+        false,
+      );
+    }
+    if (response.status === 400) {
+      return new JiraApiError(
+        `Jira validation failed (400): ${detail}`,
         "jira_validation_failed",
         response.status,
         false,
@@ -192,10 +216,17 @@ export class JiraCloudClient {
     if (retryAfter) {
       const asNumber = Number(retryAfter);
       if (Number.isFinite(asNumber) && asNumber > 0) {
-        return Math.min(2_000, Math.floor(asNumber * 1_000));
+        return Math.min(10_000, Math.floor(asNumber * 1_000));
+      }
+      const asDate = Date.parse(retryAfter);
+      if (!Number.isNaN(asDate)) {
+        const delta = asDate - Date.now();
+        if (delta > 0) {
+          return Math.min(10_000, delta);
+        }
       }
     }
-    return Math.min(2_000, 200 * 2 ** Math.max(0, attempt - 1));
+    return Math.min(10_000, 250 * 2 ** Math.max(0, attempt - 1));
   }
 
   private isRetryableTransportError(error: unknown): boolean {
@@ -216,4 +247,3 @@ export class JiraCloudClient {
     );
   }
 }
-

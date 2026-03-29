@@ -38,8 +38,6 @@
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "required": ["email", "apiToken"],
-    "anyOf": [{ "required": ["siteUrl"] }, { "required": ["baseUrl"] }],
     "properties": {
       "siteUrl": {
         "type": "string",

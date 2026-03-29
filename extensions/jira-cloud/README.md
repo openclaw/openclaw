@@ -81,6 +81,13 @@ The plugin registers these tools:
 - Assign issues.
 - Fetch minimal create metadata.
 
+## Text Field Handling (ADF)
+
+- `summary` is sent as a plain Jira string field.
+- `description` (issue create) is converted from plain text to minimal Atlassian Document Format (ADF).
+- `comment` (add comment and optional transition comment) is converted from plain text to minimal ADF.
+- The plugin intentionally supports only conservative/minimal ADF generation, not arbitrary complex ADF payload composition.
+
 ## Security and Hardening
 
 - Fail-closed when required credentials are missing.
@@ -93,5 +100,15 @@ The plugin registers these tools:
 ## Known Limits
 
 - Metadata endpoints differ across Jira Cloud tenants; this plugin uses a conservative subset and returns best-effort metadata.
+- `jira_get_create_metadata` is explicitly best-effort: some tenants/permission sets return partial metadata; in that case the tool returns stable partial output plus warnings.
 - Custom fields are not fully modeled by static types and are returned as generic field payloads where needed.
 - Issue description/comment bodies are sent as plain-text ADF documents.
+
+## Common Error Outcomes
+
+- `401 Unauthorized`: invalid credentials or token mismatch.
+- `403 Forbidden`: authenticated but lacking permission in project/resource.
+- `404 Not Found`: issue/project/resource not found or not visible.
+- `409 Conflict`: workflow/state conflict (for example transitions).
+- `429 Too Many Requests`: rate limit; retry uses conservative backoff and honors `Retry-After` when available.
+- `timeout/transient`: normalized to consistent upstream timeout/request-failed errors.

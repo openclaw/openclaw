@@ -4,11 +4,14 @@ import { JiraApiError, normalizeJiraError, sanitizeJiraErrorMessage } from "./er
 describe("jira errors", () => {
   it("sanitizes token and authorization values", () => {
     const message = sanitizeJiraErrorMessage({
-      message: "failed with token super-secret and Authorization: Basic abc123",
+      message:
+        "failed with token super-secret and Authorization: Basic abc123 and Authorization: Bearer my-token and x-api-key: key-123",
       secrets: ["super-secret"],
     });
     expect(message).not.toContain("super-secret");
     expect(message).not.toContain("abc123");
+    expect(message).not.toContain("my-token");
+    expect(message).not.toContain("key-123");
     expect(message).toContain("[REDACTED]");
   });
 
@@ -33,5 +36,16 @@ describe("jira errors", () => {
     expect(payload.code).toBe("jira_validation_failed");
     expect(payload.retryable).toBe(false);
   });
-});
 
+  it("redacts embedded basic token and apiToken in upstream-like text", () => {
+    const payload = normalizeJiraError(
+      new Error("upstream echoed Authorization: Basic ZXhhbXBsZTpzZWNyZXQ= apiToken=abc123"),
+      {
+        secrets: ["abc123"],
+      },
+    );
+    expect(payload.message).not.toContain("ZXhhbXBsZTpzZWNyZXQ=");
+    expect(payload.message).not.toContain("abc123");
+    expect(payload.message).toContain("[REDACTED]");
+  });
+});

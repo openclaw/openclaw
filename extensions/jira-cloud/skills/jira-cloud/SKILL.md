@@ -37,6 +37,8 @@ Use this skill when the user asks to work with Jira Cloud issues, projects, comm
 - Before mutating Jira state (create/comment/transition/assign), summarize planned action and confirm.
 - If user intent is unclear, ask one precise clarification question before writing.
 - Prefer bounded result sets and concise summaries for large searches.
+- Draft before create: propose summary/description/labels/priority first, then execute only after confirmation.
+- Do not assume create metadata is complete; treat `jira_get_create_metadata` as best-effort and proceed with explicit fallback questions when fields are missing.
 
 ## Tool Selection Guide
 
@@ -48,6 +50,13 @@ Use this skill when the user asks to work with Jira Cloud issues, projects, comm
 - "Comment on OPS-123" -> `jira_add_comment`
 - "Move OPS-123 to In Progress" -> `jira_list_transitions` then `jira_transition_issue`
 - "Assign OPS-123 to account X" -> `jira_assign_issue`
+
+## Error Interpretation Quick Guide
+
+- `403` -> permission problem, not credential format.
+- `404` -> issue/project/resource does not exist or is not visible to current account.
+- `409` -> state/workflow conflict; re-check transitions/current status.
+- `429` -> rate-limited; wait/retry conservatively, avoid rapid retries.
 
 ## Good Usage Examples
 

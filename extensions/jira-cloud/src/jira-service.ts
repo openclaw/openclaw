@@ -1,5 +1,7 @@
 import { DEFAULT_SEARCH_FIELDS } from "./config.js";
 import type { JiraCloudClient } from "./client.js";
+import { JiraApiError } from "./errors.js";
+import { toMinimalAdfTextDocument } from "./adf.js";
 
 export type JiraIssueSummary = {
   id?: string;
@@ -17,19 +19,6 @@ type JiraIssueLike = {
   key?: string;
   fields?: Record<string, unknown>;
 };
-
-function toAdfDocument(text: string): Record<string, unknown> {
-  return {
-    type: "doc",
-    version: 1,
-    content: [
-      {
-        type: "paragraph",
-        content: [{ type: "text", text }],
-      },
-    ],
-  };
-}
 
 function readString(value: unknown): string | undefined {
   if (typeof value !== "string") {
@@ -59,6 +48,92 @@ function summarizeIssue(issue: JiraIssueLike): JiraIssueSummary {
 
 function safeIssueUrl(siteUrl: string, issueKey: string): string {
   return `${siteUrl}/browse/${issueKey}`;
+}
+
+function summarizeAllowedValue(value: unknown): string {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const asRecord = value as Record<string, unknown>;
+    const fromValue = readString(asRecord.value);
+    if (fromValue) {
+      return fromValue;
+    }
+    const fromName = readString(asRecord.name);
+    if (fromName) {
+      return fromName;
+    }
+    const fromId = readString(asRecord.id);
+    if (fromId) {
+      return fromId;
+    }
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  return String(value);
+}
+
+function summarizeMetadataFields(fields: unknown) {
+  if (!fields || typeof fields !== "object" || Array.isArray(fields)) {
+    return [];
+  }
+  return Object.entries(fields as Record<string, unknown>).map(([id, raw]) => {
+    const field = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+    const fieldRecord = field as Record<string, unknown>;
+    const allowedValues = Array.isArray(fieldRecord.allowedValues)
+      ? fieldRecord.allowedValues.slice(0, 10).map(summarizeAllowedValue)
+      : [];
+    const schema = fieldRecord.schema;
+    const schemaRecord =
+      schema && typeof schema === "object" && !Array.isArray(schema)
+        ? (schema as Record<string, unknown>)
+        : undefined;
+    return {
+      id,
+      name: readString(fieldRecord.name) ?? id,
+      required: fieldRecord.required === true,
+      schemaType: readString(schemaRecord?.type) ?? readString(schemaRecord?.custom),
+      hasAllowedValues: allowedValues.length > 0,
+      allowedValues,
+    };
+  });
+}
+
+async function requestCreateIssueTypesBestEffort(client: JiraCloudClient, projectKey: string) {
+  try {
+    return await client.request<{
+      issueTypes?: Array<{ id?: string; name?: string; subtask?: boolean; description?: string }>;
+    }>(`/rest/api/3/issue/createmeta/${encodeURIComponent(projectKey)}/issuetypes`);
+  } catch (error) {
+    if (
+      error instanceof JiraApiError &&
+      (error.code === "jira_forbidden" || error.code === "jira_not_found")
+    ) {
+      return { issueTypes: [] };
+    }
+    throw error;
+  }
+}
+
+async function requestCreateIssueTypeDetailBestEffort(
+  client: JiraCloudClient,
+  projectKey: string,
+  issueTypeId: string,
+) {
+  try {
+    return await client.request<Record<string, unknown>>(
+      `/rest/api/3/issue/createmeta/${encodeURIComponent(projectKey)}/issuetypes/${encodeURIComponent(
+        issueTypeId,
+      )}`,
+    );
+  } catch (error) {
+    if (
+      error instanceof JiraApiError &&
+      (error.code === "jira_forbidden" || error.code === "jira_not_found")
+    ) {
+      return null;
+    }
+    throw error;
+  }
 }
 
 export function createJiraService(client: JiraCloudClient) {
@@ -162,7 +237,7 @@ export function createJiraService(client: JiraCloudClient) {
         summary: params.summary,
       };
       if (params.description) {
-        fields.description = toAdfDocument(params.description);
+        fields.description = toMinimalAdfTextDocument(params.description);
       }
       if (params.priority) {
         fields.priority = { name: params.priority };
@@ -194,7 +269,7 @@ export function createJiraService(client: JiraCloudClient) {
     async addComment(issueKey: string, comment: string) {
       const payload = await client.request<{ id?: string }>("/rest/api/3/issue/" + encodeURIComponent(issueKey) + "/comment", {
         method: "POST",
-        body: { body: toAdfDocument(comment) },
+        body: { body: toMinimalAdfTextDocument(comment) },
       });
       const commentId = readString(payload.id);
       return {
@@ -226,7 +301,7 @@ export function createJiraService(client: JiraCloudClient) {
       };
       if (params.comment) {
         body.update = {
-          comment: [{ add: { body: toAdfDocument(params.comment) } }],
+          comment: [{ add: { body: toMinimalAdfTextDocument(params.comment) } }],
         };
       }
       await client.request<void>(`/rest/api/3/issue/${encodeURIComponent(params.issueKey)}/transitions`, {
@@ -256,14 +331,26 @@ export function createJiraService(client: JiraCloudClient) {
 
     async getCreateMetadata(params: { projectKey?: string; issueType?: string }) {
       const projectKey = params.projectKey;
+      const warnings: string[] = [];
+      const projectsPayload = await client.request<{
+        values?: Array<{ id?: string; key?: string; name?: string }>;
+      }>("/rest/api/3/project/search", {
+        query: { maxResults: 25 },
+      });
+      const projects = (projectsPayload.values ?? []).map((project) => ({
+        id: readString(project.id),
+        key: readString(project.key),
+        name: readString(project.name),
+      }));
+
       const issueTypesPayload = projectKey
-        ? await client.request<{ issueTypes?: Array<{ id?: string; name?: string }> }>(
-            `/rest/api/3/issue/createmeta/${encodeURIComponent(projectKey)}/issuetypes`,
-          )
+        ? await requestCreateIssueTypesBestEffort(client, projectKey)
         : { issueTypes: [] };
       const issueTypes = (issueTypesPayload.issueTypes ?? []).map((issueType) => ({
         id: readString(issueType.id),
         name: readString(issueType.name),
+        subtask: issueType.subtask === true,
+        description: readString(issueType.description),
       }));
 
       let issueTypeFields: unknown = undefined;
@@ -274,20 +361,37 @@ export function createJiraService(client: JiraCloudClient) {
             entry.name?.toLowerCase() === params.issueType?.toLowerCase(),
         );
         if (matchedIssueType?.id) {
-          issueTypeFields = await client.request<Record<string, unknown>>(
-            `/rest/api/3/issue/createmeta/${encodeURIComponent(projectKey)}/issuetypes/${encodeURIComponent(
-              matchedIssueType.id,
-            )}`,
+          issueTypeFields = await requestCreateIssueTypeDetailBestEffort(
+            client,
+            projectKey,
+            matchedIssueType.id,
           );
+          if (!issueTypeFields) {
+            warnings.push(
+              "Issue type metadata was not fully available for this tenant or permission set.",
+            );
+          }
+        } else {
+          warnings.push("Requested issueType was not found in current create metadata response.");
         }
+      } else if (projectKey && issueTypes.length === 0) {
+        warnings.push(
+          "Create metadata for issue types is not available for this project in this tenant context.",
+        );
       }
 
       return {
+        bestEffort: true,
         projectKey,
+        projects,
         issueTypes,
-        issueTypeFields,
+        fields: summarizeMetadataFields(
+          issueTypeFields && typeof issueTypeFields === "object"
+            ? (issueTypeFields as Record<string, unknown>).fields
+            : undefined,
+        ),
+        warnings,
       };
     },
   };
 }
-
