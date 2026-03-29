@@ -108,6 +108,9 @@ function buildBundledHookEntries(): Record<string, string> {
 }
 
 const bundledHookEntries = buildBundledHookEntries();
+const bundledPluginRoot = (pluginId: string) => ["extensions", pluginId].join("/");
+const bundledPluginFile = (pluginId: string, relativePath: string) =>
+  `${bundledPluginRoot(pluginId)}/${relativePath}`;
 
 function buildCoreDistEntries(): Record<string, string> {
   return {
@@ -115,20 +118,19 @@ function buildCoreDistEntries(): Record<string, string> {
     entry: "src/entry.ts",
     // Ensure this module is bundled as an entry so legacy CLI shims can resolve its exports.
     "cli/daemon-cli": "src/cli/daemon-cli.ts",
-    // Ensure memory-cli is a stable entry so the runtime tools plugin can import
-    // it by a deterministic path instead of a content-hashed chunk name.
-    // See https://github.com/openclaw/openclaw/issues/51676
-    "cli/memory-cli": "src/cli/memory-cli.ts",
     // Keep long-lived lazy runtime boundaries on stable filenames so rebuilt
     // dist/ trees do not strand already-running gateways on stale hashed chunks.
     "agents/auth-profiles.runtime": "src/agents/auth-profiles.runtime.ts",
     "agents/pi-model-discovery-runtime": "src/agents/pi-model-discovery-runtime.ts",
     "commands/status.summary.runtime": "src/commands/status.summary.runtime.ts",
     "plugins/provider-runtime.runtime": "src/plugins/provider-runtime.runtime.ts",
+    "plugins/runtime/runtime-image-generation.runtime":
+      "src/plugins/runtime/runtime-image-generation.runtime.ts",
+    "plugins/runtime/runtime-line.contract": "src/plugins/runtime/runtime-line.contract.ts",
     extensionAPI: "src/extensionAPI.ts",
     "infra/warning-filter": "src/infra/warning-filter.ts",
-    "telegram/audit": "extensions/telegram/src/audit.ts",
-    "telegram/token": "extensions/telegram/src/token.ts",
+    "telegram/audit": bundledPluginFile("telegram", "src/audit.ts"),
+    "telegram/token": bundledPluginFile("telegram", "src/token.ts"),
     "plugins/build-smoke-entry": "src/plugins/build-smoke-entry.ts",
     "plugins/runtime/index": "src/plugins/runtime/index.ts",
     "llm-slug-generator": "src/hooks/llm-slug-generator.ts",
@@ -159,7 +161,7 @@ export default defineConfig([
     // and bundled hooks in one graph so runtime singletons are emitted once.
     entry: buildUnifiedDistEntries(),
     deps: {
-      neverBundle: ["@lancedb/lancedb"],
+      neverBundle: ["@lancedb/lancedb", "@matrix-org/matrix-sdk-crypto-nodejs", "matrix-js-sdk"],
     },
   }),
 ]);

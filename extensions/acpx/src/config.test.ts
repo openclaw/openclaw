@@ -4,6 +4,10 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
+  bundledDistPluginRootAt,
+  bundledPluginRootAt,
+} from "../../../test/helpers/bundled-plugin-paths.js";
+import {
   ACPX_BUNDLED_BIN,
   ACPX_PINNED_VERSION,
   createAcpxPluginConfigSchema,
@@ -39,10 +43,10 @@ describe("acpx plugin config parsing", () => {
     }
   });
 
-  it("prefers the workspace plugin root for dist/extensions/acpx bundles", () => {
+  it("prefers the workspace plugin root for dist plugin bundles", () => {
     const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "acpx-root-workspace-"));
-    const workspacePluginRoot = path.join(repoRoot, "extensions", "acpx");
-    const bundledPluginRoot = path.join(repoRoot, "dist", "extensions", "acpx");
+    const workspacePluginRoot = bundledPluginRootAt(repoRoot, "acpx");
+    const bundledPluginRoot = bundledDistPluginRootAt(repoRoot, "acpx");
     try {
       fs.mkdirSync(workspacePluginRoot, { recursive: true });
       fs.mkdirSync(bundledPluginRoot, { recursive: true });
@@ -186,5 +190,13 @@ describe("acpx plugin config parsing", () => {
         workspaceDir: "/tmp/workspace",
       }),
     ).toThrow("strictWindowsCmdWrapper must be a boolean");
+  });
+
+  it("keeps the runtime json schema in sync with the manifest config schema", () => {
+    const manifest = JSON.parse(
+      fs.readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"),
+    ) as { configSchema?: unknown };
+
+    expect(createAcpxPluginConfigSchema().jsonSchema).toEqual(manifest.configSchema);
   });
 });

@@ -13,7 +13,7 @@ export {
 export {
   resolveWhatsAppGroupRequireMention,
   resolveWhatsAppGroupToolPolicy,
-} from "../../extensions/whatsapp/api.js";
+} from "./whatsapp-surface.js";
 export { resolveWhatsAppGroupIntroHint } from "../channels/plugins/whatsapp-shared.js";
 export {
   ToolAuthorizationError,
@@ -23,5 +23,5 @@ export {
   readStringParam,
 } from "../agents/tools/common.js";
 export { WhatsAppConfigSchema } from "../config/zod-schema.providers-whatsapp.js";
-export { resolveWhatsAppOutboundTarget } from "../../extensions/whatsapp/src/resolve-outbound-target.js";
+export { resolveWhatsAppOutboundTarget } from "./whatsapp-surface.js";
 export { normalizeE164 } from "../utils.js";

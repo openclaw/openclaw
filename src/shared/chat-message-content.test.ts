@@ -10,6 +10,14 @@ describe("shared/chat-message-content", () => {
     ).toBe("hello");
   });
 
+  it("returns plain string content", () => {
+    expect(
+      extractFirstTextBlock({
+        content: "hello from string content",
+      }),
+    ).toBe("hello from string content");
+  });
+
   it("preserves empty-string text in the first block", () => {
     expect(
       extractFirstTextBlock({

@@ -3,11 +3,12 @@ import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
+import { bundledPluginFile } from "../../test/helpers/bundled-plugin-paths.js";
 
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
-  "extensions/discord/runtime-api.ts": [
+  [bundledPluginFile("discord", "runtime-api.ts")]: [
     'export * from "./src/audit.js";',
     'export * from "./src/actions/runtime.js";',
     'export * from "./src/actions/runtime.moderation-shared.js";',
@@ -24,55 +25,68 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     'export * from "./src/probe.js";',
     'export * from "./src/resolve-channels.js";',
     'export * from "./src/resolve-users.js";',
+    'export * from "./src/outbound-session-route.js";',
     'export * from "./src/send.js";',
   ],
-  "extensions/imessage/runtime-api.ts": [
-    'export { DEFAULT_ACCOUNT_ID, PAIRING_APPROVED_MESSAGE, buildComputedAccountStatusSnapshot, buildChannelConfigSchema, collectStatusIssuesFromLastError, formatTrimmedAllowFromEntries, getChatChannelMeta, looksLikeIMessageTargetId, normalizeIMessageMessagingTarget, resolveChannelMediaMaxBytes, resolveIMessageConfigAllowFrom, resolveIMessageConfigDefaultTo, IMessageConfigSchema, type ChannelPlugin, type IMessageAccountConfig } from "openclaw/plugin-sdk/imessage";',
+  [bundledPluginFile("imessage", "runtime-api.ts")]: [
+    'export { DEFAULT_ACCOUNT_ID, PAIRING_APPROVED_MESSAGE, buildComputedAccountStatusSnapshot, buildChannelConfigSchema, chunkTextForOutbound, collectStatusIssuesFromLastError, formatTrimmedAllowFromEntries, getChatChannelMeta, looksLikeIMessageTargetId, normalizeIMessageMessagingTarget, resolveChannelMediaMaxBytes, resolveIMessageConfigAllowFrom, resolveIMessageConfigDefaultTo, IMessageConfigSchema, type ChannelPlugin, type IMessageAccountConfig } from "openclaw/plugin-sdk/imessage";',
     'export { resolveIMessageGroupRequireMention, resolveIMessageGroupToolPolicy } from "./src/group-policy.js";',
     'export { monitorIMessageProvider } from "./src/monitor.js";',
     'export type { MonitorIMessageOpts } from "./src/monitor.js";',
     'export { probeIMessage } from "./src/probe.js";',
+    'export type { IMessageProbe } from "./src/probe.js";',
     'export { sendMessageIMessage } from "./src/send.js";',
   ],
-  "extensions/googlechat/runtime-api.ts": ['export * from "openclaw/plugin-sdk/googlechat";'],
-  "extensions/matrix/runtime-api.ts": [
-    'export * from "./src/auth-precedence.js";',
-    'export * from "./helper-api.js";',
-    'export { assertHttpUrlTargetsPrivateNetwork, closeDispatcher, createPinnedDispatcher, resolvePinnedHostnameWithPolicy, ssrfPolicyFromAllowPrivateNetwork, type LookupFn, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";',
-    'export { setMatrixThreadBindingIdleTimeoutBySessionKey, setMatrixThreadBindingMaxAgeBySessionKey } from "./thread-bindings-runtime.js";',
-    'export { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";',
-    'export type { ChannelDirectoryEntry, ChannelMessageActionContext, OpenClawConfig, PluginRuntime, RuntimeLogger, RuntimeEnv, WizardPrompter } from "openclaw/plugin-sdk/matrix";',
-    'export { formatZonedTimestamp } from "openclaw/plugin-sdk/matrix";',
+  [bundledPluginFile("googlechat", "runtime-api.ts")]: [
+    'export * from "openclaw/plugin-sdk/googlechat";',
   ],
-  "extensions/nextcloud-talk/runtime-api.ts": [
+  [bundledPluginFile("matrix", "runtime-api.ts")]: [
+    'export * from "./src/auth-precedence.js";',
+    'export { requiresExplicitMatrixDefaultAccount, resolveMatrixDefaultOrOnlyAccountId } from "./src/account-selection.js";',
+    'export * from "./src/account-selection.js";',
+    'export * from "./src/env-vars.js";',
+    'export * from "./src/storage-paths.js";',
+    'export { assertHttpUrlTargetsPrivateNetwork, closeDispatcher, createPinnedDispatcher, resolvePinnedHostnameWithPolicy, ssrfPolicyFromAllowPrivateNetwork, type LookupFn, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";',
+    'export { setMatrixThreadBindingIdleTimeoutBySessionKey, setMatrixThreadBindingMaxAgeBySessionKey } from "./src/matrix/thread-bindings-shared.js";',
+    'export { setMatrixRuntime } from "./src/runtime.js";',
+    'export { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";',
+    'export type { ChannelDirectoryEntry, ChannelMessageActionContext, OpenClawConfig, PluginRuntime, RuntimeLogger, RuntimeEnv, WizardPrompter } from "openclaw/plugin-sdk/matrix-runtime-shared";',
+    'export { formatZonedTimestamp } from "openclaw/plugin-sdk/matrix-runtime-shared";',
+    'export function chunkTextForOutbound(text: string, limit: number): string[] { const chunks: string[] = []; let remaining = text; while (remaining.length > limit) { const window = remaining.slice(0, limit); const splitAt = Math.max(window.lastIndexOf("\\n"), window.lastIndexOf(" ")); const breakAt = splitAt > 0 ? splitAt : limit; chunks.push(remaining.slice(0, breakAt).trimEnd()); remaining = remaining.slice(breakAt).trimStart(); } if (remaining.length > 0 || text.length === 0) { chunks.push(remaining); } return chunks; }',
+  ],
+  [bundledPluginFile("nextcloud-talk", "runtime-api.ts")]: [
     'export * from "openclaw/plugin-sdk/nextcloud-talk";',
   ],
-  "extensions/signal/runtime-api.ts": ['export * from "./src/runtime-api.js";'],
-  "extensions/slack/runtime-api.ts": [
+  [bundledPluginFile("signal", "runtime-api.ts")]: ['export * from "./src/runtime-api.js";'],
+  [bundledPluginFile("slack", "runtime-api.ts")]: [
     'export * from "./src/action-runtime.js";',
     'export * from "./src/directory-live.js";',
     'export * from "./src/index.js";',
     'export * from "./src/resolve-channels.js";',
     'export * from "./src/resolve-users.js";',
   ],
-  "extensions/telegram/runtime-api.ts": [
-    'export type { ChannelMessageActionAdapter, ChannelPlugin, OpenClawConfig, OpenClawPluginApi, PluginRuntime, TelegramAccountConfig, TelegramActionConfig, TelegramNetworkConfig } from "openclaw/plugin-sdk/telegram";',
+  [bundledPluginFile("telegram", "runtime-api.ts")]: [
+    'export type { ChannelMessageActionAdapter, ChannelPlugin, OpenClawConfig, OpenClawPluginApi, PluginRuntime, TelegramAccountConfig, TelegramActionConfig, TelegramNetworkConfig } from "openclaw/plugin-sdk/telegram-core";',
     'export type { TelegramApiOverride } from "./src/send.js";',
     'export type { OpenClawPluginService, OpenClawPluginServiceContext, PluginLogger } from "openclaw/plugin-sdk/core";',
     'export type { AcpRuntime, AcpRuntimeCapabilities, AcpRuntimeDoctorReport, AcpRuntimeEnsureInput, AcpRuntimeEvent, AcpRuntimeHandle, AcpRuntimeStatus, AcpRuntimeTurnInput, AcpRuntimeErrorCode, AcpSessionUpdateTag } from "openclaw/plugin-sdk/acp-runtime";',
     'export { AcpRuntimeError } from "openclaw/plugin-sdk/acp-runtime";',
-    'export { buildTokenChannelStatusSummary, clearAccountEntryFields, DEFAULT_ACCOUNT_ID, normalizeAccountId, PAIRING_APPROVED_MESSAGE, parseTelegramTopicConversation, projectCredentialSnapshotFields, resolveConfiguredFromCredentialStatuses, resolveTelegramPollVisibility } from "openclaw/plugin-sdk/telegram";',
+    'export { buildTokenChannelStatusSummary, clearAccountEntryFields, DEFAULT_ACCOUNT_ID, normalizeAccountId, PAIRING_APPROVED_MESSAGE, parseTelegramTopicConversation, projectCredentialSnapshotFields, resolveConfiguredFromCredentialStatuses, resolveTelegramPollVisibility } from "openclaw/plugin-sdk/telegram-core";',
     'export { buildChannelConfigSchema, getChatChannelMeta, jsonResult, readNumberParam, readReactionParams, readStringArrayParam, readStringOrNumberParam, readStringParam, resolvePollMaxSelections, TelegramConfigSchema } from "openclaw/plugin-sdk/telegram-core";',
     'export type { TelegramProbe } from "./src/probe.js";',
     'export { auditTelegramGroupMembership, collectTelegramUnmentionedGroupIds } from "./src/audit.js";',
+    'export { resolveTelegramRuntimeGroupPolicy } from "./src/group-access.js";',
+    'export { buildTelegramExecApprovalPendingPayload, shouldSuppressTelegramExecApprovalForwardingFallback } from "./src/exec-approval-forwarding.js";',
     'export { telegramMessageActions } from "./src/channel-actions.js";',
     'export { monitorTelegramProvider } from "./src/monitor.js";',
     'export { probeTelegram } from "./src/probe.js";',
+    'export { resolveTelegramFetch, resolveTelegramTransport, shouldRetryTelegramTransportFallback } from "./src/fetch.js";',
+    'export { makeProxyFetch } from "./src/proxy.js";',
     'export { createForumTopicTelegram, deleteMessageTelegram, editForumTopicTelegram, editMessageReplyMarkupTelegram, editMessageTelegram, pinMessageTelegram, reactMessageTelegram, renameForumTopicTelegram, sendMessageTelegram, sendPollTelegram, sendStickerTelegram, sendTypingTelegram, unpinMessageTelegram } from "./src/send.js";',
-    'export { createTelegramThreadBindingManager, getTelegramThreadBindingManager, setTelegramThreadBindingIdleTimeoutBySessionKey, setTelegramThreadBindingMaxAgeBySessionKey } from "./src/thread-bindings.js";',
+    'export { createTelegramThreadBindingManager, getTelegramThreadBindingManager, resetTelegramThreadBindingsForTests, setTelegramThreadBindingIdleTimeoutBySessionKey, setTelegramThreadBindingMaxAgeBySessionKey } from "./src/thread-bindings.js";',
     'export { resolveTelegramToken } from "./src/token.js";',
   ],
-  "extensions/whatsapp/runtime-api.ts": [
+  [bundledPluginFile("whatsapp", "runtime-api.ts")]: [
     'export * from "./src/active-listener.js";',
     'export * from "./src/action-runtime.js";',
     'export * from "./src/agent-tools-login.js";',
@@ -80,10 +94,11 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     'export * from "./src/auto-reply.js";',
     'export * from "./src/inbound.js";',
     'export * from "./src/login.js";',
-    'export * from "./src/login-qr.js";',
     'export * from "./src/media.js";',
     'export * from "./src/send.js";',
     'export * from "./src/session.js";',
+    "export async function startWebLoginWithQr( ...args: Parameters<StartWebLoginWithQr> ): ReturnType<StartWebLoginWithQr> { const { startWebLoginWithQr } = await loadLoginQrModule(); return await startWebLoginWithQr(...args); }",
+    "export async function waitForWebLogin( ...args: Parameters<WaitForWebLogin> ): ReturnType<WaitForWebLogin> { const { waitForWebLogin } = await loadLoginQrModule(); return await waitForWebLogin(...args); }",
   ],
 } as const;
 

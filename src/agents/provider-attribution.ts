@@ -1,6 +1,6 @@
 import type { RuntimeVersionEnv } from "../version.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
-import { normalizeProviderId } from "./model-selection.js";
+import { normalizeProviderId } from "./provider-id.js";
 
 export type ProviderAttributionVerification =
   | "vendor-documented"
@@ -74,6 +74,7 @@ function buildOpenAIAttributionPolicy(
     ...identity,
     headers: {
       originator: OPENCLAW_ATTRIBUTION_ORIGINATOR,
+      version: identity.version,
       "User-Agent": `${OPENCLAW_ATTRIBUTION_ORIGINATOR}/${identity.version}`,
     },
   };
@@ -93,6 +94,7 @@ function buildOpenAICodexAttributionPolicy(
     ...identity,
     headers: {
       originator: OPENCLAW_ATTRIBUTION_ORIGINATOR,
+      version: identity.version,
       "User-Agent": `${OPENCLAW_ATTRIBUTION_ORIGINATOR}/${identity.version}`,
     },
   };

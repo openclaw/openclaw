@@ -13,15 +13,14 @@ import {
   resolveWhatsAppAccount,
   type ResolvedWhatsAppAccount,
 } from "./accounts.js";
+import { WhatsAppChannelConfigSchema } from "./config-schema.js";
 import {
-  buildChannelConfigSchema,
   formatWhatsAppConfigAllowFromEntries,
   getChatChannelMeta,
   normalizeE164,
   resolveWhatsAppGroupIntroHint,
   resolveWhatsAppGroupRequireMention,
   resolveWhatsAppGroupToolPolicy,
-  WhatsAppConfigSchema,
   type ChannelPlugin,
 } from "./runtime-api.js";
 
@@ -133,7 +132,7 @@ export function createWhatsAppPluginBase(params: {
     },
     reload: { configPrefixes: ["web"], noopPrefixes: ["channels.whatsapp"] },
     gatewayMethods: ["web.login.start", "web.login.wait"],
-    configSchema: buildChannelConfigSchema(WhatsAppConfigSchema),
+    configSchema: WhatsAppChannelConfigSchema,
     config: {
       ...whatsappConfigAdapter,
       isEnabled: (account, cfg) => account.enabled && cfg.web?.enabled !== false,

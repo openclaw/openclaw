@@ -3,11 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
-  sendMessageTelegram,
-  sendPollTelegram,
-  type TelegramApiOverride,
-} from "../../extensions/telegram/src/send.js";
-import {
   clearConfigCache,
   loadConfig,
   writeConfigFile,
@@ -15,6 +10,11 @@ import {
 } from "../config/config.js";
 import { loadCronStore, saveCronStore } from "../cron/store.js";
 import type { CronStoreFile } from "../cron/types.js";
+import {
+  sendMessageTelegram,
+  sendPollTelegram,
+  type TelegramApiOverride,
+} from "../plugin-sdk/telegram-runtime.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import {
   getActivePluginRegistry,
@@ -105,38 +105,36 @@ async function withTelegramGatewayWritebackFixture(
             label: "Telegram",
             outbound: {
               deliveryMode: "direct",
-              sendText: async ({ cfg, to, text, accountId, gatewayClientScopes }) =>
-                ({
-                  channel: "telegram",
-                  ...(await sendMessageTelegram(to, text, {
-                    cfg,
-                    accountId: accountId ?? undefined,
-                    gatewayClientScopes,
-                    token: "123:abc",
-                    api: {
-                      getChat,
-                      sendMessage,
-                    },
-                  })),
-                }),
-              sendPoll: async ({ cfg, to, poll, accountId, gatewayClientScopes, threadId }) =>
-                ({
-                  channel: "telegram",
-                  ...(await sendPollTelegram(to, poll, {
-                    cfg,
-                    accountId: accountId ?? undefined,
-                    gatewayClientScopes,
-                    messageThreadId:
-                      typeof threadId === "number" && Number.isFinite(threadId)
-                        ? Math.trunc(threadId)
-                        : undefined,
-                    token: "123:abc",
-                    api: {
-                      getChat,
-                      sendPoll,
-                    },
-                  })),
-                }),
+              sendText: async ({ cfg, to, text, accountId, gatewayClientScopes }) => ({
+                channel: "telegram",
+                ...(await sendMessageTelegram(to, text, {
+                  cfg,
+                  accountId: accountId ?? undefined,
+                  gatewayClientScopes,
+                  token: "123:abc",
+                  api: {
+                    getChat,
+                    sendMessage,
+                  },
+                })),
+              }),
+              sendPoll: async ({ cfg, to, poll, accountId, gatewayClientScopes, threadId }) => ({
+                channel: "telegram",
+                ...(await sendPollTelegram(to, poll, {
+                  cfg,
+                  accountId: accountId ?? undefined,
+                  gatewayClientScopes,
+                  messageThreadId:
+                    typeof threadId === "number" && Number.isFinite(threadId)
+                      ? Math.trunc(threadId)
+                      : undefined,
+                  token: "123:abc",
+                  api: {
+                    getChat,
+                    sendPoll,
+                  },
+                })),
+              }),
             },
           }),
         },

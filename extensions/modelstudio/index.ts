@@ -1,4 +1,5 @@
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
+import { applyModelStudioNativeStreamingUsageCompat } from "./api.js";
 import {
   applyModelStudioConfig,
   applyModelStudioConfigCn,
@@ -111,5 +112,7 @@ export default defineSingleProviderPluginEntry({
       buildProvider: buildModelStudioProvider,
       allowExplicitBaseUrl: true,
     },
+    applyNativeStreamingUsageCompat: ({ providerConfig }) =>
+      applyModelStudioNativeStreamingUsageCompat(providerConfig),
   },
 });

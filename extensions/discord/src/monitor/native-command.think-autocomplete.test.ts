@@ -9,8 +9,7 @@ import {
 } from "../../../../src/auto-reply/commands-registry.js";
 import type { OpenClawConfig, loadConfig } from "../../../../src/config/config.js";
 import { clearSessionStoreCacheForTest } from "../../../../src/config/sessions/store.js";
-import { createConfiguredBindingConversationRuntimeModuleMock } from "../../../../test/helpers/extensions/configured-binding-runtime.js";
-import { resolveDiscordNativeChoiceContext } from "./native-command-ui.js";
+import { createConfiguredBindingConversationRuntimeModuleMock } from "../../../../test/helpers/plugins/configured-binding-runtime.js";
 import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
 const ensureConfiguredBindingRouteReadyMock = vi.hoisted(() =>
@@ -52,9 +51,12 @@ const STORE_PATH = path.join(
   `openclaw-discord-think-autocomplete-${process.pid}.json`,
 );
 const SESSION_KEY = "agent:main:main";
+let resolveDiscordNativeChoiceContext: typeof import("./native-command-ui.js").resolveDiscordNativeChoiceContext;
 
 describe("discord native /think autocomplete", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ resolveDiscordNativeChoiceContext } = await import("./native-command-ui.js"));
     clearSessionStoreCacheForTest();
     ensureConfiguredBindingRouteReadyMock.mockReset();
     ensureConfiguredBindingRouteReadyMock.mockResolvedValue({ ok: true });
