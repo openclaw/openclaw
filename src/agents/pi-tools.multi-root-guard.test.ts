@@ -218,6 +218,35 @@ describe("assertAliasSafe", () => {
   );
 
   it.runIf(process.platform !== "win32")(
+    "preserves unlink semantics for final symlink aliases that point outside configured roots",
+    async () => {
+      await withTempDir(
+        { prefix: "openclaw-fs-roots-", parentDir: process.cwd() },
+        async (root) => {
+          const dataDir = path.join(root, "data");
+          const outsideDir = path.join(root, "outside");
+          await fs.mkdir(dataDir, { recursive: true });
+          await fs.mkdir(outsideDir, { recursive: true });
+          const outsideFile = path.join(outsideDir, "secret.txt");
+          const aliasFile = path.join(dataDir, "alias.txt");
+          await fs.writeFile(outsideFile, "secret");
+          await fs.symlink(outsideFile, aliasFile);
+
+          const roots = makeRoots({ path: dataDir, kind: "dir", access: "rw" });
+
+          expect(() => validatePathAgainstRoots(aliasFile, "write", roots)).not.toThrow();
+          await expect(
+            assertAliasSafe(aliasFile, roots, {
+              operation: "write",
+              allowFinalSymlinkForUnlink: true,
+            }),
+          ).resolves.toBeUndefined();
+        },
+      );
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "rejects unlinks when a canonical read-only file root is stricter than an alias rw dir root",
     async () => {
       await withTempDir(

@@ -39,6 +39,7 @@ async function validateCanonicalTargetAgainstRoots(
   resolvedPath: string,
   operation: "read" | "write",
   roots: FsRootResolved[],
+  options?: { allowMissingCanonicalMatch?: boolean },
 ): Promise<void> {
   const canonicalPath = path.resolve(await resolvePathViaExistingAncestor(resolvedPath));
   const canonicalRoots = sortRootsForMatching(
@@ -52,6 +53,9 @@ async function validateCanonicalTargetAgainstRoots(
 
   const match = findMatchingRoot(canonicalPath, canonicalRoots);
   if (!match) {
+    if (options?.allowMissingCanonicalMatch) {
+      return;
+    }
     throw new Error(
       `Access denied: canonical target for '${resolvedPath}' is outside allowed filesystem roots`,
     );
@@ -88,6 +92,8 @@ export async function assertAliasSafe(
           allowFinalHardlinkForUnlink: options.allowFinalHardlinkForUnlink,
         }
       : PATH_ALIAS_POLICIES.strict;
+  const allowMissingCanonicalMatch =
+    options?.allowFinalSymlinkForUnlink || options?.allowFinalHardlinkForUnlink;
 
   await assertNoPathAliasEscape({
     absolutePath: candidate,
@@ -96,7 +102,9 @@ export async function assertAliasSafe(
     policy,
   });
 
-  await validateCanonicalTargetAgainstRoots(resolvedPath, options?.operation ?? "read", roots);
+  await validateCanonicalTargetAgainstRoots(resolvedPath, options?.operation ?? "read", roots, {
+    allowMissingCanonicalMatch,
+  });
 }
 
 export function wrapToolMultiRootGuard(
