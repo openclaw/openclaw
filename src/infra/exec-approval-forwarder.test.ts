@@ -45,10 +45,10 @@ function isDiscordExecApprovalClientEnabledForTest(params: {
 
 const telegramApprovalPlugin: Pick<
   ChannelPlugin,
-  "id" | "meta" | "capabilities" | "config" | "execApprovals"
+  "id" | "meta" | "capabilities" | "config" | "approvals"
 > = {
   ...createChannelTestPluginBase({ id: "telegram" }),
-  execApprovals: {
+  approvals: {
     delivery: {
       shouldSuppressForwardingFallback: (params) =>
         shouldSuppressTelegramExecApprovalForwardingFallback(params),
@@ -57,10 +57,10 @@ const telegramApprovalPlugin: Pick<
 };
 const discordApprovalPlugin: Pick<
   ChannelPlugin,
-  "id" | "meta" | "capabilities" | "config" | "execApprovals"
+  "id" | "meta" | "capabilities" | "config" | "approvals"
 > = {
   ...createChannelTestPluginBase({ id: "discord" }),
-  execApprovals: {
+  approvals: {
     delivery: {
       shouldSuppressForwardingFallback: ({ cfg, target }) =>
         target.channel === "discord" &&
@@ -426,7 +426,6 @@ describe("exec approval forwarder", () => {
   });
 
   it("can forward resolved notices without pending cache when request payload is present", async () => {
-    vi.useFakeTimers();
     const { deliver, forwarder } = createForwarder({
       cfg: makeTargetsCfg([{ channel: "telegram", to: "123" }]),
     });

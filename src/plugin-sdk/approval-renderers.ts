@@ -12,14 +12,6 @@ import {
 
 const DEFAULT_ALLOWED_DECISIONS = ["allow-once", "allow-always", "deny"] as const;
 
-function neutralizeApprovalText(value: string): string {
-  return value
-    .replace(/@everyone/gi, "@\u200beveryone")
-    .replace(/@here/gi, "@\u200bhere")
-    .replace(/<@/g, "<@\u200b")
-    .replace(/<#/g, "<#\u200b");
-}
-
 export function buildApprovalPendingReplyPayload(params: {
   approvalId: string;
   approvalSlug: string;
@@ -29,7 +21,7 @@ export function buildApprovalPendingReplyPayload(params: {
 }): ReplyPayload {
   const allowedDecisions = params.allowedDecisions ?? DEFAULT_ALLOWED_DECISIONS;
   return {
-    text: neutralizeApprovalText(params.text),
+    text: params.text,
     interactive: buildApprovalInteractiveReply({
       approvalId: params.approvalId,
       allowedDecisions,
@@ -39,6 +31,26 @@ export function buildApprovalPendingReplyPayload(params: {
         approvalId: params.approvalId,
         approvalSlug: params.approvalSlug,
         allowedDecisions,
+        state: "pending",
+      },
+      ...params.channelData,
+    },
+  };
+}
+
+export function buildApprovalResolvedReplyPayload(params: {
+  approvalId: string;
+  approvalSlug: string;
+  text: string;
+  channelData?: Record<string, unknown>;
+}): ReplyPayload {
+  return {
+    text: params.text,
+    channelData: {
+      execApproval: {
+        approvalId: params.approvalId,
+        approvalSlug: params.approvalSlug,
+        state: "resolved",
       },
       ...params.channelData,
     },
@@ -65,18 +77,13 @@ export function buildPluginApprovalPendingReplyPayload(params: {
 export function buildPluginApprovalResolvedReplyPayload(params: {
   resolved: PluginApprovalResolved;
   text?: string;
+  approvalSlug?: string;
   channelData?: Record<string, unknown>;
 }): ReplyPayload {
-  return params.channelData
-    ? {
-        text: neutralizeApprovalText(
-          params.text ?? buildPluginApprovalResolvedMessage(params.resolved),
-        ),
-        channelData: params.channelData,
-      }
-    : {
-        text: neutralizeApprovalText(
-          params.text ?? buildPluginApprovalResolvedMessage(params.resolved),
-        ),
-      };
+  return buildApprovalResolvedReplyPayload({
+    approvalId: params.resolved.id,
+    approvalSlug: params.approvalSlug ?? params.resolved.id.slice(0, 8),
+    text: params.text ?? buildPluginApprovalResolvedMessage(params.resolved),
+    channelData: params.channelData,
+  });
 }

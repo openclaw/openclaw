@@ -240,4 +240,50 @@ describe("discordOutbound", () => {
       channelId: "ch-1",
     });
   });
+
+  it("neutralizes approval mentions only for approval payloads", async () => {
+    await discordOutbound.sendPayload?.({
+      cfg: {},
+      to: "channel:123456",
+      text: "",
+      payload: {
+        text: "Approval @everyone <@123> <#456>",
+        channelData: {
+          execApproval: {
+            approvalId: "req-1",
+            approvalSlug: "req-1",
+          },
+        },
+      },
+      accountId: "default",
+    });
+
+    expect(hoisted.sendMessageDiscordMock).toHaveBeenCalledWith(
+      "channel:123456",
+      "Approval @\u200beveryone <@\u200b123> <#\u200b456>",
+      expect.objectContaining({
+        accountId: "default",
+      }),
+    );
+  });
+
+  it("leaves non-approval mentions unchanged", async () => {
+    await discordOutbound.sendPayload?.({
+      cfg: {},
+      to: "channel:123456",
+      text: "",
+      payload: {
+        text: "Hello @everyone",
+      },
+      accountId: "default",
+    });
+
+    expect(hoisted.sendMessageDiscordMock).toHaveBeenCalledWith(
+      "channel:123456",
+      "Hello @everyone",
+      expect.objectContaining({
+        accountId: "default",
+      }),
+    );
+  });
 });

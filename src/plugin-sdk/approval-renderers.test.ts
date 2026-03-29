@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildApprovalPendingReplyPayload,
+  buildApprovalResolvedReplyPayload,
   buildPluginApprovalPendingReplyPayload,
   buildPluginApprovalResolvedReplyPayload,
 } from "./approval-renderers.js";
@@ -13,7 +14,7 @@ describe("plugin-sdk/approval-renderers", () => {
       text: "Approval required @everyone",
     });
 
-    expect(payload.text).toContain("@\u200beveryone");
+    expect(payload.text).toContain("@everyone");
     expect(payload.interactive).toEqual({
       blocks: [
         {
@@ -90,9 +91,27 @@ describe("plugin-sdk/approval-renderers", () => {
         approvalId: "plugin-approval-123",
         approvalSlug: "custom-slug",
         allowedDecisions: ["allow-once", "allow-always", "deny"],
+        state: "pending",
       },
       telegram: {
         quoteText: "quoted",
+      },
+    });
+  });
+
+  it("builds generic resolved payloads with approval metadata", () => {
+    const payload = buildApprovalResolvedReplyPayload({
+      approvalId: "req-123",
+      approvalSlug: "req-123",
+      text: "resolved @everyone",
+    });
+
+    expect(payload.text).toBe("resolved @everyone");
+    expect(payload.channelData).toEqual({
+      execApproval: {
+        approvalId: "req-123",
+        approvalSlug: "req-123",
+        state: "resolved",
       },
     });
   });
@@ -114,6 +133,11 @@ describe("plugin-sdk/approval-renderers", () => {
 
     expect(payload.text).toContain("Plugin approval allowed once");
     expect(payload.channelData).toEqual({
+      execApproval: {
+        approvalId: "plugin-approval-123",
+        approvalSlug: "plugin-a",
+        state: "resolved",
+      },
       discord: {
         components: [{ type: "container" }],
       },
