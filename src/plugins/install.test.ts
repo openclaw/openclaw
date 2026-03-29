@@ -777,7 +777,7 @@ describe("installPluginFromArchive", () => {
     expect(handler.mock.calls[0]?.[0]).toMatchObject({
       targetName: "hook-findings-plugin",
       targetType: "plugin",
-      source: "plugin-package",
+      origin: "plugin-package",
       sourcePath: pluginDir,
       sourcePathKind: "directory",
       request: {
@@ -797,7 +797,7 @@ describe("installPluginFromArchive", () => {
       },
     });
     expect(handler.mock.calls[0]?.[1]).toEqual({
-      source: "plugin-package",
+      origin: "plugin-package",
       targetType: "plugin",
       requestKind: "plugin-dir",
     });
@@ -840,7 +840,7 @@ describe("installPluginFromArchive", () => {
     expect(handler.mock.calls[0]?.[0]).toMatchObject({
       targetName: "dangerous-blocked-plugin",
       targetType: "plugin",
-      source: "plugin-package",
+      origin: "plugin-package",
       request: {
         kind: "plugin-dir",
         mode: "install",
@@ -1202,7 +1202,7 @@ describe("installPluginFromPath", () => {
     expect(handler.mock.calls[0]?.[0]).toMatchObject({
       targetName: "payload",
       targetType: "plugin",
-      source: "plugin-file",
+      origin: "plugin-file",
       sourcePath,
       sourcePathKind: "file",
       request: {
@@ -1220,7 +1220,7 @@ describe("installPluginFromPath", () => {
       },
     });
     expect(handler.mock.calls[0]?.[1]).toEqual({
-      source: "plugin-file",
+      origin: "plugin-file",
       targetType: "plugin",
       requestKind: "plugin-file",
     });

@@ -3,6 +3,7 @@ import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveBrewExecutable } from "../infra/brew.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { createBeforeInstallHookPayload } from "../plugins/install-policy-context.js";
 import { runCommandWithTimeout, type CommandOptions } from "../process/exec.js";
 import { scanDirectoryWithSummary } from "../security/skill-scanner.js";
 import { resolveUserPath } from "../utils.js";
@@ -508,25 +509,23 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
   const hookRunner = getGlobalHookRunner();
   if (hookRunner?.hasHooks("before_install")) {
     try {
-      const hookResult = await hookRunner.runBeforeInstall(
-        {
-          targetName: params.skillName,
-          targetType: "skill",
-          sourcePath: path.resolve(entry.skill.baseDir),
-          sourcePathKind: "directory",
-          source: skillSource,
-          request: {
-            kind: "skill-install",
-            mode: "install",
-          },
-          builtinScan: scanResult.builtinScan,
-          skill: {
-            installId: params.installId,
-            ...(spec ? { installSpec: normalizeSkillInstallSpec(spec) } : {}),
-          },
+      const { event, ctx } = createBeforeInstallHookPayload({
+        targetName: params.skillName,
+        targetType: "skill",
+        origin: skillSource,
+        sourcePath: path.resolve(entry.skill.baseDir),
+        sourcePathKind: "directory",
+        request: {
+          kind: "skill-install",
+          mode: "install",
         },
-        { source: skillSource, targetType: "skill", requestKind: "skill-install" },
-      );
+        builtinScan: scanResult.builtinScan,
+        skill: {
+          installId: params.installId,
+          ...(spec ? { installSpec: normalizeSkillInstallSpec(spec) } : {}),
+        },
+      });
+      const hookResult = await hookRunner.runBeforeInstall(event, ctx);
       if (hookResult?.block) {
         return {
           ok: false,
