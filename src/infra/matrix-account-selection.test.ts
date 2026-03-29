@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   findMatrixAccountEntry,
+  getMatrixScopedEnvVarNames,
   resolveConfiguredMatrixAccountIds,
   resolveMatrixDefaultOrOnlyAccountId,
   requiresExplicitMatrixDefaultAccount,
-} from "../../extensions/matrix/src/account-selection.ts";
-import { getMatrixScopedEnvVarNames } from "../../extensions/matrix/src/env-vars.ts";
+} from "../../extensions/matrix/api.ts";
 import type { OpenClawConfig } from "../config/config.js";
 
 describe("matrix account selection", () => {
