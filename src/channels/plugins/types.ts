@@ -7,6 +7,7 @@ export type ChannelMessageActionName = ChannelMessageActionNameFromList;
 export type { ChannelMessageCapability } from "./message-capabilities.js";
 
 export type {
+  ChannelActionAvailabilityState,
   ChannelApprovalAdapter,
   ChannelApprovalForwardTarget,
   ChannelApprovalInitiatingSurfaceState,
@@ -32,6 +33,8 @@ export type {
   ChannelLogoutResult,
   ChannelOutboundAdapter,
   ChannelOutboundContext,
+  ChannelOutboundPayloadHint,
+  ChannelOutboundTargetRef,
   ChannelAllowlistAdapter,
   ChannelCommandConversationContext,
   ChannelConfiguredBindingConversationRef,
