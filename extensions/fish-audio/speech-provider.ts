@@ -170,10 +170,16 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext) {
         if (!ctx.policy.allowVoiceSettings) {
           return { handled: true };
         }
-        const lat = normalizeLatency(ctx.value);
+        const raw = typeof ctx.value === "string" ? ctx.value.trim().toLowerCase() : "";
+        if (raw !== "normal" && raw !== "balanced" && raw !== "low") {
+          return {
+            handled: true,
+            warnings: [`invalid Fish Audio latency "${ctx.value}" (expected: normal, balanced, low)`],
+          };
+        }
         return {
           handled: true,
-          overrides: { ...(ctx.currentOverrides ?? {}), latency: lat },
+          overrides: { ...(ctx.currentOverrides ?? {}), latency: raw },
         };
       }
 

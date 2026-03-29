@@ -96,5 +96,21 @@ describe("fish-audio speech provider", () => {
       expect(result.handled).toBe(true);
       expect(result.warnings?.length).toBeGreaterThan(0);
     });
+
+    it("rejects invalid latency values with warning instead of silently defaulting", () => {
+      const result = parse({ key: "fishaudio_latency", value: "fast", policy, currentOverrides: {} });
+      expect(result.handled).toBe(true);
+      expect(result.warnings?.length).toBeGreaterThan(0);
+      expect(result.overrides).toBeUndefined();
+    });
+
+    it("accepts valid latency values", () => {
+      for (const value of ["normal", "balanced", "low"]) {
+        const result = parse({ key: "fishaudio_latency", value, policy, currentOverrides: {} });
+        expect(result.handled).toBe(true);
+        expect(result.overrides?.latency).toBe(value);
+        expect(result.warnings).toBeUndefined();
+      }
+    });
   });
 });
