@@ -247,6 +247,7 @@ function mergeExistingTaskForCreate(
     agentId?: string;
     label?: string;
     task: string;
+    preferMetadata?: boolean;
     deliveryStatus?: TaskDeliveryStatus;
     notifyPolicy?: TaskNotifyPolicy;
   },
@@ -265,8 +266,17 @@ function mergeExistingTaskForCreate(
   if (params.agentId?.trim() && !existing.agentId?.trim()) {
     patch.agentId = params.agentId.trim();
   }
-  if (params.label?.trim() && !existing.label?.trim()) {
-    patch.label = params.label.trim();
+  const nextLabel = params.label?.trim();
+  if (params.preferMetadata) {
+    if (nextLabel && normalizeComparableText(existing.label) !== nextLabel) {
+      patch.label = nextLabel;
+    }
+    const nextTask = params.task.trim();
+    if (nextTask && normalizeComparableText(existing.task) !== nextTask) {
+      patch.task = nextTask;
+    }
+  } else if (nextLabel && !existing.label?.trim()) {
+    patch.label = nextLabel;
   }
   if (params.deliveryStatus === "pending" && existing.deliveryStatus !== "delivered") {
     patch.deliveryStatus = "pending";
@@ -752,6 +762,7 @@ export function createTaskRecord(params: {
   runId?: string;
   label?: string;
   task: string;
+  preferMetadata?: boolean;
   status?: TaskStatus;
   deliveryStatus?: TaskDeliveryStatus;
   notifyPolicy?: TaskNotifyPolicy;
