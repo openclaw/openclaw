@@ -78,7 +78,7 @@ describe("resolveAcpxAgentCommand", () => {
     expect(spawnAndCollectMock).toHaveBeenCalledWith(
       {
         command: "/plugin/node_modules/.bin/acpx",
-        args: ["--cwd", "/plugin", "config", "show"],
+        args: ["--cd", "/plugin", "config", "show"],
         cwd: "/plugin",
         stripProviderAuthEnvVars: true,
       },
