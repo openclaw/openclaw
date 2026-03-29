@@ -5,7 +5,7 @@ vi.mock("../../src/infra/wsl.js", () => ({
   isWSL2Sync: () => false,
 }));
 
-vi.mock("../../src/infra/net/fetch-guard.js", () => ({
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: async (params: {
     url: string;
     init?: RequestInit;
