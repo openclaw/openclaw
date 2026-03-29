@@ -263,6 +263,8 @@ Hook guard behavior for typed lifecycle hooks:
 
 - `before_tool_call`: `{ block: true }` is terminal; lower-priority handlers are skipped.
 - `before_tool_call`: `{ block: false }` is a no-op and does not clear an earlier block.
+- `before_install`: `{ block: true }` is terminal; lower-priority handlers are skipped.
+- `before_install`: `{ block: false }` is a no-op and does not clear an earlier block.
 - `message_sending`: `{ cancel: true }` is terminal; lower-priority handlers are skipped.
 - `message_sending`: `{ cancel: false }` is a no-op and does not clear an earlier cancel.
 
