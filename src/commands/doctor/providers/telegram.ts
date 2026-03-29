@@ -1,15 +1,14 @@
+import {
+  inspectTelegramAccount,
+  isNumericTelegramUserId,
+  listTelegramAccountIds,
+  normalizeTelegramAllowFromEntry,
+} from "../../../channels/read-only-account-inspect.telegram.js";
 import { resolveCommandSecretRefsViaGateway } from "../../../cli/command-secret-gateway.js";
 import { getChannelsCommandSecretTargetIds } from "../../../cli/command-secret-targets.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { TelegramNetworkConfig } from "../../../config/types.telegram.js";
-import { resolveTelegramAccount } from "../../../plugin-sdk/account-resolution.js";
-import {
-  isNumericTelegramUserId,
-  normalizeTelegramAllowFromEntry,
-  inspectTelegramAccount,
-  listTelegramAccountIds,
-  lookupTelegramChatId,
-} from "../../../plugin-sdk/telegram.js";
+import { lookupTelegramChatId } from "../../../plugin-sdk/telegram.js";
 import { describeUnknownError } from "../../../secrets/shared.js";
 import { sanitizeForLog } from "../../../terminal/ansi.js";
 import { hasAllowFromEntries } from "../shared/allowlist.js";
@@ -164,20 +163,25 @@ export async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig)
   const lookupAccounts: ResolvedTelegramLookupAccount[] = [];
   const seenLookupAccounts = new Set<string>();
   for (const accountId of listTelegramAccountIds(resolvedConfig)) {
-    let account: NonNullable<ReturnType<typeof resolveTelegramAccount>>;
+    let inspected: ReturnType<typeof inspectTelegramAccount>;
     try {
-      account = resolveTelegramAccount({ cfg: resolvedConfig, accountId });
+      inspected = inspectTelegramAccount({ cfg: resolvedConfig, accountId });
     } catch (error) {
       tokenResolutionWarnings.push(
         `- Telegram account ${accountId}: failed to inspect bot token (${describeUnknownError(error)}).`,
       );
       continue;
     }
-    const token = account.tokenSource === "none" ? "" : account.token.trim();
+    if (inspected.tokenStatus === "configured_unavailable") {
+      tokenResolutionWarnings.push(
+        `- Telegram account ${accountId}: failed to inspect bot token (configured but unavailable in this command path).`,
+      );
+    }
+    const token = inspected.tokenSource === "none" ? "" : inspected.token.trim();
     if (!token) {
       continue;
     }
-    const network = account.config.network;
+    const network = inspected.config.network;
     const cacheKey = `${token}::${JSON.stringify(network ?? {})}`;
     if (seenLookupAccounts.has(cacheKey)) {
       continue;
