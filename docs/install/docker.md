@@ -151,6 +151,7 @@ If your host routes outbound traffic through a local proxy (such as Clash Verge,
 > **Note:**
 > Replace `7897` with the port your proxy is actually listening on your host machine.
 > For Linux, ensure you add the following to the `openclaw-gateway` service to make `host.docker.internal` resolve inside the container:
+>
 > ```yaml
 > extra_hosts:
 >   - "host.docker.internal:host-gateway"
