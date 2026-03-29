@@ -96,8 +96,11 @@ export default defineChannelPluginEntry({
 - `setRuntime` is called during registration so you can store the runtime reference
   (typically via `createPluginRuntimeStore`). It is skipped during CLI metadata
   capture.
-- `registerCliMetadata` runs only when `api.registrationMode === "cli-metadata"`.
-  Use it for root-help CLI descriptors that should stay non-activating.
+- `registerCliMetadata` runs during both `api.registrationMode === "cli-metadata"`
+  and `api.registrationMode === "full"`.
+  Use it as the canonical place for channel-owned CLI descriptors so root help
+  stays non-activating while normal CLI command registration remains compatible
+  with full plugin loads.
 - `registerFull` only runs when `api.registrationMode === "full"`. It is skipped
   during setup-only loading.
 - For plugin-owned root CLI commands, prefer `api.registerCli(..., { descriptors: [...] })`
@@ -138,9 +141,9 @@ unconfigured, or when deferred loading is enabled. See
 
 ```typescript
 register(api) {
-  if (api.registrationMode === "cli-metadata") {
+  if (api.registrationMode === "cli-metadata" || api.registrationMode === "full") {
     api.registerCli(/* ... */);
-    return;
+    if (api.registrationMode === "cli-metadata") return;
   }
 
   api.registerChannel({ plugin: myPlugin });

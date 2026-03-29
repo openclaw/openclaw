@@ -2767,6 +2767,102 @@ module.exports = {
     );
   });
 
+  it("collects channel CLI metadata during full plugin loads", () => {
+    useNoBundledPlugins();
+    const pluginDir = makeTempDir();
+    const modeMarker = path.join(pluginDir, "registration-mode.txt");
+    const fullMarker = path.join(pluginDir, "full-loaded.txt");
+
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/full-cli-metadata-channel",
+          openclaw: { extensions: ["./index.cjs"] },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "full-cli-metadata-channel",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+          channels: ["full-cli-metadata-channel"],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "index.cjs"),
+      `const { defineChannelPluginEntry } = require("openclaw/plugin-sdk/core");
+module.exports = {
+  ...defineChannelPluginEntry({
+    id: "full-cli-metadata-channel",
+    name: "Full CLI Metadata Channel",
+    description: "full cli metadata channel",
+    plugin: {
+      id: "full-cli-metadata-channel",
+      meta: {
+        id: "full-cli-metadata-channel",
+        label: "Full CLI Metadata Channel",
+        selectionLabel: "Full CLI Metadata Channel",
+        docsPath: "/channels/full-cli-metadata-channel",
+        blurb: "full cli metadata channel",
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => [],
+        resolveAccount: () => ({ accountId: "default" }),
+      },
+      outbound: { deliveryMode: "direct" },
+    },
+    registerCliMetadata(api) {
+      require("node:fs").writeFileSync(
+        ${JSON.stringify(modeMarker)},
+        String(api.registrationMode),
+        "utf-8",
+      );
+      api.registerCli(() => {}, {
+        descriptors: [
+          {
+            name: "full-cli-metadata-channel",
+            description: "Full-load channel CLI metadata",
+            hasSubcommands: true,
+          },
+        ],
+      });
+    },
+    registerFull() {
+      require("node:fs").writeFileSync(${JSON.stringify(fullMarker)}, "loaded", "utf-8");
+    },
+  }),
+};`,
+      "utf-8",
+    );
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [pluginDir] },
+          allow: ["full-cli-metadata-channel"],
+        },
+      },
+    });
+
+    expect(fs.readFileSync(modeMarker, "utf-8")).toBe("full");
+    expect(fs.existsSync(fullMarker)).toBe(true);
+    expect(registry.cliRegistrars.flatMap((entry) => entry.commands)).toContain(
+      "full-cli-metadata-channel",
+    );
+  });
+
   it("awaits async plugin registration when collecting CLI metadata", async () => {
     useNoBundledPlugins();
     const plugin = writePlugin({

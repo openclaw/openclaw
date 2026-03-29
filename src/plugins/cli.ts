@@ -6,7 +6,11 @@ import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { loadOpenClawPluginCliRegistry, type PluginLoadOptions } from "./loader.js";
+import {
+  loadOpenClawPluginCliRegistry,
+  loadOpenClawPlugins,
+  type PluginLoadOptions,
+} from "./loader.js";
 import type { OpenClawPluginCliCommandDescriptor } from "./types.js";
 import type { PluginLogger } from "./types.js";
 
@@ -30,11 +34,7 @@ function canRegisterPluginCliLazily(entry: {
   return entry.commands.every((command) => descriptorNames.has(command));
 }
 
-async function loadPluginCliRegistry(
-  cfg?: OpenClawConfig,
-  env?: NodeJS.ProcessEnv,
-  loaderOptions?: Pick<PluginLoadOptions, "pluginSdkResolution">,
-) {
+function resolvePluginCliLoadContext(cfg?: OpenClawConfig, env?: NodeJS.ProcessEnv) {
   const config = cfg ?? loadConfig();
   const resolvedConfig = applyPluginAutoEnable({ config, env: env ?? process.env }).config;
   const workspaceDir = resolveAgentWorkspaceDir(
@@ -51,11 +51,40 @@ async function loadPluginCliRegistry(
     config: resolvedConfig,
     workspaceDir,
     logger,
+  };
+}
+
+async function loadPluginCliMetadataRegistry(
+  cfg?: OpenClawConfig,
+  env?: NodeJS.ProcessEnv,
+  loaderOptions?: Pick<PluginLoadOptions, "pluginSdkResolution">,
+) {
+  const context = resolvePluginCliLoadContext(cfg, env);
+  return {
+    ...context,
     registry: await loadOpenClawPluginCliRegistry({
-      config: resolvedConfig,
-      workspaceDir,
+      config: context.config,
+      workspaceDir: context.workspaceDir,
       env,
-      logger,
+      logger: context.logger,
+      ...loaderOptions,
+    }),
+  };
+}
+
+function loadPluginCliCommandRegistry(
+  cfg?: OpenClawConfig,
+  env?: NodeJS.ProcessEnv,
+  loaderOptions?: Pick<PluginLoadOptions, "pluginSdkResolution">,
+) {
+  const context = resolvePluginCliLoadContext(cfg, env);
+  return {
+    ...context,
+    registry: loadOpenClawPlugins({
+      config: context.config,
+      workspaceDir: context.workspaceDir,
+      env,
+      logger: context.logger,
       ...loaderOptions,
     }),
   };
@@ -66,7 +95,7 @@ export async function getPluginCliCommandDescriptors(
   env?: NodeJS.ProcessEnv,
 ): Promise<OpenClawPluginCliCommandDescriptor[]> {
   try {
-    const { registry } = await loadPluginCliRegistry(cfg, env);
+    const { registry } = await loadPluginCliMetadataRegistry(cfg, env);
     const seen = new Set<string>();
     const descriptors: OpenClawPluginCliCommandDescriptor[] = [];
     for (const entry of registry.cliRegistrars) {
@@ -91,7 +120,7 @@ export async function registerPluginCliCommands(
   loaderOptions?: Pick<PluginLoadOptions, "pluginSdkResolution">,
   options?: RegisterPluginCliOptions,
 ) {
-  const { config, workspaceDir, logger, registry } = await loadPluginCliRegistry(
+  const { config, workspaceDir, logger, registry } = loadPluginCliCommandRegistry(
     cfg,
     env,
     loaderOptions,

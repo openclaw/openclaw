@@ -27,9 +27,10 @@ Implementation shape:
 - The collector awaits `register(api)` so async plugin registration contributes CLI metadata.
 - The collector only exposes `registerCli(...)` to plugin code; it does not activate services, tools, providers, or gateway handlers.
 - `getPluginCliCommandDescriptors()` and root-help rendering are now async and route through the dedicated collector.
-- `defineChannelPluginEntry(...)` gained an additive `registerCliMetadata(api)` seam so channel plugins can register root-help metadata without entering `registerFull(...)`.
+- `defineChannelPluginEntry(...)` gained an additive `registerCliMetadata(api)` seam so channel plugins can register root-help metadata without entering `registerFull(...)`, while full loads still collect the same CLI descriptors.
 - `extensions/matrix/index.ts` moved its CLI descriptor registration onto that seam.
 - `defineChannelPluginEntry(...)` now skips `setRuntime(...)` in `cli-metadata` mode so help rendering does not poison channel runtime stores with a fake runtime object.
+- `registerPluginCliCommands()` still uses the normal full plugin loader so legacy channel plugins that wired CLI commands inside `registerFull(...)` keep working until they adopt `registerCliMetadata(...)`.
 
 Why this replaced the earlier approach:
 

@@ -7,12 +7,14 @@ const mocks = vi.hoisted(() => ({
   otherRegister: vi.fn(),
   memoryListAction: vi.fn(),
   loadOpenClawPluginCliRegistry: vi.fn(),
+  loadOpenClawPlugins: vi.fn(),
   applyPluginAutoEnable: vi.fn(),
 }));
 
 vi.mock("./loader.js", () => ({
   loadOpenClawPluginCliRegistry: (...args: unknown[]) =>
     mocks.loadOpenClawPluginCliRegistry(...args),
+  loadOpenClawPlugins: (...args: unknown[]) => mocks.loadOpenClawPlugins(...args),
 }));
 
 vi.mock("../config/plugin-auto-enable.js", () => ({
@@ -64,7 +66,7 @@ function createCliRegistry(params?: {
 }
 
 function expectPluginLoaderConfig(config: OpenClawConfig) {
-  expect(mocks.loadOpenClawPluginCliRegistry).toHaveBeenCalledWith(
+  expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
     expect.objectContaining({
       config,
     }),
@@ -112,6 +114,8 @@ describe("registerPluginCliCommands", () => {
     mocks.memoryListAction.mockReset();
     mocks.loadOpenClawPluginCliRegistry.mockReset();
     mocks.loadOpenClawPluginCliRegistry.mockResolvedValue(createCliRegistry());
+    mocks.loadOpenClawPlugins.mockReset();
+    mocks.loadOpenClawPlugins.mockReturnValue(createCliRegistry());
     mocks.applyPluginAutoEnable.mockReset();
     mocks.applyPluginAutoEnable.mockImplementation(({ config }) => ({ config, changes: [] }));
   });
@@ -130,7 +134,7 @@ describe("registerPluginCliCommands", () => {
 
     await registerPluginCliCommands(createProgram(), {} as OpenClawConfig, env);
 
-    expect(mocks.loadOpenClawPluginCliRegistry).toHaveBeenCalledWith(
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
         env,
       }),
@@ -199,6 +203,34 @@ describe("registerPluginCliCommands", () => {
     );
   });
 
+  it("keeps runtime CLI command registration on the full plugin loader for legacy channel plugins", async () => {
+    const { rawConfig, autoEnabledConfig } = createAutoEnabledCliFixture();
+    mocks.applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
+    mocks.loadOpenClawPlugins.mockReturnValue(
+      createCliRegistry({
+        memoryCommands: ["legacy-channel"],
+        memoryDescriptors: [
+          {
+            name: "legacy-channel",
+            description: "Legacy channel commands",
+            hasSubcommands: true,
+          },
+        ],
+      }),
+    );
+
+    await registerPluginCliCommands(createProgram(), rawConfig, undefined, undefined, {
+      mode: "lazy",
+    });
+
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: autoEnabledConfig,
+      }),
+    );
+    expect(mocks.loadOpenClawPluginCliRegistry).not.toHaveBeenCalled();
+  });
+
   it("lazy-registers descriptor-backed plugin commands on first invocation", async () => {
     const program = createProgram();
     program.exitOverride();
@@ -218,7 +250,7 @@ describe("registerPluginCliCommands", () => {
   });
 
   it("falls back to eager registration when descriptors do not cover every command root", async () => {
-    mocks.loadOpenClawPluginCliRegistry.mockResolvedValue(
+    mocks.loadOpenClawPlugins.mockReturnValue(
       createCliRegistry({
         memoryCommands: ["memory", "memory-admin"],
         memoryDescriptors: [

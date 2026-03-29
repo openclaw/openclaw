@@ -301,6 +301,7 @@ export function defineChannelPluginEntry<TPlugin>({
       if (api.registrationMode !== "full") {
         return;
       }
+      registerCliMetadata?.(api);
       registerFull?.(api);
     },
   };

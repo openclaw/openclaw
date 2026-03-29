@@ -238,10 +238,11 @@ dispatch.
     });
     ```
 
-    Put root-help CLI descriptors in `registerCliMetadata(...)` so OpenClaw can
-    show them without activating the full channel runtime. Keep
-    `registerFull(...)` for runtime-only work. `defineChannelPluginEntry`
-    handles the registration-mode split automatically. See
+    Put channel-owned CLI descriptors in `registerCliMetadata(...)` so OpenClaw
+    can show them in root help without activating the full channel runtime,
+    while normal full loads still pick up the same descriptors for real command
+    registration. Keep `registerFull(...)` for runtime-only work.
+    `defineChannelPluginEntry` handles the registration-mode split automatically. See
     [Entry Points](/plugins/sdk-entrypoints#definechannelpluginentry) for all
     options.
 
