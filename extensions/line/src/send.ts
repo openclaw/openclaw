@@ -9,6 +9,8 @@ import type { LineSendResult } from "./types.js";
 type Message = messagingApi.Message;
 type TextMessage = messagingApi.TextMessage;
 type ImageMessage = messagingApi.ImageMessage;
+type VideoMessage = messagingApi.VideoMessage & { trackingId?: string };
+type AudioMessage = messagingApi.AudioMessage;
 type LocationMessage = messagingApi.LocationMessage;
 type FlexMessage = messagingApi.FlexMessage;
 type FlexContainer = messagingApi.FlexContainer;
@@ -28,6 +30,10 @@ interface LineSendOpts {
   accountId?: string;
   verbose?: boolean;
   mediaUrl?: string;
+  mediaKind?: "image" | "video" | "audio";
+  previewImageUrl?: string;
+  durationMs?: number;
+  trackingId?: string;
   replyToken?: string;
 }
 
@@ -60,6 +66,10 @@ function normalizeTarget(to: string): string {
   }
 
   return normalized;
+}
+
+function isLineUserChatId(chatId: string): boolean {
+  return /^U/i.test(chatId);
 }
 
 function createLineMessagingClient(opts: LineClientOpts): {
@@ -103,6 +113,27 @@ export function createImageMessage(
     type: "image",
     originalContentUrl,
     previewImageUrl: previewImageUrl ?? originalContentUrl,
+  };
+}
+
+export function createVideoMessage(
+  originalContentUrl: string,
+  previewImageUrl: string,
+  trackingId?: string,
+): VideoMessage {
+  return {
+    type: "video",
+    originalContentUrl,
+    previewImageUrl,
+    ...(trackingId ? { trackingId } : {}),
+  };
+}
+
+export function createAudioMessage(originalContentUrl: string, durationMs: number): AudioMessage {
+  return {
+    type: "audio",
+    originalContentUrl,
+    duration: durationMs,
   };
 }
 
@@ -215,8 +246,27 @@ export async function sendMessageLine(
   const chatId = normalizeTarget(to);
   const messages: Message[] = [];
 
-  if (opts.mediaUrl?.trim()) {
-    messages.push(createImageMessage(opts.mediaUrl.trim()));
+  const mediaUrl = opts.mediaUrl?.trim();
+  if (mediaUrl) {
+    switch (opts.mediaKind) {
+      case "video": {
+        const previewImageUrl = opts.previewImageUrl?.trim();
+        if (!previewImageUrl) {
+          throw new Error("LINE video messages require previewImageUrl to reference an image URL");
+        }
+        const trackingId = isLineUserChatId(chatId) ? opts.trackingId : undefined;
+        messages.push(createVideoMessage(mediaUrl, previewImageUrl, trackingId));
+        break;
+      }
+      case "audio":
+        messages.push(createAudioMessage(mediaUrl, opts.durationMs ?? 60000));
+        break;
+      case "image":
+      default:
+        // Backward compatibility: keep image as default when media kind is unspecified.
+        messages.push(createImageMessage(mediaUrl, opts.previewImageUrl?.trim() || mediaUrl));
+        break;
+    }
   }
 
   if (text?.trim()) {

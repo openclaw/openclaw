@@ -49,9 +49,6 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = createChatChannelP
           if (!trimmed) {
             return false;
           }
-          // LINE user IDs are typically U followed by 32 hex characters
-          // Group IDs are C followed by 32 hex characters
-          // Room IDs are R followed by 32 hex characters
           return /^[UCR][a-f0-9]{32}$/i.test(trimmed) || /^line:/i.test(trimmed);
         },
         hint: "<userId|groupId|roomId>",
@@ -115,7 +112,6 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = createChatChannelP
     text: {
       idLabel: "lineUserId",
       message: "OpenClaw: your access has been approved.",
-      // LINE IDs are case-sensitive; only strip prefix variants (line: / line:user:).
       normalizeAllowEntry: createPairingPrefixStripper(/^line:(?:user:)?/i),
       notify: async ({ cfg, id, message }) => {
         const line = getLineRuntime().channel.line;
