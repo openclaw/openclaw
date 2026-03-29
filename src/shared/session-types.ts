@@ -6,10 +6,17 @@ export type GatewayAgentIdentity = {
   avatarUrl?: string;
 };
 
+export type GatewayAgentModel = {
+  primary?: string;
+  fallbacks?: string[];
+};
+
 export type GatewayAgentRow = {
   id: string;
   name?: string;
   identity?: GatewayAgentIdentity;
+  workspace?: string;
+  model?: GatewayAgentModel;
 };
 
 export type SessionsListResultBase<TDefaults, TRow> = {
