@@ -68,10 +68,8 @@ subpaths is in `scripts/lib/plugin-sdk-entrypoints.json`.
     | --- | --- |
     | `plugin-sdk/cli-backend` | CLI backend defaults + watchdog constants |
     | `plugin-sdk/provider-auth` | `createProviderApiKeyAuthMethod`, `ensureApiKeyFromOptionEnvOrPrompt`, `upsertAuthProfile` |
-    | `plugin-sdk/provider-models` | Legacy compat provider model aliases; prefer provider-specific subpaths or `plugin-sdk/provider-model-shared` |
     | `plugin-sdk/provider-model-shared` | `normalizeModelCompat` |
     | `plugin-sdk/provider-catalog-shared` | `findCatalogTemplate`, `buildSingleProviderApiKeyCatalog` |
-    | `plugin-sdk/provider-catalog` | Legacy compat provider builder aliases; prefer provider-specific subpaths or `plugin-sdk/provider-catalog-shared` |
     | `plugin-sdk/provider-usage` | `fetchClaudeUsage` and similar |
     | `plugin-sdk/provider-stream` | Stream wrapper types |
     | `plugin-sdk/provider-onboard` | Onboarding config patch helpers |
