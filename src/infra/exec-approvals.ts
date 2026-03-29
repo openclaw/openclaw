@@ -153,7 +153,7 @@ export type ExecApprovalsResolved = {
 };
 
 // Keep CLI + gateway defaults in sync.
-export const DEFAULT_EXEC_APPROVAL_TIMEOUT_MS = 120_000;
+export const DEFAULT_EXEC_APPROVAL_TIMEOUT_MS = 1_800_000;
 
 const DEFAULT_SECURITY: ExecSecurity = "deny";
 const DEFAULT_ASK: ExecAsk = "on-miss";
