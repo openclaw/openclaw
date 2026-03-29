@@ -1,4 +1,5 @@
 import { DatabricksAllowlistError, DatabricksPolicyError } from "./errors.js";
+import type { ResolvedSqlTarget } from "./sql-target-resolution.js";
 
 const MUTATING_KEYWORDS = [
   "INSERT",
@@ -120,41 +121,46 @@ export function assertReadOnlySqlStatement(rawSql: string): string {
 export function assertAllowlistTarget(params: {
   allowedCatalogs: readonly string[];
   allowedSchemas: readonly string[];
-  catalog?: string;
-  schema?: string;
+  targets: readonly ResolvedSqlTarget[];
 }) {
   const allowedCatalogs = params.allowedCatalogs.map((entry) => entry.toLowerCase());
   const allowedSchemas = params.allowedSchemas.map((entry) => entry.toLowerCase());
-  const targetCatalog = params.catalog?.trim().toLowerCase();
-  const targetSchema = params.schema?.trim().toLowerCase();
 
   if (allowedCatalogs.length === 0 && allowedSchemas.length === 0) {
     return;
   }
 
-  if (allowedCatalogs.length > 0) {
-    if (!targetCatalog) {
-      throw new DatabricksAllowlistError(
-        "Catalog allowlist is configured, but the query target catalog could not be determined safely.",
-      );
-    }
-    if (!allowedCatalogs.includes(targetCatalog)) {
-      throw new DatabricksAllowlistError(
-        `Catalog "${params.catalog}" is not in the configured allowlist.`,
-      );
-    }
+  if (params.targets.length === 0) {
+    throw new DatabricksAllowlistError(
+      "Allowlist is configured, but query targets could not be determined safely.",
+    );
   }
 
-  if (allowedSchemas.length > 0) {
-    if (!targetSchema) {
-      throw new DatabricksAllowlistError(
-        "Schema allowlist is configured, but the query target schema could not be determined safely.",
-      );
+  for (const target of params.targets) {
+    if (allowedCatalogs.length > 0) {
+      if (!target.catalog) {
+        throw new DatabricksAllowlistError(
+          `Catalog allowlist is configured, but target "${target.raw}" has no explicit catalog.`,
+        );
+      }
+      if (!allowedCatalogs.includes(target.catalog)) {
+        throw new DatabricksAllowlistError(
+          `Catalog "${target.catalog}" is not in the configured allowlist.`,
+        );
+      }
     }
-    if (!allowedSchemas.includes(targetSchema)) {
-      throw new DatabricksAllowlistError(
-        `Schema "${params.schema}" is not in the configured allowlist.`,
-      );
+
+    if (allowedSchemas.length > 0) {
+      if (!target.schema) {
+        throw new DatabricksAllowlistError(
+          `Schema allowlist is configured, but target "${target.raw}" has no explicit schema.`,
+        );
+      }
+      if (!allowedSchemas.includes(target.schema)) {
+        throw new DatabricksAllowlistError(
+          `Schema "${target.schema}" is not in the configured allowlist.`,
+        );
+      }
     }
   }
 }

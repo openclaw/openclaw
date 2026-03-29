@@ -58,8 +58,14 @@ describe("databricks allowlist policy", () => {
       assertAllowlistTarget({
         allowedCatalogs: ["main"],
         allowedSchemas: ["public"],
-        catalog: "MAIN",
-        schema: "Public",
+        targets: [
+          {
+            catalog: "main",
+            schema: "public",
+            table: "orders",
+            raw: "main.public.orders",
+          },
+        ],
       }),
     ).not.toThrow();
   });
@@ -69,6 +75,7 @@ describe("databricks allowlist policy", () => {
       assertAllowlistTarget({
         allowedCatalogs: ["main"],
         allowedSchemas: [],
+        targets: [],
       }),
     ).toThrow(DatabricksAllowlistError);
   });
@@ -78,8 +85,30 @@ describe("databricks allowlist policy", () => {
       assertAllowlistTarget({
         allowedCatalogs: [],
         allowedSchemas: ["public"],
-        schema: "private",
+        targets: [
+          {
+            schema: "private",
+            table: "events",
+            raw: "private.events",
+          },
+        ],
       }),
     ).toThrow('Schema "private" is not in the configured allowlist');
+  });
+
+  it("rejects schema.table target when catalog allowlist is configured", () => {
+    expect(() =>
+      assertAllowlistTarget({
+        allowedCatalogs: ["main"],
+        allowedSchemas: [],
+        targets: [
+          {
+            schema: "public",
+            table: "events",
+            raw: "public.events",
+          },
+        ],
+      }),
+    ).toThrow("has no explicit catalog");
   });
 });

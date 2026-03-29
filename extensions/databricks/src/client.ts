@@ -120,6 +120,16 @@ function isPendingStatus(status: DatabricksSqlStatus | null): boolean {
   return status === "PENDING" || status === "RUNNING" || status === "QUEUED";
 }
 
+function buildTransientPollingDelayMs(params: {
+  attempt: number;
+  pollingIntervalMs: number;
+  remainingMs: number;
+}): number {
+  const base = Math.max(200, params.pollingIntervalMs);
+  const delayMs = Math.min(base * 2 ** Math.max(0, params.attempt - 1), 2_000);
+  return Math.max(0, Math.min(delayMs, params.remainingMs));
+}
+
 export class DatabricksSqlClient {
   private readonly fetchImpl: DatabricksFetch;
   private readonly sleep: (ms: number) => Promise<void>;
@@ -222,11 +232,16 @@ export class DatabricksSqlClient {
 
   private async pollStatement(statementId: string): Promise<unknown> {
     const startedAt = Date.now();
+    let transientAttempt = 0;
+    let exhaustedByTransientErrors = false;
     const endpoint = `${this.config.host}/api/2.0/sql/statements/${encodeURIComponent(statementId)}`;
 
     while (Date.now() - startedAt <= this.config.maxPollingWaitMs) {
       const elapsedMs = Date.now() - startedAt;
       const remainingMs = this.config.maxPollingWaitMs - elapsedMs;
+      if (remainingMs <= 0) {
+        break;
+      }
       const requestTimeoutMs = Math.max(1_000, Math.min(this.config.timeoutMs, remainingMs));
 
       const controller = new AbortController();
@@ -245,13 +260,41 @@ export class DatabricksSqlClient {
             payload,
             `Databricks statement polling failed with status ${response.status}.`,
           );
-          throw new DatabricksHttpError({
+          const error = new DatabricksHttpError({
             statusCode: response.status,
             message,
           });
+          if (error.retryable) {
+            transientAttempt += 1;
+            exhaustedByTransientErrors = true;
+            const delayMs = buildTransientPollingDelayMs({
+              attempt: transientAttempt,
+              pollingIntervalMs: this.config.pollingIntervalMs,
+              remainingMs,
+            });
+            if (delayMs <= 0) {
+              throw new DatabricksError({
+                code: "POLLING_TIMEOUT",
+                message:
+                  "Databricks statement polling exceeded time budget while handling transient errors.",
+                retryable: false,
+              });
+            }
+            logDatabricks(this.logger, "warn", "Transient polling HTTP error; retrying.", {
+              statementId,
+              statusCode: response.status,
+              transientAttempt,
+              delayMs,
+            });
+            await this.sleep(delayMs);
+            continue;
+          }
+          throw error;
         }
 
         const status = getStatementStatus(payload);
+        transientAttempt = 0;
+        exhaustedByTransientErrors = false;
         if (!isPendingStatus(status)) {
           return payload;
         }
@@ -269,17 +312,44 @@ export class DatabricksSqlClient {
           error,
           `Databricks statement polling timed out after ${requestTimeoutMs}ms.`,
         );
-        if (normalized.code === "TIMEOUT") {
-          throw new DatabricksError({
-            code: "POLLING_TIMEOUT",
-            message: normalized.message,
-            retryable: true,
+        if (normalized.retryable) {
+          transientAttempt += 1;
+          exhaustedByTransientErrors = true;
+          const delayMs = buildTransientPollingDelayMs({
+            attempt: transientAttempt,
+            pollingIntervalMs: this.config.pollingIntervalMs,
+            remainingMs,
           });
+          if (delayMs <= 0) {
+            throw new DatabricksError({
+              code: "POLLING_TIMEOUT",
+              message:
+                "Databricks statement polling exceeded time budget while handling transient errors.",
+              retryable: false,
+            });
+          }
+          logDatabricks(this.logger, "warn", "Transient polling error; retrying.", {
+            statementId,
+            code: normalized.code,
+            transientAttempt,
+            delayMs,
+          });
+          await this.sleep(delayMs);
+          continue;
         }
         throw normalized;
       } finally {
         clearTimeout(timeout);
       }
+    }
+
+    if (exhaustedByTransientErrors) {
+      throw new DatabricksError({
+        code: "POLLING_TIMEOUT",
+        message:
+          "Databricks statement polling exceeded time budget while handling transient errors.",
+        retryable: false,
+      });
     }
 
     throw new DatabricksError({

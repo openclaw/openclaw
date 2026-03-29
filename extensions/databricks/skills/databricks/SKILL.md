@@ -17,6 +17,7 @@ Use this skill when the user asks to work with Databricks SQL, notebooks, jobs, 
   - mutating statements blocked
   - multi-statement SQL blocked
   - optional catalog/schema allowlists enforced conservatively (fail-closed)
+  - SQL target resolution is conservative; ambiguous targets are rejected when allowlists are active
 
 ## Not implemented yet
 
@@ -27,7 +28,8 @@ Use this skill when the user asks to work with Databricks SQL, notebooks, jobs, 
 ## Allowlist note
 
 If `allowedCatalogs` and/or `allowedSchemas` are configured, pass `catalog` and `schema` explicitly in tool requests.
-When the target cannot be determined safely, execution is rejected.
+The runtime still validates target references from SQL text itself and does not allow parameter-only bypass.
+When target resolution is ambiguous (for example single-part table references), execution is rejected.
 
 ## Scope
 

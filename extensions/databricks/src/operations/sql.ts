@@ -10,6 +10,7 @@ import { resolveDatabricksRuntimeConfig } from "../config.js";
 import { DatabricksPolicyError } from "../errors.js";
 import { logDatabricks } from "../logger.js";
 import { assertAllowlistTarget, assertReadOnlySqlStatement } from "../security-policy.js";
+import { resolveSqlTargets } from "../sql-target-resolution.js";
 
 const DatabricksReadOnlySqlToolSchema = Type.Object(
   {
@@ -76,11 +77,11 @@ export function createDatabricksSqlReadOnlyTool(api: OpenClawPluginApi): AnyAgen
       }
 
       const safeSql = assertReadOnlySqlStatement(sql);
+      const targets = resolveSqlTargets(safeSql);
       assertAllowlistTarget({
         allowedCatalogs: config.allowedCatalogs,
         allowedSchemas: config.allowedSchemas,
-        catalog,
-        schema,
+        targets,
       });
       const client = createDatabricksSqlClient({
         config: {

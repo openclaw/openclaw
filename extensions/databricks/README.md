@@ -27,6 +27,7 @@ Restart the gateway after enabling.
 - Runtime tool: `databricks_sql_readonly`
   - Executes a single SQL statement through Databricks SQL Statements API
   - Polls statement status when Databricks responds `PENDING`/`RUNNING`/`QUEUED`
+  - Retries transient polling failures (`429`/`5xx`) with bounded backoff inside `maxPollingWaitMs`
   - Enforces read-only policy: only `SELECT` or `WITH ... SELECT`
   - Blocks mutating SQL and multiple statements
   - Supports optional catalog/schema allowlists
@@ -60,4 +61,6 @@ Environment fallbacks are supported:
 - No Unity Catalog/lineage API integration yet
 - No mutating SQL operations in this iteration
 - Allowlist checks are conservative:
-  - if an allowlist is configured and target catalog/schema cannot be determined safely, the query is rejected (fail-closed)
+  - if an allowlist is configured and query targets cannot be determined safely from SQL, the query is rejected (fail-closed)
+  - single-part table references (for example `FROM orders`) are treated as ambiguous when allowlists are active
+  - explicit `catalog`/`schema` request parameters do not bypass SQL target validation

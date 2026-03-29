@@ -257,4 +257,276 @@ describe("databricks sql client", () => {
       code: "STATEMENT_PENDING_MAX_WAIT",
     });
   });
+
+  it("recovers from transient 429 during polling", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            statement_id: "stmt-5",
+            status: { state: "PENDING" },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ message: "rate limited" }), {
+          status: 429,
+          headers: { "content-type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            statement_id: "stmt-5",
+            status: { state: "SUCCEEDED" },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+      );
+
+    const client = new DatabricksSqlClient({
+      config: {
+        host: "https://dbc-example.cloud.databricks.com",
+        token: "dapi-test",
+        warehouseId: "wh-1",
+        timeoutMs: 10_000,
+        retryCount: 0,
+        pollingIntervalMs: 1,
+        maxPollingWaitMs: 5_000,
+        allowedCatalogs: [],
+        allowedSchemas: [],
+        readOnly: true,
+      },
+      logger: createLogger(),
+      deps: { fetchImpl, sleep: async () => {} },
+    });
+
+    const result = await client.executeStatement({
+      statement: "SELECT 1",
+      warehouseId: "wh-1",
+    });
+    expect(result).toEqual({
+      statement_id: "stmt-5",
+      status: { state: "SUCCEEDED" },
+    });
+  });
+
+  it("recovers from transient 5xx during polling", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            statement_id: "stmt-6",
+            status: { state: "RUNNING" },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ message: "temporary backend error" }), {
+          status: 503,
+          headers: { "content-type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            statement_id: "stmt-6",
+            status: { state: "SUCCEEDED" },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+      );
+
+    const client = new DatabricksSqlClient({
+      config: {
+        host: "https://dbc-example.cloud.databricks.com",
+        token: "dapi-test",
+        warehouseId: "wh-1",
+        timeoutMs: 10_000,
+        retryCount: 0,
+        pollingIntervalMs: 1,
+        maxPollingWaitMs: 5_000,
+        allowedCatalogs: [],
+        allowedSchemas: [],
+        readOnly: true,
+      },
+      logger: createLogger(),
+      deps: { fetchImpl, sleep: async () => {} },
+    });
+
+    const result = await client.executeStatement({
+      statement: "SELECT 1",
+      warehouseId: "wh-1",
+    });
+    expect(result).toEqual({
+      statement_id: "stmt-6",
+      status: { state: "SUCCEEDED" },
+    });
+  });
+
+  it("fails with pending-max-wait when statement never reaches terminal state", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            statement_id: "stmt-7",
+            status: { state: "RUNNING" },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+      )
+      .mockImplementation(async () => {
+        return new Response(
+          JSON.stringify({
+            statement_id: "stmt-7",
+            status: { state: "RUNNING" },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      });
+
+    const client = new DatabricksSqlClient({
+      config: {
+        host: "https://dbc-example.cloud.databricks.com",
+        token: "dapi-test",
+        warehouseId: "wh-1",
+        timeoutMs: 10_000,
+        retryCount: 0,
+        pollingIntervalMs: 500,
+        maxPollingWaitMs: 300,
+        allowedCatalogs: [],
+        allowedSchemas: [],
+        readOnly: true,
+      },
+      logger: createLogger(),
+      deps: { fetchImpl, sleep: async () => {} },
+    });
+
+    await expect(
+      client.executeStatement({
+        statement: "SELECT 1",
+        warehouseId: "wh-1",
+      }),
+    ).rejects.toMatchObject({
+      code: "STATEMENT_PENDING_MAX_WAIT",
+    });
+  });
+
+  it("fails with polling-timeout when transient polling errors consume budget", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            statement_id: "stmt-7b",
+            status: { state: "RUNNING" },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+      )
+      .mockImplementation(async () => {
+        return new Response(JSON.stringify({ message: "rate limited" }), {
+          status: 429,
+          headers: { "content-type": "application/json" },
+        });
+      });
+
+    const client = new DatabricksSqlClient({
+      config: {
+        host: "https://dbc-example.cloud.databricks.com",
+        token: "dapi-test",
+        warehouseId: "wh-1",
+        timeoutMs: 10_000,
+        retryCount: 0,
+        pollingIntervalMs: 500,
+        maxPollingWaitMs: 300,
+        allowedCatalogs: [],
+        allowedSchemas: [],
+        readOnly: true,
+      },
+      logger: createLogger(),
+      deps: { fetchImpl, sleep: async () => {} },
+    });
+
+    await expect(
+      client.executeStatement({
+        statement: "SELECT 1",
+        warehouseId: "wh-1",
+      }),
+    ).rejects.toMatchObject({
+      code: "POLLING_TIMEOUT",
+    });
+  });
+
+  it("fails with polling timeout when transient polling timeouts consume budget", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            statement_id: "stmt-8",
+            status: { state: "PENDING" },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+      )
+      .mockImplementation(async () => {
+        throw new DOMException("aborted", "AbortError");
+      });
+
+    const client = new DatabricksSqlClient({
+      config: {
+        host: "https://dbc-example.cloud.databricks.com",
+        token: "dapi-test",
+        warehouseId: "wh-1",
+        timeoutMs: 1_000,
+        retryCount: 0,
+        pollingIntervalMs: 500,
+        maxPollingWaitMs: 300,
+        allowedCatalogs: [],
+        allowedSchemas: [],
+        readOnly: true,
+      },
+      logger: createLogger(),
+      deps: { fetchImpl, sleep: async () => {} },
+    });
+
+    await expect(
+      client.executeStatement({
+        statement: "SELECT 1",
+        warehouseId: "wh-1",
+      }),
+    ).rejects.toMatchObject({
+      code: "POLLING_TIMEOUT",
+    });
+  });
 });
