@@ -14,6 +14,7 @@ export const DEFAULT_GMAIL_SERVE_PORT = 8788;
 export const DEFAULT_GMAIL_SERVE_PATH = "/gmail-pubsub";
 export const DEFAULT_GMAIL_MAX_BYTES = 20_000;
 export const DEFAULT_GMAIL_RENEW_MINUTES = 12 * 60;
+export const DEFAULT_GMAIL_EXCLUDE_LABELS = ["SPAM", "TRASH", "DRAFT", "SENT"];
 export const DEFAULT_HOOKS_PATH = "/hooks";
 
 export type GmailHookOverrides = {
@@ -27,6 +28,7 @@ export type GmailHookOverrides = {
   includeBody?: boolean;
   maxBytes?: number;
   renewEveryMinutes?: number;
+  excludeLabels?: string[];
   serveBind?: string;
   servePort?: number;
   servePath?: string;
@@ -46,6 +48,7 @@ export type GmailHookRuntimeConfig = {
   includeBody: boolean;
   maxBytes: number;
   renewEveryMinutes: number;
+  excludeLabels: string[];
   serve: {
     bind: string;
     port: number;
@@ -146,6 +149,8 @@ export function resolveGmailHookRuntimeConfig(
       ? Math.floor(renewEveryMinutesRaw)
       : DEFAULT_GMAIL_RENEW_MINUTES;
 
+  const excludeLabels = overrides.excludeLabels ?? gmail?.excludeLabels ?? DEFAULT_GMAIL_EXCLUDE_LABELS;
+
   const serveBind = overrides.serveBind ?? gmail?.serve?.bind ?? DEFAULT_GMAIL_SERVE_BIND;
   const servePortRaw = overrides.servePort ?? gmail?.serve?.port;
   const servePort =
@@ -191,6 +196,7 @@ export function resolveGmailHookRuntimeConfig(
       includeBody,
       maxBytes,
       renewEveryMinutes,
+      excludeLabels,
       serve: {
         bind: serveBind,
         port: servePort,
@@ -241,6 +247,9 @@ export function buildGogWatchServeArgs(cfg: GmailHookRuntimeConfig): string[] {
     "--hook-token",
     cfg.hookToken,
   ];
+  if (cfg.excludeLabels.length > 0) {
+    args.push("--exclude-labels", cfg.excludeLabels.join(","));
+  }
   if (cfg.includeBody) {
     args.push("--include-body");
   }

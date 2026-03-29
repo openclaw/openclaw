@@ -60,6 +60,8 @@ export type HooksGmailConfig = {
     /** Optional tailscale serve/funnel target (port, host:port, or full URL). */
     target?: string;
   };
+  /** Labels to exclude from webhook notifications. Defaults to ['SPAM','TRASH','DRAFT','SENT']. */
+  excludeLabels?: string[];
   /** Optional model override for Gmail hook processing (provider/model or alias). */
   model?: string;
   /** Optional thinking level override for Gmail hook processing. */
