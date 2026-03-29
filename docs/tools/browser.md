@@ -39,14 +39,17 @@ openclaw browser --browser-profile openclaw open https://example.com
 openclaw browser --browser-profile openclaw snapshot
 ```
 
+Before using the managed browser, enable browser config and the bundled
+`browser` plugin in `~/.openclaw/openclaw.json` (see configuration below).
+After changing either setting, restart the Gateway and verify with the above commands.
+
 If you get “Browser disabled”, enable it in config (see below) and restart the
 Gateway.
 
 ## Plugin control
 
-The default `browser` tool is now a bundled plugin that ships enabled by
-default. That means you can disable or replace it without removing the rest of
-OpenClaw's plugin system:
+The default `browser` tool is a bundled plugin. That means you can disable or
+replace it without removing the rest of OpenClaw's plugin system:
 
 ```json5
 {
@@ -133,6 +136,13 @@ Browser settings live in `~/.openclaw/openclaw.json`.
         color: "#FB542B",
       },
       remote: { cdpUrl: "http://10.0.0.42:9222", color: "#00AA00" },
+    },
+  },
+  plugins: {
+    entries: {
+      browser: {
+        enabled: true,
+      },
     },
   },
 }
@@ -748,6 +758,29 @@ Strict-mode example (block private/internal destinations by default):
 ```
 
 ## Troubleshooting
+
+### Problem: `unknown method: browser.request`
+
+This usually means the Gateway does not currently have the bundled browser tool
+registered, so `openclaw browser` cannot reach the managed browser service.
+
+Check these first:
+
+1. Confirm the managed browser is enabled in `~/.openclaw/openclaw.json`.
+2. Confirm the bundled browser plugin is explicitly enabled in config.
+3. Restart the Gateway after changing either setting.
+
+Verify the fix:
+
+```bash
+openclaw browser status
+```
+
+Success looks like:
+
+- `openclaw browser status` returns browser info instead of `unknown method: browser.request`
+- Gateway logs show `Browser control listening on http://127.0.0.1:<gateway+2>/`
+- `running: false` is still healthy until you start the browser or open a page
 
 For Linux-specific issues (especially snap Chromium), see
 [Browser troubleshooting](/tools/browser-linux-troubleshooting).
