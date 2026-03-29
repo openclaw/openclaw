@@ -198,16 +198,23 @@ export function toClientToolDefinitions(
   builtInToolNames?: ReadonlySet<string>,
 ): ClientToolConversionResult {
   const renamedTools = new Map<string, string>();
+  // Pre-compute caller-provided names to detect post-rename collisions
+  // (e.g. caller sends both "read" and "user_read" — renaming "read" would duplicate "user_read")
+  const callerToolNames = new Set(tools.map((t) => t.function.name));
 
   const defs = tools.map((tool) => {
     const func = tool.function;
     const originalName = func.name;
 
-    // Detect collision with built-in tools and prefix to avoid shadowing
+    // Detect collision with built-in tools and prefix to avoid shadowing.
+    // Skip rename if the candidate prefixed name is already taken by another caller tool.
     let effectiveName = originalName;
     if (builtInToolNames?.has(originalName)) {
-      effectiveName = `${CLIENT_TOOL_COLLISION_PREFIX}${originalName}`;
-      renamedTools.set(effectiveName, originalName);
+      const candidate = `${CLIENT_TOOL_COLLISION_PREFIX}${originalName}`;
+      if (!callerToolNames.has(candidate)) {
+        effectiveName = candidate;
+        renamedTools.set(effectiveName, originalName);
+      }
     }
 
     return {
@@ -218,7 +225,8 @@ export function toClientToolDefinitions(
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
         const { toolCallId, params } = splitToolExecuteArgs(args);
         const outcome = await runBeforeToolCallHook({
-          toolName: effectiveName,
+          // Use originalName so before_tool_call policies match operator-configured names
+          toolName: originalName,
           params,
           toolCallId,
           ctx: hookContext,

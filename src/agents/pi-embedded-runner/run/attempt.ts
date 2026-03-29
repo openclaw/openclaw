@@ -810,14 +810,10 @@ export async function runEmbeddedAttempt(
         agentId: sessionAgentId,
       });
 
-      // Collect built-in tool names for collision detection
+      // Collect built-in tool names for collision detection.
+      // customTools is a subset of effectiveTools (produced by splitSdkTools), so one loop suffices.
       const builtInToolNames = new Set<string>();
       for (const tool of effectiveTools) {
-        if (tool.name) {
-          builtInToolNames.add(tool.name);
-        }
-      }
-      for (const tool of customTools) {
         if (tool.name) {
           builtInToolNames.add(tool.name);
         }

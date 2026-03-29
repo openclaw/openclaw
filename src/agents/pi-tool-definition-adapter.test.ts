@@ -223,6 +223,19 @@ describe("toClientToolDefinitions — collision detection", () => {
     expect(result.renamedTools.size).toBe(0);
   });
 
+  it("skips rename when prefixed name would collide with another caller tool", () => {
+    // P1: caller provides both "read" (collides with built-in) and "user_read" (already that name)
+    // Renaming "read" → "user_read" would create a duplicate, so rename is skipped
+    const tools = [makeClientTool("read"), makeClientTool(`${CLIENT_TOOL_COLLISION_PREFIX}read`)];
+    const builtInNames = new Set(["read"]);
+    const result = toClientToolDefinitions(tools, undefined, undefined, builtInNames);
+
+    // Neither tool is renamed — "read" can't safely be prefixed, "user_read" has no collision
+    expect(result.tools[0]?.name).toBe("read");
+    expect(result.tools[1]?.name).toBe(`${CLIENT_TOOL_COLLISION_PREFIX}read`);
+    expect(result.renamedTools.size).toBe(0);
+  });
+
   it("preserves description and parameters through rename", () => {
     const tools: ClientToolDefinition[] = [
       {
