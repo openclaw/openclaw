@@ -35,6 +35,28 @@ describe("shared/node-match", () => {
     ).toBe("ios-live");
   });
 
+  it("prefers a unique current OpenClaw client over a legacy clawdbot client", () => {
+    expect(
+      resolveNodeIdFromCandidates(
+        [
+          {
+            nodeId: "legacy-mac",
+            displayName: "Peter’s Mac Studio",
+            clientId: "clawdbot-macos",
+            connected: false,
+          },
+          {
+            nodeId: "current-mac",
+            displayName: "Peter’s Mac Studio",
+            clientId: "openclaw-macos",
+            connected: false,
+          },
+        ],
+        "Peter's Mac Studio",
+      ),
+    ).toBe("current-mac");
+  });
+
   it("falls back to raw ambiguous matches when none of them are connected", () => {
     expect(() =>
       resolveNodeIdFromCandidates(
@@ -44,7 +66,7 @@ describe("shared/node-match", () => {
         ],
         "iphone",
       ),
-    ).toThrow(/ambiguous node: iphone.*matches: iPhone, iPhone/);
+    ).toThrow(/ambiguous node: iphone.*node=ios-a.*node=ios-b/);
   });
 
   it("throws clear unknown and ambiguous node errors", () => {
@@ -66,9 +88,39 @@ describe("shared/node-match", () => {
         ],
         "iphone",
       ),
-    ).toThrow(/ambiguous node: iphone.*matches: iPhone, iPhone/);
+    ).toThrow(/ambiguous node: iphone.*node=ios-a.*node=ios-b/);
 
     expect(() => resolveNodeIdFromCandidates([], "")).toThrow(/node required/);
+  });
+
+  it("prints client ids in ambiguous-node errors when available", () => {
+    expect(() =>
+      resolveNodeIdFromCandidates(
+        [
+          {
+            nodeId: "legacy-mac",
+            displayName: "Peter’s Mac Studio",
+            clientId: "clawdbot-macos",
+            connected: true,
+          },
+          {
+            nodeId: "other-mac",
+            displayName: "Peter’s Mac Studio",
+            clientId: "openclaw-macos",
+            connected: true,
+          },
+          {
+            nodeId: "third-mac",
+            displayName: "Peter’s Mac Studio",
+            clientId: "openclaw-macos",
+            connected: true,
+          },
+        ],
+        "Peter's Mac Studio",
+      ),
+    ).toThrow(
+      /ambiguous node: Peter's Mac Studio.*node=legacy-mac.*client=clawdbot-macos.*node=other-mac.*client=openclaw-macos.*node=third-mac.*client=openclaw-macos/,
+    );
   });
 
   it("lists remote ips in unknown-node errors when display names are missing", () => {

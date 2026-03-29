@@ -73,6 +73,15 @@ function formatPathEnv(raw?: string): string | null {
   return shortenHomeInString(display);
 }
 
+function formatClientLabel(node: { clientId?: string; clientMode?: string }): string | null {
+  const clientId = node.clientId?.trim();
+  const clientMode = node.clientMode?.trim();
+  if (clientId && clientMode) {
+    return `${clientId}/${clientMode}`;
+  }
+  return clientId || clientMode || null;
+}
+
 function parseSinceMs(raw: unknown, label: string): number | undefined {
   if (raw === undefined || raw === null) {
     return undefined;
@@ -166,7 +175,9 @@ export function registerNodesStatusCommands(nodes: Command) {
             const perms = formatPermissions(n.permissions);
             const versions = formatNodeVersions(n);
             const pathEnv = formatPathEnv(n.pathEnv);
+            const client = formatClientLabel(n);
             const detailParts = [
+              client ? `client: ${client}` : null,
               n.deviceFamily ? `device: ${n.deviceFamily}` : null,
               n.modelIdentifier ? `hw: ${n.modelIdentifier}` : null,
               perms ? `perms: ${perms}` : null,
@@ -241,6 +252,7 @@ export function registerNodesStatusCommands(nodes: Command) {
           const perms = formatPermissions(obj.permissions);
           const family = typeof obj.deviceFamily === "string" ? obj.deviceFamily : null;
           const model = typeof obj.modelIdentifier === "string" ? obj.modelIdentifier : null;
+          const client = formatClientLabel(obj as { clientId?: string; clientMode?: string });
           const ip = typeof obj.remoteIp === "string" ? obj.remoteIp : null;
           const pathEnv = typeof obj.pathEnv === "string" ? obj.pathEnv : null;
           const versions = formatNodeVersions(
@@ -260,6 +272,7 @@ export function registerNodesStatusCommands(nodes: Command) {
           const rows = [
             { Field: "ID", Value: nodeId },
             displayName ? { Field: "Name", Value: displayName } : null,
+            client ? { Field: "Client", Value: client } : null,
             ip ? { Field: "IP", Value: ip } : null,
             family ? { Field: "Device", Value: family } : null,
             model ? { Field: "Model", Value: model } : null,
