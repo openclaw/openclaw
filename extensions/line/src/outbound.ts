@@ -9,7 +9,66 @@ import {
   type LineChannelData,
   type ResolvedLineAccount,
 } from "../api.js";
+import { resolveLineOutboundMedia, type LineOutboundMediaResolved } from "./outbound-media.js";
 import { getLineRuntime } from "./runtime.js";
+
+type LineChannelDataWithMedia = LineChannelData & {
+  mediaKind?: "image" | "video" | "audio";
+  previewImageUrl?: string;
+  durationMs?: number;
+  trackingId?: string;
+};
+
+function isLineUserTarget(target: string): boolean {
+  const normalized = target
+    .trim()
+    .replace(/^line:(group|room|user):/i, "")
+    .replace(/^line:/i, "");
+  return /^U/i.test(normalized);
+}
+
+function hasLineSpecificMediaOptions(lineData: LineChannelDataWithMedia): boolean {
+  return Boolean(
+    lineData.mediaKind ??
+      lineData.previewImageUrl?.trim() ??
+      (typeof lineData.durationMs === "number" ? lineData.durationMs : undefined) ??
+      lineData.trackingId?.trim(),
+  );
+}
+
+function buildLineMediaMessageObject(
+  resolved: LineOutboundMediaResolved,
+  opts?: { allowTrackingId?: boolean },
+): Record<string, unknown> {
+  switch (resolved.mediaKind) {
+    case "video": {
+      const previewImageUrl = resolved.previewImageUrl?.trim();
+      if (!previewImageUrl) {
+        throw new Error("LINE video messages require previewImageUrl to reference an image URL");
+      }
+      return {
+        type: "video",
+        originalContentUrl: resolved.mediaUrl,
+        previewImageUrl,
+        ...(opts?.allowTrackingId && resolved.trackingId
+          ? { trackingId: resolved.trackingId }
+          : {}),
+      };
+    }
+    case "audio":
+      return {
+        type: "audio",
+        originalContentUrl: resolved.mediaUrl,
+        duration: resolved.durationMs ?? 60000,
+      };
+    default:
+      return {
+        type: "image",
+        originalContentUrl: resolved.mediaUrl,
+        previewImageUrl: resolved.previewImageUrl ?? resolved.mediaUrl,
+      };
+  }
+}
 
 export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>["outbound"]> = {
   deliveryMode: "direct",
@@ -17,7 +76,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
   textChunkLimit: 5000,
   sendPayload: async ({ to, payload, accountId, cfg }) => {
     const runtime = getLineRuntime();
-    const lineData = (payload.channelData?.line as LineChannelData | undefined) ?? {};
+    const lineData = (payload.channelData?.line as LineChannelDataWithMedia | undefined) ?? {};
     const sendText = runtime.channel.line.pushMessageLine;
     const sendBatch = runtime.channel.line.pushMessagesLine;
     const sendFlex = runtime.channel.line.pushFlexMessage;
@@ -61,12 +120,36 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       ? runtime.channel.text.chunkMarkdownText(processed.text, chunkLimit)
       : [];
     const mediaUrls = resolveOutboundMediaUrls(payload);
+    const useLineSpecificMedia = hasLineSpecificMediaOptions(lineData);
     const shouldSendQuickRepliesInline = chunks.length === 0 && hasQuickReplies;
     const sendMediaMessages = async () => {
       for (const url of mediaUrls) {
+        const trimmed = url?.trim();
+        if (!trimmed) {
+          continue;
+        }
+        if (!useLineSpecificMedia) {
+          lastResult = await runtime.channel.line.sendMessageLine(to, "", {
+            verbose: false,
+            mediaUrl: trimmed,
+            cfg,
+            accountId: accountId ?? undefined,
+          });
+          continue;
+        }
+        const resolved = await resolveLineOutboundMedia(trimmed, {
+          mediaKind: lineData.mediaKind,
+          previewImageUrl: lineData.previewImageUrl,
+          durationMs: lineData.durationMs,
+          trackingId: lineData.trackingId,
+        });
         lastResult = await runtime.channel.line.sendMessageLine(to, "", {
           verbose: false,
-          mediaUrl: url,
+          mediaUrl: resolved.mediaUrl,
+          mediaKind: resolved.mediaKind,
+          previewImageUrl: resolved.previewImageUrl,
+          durationMs: resolved.durationMs,
+          trackingId: resolved.trackingId,
           cfg,
           accountId: accountId ?? undefined,
         });
@@ -170,11 +253,23 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
         if (!trimmed) {
           continue;
         }
-        quickReplyMessages.push({
-          type: "image",
-          originalContentUrl: trimmed,
-          previewImageUrl: trimmed,
+        if (!useLineSpecificMedia) {
+          quickReplyMessages.push({
+            type: "image",
+            originalContentUrl: trimmed,
+            previewImageUrl: trimmed,
+          });
+          continue;
+        }
+        const resolved = await resolveLineOutboundMedia(trimmed, {
+          mediaKind: lineData.mediaKind,
+          previewImageUrl: lineData.previewImageUrl,
+          durationMs: lineData.durationMs,
+          trackingId: lineData.trackingId,
         });
+        quickReplyMessages.push(
+          buildLineMediaMessageObject(resolved, { allowTrackingId: isLineUserTarget(to) }),
+        );
       }
       if (quickReplyMessages.length > 0 && quickReply) {
         const lastIndex = quickReplyMessages.length - 1;
