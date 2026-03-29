@@ -162,6 +162,12 @@ export function buildGroupChatContext(params: { sessionCtx: TemplateContext }): 
   }
   if (members) {
     lines.push(`Participants: ${members}.`);
+    const providerId = resolveLooseChannelId(params.sessionCtx.Provider?.trim());
+    if (providerId === "whatsapp") {
+      lines.push(
+        "To @mention a participant, write @<their phone number> in your reply (e.g. @+1234567890). This sends a native mention notification.",
+      );
+    }
   }
   lines.push(
     "Your replies are automatically sent to this group chat. Do not use the message tool to send to this same group — just reply normally.",
