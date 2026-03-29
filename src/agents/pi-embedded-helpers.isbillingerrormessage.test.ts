@@ -655,6 +655,10 @@ describe("isFailoverErrorMessage", () => {
     ]);
   });
 
+  it("matches terminated transport errors as timeout", () => {
+    expectTimeoutFailoverSamples(["terminated", "rawError=terminated"]);
+  });
+
   it("does not classify MALFORMED_FUNCTION_CALL as timeout", () => {
     const sample = "Unhandled stop reason: MALFORMED_FUNCTION_CALL";
     expect(isTimeoutErrorMessage(sample)).toBe(false);
