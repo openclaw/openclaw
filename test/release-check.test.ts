@@ -20,6 +20,7 @@ function makePackResult(filename: string, unpackedSize: number) {
 
 const requiredPluginSdkPackPaths = [...listPluginSdkDistArtifacts(), "dist/plugin-sdk/compat.js"];
 const requiredBundledPluginPackPaths = listBundledPluginPackArtifacts();
+const requiredMatrixCryptoWasmPackPaths = ["dist/pkg/matrix_sdk_crypto_wasm_bg.wasm"];
 
 describe("collectAppcastSparkleVersionErrors", () => {
   it("accepts legacy 9-digit calver builds before lane-floor cutover", () => {
@@ -138,6 +139,7 @@ describe("collectMissingPackPaths", () => {
       expect.arrayContaining([
         "dist/channel-catalog.json",
         "dist/control-ui/index.html",
+        "dist/pkg/matrix_sdk_crypto_wasm_bg.wasm",
         bundledDistPluginFile("matrix", "helper-api.js"),
         bundledDistPluginFile("matrix", "runtime-api.js"),
         bundledDistPluginFile("matrix", "thread-bindings-runtime.js"),
@@ -158,6 +160,7 @@ describe("collectMissingPackPaths", () => {
         "dist/entry.js",
         "dist/control-ui/index.html",
         ...requiredBundledPluginPackPaths,
+        ...requiredMatrixCryptoWasmPackPaths,
         ...requiredPluginSdkPackPaths,
         "dist/plugin-sdk/root-alias.cjs",
         "dist/build-info.json",

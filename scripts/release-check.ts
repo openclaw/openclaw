@@ -28,6 +28,7 @@ const requiredPathGroups = [
   "dist/build-info.json",
   "dist/channel-catalog.json",
   "dist/control-ui/index.html",
+  "dist/pkg/matrix_sdk_crypto_wasm_bg.wasm",
 ];
 const forbiddenPrefixes = ["dist-runtime/", "dist/OpenClaw.app/"];
 // 2026.3.12 ballooned to ~213.6 MiB unpacked and correlated with low-memory
