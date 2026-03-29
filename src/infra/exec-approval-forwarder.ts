@@ -7,6 +7,10 @@ import type {
   ExecApprovalForwardTarget,
 } from "../config/types.approvals.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  buildApprovalPendingReplyPayload,
+  buildPluginApprovalPendingReplyPayload,
+} from "../plugin-sdk/approval-renderers.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { compileConfigRegex } from "../security/config-regex.js";
 import { testRegexWithBoundedInput } from "../security/safe-regex.js";
@@ -284,7 +288,11 @@ function buildRequestPayloadForTarget(
   if (pluginPayload) {
     return pluginPayload;
   }
-  return { text: buildRequestMessage(request, nowMsValue) };
+  return buildApprovalPendingReplyPayload({
+    approvalId: request.id,
+    approvalSlug: request.id.slice(0, 8),
+    text: buildRequestMessage(request, nowMsValue),
+  });
 }
 
 function buildResolvedPayloadForTarget(
@@ -563,7 +571,14 @@ export function createExecApprovalForwarder(
               nowMs: nowMs(),
             })
           : null;
-        return adapterPayload ?? { text: buildPluginApprovalRequestMessage(request, nowMs()) };
+        return (
+          adapterPayload ??
+          buildPluginApprovalPendingReplyPayload({
+            request,
+            nowMs: nowMs(),
+            text: buildPluginApprovalRequestMessage(request, nowMs()),
+          })
+        );
       },
       beforeDeliver: async (target, payload) => {
         const channel = normalizeMessageChannel(target.channel) ?? target.channel;
