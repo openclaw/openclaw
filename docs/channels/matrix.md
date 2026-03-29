@@ -470,6 +470,23 @@ Matrix supports native Matrix threads for both automatic replies and message-too
 - Top-level Matrix room/DM `/focus` creates a new Matrix thread and binds it to the target session when `threadBindings.spawnSubagentSessions=true`.
 - Running `/focus` or `/acp spawn --thread here` inside an existing Matrix thread binds that current thread instead.
 
+## ACP conversation bindings
+
+Matrix rooms, DMs, and existing Matrix threads can be turned into durable ACP workspaces without changing the chat surface.
+
+Fast operator flow:
+
+- Run `/acp spawn codex --bind here` inside the Matrix DM, room, or existing thread you want to keep using.
+- In a top-level Matrix DM or room, the current DM/room stays the chat surface and future messages route to the spawned ACP session.
+- Inside an existing Matrix thread, `--bind here` binds that current thread in place.
+- `/new` and `/reset` reset the same bound ACP session in place.
+- `/acp close` closes the ACP session and removes the binding.
+
+Notes:
+
+- `--bind here` does not create a child Matrix thread.
+- `threadBindings.spawnAcpSessions` is only required for `/acp spawn --thread auto|here`, where OpenClaw needs to create or bind a child Matrix thread.
+
 ### Thread Binding Config
 
 Matrix inherits global defaults from `session.threadBindings`, and also supports per-channel overrides:
