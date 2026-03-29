@@ -9,7 +9,6 @@ import { createBundleMcpToolRuntime } from "./pi-bundle-mcp-tools.js";
 
 const require = createRequire(import.meta.url);
 const SDK_SERVER_MCP_PATH = require.resolve("@modelcontextprotocol/sdk/server/mcp.js");
-const SDK_SERVER_STDIO_PATH = require.resolve("@modelcontextprotocol/sdk/server/stdio.js");
 const SDK_SERVER_SSE_PATH = require.resolve("@modelcontextprotocol/sdk/server/sse.js");
 
 const tempDirs: string[] = [];
