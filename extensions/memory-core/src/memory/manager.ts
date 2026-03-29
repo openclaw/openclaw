@@ -352,7 +352,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
 
       // Extract keywords for better FTS matching on conversational queries
       // e.g., "that thing we discussed about the API" → ["discussed", "API"]
-      const keywords = extractKeywords(cleaned);
+      const keywords = extractKeywords(cleaned, {
+        ftsTokenizer: this.settings.store.fts.tokenizer,
+      });
       const searchTerms = keywords.length > 0 ? keywords : [cleaned];
 
       // Search with each keyword and merge results
@@ -488,6 +490,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       ftsTable: FTS_TABLE,
       providerModel,
       query,
+      ftsTokenizer: this.settings.store.fts.tokenizer,
       limit,
       snippetMaxChars: SNIPPET_MAX_CHARS,
       sourceFilter,
