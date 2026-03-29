@@ -28,6 +28,16 @@ export const AgentSummarySchema = Type.Object(
         { additionalProperties: false },
       ),
     ),
+    workspace: Type.Optional(NonEmptyString),
+    model: Type.Optional(
+      Type.Object(
+        {
+          primary: Type.Optional(NonEmptyString),
+          fallbacks: Type.Optional(Type.Array(NonEmptyString)),
+        },
+        { additionalProperties: false },
+      ),
+    ),
   },
   { additionalProperties: false },
 );
