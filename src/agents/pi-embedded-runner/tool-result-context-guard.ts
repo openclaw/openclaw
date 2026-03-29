@@ -161,7 +161,7 @@ function enforceToolResultContextBudgetInPlace(params: {
   messages: AgentMessage[];
   contextBudgetChars: number;
   maxSingleToolResultChars: number;
-}): void {
+}): MessageCharEstimateCache {
   const { messages, contextBudgetChars, maxSingleToolResultChars } = params;
   const estimateCache = createMessageCharEstimateCache();
 
@@ -176,7 +176,7 @@ function enforceToolResultContextBudgetInPlace(params: {
 
   let currentChars = estimateContextChars(messages, estimateCache);
   if (currentChars <= contextBudgetChars) {
-    return;
+    return estimateCache;
   }
 
   // Compact oldest tool outputs first until the context is back under budget.
@@ -185,6 +185,8 @@ function enforceToolResultContextBudgetInPlace(params: {
     charsNeeded: currentChars - contextBudgetChars,
     cache: estimateCache,
   });
+
+  return estimateCache;
 }
 
 export function installToolResultContextGuard(params: {
@@ -218,7 +220,7 @@ export function installToolResultContextGuard(params: {
       : messages;
 
     const contextMessages = Array.isArray(transformed) ? transformed : messages;
-    enforceToolResultContextBudgetInPlace({
+    const enforcementCache = enforceToolResultContextBudgetInPlace({
       messages: contextMessages,
       contextBudgetChars,
       maxSingleToolResultChars,
@@ -228,9 +230,10 @@ export function installToolResultContextGuard(params: {
     // If it does, non-tool-result content dominates and only full LLM-based session
     // compaction can reduce context size. Throwing a context overflow error triggers
     // the existing overflow recovery cascade in run.ts.
+    // Reuse the cache from enforcement to avoid re-estimating every message.
     const postEnforcementChars = estimateContextChars(
       contextMessages,
-      createMessageCharEstimateCache(),
+      enforcementCache,
     );
     if (postEnforcementChars > preemptiveOverflowChars) {
       throw new Error(PREEMPTIVE_CONTEXT_OVERFLOW_MESSAGE);
