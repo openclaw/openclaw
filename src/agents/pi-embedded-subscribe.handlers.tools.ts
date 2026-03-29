@@ -347,12 +347,17 @@ export async function handleToolExecutionStart(
 
   if (toolName === "read") {
     const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
+    // The read tool schema accepts path, file_path, file, and filePath as aliases.
     const filePathValue =
       typeof record.path === "string"
         ? record.path
         : typeof record.file_path === "string"
           ? record.file_path
-          : "";
+          : typeof record.file === "string"
+            ? record.file
+            : typeof record.filePath === "string"
+              ? record.filePath
+              : "";
     const filePath = filePathValue.trim();
     if (!filePath) {
       const argsPreview = typeof args === "string" ? args.slice(0, 200) : undefined;
