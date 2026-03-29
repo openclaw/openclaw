@@ -25,6 +25,35 @@ export type HubLockfile = {
   skills: HubLockSkillEntry[];
 };
 
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+export function isValidHubLockSkillEntry(entry: unknown): entry is HubLockSkillEntry {
+  if (!entry || typeof entry !== "object") {
+    return false;
+  }
+  const row = entry as Record<string, unknown>;
+  if (!isNonEmptyString(row.name)) {
+    return false;
+  }
+  if (row.source !== "clawhub" && row.source !== "github") {
+    return false;
+  }
+  if (
+    !isNonEmptyString(row.url) ||
+    !isNonEmptyString(row.ref) ||
+    !isNonEmptyString(row.contentHash)
+  ) {
+    return false;
+  }
+  const scan = row.scan;
+  if (!scan || typeof scan !== "object") {
+    return false;
+  }
+  return true;
+}
+
 export function upsertLockSkill(lock: HubLockfile, entry: HubLockSkillEntry): HubLockfile {
   const filtered = lock.skills.filter((skill) => skill.name !== entry.name);
   filtered.push(entry);
@@ -42,7 +71,7 @@ export async function readHubLockfile(lockPath: string): Promise<HubLockfile> {
       return { lockfileVersion: 1, skills: [] };
     }
     const skills = parsed.skills
-      .filter((entry): entry is HubLockSkillEntry => Boolean(entry && typeof entry === "object"))
+      .filter(isValidHubLockSkillEntry)
       .map((entry): HubLockSkillEntry => {
         const verdict: HubLockSkillEntry["scan"]["verdict"] =
           entry.scan?.verdict === "critical" || entry.scan?.verdict === "warn"

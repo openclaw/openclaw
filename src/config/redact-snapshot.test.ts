@@ -7,7 +7,7 @@ import {
   type TestSnapshot,
 } from "./redact-snapshot.test-helpers.js";
 import { redactSnapshotTestHints as mainSchemaHints } from "./redact-snapshot.test-hints.js";
-import type { ConfigUiHints } from "./schema.js";
+import { buildConfigSchema, type ConfigUiHints } from "./schema.js";
 import type { ConfigFileSnapshot } from "./types.openclaw.js";
 
 function expectNestedLevelPairValue(
@@ -157,6 +157,72 @@ describe("redactConfigSnapshot", () => {
     expect(cfg.models.providers.openai.baseUrl).toBe(REDACTED_SENTINEL);
     expect(result.raw).toContain(REDACTED_SENTINEL);
     expect(result.raw).not.toContain("alice:secret@");
+  });
+
+  it("redacts and restores MCP SSE header values from schema hints", () => {
+    const hints = buildConfigSchema().uiHints;
+    const snapshot = makeSnapshot({
+      mcp: {
+        servers: {
+          remote: {
+            url: "https://example.com/mcp",
+            headers: {
+              Authorization: "Bearer secret-token",
+              "X-Test": "ok",
+            },
+          },
+        },
+      },
+    });
+
+    const result = redactConfigSnapshot(snapshot, hints);
+    const servers = (result.config.mcp as { servers: Record<string, Record<string, unknown>> })
+      .servers;
+    expect((servers.remote.headers as Record<string, string>).Authorization).toBe(
+      REDACTED_SENTINEL,
+    );
+    expect((servers.remote.headers as Record<string, string>)["X-Test"]).toBe(REDACTED_SENTINEL);
+
+    const restored = restoreRedactedValues(result.config, snapshot.config, hints);
+    expect(restored.mcp.servers.remote.headers.Authorization).toBe("Bearer secret-token");
+    expect(restored.mcp.servers.remote.headers["X-Test"]).toBe("ok");
+  });
+
+  it("redacts sensitive auth material from MCP SSE URLs", () => {
+    const hints = buildConfigSchema().uiHints;
+    const raw = `{
+  mcp: {
+    servers: {
+      remote: {
+        url: "https://user:pass@example.com/mcp?token=secret123&safe=value",
+      },
+    },
+  },
+}`;
+    const snapshot = makeSnapshot(
+      {
+        mcp: {
+          servers: {
+            remote: {
+              url: "https://user:pass@example.com/mcp?token=secret123&safe=value",
+            },
+          },
+        },
+      },
+      raw,
+    );
+
+    const result = redactConfigSnapshot(snapshot, hints);
+    const cfg = result.config as typeof snapshot.config;
+    expect(cfg.mcp.servers.remote.url).toBe(REDACTED_SENTINEL);
+    expect(result.raw).toContain(REDACTED_SENTINEL);
+    expect(result.raw).not.toContain("user:pass@");
+    expect(result.raw).not.toContain("secret123");
+
+    const restored = restoreRedactedValues(result.config, snapshot.config, hints);
+    expect(restored.mcp.servers.remote.url).toBe(
+      "https://user:pass@example.com/mcp?token=secret123&safe=value",
+    );
   });
 
   it("does not redact maxTokens-style fields", () => {

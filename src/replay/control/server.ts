@@ -4,6 +4,7 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from "node:http";
+import { loadConfig } from "../../config/config.js";
 import { getBearerToken } from "../../gateway/http-utils.js";
 import { validateJsonSchemaValue } from "../../plugins/schema-validator.js";
 import {
@@ -104,7 +105,8 @@ export async function startReplayControlServer(params: {
   token?: string;
   ttlMs?: number;
 }): Promise<ReplayControlServer> {
-  const enabled = params.enabled ?? isResearchEnabled();
+  const cfg = loadConfig();
+  const enabled = params.enabled ?? isResearchEnabled(cfg);
   if (!enabled) {
     throw new ReplayControlError({
       code: "replay_disabled",

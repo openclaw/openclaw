@@ -3,7 +3,9 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as configModule from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getDeterministicFreePortBlock } from "../../test-utils/ports.js";
 import { startReplayControlServer } from "./server.js";
 
@@ -87,6 +89,32 @@ describe("replay control server", () => {
     await expect(startReplayControlServer({ enabled: false })).rejects.toThrow(
       /Replay control is disabled/,
     );
+  });
+
+  it("defaults enabled from loaded config when params.enabled is omitted", async () => {
+    const spy = vi.spyOn(configModule, "loadConfig").mockReturnValue({
+      research: { enabled: true },
+    } as OpenClawConfig);
+    const port = await getDeterministicFreePortBlock({ offsets: [50] });
+    let server: Awaited<ReturnType<typeof startReplayControlServer>> | undefined;
+    try {
+      server = await startReplayControlServer({ port });
+      expect(server.port).toBe(port);
+    } finally {
+      await server?.close();
+      spy.mockRestore();
+    }
+  });
+
+  it("defaults to disabled when config has research disabled", async () => {
+    const spy = vi.spyOn(configModule, "loadConfig").mockReturnValue({
+      research: { enabled: false },
+    } as OpenClawConfig);
+    try {
+      await expect(startReplayControlServer({})).rejects.toThrow(/Replay control is disabled/);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("requires bearer token and supports lifecycle endpoints", async () => {

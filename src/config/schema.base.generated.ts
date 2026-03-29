@@ -4623,7 +4623,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       properties: {
                         host: {
                           type: "string",
-                          enum: ["sandbox", "gateway", "node"],
+                          enum: ["auto", "sandbox", "gateway", "node"],
                         },
                         security: {
                           type: "string",
@@ -7205,7 +7205,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
             properties: {
               host: {
                 type: "string",
-                enum: ["sandbox", "gateway", "node"],
+                enum: ["auto", "sandbox", "gateway", "node"],
               },
               security: {
                 type: "string",
@@ -11136,6 +11136,25 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                   type: "string",
                   format: "uri",
                 },
+                headers: {
+                  type: "object",
+                  propertyNames: {
+                    type: "string",
+                  },
+                  additionalProperties: {
+                    anyOf: [
+                      {
+                        type: "string",
+                      },
+                      {
+                        type: "number",
+                      },
+                      {
+                        type: "boolean",
+                      },
+                    ],
+                  },
+                },
               },
               additionalProperties: {},
             },
@@ -12633,8 +12652,8 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       tags: ["tools"],
     },
     "tools.exec.host": {
-      label: "Exec Host",
-      help: "Selects execution host strategy for shell commands, typically controlling local vs delegated execution environment. Use the safest host mode that still satisfies your automation requirements.",
+      label: "Exec Target",
+      help: 'Selects execution target strategy for shell commands. Use "auto" for runtime-aware behavior (sandbox when available, otherwise gateway), or pin sandbox/gateway/node explicitly when you need a fixed surface.',
       tags: ["tools"],
     },
     "tools.exec.security": {
@@ -12951,7 +12970,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     "tools.web.fetch.firecrawl.baseUrl": {
       label: "Firecrawl Base URL",
       help: "Firecrawl base URL (e.g. https://api.firecrawl.dev or custom endpoint).",
-      tags: ["tools"],
+      tags: ["tools", "url-secret"],
     },
     "tools.web.fetch.firecrawl.onlyMainContent": {
       label: "Firecrawl Main Content Only",
@@ -13056,7 +13075,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       label: "Gateway APNs Relay Base URL",
       help: "Base HTTPS URL for the external APNs relay service used by official/TestFlight iOS builds. Keep this aligned with the relay URL baked into the iOS build so registration and send traffic hit the same deployment.",
       placeholder: "https://relay.example.com",
-      tags: ["network", "advanced"],
+      tags: ["network", "advanced", "url-secret"],
     },
     "gateway.push.apns.relay.timeoutMs": {
       label: "Gateway APNs Relay Timeout (ms)",
@@ -13396,7 +13415,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     "agents.defaults.memorySearch.remote.baseUrl": {
       label: "Remote Embedding Base URL",
       help: "Overrides the embedding API endpoint, such as an OpenAI-compatible proxy or custom Gemini base URL. Use this only when routing through your own gateway or vendor endpoint; keep provider defaults otherwise.",
-      tags: ["advanced"],
+      tags: ["advanced", "url-secret"],
     },
     "agents.defaults.memorySearch.remote.apiKey": {
       label: "Remote Embedding API Key",
@@ -13882,7 +13901,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
     "models.providers.*.baseUrl": {
       label: "Model Provider Base URL",
       help: "Base URL for the provider endpoint used to serve model requests for that provider entry. Use HTTPS endpoints and keep URLs environment-specific through config templating where needed.",
-      tags: ["models"],
+      tags: ["models", "url-secret"],
     },
     "models.providers.*.apiKey": {
       label: "Model Provider API Key",
@@ -15569,11 +15588,60 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       sensitive: true,
       tags: ["security", "auth", "tools"],
     },
+    "mcp.servers.*.headers.*": {
+      sensitive: true,
+      tags: ["security"],
+    },
     "skills.entries.*.apiKey": {
       sensitive: true,
       tags: ["security", "auth"],
     },
+    "agents.list[].memorySearch.remote.baseUrl": {
+      tags: ["advanced", "url-secret"],
+    },
+    "tools.web.search.brave.baseUrl": {
+      tags: ["tools", "url-secret"],
+    },
+    "tools.web.search.firecrawl.baseUrl": {
+      tags: ["tools", "url-secret"],
+    },
+    "tools.web.search.gemini.baseUrl": {
+      tags: ["tools", "url-secret"],
+    },
+    "tools.web.search.grok.baseUrl": {
+      tags: ["tools", "url-secret"],
+    },
+    "tools.web.search.kimi.baseUrl": {
+      tags: ["tools", "url-secret"],
+    },
+    "tools.web.search.perplexity.baseUrl": {
+      tags: ["tools", "url-secret"],
+    },
+    "tools.media.models[].baseUrl": {
+      tags: ["media", "tools", "url-secret"],
+    },
+    "tools.media.image.baseUrl": {
+      tags: ["media", "tools", "url-secret"],
+    },
+    "tools.media.image.models[].baseUrl": {
+      tags: ["media", "tools", "url-secret"],
+    },
+    "tools.media.audio.baseUrl": {
+      tags: ["media", "tools", "url-secret"],
+    },
+    "tools.media.audio.models[].baseUrl": {
+      tags: ["media", "tools", "url-secret"],
+    },
+    "tools.media.video.baseUrl": {
+      tags: ["media", "tools", "url-secret"],
+    },
+    "tools.media.video.models[].baseUrl": {
+      tags: ["media", "tools", "url-secret"],
+    },
+    "mcp.servers.*.url": {
+      tags: ["advanced", "url-secret"],
+    },
   },
-  version: "2026.3.28",
+  version: "2026.3.29",
   generatedAt: "2026-03-22T21:17:33.302Z",
 } as const satisfies BaseConfigSchemaResponse;

@@ -21,10 +21,10 @@ import {
   applyPathPrepend,
   applyShellPath,
   normalizeExecAsk,
-  normalizeExecHost,
   normalizeExecSecurity,
+  normalizeExecTarget,
   normalizePathPrepend,
-  renderExecHostLabel,
+  resolveExecTarget,
   resolveApprovalRunningNoticeMs,
   runExecProcess,
   execSchema,
@@ -329,18 +329,13 @@ export function createExecTool(
       if (elevatedRequested) {
         logInfo(`exec: elevated command ${truncateMiddle(params.command, 120)}`);
       }
-      const configuredHost = defaults?.host ?? "sandbox";
-      const requestedHost = normalizeExecHost(params.host) ?? null;
-      let host: ExecHost = requestedHost ?? configuredHost;
-      if (!elevatedRequested && requestedHost && requestedHost !== configuredHost) {
-        throw new Error(
-          `exec host not allowed (requested ${renderExecHostLabel(requestedHost)}; ` +
-            `configure tools.exec.host=${renderExecHostLabel(configuredHost)} to allow).`,
-        );
-      }
-      if (elevatedRequested) {
-        host = "gateway";
-      }
+      const target = resolveExecTarget({
+        configuredTarget: defaults?.host,
+        requestedTarget: normalizeExecTarget(params.host),
+        elevatedRequested,
+        sandboxAvailable: Boolean(defaults?.sandbox),
+      });
+      const host: ExecHost = target.effectiveHost;
 
       const configuredSecurity = defaults?.security ?? (host === "sandbox" ? "deny" : "allowlist");
       const requestedSecurity = normalizeExecSecurity(params.security);
@@ -358,12 +353,11 @@ export function createExecTool(
       }
 
       const sandbox = host === "sandbox" ? defaults?.sandbox : undefined;
-      // Never fall through to direct host exec when the selected host was sandbox.
-      if (host === "sandbox" && !sandbox) {
+      if (target.selectedTarget === "sandbox" && !sandbox) {
         throw new Error(
           [
-            "exec host resolved to sandbox, but sandbox runtime is unavailable for this session.",
-            'Enable sandbox mode (`agents.defaults.sandbox.mode="non-main"` or `"all"`) or set tools.exec.host to "gateway"/"node".',
+            "exec host=sandbox requires a sandbox runtime for this session.",
+            'Enable sandbox mode (`agents.defaults.sandbox.mode="non-main"` or `"all"`) or use host=auto/gateway/node.',
           ].join("\n"),
         );
       }
@@ -378,7 +372,10 @@ export function createExecTool(
         });
         workdir = resolved.hostWorkdir;
         containerWorkdir = resolved.containerWorkdir;
-      } else {
+      } else if (host !== "node") {
+        // Skip local workdir resolution for remote node execution: the remote node's
+        // filesystem is not visible to the gateway, so resolveWorkdir() would incorrectly
+        // fall back to the gateway's cwd. The node is responsible for validating its own cwd.
         workdir = resolveWorkdir(rawWorkdir, warnings);
       }
 
