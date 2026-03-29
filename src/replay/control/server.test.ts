@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -105,6 +106,31 @@ describe("replay control server", () => {
         },
       );
       expect(stateAfterClose.status).toBe(404);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("returns 400 invalid_request for malformed JSON bodies", async () => {
+    const port = await getDeterministicFreePortBlock({ offsets: [1] });
+    const bearerToken = `replay-json-${randomUUID()}`;
+    const server = await startReplayControlServer({
+      enabled: true,
+      port,
+      token: bearerToken,
+    });
+    try {
+      const res = await fetch(`http://127.0.0.1:${server.port}/api/replay/v1/runs.create`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${bearerToken}`,
+          "Content-Type": "application/json",
+        },
+        body: "{",
+      });
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error?: { code?: string } };
+      expect(body.error?.code).toBe("invalid_request");
     } finally {
       await server.close();
     }

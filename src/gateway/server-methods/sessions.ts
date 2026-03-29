@@ -87,6 +87,20 @@ const SESSION_SEARCH_FTS_TABLE = "chunks_fts";
 const SESSIONS_RECALL_MAX_EVIDENCE_CHARS_PER_HIT = 700;
 const SESSIONS_RECALL_MAX_EVIDENCE_CHARS_TOTAL = 4_000;
 
+/**
+ * Session FTS (`sessions.search` / `sessions.recall`):
+ *
+ * Session transcript chunks are indexed into **per-agent** SQLite memory stores. Path resolution is
+ * `resolveMemorySearchConfig(cfg, agentId).store.path` → `resolveStorePath` in `memory-search.ts`
+ * (default: `{stateDir}/memory/{agentId}.sqlite`, or a user path with `{agentId}` substituted).
+ *
+ * A gateway-visible session list can span **multiple** agent ids (`resolveAgentIdFromSessionKey`).
+ * Correct search must therefore query **each distinct agent memory DB** that backs at least one
+ * visible session (dedupe by resolved `store.path` when configs collide), merge hits, then apply
+ * the existing `allowedPaths` filter and global `limit`. Opening **only**
+ * `resolveMemorySearchConfig(cfg, resolveDefaultAgentId(cfg))` misses chunks for non-default agents.
+ */
+
 type SessionSearchResultRow = {
   sessionKey: string;
   sessionId: string;
@@ -119,11 +133,6 @@ async function searchSessionsViaFts(params: {
   kinds?: string[];
   requestedKeys?: string[];
 }): Promise<{ count: number; results: SessionSearchResultRow[] }> {
-  const searchCfg = resolveMemorySearchConfig(params.cfg, resolveDefaultAgentId(params.cfg));
-  if (!searchCfg) {
-    return { count: 0, results: [] };
-  }
-
   const visibleKeys = await resolveVisibleSessionKeys({
     cfg: params.cfg,
     agentSessionKey: params.requesterSessionKey,
@@ -145,6 +154,7 @@ async function searchSessionsViaFts(params: {
   const requestedKeys = params.requestedKeys?.length ? new Set(params.requestedKeys) : undefined;
   const allowedPaths = new Set<string>();
   const pathToSession = new Map<string, { sessionKey: string; sessionId: string }>();
+  const distinctAgentIds = new Set<string>();
   for (const row of listed.sessions) {
     const key = typeof row.key === "string" ? row.key : "";
     const sessionId = typeof row.sessionId === "string" ? row.sessionId : "";
@@ -160,6 +170,7 @@ async function searchSessionsViaFts(params: {
     if (requestedKeys && !requestedKeys.has(key)) {
       continue;
     }
+    distinctAgentIds.add(normalizeAgentId(resolveAgentIdFromSessionKey(key)));
     const storedSessionFile = loadSessionEntry(key).entry?.sessionFile;
     const transcriptCandidates = resolveSessionTranscriptCandidates(
       sessionId,
@@ -180,47 +191,77 @@ async function searchSessionsViaFts(params: {
     return { count: 0, results: [] };
   }
 
-  const db = new DatabaseSync(searchCfg.store.path);
-  try {
-    const hits = await searchKeyword({
-      db,
-      ftsTable: SESSION_SEARCH_FTS_TABLE,
-      providerModel: undefined,
-      query: params.query,
-      limit: Math.max(1, params.limit * 3),
-      snippetMaxChars: 500,
-      sourceFilter: { sql: " AND source = ?", params: ["sessions"] },
-      buildFtsQuery,
-      bm25RankToScore,
-    });
-    const rows: SessionSearchResultRow[] = [];
-    for (const hit of hits) {
-      const relPath = hit.path.replace(/\\/g, "/");
-      if (allowedPaths.size > 0 && !allowedPaths.has(relPath)) {
-        continue;
-      }
-      const session = pathToSession.get(relPath);
-      if (!session) {
-        continue;
-      }
-      rows.push({
-        sessionKey: session.sessionKey,
-        sessionId: session.sessionId,
-        snippet: hit.snippet,
-        score: hit.score,
-        startLine: hit.startLine,
-        endLine: hit.endLine,
-      });
-      if (rows.length >= params.limit) {
-        break;
-      }
+  const storePathsSeen = new Set<string>();
+  const memoryDbPaths: string[] = [];
+  for (const agentId of distinctAgentIds) {
+    const memCfg = resolveMemorySearchConfig(params.cfg, agentId);
+    if (!memCfg) {
+      continue;
     }
-    return { count: rows.length, results: rows };
-  } catch {
-    return { count: 0, results: [] };
-  } finally {
-    db.close();
+    const storeFilePath = memCfg.store.path;
+    if (storePathsSeen.has(storeFilePath)) {
+      continue;
+    }
+    storePathsSeen.add(storeFilePath);
+    memoryDbPaths.push(storeFilePath);
   }
+  if (memoryDbPaths.length === 0) {
+    return { count: 0, results: [] };
+  }
+
+  const perDbLimit = Math.max(1, params.limit * 3);
+  const mergedHits: Awaited<ReturnType<typeof searchKeyword>> = [];
+  for (const dbPath of memoryDbPaths) {
+    let db: DatabaseSync;
+    try {
+      db = new DatabaseSync(dbPath);
+    } catch {
+      continue;
+    }
+    try {
+      const hits = await searchKeyword({
+        db,
+        ftsTable: SESSION_SEARCH_FTS_TABLE,
+        providerModel: undefined,
+        query: params.query,
+        limit: perDbLimit,
+        snippetMaxChars: 500,
+        sourceFilter: { sql: " AND source = ?", params: ["sessions"] },
+        buildFtsQuery,
+        bm25RankToScore,
+      });
+      mergedHits.push(...hits);
+    } catch {
+      // Missing table / corrupt DB — skip this store (same resilience as single-DB path).
+    } finally {
+      db.close();
+    }
+  }
+  mergedHits.sort((a, b) => b.score - a.score);
+
+  const rows: SessionSearchResultRow[] = [];
+  for (const hit of mergedHits) {
+    const relPath = hit.path.replace(/\\/g, "/");
+    if (allowedPaths.size > 0 && !allowedPaths.has(relPath)) {
+      continue;
+    }
+    const session = pathToSession.get(relPath);
+    if (!session) {
+      continue;
+    }
+    rows.push({
+      sessionKey: session.sessionKey,
+      sessionId: session.sessionId,
+      snippet: hit.snippet,
+      score: hit.score,
+      startLine: hit.startLine,
+      endLine: hit.endLine,
+    });
+    if (rows.length >= params.limit) {
+      break;
+    }
+  }
+  return { count: rows.length, results: rows };
 }
 
 function extractSessionMessageText(message: unknown): string {

@@ -103,6 +103,8 @@ const ApprovalRequestEventSchema = ResearchEventBaseSchema.extend({
   payload: z
     .object({
       approvalId: z.string().min(1),
+      /** Echo of the agent invocation `runId` when known (distinct from `approvalId`). */
+      agentRunId: z.string().min(1).optional(),
       host: z.union([z.literal("gateway"), z.literal("node")]).optional(),
       commandSummary: z.string().optional(),
     })
@@ -114,6 +116,7 @@ const ApprovalAllowEventSchema = ResearchEventBaseSchema.extend({
   payload: z
     .object({
       approvalId: z.string().min(1),
+      agentRunId: z.string().min(1).optional(),
       decision: z.string().optional(),
     })
     .strict(),
@@ -124,6 +127,7 @@ const ApprovalDenyEventSchema = ResearchEventBaseSchema.extend({
   payload: z
     .object({
       approvalId: z.string().min(1),
+      agentRunId: z.string().min(1).optional(),
       decision: z.string().optional(),
       reason: z.string().optional(),
     })

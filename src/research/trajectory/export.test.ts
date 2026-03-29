@@ -202,4 +202,57 @@ describe("trajectory export", () => {
     expect(parsed.toolCalls[0]?.stepIdx).toBe(0);
     expect(parsed.toolCalls[1]?.stepIdx).toBe(0);
   });
+
+  it("orders tool.start before tool.end when timestamps tie", async () => {
+    const transcriptPath = path.join(tmpRoot, "tie-transcript.jsonl");
+    const eventsPath = path.join(tmpRoot, "tie.events.jsonl");
+    const outputPath = path.join(tmpRoot, "tie.trajectory.v1.json");
+    await fs.writeFile(transcriptPath, "", "utf8");
+    const baseEvent = {
+      v: 1 as const,
+      ts: 1700000000000,
+      runId: "run-tie",
+      sessionId: "session-tie",
+      agentId: "default",
+    };
+    await fs.writeFile(
+      eventsPath,
+      [
+        JSON.stringify({
+          ...baseEvent,
+          kind: "tool.end",
+          payload: {
+            toolName: "exec",
+            toolCallId: "call-tie",
+            ok: true,
+            resultSummary: "done",
+          },
+        }),
+        JSON.stringify({
+          ...baseEvent,
+          kind: "tool.start",
+          payload: {
+            toolName: "exec",
+            toolCallId: "call-tie",
+            argsSummary: "run",
+          },
+        }),
+      ].join("\n"),
+      "utf8",
+    );
+    const result = await exportTrajectoryV1({
+      agentId: "default",
+      sessionId: "session-tie",
+      transcriptPath,
+      eventsPath,
+      outputPath,
+    });
+    const parsed = JSON.parse(result.bytes) as {
+      events: Array<{ kind: string }>;
+    };
+    const toolKinds = parsed.events
+      .filter((e) => e.kind === "tool.start" || e.kind === "tool.end")
+      .map((e) => e.kind);
+    expect(toolKinds).toEqual(["tool.start", "tool.end"]);
+  });
 });

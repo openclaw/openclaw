@@ -247,10 +247,9 @@ export async function runEmbeddedPiAgent(
         config: params.config,
       });
       const resolvedWorkspace = workspaceResolution.workspaceDir;
-      if (workspaceResolution.agentId && workspaceResolution.agentId !== research.agentId) {
-        // Workspace resolution may disagree with the caller; we still emit research/telemetry using
-        // `research.agentId` from createResearchRunContext for a stable run identity.
-      }
+      // R4: When `workspaceResolution.agentId` differs from `research.agentId`, we intentionally do
+      // not override `research.agentId` from `createResearchRunContext` — stable run-scoped identity
+      // for research events must stay tied to the context created at run start, not workspace fallback.
       const redactedSessionId = redactRunIdentifier(params.sessionId);
       const redactedSessionKey = redactRunIdentifier(params.sessionKey);
       const redactedWorkspace = redactRunIdentifier(resolvedWorkspace);
@@ -889,6 +888,16 @@ export async function runEmbeddedPiAgent(
           const prompt =
             provider === "anthropic" ? scrubAnthropicRefusalMagic(params.prompt) : params.prompt;
 
+          await research.emit({
+            kind: "llm.request",
+            payload: {
+              provider,
+              model: modelId,
+              promptChars: params.prompt.length,
+              imageCount: params.images?.length ?? 0,
+            },
+          });
+
           const attempt = await runEmbeddedAttempt({
             sessionId: params.sessionId,
             sessionKey: params.sessionKey,
@@ -997,15 +1006,6 @@ export async function runEmbeddedPiAgent(
             lastAssistant,
           } = attempt;
           endTimedOut = timedOut;
-          await research.emit({
-            kind: "llm.request",
-            payload: {
-              provider,
-              model: modelId,
-              promptChars: params.prompt.length,
-              imageCount: params.images?.length ?? 0,
-            },
-          });
           bootstrapPromptWarningSignaturesSeen =
             attempt.bootstrapPromptWarningSignaturesSeen ??
             (attempt.bootstrapPromptWarningSignature

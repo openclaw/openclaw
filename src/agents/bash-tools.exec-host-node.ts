@@ -53,6 +53,7 @@ export type ExecuteNodeHostCommandParams = {
   warnings: string[];
   notifySessionKey?: string;
   sessionId?: string;
+  agentRunId?: string;
   trustedSafeBinDirs?: ReadonlySet<string>;
 };
 
@@ -257,6 +258,7 @@ export async function executeNodeHostCommand(
         }),
         sessionId: params.sessionId,
         ...buildExecApprovalTurnSourceContext(params),
+        agentRunId: params.agentRunId,
       });
     const {
       approvalId,
@@ -287,6 +289,7 @@ export async function executeNodeHostCommand(
         sessionKey: runSessionKey,
         agentId: runAgentId,
         sessionId: params.sessionId,
+        agentRunId: params.agentRunId,
         onFailure: () =>
           void execHostShared.sendExecApprovalFollowupResult(
             followupTarget,
