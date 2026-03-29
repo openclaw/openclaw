@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawPluginCommandDefinition } from "../../test/helpers/extensions/plugin-command.js";
-import { createPluginRuntimeMock } from "../../test/helpers/extensions/plugin-runtime-mock.js";
+import type { OpenClawPluginCommandDefinition } from "../../test/helpers/plugins/plugin-command.js";
+import { createPluginRuntimeMock } from "../../test/helpers/plugins/plugin-runtime-mock.js";
 import register from "./index.js";
 
 function createHarness(config: Record<string, unknown>) {

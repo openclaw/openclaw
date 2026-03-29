@@ -1,5 +1,6 @@
 import path from "node:path";
 import { isUnitConfigTestFile } from "../../vitest.unit-paths.mjs";
+import { BUNDLED_PLUGIN_PATH_PREFIX } from "../lib/bundled-plugin-paths.mjs";
 import {
   loadChannelTimingManifest,
   loadExtensionTimingManifest,
@@ -97,13 +98,7 @@ const normalizeSurfaces = (values = []) => [
   ),
 ];
 
-const EXPLICIT_PLAN_SURFACES = new Set([
-  "unit",
-  "extensions",
-  "channels",
-  "contracts",
-  "gateway",
-]);
+const EXPLICIT_PLAN_SURFACES = new Set(["unit", "extensions", "channels", "contracts", "gateway"]);
 const FAILURE_POLICIES = new Set(["fail-fast", "collect-all"]);
 
 const validateExplicitSurfaces = (surfaces) => {
@@ -470,7 +465,9 @@ const buildDefaultUnits = (context, request) => {
     (file) => !new Set(unitFastExcludedFiles).has(file),
   );
   const extensionSharedCandidateFiles = catalog.allKnownTestFiles.filter(
-    (file) => file.startsWith("extensions/") && !catalog.extensionForkIsolatedFileSet.has(file),
+    (file) =>
+      file.startsWith(BUNDLED_PLUGIN_PATH_PREFIX) &&
+      !catalog.extensionForkIsolatedFileSet.has(file),
   );
   const channelSharedCandidateFiles = catalog.allKnownTestFiles.filter(
     (file) =>
@@ -1097,7 +1094,7 @@ const estimateTopLevelEntryDurationMs = (unit, context) => {
     if (context.catalog.channelTestPrefixes.some((prefix) => file.startsWith(prefix))) {
       return totalMs + 3_000;
     }
-    if (file.startsWith("extensions/")) {
+    if (file.startsWith(BUNDLED_PLUGIN_PATH_PREFIX)) {
       return totalMs + 2_000;
     }
     return totalMs + 1_000;
@@ -1196,14 +1193,7 @@ export function buildCIExecutionManifest(scopeInput = {}, options = {}) {
     minShards: 1,
     maxShards: 9,
   });
-  const bunShardCount = resolveDynamicShardCount({
-    estimatedDurationMs: sumKnownManifestDurationsMs(context.unitTimingManifest),
-    fileCount: context.catalog.allKnownUnitFiles.length,
-    targetDurationMs: 30_000,
-    targetFilesPerShard: 80,
-    minShards: 1,
-    maxShards: 4,
-  });
+  const bunShardCount = windowsShardCount;
 
   const checksFastInclude = nodeEligible
     ? [
@@ -1372,6 +1362,24 @@ export const formatExecutionUnitSummary = (unit) =>
     unit.maxWorkers ?? "default",
   )} surface=${unit.surface} isolate=${unit.isolate ? "yes" : "no"} pool=${unit.pool}`;
 
+function resolveSurfaceAwareTopLevelParallelLimit(context, units, defaultLimit) {
+  if (!context.runtime.isCI || context.noIsolateArgs.length === 0) {
+    return defaultLimit;
+  }
+
+  const sharedExtensionUnits = units.filter(
+    (unit) => unit.surface === "extensions" && !unit.isolate,
+  );
+  if (sharedExtensionUnits.length <= 1) {
+    return defaultLimit;
+  }
+
+  // Shared extension batches can each retain multiple GiB in CI. Limit that
+  // phase to two concurrent lanes so provider-contract checks are not starved
+  // behind unrelated memory-heavy extension suites.
+  return Math.min(defaultLimit, 2);
+}
+
 export function explainExecutionTarget(request, options = {}) {
   const context = createPlannerContext(request, options);
   context.noIsolateArgs =
@@ -1505,7 +1513,11 @@ export function buildExecutionPlan(request, options = {}) {
     context.noIsolateArgs.length > 0
       ? context.executionBudget.topLevelParallelLimitNoIsolate
       : context.executionBudget.topLevelParallelLimitIsolated;
-  const defaultTopLevelParallelLimit = baseTopLevelParallelLimit;
+  const defaultTopLevelParallelLimit = resolveSurfaceAwareTopLevelParallelLimit(
+    context,
+    selectedUnits,
+    baseTopLevelParallelLimit,
+  );
   const topLevelParallelLimit = Math.max(
     1,
     parseEnvNumber(env, "OPENCLAW_TEST_TOP_LEVEL_CONCURRENCY", defaultTopLevelParallelLimit),

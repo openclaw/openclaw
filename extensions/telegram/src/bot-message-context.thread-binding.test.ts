@@ -21,11 +21,7 @@ vi.mock("./conversation-route.js", async (importOriginal) => {
 
 let buildTelegramMessageContextForTest: typeof import("./bot-message-context.test-harness.js").buildTelegramMessageContextForTest;
 
-function createBoundRoute(params: {
-  accountId: string;
-  sessionKey: string;
-  agentId: string;
-}) {
+function createBoundRoute(params: { accountId: string; sessionKey: string; agentId: string }) {
   return {
     configuredBinding: null,
     configuredBindingSessionKey: "",

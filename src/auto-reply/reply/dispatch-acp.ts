@@ -188,6 +188,41 @@ export type AcpDispatchAttemptResult = {
   counts: Record<ReplyDispatchKind, number>;
 };
 
+const ACP_STALE_BINDING_UNBIND_REASON = "acp-session-init-failed";
+
+function isStaleSessionInitError(params: { code: string; message: string }): boolean {
+  if (params.code !== "ACP_SESSION_INIT_FAILED") {
+    return false;
+  }
+  return /(ACP (session )?metadata is missing|missing ACP metadata|Session is not ACP-enabled|Resource not found)/i.test(
+    params.message,
+  );
+}
+
+async function maybeUnbindStaleBoundConversations(params: {
+  targetSessionKey: string;
+  error: { code: string; message: string };
+}): Promise<void> {
+  if (!isStaleSessionInitError(params.error)) {
+    return;
+  }
+  try {
+    const removed = await getSessionBindingService().unbind({
+      targetSessionKey: params.targetSessionKey,
+      reason: ACP_STALE_BINDING_UNBIND_REASON,
+    });
+    if (removed.length > 0) {
+      logVerbose(
+        `dispatch-acp: removed ${removed.length} stale bound conversation(s) for ${params.targetSessionKey} after ${params.error.code}: ${params.error.message}`,
+      );
+    }
+  } catch (error) {
+    logVerbose(
+      `dispatch-acp: failed to unbind stale bound conversations for ${params.targetSessionKey}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
 async function finalizeAcpTurnOutput(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
@@ -302,6 +337,7 @@ export async function tryDispatchAcpReply(params: {
   if (acpResolution.kind === "none") {
     return null;
   }
+  const canonicalSessionKey = acpResolution.sessionKey;
 
   let queuedFinal = false;
   const delivery = createAcpDispatchDeliveryCoordinator({
@@ -324,7 +360,7 @@ export async function tryDispatchAcpReply(params: {
     identityPendingBeforeTurn &&
     (Boolean(params.ctx.MessageThreadId != null && String(params.ctx.MessageThreadId).trim()) ||
       hasBoundConversationForSession({
-        sessionKey,
+        sessionKey: canonicalSessionKey,
         channelRaw: params.ctx.OriginatingChannel ?? params.ctx.Surface ?? params.ctx.Provider,
         accountIdRaw: params.ctx.AccountId,
       }));
@@ -334,9 +370,9 @@ export async function tryDispatchAcpReply(params: {
       ? (
           acpResolution.meta.agent?.trim() ||
           params.cfg.acp?.defaultAgent?.trim() ||
-          resolveAgentIdFromSessionKey(sessionKey)
+          resolveAgentIdFromSessionKey(canonicalSessionKey)
         ).trim()
-      : resolveAgentIdFromSessionKey(sessionKey);
+      : resolveAgentIdFromSessionKey(canonicalSessionKey);
   const projector = createAcpReplyProjector({
     cfg: params.cfg,
     shouldSendToolSummaries: params.shouldSendToolSummaries,
@@ -352,7 +388,25 @@ export async function tryDispatchAcpReply(params: {
       throw dispatchPolicyError;
     }
     if (acpResolution.kind === "stale") {
-      throw acpResolution.error;
+      await maybeUnbindStaleBoundConversations({
+        targetSessionKey: canonicalSessionKey,
+        error: acpResolution.error,
+      });
+      const delivered = await delivery.deliver("final", {
+        text: formatAcpRuntimeErrorText(acpResolution.error),
+        isError: true,
+      });
+      const counts = params.dispatcher.getQueuedCounts();
+      delivery.applyRoutedCounts(counts);
+      const acpStats = acpManager.getObservabilitySnapshot(params.cfg);
+      logVerbose(
+        `acp-dispatch: session=${sessionKey} outcome=error code=${acpResolution.error.code} latencyMs=${Date.now() - acpDispatchStartedAt} queueDepth=${acpStats.turns.queueDepth} activeRuntimes=${acpStats.runtimeCache.activeSessions}`,
+      );
+      params.recordProcessed("completed", {
+        reason: `acp_error:${acpResolution.error.code.toLowerCase()}`,
+      });
+      params.markIdle("message_completed");
+      return { queuedFinal: delivered, counts };
     }
     const agentPolicyError = resolveAcpAgentPolicyError(params.cfg, resolvedAcpAgent);
     if (agentPolicyError) {
@@ -391,7 +445,7 @@ export async function tryDispatchAcpReply(params: {
 
     await acpManager.runTurn({
       cfg: params.cfg,
-      sessionKey,
+      sessionKey: canonicalSessionKey,
       text: promptText,
       attachments: attachments.length > 0 ? attachments : undefined,
       mode: "prompt",
@@ -404,7 +458,7 @@ export async function tryDispatchAcpReply(params: {
     queuedFinal =
       (await finalizeAcpTurnOutput({
         cfg: params.cfg,
-        sessionKey,
+        sessionKey: canonicalSessionKey,
         delivery,
         inboundAudio: params.inboundAudio,
         sessionTtsAuto: params.sessionTtsAuto,
@@ -439,6 +493,10 @@ export async function tryDispatchAcpReply(params: {
       error: err,
       fallbackCode: "ACP_TURN_FAILED",
       fallbackMessage: "ACP turn failed before completion.",
+    });
+    await maybeUnbindStaleBoundConversations({
+      targetSessionKey: canonicalSessionKey,
+      error: acpError,
     });
     const delivered = await delivery.deliver("final", {
       text: formatAcpRuntimeErrorText(acpError),
