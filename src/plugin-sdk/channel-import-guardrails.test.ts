@@ -76,6 +76,34 @@ const SAME_CHANNEL_SDK_GUARDS: GuardedSource[] = [
     forbiddenPatterns: [/["']\.\.\/runtime-api\.js["']/],
   },
   {
+    path: bundledPluginFile("telegram", "src/accounts.ts"),
+    forbiddenPatterns: [/["']\.\.\/runtime-api\.js["']/],
+  },
+  {
+    path: bundledPluginFile("telegram", "src/account-inspect.ts"),
+    forbiddenPatterns: [/["']\.\.\/runtime-api\.js["']/],
+  },
+  {
+    path: bundledPluginFile("telegram", "src/api-fetch.ts"),
+    forbiddenPatterns: [/["']\.\.\/runtime-api\.js["']/],
+  },
+  {
+    path: bundledPluginFile("telegram", "src/channel.setup.ts"),
+    forbiddenPatterns: [/["']\.\.\/runtime-api\.js["']/],
+  },
+  {
+    path: bundledPluginFile("telegram", "src/probe.ts"),
+    forbiddenPatterns: [/["']\.\.\/runtime-api\.js["']/],
+  },
+  {
+    path: bundledPluginFile("telegram", "src/setup-core.ts"),
+    forbiddenPatterns: [/["']\.\.\/runtime-api\.js["']/],
+  },
+  {
+    path: bundledPluginFile("telegram", "src/token.ts"),
+    forbiddenPatterns: [/["']\.\.\/runtime-api\.js["']/],
+  },
+  {
     path: bundledPluginFile("imessage", "src/shared.ts"),
     forbiddenPatterns: [/["']openclaw\/plugin-sdk\/imessage["']/, /plugin-sdk-internal\/imessage/],
   },
@@ -160,9 +188,11 @@ const LOCAL_EXTENSION_API_BARREL_GUARDS = [
   "msteams",
   "nextcloud-talk",
   "nostr",
+  "ollama",
   "open-prose",
   "phone-control",
   "copilot-proxy",
+  "sglang",
   "zai",
   "signal",
   "synology-chat",
@@ -171,8 +201,10 @@ const LOCAL_EXTENSION_API_BARREL_GUARDS = [
   "thread-ownership",
   "tlon",
   "voice-call",
+  "vllm",
   "whatsapp",
   "twitch",
+  "xai",
   "zalo",
   "zalouser",
 ] as const;
