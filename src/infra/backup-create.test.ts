@@ -17,9 +17,12 @@ function makeResult(overrides: Partial<BackupCreateResult> = {}): BackupCreateRe
 }
 
 describe("formatBackupCreateSummary", () => {
-  it("formats created archives with included and skipped paths", () => {
-    const lines = formatBackupCreateSummary(
-      makeResult({
+  const backupArchiveLine = "Backup archive: /tmp/openclaw-backup.tar.gz";
+
+  it.each([
+    {
+      name: "formats created archives with included and skipped paths",
+      result: makeResult({
         verified: true,
         assets: [
           {
@@ -39,22 +42,19 @@ describe("formatBackupCreateSummary", () => {
           },
         ],
       }),
-    );
-
-    expect(lines).toEqual([
-      "Backup archive: /tmp/openclaw-backup.tar.gz",
-      "Included 1 path:",
-      "- state: ~/.openclaw",
-      "Skipped 1 path:",
-      "- workspace: ~/Projects/openclaw (covered by ~/.openclaw)",
-      "Created /tmp/openclaw-backup.tar.gz",
-      "Archive verification: passed",
-    ]);
-  });
-
-  it("formats dry runs and pluralized counts", () => {
-    const lines = formatBackupCreateSummary(
-      makeResult({
+      expected: [
+        backupArchiveLine,
+        "Included 1 path:",
+        "- state: ~/.openclaw",
+        "Skipped 1 path:",
+        "- workspace: ~/Projects/openclaw (covered by ~/.openclaw)",
+        "Created /tmp/openclaw-backup.tar.gz",
+        "Archive verification: passed",
+      ],
+    },
+    {
+      name: "formats dry runs and pluralized counts",
+      result: makeResult({
         dryRun: true,
         assets: [
           {
@@ -71,14 +71,15 @@ describe("formatBackupCreateSummary", () => {
           },
         ],
       }),
-    );
-
-    expect(lines).toEqual([
-      "Backup archive: /tmp/openclaw-backup.tar.gz",
-      "Included 2 paths:",
-      "- config: ~/.openclaw/config.json",
-      "- credentials: ~/.openclaw/oauth",
-      "Dry run only; archive was not written.",
-    ]);
+      expected: [
+        backupArchiveLine,
+        "Included 2 paths:",
+        "- config: ~/.openclaw/config.json",
+        "- credentials: ~/.openclaw/oauth",
+        "Dry run only; archive was not written.",
+      ],
+    },
+  ])("$name", ({ result, expected }) => {
+    expect(formatBackupCreateSummary(result)).toEqual(expected);
   });
 });

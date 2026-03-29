@@ -4,7 +4,7 @@ import {
   EMPTY_DISPATCH_RESULT,
   resetBlueBubblesMonitorTestState,
   type DispatchReplyParams,
-} from "../../../test/helpers/extensions/bluebubbles-monitor.js";
+} from "../../../test/helpers/plugins/bluebubbles-monitor.js";
 import type { ResolvedBlueBubblesAccount } from "./accounts.js";
 import { fetchBlueBubblesHistory } from "./history.js";
 import { handleBlueBubblesWebhookRequest, resolveBlueBubblesMessageId } from "./monitor.js";
@@ -107,6 +107,7 @@ const mockChunkTextWithMode = vi.fn((text: string) => (text ? [text] : []));
 const mockChunkMarkdownTextWithMode = vi.fn((text: string) => (text ? [text] : []));
 const mockResolveChunkMode = vi.fn(() => "length" as const);
 const mockFetchBlueBubblesHistory = vi.mocked(fetchBlueBubblesHistory);
+const mockFetch = vi.fn();
 const TEST_WEBHOOK_PASSWORD = "secret-token";
 
 function createMockRuntime(): PluginRuntime {
@@ -142,6 +143,12 @@ describe("BlueBubbles webhook monitor", () => {
   let unregister: () => void;
 
   beforeEach(() => {
+    vi.stubGlobal("fetch", mockFetch);
+    mockFetch.mockReset();
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: [] }),
+    });
     resetBlueBubblesMonitorTestState({
       createRuntime: createMockRuntime,
       fetchHistoryMock: mockFetchBlueBubblesHistory,
@@ -156,6 +163,7 @@ describe("BlueBubbles webhook monitor", () => {
 
   afterEach(() => {
     unregister?.();
+    vi.unstubAllGlobals();
   });
 
   function setupWebhookTarget(params?: {
@@ -394,6 +402,163 @@ describe("BlueBubbles webhook monitor", () => {
     it("rejects unauthorized requests with wrong password", async () => {
       await expectProtectedWebhookRequestStatus(
         createProtectedPasswordQueryRequestParams("wrong-token"),
+        401,
+      );
+    });
+
+    it("rate limits repeated invalid password guesses from the same client", async () => {
+      setupWebhookTarget({
+        account: createMockAccount({
+          password: "99999999",
+        }),
+      });
+
+      let saw429 = false;
+      // Default webhook fixed-window budget is 120 requests/minute, so loop past it.
+      for (let i = 0; i < 130; i += 1) {
+        const candidate = String(i).padStart(8, "0");
+        const { res } = await dispatchWebhookPayloadForTest(
+          createPasswordQueryRequestParamsForTest({
+            password: candidate,
+            body: createTimestampedNewMessagePayloadForTest({
+              guid: `msg-${i}`,
+              text: `hello ${i}`,
+            }),
+            remoteAddress: "192.168.1.100",
+          }),
+        );
+
+        if (res.statusCode === 429) {
+          saw429 = true;
+          break;
+        }
+
+        expect(res.statusCode).toBe(401);
+      }
+
+      expect(saw429).toBe(true);
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    });
+
+    it("keeps forwarded clients behind configured trusted proxies in separate auth buckets", async () => {
+      setupWebhookTarget({
+        account: createMockAccount({
+          password: "99999999",
+        }),
+        config: {
+          gateway: {
+            trustedProxies: ["10.0.0.0/8"],
+          },
+        } as OpenClawConfig,
+      });
+
+      let saw429 = false;
+      for (let i = 0; i < 130; i += 1) {
+        const candidate = String(i).padStart(8, "0");
+        const { res } = await dispatchWebhookPayloadForTest(
+          createPasswordQueryRequestParamsForTest({
+            password: candidate,
+            body: createTimestampedNewMessagePayloadForTest({
+              guid: `proxy-msg-${i}`,
+              text: `hello proxy ${i}`,
+            }),
+            remoteAddress: "10.0.0.5",
+            overrides: {
+              headers: {
+                host: "localhost",
+                "x-forwarded-for": "203.0.113.10",
+              },
+            },
+          }),
+        );
+
+        if (res.statusCode === 429) {
+          saw429 = true;
+          break;
+        }
+
+        expect(res.statusCode).toBe(401);
+      }
+
+      expect(saw429).toBe(true);
+
+      await expectWebhookRequestStatusForTest(
+        createPasswordQueryRequestParamsForTest({
+          password: "wrong-pass",
+          body: createTimestampedNewMessagePayloadForTest({
+            guid: "proxy-msg-other-client",
+            text: "hello other proxy client",
+          }),
+          remoteAddress: "10.0.0.5",
+          overrides: {
+            headers: {
+              host: "localhost",
+              "x-forwarded-for": "203.0.113.11",
+            },
+          },
+        }),
+        401,
+      );
+    });
+
+    it("keeps real-ip fallback clients behind trusted proxies in separate auth buckets", async () => {
+      setupWebhookTarget({
+        account: createMockAccount({
+          password: "99999999",
+        }),
+        config: {
+          gateway: {
+            trustedProxies: ["10.0.0.0/8"],
+            allowRealIpFallback: true,
+          },
+        } as OpenClawConfig,
+      });
+
+      let saw429 = false;
+      for (let i = 0; i < 130; i += 1) {
+        const candidate = String(i).padStart(8, "0");
+        const { res } = await dispatchWebhookPayloadForTest(
+          createPasswordQueryRequestParamsForTest({
+            password: candidate,
+            body: createTimestampedNewMessagePayloadForTest({
+              guid: `real-ip-msg-${i}`,
+              text: `hello real ip ${i}`,
+            }),
+            remoteAddress: "10.0.0.5",
+            overrides: {
+              headers: {
+                host: "localhost",
+                "x-real-ip": "203.0.113.10",
+              },
+            },
+          }),
+        );
+
+        if (res.statusCode === 429) {
+          saw429 = true;
+          break;
+        }
+
+        expect(res.statusCode).toBe(401);
+      }
+
+      expect(saw429).toBe(true);
+
+      await expectWebhookRequestStatusForTest(
+        createPasswordQueryRequestParamsForTest({
+          password: "wrong-pass",
+          body: createTimestampedNewMessagePayloadForTest({
+            guid: "real-ip-msg-other-client",
+            text: "hello other real ip client",
+          }),
+          remoteAddress: "10.0.0.5",
+          overrides: {
+            headers: {
+              host: "localhost",
+              "x-real-ip": "203.0.113.11",
+            },
+          },
+        }),
         401,
       );
     });

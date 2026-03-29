@@ -13,7 +13,7 @@ import {
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
 import {
   createChannelDirectoryAdapter,
-  listResolvedDirectoryEntriesFromSources,
+  createResolvedDirectoryEntriesLister,
 } from "openclaw/plugin-sdk/directory-runtime";
 import { runStoppablePassiveMonitor } from "openclaw/plugin-sdk/extension-shared";
 import {
@@ -26,7 +26,7 @@ import {
   resolveIrcAccount,
   type ResolvedIrcAccount,
 } from "./accounts.js";
-import { IrcConfigSchema } from "./config-schema.js";
+import { IrcChannelConfigSchema } from "./config-schema.js";
 import { monitorIrcProvider } from "./monitor.js";
 import {
   normalizeIrcMessagingTarget,
@@ -38,8 +38,8 @@ import { resolveIrcGroupMatch, resolveIrcRequireMention } from "./policy.js";
 import { probeIrc } from "./probe.js";
 import {
   buildBaseChannelStatusSummary,
-  buildChannelConfigSchema,
   createAccountStatusSink,
+  chunkTextForOutbound,
   DEFAULT_ACCOUNT_ID,
   getChatChannelMeta,
   PAIRING_APPROVED_MESSAGE,
@@ -60,6 +60,30 @@ function normalizePairingTarget(raw: string): string {
   }
   return normalized.split(/[!@]/, 1)[0]?.trim() ?? "";
 }
+
+const listIrcDirectoryPeersFromConfig = createResolvedDirectoryEntriesLister<ResolvedIrcAccount>({
+  kind: "user",
+  resolveAccount: adaptScopedAccountAccessor(resolveIrcAccount),
+  resolveSources: (account) => [
+    account.config.allowFrom ?? [],
+    account.config.groupAllowFrom ?? [],
+    ...Object.values(account.config.groups ?? {}).map((group) => group.allowFrom ?? []),
+  ],
+  normalizeId: (entry) => normalizePairingTarget(entry) || null,
+});
+
+const listIrcDirectoryGroupsFromConfig = createResolvedDirectoryEntriesLister<ResolvedIrcAccount>({
+  kind: "group",
+  resolveAccount: adaptScopedAccountAccessor(resolveIrcAccount),
+  resolveSources: (account) => [
+    account.config.channels ?? [],
+    Object.keys(account.config.groups ?? {}),
+  ],
+  normalizeId: (entry) => {
+    const normalized = normalizeIrcMessagingTarget(entry);
+    return normalized && isChannelTarget(normalized) ? normalized : null;
+  },
+});
 
 const ircConfigAdapter = createScopedChannelConfigAdapter<
   ResolvedIrcAccount,
@@ -145,7 +169,7 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChat
       blockStreaming: true,
     },
     reload: { configPrefixes: ["channels.irc"] },
-    configSchema: buildChannelConfigSchema(IrcConfigSchema),
+    configSchema: IrcChannelConfigSchema,
     config: {
       ...ircConfigAdapter,
       isConfigured: (account) => account.configured,
@@ -227,32 +251,9 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChat
       },
     },
     directory: createChannelDirectoryAdapter({
-      listPeers: async (params) =>
-        listResolvedDirectoryEntriesFromSources<ResolvedIrcAccount>({
-          ...params,
-          kind: "user",
-          resolveAccount: adaptScopedAccountAccessor(resolveIrcAccount),
-          resolveSources: (account) => [
-            account.config.allowFrom ?? [],
-            account.config.groupAllowFrom ?? [],
-            ...Object.values(account.config.groups ?? {}).map((group) => group.allowFrom ?? []),
-          ],
-          normalizeId: (entry) => normalizePairingTarget(entry) || null,
-        }),
+      listPeers: async (params) => listIrcDirectoryPeersFromConfig(params),
       listGroups: async (params) => {
-        const entries = listResolvedDirectoryEntriesFromSources<ResolvedIrcAccount>({
-          ...params,
-          kind: "group",
-          resolveAccount: adaptScopedAccountAccessor(resolveIrcAccount),
-          resolveSources: (account) => [
-            account.config.channels ?? [],
-            Object.keys(account.config.groups ?? {}),
-          ],
-          normalizeId: (entry) => {
-            const normalized = normalizeIrcMessagingTarget(entry);
-            return normalized && isChannelTarget(normalized) ? normalized : null;
-          },
-        });
+        const entries = await listIrcDirectoryGroupsFromConfig(params);
         return entries.map((entry) => ({ ...entry, name: entry.id }));
       },
     }),
@@ -333,7 +334,7 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChat
   outbound: {
     base: {
       deliveryMode: "direct",
-      chunker: (text, limit) => getIrcRuntime().channel.text.chunkMarkdownText(text, limit),
+      chunker: chunkTextForOutbound,
       chunkerMode: "markdown",
       textChunkLimit: 350,
     },

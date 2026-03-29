@@ -748,6 +748,26 @@ describe("native PDF provider API calls", () => {
     expect(url).toContain("/v1beta/models/");
     expect(url).not.toContain("/v1beta/v1beta");
   });
+
+  it("geminiAnalyzePdf normalizes bare Google API hosts to a single /v1beta root", async () => {
+    const { geminiAnalyzePdf } = await import("./pdf-native-providers.js");
+    const fetchMock = mockFetchResponse({
+      ok: true,
+      json: async () => ({
+        candidates: [{ content: { parts: [{ text: "ok" }] } }],
+      }),
+    });
+
+    await geminiAnalyzePdf(
+      makeGeminiAnalyzeParams({
+        baseUrl: "https://generativelanguage.googleapis.com",
+      }),
+    );
+
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toContain("https://generativelanguage.googleapis.com/v1beta/models/");
+    expect(url).not.toContain("/v1beta/v1beta");
+  });
 });
 
 // ---------------------------------------------------------------------------

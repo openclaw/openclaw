@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -15,6 +16,10 @@ function writeJson(filePath, value) {
 
 function removePathIfExists(targetPath) {
   fs.rmSync(targetPath, { recursive: true, force: true });
+}
+
+function makeTempDir(parentDir, prefix) {
+  return fs.mkdtempSync(path.join(parentDir, prefix));
 }
 
 function listBundledPluginRuntimeDirs(repoRoot) {
@@ -81,6 +86,27 @@ function sanitizeBundledManifestForRuntimeInstall(pluginDir) {
 
   if (changed) {
     writeJson(manifestPath, packageJson);
+  }
+
+  return packageJson;
+}
+
+function resolveRuntimeDepsStampPath(pluginDir) {
+  return path.join(pluginDir, ".openclaw-runtime-deps-stamp.json");
+}
+
+function createRuntimeDepsFingerprint(packageJson) {
+  return createHash("sha256").update(JSON.stringify(packageJson)).digest("hex");
+}
+
+function readRuntimeDepsStamp(stampPath) {
+  if (!fs.existsSync(stampPath)) {
+    return null;
+  }
+  try {
+    return readJson(stampPath);
+  } catch {
+    return null;
   }
 }
 
@@ -193,8 +219,11 @@ function buildCmdExeCommandLine(command, args) {
   return [escapeForCmdExe(command), ...args.map(escapeForCmdExe)].join(" ");
 }
 
-function installPluginRuntimeDeps(pluginDir, pluginId) {
-  sanitizeBundledManifestForRuntimeInstall(pluginDir);
+function installPluginRuntimeDeps(params) {
+  const { fingerprint, packageJson, pluginDir, pluginId } = params;
+  const nodeModulesDir = path.join(pluginDir, "node_modules");
+  const stampPath = resolveRuntimeDepsStampPath(pluginDir);
+  const tempInstallDir = makeTempDir(pluginDir, ".runtime-deps-");
   const npmRunner = resolveNpmRunner({
     npmArgs: [
       "install",
@@ -205,34 +234,66 @@ function installPluginRuntimeDeps(pluginDir, pluginId) {
       "--package-lock=false",
     ],
   });
-  const result = spawnSync(npmRunner.command, npmRunner.args, {
-    cwd: pluginDir,
-    encoding: "utf8",
-    env: npmRunner.env,
-    stdio: "pipe",
-    shell: npmRunner.shell,
-    windowsVerbatimArguments: npmRunner.windowsVerbatimArguments,
-  });
-  if (result.status === 0) {
-    return;
+  try {
+    writeJson(path.join(tempInstallDir, "package.json"), packageJson);
+    const result = spawnSync(npmRunner.command, npmRunner.args, {
+      cwd: tempInstallDir,
+      encoding: "utf8",
+      env: npmRunner.env,
+      stdio: "pipe",
+      shell: npmRunner.shell,
+      windowsVerbatimArguments: npmRunner.windowsVerbatimArguments,
+    });
+    if (result.status !== 0) {
+      const output = [result.stderr, result.stdout].filter(Boolean).join("\n").trim();
+      throw new Error(
+        `failed to stage bundled runtime deps for ${pluginId}: ${output || "npm install failed"}`,
+      );
+    }
+
+    const stagedNodeModulesDir = path.join(tempInstallDir, "node_modules");
+    if (!fs.existsSync(stagedNodeModulesDir)) {
+      throw new Error(
+        `failed to stage bundled runtime deps for ${pluginId}: npm install produced no node_modules directory`,
+      );
+    }
+
+    removePathIfExists(nodeModulesDir);
+    fs.renameSync(stagedNodeModulesDir, nodeModulesDir);
+    writeJson(stampPath, {
+      fingerprint,
+      generatedAt: new Date().toISOString(),
+    });
+  } finally {
+    removePathIfExists(tempInstallDir);
   }
-  const output = [result.stderr, result.stdout].filter(Boolean).join("\n").trim();
-  throw new Error(
-    `failed to stage bundled runtime deps for ${pluginId}: ${output || "npm install failed"}`,
-  );
 }
 
 export function stageBundledPluginRuntimeDeps(params = {}) {
   const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();
+  const installPluginRuntimeDepsImpl =
+    params.installPluginRuntimeDepsImpl ?? installPluginRuntimeDeps;
   for (const pluginDir of listBundledPluginRuntimeDirs(repoRoot)) {
     const pluginId = path.basename(pluginDir);
-    const packageJson = readJson(path.join(pluginDir, "package.json"));
+    const packageJson = sanitizeBundledManifestForRuntimeInstall(pluginDir);
     const nodeModulesDir = path.join(pluginDir, "node_modules");
-    removePathIfExists(nodeModulesDir);
+    const stampPath = resolveRuntimeDepsStampPath(pluginDir);
     if (!hasRuntimeDeps(packageJson) || !shouldStageRuntimeDeps(packageJson)) {
+      removePathIfExists(nodeModulesDir);
+      removePathIfExists(stampPath);
       continue;
     }
-    installPluginRuntimeDeps(pluginDir, pluginId);
+    const fingerprint = createRuntimeDepsFingerprint(packageJson);
+    const stamp = readRuntimeDepsStamp(stampPath);
+    if (fs.existsSync(nodeModulesDir) && stamp?.fingerprint === fingerprint) {
+      continue;
+    }
+    installPluginRuntimeDepsImpl({
+      fingerprint,
+      packageJson,
+      pluginDir,
+      pluginId,
+    });
   }
 }
 

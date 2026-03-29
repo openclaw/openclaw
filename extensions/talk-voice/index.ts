@@ -164,6 +164,13 @@ export default definePluginEntry({
         }
 
         if (action === "set") {
+          // Internal gateway callers already expose operator scopes and should
+          // match the admin-only config.patch RPC. External channels rely on
+          // the plugin command's authorized-sender gate instead.
+          if (ctx.channel === "webchat" && !ctx.gatewayClientScopes?.includes("operator.admin")) {
+            return { text: `⚠️ ${commandLabel} set requires operator.admin.` };
+          }
+
           const query = tokens.slice(1).join(" ").trim();
           if (!query) {
             return { text: `Usage: ${commandLabel} set <voiceId|name>` };

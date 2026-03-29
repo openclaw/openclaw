@@ -3,10 +3,10 @@ import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { VERCEL_AI_GATEWAY_BASE_URL } from "../plugin-sdk/vercel-ai-gateway.js";
 import { captureEnv } from "../test-utils/env.js";
 import { NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
 import { resolveImplicitProvidersForTest } from "./models-config.e2e-harness.js";
-import { VERCEL_AI_GATEWAY_BASE_URL } from "./vercel-ai-gateway.js";
 
 describe("vercel-ai-gateway provider resolution", () => {
   it("adds the provider with GPT-5.4 models when AI_GATEWAY_API_KEY is present", async () => {

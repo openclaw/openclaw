@@ -72,6 +72,130 @@ export function createStatusPluginStatusModuleMock(
   };
 }
 
+export function createStatusUpdateModuleMock(
+  mocks: Pick<StatusScanSharedMocks, "getUpdateCheckResult">,
+) {
+  return {
+    getUpdateCheckResult: mocks.getUpdateCheckResult,
+  };
+}
+
+export function createStatusAgentLocalModuleMock(
+  mocks: Pick<StatusScanSharedMocks, "getAgentLocalStatuses">,
+) {
+  return {
+    getAgentLocalStatuses: mocks.getAgentLocalStatuses,
+  };
+}
+
+export function createStatusSummaryModuleMock(
+  mocks: Pick<StatusScanSharedMocks, "getStatusSummary">,
+) {
+  return {
+    getStatusSummary: mocks.getStatusSummary,
+  };
+}
+
+export function createStatusExecModuleMock() {
+  return {
+    runExec: vi.fn(),
+  };
+}
+
+type StatusScanModuleTestMocks = StatusScanSharedMocks & {
+  buildChannelsTable?: ReturnType<typeof vi.fn>;
+  callGateway?: ReturnType<typeof vi.fn>;
+  getStatusCommandSecretTargetIds?: ReturnType<typeof vi.fn>;
+  resolveMemorySearchConfig?: ReturnType<typeof vi.fn>;
+};
+
+export async function loadStatusScanModuleForTest(
+  mocks: StatusScanModuleTestMocks,
+  options: {
+    fastJson: true;
+  },
+): Promise<typeof import("./status.scan.fast-json.js")>;
+export async function loadStatusScanModuleForTest(
+  mocks: StatusScanModuleTestMocks,
+  options?: {
+    fastJson?: false;
+  },
+): Promise<typeof import("./status.scan.js")>;
+export async function loadStatusScanModuleForTest(
+  mocks: StatusScanModuleTestMocks,
+  options: {
+    fastJson?: boolean;
+  } = {},
+) {
+  vi.resetModules();
+
+  vi.doMock("../channels/config-presence.js", () => ({
+    hasPotentialConfiguredChannels: mocks.hasPotentialConfiguredChannels,
+  }));
+
+  if (options.fastJson) {
+    vi.doMock("../config/io.js", () => ({
+      readBestEffortConfig: mocks.readBestEffortConfig,
+    }));
+    vi.doMock("../cli/command-secret-targets.js", () => ({
+      getStatusCommandSecretTargetIds: mocks.getStatusCommandSecretTargetIds,
+    }));
+    vi.doMock("../agents/memory-search.js", () => ({
+      resolveMemorySearchConfig: mocks.resolveMemorySearchConfig,
+    }));
+  } else {
+    vi.doMock("../cli/progress.js", () => ({
+      withProgress: vi.fn(async (_opts, run) => await run({ setLabel: vi.fn(), tick: vi.fn() })),
+    }));
+    vi.doMock("../config/config.js", () => ({
+      readBestEffortConfig: mocks.readBestEffortConfig,
+    }));
+    vi.doMock("./status-all/channels.js", () => ({
+      buildChannelsTable: mocks.buildChannelsTable,
+    }));
+    vi.doMock("./status.scan.runtime.js", () => ({
+      statusScanRuntime: {
+        buildChannelsTable: mocks.buildChannelsTable,
+        collectChannelStatusIssues: vi.fn(() => []),
+      },
+    }));
+  }
+
+  vi.doMock("../config/paths.js", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("../config/paths.js")>();
+    return {
+      ...actual,
+      resolveConfigPath: mocks.resolveConfigPath,
+    };
+  });
+
+  vi.doMock("../cli/command-secret-gateway.js", () => ({
+    resolveCommandSecretRefsViaGateway: mocks.resolveCommandSecretRefsViaGateway,
+  }));
+  vi.doMock("./status.update.js", () => createStatusUpdateModuleMock(mocks));
+  vi.doMock("./status.agent-local.js", () => createStatusAgentLocalModuleMock(mocks));
+  vi.doMock("./status.summary.js", () => createStatusSummaryModuleMock(mocks));
+  vi.doMock("../infra/os-summary.js", () => createStatusOsSummaryModuleMock());
+  vi.doMock("./status.scan.deps.runtime.js", () => createStatusScanDepsRuntimeModuleMock(mocks));
+  vi.doMock("../gateway/call.js", () => createStatusGatewayCallModuleMock(mocks));
+  vi.doMock("../gateway/probe.js", () => ({
+    probeGateway: mocks.probeGateway,
+  }));
+  vi.doMock("./status.gateway-probe.js", () => createStatusGatewayProbeModuleMock(mocks));
+  vi.doMock("../gateway/connection-details.js", () => ({
+    buildGatewayConnectionDetails: mocks.buildGatewayConnectionDetails,
+    buildGatewayConnectionDetailsWithResolvers: mocks.buildGatewayConnectionDetails,
+  }));
+  vi.doMock("../process/exec.js", () => createStatusExecModuleMock());
+  vi.doMock("../cli/plugin-registry.js", () => createStatusPluginRegistryModuleMock(mocks));
+  vi.doMock("../plugins/status.js", () => createStatusPluginStatusModuleMock(mocks));
+
+  if (options.fastJson) {
+    return await import("./status.scan.fast-json.js");
+  }
+  return await import("./status.scan.js");
+}
+
 export function createStatusScanConfig<T extends object = OpenClawConfig>(
   overrides: T = {} as T,
 ): OpenClawConfig & T {

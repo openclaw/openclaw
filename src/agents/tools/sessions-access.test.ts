@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   createAgentToAgentPolicy,
@@ -8,6 +8,7 @@ import {
   resolveSandboxedSessionToolContext,
   resolveSessionToolsVisibility,
 } from "./sessions-access.js";
+import { __testing as sessionsResolutionTesting } from "./sessions-resolution.js";
 
 describe("resolveSessionToolsVisibility", () => {
   it("defaults to tree when unset or invalid", () => {
@@ -108,6 +109,38 @@ describe("createAgentToAgentPolicy", () => {
 });
 
 describe("createSessionVisibilityGuard", () => {
+  it("does not block exact same-agent spawned targets that fall past the spawned list cap", async () => {
+    sessionsResolutionTesting.setDepsForTest({
+      callGateway: vi.fn(async (request: { method?: string; params?: { key?: string } }) => {
+        if (request.method === "sessions.resolve") {
+          return { key: request.params?.key };
+        }
+        if (request.method === "sessions.list") {
+          return {
+            sessions: [
+              ...Array.from({ length: 500 }, (_, index) => ({
+                key: `agent:main:subagent:worker-${index}`,
+              })),
+              { key: "agent:main:subagent:worker-999" },
+            ],
+          };
+        }
+        return {};
+      }) as never,
+    });
+
+    const guard = await createSessionVisibilityGuard({
+      action: "history",
+      requesterSessionKey: "agent:main:main",
+      visibility: "tree",
+      a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
+    });
+
+    expect(guard.check("agent:main:subagent:worker-999")).toEqual({ allowed: true });
+
+    sessionsResolutionTesting.setDepsForTest();
+  });
+
   it("blocks cross-agent send when agent-to-agent is disabled", async () => {
     const guard = await createSessionVisibilityGuard({
       action: "send",
