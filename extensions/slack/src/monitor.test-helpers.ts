@@ -47,6 +47,7 @@ type SlackClient = {
   };
   reactions: {
     add: (...args: unknown[]) => unknown;
+    remove: (...args: unknown[]) => unknown;
   };
 };
 
@@ -87,6 +88,7 @@ function ensureSlackTestRuntime(): {
       },
       reactions: {
         add: (...args: unknown[]) => slackTestState.reactMock(...args),
+        remove: (...args: unknown[]) => slackTestState.reactMock(...args),
       },
     };
   }
