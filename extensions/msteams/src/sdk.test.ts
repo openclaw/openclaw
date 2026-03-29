@@ -173,6 +173,38 @@ describe("createBotFrameworkJwtValidator", () => {
     expect(entraConfig?.validateIssuer).toEqual({ allowedTenantIds: ["tenant-id"] });
   });
 
+  it("falls back to Entra JWKS when Bot Framework validation throws", async () => {
+    jwtValidatorState.behaviorByJwks.set(
+      "https://login.botframework.com/v1/.well-known/keys",
+      "throw",
+    );
+    jwtValidatorState.behaviorByJwks.set(
+      "https://login.microsoftonline.com/common/discovery/v2.0/keys",
+      "success",
+    );
+
+    const validator = await createBotFrameworkJwtValidator(creds);
+    await expect(
+      validator.validate("Bearer token-throw", "https://service.example.com"),
+    ).resolves.toBe(true);
+
+    expect(jwtValidatorState.calls).toHaveLength(2);
+    expect(jwtValidatorState.calls[0]).toMatchObject({
+      jwksUri: "https://login.botframework.com/v1/.well-known/keys",
+      token: "token-throw",
+      overrideOptions: {
+        validateServiceUrl: { expectedServiceUrl: "https://service.example.com" },
+      },
+    });
+    expect(jwtValidatorState.calls[1]).toMatchObject({
+      jwksUri: "https://login.microsoftonline.com/common/discovery/v2.0/keys",
+      token: "token-throw",
+      overrideOptions: {
+        validateServiceUrl: { expectedServiceUrl: "https://service.example.com" },
+      },
+    });
+  });
+
   it("returns false when all validator paths fail", async () => {
     jwtValidatorState.behaviorByJwks.set(
       "https://login.botframework.com/v1/.well-known/keys",
@@ -181,6 +213,7 @@ describe("createBotFrameworkJwtValidator", () => {
 
     const validator = await createBotFrameworkJwtValidator(creds);
     await expect(validator.validate("Bearer token-3")).resolves.toBe(false);
+    expect(jwtValidatorState.calls).toHaveLength(2);
   });
 
   it("returns false for empty bearer token", async () => {
