@@ -70,6 +70,23 @@ async function postChatCompletions(port: number, body: unknown, headers?: Record
   return res;
 }
 
+async function postChatCompletionsAuthOnly(
+  port: number,
+  body: unknown,
+  headers?: Record<string, string>,
+) {
+  const res = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: "Bearer secret",
+      ...headers,
+    },
+    body: JSON.stringify(body),
+  });
+  return res;
+}
+
 async function expectChatCompletionsDisabled(
   start: (port: number) => Promise<{ close: (opts?: { reason?: string }) => Promise<void> }>,
 ) {
@@ -103,6 +120,23 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         openAiChatCompletionsEnabled: false,
       }),
     );
+  });
+
+  it("allows headerless bearer auth on /v1/chat/completions", async () => {
+    agentCommand.mockClear();
+    agentCommand.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
+
+    const res = await postChatCompletionsAuthOnly(enabledPort, {
+      model: "openclaw",
+      messages: [{ role: "user", content: "hi" }],
+    });
+
+    expect(res.status).toBe(200);
+    await expect(res.json()).resolves.toMatchObject({
+      object: "chat.completion",
+      choices: [{ message: { content: "hello" } }],
+    });
+    expect(agentCommand).toHaveBeenCalledTimes(1);
   });
 
   it("handles request validation and routing", async () => {

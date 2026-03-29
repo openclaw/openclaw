@@ -29,6 +29,7 @@ import { sendJson, setSseHeaders, writeDone } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 import { resolveGatewayRequestContext, resolveOpenAiCompatModelOverride } from "./http-utils.js";
 import { normalizeInputHostnameAllowlist } from "./input-allowlist.js";
+import { CLI_DEFAULT_OPERATOR_SCOPES } from "./method-scopes.js";
 
 type OpenAiHttpOptions = {
   auth: ResolvedGatewayAuth;
@@ -417,6 +418,7 @@ export async function handleOpenAiHttpRequest(
   const handled = await handleGatewayPostJsonEndpoint(req, res, {
     pathname: "/v1/chat/completions",
     requiredOperatorMethod: "chat.send",
+    implicitCompatibilityOperatorScopes: CLI_DEFAULT_OPERATOR_SCOPES,
     auth: opts.auth,
     trustedProxies: opts.trustedProxies,
     allowRealIpFallback: opts.allowRealIpFallback,

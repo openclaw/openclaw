@@ -28,11 +28,17 @@ async function startServer(port: number, opts?: { openAiChatCompletionsEnabled?:
   });
 }
 
-async function getModels(pathname: string, headers?: Record<string, string>) {
-  return await fetch(`http://127.0.0.1:${enabledPort}${pathname}`, {
+async function getModels(
+  pathname: string,
+  headers?: Record<string, string>,
+  opts?: { includeDefaultScopeHeader?: boolean; port?: number; token?: string },
+) {
+  const includeDefaultScopeHeader = opts?.includeDefaultScopeHeader ?? true;
+  const port = opts?.port ?? enabledPort;
+  return await fetch(`http://127.0.0.1:${port}${pathname}`, {
     headers: {
-      authorization: "Bearer secret",
-      ...READ_SCOPE_HEADER,
+      authorization: `Bearer ${opts?.token ?? "secret"}`,
+      ...(includeDefaultScopeHeader ? READ_SCOPE_HEADER : {}),
       ...headers,
     },
   });
@@ -60,6 +66,29 @@ describe("OpenAI-compatible models HTTP API (e2e)", () => {
     const firstId = list.data?.[0]?.id;
     expect(typeof firstId).toBe("string");
     const res = await getModels(`/v1/models/${encodeURIComponent(firstId!)}`);
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as { id?: string; object?: string };
+    expect(json.object).toBe("model");
+    expect(json.id).toBe(firstId);
+  });
+
+  it("serves /v1/models with headerless bearer auth", async () => {
+    const res = await getModels("/v1/models", undefined, { includeDefaultScopeHeader: false });
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as { object?: string; data?: Array<{ id?: string }> };
+    expect(json.object).toBe("list");
+    expect((json.data?.length ?? 0) > 0).toBe(true);
+  });
+
+  it("serves /v1/models/{id} with headerless bearer auth", async () => {
+    const list = (await (await getModels("/v1/models")).json()) as {
+      data?: Array<{ id?: string }>;
+    };
+    const firstId = list.data?.[0]?.id;
+    expect(typeof firstId).toBe("string");
+    const res = await getModels(`/v1/models/${encodeURIComponent(firstId!)}`, undefined, {
+      includeDefaultScopeHeader: false,
+    });
     expect(res.status).toBe(200);
     const json = (await res.json()) as { id?: string; object?: string };
     expect(json.object).toBe("model");
@@ -119,6 +148,27 @@ describe("OpenAI-compatible models HTTP API (e2e)", () => {
       expect(res.status).toBe(404);
     } finally {
       await server.close({ reason: "models disabled test done" });
+    }
+  });
+
+  it("serves /v1/models with headerless password auth", async () => {
+    const port = await getFreePort();
+    const server = await startGatewayServer(port, {
+      host: "127.0.0.1",
+      auth: { mode: "password", password: "pw-secret" },
+      controlUiEnabled: false,
+      openAiChatCompletionsEnabled: true,
+    });
+    try {
+      const res = await getModels("/v1/models", undefined, {
+        includeDefaultScopeHeader: false,
+        port,
+        token: "pw-secret",
+      });
+      expect(res.status).toBe(200);
+      await expect(res.json()).resolves.toMatchObject({ object: "list" });
+    } finally {
+      await server.close({ reason: "models password auth test done" });
     }
   });
 });

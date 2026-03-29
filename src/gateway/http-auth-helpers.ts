@@ -1,19 +1,51 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
-import { authorizeHttpGatewayConnect, type ResolvedGatewayAuth } from "./auth.js";
+import {
+  authorizeHttpGatewayConnect,
+  type GatewayAuthResult,
+  type ResolvedGatewayAuth,
+} from "./auth.js";
 import { sendGatewayAuthFailure } from "./http-common.js";
 import { getBearerToken, getHeader } from "./http-utils.js";
+import { CLI_DEFAULT_OPERATOR_SCOPES, type OperatorScope } from "./method-scopes.js";
 
 const OPERATOR_SCOPES_HEADER = "x-openclaw-scopes";
 
-export async function authorizeGatewayBearerRequestOrReply(params: {
+type RequestedOperatorScopes = {
+  present: boolean;
+  scopes: string[];
+};
+
+function parseRequestedOperatorScopes(req: IncomingMessage): RequestedOperatorScopes {
+  const raw = getHeader(req, OPERATOR_SCOPES_HEADER);
+  if (raw === undefined) {
+    return { present: false, scopes: [] };
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return { present: true, scopes: [] };
+  }
+  return {
+    present: true,
+    scopes: trimmed
+      .split(",")
+      .map((scope) => scope.trim())
+      .filter((scope) => scope.length > 0),
+  };
+}
+
+function canImplicitlyTrustCompatibilityScopes(authResult: GatewayAuthResult): boolean {
+  return authResult.ok && (authResult.method === "token" || authResult.method === "password");
+}
+
+export async function authorizeGatewayBearerRequest(params: {
   req: IncomingMessage;
   res: ServerResponse;
   auth: ResolvedGatewayAuth;
   trustedProxies?: string[];
   allowRealIpFallback?: boolean;
   rateLimiter?: AuthRateLimiter;
-}): Promise<boolean> {
+}): Promise<GatewayAuthResult | null> {
   const token = getBearerToken(params.req);
   const authResult = await authorizeHttpGatewayConnect({
     auth: params.auth,
@@ -25,18 +57,37 @@ export async function authorizeGatewayBearerRequestOrReply(params: {
   });
   if (!authResult.ok) {
     sendGatewayAuthFailure(params.res, authResult);
-    return false;
+    return null;
   }
-  return true;
+  return authResult;
+}
+
+export async function authorizeGatewayBearerRequestOrReply(params: {
+  req: IncomingMessage;
+  res: ServerResponse;
+  auth: ResolvedGatewayAuth;
+  trustedProxies?: string[];
+  allowRealIpFallback?: boolean;
+  rateLimiter?: AuthRateLimiter;
+}): Promise<boolean> {
+  return (await authorizeGatewayBearerRequest(params)) !== null;
 }
 
 export function resolveGatewayRequestedOperatorScopes(req: IncomingMessage): string[] {
-  const raw = getHeader(req, OPERATOR_SCOPES_HEADER)?.trim();
-  if (!raw) {
-    return [];
+  return parseRequestedOperatorScopes(req).scopes;
+}
+
+export function resolveGatewayCompatibilityHttpOperatorScopes(params: {
+  req: IncomingMessage;
+  authResult: GatewayAuthResult;
+  fallbackScopes?: readonly OperatorScope[];
+}): string[] {
+  const requested = parseRequestedOperatorScopes(params.req);
+  if (requested.present) {
+    return requested.scopes;
   }
-  return raw
-    .split(",")
-    .map((scope) => scope.trim())
-    .filter((scope) => scope.length > 0);
+  if (canImplicitlyTrustCompatibilityScopes(params.authResult)) {
+    return [...(params.fallbackScopes ?? CLI_DEFAULT_OPERATOR_SCOPES)];
+  }
+  return [];
 }
