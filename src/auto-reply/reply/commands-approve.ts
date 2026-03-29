@@ -132,6 +132,7 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
   const isPluginId = parsed.id.startsWith("plugin:");
   let discordExecApprovalDeniedReply: { shouldContinue: false; reply: { text: string } } | null =
     null;
+  let isTelegramExplicitApprover = false;
 
   if (params.command.channel === "telegram") {
     const telegramApproverContext = {
@@ -139,6 +140,7 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
       accountId: params.ctx.AccountId,
       senderId: params.command.senderId,
     };
+    isTelegramExplicitApprover = isTelegramExecApprovalApprover(telegramApproverContext);
 
     if (!isPluginId && !isTelegramExecApprovalAuthorizedSender(telegramApproverContext)) {
       return {
@@ -147,7 +149,7 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
       };
     }
 
-    if (isPluginId && !isTelegramExecApprovalApprover(telegramApproverContext)) {
+    if (isPluginId && !isTelegramExplicitApprover) {
       return {
         shouldContinue: false,
         reply: { text: "❌ You are not authorized to approve plugin requests on Telegram." },
@@ -248,6 +250,12 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
       await callApprovalMethod("exec.approval.resolve");
     } catch (err) {
       if (isApprovalNotFoundError(err)) {
+        if (params.command.channel === "telegram" && !isTelegramExplicitApprover) {
+          return {
+            shouldContinue: false,
+            reply: { text: `❌ Failed to submit approval: ${String(err)}` },
+          };
+        }
         try {
           await callApprovalMethod("plugin.approval.resolve");
         } catch (pluginErr) {

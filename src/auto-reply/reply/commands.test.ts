@@ -742,6 +742,30 @@ describe("/approve command", () => {
     expect(callGatewayMock).toHaveBeenCalledTimes(0);
   });
 
+  it("does not fall back to legacy plugin approvals for Telegram target recipients", async () => {
+    const cfg = createTelegramTargetApproveCfg();
+    const params = buildParams("/approve legacy-plugin-123 allow-once", cfg, {
+      Provider: "telegram",
+      Surface: "telegram",
+      SenderId: "123",
+    });
+
+    callGatewayMock.mockRejectedValueOnce(
+      gatewayError("unknown or expired approval id", "APPROVAL_NOT_FOUND"),
+    );
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("unknown or expired approval id");
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "exec.approval.resolve",
+        params: { id: "legacy-plugin-123", decision: "allow-once" },
+      }),
+    );
+  });
+
   it("enforces gateway approval scopes", async () => {
     const cfg = {
       commands: { text: true },
