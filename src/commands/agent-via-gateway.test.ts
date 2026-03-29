@@ -139,9 +139,9 @@ describe("agentCliCommand", () => {
     });
   });
 
-  it("skips gateway when --deliver is set (direct delivery bypasses LLM)", async () => {
+  it("routes --deliver through the gateway (channel runtime may be gateway-side)", async () => {
     await withTempStore(async () => {
-      mockLocalAgentReply();
+      mockGatewaySuccessReply();
 
       await agentCliCommand(
         {
@@ -153,8 +153,8 @@ describe("agentCliCommand", () => {
         runtime,
       );
 
-      expect(callGateway).not.toHaveBeenCalled();
-      expect(agentCommand).toHaveBeenCalledTimes(1);
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      expect(agentCommand).not.toHaveBeenCalled();
     });
   });
 });

@@ -184,9 +184,7 @@ export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv, d
     agentId: opts.agent,
     replyAccountId: opts.replyAccount,
   };
-  // Direct delivery bypasses the LLM turn, so route straight to the embedded
-  // agent path which handles it locally without a gateway round-trip.
-  if (opts.local === true || opts.deliver === true) {
+  if (opts.local === true) {
     return await agentCommand(localOpts, runtime, deps);
   }
 
