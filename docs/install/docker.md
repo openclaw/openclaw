@@ -143,8 +143,8 @@ If your host routes outbound traffic through a local proxy (such as Clash Verge,
 
 ```yaml
 # In openclaw-gateway.environment:
-# HTTP_PROXY: "socks5h://host.docker.internal:7897"
-# HTTPS_PROXY: "socks5h://host.docker.internal:7897"
+# HTTP_PROXY: "http://host.docker.internal:7897"
+# HTTPS_PROXY: "http://host.docker.internal:7897"
 # NO_PROXY: "localhost,127.0.0.1,.local,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
 ```
 
