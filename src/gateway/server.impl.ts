@@ -4,6 +4,7 @@ import type { CanvasHostServer } from "../canvas-host/server.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { isRestartEnabled } from "../config/commands.flags.js";
+import { attemptConfigRollback } from "../config/config-backup-restore.js";
 import {
   type OpenClawConfig,
   applyConfigOverrides,
@@ -220,6 +221,31 @@ export async function startGatewayServer(
     key: "OPENCLAW_RAW_STREAM_PATH",
     description: "raw stream log path override",
   });
+
+  // Attempt automatic config rollback before full startup validation, so that
+  // a bad config edit doesn't permanently prevent the gateway from starting.
+  {
+    const preflightSnapshot = await readConfigFileSnapshot();
+    if (preflightSnapshot.exists && !preflightSnapshot.valid) {
+      const configBackupSettings = preflightSnapshot.config?.gateway?.configBackup;
+      const autoRollbackEnabled = configBackupSettings?.autoRollback !== false; // default true
+      if (autoRollbackEnabled) {
+        log.warn("gateway: config validation failed, attempting automatic rollback...");
+        const rollbackResult = await attemptConfigRollback(preflightSnapshot.path);
+        if (rollbackResult.restored) {
+          log.info(`gateway: rolled back config from ${rollbackResult.backupPath}`);
+          const rollbackSnapshot = await readConfigFileSnapshot();
+          if (rollbackSnapshot.valid) {
+            log.info("gateway: config rollback successful, continuing startup");
+          } else {
+            log.warn("gateway: config still invalid after rollback, startup will fail");
+          }
+        } else {
+          log.warn(`gateway: rollback failed: ${rollbackResult.error}`);
+        }
+      }
+    }
+  }
 
   const configSnapshot = await loadGatewayStartupConfigSnapshot({
     minimalTestGateway,
