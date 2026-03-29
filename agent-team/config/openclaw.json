@@ -110,6 +110,13 @@
       "capabilities": {
         "interactiveReplies": true
       },
+      "actions": {
+        "messages": true,
+        "reactions": true,
+        "pins": true,
+        "memberInfo": true,
+        "emojiList": true
+      },
       "streaming": "partial",
       "nativeStreaming": true,
       "userTokenReadOnly": true,
