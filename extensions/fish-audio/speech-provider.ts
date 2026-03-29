@@ -259,9 +259,9 @@ export function buildFishAudioSpeechProvider(): SpeechProviderPlugin {
         ...(trimToUndefined(talkProviderConfig.voiceId) == null
           ? {}
           : { voiceId: trimToUndefined(talkProviderConfig.voiceId) }),
-        ...(trimToUndefined(talkProviderConfig.model) == null
+        ...(trimToUndefined(talkProviderConfig.modelId) == null
           ? {}
-          : { model: normalizeModel(talkProviderConfig.model) }),
+          : { model: normalizeModel(talkProviderConfig.modelId) }),
         ...(talkProviderConfig.latency == null
           ? {}
           : { latency: normalizeLatency(talkProviderConfig.latency) }),
