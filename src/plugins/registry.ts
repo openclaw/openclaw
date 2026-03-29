@@ -291,20 +291,35 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       names.push(tool.name);
     }
 
-    const normalized = names.map((name) => name.trim()).filter(Boolean);
+    let normalized = names.map((name) => name.trim()).filter(Boolean);
 
-    // Deduplicate: skip if the same plugin already registered a tool with any
-    // of the same names.  This prevents duplicate entries when a plugin's
-    // registerFull() callback is invoked multiple times during config
-    // hot-reload cycles (see #56114).
+    // Deduplicate: filter out names already registered by this plugin.
+    // This prevents duplicate entries when a plugin's registerFull() callback
+    // is invoked multiple times during config hot-reload cycles (see #56114).
     if (normalized.length > 0) {
-      const alreadyRegistered = registry.tools.some(
+      const registeredNames = new Set(
+        registry.tools.filter((t) => t.pluginId === record.id).flatMap((t) => t.names),
+      );
+      const newNames = normalized.filter((n) => !registeredNames.has(n));
+
+      if (newNames.length === 0) {
+        return; // nothing genuinely new — skip
+      }
+
+      // Use only the new names from here on
+      normalized = newNames;
+    }
+
+    // For nameless tools, also check for duplicates by factory reference
+    if (normalized.length === 0) {
+      const alreadyRegisteredFactory = registry.tools.some(
         (existing) =>
           existing.pluginId === record.id &&
-          existing.names.some((n) => normalized.includes(n)),
+          existing.names.length === 0 &&
+          existing.factory === factory,
       );
-      if (alreadyRegistered) {
-        return;
+      if (alreadyRegisteredFactory) {
+        return; // skip duplicate nameless factory
       }
     }
 
