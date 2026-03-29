@@ -150,8 +150,13 @@ function normalizeProviderModelId(provider: string, model: string): string {
   if (provider === "openrouter") {
     return model.includes("/") ? model : `openrouter/${model}`;
   }
-  if (provider === "xai") {
-    return normalizeXaiModelId(model);
+  // OpenRouter and other catalogs use the `x-ai/` prefix; config refs use `xai/`.
+  // Apply the same xAI model-id normalization in both cases so pricing and lookups align.
+  {
+    const xaiProvider = provider.trim().toLowerCase();
+    if (xaiProvider === "xai" || xaiProvider === "x-ai") {
+      return normalizeXaiModelId(model);
+    }
   }
   if (provider === "vercel-ai-gateway" && !model.includes("/")) {
     // Allow Vercel-specific Claude refs without an upstream prefix.

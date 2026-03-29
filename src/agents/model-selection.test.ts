@@ -204,6 +204,12 @@ describe("model-selection", () => {
         expected: { provider: "xai", model: "grok-4.20-beta-latest-reasoning" },
       },
       {
+        name: "normalizes x-ai OpenRouter catalog provider prefix like xai",
+        variants: ["x-ai/grok-4.20-experimental-beta-0304-reasoning"],
+        defaultProvider: "openai",
+        expected: { provider: "x-ai", model: "grok-4.20-beta-latest-reasoning" },
+      },
+      {
         name: "keeps OpenAI codex refs on the openai provider",
         variants: ["openai/gpt-5.4", "gpt-5.4"],
         defaultProvider: "openai",

@@ -8,6 +8,9 @@ import {
   type ModelRef,
 } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { normalizeXaiModelId } from "../plugin-sdk/xai.js";
+import { normalizeProviderModelIdWithPlugin } from "../plugins/provider-runtime.js";
 import {
   clearGatewayModelPricingCacheState,
   getCachedGatewayModelPricing,
@@ -15,8 +18,6 @@ import {
   replaceGatewayModelPricingCache,
   type CachedModelPricing,
 } from "./model-pricing-cache-state.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
-import { normalizeProviderModelIdWithPlugin } from "../plugins/provider-runtime.js";
 
 type OpenRouterPricingEntry = {
   id: string;
@@ -148,6 +149,12 @@ function canonicalizeOpenRouterLookupId(id: string): string {
     model = model
       .replace(/^claude-(\d+)\.(\d+)-/u, "claude-$1-$2-")
       .replace(/^claude-([a-z]+)-(\d+)\.(\d+)$/u, "claude-$1-$2-$3");
+  }
+  {
+    const p = provider.trim().toLowerCase();
+    if (p === "xai" || p === "x-ai") {
+      model = normalizeXaiModelId(model);
+    }
   }
   model =
     normalizeProviderModelIdWithPlugin({
