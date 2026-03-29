@@ -1076,13 +1076,21 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
   };
 }
 
-function extractBalancedJsonPrefix(raw: string): string | null {
+type BalancedJsonPrefix = {
+  json: string;
+  startIndex: number;
+};
+
+function extractBalancedJsonPrefix(raw: string): BalancedJsonPrefix | null {
   let start = 0;
-  while (start < raw.length && /\s/.test(raw[start] ?? "")) {
+  while (start < raw.length) {
+    const char = raw[start];
+    if (char === "{" || char === "[") {
+      break;
+    }
     start += 1;
   }
-  const startChar = raw[start];
-  if (startChar !== "{" && startChar !== "[") {
+  if (start >= raw.length) {
     return null;
   }
 
@@ -1115,7 +1123,7 @@ function extractBalancedJsonPrefix(raw: string): string | null {
     if (char === "}" || char === "]") {
       depth -= 1;
       if (depth === 0) {
-        return raw.slice(start, i + 1);
+        return { json: raw.slice(start, i + 1), startIndex: start };
       }
     }
   }
@@ -1123,7 +1131,9 @@ function extractBalancedJsonPrefix(raw: string): string | null {
 }
 
 const MAX_TOOLCALL_REPAIR_BUFFER_CHARS = 64_000;
+const MAX_TOOLCALL_REPAIR_LEADING_CHARS = 96;
 const MAX_TOOLCALL_REPAIR_TRAILING_CHARS = 3;
+const TOOLCALL_REPAIR_ALLOWED_LEADING_RE = /^[a-z0-9\s"'`.:/_\\-]+$/i;
 const TOOLCALL_REPAIR_ALLOWED_TRAILING_RE = /^[^\s{}[\]":,\\]{1,3}$/;
 const MAX_BTW_SNAPSHOT_MESSAGES = 100;
 
@@ -1141,33 +1151,66 @@ function shouldAttemptMalformedToolCallRepair(partialJson: string, delta: string
 
 type ToolCallArgumentRepair = {
   args: Record<string, unknown>;
+  kind: "preserved" | "repaired";
+  leadingPrefix: string;
   trailingSuffix: string;
 };
 
-function tryParseMalformedToolCallArguments(raw: string): ToolCallArgumentRepair | undefined {
+function isAllowedToolCallRepairLeadingPrefix(prefix: string): boolean {
+  if (!prefix) {
+    return true;
+  }
+  if (prefix.length > MAX_TOOLCALL_REPAIR_LEADING_CHARS) {
+    return false;
+  }
+  if (!TOOLCALL_REPAIR_ALLOWED_LEADING_RE.test(prefix)) {
+    return false;
+  }
+  return /^[.:'"`-]/.test(prefix) || /^(?:functions?|tools?)[._:/-]?/i.test(prefix);
+}
+
+function tryExtractUsableToolCallArguments(raw: string): ToolCallArgumentRepair | undefined {
   if (!raw.trim()) {
     return undefined;
   }
   try {
-    JSON.parse(raw);
-    return undefined;
+    const parsed = JSON.parse(raw) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? {
+          args: parsed as Record<string, unknown>,
+          kind: "preserved",
+          leadingPrefix: "",
+          trailingSuffix: "",
+        }
+      : undefined;
   } catch {
-    const jsonPrefix = extractBalancedJsonPrefix(raw);
-    if (!jsonPrefix) {
+    const extracted = extractBalancedJsonPrefix(raw);
+    if (!extracted) {
       return undefined;
     }
-    const suffix = raw.slice(raw.indexOf(jsonPrefix) + jsonPrefix.length).trim();
+    const leadingPrefix = raw.slice(0, extracted.startIndex).trim();
+    if (!isAllowedToolCallRepairLeadingPrefix(leadingPrefix)) {
+      return undefined;
+    }
+    const suffix = raw.slice(extracted.startIndex + extracted.json.length).trim();
+    if (leadingPrefix.length === 0 && suffix.length === 0) {
+      return undefined;
+    }
     if (
-      suffix.length === 0 ||
       suffix.length > MAX_TOOLCALL_REPAIR_TRAILING_CHARS ||
-      !TOOLCALL_REPAIR_ALLOWED_TRAILING_RE.test(suffix)
+      (suffix.length > 0 && !TOOLCALL_REPAIR_ALLOWED_TRAILING_RE.test(suffix))
     ) {
       return undefined;
     }
     try {
-      const parsed = JSON.parse(jsonPrefix) as unknown;
+      const parsed = JSON.parse(extracted.json) as unknown;
       return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-        ? { args: parsed as Record<string, unknown>, trailingSuffix: suffix }
+        ? {
+            args: parsed as Record<string, unknown>,
+            kind: "repaired",
+            leadingPrefix,
+            trailingSuffix: suffix,
+          }
         : undefined;
     } catch {
       return undefined;
@@ -1285,16 +1328,19 @@ function wrapStreamRepairMalformedToolCallArguments(
                 return result;
               }
               partialJsonByIndex.set(event.contentIndex, nextPartialJson);
-              if (shouldAttemptMalformedToolCallRepair(nextPartialJson, event.delta)) {
-                const repair = tryParseMalformedToolCallArguments(nextPartialJson);
+              const shouldReevaluateRepair =
+                shouldAttemptMalformedToolCallRepair(nextPartialJson, event.delta) ||
+                repairedArgsByIndex.has(event.contentIndex);
+              if (shouldReevaluateRepair) {
+                const repair = tryExtractUsableToolCallArguments(nextPartialJson);
                 if (repair) {
                   repairedArgsByIndex.set(event.contentIndex, repair.args);
                   repairToolCallArgumentsInMessage(event.partial, event.contentIndex, repair.args);
                   repairToolCallArgumentsInMessage(event.message, event.contentIndex, repair.args);
-                  if (!loggedRepairIndices.has(event.contentIndex)) {
+                  if (!loggedRepairIndices.has(event.contentIndex) && repair.kind === "repaired") {
                     loggedRepairIndices.add(event.contentIndex);
                     log.warn(
-                      `repairing Kimi tool call arguments after ${repair.trailingSuffix.length} trailing chars`,
+                      `repairing Kimi tool call arguments with ${repair.leadingPrefix.length} leading chars and ${repair.trailingSuffix.length} trailing chars`,
                     );
                   }
                 } else {
