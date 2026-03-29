@@ -63,6 +63,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/Matrix: mirror the Matrix crypto WASM runtime dependency into the root packaged install and enforce root/plugin dependency parity so bundled Matrix E2EE crypto resolves correctly in shipped builds. (#57163) Thanks @gumadeiras.
 - Plugins/CLI: add descriptor-backed lazy plugin CLI registration so Matrix can keep its CLI module lazy-loaded without dropping `openclaw matrix ...` from parse-time command registration. (#57165) Thanks @gumadeiras.
 - Plugins/CLI: collect root-help plugin descriptors through a dedicated non-activating CLI metadata path so enabled plugins keep validated config semantics without triggering runtime-only plugin registration work, while preserving runtime CLI command registration for legacy channel plugins that still wire commands from full registration. (#57294) thanks @gumadeiras.
+- Anthropic/OAuth: inject `/fast` `service_tier` hints for direct `sk-ant-oat-*` requests so OAuth-authenticated Anthropic runs stop missing the same overload-routing signal as API-key traffic. Fixes #55758. Thanks @Cypherm and @vincentkoc.
 
 ## 2026.3.28
 
@@ -347,7 +348,6 @@ Docs: https://docs.openclaw.ai
 - Security/bash stop: route `/bash stop` through the hardened process-tree killer so invalid or attacker-influenced SIGKILL targets cannot escape the intended bash-session scope.
 - Security/installer: hide staged project `.npmrc` files during skill and package installs so npm registry and git settings inside the stage directory cannot hijack trusted installs.
 - Agents/tool-call repair: recover malformed Kimi/OpenRouter tool-call argument streams when provider preambles appear before JSON payloads, and fail closed on non-tool leading text so fragment strings do not leak into filesystem path arguments during sub-agent runs. (#56560) Thanks @Originalwhite.
-- Anthropic/OAuth: inject `/fast` `service_tier` hints for direct `sk-ant-oat-*` requests so OAuth-authenticated Anthropic runs stop missing the same overload-routing signal as API-key traffic. Fixes #55758. Thanks @Cypherm and @vincentkoc.
 
 ## 2026.3.23
 
