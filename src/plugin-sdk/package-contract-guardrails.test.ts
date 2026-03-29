@@ -63,6 +63,10 @@ function readGeneratedFacadeTypeMap(): string {
   );
 }
 
+function buildLegacyPluginSourceAlias(): string {
+  return ["openclaw", ["plugin", "source"].join("-")].join("/") + "/";
+}
+
 describe("plugin-sdk package contract guardrails", () => {
   it("keeps package.json exports aligned with built plugin-sdk entrypoints", () => {
     expect(collectPluginSdkPackageExports()).toEqual([...pluginSdkEntrypoints].toSorted());
@@ -99,7 +103,8 @@ describe("plugin-sdk package contract guardrails", () => {
     expect(optionalDependencies["@matrix-org/matrix-sdk-crypto-nodejs"]).toBe("^0.4.0");
   });
 
-  it("keeps generated facade types on package-valid module specifiers", () => {
-    expect(readGeneratedFacadeTypeMap()).not.toContain("openclaw/plugin-source/");
+  it("keeps generated facade types on package-style module specifiers", () => {
+    expect(readGeneratedFacadeTypeMap()).not.toContain("../../extensions/");
+    expect(readGeneratedFacadeTypeMap()).not.toContain(buildLegacyPluginSourceAlias());
   });
 });
