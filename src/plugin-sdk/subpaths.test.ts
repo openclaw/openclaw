@@ -117,6 +117,10 @@ function expectSourceContains(subpath: string, snippet: string) {
   expect(readPluginSdkSource(subpath)).toContain(snippet);
 }
 
+function expectSourceOmitsSnippet(subpath: string, snippet: string) {
+  expect(readPluginSdkSource(subpath)).not.toContain(snippet);
+}
+
 describe("plugin-sdk subpath exports", () => {
   it("keeps the curated public list free of internal implementation subpaths", () => {
     for (const deniedSubpath of [
@@ -593,6 +597,9 @@ describe("plugin-sdk subpath exports", () => {
       "buildVllmProvider",
       "discoverOpenAICompatibleSelfHostedProvider",
     ]);
+    expectSourceOmitsSnippet("provider-setup", "./ollama-surface.js");
+    expectSourceOmitsSnippet("provider-setup", "./vllm.js");
+    expectSourceOmitsSnippet("provider-setup", "./sglang.js");
     expectSourceMentions("provider-auth", [
       "buildOauthProviderAuthResult",
       "generatePkceVerifierChallenge",
@@ -609,6 +616,8 @@ describe("plugin-sdk subpath exports", () => {
         "resolveZaiBaseUrl",
       ],
     });
+    expectSourceOmitsSnippet("provider-models", "./xai.js");
+    expectSourceOmitsSnippet("provider-models", "./ollama-surface.js");
     expectSourceContract("provider-model-shared", {
       mentions: ["DEFAULT_CONTEXT_TOKENS", "normalizeModelCompat", "cloneFirstTemplateModel"],
       omits: ["applyOpenAIConfig", "buildKilocodeModelDefinition", "discoverHuggingfaceModels"],
@@ -637,6 +646,11 @@ describe("plugin-sdk subpath exports", () => {
       "buildSglangProvider",
       "configureOpenAICompatibleSelfHostedProviderNonInteractive",
     ]);
+    expectSourceOmitsSnippet("self-hosted-provider-setup", "./vllm.js");
+    expectSourceOmitsSnippet("self-hosted-provider-setup", "./sglang.js");
+    expectSourceOmitsSnippet("agent-runtime", "./sglang.js");
+    expectSourceOmitsSnippet("agent-runtime", "./vllm.js");
+    expectSourceOmitsSnippet("xai-model-id", "./xai.js");
     expectSourceMentions("sandbox", ["registerSandboxBackend", "runPluginCommandWithTimeout"]);
 
     expectSourceMentions("secret-input", [
