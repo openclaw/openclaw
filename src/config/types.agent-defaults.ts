@@ -290,6 +290,12 @@ export type AgentDefaultsConfig = {
     runTimeoutSeconds?: number;
     /** Gateway timeout in ms for sub-agent announce delivery calls (default: 90000). */
     announceTimeoutMs?: number;
+    /**
+     * Enable the `sessions_await` tool and `suppressAnnounce`/`waitForCompletion`
+     * parameters on `sessions_spawn` for parallel sub-agent orchestration.
+     * Default: false.
+     */
+    awaitEnabled?: boolean;
   };
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: AgentSandboxConfig;

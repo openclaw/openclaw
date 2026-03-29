@@ -27,7 +27,7 @@ import {
   normalizeSpawnedRunMetadata,
   resolveSpawnedWorkspaceInheritance,
 } from "./spawned-context.js";
-import { buildSubagentSystemPrompt } from "./subagent-announce.js";
+import { buildSubagentSystemPrompt, captureSubagentCompletionReply } from "./subagent-announce.js";
 import {
   decodeStrictBase64,
   materializeSubagentAttachments,
@@ -35,7 +35,12 @@ import {
 } from "./subagent-attachments.js";
 import { resolveSubagentCapabilities } from "./subagent-capabilities.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
-import { countActiveRunsForSession, registerSubagentRun } from "./subagent-registry.js";
+import {
+  clearSuppressAutoAnnounce,
+  countActiveRunsForSession,
+  registerSubagentRun,
+} from "./subagent-registry.js";
+import { resolveAgentTimeoutMs } from "./timeout.js";
 import { readStringParam } from "./tools/common.js";
 import {
   resolveDisplaySessionKey,
@@ -62,6 +67,9 @@ export type SpawnSubagentParams = {
   cleanup?: "delete" | "keep";
   sandbox?: SpawnSubagentSandboxMode;
   expectsCompletionMessage?: boolean;
+  waitForCompletion?: boolean;
+  /** Suppress auto-announce at registration time so the caller can collect results via sessions_await. */
+  suppressAnnounce?: boolean;
   attachments?: Array<{
     name: string;
     content: string;
@@ -89,6 +97,7 @@ export const SUBAGENT_SPAWN_ACCEPTED_NOTE =
   "Auto-announce is push-based. After spawning children, do NOT call sessions_list, sessions_history, exec sleep, or any polling tool. Wait for completion events to arrive as user messages, track expected child session keys, and only send your final answer after ALL expected completions arrive. If a child completion event arrives AFTER your final answer, reply ONLY with NO_REPLY.";
 export const SUBAGENT_SPAWN_SESSION_ACCEPTED_NOTE =
   "thread-bound session stays active after this task; continue in-thread for follow-ups.";
+const MAX_INLINE_WAIT_FOR_COMPLETION_MS = 5 * 60 * 1000;
 
 export type SpawnSubagentResult = {
   status: "accepted" | "forbidden" | "error";
@@ -103,6 +112,12 @@ export type SpawnSubagentResult = {
     totalBytes: number;
     files: Array<{ name: string; bytes: number; sha256: string }>;
     relDir: string;
+  };
+  completion?: {
+    status: "ok" | "error" | "timeout";
+    waitTimeoutMs: number;
+    reply?: string;
+    error?: string;
   };
 };
 
@@ -230,6 +245,102 @@ function summarizeError(err: unknown): string {
   return "error";
 }
 
+async function waitForSpawnedSubagentCompletion(params: {
+  runId: string;
+  childSessionKey: string;
+  cleanup: "delete" | "keep";
+  spawnMode: SpawnSubagentMode;
+  waitTimeoutMs: number;
+}): Promise<{
+  status: "ok" | "error" | "timeout";
+  waitTimeoutMs: number;
+  reply?: string;
+  error?: string;
+}> {
+  const maybeDeleteChildSession = async () => {
+    if (params.cleanup !== "delete") {
+      return;
+    }
+    await cleanupProvisionalSession(params.childSessionKey, {
+      deleteTranscript: true,
+      emitLifecycleHooks: params.spawnMode === "session",
+    });
+  };
+
+  try {
+    const timeoutMs = Math.max(1, Math.floor(params.waitTimeoutMs));
+    const wait = await callGateway<{
+      status?: string;
+      error?: string;
+    }>({
+      method: "agent.wait",
+      params: {
+        runId: params.runId,
+        timeoutMs,
+      },
+      timeoutMs: timeoutMs + 10_000,
+    });
+
+    if (wait?.status === "error") {
+      // Restore auto-announce so a late completion/summary can still be delivered.
+      clearSuppressAutoAnnounce(params.runId);
+      await maybeDeleteChildSession();
+      return {
+        status: "error",
+        waitTimeoutMs: timeoutMs,
+        error: typeof wait.error === "string" ? wait.error : "subagent run failed",
+      };
+    }
+    if (wait?.status === "timeout") {
+      // Restore auto-announce so the child can still announce if it completes later.
+      clearSuppressAutoAnnounce(params.runId);
+      return {
+        status: "timeout",
+        waitTimeoutMs: timeoutMs,
+        error: "subagent run timed out",
+      };
+    }
+    if (wait?.status !== "ok") {
+      // Restore auto-announce so a late completion/summary can still be delivered.
+      clearSuppressAutoAnnounce(params.runId);
+      return {
+        status: "error",
+        waitTimeoutMs: timeoutMs,
+        error: `unexpected agent.wait status: ${String(wait?.status)}`,
+      };
+    }
+
+    let reply: string | undefined;
+    let captureError: string | undefined;
+    try {
+      const capturedReply = await captureSubagentCompletionReply(params.childSessionKey);
+      reply = capturedReply?.trim() || undefined;
+      await maybeDeleteChildSession();
+    } catch (err) {
+      // Preserve success status but restore announce fallback if reply capture transport fails.
+      clearSuppressAutoAnnounce(params.runId);
+      captureError = summarizeError(err);
+    }
+    return {
+      status: "ok",
+      waitTimeoutMs: timeoutMs,
+      reply,
+      ...(captureError
+        ? {
+            error: `failed to capture completion reply: ${captureError}`,
+          }
+        : {}),
+    };
+  } catch (err) {
+    clearSuppressAutoAnnounce(params.runId);
+    return {
+      status: "error",
+      waitTimeoutMs: Math.max(1, Math.floor(params.waitTimeoutMs)),
+      error: summarizeError(err),
+    };
+  }
+}
+
 async function ensureThreadBindingForSubagentSpawn(params: {
   hookRunner: ReturnType<typeof getGlobalHookRunner>;
   childSessionKey: string;
@@ -323,6 +434,12 @@ export async function spawnSubagentDirect(
       error: 'mode="session" requires thread=true so the subagent can stay bound to a thread.',
     };
   }
+  if (spawnMode === "session" && params.waitForCompletion === true) {
+    return {
+      status: "error",
+      error: 'waitForCompletion=true is only supported for mode="run".',
+    };
+  }
   const cleanup =
     spawnMode === "session"
       ? "keep"
@@ -351,6 +468,12 @@ export async function spawnSubagentDirect(
     typeof params.runTimeoutSeconds === "number" && Number.isFinite(params.runTimeoutSeconds)
       ? Math.max(0, Math.floor(params.runTimeoutSeconds))
       : cfgSubagentTimeout;
+  const configuredWaitTimeoutMs = resolveAgentTimeoutMs({
+    cfg,
+    overrideSeconds: runTimeoutSeconds,
+  });
+  // Inline waitForCompletion should finish within a typical single-turn budget.
+  const inlineWaitTimeoutMs = Math.min(configuredWaitTimeoutMs, MAX_INLINE_WAIT_FOR_COMPLETION_MS);
   let modelApplied = false;
   let threadBindingReady = false;
   const { mainKey, alias } = resolveMainSessionAlias(cfg);
@@ -739,6 +862,9 @@ export async function spawnSubagentDirect(
     };
   }
 
+  const shouldWaitForCompletion = params.waitForCompletion === true && spawnMode === "run";
+  const shouldSuppressAnnounce = shouldWaitForCompletion || params.suppressAnnounce === true;
+
   try {
     registerSubagentRun({
       runId: childRunId,
@@ -753,6 +879,7 @@ export async function spawnSubagentDirect(
       model: resolvedModel,
       workspaceDir: spawnedMetadata.workspaceDir,
       runTimeoutSeconds,
+      suppressAutoAnnounce: shouldSuppressAnnounce,
       expectsCompletionMessage,
       spawnMode,
       attachmentsDir: attachmentAbsDir,
@@ -835,6 +962,16 @@ export async function spawnSubagentDirect(
         ? undefined
         : SUBAGENT_SPAWN_ACCEPTED_NOTE;
 
+  const completion = shouldWaitForCompletion
+    ? await waitForSpawnedSubagentCompletion({
+        runId: childRunId,
+        childSessionKey,
+        cleanup,
+        spawnMode,
+        waitTimeoutMs: inlineWaitTimeoutMs,
+      })
+    : undefined;
+
   return {
     status: "accepted",
     childSessionKey,
@@ -843,5 +980,6 @@ export async function spawnSubagentDirect(
     note,
     modelApplied: resolvedModel ? modelApplied : undefined,
     attachments: attachmentsReceipt,
+    completion,
   };
 }
