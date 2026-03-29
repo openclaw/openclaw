@@ -764,7 +764,7 @@ describe("executeSlashCommand /steer (soft inject)", () => {
     );
   });
 
-  it("ignores ended subagent sessions when resolving target", async () => {
+  it("keeps ended subagent targets so steer does not fall back to the current session", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "sessions.list") {
         return {
@@ -790,16 +790,9 @@ describe("executeSlashCommand /steer (soft inject)", () => {
       "researcher try again",
     );
 
-    // "researcher" is ended, so the full string is sent to current session
-    expect(result.content).toBe("Steered.");
-    expect(request).toHaveBeenCalledWith(
-      "chat.send",
-      expect.objectContaining({
-        sessionKey: "agent:main:main",
-        message: "researcher try again",
-        deliver: false,
-      }),
-    );
+    expect(result.content).toBe("No active run matched `researcher`. Use `/redirect` instead.");
+    expect(request).toHaveBeenCalledWith("sessions.list", {});
+    expect(request).not.toHaveBeenCalledWith("chat.send", expect.anything());
   });
 
   it("returns a no-op summary when the current session has no active run", async () => {
@@ -908,6 +901,40 @@ describe("executeSlashCommand /redirect (hard kill-and-restart)", () => {
     expect(result.content).toBe("Redirected `researcher`.");
     // Subagent redirect must NOT set trackRunId — the run belongs to a
     // different session so chat events would never clear chatRunId.
+    expect(result.trackRunId).toBeUndefined();
+    expect(request).toHaveBeenCalledWith("sessions.steer", {
+      key: "agent:main:subagent:researcher",
+      message: "start over completely",
+    });
+  });
+
+  it("redirects an ended subagent instead of falling back to the current session", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.list") {
+        return {
+          sessions: [
+            row("agent:main:main"),
+            row("agent:main:subagent:researcher", {
+              spawnedBy: "agent:main:main",
+              endedAt: Date.now() - 60_000,
+            }),
+          ],
+        };
+      }
+      if (method === "sessions.steer") {
+        return { status: "started", runId: "run-3", messageSeq: 1 };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "redirect",
+      "researcher start over completely",
+    );
+
+    expect(result.content).toBe("Redirected `researcher`.");
     expect(result.trackRunId).toBeUndefined();
     expect(request).toHaveBeenCalledWith("sessions.steer", {
       key: "agent:main:subagent:researcher",
