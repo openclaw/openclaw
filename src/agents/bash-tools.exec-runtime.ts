@@ -1,7 +1,7 @@
 import path from "node:path";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
-import { type ExecHost } from "../infra/exec-approvals.js";
+import { type ExecHost, type ExecTarget } from "../infra/exec-approvals.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { isDangerousHostEnvVarName } from "../infra/host-env-security.js";
 import { findPathKey, mergePathPrepend } from "../infra/path-prepend.js";
@@ -15,6 +15,7 @@ export {
   normalizeExecAsk,
   normalizeExecHost,
   normalizeExecSecurity,
+  normalizeExecTarget,
 } from "../infra/exec-approvals.js";
 import { logWarn } from "../logger.js";
 import type { ManagedRun } from "../process/supervisor/index.js";
@@ -143,7 +144,7 @@ export const execSchema = Type.Object({
   ),
   host: Type.Optional(
     Type.String({
-      description: "Exec host (sandbox|gateway|node).",
+      description: "Exec host/target (auto|sandbox|gateway|node).",
     }),
   ),
   security: Type.Optional(
@@ -204,6 +205,66 @@ export type ExecProcessHandle = {
 
 export function renderExecHostLabel(host: ExecHost) {
   return host === "sandbox" ? "sandbox" : host === "gateway" ? "gateway" : "node";
+}
+
+export function renderExecTargetLabel(target: ExecTarget) {
+  return target === "auto" ? "auto" : renderExecHostLabel(target);
+}
+
+export function isRequestedExecTargetAllowed(params: {
+  configuredTarget: ExecTarget;
+  requestedTarget: ExecTarget;
+}) {
+  if (params.requestedTarget === params.configuredTarget) {
+    return true;
+  }
+  if (params.configuredTarget === "auto") {
+    return true;
+  }
+  return false;
+}
+
+export function resolveExecTarget(params: {
+  configuredTarget?: ExecTarget;
+  requestedTarget?: ExecTarget | null;
+  elevatedRequested: boolean;
+  sandboxAvailable: boolean;
+}) {
+  const configuredTarget = params.configuredTarget ?? "auto";
+  const requestedTarget = params.requestedTarget ?? null;
+  if (params.elevatedRequested) {
+    return {
+      configuredTarget,
+      requestedTarget,
+      selectedTarget: "gateway" as const,
+      effectiveHost: "gateway" as const,
+    };
+  }
+  if (
+    requestedTarget &&
+    !isRequestedExecTargetAllowed({
+      configuredTarget,
+      requestedTarget,
+    })
+  ) {
+    throw new Error(
+      `exec host not allowed (requested ${renderExecTargetLabel(requestedTarget)}; ` +
+        `configure tools.exec.host=${renderExecTargetLabel(configuredTarget)} to allow).`,
+    );
+  }
+  const selectedTarget = requestedTarget ?? configuredTarget;
+  const effectiveHost =
+    selectedTarget === "auto"
+      ? params.sandboxAvailable
+        ? "sandbox"
+        : "gateway"
+      : selectedTarget;
+  return {
+    configuredTarget,
+    requestedTarget,
+    selectedTarget,
+    effectiveHost,
+  };
 }
 
 export function normalizeNotifyOutput(value: string) {
