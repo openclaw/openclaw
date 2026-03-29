@@ -195,8 +195,10 @@ export type ToolCallInputRepairOptions = {
   allowedToolNames?: Iterable<string>;
 };
 
+export type ErroredAssistantResultPolicy = "preserve" | "drop";
+
 export type ToolUseResultPairingOptions = {
-  dropErroredAssistantResults?: boolean;
+  erroredAssistantResultPolicy?: ErroredAssistantResultPolicy;
 };
 
 export function stripToolResultDetails(messages: AgentMessage[]): AgentMessage[] {
@@ -346,6 +348,10 @@ export type ToolUseRepairReport = {
   moved: boolean;
 };
 
+function shouldDropErroredAssistantResults(options?: ToolUseResultPairingOptions): boolean {
+  return options?.erroredAssistantResultPolicy === "drop";
+}
+
 export function repairToolUseResultPairing(
   messages: AgentMessage[],
   options?: ToolUseResultPairingOptions,
@@ -463,7 +469,7 @@ export function repairToolUseResultPairing(
     const stopReason = (assistant as { stopReason?: string }).stopReason;
     if (stopReason === "error" || stopReason === "aborted") {
       out.push(msg);
-      if (!options?.dropErroredAssistantResults) {
+      if (!shouldDropErroredAssistantResults(options)) {
         for (const toolCall of toolCalls) {
           const result = spanResultsById.get(toolCall.id);
           if (!result) {
