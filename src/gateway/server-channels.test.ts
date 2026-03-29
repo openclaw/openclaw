@@ -201,13 +201,13 @@ describe("server-channels auto restart", () => {
     expect(account?.configured).toBe(true);
   });
 
-  it("forwards described mode into runtime snapshots", () => {
+  it("applies described config fields into runtime snapshots", () => {
     installTestRegistry(
       createTestPlugin({
         describeAccount: (resolved) => ({
           accountId: DEFAULT_ACCOUNT_ID,
           enabled: resolved.enabled !== false,
-          configured: resolved.configured !== false,
+          configured: false,
           mode: "webhook",
         }),
       }),
@@ -215,6 +215,7 @@ describe("server-channels auto restart", () => {
     const manager = createManager();
     const snapshot = manager.getRuntimeSnapshot();
     const account = snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.configured).toBe(false);
     expect(account?.mode).toBe("webhook");
   });
 

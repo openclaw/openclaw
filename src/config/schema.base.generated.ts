@@ -2033,6 +2033,24 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       path: {
                         type: "string",
                       },
+                      fts: {
+                        type: "object",
+                        properties: {
+                          tokenizer: {
+                            anyOf: [
+                              {
+                                type: "string",
+                                const: "unicode61",
+                              },
+                              {
+                                type: "string",
+                                const: "trigram",
+                              },
+                            ],
+                          },
+                        },
+                        additionalProperties: false,
+                      },
                       vector: {
                         type: "object",
                         properties: {
@@ -3595,6 +3613,24 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                         },
                         path: {
                           type: "string",
+                        },
+                        fts: {
+                          type: "object",
+                          properties: {
+                            tokenizer: {
+                              anyOf: [
+                                {
+                                  type: "string",
+                                  const: "unicode61",
+                                },
+                                {
+                                  type: "string",
+                                  const: "trigram",
+                                },
+                              ],
+                            },
+                          },
+                          additionalProperties: false,
                         },
                         vector: {
                           type: "object",
@@ -15510,6 +15546,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       tags: ["security", "auth"],
     },
   },
-  version: "2026.3.28-beta.1",
+  version: "2026.3.28",
   generatedAt: "2026-03-22T21:17:33.302Z",
 } as const satisfies BaseConfigSchemaResponse;

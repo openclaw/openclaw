@@ -1,4 +1,4 @@
-import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
+import { describeWebhookAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import {
   adaptScopedAccountAccessor,
   createScopedChannelConfigAdapter,
@@ -172,12 +172,12 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount, ZaloProbeResult> =
         ...zaloConfigAdapter,
         isConfigured: (account) => Boolean(account.token?.trim()),
         describeAccount: (account): ChannelAccountSnapshot =>
-          describeAccountSnapshot({
+          describeWebhookAccountSnapshot({
             account,
             configured: Boolean(account.token?.trim()),
+            mode: account.config.webhookUrl ? "webhook" : "polling",
             extra: {
               tokenSource: account.tokenSource,
-              mode: account.config.webhookUrl ? "webhook" : "polling",
             },
           }),
       },
