@@ -81,7 +81,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
   });
   if (cacheTtlMs != null) {
     next.lastCacheTouchAt = next.updatedAt;
-    next.lastIdleCompactionForCacheTouchAt = undefined;
+    next.lastIdleCompactionForAssistantMessageAt = undefined;
   }
   setSessionRuntimeModel(next, {
     provider: providerUsed,

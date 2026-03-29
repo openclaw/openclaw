@@ -87,6 +87,58 @@ describe("runSessionCacheMaintenanceSweep", () => {
 
     expect(compactEmbeddedPiSessionMock).toHaveBeenCalledTimes(2);
     const stored = loadSessionStore(storePath, { skipCache: true });
-    expect(stored[sessionKey]?.lastIdleCompactionForCacheTouchAt).toBeUndefined();
+    expect(stored[sessionKey]?.lastIdleCompactionForAssistantMessageAt).toBeUndefined();
+  });
+
+  it("does not compact twice during the same assistant idle window", async () => {
+    const { runSessionCacheMaintenanceSweep } = await import("./session-cache-maintenance.js");
+
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-cache-once-"));
+    tempRoots.push(root);
+    const storePath = path.join(root, "sessions.json");
+    const sessionFile = path.join(root, "session.jsonl");
+    const sessionKey = "agent:main:test:compact-once";
+    const assistantReplyAt = 5_000;
+    const firstNow = assistantReplyAt + ONE_HOUR_MS - 60_000;
+    const secondNow = firstNow + ONE_HOUR_MS - 60_000;
+
+    await fs.writeFile(sessionFile, "", "utf-8");
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: "sess-compact-once",
+          sessionFile,
+          updatedAt: assistantReplyAt,
+          lastUserMessageAt: assistantReplyAt,
+          lastAssistantMessageAt: assistantReplyAt,
+          lastCacheTouchAt: assistantReplyAt,
+          totalTokens: 25_000,
+          totalTokensFresh: true,
+        },
+      }),
+      "utf-8",
+    );
+
+    compactEmbeddedPiSessionMock.mockResolvedValue({
+      ok: true,
+      compacted: true,
+      result: { tokensAfter: 10_000 },
+    });
+
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+    await runSessionCacheMaintenanceSweep({
+      cfg,
+      nowMs: () => firstNow,
+    });
+    await runSessionCacheMaintenanceSweep({
+      cfg,
+      nowMs: () => secondNow,
+    });
+
+    expect(compactEmbeddedPiSessionMock).toHaveBeenCalledTimes(1);
+    const stored = loadSessionStore(storePath, { skipCache: true });
+    expect(stored[sessionKey]?.lastIdleCompactionForAssistantMessageAt).toBe(assistantReplyAt);
   });
 });

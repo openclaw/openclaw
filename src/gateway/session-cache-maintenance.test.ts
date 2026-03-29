@@ -28,14 +28,14 @@ describe("session cache maintenance helpers", () => {
     ).toBe(true);
   });
 
-  it("does not warm when the current cache-touch window was already serviced", () => {
+  it("does not warm when the current assistant idle window was already serviced", () => {
     expect(
       shouldRunIdleCacheCompaction({
         entry: {
           lastUserMessageAt: 1_000,
           lastAssistantMessageAt: 2_000,
           lastCacheTouchAt: 2_000,
-          lastIdleCompactionForCacheTouchAt: 2_000,
+          lastIdleCompactionForAssistantMessageAt: 2_000,
         },
         policy: {
           mode: "compact",

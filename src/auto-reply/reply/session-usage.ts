@@ -157,7 +157,7 @@ export async function persistSessionUsageUpdate(params: {
               });
               if (cacheTtlMs != null) {
                 patch.lastCacheTouchAt = now;
-                patch.lastIdleCompactionForCacheTouchAt = undefined;
+                patch.lastIdleCompactionForAssistantMessageAt = undefined;
               }
             }
           }
@@ -215,7 +215,7 @@ export async function persistSessionUsageUpdate(params: {
               });
               if (cacheTtlMs != null) {
                 patch.lastCacheTouchAt = now;
-                patch.lastIdleCompactionForCacheTouchAt = undefined;
+                patch.lastIdleCompactionForAssistantMessageAt = undefined;
               }
             }
           }

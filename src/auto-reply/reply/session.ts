@@ -590,7 +590,7 @@ export async function initSessionState(params: {
   if (isNewSession) {
     sessionEntry.lastAssistantMessageAt = undefined;
     sessionEntry.lastCacheTouchAt = undefined;
-    sessionEntry.lastIdleCompactionForCacheTouchAt = undefined;
+    sessionEntry.lastIdleCompactionForAssistantMessageAt = undefined;
     sessionEntry.compactionCount = 0;
     sessionEntry.memoryFlushCompactionCount = undefined;
     sessionEntry.memoryFlushAt = undefined;

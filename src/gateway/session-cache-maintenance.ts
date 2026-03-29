@@ -43,7 +43,7 @@ type SessionCacheTimingState = Pick<
   | "lastUserMessageAt"
   | "lastAssistantMessageAt"
   | "lastCacheTouchAt"
-  | "lastIdleCompactionForCacheTouchAt"
+  | "lastIdleCompactionForAssistantMessageAt"
 >;
 
 function resolvePositiveTimestamp(value: number | undefined): number | null {
@@ -55,6 +55,10 @@ function resolveCacheTouchAt(entry: SessionCacheTimingState): number | null {
     resolvePositiveTimestamp(entry.lastCacheTouchAt) ??
     resolvePositiveTimestamp(entry.lastAssistantMessageAt)
   );
+}
+
+function resolveAssistantReplyAt(entry: SessionCacheTimingState): number | null {
+  return resolvePositiveTimestamp(entry.lastAssistantMessageAt);
 }
 
 function isAwaitingUserReply(entry: SessionCacheTimingState): boolean {
@@ -102,11 +106,12 @@ export function shouldRunIdleCacheCompaction(params: {
     return false;
   }
   const cacheTouchAt = resolveCacheTouchAt(params.entry);
+  const assistantReplyAt = resolveAssistantReplyAt(params.entry);
   const idleThresholdMs = resolveIdleCompactionThresholdMs(params.policy);
-  if (cacheTouchAt == null || idleThresholdMs == null) {
+  if (cacheTouchAt == null || assistantReplyAt == null || idleThresholdMs == null) {
     return false;
   }
-  if (params.entry.lastIdleCompactionForCacheTouchAt === cacheTouchAt) {
+  if (params.entry.lastIdleCompactionForAssistantMessageAt === assistantReplyAt) {
     return false;
   }
   if (params.now - cacheTouchAt >= (params.policy.cacheTtlMs ?? 0)) {
@@ -219,7 +224,8 @@ async function maybeCompactIdleSession(params: {
   totalTokens: number;
 }): Promise<boolean> {
   const cacheTouchAt = resolveCacheTouchAt(params.entry);
-  if (cacheTouchAt == null || !params.entry.sessionFile) {
+  const assistantReplyAt = resolveAssistantReplyAt(params.entry);
+  if (cacheTouchAt == null || assistantReplyAt == null || !params.entry.sessionFile) {
     return false;
   }
   const agentId =
@@ -243,7 +249,7 @@ async function maybeCompactIdleSession(params: {
 
   const patch: Partial<SessionEntry> = {};
   if (result.ok && result.compacted) {
-    patch.lastIdleCompactionForCacheTouchAt = cacheTouchAt;
+    patch.lastIdleCompactionForAssistantMessageAt = assistantReplyAt;
     patch.compactionCount = (params.entry.compactionCount ?? 0) + 1;
     patch.lastCacheTouchAt = params.now;
     if (typeof result.result?.tokensAfter === "number" && result.result.tokensAfter > 0) {

@@ -89,10 +89,11 @@ export type SessionEntry = {
   /** Timestamp (ms) when this session last touched the model prompt cache. */
   lastCacheTouchAt?: number;
   /**
-   * Cache-touch timestamp already serviced by idle cache-warming compaction.
-   * Prevents retrying the same idle compaction every maintenance sweep.
+   * Assistant-turn timestamp already serviced by idle cache-warming compaction.
+   * Prevents retrying idle compaction more than once for the same
+   * assistant-waiting-for-user window.
    */
-  lastIdleCompactionForCacheTouchAt?: number;
+  lastIdleCompactionForAssistantMessageAt?: number;
   sessionFile?: string;
   /** Parent session key that spawned this session (used for sandbox session-tool scoping). */
   spawnedBy?: string;
