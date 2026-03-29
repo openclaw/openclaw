@@ -18,10 +18,7 @@ import {
   isEmbeddedPiRunActive,
   waitForEmbeddedPiRunEnd,
 } from "../../agents/pi-embedded-runner/runs.js";
-import {
-  classifySessionKind,
-  resolveMainSessionAlias,
-} from "../../agents/tools/sessions-helpers.js";
+import { resolveMainSessionAlias } from "../../agents/tools/sessions-helpers.js";
 import { resolveVisibleSessionKeys } from "../../agents/tools/sessions-visible-keys.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import { loadConfig } from "../../config/config.js";
@@ -71,6 +68,7 @@ import {
   performGatewaySessionReset,
 } from "../session-reset-service.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
+import { classifySessionKind } from "../session-tool-kind.js";
 import {
   archiveFileOnDisk,
   listSessionsFromStore,
@@ -141,6 +139,9 @@ function useToolFacingKindFilter(normalizedKinds: Set<string>): boolean {
 /**
  * Session FTS (`sessions.search` / `sessions.recall`):
  *
+ * Listing uses `includeGlobal` / `includeUnknown` so gateway row-kind filters (`global`, `unknown`) can match;
+ * visibility and `kinds` still restrict what is searchable.
+ *
  * Session transcript chunks are indexed into **per-agent** SQLite memory stores. Path resolution is
  * `resolveMemorySearchConfig(cfg, agentId).store.path` → `resolveStorePath` in `memory-search.ts`
  * (default: `{stateDir}/memory/{agentId}.sqlite`, or a user path with `{agentId}` substituted).
@@ -159,6 +160,8 @@ type SessionSearchResultRow = {
   score: number;
   startLine: number;
   endLine: number;
+  /** Relative path under the session store for the transcript file this FTS hit matched. */
+  transcriptRelPath?: string;
 };
 
 type SessionRecallCitation = {
@@ -182,6 +185,13 @@ async function searchSessionsViaFts(params: {
   sandboxed?: boolean;
   activeMinutes?: number;
   kinds?: string[];
+  /**
+   * When `kinds` is set: filter mode for the `kinds` tokens.
+   * - `row`: gateway store row kinds (`direct`, `group`, …).
+   * - `session`: same taxonomy as `sessions_list` / `classifySessionKind`.
+   * - `auto` (default): legacy heuristic (`useToolFacingKindFilter`).
+   */
+  kindScope?: "row" | "session" | "auto";
   requestedKeys?: string[];
 }): Promise<{ count: number; results: SessionSearchResultRow[] }> {
   const visibleKeys = await resolveVisibleSessionKeys({
@@ -197,14 +207,21 @@ async function searchSessionsViaFts(params: {
     storePath,
     store,
     opts: {
-      includeGlobal: false,
-      includeUnknown: false,
+      includeGlobal: true,
+      includeUnknown: true,
       ...(typeof params.activeMinutes === "number" ? { activeMinutes: params.activeMinutes } : {}),
     },
   });
   const normalizedKinds = normalizeSessionsSearchKinds(params.kinds);
+  const kindScope = params.kindScope ?? "auto";
   const toolFacingKindFilter =
-    normalizedKinds !== undefined ? useToolFacingKindFilter(normalizedKinds) : false;
+    normalizedKinds === undefined
+      ? false
+      : kindScope === "session"
+        ? true
+        : kindScope === "row"
+          ? false
+          : useToolFacingKindFilter(normalizedKinds);
   const requestedKeys = params.requestedKeys?.length ? new Set(params.requestedKeys) : undefined;
   const allowedPaths = new Set<string>();
   const pathToSession = new Map<string, { sessionKey: string; sessionId: string }>();
@@ -325,6 +342,7 @@ async function searchSessionsViaFts(params: {
       score: hit.score,
       startLine: hit.startLine,
       endLine: hit.endLine,
+      transcriptRelPath: relPath,
     });
     if (rows.length >= params.limit) {
       break;
@@ -359,6 +377,25 @@ function extractSessionMessageText(message: unknown): string {
   return typeof text === "string" ? text.trim() : "";
 }
 
+function resolveIndexedTranscriptPathUnderStore(params: {
+  storePath: string;
+  transcriptRelPath: string;
+}): string | undefined {
+  if (!params.transcriptRelPath.trim()) {
+    return undefined;
+  }
+  const abs = path.resolve(params.storePath, params.transcriptRelPath);
+  const root = path.resolve(params.storePath);
+  const rel = path.relative(root, abs);
+  if (rel.startsWith("..") || path.isAbsolute(rel)) {
+    return undefined;
+  }
+  if (!fs.existsSync(abs)) {
+    return undefined;
+  }
+  return abs;
+}
+
 function buildSessionRecallEvidence(params: {
   sessionKey: string;
   sessionId: string;
@@ -366,12 +403,21 @@ function buildSessionRecallEvidence(params: {
   sessionFile?: string;
   startLine: number;
   endLine: number;
+  /** FTS-indexed transcript file (relative to store); preferred over first existing candidate. */
+  transcriptRelPath?: string;
 }): SessionRecallEvidence | null {
-  const transcriptPath = resolveSessionTranscriptCandidates(
-    params.sessionId,
-    params.storePath,
-    params.sessionFile,
-  ).find((candidate) => fs.existsSync(candidate));
+  const fromHit =
+    params.transcriptRelPath !== undefined && params.transcriptRelPath !== ""
+      ? resolveIndexedTranscriptPathUnderStore({
+          storePath: params.storePath,
+          transcriptRelPath: params.transcriptRelPath,
+        })
+      : undefined;
+  const transcriptPath =
+    fromHit ??
+    resolveSessionTranscriptCandidates(params.sessionId, params.storePath, params.sessionFile).find(
+      (candidate) => fs.existsSync(candidate),
+    );
   if (!transcriptPath) {
     return null;
   }
@@ -919,6 +965,10 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       typeof p.requesterSessionKey === "string" && p.requesterSessionKey.trim()
         ? p.requesterSessionKey.trim()
         : undefined;
+    const kindScope =
+      p.kindScope === "row" || p.kindScope === "session" || p.kindScope === "auto"
+        ? p.kindScope
+        : undefined;
     const searchResult = await searchSessionsViaFts({
       cfg,
       query,
@@ -927,6 +977,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       sandboxed: p.sandboxed === true,
       activeMinutes,
       kinds,
+      ...(kindScope !== undefined ? { kindScope } : {}),
       requestedKeys,
     });
     respond(true, searchResult, undefined);
@@ -987,6 +1038,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
             sessionFile: session.entry.sessionFile,
             startLine: hit.startLine,
             endLine: hit.endLine,
+            transcriptRelPath: hit.transcriptRelPath,
           })
         : null;
       if (!evidence) {

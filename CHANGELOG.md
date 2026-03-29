@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Gateway: `sessions.search` accepts optional `kindScope` (`row` | `session` | `auto`) so callers choose whether `kinds` filters by gateway row kinds (`direct`, …) or by the same tool/session taxonomy as `sessions_list`; `auto` keeps the legacy mixed-token heuristic. `sessions_search` passes `kindScope: "session"` when filtering by kinds. Session kind classification (`classifySessionKind`) now lives in `src/gateway/session-tool-kind.ts` (re-exported from `sessions-helpers` for compatibility).
 - LINE/outbound media: add LINE image, video, and audio outbound sends on the LINE-specific delivery path, including explicit preview/tracking handling for videos while keeping generic media sends on the existing image-only route. (#45826) Thanks @masatohoshino.
 - WhatsApp/reactions: agents can now react with emoji on incoming WhatsApp messages, enabling more natural conversational interactions like acknowledging a photo with ❤️ instead of typing a reply. Thanks @mcaxtr.
 - MCP: add remote HTTP/SSE server support for `mcp.servers` URL configs, including auth headers and safer config redaction for MCP credentials. (#50396) Thanks @dhananjai1729.
@@ -14,6 +15,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway: `sessions.recall` reads evidence from the **same indexed transcript file** as the FTS hit (optional `transcriptRelPath` on search results) instead of always using the first existing candidate path.
+- Gateway: `sessions.search` session listing uses **`includeGlobal` / `includeUnknown`** so gateway row-kind filters (`global`, `unknown`) can match.
 - ACP/sessions_spawn: register ACP child runs for completion tracking and lifecycle cleanup, and make registration-failure cleanup explicitly best-effort so callers do not assume an already-started ACP turn was fully aborted. (#40885) Thanks @xaeon2026 and @vincentkoc.
 - ACPX/runtime: derive the bundled ACPX expected version from the extension package metadata instead of hardcoding a separate literal, so plugin-local ACPX installs stop drifting out of health-check parity after version bumps. (#49089) Thanks @jiejiesks and @vincentkoc.
 - Gateway/auth: make local-direct `trusted-proxy` fallback require the configured shared token instead of silently authenticating same-host callers, while keeping same-host reverse proxy identity-header flows on the normal trusted-proxy path. Thanks @zhangning-agent and @vincentkoc.

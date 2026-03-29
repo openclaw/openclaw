@@ -30,7 +30,7 @@ export {
 } from "./sessions-resolution.js";
 export { resolveVisibleSessionKeys } from "./sessions-visible-keys.js";
 import { type OpenClawConfig, loadConfig } from "../../config/config.js";
-import { buildAgentMainSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
+import type { SessionKind } from "../../gateway/session-tool-kind.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { sanitizeUserFacingText } from "../pi-embedded-helpers.js";
 import {
@@ -39,8 +39,8 @@ import {
   stripModelSpecialTokens,
   stripThinkingTagsFromText,
 } from "../pi-embedded-utils.js";
-
-export type SessionKind = "main" | "group" | "cron" | "hook" | "node" | "other";
+export type { SessionKind } from "../../gateway/session-tool-kind.js";
+export { classifySessionKind } from "../../gateway/session-tool-kind.js";
 
 export type SessionListDeliveryContext = {
   channel?: string;
@@ -110,44 +110,6 @@ export function resolveSessionToolContext(opts?: {
       sandboxed: opts?.sandboxed,
     }),
   };
-}
-
-export function classifySessionKind(params: {
-  key: string;
-  gatewayKind?: string | null;
-  alias: string;
-  mainKey: string;
-}): SessionKind {
-  const key = params.key;
-  if (key === params.alias || key === params.mainKey) {
-    return "main";
-  }
-  const parsedAgent = parseAgentSessionKey(key);
-  if (parsedAgent) {
-    const canonicalMain = buildAgentMainSessionKey({
-      agentId: parsedAgent.agentId,
-      mainKey: params.mainKey,
-    });
-    if (key === canonicalMain) {
-      return "main";
-    }
-  }
-  if (key.startsWith("cron:")) {
-    return "cron";
-  }
-  if (key.startsWith("hook:")) {
-    return "hook";
-  }
-  if (key.startsWith("node-") || key.startsWith("node:")) {
-    return "node";
-  }
-  if (params.gatewayKind === "group") {
-    return "group";
-  }
-  if (key.includes(":group:") || key.includes(":channel:")) {
-    return "group";
-  }
-  return "other";
 }
 
 export function deriveChannel(params: {

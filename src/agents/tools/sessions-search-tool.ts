@@ -35,6 +35,7 @@ export function createSessionsSearchTool(opts?: {
         ?.map((value) => value.trim().toLowerCase())
         .filter((value) => ["main", "group", "cron", "hook", "node", "other"].includes(value));
 
+      const hasKinds = Boolean(kinds && kinds.length > 0);
       const result = await callGateway<{
         count: number;
         results: Array<{
@@ -51,7 +52,8 @@ export function createSessionsSearchTool(opts?: {
           query,
           limit,
           activeMinutes,
-          kinds: kinds && kinds.length > 0 ? kinds : undefined,
+          kinds: hasKinds ? kinds : undefined,
+          ...(hasKinds ? { kindScope: "session" as const } : {}),
           requesterSessionKey: opts?.agentSessionKey,
           sandboxed: opts?.sandboxed === true,
         },

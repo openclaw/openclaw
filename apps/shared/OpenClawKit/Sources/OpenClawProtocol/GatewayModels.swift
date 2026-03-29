@@ -1272,6 +1272,7 @@ public struct SessionsSearchParams: Codable, Sendable {
     public let limit: Int?
     public let activeminutes: Int?
     public let kinds: [String]?
+    public let kindscope: AnyCodable?
     public let keys: [String]?
     public let requestersessionkey: String?
     public let sandboxed: Bool?
@@ -1281,6 +1282,7 @@ public struct SessionsSearchParams: Codable, Sendable {
         limit: Int?,
         activeminutes: Int?,
         kinds: [String]?,
+        kindscope: AnyCodable?,
         keys: [String]?,
         requestersessionkey: String?,
         sandboxed: Bool?)
@@ -1289,6 +1291,7 @@ public struct SessionsSearchParams: Codable, Sendable {
         self.limit = limit
         self.activeminutes = activeminutes
         self.kinds = kinds
+        self.kindscope = kindscope
         self.keys = keys
         self.requestersessionkey = requestersessionkey
         self.sandboxed = sandboxed
@@ -1299,6 +1302,7 @@ public struct SessionsSearchParams: Codable, Sendable {
         case limit
         case activeminutes = "activeMinutes"
         case kinds
+        case kindscope = "kindScope"
         case keys
         case requestersessionkey = "requesterSessionKey"
         case sandboxed
