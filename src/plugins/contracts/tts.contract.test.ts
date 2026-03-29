@@ -525,6 +525,8 @@ describe("tts", () => {
     });
 
     it("preserves surrounding blank lines in cleanedText after directive removal", () => {
+      // Removing the directive line collapses one newline from the surrounding
+      // blank lines, resulting in three consecutive newlines (\n\n\n).
       const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
       const input = "\n\n[[tts:provider=edge]]\n\nBody paragraph.\n\n";
       const result = parseTtsDirectives(input, policy);
