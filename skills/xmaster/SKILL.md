@@ -51,6 +51,18 @@ Use the `xmaster` CLI to interact with X (Twitter): post, reply, search, analyze
 - Working with Instagram, LinkedIn, or non-X platforms
 - Reading web pages or URLs that aren't x.com posts
 - `xmaster` is not installed or X API credentials are not configured
+- You only need raw X API access without analytics — consider the `xurl` skill instead
+
+**How this differs from `xurl`:** xurl provides direct authenticated access to X API endpoints. xmaster adds a layer on top: pre-flight post analysis, engagement metrics, scheduling, timing heatmaps, AI-powered search, writing style persistence, and local SQLite tracking. Use xurl for raw API calls; use xmaster when you need intelligence around posting and engagement.
+
+## Secret Safety (Mandatory)
+
+- Never read, print, parse, or send the xmaster config file (`~/.config/xmaster/config.toml`) to the LLM context. It contains API keys.
+- Never ask the user to paste API credentials into chat.
+- Do not pass credentials inline in commands. The user must configure them manually via `xmaster config set` outside the agent session.
+- `xmaster config check` is safe to run (keys are masked in output), but do not attempt to extract or log credential values.
+- `xmaster config show` masks sensitive values by default. Do not attempt to unmask them.
+- Never use shell commands to read, cat, or grep the config file directly.
 
 ## Setup
 
@@ -96,7 +108,7 @@ xmaster config auth
 
 ### 5. Optional: Reply fallback (browser cookies)
 
-X blocks programmatic replies to non-followers via API. xmaster can fall back to web session:
+X restricts programmatic replies to non-followers via API. xmaster can fall back to a web session for these cases. **Note:** This uses browser cookies outside the official API and may not comply with X's Terms of Service. Use at your own discretion.
 
 ```bash
 xmaster config web-login
@@ -291,5 +303,3 @@ Read it back via `xmaster agent-info --json` under `writing_style`.
 - **Repo:** https://github.com/199-biotechnologies/xmaster
 - **crates.io:** https://crates.io/crates/xmaster
 - **License:** MIT
-
-Tested in production daily. Feedback, issues, and stars welcome at the repo.
