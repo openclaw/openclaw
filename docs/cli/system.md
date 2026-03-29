@@ -27,6 +27,11 @@ Enqueue a system event on the **main** session. The next heartbeat will inject
 it as a `System:` line in the prompt. Use `--mode now` to trigger the heartbeat
 immediately; `next-heartbeat` waits for the next scheduled tick.
 
+<Tip>
+For recipes on waking your agent from bash scripts, CI pipelines, and monitoring
+tools, see [System Events: Wake Your Agent from Scripts](/automation/system-events).
+</Tip>
+
 Flags:
 
 - `--text <text>`: required system event text.
@@ -58,3 +63,9 @@ Flags:
 
 - Requires a running Gateway reachable by your current config (local or remote).
 - System events are ephemeral and not persisted across restarts.
+
+## Related
+
+- [System Events: Wake Your Agent from Scripts](/automation/system-events) — recipes and patterns
+- [Cron Jobs](/automation/cron-jobs) — scheduled task automation
+- [Cron vs Heartbeat](/automation/cron-vs-heartbeat) — choosing the right mechanism

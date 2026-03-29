@@ -1109,6 +1109,7 @@
                   "automation/standing-orders",
                   "automation/cron-jobs",
                   "automation/cron-vs-heartbeat",
+                  "automation/system-events",
                   "automation/troubleshooting",
                   "automation/webhook",
                   "automation/gmail-pubsub",
