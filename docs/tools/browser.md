@@ -74,7 +74,7 @@ replacement plugin to reuse.
 The bundled browser plugin also owns the browser runtime implementation now.
 Core keeps only shared Plugin SDK helpers plus compatibility re-exports for
 older internal import paths. In practice, removing or replacing
-`extensions/browser` removes the browser feature set instead of leaving a
+Removing the browser plugin package removes the browser feature set instead of leaving a
 second core-owned runtime behind.
 
 Browser config changes still require a Gateway restart so the bundled plugin
@@ -231,8 +231,9 @@ Notes:
 ## Browserless (hosted remote CDP)
 
 [Browserless](https://browserless.io) is a hosted Chromium service that exposes
-CDP endpoints over HTTPS. You can point an OpenClaw browser profile at a
-Browserless region endpoint and authenticate with your API key.
+CDP connection URLs over HTTPS and WebSocket. OpenClaw can use either form, but
+for a remote browser profile the simplest option is the direct WebSocket URL
+from Browserless' connection docs.
 
 Example:
 
@@ -245,7 +246,7 @@ Example:
     remoteCdpHandshakeTimeoutMs: 4000,
     profiles: {
       browserless: {
-        cdpUrl: "https://production-sfo.browserless.io?token=<BROWSERLESS_API_KEY>",
+        cdpUrl: "wss://production-sfo.browserless.io?token=<BROWSERLESS_API_KEY>",
         color: "#00AA00",
       },
     },
@@ -257,17 +258,21 @@ Notes:
 
 - Replace `<BROWSERLESS_API_KEY>` with your real Browserless token.
 - Choose the region endpoint that matches your Browserless account (see their docs).
+- If Browserless gives you an HTTPS base URL, you can either convert it to
+  `wss://` for a direct CDP connection or keep the HTTPS URL and let OpenClaw
+  discover `/json/version`.
 
 ## Direct WebSocket CDP providers
 
 Some hosted browser services expose a **direct WebSocket** endpoint rather than
 the standard HTTP-based CDP discovery (`/json/version`). OpenClaw supports both:
 
-- **HTTP(S) endpoints** (e.g. Browserless) — OpenClaw calls `/json/version` to
-  discover the WebSocket debugger URL, then connects.
+- **HTTP(S) endpoints** — OpenClaw calls `/json/version` to discover the
+  WebSocket debugger URL, then connects.
 - **WebSocket endpoints** (`ws://` / `wss://`) — OpenClaw connects directly,
   skipping `/json/version`. Use this for services like
-  [Browserbase](https://www.browserbase.com) or any provider that hands you a
+  [Browserless](https://browserless.io),
+  [Browserbase](https://www.browserbase.com), or any provider that hands you a
   WebSocket URL.
 
 ### Browserbase

@@ -1,25 +1,32 @@
+import type { getReplyFromConfig as getReplyFromConfigRuntime } from "./auto-reply/reply.runtime.js";
 import { applyTemplate } from "./auto-reply/templating.js";
 import { createDefaultDeps } from "./cli/deps.js";
+import type { promptYesNo as promptYesNoRuntime } from "./cli/prompt.js";
 import { waitForever } from "./cli/wait.js";
 import { loadConfig } from "./config/config.js";
 import { resolveStorePath } from "./config/sessions/paths.js";
 import { deriveSessionKey, resolveSessionKey } from "./config/sessions/session-key.js";
 import { loadSessionStore, saveSessionStore } from "./config/sessions/store.js";
+import type { ensureBinary as ensureBinaryRuntime } from "./infra/binaries.js";
 import {
   describePortOwner,
   ensurePortAvailable,
   handlePortError,
   PortInUseError,
 } from "./infra/ports.js";
+import type { monitorWebChannel as monitorWebChannelRuntime } from "./plugins/runtime/runtime-whatsapp-boundary.js";
+import type {
+  runCommandWithTimeout as runCommandWithTimeoutRuntime,
+  runExec as runExecRuntime,
+} from "./process/exec.js";
 import { assertWebChannel, normalizeE164, toWhatsappJid } from "./utils.js";
 
-type GetReplyFromConfig = typeof import("./auto-reply/reply.runtime.js").getReplyFromConfig;
-type PromptYesNo = typeof import("./cli/prompt.js").promptYesNo;
-type EnsureBinary = typeof import("./infra/binaries.js").ensureBinary;
-type RunExec = typeof import("./process/exec.js").runExec;
-type RunCommandWithTimeout = typeof import("./process/exec.js").runCommandWithTimeout;
-type MonitorWebChannel =
-  typeof import("./plugins/runtime/runtime-whatsapp-boundary.js").monitorWebChannel;
+type GetReplyFromConfig = typeof getReplyFromConfigRuntime;
+type PromptYesNo = typeof promptYesNoRuntime;
+type EnsureBinary = typeof ensureBinaryRuntime;
+type RunExec = typeof runExecRuntime;
+type RunCommandWithTimeout = typeof runCommandWithTimeoutRuntime;
+type MonitorWebChannel = typeof monitorWebChannelRuntime;
 
 let replyRuntimePromise: Promise<typeof import("./auto-reply/reply.runtime.js")> | null = null;
 let promptRuntimePromise: Promise<typeof import("./cli/prompt.js")> | null = null;

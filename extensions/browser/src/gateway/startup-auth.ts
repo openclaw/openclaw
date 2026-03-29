@@ -1,1 +1,1 @@
-export * from "openclaw/plugin-sdk/browser-support";
+export { ensureGatewayStartupAuth } from "openclaw/plugin-sdk/browser-support";

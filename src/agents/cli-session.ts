@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
-import { CLAUDE_CLI_BACKEND_ID } from "../../extensions/anthropic/cli-shared.js";
 import type { CliSessionBinding, SessionEntry } from "../config/sessions.js";
+import { CLAUDE_CLI_BACKEND_ID } from "../plugin-sdk/anthropic-cli.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 function trimOptional(value: string | undefined): string | undefined {
@@ -126,16 +126,16 @@ export function resolveCliSessionReuse(params: {
   const currentAuthProfileId = trimOptional(params.authProfileId);
   const currentExtraSystemPromptHash = trimOptional(params.extraSystemPromptHash);
   const currentMcpConfigHash = trimOptional(params.mcpConfigHash);
-  if (binding?.authProfileId && trimOptional(binding.authProfileId) !== currentAuthProfileId) {
+  const storedAuthProfileId = trimOptional(binding?.authProfileId);
+  if (storedAuthProfileId !== currentAuthProfileId) {
     return { invalidatedReason: "auth-profile" };
   }
-  if (
-    binding?.extraSystemPromptHash &&
-    trimOptional(binding.extraSystemPromptHash) !== currentExtraSystemPromptHash
-  ) {
+  const storedExtraSystemPromptHash = trimOptional(binding?.extraSystemPromptHash);
+  if (storedExtraSystemPromptHash !== currentExtraSystemPromptHash) {
     return { invalidatedReason: "system-prompt" };
   }
-  if (binding?.mcpConfigHash && trimOptional(binding.mcpConfigHash) !== currentMcpConfigHash) {
+  const storedMcpConfigHash = trimOptional(binding?.mcpConfigHash);
+  if (storedMcpConfigHash !== currentMcpConfigHash) {
     return { invalidatedReason: "mcp" };
   }
   return { sessionId };

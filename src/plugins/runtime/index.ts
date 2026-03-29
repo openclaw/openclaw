@@ -1,8 +1,4 @@
 import { resolveStateDir } from "../../config/paths.js";
-import {
-  listRuntimeImageGenerationProviders,
-  generateImage,
-} from "../../image-generation/runtime.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import {
   createLazyRuntimeMethod,
@@ -11,6 +7,7 @@ import {
 } from "../../shared/lazy-runtime.js";
 import { VERSION } from "../../version.js";
 import { listWebSearchProviders, runWebSearch } from "../../web-search/runtime.js";
+import { loadSiblingRuntimeModuleSync } from "./local-runtime-module.js";
 import { createRuntimeAgent } from "./runtime-agent.js";
 import { defineCachedValue } from "./runtime-cache.js";
 import { createRuntimeChannel } from "./runtime-channel.js";
@@ -50,6 +47,27 @@ function createRuntimeMediaUnderstandingFacade(): PluginRuntime["mediaUnderstand
     ),
     describeVideoFile: bindMediaUnderstandingRuntime((runtime) => runtime.describeVideoFile),
     transcribeAudioFile: bindMediaUnderstandingRuntime((runtime) => runtime.transcribeAudioFile),
+  };
+}
+
+type RuntimeImageGenerationModule = typeof import("./runtime-image-generation.runtime.js");
+let cachedRuntimeImageGenerationModule: RuntimeImageGenerationModule | null = null;
+
+function loadRuntimeImageGenerationModule(): RuntimeImageGenerationModule {
+  cachedRuntimeImageGenerationModule ??= loadSiblingRuntimeModuleSync<RuntimeImageGenerationModule>(
+    {
+      moduleUrl: import.meta.url,
+      relativeBase: "./runtime-image-generation.runtime",
+    },
+  );
+  return cachedRuntimeImageGenerationModule;
+}
+
+function createRuntimeImageGeneration(): PluginRuntime["imageGeneration"] {
+  return {
+    generate: (params) => loadRuntimeImageGenerationModule().generateImage(params),
+    listProviders: (params) =>
+      loadRuntimeImageGenerationModule().listRuntimeImageGenerationProviders(params),
   };
 }
 
@@ -175,10 +193,6 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     ),
     system: createRuntimeSystem(),
     media: createRuntimeMedia(),
-    imageGeneration: {
-      generate: generateImage,
-      listProviders: listRuntimeImageGenerationProviders,
-    },
     webSearch: {
       listProviders: listWebSearchProviders,
       search: runWebSearch,
@@ -187,8 +201,13 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     events: createRuntimeEvents(),
     logging: createRuntimeLogging(),
     state: { resolveStateDir },
-  } satisfies Omit<PluginRuntime, "tts" | "mediaUnderstanding" | "stt" | "modelAuth"> &
-    Partial<Pick<PluginRuntime, "tts" | "mediaUnderstanding" | "stt" | "modelAuth">>;
+  } satisfies Omit<
+    PluginRuntime,
+    "tts" | "mediaUnderstanding" | "stt" | "modelAuth" | "imageGeneration"
+  > &
+    Partial<
+      Pick<PluginRuntime, "tts" | "mediaUnderstanding" | "stt" | "modelAuth" | "imageGeneration">
+    >;
 
   defineCachedValue(runtime, "tts", createRuntimeTts);
   defineCachedValue(runtime, "mediaUnderstanding", () => mediaUnderstanding);
@@ -196,6 +215,7 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     transcribeAudioFile: mediaUnderstanding.transcribeAudioFile,
   }));
   defineCachedValue(runtime, "modelAuth", createRuntimeModelAuth);
+  defineCachedValue(runtime, "imageGeneration", createRuntimeImageGeneration);
 
   return runtime as PluginRuntime;
 }

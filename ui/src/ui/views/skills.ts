@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { ref } from "lit/directives/ref.js";
 import type { SkillMessageMap } from "../controllers/skills.ts";
 import { clampText } from "../format.ts";
 import { resolveSafeExternalUrl } from "../open-external-url.ts";
@@ -240,16 +241,24 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
   const showBundledBadge = Boolean(skill.bundled && skill.source !== "openclaw-bundled");
   const missing = computeSkillMissing(skill);
   const reasons = computeSkillReasons(skill);
+  const ensureModalOpen = (el?: Element) => {
+    if (!(el instanceof HTMLDialogElement) || el.open) {
+      return;
+    }
+    el.showModal();
+  };
 
   return html`
     <dialog
       class="md-preview-dialog"
-      open
+      ${ref(ensureModalOpen)}
       @click=${(e: Event) => {
-        if ((e.target as HTMLElement).classList.contains("md-preview-dialog")) {
-          props.onDetailClose();
+        const dialog = e.currentTarget as HTMLDialogElement;
+        if (e.target === dialog) {
+          dialog.close();
         }
       }}
+      @close=${props.onDetailClose}
     >
       <div class="md-preview-dialog__panel">
         <div class="md-preview-dialog__header">
@@ -261,7 +270,14 @@ function renderSkillDetail(skill: SkillStatusEntry, props: SkillsProps) {
             ${skill.emoji ? html`<span style="font-size: 18px;">${skill.emoji}</span>` : nothing}
             <span>${skill.name}</span>
           </div>
-          <button class="btn btn--sm" @click=${props.onDetailClose}>Close</button>
+          <button
+            class="btn btn--sm"
+            @click=${(e: Event) => {
+              (e.currentTarget as HTMLElement).closest("dialog")?.close();
+            }}
+          >
+            Close
+          </button>
         </div>
         <div class="md-preview-dialog__body" style="display: grid; gap: 16px;">
           <div>

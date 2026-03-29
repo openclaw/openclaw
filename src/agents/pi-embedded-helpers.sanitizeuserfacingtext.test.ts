@@ -82,6 +82,46 @@ describe("sanitizeUserFacingText", () => {
     );
   });
 
+  it("does not rewrite unprefixed raw API payloads without explicit errorContext", () => {
+    const raw = '{"type":"error","error":{"type":"server_error","message":"Something exploded"}}';
+    expect(sanitizeUserFacingText(raw)).toBe(raw);
+  });
+
+  it("sanitizes Codex error-prefixed API payloads", () => {
+    const raw =
+      'Codex error: {"type":"error","error":{"type":"server_error","message":"Something exploded"},"sequence_number":2}';
+    expect(sanitizeUserFacingText(raw, { errorContext: true })).toBe(
+      "LLM error server_error: Something exploded",
+    );
+  });
+
+  it("sanitizes Codex error-prefixed API payloads without explicit errorContext", () => {
+    const raw =
+      'Codex error: {"type":"error","error":{"type":"server_error","message":"Something exploded"},"sequence_number":2}';
+    expect(sanitizeUserFacingText(raw)).toBe("LLM error server_error: Something exploded");
+  });
+
+  it("keeps regular JSON examples intact without explicit errorContext", () => {
+    const raw = '{"error":{"type":"validation_error","message":"showing an example payload"}}';
+    expect(sanitizeUserFacingText(raw)).toBe(raw);
+  });
+
+  it("preserves specialized context overflow guidance for raw API payloads", () => {
+    const raw =
+      '{"type":"error","error":{"type":"invalid_request_error","message":"Request size exceeds model context window"}}';
+    expect(sanitizeUserFacingText(raw, { errorContext: true })).toContain(
+      "Context overflow: prompt too large for the model.",
+    );
+  });
+
+  it("preserves specialized context overflow guidance for Codex-prefixed API payloads", () => {
+    const raw =
+      'Codex error: {"type":"error","error":{"type":"invalid_request_error","message":"Request size exceeds model context window"}}';
+    expect(sanitizeUserFacingText(raw, { errorContext: true })).toContain(
+      "Context overflow: prompt too large for the model.",
+    );
+  });
+
   it("returns a friendly message for rate limit errors in Error: prefixed payloads", () => {
     expect(sanitizeUserFacingText("Error: 429 Rate limit exceeded", { errorContext: true })).toBe(
       "⚠️ API rate limit reached. Please try again later.",
@@ -94,6 +134,17 @@ describe("sanitizeUserFacingText", () => {
         errorContext: true,
       }),
     ).toBe("LLM request failed: connection refused by the provider endpoint.");
+  });
+
+  it("sanitizes invalid streaming event order errors", () => {
+    expect(
+      sanitizeUserFacingText(
+        'Unexpected event order, got message_start before receiving "message_stop"',
+        { errorContext: true },
+      ),
+    ).toBe(
+      "LLM request failed: provider returned an invalid streaming response. Please try again.",
+    );
   });
 
   it.each([

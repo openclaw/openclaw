@@ -379,6 +379,10 @@ export type MemorySearchConfig = {
   store?: {
     driver?: "sqlite";
     path?: string;
+    fts?: {
+      /** FTS5 tokenizer (default: "unicode61"). Use "trigram" for CJK text support. */
+      tokenizer?: "unicode61" | "trigram";
+    };
     vector?: {
       /** Enable sqlite-vec extension for vector search (default: true). */
       enabled?: boolean;
@@ -459,6 +463,23 @@ type WebSearchLegacyProviderConfig = {
   inlineCitations?: boolean;
 };
 
+type XSearchToolConfig = {
+  /** Enable X search tool (default: true when an xAI API key is available). */
+  enabled?: boolean;
+  /** API key for xAI (defaults to XAI_API_KEY env var). Supports SecretRef. */
+  apiKey?: SecretInput;
+  /** Model id to use for X search. */
+  model?: string;
+  /** Keep inline citations in the xAI response payload when available. */
+  inlineCitations?: boolean;
+  /** Optional max search/tool turns for xAI to use internally. */
+  maxTurns?: number;
+  /** Timeout in seconds for X search requests. */
+  timeoutSeconds?: number;
+  /** Cache TTL in minutes for X search results. */
+  cacheTtlMinutes?: number;
+};
+
 export type ToolsConfig = {
   /** Base tool profile applied before allow/deny lists. */
   profile?: ToolProfileId;
@@ -495,6 +516,8 @@ export type ToolsConfig = {
       /** @deprecated Legacy Perplexity scoped config. */
       perplexity?: WebSearchLegacyProviderConfig;
     } & Record<string, unknown>;
+    /** X (formerly Twitter) search tool configuration using xAI Grok. */
+    x_search?: XSearchToolConfig;
     fetch?: {
       /** Enable web fetch tool (default: true). */
       enabled?: boolean;

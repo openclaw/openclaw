@@ -1,13 +1,23 @@
 import fs from "node:fs/promises";
 import { beforeEach, vi } from "vitest";
-import { buildAnthropicCliBackend } from "../../extensions/anthropic/cli-backend.js";
-import { buildGoogleGeminiCliBackend } from "../../extensions/google/cli-backend.js";
-import { buildOpenAICodexCliBackend } from "../../extensions/openai/cli-backend.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import type { CliBackendPlugin } from "../plugins/types.js";
+import { loadBundledPluginTestApiSync } from "../test-utils/bundled-plugin-public-surface.js";
+import { mergeMockedModule } from "../test-utils/vitest-module-mocks.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
+
+const { buildAnthropicCliBackend } = loadBundledPluginTestApiSync<{
+  buildAnthropicCliBackend: () => CliBackendPlugin;
+}>("anthropic");
+const { buildGoogleGeminiCliBackend } = loadBundledPluginTestApiSync<{
+  buildGoogleGeminiCliBackend: () => CliBackendPlugin;
+}>("google");
+const { buildOpenAICodexCliBackend } = loadBundledPluginTestApiSync<{
+  buildOpenAICodexCliBackend: () => CliBackendPlugin;
+}>("openai");
 
 export const supervisorSpawnMock = vi.fn();
 export const enqueueSystemEventMock = vi.fn();
@@ -43,9 +53,14 @@ vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
 }));
 
-vi.mock("../infra/heartbeat-wake.js", () => ({
-  requestHeartbeatNow: (...args: unknown[]) => requestHeartbeatNowMock(...args),
-}));
+vi.mock("../infra/heartbeat-wake.js", async (importOriginal) => {
+  return await mergeMockedModule(
+    await importOriginal<typeof import("../infra/heartbeat-wake.js")>(),
+    () => ({
+      requestHeartbeatNow: (...args: unknown[]) => requestHeartbeatNowMock(...args),
+    }),
+  );
+});
 
 vi.mock("./bootstrap-files.js", () => ({
   makeBootstrapWarn: () => () => {},
@@ -159,9 +174,16 @@ export async function setupCliRunnerTestModule() {
   vi.doMock("../infra/system-events.js", () => ({
     enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
   }));
-  vi.doMock("../infra/heartbeat-wake.js", () => ({
-    requestHeartbeatNow: (...args: unknown[]) => requestHeartbeatNowMock(...args),
-  }));
+  vi.doMock("../infra/heartbeat-wake.js", async () => {
+    return await mergeMockedModule(
+      await vi.importActual<typeof import("../infra/heartbeat-wake.js")>(
+        "../infra/heartbeat-wake.js",
+      ),
+      () => ({
+        requestHeartbeatNow: (...args: unknown[]) => requestHeartbeatNowMock(...args),
+      }),
+    );
+  });
   vi.doMock("./bootstrap-files.js", () => ({
     makeBootstrapWarn: () => () => {},
     resolveBootstrapContextForRun: hoisted.resolveBootstrapContextForRunMock,

@@ -1,3 +1,7 @@
+import { spawnSync } from "node:child_process";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { Command } from "commander";
 import { describe, expect, it } from "vitest";
 import { getCompletionScript } from "./completion-cli.js";
@@ -25,6 +29,56 @@ describe("completion-cli", () => {
     expect(script).toContain("(status) _openclaw_gateway_status ;;");
     expect(script).toContain("(restart) _openclaw_gateway_restart ;;");
     expect(script).toContain("--force[Force the action]");
+  });
+
+  it("defers zsh registration until compinit is available", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const probe = spawnSync("zsh", ["-fc", "exit 0"], { encoding: "utf8" });
+    if (probe.error) {
+      if ("code" in probe.error && probe.error.code === "ENOENT") {
+        return;
+      }
+      throw probe.error;
+    }
+
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-zsh-completion-"));
+    try {
+      const scriptPath = path.join(tempDir, "openclaw.zsh");
+      await fs.writeFile(scriptPath, getCompletionScript("zsh", createCompletionProgram()), "utf8");
+
+      const result = spawnSync(
+        "zsh",
+        [
+          "-fc",
+          `
+            source ${JSON.stringify(scriptPath)}
+            [[ -z "\${_comps[openclaw]-}" ]] || exit 10
+            [[ "\${precmd_functions[(r)_openclaw_register_completion]}" = "_openclaw_register_completion" ]] || exit 11
+            autoload -Uz compinit
+            compinit -C
+            _openclaw_register_completion
+            [[ -z "\${precmd_functions[(r)_openclaw_register_completion]}" ]] || exit 12
+            [[ "\${_comps[openclaw]-}" = "_openclaw_root_completion" ]]
+          `,
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            HOME: tempDir,
+            ZDOTDIR: tempDir,
+          },
+        },
+      );
+
+      expect(result.stderr).not.toContain("command not found: compdef");
+      expect(result.status).toBe(0);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("generates PowerShell command paths without the executable prefix", () => {

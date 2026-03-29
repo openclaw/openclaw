@@ -1,11 +1,8 @@
-export type {
-  InspectedTelegramAccount,
-  ResolvedTelegramAccount,
-} from "../../extensions/telegram/api.js";
-export type { TelegramButtonStyle, TelegramInlineButtons } from "../../extensions/telegram/api.js";
-export type { StickerMetadata } from "../../extensions/telegram/api.js";
-export type { TelegramProbe } from "../../extensions/telegram/runtime-api.js";
-export type { TelegramApiOverride } from "../../extensions/telegram/runtime-api.js";
+export type { InspectedTelegramAccount, ResolvedTelegramAccount } from "./telegram-surface.js";
+export type { TelegramButtonStyle, TelegramInlineButtons } from "./telegram-surface.js";
+export type { StickerMetadata } from "./telegram-surface.js";
+export type { TelegramProbe } from "./telegram-runtime-surface.js";
+export type { TelegramApiOverride } from "./telegram-runtime-surface.js";
 
 export {
   buildBrowseProvidersButton,
@@ -18,7 +15,9 @@ export {
   getModelsPageSize,
   inspectTelegramAccount,
   isTelegramExecApprovalApprover,
+  isTelegramExecApprovalAuthorizedSender,
   isTelegramExecApprovalClientEnabled,
+  isTelegramExecApprovalTargetRecipient,
   listTelegramAccountIds,
   listTelegramDirectoryGroupsFromConfig,
   listTelegramDirectoryPeersFromConfig,
@@ -37,15 +36,13 @@ export {
   searchStickers,
   sendTelegramPayloadMessages,
   type ProviderInfo,
-} from "../../extensions/telegram/api.js";
-export {
-  isNumericTelegramUserId,
-  normalizeTelegramAllowFromEntry,
-} from "../../extensions/telegram/allow-from.js";
+} from "./telegram-surface.js";
+export { isNumericTelegramUserId, normalizeTelegramAllowFromEntry } from "./telegram-allow-from.js";
 export {
   auditTelegramGroupMembership,
   buildTelegramExecApprovalPendingPayload,
   collectTelegramUnmentionedGroupIds,
+  createTelegramThreadBindingManager,
   createForumTopicTelegram,
   deleteMessageTelegram,
   editForumTopicTelegram,
@@ -66,6 +63,6 @@ export {
   shouldSuppressTelegramExecApprovalForwardingFallback,
   telegramMessageActions,
   unpinMessageTelegram,
-} from "../../extensions/telegram/runtime-api.js";
-export { buildTelegramGroupPeerId } from "../../extensions/telegram/src/bot/helpers.js";
-export { parseTelegramTarget } from "../../extensions/telegram/src/targets.js";
+} from "./telegram-runtime-surface.js";
+export { buildTelegramGroupPeerId } from "./telegram-surface.js";
+export { parseTelegramTarget } from "./telegram-surface.js";

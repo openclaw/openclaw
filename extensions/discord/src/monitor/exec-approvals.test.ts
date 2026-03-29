@@ -46,7 +46,9 @@ const mockRestPatch = vi.hoisted(() => vi.fn());
 const mockRestDelete = vi.hoisted(() => vi.fn());
 const gatewayClientStarts = vi.hoisted(() => vi.fn());
 const gatewayClientStops = vi.hoisted(() => vi.fn());
-const gatewayClientRequests = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
+const gatewayClientRequests = vi.hoisted(() =>
+  vi.fn(async (_method?: string, _params?: unknown) => ({ ok: true })),
+);
 const gatewayClientParams = vi.hoisted(() => [] as Array<Record<string, unknown>>);
 const mockGatewayClientCtor = vi.hoisted(() => vi.fn());
 const mockResolveGatewayConnectionAuth = vi.hoisted(() => vi.fn());
@@ -85,8 +87,8 @@ vi.mock("openclaw/plugin-sdk/gateway-runtime", async (importOriginal) => {
     stop() {
       gatewayClientStops();
     }
-    async request() {
-      return gatewayClientRequests();
+    async request(method: string, params?: unknown) {
+      return gatewayClientRequests(method, params);
     }
   }
   return {
@@ -237,6 +239,7 @@ type DiscordExecApprovalHandlerInstance = InstanceType<
 >;
 
 type ExecApprovalRequest = import("./exec-approvals.js").ExecApprovalRequest;
+type PluginApprovalRequest = import("./exec-approvals.js").PluginApprovalRequest;
 type ExecApprovalButtonContext = import("./exec-approvals.js").ExecApprovalButtonContext;
 
 function createTestingDeps() {
@@ -372,8 +375,8 @@ type ExecApprovalHandlerInternals = {
     string,
     { discordMessageId: string; discordChannelId: string; timeoutId: NodeJS.Timeout }
   >;
-  requestCache: Map<string, ExecApprovalRequest>;
-  handleApprovalRequested: (request: ExecApprovalRequest) => Promise<void>;
+  requestCache: Map<string, unknown>;
+  handleApprovalRequested: (request: ExecApprovalRequest | PluginApprovalRequest) => Promise<void>;
   handleApprovalTimeout: (approvalId: string, source?: "channel" | "dm") => Promise<void>;
 };
 
@@ -407,6 +410,39 @@ function createRequest(
     createdAtMs: Date.now(),
     expiresAtMs: Date.now() + 60000,
   };
+}
+
+function createPluginRequest(
+  overrides: Partial<PluginApprovalRequest["request"]> = {},
+): PluginApprovalRequest {
+  return {
+    id: "plugin:test-id",
+    request: {
+      title: "Sensitive plugin action",
+      description: "The plugin wants to run a sensitive tool action.",
+      severity: "warning",
+      toolName: "plugin.tool",
+      pluginId: "plugin-test",
+      agentId: "test-agent",
+      sessionKey: "agent:test-agent:discord:channel:999888777",
+      ...overrides,
+    },
+    createdAtMs: Date.now(),
+    expiresAtMs: Date.now() + 60000,
+  };
+}
+
+function createMockButtonInteraction(userId: string) {
+  const reply = vi.fn().mockResolvedValue(undefined);
+  const acknowledge = vi.fn().mockResolvedValue(undefined);
+  const followUp = vi.fn().mockResolvedValue(undefined);
+  const interaction = {
+    userId,
+    reply,
+    acknowledge,
+    followUp,
+  } as unknown as ButtonInteraction;
+  return { interaction, reply, acknowledge, followUp };
 }
 
 beforeEach(() => {
@@ -690,6 +726,104 @@ describe("DiscordExecApprovalHandler.shouldHandle", () => {
   });
 });
 
+describe("DiscordExecApprovalHandler plugin approvals", () => {
+  beforeEach(() => {
+    mockRestPost.mockClear().mockResolvedValue({ id: "mock-message", channel_id: "mock-channel" });
+    mockRestPatch.mockClear().mockResolvedValue({});
+    mockRestDelete.mockClear().mockResolvedValue({});
+  });
+
+  it("delivers plugin approval requests with interactive approval buttons", async () => {
+    const handler = createHandler({ enabled: true, approvers: ["123"] });
+    const internals = getHandlerInternals(handler);
+    mockSuccessfulDmDelivery({ throwOnUnexpectedRoute: true });
+
+    await internals.handleApprovalRequested(createPluginRequest());
+
+    const dmCall = mockRestPost.mock.calls.find(
+      (call) => call[0] === Routes.channelMessages("dm-1"),
+    ) as [string, { body?: unknown }] | undefined;
+    expect(dmCall).toBeDefined();
+    expect(dmCall?.[1]?.body).toBeDefined();
+    const bodyJson = JSON.stringify(dmCall?.[1]?.body ?? {});
+    expect(bodyJson).toContain("Plugin Approval Required");
+    expect(bodyJson).toContain("plugin:test-id");
+    expect(bodyJson).toContain("execapproval:id=plugin%3Atest-id;action=allow-once");
+
+    clearPendingTimeouts(handler);
+  });
+
+  it("handles plugin approvals end-to-end via gateway event, button resolve, and card update", async () => {
+    const handler = createHandler({ enabled: true, approvers: ["123"] });
+    mockSuccessfulDmDelivery({
+      noteChannelId: "999888777",
+      expectedNoteText: "I sent the allowed approvers DMs",
+      throwOnUnexpectedRoute: true,
+    });
+
+    await handler.start();
+    try {
+      const onEvent = gatewayClientParams[0]?.onEvent as
+        | ((evt: { event: string; payload: unknown }) => void)
+        | undefined;
+      expect(typeof onEvent).toBe("function");
+
+      const request = createPluginRequest();
+      onEvent?.({
+        event: "plugin.approval.requested",
+        payload: request,
+      });
+
+      await vi.waitFor(() => {
+        expect(mockRestPost).toHaveBeenCalledWith(
+          Routes.channelMessages("dm-1"),
+          expect.objectContaining({
+            body: expect.objectContaining({
+              components: expect.any(Array),
+            }),
+          }),
+        );
+      });
+
+      const button = new ExecApprovalButton({ handler });
+      const { interaction, acknowledge } = createMockButtonInteraction("123");
+      await button.run(interaction, { id: request.id, action: "allow-once" });
+
+      expect(acknowledge).toHaveBeenCalledTimes(1);
+      expect(gatewayClientRequests).toHaveBeenCalledWith("plugin.approval.resolve", {
+        id: request.id,
+        decision: "allow-once",
+      });
+
+      onEvent?.({
+        event: "plugin.approval.resolved",
+        payload: {
+          id: request.id,
+          decision: "allow-once",
+          resolvedBy: "discord:123",
+          ts: Date.now(),
+          request: request.request,
+        },
+      });
+
+      await vi.waitFor(() => {
+        expect(mockRestPatch).toHaveBeenCalledWith(
+          Routes.channelMessage("dm-1", "msg-1"),
+          expect.objectContaining({ body: expect.any(Object) }),
+        );
+      });
+      const patchCall = mockRestPatch.mock.calls.find(
+        (call) => call[0] === Routes.channelMessage("dm-1", "msg-1"),
+      ) as [string, { body?: unknown }] | undefined;
+      const patchBody = JSON.stringify(patchCall?.[1]?.body ?? {});
+      expect(patchBody).toContain("Plugin Approval: Allowed (once)");
+    } finally {
+      clearPendingTimeouts(handler);
+      await handler.stop();
+    }
+  });
+});
+
 // ─── DiscordExecApprovalHandler.getApprovers ──────────────────────────────────
 
 describe("DiscordExecApprovalHandler.getApprovers", () => {
@@ -715,6 +849,40 @@ describe("DiscordExecApprovalHandler.getApprovers", () => {
     for (const testCase of cases) {
       const handler = createHandler(testCase.config);
       expect(handler.getApprovers(), testCase.name).toEqual(testCase.expected);
+    }
+  });
+});
+
+describe("DiscordExecApprovalHandler.resolveApproval", () => {
+  it("routes non-prefixed approval IDs to exec.approval.resolve", async () => {
+    const handler = createHandler({ enabled: true, approvers: ["123"] });
+    await handler.start();
+
+    try {
+      const ok = await handler.resolveApproval("exec-123", "allow-once");
+      expect(ok).toBe(true);
+      expect(gatewayClientRequests).toHaveBeenCalledWith("exec.approval.resolve", {
+        id: "exec-123",
+        decision: "allow-once",
+      });
+    } finally {
+      await handler.stop();
+    }
+  });
+
+  it("routes plugin-prefixed approval IDs to plugin.approval.resolve", async () => {
+    const handler = createHandler({ enabled: true, approvers: ["123"] });
+    await handler.start();
+
+    try {
+      const ok = await handler.resolveApproval("plugin:abc-123", "deny");
+      expect(ok).toBe(true);
+      expect(gatewayClientRequests).toHaveBeenCalledWith("plugin.approval.resolve", {
+        id: "plugin:abc-123",
+        decision: "deny",
+      });
+    } finally {
+      await handler.stop();
     }
   });
 });
@@ -756,7 +924,7 @@ describe("ExecApprovalButton", () => {
     await button.run(interaction, data);
 
     expect(reply).toHaveBeenCalledWith({
-      content: "⛔ You are not authorized to approve exec requests.",
+      content: "⛔ You are not authorized to approve requests.",
       ephemeral: true,
     });
     expect(acknowledge).not.toHaveBeenCalled();
@@ -992,8 +1160,8 @@ describe("DiscordExecApprovalHandler timeout cleanup", () => {
     const requestA = { ...createRequest(), id: "abc" };
     const requestB = { ...createRequest(), id: "abc2" };
 
-    internals.requestCache.set("abc", requestA);
-    internals.requestCache.set("abc2", requestB);
+    internals.requestCache.set("abc", { kind: "exec", request: requestA });
+    internals.requestCache.set("abc2", { kind: "exec", request: requestB });
 
     const timeoutIdA = setTimeout(() => {}, 0);
     const timeoutIdB = setTimeout(() => {}, 0);
