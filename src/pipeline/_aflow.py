@@ -152,19 +152,26 @@ class AFlowEngine:
                 reasoning="Heuristic keyword match",
             )
 
-        # Stage 2: LLM-generated chain
+        # Stage 2: LLM-generated chain (with aggressive timeout for free-tier)
+        # B4-fix: на free-tier моделях Stage 2 тратит 20-40с впустую.
+        # Ограничиваем 8с — если не успели, сразу fallback к static chain.
         try:
-            result = await self._llm_generate_chain(
-                prompt=prompt,
-                brigade=brigade,
-                available_roles=available_roles,
-                config=config,
-                max_chain_len=max_chain_len,
+            result = await asyncio.wait_for(
+                self._llm_generate_chain(
+                    prompt=prompt,
+                    brigade=brigade,
+                    available_roles=available_roles,
+                    config=config,
+                    max_chain_len=max_chain_len,
+                ),
+                timeout=8.0,
             )
             if result and result.chain:
                 logger.info("AFlow: LLM chain generated", chain=result.chain,
                             source=result.source, confidence=result.confidence)
                 return result
+        except asyncio.TimeoutError:
+            logger.info("AFlow: LLM chain generation timed out (8s), using static chain")
         except Exception as e:
             logger.warning("AFlow LLM generation failed, falling back", error=str(e))
 

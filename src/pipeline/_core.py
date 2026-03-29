@@ -742,8 +742,12 @@ class PipelineExecutor:
                 # --- GUARDRAIL VALIDATION WITH RETRY ---
                 guardrail_fn = ROLE_GUARDRAILS.get(role_name)
                 if guardrail_fn and not task_type:
+                    # B3-fix: передаём task_hint для context-aware валидации (Analyst)
+                    _guardrail_kwargs: Dict[str, Any] = {}
+                    if role_name == "Analyst" and _yt_transcript_injected:
+                        _guardrail_kwargs["task_hint"] = "youtube video"
                     for retry_i in range(GUARDRAIL_MAX_RETRIES):
-                        is_valid, feedback = guardrail_fn(response)
+                        is_valid, feedback = guardrail_fn(response, **_guardrail_kwargs)
                         if is_valid:
                             break
                         logger.warning(f"Guardrail failed for {role_name} (attempt {retry_i + 1}/{GUARDRAIL_MAX_RETRIES}): {feedback}")

@@ -163,10 +163,17 @@ def validate_researcher(response_text: str) -> tuple[bool, str]:
     return True, ""
 
 
-def validate_analyst(response_text: str) -> tuple[bool, str]:
-    """Validate Analyst output has numerical metrics and data."""
+def validate_analyst(response_text: str, *, task_hint: str = "") -> tuple[bool, str]:
+    """Validate Analyst output has numerical metrics and data.
+
+    For qualitative tasks (youtube, video, summary) metrics are not required.
+    """
     if len(response_text.strip()) < 40:
         return False, "Аналитический отчёт слишком короткий. Добавь метрики, sample size, CI."
+    # B3-fix: для YouTube / video / качественного анализа метрики не обязательны
+    _qualitative_hints = ("youtube", "video", "видео", "summary", "саммари", "качественн")
+    if any(h in task_hint.lower() for h in _qualitative_hints):
+        return True, ""
     lower = response_text.lower()
     has_metrics = any(kw in lower for kw in [
         "metric", "метрик", "mean", "среднее", "median", "p99", "ci ",
