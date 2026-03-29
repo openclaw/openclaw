@@ -1,4 +1,5 @@
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
+import JSON5 from "json5";
 import { json } from "@codemirror/lang-json";
 import { syntaxHighlighting, defaultHighlightStyle, foldGutter, foldKeymap } from "@codemirror/language";
 import { linter, lintGutter, type Diagnostic } from "@codemirror/lint";
@@ -212,7 +213,7 @@ export class ConfigEditor extends LitElement {
         }
 
         try {
-          JSON.parse(docText);
+          JSON5.parse(docText);
         } catch (e) {
           if (e instanceof SyntaxError) {
             // Try to extract line/col from error message
