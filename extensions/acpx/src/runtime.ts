@@ -99,6 +99,33 @@ function formatAcpxExitMessage(params: {
   return `acpx exited with code ${params.exitCode ?? "unknown"}`;
 }
 
+function formatAcpxHealthProbeExitMessage(params: {
+  stdout: string;
+  stderr: string;
+  exitCode: number | null | undefined;
+  signal?: NodeJS.Signals | null;
+}): string {
+  const stderr = params.stderr.trim();
+  const stdout = params.stdout.trim();
+  if (params.exitCode === ACPX_EXIT_CODE_PERMISSION_DENIED) {
+    return [
+      stderr || stdout || "Permission denied by ACP runtime (acpx).",
+      "ACPX blocked a write/exec permission request in a non-interactive session.",
+      formatPermissionModeGuidance(),
+    ].join(" ");
+  }
+  if (stderr) {
+    return stderr;
+  }
+  if (stdout) {
+    return stdout;
+  }
+  if (params.signal) {
+    return `acpx exited with signal ${params.signal}`;
+  }
+  return `acpx exited with code ${params.exitCode ?? "unknown"}`;
+}
+
 function didAcpxProcessExitWithFailure(params: {
   exitCode: number | null | undefined;
   signal?: NodeJS.Signals | null;
@@ -318,9 +345,12 @@ export class AcpxRuntime implements AcpRuntime {
         }
         return failure.result.error.message;
       }
-      return (
-        failure.result.stderr.trim() || `acpx exited with code ${failure.result.code ?? "unknown"}`
-      );
+      return formatAcpxHealthProbeExitMessage({
+        stdout: failure.result.stdout,
+        stderr: failure.result.stderr,
+        exitCode: failure.result.code,
+        signal: failure.result.signal,
+      });
     }
     return failure.error instanceof Error ? failure.error.message : String(failure.error);
   }
@@ -858,8 +888,12 @@ export class AcpxRuntime implements AcpRuntime {
       return {
         ok: false,
         code: "ACP_BACKEND_UNAVAILABLE",
-        message:
-          helpResult.stderr.trim() || `acpx exited with code ${helpResult.code ?? "unknown"}`,
+        message: formatAcpxHealthProbeExitMessage({
+          stdout: helpResult.stdout,
+          stderr: helpResult.stderr,
+          exitCode: helpResult.code,
+          signal: helpResult.signal,
+        }),
       };
     }
 

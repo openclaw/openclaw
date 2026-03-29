@@ -44,6 +44,10 @@ if (args.includes("--help")) {
   if (process.env.MOCK_ACPX_HELP_SIGNAL) {
     process.kill(process.pid, process.env.MOCK_ACPX_HELP_SIGNAL);
   }
+  if (process.env.MOCK_ACPX_HELP_STDOUT) {
+    process.stdout.write(process.env.MOCK_ACPX_HELP_STDOUT + "\\n");
+    process.exit(Number(process.env.MOCK_ACPX_HELP_EXIT_CODE || "1"));
+  }
   process.stdout.write("mock-acpx help\\n");
   process.exit(0);
 }
@@ -336,6 +340,7 @@ process.exit(2);
 `;
 
 export async function createMockRuntimeFixture(params?: {
+  expectedVersion?: string;
   permissionMode?: ResolvedAcpxPluginConfig["permissionMode"];
   queueOwnerTtlSeconds?: number;
   mcpServers?: ResolvedAcpxPluginConfig["mcpServers"];
@@ -351,6 +356,7 @@ export async function createMockRuntimeFixture(params?: {
 
   const config: ResolvedAcpxPluginConfig = {
     command: scriptPath,
+    expectedVersion: params?.expectedVersion,
     allowPluginLocalInstall: false,
     stripProviderAuthEnvVars: false,
     installCommand: "n/a",

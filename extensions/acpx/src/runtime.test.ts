@@ -4,7 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { runAcpRuntimeAdapterContract } from "../../../src/acp/runtime/adapter-contract.testkit.js";
-import { resolveAcpxPluginConfig } from "./config.js";
+import { ACPX_PINNED_VERSION, resolveAcpxPluginConfig } from "./config.js";
 import { AcpxRuntime, decodeAcpxRuntimeHandleState } from "./runtime.js";
 import {
   cleanupMockRuntimeFixtures,
@@ -768,14 +768,54 @@ describe("AcpxRuntime", () => {
     process.env.MOCK_ACPX_HELP_SIGNAL = "SIGTERM";
 
     try {
-      const { runtime } = await createMockRuntimeFixture();
+      const { runtime } = await createMockRuntimeFixture({
+        expectedVersion: ACPX_PINNED_VERSION,
+      });
       await runtime.probeAvailability();
       expect(runtime.isHealthy()).toBe(false);
+      expect(runtime.getUnhealthyReason()).toContain("SIGTERM");
+      await expect(runtime.doctor()).resolves.toMatchObject({
+        ok: false,
+        code: "ACP_BACKEND_UNAVAILABLE",
+        message: expect.stringContaining("SIGTERM"),
+      });
     } finally {
       if (previousSignal === undefined) {
         delete process.env.MOCK_ACPX_HELP_SIGNAL;
       } else {
         process.env.MOCK_ACPX_HELP_SIGNAL = previousSignal;
+      }
+    }
+  });
+
+  it("surfaces stdout-only help-check diagnostics in unhealthy runtime reasons", async () => {
+    const previousStdout = process.env.MOCK_ACPX_HELP_STDOUT;
+    const previousExitCode = process.env.MOCK_ACPX_HELP_EXIT_CODE;
+    process.env.MOCK_ACPX_HELP_STDOUT = "probe failed: missing API token";
+    process.env.MOCK_ACPX_HELP_EXIT_CODE = "1";
+
+    try {
+      const { runtime } = await createMockRuntimeFixture({
+        expectedVersion: ACPX_PINNED_VERSION,
+      });
+      await runtime.probeAvailability();
+      expect(runtime.isHealthy()).toBe(false);
+      expect(runtime.getUnhealthyReason()).toContain("probe failed: missing API token");
+      await expect(runtime.doctor()).resolves.toMatchObject({
+        ok: false,
+        code: "ACP_BACKEND_UNAVAILABLE",
+        message: expect.stringContaining("probe failed: missing API token"),
+      });
+    } finally {
+      if (previousStdout === undefined) {
+        delete process.env.MOCK_ACPX_HELP_STDOUT;
+      } else {
+        process.env.MOCK_ACPX_HELP_STDOUT = previousStdout;
+      }
+      if (previousExitCode === undefined) {
+        delete process.env.MOCK_ACPX_HELP_EXIT_CODE;
+      } else {
+        process.env.MOCK_ACPX_HELP_EXIT_CODE = previousExitCode;
       }
     }
   });
