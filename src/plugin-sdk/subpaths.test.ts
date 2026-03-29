@@ -121,6 +121,13 @@ function expectSourceOmitsSnippet(subpath: string, snippet: string) {
   expect(readPluginSdkSource(subpath)).not.toContain(snippet);
 }
 
+function expectSourceOmitsImportPattern(subpath: string, specifier: string) {
+  const escapedSpecifier = specifier.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const source = readPluginSdkSource(subpath);
+  expect(source).not.toMatch(new RegExp(`\\bfrom\\s+["']${escapedSpecifier}["']`, "u"));
+  expect(source).not.toMatch(new RegExp(`\\bimport\\(\\s*["']${escapedSpecifier}["']\\s*\\)`, "u"));
+}
+
 describe("plugin-sdk subpath exports", () => {
   it("keeps the curated public list free of internal implementation subpaths", () => {
     for (const deniedSubpath of [
@@ -613,8 +620,8 @@ describe("plugin-sdk subpath exports", () => {
       ],
     });
     expectSourceOmitsSnippet("provider-setup", "./ollama-surface.js");
-    expectSourceOmitsSnippet("provider-setup", "./vllm.js");
-    expectSourceOmitsSnippet("provider-setup", "./sglang.js");
+    expectSourceOmitsImportPattern("provider-setup", "./vllm.js");
+    expectSourceOmitsImportPattern("provider-setup", "./sglang.js");
     expectSourceMentions("provider-auth", [
       "buildOauthProviderAuthResult",
       "generatePkceVerifierChallenge",
@@ -665,6 +672,8 @@ describe("plugin-sdk subpath exports", () => {
       ],
       omits: ["buildVllmProvider", "buildSglangProvider"],
     });
+    expectSourceOmitsImportPattern("self-hosted-provider-setup", "./vllm.js");
+    expectSourceOmitsImportPattern("self-hosted-provider-setup", "./sglang.js");
     expectSourceOmitsSnippet("agent-runtime", "./sglang.js");
     expectSourceOmitsSnippet("agent-runtime", "./vllm.js");
     expectSourceOmitsSnippet("xai-model-id", "./xai.js");
