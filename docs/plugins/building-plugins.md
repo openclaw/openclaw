@@ -149,8 +149,11 @@ Hook guard semantics to keep in mind:
 
 - `before_tool_call`: `{ block: true }` is terminal and stops lower-priority handlers.
 - `before_tool_call`: `{ block: false }` is treated as no decision.
+- `before_tool_call`: `{ requireApproval: true }` pauses agent execution and prompts the user for approval via the exec approval overlay, Telegram buttons, Discord interactions, or the `/approve` command on any channel.
 - `message_sending`: `{ cancel: true }` is terminal and stops lower-priority handlers.
 - `message_sending`: `{ cancel: false }` is treated as no decision.
+
+The `/approve` command handles both exec and plugin approvals with automatic fallback. Plugin approval forwarding can be configured independently via `approvals.plugin` in config.
 
 See [SDK Overview hook decision semantics](/plugins/sdk-overview#hook-decision-semantics) for details.
 
