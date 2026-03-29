@@ -365,7 +365,15 @@ export async function readCronRunLogEntriesPage(
 ): Promise<CronRunLogPageResult> {
   await drainPendingWrite(filePath);
   const limit = Math.max(1, Math.min(200, Math.floor(opts?.limit ?? 50)));
-  const raw = await fs.readFile(path.resolve(filePath), "utf-8").catch(() => "");
+  const resolved = path.resolve(filePath);
+  // Defensive prune before reading: if async prune in appendCronRunLog failed
+  // silently (e.g. disk pressure), the file may have grown beyond the expected
+  // max size. Pruning here prevents OOM when loading the file into memory.
+  await pruneIfNeeded(resolved, {
+    maxBytes: DEFAULT_CRON_RUN_LOG_MAX_BYTES,
+    keepLines: DEFAULT_CRON_RUN_LOG_KEEP_LINES,
+  });
+  const raw = await fs.readFile(resolved, "utf-8").catch(() => "");
   const statuses = normalizeRunStatuses(opts);
   const deliveryStatuses = normalizeDeliveryStatuses(opts);
   const query = normalizeLowercaseStringOrEmpty(opts?.query);
@@ -419,6 +427,15 @@ export async function readCronRunLogEntriesPageAll(
     };
   }
   await Promise.all(jsonlFiles.map((f) => drainPendingWrite(f)));
+  // Defensive prune on each file before reading to prevent OOM from unbounded growth
+  await Promise.all(
+    jsonlFiles.map((f) =>
+      pruneIfNeeded(f, {
+        maxBytes: DEFAULT_CRON_RUN_LOG_MAX_BYTES,
+        keepLines: DEFAULT_CRON_RUN_LOG_KEEP_LINES,
+      }),
+    ),
+  );
   const chunks = await Promise.all(
     jsonlFiles.map(async (filePath) => {
       const raw = await fs.readFile(filePath, "utf-8").catch(() => "");

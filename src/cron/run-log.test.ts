@@ -8,6 +8,7 @@ import {
   DEFAULT_CRON_RUN_LOG_MAX_BYTES,
   getPendingCronRunLogWriteCountForTests,
   readCronRunLogEntries,
+  readCronRunLogEntriesPage,
   resolveCronRunLogPruneOptions,
   resolveCronRunLogPath,
 } from "./run-log.js";
@@ -310,6 +311,48 @@ describe("cron run log", () => {
 
       // Clean up
       await writePromise.catch(() => undefined);
+    });
+  });
+
+  it("readCronRunLogEntriesPage prunes oversized files before reading", async () => {
+    await withRunLogDir("openclaw-cron-log-prune-read-", async (dir) => {
+      const logPath = path.join(dir, "runs", "job-prune.jsonl");
+      await fs.mkdir(path.dirname(logPath), { recursive: true });
+
+      // Write many lines to exceed DEFAULT_CRON_RUN_LOG_MAX_BYTES without going
+      // through appendCronRunLog (simulating failed async prune)
+      const lines: string[] = [];
+      for (let i = 0; i < 5000; i++) {
+        lines.push(
+          JSON.stringify({
+            ts: 1000 + i,
+            jobId: "job-prune",
+            action: "finished",
+            status: "ok",
+            summary: "x".repeat(200),
+          }),
+        );
+      }
+      await fs.writeFile(logPath, lines.join("\n") + "\n", "utf-8");
+
+      // Verify file is larger than default max
+      const sizeBefore = (await fs.stat(logPath)).size;
+      expect(sizeBefore).toBeGreaterThan(DEFAULT_CRON_RUN_LOG_MAX_BYTES);
+
+      // Reading should trigger defensive prune and not OOM
+      const page = await readCronRunLogEntriesPage(logPath, {
+        limit: 10,
+        offset: 0,
+        sortDir: "desc",
+      });
+
+      // Should still return valid entries
+      expect(page.entries.length).toBeGreaterThan(0);
+      expect(page.entries.length).toBeLessThanOrEqual(10);
+
+      // File should be pruned after reading
+      const sizeAfter = (await fs.stat(logPath)).size;
+      expect(sizeAfter).toBeLessThanOrEqual(DEFAULT_CRON_RUN_LOG_MAX_BYTES);
     });
   });
 });
