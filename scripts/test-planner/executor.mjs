@@ -166,6 +166,14 @@ export function createExecutionArtifacts(env = process.env) {
   return { ensureTempArtifactDir, writeTempJsonArtifact, cleanupTempArtifacts };
 }
 
+export function createTempArtifactWriteStream(filePath) {
+  const fd = fs.openSync(filePath, "w");
+  return fs.createWriteStream(filePath, {
+    fd,
+    autoClose: true,
+  });
+}
+
 const ensureNodeOptionFlag = (nodeOptions, flagPrefix, nextValue) =>
   nodeOptions.includes(flagPrefix) ? nodeOptions : `${nodeOptions} ${nextValue}`.trim();
 
@@ -420,7 +428,7 @@ export async function executePlan(plan, options = {}) {
         .filter(Boolean)
         .join("-");
       const laneLogPath = path.join(artifacts.ensureTempArtifactDir(), `${artifactStem}.log`);
-      const laneLogStream = fs.createWriteStream(laneLogPath, { flags: "w" });
+      const laneLogStream = createTempArtifactWriteStream(laneLogPath);
       laneLogStream.write(`[test-parallel] entry=${unit.id}\n`);
       laneLogStream.write(`[test-parallel] cwd=${process.cwd()}\n`);
       laneLogStream.write(
