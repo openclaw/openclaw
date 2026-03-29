@@ -696,6 +696,7 @@ export async function runMemoryFlushIfNeeded(params: {
           ...senderContext,
           ...runBaseParams,
           allowGatewaySubagentBinding: true,
+          silentExpected: true,
           trigger: "memory",
           memoryFlushWritePath,
           prompt: activeMemoryFlushPlan.prompt,
