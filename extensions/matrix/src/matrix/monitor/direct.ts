@@ -113,10 +113,23 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
       const { roomId, senderId } = params;
       const selfUserId = params.selfUserId ?? (await ensureSelfUserId());
       const joinedMembers = await resolveJoinedMembers(roomId);
+
+      // Check is_direct flag first (authoritative Matrix protocol signal)
+      const directViaSender = await resolveDirectMemberFlag(roomId, senderId);
+      const directViaSelf = await resolveDirectMemberFlag(roomId, selfUserId);
+      // Preserve explicit false: if both lookups resolved and both are false, forward false
+      const isDirectFlag: boolean | null =
+        directViaSender || directViaSelf
+          ? true
+          : directViaSender === false && directViaSelf === false
+            ? false
+            : null;
+
       const strictDirectMembership = isStrictDirectMembership({
         selfUserId,
         remoteUserId: senderId,
         joinedMembers,
+        isDirectFlag,
       });
 
       try {

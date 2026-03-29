@@ -64,7 +64,17 @@ function mergePropertySchemas(existing: unknown, incoming: unknown): unknown {
     return merged;
   }
 
-  return existing;
+  // Preserve Optional annotation when merging schemas
+  const existingRecord = existing as Record<string, unknown>;
+  const incomingRecord = incoming as Record<string, unknown>;
+  const merged: Record<string, unknown> = { ...existingRecord };
+
+  // If either schema has optional=true, the merged schema should be optional
+  if (incomingRecord.optional === true || existingRecord.optional === true) {
+    merged.optional = true;
+  }
+
+  return merged;
 }
 
 export function normalizeToolParameters(

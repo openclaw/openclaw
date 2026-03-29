@@ -21,10 +21,28 @@ export function isStrictDirectMembership(params: {
   selfUserId?: string | null;
   remoteUserId?: string | null;
   joinedMembers?: readonly string[] | null;
+  isDirectFlag?: boolean | null;
 }): boolean {
   const selfUserId = trimMaybeString(params.selfUserId);
   const remoteUserId = trimMaybeString(params.remoteUserId);
   const joinedMembers = params.joinedMembers ?? [];
+
+  // Priority 1: is_direct flag is authoritative (Matrix protocol standard)
+  if (params.isDirectFlag === true) {
+    return Boolean(
+      selfUserId &&
+      remoteUserId &&
+      joinedMembers.includes(selfUserId) &&
+      joinedMembers.includes(remoteUserId),
+    );
+  }
+
+  // Priority 2: explicit is_direct=false means not a DM
+  if (params.isDirectFlag === false) {
+    return false;
+  }
+
+  // Priority 3: fallback to 2-member check only when is_direct is unavailable
   return Boolean(
     selfUserId &&
     remoteUserId &&
