@@ -7,6 +7,7 @@ import {
   type AgentBootstrapHookContext,
 } from "../hooks/internal-hooks.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
+import { clearAllBootstrapSnapshots } from "./bootstrap-cache.js";
 import { resolveBootstrapContextForRun, resolveBootstrapFilesForRun } from "./bootstrap-files.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
@@ -52,9 +53,44 @@ function registerMalformedBootstrapFileHook() {
   });
 }
 
+function registerDuplicateBootstrapFileHook() {
+  registerInternalHook("agent:bootstrap", (event) => {
+    const context = event.context as AgentBootstrapHookContext;
+    const duplicateDir = path.join(context.workspaceDir, "extras");
+    const duplicatePath = path.join(duplicateDir, "SELF_IMPROVEMENT_REMINDER.md");
+    context.bootstrapFiles = [
+      ...context.bootstrapFiles,
+      {
+        name: "SELF_IMPROVEMENT_REMINDER.md",
+        path: `${duplicateDir}${path.sep}.${path.sep}SELF_IMPROVEMENT_REMINDER.md`,
+        content: "first",
+        missing: false,
+      } as unknown as WorkspaceBootstrapFile,
+      {
+        name: "SELF_IMPROVEMENT_REMINDER.md",
+        path: duplicatePath,
+        content: "second",
+        missing: false,
+      } as unknown as WorkspaceBootstrapFile,
+      {
+        name: "SELF_IMPROVEMENT_REMINDER.md",
+        path: path.join(context.workspaceDir, "other", "SELF_IMPROVEMENT_REMINDER.md"),
+        content: "third",
+        missing: false,
+      } as unknown as WorkspaceBootstrapFile,
+    ];
+  });
+}
+
 describe("resolveBootstrapFilesForRun", () => {
-  beforeEach(() => clearInternalHooks());
-  afterEach(() => clearInternalHooks());
+  beforeEach(() => {
+    clearInternalHooks();
+    clearAllBootstrapSnapshots();
+  });
+  afterEach(() => {
+    clearInternalHooks();
+    clearAllBootstrapSnapshots();
+  });
 
   it("applies bootstrap hook overrides", async () => {
     registerExtraBootstrapFileHook();
@@ -81,11 +117,56 @@ describe("resolveBootstrapFilesForRun", () => {
     expect(warnings).toHaveLength(3);
     expect(warnings[0]).toContain('missing or invalid "path" field');
   });
+
+  it("deduplicates hook-injected bootstrap files by normalized path while preserving order", async () => {
+    registerDuplicateBootstrapFileHook();
+
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    const files = await resolveBootstrapFilesForRun({ workspaceDir });
+    const duplicates = files.filter((file) => file.path.endsWith("SELF_IMPROVEMENT_REMINDER.md"));
+
+    expect(duplicates).toHaveLength(2);
+    expect(duplicates[0]?.path).toBe(
+      `${path.join(workspaceDir, "extras")}${path.sep}.${path.sep}SELF_IMPROVEMENT_REMINDER.md`,
+    );
+    expect(duplicates[0]?.content).toBe("first");
+    expect(duplicates[1]?.path).toBe(
+      path.join(workspaceDir, "other", "SELF_IMPROVEMENT_REMINDER.md"),
+    );
+  });
+
+  it("does not accumulate duplicate hook-injected files across cached runs", async () => {
+    registerInternalHook("agent:bootstrap", (event) => {
+      const context = event.context as AgentBootstrapHookContext;
+      context.bootstrapFiles.push({
+        name: "EXTRA.md",
+        path: path.join(context.workspaceDir, "EXTRA.md"),
+        content: "extra",
+        missing: false,
+      } as unknown as WorkspaceBootstrapFile);
+    });
+
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    const sessionKey = "agent:main:main";
+    const injectedPath = path.join(workspaceDir, "EXTRA.md");
+
+    const first = await resolveBootstrapFilesForRun({ workspaceDir, sessionKey });
+    const second = await resolveBootstrapFilesForRun({ workspaceDir, sessionKey });
+
+    expect(first.filter((file) => file.path === injectedPath)).toHaveLength(1);
+    expect(second.filter((file) => file.path === injectedPath)).toHaveLength(1);
+  });
 });
 
 describe("resolveBootstrapContextForRun", () => {
-  beforeEach(() => clearInternalHooks());
-  afterEach(() => clearInternalHooks());
+  beforeEach(() => {
+    clearInternalHooks();
+    clearAllBootstrapSnapshots();
+  });
+  afterEach(() => {
+    clearInternalHooks();
+    clearAllBootstrapSnapshots();
+  });
 
   it("returns context files for hook-adjusted bootstrap files", async () => {
     registerExtraBootstrapFileHook();
