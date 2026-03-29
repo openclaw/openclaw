@@ -1,33 +1,45 @@
 ---
 title: "Root Help CLI Descriptor Loader Note"
-summary: "Move root-help descriptor capture onto shared loader semantics while keeping channel plugins non-activating."
+summary: "Collect root-help plugin CLI descriptors through a dedicated non-activating loader path with validated config, awaited registration, and plugin-owned channel metadata."
 author: "Gustavo Madeira Santana"
 github_username: "gumadeiras"
 created: "2026-03-29"
 status: "implemented"
 ---
 
-This note covers the follow-up on PR #57294 after review found that the first descriptor-capture approach rebuilt plugin discovery and import logic inside `src/plugins/cli.ts`.
+This note covers the final implementation on PR #57294 after review found two remaining gaps in the earlier branch state:
+
+- root help still depended on an activating plugin loader path
+- async `register()` implementations were still ignored during descriptor capture
 
 Decision:
 
 - Root help should be non-activating, not semantically different.
-- That means `openclaw --help` should keep loader semantics for enable-state, per-plugin config, config validation, and channel/plugin selection rules.
-- The loader gets a dedicated CLI-metadata snapshot mode instead of `src/plugins/cli.ts` importing plugin entries by itself.
+- That means `openclaw --help` should keep loader semantics for enable-state, per-plugin config, duplicate precedence, config validation, and memory-slot gating.
+- Help should use a dedicated async CLI metadata collector instead of piggybacking on the general activating registry loader.
+- Channel plugins should keep ownership of their own root-help metadata wherever possible.
 
 Implementation shape:
 
-- Add `captureCliMetadataOnly` to `loadOpenClawPlugins()`.
-- In that mode, enabled channel plugins load from their real entry file but receive `registrationMode: "setup-only"` so `registerFull(...)` work does not run.
-- Non-channel plugins keep the normal validated loader path, including `pluginConfig`.
-- `getPluginCliCommandDescriptors()` now asks the loader for a non-activating snapshot registry and reads `registry.cliRegistrars`.
+- Add `loadOpenClawPluginCliRegistry()` in `src/plugins/loader.ts`.
+- The collector reuses plugin discovery, manifest loading, duplicate precedence, enable-state resolution, config validation, and memory-slot gating.
+- The collector always runs with `activate: false` and `cache: false`.
+- The collector awaits `register(api)` so async plugin registration contributes CLI metadata.
+- The collector only exposes `registerCli(...)` to plugin code; it does not activate services, tools, providers, or gateway handlers.
+- `getPluginCliCommandDescriptors()` and root-help rendering are now async and route through the dedicated collector.
+- `defineChannelPluginEntry(...)` gained an additive `registerCliMetadata(api)` seam so channel plugins can register root-help metadata without entering `registerFull(...)`.
+- `extensions/matrix/index.ts` moved its CLI descriptor registration onto that seam.
+- `defineChannelPluginEntry(...)` now skips `setRuntime(...)` in `cli-metadata` mode so help rendering does not poison channel runtime stores with a fake runtime object.
 
 Why this replaced the earlier approach:
 
-- The manual import loop in `src/plugins/cli.ts` dropped `api.pluginConfig`, which broke config-dependent CLI plugins.
-- It also drifted away from loader behavior around channel setup entry selection and plugin registration rules.
+- The original manual import loop in `src/plugins/cli.ts` dropped `api.pluginConfig`, which broke config-dependent CLI plugins.
+- The intermediate loader-flag approach still tied descriptor capture to the sync general loader path and left async `register()` unsupported.
+- The dedicated collector keeps the special behavior narrow and explicit instead of broadening the general loader contract further.
 
 Regression coverage added:
 
-- A loader test that proves CLI metadata snapshot loads still receive validated `pluginConfig`.
-- A loader test that proves channel CLI metadata capture uses the real channel entry in `setup-only` mode instead of the package `setupEntry`.
+- A loader test that proves CLI metadata loads still receive validated `pluginConfig`.
+- A loader test that proves channel CLI metadata capture uses the real channel entry, reports `registrationMode: "cli-metadata"`, and does not load `setupEntry`.
+- A loader test that proves async plugin `register()` contributes CLI descriptors during metadata collection.
+- A loader test that proves `cli-metadata` mode does not call `setRuntime(...)` for channel plugins.
