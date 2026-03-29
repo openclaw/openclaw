@@ -676,7 +676,10 @@ async function resolveSteerTarget(
   client: GatewayBrowserClient,
   sessionKey: string,
   args: string,
-): Promise<{ key: string; message: string; label?: string } | { error: string }> {
+): Promise<
+  | { key: string; message: string; label?: string; sessions?: SessionsListResult }
+  | { error: string }
+> {
   const trimmed = args.trim();
   if (!trimmed) {
     return { error: "empty" };
@@ -691,7 +694,7 @@ async function resolveSteerTarget(
       const sessions = await client.request<SessionsListResult>("sessions.list", {});
       const matched = resolveSteerSubagent(sessions?.sessions ?? [], sessionKey, maybeTarget);
       if (matched.length === 1) {
-        return { key: matched[0], message: rest, label: maybeTarget };
+        return { key: matched[0], message: rest, label: maybeTarget, sessions };
       }
       if (matched.length > 1) {
         return { error: `Multiple sub-agents match \`${maybeTarget}\`. Be more specific.` };
@@ -699,6 +702,10 @@ async function resolveSteerTarget(
     }
   }
   return { key: sessionKey, message: trimmed };
+}
+
+function isActiveSteerSession(session: GatewaySessionRow | undefined): boolean {
+  return session?.status === "running" && session.endedAt == null;
 }
 
 /** Soft inject — queues a message into the active run via chat.send (deliver: false). */
@@ -712,6 +719,16 @@ async function executeSteer(
     if ("error" in resolved) {
       return {
         content: resolved.error === "empty" ? "Usage: `/steer [id] <message>`" : resolved.error,
+      };
+    }
+    const sessions =
+      resolved.sessions ?? (await client.request<SessionsListResult>("sessions.list", {}));
+    const targetSession = resolveCurrentSession(sessions, resolved.key);
+    if (!isActiveSteerSession(targetSession)) {
+      return {
+        content: resolved.label
+          ? `No active run matched \`${resolved.label}\`. Use \`/redirect\` instead.`
+          : "No active run. Use the chat input or `/redirect` instead.",
       };
     }
     await client.request("chat.send", {
