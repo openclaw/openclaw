@@ -878,6 +878,12 @@ class PipelineExecutor:
                         if did_handoff:
                             break
 
+                    # B1-fix: всегда сохраняем шаг в steps_results, даже если
+                    # ответ содержит валидный JSON, не совпавший с action-паттерном.
+                    # Без этого Analyst/Researcher/Summarizer молча терялись.
+                    if not did_handoff:
+                        steps_results.append({"role": role_name, "model": model, "response": response})
+
                 except json.JSONDecodeError:
                     steps_results.append({"role": role_name, "model": model, "response": response})
             else:
