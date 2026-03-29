@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { validateConfigObject } from "./config.js";
+import { validateConfigObject } from "./validation.js";
 
 describe("signal groups schema", () => {
   it("accepts top-level Signal groups overrides", () => {

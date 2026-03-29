@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
 import {
   findMatrixAccountEntry,
-  getMatrixScopedEnvVarNames,
-  requiresExplicitMatrixDefaultAccount,
   resolveConfiguredMatrixAccountIds,
   resolveMatrixDefaultOrOnlyAccountId,
-} from "../plugin-sdk/matrix.js";
+  requiresExplicitMatrixDefaultAccount,
+} from "../../extensions/matrix/src/account-selection.ts";
+import { getMatrixScopedEnvVarNames } from "../../extensions/matrix/src/env-vars.ts";
+import type { OpenClawConfig } from "../config/config.js";
 
 describe("matrix account selection", () => {
   it("resolves configured account ids from non-canonical account keys", () => {

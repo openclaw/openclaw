@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { validateConfigObject } from "./config.js";
+import { validateConfigObject } from "./validation.js";
 
 describe("Slack HTTP mode config", () => {
   it("accepts HTTP mode when signing secret is configured", () => {

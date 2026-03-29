@@ -3,10 +3,7 @@ import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk/zalo";
 import { expect, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../../../src/plugins/registry.js";
 import { setActivePluginRegistry } from "../../../src/plugins/runtime.js";
-import {
-  loadBundledPluginPublicSurfaceSync,
-  resolveRelativeBundledPluginPublicModuleId,
-} from "../../../src/test-utils/bundled-plugin-public-surface.js";
+import { loadBundledPluginPublicSurfaceSync } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 import { withServer } from "../http-test-server.js";
 import { createPluginRuntimeMock } from "./plugin-runtime-mock.js";
 import { createRuntimeEnv } from "./runtime-env.js";
@@ -45,17 +42,6 @@ const { normalizeSecretInputString } = loadBundledPluginPublicSurfaceSync<{
   artifactBasename: "src/secret-input.js",
 });
 
-const zaloApiModuleId = resolveRelativeBundledPluginPublicModuleId({
-  fromModuleUrl: import.meta.url,
-  pluginId: "zalo",
-  artifactBasename: "src/api.js",
-});
-const zaloRuntimeModuleId = resolveRelativeBundledPluginPublicModuleId({
-  fromModuleUrl: import.meta.url,
-  pluginId: "zalo",
-  artifactBasename: "src/runtime.js",
-});
-
 const lifecycleMocks = vi.hoisted(() => ({
   setWebhookMock: vi.fn(async () => ({ ok: true, result: { url: "" } })),
   deleteWebhookMock: vi.fn(async () => ({ ok: true, result: { url: "" } })),
@@ -79,7 +65,7 @@ export const sendMessageMock = lifecycleMocks.sendMessageMock;
 export const sendPhotoMock = lifecycleMocks.sendPhotoMock;
 export const getZaloRuntimeMock = lifecycleMocks.getZaloRuntimeMock;
 
-vi.mock(zaloApiModuleId, async (importOriginal) => {
+vi.mock("../../../extensions/zalo/src/api.ts", async (importOriginal) => {
   const actual = await importOriginal<object>();
   return {
     ...actual,
@@ -93,7 +79,7 @@ vi.mock(zaloApiModuleId, async (importOriginal) => {
   };
 });
 
-vi.mock(zaloRuntimeModuleId, () => ({
+vi.mock("../../../extensions/zalo/src/runtime.ts", () => ({
   getZaloRuntime: lifecycleMocks.getZaloRuntimeMock,
 }));
 
