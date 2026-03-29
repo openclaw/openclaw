@@ -6,11 +6,14 @@
  * Run via: node --import tsx src/mcp/plugin-tools-serve.ts
  * Or: bun src/mcp/plugin-tools-serve.ts
  */
+import { pathToFileURL } from "node:url";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
+import { routeLogsToStderr } from "../logging/console.js";
 import { resolvePluginTools } from "../plugins/tools.js";
 import { VERSION } from "../version.js";
 
@@ -23,16 +26,21 @@ function resolveJsonSchemaForTool(tool: AnyAgentTool): Record<string, unknown> {
   return { type: "object", properties: {} };
 }
 
-async function main(): Promise<void> {
-  const cfg = loadConfig();
-  const tools = resolvePluginTools({
-    context: { config: cfg },
+function resolveTools(config: OpenClawConfig): AnyAgentTool[] {
+  return resolvePluginTools({
+    context: { config },
     suppressNameConflicts: true,
   });
+}
 
-  if (tools.length === 0) {
-    process.stderr.write("plugin-tools-serve: no plugin tools found\n");
-  }
+export function createPluginToolsMcpServer(
+  params: {
+    config?: OpenClawConfig;
+    tools?: AnyAgentTool[];
+  } = {},
+): Server {
+  const cfg = params.config ?? loadConfig();
+  const tools = params.tools ?? resolveTools(cfg);
 
   const toolMap = new Map<string, AnyAgentTool>();
   for (const tool of tools) {
@@ -77,6 +85,20 @@ async function main(): Promise<void> {
     }
   });
 
+  return server;
+}
+
+export async function servePluginToolsMcp(): Promise<void> {
+  // MCP stdio requires stdout to stay protocol-only.
+  routeLogsToStderr();
+
+  const config = loadConfig();
+  const tools = resolveTools(config);
+  const server = createPluginToolsMcpServer({ config, tools });
+  if (tools.length === 0) {
+    process.stderr.write("plugin-tools-serve: no plugin tools found\n");
+  }
+
   const transport = new StdioServerTransport();
 
   let shuttingDown = false;
@@ -100,7 +122,11 @@ async function main(): Promise<void> {
   await server.connect(transport);
 }
 
-main().catch((err) => {
-  process.stderr.write(`plugin-tools-serve: ${err instanceof Error ? err.message : String(err)}\n`);
-  process.exit(1);
-});
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  servePluginToolsMcp().catch((err) => {
+    process.stderr.write(
+      `plugin-tools-serve: ${err instanceof Error ? err.message : String(err)}\n`,
+    );
+    process.exit(1);
+  });
+}
