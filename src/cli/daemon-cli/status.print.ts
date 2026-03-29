@@ -167,6 +167,50 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
     spacer();
   }
 
+  if (status.logs) {
+    defaultRuntime.log(`${label("Gateway logs:")} ${infoText(shortenHomePath(status.logs.directory))}`);
+    defaultRuntime.log(
+      `${label("Gateway stdout:")} ${infoText(shortenHomePath(status.logs.stdoutPath))}`,
+    );
+    defaultRuntime.log(
+      `${label("Gateway stderr:")} ${infoText(shortenHomePath(status.logs.stderrPath))}`,
+    );
+    spacer();
+  }
+
+  if (status.windows) {
+    defaultRuntime.log(
+      `${label("Windows mode:")} ${infoText(status.windows.serviceMode)} (${infoText(status.windows.registrationDetail)})`,
+    );
+    defaultRuntime.log(`${label("Task script:")} ${infoText(shortenHomePath(status.windows.taskScriptPath))}`);
+    if (status.windows.registrationPath) {
+      defaultRuntime.log(
+        `${label("Startup entry:")} ${infoText(shortenHomePath(status.windows.registrationPath))}`,
+      );
+    }
+    const wslState = status.windows.wsl.wslExeAvailable
+      ? status.windows.wsl.defaultDistroReachable
+        ? status.windows.wsl.systemdEnabled === false
+          ? "installed, default distro reachable, systemd disabled"
+          : "installed and reachable"
+        : "installed, default distro not ready"
+      : "not installed";
+    defaultRuntime.log(`${label("WSL2:")} ${infoText(wslState)}`);
+    if (status.windows.wsl.defaultDistroName) {
+      defaultRuntime.log(`${label("WSL distro:")} ${infoText(status.windows.wsl.defaultDistroName)}`);
+    }
+    if (status.windows.degradedReason) {
+      defaultRuntime.error(`${errorText("Windows issue:")} ${status.windows.degradedReason}`);
+    }
+    if (status.windows.recommendedAction) {
+      defaultRuntime.error(`${warnText("Windows fix:")} ${status.windows.recommendedAction}`);
+    }
+    if (status.windows.wsl.recommendedAction) {
+      defaultRuntime.error(`${warnText("WSL2 fix:")} ${status.windows.wsl.recommendedAction}`);
+    }
+    spacer();
+  }
+
   const runtimeLine = formatRuntimeStatus(service.runtime);
   if (runtimeLine) {
     const runtimeColor = resolveRuntimeStatusColor(service.runtime?.status);
@@ -306,6 +350,9 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
       const logs = resolveGatewayLogPaths(service.command?.environment ?? process.env);
       defaultRuntime.error(`${errorText("Logs:")} ${shortenHomePath(logs.stdoutPath)}`);
       defaultRuntime.error(`${errorText("Errors:")} ${shortenHomePath(logs.stderrPath)}`);
+    } else if (process.platform === "win32" && status.logs) {
+      defaultRuntime.error(`${errorText("Logs:")} ${shortenHomePath(status.logs.stdoutPath)}`);
+      defaultRuntime.error(`${errorText("Errors:")} ${shortenHomePath(status.logs.stderrPath)}`);
     }
     spacer();
   }

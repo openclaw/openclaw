@@ -1,8 +1,6 @@
-import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { inspect } from "node:util";
-import { cancel, isCancel } from "@clack/prompts";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../agents/workspace.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { CONFIG_PATH } from "../config/config.js";
@@ -24,23 +22,18 @@ import {
 } from "../infra/network-discovery-display.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { stylePromptTitle } from "../terminal/prompt-style.js";
 import { CONFIG_DIR, shortenHomeInString, shortenHomePath, sleep } from "../utils.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import { VERSION } from "../version.js";
-import type { NodeManagerChoice, OnboardMode, ResetScope } from "./onboard-types.js";
+import type { NodeManagerChoice, ResetScope } from "./onboard-types.js";
+export {
+  applyWizardMetadata,
+  guardCancel,
+  printWizardHeader,
+  randomToken,
+} from "./wizard-core.js";
 
 export { detectBinary };
 export { detectBrowserOpenSupport, openUrl, openUrlInBackground, resolveBrowserOpenCommand };
-
-export function guardCancel<T>(value: T | symbol, runtime: RuntimeEnv): T {
-  if (isCancel(value)) {
-    cancel(stylePromptTitle("Setup cancelled.") ?? "Setup cancelled.");
-    runtime.exit(0);
-    throw new Error("unreachable");
-  }
-  return value;
-}
 
 export function summarizeExistingConfig(config: OpenClawConfig): string {
   const rows: string[] = [];
@@ -72,10 +65,6 @@ export function summarizeExistingConfig(config: OpenClawConfig): string {
   return rows.length ? rows.join("\n") : "No key settings detected.";
 }
 
-export function randomToken(): string {
-  return crypto.randomBytes(24).toString("hex");
-}
-
 export function normalizeGatewayTokenInput(value: unknown): string {
   if (typeof value !== "string") {
     return "";
@@ -103,36 +92,6 @@ export function validateGatewayPasswordInput(value: unknown): string | undefined
   return undefined;
 }
 
-export function printWizardHeader(runtime: RuntimeEnv) {
-  const header = [
-    "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
-    "██░▄▄▄░██░▄▄░██░▄▄▄██░▀██░██░▄▄▀██░████░▄▄▀██░███░██",
-    "██░███░██░▀▀░██░▄▄▄██░█░█░██░█████░████░▀▀░██░█░█░██",
-    "██░▀▀▀░██░█████░▀▀▀██░██▄░██░▀▀▄██░▀▀░█░██░██▄▀▄▀▄██",
-    "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
-    "                  🦞 OPENCLAW 🦞                    ",
-    " ",
-  ].join("\n");
-  runtime.log(header);
-}
-
-export function applyWizardMetadata(
-  cfg: OpenClawConfig,
-  params: { command: string; mode: OnboardMode },
-): OpenClawConfig {
-  const commit = process.env.GIT_COMMIT?.trim() || process.env.GIT_SHA?.trim() || undefined;
-  return {
-    ...cfg,
-    wizard: {
-      ...cfg.wizard,
-      lastRunAt: new Date().toISOString(),
-      lastRunVersion: VERSION,
-      lastRunCommit: commit,
-      lastRunCommand: params.command,
-      lastRunMode: params.mode,
-    },
-  };
-}
 
 export function formatControlUiSshHint(params: {
   port: number;

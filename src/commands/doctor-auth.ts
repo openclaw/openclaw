@@ -22,18 +22,31 @@ import {
   resolveProviderAuthLoginCommand,
 } from "./provider-auth-guidance.js";
 
+const doctorDebugEnabled = () => process.env.OPENCLAW_DEBUG_DOCTOR === "1";
+
+function debugDoctor(message: string): void {
+  if (!doctorDebugEnabled()) {
+    return;
+  }
+  console.error(`[doctor-debug] ${message}`);
+}
+
 export async function maybeRepairLegacyOAuthProfileIds(
   cfg: OpenClawConfig,
   prompter: DoctorPrompter,
 ): Promise<OpenClawConfig> {
+  debugDoctor("doctor-auth:maybeRepairLegacyOAuthProfileIds:ensureAuthProfileStore:start");
   const store = ensureAuthProfileStore();
+  debugDoctor("doctor-auth:maybeRepairLegacyOAuthProfileIds:ensureAuthProfileStore:done");
   let nextCfg = cfg;
+  debugDoctor("doctor-auth:maybeRepairLegacyOAuthProfileIds:resolvePluginProviders:start");
   const providers = resolvePluginProviders({
     config: cfg,
     env: process.env,
     bundledProviderAllowlistCompat: true,
     bundledProviderVitestCompat: true,
   });
+  debugDoctor("doctor-auth:maybeRepairLegacyOAuthProfileIds:resolvePluginProviders:done");
   for (const provider of providers) {
     for (const repairSpec of provider.oauthProfileIdRepairs ?? []) {
       const repair = repairOAuthProfileIdMismatch({
@@ -388,3 +401,4 @@ export async function noteAuthProfileHealth(params: {
     note(issueLines.join("\n"), "Model auth");
   }
 }
+

@@ -115,4 +115,36 @@ describe("createDoctorPrompter", () => {
     ).resolves.toBe(true);
     expect(confirmMock).not.toHaveBeenCalled();
   });
+
+  it("does not auto-confirm repairs when stdin is not interactive and no repair mode was requested", async () => {
+    setNonInteractiveTerminal();
+    const prompter = createDoctorPrompter({
+      runtime: {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      },
+      options: {},
+    });
+
+    await expect(
+      prompter.confirmAutoFix({
+        message: "Repair gateway service config?",
+        initialValue: true,
+      }),
+    ).resolves.toBe(false);
+    await expect(
+      prompter.confirmRuntimeRepair({
+        message: "Restart gateway service now?",
+        initialValue: true,
+      }),
+    ).resolves.toBe(false);
+    await expect(
+      prompter.confirmAggressiveAutoFix({
+        message: "Overwrite gateway service config?",
+        initialValue: true,
+      }),
+    ).resolves.toBe(false);
+    expect(confirmMock).not.toHaveBeenCalled();
+  });
 });

@@ -7,6 +7,14 @@ import { note } from "../terminal/note.js";
 import { resolveHomeDir } from "../utils.js";
 import { noteIncludeConfinementWarning } from "./doctor-config-analysis.js";
 
+const doctorDebugEnabled = () => process.env.OPENCLAW_DEBUG_DOCTOR === "1";
+const debugDoctor = (message: string) => {
+  if (!doctorDebugEnabled()) {
+    return;
+  }
+  process.stderr.write(`[doctor:debug] ${message}\n`);
+};
+
 async function maybeMigrateLegacyConfig(): Promise<string[]> {
   const changes: string[] = [];
   const home = resolveHomeDir();
@@ -66,8 +74,10 @@ export async function runDoctorConfigPreflight(
   } = {},
 ): Promise<DoctorConfigPreflightResult> {
   if (options.migrateState !== false) {
+    debugDoctor("doctor-config-preflight:migrateState:start");
     const { autoMigrateLegacyStateDir } = await import("./doctor-state-migrations.js");
     const stateDirResult = await autoMigrateLegacyStateDir({ env: process.env });
+    debugDoctor("doctor-config-preflight:migrateState:done");
     if (stateDirResult.changes.length > 0) {
       note(stateDirResult.changes.map((entry) => `- ${entry}`).join("\n"), "Doctor changes");
     }
@@ -77,13 +87,17 @@ export async function runDoctorConfigPreflight(
   }
 
   if (options.migrateLegacyConfig !== false) {
+    debugDoctor("doctor-config-preflight:migrateLegacyConfig:start");
     const legacyConfigChanges = await maybeMigrateLegacyConfig();
+    debugDoctor("doctor-config-preflight:migrateLegacyConfig:done");
     if (legacyConfigChanges.length > 0) {
       note(legacyConfigChanges.map((entry) => `- ${entry}`).join("\n"), "Doctor changes");
     }
   }
 
+  debugDoctor("doctor-config-preflight:readConfigFileSnapshot:start");
   const snapshot = await readConfigFileSnapshot();
+  debugDoctor("doctor-config-preflight:readConfigFileSnapshot:done");
   const invalidConfigNote =
     options.invalidConfigNote ?? "Config invalid; doctor will run with best-effort config.";
   if (

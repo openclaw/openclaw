@@ -18,6 +18,37 @@ function removePathIfExists(targetPath) {
   fs.rmSync(targetPath, { recursive: true, force: true });
 }
 
+function sleepMs(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function moveDirIntoPlace(sourceDir, targetDir) {
+  try {
+    fs.renameSync(sourceDir, targetDir);
+    return;
+  } catch (error) {
+    const code = error && typeof error === "object" ? error.code : undefined;
+    const isWindowsRenameLock =
+      process.platform === "win32" && (code === "EPERM" || code === "EBUSY");
+    if (!isWindowsRenameLock) {
+      throw error;
+    }
+  }
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      fs.cpSync(sourceDir, targetDir, { recursive: true, force: true });
+      removePathIfExists(sourceDir);
+      return;
+    } catch (error) {
+      if (attempt === 2) {
+        throw error;
+      }
+      sleepMs(100 * (attempt + 1));
+    }
+  }
+}
+
 function makeTempDir(parentDir, prefix) {
   return fs.mkdtempSync(path.join(parentDir, prefix));
 }
@@ -256,7 +287,7 @@ function installPluginRuntimeDeps(params) {
     }
 
     removePathIfExists(nodeModulesDir);
-    fs.renameSync(stagedNodeModulesDir, nodeModulesDir);
+    moveDirIntoPlace(stagedNodeModulesDir, nodeModulesDir);
     writeJson(stampPath, {
       fingerprint,
       generatedAt: new Date().toISOString(),

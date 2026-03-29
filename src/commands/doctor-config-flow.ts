@@ -29,12 +29,22 @@ import {
 } from "./doctor/shared/mutable-allowlist.js";
 import { collectDoctorPreviewWarnings } from "./doctor/shared/preview-warnings.js";
 
+const doctorDebugEnabled = () => process.env.OPENCLAW_DEBUG_DOCTOR === "1";
+const debugDoctor = (message: string) => {
+  if (!doctorDebugEnabled()) {
+    return;
+  }
+  process.stderr.write(`[doctor:debug] ${message}\n`);
+};
+
 export async function loadAndMaybeMigrateDoctorConfig(params: {
   options: DoctorOptions;
   confirm: (p: { message: string; initialValue: boolean }) => Promise<boolean>;
 }) {
   const shouldRepair = params.options.repair === true || params.options.yes === true;
+  debugDoctor("doctor-config-flow:preflight:start");
   const preflight = await runDoctorConfigPreflight();
+  debugDoctor("doctor-config-flow:preflight:done");
   let snapshot = preflight.snapshot;
   const baseCfg = preflight.baseConfig;
   let cfg: OpenClawConfig = baseCfg;
@@ -84,13 +94,16 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     env: process.env,
     shouldRepair,
   });
+  debugDoctor("doctor-config-flow:runMatrixDoctorSequence:done");
   emitDoctorNotes({
     note,
     changeNotes: matrixSequence.changeNotes,
     warningNotes: matrixSequence.warningNotes,
   });
 
+  debugDoctor("doctor-config-flow:cleanStaleMatrixPluginConfig:start");
   const staleMatrixCleanup = await cleanStaleMatrixPluginConfig(candidate);
+  debugDoctor("doctor-config-flow:cleanStaleMatrixPluginConfig:done");
   if (staleMatrixCleanup.changes.length > 0) {
     note(staleMatrixCleanup.changes.join("\n"), "Doctor changes");
     ({ cfg, candidate, pendingChanges, fixHints } = applyDoctorConfigMutation({
@@ -112,10 +125,12 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   }
 
   if (shouldRepair) {
+    debugDoctor("doctor-config-flow:runDoctorRepairSequence:start");
     const repairSequence = await runDoctorRepairSequence({
       state: { cfg, candidate, pendingChanges, fixHints },
       doctorFixCommand,
     });
+    debugDoctor("doctor-config-flow:runDoctorRepairSequence:done");
     ({ cfg, candidate, pendingChanges, fixHints } = repairSequence.state);
     emitDoctorNotes({
       note,
@@ -148,6 +163,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     note(lines, shouldRepair ? "Doctor changes" : "Unknown config keys");
   }
 
+  debugDoctor("doctor-config-flow:finalizeDoctorConfigFlow:start");
   const finalized = await finalizeDoctorConfigFlow({
     cfg,
     candidate,
@@ -157,6 +173,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     confirm: params.confirm,
     note,
   });
+  debugDoctor("doctor-config-flow:finalizeDoctorConfigFlow:done");
   cfg = finalized.cfg;
 
   noteOpencodeProviderOverrides(cfg);

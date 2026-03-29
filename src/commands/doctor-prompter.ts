@@ -6,7 +6,7 @@ import {
   shouldAutoApproveDoctorFix,
   type DoctorRepairMode,
 } from "./doctor-repair-mode.js";
-import { guardCancel } from "./onboard-helpers.js";
+import { guardCancel } from "./wizard-core.js";
 
 export type DoctorOptions = {
   workspaceSuggestions?: boolean;
@@ -42,7 +42,7 @@ export function createDoctorPrompter(params: {
       return false;
     }
     if (!repairMode.canPrompt) {
-      return Boolean(p.initialValue ?? false);
+      return false;
     }
     return guardCancel(
       await confirm({
@@ -67,7 +67,7 @@ export function createDoctorPrompter(params: {
         return false;
       }
       if (!repairMode.canPrompt) {
-        return Boolean(p.initialValue ?? false);
+        return false;
       }
       return guardCancel(
         await confirm({
@@ -85,7 +85,7 @@ export function createDoctorPrompter(params: {
         return false;
       }
       if (!repairMode.canPrompt) {
-        return Boolean(p.initialValue ?? false);
+        return false;
       }
       return guardCancel(
         await confirm({

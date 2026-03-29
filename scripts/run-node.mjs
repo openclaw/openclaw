@@ -9,7 +9,7 @@ import {
   BUNDLED_PLUGIN_PATH_PREFIX,
   BUNDLED_PLUGIN_ROOT_DIR,
 } from "./lib/bundled-plugin-paths.mjs";
-import { runRuntimePostBuild } from "./runtime-postbuild.mjs";
+import { runRuntimeMetadataPostBuild, runRuntimePostBuild } from "./runtime-postbuild.mjs";
 
 const buildScript = "scripts/tsdown-build.mjs";
 const compilerArgs = [buildScript, "--no-clean"];
@@ -153,12 +153,41 @@ const parseGitStatusPaths = (output) =>
     .map((entry) => normalizePath(entry.trim()))
     .filter(Boolean);
 
-const hasDirtySourceTree = (deps) => {
+const readDirtyBuildState = (deps, stampMtime) => {
   const output = readGitStatus(deps);
   if (output === null) {
     return null;
   }
-  return parseGitStatusPaths(output).some((repoPath) => isBuildRelevantRunNodePath(repoPath));
+
+  const relevantPaths = parseGitStatusPaths(output).filter((repoPath) =>
+    isBuildRelevantRunNodePath(repoPath),
+  );
+  if (relevantPaths.length === 0) {
+    return {
+      requiresBuild: false,
+      paths: [],
+    };
+  }
+
+  let latestDirtyMtime = null;
+  for (const repoPath of relevantPaths) {
+    const absolutePath = path.join(deps.cwd, repoPath);
+    const mtime = statMtime(absolutePath, deps.fs);
+    if (mtime == null) {
+      return {
+        requiresBuild: true,
+        paths: relevantPaths,
+      };
+    }
+    if (latestDirtyMtime == null || mtime > latestDirtyMtime) {
+      latestDirtyMtime = mtime;
+    }
+  }
+
+  return {
+    requiresBuild: latestDirtyMtime != null && latestDirtyMtime > stampMtime,
+    paths: relevantPaths,
+  };
 };
 
 const readBuildStamp = (deps) => {
@@ -221,11 +250,11 @@ const shouldBuild = (deps) => {
     return true;
   }
   if (currentHead) {
-    const dirty = hasDirtySourceTree(deps);
-    if (dirty === true) {
+    const dirtyState = readDirtyBuildState(deps, stamp.mtime);
+    if (dirtyState?.requiresBuild === true) {
       return true;
     }
-    if (dirty === false) {
+    if (dirtyState?.requiresBuild === false) {
       return false;
     }
   }
@@ -260,9 +289,13 @@ const runOpenClaw = async (deps) => {
   return res.exitCode ?? 1;
 };
 
-const syncRuntimeArtifacts = (deps) => {
+const syncRuntimeArtifacts = (deps, fullSync = false) => {
   try {
-    runRuntimePostBuild({ cwd: deps.cwd });
+    if (fullSync) {
+      runRuntimePostBuild({ cwd: deps.cwd });
+    } else {
+      runRuntimeMetadataPostBuild({ cwd: deps.cwd });
+    }
   } catch (error) {
     logRunner(
       `Failed to write runtime build artifacts: ${error?.message ?? "unknown error"}`,
@@ -332,7 +365,7 @@ export async function runNodeMain(params = {}) {
   if (buildRes.exitCode !== 0 && buildRes.exitCode !== null) {
     return buildRes.exitCode;
   }
-  if (!syncRuntimeArtifacts(deps)) {
+  if (!syncRuntimeArtifacts(deps, true)) {
     return 1;
   }
   writeBuildStamp(deps);

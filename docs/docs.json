@@ -1234,6 +1234,7 @@
                   "platforms/macos",
                   "platforms/linux",
                   "platforms/windows",
+                  "platforms/windows-troubleshooting",
                   "platforms/android",
                   "platforms/ios"
                 ]

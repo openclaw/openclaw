@@ -30,10 +30,17 @@ describe("buildPlatformRuntimeLogHints", () => {
     expect(
       buildPlatformRuntimeLogHints({
         platform: "win32",
+        env: {
+          USERPROFILE: "C:\\Users\\test",
+        },
         systemdServiceName: "openclaw-gateway",
         windowsTaskName: "OpenClaw Gateway",
       }),
-    ).toEqual(['Logs: schtasks /Query /TN "OpenClaw Gateway" /V /FO LIST']);
+    ).toEqual([
+      "Gateway stdout: C:\\Users\\test\\.openclaw\\logs\\gateway.log",
+      "Gateway stderr: C:\\Users\\test\\.openclaw\\logs\\gateway.err.log",
+      'Task details: schtasks /Query /TN "OpenClaw Gateway" /V /FO LIST',
+    ]);
   });
 });
 

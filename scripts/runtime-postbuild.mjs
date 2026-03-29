@@ -5,10 +5,14 @@ import { stageBundledPluginRuntimeDeps } from "./stage-bundled-plugin-runtime-de
 import { stageBundledPluginRuntime } from "./stage-bundled-plugin-runtime.mjs";
 import { writeOfficialChannelCatalog } from "./write-official-channel-catalog.mjs";
 
-export function runRuntimePostBuild(params = {}) {
+export function runRuntimeMetadataPostBuild(params = {}) {
   copyPluginSdkRootAlias(params);
   copyBundledPluginMetadata(params);
   writeOfficialChannelCatalog(params);
+}
+
+export function runRuntimePostBuild(params = {}) {
+  runRuntimeMetadataPostBuild(params);
   stageBundledPluginRuntimeDeps(params);
   stageBundledPluginRuntime(params);
 }

@@ -1181,7 +1181,10 @@
     "tui:dev": "OPENCLAW_PROFILE=dev node scripts/run-node.mjs --dev tui",
     "ui:build": "node scripts/ui.js build",
     "ui:dev": "node scripts/ui.js dev",
-    "ui:install": "node scripts/ui.js install"
+    "ui:install": "node scripts/ui.js install",
+    "windows:tray:build": "dotnet build apps/windows/OpenClaw.WindowsTray/OpenClaw.WindowsTray.csproj",
+    "windows:tray:smoke": "dotnet run --project apps/windows/OpenClaw.WindowsTray/OpenClaw.WindowsTray.csproj -- --smoke",
+    "windows:tray:verify": "pnpm windows:tray:build && node scripts/windows-tray-smoke.mjs"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "0.17.0",

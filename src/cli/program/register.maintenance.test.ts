@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import { Command } from "commander";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -5,6 +6,7 @@ const doctorCommand = vi.fn();
 const dashboardCommand = vi.fn();
 const resetCommand = vi.fn();
 const uninstallCommand = vi.fn();
+const spawnMock = vi.fn();
 
 const runtime = {
   log: vi.fn(),
@@ -30,6 +32,10 @@ vi.mock("../../commands/uninstall.js", () => ({
 
 vi.mock("../../runtime.js", () => ({
   defaultRuntime: runtime,
+}));
+
+vi.mock("node:child_process", () => ({
+  spawn: spawnMock,
 }));
 
 const mockedModuleIds = [
@@ -62,6 +68,9 @@ describe("registerMaintenanceCommands doctor action", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.useRealTimers();
+    vi.unstubAllEnvs();
+    vi.stubEnv("OPENCLAW_DOCTOR_CHILD", "1");
   });
 
   it("exits with code 0 after successful doctor run", async () => {
@@ -100,6 +109,36 @@ describe("registerMaintenanceCommands doctor action", () => {
         repair: true,
       }),
     );
+  });
+
+  it("fails fast when non-interactive doctor exceeds the timeout budget", async () => {
+    vi.useFakeTimers();
+    vi.unstubAllEnvs();
+    vi.stubEnv("OPENCLAW_DOCTOR_TIMEOUT_MS", "10");
+    const child = new EventEmitter() as EventEmitter & {
+      kill: ReturnType<typeof vi.fn>;
+      stdout: EventEmitter;
+      stderr: EventEmitter;
+    };
+    child.kill = vi.fn();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    spawnMock.mockReturnValue(child);
+
+    const run = runMaintenanceCli(["doctor", "--non-interactive"]);
+    child.stderr.emit("data", Buffer.from("[doctor-debug] providers.runtime:loadOpenClawPlugins:start\n"));
+    await vi.advanceTimersByTimeAsync(25);
+    await run;
+
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    expect(child.kill).toHaveBeenCalledTimes(1);
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Last observed stage: providers.runtime:loadOpenClawPlugins:start."),
+    );
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Likely heavy area: provider plugin discovery or plugin loader initialization."),
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
   it("passes noOpen to dashboard command", async () => {

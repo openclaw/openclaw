@@ -24,7 +24,12 @@ export function buildPlatformRuntimeLogHints(params: {
     return [`Logs: journalctl --user -u ${params.systemdServiceName}.service -n 200 --no-pager`];
   }
   if (platform === "win32") {
-    return [`Logs: schtasks /Query /TN "${params.windowsTaskName}" /V /FO LIST`];
+    const logs = resolveGatewayLogPaths(env);
+    return [
+      `Gateway stdout: ${logs.stdoutPath}`,
+      `Gateway stderr: ${logs.stderrPath}`,
+      `Task details: schtasks /Query /TN "${params.windowsTaskName}" /V /FO LIST`,
+    ];
   }
   return [];
 }

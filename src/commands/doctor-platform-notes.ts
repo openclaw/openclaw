@@ -5,6 +5,8 @@ import path from "node:path";
 import { promisify } from "node:util";
 import type { OpenClawConfig } from "../config/config.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
+import { resolveGatewayService } from "../daemon/service.js";
+import { collectWindowsGatewayStatus } from "../daemon/windows-status.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
 
@@ -181,4 +183,44 @@ export function noteStartupOptimizationHints(
   ].filter((line): line is string => Boolean(line));
 
   noteFn([...lines, ...suggestions].join("\n"), "Startup optimization");
+}
+
+export async function noteWindowsGatewayPlatformNotes(deps?: {
+  platform?: NodeJS.Platform;
+  noteFn?: typeof note;
+}) {
+  const platform = deps?.platform ?? process.platform;
+  if (platform !== "win32") {
+    return;
+  }
+
+  const noteFn = deps?.noteFn ?? note;
+  const service = resolveGatewayService();
+  const runtime = await service.readRuntime(process.env).catch(() => undefined);
+  const loaded = await service.isLoaded({ env: process.env }).catch(() => false);
+  const summary = await collectWindowsGatewayStatus(process.env, {
+    taskRegistered: loaded,
+    runtimeStatus: runtime?.status,
+  }).catch(() => null);
+  if (!summary) {
+    return;
+  }
+
+  const lines = [
+    `- Windows startup mode: ${summary.serviceMode}.`,
+    `- Registration: ${summary.registrationDetail}`,
+    `- Gateway logs: ${shortenHomePath(summary.logDir)}`,
+    summary.degradedReason ? `- Gateway issue: ${summary.degradedReason}` : undefined,
+    summary.recommendedAction ? `- Recommended action: ${summary.recommendedAction}` : undefined,
+    summary.wsl.wslExeAvailable
+      ? summary.wsl.defaultDistroReachable
+        ? summary.wsl.systemdEnabled === false
+          ? "- WSL2 is installed, but systemd is disabled in the default distro."
+          : `- WSL2 default distro is reachable${summary.wsl.defaultDistroName ? ` (${summary.wsl.defaultDistroName})` : ""}.`
+        : "- WSL2 is installed, but the default distro is not ready yet."
+      : "- WSL2 is not installed. WSL2 remains the recommended full Windows setup path.",
+    summary.wsl.recommendedAction ? `- WSL2 fix: ${summary.wsl.recommendedAction}` : undefined,
+  ].filter((line): line is string => Boolean(line));
+
+  noteFn(lines.join("\n"), "Gateway (Windows)");
 }

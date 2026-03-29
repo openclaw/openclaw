@@ -121,4 +121,57 @@ describe("printDaemonStatus", () => {
       expect.stringContaining(formatCliCommand("openclaw gateway restart")),
     );
   });
+
+  it("prints Windows log and repair details when present", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "Scheduled Task",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          runtime: { status: "running", pid: 8000 },
+        },
+        logs: {
+          directory: "C:\\Users\\user\\.openclaw\\logs\\gateway",
+          stdoutPath: "C:\\Users\\user\\.openclaw\\logs\\gateway\\gateway.out.log",
+          stderrPath: "C:\\Users\\user\\.openclaw\\logs\\gateway\\gateway.err.log",
+        },
+        windows: {
+          serviceMode: "startup-fallback",
+          taskName: "OpenClaw Gateway",
+          taskRegistered: false,
+          startupEntryInstalled: true,
+          taskScriptPath: "C:\\Users\\user\\.openclaw\\gateway\\OpenClaw Gateway.cmd",
+          registrationPath:
+            "C:\\Users\\user\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\OpenClaw Gateway.cmd",
+          registrationDetail:
+            "Startup-folder login item is installed at C:\\Users\\user\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\OpenClaw Gateway.cmd.",
+          logDir: "C:\\Users\\user\\.openclaw\\logs\\gateway",
+          stdoutPath: "C:\\Users\\user\\.openclaw\\logs\\gateway\\gateway.out.log",
+          stderrPath: "C:\\Users\\user\\.openclaw\\logs\\gateway\\gateway.err.log",
+          degradedReason: "Windows is using the Startup-folder fallback instead of a Scheduled Task.",
+          recommendedAction:
+            "Re-run from an elevated PowerShell session if you want Scheduled Task supervision.",
+          wsl: {
+            wslExeAvailable: true,
+            defaultDistroName: "Ubuntu-24.04",
+            defaultDistroReachable: true,
+            systemdEnabled: false,
+            recommendedAction:
+              "Enable systemd in `/etc/wsl.conf`, run `wsl --shutdown`, then reopen your distro.",
+          },
+        },
+        extraServices: [],
+      },
+      { json: false },
+    );
+
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Gateway logs:"));
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Windows mode:"));
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("WSL2:"));
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Windows issue:"));
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Windows fix:"));
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("WSL2 fix:"));
+  });
 });

@@ -11,9 +11,12 @@ title: "Platforms"
 OpenClaw core is written in TypeScript. **Node is the recommended runtime**.
 Bun is not recommended for the Gateway (WhatsApp/Telegram bugs).
 
-Companion apps exist for macOS (menu bar app) and mobile nodes (iOS/Android). Windows and
-Linux companion apps are planned, but the Gateway is fully supported today.
-Native companion apps for Windows are also planned; the Gateway is recommended via WSL2.
+Companion apps exist for macOS (menu bar app), Windows (tray companion MVP), and mobile
+nodes (iOS/Android). Linux does not have a companion app yet, but the Gateway is fully
+supported today.
+
+Windows supports both native CLI flows and WSL2. WSL2 is still the recommended path for the
+full Gateway service experience.
 
 ## Choose your OS
 
@@ -22,6 +25,14 @@ Native companion apps for Windows are also planned; the Gateway is recommended v
 - Android: [Android](/platforms/android)
 - Windows: [Windows](/platforms/windows)
 - Linux: [Linux](/platforms/linux)
+
+## Quick guidance
+
+- Use **macOS** if you want the smoothest companion app experience today.
+- Use **Windows + WSL2** if you want the most predictable Gateway host behavior on Windows.
+- Use **native Windows** if you want a supported CLI path plus the tray companion MVP.
+- Use **Linux** or **WSL2** if you want a headless or server-style Gateway host.
+- Use **mobile** if you want nodes for local presence, notifications, or device features.
 
 ## VPS & hosting
 

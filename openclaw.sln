@@ -1,0 +1,32 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.5.2.0
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "apps", "apps", "{1787FE1D-075E-9E68-7218-25F1BD1BBEAB}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "windows", "windows", "{524A62EC-EBA4-0E97-529B-DA23001F75A0}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OpenClaw.WindowsTray", "apps\windows\OpenClaw.WindowsTray\OpenClaw.WindowsTray.csproj", "{C0EB18B0-1762-9B4A-4460-BDAB7E61BDCE}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{C0EB18B0-1762-9B4A-4460-BDAB7E61BDCE}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C0EB18B0-1762-9B4A-4460-BDAB7E61BDCE}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C0EB18B0-1762-9B4A-4460-BDAB7E61BDCE}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C0EB18B0-1762-9B4A-4460-BDAB7E61BDCE}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{524A62EC-EBA4-0E97-529B-DA23001F75A0} = {1787FE1D-075E-9E68-7218-25F1BD1BBEAB}
+		{C0EB18B0-1762-9B4A-4460-BDAB7E61BDCE} = {524A62EC-EBA4-0E97-529B-DA23001F75A0}
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {B5C11922-1155-412C-B025-7433C716ABE0}
+	EndGlobalSection
+EndGlobal

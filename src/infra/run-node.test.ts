@@ -280,6 +280,27 @@ describe("run-node script", () => {
     });
   });
 
+  it("skips rebuilding when dirty source files are older than the current build stamp", async () => {
+    await withTempDir(async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+        },
+        oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE],
+        buildPaths: [DIST_ENTRY, BUILD_STAMP],
+      });
+
+      const { spawnCalls, spawn, spawnSync } = createSpawnRecorder({
+        gitHead: "abc123\n",
+        gitStatus: ` M ${ROOT_SRC}\n`,
+      });
+      const exitCode = await runStatusCommand({ tmp, spawn, spawnSync });
+
+      expect(exitCode).toBe(0);
+      expect(spawnCalls).toEqual([statusCommandSpawn()]);
+    });
+  });
+
   it("returns the build exit code when the compiler step fails", async () => {
     await withTempDir(async (tmp) => {
       const spawn = (cmd: string, args: string[] = []) => {

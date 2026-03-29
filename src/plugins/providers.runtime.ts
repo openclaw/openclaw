@@ -15,6 +15,15 @@ import type { ProviderPlugin } from "./types.js";
 
 const log = createSubsystemLogger("plugins");
 
+const doctorDebugEnabled = () => process.env.OPENCLAW_DEBUG_DOCTOR === "1";
+
+function debugDoctor(message: string): void {
+  if (!doctorDebugEnabled()) {
+    return;
+  }
+  console.error(`[doctor-debug] ${message}`);
+}
+
 export function resolvePluginProviders(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
@@ -28,6 +37,7 @@ export function resolvePluginProviders(params: {
   pluginSdkResolution?: PluginLoadOptions["pluginSdkResolution"];
 }): ProviderPlugin[] {
   const env = params.env ?? process.env;
+  debugDoctor("providers.runtime:applyPluginAutoEnable:start");
   const autoEnabledConfig =
     params.config !== undefined
       ? applyPluginAutoEnable({
@@ -35,6 +45,8 @@ export function resolvePluginProviders(params: {
           env,
         }).config
       : undefined;
+  debugDoctor("providers.runtime:applyPluginAutoEnable:done");
+  debugDoctor("providers.runtime:resolveBundledProviderCompatPluginIds:start");
   const bundledProviderCompatPluginIds =
     params.bundledProviderAllowlistCompat || params.bundledProviderVitestCompat
       ? resolveBundledProviderCompatPluginIds({
@@ -44,6 +56,7 @@ export function resolvePluginProviders(params: {
           onlyPluginIds: params.onlyPluginIds,
         })
       : [];
+  debugDoctor("providers.runtime:resolveBundledProviderCompatPluginIds:done");
   const maybeAllowlistCompat = params.bundledProviderAllowlistCompat
     ? withBundledPluginAllowlistCompat({
         config: autoEnabledConfig,
@@ -63,12 +76,15 @@ export function resolvePluginProviders(params: {
         env,
       })
     : allowlistCompatConfig;
+  debugDoctor("providers.runtime:resolveEnabledProviderPluginIds:start");
   const providerPluginIds = resolveEnabledProviderPluginIds({
     config,
     workspaceDir: params.workspaceDir,
     env,
     onlyPluginIds: params.onlyPluginIds,
   });
+  debugDoctor("providers.runtime:resolveEnabledProviderPluginIds:done");
+  debugDoctor("providers.runtime:loadOpenClawPlugins:start");
   const registry = loadOpenClawPlugins({
     config,
     workspaceDir: params.workspaceDir,
@@ -80,8 +96,10 @@ export function resolvePluginProviders(params: {
     logger: createPluginLoaderLogger(log),
   });
 
+  debugDoctor("providers.runtime:loadOpenClawPlugins:done");
   return registry.providers.map((entry) => ({
     ...entry.provider,
     pluginId: entry.pluginId,
   }));
 }
+

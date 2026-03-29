@@ -54,6 +54,24 @@ const resolveGatewayPort = vi.fn((_cfg?: unknown, _env?: unknown) => 18789);
 const resolveStateDir = vi.fn(
   (env: NodeJS.ProcessEnv) => env.OPENCLAW_STATE_DIR ?? "/tmp/openclaw-cli",
 );
+const collectWindowsGatewayStatus = vi.fn(
+  async (_env?: NodeJS.ProcessEnv, _params?: unknown) => ({
+    serviceMode: "scheduled-task" as const,
+    taskName: "OpenClaw Gateway",
+    taskRegistered: true,
+    startupEntryInstalled: false,
+    taskScriptPath: "C:\\Users\\user\\.openclaw\\gateway\\OpenClaw Gateway.cmd",
+    registrationDetail: "Scheduled Task is registered as OpenClaw Gateway.",
+    logDir: "C:\\Users\\user\\.openclaw\\logs\\gateway",
+    stdoutPath: "C:\\Users\\user\\.openclaw\\logs\\gateway\\gateway.out.log",
+    stderrPath: "C:\\Users\\user\\.openclaw\\logs\\gateway\\gateway.err.log",
+    wsl: {
+      wslExeAvailable: true,
+      defaultDistroReachable: true,
+      systemdEnabled: true,
+    },
+  }),
+);
 const resolveConfigPath = vi.fn((env: NodeJS.ProcessEnv, stateDir: string) => {
   return env.OPENCLAW_CONFIG_PATH ?? `${stateDir}/openclaw.json`;
 });
@@ -109,6 +127,11 @@ vi.mock("../../daemon/service.js", () => ({
     }),
 }));
 
+vi.mock("../../daemon/windows-status.js", () => ({
+  collectWindowsGatewayStatus: (env?: NodeJS.ProcessEnv, params?: unknown) =>
+    collectWindowsGatewayStatus(env, params),
+}));
+
 vi.mock("../../gateway/net.js", () => ({
   resolveGatewayBindHost: (bindMode: string, customBindHost?: string) =>
     resolveGatewayBindHost(bindMode, customBindHost),
@@ -158,6 +181,7 @@ describe("gatherDaemonStatus", () => {
     callGatewayStatusProbe.mockClear();
     loadGatewayTlsRuntime.mockClear();
     inspectGatewayRestart.mockClear();
+    collectWindowsGatewayStatus.mockClear();
     daemonLoadedConfig = {
       gateway: {
         bind: "lan",
@@ -521,5 +545,31 @@ describe("gatherDaemonStatus", () => {
       healthy: false,
       staleGatewayPids: [9000],
     });
+  });
+
+  it("includes Windows logs and status details in JSON output", async () => {
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: false,
+      deep: false,
+    });
+
+    expect(collectWindowsGatewayStatus).toHaveBeenCalledWith(
+      expect.objectContaining({
+        OPENCLAW_CONFIG_PATH: "/tmp/openclaw-daemon/openclaw.json",
+      }),
+      expect.objectContaining({
+        taskRegistered: true,
+        runtimeStatus: "running",
+        portListening: false,
+      }),
+    );
+    expect(status.logs).toEqual({
+      directory: "C:\\Users\\user\\.openclaw\\logs\\gateway",
+      stdoutPath: "C:\\Users\\user\\.openclaw\\logs\\gateway\\gateway.out.log",
+      stderrPath: "C:\\Users\\user\\.openclaw\\logs\\gateway\\gateway.err.log",
+    });
+    expect(status.windows?.serviceMode).toBe("scheduled-task");
+    expect(status.windows?.registrationDetail).toContain("Scheduled Task");
   });
 });

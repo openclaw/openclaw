@@ -26,7 +26,10 @@ import type {
   GatewayServiceRestartResult,
 } from "./service-types.js";
 
-function resolveTaskName(env: GatewayServiceEnv): string {
+const SCHTASKS_STATUS_TIMEOUT_MS = 4_000;
+const SCHTASKS_STATUS_NO_OUTPUT_TIMEOUT_MS = 2_000;
+
+export function resolveScheduledTaskName(env: GatewayServiceEnv): string {
   const override = env.OPENCLAW_WINDOWS_TASK_NAME?.trim();
   if (override) {
     return override;
@@ -78,8 +81,8 @@ function sanitizeWindowsFilename(value: string): string {
   return value.replace(/[<>:"/\\|?*]/g, "_").replace(/\p{Cc}/gu, "_");
 }
 
-function resolveStartupEntryPath(env: GatewayServiceEnv): string {
-  const taskName = resolveTaskName(env);
+export function resolveStartupEntryPath(env: GatewayServiceEnv): string {
+  const taskName = resolveScheduledTaskName(env);
   return path.join(resolveWindowsStartupDir(env), `${sanitizeWindowsFilename(taskName)}.cmd`);
 }
 
@@ -278,7 +281,10 @@ function buildStartupLauncherScript(params: { description?: string; scriptPath: 
 }
 
 async function assertSchtasksAvailable() {
-  const res = await execSchtasks(["/Query"]);
+  const res = await execSchtasks(["/Query"], {
+    timeoutMs: SCHTASKS_STATUS_TIMEOUT_MS,
+    noOutputTimeoutMs: SCHTASKS_STATUS_NO_OUTPUT_TIMEOUT_MS,
+  });
   if (res.code === 0) {
     return;
   }
@@ -296,8 +302,11 @@ async function isStartupEntryInstalled(env: GatewayServiceEnv): Promise<boolean>
 }
 
 async function isRegisteredScheduledTask(env: GatewayServiceEnv): Promise<boolean> {
-  const taskName = resolveTaskName(env);
-  const res = await execSchtasks(["/Query", "/TN", taskName]).catch(() => ({
+  const taskName = resolveScheduledTaskName(env);
+  const res = await execSchtasks(["/Query", "/TN", taskName], {
+    timeoutMs: SCHTASKS_STATUS_TIMEOUT_MS,
+    noOutputTimeoutMs: SCHTASKS_STATUS_NO_OUTPUT_TIMEOUT_MS,
+  }).catch(() => ({
     code: 1,
     stdout: "",
     stderr: "",
@@ -520,7 +529,7 @@ async function stopStartupEntry(
   if (typeof runtime.pid === "number" && runtime.pid > 0) {
     await terminateGatewayProcessTree(runtime.pid, 300);
   }
-  stdout.write(`${formatLine("Stopped Windows login item", resolveTaskName(env))}\n`);
+  stdout.write(`${formatLine("Stopped Windows login item", resolveScheduledTaskName(env))}\n`);
 }
 
 async function terminateInstalledStartupRuntime(env: GatewayServiceEnv): Promise<void> {
@@ -542,7 +551,7 @@ async function restartStartupEntry(
     await terminateGatewayProcessTree(runtime.pid, 300);
   }
   launchFallbackTaskScript(resolveTaskScriptPath(env));
-  stdout.write(`${formatLine("Restarted Windows login item", resolveTaskName(env))}\n`);
+  stdout.write(`${formatLine("Restarted Windows login item", resolveScheduledTaskName(env))}\n`);
   return { outcome: "completed" };
 }
 
@@ -589,7 +598,7 @@ async function activateScheduledTask(params: {
 }) {
   const taskDescription = params.description ?? "OpenClaw Gateway";
 
-  const taskName = resolveTaskName(params.env);
+  const taskName = resolveScheduledTaskName(params.env);
   const quotedScript = quoteSchtasksArg(params.scriptPath);
   const baseArgs = [
     "/Create",
@@ -664,7 +673,7 @@ export async function uninstallScheduledTask({
   stdout,
 }: GatewayServiceManageArgs): Promise<void> {
   await assertSchtasksAvailable();
-  const taskName = resolveTaskName(env);
+  const taskName = resolveScheduledTaskName(env);
   const taskInstalled = await isRegisteredScheduledTask(env).catch(() => false);
   if (taskInstalled) {
     await execSchtasks(["/Delete", "/F", "/TN", taskName]);
@@ -707,7 +716,7 @@ export async function stopScheduledTask({ stdout, env }: GatewayServiceControlAr
       return;
     }
   }
-  const taskName = resolveTaskName(effectiveEnv);
+  const taskName = resolveScheduledTaskName(effectiveEnv);
   const res = await execSchtasks(["/End", "/TN", taskName]);
   if (res.code !== 0 && !isTaskNotRunning(res)) {
     throw new Error(`schtasks end failed: ${res.stderr || res.stdout}`.trim());
@@ -746,7 +755,7 @@ export async function restartScheduledTask({
       return await restartStartupEntry(effectiveEnv, stdout);
     }
   }
-  const taskName = resolveTaskName(effectiveEnv);
+  const taskName = resolveScheduledTaskName(effectiveEnv);
   await execSchtasks(["/End", "/TN", taskName]);
   const restartPort = await resolveScheduledTaskPort(effectiveEnv);
   await terminateScheduledTaskGatewayListeners(effectiveEnv);
@@ -791,8 +800,11 @@ export async function readScheduledTaskRuntime(
       detail: String(err),
     };
   }
-  const taskName = resolveTaskName(env);
-  const res = await execSchtasks(["/Query", "/TN", taskName, "/V", "/FO", "LIST"]);
+  const taskName = resolveScheduledTaskName(env);
+  const res = await execSchtasks(["/Query", "/TN", taskName, "/V", "/FO", "LIST"], {
+    timeoutMs: SCHTASKS_STATUS_TIMEOUT_MS,
+    noOutputTimeoutMs: SCHTASKS_STATUS_NO_OUTPUT_TIMEOUT_MS,
+  });
   if (res.code !== 0) {
     if (await isStartupEntryInstalled(env)) {
       return await resolveFallbackRuntime(env);

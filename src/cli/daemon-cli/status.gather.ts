@@ -16,6 +16,8 @@ import type { ServiceConfigAudit } from "../../daemon/service-audit.js";
 import { auditGatewayServiceConfig } from "../../daemon/service-audit.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import { resolveGatewayService } from "../../daemon/service.js";
+import type { WindowsGatewayStatus } from "../../daemon/windows-status.js";
+import { collectWindowsGatewayStatus } from "../../daemon/windows-status.js";
 import { isGatewaySecretRefUnavailableError, trimToUndefined } from "../../gateway/credentials.js";
 import { resolveGatewayProbeAuthWithSecretInputs } from "../../gateway/probe-auth.js";
 import {
@@ -58,6 +60,12 @@ type PortStatusSummary = {
   status: PortUsageStatus;
   listeners: PortListener[];
   hints: string[];
+};
+
+type GatewayLogsSummary = {
+  directory: string;
+  stdoutPath: string;
+  stderrPath: string;
 };
 
 type DaemonConfigContext = {
@@ -119,6 +127,8 @@ export type DaemonStatus = {
     listeners: PortListener[];
     hints: string[];
   };
+  logs?: GatewayLogsSummary;
+  windows?: WindowsGatewayStatus;
   lastError?: string;
   rpc?: {
     ok: boolean;
@@ -391,6 +401,15 @@ export async function gatherDaemonStatus(
     lastError = (await readLastGatewayErrorLine(mergedDaemonEnv as NodeJS.ProcessEnv)) ?? undefined;
   }
 
+  const windowsStatus =
+    process.platform === "win32"
+      ? await collectWindowsGatewayStatus(mergedDaemonEnv as NodeJS.ProcessEnv, {
+          taskRegistered: loaded,
+          runtimeStatus: runtime?.status,
+          portListening: portStatus?.status === "busy",
+        }).catch(() => undefined)
+      : undefined;
+
   return {
     service: {
       label: service.label,
@@ -409,6 +428,16 @@ export async function gatherDaemonStatus(
     gateway,
     port: portStatus,
     ...(portCliStatus ? { portCli: portCliStatus } : {}),
+    ...(windowsStatus
+      ? {
+          logs: {
+            directory: windowsStatus.logDir,
+            stdoutPath: windowsStatus.stdoutPath,
+            stderrPath: windowsStatus.stderrPath,
+          },
+          windows: windowsStatus,
+        }
+      : {}),
     lastError,
     ...(rpc
       ? {
