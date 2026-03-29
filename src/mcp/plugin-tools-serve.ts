@@ -8,10 +8,7 @@
  */
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-} from "@modelcontextprotocol/sdk/types.js";
+import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { loadConfig } from "../config/config.js";
 import { resolvePluginTools } from "../plugins/tools.js";
@@ -64,16 +61,17 @@ async function main(): Promise<void> {
       };
     }
     try {
-      const result = await tool.execute(
-        `mcp-${Date.now()}`,
-        request.params.arguments ?? {},
-      );
+      const result = await tool.execute(`mcp-${Date.now()}`, request.params.arguments ?? {});
       return {
-        content: Array.isArray(result.content) ? result.content : [{ type: "text", text: String(result.content) }],
+        content: Array.isArray(result.content)
+          ? result.content
+          : [{ type: "text", text: String(result.content) }],
       };
     } catch (err) {
       return {
-        content: [{ type: "text", text: `Tool error: ${err instanceof Error ? err.message : String(err)}` }],
+        content: [
+          { type: "text", text: `Tool error: ${err instanceof Error ? err.message : String(err)}` },
+        ],
         isError: true,
       };
     }
@@ -83,7 +81,9 @@ async function main(): Promise<void> {
 
   let shuttingDown = false;
   const shutdown = () => {
-    if (shuttingDown) return;
+    if (shuttingDown) {
+      return;
+    }
     shuttingDown = true;
     process.stdin.off("end", shutdown);
     process.stdin.off("close", shutdown);
