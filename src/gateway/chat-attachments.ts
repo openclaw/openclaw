@@ -15,9 +15,44 @@ export type ChatImageContent = {
   mimeType: string;
 };
 
+/**
+ * Metadata for an attachment that was offloaded to the media store.
+ *
+ * Included in ParsedMessageWithImages.offloadedRefs so that callers can
+ * persist structured media metadata for transcripts. Without this, consumers
+ * that derive MediaPath/MediaPaths from the `images` array (e.g.
+ * persistChatSendImages and buildChatSendTranscriptMessage in chat.ts) would
+ * silently omit all large attachments that were offloaded to disk.
+ */
+export type OffloadedMediaRef = {
+  /** Opaque media URI injected into the message, e.g. "media://inbound/<id>" */
+  mediaRef: string;
+  /** The raw media ID from SavedMedia.id, usable with resolveMediaBufferPath */
+  id: string;
+  /** MIME type of the offloaded attachment */
+  mimeType: string;
+  /** The label / filename of the original attachment */
+  label: string;
+};
+
 export type ParsedMessageWithImages = {
   message: string;
+  /** Small attachments (≤ OFFLOAD_THRESHOLD_BYTES) passed inline to the model */
   images: ChatImageContent[];
+  /**
+   * Large attachments (> OFFLOAD_THRESHOLD_BYTES) that were offloaded to the
+   * media store. Each entry corresponds to a `[media attached: media://inbound/<id>]`
+   * marker appended to `message`.
+   *
+   * Callers MUST persist this list separately for transcript media metadata.
+   * It is intentionally separate from `images` because downstream model calls
+   * do not receive these as inline image blocks.
+   *
+   * ⚠️  Call sites (chat.ts, agent.ts, server-node-events.ts) MUST also pass
+   * `supportsImages: modelSupportsImages(model)` so that text-only model runs
+   * do not inject unresolvable media:// markers into prompt text.
+   */
+  offloadedRefs: OffloadedMediaRef[];
 };
 
 type AttachmentLog = {
@@ -52,8 +87,11 @@ const MIME_TO_EXT: Record<string, string> = {
   "image/tiff": ".tiff",
 };
 
-// Moved outside the loop and uses a Set for O(1) lookup instead of
-// rebuilding an array on every attachment iteration.
+// Module-level Set for O(1) lookup — not rebuilt on every attachment iteration.
+//
+// heic/heif are included only if store.ts's extensionForMime maps them to an
+// extension. If it does not (same extension-loss risk as bmp/tiff), remove
+// them from this set.
 const SUPPORTED_OFFLOAD_MIMES = new Set([
   "image/jpeg",
   "image/jpg",
@@ -67,8 +105,8 @@ const SUPPORTED_OFFLOAD_MIMES = new Set([
 /**
  * Raised when the Gateway cannot persist an attachment to the media store.
  *
- * This is distinct from ordinary input-validation errors so that Gateway
- * handlers can map it to a server-side 5xx status rather than a client 4xx.
+ * Distinct from ordinary input-validation errors so that Gateway handlers can
+ * map it to a server-side 5xx status rather than a client 4xx.
  *
  * Example causes: ENOSPC, EPERM, unexpected saveMediaBuffer return shape.
  */
@@ -97,10 +135,9 @@ function isValidBase64(value: string): boolean {
   if (value.length === 0 || value.length % 4 !== 0) {
     return false;
   }
-  // A full O(n) regex scan is safe because the regex has no overlapping
-  // quantifiers and fails linearly without catastrophic backtracking.
-  // This prevents adversarial payloads padded with megabytes of whitespace
-  // from bypassing length thresholds.
+  // A full O(n) regex scan is safe: no overlapping quantifiers, fails linearly.
+  // Prevents adversarial payloads padded with megabytes of whitespace from
+  // bypassing length thresholds.
   return /^[A-Za-z0-9+/]+={0,2}$/.test(value);
 }
 
@@ -110,9 +147,12 @@ function isValidBase64(value: string): boolean {
  *
  * Node's Buffer.from silently drops invalid base64 characters rather than
  * throwing. A material size discrepancy means the source string contained
- * embedded garbage that was silently stripped, which would produce a
- * corrupted file on disk. ±3 bytes of slack accounts for base64 padding
- * rounding.
+ * embedded garbage that was silently stripped, which would produce a corrupted
+ * file on disk. ±3 bytes of slack accounts for base64 padding rounding.
+ *
+ * IMPORTANT: this is an input-validation check (4xx client error).
+ * It MUST be called OUTSIDE the MediaOffloadError try/catch so that
+ * corrupt-input errors are not misclassified as 5xx server errors.
  */
 function verifyDecodedSize(buffer: Buffer, estimatedBytes: number, label: string): void {
   if (Math.abs(buffer.byteLength - estimatedBytes) > 3) {
@@ -138,10 +178,8 @@ function ensureExtension(label: string, mime: string): string {
  * - is a non-empty string
  * - contains no path separators (/ or \) or null bytes
  *
- * This provides defence-in-depth before the ID is embedded in a
- * media://inbound/<id> URI and later resolved by resolveMediaBufferPath
- * (which applies its own guards). Catching a bad shape here produces a
- * cleaner error message than a cryptic failure deeper in the stack.
+ * Catching a bad shape here produces a cleaner error than a cryptic failure
+ * deeper in the stack, and is treated as a 5xx infrastructure error.
  */
 function assertSavedMedia(value: unknown, label: string): SavedMedia {
   if (
@@ -209,34 +247,40 @@ function validateAttachmentBase64OrThrow(
 
 /**
  * Parse attachments and extract images as structured content blocks.
- * Returns the message text and an array of image content blocks
- * compatible with Claude API's image format.
+ * Returns the message text, inline image blocks, and offloaded media refs.
  *
+ * ## Offload behaviour
  * Attachments whose decoded size exceeds OFFLOAD_THRESHOLD_BYTES are saved to
  * disk via saveMediaBuffer and replaced with an opaque `media://inbound/<id>`
- * URI appended to the message. Downstream agents must resolve this URI via the
- * media store before forwarding to the model.
+ * URI appended to the message. The agent resolves these URIs via
+ * resolveMediaBufferPath before passing them to the model.
  *
- * Pass `supportsImages: false` for text-only model runs. In that case all
- * attachments are dropped cleanly and no media:// markers are injected into
- * the prompt, preventing internal path references from leaking into model input.
+ * ## Transcript metadata
+ * Callers MUST use `result.offloadedRefs` to persist structured media metadata
+ * for transcripts. These refs are intentionally excluded from `result.images`
+ * because they are not passed inline to the model.
  *
- * On any parse failure after one or more files have already been offloaded,
- * this function performs a best-effort cleanup of those files before rethrowing
- * so that malformed requests do not accumulate orphaned files on disk.
+ * ## Text-only model runs
+ * Pass `supportsImages: false` for text-only model runs so that no media://
+ * markers are injected into prompt text.
  *
- * Known limitation: when a mix of large (offloaded) and small (inline) images
- * is present, offloaded images appear as text markers appended to the message
- * while inline images are in the `images` array. The agent's
- * detectAndLoadPromptImages initialises from `existingImages` first, then
- * appends prompt-detected refs, so mixed batches may be delivered to the model
- * in a different order than the original attachment list. Prompts that rely on
- * attachment order (e.g. "first image") should be aware of this. A future
- * refactor should unify all image references into a single ordered list.
+ * ⚠️  Call sites in chat.ts, agent.ts, and server-node-events.ts MUST be
+ * updated to pass `supportsImages: modelSupportsImages(model)`. Until they do,
+ * text-only model runs receive unresolvable media:// markers in their prompt.
  *
- * @throws {MediaOffloadError} When a filesystem error prevents saving an
- * attachment to the media store. Callers should map this to a server-side
- * 5xx status rather than a client 4xx.
+ * ## Cleanup on failure
+ * On any parse failure after files have already been offloaded, best-effort
+ * cleanup is performed before rethrowing so that malformed requests do not
+ * accumulate orphaned files on disk ahead of the periodic TTL sweep.
+ *
+ * ## Known ordering limitation
+ * In mixed large/small batches, the model receives images in a different order
+ * than the original attachment list because detectAndLoadPromptImages
+ * initialises from existingImages first, then appends prompt-detected refs.
+ * A future refactor should unify all image references into a single ordered list.
+ *
+ * @throws {MediaOffloadError} Infrastructure failure saving to media store → 5xx.
+ * @throws {Error} Input validation failure → 4xx.
  */
 export async function parseMessageWithAttachments(
   message: string,
@@ -247,29 +291,27 @@ export async function parseMessageWithAttachments(
   const log = opts?.log;
 
   if (!attachments || attachments.length === 0) {
-    return { message, images: [] };
+    return { message, images: [], offloadedRefs: [] };
   }
 
-  // For text-only models, attachments cannot be used regardless of size.
-  // Drop them cleanly instead of saving files and injecting media:// markers
-  // that would never be resolved, which would leak internal path references
-  // into the model's prompt.
+  // For text-only models drop all attachments cleanly. Do not save files or
+  // inject media:// markers that would never be resolved and would leak
+  // internal path references into the model's prompt.
   if (opts?.supportsImages === false) {
     if (attachments.length > 0) {
       log?.warn(
         `parseMessageWithAttachments: ${attachments.length} attachment(s) dropped — model does not support images`,
       );
     }
-    return { message, images: [] };
+    return { message, images: [], offloadedRefs: [] };
   }
 
   const images: ChatImageContent[] = [];
+  const offloadedRefs: OffloadedMediaRef[] = [];
   let updatedMessage = message;
 
-  // Track IDs of files saved during this request so we can clean them up
-  // if a later attachment fails validation and the entire parse is aborted.
-  // Without this, repeated malformed multi-attachment requests can accumulate
-  // orphaned files on disk ahead of the periodic TTL sweep.
+  // Track IDs of files saved during this request for cleanup if a later
+  // attachment fails validation and the entire parse is aborted.
   const savedMediaIds: string[] = [];
 
   try {
@@ -318,23 +360,17 @@ export async function parseMessageWithAttachments(
         );
       }
 
-      // The third fallback normalises `mime` so that a raw un-normalised string
-      // (e.g. "IMAGE/JPEG" from the caller) does not silently bypass the
-      // SUPPORTED_OFFLOAD_MIMES check below. If normalisation still yields
-      // nothing, fall back to the raw string as a last resort.
+      // Third fallback normalises `mime` so a raw un-normalised string (e.g.
+      // "IMAGE/JPEG") does not silently bypass the SUPPORTED_OFFLOAD_MIMES check.
       const finalMime = sniffedMime ?? providedMime ?? normalizeMime(mime) ?? mime;
 
       let isOffloaded = false;
 
-      const isSupportedForOffload = SUPPORTED_OFFLOAD_MIMES.has(finalMime);
-
       if (sizeBytes > OFFLOAD_THRESHOLD_BYTES) {
+        const isSupportedForOffload = SUPPORTED_OFFLOAD_MIMES.has(finalMime);
+
         if (!isSupportedForOffload) {
-          // The attachment is above the offload threshold but its format cannot
-          // be offloaded (no guaranteed extension mapping in store.ts).
-          // Note: sizeBytes is between OFFLOAD_THRESHOLD_BYTES and maxBytes, so
-          // saying "exceeds size limit" would be misleading — the image IS within
-          // the declared limit but cannot safely be offloaded in this format.
+          // Passing this inline would reintroduce the OOM risk this PR prevents.
           throw new Error(
             `attachment ${label}: format ${finalMime} is too large to pass inline ` +
               `(${sizeBytes} > ${OFFLOAD_THRESHOLD_BYTES} bytes) and cannot be offloaded. ` +
@@ -342,14 +378,15 @@ export async function parseMessageWithAttachments(
           );
         }
 
+        // Decode and run input-validation BEFORE the MediaOffloadError try/catch.
+        // verifyDecodedSize is a 4xx client error and must not be wrapped as a
+        // 5xx MediaOffloadError.
+        const buffer = Buffer.from(b64, "base64");
+        verifyDecodedSize(buffer, sizeBytes, label);
+
+        // Only the storage operation is wrapped so callers can distinguish
+        // infrastructure failures (5xx) from input errors (4xx).
         try {
-          const buffer = Buffer.from(b64, "base64");
-
-          // Post-decode size validation for large payloads.
-          // Provides defense-in-depth against silent truncation by Buffer.from
-          // if any malformed characters somehow bypassed prior validation.
-          verifyDecodedSize(buffer, sizeBytes, label);
-
           const labelWithExt = ensureExtension(label, finalMime);
 
           const rawResult = await saveMediaBuffer(
@@ -360,26 +397,24 @@ export async function parseMessageWithAttachments(
             labelWithExt,
           );
 
-          // Validate shape and ID safety before trusting the result.
           const savedMedia = assertSavedMedia(rawResult, label);
 
-          // Track this ID for cleanup if a later attachment fails.
+          // Track for cleanup if a subsequent attachment fails.
           savedMediaIds.push(savedMedia.id);
 
-          // Use an opaque media URI instead of a physical filesystem path.
-          // This decouples the Gateway from the Agent's filesystem layout
-          // and is compatible with workspaceOnly sandboxes.
-          // The agent resolves media://inbound/<id> via resolveMediaBufferPath
-          // in store.ts before passing the image to the model.
+          // Opaque URI — compatible with workspaceOnly sandboxes and decouples
+          // the Gateway from the agent's filesystem layout.
           const mediaRef = `media://inbound/${savedMedia.id}`;
 
           updatedMessage += `\n[media attached: ${mediaRef}]`;
           log?.info?.(`[Gateway] Intercepted large image payload. Saved: ${mediaRef}`);
+
+          // Record for transcript metadata — separate from `images` because
+          // these are not passed inline to the model.
+          offloadedRefs.push({ mediaRef, id: savedMedia.id, mimeType: finalMime, label });
+
           isOffloaded = true;
         } catch (err) {
-          // Distinguish operational storage failures from input-validation errors
-          // so that Gateway handlers can map them to the correct HTTP status:
-          // catch MediaOffloadError → 5xx, catch Error → 4xx.
           const errorMessage = err instanceof Error ? err.message : String(err);
           throw new MediaOffloadError(
             `[Gateway Error] Failed to save intercepted media to disk: ${errorMessage}`,
@@ -395,10 +430,7 @@ export async function parseMessageWithAttachments(
       images.push({ type: "image", data: b64, mimeType: finalMime });
     }
   } catch (err) {
-    // Best-effort cleanup: delete any files that were successfully saved
-    // earlier in this request before re-throwing. This prevents malformed
-    // multi-attachment requests from accumulating orphaned files on disk
-    // ahead of the periodic TTL sweep.
+    // Best-effort cleanup before rethrowing.
     if (savedMediaIds.length > 0) {
       await Promise.allSettled(savedMediaIds.map((id) => deleteMediaBuffer(id, "inbound")));
     }
@@ -408,6 +440,7 @@ export async function parseMessageWithAttachments(
   return {
     message: updatedMessage !== message ? updatedMessage.trimEnd() : message,
     images,
+    offloadedRefs,
   };
 }
 
