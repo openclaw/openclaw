@@ -308,8 +308,20 @@ export function resolveMemoryBackendConfig(params: {
   const qmdCfg = params.cfg.memory?.qmd;
   const includeDefaultMemory = qmdCfg?.includeDefaultMemory !== false;
   const nameSet = new Set<string>();
-  // Read memorySearch.extraPaths and map them to QMD custom paths
-  const searchExtraPaths = (params.cfg.agents?.defaults?.memorySearch?.extraPaths ?? [])
+  // Read memorySearch.extraPaths (supports per-agent overrides via agents.list[].memorySearch)
+  // Merge defaults with agent-specific overrides
+  const searchDefaults = params.cfg.agents?.defaults?.memorySearch?.extraPaths ?? [];
+  let searchOverrides: string[] = [];
+  const agentList = params.cfg.agents?.list;
+  if (Array.isArray(agentList)) {
+    const agentEntry = agentList.find((a) => a?.id === params.agentId);
+    if (agentEntry?.memorySearch?.extraPaths) {
+      searchOverrides = agentEntry.memorySearch.extraPaths;
+    }
+  }
+  // Agent-specific overrides take priority
+  const mergedExtraPaths = searchOverrides.length > 0 ? searchOverrides : searchDefaults;
+  const searchExtraPaths = mergedExtraPaths
     .filter((p): p is string => typeof p === "string" && p.trim().length > 0)
     .map((p): { path: string; pattern?: string; name?: string } => ({ path: p.trim() }));
 
