@@ -16,6 +16,7 @@ void state_on_gateway_refresh_requested(void) {}
 static void test_initial_state(void) {
     state_init();
     g_assert_cmpint(state_get_current(), ==, STATE_NEEDS_SETUP);
+    g_assert_cmpint(state_get_runtime_mode(), ==, RUNTIME_NONE);
 }
 
 static void test_installed_inactive(void) {
@@ -25,6 +26,7 @@ static void test_installed_inactive(void) {
     sys.active = FALSE;
     state_update_systemd(&sys);
     g_assert_cmpint(state_get_current(), ==, STATE_STOPPED);
+    g_assert_cmpint(state_get_runtime_mode(), ==, RUNTIME_NONE);
 }
 
 static void test_active_without_fresh_health(void) {
@@ -35,6 +37,7 @@ static void test_active_without_fresh_health(void) {
     state_update_systemd(&sys);
     // Startup hydration guard: systemd active + no health data → STARTING (transitional, not RUNNING)
     g_assert_cmpint(state_get_current(), ==, STATE_STARTING);
+    g_assert_cmpint(state_get_runtime_mode(), ==, RUNTIME_SERVICE_ACTIVE_NOT_PROVEN);
 }
 
 /* ── Native gateway connectivity tests ── */
@@ -56,6 +59,7 @@ static void test_full_connectivity_running(void) {
     state_update_health(&hs);
 
     g_assert_cmpint(state_get_current(), ==, STATE_RUNNING);
+    g_assert_cmpint(state_get_runtime_mode(), ==, RUNTIME_EXPECTED_SERVICE_HEALTHY);
 }
 
 static void test_warning_health(void) {
@@ -135,6 +139,7 @@ static void test_precedence_systemd_inactive_native_connected(void) {
 
     // Runtime connectivity takes precedence → RUNNING
     g_assert_cmpint(state_get_current(), ==, STATE_RUNNING);
+    g_assert_cmpint(state_get_runtime_mode(), ==, RUNTIME_HEALTHY_OUTSIDE_EXPECTED_SERVICE);
 }
 
 static void test_precedence_systemd_unavailable_native_connected(void) {
@@ -156,6 +161,7 @@ static void test_precedence_systemd_unavailable_native_connected(void) {
 
     // Runtime connectivity takes precedence → RUNNING
     g_assert_cmpint(state_get_current(), ==, STATE_RUNNING);
+    g_assert_cmpint(state_get_runtime_mode(), ==, RUNTIME_HEALTHY_OUTSIDE_EXPECTED_SERVICE);
 }
 
 static void test_precedence_systemd_active_http_down(void) {
@@ -196,6 +202,7 @@ static void test_precedence_not_installed_native_connected(void) {
 
     // Runtime connectivity takes precedence → RUNNING
     g_assert_cmpint(state_get_current(), ==, STATE_RUNNING);
+    g_assert_cmpint(state_get_runtime_mode(), ==, RUNTIME_HEALTHY_OUTSIDE_EXPECTED_SERVICE);
 }
 
 static void test_precedence_native_connected_with_warning(void) {
@@ -344,6 +351,7 @@ static void test_health_zero_timestamp_preserves_systemd_running(void) {
 
     // Systemd still active + no valid health data → startup hydration guard → STARTING
     g_assert_cmpint(state_get_current(), ==, STATE_STARTING);
+    g_assert_cmpint(state_get_runtime_mode(), ==, RUNTIME_SERVICE_ACTIVE_NOT_PROVEN);
 }
 
 static void test_activation_boundary_health_persists_through_stop(void) {
@@ -409,6 +417,7 @@ static void test_systemd_stop_does_not_regress_native_connected(void) {
     sys.active = FALSE;
     state_update_systemd(&sys);
     g_assert_cmpint(state_get_current(), ==, STATE_RUNNING);
+    g_assert_cmpint(state_get_runtime_mode(), ==, RUNTIME_HEALTHY_OUTSIDE_EXPECTED_SERVICE);
 }
 
 /* ── Readiness decision table tests ── */
