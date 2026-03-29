@@ -69,7 +69,7 @@ async function main(): Promise<void> {
         request.params.arguments ?? {},
       );
       return {
-        content: Array.isArray(result.content) ? result.content : [{ type: "text", text: String(result) }],
+        content: Array.isArray(result.content) ? result.content : [{ type: "text", text: String(result.content) }],
       };
     } catch (err) {
       return {
