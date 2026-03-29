@@ -11,8 +11,8 @@ import type { TaskRecord } from "./task-registry.types.js";
 function createStoredTask(): TaskRecord {
   return {
     taskId: "task-restored",
-    source: "sessions_spawn",
     runtime: "acp",
+    sourceId: "run-restored",
     requesterSessionKey: "agent:main:main",
     childSessionKey: "agent:codex:acp:restored",
     runId: "run-restored",
@@ -48,7 +48,6 @@ describe("task-registry store runtime", () => {
     expect(loadSnapshot).toHaveBeenCalledTimes(1);
 
     createTaskRecord({
-      source: "sessions_spawn",
       runtime: "acp",
       requesterSessionKey: "agent:main:main",
       childSessionKey: "agent:codex:acp:new",
@@ -80,7 +79,6 @@ describe("task-registry store runtime", () => {
 
     expect(findTaskByRunId("run-restored")).toBeTruthy();
     const created = createTaskRecord({
-      source: "sessions_spawn",
       runtime: "acp",
       requesterSessionKey: "agent:main:main",
       childSessionKey: "agent:codex:acp:new",

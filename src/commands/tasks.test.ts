@@ -37,8 +37,8 @@ let tasksCancelCommand: typeof import("./tasks.js").tasksCancelCommand;
 
 const taskFixture = {
   taskId: "task-12345678",
-  source: "sessions_spawn",
   runtime: "acp",
+  sourceId: "run-12345678",
   requesterSessionKey: "agent:main:main",
   childSessionKey: "agent:codex:acp:child",
   runId: "run-12345678",
