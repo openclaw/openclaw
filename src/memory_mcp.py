@@ -361,29 +361,46 @@ async def run_extension(extension_name: str, command: str, args: Optional[List[s
         return f"Failed to run extension {extension_name}: {e}"
 
 def export_vault_content() -> str:
-    """Collects all .md files in the .obsidian vault and concatenates them into a single Mega-source."""
+    """Collects all .md files in the .obsidian vault (filtered by tags) and generates a Mega-source."""
     obsidian_dir = os.path.join(_project_root, ".obsidian")
     if not os.path.exists(obsidian_dir):
         return "Obsidian vault not found."
 
     mega_source = []
+    toc = []
     
     # Recursively scan .obsidian for .md files
     for root, _, files in os.walk(obsidian_dir):
         for f in files:
             if f.endswith(".md"):
+                if f == "Obsidian_Brain_Dump.md": continue
                 fpath = os.path.join(root, f)
                 try:
                     with open(fpath, "r", encoding="utf-8") as file_obj:
                         content = file_obj.read()
-                        mega_source.append(f"## Document: {f}\n\n{content.strip()}\n")
-                except Exception as e:
+                        
+                        # v16.2 Filtering
+                        if "#v16_knowledge" in content or "#golden_snippet" in content:
+                            anchor = f.replace(" ", "-").replace(".", "").lower()
+                            toc.append(f"- [{f}](#document-{anchor})")
+                            mega_source.append(f"## Document: {f}\n\n{content.strip()}\n")
+                except Exception:
                     pass
 
     if not mega_source:
-        return "No markdown files found in Obsidian vault."
+        return "No markdown files found in Obsidian vault with #v16_knowledge or #golden_snippet."
 
-    return "\n\n---\n\n".join(mega_source)
+    final_content = "# Obsidian Brain Dump\n\n## Table of Contents\n" + "\n".join(toc) + "\n\n---\n\n" + "\n\n---\n\n".join(mega_source)
+    
+    # Write the dump locally
+    try:
+        dump_path = os.path.join(obsidian_dir, "Obsidian_Brain_Dump.md")
+        with open(dump_path, "w", encoding="utf-8") as df:
+            df.write(final_content)
+    except Exception:
+        pass
+
+    return final_content
 
 @mcp.tool()
 async def export_vault_for_notebooklm() -> str:
@@ -393,6 +410,127 @@ async def export_vault_for_notebooklm() -> str:
     Returns the concatenated content, stripped of heavy tags.
     """
     return export_vault_content()
+
+
+# ---------------------------------------------------------------------------
+# v16.6  Codebase Mega-Dump Generator
+# ---------------------------------------------------------------------------
+
+_LANG_MAP = {
+    ".py": "python", ".rs": "rust", ".ts": "typescript", ".js": "javascript",
+    ".toml": "toml", ".json": "json", ".yaml": "yaml", ".yml": "yaml",
+    ".md": "markdown", ".sh": "bash", ".ps1": "powershell", ".sql": "sql",
+    ".html": "html", ".css": "css", ".mjs": "javascript",
+}
+
+_IGNORE_DIRS = {
+    ".venv", "__pycache__", ".git", ".pytest_cache", ".obsidian",
+    "node_modules", ".mypy_cache", ".ruff_cache", "target",
+    "unsloth_compiled_cache", "dist", ".tox",
+}
+
+_IGNORE_EXTS = {
+    ".pyc", ".pyo", ".so", ".pyd", ".dll", ".exe", ".whl",
+    ".egg-info", ".tar", ".gz", ".zip", ".png", ".jpg", ".jpeg",
+    ".gif", ".ico", ".svg", ".woff", ".woff2", ".ttf", ".lock",
+}
+
+_IGNORE_FILES = {".env", ".env.local", ".env.production", "pnpm-lock.yaml"}
+
+
+def export_openclaw_codebase() -> str:
+    """Recursively export src/, scripts/ and root config files into a single Markdown file."""
+    scan_dirs = [
+        os.path.join(_project_root, "src"),
+        os.path.join(_project_root, "scripts"),
+    ]
+    root_globs = {".toml", ".json", ".md", ".mjs"}
+    root_names = {"SOUL.md", "IDENTITY.md", "BRAIN.md", "MEMORY.md", "VISION.md",
+                  "HEARTBEAT.md", "AGENTS.md", "CONTRIBUTING.md", "SECURITY.md",
+                  "README.md", "TROUBLESHOOTING.md", "PROJECT_CONTEXT.md",
+                  "pyproject.toml", "tsconfig.json", "vitest.config.ts",
+                  "tsdown.config.ts", "docker-compose.yml", "Dockerfile",
+                  "fly.toml", "render.yaml", "openclaw.mjs", "package.json"}
+
+    toc: list[str] = []
+    sections: list[str] = []
+    file_count = 0
+    total_bytes = 0
+
+    def _should_skip_dir(name: str) -> bool:
+        return name in _IGNORE_DIRS or name.startswith(".")
+
+    def _should_skip_file(name: str) -> bool:
+        if name in _IGNORE_FILES:
+            return True
+        _, ext = os.path.splitext(name)
+        return ext in _IGNORE_EXTS
+
+    def _anchor(rel: str) -> str:
+        return rel.replace("/", "-").replace("\\", "-").replace(".", "-").replace("_", "-").lower()
+
+    def _lang(path: str) -> str:
+        _, ext = os.path.splitext(path)
+        return _LANG_MAP.get(ext, "")
+
+    def _add_file(abs_path: str, rel_path: str) -> None:
+        nonlocal file_count, total_bytes
+        try:
+            with open(abs_path, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+        except Exception:
+            return
+        rel_unix = rel_path.replace("\\", "/")
+        anchor = _anchor(rel_unix)
+        lang = _lang(rel_unix)
+        toc.append(f"- [{rel_unix}](#{anchor})")
+        sections.append(f"## File: {rel_unix}\n\n```{lang}\n{content.rstrip()}\n```")
+        file_count += 1
+        total_bytes += len(content)
+
+    # 1. Root config files
+    for name in sorted(os.listdir(_project_root)):
+        full = os.path.join(_project_root, name)
+        if not os.path.isfile(full):
+            continue
+        if name in root_names:
+            _add_file(full, name)
+
+    # 2. Recursive scan of src/ and scripts/
+    for scan_dir in scan_dirs:
+        if not os.path.isdir(scan_dir):
+            continue
+        for root, dirs, files in os.walk(scan_dir):
+            dirs[:] = [d for d in sorted(dirs) if not _should_skip_dir(d)]
+            for fname in sorted(files):
+                if _should_skip_file(fname):
+                    continue
+                abs_path = os.path.join(root, fname)
+                rel_path = os.path.relpath(abs_path, _project_root)
+                _add_file(abs_path, rel_path)
+
+    if not sections:
+        return "No source files found."
+
+    header = (
+        "# OpenClaw Codebase Dump\n\n"
+        f"> Auto-generated · {file_count} files · {total_bytes:,} bytes\n\n"
+        "## Table of Contents\n\n"
+    )
+    body = header + "\n".join(toc) + "\n\n---\n\n" + "\n\n---\n\n".join(sections) + "\n"
+
+    dump_path = os.path.join(_project_root, "OpenClaw_Codebase_Dump.md")
+    with open(dump_path, "w", encoding="utf-8") as f:
+        f.write(body)
+
+    return body
+
+
+@mcp.tool()
+async def export_codebase_for_notebooklm() -> str:
+    """Export the entire OpenClaw source code into a single Markdown for NotebookLM."""
+    return export_openclaw_codebase()
+
 
 if __name__ == "__main__":
     mcp.run()

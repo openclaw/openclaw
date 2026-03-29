@@ -2,6 +2,7 @@ node_modules
 **/node_modules/
 .env
 docker-compose.extra.yml
+OpenClaw_Codebase_Dump.md
 dist
 pnpm-lock.yaml
 bun.lock
