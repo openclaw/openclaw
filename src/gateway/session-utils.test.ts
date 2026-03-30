@@ -11,6 +11,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { withEnv } from "../test-utils/env.js";
+import { getSessionTitleFieldsCacheMaxEntries } from "./session-utils.fs.js";
 import {
   capArrayByJsonBytes,
   classifySessionKey,

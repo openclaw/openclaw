@@ -748,7 +748,7 @@ export function getSessionUsageCacheMaxEntries(): number {
 }
 
 export function getSessionTitleFieldsCacheMaxEntries(): number {
-  return MAX_SESSION_TITLE_FIELDS_CACHE_MAX_ENTRIES;
+  return MAX_SESSION_TITLE_FIELDS_CACHE_ENTRIES;
 }
 
 export function setSessionUsageTranscriptMaxBytes(value: number | undefined) {
