@@ -2,7 +2,6 @@ import {
   type Component,
   Input,
   isKeyRelease,
-  Key,
   matchesKey,
   type SelectItem,
   type SelectListTheme,

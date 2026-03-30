@@ -28,6 +28,12 @@ const resolveTestSkillDirs = (workspaceDir: string) => ({
   bundledSkillsDir: path.join(workspaceDir, ".bundled"),
 });
 
+function normalizeDarwinTmpPath(filePath: string): string {
+  return process.platform === "darwin" && filePath.startsWith("/private/var/")
+    ? filePath.slice("/private".length)
+    : filePath;
+}
+
 const makeWorkspace = async () => await fixtureSuite.createCaseDir("workspace");
 const apiKeyField = ["api", "Key"].join("");
 
@@ -210,12 +216,16 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
       ]),
     );
     expect(
-      commands.find((entry) => entry.skillName === "workflows:review")?.sourceFilePath,
+      normalizeDarwinTmpPath(
+        commands.find((entry) => entry.skillName === "workflows:review")?.sourceFilePath ?? "",
+      ),
     ).toContain(
-      path.join(
-        installedPluginRoot(path.join(workspaceDir, ".openclaw"), "compound-bundle"),
-        "commands",
-        "workflows-review.md",
+      normalizeDarwinTmpPath(
+        path.join(
+          installedPluginRoot(path.join(tempHome!.home, ".openclaw"), "compound-bundle"),
+          "commands",
+          "workflows-review.md",
+        ),
       ),
     );
   });
