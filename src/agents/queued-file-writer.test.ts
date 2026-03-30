@@ -19,8 +19,7 @@ describe("QueuedFileWriter", () => {
     writer.write("line1\n");
     writer.write("line2\n");
 
-    // Wait for the queue to drain
-    await new Promise((r) => setTimeout(r, 200));
+    await writer.drain();
 
     const content = await fs.readFile(filePath, "utf8");
     expect(content).toBe("line1\nline2\n");
@@ -40,7 +39,6 @@ describe("QueuedFileWriter", () => {
     const dir = path.join(os.tmpdir(), "qfw-no-exist-" + process.pid);
     const filePath = path.join(dir, "sub", "test.log");
 
-    // Create the directory so mkdir succeeds, but make the file unwritable
     await fs.mkdir(path.join(dir, "sub"), { recursive: true });
     // Create a directory where the file should be — appendFile will fail
     await fs.mkdir(filePath, { recursive: true });
@@ -49,13 +47,11 @@ describe("QueuedFileWriter", () => {
 
     const writer = getQueuedFileWriter(writers, filePath);
 
-    // Trigger 3 write failures
     writer.write("a\n");
     writer.write("b\n");
     writer.write("c\n");
 
-    // Wait for queue to drain
-    await new Promise((r) => setTimeout(r, 500));
+    await writer.drain();
 
     expect(warnSpy).toHaveBeenCalledTimes(1);
     expect(warnSpy.mock.calls[0]?.[0]).toContain("QueuedFileWriter");
@@ -66,22 +62,74 @@ describe("QueuedFileWriter", () => {
     await fs.rm(dir, { recursive: true, force: true });
   });
 
-  it("resets failure count on successful write", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "qfw-reset-"));
-    const filePath = path.join(dir, "test.log");
+  it("warning fires on every failure at or past threshold, not just once", async () => {
+    const dir = path.join(os.tmpdir(), "qfw-repeat-warn-" + process.pid);
+    const filePath = path.join(dir, "sub", "test.log");
+
+    await fs.mkdir(path.join(dir, "sub"), { recursive: true });
+    await fs.mkdir(filePath, { recursive: true });
 
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     const writer = getQueuedFileWriter(writers, filePath);
 
-    // Successful writes should not trigger warning
-    writer.write("ok1\n");
-    writer.write("ok2\n");
-    writer.write("ok3\n");
-    writer.write("ok4\n");
+    // Trigger 5 write failures — should warn on failures 3, 4, and 5
+    writer.write("a\n");
+    writer.write("b\n");
+    writer.write("c\n");
+    writer.write("d\n");
+    writer.write("e\n");
 
-    await new Promise((r) => setTimeout(r, 200));
+    await writer.drain();
 
+    expect(warnSpy).toHaveBeenCalledTimes(3);
+    expect(warnSpy.mock.calls[0]?.[0]).toContain("3 consecutive write failures");
+    expect(warnSpy.mock.calls[1]?.[0]).toContain("4 consecutive write failures");
+    expect(warnSpy.mock.calls[2]?.[0]).toContain("5 consecutive write failures");
+
+    warnSpy.mockRestore();
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it("resets failure count on successful write", async () => {
+    const dir = path.join(os.tmpdir(), "qfw-reset-" + process.pid);
+    const filePath = path.join(dir, "sub", "test.log");
+
+    // Create directory structure where the file path is a directory (causes write failure)
+    await fs.mkdir(path.join(dir, "sub"), { recursive: true });
+    await fs.mkdir(filePath, { recursive: true });
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const writer = getQueuedFileWriter(writers, filePath);
+
+    // Induce 2 failures (below threshold — no warning yet)
+    writer.write("fail1\n");
+    writer.write("fail2\n");
+
+    await writer.drain();
+    expect(warnSpy).not.toHaveBeenCalled();
+
+    // Fix the path: remove the directory and let appendFile create a real file
+    await fs.rm(filePath, { recursive: true, force: true });
+
+    // Successful write — should reset counter to 0
+    writer.write("success\n");
+
+    await writer.drain();
+    expect(warnSpy).not.toHaveBeenCalled();
+
+    // Now re-break the path
+    await fs.rm(filePath, { force: true });
+    await fs.mkdir(filePath, { recursive: true });
+
+    // Induce 2 more failures — if counter reset properly, still below threshold
+    writer.write("fail3\n");
+    writer.write("fail4\n");
+
+    await writer.drain();
+
+    // Should NOT have warned — counter was reset by success, so we're at 2 again
     expect(warnSpy).not.toHaveBeenCalled();
 
     warnSpy.mockRestore();
