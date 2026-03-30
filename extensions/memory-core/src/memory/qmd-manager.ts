@@ -220,9 +220,9 @@ export class QmdMemoryManager implements MemorySearchManager {
     this.env = {
       ...process.env,
       XDG_CONFIG_HOME: this.xdgConfigHome,
-      // workaround for upstream bug https://github.com/tobi/qmd/issues/132
-      // QMD doesn't respect XDG_CONFIG_HOME:
-      QMD_CONFIG_DIR: this.xdgConfigHome,
+      // QMD resolves index.yml relative to QMD_CONFIG_DIR rather than XDG_CONFIG_HOME.
+      // Point it at the nested qmd config directory so per-agent collections are visible.
+      QMD_CONFIG_DIR: path.join(this.xdgConfigHome, "qmd"),
       XDG_CACHE_HOME: this.xdgCacheHome,
       NO_COLOR: "1",
     };
@@ -1105,9 +1105,9 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private shouldRunEmbed(force?: boolean): boolean {
-    if (this.qmd.searchMode === "search") {
-      return false;
-    }
+    // Keep embeddings current regardless of the active retrieval mode.
+    // Search-mode indexing still needs vectors so later mode switches and
+    // hybrid flows do not inherit an incomplete QMD index.
     const now = Date.now();
     if (this.embedBackoffUntil !== null && now < this.embedBackoffUntil) {
       return false;
@@ -1121,9 +1121,6 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private shouldScheduleEmbedTimer(): boolean {
-    if (this.qmd.searchMode === "search") {
-      return false;
-    }
     const embedIntervalMs = this.qmd.update.embedIntervalMs;
     if (embedIntervalMs <= 0) {
       return false;
