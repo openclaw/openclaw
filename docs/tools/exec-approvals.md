@@ -196,10 +196,18 @@ Examples:
 - `lua -e`
 - `osascript -e`
 
+Positional interpreters — commands that accept code as a positional argument rather than behind a flag — are also treated as interpreter-like:
+
+- `awk`, `gawk`, `mawk`, `nawk`
+
+These are blocked from `allow-always` persistence regardless of `strictInlineEval`, because their
+first positional argument is executable code (e.g. `awk '{print $1}'`), making stable file binding
+infeasible.
+
 This is defense-in-depth for interpreter loaders that do not map cleanly to one stable file operand. In strict mode:
 
-- these commands still need explicit approval;
-- `allow-always` does not persist new allowlist entries for them automatically.
+- flag-based inline eval commands still need explicit approval;
+- `allow-always` does not persist new allowlist entries for any interpreter-like command (flag-based or positional) automatically.
 
 ## Allowlist (per agent)
 
