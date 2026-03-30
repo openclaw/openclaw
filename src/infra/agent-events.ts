@@ -66,7 +66,13 @@ export function emitAgentEvent(event: Omit<AgentEventPayload, "seq" | "ts">) {
   const isControlUiVisible = context?.isControlUiVisible ?? true;
   const eventSessionKey =
     typeof event.sessionKey === "string" && event.sessionKey.trim() ? event.sessionKey : undefined;
-  const sessionKey = isControlUiVisible ? (eventSessionKey ?? context?.sessionKey) : undefined;
+
+  // Critical events (error, tool_execution_end) should always be visible for debugging
+  const isCriticalEvent = event.stream === "error" || event.stream === "tool";
+  const sessionKey = isCriticalEvent || isControlUiVisible
+    ? (eventSessionKey ?? context?.sessionKey)
+    : undefined;
+
   const enriched: AgentEventPayload = {
     ...event,
     sessionKey,
