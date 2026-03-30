@@ -1471,7 +1471,7 @@ export async function runEmbeddedAttempt(
 
           // Detect and load images referenced in the prompt for vision-capable models.
           // Images are prompt-local only (pi-like behavior).
-          const imageResult = await detectAndLoadPromptImages({
+          let imageResult = await detectAndLoadPromptImages({
             prompt: effectivePrompt,
             workspaceDir: effectiveWorkspace,
             model: params.model,
@@ -1549,6 +1549,24 @@ export async function runEmbeddedAttempt(
               }
               if (llmInputResult?.systemPrompt !== undefined) {
                 systemPromptText = llmInputResult.systemPrompt;
+              }
+
+              // Re-detect images when the hook rewrote the prompt, so the
+              // model receives attachments matching the updated text.
+              if (llmInputResult?.prompt) {
+                imageResult = await detectAndLoadPromptImages({
+                  prompt: effectivePrompt,
+                  workspaceDir: effectiveWorkspace,
+                  model: params.model,
+                  existingImages: params.images,
+                  maxBytes: MAX_IMAGE_BYTES,
+                  maxDimensionPx: resolveImageSanitizationLimits(params.config).maxDimensionPx,
+                  workspaceOnly: effectiveFsWorkspaceOnly,
+                  sandbox:
+                    sandbox?.enabled && sandbox?.fsBridge
+                      ? { root: sandbox.workspaceDir, bridge: sandbox.fsBridge }
+                      : undefined,
+                });
               }
             } catch (err) {
               // Re-throw block errors so the outer catch records them as promptError
