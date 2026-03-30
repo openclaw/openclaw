@@ -86,6 +86,8 @@ export function normalizeToolParameters(
 
   // Provider quirks:
   // - Gemini rejects several JSON Schema keywords, so we scrub those.
+  // - Ark/Volcengine/BytePlus reject `patternProperties` and similar keywords
+  //   (same subset as Gemini), so we apply the same cleaning. (#57443)
   // - OpenAI rejects function tool schemas unless the *top-level* is `type: "object"`.
   //   (TypeBox root unions compile to `{ anyOf: [...] }` without `type`).
   // - Anthropic expects full JSON Schema draft 2020-12 compliance.
@@ -97,10 +99,13 @@ export function normalizeToolParameters(
     options?.modelProvider?.toLowerCase().includes("google") ||
     options?.modelProvider?.toLowerCase().includes("gemini");
   const isAnthropicProvider = options?.modelProvider?.toLowerCase().includes("anthropic");
+  const isArkProvider = /(volcengine(-plan)?|byteplus(-plan)?|ark)\/?/.test(
+    options?.modelProvider?.toLowerCase() ?? "",
+  );
   const unsupportedToolSchemaKeywords = resolveUnsupportedToolSchemaKeywords(options?.modelCompat);
 
   function applyProviderCleaning(s: unknown): unknown {
-    if (isGeminiProvider && !isAnthropicProvider) {
+    if ((isGeminiProvider || isArkProvider) && !isAnthropicProvider) {
       return cleanSchemaForGemini(s);
     }
     if (unsupportedToolSchemaKeywords.size > 0) {
