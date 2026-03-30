@@ -261,8 +261,8 @@ describe("renderDiffDocument", () => {
     expect(rendered.fileCount).toBe(1);
     expect(rendered.html).toContain("data-openclaw-diff-root");
     expect(rendered.html).toContain("src/example.ts");
-    expect(rendered.html).toContain("/plugins/diffs/assets/viewer.js");
-    expect(rendered.imageHtml).toContain("/plugins/diffs/assets/viewer.js");
+    expect(rendered.html).toContain("../../assets/viewer.js");
+    expect(rendered.imageHtml).toContain("../../assets/viewer.js");
     expect(rendered.imageHtml).toContain("max-width: 960px;");
     expect(rendered.imageHtml).toContain("--diffs-font-size: 16px;");
     expect(rendered.html).toContain("min-height: 100vh;");
@@ -271,6 +271,28 @@ describe("renderDiffDocument", () => {
     expect(rendered.html).toContain("--diffs-line-height: 24px;");
     expect(rendered.html).toContain("--diffs-font-size: 15px;");
     expect(rendered.html).not.toContain("fonts.googleapis.com");
+  });
+
+  it("resolves viewer assets under an optional base path", async () => {
+    const rendered = await renderDiffDocument(
+      {
+        kind: "before_after",
+        before: "const value = 1;\n",
+        after: "const value = 2;\n",
+      },
+      {
+        presentation: DEFAULT_DIFFS_TOOL_DEFAULTS,
+        image: resolveDiffImageRenderOptions({ defaults: DEFAULT_DIFFS_TOOL_DEFAULTS }),
+        expandUnchanged: false,
+      },
+    );
+
+    const html = rendered.html ?? "";
+    const loaderSrc = html.match(/<script type="module" src="([^"]+)"><\/script>/)?.[1];
+    expect(loaderSrc).toBe("../../assets/viewer.js");
+    expect(
+      new URL(loaderSrc ?? "", "https://example.com/openclaw/plugins/diffs/view/id/token").pathname,
+    ).toBe("/openclaw/plugins/diffs/assets/viewer.js");
   });
 
   it("renders multi-file patch input", async () => {
@@ -399,7 +421,7 @@ describe("viewer assets", () => {
     const loader = await getServedViewerAsset(VIEWER_LOADER_PATH);
 
     expect(loader?.contentType).toBe("text/javascript; charset=utf-8");
-    expect(String(loader?.body)).toContain(`${VIEWER_RUNTIME_PATH}?v=`);
+    expect(String(loader?.body)).toContain(`./viewer-runtime.js?v=`);
   });
 
   it("serves the runtime bundle body", async () => {

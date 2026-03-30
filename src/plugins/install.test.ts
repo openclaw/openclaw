@@ -251,6 +251,19 @@ async function installFromDirWithWarnings(params: { pluginDir: string; extension
   return { result, warnings };
 }
 
+async function installFromFileWithWarnings(params: { extensionsDir: string; filePath: string }) {
+  const warnings: string[] = [];
+  const result = await installPluginFromFile({
+    filePath: params.filePath,
+    extensionsDir: params.extensionsDir,
+    logger: {
+      info: () => {},
+      warn: (msg: string) => warnings.push(msg),
+    },
+  });
+  return { result, warnings };
+}
+
 function setupManifestInstallFixture(params: { manifestId: string }) {
   const caseDir = makeTempDir();
   const stateDir = path.join(caseDir, "state");
@@ -723,7 +736,7 @@ describe("installPluginFromArchive", () => {
     expect.unreachable("expected install to fail without openclaw.extensions");
   });
 
-  it("warns when plugin contains dangerous code patterns", async () => {
+  it("blocks package installs when plugin contains dangerous code patterns", async () => {
     const { pluginDir, extensionsDir } = setupPluginInstallDirs();
 
     fs.writeFileSync(
@@ -741,7 +754,29 @@ describe("installPluginFromArchive", () => {
 
     const { result, warnings } = await installFromDirWithWarnings({ pluginDir, extensionsDir });
 
-    expect(result.ok).toBe(true);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
+      expect(result.error).toContain('Plugin "dangerous-plugin" installation blocked');
+      expect(result.error).toContain("dangerous code patterns detected");
+    }
+    expect(warnings.some((w) => w.includes("dangerous code pattern"))).toBe(true);
+  });
+
+  it("blocks bundle installs when bundle contains dangerous code patterns", async () => {
+    const { pluginDir, extensionsDir } = setupBundleInstallFixture({
+      bundleFormat: "codex",
+      name: "Dangerous Bundle",
+    });
+    fs.writeFileSync(path.join(pluginDir, "payload.js"), "eval('danger');\n", "utf-8");
+
+    const { result, warnings } = await installFromDirWithWarnings({ pluginDir, extensionsDir });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
+      expect(result.error).toContain('Bundle "dangerous-bundle" installation blocked');
+    }
     expect(warnings.some((w) => w.includes("dangerous code pattern"))).toBe(true);
   });
 
@@ -835,6 +870,7 @@ describe("installPluginFromArchive", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error).toBe("Blocked by enterprise policy");
+      expect(result.code).toBeUndefined();
     }
     expect(handler).toHaveBeenCalledTimes(1);
     expect(handler.mock.calls[0]?.[0]).toMatchObject({
@@ -886,12 +922,12 @@ describe("installPluginFromArchive", () => {
 
     const { result, warnings } = await installFromDirWithWarnings({ pluginDir, extensionsDir });
 
-    expect(result.ok).toBe(true);
+    expect(result.ok).toBe(false);
     expect(warnings.some((w) => w.includes("hidden/node_modules path"))).toBe(true);
     expect(warnings.some((w) => w.includes("dangerous code pattern"))).toBe(true);
   });
 
-  it("continues install when scanner throws", async () => {
+  it("blocks install when scanner throws", async () => {
     const scanSpy = vi
       .spyOn(installSecurityScan, "scanPackageInstallSource")
       .mockRejectedValueOnce(new Error("scanner exploded"));
@@ -910,8 +946,12 @@ describe("installPluginFromArchive", () => {
 
     const { result, warnings } = await installFromDirWithWarnings({ pluginDir, extensionsDir });
 
-    expect(result.ok).toBe(true);
-    expect(warnings.some((w) => w.includes("code safety scan failed"))).toBe(true);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_FAILED);
+      expect(result.error).toContain("code safety scan failed (Error: scanner exploded)");
+    }
+    expect(warnings).toEqual([]);
     scanSpy.mockRestore();
   });
 });
@@ -1224,6 +1264,27 @@ describe("installPluginFromPath", () => {
       targetType: "plugin",
       requestKind: "plugin-file",
     });
+  });
+
+  it("blocks plain file installs when the scanner finds dangerous code patterns", async () => {
+    const baseDir = makeTempDir();
+    const extensionsDir = path.join(baseDir, "extensions");
+    fs.mkdirSync(extensionsDir, { recursive: true });
+
+    const sourcePath = path.join(baseDir, "payload.js");
+    fs.writeFileSync(sourcePath, "eval('danger');\n", "utf-8");
+
+    const { result, warnings } = await installFromFileWithWarnings({
+      filePath: sourcePath,
+      extensionsDir,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
+      expect(result.error).toContain('Plugin file "payload" installation blocked');
+    }
+    expect(warnings.some((w) => w.includes("dangerous code pattern"))).toBe(true);
   });
 
   it("blocks hardlink alias overwrites when installing a plain file plugin", async () => {
