@@ -732,6 +732,7 @@ export const dispatchTelegramMessage = async ({
                     }
                   }
                   retainPreviewOnCleanupByLane.answer = true;
+                  activePreviewLifecycleByLane.answer = "complete";
                 }
               }
               if (info.kind === "final") {
