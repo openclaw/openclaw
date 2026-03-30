@@ -361,7 +361,7 @@ async function persistChatSendImages(params: {
   for (const ref of params.offloadedRefs) {
     saved.push({
       id: ref.id,
-      path: ref.mediaRef,
+      path: ref.path,
       size: 0,
       contentType: ref.mimeType,
     });
@@ -1431,7 +1431,65 @@ export const chatHandlers: GatewayRequestHandlers = {
     let parsedMessage = inboundMessage;
     let parsedImages: ChatImageContent[] = [];
     let parsedOffloadedRefs: OffloadedRef[] = [];
-    if (normalizedAttachments.length > 0) {
+    
+    const timeoutMs = resolveAgentTimeoutMs({
+      cfg,
+      overrideMs: p.timeoutMs,
+    });
+    const now = Date.now();
+    const clientRunId = p.idempotencyKey;
+
+    const sendPolicy = resolveSendPolicy({
+      cfg,
+      entry,
+      sessionKey,
+      channel: entry?.channel,
+      chatType: entry?.chatType,
+    });
+    if (sendPolicy === "deny") {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "send blocked by session policy"),
+      );
+      return;
+    }
+
+    if (stopCommand) {
+      const res = abortChatRunsForSessionKeyWithPartials({
+        context,
+        ops: createChatAbortOps(context),
+        sessionKey: rawSessionKey,
+        abortOrigin: "stop-command",
+        stopReason: "stop",
+        requester: resolveChatAbortRequester(client),
+      });
+      if (res.unauthorized) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"));
+        return;
+      }
+      respond(true, { ok: true, aborted: res.aborted, runIds: res.runIds });
+      return;
+    }
+
+    const cached = context.dedupe.get(`chat:${clientRunId}`);
+    if (cached) {
+      respond(cached.ok, cached.payload, cached.error, {
+        cached: true,
+      });
+      return;
+    }
+
+    const activeExisting = context.chatAbortControllers.get(clientRunId);
+    if (activeExisting) {
+      respond(true, { runId: clientRunId, status: "in_flight" as const }, undefined, {
+        cached: true,
+        runId: clientRunId,
+      });
+      return;
+    }
+
+if (normalizedAttachments.length > 0) {
       // Determine whether the selected model supports image input so that large-
       // attachment offload markers are only injected when the model can resolve
       // them. Defaults to true when the catalog is unavailable (backwards-
@@ -1488,63 +1546,6 @@ export const chatHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-    }
-
-    const timeoutMs = resolveAgentTimeoutMs({
-      cfg,
-      overrideMs: p.timeoutMs,
-    });
-    const now = Date.now();
-    const clientRunId = p.idempotencyKey;
-
-    const sendPolicy = resolveSendPolicy({
-      cfg,
-      entry,
-      sessionKey,
-      channel: entry?.channel,
-      chatType: entry?.chatType,
-    });
-    if (sendPolicy === "deny") {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "send blocked by session policy"),
-      );
-      return;
-    }
-
-    if (stopCommand) {
-      const res = abortChatRunsForSessionKeyWithPartials({
-        context,
-        ops: createChatAbortOps(context),
-        sessionKey: rawSessionKey,
-        abortOrigin: "stop-command",
-        stopReason: "stop",
-        requester: resolveChatAbortRequester(client),
-      });
-      if (res.unauthorized) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"));
-        return;
-      }
-      respond(true, { ok: true, aborted: res.aborted, runIds: res.runIds });
-      return;
-    }
-
-    const cached = context.dedupe.get(`chat:${clientRunId}`);
-    if (cached) {
-      respond(cached.ok, cached.payload, cached.error, {
-        cached: true,
-      });
-      return;
-    }
-
-    const activeExisting = context.chatAbortControllers.get(clientRunId);
-    if (activeExisting) {
-      respond(true, { runId: clientRunId, status: "in_flight" as const }, undefined, {
-        cached: true,
-        runId: clientRunId,
-      });
-      return;
     }
 
     try {

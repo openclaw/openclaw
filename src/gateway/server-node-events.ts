@@ -367,33 +367,13 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
       let images: Array<{ type: "image"; data: string; mimeType: string }> = [];
 
       if (normalizedAttachments.length > 0) {
-        let supportsImages = true;
-        try {
-          const catalog = 'loadGatewayModelCatalog' in ctx && typeof ctx.loadGatewayModelCatalog === 'function'
-            ? await (ctx as any).loadGatewayModelCatalog()
-            : [];
-          const modelRef = resolveSessionModelRef(cfg, entry, undefined);
-          const catalogModels: unknown[] = Array.isArray(catalog)
-            ? catalog
-            : Array.isArray((catalog as { models?: unknown[] } | null)?.models)
-              ? (catalog as { models: unknown[] }).models
-              : [];
-          const modelEntry = catalogModels.find(
-            (m): m is { id?: unknown; provider?: unknown; input?: unknown[] } =>
-              m !== null && typeof m === "object" &&
-              (m as Record<string, unknown>).id === modelRef.model &&
-              (m as Record<string, unknown>).provider === modelRef.provider,
-          );
-          if (modelEntry != null) {
-            supportsImages = Array.isArray(modelEntry.input) && modelEntry.input.includes("image");
-          }
-        } catch {}
-
+      // NodeEventContext does not expose loadGatewayModelCatalog.
+      // Node events are fire-and-forget; default to supportsImages:true so
+      // attachments are handled the same as before this change.
         try {
           const parsed = await parseMessageWithAttachments(message, normalizedAttachments, {
             maxBytes: 5_000_000,
             log: ctx.logGateway,
-            supportsImages,
           });
           message = parsed.message.trim();
           images = parsed.images;

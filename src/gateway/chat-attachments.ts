@@ -29,6 +29,8 @@ export type OffloadedRef = {
   mediaRef: string;
   /** The raw media ID from SavedMedia.id, usable with resolveMediaBufferPath */
   id: string;
+  /** Absolute filesystem path returned by saveMediaBuffer — used for transcript MediaPath */
+  path: string;
   /** MIME type of the offloaded attachment */
   mimeType: string;
   /** The label / filename of the original attachment */
@@ -411,7 +413,13 @@ export async function parseMessageWithAttachments(
 
           // Record for transcript metadata — separate from `images` because
           // these are not passed inline to the model.
-          offloadedRefs.push({ mediaRef, id: savedMedia.id, mimeType: finalMime, label });
+          offloadedRefs.push({
+            mediaRef,
+            id: savedMedia.id,
+            path: savedMedia.path ?? "",
+            mimeType: finalMime,
+            label,
+          });
 
           isOffloaded = true;
         } catch (err) {
