@@ -10,7 +10,7 @@ import {
   createTextUpdate,
   expectImageLifecycleDelivery,
   postWebhookReplay,
-} from "../test-support/lifecycle.js";
+} from "../test-support/lifecycle-test-support.js";
 import {
   clearZaloWebhookSecurityStateForTest,
   getZaloWebhookRateLimitStateSizeForTest,
