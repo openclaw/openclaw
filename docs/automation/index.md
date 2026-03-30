@@ -15,31 +15,12 @@ OpenClaw provides several automation mechanisms, each suited to different use ca
 
 ```mermaid
 flowchart TD
-    A[What do you need?] --> B{Run on a schedule?}
-    A --> C{React to an event?}
-    A --> D{Receive external HTTP?}
-    A --> E{Persistent instructions?}
-
-    B -->|Yes| F{Exact timing critical?}
-    F -->|Yes| G["**Cron** (isolated)"]
-    F -->|No| H{Can batch with other checks?}
-    H -->|Yes| I[**Heartbeat**]
-    H -->|No| J[**Cron**]
-
-    C -->|Yes| K[**Hooks**]
-    D -->|Yes| L[**Webhooks**]
-    E -->|Yes| M[**Standing Orders**]
-
-    G --> N[All background work tracked via **Tasks**]
-    J --> N
-
-    click I "/gateway/heartbeat"
-    click G "/automation/cron-jobs"
-    click J "/automation/cron-jobs"
-    click K "/automation/hooks"
-    click L "/automation/webhook"
-    click M "/automation/standing-orders"
-    click N "/automation/tasks"
+    A{Run on a schedule?} -->|Yes| B{Exact timing needed?}
+    A -->|No| C{React to events?}
+    B -->|Yes| D[Cron]
+    B -->|No| E[Heartbeat]
+    C -->|Yes| F[Hooks]
+    C -->|No| G[Standing Orders]
 ```
 
 ## Mechanisms at a glance
