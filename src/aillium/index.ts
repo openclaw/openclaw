@@ -1,5 +1,7 @@
 export type {
   AilliumIntegrationBoundary,
+  ContextLifecycleEvent,
+  ContextLifecycleHook,
   ContractAdapter,
   EvidenceCallbackHook,
   JsonPrimitive,

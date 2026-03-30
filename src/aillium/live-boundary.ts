@@ -9,6 +9,8 @@
 
 import type {
   AilliumIntegrationBoundary,
+  ContextLifecycleEvent,
+  ContextLifecycleHook,
   ContractAdapter,
   EvidenceCallbackHook,
   JsonValue,
@@ -141,6 +143,34 @@ class LiveTenantSessionMetadataAdapter implements TenantSessionMetadataAdapter {
   }
 }
 
+class LiveContextLifecycleHook implements ContextLifecycleHook {
+  constructor(private readonly config: AilliumCoreConnectionConfig) {}
+
+  async onContextLifecycle(event: ContextLifecycleEvent): Promise<void> {
+    try {
+      await fetch(
+        `${this.config.baseUrl}/master-agent/runtime/context-lifecycle`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-aillium-runtime-token": this.config.syncToken,
+          },
+          body: JSON.stringify({
+            openclaw_session_key: event.sessionKey,
+            openclaw_session_id: event.sessionId,
+            event_kind: event.kind,
+            payload: event.payload,
+          }),
+          signal: AbortSignal.timeout(this.config.timeoutMs ?? 15_000),
+        },
+      );
+    } catch {
+      // Best-effort lifecycle delivery; do not block runtime execution
+    }
+  }
+}
+
 export function createLiveAilliumBoundary(
   config: AilliumCoreConnectionConfig,
 ): AilliumIntegrationBoundary {
@@ -149,5 +179,6 @@ export function createLiveAilliumBoundary(
     contractAdapter: new LiveContractAdapter(),
     evidenceHooks: [new LiveEvidenceCallbackHook(config)],
     tenantSessionMetadata: new LiveTenantSessionMetadataAdapter(),
+    contextLifecycle: new LiveContextLifecycleHook(config),
   };
 }

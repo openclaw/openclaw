@@ -63,9 +63,32 @@ export interface TenantSessionMetadataAdapter {
   project(metadata: TenantSessionMetadata): Promise<TenantSessionMetadata>;
 }
 
+/**
+ * Lifecycle events from the context engine forwarded to Aillium Core.
+ *
+ * This bridges OpenClaw's ContextEngine lifecycle (afterTurn, compact, bootstrap)
+ * into the Aillium control plane so the master agent's continuity layer can
+ * react to compaction summaries, token budget changes, and session bootstraps.
+ */
+export interface ContextLifecycleEvent {
+  kind: "after_turn" | "compact" | "bootstrap" | "dispose";
+  sessionKey: string;
+  sessionId?: string;
+  payload: Record<string, JsonValue>;
+}
+
+export interface ContextLifecycleHook {
+  /**
+   * Called by the OpenClaw runtime when a context engine lifecycle event occurs.
+   * Best-effort delivery — must not block runtime execution.
+   */
+  onContextLifecycle(event: ContextLifecycleEvent): Promise<void>;
+}
+
 export interface AilliumIntegrationBoundary {
   runtimeRegistration: RuntimeRegistrationAdapter;
   contractAdapter: ContractAdapter;
   evidenceHooks: readonly EvidenceCallbackHook[];
   tenantSessionMetadata: TenantSessionMetadataAdapter;
+  contextLifecycle?: ContextLifecycleHook;
 }
