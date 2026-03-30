@@ -53,6 +53,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.ui.mobileCardSurface
 
 private enum class ConnectInputMode {
@@ -269,7 +270,12 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
             viewModel.setGatewayToken("")
           }
           viewModel.setGatewayPassword(config.password)
-          viewModel.connectManual()
+          viewModel.connect(
+            GatewayEndpoint.manual(host = config.host, port = config.port),
+            token = config.token.ifEmpty { null },
+            bootstrapToken = config.bootstrapToken.ifEmpty { null },
+            password = config.password.ifEmpty { null },
+          )
         },
         modifier = Modifier.fillMaxWidth().height(52.dp),
         shape = RoundedCornerShape(14.dp),
