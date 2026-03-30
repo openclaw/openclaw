@@ -146,6 +146,8 @@ describe("resolveMemoryBackendConfig", () => {
 });
 
 describe("memorySearch.extraPaths integration", () => {
+  const resolveExpectedPath = (value: string) => path.resolve(value);
+
   it("maps agents.defaults.memorySearch.extraPaths to QMD collections", () => {
     const cfg = {
       memory: { backend: "qmd" },
@@ -165,7 +167,10 @@ describe("memorySearch.extraPaths integration", () => {
     );
     expect(customCollections.length).toBeGreaterThanOrEqual(2);
     expect(customCollections.map((collection) => collection.path)).toEqual(
-      expect.arrayContaining(["/home/user/docs", "/home/user/vault"]),
+      expect.arrayContaining([
+        resolveExpectedPath("/home/user/docs"),
+        resolveExpectedPath("/home/user/vault"),
+      ]),
     );
   });
 
@@ -195,8 +200,8 @@ describe("memorySearch.extraPaths integration", () => {
       (collection) => collection.kind === "custom",
     );
     const paths = customCollections.map((collection) => collection.path);
-    expect(paths).toContain("/agent/specific/path");
-    expect(paths).toContain("/default/path");
+    expect(paths).toContain(resolveExpectedPath("/agent/specific/path"));
+    expect(paths).toContain(resolveExpectedPath("/default/path"));
   });
 
   it("falls back to defaults when agent has no overrides", () => {
@@ -225,7 +230,7 @@ describe("memorySearch.extraPaths integration", () => {
       (collection) => collection.kind === "custom",
     );
     const paths = customCollections.map((collection) => collection.path);
-    expect(paths).toContain("/default/path");
+    expect(paths).toContain(resolveExpectedPath("/default/path"));
   });
 
   it("deduplicates merged memorySearch.extraPaths for QMD collections", () => {
@@ -255,8 +260,10 @@ describe("memorySearch.extraPaths integration", () => {
     );
     const paths = customCollections.map((collection) => collection.path);
 
-    expect(paths.filter((collectionPath) => collectionPath === "/shared/path")).toHaveLength(1);
-    expect(paths).toContain("/agent-only");
+    expect(
+      paths.filter((collectionPath) => collectionPath === resolveExpectedPath("/shared/path")),
+    ).toHaveLength(1);
+    expect(paths).toContain(resolveExpectedPath("/agent-only"));
   });
 
   it("matches per-agent memorySearch.extraPaths using normalized agent ids", () => {
@@ -282,7 +289,9 @@ describe("memorySearch.extraPaths integration", () => {
       (collection) => collection.kind === "custom",
     );
 
-    expect(customCollections.map((collection) => collection.path)).toContain("/agent/mixed-case");
+    expect(customCollections.map((collection) => collection.path)).toContain(
+      resolveExpectedPath("/agent/mixed-case"),
+    );
   });
 
   it("deduplicates identical roots shared by memory.qmd.paths and memorySearch.extraPaths", () => {
@@ -309,7 +318,8 @@ describe("memorySearch.extraPaths integration", () => {
     );
     const docsCollections = customCollections.filter(
       (collection) =>
-        collection.path === "/workspace/root/docs" && collection.pattern === "**/*.md",
+        collection.path === path.resolve("/workspace/root/docs") &&
+        collection.pattern === "**/*.md",
     );
 
     expect(docsCollections).toHaveLength(1);

@@ -115,6 +115,8 @@ describe("registerMaintenanceCommands doctor action", () => {
     vi.useRealTimers();
     vi.unstubAllEnvs();
     vi.stubEnv("OPENCLAW_DOCTOR_TIMEOUT_MS", "10");
+    const originalArgv = process.argv;
+    process.argv = [process.execPath, "dist/index.js", "doctor", "--non-interactive"];
     const child = new EventEmitter() as EventEmitter & {
       kill: ReturnType<typeof vi.fn>;
       stdout: EventEmitter;
@@ -125,20 +127,29 @@ describe("registerMaintenanceCommands doctor action", () => {
     child.stderr = new EventEmitter();
     spawnMock.mockReturnValue(child);
 
-    const run = runMaintenanceCli(["doctor", "--non-interactive"]);
-    child.stderr.emit("data", Buffer.from("[doctor-debug] providers.runtime:loadOpenClawPlugins:start\n"));
-    await new Promise((resolve) => setTimeout(resolve, 25));
-    await run;
+    try {
+      const run = runMaintenanceCli(["doctor", "--non-interactive"]);
+      child.stderr.emit(
+        "data",
+        Buffer.from("[doctor-debug] providers.runtime:loadOpenClawPlugins:start\n"),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      await run;
 
-    expect(spawnMock).toHaveBeenCalledTimes(1);
-    expect(child.kill).toHaveBeenCalledTimes(1);
-    expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Last observed stage: providers.runtime:loadOpenClawPlugins:start."),
-    );
-    expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Likely heavy area: provider plugin discovery or plugin loader initialization."),
-    );
-    expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+      expect(child.kill).toHaveBeenCalledTimes(1);
+      expect(runtime.error).toHaveBeenCalledWith(
+        expect.stringContaining("Last observed stage: providers.runtime:loadOpenClawPlugins:start."),
+      );
+      expect(runtime.error).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "Likely heavy area: provider plugin discovery or plugin loader initialization.",
+        ),
+      );
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+    } finally {
+      process.argv = originalArgv;
+    }
   });
 
   it("passes noOpen to dashboard command", async () => {

@@ -43,6 +43,10 @@ function resolveTelegramAutoThreadIdForTest(params: {
     if (groupTopic) {
       return groupTopic[1].toLowerCase();
     }
+    const group = /^group:([^:]+)$/i.exec(trimmed);
+    if (group) {
+      return group[1].toLowerCase();
+    }
     const topic = /^([^:]+):topic:\d+$/i.exec(trimmed);
     if (topic) {
       return topic[1].toLowerCase();
