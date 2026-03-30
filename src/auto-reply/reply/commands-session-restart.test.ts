@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 const writeRestartSentinelMock = vi.fn().mockResolvedValue("/tmp/sentinel.json");
+const readRestartSentinelMock = vi.fn().mockResolvedValue(null);
 const triggerOpenClawRestartMock = vi.fn(
   () => ({ ok: true, method: "launchctl" }) as { ok: boolean; method: string; detail?: string },
 );
@@ -12,6 +13,7 @@ vi.mock("../../infra/restart-sentinel.js", async (importOriginal) => {
   return {
     ...orig,
     writeRestartSentinel: writeRestartSentinelMock,
+    readRestartSentinel: readRestartSentinelMock,
   };
 });
 
@@ -67,8 +69,10 @@ function makeParams(overrides: Partial<HandleCommandsParams> = {}): HandleComman
 describe("handleRestartCommand sentinel", () => {
   beforeEach(() => {
     writeRestartSentinelMock.mockClear();
+    readRestartSentinelMock.mockClear();
     triggerOpenClawRestartMock.mockClear();
     triggerOpenClawRestartMock.mockReturnValue({ ok: true, method: "launchctl" });
+    readRestartSentinelMock.mockResolvedValue(null);
   });
 
   afterEach(() => {
@@ -114,14 +118,41 @@ describe("handleRestartCommand sentinel", () => {
       method: "launchctl",
       detail: "not found",
     });
+    // readRestartSentinel returns our sentinel so the ts check passes
+    readRestartSentinelMock.mockImplementation(async () => {
+      const payload = writeRestartSentinelMock.mock.calls[0]?.[0];
+      return payload ? { version: 1, payload } : null;
+    });
 
     const result = await handleRestartCommand(makeParams(), true);
 
     expect(result?.reply?.text).toMatch(/Restart failed/);
     // Sentinel was written before the trigger attempt
     expect(writeRestartSentinelMock).toHaveBeenCalledTimes(1);
-    // Then cleaned up after failure
+    // Then cleaned up after failure (ts matched)
     expect(unlinkSpy).toHaveBeenCalledTimes(1);
+    unlinkSpy.mockRestore();
+  });
+
+  it("does not unlink sentinel when another flow overwrote it before cleanup", async () => {
+    const unlinkSpy = vi.spyOn(fs, "unlink").mockResolvedValue();
+    triggerOpenClawRestartMock.mockReturnValue({
+      ok: false,
+      method: "launchctl",
+      detail: "not found",
+    });
+    // readRestartSentinel returns a sentinel with a different ts (from another flow)
+    readRestartSentinelMock.mockResolvedValue({
+      version: 1,
+      payload: { kind: "config-apply", status: "ok", ts: 9999999999999 },
+    });
+
+    const result = await handleRestartCommand(makeParams(), true);
+
+    expect(result?.reply?.text).toMatch(/Restart failed/);
+    expect(writeRestartSentinelMock).toHaveBeenCalledTimes(1);
+    // Should NOT unlink because the file on disk belongs to another restart flow
+    expect(unlinkSpy).not.toHaveBeenCalled();
     unlinkSpy.mockRestore();
   });
 

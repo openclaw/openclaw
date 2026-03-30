@@ -10,6 +10,7 @@ import type { SessionBindingRecord } from "../../infra/outbound/session-binding-
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
 import {
   formatDoctorNonInteractiveHint,
+  readRestartSentinel,
   resolveRestartSentinelPath,
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
@@ -751,16 +752,18 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
   }
   // Write restart sentinel only after confirming restart will proceed,
   // so a failed restart doesn't leave a stale sentinel on disk.
+  let sentinelTs: number | undefined;
   async function writeSentinel() {
     const dc = params.sessionEntry?.deliveryContext;
     const deliveryContext = dc
       ? { channel: dc.channel, to: dc.to, accountId: dc.accountId }
       : undefined;
     const { threadId } = parseSessionThreadInfo(params.sessionKey);
+    const ts = Date.now();
     const sentinelPayload: RestartSentinelPayload = {
       kind: "restart",
       status: "ok",
-      ts: Date.now(),
+      ts,
       sessionKey: params.sessionKey,
       deliveryContext,
       threadId,
@@ -769,6 +772,7 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
     };
     try {
       await writeRestartSentinel(sentinelPayload);
+      sentinelTs = ts;
       return true;
     } catch {
       // best-effort: sentinel delivery is not critical
@@ -793,10 +797,14 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
   const sentinelWritten = await writeSentinel();
   const restartMethod = triggerOpenClawRestart();
   if (!restartMethod.ok) {
-    // Clean up stale sentinel since restart didn't actually happen — but only
-    // if we actually wrote it, to avoid removing a sentinel from another flow.
-    if (sentinelWritten) {
-      await fs.unlink(resolveRestartSentinelPath()).catch(() => {});
+    // Clean up our sentinel since restart didn't actually happen. Read first
+    // to ensure we only delete the file we wrote — another restart flow may
+    // have overwritten it between our write and this cleanup.
+    if (sentinelWritten && sentinelTs != null) {
+      const existing = await readRestartSentinel();
+      if (existing?.payload.ts === sentinelTs) {
+        await fs.unlink(resolveRestartSentinelPath()).catch(() => {});
+      }
     }
     const detail = restartMethod.detail ? ` Details: ${restartMethod.detail}` : "";
     return {
