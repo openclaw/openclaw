@@ -458,6 +458,9 @@ type WebFetchRuntimeParams = FirecrawlRuntimeParams & {
   cacheTtlMs: number;
   userAgent: string;
   readabilityEnabled: boolean;
+  ssrfPolicy?: {
+    allowRfc2544BenchmarkRange?: boolean;
+  };
 };
 
 function toFirecrawlContentParams(
@@ -512,8 +515,11 @@ async function maybeFetchFirecrawlWebFetchPayload(
 }
 
 async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string, unknown>> {
+  // Include ssrfPolicy in cache key to prevent cross-policy cache bypass
+  // Use JSON.stringify to encode the full policy object, ensuring future fields are automatically included
+  const ssrfPolicySuffix = params.ssrfPolicy ? `:${JSON.stringify(params.ssrfPolicy)}` : "";
   const cacheKey = normalizeCacheKey(
-    `fetch:${params.url}:${params.extractMode}:${params.maxChars}`,
+    `fetch:${params.url}:${params.extractMode}:${params.maxChars}${ssrfPolicySuffix}`,
   );
   const cached = readCache(FETCH_CACHE, cacheKey);
   if (cached) {
@@ -534,11 +540,19 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
   let res: Response;
   let release: (() => Promise<void>) | null = null;
   let finalUrl = params.url;
+
+  // Build SSRF policy from config
+  const policy =
+    params.ssrfPolicy?.allowRfc2544BenchmarkRange === true
+      ? { allowRfc2544BenchmarkRange: true }
+      : undefined;
+
   try {
     const result = await fetchWithWebToolsNetworkGuard({
       url: params.url,
       maxRedirects: params.maxRedirects,
       timeoutSeconds: params.timeoutSeconds,
+      policy,
       init: {
         headers: {
           Accept: "text/markdown, text/html;q=0.9, */*;q=0.1",
@@ -741,6 +755,7 @@ export function createWebFetchTool(options?: {
     return null;
   }
   const readabilityEnabled = resolveFetchReadabilityEnabled(fetch);
+  const ssrfPolicy = fetch?.ssrfPolicy;
   const firecrawl = resolveFirecrawlConfig(fetch);
   const runtimeFirecrawlActive = options?.runtimeFirecrawl?.active;
   const shouldResolveFirecrawlApiKey =
@@ -787,6 +802,7 @@ export function createWebFetchTool(options?: {
         cacheTtlMs: resolveCacheTtlMs(fetch?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
         userAgent,
         readabilityEnabled,
+        ssrfPolicy,
         firecrawlEnabled,
         firecrawlApiKey,
         firecrawlBaseUrl,

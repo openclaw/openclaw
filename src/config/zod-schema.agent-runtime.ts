@@ -324,6 +324,12 @@ export const ToolsWebFetchSchema = z
     maxRedirects: z.number().int().nonnegative().optional(),
     userAgent: z.string().optional(),
     readability: z.boolean().optional(),
+    ssrfPolicy: z
+      .object({
+        allowRfc2544BenchmarkRange: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     firecrawl: z
       .object({
         enabled: z.boolean().optional(),
