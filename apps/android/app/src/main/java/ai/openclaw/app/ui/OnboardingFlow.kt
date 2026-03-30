@@ -1459,8 +1459,8 @@ private fun PermissionsStep(
         subtitle = "Send and search text messages via the gateway",
         checked = enableSms,
         granted =
-          isPermissionGranted(context, Manifest.permission.SEND_SMS) &&
-                  isPermissionGranted(context, Manifest.permission.READ_SMS),
+          isPermissionGranted(context, Manifest.permission.SEND_SMS) ||
+            isPermissionGranted(context, Manifest.permission.READ_SMS),
         onCheckedChange = onSmsChange,
       )
     }
