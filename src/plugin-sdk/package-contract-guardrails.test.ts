@@ -1,9 +1,10 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import * as tar from "tar";
 import { describe, expect, it } from "vitest";
 import { pluginSdkEntrypoints } from "./entrypoints.js";
 
@@ -198,18 +199,23 @@ function packOpenClawToTempDir(packDir: string): string {
   return join(packDir, filename);
 }
 
-function readPackedRootPackageJson(archivePath: string): {
+async function readPackedRootPackageJson(archivePath: string): Promise<{
   dependencies?: Record<string, string>;
-} {
-  return JSON.parse(
-    execFileSync("tar", ["-xOf", archivePath, "package/package.json"], {
-      encoding: "utf8",
-      maxBuffer: NPM_PACK_MAX_BUFFER_BYTES,
-      stdio: ["ignore", "pipe", "pipe"],
-    }),
-  ) as {
-    dependencies?: Record<string, string>;
-  };
+}> {
+  const extractDir = mkdtempSync(join(os.tmpdir(), "openclaw-packed-root-package-json-"));
+  try {
+    await tar.x({
+      file: archivePath,
+      cwd: extractDir,
+      filter: (entryPath) => entryPath === "package/package.json",
+      strict: true,
+    });
+    return JSON.parse(readFileSync(join(extractDir, "package", "package.json"), "utf8")) as {
+      dependencies?: Record<string, string>;
+    };
+  } finally {
+    rmSync(extractDir, { recursive: true, force: true });
+  }
 }
 
 function readGeneratedFacadeTypeMap(): string {
@@ -332,14 +338,14 @@ describe("plugin-sdk package contract guardrails", () => {
     expect(resolvedPath).toContain("@matrix-org/matrix-sdk-crypto-wasm");
   });
 
-  it("keeps matrix crypto WASM in the packed artifact manifest", () => {
+  it("keeps matrix crypto WASM in the packed artifact manifest", async () => {
     const tempRoot = mkdtempSync(join(os.tmpdir(), "openclaw-matrix-wasm-pack-"));
     try {
       const packDir = join(tempRoot, "pack");
       mkdirSync(packDir, { recursive: true });
 
       const archivePath = packOpenClawToTempDir(packDir);
-      const packedPackageJson = readPackedRootPackageJson(archivePath);
+      const packedPackageJson = await readPackedRootPackageJson(archivePath);
       const matrixPackageJson = readMatrixPackageJson();
 
       expect(packedPackageJson.dependencies?.["@matrix-org/matrix-sdk-crypto-wasm"]).toBe(
