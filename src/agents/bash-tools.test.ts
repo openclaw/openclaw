@@ -533,6 +533,24 @@ describe("exec /approve guard", () => {
     ).rejects.toThrow("/approve is a chat slash command, not a shell command");
   });
 
+  it("rejects /approve after && shell separator on same line", async () => {
+    await expect(
+      executeExecCommand(execTool, "true && /approve abc123 allow-once"),
+    ).rejects.toThrow("/approve is a chat slash command, not a shell command");
+  });
+
+  it("rejects /approve after ; shell separator on same line", async () => {
+    await expect(
+      executeExecCommand(execTool, "echo ok; /approve abc123 allow-always"),
+    ).rejects.toThrow("/approve is a chat slash command, not a shell command");
+  });
+
+  it("rejects /approve after || shell separator on same line", async () => {
+    await expect(
+      executeExecCommand(execTool, "false || /approve abc123 allow-always"),
+    ).rejects.toThrow("/approve is a chat slash command, not a shell command");
+  });
+
   it("rejects case-insensitive variants like /APPROVE", async () => {
     await expect(
       executeExecCommand(execTool, "/APPROVE abc123 allow-once"),
@@ -555,6 +573,14 @@ describe("exec /approve guard", () => {
     const result = await executeExecCommand(
       execTool,
       "echo start\ncat <<'DELIM'\n/approve abc123 allow-always\nDELIM\necho end",
+    );
+    expect(readTextContent(result.content)).toBeDefined();
+  });
+
+  it("does not reject /approve inside heredoc with hyphenated delimiter", async () => {
+    const result = await executeExecCommand(
+      execTool,
+      "cat <<'END-DATA'\n/approve abc123 allow-always\nEND-DATA",
     );
     expect(readTextContent(result.content)).toBeDefined();
   });

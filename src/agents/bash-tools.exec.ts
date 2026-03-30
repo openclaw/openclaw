@@ -54,15 +54,47 @@ export type {
 } from "./bash-tools.exec-types.js";
 
 /**
- * The regex used to detect /approve slash commands in executable lines.
+ * The regex used to detect /approve slash commands.
  * Case-insensitive, supports optional @mention suffix.
+ * Anchored to the start of a *segment* (after splitting on shell separators).
  */
 const APPROVE_COMMAND_RE = /^\s*\/approve(?:@[^\s]*)?(\s|$)/i;
 
 /**
- * Check whether any *executable* line in a shell command contains /approve.
- * Heredoc / here-string bodies are skipped so that `/approve` literals
- * inside data blocks do not trigger a false positive.
+ * Split a single shell line into command segments separated by
+ * `&&`, `||`, `;`, or `|`. This is a best-effort heuristic — it does
+ * not handle quoted strings containing these operators, but that is
+ * acceptable for a safety guard (false positives are safe, false
+ * negatives are the risk).
+ */
+function splitShellSegments(line: string): string[] {
+  return line.split(/\s*(?:&&|\|\||[;|])\s*/);
+}
+
+/**
+ * Detect a heredoc opening on a line. Returns the delimiter word or null.
+ * Supports: <<EOF  <<'EOF'  <<"EOF"  <<-EOF  <<-'EOF-1'  <<"EOF_2"
+ * Uses [\w-]+ to cover delimiters with hyphens (e.g. END-OF-DATA).
+ * Only matches `<<` that is preceded by start-of-string or whitespace
+ * to avoid false positives on strings like `echo "<<EOF"`.
+ */
+function detectHeredocDelimiter(line: string): string | null {
+  const m = line.match(/(?:^|\s)<<-?\s*['"]?([\w-]+)['"]?/);
+  return m ? m[1] : null;
+}
+
+/**
+ * Check whether any *executable* segment in a shell command contains /approve.
+ *
+ * This is a **best-effort defence layer** (layer 3 of 3). The primary fixes
+ * are in the system prompt (layer 1) and the approval-pending tool output
+ * (layer 2). A perfect check would require a full shell parser, which is
+ * out of scope; this guard catches the realistic attack vectors produced
+ * by LLM-generated commands.
+ *
+ * - Lines inside heredoc bodies are skipped (no false positives on data).
+ * - Each executable line is split on shell separators (`&&`, `||`, `;`, `|`)
+ *   so that `/approve` after a separator is detected.
  */
 export function containsApproveCommand(command: string): boolean {
   const lines = command.split("\n");
@@ -75,14 +107,16 @@ export function containsApproveCommand(command: string): boolean {
       }
       continue; // skip data lines
     }
-    // Detect heredoc start: <<[-]?['"\\]?DELIM['"\\]?
-    const heredocMatch = line.match(/<<-?\s*['"]?(\w+)['"]?/);
-    if (heredocMatch) {
-      heredocDelimiter = heredocMatch[1];
+    // Detect heredoc start on this line.
+    const delim = detectHeredocDelimiter(line);
+    if (delim) {
+      heredocDelimiter = delim;
     }
-    // Test the line (even if it also starts a heredoc, the command part is real).
-    if (APPROVE_COMMAND_RE.test(line)) {
-      return true;
+    // Test every segment of the line (split on shell operators).
+    for (const segment of splitShellSegments(line)) {
+      if (APPROVE_COMMAND_RE.test(segment)) {
+        return true;
+      }
     }
   }
   return false;
