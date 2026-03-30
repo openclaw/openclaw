@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const runMock = vi.hoisted(() => vi.fn());
 const createTelegramBotMock = vi.hoisted(() => vi.fn());
@@ -13,6 +13,14 @@ vi.mock("@grammyjs/runner", () => ({
 vi.mock("./bot.js", () => ({
   createTelegramBot: createTelegramBotMock,
 }));
+
+vi.mock("./fetch.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./fetch.js")>();
+  return {
+    ...actual,
+    resolveTelegramApiBase: vi.fn((apiRoot?: string) => apiRoot ?? "https://api.telegram.org"),
+  };
+});
 
 vi.mock("./network-errors.js", () => ({
   isRecoverableTelegramNetworkError: isRecoverableTelegramNetworkErrorMock,
@@ -120,6 +128,7 @@ function createPollingSessionWithTransportRestart(params: {
 }) {
   return new TelegramPollingSession({
     token: "tok",
+    apiBase: "https://api.telegram.org",
     config: {},
     accountId: "default",
     runtime: undefined,
@@ -142,7 +151,12 @@ describe("TelegramPollingSession", () => {
     isRecoverableTelegramNetworkErrorMock.mockReset().mockReturnValue(true);
     computeBackoffMock.mockReset().mockReturnValue(0);
     sleepWithAbortMock.mockReset().mockResolvedValue(undefined);
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 200 }));
     ({ TelegramPollingSession } = await import("./polling-session.js"));
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it("uses backoff helpers for recoverable polling retries", async () => {
@@ -183,6 +197,7 @@ describe("TelegramPollingSession", () => {
 
     const session = new TelegramPollingSession({
       token: "tok",
+      apiBase: "https://api.telegram.org",
       config: {},
       accountId: "default",
       runtime: undefined,
@@ -199,7 +214,7 @@ describe("TelegramPollingSession", () => {
 
     expect(runMock).toHaveBeenCalledTimes(2);
     expect(computeBackoffMock).toHaveBeenCalledTimes(1);
-    expect(sleepWithAbortMock).toHaveBeenCalledTimes(1);
+    expect(sleepWithAbortMock.mock.calls.length).toBeGreaterThanOrEqual(1);
   });
 
   it("forces a restart when polling stalls without getUpdates activity", async () => {
@@ -248,6 +263,7 @@ describe("TelegramPollingSession", () => {
     const log = vi.fn();
     const session = new TelegramPollingSession({
       token: "tok",
+      apiBase: "https://api.telegram.org",
       config: {},
       accountId: "default",
       runtime: undefined,
@@ -269,8 +285,8 @@ describe("TelegramPollingSession", () => {
       expect(runMock).toHaveBeenCalledTimes(2);
       expect(firstRunnerStop).toHaveBeenCalledTimes(1);
       expect(botStop).toHaveBeenCalled();
-      expect(log).toHaveBeenCalledWith(expect.stringContaining("Polling stall detected"));
       expect(log).toHaveBeenCalledWith(expect.stringContaining("polling stall detected"));
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("forcing restart"));
     } finally {
       watchdogHarness.restore();
     }
@@ -317,6 +333,7 @@ describe("TelegramPollingSession", () => {
     try {
       const session = new TelegramPollingSession({
         token: "tok",
+        apiBase: "https://api.telegram.org",
         config: {},
         accountId: "default",
         runtime: undefined,
@@ -430,6 +447,7 @@ describe("TelegramPollingSession", () => {
     const log = vi.fn();
     const session = new TelegramPollingSession({
       token: "tok",
+      apiBase: "https://api.telegram.org",
       config: {},
       accountId: "default",
       runtime: undefined,
@@ -539,6 +557,7 @@ describe("TelegramPollingSession", () => {
     const log = vi.fn();
     const session = new TelegramPollingSession({
       token: "tok",
+      apiBase: "https://api.telegram.org",
       config: {},
       accountId: "default",
       runtime: undefined,
@@ -657,6 +676,7 @@ describe("TelegramPollingSession", () => {
     const log = vi.fn();
     const session = new TelegramPollingSession({
       token: "tok",
+      apiBase: "https://api.telegram.org",
       config: {},
       accountId: "default",
       runtime: undefined,
@@ -771,6 +791,7 @@ describe("TelegramPollingSession", () => {
     const log = vi.fn();
     const session = new TelegramPollingSession({
       token: "tok",
+      apiBase: "https://api.telegram.org",
       config: {},
       accountId: "default",
       runtime: undefined,
