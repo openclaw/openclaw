@@ -4,25 +4,25 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildSessionEntry, listSessionFilesForAgent } from "./session-files.js";
 
-describe("buildSessionEntry", () => {
-  let tmpDir: string;
-  let originalStateDir: string | undefined;
+let tmpDir: string;
+let originalStateDir: string | undefined;
 
-  beforeEach(async () => {
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "session-entry-test-"));
-    originalStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = tmpDir;
-  });
+beforeEach(async () => {
+  tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "session-entry-test-"));
+  originalStateDir = process.env.OPENCLAW_STATE_DIR;
+  process.env.OPENCLAW_STATE_DIR = tmpDir;
+});
 
-  afterEach(async () => {
-    if (originalStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = originalStateDir;
-    }
-    await fs.rm(tmpDir, { recursive: true, force: true });
-  });
+afterEach(async () => {
+  if (originalStateDir === undefined) {
+    delete process.env.OPENCLAW_STATE_DIR;
+  } else {
+    process.env.OPENCLAW_STATE_DIR = originalStateDir;
+  }
+  await fs.rm(tmpDir, { recursive: true, force: true });
+});
 
+describe("listSessionFilesForAgent", () => {
   it("includes reset and deleted transcripts in session file listing", async () => {
     const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
     await fs.mkdir(path.join(sessionsDir, "archive"), { recursive: true });
@@ -48,7 +48,9 @@ describe("buildSessionEntry", () => {
       included.toSorted(),
     );
   });
+});
 
+describe("buildSessionEntry", () => {
   it("returns lineMap tracking original JSONL line numbers", async () => {
     // Simulate a real session JSONL file with metadata records interspersed
     // Lines 1-3: non-message metadata records
