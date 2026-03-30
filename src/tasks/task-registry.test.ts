@@ -679,6 +679,48 @@ describe("task-registry", () => {
     });
   });
 
+  it("adopts parent flow linkage when collapsing onto an earlier ACP record", async () => {
+    await withTempDir({ prefix: "openclaw-task-registry-" }, async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+
+      const directTask = createTaskRecord({
+        runtime: "acp",
+        requesterSessionKey: "agent:main:main",
+        requesterOrigin: {
+          channel: "telegram",
+          to: "telegram:123",
+        },
+        childSessionKey: "agent:main:acp:child",
+        runId: "run-collapse-parent-flow",
+        task: "Direct ACP child",
+        status: "running",
+        deliveryStatus: "pending",
+      });
+
+      const spawnedTask = createTaskRecord({
+        runtime: "acp",
+        requesterSessionKey: "agent:main:main",
+        requesterOrigin: {
+          channel: "telegram",
+          to: "telegram:123",
+        },
+        parentFlowId: "flow-123",
+        childSessionKey: "agent:main:acp:child",
+        runId: "run-collapse-parent-flow",
+        task: "Spawn ACP child",
+        status: "running",
+        deliveryStatus: "pending",
+      });
+
+      expect(spawnedTask.taskId).toBe(directTask.taskId);
+      expect(findTaskByRunId("run-collapse-parent-flow")).toMatchObject({
+        taskId: directTask.taskId,
+        parentFlowId: "flow-123",
+      });
+    });
+  });
+
   it("collapses ACP run-owned task creation onto the existing spawned task", async () => {
     await withTempDir({ prefix: "openclaw-task-registry-" }, async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
@@ -772,6 +814,7 @@ describe("task-registry", () => {
       const task = createTaskRecord({
         runtime: "subagent",
         requesterSessionKey: "agent:main:main",
+        parentFlowId: "flow-restore",
         childSessionKey: "agent:main:subagent:child",
         runId: "run-restore",
         task: "Restore me",
@@ -785,6 +828,7 @@ describe("task-registry", () => {
 
       expect(resolveTaskForLookupToken(task.taskId)).toMatchObject({
         taskId: task.taskId,
+        parentFlowId: "flow-restore",
         runId: "run-restore",
         task: "Restore me",
       });

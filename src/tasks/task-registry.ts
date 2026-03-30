@@ -367,6 +367,7 @@ function mergeExistingTaskForCreate(
   params: {
     requesterOrigin?: TaskDeliveryState["requesterOrigin"];
     sourceId?: string;
+    parentFlowId?: string;
     parentTaskId?: string;
     agentId?: string;
     label?: string;
@@ -388,6 +389,9 @@ function mergeExistingTaskForCreate(
   }
   if (params.sourceId?.trim() && !existing.sourceId?.trim()) {
     patch.sourceId = params.sourceId.trim();
+  }
+  if (params.parentFlowId?.trim() && !existing.parentFlowId?.trim()) {
+    patch.parentFlowId = params.parentFlowId.trim();
   }
   if (params.parentTaskId?.trim() && !existing.parentTaskId?.trim()) {
     patch.parentTaskId = params.parentTaskId.trim();
@@ -910,6 +914,7 @@ export function createTaskRecord(params: {
   sourceId?: string;
   requesterSessionKey: string;
   requesterOrigin?: TaskDeliveryState["requesterOrigin"];
+  parentFlowId?: string;
   childSessionKey?: string;
   parentTaskId?: string;
   agentId?: string;
@@ -947,6 +952,7 @@ export function createTaskRecord(params: {
     runtime: params.runtime,
     sourceId: params.sourceId?.trim() || undefined,
     requesterSessionKey: params.requesterSessionKey,
+    parentFlowId: params.parentFlowId?.trim() || undefined,
     childSessionKey: params.childSessionKey,
     parentTaskId: params.parentTaskId?.trim() || undefined,
     agentId: params.agentId?.trim() || undefined,
