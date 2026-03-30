@@ -388,6 +388,34 @@ describe("renderDiffDocument", () => {
     ).toBe("/openclaw/plugins/diffs/assets/viewer.js");
   });
 
+  it("downgrades invalid language hints to plain text", async () => {
+    const rendered = await renderDiffDocument(
+      {
+        kind: "before_after",
+        before: "const value = 1;\n",
+        after: "const value = 2;\n",
+        lang: "not-a-real-language",
+      },
+      {
+        presentation: DEFAULT_DIFFS_TOOL_DEFAULTS,
+        image: resolveDiffImageRenderOptions({ defaults: DEFAULT_DIFFS_TOOL_DEFAULTS }),
+        expandUnchanged: false,
+      },
+    );
+
+    expect(rendered.title).toBe("Text diff");
+    expect(rendered.html).toContain("diff.txt");
+    expect(rendered.html).not.toContain("not-a-real-language");
+
+    const payloads = [...rendered.html.matchAll(/data-openclaw-diff-payload>(.*?)<\/script>/g)].map(
+      (match) => parseViewerPayloadJson(match[1] ?? ""),
+    );
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.langs).toEqual(["text"]);
+    expect(payloads[0]?.oldFile?.lang).toBeUndefined();
+    expect(payloads[0]?.newFile?.lang).toBeUndefined();
+  });
+
   it("renders multi-file patch input", async () => {
     const patch = [
       "diff --git a/a.ts b/a.ts",

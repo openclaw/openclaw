@@ -1,4 +1,4 @@
-import { FileDiff, preloadHighlighter } from "@pierre/diffs";
+import { FileDiff, preloadHighlighter, resolveLanguage } from "@pierre/diffs";
 import type {
   FileContents,
   FileDiffMetadata,
@@ -28,6 +28,28 @@ const viewerState: ViewerState = {
   backgroundEnabled: true,
   wrapEnabled: true,
 };
+
+export async function filterSupportedHydrationLanguages(
+  languages: Iterable<SupportedLanguages>,
+): Promise<SupportedLanguages[]> {
+  const supported = new Set<SupportedLanguages>();
+  for (const language of languages) {
+    if (language === "text" || language === "ansi") {
+      supported.add(language);
+      continue;
+    }
+    try {
+      await resolveLanguage(language as Exclude<SupportedLanguages, "text" | "ansi">);
+      supported.add(language);
+    } catch {
+      // Ignore invalid persisted hints and let the viewer fall back to plain text.
+    }
+  }
+  if (supported.size === 0) {
+    supported.add("text");
+  }
+  return [...supported];
+}
 
 function parsePayload(element: HTMLScriptElement): DiffViewerPayload {
   const raw = element.textContent?.trim();
@@ -268,7 +290,7 @@ async function hydrateViewer(): Promise<void> {
 
   await preloadHighlighter({
     themes: ["pierre-light", "pierre-dark"],
-    langs: langs.size > 0 ? [...langs] : ["text"],
+    langs: await filterSupportedHydrationLanguages(langs),
   });
 
   syncDocumentTheme();
@@ -297,10 +319,12 @@ async function main(): Promise<void> {
   }
 }
 
-if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", () => {
+if (typeof document !== "undefined") {
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", () => {
+      void main();
+    });
+  } else {
     void main();
-  });
-} else {
-  void main();
+  }
 }
