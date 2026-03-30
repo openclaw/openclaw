@@ -34,6 +34,7 @@ import {
   createOpenAIAttributionHeadersWrapper,
   createOpenAIDefaultTransportWrapper,
   createOpenAIFastModeWrapper,
+  createOpenAIReasoningCompatibilityWrapper,
   createOpenAIResponsesContextManagementWrapper,
   createOpenAIServiceTierWrapper,
   createOpenAITextVerbosityWrapper,
@@ -459,6 +460,15 @@ function applyPostPluginStreamWrappers(
     ctx.effectiveExtraParams,
   );
 
+  if (
+    ctx.provider === "openai" ||
+    ctx.provider === "openai-codex" ||
+    ctx.provider === "azure-openai" ||
+    ctx.provider === "azure-openai-responses"
+  ) {
+    ctx.agent.streamFn = createOpenAIReasoningCompatibilityWrapper(ctx.agent.streamFn);
+  }
+
   const rawParallelToolCalls = resolveAliasedParamValue(
     [ctx.resolvedExtraParams, ctx.override],
     "parallel_tool_calls",
@@ -518,7 +528,6 @@ export function applyExtraParamsToAgent(
     agentId,
     resolvedExtraParams,
   });
-
   const wrapperContext: ApplyExtraParamsContext = {
     agent,
     cfg,
