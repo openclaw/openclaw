@@ -507,9 +507,18 @@ describe("exec /approve guard", () => {
     expect(readTextContent(result.content)).toBeDefined();
   });
 
-  it("rejects /approve on a non-first line of a multiline command", async () => {
+  it("does not reject /approve in heredoc or non-first-line data", async () => {
+    // /approve on a non-first line is heredoc/stdin data, not an executed command
+    const result = await executeExecCommand(
+      execTool,
+      "cat <<'EOF'\n/approve abc123 allow-always\nEOF",
+    );
+    expect(readTextContent(result.content)).toBeDefined();
+  });
+
+  it("rejects /approve as the first line even in a multiline command", async () => {
     await expect(
-      executeExecCommand(execTool, "ls\n/approve abc123 allow-always"),
+      executeExecCommand(execTool, "/approve abc123 allow-always\necho done"),
     ).rejects.toThrow("/approve is a chat slash command, not a shell command");
   });
 
