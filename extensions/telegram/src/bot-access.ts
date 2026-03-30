@@ -87,8 +87,9 @@ export const resolveSenderAllowMatch = (params: {
   if (!allow.hasEntries) {
     return { allowed: false };
   }
-  if (senderId && allow.entries.includes(senderId)) {
-    return { allowed: true, matchKey: senderId, matchSource: "id" };
+  const senderIdStr = senderId ? String(senderId) : undefined;
+  if (senderIdStr && allow.entries.includes(senderIdStr)) {
+    return { allowed: true, matchKey: senderIdStr, matchSource: "id" };
   }
   return { allowed: false };
 };
