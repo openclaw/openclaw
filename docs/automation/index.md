@@ -13,26 +13,33 @@ OpenClaw provides several automation mechanisms, each suited to different use ca
 
 ## Quick decision guide
 
-```
-Do you need something to run on a schedule?
-  YES → Is exact timing critical?
-    YES → Cron (isolated)
-    NO  → Can it batch with other checks?
-      YES → Heartbeat
-      NO  → Cron
-  NO → Continue...
+```mermaid
+flowchart TD
+    A[What do you need?] --> B{Run on a schedule?}
+    A --> C{React to an event?}
+    A --> D{Receive external HTTP?}
+    A --> E{Persistent instructions?}
 
-Do you need to react to an event (message, tool call, session change)?
-  YES → Hooks (or plugin hooks)
+    B -->|Yes| F{Exact timing critical?}
+    F -->|Yes| G["**Cron** (isolated)"]
+    F -->|No| H{Can batch with other checks?}
+    H -->|Yes| I[**Heartbeat**]
+    H -->|No| J[**Cron**]
 
-Do you need to receive external HTTP events?
-  YES → Webhooks
+    C -->|Yes| K[**Hooks**]
+    D -->|Yes| L[**Webhooks**]
+    E -->|Yes| M[**Standing Orders**]
 
-Do you want persistent instructions the agent always follows?
-  YES → Standing Orders
+    G --> N[All background work tracked via **Tasks**]
+    J --> N
 
-Do you want to track what background work happened?
-  → Background Tasks (automatic for cron, ACP, subagents)
+    click I "/gateway/heartbeat"
+    click G "/automation/cron-jobs"
+    click J "/automation/cron-jobs"
+    click K "/automation/hooks"
+    click L "/automation/webhook"
+    click M "/automation/standing-orders"
+    click N "/automation/tasks"
 ```
 
 ## Mechanisms at a glance
