@@ -138,6 +138,29 @@ describe("createOpenClawCodingTools", () => {
     }
   });
 
+  it("accepts legacy old/newText when edits[] is present but empty", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-legacy-edit-empty-edits-"));
+    try {
+      const filePath = path.join(tmpDir, "legacy-empty-edits.js");
+      await fs.writeFile(filePath, "const value = 'old';\n", "utf8");
+
+      const tools = createOpenClawCodingTools({ workspaceDir: tmpDir });
+      const { editTool } = expectReadWriteEditTools(tools);
+
+      const result = await editTool.execute("tool-legacy-edit-empty-edits", {
+        path: "legacy-empty-edits.js",
+        oldText: "const value = 'old';\n",
+        newText: "const value = 'new';\n",
+        edits: [],
+      });
+
+      expect(result.content[0].text).toMatch(/Edited|Successfully replaced/i);
+      await expect(fs.readFile(filePath, "utf8")).resolves.toBe("const value = 'new';\n");
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("still rejects malformed legacy single-edit input missing newText", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-legacy-edit-invalid-"));
     try {
@@ -158,26 +181,5 @@ describe("createOpenClawCodingTools", () => {
     }
   });
 
-
-  it("still rejects blank legacy oldText values", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-legacy-edit-blank-"));
-    try {
-      const filePath = path.join(tmpDir, "legacy-blank.js");
-      await fs.writeFile(filePath, "const value = 'old';\n", "utf8");
-
-      const tools = createOpenClawCodingTools({ workspaceDir: tmpDir });
-      const { editTool } = expectReadWriteEditTools(tools);
-
-      await expect(
-        editTool.execute("tool-legacy-edit-blank", {
-          path: "legacy-blank.js",
-          oldText: "   ",
-          newText: "new",
-        }),
-      ).rejects.toThrow(/oldText|edits/i);
-    } finally {
-      await fs.rm(tmpDir, { recursive: true, force: true });
-    }
-  });
 
 });

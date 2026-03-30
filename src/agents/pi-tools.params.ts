@@ -25,8 +25,8 @@ export const CLAUDE_PARAM_GROUPS = {
       keys: ["edits", "oldText", "old_string", "old_text", "oldString"],
       label: "edits or oldText/newText aliases",
       validate: (record: Record<string, unknown>) => {
-        if (Array.isArray(record.edits)) {
-          return record.edits.length > 0;
+        if (Array.isArray(record.edits) && record.edits.length > 0) {
+          return true;
         }
         const readNonEmptyString = (...keys: string[]) =>
           keys.some((key) => {
@@ -167,7 +167,8 @@ export function normalizeToolParams(params: unknown): Record<string, unknown> | 
     });
   }
   if (
-    !("edits" in normalized) &&
+    ((!("edits" in normalized) ||
+      (Array.isArray(normalized.edits) && normalized.edits.length === 0))) &&
     typeof normalized.oldText === "string" &&
     typeof normalized.newText === "string"
   ) {
