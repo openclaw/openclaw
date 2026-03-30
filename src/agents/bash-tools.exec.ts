@@ -289,7 +289,11 @@ function rejectExecApprovalShellCommand(command: string): void {
     if (stripped.length === 0) {
       return [];
     }
-    return [stripped.join(" "), ...extractShellWrapperPayload(stripped)];
+    const nestedCandidates = extractShellWrapperPayload(stripped).flatMap((payload) => {
+      const innerArgv = splitShellArgs(payload);
+      return innerArgv ? buildCandidates(innerArgv) : [payload];
+    });
+    return [stripped.join(" "), ...nestedCandidates];
   };
 
   const rawCommand = command.trim();

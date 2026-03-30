@@ -279,6 +279,7 @@ describe("exec host env validation", () => {
     "sudo /approve abc123 allow-once",
     "sudo -E /approve abc123 allow-once",
     "bash -lc '/approve abc123 deny'",
+    "bash -c 'sudo /approve abc123 allow-once'",
     "sh -c '/approve abc123 allow-once'",
   ])("rejects /approve shell commands in %s", async (command) => {
     const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
