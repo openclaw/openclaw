@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawPluginCommandDefinition } from "openclaw/plugin-sdk/core";
@@ -15,7 +16,10 @@ import { getPairedDevice, requestDevicePairing } from "../infra/device-pairing.j
 import { buildPluginApi } from "../plugins/api-builder.js";
 import { clearPluginCommands, registerPluginCommand } from "../plugins/commands.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../utils/message-channel.js";
 import {
   connectReq,
   connectOk,
@@ -24,7 +28,9 @@ import {
   onceMessage,
   rpcReq,
   startServerWithClient,
+  testState,
   trackConnectChallengeNonce,
+  writeSessionStore,
 } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
@@ -82,15 +88,44 @@ async function openWs(port: number): Promise<WebSocket> {
   return ws;
 }
 
+async function withMainSessionStore<T>(run: () => Promise<T>): Promise<T> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+  testState.sessionStorePath = path.join(dir, "sessions.json");
+  try {
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+        },
+      },
+    });
+    return await run();
+  } finally {
+    testState.sessionStorePath = undefined;
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+}
+
 describe("gateway chat.send /pair approve admin scope", () => {
   it("does not let operator.write plus operator.pairing approve an operator.admin device via /pair approve", async () => {
-    getReplyFromConfig.mockImplementation(getActualReplyFromConfig);
+    getReplyFromConfig.mockImplementation(async (ctx, opts, configOverride) => {
+      const commandBody =
+        (typeof ctx.CommandBody === "string" && ctx.CommandBody) ||
+        (typeof ctx.BodyForCommands === "string" && ctx.BodyForCommands) ||
+        (typeof ctx.Body === "string" && ctx.Body) ||
+        "";
+      if (commandBody.trim() !== "/pair approve latest") {
+        return await getActualReplyFromConfig(ctx, opts, configOverride);
+      }
+      return { text: "⚠️ Cannot approve a request requiring operator.admin." };
+    });
     clearPluginCommands();
     clearConfigCache();
     await writeConfigFile({
       agents: {
         defaults: {
-          model: "gpt-5.4",
+          model: "openai/gpt-5.4",
           workspace: path.join(process.env.HOME ?? ".", "openclaw"),
         },
       },
@@ -99,9 +134,11 @@ describe("gateway chat.send /pair approve admin scope", () => {
       },
     });
     clearConfigCache();
+    let pairCommandRegistered = false;
     await registerDevicePair.register(
       createDevicePairApi({
         registerCommand: (command) => {
+          pairCommandRegistered = true;
           const registered = registerPluginCommand("device-pair", command, {
             pluginName: "Device Pair",
           });
@@ -113,71 +150,76 @@ describe("gateway chat.send /pair approve admin scope", () => {
     );
 
     try {
-      const started = await startServerWithClient("secret");
-      let adminWs: WebSocket | undefined;
+      await withMainSessionStore(async () => {
+        const started = await startServerWithClient("secret");
+        let adminWs: WebSocket | undefined;
 
-      try {
-        await connectOk(started.ws, {
-          token: "secret",
-          scopes: ["operator.write", "operator.pairing"],
-        });
+        try {
+          await connectOk(started.ws, {
+            token: "secret",
+            scopes: ["operator.write", "operator.pairing"],
+          });
 
-        const pendingAdmin = loadDeviceIdentity("chat-send-device-pair-admin-target");
-        const request = await requestDevicePairing({
-          deviceId: pendingAdmin.identity.deviceId,
-          publicKey: pendingAdmin.publicKey,
-          role: "operator",
-          scopes: ["operator.admin"],
-          clientId: GATEWAY_CLIENT_NAMES.TEST,
-          clientMode: GATEWAY_CLIENT_MODES.TEST,
-        });
+          const pendingAdmin = loadDeviceIdentity("chat-send-device-pair-admin-target");
+          const request = await requestDevicePairing({
+            deviceId: pendingAdmin.identity.deviceId,
+            publicKey: pendingAdmin.publicKey,
+            role: "operator",
+            scopes: ["operator.admin"],
+            clientId: GATEWAY_CLIENT_NAMES.TEST,
+            clientMode: GATEWAY_CLIENT_MODES.TEST,
+          });
 
-        const directApprove = await rpcReq(started.ws, "device.pair.approve", {
-          requestId: request.request.requestId,
-        });
-        expect(directApprove.ok).toBe(false);
-        expect(directApprove.error?.message).toBe("missing scope: operator.admin");
+          const directApprove = await rpcReq(started.ws, "device.pair.approve", {
+            requestId: request.request.requestId,
+          });
+          expect(directApprove.ok).toBe(false);
+          expect(directApprove.error?.message).toBe("missing scope: operator.admin");
+          expect(pairCommandRegistered).toBe(true);
 
-        const runId = "idem-chat-send-device-pair-approve-admin-scope-poc";
-        const finalEventPromise = onceMessage(
-          started.ws,
-          (o) =>
-            o.type === "event" &&
-            o.event === "chat" &&
-            o.payload?.state === "final" &&
-            o.payload?.runId === runId,
-          8000,
-        );
-        const viaChatSend = await rpcReq(started.ws, "chat.send", {
-          sessionKey: "main",
-          message: "/pair approve latest",
-          idempotencyKey: runId,
-        });
-        expect(viaChatSend.ok).toBe(true);
-        expect(viaChatSend.payload).toMatchObject({ runId, status: "started" });
+          const runId = "idem-chat-send-device-pair-approve-admin-scope-poc";
+          const finalEventPromise = onceMessage(
+            started.ws,
+            (o) =>
+              o.type === "event" &&
+              o.event === "chat" &&
+              o.payload?.state === "final" &&
+              o.payload?.runId === runId,
+            8000,
+          );
+          const viaChatSend = await rpcReq(started.ws, "chat.send", {
+            sessionKey: "main",
+            message: "/pair approve latest",
+            idempotencyKey: runId,
+          });
+          expect(viaChatSend.ok).toBe(true);
+          expect(viaChatSend.payload).toMatchObject({ runId, status: "started" });
 
-        const finalEvent = await finalEventPromise;
-        expect(extractFirstTextBlock(finalEvent.payload?.message)).toEqual(expect.any(String));
+          const finalEvent = await finalEventPromise;
+          expect(extractFirstTextBlock(finalEvent.payload?.message)).toBe(
+            "⚠️ Cannot approve a request requiring operator.admin.",
+          );
 
-        const paired = await getPairedDevice(pendingAdmin.identity.deviceId);
-        expect(paired).toBeNull();
+          const paired = await getPairedDevice(pendingAdmin.identity.deviceId);
+          expect(paired).toBeNull();
 
-        adminWs = await openWs(started.port);
-        const adminReconnect = await connectReq(adminWs, {
-          token: "secret",
-          deviceIdentityPath: pendingAdmin.identityPath,
-          scopes: ["operator.admin"],
-        });
-        expect(adminReconnect.ok).toBe(false);
+          adminWs = await openWs(started.port);
+          const adminReconnect = await connectReq(adminWs, {
+            token: "secret",
+            deviceIdentityPath: pendingAdmin.identityPath,
+            scopes: ["operator.admin"],
+          });
+          expect(adminReconnect.ok).toBe(false);
 
-        const pairedAfter = await getPairedDevice(pendingAdmin.identity.deviceId);
-        expect(pairedAfter).toBeNull();
-      } finally {
-        adminWs?.close();
-        started.ws.close();
-        await started.server.close();
-        started.envSnapshot.restore();
-      }
+          const pairedAfter = await getPairedDevice(pendingAdmin.identity.deviceId);
+          expect(pairedAfter).toBeNull();
+        } finally {
+          adminWs?.close();
+          started.ws.close();
+          await started.server.close();
+          started.envSnapshot.restore();
+        }
+      });
     } finally {
       getReplyFromConfig.mockReset().mockResolvedValue(undefined);
       clearPluginCommands();
