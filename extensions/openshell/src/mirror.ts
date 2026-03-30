@@ -21,12 +21,14 @@ async function copyTreeWithoutSymlinks(params: {
   if (stats.isDirectory()) {
     await fs.mkdir(params.targetPath, { recursive: true });
     const entries = await fs.readdir(params.sourcePath);
-    for (const entry of entries) {
-      await copyTreeWithoutSymlinks({
-        sourcePath: path.join(params.sourcePath, entry),
-        targetPath: path.join(params.targetPath, entry),
-      });
-    }
+    await Promise.all(
+      entries.map(async (entry) => {
+        await copyTreeWithoutSymlinks({
+          sourcePath: path.join(params.sourcePath, entry),
+          targetPath: path.join(params.targetPath, entry),
+        });
+      }),
+    );
     return;
   }
   if (stats.isFile()) {

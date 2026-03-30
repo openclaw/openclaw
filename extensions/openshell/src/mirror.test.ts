@@ -8,20 +8,20 @@ import {
   stageDirectoryContents,
 } from "./mirror.js";
 
+const dirs: string[] = [];
+
+async function makeTmpDir(): Promise<string> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mirror-test-"));
+  dirs.push(dir);
+  return dir;
+}
+
+afterEach(async () => {
+  await Promise.all(dirs.map((d) => fs.rm(d, { recursive: true, force: true })));
+  dirs.length = 0;
+});
+
 describe("replaceDirectoryContents", () => {
-  const dirs: string[] = [];
-
-  async function makeTmpDir(): Promise<string> {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mirror-test-"));
-    dirs.push(dir);
-    return dir;
-  }
-
-  afterEach(async () => {
-    await Promise.all(dirs.map((d) => fs.rm(d, { recursive: true, force: true })));
-    dirs.length = 0;
-  });
-
   it("copies source entries to target", async () => {
     const source = await makeTmpDir();
     const target = await makeTmpDir();
@@ -145,7 +145,9 @@ describe("replaceDirectoryContents", () => {
     await expect(fs.lstat(path.join(target, "escaped-link"))).rejects.toThrow();
     await expect(fs.lstat(path.join(target, "nested", "escaped-dir"))).rejects.toThrow();
   });
+});
 
+describe("stageDirectoryContents", () => {
   it("stages upload content without symbolic links", async () => {
     const source = await makeTmpDir();
     const staged = await makeTmpDir();
