@@ -116,7 +116,7 @@ export async function loadChatHistory(state: ChatState) {
       state.lastError = String(err);
     }
   } finally {
-    if (state.chatHistoryRequestId === requestId && state.sessionKey === sessionKeyAtRequest) {
+    if (state.chatHistoryRequestId === requestId) {
       state.chatLoading = false;
     }
   }
@@ -255,6 +255,12 @@ export async function sendChatMessage(
     });
 
     if (state.sessionKey !== sessionKeyAtSend) {
+      state.chatRunId = null;
+      state.chatStream = null;
+      state.chatStreamStartedAt = null;
+      state.chatMessages = state.chatMessages.filter(
+        (m) => !(m && typeof m === "object" && (m as Record<string, unknown>).timestamp === now),
+      );
       return null;
     }
 
