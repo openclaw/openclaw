@@ -1207,7 +1207,7 @@ export async function runConfigSchema(opts: { runtime?: RuntimeEnv } = {}) {
 
 export async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } = {}) {
   const runtime = opts.runtime ?? defaultRuntime;
-  let outputPath = CONFIG_PATH ?? "openclaw.json";
+  let outputPath = CONFIG_PATH ?? "nexus-agent.json";
 
   try {
     const snapshot = await readConfigFileSnapshot();

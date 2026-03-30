@@ -83,13 +83,13 @@ cp docs/reference/AGENTS.default.md ~/.openclaw/workspace/AGENTS.md
 
 ## 备份提示（推荐）
 
-如果你将此工作区视为 Clawd 的"记忆"，请将其设为 git 仓库（最好是私有的），这样 `AGENTS.md` 和你的记忆文件就会被备份。
+如果你将此工作区视为智能体的"记忆"，请将其设为 git 仓库（最好是私有的），这样 `AGENTS.md` 和你的记忆文件就会被备份。
 
 ```bash
 cd ~/.openclaw/workspace
 git init
 git add AGENTS.md
-git commit -m "Add Clawd workspace"
+git commit -m "Add agent workspace"
 # 可选：添加私有远程仓库 + push
 ```
 

@@ -30,7 +30,7 @@ The tool only appears when at least one image generation provider is available. 
 }
 ```
 
-3. Ask the agent: _"Generate an image of a friendly lobster mascot."_
+3. Ask the agent: _"Generate an image of a friendly spider mascot."_
 
 The agent calls `image_generate` automatically. No tool allow-listing needed — it's enabled by default when a provider is available.
 

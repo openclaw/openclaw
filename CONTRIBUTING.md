@@ -1,23 +1,21 @@
-# Contributing to OpenClaw
+# Contributing to Nexus Agent
 
-Welcome to the lobster tank! 🦞
+Welcome to Nexus Agent!
 
 ## Quick Links
 
-- **GitHub:** https://github.com/openclaw/openclaw
+- **GitHub:** https://github.com/Johnny3116/Nexus-Agent
 - **Vision:** [`VISION.md`](VISION.md)
-- **Discord:** https://discord.gg/qkhbAGHRBT
-- **X/Twitter:** [@steipete](https://x.com/steipete) / [@openclaw](https://x.com/openclaw)
 
 ## Maintainers
 
 - **Peter Steinberger** - Benevolent Dictator
   - GitHub: [@steipete](https://github.com/steipete) · X: [@steipete](https://x.com/steipete)
 
-- **Shadow** - Discord subsystem, Discord admin, Clawhub, all community moderation
+- **Shadow** - Discord subsystem, Discord admin, Skills Hub, all community moderation
   - GitHub: [@thewilloftheshadow](https://github.com/thewilloftheshadow) · X: [@4shadowed](https://x.com/4shadowed)
 
-- **Vignesh** - Memory (QMD), formal modeling, TUI, IRC, and Lobster
+- **Vignesh** - Memory (QMD), formal modeling, TUI, IRC
   - GitHub: [@vignesh07](https://github.com/vignesh07) · X: [@\_vgnsh](https://x.com/_vgnsh)
 
 - **Jos** - Telegram, API, Nix mode

@@ -112,7 +112,7 @@ Config sample:
         id: "main",
         identity: {
           name: "OpenClaw",
-          theme: "space lobster",
+          theme: "nexus-iris",
           emoji: "🦞",
           avatar: "avatars/openclaw.png",
         },

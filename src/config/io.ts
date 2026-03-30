@@ -71,8 +71,8 @@ const SHELL_ENV_EXPECTED_KEYS = [
   "DISCORD_BOT_TOKEN",
   "SLACK_BOT_TOKEN",
   "SLACK_APP_TOKEN",
-  "OPENCLAW_GATEWAY_TOKEN",
-  "OPENCLAW_GATEWAY_PASSWORD",
+  "NEXUS_GATEWAY_TOKEN",
+  "NEXUS_GATEWAY_PASSWORD",
 ];
 
 const OPEN_DM_POLICY_ALLOW_FROM_RE =
@@ -2372,7 +2372,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
 }
 
 // NOTE: These wrappers intentionally do *not* cache the resolved config path at
-// module scope. `OPENCLAW_CONFIG_PATH` (and friends) are expected to work even
+// module scope. `NEXUS_CONFIG_PATH` (and friends) are expected to work even
 // when set after the module has been imported (tests, one-off scripts, etc.).
 const AUTO_OWNER_DISPLAY_SECRET_BY_PATH = new Map<string, string>();
 const AUTO_OWNER_DISPLAY_SECRET_PERSIST_IN_FLIGHT = new Set<string>();

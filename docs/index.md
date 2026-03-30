@@ -1,32 +1,17 @@
 ---
-summary: "OpenClaw is a multi-channel gateway for AI agents that runs on any OS."
+summary: "Nexus Agent is an autonomous agent layer for the Nexus AI ecosystem."
 read_when:
-  - Introducing OpenClaw to newcomers
-title: "OpenClaw"
+  - Introducing Nexus Agent to newcomers
+title: "Nexus Agent"
 ---
 
-# OpenClaw 🦞
+# Nexus Agent
+
+> _"Where all threads meet."_
 
 <p align="center">
-    <img
-        src="/assets/openclaw-logo-text-dark.png"
-        alt="OpenClaw"
-        width="500"
-        class="dark:hidden"
-    />
-    <img
-        src="/assets/openclaw-logo-text.png"
-        alt="OpenClaw"
-        width="500"
-        class="hidden dark:block"
-    />
-</p>
-
-> _"EXFOLIATE! EXFOLIATE!"_ — A space lobster, probably
-
-<p align="center">
-  <strong>Any OS gateway for AI agents across WhatsApp, Telegram, Discord, iMessage, and more.</strong><br />
-  Send a message, get an agent response from your pocket. Plugins add Mattermost and more.
+  <strong>Autonomous agent layer with heartbeat reasoning, scheduled tasks, and multi-channel communication.</strong><br />
+  Telegram chat, Discord notifications, WebUI dashboard — all locked behind Tailscale.
 </p>
 
 <Columns>

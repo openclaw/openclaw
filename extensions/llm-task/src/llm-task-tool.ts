@@ -54,7 +54,7 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
     name: "llm-task",
     label: "LLM Task",
     description:
-      "Run a generic JSON-only LLM task and return schema-validated JSON. Designed for orchestration from Lobster workflows via openclaw.invoke.",
+      "Run a generic JSON-only LLM task and return schema-validated JSON. Designed for orchestration from workflow engines via openclaw.invoke.",
     parameters: Type.Object({
       prompt: Type.String({ description: "Task instruction for the LLM." }),
       input: Type.Optional(Type.Unknown({ description: "Optional input payload for the task." })),

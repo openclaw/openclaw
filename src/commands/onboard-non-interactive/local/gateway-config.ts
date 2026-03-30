@@ -52,7 +52,7 @@ export function applyNonInteractiveGatewayConfig(params: {
 
   let nextConfig = params.nextConfig;
   const explicitGatewayToken = normalizeGatewayTokenInput(opts.gatewayToken);
-  const envGatewayToken = normalizeGatewayTokenInput(process.env.OPENCLAW_GATEWAY_TOKEN);
+  const envGatewayToken = normalizeGatewayTokenInput(process.env.NEXUS_GATEWAY_TOKEN);
   let gatewayToken = explicitGatewayToken || envGatewayToken || undefined;
   const gatewayTokenRefEnv = String(opts.gatewayTokenRefEnv ?? "").trim();
 
@@ -60,7 +60,7 @@ export function applyNonInteractiveGatewayConfig(params: {
     if (gatewayTokenRefEnv) {
       if (!isValidEnvSecretRefId(gatewayTokenRefEnv)) {
         runtime.error(
-          "Invalid --gateway-token-ref-env (use env var name like OPENCLAW_GATEWAY_TOKEN).",
+          "Invalid --gateway-token-ref-env (use env var name like NEXUS_GATEWAY_TOKEN).",
         );
         runtime.exit(1);
         return null;

@@ -2,7 +2,7 @@
   "name": "@openclaw/telegram",
   "version": "2026.3.30",
   "private": true,
-  "description": "OpenClaw Telegram channel plugin",
+  "description": "Nexus Agent Telegram channel plugin",
   "type": "module",
   "dependencies": {
     "@grammyjs/runner": "^2.0.3",
@@ -26,7 +26,7 @@
       "selectionDocsPrefix": "",
       "selectionDocsOmitLabel": true,
       "selectionExtras": [
-        "https://openclaw.ai"
+        "https://github.com/Johnny3116/Nexus-Agent"
       ],
       "markdownCapable": true
     },

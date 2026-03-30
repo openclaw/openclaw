@@ -398,7 +398,7 @@ export async function runServiceRestart(params: {
     // Check for token drift before restart (service token vs config token)
     try {
       const command = await params.service.readCommand(process.env);
-      const serviceToken = command?.environment?.OPENCLAW_GATEWAY_TOKEN;
+      const serviceToken = command?.environment?.NEXUS_GATEWAY_TOKEN;
       const cfg = await readBestEffortConfig();
       const configToken = resolveGatewayTokenForDriftCheck({ cfg, env: process.env });
       const driftIssue = checkTokenDrift({ serviceToken, configToken });

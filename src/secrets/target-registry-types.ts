@@ -1,4 +1,4 @@
-export type SecretTargetConfigFile = "openclaw.json" | "auth-profiles.json"; // pragma: allowlist secret
+export type SecretTargetConfigFile = "nexus-agent.json" | "auth-profiles.json"; // pragma: allowlist secret
 export type SecretTargetShape = "secret_input" | "sibling_ref"; // pragma: allowlist secret
 export type SecretTargetExpected = "string" | "string-or-object"; // pragma: allowlist secret
 export type AuthProfileType = "api_key" | "token";

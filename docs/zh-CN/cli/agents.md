@@ -71,7 +71,7 @@ openclaw agents set-identity --agent main --name "OpenClaw" --emoji "🦞" --ava
         id: "main",
         identity: {
           name: "OpenClaw",
-          theme: "space lobster",
+          theme: "nexus-iris",
           emoji: "🦞",
           avatar: "avatars/openclaw.png",
         },

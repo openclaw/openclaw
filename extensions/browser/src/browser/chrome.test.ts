@@ -160,7 +160,7 @@ describe("browser chrome profile decoration", () => {
 
   it("best-effort writes name when color is invalid", async () => {
     const userDataDir = await createUserDataDir();
-    decorateOpenClawProfile(userDataDir, { color: "lobster-orange" });
+    decorateOpenClawProfile(userDataDir, { color: "nexus-purple" });
     const def = await readDefaultProfileFromLocalState(userDataDir);
 
     expect(def.name).toBe(DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME);

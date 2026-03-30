@@ -245,12 +245,12 @@ if (isMainModule({ currentFile: fileURLToPath(import.meta.url) })) {
   const argv = process.argv.slice(2);
   if (argv.includes("--token") || argv.includes("--gateway-token")) {
     console.error(
-      "Warning: --token can be exposed via process listings. Prefer --token-file or OPENCLAW_GATEWAY_TOKEN.",
+      "Warning: --token can be exposed via process listings. Prefer --token-file or NEXUS_GATEWAY_TOKEN.",
     );
   }
   if (argv.includes("--password") || argv.includes("--gateway-password")) {
     console.error(
-      "Warning: --password can be exposed via process listings. Prefer --password-file or OPENCLAW_GATEWAY_PASSWORD.",
+      "Warning: --password can be exposed via process listings. Prefer --password-file or NEXUS_GATEWAY_PASSWORD.",
     );
   }
   const opts = parseArgs(argv);

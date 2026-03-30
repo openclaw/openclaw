@@ -120,8 +120,8 @@ export async function materializeSubagentAttachments(params: {
 
   const attachmentId = crypto.randomUUID();
   const childWorkspaceDir = resolveAgentWorkspaceDir(params.config, params.targetAgentId);
-  const absRootDir = path.join(childWorkspaceDir, ".openclaw", "attachments");
-  const relDir = path.posix.join(".openclaw", "attachments", attachmentId);
+  const absRootDir = path.join(childWorkspaceDir, ".nexus-agent", "attachments");
+  const relDir = path.posix.join(".nexus-agent", "attachments", attachmentId);
   const absDir = path.join(absRootDir, attachmentId);
 
   const fail = (error: string): never => {

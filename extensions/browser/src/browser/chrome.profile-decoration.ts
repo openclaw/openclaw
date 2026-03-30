@@ -6,7 +6,7 @@ import {
 } from "./constants.js";
 
 function decoratedMarkerPath(userDataDir: string) {
-  return path.join(userDataDir, ".openclaw-profile-decorated");
+  return path.join(userDataDir, ".nexus-profile-decorated");
 }
 
 function safeReadJson(filePath: string): Record<string, unknown> | null {
@@ -123,7 +123,7 @@ export function isProfileDecorated(
 }
 
 /**
- * Best-effort profile decoration (name + lobster-orange). Chrome preference keys
+ * Best-effort profile decoration (name + nexus-purple). Chrome preference keys
  * vary by version; we keep this conservative and idempotent.
  */
 export function decorateOpenClawProfile(

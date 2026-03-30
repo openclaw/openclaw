@@ -334,8 +334,8 @@ export function registerControlUiAndPairingSuite(): void {
     };
     testState.gatewayAuth = { mode: "token", token: "secret" };
     await writeTrustedProxyControlUiConfig({ allowInsecureAuth: true });
-    const prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
-    process.env.OPENCLAW_GATEWAY_TOKEN = "secret";
+    const prevToken = process.env.NEXUS_GATEWAY_TOKEN;
+    process.env.NEXUS_GATEWAY_TOKEN = "secret";
     try {
       await withGatewayServer(async ({ port }) => {
         const ws = new WebSocket(`ws://127.0.0.1:${port}`, {
@@ -396,8 +396,8 @@ export function registerControlUiAndPairingSuite(): void {
   test("allows control ui with stale device identity when device auth is disabled", async () => {
     testState.gatewayControlUi = { dangerouslyDisableDeviceAuth: true };
     testState.gatewayAuth = { mode: "token", token: "secret" };
-    const prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
-    process.env.OPENCLAW_GATEWAY_TOKEN = "secret";
+    const prevToken = process.env.NEXUS_GATEWAY_TOKEN;
+    process.env.NEXUS_GATEWAY_TOKEN = "secret";
     try {
       await withGatewayServer(async ({ port }) => {
         const ws = await openWs(port, { origin: originForPort(port) });
@@ -433,8 +433,8 @@ export function registerControlUiAndPairingSuite(): void {
   test("preserves requested control ui scopes when dangerouslyDisableDeviceAuth bypasses device identity", async () => {
     testState.gatewayControlUi = { dangerouslyDisableDeviceAuth: true };
     testState.gatewayAuth = { mode: "token", token: "secret" };
-    const prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
-    process.env.OPENCLAW_GATEWAY_TOKEN = "secret";
+    const prevToken = process.env.NEXUS_GATEWAY_TOKEN;
+    process.env.NEXUS_GATEWAY_TOKEN = "secret";
     try {
       await withGatewayServer(async ({ port }) => {
         const ws = await openWs(port, { origin: originForPort(port) });
@@ -961,9 +961,9 @@ export function registerControlUiAndPairingSuite(): void {
     ws2.close();
     await server.close();
     if (prevToken === undefined) {
-      delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      delete process.env.NEXUS_GATEWAY_TOKEN;
     } else {
-      process.env.OPENCLAW_GATEWAY_TOKEN = prevToken;
+      process.env.NEXUS_GATEWAY_TOKEN = prevToken;
     }
   });
 

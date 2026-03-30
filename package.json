@@ -1,20 +1,20 @@
 {
-  "name": "openclaw",
+  "name": "nexus-agent",
   "version": "2026.3.30",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
-  "homepage": "https://github.com/openclaw/openclaw#readme",
+  "homepage": "https://github.com/Johnny3116/Nexus-Agent#readme",
   "bugs": {
-    "url": "https://github.com/openclaw/openclaw/issues"
+    "url": "https://github.com/Johnny3116/Nexus-Agent/issues"
   },
   "license": "MIT",
   "author": "",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/openclaw/openclaw.git"
+    "url": "git+https://github.com/Johnny3116/Nexus-Agent.git"
   },
   "bin": {
-    "openclaw": "openclaw.mjs"
+    "nexus-agent": "nexus-agent.mjs"
   },
   "directories": {
     "doc": "docs",
@@ -23,7 +23,7 @@
   "files": [
     "CHANGELOG.md",
     "LICENSE",
-    "openclaw.mjs",
+    "nexus-agent.mjs",
     "README.md",
     "assets/",
     "dist/",

@@ -767,7 +767,7 @@ describe("monitorDiscordProvider", () => {
     );
     clientFetchUserMock.mockImplementationOnce(async () => {
       emitter.emit("debug", "WebSocket connection opened");
-      return { id: "bot-1", username: "Molty" };
+      return { id: "bot-1", username: "Nexus" };
     });
     isVerboseMock.mockReturnValue(true);
 

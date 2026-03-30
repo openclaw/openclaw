@@ -29,7 +29,7 @@ export function resolveOsHomeDir(
 }
 
 function resolveRawHomeDir(env: NodeJS.ProcessEnv, homedir: () => string): string | undefined {
-  const explicitHome = normalize(env.OPENCLAW_HOME);
+  const explicitHome = normalize(env.NEXUS_HOME);
   if (explicitHome) {
     if (explicitHome === "~" || explicitHome.startsWith("~/") || explicitHome.startsWith("~\\")) {
       const fallbackHome = resolveRawOsHomeDir(env, homedir);

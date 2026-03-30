@@ -179,7 +179,7 @@ OpenClaw 为 browser、canvas、nodes 和 cron 暴露**一流的智能体工具*
 
 可选的插件工具：
 
-- [Lobster](/tools/lobster)：带有可恢复审批的类型化工作流运行时（需要 Gateway 网关主机上的 Lobster CLI）。
+- 工作流运行时：带有可恢复审批的类型化工作流管道。
 - [LLM Task](/tools/llm-task)：用于结构化工作流输出的 JSON-only LLM 步骤（可选 schema 验证）。
 
 ## 工具清单

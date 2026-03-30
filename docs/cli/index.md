@@ -79,7 +79,7 @@ This page describes the current CLI behavior. If commands change, update this do
 
 ## Color palette
 
-OpenClaw uses a lobster palette for CLI output.
+OpenClaw uses a Nexus palette for CLI output.
 
 - `accent` (#FF5A2D): headings, labels, primary highlights.
 - `accentBright` (#FF7A3D): command names, emphasis.
@@ -90,7 +90,7 @@ OpenClaw uses a lobster palette for CLI output.
 - `error` (#E23D2D): errors, failures.
 - `muted` (#8B7F77): de-emphasis, metadata.
 
-Palette source of truth: `src/terminal/palette.ts` (the “lobster palette”).
+Palette source of truth: `src/terminal/palette.ts` (the Nexus palette).
 
 ## Command tree
 
@@ -523,9 +523,9 @@ List and inspect available skills plus readiness info.
 
 Subcommands:
 
-- `skills search [query...]`: search ClawHub skills.
-- `skills install <slug>`: install a skill from ClawHub into the active workspace.
-- `skills update <slug|--all>`: update tracked ClawHub skills.
+- `skills search [query...]`: search Skills Hub skills.
+- `skills install <slug>`: install a skill from Skills Hub into the active workspace.
+- `skills update <slug|--all>`: update tracked Skills Hub skills.
 - `skills list`: list skills (default when no subcommand).
 - `skills info <name>`: show details for one skill.
 - `skills check`: summary of ready vs missing requirements.
@@ -536,7 +536,7 @@ Options:
 - `--json`: output JSON (no styling).
 - `-v`, `--verbose`: include missing requirements detail.
 
-Tip: use `openclaw skills search`, `openclaw skills install`, and `openclaw skills update` for ClawHub-backed skills.
+Tip: use `openclaw skills search`, `openclaw skills install`, and `openclaw skills update` for Skills Hub-backed skills.
 
 ### `pairing`
 

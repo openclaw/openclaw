@@ -1,12 +1,12 @@
-# OpenClaw ACP Bridge
+# Nexus Agent ACP Bridge
 
-This document describes how the OpenClaw ACP (Agent Client Protocol) bridge works,
+This document describes how the Nexus Agent ACP (Agent Client Protocol) bridge works,
 how it maps ACP sessions to Gateway sessions, and how IDEs should invoke it.
 
 ## Overview
 
-`openclaw acp` exposes an ACP agent over stdio and forwards prompts to a running
-OpenClaw Gateway over WebSocket. It keeps ACP session ids mapped to Gateway
+`nexus-agent acp` exposes an ACP agent over stdio and forwards prompts to a running
+Nexus Agent Gateway over WebSocket. It keeps ACP session ids mapped to Gateway
 session keys so IDEs can reconnect to the same agent transcript or reset it on
 request.
 

@@ -1,15 +1,15 @@
 ---
-summary: "ClawHub guide: public registry, native OpenClaw install flows, and ClawHub CLI workflows"
+summary: "Skills Hub guide: public registry, native OpenClaw install flows, and Skills Hub CLI workflows"
 read_when:
-  - Introducing ClawHub to new users
+  - Introducing Skills Hub to new users
   - Installing, searching, or publishing skills or plugins
-  - Explaining ClawHub CLI flags and sync behavior
-title: "ClawHub"
+  - Explaining Skills Hub CLI flags and sync behavior
+title: "Skills Hub"
 ---
 
-# ClawHub
+# Skills Hub (ClawHub)
 
-ClawHub is the public registry for **OpenClaw skills and plugins**.
+Skills Hub (formerly ClawHub) is the public registry for **OpenClaw skills and plugins**.
 
 - Use native `openclaw` commands to search/install/update skills and install
   plugins from ClawHub.

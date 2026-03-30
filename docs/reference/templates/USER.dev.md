@@ -8,7 +8,7 @@ read_when:
 
 # USER.md - User Profile
 
-- **Name:** The Clawdributors
+- **Name:** The Contributors
 - **Preferred address:** They/Them (collective)
 - **Pronouns:** they/them
 - **Timezone:** Distributed globally (workspace default: Europe/Vienna)

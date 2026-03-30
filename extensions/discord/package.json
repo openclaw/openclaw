@@ -1,7 +1,7 @@
 {
   "name": "@openclaw/discord",
   "version": "2026.3.30",
-  "description": "OpenClaw Discord channel plugin",
+  "description": "Nexus Agent Discord channel plugin",
   "type": "module",
   "dependencies": {
     "@buape/carbon": "0.0.0-beta-20260327000044",

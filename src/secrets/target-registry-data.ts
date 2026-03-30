@@ -33,7 +33,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "agents.defaults.memorySearch.remote.apiKey",
     targetType: "agents.defaults.memorySearch.remote.apiKey",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "agents.defaults.memorySearch.remote.apiKey",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -44,7 +44,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "agents.list[].memorySearch.remote.apiKey",
     targetType: "agents.list[].memorySearch.remote.apiKey",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "agents.list[].memorySearch.remote.apiKey",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -55,7 +55,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "channels.bluebubbles.accounts.*.password",
     targetType: "channels.bluebubbles.accounts.*.password",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "channels.bluebubbles.accounts.*.password",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -66,7 +66,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "channels.bluebubbles.password",
     targetType: "channels.bluebubbles.password",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "channels.bluebubbles.password",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -77,7 +77,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "channels.discord.accounts.*.pluralkit.token",
     targetType: "channels.discord.accounts.*.pluralkit.token",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "channels.discord.accounts.*.pluralkit.token",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -88,7 +88,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "channels.discord.accounts.*.token",
     targetType: "channels.discord.accounts.*.token",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "channels.discord.accounts.*.token",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -99,7 +99,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "channels.discord.accounts.*.voice.tts.providers.*.apiKey",
     targetType: "channels.discord.accounts.*.voice.tts.providers.*.apiKey",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "channels.discord.accounts.*.voice.tts.providers.*.apiKey",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -111,7 +111,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "channels.discord.pluralkit.token",
     targetType: "channels.discord.pluralkit.token",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "channels.discord.pluralkit.token",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -122,7 +122,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "channels.discord.token",
     targetType: "channels.discord.token",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "channels.discord.token",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -133,7 +133,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "channels.discord.voice.tts.providers.*.apiKey",
     targetType: "channels.discord.voice.tts.providers.*.apiKey",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "channels.discord.voice.tts.providers.*.apiKey",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -145,7 +145,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "channels.feishu.accounts.*.appSecret",
     targetType: "channels.feishu.accounts.*.appSecret",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "channels.feishu.accounts.*.appSecret",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -156,7 +156,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "channels.feishu.accounts.*.encryptKey",
     targetType: "channels.feishu.accounts.*.encryptKey",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "channels.feishu.accounts.*.encryptKey",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -167,7 +167,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "channels.feishu.accounts.*.verificationToken",
     targetType: "channels.feishu.accounts.*.verificationToken",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "channels.feishu.accounts.*.verificationToken",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -178,7 +178,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "channels.feishu.appSecret",
     targetType: "channels.feishu.appSecret",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "channels.feishu.appSecret",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -189,7 +189,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "channels.feishu.encryptKey",
     targetType: "channels.feishu.encryptKey",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "channels.feishu.encryptKey",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -200,7 +200,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "channels.feishu.verificationToken",
     targetType: "channels.feishu.verificationToken",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "channels.feishu.verificationToken",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -212,7 +212,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
     id: "channels.googlechat.accounts.*.serviceAccount",
     targetType: "channels.googlechat.serviceAccount",
     targetTypeAliases: ["channels.googlechat.accounts.*.serviceAccount"],
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "channels.googlechat.accounts.*.serviceAccount",
     refPathPattern: "channels.googlechat.accounts.*.serviceAccountRef",
     secretShape: SIBLING_REF_SHAPE,
@@ -225,7 +225,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "channels.googlechat.serviceAccount",
     targetType: "channels.googlechat.serviceAccount",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "channels.googlechat.serviceAccount",
     refPathPattern: "channels.googlechat.serviceAccountRef",
     secretShape: SIBLING_REF_SHAPE,
@@ -237,7 +237,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "channels.irc.accounts.*.nickserv.password",
     targetType: "channels.irc.accounts.*.nickserv.password",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "channels.irc.accounts.*.nickserv.password",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -248,7 +248,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "channels.irc.accounts.*.password",
     targetType: "channels.irc.accounts.*.password",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "channels.irc.accounts.*.password",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -259,7 +259,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "channels.irc.nickserv.password",
     targetType: "channels.irc.nickserv.password",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "channels.irc.nickserv.password",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -270,7 +270,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "channels.irc.password",
     targetType: "channels.irc.password",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "channels.irc.password",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -281,7 +281,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "channels.mattermost.accounts.*.botToken",
     targetType: "channels.mattermost.accounts.*.botToken",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "channels.mattermost.accounts.*.botToken",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -292,7 +292,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "channels.mattermost.botToken",
     targetType: "channels.mattermost.botToken",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "channels.mattermost.botToken",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -303,7 +303,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "channels.matrix.accounts.*.accessToken",
     targetType: "channels.matrix.accounts.*.accessToken",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "channels.matrix.accounts.*.accessToken",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -314,7 +314,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "channels.matrix.accounts.*.password",
     targetType: "channels.matrix.accounts.*.password",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "channels.matrix.accounts.*.password",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -325,7 +325,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "channels.matrix.accessToken",
     targetType: "channels.matrix.accessToken",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "channels.matrix.accessToken",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -336,7 +336,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "channels.matrix.password",
     targetType: "channels.matrix.password",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "channels.matrix.password",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -347,7 +347,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "channels.msteams.appPassword",
     targetType: "channels.msteams.appPassword",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "channels.msteams.appPassword",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -358,7 +358,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "channels.nextcloud-talk.accounts.*.apiPassword",
     targetType: "channels.nextcloud-talk.accounts.*.apiPassword",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "channels.nextcloud-talk.accounts.*.apiPassword",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -369,7 +369,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "channels.nextcloud-talk.accounts.*.botSecret",
     targetType: "channels.nextcloud-talk.accounts.*.botSecret",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "channels.nextcloud-talk.accounts.*.botSecret",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -380,7 +380,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "channels.nextcloud-talk.apiPassword",
     targetType: "channels.nextcloud-talk.apiPassword",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "channels.nextcloud-talk.apiPassword",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -391,7 +391,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "channels.nextcloud-talk.botSecret",
     targetType: "channels.nextcloud-talk.botSecret",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "channels.nextcloud-talk.botSecret",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -402,7 +402,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "channels.slack.accounts.*.appToken",
     targetType: "channels.slack.accounts.*.appToken",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "channels.slack.accounts.*.appToken",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -413,7 +413,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "channels.slack.accounts.*.botToken",
     targetType: "channels.slack.accounts.*.botToken",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "channels.slack.accounts.*.botToken",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -424,7 +424,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "channels.slack.accounts.*.signingSecret",
     targetType: "channels.slack.accounts.*.signingSecret",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "channels.slack.accounts.*.signingSecret",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -435,7 +435,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "channels.slack.accounts.*.userToken",
     targetType: "channels.slack.accounts.*.userToken",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "channels.slack.accounts.*.userToken",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -446,7 +446,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "channels.slack.appToken",
     targetType: "channels.slack.appToken",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "channels.slack.appToken",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -457,7 +457,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "channels.slack.botToken",
     targetType: "channels.slack.botToken",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "channels.slack.botToken",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -468,7 +468,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "channels.slack.signingSecret",
     targetType: "channels.slack.signingSecret",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "channels.slack.signingSecret",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -479,7 +479,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "channels.slack.userToken",
     targetType: "channels.slack.userToken",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "channels.slack.userToken",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -490,7 +490,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "channels.telegram.accounts.*.botToken",
     targetType: "channels.telegram.accounts.*.botToken",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "channels.telegram.accounts.*.botToken",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -501,7 +501,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "channels.telegram.accounts.*.webhookSecret",
     targetType: "channels.telegram.accounts.*.webhookSecret",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "channels.telegram.accounts.*.webhookSecret",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -512,7 +512,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "channels.telegram.botToken",
     targetType: "channels.telegram.botToken",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "channels.telegram.botToken",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -523,7 +523,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "channels.telegram.webhookSecret",
     targetType: "channels.telegram.webhookSecret",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "channels.telegram.webhookSecret",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -534,7 +534,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "channels.zalo.accounts.*.botToken",
     targetType: "channels.zalo.accounts.*.botToken",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "channels.zalo.accounts.*.botToken",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -545,7 +545,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "channels.zalo.accounts.*.webhookSecret",
     targetType: "channels.zalo.accounts.*.webhookSecret",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "channels.zalo.accounts.*.webhookSecret",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -556,7 +556,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "channels.zalo.botToken",
     targetType: "channels.zalo.botToken",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "channels.zalo.botToken",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -567,7 +567,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "channels.zalo.webhookSecret",
     targetType: "channels.zalo.webhookSecret",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "channels.zalo.webhookSecret",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -578,7 +578,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "cron.webhookToken",
     targetType: "cron.webhookToken",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "cron.webhookToken",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -589,7 +589,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "gateway.auth.token",
     targetType: "gateway.auth.token",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "gateway.auth.token",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -600,7 +600,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "gateway.auth.password",
     targetType: "gateway.auth.password",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "gateway.auth.password",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -611,7 +611,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "gateway.remote.password",
     targetType: "gateway.remote.password",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "gateway.remote.password",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -622,7 +622,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "gateway.remote.token",
     targetType: "gateway.remote.token",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "gateway.remote.token",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -633,7 +633,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "messages.tts.providers.*.apiKey",
     targetType: "messages.tts.providers.*.apiKey",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "messages.tts.providers.*.apiKey",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -646,7 +646,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
     id: "models.providers.*.apiKey",
     targetType: "models.providers.apiKey",
     targetTypeAliases: ["models.providers.*.apiKey"],
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "models.providers.*.apiKey",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -660,7 +660,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
     id: "models.providers.*.headers.*",
     targetType: "models.providers.headers",
     targetTypeAliases: ["models.providers.*.headers.*"],
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "models.providers.*.headers.*",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -673,7 +673,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
     id: "skills.entries.*.apiKey",
     targetType: "skills.entries.apiKey",
     targetTypeAliases: ["skills.entries.*.apiKey"],
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "skills.entries.*.apiKey",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -684,7 +684,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "talk.apiKey",
     targetType: "talk.apiKey",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "talk.apiKey",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -695,7 +695,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "talk.providers.*.apiKey",
     targetType: "talk.providers.*.apiKey",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "talk.providers.*.apiKey",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -706,7 +706,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "tools.web.fetch.firecrawl.apiKey",
     targetType: "tools.web.fetch.firecrawl.apiKey",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "tools.web.fetch.firecrawl.apiKey",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -717,7 +717,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "tools.web.x_search.apiKey",
     targetType: "tools.web.x_search.apiKey",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "tools.web.x_search.apiKey",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -728,7 +728,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "tools.web.search.apiKey",
     targetType: "tools.web.search.apiKey",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "tools.web.search.apiKey",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -739,7 +739,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "plugins.entries.brave.config.webSearch.apiKey",
     targetType: "plugins.entries.brave.config.webSearch.apiKey",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "plugins.entries.brave.config.webSearch.apiKey",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -750,7 +750,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "tools.web.search.gemini.apiKey",
     targetType: "tools.web.search.gemini.apiKey",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "tools.web.search.gemini.apiKey",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -761,7 +761,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "plugins.entries.google.config.webSearch.apiKey",
     targetType: "plugins.entries.google.config.webSearch.apiKey",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "plugins.entries.google.config.webSearch.apiKey",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -772,7 +772,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "tools.web.search.grok.apiKey",
     targetType: "tools.web.search.grok.apiKey",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "tools.web.search.grok.apiKey",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -783,7 +783,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "plugins.entries.xai.config.webSearch.apiKey",
     targetType: "plugins.entries.xai.config.webSearch.apiKey",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "plugins.entries.xai.config.webSearch.apiKey",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -794,7 +794,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "tools.web.search.kimi.apiKey",
     targetType: "tools.web.search.kimi.apiKey",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "tools.web.search.kimi.apiKey",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -805,7 +805,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "plugins.entries.moonshot.config.webSearch.apiKey",
     targetType: "plugins.entries.moonshot.config.webSearch.apiKey",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "plugins.entries.moonshot.config.webSearch.apiKey",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -816,7 +816,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "tools.web.search.perplexity.apiKey",
     targetType: "tools.web.search.perplexity.apiKey",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "tools.web.search.perplexity.apiKey",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -827,7 +827,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "plugins.entries.perplexity.config.webSearch.apiKey",
     targetType: "plugins.entries.perplexity.config.webSearch.apiKey",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "plugins.entries.perplexity.config.webSearch.apiKey",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -838,7 +838,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "plugins.entries.firecrawl.config.webSearch.apiKey",
     targetType: "plugins.entries.firecrawl.config.webSearch.apiKey",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "plugins.entries.firecrawl.config.webSearch.apiKey",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
@@ -849,7 +849,7 @@ const SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "plugins.entries.tavily.config.webSearch.apiKey",
     targetType: "plugins.entries.tavily.config.webSearch.apiKey",
-    configFile: "openclaw.json",
+    configFile: "nexus-agent.json",
     pathPattern: "plugins.entries.tavily.config.webSearch.apiKey",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",

@@ -136,7 +136,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
       );
       defaultRuntime.error(
         errorText(
-          `Fix: rerun \`${formatCliCommand("openclaw gateway install --force")}\` from the same --profile / OPENCLAW_STATE_DIR you expect.`,
+          `Fix: rerun \`${formatCliCommand("openclaw gateway install --force")}\` from the same --profile / NEXUS_STATE_DIR you expect.`,
         ),
       );
     }

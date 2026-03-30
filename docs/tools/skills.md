@@ -54,13 +54,13 @@ You can gate them via `metadata.openclaw.requires.config` on the plugin’s conf
 entry. See [Plugins](/tools/plugin) for discovery/config and [Tools](/tools) for the
 tool surface those skills teach.
 
-## ClawHub (install + sync)
+## Skills Hub (install + sync)
 
-ClawHub is the public skills registry for OpenClaw. Browse at
+Skills Hub (formerly ClawHub) is the public skills registry. Browse at
 [https://clawhub.com](https://clawhub.com). Use native `openclaw skills`
 commands to discover/install/update skills, or the separate `clawhub` CLI when
 you need publish/sync workflows.
-Full guide: [ClawHub](/tools/clawhub).
+Full guide: [Skills Hub](/tools/clawhub).
 
 Common flows:
 

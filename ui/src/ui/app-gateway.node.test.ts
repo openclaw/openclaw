@@ -129,7 +129,7 @@ function createHost() {
     agentsList: null,
     agentsError: null,
     debugHealth: null,
-    assistantName: "OpenClaw",
+    assistantName: "Nexus Agent",
     assistantAvatar: null,
     assistantAgentId: null,
     serverVersion: null,

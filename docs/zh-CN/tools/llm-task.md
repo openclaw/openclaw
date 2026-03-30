@@ -17,7 +17,7 @@ x-i18n:
 
 `llm-task` 是一个**可选插件工具**，用于运行纯 JSON 的 LLM 任务并返回结构化输出（可选择根据 JSON Schema 进行验证）。
 
-这非常适合像 Lobster 这样的工作流引擎：你可以添加单个 LLM 步骤，而无需为每个工作流编写自定义 OpenClaw 代码。
+这非常适合工作流引擎：你可以添加单个 LLM 步骤，而无需为每个工作流编写自定义 OpenClaw 代码。
 
 ## 启用插件
 
@@ -88,9 +88,9 @@ x-i18n:
 
 返回 `details.json`，包含解析后的 JSON（如果提供了 `schema`，则会进行验证）。
 
-## 示例：Lobster 工作流步骤
+## 示例：工作流步骤
 
-```lobster
+```
 openclaw.invoke --tool llm-task --action json --args-json '{
   "prompt": "Given the input email, return intent and draft.",
   "input": {

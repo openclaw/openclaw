@@ -1,10 +1,10 @@
 ---
 read_when:
-  - 向新用户介绍 ClawHub
+  - 向新用户介绍 Skills Hub
   - 安装、搜索或发布 Skills 或插件
-  - 说明 ClawHub CLI 标志和同步行为
-summary: ClawHub 指南：公共 Skills / 插件注册中心与 CLI 工作流
-title: ClawHub
+  - 说明 Skills Hub CLI 标志和同步行为
+summary: Skills Hub 指南：公共 Skills / 插件注册中心与 CLI 工作流
+title: Skills Hub
 x-i18n:
   generated_at: "2026-02-01T21:42:32Z"
   model: claude-opus-4-5

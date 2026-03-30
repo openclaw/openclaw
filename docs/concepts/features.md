@@ -70,4 +70,4 @@ title: "Features"
 - Browser automation, exec, sandboxing
 - Web search (Brave, Perplexity, Gemini, Grok, Kimi, Firecrawl)
 - Cron jobs and heartbeat scheduling
-- Skills, plugins, and workflow pipelines (Lobster)
+- Skills, plugins, and workflow pipelines

@@ -5,7 +5,7 @@ import { createTempHomeEnv } from "../test-utils/temp-home.js";
 
 export function setTempStateDir(workspaceDir: string): string {
   const stateDir = path.join(workspaceDir, "state");
-  process.env.OPENCLAW_STATE_DIR = stateDir;
+  process.env.NEXUS_STATE_DIR = stateDir;
   return stateDir;
 }
 

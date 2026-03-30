@@ -4,8 +4,8 @@ FROM debian:bookworm-slim@sha256:98f4b71de414932439ac6ac690d7060df1f27161073c503
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN --mount=type=cache,id=openclaw-sandbox-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
-  --mount=type=cache,id=openclaw-sandbox-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
+RUN --mount=type=cache,id=nexus-sandbox-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
+  --mount=type=cache,id=nexus-sandbox-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
   apt-get update \
   && apt-get upgrade -y --no-install-recommends \
   && apt-get install -y --no-install-recommends \
@@ -25,7 +25,7 @@ RUN --mount=type=cache,id=openclaw-sandbox-bookworm-apt-cache,target=/var/cache/
     x11vnc \
     xvfb
 
-COPY --chmod=755 scripts/sandbox-browser-entrypoint.sh /usr/local/bin/openclaw-sandbox-browser
+COPY --chmod=755 scripts/sandbox-browser-entrypoint.sh /usr/local/bin/nexus-sandbox-browser
 
 RUN useradd --create-home --shell /bin/bash sandbox
 USER sandbox
@@ -33,4 +33,4 @@ WORKDIR /home/sandbox
 
 EXPOSE 9222 5900 6080
 
-CMD ["openclaw-sandbox-browser"]
+CMD ["nexus-sandbox-browser"]

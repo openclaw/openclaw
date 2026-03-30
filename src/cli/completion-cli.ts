@@ -249,7 +249,7 @@ export function registerCompletionCli(program: Command) {
     .option("-i, --install", "Install completion script to shell profile")
     .option(
       "--write-state",
-      "Write completion scripts to $OPENCLAW_STATE_DIR/completions (no stdout)",
+      "Write completion scripts to $NEXUS_STATE_DIR/completions (no stdout)",
     )
     .option("-y, --yes", "Skip confirmation (non-interactive)", false)
     .action(async (options) => {

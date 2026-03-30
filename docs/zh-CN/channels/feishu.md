@@ -616,14 +616,14 @@ openclaw pairing list feishu
     list: [
       { id: "main" },
       {
-        id: "clawd-fan",
-        workspace: "/home/user/clawd-fan",
-        agentDir: "/home/user/.openclaw/agents/clawd-fan/agent",
+        id: "agent-fan",
+        workspace: "/home/user/agent-fan",
+        agentDir: "/home/user/.openclaw/agents/agent-fan/agent",
       },
       {
-        id: "clawd-xi",
-        workspace: "/home/user/clawd-xi",
-        agentDir: "/home/user/.openclaw/agents/clawd-xi/agent",
+        id: "agent-xi",
+        workspace: "/home/user/agent-xi",
+        agentDir: "/home/user/.openclaw/agents/agent-xi/agent",
       },
     ],
   },
@@ -636,14 +636,14 @@ openclaw pairing list feishu
       },
     },
     {
-      agentId: "clawd-fan",
+      agentId: "agent-fan",
       match: {
         channel: "feishu",
         peer: { kind: "direct", id: "ou_yyy" },
       },
     },
     {
-      agentId: "clawd-xi",
+      agentId: "agent-xi",
       match: {
         channel: "feishu",
         peer: { kind: "group", id: "oc_zzz" },

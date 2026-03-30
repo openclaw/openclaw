@@ -2,7 +2,7 @@ import { listSecretTargetRegistryEntries } from "./target-registry.js";
 
 type CredentialMatrixEntry = {
   id: string;
-  configFile: "openclaw.json" | "auth-profiles.json";
+  configFile: "nexus-agent.json" | "auth-profiles.json";
   path: string;
   refPath?: string;
   when?: { type: "api_key" | "token" };

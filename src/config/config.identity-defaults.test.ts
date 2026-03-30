@@ -78,7 +78,7 @@ describe("config identity defaults", () => {
               id: "main",
               identity: {
                 name: "Samantha Sloth",
-                theme: "space lobster",
+                theme: "nexus-iris",
                 emoji: "🦞",
               },
               groupChat: { mentionPatterns: ["@openclaw"] },

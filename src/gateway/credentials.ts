@@ -41,7 +41,7 @@ export class GatewaySecretRefUnavailableError extends Error {
     super(
       [
         `${path} is configured as a secret reference but is unavailable in this command path.`,
-        "Fix: set OPENCLAW_GATEWAY_TOKEN/OPENCLAW_GATEWAY_PASSWORD, pass explicit --token/--password,",
+        "Fix: set NEXUS_GATEWAY_TOKEN/NEXUS_GATEWAY_PASSWORD, pass explicit --token/--password,",
         "or run a gateway command path that resolves secret references before credential selection.",
       ].join("\n"),
     );

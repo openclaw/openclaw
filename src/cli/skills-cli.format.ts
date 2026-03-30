@@ -23,7 +23,7 @@ function appendClawHubHint(output: string, json?: boolean): string {
   if (json) {
     return output;
   }
-  return `${output}\n\nTip: use \`openclaw skills search\`, \`openclaw skills install\`, and \`openclaw skills update\` for ClawHub-backed skills.`;
+  return `${output}\n\nTip: use \`openclaw skills search\`, \`openclaw skills install\`, and \`openclaw skills update\` for Skills Hub-backed skills.`;
 }
 
 function formatSkillStatus(skill: SkillStatusEntry): string {
@@ -282,7 +282,7 @@ export function formatSkillInfo(
       `  Save via CLI: ${formatCliCommand(`openclaw config set skills.entries.${safeSkillKey}.apiKey YOUR_KEY`)}`,
     );
     lines.push(
-      `  Stored in: ${theme.muted("$OPENCLAW_CONFIG_PATH")} ${theme.muted("(default: ~/.openclaw/openclaw.json)")}`,
+      `  Stored in: ${theme.muted("$NEXUS_CONFIG_PATH")} ${theme.muted("(default: ~/.openclaw/openclaw.json)")}`,
     );
   }
 

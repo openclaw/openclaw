@@ -56,8 +56,8 @@ async function assertUnmanagedGatewayRestartEnabled(port: number): Promise<void>
   const probe = await probeGateway({
     url: `${scheme}://127.0.0.1:${port}`,
     auth: {
-      token: process.env.OPENCLAW_GATEWAY_TOKEN?.trim() || undefined,
-      password: process.env.OPENCLAW_GATEWAY_PASSWORD?.trim() || undefined,
+      token: process.env.NEXUS_GATEWAY_TOKEN?.trim() || undefined,
+      password: process.env.NEXUS_GATEWAY_PASSWORD?.trim() || undefined,
     },
     timeoutMs: 1_000,
   }).catch(() => null);
