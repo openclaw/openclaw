@@ -23,6 +23,17 @@ describe("sessions-list-tool", () => {
                 threadId: "thread-1",
               },
             },
+            {
+              key: "agent:main:telegram:topic",
+              kind: "direct",
+              sessionId: "sess-telegram-topic",
+              deliveryContext: {
+                channel: "telegram",
+                to: "telegram:topic",
+                accountId: "acct-2",
+                threadId: 271,
+              },
+            },
           ],
         };
       }
@@ -61,7 +72,7 @@ describe("sessions-list-tool", () => {
           channel?: string;
           to?: string;
           accountId?: string;
-          threadId?: string;
+          threadId?: string | number;
         };
       }>;
     };
@@ -71,6 +82,81 @@ describe("sessions-list-tool", () => {
       to: "discord:child",
       accountId: "acct-1",
       threadId: "thread-1",
+    });
+    expect(details.sessions?.[1]?.deliveryContext).toEqual({
+      channel: "telegram",
+      to: "telegram:topic",
+      accountId: "acct-2",
+      threadId: 271,
+    });
+  });
+
+  it("keeps numeric deliveryContext.threadId in sessions_list results", async () => {
+    const gatewayCallMock = vi.fn(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "sessions.list") {
+        return {
+          path: "/tmp/sessions.json",
+          sessions: [
+            {
+              key: "agent:main:telegram:group:-100123:topic:99",
+              kind: "group",
+              sessionId: "sess-telegram-topic",
+              deliveryContext: {
+                channel: "telegram",
+                to: "-100123",
+                accountId: "acct-1",
+                threadId: 99,
+              },
+            },
+          ],
+        };
+      }
+      return {};
+    });
+
+    vi.doMock("../../gateway/call.js", () => ({
+      callGateway: gatewayCallMock,
+    }));
+    vi.doMock("./sessions-helpers.js", async () => {
+      const actual =
+        await vi.importActual<typeof import("./sessions-helpers.js")>("./sessions-helpers.js");
+      return {
+        ...actual,
+        createAgentToAgentPolicy: () => ({}),
+        createSessionVisibilityGuard: async () => ({
+          check: () => ({ allowed: true }),
+        }),
+        resolveEffectiveSessionToolsVisibility: () => "all",
+        resolveSandboxedSessionToolContext: () => ({
+          mainKey: "main",
+          alias: "main",
+          requesterInternalKey: undefined,
+          restrictToSpawned: false,
+        }),
+      };
+    });
+
+    const { createSessionsListTool } = await import("./sessions-list-tool.js");
+    const tool = createSessionsListTool({ config: {} as never });
+
+    const result = await tool.execute("call-2", {});
+    const details = result.details as {
+      sessions?: Array<{
+        deliveryContext?: {
+          channel?: string;
+          to?: string;
+          accountId?: string;
+          threadId?: string | number;
+        };
+      }>;
+    };
+
+    expect(details.sessions?.[0]?.deliveryContext).toEqual({
+      channel: "telegram",
+      to: "-100123",
+      accountId: "acct-1",
+      threadId: 99,
     });
   });
 
@@ -123,7 +209,7 @@ describe("sessions-list-tool", () => {
     const { createSessionsListTool } = await import("./sessions-list-tool.js");
     const tool = createSessionsListTool({ config: {} as never });
 
-    const result = await tool.execute("call-2", {});
+    const result = await tool.execute("call-3", {});
     const details = result.details as {
       sessions?: Array<{
         thinkingLevel?: string;

@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/diffs",
-  "version": "2026.3.26",
+  "version": "2026.3.30",
   "private": true,
   "description": "OpenClaw diff viewer plugin",
   "type": "module",
@@ -8,11 +8,15 @@
     "build:viewer": "bun build src/viewer-client.ts --target browser --format esm --minify --outfile assets/viewer-runtime.js"
   },
   "dependencies": {
-    "@pierre/diffs": "1.1.5",
-    "@sinclair/typebox": "0.34.48",
+    "@pierre/diffs": "1.1.7",
+    "@pierre/theme": "0.0.24",
+    "@sinclair/typebox": "0.34.49",
     "playwright-core": "1.58.2"
   },
   "openclaw": {
+    "bundle": {
+      "stageRuntimeDependencies": true
+    },
     "extensions": [
       "./index.ts"
     ]

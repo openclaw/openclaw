@@ -7,23 +7,27 @@ import {
   resolveBestEffortGatewayBindHostForDisplay,
 } from "./network-discovery-display.js";
 
+const discoveryErrorMessage = "uv_interface_addresses failed";
+
+function mockInterfaceDiscoveryFailure(): void {
+  vi.spyOn(os, "networkInterfaces").mockImplementation(() => {
+    throw new Error(discoveryErrorMessage);
+  });
+}
+
 describe("network display discovery", () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
   it("returns no LAN address when interface discovery throws", () => {
-    vi.spyOn(os, "networkInterfaces").mockImplementation(() => {
-      throw new Error("uv_interface_addresses failed");
-    });
+    mockInterfaceDiscoveryFailure();
 
     expect(pickBestEffortPrimaryLanIPv4()).toBeUndefined();
   });
 
   it("reports a warning when tailnet inspection throws", () => {
-    vi.spyOn(os, "networkInterfaces").mockImplementation(() => {
-      throw new Error("uv_interface_addresses failed");
-    });
+    mockInterfaceDiscoveryFailure();
 
     expect(
       inspectBestEffortPrimaryTailnetIPv4({
@@ -31,14 +35,12 @@ describe("network display discovery", () => {
       }),
     ).toEqual({
       tailnetIPv4: undefined,
-      warning: "Status could not inspect tailnet addresses: uv_interface_addresses failed.",
+      warning: `Status could not inspect tailnet addresses: ${discoveryErrorMessage}.`,
     });
   });
 
   it("falls back to loopback when bind host resolution throws", async () => {
-    vi.spyOn(os, "networkInterfaces").mockImplementation(() => {
-      throw new Error("uv_interface_addresses failed");
-    });
+    mockInterfaceDiscoveryFailure();
 
     await expect(
       resolveBestEffortGatewayBindHostForDisplay({
@@ -48,8 +50,7 @@ describe("network display discovery", () => {
       }),
     ).resolves.toEqual({
       bindHost: "127.0.0.1",
-      warning:
-        "Status is using fallback network details because interface discovery failed: uv_interface_addresses failed.",
+      warning: `Status is using fallback network details because interface discovery failed: ${discoveryErrorMessage}.`,
     });
   });
 

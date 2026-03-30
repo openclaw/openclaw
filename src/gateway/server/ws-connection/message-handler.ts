@@ -11,12 +11,14 @@ import {
   approveDevicePairing,
   ensureDeviceToken,
   getPairedDevice,
+  hasEffectivePairedDeviceRole,
   listDevicePairing,
+  listEffectivePairedDeviceRoles,
   requestDevicePairing,
   updatePairedDeviceMetadata,
   verifyDeviceToken,
 } from "../../../infra/device-pairing.js";
-import { updatePairedNodeMetadata } from "../../../infra/node-pairing.js";
+import { getPairedNode, updatePairedNodeMetadata } from "../../../infra/node-pairing.js";
 import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../../infra/skills-remote.js";
 import { upsertPresence } from "../../../infra/system-presence.js";
 import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
@@ -88,6 +90,7 @@ import {
   evaluateMissingDeviceIdentity,
   isTrustedProxyControlUiOperatorAuth,
   resolveControlUiAuthPolicy,
+  shouldClearUnboundScopesForMissingDeviceIdentity,
   shouldSkipControlUiPairing,
 } from "./connect-policy.js";
 import {
@@ -546,10 +549,13 @@ export function attachGatewayWsMessageHandler(params: {
           // allow path, including trusted token-authenticated backend operators.
           if (
             !device &&
-            (decision.kind !== "allow" ||
-              (!controlUiAuthPolicy.allowBypass &&
-                !preserveInsecureLocalControlUiScopes &&
-                (authMethod === "token" || authMethod === "password" || trustedProxyAuthOk)))
+            shouldClearUnboundScopesForMissingDeviceIdentity({
+              decision,
+              controlUiAuthPolicy,
+              preserveInsecureLocalControlUiScopes,
+              authMethod,
+              trustedProxyAuthOk,
+            })
           ) {
             clearUnboundScopes();
           }
@@ -749,12 +755,7 @@ export function attachGatewayWsMessageHandler(params: {
               if (!pairedCandidate || pairedCandidate.publicKey !== devicePublicKey) {
                 return false;
               }
-              const pairedRoles = Array.isArray(pairedCandidate.roles)
-                ? pairedCandidate.roles
-                : pairedCandidate.role
-                  ? [pairedCandidate.role]
-                  : [];
-              if (pairedRoles.length > 0 && !pairedRoles.includes(role)) {
+              if (!hasEffectivePairedDeviceRole(pairedCandidate, role)) {
                 return false;
               }
               if (scopes.length === 0) {
@@ -806,8 +807,10 @@ export function attachGatewayWsMessageHandler(params: {
               return replacementPending?.requestId;
             };
             if (pairing.request.silent === true) {
-              approved = await approveDevicePairing(pairing.request.requestId);
-              if (approved) {
+              approved = await approveDevicePairing(pairing.request.requestId, {
+                callerScopes: scopes,
+              });
+              if (approved?.status === "approved") {
                 logGateway.info(
                   `device pairing auto-approved device=${approved.device.deviceId} role=${approved.device.role ?? "unknown"}`,
                 );
@@ -839,7 +842,12 @@ export function attachGatewayWsMessageHandler(params: {
             }
             // Re-resolve: another connection may have superseded/approved the request since we created it
             recoveryRequestId = await resolveLivePendingRequestId();
-            if (!(pairing.request.silent === true && (approved || resolvedByConcurrentApproval))) {
+            if (
+              !(
+                pairing.request.silent === true &&
+                (approved?.status === "approved" || resolvedByConcurrentApproval)
+              )
+            ) {
               setHandshakeState("failed");
               setCloseCause("pairing-required", {
                 deviceId: device.id,
@@ -899,11 +907,7 @@ export function attachGatewayWsMessageHandler(params: {
                 connectParams.client.deviceFamily = metadataPinning.pinnedDeviceFamily;
               }
             }
-            const pairedRoles = Array.isArray(paired.roles)
-              ? paired.roles
-              : paired.role
-                ? [paired.role]
-                : [];
+            const pairedRoles = listEffectivePairedDeviceRoles(paired);
             const pairedScopes = Array.isArray(paired.scopes)
               ? paired.scopes
               : Array.isArray(paired.approvedScopes)
@@ -959,14 +963,22 @@ export function attachGatewayWsMessageHandler(params: {
 
         if (role === "node") {
           const cfg = loadConfig();
+          const nodeId = connectParams.device?.id ?? connectParams.client.id;
+          const pairedNode = await getPairedNode(nodeId);
           const allowlist = resolveNodeCommandAllowlist(cfg, {
             platform: connectParams.client.platform,
             deviceFamily: connectParams.client.deviceFamily,
           });
           const declared = Array.isArray(connectParams.commands) ? connectParams.commands : [];
+          const pairedCommands = pairedNode ? new Set(pairedNode.commands ?? []) : null;
           const filtered = declared
             .map((cmd) => cmd.trim())
-            .filter((cmd) => cmd.length > 0 && allowlist.has(cmd));
+            .filter(
+              (cmd) =>
+                cmd.length > 0 &&
+                allowlist.has(cmd) &&
+                (pairedCommands === null || pairedCommands.has(cmd)),
+            );
           connectParams.commands = filtered;
         }
 

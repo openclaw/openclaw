@@ -23,6 +23,7 @@ import {
   isOverloadedErrorMessage,
   isPeriodicUsageLimitErrorMessage,
   isRateLimitErrorMessage,
+  isServerErrorMessage,
   isTimeoutErrorMessage,
   matchesFormatErrorPattern,
 } from "./failover-matches.js";
@@ -34,6 +35,7 @@ export {
   isBillingErrorMessage,
   isOverloadedErrorMessage,
   isRateLimitErrorMessage,
+  isServerErrorMessage,
   isTimeoutErrorMessage,
 } from "./failover-matches.js";
 
@@ -190,6 +192,18 @@ function isReasoningConstraintErrorMessage(raw: string): boolean {
   );
 }
 
+function isInvalidStreamingEventOrderError(raw: string): boolean {
+  if (!raw) {
+    return false;
+  }
+  const lower = raw.toLowerCase();
+  return (
+    lower.includes("unexpected event order") &&
+    lower.includes("message_start") &&
+    lower.includes("message_stop")
+  );
+}
+
 function hasRateLimitTpmHint(raw: string): boolean {
   const lower = raw.toLowerCase();
   return /\btpm\b/i.test(lower) || lower.includes("tokens per minute");
@@ -338,7 +352,7 @@ export function extractObservedOverflowTokenCount(errorMessage?: string): number
 
 const FINAL_TAG_RE = /<\s*\/?\s*final\s*>/gi;
 const ERROR_PREFIX_RE =
-  /^(?:error|(?:[a-z][\w-]*\s+)?api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|request failed|failed|exception)(?:\s+\d{3})?[:\s-]+/i;
+  /^(?:error|(?:[a-z][\w-]*\s+)?api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|codex\s*error|request failed|failed|exception)(?:\s+\d{3})?[:\s-]+/i;
 const CONTEXT_OVERFLOW_ERROR_HEAD_RE =
   /^(?:context overflow:|request_too_large\b|request size exceeds\b|request exceeds the maximum size\b|context length exceeded\b|maximum context length\b|prompt is too long\b|exceeds model context window\b)/i;
 const TRANSIENT_HTTP_ERROR_CODES = new Set([499, 500, 502, 503, 504, 521, 522, 523, 524, 529]);
@@ -500,6 +514,25 @@ export function classifyFailoverReasonFromHttpStatus(
   if (status === 408) {
     return "timeout";
   }
+  if (status === 410) {
+    // HTTP 410 is only a true session-expiry signal when the payload says the
+    // remote session/conversation is gone. Generic 410/no-body responses from
+    // OpenAI-compatible proxies are better treated as retryable transport-path
+    // failures so we do not clear session state or poison auth-profile health.
+    if (message && isCliSessionExpiredErrorMessage(message)) {
+      return "session_expired";
+    }
+    if (message && isBillingErrorMessage(message)) {
+      return "billing";
+    }
+    if (message && isAuthPermanentErrorMessage(message)) {
+      return "auth_permanent";
+    }
+    if (message && isAuthErrorMessage(message)) {
+      return "auth";
+    }
+    return "timeout";
+  }
   if (status === 503) {
     if (message && isOverloadedErrorMessage(message)) {
       return "overloaded";
@@ -607,6 +640,40 @@ export function isRawApiErrorPayload(raw?: string): boolean {
   return getApiErrorPayloadFingerprint(raw) !== null;
 }
 
+function isLikelyProviderErrorType(type?: string): boolean {
+  const normalized = type?.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return normalized.endsWith("_error");
+}
+
+const NON_ERROR_PROVIDER_PAYLOAD_MAX_LENGTH = 16_384;
+const NON_ERROR_PROVIDER_PAYLOAD_PREFIX_RE = /^codex\s*error(?:\s+\d{3})?[:\s-]+/i;
+
+function shouldRewriteRawPayloadWithoutErrorContext(raw: string): boolean {
+  if (raw.length > NON_ERROR_PROVIDER_PAYLOAD_MAX_LENGTH) {
+    return false;
+  }
+  if (!NON_ERROR_PROVIDER_PAYLOAD_PREFIX_RE.test(raw)) {
+    return false;
+  }
+  const info = parseApiErrorInfo(raw);
+  if (!info) {
+    return false;
+  }
+  if (isLikelyProviderErrorType(info.type)) {
+    return true;
+  }
+  if (info.httpCode) {
+    const parsedCode = Number(info.httpCode);
+    if (Number.isFinite(parsedCode) && parsedCode >= 400) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function formatAssistantErrorText(
   msg: AssistantMessage,
   opts?: { cfg?: OpenClawConfig; sessionKey?: string; provider?: string; model?: string },
@@ -646,6 +713,10 @@ export function formatAssistantErrorText(
       "Reasoning is required for this model endpoint. " +
       "Use /think minimal (or any non-off level) and try again."
     );
+  }
+
+  if (isInvalidStreamingEventOrderError(raw)) {
+    return "LLM request failed: provider returned an invalid streaming response. Please try again.";
   }
 
   // Catch role ordering errors - including JSON-wrapped and "400" prefix variants
@@ -724,6 +795,12 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
     return "";
   }
 
+  // Provider error payloads should not leak directly into user-visible text even
+  // when a stream chunk was not explicitly flagged as an error.
+  if (!errorContext && shouldRewriteRawPayloadWithoutErrorContext(trimmed)) {
+    return formatRawAssistantErrorForUi(trimmed);
+  }
+
   // Only apply error-pattern rewrites when the caller knows this text is an error payload.
   // Otherwise we risk swallowing legitimate assistant text that merely *mentions* these errors.
   if (errorContext) {
@@ -743,6 +820,10 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
 
     if (isBillingErrorMessage(trimmed)) {
       return BILLING_ERROR_USER_MESSAGE;
+    }
+
+    if (isInvalidStreamingEventOrderError(trimmed)) {
+      return "LLM request failed: provider returned an invalid streaming response. Please try again.";
     }
 
     if (isRawApiErrorPayload(trimmed) || isLikelyHttpErrorText(trimmed)) {
@@ -807,7 +888,7 @@ export function isBillingAssistantError(msg: AssistantMessage | undefined): bool
 // Non-transient api_error payloads (context overflow, validation/schema errors)
 // must NOT be classified as timeout.
 const API_ERROR_TRANSIENT_SIGNALS_RE =
-  /internal server error|overload|temporarily unavailable|service unavailable|unknown error|server error|bad gateway|gateway timeout|upstream error|backend error|try again later|temporarily.+unable/i;
+  /internal server error|overload|temporarily unavailable|service unavailable|unknown error|server error|bad gateway|gateway timeout|upstream error|backend error|try again later|temporarily.+unable|unexpected error/i;
 
 function isJsonApiInternalServerError(raw: string): boolean {
   if (!raw) {
@@ -960,6 +1041,11 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
   if (isModelNotFoundErrorMessage(raw)) {
     return "model_not_found";
   }
+  const trimmed = raw.trim();
+  const leadingStatus = extractLeadingHttpStatus(trimmed);
+  if (leadingStatus?.code === 410) {
+    return classifyFailoverReasonFromHttpStatus(leadingStatus.code, leadingStatus.rest);
+  }
   const reasonFrom402Text = classifyFailoverReasonFrom402Text(raw);
   if (reasonFrom402Text) {
     return reasonFrom402Text;
@@ -975,7 +1061,7 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
   }
   if (isTransientHttpError(raw)) {
     // 529 is always overloaded, even without explicit overload keywords in the body.
-    const status = extractLeadingHttpStatus(raw.trim());
+    const status = extractLeadingHttpStatus(trimmed);
     if (status?.code === 529) {
       return "overloaded";
     }
@@ -993,6 +1079,9 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
   }
   if (isAuthErrorMessage(raw)) {
     return "auth";
+  }
+  if (isServerErrorMessage(raw)) {
+    return "timeout";
   }
   if (isJsonApiInternalServerError(raw)) {
     return "timeout";

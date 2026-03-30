@@ -1,11 +1,10 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { ExecApprovalRequest } from "openclaw/plugin-sdk/infra-runtime";
 import {
   buildExecApprovalPendingReplyPayload,
   resolveExecApprovalCommandDisplay,
-} from "openclaw/plugin-sdk/infra-runtime";
+  type ExecApprovalRequest,
+} from "openclaw/plugin-sdk/approval-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { normalizeMessageChannel } from "openclaw/plugin-sdk/routing";
-import { buildTelegramExecApprovalButtons } from "./approval-buttons.js";
 import { isTelegramExecApprovalClientEnabled } from "./exec-approvals.js";
 
 export function shouldSuppressTelegramExecApprovalForwardingFallback(params: {
@@ -30,7 +29,7 @@ export function buildTelegramExecApprovalPendingPayload(params: {
   request: ExecApprovalRequest;
   nowMs: number;
 }) {
-  const payload = buildExecApprovalPendingReplyPayload({
+  return buildExecApprovalPendingReplyPayload({
     approvalId: params.request.id,
     approvalSlug: params.request.id.slice(0, 8),
     approvalCommandId: params.request.id,
@@ -41,15 +40,4 @@ export function buildTelegramExecApprovalPendingPayload(params: {
     expiresAtMs: params.request.expiresAtMs,
     nowMs: params.nowMs,
   });
-  const buttons = buildTelegramExecApprovalButtons(params.request.id);
-  if (!buttons) {
-    return payload;
-  }
-  return {
-    ...payload,
-    channelData: {
-      ...payload.channelData,
-      telegram: { buttons },
-    },
-  };
 }

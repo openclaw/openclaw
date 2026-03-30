@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import type { GatewayRpcOpts } from "../../../../src/cli/gateway-rpc.js";
+import type { GatewayRpcOpts } from "openclaw/plugin-sdk/browser-support";
 import { createCliRuntimeCapture } from "../../test-support.js";
 import type { CliRuntimeCapture } from "../../test-support.js";
 
@@ -28,9 +28,7 @@ export function createBrowserProgram(params?: { withGatewayUrl?: boolean }): {
 const browserCliRuntimeState = { capture: null as CliRuntimeCapture | null };
 
 export function getBrowserCliRuntimeCapture(): CliRuntimeCapture {
-  if (!browserCliRuntimeState.capture) {
-    throw new Error("runtime capture not initialized");
-  }
+  browserCliRuntimeState.capture ??= createCliRuntimeCapture();
   return browserCliRuntimeState.capture;
 }
 

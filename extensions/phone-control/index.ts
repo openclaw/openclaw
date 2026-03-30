@@ -358,9 +358,12 @@ export default definePluginEntry({
         }
 
         if (action === "disarm") {
-          if (ctx.channel === "webchat" && !ctx.gatewayClientScopes?.includes("operator.admin")) {
+          if (
+            (ctx.channel === "webchat" || Array.isArray(ctx.gatewayClientScopes)) &&
+            !ctx.gatewayClientScopes?.includes("operator.admin")
+          ) {
             return {
-              text: "⚠️ /phone disarm requires operator.admin for internal gateway callers.",
+              text: "⚠️ /phone disarm requires operator.admin.",
             };
           }
           const res = await disarmNow({
@@ -380,9 +383,12 @@ export default definePluginEntry({
         }
 
         if (action === "arm") {
-          if (ctx.channel === "webchat" && !ctx.gatewayClientScopes?.includes("operator.admin")) {
+          if (
+            (ctx.channel === "webchat" || Array.isArray(ctx.gatewayClientScopes)) &&
+            !ctx.gatewayClientScopes?.includes("operator.admin")
+          ) {
             return {
-              text: "⚠️ /phone arm requires operator.admin for internal gateway callers.",
+              text: "⚠️ /phone arm requires operator.admin.",
             };
           }
           const group = parseGroup(tokens[1]);

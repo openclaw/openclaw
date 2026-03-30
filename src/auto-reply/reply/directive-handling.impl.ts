@@ -3,12 +3,13 @@ import {
   resolveAgentDir,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
+import { renderExecTargetLabel, resolveExecTarget } from "../../agents/bash-tools.exec-runtime.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { requestLiveSessionModelSwitch } from "../../agents/live-model-switch.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
-import type { ExecAsk, ExecHost, ExecSecurity } from "../../infra/exec-approvals.js";
+import type { ExecAsk, ExecHost, ExecSecurity, ExecTarget } from "../../infra/exec-approvals.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
@@ -20,10 +21,13 @@ import type { HandleDirectiveOnlyParams } from "./directive-handling.params.js";
 import { maybeHandleQueueDirective } from "./directive-handling.queue-validation.js";
 import {
   canPersistInternalExecDirective,
+  canPersistInternalVerboseDirective,
   formatDirectiveAck,
   formatElevatedRuntimeHint,
   formatElevatedUnavailableText,
   formatInternalExecPersistenceDeniedText,
+  formatInternalVerboseCurrentReplyOnlyText,
+  formatInternalVerbosePersistenceDeniedText,
   enqueueModeSwitchEvents,
   withOptions,
 } from "./directive-handling.shared.js";
@@ -33,17 +37,31 @@ function resolveExecDefaults(params: {
   cfg: OpenClawConfig;
   sessionEntry?: SessionEntry;
   agentId?: string;
-}): { host: ExecHost; security: ExecSecurity; ask: ExecAsk; node?: string } {
+  sandboxAvailable: boolean;
+}): {
+  host: ExecTarget;
+  effectiveHost: ExecHost;
+  security: ExecSecurity;
+  ask: ExecAsk;
+  node?: string;
+} {
   const globalExec = params.cfg.tools?.exec;
   const agentExec = params.agentId
     ? resolveAgentConfig(params.cfg, params.agentId)?.tools?.exec
     : undefined;
+  const host =
+    (params.sessionEntry?.execHost as ExecTarget | undefined) ??
+    (agentExec?.host as ExecTarget | undefined) ??
+    (globalExec?.host as ExecTarget | undefined) ??
+    "auto";
+  const resolved = resolveExecTarget({
+    configuredTarget: host,
+    elevatedRequested: false,
+    sandboxAvailable: params.sandboxAvailable,
+  });
   return {
-    host:
-      (params.sessionEntry?.execHost as ExecHost | undefined) ??
-      (agentExec?.host as ExecHost | undefined) ??
-      (globalExec?.host as ExecHost | undefined) ??
-      "sandbox",
+    host,
+    effectiveHost: resolved.effectiveHost,
     security:
       (params.sessionEntry?.execSecurity as ExecSecurity | undefined) ??
       (agentExec?.security as ExecSecurity | undefined) ??
@@ -96,6 +114,12 @@ export async function handleDirectiveOnly(
   }).sandboxed;
   const shouldHintDirectRuntime = directives.hasElevatedDirective && !runtimeIsSandboxed;
   const allowInternalExecPersistence = canPersistInternalExecDirective({
+    messageProvider: params.messageProvider,
+    surface: params.surface,
+    gatewayClientScopes: params.gatewayClientScopes,
+  });
+  const allowInternalVerbosePersistence = canPersistInternalVerboseDirective({
+    messageProvider: params.messageProvider,
     surface: params.surface,
     gatewayClientScopes: params.gatewayClientScopes,
   });
@@ -176,7 +200,7 @@ export async function handleDirectiveOnly(
     };
   }
   if (directives.hasFastDirective && directives.fastMode === undefined) {
-    if (!directives.rawFastMode) {
+    if (!directives.rawFastMode || directives.rawFastMode.toLowerCase() === "status") {
       const sourceSuffix =
         effectiveFastModeSource === "config"
           ? " (config)"
@@ -186,12 +210,12 @@ export async function handleDirectiveOnly(
       return {
         text: withOptions(
           `Current fast mode: ${effectiveFastMode ? "on" : "off"}${sourceSuffix}.`,
-          "on, off",
+          "status, on, off",
         ),
       };
     }
     return {
-      text: `Unrecognized fast mode "${directives.rawFastMode}". Valid levels: on, off.`,
+      text: `Unrecognized fast mode "${directives.rawFastMode}". Valid levels: status, on, off.`,
     };
   }
   if (directives.hasReasoningDirective && !directives.reasoningLevel) {
@@ -242,7 +266,7 @@ export async function handleDirectiveOnly(
   if (directives.hasExecDirective) {
     if (directives.invalidExecHost) {
       return {
-        text: `Unrecognized exec host "${directives.rawExecHost ?? ""}". Valid hosts: sandbox, gateway, node.`,
+        text: `Unrecognized exec host "${directives.rawExecHost ?? ""}". Valid hosts: auto, sandbox, gateway, node.`,
       };
     }
     if (directives.invalidExecSecurity) {
@@ -265,12 +289,13 @@ export async function handleDirectiveOnly(
         cfg: params.cfg,
         sessionEntry,
         agentId: activeAgentId,
+        sandboxAvailable: runtimeIsSandboxed,
       });
       const nodeLabel = execDefaults.node ? `node=${execDefaults.node}` : "node=(unset)";
       return {
         text: withOptions(
-          `Current exec defaults: host=${execDefaults.host}, security=${execDefaults.security}, ask=${execDefaults.ask}, ${nodeLabel}.`,
-          "host=sandbox|gateway|node, security=deny|allowlist|full, ask=off|on-miss|always, node=<id>",
+          `Current exec defaults: host=${renderExecTargetLabel(execDefaults.host)}, effective=${execDefaults.effectiveHost}, security=${execDefaults.security}, ask=${execDefaults.ask}, ${nodeLabel}.`,
+          "host=auto|sandbox|gateway|node, security=deny|allowlist|full, ask=off|on-miss|always, node=<id>",
         ),
       };
     }
@@ -319,7 +344,9 @@ export async function handleDirectiveOnly(
   const shouldPersistSessionEntry =
     (directives.hasThinkDirective && Boolean(directives.thinkLevel)) ||
     (directives.hasFastDirective && directives.fastMode !== undefined) ||
-    (directives.hasVerboseDirective && Boolean(directives.verboseLevel)) ||
+    (directives.hasVerboseDirective &&
+      Boolean(directives.verboseLevel) &&
+      allowInternalVerbosePersistence) ||
     (directives.hasReasoningDirective && Boolean(directives.reasoningLevel)) ||
     (directives.hasElevatedDirective && Boolean(directives.elevatedLevel)) ||
     (directives.hasExecDirective && directives.hasExecOptions && allowInternalExecPersistence) ||
@@ -342,7 +369,11 @@ export async function handleDirectiveOnly(
     if (shouldDowngradeXHigh) {
       sessionEntry.thinkingLevel = "high";
     }
-    if (directives.hasVerboseDirective && directives.verboseLevel) {
+    if (
+      directives.hasVerboseDirective &&
+      directives.verboseLevel &&
+      allowInternalVerbosePersistence
+    ) {
       applyVerboseOverride(sessionEntry, directives.verboseLevel);
     }
     if (directives.hasReasoningDirective && directives.reasoningLevel) {
@@ -457,12 +488,21 @@ export async function handleDirectiveOnly(
   }
   if (directives.hasVerboseDirective && directives.verboseLevel) {
     parts.push(
-      directives.verboseLevel === "off"
-        ? formatDirectiveAck("Verbose logging disabled.")
-        : directives.verboseLevel === "full"
-          ? formatDirectiveAck("Verbose logging set to full.")
-          : formatDirectiveAck("Verbose logging enabled."),
+      !allowInternalVerbosePersistence
+        ? formatDirectiveAck(formatInternalVerboseCurrentReplyOnlyText())
+        : directives.verboseLevel === "off"
+          ? formatDirectiveAck("Verbose logging disabled.")
+          : directives.verboseLevel === "full"
+            ? formatDirectiveAck("Verbose logging set to full.")
+            : formatDirectiveAck("Verbose logging enabled."),
     );
+  }
+  if (
+    directives.hasVerboseDirective &&
+    directives.verboseLevel &&
+    !allowInternalVerbosePersistence
+  ) {
+    parts.push(formatDirectiveAck(formatInternalVerbosePersistenceDeniedText()));
   }
   if (directives.hasReasoningDirective && directives.reasoningLevel) {
     parts.push(

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createProviderUsageFetch,
   makeResponse,
-} from "../../test/helpers/extensions/provider-usage-fetch.js";
+} from "../../test/helpers/plugins/provider-usage-fetch.js";
 import { buildCopilotModelDefinition, getDefaultCopilotModelIds } from "./models-defaults.js";
 import { fetchCopilotUsage } from "./usage.js";
 
@@ -17,7 +17,7 @@ vi.mock("@mariozechner/pi-ai/oauth", async () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/provider-models", () => ({
+vi.mock("openclaw/plugin-sdk/provider-model-shared", () => ({
   normalizeModelCompat: (model: Record<string, unknown>) => model,
 }));
 

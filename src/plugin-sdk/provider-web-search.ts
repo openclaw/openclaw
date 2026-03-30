@@ -3,6 +3,7 @@
 export type { OpenClawConfig } from "../config/config.js";
 import type {
   WebSearchCredentialResolutionSource,
+  WebSearchProviderSetupContext,
   WebSearchProviderPlugin,
   WebSearchProviderToolDefinition,
 } from "../plugins/types.js";
@@ -63,6 +64,7 @@ export { formatCliCommand } from "../cli/command-format.js";
 export { wrapWebContent } from "../security/external-content.js";
 export type {
   WebSearchCredentialResolutionSource,
+  WebSearchProviderSetupContext,
   WebSearchProviderPlugin,
   WebSearchProviderToolDefinition,
 };

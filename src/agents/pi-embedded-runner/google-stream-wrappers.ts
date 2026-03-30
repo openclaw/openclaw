@@ -1,6 +1,7 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
 function isGemini31Model(modelId: string): boolean {
   const normalized = modelId.toLowerCase();
@@ -74,19 +75,14 @@ export function createGoogleThinkingPayloadWrapper(
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    const onPayload = options?.onPayload;
-    return underlying(model, context, {
-      ...options,
-      onPayload: (payload) => {
-        if (model.api === "google-generative-ai") {
-          sanitizeGoogleThinkingPayload({
-            payload,
-            modelId: model.id,
-            thinkingLevel,
-          });
-        }
-        return onPayload?.(payload, model);
-      },
+    return streamWithPayloadPatch(underlying, model, context, options, (payload) => {
+      if (model.api === "google-generative-ai") {
+        sanitizeGoogleThinkingPayload({
+          payload,
+          modelId: model.id,
+          thinkingLevel,
+        });
+      }
     });
   };
 }

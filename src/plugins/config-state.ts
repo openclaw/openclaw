@@ -1,5 +1,9 @@
 import { normalizeChatChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  BUNDLED_LEGACY_PLUGIN_ID_ALIASES,
+  BUNDLED_PROVIDER_PLUGIN_ID_ALIASES,
+} from "./bundled-capability-metadata.js";
 import type { PluginRecord } from "./registry.js";
 import { defaultSlotIdForKey } from "./slots.js";
 
@@ -65,16 +69,13 @@ export const BUNDLED_ENABLED_BY_DEFAULT = new Set<string>([
   "xiaomi",
   "zai",
 ]);
-
-const PLUGIN_ID_ALIASES: Readonly<Record<string, string>> = {
-  "openai-codex": "openai",
-  "kimi-coding": "kimi",
-  "minimax-portal-auth": "minimax",
-};
-
 export function normalizePluginId(id: string): string {
   const trimmed = id.trim();
-  return PLUGIN_ID_ALIASES[trimmed] ?? trimmed;
+  return (
+    BUNDLED_LEGACY_PLUGIN_ID_ALIASES[trimmed] ??
+    BUNDLED_PROVIDER_PLUGIN_ID_ALIASES[trimmed] ??
+    trimmed
+  );
 }
 
 const normalizeList = (value: unknown): string[] => {
@@ -300,7 +301,7 @@ export function resolveEnableState(
   if (entry?.enabled === true) {
     return { enabled: true };
   }
-  if (origin === "bundled" && (enabledByDefault ?? BUNDLED_ENABLED_BY_DEFAULT.has(id))) {
+  if (origin === "bundled" && enabledByDefault === true) {
     return { enabled: true };
   }
   if (origin === "bundled") {

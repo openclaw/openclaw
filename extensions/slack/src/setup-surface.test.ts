@@ -1,10 +1,10 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
 import {
   createTestWizardPrompter,
   runSetupWizardFinalize,
   type WizardPrompter,
-} from "../../../test/helpers/extensions/setup-wizard.js";
+} from "../../../test/helpers/plugins/setup-wizard.js";
 import { slackSetupWizard } from "./setup-surface.js";
 
 describe("slackSetupWizard.finalize", () => {

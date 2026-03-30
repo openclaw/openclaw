@@ -28,6 +28,7 @@ import {
   hasDifferentLiveSessionModelSelection,
   LiveSessionModelSwitchError,
   resolveLiveSessionModelSelection,
+  shouldTrackPersistedLiveSessionModelSelection,
   consumeLiveSessionModelSwitch,
 } from "../live-model-switch.js";
 import {
@@ -38,6 +39,7 @@ import {
 } from "../model-auth.js";
 import { normalizeProviderId } from "../model-selection.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
+import { disposeSessionMcpRuntime } from "../pi-bundle-mcp-tools.js";
 import {
   classifyFailoverReason,
   extractObservedOverflowTokenCount,
@@ -146,6 +148,7 @@ export async function runEmbeddedPiAgent(
       await ensureOpenClawModelsJson(params.config, agentDir);
       const hookRunner = getGlobalHookRunner();
       const hookCtx = {
+        runId: params.runId,
         agentId: workspaceResolution.agentId,
         sessionKey: params.sessionKey,
         sessionId: params.sessionId,
@@ -241,6 +244,10 @@ export async function runEmbeddedPiAgent(
           defaultProvider: provider,
           defaultModel: modelId,
         });
+      const shouldTrackPersistedLiveSelection = shouldTrackPersistedLiveSessionModelSelection(
+        resolveCurrentLiveSelection(),
+        resolvePersistedLiveSelection(),
+      );
       const {
         advanceAuthProfile,
         initializeAuthProfile,
@@ -448,7 +455,9 @@ export async function runEmbeddedPiAgent(
             };
           }
           runLoopIterations += 1;
-          const nextSelection = resolvePersistedLiveSelection();
+          const nextSelection = shouldTrackPersistedLiveSelection
+            ? resolvePersistedLiveSelection()
+            : null;
           if (hasDifferentLiveSessionModelSelection(resolveCurrentLiveSelection(), nextSelection)) {
             log.info(
               `live session model switch detected before attempt for ${params.sessionId}: ${provider}/${modelId} -> ${nextSelection.provider}/${nextSelection.model}`,
@@ -535,6 +544,7 @@ export async function runEmbeddedPiAgent(
             streamParams: params.streamParams,
             ownerNumbers: params.ownerNumbers,
             enforceFinalTag: params.enforceFinalTag,
+            silentExpected: params.silentExpected,
             bootstrapPromptWarningSignaturesSeen,
             bootstrapPromptWarningSignature:
               bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1],
@@ -603,9 +613,10 @@ export async function runEmbeddedPiAgent(
           }
           const failedOrAbortedAttempt =
             aborted || Boolean(promptError) || Boolean(assistantErrorText) || timedOut;
-          const persistedSelection = failedOrAbortedAttempt
-            ? resolvePersistedLiveSelection()
-            : null;
+          const persistedSelection =
+            failedOrAbortedAttempt && shouldTrackPersistedLiveSelection
+              ? resolvePersistedLiveSelection()
+              : null;
           if (
             failedOrAbortedAttempt &&
             canRestartForLiveSwitch &&
@@ -1421,6 +1432,13 @@ export async function runEmbeddedPiAgent(
       } finally {
         await contextEngine.dispose?.();
         stopRuntimeAuthRefreshTimer();
+        if (params.cleanupBundleMcpOnRunEnd === true) {
+          await disposeSessionMcpRuntime(params.sessionId).catch((error) => {
+            log.warn(
+              `bundle-mcp cleanup failed after run for ${params.sessionId}: ${describeUnknownError(error)}`,
+            );
+          });
+        }
       }
     }),
   );

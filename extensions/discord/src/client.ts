@@ -1,7 +1,6 @@
 import { RequestClient } from "@buape/carbon";
 import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { RetryConfig } from "openclaw/plugin-sdk/infra-runtime";
-import type { RetryRunner } from "openclaw/plugin-sdk/infra-runtime";
+import type { RetryConfig, RetryRunner } from "openclaw/plugin-sdk/retry-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import {
   mergeDiscordAccountConfig,

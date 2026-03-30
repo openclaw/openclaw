@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { createTestPluginApi } from "../../test/helpers/extensions/plugin-api.js";
+import { createTestPluginApi } from "../../test/helpers/plugins/plugin-api.js";
 import registerPhoneControl from "./index.js";
 import type {
   OpenClawPluginApi,
@@ -110,7 +110,11 @@ describe("phone-control plugin", () => {
     await withRegisteredPhoneControl(async ({ command, writeConfigFile, getConfig }) => {
       expect(command.name).toBe("phone");
 
-      const res = await command.handler(createCommandContext("arm writes 30s"));
+      const res = await command.handler({
+        ...createCommandContext("arm writes 30s"),
+        channel: "webchat",
+        gatewayClientScopes: ["operator.admin"],
+      });
       const text = String(res?.text ?? "");
       const nodes = (
         getConfig().gateway as { nodes?: { allowCommands?: string[]; denyCommands?: string[] } }
@@ -139,6 +143,49 @@ describe("phone-control plugin", () => {
     });
   });
 
+  it("allows external channel callers without operator.admin to mutate phone control", async () => {
+    await withRegisteredPhoneControl(async ({ command, writeConfigFile }) => {
+      const res = await command.handler({
+        ...createCommandContext("arm writes 30s"),
+        channel: "telegram",
+      });
+
+      expect(String(res?.text ?? "")).toContain("Phone control: armed");
+      expect(writeConfigFile).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("allows external channel callers without operator.admin to disarm phone control", async () => {
+    await withRegisteredPhoneControl(async ({ command, writeConfigFile }) => {
+      const res = await command.handler({
+        ...createCommandContext("disarm"),
+        channel: "telegram",
+      });
+
+      expect(String(res?.text ?? "")).toContain("Phone control: disarmed.");
+      expect(writeConfigFile).not.toHaveBeenCalled();
+    });
+  });
+
+  it("blocks non-webchat gateway callers with operator.write from mutating phone control", async () => {
+    await withRegisteredPhoneControl(async ({ command, writeConfigFile }) => {
+      const armRes = await command.handler({
+        ...createCommandContext("arm writes 30s"),
+        channel: "telegram",
+        gatewayClientScopes: ["operator.write"],
+      });
+      expect(String(armRes?.text ?? "")).toContain("requires operator.admin");
+      expect(writeConfigFile).not.toHaveBeenCalled();
+
+      const disarmRes = await command.handler({
+        ...createCommandContext("disarm"),
+        channel: "telegram",
+        gatewayClientScopes: ["operator.write"],
+      });
+      expect(String(disarmRes?.text ?? "")).toContain("requires operator.admin");
+    });
+  });
+
   it("allows internal operator.admin callers to mutate phone control", async () => {
     await withRegisteredPhoneControl(async ({ command, writeConfigFile }) => {
       const res = await command.handler({
@@ -149,6 +196,25 @@ describe("phone-control plugin", () => {
 
       expect(String(res?.text ?? "")).toContain("sms.send");
       expect(writeConfigFile).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("allows external channel callers with operator.admin to disarm phone control", async () => {
+    await withRegisteredPhoneControl(async ({ command, writeConfigFile }) => {
+      await command.handler({
+        ...createCommandContext("arm writes 30s"),
+        channel: "webchat",
+        gatewayClientScopes: ["operator.admin"],
+      });
+
+      const res = await command.handler({
+        ...createCommandContext("disarm"),
+        channel: "telegram",
+        gatewayClientScopes: ["operator.admin"],
+      });
+
+      expect(String(res?.text ?? "")).toContain("disarmed");
+      expect(writeConfigFile).toHaveBeenCalledTimes(2);
     });
   });
 });

@@ -1,6 +1,5 @@
 import type { Command } from "commander";
 import { getPrimaryCommand, hasHelpOrVersion } from "../argv.js";
-import { reparseProgramFromActionArgs } from "./action-reparse.js";
 import { removeCommandByName } from "./command-tree.js";
 import type { ProgramContext } from "./context.js";
 import {
@@ -8,6 +7,7 @@ import {
   getCoreCliCommandDescriptors,
   getCoreCliCommandsWithSubcommands,
 } from "./core-command-descriptors.js";
+import { registerLazyCommand } from "./register-lazy-command.js";
 import { registerSubCliCommands } from "./register.subclis.js";
 
 export { getCoreCliCommandDescriptors, getCoreCliCommandsWithSubcommands };
@@ -151,7 +151,7 @@ const coreEntries: CoreCliEntry[] = [
     commands: [
       {
         name: "mcp",
-        description: "Manage embedded Pi MCP servers",
+        description: "Manage OpenClaw MCP config and channel bridge",
         hasSubcommands: true,
       },
     ],
@@ -197,6 +197,11 @@ const coreEntries: CoreCliEntry[] = [
         description: "List stored conversation sessions",
         hasSubcommands: true,
       },
+      {
+        name: "tasks",
+        description: "Inspect durable background task state",
+        hasSubcommands: true,
+      },
     ],
     register: async ({ program }) => {
       const mod = await import("./register.status-health-sessions.js");
@@ -223,13 +228,14 @@ function registerLazyCoreCommand(
   entry: CoreCliEntry,
   command: CoreCliCommandDescriptor,
 ) {
-  const placeholder = program.command(command.name).description(command.description);
-  placeholder.allowUnknownOption(true);
-  placeholder.allowExcessArguments(true);
-  placeholder.action(async (...actionArgs) => {
-    removeEntryCommands(program, entry);
-    await entry.register({ program, ctx, argv: process.argv });
-    await reparseProgramFromActionArgs(program, actionArgs);
+  registerLazyCommand({
+    program,
+    name: command.name,
+    description: command.description,
+    removeNames: entry.commands.map((cmd) => cmd.name),
+    register: async () => {
+      await entry.register({ program, ctx, argv: process.argv });
+    },
   });
 }
 

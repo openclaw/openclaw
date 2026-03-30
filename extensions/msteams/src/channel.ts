@@ -23,10 +23,12 @@ import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-h
 import type { ChannelMessageActionName, ChannelPlugin, OpenClawConfig } from "../runtime-api.js";
 import {
   buildProbeChannelStatusSummary,
+  chunkTextForOutbound,
   createDefaultChannelRuntimeState,
   DEFAULT_ACCOUNT_ID,
   PAIRING_APPROVED_MESSAGE,
 } from "../runtime-api.js";
+import { msTeamsApprovalAuth } from "./approval-auth.js";
 import { MSTeamsChannelConfigSchema } from "./config-schema.js";
 import { resolveMSTeamsGroupToolPolicy } from "./policy.js";
 import type { ProbeMSTeamsResult } from "./probe.js";
@@ -355,6 +357,9 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
         threads: true,
         media: true,
       },
+      streaming: {
+        blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
+      },
       agentPrompt: {
         messageToolHints: () => [
           "- Adaptive Cards supported. Use `action=send` with `card={type,version,body}` to send rich cards.",
@@ -375,6 +380,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
             configured: account.configured,
           }),
       },
+      auth: msTeamsApprovalAuth,
       setup: msteamsSetupAdapter,
       messaging: {
         normalizeTarget: normalizeMSTeamsMessagingTarget,
@@ -934,7 +940,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
     },
     outbound: {
       deliveryMode: "direct",
-      chunker: (text, limit) => getMSTeamsRuntime().channel.text.chunkMarkdownText(text, limit),
+      chunker: chunkTextForOutbound,
       chunkerMode: "markdown",
       textChunkLimit: 4000,
       pollMaxOptions: 12,

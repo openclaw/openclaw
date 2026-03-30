@@ -11,6 +11,39 @@ const baseCfg = {
   commands: { useAccessGroups: true },
 } as unknown as OpenClawConfig;
 
+function createDirectDmRuntime() {
+  const recordInboundSession = vi.fn(async () => {});
+  const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async ({ dispatcherOptions }) => {
+    await dispatcherOptions.deliver({ text: "reply text" });
+  });
+  return {
+    recordInboundSession,
+    dispatchReplyWithBufferedBlockDispatcher,
+    runtime: {
+      channel: {
+        routing: {
+          resolveAgentRoute: vi.fn(({ accountId, peer }) => ({
+            agentId: "agent-main",
+            accountId,
+            sessionKey: `dm:${peer.id}`,
+          })),
+        },
+        session: {
+          resolveStorePath: vi.fn(() => "/tmp/direct-dm-session-store"),
+          readSessionUpdatedAt: vi.fn(() => 1234),
+          recordInboundSession,
+        },
+        reply: {
+          resolveEnvelopeFormatOptions: vi.fn(() => ({ mode: "agent" })),
+          formatAgentEnvelope: vi.fn(({ body }) => `env:${body}`),
+          finalizeInboundContext: vi.fn((ctx) => ctx),
+          dispatchReplyWithBufferedBlockDispatcher,
+        },
+      },
+    } as never,
+  };
+}
+
 describe("plugin-sdk/direct-dm", () => {
   it("resolves inbound DM access and command auth through one helper", async () => {
     const result = await resolveInboundDirectDmAccessWithRuntime({
@@ -62,17 +95,17 @@ describe("plugin-sdk/direct-dm", () => {
     });
 
     await expect(
-      authorizer({
-        senderId: "pair-me",
-        reply: async () => {},
-      }),
-    ).resolves.toBe("pairing");
-    await expect(
-      authorizer({
-        senderId: "blocked",
-        reply: async () => {},
-      }),
-    ).resolves.toBe("block");
+      Promise.all([
+        authorizer({
+          senderId: "pair-me",
+          reply: async () => {},
+        }),
+        authorizer({
+          senderId: "blocked",
+          reply: async () => {},
+        }),
+      ]),
+    ).resolves.toEqual(["pairing", "block"]);
 
     expect(issuePairingChallenge).toHaveBeenCalledTimes(1);
     expect(onBlocked).toHaveBeenCalledWith({
@@ -98,38 +131,15 @@ describe("plugin-sdk/direct-dm", () => {
   });
 
   it("dispatches direct DMs through the standard route/session/reply pipeline", async () => {
-    const recordInboundSession = vi.fn(async () => {});
-    const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async ({ dispatcherOptions }) => {
-      await dispatcherOptions.deliver({ text: "reply text" });
-    });
+    const { recordInboundSession, dispatchReplyWithBufferedBlockDispatcher, runtime } =
+      createDirectDmRuntime();
     const deliver = vi.fn(async () => {});
 
     const result = await dispatchInboundDirectDmWithRuntime({
       cfg: {
         session: { store: { type: "jsonl" } },
       } as never,
-      runtime: {
-        channel: {
-          routing: {
-            resolveAgentRoute: vi.fn(({ accountId, peer }) => ({
-              agentId: "agent-main",
-              accountId,
-              sessionKey: `dm:${peer.id}`,
-            })),
-          },
-          session: {
-            resolveStorePath: vi.fn(() => "/tmp/direct-dm-session-store"),
-            readSessionUpdatedAt: vi.fn(() => 1234),
-            recordInboundSession,
-          },
-          reply: {
-            resolveEnvelopeFormatOptions: vi.fn(() => ({ mode: "agent" })),
-            formatAgentEnvelope: vi.fn(({ body }) => `env:${body}`),
-            finalizeInboundContext: vi.fn((ctx) => ctx),
-            dispatchReplyWithBufferedBlockDispatcher,
-          },
-        },
-      } as never,
+      runtime,
       channel: "nostr",
       channelLabel: "Nostr",
       accountId: "default",

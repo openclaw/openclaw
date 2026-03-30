@@ -1,6 +1,6 @@
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { RuntimeEnv } from "../../../../src/runtime.js";
-import { createNonExitingTypedRuntimeEnv } from "../../../../test/helpers/extensions/runtime-env.js";
+import { createNonExitingTypedRuntimeEnv } from "../../../../test/helpers/plugins/runtime-env.js";
 import * as resolveChannelsModule from "../resolve-channels.js";
 import * as resolveUsersModule from "../resolve-users.js";
 import { resolveDiscordAllowlistConfig } from "./provider.allowlist.js";
