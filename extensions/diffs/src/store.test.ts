@@ -288,7 +288,7 @@ describe("createDiffsHttpHandler", () => {
 
     expect(handled).toBe(true);
     expect(res.statusCode).toBe(200);
-    expect(String(res.body)).toContain("/plugins/diffs/assets/viewer-runtime.js?v=");
+    expect(String(res.body)).toContain("./viewer-runtime.js?v=");
   });
 
   it("serves the shared viewer runtime asset", async () => {
