@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildBlockedFinalizationMessage,
+  detectQualityGuardLanguage,
   isLikelyTrivialChiefReply,
   parseQualityGuardReview,
   shouldRequireChiefQualityGuardReview,
@@ -40,6 +42,15 @@ describe("quality guard heuristics", () => {
       }),
     ).toBe(false);
   });
+
+  it("detects Vietnamese requests for final-review language control", () => {
+    expect(
+      detectQualityGuardLanguage({
+        originalPrompt: "Kiểm tra lại giúp mình và chốt câu trả lời cuối.",
+        candidateText: "Mình đang rà lại toàn bộ trước khi chốt.",
+      }),
+    ).toBe("vi");
+  });
 });
 
 describe("quality guard contract parsing", () => {
@@ -63,5 +74,25 @@ describe("quality guard contract parsing", () => {
     expect(parsed.verdict).toBe("block");
     expect(parsed.can_finalize).toBe(false);
     expect(parsed.findings[0]).toContain("invalid review contract");
+  });
+
+  it("builds a Vietnamese blocked message without leaking English review bullets", () => {
+    const message = buildBlockedFinalizationMessage({
+      language: "vi",
+      review: {
+        verdict: "block",
+        severity: "high",
+        findings: ["The draft still overclaims without verified evidence."],
+        missing_evidence: ["Missing proof from the current stack."],
+        scope_or_logic_issues: [],
+        required_revisions: [],
+        paperclip_update_safe: false,
+        can_finalize: false,
+      },
+    });
+    expect(message).toContain("Mình chưa thể chốt an toàn");
+    expect(message).toContain("Những gì còn cần xử lý");
+    expect(message).not.toContain("What still needs to be addressed");
+    expect(message).not.toContain("The draft still overclaims");
   });
 });
