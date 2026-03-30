@@ -924,6 +924,7 @@
                 "pages": [
                   "install/ansible",
                   "install/bun",
+                  "install/clawdock",
                   "install/docker",
                   "install/nix",
                   "install/podman"
@@ -989,7 +990,6 @@
                   "channels/telegram",
                   "channels/tlon",
                   "channels/twitch",
-                  "plugins/voice-call",
                   "channels/whatsapp",
                   "channels/zalo",
                   "channels/zalouser"
@@ -1077,6 +1077,7 @@
                   "tools/plugin",
                   "plugins/community",
                   "plugins/bundles",
+                  "plugins/voice-call",
                   {
                     "group": "Building Plugins",
                     "pages": [
