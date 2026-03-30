@@ -118,6 +118,34 @@ class InvokeDispatcherTest {
       assertEquals("SMS_UNAVAILABLE: SMS not available on this device", result.error?.message)
     }
 
+  @Test
+  fun handleInvoke_allowsAvailableSmsSendToReachHandler() =
+    runTest {
+      val result =
+        newDispatcher(
+          sendSmsAvailable = true,
+          smsFeatureEnabled = true,
+          smsTelephonyAvailable = true,
+        ).handleInvoke(OpenClawSmsCommand.Send.rawValue, """{"to":"+15551234567","message":"hi"}""")
+
+      assertEquals("SMS_PERMISSION_REQUIRED", result.error?.code)
+      assertEquals("grant SMS permission", result.error?.message)
+    }
+
+  @Test
+  fun handleInvoke_blocksSmsSendWhenUnavailable() =
+    runTest {
+      val result =
+        newDispatcher(
+          sendSmsAvailable = false,
+          smsFeatureEnabled = true,
+          smsTelephonyAvailable = true,
+        ).handleInvoke(OpenClawSmsCommand.Send.rawValue, """{"to":"+15551234567","message":"hi"}""")
+
+      assertEquals("SMS_UNAVAILABLE", result.error?.code)
+      assertEquals("SMS_UNAVAILABLE: SMS not available on this device", result.error?.message)
+    }
+
   private fun newDispatcher(
     sendSmsAvailable: Boolean = false,
     readSmsAvailable: Boolean = false,
