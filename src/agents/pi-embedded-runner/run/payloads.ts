@@ -258,7 +258,9 @@ export function buildEmbeddedRunPayloads(params: {
           );
         })
         .map((segment) => segment.text);
-      return filteredAssistantOutputs;
+      if (filteredAssistantOutputs.length > 0) {
+        return filteredAssistantOutputs;
+      }
     }
     return params.assistantTexts;
   })();

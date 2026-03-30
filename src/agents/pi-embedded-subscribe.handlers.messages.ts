@@ -66,6 +66,24 @@ function extractAssistantOutputsForMessage(ctx: EmbeddedPiSubscribeContext, msg:
   return extractAssistantOutputCandidates(msg, { fallbackMessageStableId });
 }
 
+function resolveLiveCommentaryDeltaText(params: {
+  currentText: string;
+  deliveredText?: string;
+}): string | null {
+  const { currentText, deliveredText } = params;
+  if (!deliveredText) {
+    return currentText;
+  }
+  if (currentText === deliveredText) {
+    return null;
+  }
+  if (currentText.startsWith(deliveredText)) {
+    const deltaText = currentText.slice(deliveredText.length);
+    return deltaText.length > 0 ? deltaText : null;
+  }
+  return currentText;
+}
+
 export function resolveSilentReplyFallbackText(params: {
   text: string;
   messagingToolSentTexts: string[];
@@ -351,16 +369,31 @@ export function handleMessageUpdate(
   }
 
   for (const segment of extractAssistantOutputsForMessage(ctx, msg)) {
-    if (
-      segment.phase !== "commentary" ||
-      segment.isTerminal ||
-      ctx.state.seenLiveCommentarySegmentIds.has(segment.segmentId)
-    ) {
+    if (segment.phase !== "commentary" || segment.isTerminal) {
       continue;
     }
-    ctx.state.seenLiveCommentarySegmentIds.add(segment.segmentId);
+    if (ctx.state.pendingCommentarySegmentIds.has(segment.segmentId)) {
+      continue;
+    }
+    const deliveredText = ctx.state.deliveredCommentarySegmentTexts.get(segment.segmentId);
+    const unsentText = resolveLiveCommentaryDeltaText({
+      currentText: segment.text,
+      deliveredText,
+    });
+    if (!unsentText) {
+      continue;
+    }
     const { isTerminal: _isTerminal, ...commentarySegment } = segment;
-    ctx.queueCommentaryDelivery(commentarySegment);
+    ctx.queueCommentaryDelivery(
+      {
+        ...commentarySegment,
+        text: unsentText,
+      },
+      {
+        allowRedelivery: Boolean(deliveredText),
+        deliveredText: commentarySegment.text,
+      },
+    );
   }
 }
 
@@ -550,19 +583,37 @@ export function handleMessageEnd(
 
   for (const segment of extractAssistantOutputsForMessage(ctx, assistantMessage)) {
     const { isTerminal: _isTerminal, ...finalizedSegment } = segment;
-    if (
-      !ctx.state.assistantOutputs.some(
-        (existingSegment) => existingSegment.segmentId === finalizedSegment.segmentId,
-      )
-    ) {
+    const existingSegment = ctx.state.assistantOutputs.find(
+      (entry) => entry.segmentId === finalizedSegment.segmentId,
+    );
+    if (existingSegment) {
+      existingSegment.text = finalizedSegment.text;
+      existingSegment.phase = finalizedSegment.phase;
+    } else {
       ctx.state.assistantOutputs.push(finalizedSegment);
     }
-    if (
-      finalizedSegment.phase === "commentary" &&
-      !ctx.state.deliveredCommentarySegmentIds.has(finalizedSegment.segmentId) &&
-      !ctx.state.pendingCommentarySegmentIds.has(finalizedSegment.segmentId)
-    ) {
-      ctx.queueCommentaryDelivery(finalizedSegment);
+    if (finalizedSegment.phase !== "commentary") {
+      continue;
+    }
+    if (ctx.state.pendingCommentarySegmentIds.has(finalizedSegment.segmentId)) {
+      continue;
+    }
+    const deliveredText = ctx.state.deliveredCommentarySegmentTexts.get(finalizedSegment.segmentId);
+    const unsentText = resolveLiveCommentaryDeltaText({
+      currentText: finalizedSegment.text,
+      deliveredText,
+    });
+    if (unsentText) {
+      ctx.queueCommentaryDelivery(
+        {
+          ...finalizedSegment,
+          text: unsentText,
+        },
+        {
+          allowRedelivery: Boolean(deliveredText),
+          deliveredText: finalizedSegment.text,
+        },
+      );
     }
   }
 

@@ -388,6 +388,49 @@ describe("deliverWebReply", () => {
     );
   });
 
+  it("propagates aborts from later media delivery failures", async () => {
+    const msg = makeMsg();
+    const abortError = new Error("commentary aborted");
+    abortError.name = "AbortError";
+    (
+      loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
+    ).mockResolvedValueOnce({
+      buffer: Buffer.from("img-1"),
+      contentType: "image/jpeg",
+      kind: "image",
+    });
+    (
+      loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
+    ).mockResolvedValueOnce({
+      buffer: Buffer.from("img-2"),
+      contentType: "image/jpeg",
+      kind: "image",
+    });
+    (
+      msg.sendMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
+    ).mockResolvedValueOnce(undefined);
+    (
+      msg.sendMedia as unknown as { mockRejectedValueOnce: (v: unknown) => void }
+    ).mockRejectedValueOnce(abortError);
+
+    await expect(
+      deliverWebReply({
+        replyResult: {
+          text: "caption",
+          mediaUrls: ["http://example.com/1.jpg", "http://example.com/2.jpg"],
+        },
+        msg,
+        maxMediaBytes: 1024 * 1024,
+        textLimit: 200,
+        replyLogger,
+        skipLog: true,
+      }),
+    ).rejects.toThrow("commentary aborted");
+
+    expect(msg.sendMedia).toHaveBeenCalledTimes(2);
+    expect(msg.reply).not.toHaveBeenCalled();
+  });
+
   it("sends audio media as ptt voice note", async () => {
     const msg = makeMsg();
     (

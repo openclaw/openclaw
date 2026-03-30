@@ -69,9 +69,9 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     suppressBlockChunks: false, // Avoid late chunk inserts after final text merge.
     lastReasoningSent: undefined,
     assistantOutputs: [],
-    seenLiveCommentarySegmentIds: new Set(),
     pendingCommentarySegmentIds: new Set(),
     deliveredCommentarySegmentIds: new Set(),
+    deliveredCommentarySegmentTexts: new Map(),
     commentaryGeneration: 0,
     commentaryQueueVersion: 0,
     commentaryAbortControllers: new Set(),
@@ -649,13 +649,16 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     commentaryDeliveryQueue = Promise.resolve();
   };
 
-  const queueCommentaryDelivery = (segment: AssistantOutputEntry) => {
+  const queueCommentaryDelivery = (
+    segment: AssistantOutputEntry,
+    options?: { allowRedelivery?: boolean; deliveredText?: string },
+  ) => {
     if (!params.onCommentaryReply) {
       return;
     }
     if (
       state.pendingCommentarySegmentIds.has(segment.segmentId) ||
-      state.deliveredCommentarySegmentIds.has(segment.segmentId)
+      (!options?.allowRedelivery && state.deliveredCommentarySegmentIds.has(segment.segmentId))
     ) {
       return;
     }
@@ -694,6 +697,10 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
           return;
         }
         state.deliveredCommentarySegmentIds.add(segment.segmentId);
+        state.deliveredCommentarySegmentTexts.set(
+          segment.segmentId,
+          options?.deliveredText ?? segment.text,
+        );
       })
       .catch((err) => {
         if (abortController.signal.aborted || generation !== state.commentaryGeneration) {
@@ -744,7 +751,6 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     state.pendingToolAudioAsVoice = false;
     state.deterministicApprovalPromptSent = false;
     abortCommentaryDelivery(createCommentaryAbortError("Commentary delivery aborted on retry"));
-    state.seenLiveCommentarySegmentIds.clear();
     resetAssistantMessageState(0);
   };
 

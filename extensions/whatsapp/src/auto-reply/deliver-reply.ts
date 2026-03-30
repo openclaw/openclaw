@@ -165,6 +165,8 @@ export async function deliverWebReply(params: {
     }
     throw lastErr;
   };
+  const isAbortError = (error: unknown) =>
+    abortSignal?.aborted === true || (error instanceof Error && error.name === "AbortError");
 
   try {
     // Text-only replies
@@ -280,6 +282,9 @@ export async function deliverWebReply(params: {
           "auto-reply sent (media)",
         );
       } catch (error) {
+        if (isAbortError(error)) {
+          throw error;
+        }
         whatsappOutboundLog.error(`Failed sending web media to ${msg.from}: ${formatError(error)}`);
         replyLogger.warn({ err: error, mediaUrl }, "failed to send web media reply");
         if (index > 0) {

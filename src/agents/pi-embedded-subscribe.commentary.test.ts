@@ -131,6 +131,79 @@ describe("subscribeEmbeddedPiSession commentary delivery", () => {
     );
   });
 
+  it("re-sends only the appended commentary suffix when a delivered segment grows", async () => {
+    const onCommentaryReply = vi.fn();
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run",
+      onCommentaryReply,
+    });
+
+    emit({
+      type: "message_update",
+      message: buildAssistantMessage({
+        id: "assistant-1",
+        content: [
+          {
+            type: "text",
+            text: "Step 2/3",
+            textSignature: JSON.stringify({ id: "sig-stream", phase: "commentary" }),
+          },
+          {
+            type: "toolCall",
+            toolCallId: "call-1",
+            toolName: "exec",
+            args: "{}",
+          },
+        ],
+      }),
+      assistantMessageEvent: {
+        type: "text_delta",
+        delta: "",
+      },
+    });
+
+    await subscription.waitForCommentaryDelivery();
+
+    emit({
+      type: "message_update",
+      message: buildAssistantMessage({
+        id: "assistant-1",
+        content: [
+          {
+            type: "text",
+            text: "Step 2/3: running lint.",
+            textSignature: JSON.stringify({ id: "sig-stream", phase: "commentary" }),
+          },
+          {
+            type: "toolCall",
+            toolCallId: "call-2",
+            toolName: "exec",
+            args: "{}",
+          },
+        ],
+      }),
+      assistantMessageEvent: {
+        type: "text_delta",
+        delta: "",
+      },
+    });
+
+    await subscription.waitForCommentaryDelivery();
+
+    expect(onCommentaryReply).toHaveBeenCalledTimes(2);
+    expect(onCommentaryReply).toHaveBeenNthCalledWith(
+      1,
+      { text: "Step 2/3" },
+      expect.objectContaining({ timeoutMs: undefined }),
+    );
+    expect(onCommentaryReply).toHaveBeenNthCalledWith(
+      2,
+      { text: ": running lint." },
+      expect.objectContaining({ timeoutMs: undefined }),
+    );
+    expect(subscription.deliveredCommentarySegmentIds()).toEqual(["sig-stream"]);
+  });
+
   it("delivers undelivered commentary on message_end and preserves final outputs", async () => {
     const onCommentaryReply = vi.fn();
     const { emit, subscription } = createSubscribedSessionHarness({

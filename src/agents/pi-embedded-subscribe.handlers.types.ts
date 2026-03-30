@@ -63,9 +63,9 @@ export type EmbeddedPiSubscribeState = {
   suppressBlockChunks: boolean;
   lastReasoningSent?: string;
   assistantOutputs: AssistantOutputEntry[];
-  seenLiveCommentarySegmentIds: Set<string>;
   pendingCommentarySegmentIds: Set<string>;
   deliveredCommentarySegmentIds: Set<string>;
+  deliveredCommentarySegmentTexts: Map<string, string>;
   commentaryGeneration: number;
   commentaryQueueVersion: number;
   commentaryAbortControllers: Set<AbortController>;
@@ -139,7 +139,10 @@ export type EmbeddedPiSubscribeContext = {
   getCompactionCount: () => number;
   emitBlockReply: (payload: BlockReplyPayload) => void;
   resolveCurrentAssistantFallbackMessageId: () => string;
-  queueCommentaryDelivery: (segment: AssistantOutputEntry) => void;
+  queueCommentaryDelivery: (
+    segment: AssistantOutputEntry,
+    options?: { allowRedelivery?: boolean; deliveredText?: string },
+  ) => void;
   waitForCommentaryDeliveryRound: () => Promise<boolean>;
   waitForCommentaryDelivery: () => Promise<void>;
   abortCommentaryDelivery: (reason?: unknown) => void;
