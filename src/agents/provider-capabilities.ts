@@ -231,5 +231,19 @@ export function resolveTranscriptToolCallIdMode(
   if (modelIncludesAnyHint(modelId, capabilities.transcriptToolCallIdModelHints)) {
     return "strict9";
   }
+  // When the resolved provider does not have explicit strict9 configuration,
+  // check all static provider capabilities for model hints. This handles proxy
+  // providers (e.g., openrouter, together) that route to models like mistral/mixtral/codestral.
+  // Note: This only covers PLUGIN_CAPABILITIES_FALLBACKS; plugin-registered strict9 capabilities
+  // with model hints are not included in this fallback scan.
+  for (const [, providerCaps] of Object.entries(PLUGIN_CAPABILITIES_FALLBACKS)) {
+    if (
+      providerCaps.transcriptToolCallIdMode === "strict9" &&
+      providerCaps.transcriptToolCallIdModelHints &&
+      modelIncludesAnyHint(modelId, providerCaps.transcriptToolCallIdModelHints)
+    ) {
+      return "strict9";
+    }
+  }
   return undefined;
 }
