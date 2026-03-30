@@ -212,7 +212,11 @@ export function assertRequiredParams(
   if (missingLabels.length > 0) {
     const joined = missingLabels.join(", ");
     const noun = missingLabels.length === 1 ? "parameter" : "parameters";
-    throw parameterValidationError(`Missing required ${noun}: ${joined}`);
+    // Log actual keys and value types to diagnose model tool-call mismatches
+    const receivedKeys = Object.keys(record);
+    const receivedTypes = receivedKeys.map((k) => `${k}:${typeof record[k]}`).join(", ");
+    const diagnostic = ` Received keys: [${receivedTypes}]`;
+    throw parameterValidationError(`Missing required ${noun}: ${joined}${diagnostic}`);
   }
 }
 
