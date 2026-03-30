@@ -3,6 +3,8 @@ import { createCliRuntimeCapture } from "../cli/test-runtime-capture.js";
 
 const reconcileInspectableTasksMock = vi.fn();
 const reconcileTaskLookupTokenMock = vi.fn();
+const listTaskAuditFindingsMock = vi.fn();
+const summarizeTaskAuditFindingsMock = vi.fn();
 const updateTaskNotifyPolicyByIdMock = vi.fn();
 const cancelTaskByIdMock = vi.fn();
 const getTaskByIdMock = vi.fn();
@@ -11,6 +13,11 @@ const loadConfigMock = vi.fn(() => ({ loaded: true }));
 vi.mock("../tasks/task-registry.reconcile.js", () => ({
   reconcileInspectableTasks: (...args: unknown[]) => reconcileInspectableTasksMock(...args),
   reconcileTaskLookupToken: (...args: unknown[]) => reconcileTaskLookupTokenMock(...args),
+}));
+
+vi.mock("../tasks/task-registry.audit.js", () => ({
+  listTaskAuditFindings: (...args: unknown[]) => listTaskAuditFindingsMock(...args),
+  summarizeTaskAuditFindings: (...args: unknown[]) => summarizeTaskAuditFindingsMock(...args),
 }));
 
 vi.mock("../tasks/task-registry.js", () => ({
@@ -34,6 +41,7 @@ let tasksListCommand: typeof import("./tasks.js").tasksListCommand;
 let tasksShowCommand: typeof import("./tasks.js").tasksShowCommand;
 let tasksNotifyCommand: typeof import("./tasks.js").tasksNotifyCommand;
 let tasksCancelCommand: typeof import("./tasks.js").tasksCancelCommand;
+let tasksAuditCommand: typeof import("./tasks.js").tasksAuditCommand;
 
 const taskFixture = {
   taskId: "task-12345678",
@@ -59,8 +67,13 @@ const taskFixture = {
 } as const;
 
 beforeAll(async () => {
-  ({ tasksListCommand, tasksShowCommand, tasksNotifyCommand, tasksCancelCommand } =
-    await import("./tasks.js"));
+  ({
+    tasksListCommand,
+    tasksShowCommand,
+    tasksNotifyCommand,
+    tasksCancelCommand,
+    tasksAuditCommand,
+  } = await import("./tasks.js"));
 });
 
 describe("tasks commands", () => {
@@ -69,6 +82,20 @@ describe("tasks commands", () => {
     resetRuntimeCapture();
     reconcileInspectableTasksMock.mockReturnValue([]);
     reconcileTaskLookupTokenMock.mockReturnValue(undefined);
+    listTaskAuditFindingsMock.mockReturnValue([]);
+    summarizeTaskAuditFindingsMock.mockReturnValue({
+      total: 0,
+      warnings: 0,
+      errors: 0,
+      byCode: {
+        stale_queued: 0,
+        stale_running: 0,
+        lost: 0,
+        delivery_failed: 0,
+        missing_cleanup: 0,
+        inconsistent_timestamps: 0,
+      },
+    });
     updateTaskNotifyPolicyByIdMock.mockReturnValue(undefined);
     cancelTaskByIdMock.mockResolvedValue({ found: false, cancelled: false, reason: "missing" });
     getTaskByIdMock.mockReturnValue(undefined);
@@ -136,5 +163,36 @@ describe("tasks commands", () => {
     });
     expect(runtimeLogs[0]).toContain("Cancelled task-12345678 (acp) run run-12345678.");
     expect(runtimeErrors).toEqual([]);
+  });
+
+  it("shows task audit findings with filters", async () => {
+    listTaskAuditFindingsMock.mockReturnValue([
+      {
+        severity: "error",
+        code: "stale_running",
+        task: taskFixture,
+        ageMs: 45 * 60_000,
+        detail: "running task appears stuck",
+      },
+    ]);
+    summarizeTaskAuditFindingsMock.mockReturnValue({
+      total: 1,
+      warnings: 0,
+      errors: 1,
+      byCode: {
+        stale_queued: 0,
+        stale_running: 1,
+        lost: 0,
+        delivery_failed: 0,
+        missing_cleanup: 0,
+        inconsistent_timestamps: 0,
+      },
+    });
+
+    await tasksAuditCommand({ severity: "error", code: "stale_running", limit: 1 }, runtime);
+
+    expect(runtimeLogs[0]).toContain("Task audit: 1 findings · 1 errors · 0 warnings");
+    expect(runtimeLogs.join("\n")).toContain("stale_running");
+    expect(runtimeLogs.join("\n")).toContain("running task appears stuck");
   });
 });
