@@ -415,13 +415,10 @@ export async function runServiceRestart(params: {
         }
       }
     } catch (err) {
-      if (isGatewaySecretRefUnavailableError(err, "gateway.auth.token")) {
-        const warning =
-          "Unable to verify gateway token drift: gateway.auth.token SecretRef is configured but unavailable in this command path.";
-        warnings.push(warning);
-        if (!json) {
-          defaultRuntime.log(`\n⚠️  ${warning}\n`);
-        }
+      // SecretRef-backed tokens are externally managed (e.g. macOS Keychain);
+      // drift checking does not apply — silently skip instead of warning.
+      if (!isGatewaySecretRefUnavailableError(err, "gateway.auth.token")) {
+        throw err;
       }
     }
   }

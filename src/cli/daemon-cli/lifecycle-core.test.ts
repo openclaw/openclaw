@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewaySecretRefUnavailableError } from "../../gateway/credentials.js";
 import {
   defaultRuntime,
   resetLifecycleRuntimeLogs,
@@ -16,6 +17,8 @@ const loadConfig = vi.fn(() => ({
   },
 }));
 
+const mockResolveGatewayTokenForDriftCheck = vi.fn(() => "config-token");
+
 vi.mock("../../config/config.js", () => ({
   loadConfig: () => loadConfig(),
   readBestEffortConfig: async () => loadConfig(),
@@ -23,6 +26,11 @@ vi.mock("../../config/config.js", () => ({
 
 vi.mock("../../runtime.js", () => ({
   defaultRuntime,
+}));
+
+vi.mock("./gateway-token-drift.js", () => ({
+  resolveGatewayTokenForDriftCheck: (...args: unknown[]) =>
+    mockResolveGatewayTokenForDriftCheck(...args),
 }));
 
 let runServiceRestart: typeof import("./lifecycle-core.js").runServiceRestart;
@@ -59,6 +67,8 @@ describe("runServiceRestart token drift", () => {
         },
       },
     });
+    mockResolveGatewayTokenForDriftCheck.mockReset();
+    mockResolveGatewayTokenForDriftCheck.mockReturnValue("config-token");
     resetLifecycleServiceMocks();
     service.readCommand.mockResolvedValue({
       programArguments: [],
@@ -251,5 +261,26 @@ describe("runServiceRestart token drift", () => {
       ]),
     );
     expect(service.restart).not.toHaveBeenCalled();
+  });
+
+  it("silently skips drift check when token is a SecretRef", async () => {
+    mockResolveGatewayTokenForDriftCheck.mockImplementation(() => {
+      throw new GatewaySecretRefUnavailableError("gateway.auth.token");
+    });
+
+    await runServiceRestart(createServiceRunArgs(true));
+
+    const payload = readJsonLog<{ warnings?: string[] }>();
+    expect(payload.warnings).toBeUndefined();
+  });
+
+  it("re-throws non-SecretRef errors during drift check", async () => {
+    mockResolveGatewayTokenForDriftCheck.mockImplementation(() => {
+      throw new Error("unexpected failure");
+    });
+
+    await expect(runServiceRestart(createServiceRunArgs(true))).rejects.toThrow(
+      "unexpected failure",
+    );
   });
 });
