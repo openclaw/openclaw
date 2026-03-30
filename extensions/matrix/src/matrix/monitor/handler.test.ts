@@ -892,6 +892,7 @@ describe("matrix monitor handler pairing account scope", () => {
       dmPolicy: "open",
       textLimit: 8_000,
       mediaMaxBytes: 10_000_000,
+      historyLimit: 0,
       startupMs: 0,
       startupGraceMs: 0,
       directTracker: {
