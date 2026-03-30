@@ -98,7 +98,7 @@ async def handle_voice(gateway, message: Message):
 
 
 async def _transcribe_audio(gateway, audio_data: bytes) -> str:
-    """Transcribe audio bytes using local whisper fallbacks."""
+    """Transcribe audio bytes using whisper CLI."""
     # Fallback: whisper-cpp via subprocess
     try:
         import tempfile
