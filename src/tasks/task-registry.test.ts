@@ -9,9 +9,11 @@ import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-even
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   createTaskRecord,
+  findLatestTaskForSessionKey,
   findTaskByRunId,
   getTaskById,
   getTaskRegistrySummary,
+  listTasksForSessionKey,
   listTaskRecords,
   maybeDeliverTaskStateChangeUpdate,
   maybeDeliverTaskTerminalUpdate,
@@ -786,6 +788,38 @@ describe("task-registry", () => {
         runId: "run-restore",
         task: "Restore me",
       });
+    });
+  });
+
+  it("indexes tasks by session key for latest and list lookups", async () => {
+    await withTempDir({ prefix: "openclaw-task-registry-" }, async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests({ persist: false });
+      const nowSpy = vi.spyOn(Date, "now");
+      nowSpy.mockReturnValue(1_700_000_000_000);
+
+      const older = createTaskRecord({
+        runtime: "acp",
+        requesterSessionKey: "agent:main:main",
+        childSessionKey: "agent:main:subagent:child-1",
+        runId: "run-session-lookup-1",
+        task: "Older task",
+      });
+      const latest = createTaskRecord({
+        runtime: "subagent",
+        requesterSessionKey: "agent:main:main",
+        childSessionKey: "agent:main:subagent:child-2",
+        runId: "run-session-lookup-2",
+        task: "Latest task",
+      });
+      nowSpy.mockRestore();
+
+      expect(findLatestTaskForSessionKey("agent:main:main")?.taskId).toBe(latest.taskId);
+      expect(listTasksForSessionKey("agent:main:main").map((task) => task.taskId)).toEqual([
+        latest.taskId,
+        older.taskId,
+      ]);
+      expect(findLatestTaskForSessionKey("agent:main:subagent:child-1")?.taskId).toBe(older.taskId);
     });
   });
 

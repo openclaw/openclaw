@@ -40,7 +40,7 @@ type TaskDeliveryStateRow = {
 type TaskRegistryStatements = {
   selectAll: StatementSync;
   selectAllDeliveryStates: StatementSync;
-  replaceRow: StatementSync;
+  upsertRow: StatementSync;
   replaceDeliveryState: StatementSync;
   deleteRow: StatementSync;
   deleteDeliveryState: StatementSync;
@@ -194,8 +194,8 @@ function createStatements(db: DatabaseSync): TaskRegistryStatements {
       FROM task_delivery_state
       ORDER BY task_id ASC
     `),
-    replaceRow: db.prepare(`
-      INSERT OR REPLACE INTO task_runs (
+    upsertRow: db.prepare(`
+      INSERT INTO task_runs (
         task_id,
         runtime,
         source_id,
@@ -242,6 +242,28 @@ function createStatements(db: DatabaseSync): TaskRegistryStatements {
         @terminal_summary,
         @terminal_outcome
       )
+      ON CONFLICT(task_id) DO UPDATE SET
+        runtime = excluded.runtime,
+        source_id = excluded.source_id,
+        requester_session_key = excluded.requester_session_key,
+        child_session_key = excluded.child_session_key,
+        parent_task_id = excluded.parent_task_id,
+        agent_id = excluded.agent_id,
+        run_id = excluded.run_id,
+        label = excluded.label,
+        task = excluded.task,
+        status = excluded.status,
+        delivery_status = excluded.delivery_status,
+        notify_policy = excluded.notify_policy,
+        created_at = excluded.created_at,
+        started_at = excluded.started_at,
+        ended_at = excluded.ended_at,
+        last_event_at = excluded.last_event_at,
+        cleanup_after = excluded.cleanup_after,
+        error = excluded.error,
+        progress_summary = excluded.progress_summary,
+        terminal_summary = excluded.terminal_summary,
+        terminal_outcome = excluded.terminal_outcome
     `),
     replaceDeliveryState: db.prepare(`
       INSERT OR REPLACE INTO task_delivery_state (
@@ -371,7 +393,7 @@ export function saveTaskRegistryStateToSqlite(snapshot: TaskRegistryStoreSnapsho
     statements.clearDeliveryStates.run();
     statements.clearRows.run();
     for (const task of snapshot.tasks.values()) {
-      statements.replaceRow.run(bindTaskRecord(task));
+      statements.upsertRow.run(bindTaskRecord(task));
     }
     for (const state of snapshot.deliveryStates.values()) {
       statements.replaceDeliveryState.run(bindTaskDeliveryState(state));
@@ -381,7 +403,7 @@ export function saveTaskRegistryStateToSqlite(snapshot: TaskRegistryStoreSnapsho
 
 export function upsertTaskRegistryRecordToSqlite(task: TaskRecord) {
   const store = openTaskRegistryDatabase();
-  store.statements.replaceRow.run(bindTaskRecord(task));
+  store.statements.upsertRow.run(bindTaskRecord(task));
   ensureTaskRegistryPermissions(store.path);
 }
 

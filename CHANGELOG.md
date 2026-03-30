@@ -7,6 +7,7 @@ Docs: https://docs.openclaw.ai
 ### Breaking
 
 - Nodes/exec: remove the duplicated `nodes.run` shell wrapper from the CLI and agent `nodes` tool so node shell execution always goes through `exec host=node`, keeping node-specific capabilities on `nodes invoke` and the dedicated media/location/notify actions.
+- Background tasks: replace the old JSON task ledger with the SQLite-backed task store, so undocumented tooling or scripts that read `tasks/runs.json` directly must switch to the supported `openclaw tasks` surfaces instead of depending on state-dir internals. Thanks @vincentkoc and @mbelinky.
 
 ### Changes
 
@@ -19,6 +20,8 @@ Docs: https://docs.openclaw.ai
 - Agents/LLM: add a configurable idle-stream timeout for embedded runner requests so stalled model streams abort cleanly instead of hanging until the broader run timeout fires. (#55072) Thanks @liuy.
 - OpenAI/Responses: forward configured `text.verbosity` across Responses HTTP and WebSocket transports, surface it in `/status`, and keep per-agent verbosity precedence aligned with runtime behavior. (#47106) Thanks @merc1305 and @vincentkoc.
 - Android/notifications: add notification-forwarding controls with package filtering, quiet hours, rate limiting, and safer picker behavior for forwarded notification events. (#40175) Thanks @nimbleenigma.
+- Matrix/network: add explicit `channels.matrix.proxy` config for routing Matrix traffic through an HTTP(S) proxy, including account-level overrides and matching probe/runtime behavior. (#56931) thanks @patrick-yingxi-pan.
+- Background tasks: turn tasks into a real shared background-run control plane instead of ACP-only bookkeeping by unifying ACP, subagent, cron, and background CLI execution under one SQLite-backed ledger, routing detached lifecycle updates through the executor seam, adding audit/maintenance/status visibility, tightening auto-cleanup and lost-run recovery, improving task awareness in internal status/tool surfaces, and clarifying the split between heartbeat/main-session automation and detached scheduled runs. Thanks @vincentkoc and @mbelinky.
 
 ### Fixes
 
@@ -54,6 +57,7 @@ Docs: https://docs.openclaw.ai
 - Memory/QMD: keep reset and deleted session transcripts in QMD session export so daily session resets do not silently drop most historical recall from `memory_search`. (#30220) Thanks @pushkarsingh32.
 - Memory/QMD: rebind collections when QMD reports a changed pattern but omits path metadata, so config pattern changes stop being silently ignored on restart. (#49897) Thanks @Madruru.
 - Memory/QMD: warn explicitly when `memory.backend=qmd` is configured but the `qmd` binary is missing, so doctor and runtime fallback no longer fail as a silent builtin downgrade. (#50439) Thanks @Jimmy-xuzimo and @vincentkoc.
+- Memory/QMD: pass a direct-session key on `openclaw memory search` so CLI QMD searches no longer get denied as `session=<none>` under direct-only scope defaults. (#43517) Thanks @waynecc-at and @vincentkoc.
 - Agents/memory flush: keep daily memory flush files append-only during embedded attempts so compaction writes do not overwrite earlier notes. (#53725) Thanks @HPluseven.
 - Web UI/markdown: stop bare auto-links from swallowing adjacent CJK text while preserving valid mixed-script path and query characters in rendered links. (#48410) Thanks @jnuyao.
 - BlueBubbles/iMessage: coalesce URL-only inbound messages with their link-preview balloon again so sharing a bare link no longer drops the URL from agent context. Thanks @vincentkoc.
@@ -94,6 +98,7 @@ Docs: https://docs.openclaw.ai
 - Agents/Anthropic failover: treat Anthropic `api_error` payloads with `An unexpected error occurred while processing the response` as transient so retry/fallback can engage instead of surfacing a terminal failure. (#57441) Thanks @zijiess and @vincentkoc.
 - Agents/compaction: keep late compaction-retry rejections handled after the aggregate timeout path wins without swallowing real pre-timeout wait failures, so timed-out retries no longer surface an unhandled rejection on later unsubscribe. (#57451) Thanks @mpz4life and @vincentkoc.
 - Matrix/delivery recovery: treat Synapse `User not in room` replay failures as permanent during startup recovery so poisoned queued messages move to `failed/` instead of crash-looping Matrix after restart. (#57426) thanks @dlardo.
+- Plugins/facades: guard bundled plugin facade loads with a cache-first sentinel so circular re-entry stops crashing `xai`, `sglang`, and `vllm` during gateway plugin startup. (#57508) Thanks @openperf.
 
 ## 2026.3.28
 
@@ -222,6 +227,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/diffs: load bundled Pierre themes without JSON module imports so diff rendering keeps working on newer Node builds. (#45869) thanks @NickHood1984.
 - Plugins/uninstall: remove owned `channels.<id>` config when uninstalling channel plugins, and keep the uninstall preview aligned with explicit channel ownership so built-in channels and shared keys stay intact. (#35915) Thanks @wbxl2000.
 - Plugins/Matrix: prefer explicit DM signals when choosing outbound direct rooms and routing unmapped verification summaries, so strict 2-person fallback rooms do not outrank the real DM. (#56076) thanks @gumadeiras
+- Slack/interactive replies: resolve Slack Block Kit reply delivery from both authored `channelData.slack.blocks` payloads and directive-generated interactive replies, and keep Slack button styles mapped onto valid Block Kit button rendering so interactive replies stop dropping on Slack-specific delivery paths. Thanks @vincentkoc.
 - Plugins/Matrix: resolve env-backed `accessToken` and `password` SecretRefs against the active Matrix config env path during startup, and officially accept SecretRef `accessToken` config values. (#54980) thanks @kakahu2015.
 - Microsoft Teams/proactive DMs: prefer the freshest personal conversation reference for `user:<aadObjectId>` sends when multiple stored references exist, so replies stop targeting stale DM threads. (#54702) Thanks @gumclaw.
 - Gateway/plugins: reuse the session workspace when building HTTP `/tools/invoke` tool lists and harden tool construction to infer the session agent workspace by default, so workspace plugins do not re-register on repeated HTTP tool calls. (#56101) thanks @neeravmakwana
