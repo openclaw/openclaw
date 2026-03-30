@@ -93,19 +93,52 @@ type TelegramSendFn = typeof sendMessageTelegram;
 type TelegramSendOptions = NonNullable<Parameters<TelegramSendFn>[2]>;
 
 function resolveTelegramProbe() {
-  return probeModule.probeTelegram;
+  return (
+    getOptionalTelegramRuntime()?.channel?.telegram?.probeTelegram ?? probeModule.probeTelegram
+  );
 }
 
 function resolveTelegramAuditCollector() {
-  return auditModule.collectTelegramUnmentionedGroupIds;
+  return (
+    getOptionalTelegramRuntime()?.channel?.telegram?.collectTelegramUnmentionedGroupIds ??
+    auditModule.collectTelegramUnmentionedGroupIds
+  );
 }
 
 function resolveTelegramAuditMembership() {
-  return auditModule.auditTelegramGroupMembership;
+  return (
+    getOptionalTelegramRuntime()?.channel?.telegram?.auditTelegramGroupMembership ??
+    auditModule.auditTelegramGroupMembership
+  );
 }
 
 function resolveTelegramMonitor() {
-  return monitorModule.monitorTelegramProvider;
+  return (
+    getOptionalTelegramRuntime()?.channel?.telegram?.monitorTelegramProvider ??
+    monitorModule.monitorTelegramProvider
+  );
+}
+
+function getOptionalTelegramRuntime() {
+  try {
+    return getTelegramRuntime();
+  } catch {
+    return null;
+  }
+}
+
+function resolveTelegramSend(deps?: OutboundSendDeps): TelegramSendFn {
+  return (
+    resolveOutboundSendDep<TelegramSendFn>(deps, "telegram") ??
+    getOptionalTelegramRuntime()?.channel?.telegram?.sendMessageTelegram ??
+    sendMessageTelegram
+  );
+}
+
+function resolveTelegramTokenHelper() {
+  return (
+    getOptionalTelegramRuntime()?.channel?.telegram?.resolveTelegramToken ?? resolveTelegramToken
+  );
 }
 
 function buildTelegramSendOptions(params: {
@@ -148,8 +181,7 @@ async function sendTelegramOutbound(params: {
   silent?: boolean | null;
   gatewayClientScopes?: readonly string[] | null;
 }) {
-  const send =
-    resolveOutboundSendDep<TelegramSendFn>(params.deps, "telegram") ?? sendMessageTelegram;
+  const send = resolveTelegramSend(params.deps);
   return await send(
     params.to,
     params.text,
@@ -165,6 +197,28 @@ async function sendTelegramOutbound(params: {
     }),
   );
 }
+
+const telegramMessageActions: ChannelMessageActionAdapter = {
+  describeMessageTool: (ctx) =>
+    getOptionalTelegramRuntime()?.channel?.telegram?.messageActions?.describeMessageTool?.(ctx) ??
+    telegramMessageActionsImpl.describeMessageTool?.(ctx) ??
+    null,
+  extractToolSend: (ctx) =>
+    getOptionalTelegramRuntime()?.channel?.telegram?.messageActions?.extractToolSend?.(ctx) ??
+    telegramMessageActionsImpl.extractToolSend?.(ctx) ??
+    null,
+  handleAction: async (ctx) => {
+    const runtimeHandleAction =
+      getOptionalTelegramRuntime()?.channel?.telegram?.messageActions?.handleAction;
+    if (runtimeHandleAction) {
+      return await runtimeHandleAction(ctx);
+    }
+    if (!telegramMessageActionsImpl.handleAction) {
+      throw new Error("Telegram message actions not available");
+    }
+    return await telegramMessageActionsImpl.handleAction(ctx);
+  },
+};
 
 function normalizeTelegramAcpConversationId(conversationId: string) {
   const parsed = parseTelegramTopicConversation({ conversationId });
@@ -386,17 +440,6 @@ const telegramNativeApprovalAdapter = createApproverRestrictedNativeApprovalAdap
   resolveSuppressionAccountId: ({ target, request }) =>
     target.accountId?.trim() || request.request.turnSourceAccountId?.trim() || undefined,
 });
-
-const telegramMessageActions: ChannelMessageActionAdapter = {
-  describeMessageTool: (ctx) => telegramMessageActionsImpl.describeMessageTool?.(ctx) ?? null,
-  extractToolSend: (ctx) => telegramMessageActionsImpl.extractToolSend?.(ctx) ?? null,
-  handleAction: async (ctx) => {
-    if (!telegramMessageActionsImpl.handleAction) {
-      throw new Error("Telegram message actions not available");
-    }
-    return await telegramMessageActionsImpl.handleAction(ctx);
-  },
-};
 
 const resolveTelegramAllowlistGroupOverrides = createNestedAllowlistOverrideResolver({
   resolveRecord: (account: ResolvedTelegramAccount) => account.config.groups,
@@ -770,11 +813,11 @@ export const telegramPlugin = createChatChannelPlugin({
       message: PAIRING_APPROVED_MESSAGE,
       normalizeAllowEntry: createPairingPrefixStripper(/^(telegram|tg):/i),
       notify: async ({ cfg, id, message, accountId }) => {
-        const { token } = resolveTelegramToken(cfg, { accountId });
+        const { token } = resolveTelegramTokenHelper()(cfg, { accountId });
         if (!token) {
           throw new Error("telegram token not configured");
         }
-        await sendMessageTelegram(id, message, { token, accountId });
+        await resolveTelegramSend()(id, message, { token, accountId });
       },
     },
   },
@@ -838,8 +881,7 @@ export const telegramPlugin = createChatChannelPlugin({
         forceDocument,
         gatewayClientScopes,
       }) => {
-        const send =
-          resolveOutboundSendDep<TelegramSendFn>(deps, "telegram") ?? sendMessageTelegram;
+        const send = resolveTelegramSend(deps);
         const result = await sendTelegramPayloadMessages({
           send,
           to,
