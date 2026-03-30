@@ -109,8 +109,8 @@ function extractKimiCitations(data: KimiSearchResponse): string[] {
     }
     try {
       const parsed = JSON.parse(rawArguments) as {
-        search_results?: Array<{ url?: string }>;
         url?: string;
+        search_results?: Array<{ url?: string }>;
       };
       if (typeof parsed.url === "string" && parsed.url.trim()) {
         citations.push(parsed.url.trim());
@@ -128,14 +128,14 @@ function extractKimiCitations(data: KimiSearchResponse): string[] {
   return [...new Set(citations)];
 }
 
-function buildKimiToolResultContent(data: KimiSearchResponse): string {
-  return JSON.stringify({
-    search_results: (data.search_results ?? []).map((entry) => ({
-      title: entry.title ?? "",
-      url: entry.url ?? "",
-      content: entry.content ?? "",
-    })),
-  });
+function buildKimiToolMessageContent(toolCall: KimiToolCall): string {
+  const rawArguments = toolCall.function?.arguments;
+  if (typeof rawArguments !== "string") {
+    return "{}";
+  }
+
+  const trimmed = rawArguments.trim();
+  return trimmed || "{}";
 }
 
 async function runKimiSearch(params: {
@@ -164,6 +164,7 @@ async function runKimiSearch(params: {
             model: params.model,
             messages,
             tools: [KIMI_WEB_SEARCH_TOOL],
+            thinking: { type: "disabled" },
           }),
         },
       },
@@ -185,28 +186,39 @@ async function runKimiSearch(params: {
         const toolCalls = message?.tool_calls ?? [];
 
         if (choice?.finish_reason !== "tool_calls" || toolCalls.length === 0) {
-          return { done: true, content: text ?? "No response", citations: [...collectedCitations] };
+          return {
+            done: true,
+            content: text ?? "No response",
+            citations: [...collectedCitations],
+          };
+        }
+
+        const validToolCalls = toolCalls.filter(
+          (toolCall) => toolCall.id?.trim() && toolCall.function?.name?.trim(),
+        );
+
+        if (validToolCalls.length !== toolCalls.length || validToolCalls.length === 0) {
+          return {
+            done: true,
+            content: text ?? "No response",
+            citations: [...collectedCitations],
+          };
         }
 
         messages.push({
           role: "assistant",
           content: message?.content ?? "",
           ...(message?.reasoning_content ? { reasoning_content: message.reasoning_content } : {}),
-          tool_calls: toolCalls,
+          tool_calls: validToolCalls,
         });
 
-        const toolContent = buildKimiToolResultContent(data);
-        let pushed = false;
-        for (const toolCall of toolCalls) {
-          const toolCallId = toolCall.id?.trim();
-          if (!toolCallId) {
-            continue;
-          }
-          pushed = true;
-          messages.push({ role: "tool", tool_call_id: toolCallId, content: toolContent });
-        }
-        if (!pushed) {
-          return { done: true, content: text ?? "No response", citations: [...collectedCitations] };
+        for (const toolCall of validToolCalls) {
+          messages.push({
+            role: "tool",
+            tool_call_id: toolCall.id!.trim(),
+            name: toolCall.function!.name!.trim(),
+            content: buildKimiToolMessageContent(toolCall),
+          });
         }
         return { done: false };
       },
@@ -228,7 +240,7 @@ function createKimiSchema() {
     query: Type.String({ description: "Search query string." }),
     count: Type.Optional(
       Type.Number({
-        description: "Number of results to return (1-10).",
+        description: "Compatibility field. Kimi builtin $web_search may ignore this value.",
         minimum: 1,
         maximum: MAX_SEARCH_COUNT,
       }),
@@ -351,4 +363,5 @@ export const __testing = {
   resolveKimiModel,
   resolveKimiBaseUrl,
   extractKimiCitations,
+  buildKimiToolMessageContent,
 } as const;
