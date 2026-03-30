@@ -37,6 +37,8 @@ export interface MabosPluginConfig {
   sessionIntel?: import("../session-intel/types.js").SessionIntelConfig;
   sandboxEnabled?: boolean;
   sandbox?: import("../execution-sandbox/types.js").ExecutionSandboxConfig;
+  skillLoopEnabled?: boolean;
+  skillLoop?: import("../skill-loop/types.js").SkillLoopConfig;
 }
 
 /**
