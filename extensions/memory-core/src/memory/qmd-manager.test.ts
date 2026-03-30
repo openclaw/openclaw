@@ -332,7 +332,12 @@ describe("QmdMemoryManager", () => {
     await vi.advanceTimersByTimeAsync(500);
     await expect(searchPromise).resolves.toEqual([]);
 
-    (releaseUpdate as (() => void) | null)?.();
+    const releaseUpdateFn: () => void =
+      (releaseUpdate as (() => void) | null) ??
+      (() => {
+        throw new Error("expected qmd update process to start");
+      });
+    releaseUpdateFn();
     await manager.close();
   });
 
