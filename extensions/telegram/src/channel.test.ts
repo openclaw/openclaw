@@ -292,7 +292,7 @@ describe("telegramPlugin duplicate token guard", () => {
     }
   });
 
-  it("uses imported Telegram probe helpers even when runtime state is set", async () => {
+  it("prefers runtime Telegram probe helpers when runtime state is set", async () => {
     probeTelegramMock.mockReset();
     const runtimeProbeTelegram = vi.fn(async () => ({
       ok: true,
@@ -319,16 +319,16 @@ describe("telegramPlugin duplicate token guard", () => {
       }),
     ).resolves.toEqual({
       ok: true,
-      bot: { username: "modulebot" },
-      elapsedMs: 1,
+      bot: { username: "runtimebot" },
+      elapsedMs: 7,
     });
-    expect(probeTelegramMock).toHaveBeenCalledWith("token-ops", 4321, {
+    expect(runtimeProbeTelegram).toHaveBeenCalledWith("token-ops", 4321, {
       accountId: "ops",
       proxyUrl: undefined,
       network: undefined,
       apiRoot: undefined,
     });
-    expect(runtimeProbeTelegram).not.toHaveBeenCalled();
+    expect(probeTelegramMock).not.toHaveBeenCalled();
   });
 
   it("passes account proxy and network settings into Telegram probes", async () => {
