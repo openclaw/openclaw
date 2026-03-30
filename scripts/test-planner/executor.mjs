@@ -811,6 +811,11 @@ export async function executePlan(plan, options = {}) {
       return results;
     }
     const explicitFilterCount = countExplicitEntryFilters(unit.args);
+    const includeFileCount =
+      Array.isArray(unit.includeFiles) && unit.includeFiles.length > 0
+        ? unit.includeFiles.length
+        : null;
+    const shardCandidateCount = explicitFilterCount ?? includeFileCount;
     const topLevelAssignedShard = plan.topLevelSingleShardAssignments.get(unit);
     if (topLevelAssignedShard !== undefined) {
       if (plan.shardIndexOverride !== null && plan.shardIndexOverride !== topLevelAssignedShard) {
@@ -820,9 +825,9 @@ export async function executePlan(plan, options = {}) {
       return results;
     }
     const effectiveShardCount =
-      explicitFilterCount === null
+      shardCandidateCount === null
         ? plan.shardCount
-        : Math.min(plan.shardCount, Math.max(1, explicitFilterCount - 1));
+        : Math.min(plan.shardCount, Math.max(1, shardCandidateCount - 1));
     if (effectiveShardCount <= 1) {
       if (plan.shardIndexOverride !== null && plan.shardIndexOverride > effectiveShardCount) {
         return results;
