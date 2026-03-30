@@ -34,6 +34,19 @@ commands for resume, planning, review, model selection, compaction, and more.
 openclaw plugins install openclaw-codex-app-server
 ```
 
+### Cortex Memory
+
+Persistent memory engine for AI assistants with 4-tier architecture
+(Working, Episodic, Semantic, Procedural), Bayesian beliefs, people graph,
+and multi-signal retrieval. Local-first, zero-cloud, Rust-native.
+
+- **npm:** `@cortex-ai-memory/cortex-memory`
+- **repo:** [github.com/gambletan/cortex](https://github.com/gambletan/cortex)
+
+```bash
+openclaw plugins install @cortex-ai-memory/cortex-memory
+```
+
 ### DingTalk
 
 Enterprise robot integration using Stream mode. Supports text, images, and
