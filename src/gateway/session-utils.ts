@@ -29,6 +29,7 @@ import {
   buildGroupDisplayName,
   canonicalizeMainSessionAlias,
   loadSessionStore,
+  resolveAllAgentSessionStoreTargets,
   resolveAllAgentSessionStoreTargetsSync,
   resolveAgentMainSessionKey,
   resolveFreshSessionTotalTokens,
@@ -38,6 +39,7 @@ import {
   type SessionStoreTarget,
   type SessionScope,
 } from "../config/sessions.js";
+import { applySessionStoreMigrations } from "../config/sessions/store-migrations.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import {
   normalizeAgentId,
@@ -54,10 +56,16 @@ import {
   resolveAvatarMime,
 } from "../shared/avatar-policy.js";
 import { normalizeSessionDeliveryFields } from "../utils/delivery-context.js";
+import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
 import {
+  applyConfiguredSessionUsageCacheSettings,
+  getSessionTitleFieldsCacheMaxEntries,
+  getSessionUsageCacheMaxEntries,
   readLatestSessionUsageFromTranscript,
+  readLatestSessionUsageFromTranscriptAsync,
   readSessionTitleFieldsFromTranscript,
+  readSessionTitleFieldsFromTranscriptAsync,
 } from "./session-utils.fs.js";
 import type {
   GatewayAgentRow,
@@ -67,6 +75,7 @@ import type {
 } from "./session-utils.types.js";
 
 export {
+  applyConfiguredSessionUsageCacheSettings,
   archiveFileOnDisk,
   archiveSessionTranscripts,
   attachOpenClawTranscriptMeta,
@@ -928,11 +937,13 @@ export function resolveGatewaySessionStoreTarget(params: {
 function mergeSessionEntryIntoCombined(params: {
   cfg: OpenClawConfig;
   combined: Record<string, SessionEntry>;
+  sourceStorePaths: Map<string, string>;
   entry: SessionEntry;
   agentId: string;
   canonicalKey: string;
+  sourceStorePath: string;
 }) {
-  const { cfg, combined, entry, agentId, canonicalKey } = params;
+  const { cfg, combined, sourceStorePaths, entry, agentId, canonicalKey, sourceStorePath } = params;
   const existing = combined[canonicalKey];
 
   if (existing && (existing.updatedAt ?? 0) > (entry.updatedAt ?? 0)) {
@@ -951,14 +962,17 @@ function mergeSessionEntryIntoCombined(params: {
         entry.spawnedBy ?? existing?.spawnedBy,
       ),
     };
+    sourceStorePaths.set(canonicalKey, sourceStorePath);
   }
 }
 
 export function loadCombinedSessionStoreForGateway(cfg: OpenClawConfig): {
   storePath: string;
   store: Record<string, SessionEntry>;
+  sourceStorePaths: Map<string, string>;
 } {
   const storeConfig = cfg.session?.store;
+  const sourceStorePaths = new Map<string, string>();
   if (storeConfig && !isStorePathTemplate(storeConfig)) {
     const storePath = resolveStorePath(storeConfig);
     const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(cfg));
@@ -969,12 +983,14 @@ export function loadCombinedSessionStoreForGateway(cfg: OpenClawConfig): {
       mergeSessionEntryIntoCombined({
         cfg,
         combined,
+        sourceStorePaths,
         entry,
         agentId: defaultAgentId,
         canonicalKey,
+        sourceStorePath: storePath,
       });
     }
-    return { storePath, store: combined };
+    return { storePath, store: combined, sourceStorePaths };
   }
 
   const targets = resolveAllAgentSessionStoreTargetsSync(cfg);
@@ -988,16 +1004,108 @@ export function loadCombinedSessionStoreForGateway(cfg: OpenClawConfig): {
       mergeSessionEntryIntoCombined({
         cfg,
         combined,
+        sourceStorePaths,
         entry,
         agentId,
         canonicalKey,
+        sourceStorePath: storePath,
       });
     }
   }
 
   const storePath =
     typeof storeConfig === "string" && storeConfig.trim() ? storeConfig.trim() : "(multiple)";
-  return { storePath, store: combined };
+  return { storePath, store: combined, sourceStorePaths };
+}
+
+function isSessionStoreRecord(value: unknown): value is Record<string, SessionEntry> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+const PREWARM_SESSION_STORE_RETRY_DELAY_MS = 50;
+
+async function waitForPrewarmSessionStoreRetry(delayMs: number): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+}
+
+async function loadSessionStoreForPrewarm(
+  storePath: string,
+): Promise<Record<string, SessionEntry>> {
+  const maxReadAttempts = process.platform === "win32" ? 3 : 1;
+  for (let attempt = 0; attempt < maxReadAttempts; attempt++) {
+    try {
+      const raw = await fs.promises.readFile(storePath, "utf-8");
+      if (raw.length === 0 && attempt < maxReadAttempts - 1) {
+        await waitForPrewarmSessionStoreRetry(PREWARM_SESSION_STORE_RETRY_DELAY_MS);
+        continue;
+      }
+      const parsed = JSON.parse(raw);
+      if (!isSessionStoreRecord(parsed)) {
+        return {};
+      }
+      applySessionStoreMigrations(parsed);
+      return structuredClone(parsed);
+    } catch {
+      if (attempt < maxReadAttempts - 1) {
+        await waitForPrewarmSessionStoreRetry(PREWARM_SESSION_STORE_RETRY_DELAY_MS);
+        continue;
+      }
+      return {};
+    }
+  }
+  return {};
+}
+
+async function loadCombinedSessionStoreForGatewayAsync(cfg: OpenClawConfig): Promise<{
+  storePath: string;
+  store: Record<string, SessionEntry>;
+  sourceStorePaths: Map<string, string>;
+}> {
+  const storeConfig = cfg.session?.store;
+  const sourceStorePaths = new Map<string, string>();
+  if (storeConfig && !isStorePathTemplate(storeConfig)) {
+    const storePath = resolveStorePath(storeConfig);
+    const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(cfg));
+    const store = await loadSessionStoreForPrewarm(storePath);
+    const combined: Record<string, SessionEntry> = {};
+    for (const [key, entry] of Object.entries(store)) {
+      const canonicalKey = canonicalizeSessionKeyForAgent(defaultAgentId, key);
+      mergeSessionEntryIntoCombined({
+        cfg,
+        combined,
+        sourceStorePaths,
+        entry,
+        agentId: defaultAgentId,
+        canonicalKey,
+        sourceStorePath: storePath,
+      });
+    }
+    return { storePath, store: combined, sourceStorePaths };
+  }
+
+  const targets = await resolveAllAgentSessionStoreTargets(cfg);
+  const combined: Record<string, SessionEntry> = {};
+  for (const target of targets) {
+    const agentId = target.agentId;
+    const storePath = target.storePath;
+    const store = await loadSessionStoreForPrewarm(storePath);
+    for (const [key, entry] of Object.entries(store)) {
+      const canonicalKey = canonicalizeSessionKeyForAgent(agentId, key);
+      mergeSessionEntryIntoCombined({
+        cfg,
+        combined,
+        sourceStorePaths,
+        entry,
+        agentId,
+        canonicalKey,
+        sourceStorePath: storePath,
+      });
+    }
+  }
+
+  const combinedStorePath =
+    typeof storeConfig === "string" && storeConfig.trim() ? storeConfig.trim() : "(multiple)";
+  return { storePath: combinedStorePath, store: combined, sourceStorePaths };
 }
 
 export function getSessionDefaults(cfg: OpenClawConfig): GatewaySessionsDefaults {
@@ -1457,4 +1565,179 @@ export function listSessionsFromStore(params: {
     defaults: getSessionDefaults(cfg),
     sessions,
   };
+}
+
+function needsTranscriptUsageFallback(params: {
+  cfg: OpenClawConfig;
+  entry?: SessionEntry;
+  fallbackProvider?: string;
+  fallbackModel?: string;
+}): boolean {
+  return (
+    resolvePositiveNumber(resolveFreshSessionTotalTokens(params.entry)) === undefined ||
+    resolvePositiveNumber(params.entry?.contextTokens) === undefined ||
+    resolveEstimatedSessionCostUsd({
+      cfg: params.cfg,
+      provider: params.fallbackProvider,
+      model: params.fallbackModel,
+      entry: params.entry,
+    }) === undefined
+  );
+}
+
+const DEFAULT_PREWARM_CONCURRENCY = 16;
+
+/**
+ * Pre-warm the session transcript caches (usage and title) by reading
+ * transcript files at gateway startup. Runs in the background so gateway
+ * startup is not delayed. Uses async I/O with bounded concurrency.
+ */
+export async function prewarmSessionUsageCache(params: {
+  cfg: OpenClawConfig;
+  log: { info: (msg: string) => void; warn: (msg: string) => void };
+}): Promise<void> {
+  const { cfg, log } = params;
+  // Re-apply the configured cache settings before the deferred prewarm kicks off so
+  // callers that invoke this helper directly keep the current limits.
+  applyConfiguredSessionUsageCacheSettings(cfg);
+
+  // Yield to the macrotask queue so the synchronous store scan below
+  // does not block early HTTP request handling. The HTTP server is
+  // already listening when startGatewaySidecars runs, so a microtask
+  // yield (Promise.resolve) is not sufficient.
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+  if (cfg.gateway?.sessionsList?.prewarmUsageCache !== true) {
+    return;
+  }
+
+  const concurrency = Math.max(
+    1,
+    Math.min(64, cfg.gateway?.sessionsList?.prewarmConcurrency ?? DEFAULT_PREWARM_CONCURRENCY),
+  );
+
+  const { storePath, store, sourceStorePaths } = await loadCombinedSessionStoreForGatewayAsync(cfg);
+  const resolvedStorePath = storePath === "(multiple)" ? undefined : storePath;
+  const entries = Object.entries(store);
+  const toWarm: Array<{
+    warmKey: string;
+    sessionId: string;
+    storePath?: string;
+    sessionFile?: string;
+    agentId: string;
+    needsUsage: boolean;
+    updatedAt: number;
+  }> = [];
+
+  for (const [key, entry] of entries) {
+    if (isCronRunSessionKey(key) || !entry?.sessionId) {
+      continue;
+    }
+    const parsed = parseAgentSessionKey(key);
+    const agentId = parsed?.agentId ? normalizeAgentId(parsed.agentId) : resolveDefaultAgentId(cfg);
+    const resolvedModel = resolveSessionModelIdentityRef(cfg, entry, agentId);
+    const needsUsage = needsTranscriptUsageFallback({
+      cfg,
+      entry,
+      fallbackProvider: resolvedModel.provider,
+      fallbackModel: resolvedModel.model,
+    });
+    // Always warm title cache; only warm usage cache when metadata is missing.
+    toWarm.push({
+      warmKey: key,
+      sessionId: entry.sessionId,
+      storePath: sourceStorePaths.get(key) ?? resolvedStorePath,
+      sessionFile: entry.sessionFile,
+      agentId,
+      needsUsage,
+      updatedAt: entry.updatedAt ?? 0,
+    });
+  }
+
+  if (toWarm.length === 0) {
+    return;
+  }
+
+  const usageCount = toWarm.filter((t) => t.needsUsage).length;
+  const currentMax = getSessionUsageCacheMaxEntries();
+  const currentTitleMax = getSessionTitleFieldsCacheMaxEntries();
+  let usagePrewarmKeys: Set<string> | undefined;
+  let titlePrewarmKeys: Set<string> | undefined;
+  if (usageCount > currentMax) {
+    usagePrewarmKeys = new Set(
+      toWarm
+        .filter((t) => t.needsUsage)
+        .toSorted((a, b) => b.updatedAt - a.updatedAt)
+        .slice(0, currentMax)
+        .map((item) => item.warmKey),
+    );
+    log.warn(
+      `[sessions] prewarm: ${usageCount} sessions need usage warming but usageCacheMaxEntries is ${currentMax}. ` +
+        `Prewarm will only warm the ${currentMax} most recently updated usage entries. ` +
+        `Consider increasing gateway.sessionsList.usageCacheMaxEntries.`,
+    );
+  }
+  const plannedUsageCount = usagePrewarmKeys?.size ?? usageCount;
+  if (toWarm.length > currentTitleMax) {
+    titlePrewarmKeys = new Set(
+      toWarm
+        .toSorted((a, b) => b.updatedAt - a.updatedAt)
+        .slice(0, currentTitleMax)
+        .map((item) => item.warmKey),
+    );
+    log.warn(
+      `[sessions] prewarm: ${toWarm.length} sessions need title warming but the title cache only retains ${currentTitleMax}. ` +
+        `Prewarm will only warm the ${currentTitleMax} most recently updated title entries.`,
+    );
+  }
+  const plannedTitleCount = titlePrewarmKeys?.size ?? toWarm.length;
+
+  log.info(
+    `[sessions] prewarm: warming ${toWarm.length} session(s) (${plannedUsageCount} usage + ${plannedTitleCount} title, concurrency=${concurrency})`,
+  );
+
+  let usageAttempted = 0;
+  let usageFound = 0;
+  let titleWarmed = 0;
+  let failed = 0;
+
+  const tasks = toWarm.map((item) => async () => {
+    // Warm usage cache (async I/O)
+    if (item.needsUsage && (!usagePrewarmKeys || usagePrewarmKeys.has(item.warmKey))) {
+      const result = await readLatestSessionUsageFromTranscriptAsync(
+        item.sessionId,
+        item.storePath,
+        item.sessionFile,
+        item.agentId,
+      );
+      usageAttempted++;
+      if (result !== null) {
+        usageFound++;
+      }
+    }
+    // Warm title cache with bounded async head/tail reads so background prewarm
+    // does not serialize thousands of synchronous file reads on the event loop.
+    if (!titlePrewarmKeys || titlePrewarmKeys.has(item.warmKey)) {
+      await readSessionTitleFieldsFromTranscriptAsync(
+        item.sessionId,
+        item.storePath,
+        item.sessionFile,
+        item.agentId,
+      );
+      titleWarmed++;
+    }
+  });
+
+  await runTasksWithConcurrency({
+    tasks,
+    limit: concurrency,
+    errorMode: "continue",
+    onTaskError: () => {
+      failed++;
+    },
+  });
+
+  log.info(
+    `[sessions] prewarm: done (usage=${usageFound}/${usageAttempted} title=${titleWarmed} failed=${failed})`,
+  );
 }

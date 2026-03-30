@@ -4,14 +4,20 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
 import {
+  applyConfiguredSessionUsageCacheSettings,
+  getSessionUsageCacheMaxEntries,
+  MAX_SESSION_USAGE_CACHE_MAX_ENTRIES,
   archiveSessionTranscripts,
   readFirstUserMessageFromTranscript,
   readLastMessagePreviewFromTranscript,
   readLatestSessionUsageFromTranscript,
+  readLatestSessionUsageFromTranscriptAsync,
   readSessionMessages,
+  readSessionTitleFieldsFromTranscriptAsync,
   readSessionTitleFieldsFromTranscript,
   readSessionPreviewItemsFromTranscript,
   resolveSessionTranscriptCandidates,
+  setSessionUsageCacheMaxEntries,
 } from "./session-utils.fs.js";
 
 function registerTempSessionStore(
@@ -420,15 +426,20 @@ describe("readSessionTitleFieldsFromTranscript cache", () => {
     const sessionId = "test-cache-1";
     writeTranscript(tmpDir, sessionId, buildBasicSessionTranscript(sessionId));
 
+    const openSpy = vi.spyOn(fs, "openSync");
     const readSpy = vi.spyOn(fs, "readSync");
 
     const first = readSessionTitleFieldsFromTranscript(sessionId, storePath);
+    const opensAfterFirst = openSpy.mock.calls.length;
     const readsAfterFirst = readSpy.mock.calls.length;
+    expect(opensAfterFirst).toBeGreaterThan(0);
     expect(readsAfterFirst).toBeGreaterThan(0);
 
     const second = readSessionTitleFieldsFromTranscript(sessionId, storePath);
     expect(second).toEqual(first);
+    expect(openSpy.mock.calls.length).toBe(opensAfterFirst);
     expect(readSpy.mock.calls.length).toBe(readsAfterFirst);
+    openSpy.mockRestore();
     readSpy.mockRestore();
   });
 
@@ -456,6 +467,61 @@ describe("readSessionTitleFieldsFromTranscript cache", () => {
     expect(second.lastMessagePreview).toBe("New");
     expect(readSpy.mock.calls.length).toBeGreaterThan(readsAfterFirst);
     readSpy.mockRestore();
+  });
+});
+
+describe("readSessionTitleFieldsFromTranscriptAsync", () => {
+  let tmpDir: string;
+  let storePath: string;
+
+  registerTempSessionStore("openclaw-session-title-async-test-", (nextTmpDir, nextStorePath) => {
+    tmpDir = nextTmpDir;
+    storePath = nextStorePath;
+  });
+
+  test("uses async partial reads without sync fs calls", async () => {
+    const sessionId = "title-async";
+    writeTranscript(
+      tmpDir,
+      sessionId,
+      buildBasicSessionTranscript(sessionId, "Hello world", "Hi there"),
+    );
+
+    const openSyncSpy = vi.spyOn(fs, "openSync");
+    const readSyncSpy = vi.spyOn(fs, "readSync");
+
+    const result = await readSessionTitleFieldsFromTranscriptAsync(sessionId, storePath);
+
+    expect(result).toEqual({
+      firstUserMessage: "Hello world",
+      lastMessagePreview: "Hi there",
+    });
+    expect(openSyncSpy).not.toHaveBeenCalled();
+    expect(readSyncSpy).not.toHaveBeenCalled();
+
+    openSyncSpy.mockRestore();
+    readSyncSpy.mockRestore();
+  });
+
+  test("returns cached values without opening the transcript when unchanged", async () => {
+    const sessionId = "title-async-cache-hit";
+    writeTranscript(
+      tmpDir,
+      sessionId,
+      buildBasicSessionTranscript(sessionId, "Hello world", "Hi there"),
+    );
+
+    const openSpy = vi.spyOn(fs.promises, "open");
+
+    const first = await readSessionTitleFieldsFromTranscriptAsync(sessionId, storePath);
+    const opensAfterFirst = openSpy.mock.calls.length;
+    expect(opensAfterFirst).toBeGreaterThan(0);
+
+    const second = await readSessionTitleFieldsFromTranscriptAsync(sessionId, storePath);
+    expect(second).toEqual(first);
+    expect(openSpy.mock.calls.length).toBe(opensAfterFirst);
+
+    openSpy.mockRestore();
   });
 });
 
@@ -777,6 +843,335 @@ describe("readLatestSessionUsageFromTranscript", () => {
     ]);
 
     expect(readLatestSessionUsageFromTranscript(sessionId, storePath)).toBeNull();
+  });
+});
+
+describe("readLatestSessionUsageFromTranscript cache", () => {
+  let tmpDir: string;
+  let storePath: string;
+
+  registerTempSessionStore("openclaw-session-usage-cache-test-", (nextTmpDir, nextStorePath) => {
+    tmpDir = nextTmpDir;
+    storePath = nextStorePath;
+  });
+
+  test("returns cached result without re-reading file on second call", () => {
+    const sessionId = "usage-cache-hit";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      {
+        message: {
+          role: "assistant",
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          usage: { input: 100, output: 50, cost: { total: 0.001 } },
+        },
+      },
+    ]);
+
+    const readFileSpy = vi.spyOn(fs, "readFileSync");
+
+    const first = readLatestSessionUsageFromTranscript(sessionId, storePath);
+    const readsAfterFirst = readFileSpy.mock.calls.length;
+    expect(readsAfterFirst).toBeGreaterThan(0);
+    expect(first).toMatchObject({
+      modelProvider: "anthropic",
+      model: "claude-sonnet-4-6",
+      inputTokens: 100,
+      outputTokens: 50,
+    });
+
+    const second = readLatestSessionUsageFromTranscript(sessionId, storePath);
+    expect(second).toEqual(first);
+    expect(readFileSpy.mock.calls.length).toBe(readsAfterFirst);
+
+    readFileSpy.mockRestore();
+  });
+
+  test("invalidates cache when file mtime changes", () => {
+    const sessionId = "usage-cache-mtime";
+    const transcriptPath = writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      {
+        message: {
+          role: "assistant",
+          provider: "openai",
+          model: "gpt-5.4",
+          usage: { input: 200, output: 100, cost: { total: 0.002 } },
+        },
+      },
+    ]);
+
+    const first = readLatestSessionUsageFromTranscript(sessionId, storePath);
+    expect(first).toMatchObject({ modelProvider: "openai", model: "gpt-5.4" });
+
+    // Touch the file to change mtime without changing size
+    const futureTime = Date.now() + 10_000;
+    fs.utimesSync(transcriptPath, futureTime / 1000, futureTime / 1000);
+
+    const readFileSpy = vi.spyOn(fs, "readFileSync");
+    const second = readLatestSessionUsageFromTranscript(sessionId, storePath);
+    // Should have re-read the file since mtime changed
+    expect(readFileSpy.mock.calls.length).toBeGreaterThan(0);
+    expect(second).toEqual(first);
+
+    readFileSpy.mockRestore();
+  });
+
+  test("invalidates cache when file size changes", () => {
+    const sessionId = "usage-cache-size";
+    const transcriptPath = writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      {
+        message: {
+          role: "assistant",
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          usage: { input: 300, output: 150, cost: { total: 0.003 } },
+        },
+      },
+    ]);
+
+    const first = readLatestSessionUsageFromTranscript(sessionId, storePath);
+    expect(first).toMatchObject({ inputTokens: 300, outputTokens: 150 });
+
+    // Append to the file to change size
+    fs.appendFileSync(
+      transcriptPath,
+      `\n${JSON.stringify({
+        message: {
+          role: "assistant",
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          usage: { input: 500, output: 200, cost: { total: 0.005 } },
+        },
+      })}`,
+      "utf-8",
+    );
+
+    const readFileSpy = vi.spyOn(fs, "readFileSync");
+    const second = readLatestSessionUsageFromTranscript(sessionId, storePath);
+    // Should have re-read the file since size changed
+    expect(readFileSpy.mock.calls.length).toBeGreaterThan(0);
+    // Aggregated usage should now include both entries
+    expect(second).toMatchObject({ inputTokens: 800, outputTokens: 350 });
+
+    readFileSpy.mockRestore();
+  });
+
+  test("does not cache null from transient I/O errors", () => {
+    const sessionId = "usage-cache-transient-error";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      {
+        message: {
+          role: "assistant",
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          usage: { input: 100, output: 50 },
+        },
+      },
+    ]);
+
+    // Simulate a transient I/O error by making openSync fail once
+    const originalOpenSync = fs.openSync;
+    let openCallCount = 0;
+    const openSpy = vi.spyOn(fs, "openSync").mockImplementation((...args: unknown[]) => {
+      openCallCount++;
+      if (openCallCount === 1) {
+        throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+      }
+      return originalOpenSync.apply(fs, args as Parameters<typeof fs.openSync>);
+    });
+
+    // First call — transient error, should return null but NOT cache it
+    const firstResult = readLatestSessionUsageFromTranscript(sessionId, storePath);
+    expect(firstResult).toBeNull();
+
+    // Second call — error resolved, should re-read and succeed (not serve cached null)
+    const secondResult = readLatestSessionUsageFromTranscript(sessionId, storePath);
+    expect(secondResult).toMatchObject({ inputTokens: 100, outputTokens: 50 });
+
+    openSpy.mockRestore();
+  });
+
+  test("checks transcript metadata from the opened fd instead of path stat", () => {
+    const sessionId = "usage-cache-fstat";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      {
+        message: {
+          role: "assistant",
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          usage: { input: 100, output: 50 },
+        },
+      },
+    ]);
+
+    const statSpy = vi.spyOn(fs, "statSync");
+    const snapshot = readLatestSessionUsageFromTranscript(sessionId, storePath);
+    expect(snapshot).toMatchObject({ inputTokens: 100, outputTokens: 50 });
+    expect(statSpy).not.toHaveBeenCalled();
+    statSpy.mockRestore();
+  });
+});
+
+describe("readLatestSessionUsageFromTranscriptAsync", () => {
+  let tmpDir: string;
+  let storePath: string;
+
+  registerTempSessionStore("openclaw-session-usage-async-test-", (nextTmpDir, nextStorePath) => {
+    tmpDir = nextTmpDir;
+    storePath = nextStorePath;
+  });
+
+  test("streams transcript reads without using fs.promises.readFile", async () => {
+    const sessionId = "usage-async-stream";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      {
+        message: {
+          role: "assistant",
+          provider: "openai",
+          model: "gpt-5.4",
+          usage: {
+            input: 1_000,
+            output: 200,
+            cacheRead: 100,
+            cost: { total: 0.0042 },
+          },
+        },
+      },
+      ...Array.from({ length: 80 }, () => ({
+        message: { role: "user", content: "x".repeat(20_000) },
+      })),
+      {
+        message: {
+          role: "assistant",
+          provider: "openai",
+          model: "gpt-5.4",
+          usage: {
+            input: 500,
+            output: 150,
+            cacheRead: 50,
+            cost: { total: 0.0021 },
+          },
+        },
+      },
+    ]);
+
+    const readFileSpy = vi.spyOn(fs.promises, "readFile");
+
+    const snapshot = await readLatestSessionUsageFromTranscriptAsync(sessionId, storePath);
+
+    expect(snapshot).toMatchObject({
+      modelProvider: "openai",
+      model: "gpt-5.4",
+      inputTokens: 1500,
+      outputTokens: 350,
+      cacheRead: 150,
+      totalTokens: 550,
+      totalTokensFresh: true,
+    });
+    expect(snapshot?.costUsd).toBeCloseTo(0.0063, 8);
+    expect(readFileSpy).not.toHaveBeenCalled();
+
+    readFileSpy.mockRestore();
+  });
+
+  test("checks transcript metadata from the opened file handle instead of path stat", async () => {
+    const sessionId = "usage-async-filehandle-stat";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      {
+        message: {
+          role: "assistant",
+          provider: "openai",
+          model: "gpt-5.4",
+          usage: { input: 100, output: 50, cost: { total: 0.001 } },
+        },
+      },
+    ]);
+
+    const statSpy = vi.spyOn(fs.promises, "stat");
+    const snapshot = await readLatestSessionUsageFromTranscriptAsync(sessionId, storePath);
+    expect(snapshot).toMatchObject({ inputTokens: 100, outputTokens: 50 });
+    expect(statSpy).not.toHaveBeenCalled();
+    statSpy.mockRestore();
+  });
+
+  test("bounds async transcript streaming to the size checked from the open file handle", async () => {
+    const sessionId = "usage-async-bounded-stream";
+    const transcriptPath = writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      {
+        message: {
+          role: "assistant",
+          provider: "openai",
+          model: "gpt-5.4",
+          usage: { input: 100, output: 50, cost: { total: 0.001 } },
+        },
+      },
+    ]);
+
+    let capturedOptions: fs.CreateReadStreamOptions | undefined;
+    const originalOpen = fs.promises.open.bind(fs.promises);
+    const openSpy = vi.spyOn(fs.promises, "open").mockImplementation(async (...args) => {
+      const fileHandle = await originalOpen(...(args as Parameters<typeof fs.promises.open>));
+      const originalCreateReadStream = fileHandle.createReadStream.bind(fileHandle);
+      vi.spyOn(fileHandle, "createReadStream").mockImplementation((options) => {
+        capturedOptions =
+          typeof options === "object" && options ? { ...options } : (options as never);
+        return originalCreateReadStream(options);
+      });
+      return fileHandle;
+    });
+    const snapshot = await readLatestSessionUsageFromTranscriptAsync(sessionId, storePath);
+
+    expect(snapshot).toMatchObject({ inputTokens: 100, outputTokens: 50 });
+    expect(capturedOptions).toEqual(
+      expect.objectContaining({
+        encoding: "utf-8",
+        start: 0,
+        end: fs.statSync(transcriptPath).size - 1,
+      }),
+    );
+
+    openSpy.mockRestore();
+  });
+});
+
+describe("session usage cache settings", () => {
+  let tmpDir: string;
+  let storePath: string;
+
+  registerTempSessionStore(
+    "openclaw-session-usage-guardrails-test-",
+    (nextTmpDir, nextStorePath) => {
+      tmpDir = nextTmpDir;
+      storePath = nextStorePath;
+    },
+  );
+
+  afterEach(() => {
+    setSessionUsageCacheMaxEntries(undefined);
+  });
+
+  test("clamps configured usage cache max entries to a bounded limit", () => {
+    setSessionUsageCacheMaxEntries(Number.MAX_SAFE_INTEGER);
+    expect(getSessionUsageCacheMaxEntries()).toBe(MAX_SESSION_USAGE_CACHE_MAX_ENTRIES);
+  });
+
+  test("applies usage cache settings from gateway config", () => {
+    applyConfiguredSessionUsageCacheSettings({
+      gateway: {
+        sessionsList: {
+          usageCacheMaxEntries: Number.MAX_SAFE_INTEGER,
+        },
+      },
+    });
+    expect(getSessionUsageCacheMaxEntries()).toBe(MAX_SESSION_USAGE_CACHE_MAX_ENTRIES);
   });
 });
 

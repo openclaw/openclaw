@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
@@ -11,6 +11,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { withEnv } from "../test-utils/env.js";
+import { getSessionTitleFieldsCacheMaxEntries } from "./session-utils.fs.js";
 import {
   capArrayByJsonBytes,
   classifySessionKey,
@@ -26,6 +27,7 @@ import {
   resolveGatewaySessionStoreTarget,
   resolveSessionModelIdentityRef,
   resolveSessionModelRef,
+  prewarmSessionUsageCache,
   resolveSessionStoreKey,
 } from "./session-utils.js";
 
@@ -568,7 +570,7 @@ describe("gateway session utils", () => {
     const result = listAgentsForGateway(cfg);
     expect(result.agents[0]).toMatchObject({
       id: "main",
-      workspace: "/tmp/default-workspace",
+      workspace: path.resolve("/tmp/default-workspace"),
       model: {
         primary: "openai/gpt-5.4",
         fallbacks: ["openai-codex/gpt-5.2-codex"],
@@ -2423,5 +2425,413 @@ describe("loadCombinedSessionStoreForGateway includes disk-only agents (#32804)"
       expect(store["agent:main:main"]).toBeDefined();
       expect(store["agent:codex:acp-task"]).toBeDefined();
     });
+  });
+});
+
+describe("prewarmSessionUsageCache", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-prewarm-"));
+  });
+
+  afterEach(() => {
+    if (tmpDir) {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  function writeStore(storePath: string, store: Record<string, SessionEntry>) {
+    fs.writeFileSync(storePath, JSON.stringify(store), "utf-8");
+  }
+
+  function writeTranscript(dir: string, sessionId: string, totalTokens: number) {
+    fs.writeFileSync(
+      path.join(dir, `${sessionId}.jsonl`),
+      [
+        JSON.stringify({ type: "session", version: 1, id: sessionId }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            provider: "anthropic",
+            model: "claude-sonnet-4-6",
+            usage: {
+              input: Math.floor(totalTokens / 2),
+              output: totalTokens - Math.floor(totalTokens / 2),
+            },
+          },
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+  }
+
+  test("does nothing when prewarmUsageCache is not enabled", async () => {
+    const log = { info: vi.fn(), warn: vi.fn() };
+    const cfg = { session: { store: path.join(tmpDir, "sessions.json") } } as OpenClawConfig;
+    writeStore(path.join(tmpDir, "sessions.json"), {});
+
+    await prewarmSessionUsageCache({ cfg, log });
+    expect(log.info).not.toHaveBeenCalled();
+  });
+
+  test("warms usage and title caches for sessions", async () => {
+    const storePath = path.join(tmpDir, "sessions.json");
+    const store: Record<string, SessionEntry> = {
+      main: {
+        sessionId: "prewarm-sess-1",
+        updatedAt: Date.now(),
+        totalTokens: 0,
+        totalTokensFresh: false,
+      } as SessionEntry,
+      other: {
+        sessionId: "prewarm-sess-2",
+        updatedAt: Date.now(),
+        totalTokens: 0,
+        totalTokensFresh: false,
+      } as SessionEntry,
+    };
+    writeStore(storePath, store);
+    writeTranscript(tmpDir, "prewarm-sess-1", 200);
+    writeTranscript(tmpDir, "prewarm-sess-2", 400);
+
+    const log = { info: vi.fn(), warn: vi.fn() };
+    const cfg = {
+      session: { store: storePath },
+      gateway: { sessionsList: { prewarmUsageCache: true } },
+    } as OpenClawConfig;
+
+    await prewarmSessionUsageCache({ cfg, log });
+
+    const infoMessages = log.info.mock.calls.map((c: unknown[]) => String(c[0]));
+    expect(infoMessages.some((m: string) => m.includes("warming 2 session"))).toBe(true);
+    expect(infoMessages.some((m: string) => m.includes("usage=2") && m.includes("title=2"))).toBe(
+      true,
+    );
+  });
+
+  test("uses each entry's originating store path during multi-store prewarm", async () => {
+    await withStateDirEnv("openclaw-prewarm-multi-store-", async ({ stateDir }) => {
+      const customRoot = path.join(stateDir, "custom-state");
+      const mainDir = path.join(customRoot, "agents", "main", "sessions");
+      const opsDir = path.join(customRoot, "agents", "ops", "sessions");
+      fs.mkdirSync(mainDir, { recursive: true });
+      fs.mkdirSync(opsDir, { recursive: true });
+
+      writeStore(path.join(mainDir, "sessions.json"), {
+        "agent:main:main": {
+          sessionId: "prewarm-main-custom",
+          updatedAt: Date.now(),
+          totalTokens: 0,
+          totalTokensFresh: false,
+        } as SessionEntry,
+      });
+      writeStore(path.join(opsDir, "sessions.json"), {
+        "agent:ops:work": {
+          sessionId: "prewarm-ops-custom",
+          updatedAt: Date.now(),
+          totalTokens: 0,
+          totalTokensFresh: false,
+        } as SessionEntry,
+      });
+      writeTranscript(mainDir, "prewarm-main-custom", 200);
+      writeTranscript(opsDir, "prewarm-ops-custom", 400);
+
+      const log = { info: vi.fn(), warn: vi.fn() };
+      const cfg = {
+        session: {
+          store: path.join(customRoot, "agents", "{agentId}", "sessions", "sessions.json"),
+        },
+        gateway: { sessionsList: { prewarmUsageCache: true } },
+      } as OpenClawConfig;
+
+      await prewarmSessionUsageCache({ cfg, log });
+
+      const infoMessages = log.info.mock.calls.map((c: unknown[]) => String(c[0]));
+      expect(infoMessages.some((m: string) => m.includes("usage=2") && m.includes("title=2"))).toBe(
+        true,
+      );
+    });
+  });
+
+  test("skips usage warming for sessions that already have metadata", async () => {
+    const storePath = path.join(tmpDir, "sessions.json");
+    const store: Record<string, SessionEntry> = {
+      "has-usage": {
+        sessionId: "prewarm-has-usage",
+        updatedAt: Date.now(),
+        totalTokens: 500,
+        totalTokensFresh: true,
+        contextTokens: 200000,
+        estimatedCostUsd: 0.01,
+      } as SessionEntry,
+      "no-usage": {
+        sessionId: "prewarm-no-usage",
+        updatedAt: Date.now(),
+        totalTokens: 0,
+        totalTokensFresh: false,
+      } as SessionEntry,
+    };
+    writeStore(storePath, store);
+    writeTranscript(tmpDir, "prewarm-no-usage", 300);
+
+    const log = { info: vi.fn(), warn: vi.fn() };
+    const cfg = {
+      session: { store: storePath },
+      gateway: { sessionsList: { prewarmUsageCache: true } },
+    } as OpenClawConfig;
+
+    await prewarmSessionUsageCache({ cfg, log });
+
+    const infoMessages = log.info.mock.calls.map((c: unknown[]) => String(c[0]));
+    // 1 usage (no-usage only) + 2 title (both sessions)
+    expect(infoMessages.some((m: string) => m.includes("1 usage"))).toBe(true);
+    expect(infoMessages.some((m: string) => m.includes("usage=1") && m.includes("title=2"))).toBe(
+      true,
+    );
+  });
+
+  test("applies usageCacheMaxEntries from config", async () => {
+    const storePath = path.join(tmpDir, "sessions.json");
+    writeStore(storePath, {});
+
+    const log = { info: vi.fn(), warn: vi.fn() };
+    const cfg = {
+      session: { store: storePath },
+      gateway: { sessionsList: { usageCacheMaxEntries: 50000 } },
+    } as OpenClawConfig;
+
+    await prewarmSessionUsageCache({ cfg, log });
+    // No error means usageCacheMaxEntries was accepted
+  });
+
+  test.runIf(process.platform === "win32")(
+    "retries transient Windows read failures when loading stores for prewarm",
+    async () => {
+      const storePath = path.join(tmpDir, "sessions.json");
+      const store: Record<string, SessionEntry> = {
+        retry: {
+          sessionId: "prewarm-retry-store",
+          updatedAt: Date.now(),
+          totalTokens: 0,
+          totalTokensFresh: false,
+        } as SessionEntry,
+      };
+      writeStore(storePath, store);
+      writeTranscript(tmpDir, "prewarm-retry-store", 250);
+
+      const originalReadFile = fs.promises.readFile.bind(fs.promises);
+      let failedReads = 0;
+      const readFileSpy = vi
+        .spyOn(fs.promises, "readFile")
+        .mockImplementation(async (...args: Parameters<typeof fs.promises.readFile>) => {
+          const target = args[0];
+          if (target === storePath && failedReads < 2) {
+            failedReads += 1;
+            throw Object.assign(new Error("EBUSY"), { code: "EBUSY" });
+          }
+          return originalReadFile(...args);
+        });
+
+      const log = { info: vi.fn(), warn: vi.fn() };
+      const cfg = {
+        session: { store: storePath },
+        gateway: { sessionsList: { prewarmUsageCache: true } },
+      } as OpenClawConfig;
+
+      await prewarmSessionUsageCache({ cfg, log });
+
+      expect(failedReads).toBe(2);
+      const infoMessages = log.info.mock.calls.map((c: unknown[]) => String(c[0]));
+      expect(infoMessages.some((m: string) => m.includes("usage=1") && m.includes("title=1"))).toBe(
+        true,
+      );
+
+      readFileSpy.mockRestore();
+    },
+  );
+
+  test("caps usage prewarm to the most recently updated cache-sized subset", async () => {
+    const storePath = path.join(tmpDir, "sessions.json");
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      old: {
+        sessionId: "prewarm-old",
+        updatedAt: now - 3_000,
+        totalTokens: 0,
+        totalTokensFresh: false,
+      } as SessionEntry,
+      recent: {
+        sessionId: "prewarm-recent",
+        updatedAt: now - 2_000,
+        totalTokens: 0,
+        totalTokensFresh: false,
+      } as SessionEntry,
+      newest: {
+        sessionId: "prewarm-newest",
+        updatedAt: now - 1_000,
+        totalTokens: 0,
+        totalTokensFresh: false,
+      } as SessionEntry,
+    };
+    writeStore(storePath, store);
+    writeTranscript(tmpDir, "prewarm-old", 100);
+    writeTranscript(tmpDir, "prewarm-recent", 200);
+    writeTranscript(tmpDir, "prewarm-newest", 300);
+
+    const log = { info: vi.fn(), warn: vi.fn() };
+    const cfg = {
+      session: { store: storePath },
+      gateway: { sessionsList: { prewarmUsageCache: true, usageCacheMaxEntries: 2 } },
+    } as OpenClawConfig;
+
+    await prewarmSessionUsageCache({ cfg, log });
+
+    const warnMessages = log.warn.mock.calls.map((c: unknown[]) => String(c[0]));
+    expect(
+      warnMessages.some(
+        (m: string) =>
+          m.includes("3 sessions need usage warming") &&
+          m.includes("only warm the 2 most recently updated usage entries"),
+      ),
+    ).toBe(true);
+    const infoMessages = log.info.mock.calls.map((c: unknown[]) => String(c[0]));
+    expect(infoMessages.some((m: string) => m.includes("warming 3 session"))).toBe(true);
+    expect(infoMessages.some((m: string) => m.includes("usage=2") && m.includes("title=3"))).toBe(
+      true,
+    );
+  });
+
+  test("keys capped usage prewarm by canonical store entry instead of sessionId", async () => {
+    const storePath = path.join(tmpDir, "sessions.json");
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      "agent:main:main": {
+        sessionId: "shared-session",
+        updatedAt: now - 3_000,
+        totalTokens: 0,
+        totalTokensFresh: false,
+      } as SessionEntry,
+      "agent:ops:main": {
+        sessionId: "shared-session",
+        updatedAt: now - 1_000,
+        totalTokens: 0,
+        totalTokensFresh: false,
+      } as SessionEntry,
+      "agent:aux:main": {
+        sessionId: "unique-session",
+        updatedAt: now - 2_000,
+        totalTokens: 0,
+        totalTokensFresh: false,
+      } as SessionEntry,
+    };
+    writeStore(storePath, store);
+    writeTranscript(tmpDir, "shared-session", 100);
+    writeTranscript(tmpDir, "unique-session", 200);
+
+    const log = { info: vi.fn(), warn: vi.fn() };
+    const cfg = {
+      session: { store: storePath },
+      gateway: { sessionsList: { prewarmUsageCache: true, usageCacheMaxEntries: 2 } },
+    } as OpenClawConfig;
+
+    await prewarmSessionUsageCache({ cfg, log });
+
+    const infoMessages = log.info.mock.calls.map((c: unknown[]) => String(c[0]));
+    expect(infoMessages.some((m: string) => m.includes("usage=2") && m.includes("title=3"))).toBe(
+      true,
+    );
+  });
+
+  test("caps title prewarm to the most recently updated title-cache-sized subset", async () => {
+    const storePath = path.join(tmpDir, "sessions.json");
+    const now = Date.now();
+    const titleCacheMax = getSessionTitleFieldsCacheMaxEntries();
+    const store: Record<string, SessionEntry> = {};
+    for (let index = 0; index < titleCacheMax + 2; index++) {
+      const sessionId = `title-prewarm-${index}`;
+      store[`session-${index}`] = {
+        sessionId,
+        updatedAt: now - index,
+        totalTokens: 0,
+        totalTokensFresh: false,
+      } as SessionEntry;
+      writeTranscript(tmpDir, sessionId, index + 1);
+    }
+    writeStore(storePath, store);
+
+    const log = { info: vi.fn(), warn: vi.fn() };
+    const cfg = {
+      session: { store: storePath },
+      gateway: {
+        sessionsList: {
+          prewarmUsageCache: true,
+          usageCacheMaxEntries: titleCacheMax + 10,
+        },
+      },
+    } as OpenClawConfig;
+
+    await prewarmSessionUsageCache({ cfg, log });
+
+    const warnMessages = log.warn.mock.calls.map((c: unknown[]) => String(c[0]));
+    expect(
+      warnMessages.some(
+        (m: string) =>
+          m.includes(`${titleCacheMax + 2} sessions need title warming`) &&
+          m.includes(`only warm the ${titleCacheMax} most recently updated title entries`),
+      ),
+    ).toBe(true);
+    const infoMessages = log.info.mock.calls.map((c: unknown[]) => String(c[0]));
+    expect(
+      infoMessages.some(
+        (m: string) =>
+          m.includes(`warming ${titleCacheMax + 2} session`) &&
+          m.includes(`(${titleCacheMax + 2} usage +`) &&
+          m.includes(`${titleCacheMax} title`),
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("gateway.sessionsList config validation", () => {
+  test("zod schema accepts valid sessionsList config", async () => {
+    const { OpenClawSchema } = await import("../config/zod-schema.js");
+    const config = {
+      gateway: {
+        sessionsList: {
+          usageCacheMaxEntries: 10000,
+          prewarmUsageCache: true,
+          prewarmConcurrency: 8,
+        },
+      },
+    };
+    const result = OpenClawSchema.safeParse(config);
+    expect(result.success).toBe(true);
+  });
+
+  test("zod schema rejects invalid sessionsList values", async () => {
+    const { OpenClawSchema } = await import("../config/zod-schema.js");
+    const config = {
+      gateway: {
+        sessionsList: {
+          usageCacheMaxEntries: -1,
+        },
+      },
+    };
+    const result = OpenClawSchema.safeParse(config);
+    expect(result.success).toBe(false);
+  });
+
+  test("zod schema rejects unknown keys in sessionsList", async () => {
+    const { OpenClawSchema } = await import("../config/zod-schema.js");
+    const config = {
+      gateway: {
+        sessionsList: {
+          unknownKey: true,
+        },
+      },
+    };
+    const result = OpenClawSchema.safeParse(config);
+    expect(result.success).toBe(false);
   });
 });

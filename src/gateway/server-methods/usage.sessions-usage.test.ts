@@ -172,6 +172,7 @@ describe("sessions.usage", () => {
               updatedAt: 999,
             },
           },
+          sourceStorePaths: new Map([[storeKey, path.join(agentSessionsDir, "sessions.json")]]),
         });
 
         // Query via discovered key: agent:<id>:<sessionId>
@@ -214,6 +215,13 @@ describe("sessions.usage", () => {
               updatedAt: 2_000,
             },
           },
+          sourceStorePaths: new Map([
+            [preferredKey, path.join(agentSessionsDir, "sessions.json")],
+            [
+              "agent:other:main",
+              path.join(stateDir, "agents", "other", "sessions", "sessions.json"),
+            ],
+          ]),
         });
 
         const respond = await runSessionsUsage({

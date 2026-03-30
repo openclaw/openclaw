@@ -19,9 +19,16 @@ const resolveModelMock = vi.fn<
     api: "openai-codex-responses",
   },
 }));
+const resolveAgentSessionDirsMock = vi.fn<(stateDir: unknown) => Promise<string[]>>();
+const applyConfiguredSessionUsageCacheSettingsMock = vi.fn<(cfg: unknown) => void>();
 
 vi.mock("../agents/agent-paths.js", () => ({
   resolveOpenClawAgentDir: () => "/tmp/agent",
+}));
+
+vi.mock("../agents/session-dirs.js", () => ({
+  resolveAgentSessionDirs: (stateDir: unknown) => resolveAgentSessionDirsMock(stateDir),
+  cleanStaleLockFiles: vi.fn(async () => {}),
 }));
 
 vi.mock("../agents/models-config.js", () => ({
@@ -39,10 +46,23 @@ vi.mock("../agents/pi-embedded-runner/model.js", () => ({
   ) => resolveModelMock(provider, modelId, agentDir, cfg, options),
 }));
 
+vi.mock("./session-utils.fs.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("./session-utils.fs.js")>("./session-utils.fs.js");
+  return {
+    ...actual,
+    applyConfiguredSessionUsageCacheSettings: (cfg: unknown) =>
+      applyConfiguredSessionUsageCacheSettingsMock(cfg),
+  };
+});
+
 describe("gateway startup primary model warmup", () => {
   beforeEach(() => {
     ensureOpenClawModelsJsonMock.mockClear();
     resolveModelMock.mockClear();
+    resolveAgentSessionDirsMock.mockReset();
+    resolveAgentSessionDirsMock.mockResolvedValue([]);
+    applyConfiguredSessionUsageCacheSettingsMock.mockClear();
   });
 
   it("prewarms an explicit configured primary model", async () => {
@@ -78,5 +98,38 @@ describe("gateway startup primary model warmup", () => {
 
     expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
     expect(resolveModelMock).not.toHaveBeenCalled();
+  });
+
+  it("reapplies sessions.list cache settings before the first awaited startup work", async () => {
+    let release!: () => void;
+    const blocked = new Promise<string[]>((resolve) => {
+      release = () => resolve([]);
+    });
+    resolveAgentSessionDirsMock.mockReturnValueOnce(blocked);
+
+    const { startGatewaySidecars } = await import("./server-startup.js");
+    const cfg = {
+      gateway: {
+        sessionsList: {
+          usageCacheMaxEntries: 123,
+        },
+      },
+    } as OpenClawConfig;
+
+    const promise = startGatewaySidecars({
+      cfg,
+      pluginRegistry: new Map() as never,
+      defaultWorkspaceDir: "/tmp/workspace",
+      deps: {} as never,
+      startChannels: vi.fn(async () => {}),
+      log: { info: vi.fn(), warn: vi.fn() },
+      logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      logChannels: { info: vi.fn(), error: vi.fn() },
+    });
+
+    expect(applyConfiguredSessionUsageCacheSettingsMock).toHaveBeenCalledWith(cfg);
+
+    release();
+    await promise;
   });
 });

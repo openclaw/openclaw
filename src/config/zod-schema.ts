@@ -97,6 +97,8 @@ const LoggingLevelSchema = z.union([
   z.literal("trace"),
 ]);
 
+const MAX_SESSION_USAGE_CACHE_MAX_ENTRIES = 100_000;
+
 const MemoryQmdSchema = z
   .object({
     command: z.string().optional(),
@@ -862,6 +864,19 @@ export const OpenClawSchema = z
               .optional(),
             allowCommands: z.array(z.string()).optional(),
             denyCommands: z.array(z.string()).optional(),
+          })
+          .strict()
+          .optional(),
+        sessionsList: z
+          .object({
+            usageCacheMaxEntries: z
+              .number()
+              .int()
+              .positive()
+              .max(MAX_SESSION_USAGE_CACHE_MAX_ENTRIES)
+              .optional(),
+            prewarmUsageCache: z.boolean().optional(),
+            prewarmConcurrency: z.number().int().min(1).max(64).optional(),
           })
           .strict()
           .optional(),
