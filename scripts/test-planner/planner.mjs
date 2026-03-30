@@ -1,5 +1,6 @@
 import path from "node:path";
 import { isUnitConfigTestFile } from "../../vitest.unit-paths.mjs";
+import { BUNDLED_PLUGIN_PATH_PREFIX } from "../lib/bundled-plugin-paths.mjs";
 import {
   loadChannelTimingManifest,
   loadExtensionTimingManifest,
@@ -17,6 +18,17 @@ import {
   parsePassthroughArgs,
   SINGLE_RUN_ONLY_FLAGS,
 } from "./vitest-args.mjs";
+
+const countUnitEntryFilters = (unit) => {
+  const explicitFilterCount = countExplicitEntryFilters(unit.args);
+  if (explicitFilterCount !== null) {
+    return explicitFilterCount;
+  }
+  if (Array.isArray(unit.includeFiles) && unit.includeFiles.length > 0) {
+    return unit.includeFiles.length;
+  }
+  return null;
+};
 
 const parseEnvNumber = (env, name, fallback) => {
   const parsed = Number.parseInt(env[name] ?? "", 10);
@@ -463,8 +475,16 @@ const buildDefaultUnits = (context, request) => {
   const unitFastCandidateFiles = catalog.allKnownUnitFiles.filter(
     (file) => !new Set(unitFastExcludedFiles).has(file),
   );
+  const shouldPhaseUnitFastBatches =
+    !unitOnlyRun ||
+    catalog.unitForkIsolatedFiles.length > 0 ||
+    unitMemoryIsolatedFiles.length > 0 ||
+    timedHeavyUnitFiles.length > 0 ||
+    catalog.unitThreadPinnedFiles.length > 0;
   const extensionSharedCandidateFiles = catalog.allKnownTestFiles.filter(
-    (file) => file.startsWith("extensions/") && !catalog.extensionForkIsolatedFileSet.has(file),
+    (file) =>
+      file.startsWith(BUNDLED_PLUGIN_PATH_PREFIX) &&
+      !catalog.extensionForkIsolatedFileSet.has(file),
   );
   const channelSharedCandidateFiles = catalog.allKnownTestFiles.filter(
     (file) =>
@@ -524,7 +544,7 @@ const buildDefaultUnits = (context, request) => {
             id: unitId,
             surface: "unit",
             isolate: false,
-            serialPhase: unitOnlyRun ? undefined : "unit-fast",
+            serialPhase: shouldPhaseUnitFastBatches ? "unit-fast" : undefined,
             includeFiles: batch,
             estimatedDurationMs: estimateEntryFilesDurationMs(
               { args: ["vitest", "run", "--config", "vitest.unit.config.ts"] },
@@ -1091,7 +1111,7 @@ const estimateTopLevelEntryDurationMs = (unit, context) => {
     if (context.catalog.channelTestPrefixes.some((prefix) => file.startsWith(prefix))) {
       return totalMs + 3_000;
     }
-    if (file.startsWith("extensions/")) {
+    if (file.startsWith(BUNDLED_PLUGIN_PATH_PREFIX)) {
       return totalMs + 2_000;
     }
     return totalMs + 1_000;
@@ -1107,7 +1127,7 @@ const buildTopLevelSingleShardAssignments = (context, units) => {
     if (unit.fixedShardIndex !== undefined) {
       return false;
     }
-    const explicitFilterCount = countExplicitEntryFilters(unit.args);
+    const explicitFilterCount = countUnitEntryFilters(unit);
     if (explicitFilterCount === null) {
       return false;
     }
@@ -1355,11 +1375,35 @@ export function buildCIExecutionManifest(scopeInput = {}, options = {}) {
 }
 
 export const formatExecutionUnitSummary = (unit) =>
-  `${unit.id} filters=${String(countExplicitEntryFilters(unit.args) || "all")} maxWorkers=${String(
+  `${unit.id} filters=${String(countUnitEntryFilters(unit) || "all")} maxWorkers=${String(
     unit.maxWorkers ?? "default",
   )} surface=${unit.surface} isolate=${unit.isolate ? "yes" : "no"} pool=${unit.pool}`;
 
 function resolveSurfaceAwareTopLevelParallelLimit(context, units, defaultLimit) {
+  const sharedUnitBatches = units.filter(
+    (unit) => unit.surface === "unit" && !unit.isolate && unit.id.startsWith("unit-fast"),
+  );
+  const onlyUnitSurface = units.length > 0 && units.every((unit) => unit.surface === "unit");
+
+  if (!context.runtime.isCI && context.noIsolateArgs.length > 0) {
+    if (onlyUnitSurface && sharedUnitBatches.length >= 4) {
+      return Math.min(defaultLimit, 3);
+    }
+  }
+
+  if (
+    !context.runtime.isCI &&
+    context.runtime.loadBand === "saturated" &&
+    context.noIsolateArgs.length > 0
+  ) {
+    if (sharedUnitBatches.length >= 4) {
+      // Saturated local hosts regress when every unit-fast batch fans out at once.
+      // Keep the shared unit phase to a smaller burst and let later isolated lanes
+      // make forward progress instead of waiting behind a thundering herd.
+      return Math.min(defaultLimit, 3);
+    }
+  }
+
   if (!context.runtime.isCI || context.noIsolateArgs.length === 0) {
     return defaultLimit;
   }

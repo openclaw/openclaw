@@ -664,9 +664,6 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   ) {
     // FTS-only mode: no embedding provider, but we can still build a FTS index
     if (!this.provider) {
-      if (!this.fts.enabled || !this.fts.available) {
-        return;
-      }
       // Multimodal files require an embedding provider; skip in FTS-only mode.
       if ("kind" in entry && entry.kind === "multimodal") {
         return;
@@ -685,6 +682,15 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     let chunks: MemoryChunk[];
     let structuredInputBytes: number | undefined;
     if ("kind" in entry && entry.kind === "multimodal") {
+      if (!this.provider) {
+        log.debug("Skipping multimodal indexing in FTS-only mode", {
+          path: entry.path,
+          source: options.source,
+        });
+        this.clearIndexedFileData(entry.path, options.source);
+        this.upsertFileRecord(entry, options.source);
+        return;
+      }
       const multimodalChunk = await buildMultimodalChunkForIndexing(entry);
       if (!multimodalChunk) {
         this.clearIndexedFileData(entry.path, options.source);
@@ -695,17 +701,21 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       chunks = [multimodalChunk.chunk];
     } else {
       const content = options.content ?? (await fs.readFile(entry.absPath, "utf-8"));
-      chunks = enforceEmbeddingMaxInputTokens(
-        this.provider,
-        chunkMarkdown(content, this.settings.chunking).filter(
-          (chunk) => chunk.text.trim().length > 0,
-        ),
-        EMBEDDING_BATCH_MAX_TOKENS,
+      const baseChunks = chunkMarkdown(content, this.settings.chunking).filter(
+        (chunk) => chunk.text.trim().length > 0,
       );
+      chunks = this.provider
+        ? enforceEmbeddingMaxInputTokens(this.provider, baseChunks, EMBEDDING_BATCH_MAX_TOKENS)
+        : baseChunks;
       if (options.source === "sessions" && "lineMap" in entry) {
         remapChunkLines(chunks, entry.lineMap);
       }
     }
+    if (!this.provider) {
+      this.writeChunks(entry, options.source, "fts-only", chunks, [], false);
+      return;
+    }
+
     let embeddings: number[][];
     try {
       embeddings = this.batch.enabled

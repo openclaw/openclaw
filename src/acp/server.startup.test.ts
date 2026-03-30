@@ -12,7 +12,7 @@ type GatewayClientAuth = {
 };
 type ResolveGatewayConnectionAuth = (params: unknown) => Promise<GatewayClientAuth>;
 
-const mockState = {
+const mockState = vi.hoisted(() => ({
   gateways: [] as MockGatewayClient[],
   gatewayAuth: [] as GatewayClientAuth[],
   agentSideConnectionCtor: vi.fn(),
@@ -21,7 +21,7 @@ const mockState = {
     token: undefined,
     password: undefined,
   })),
-};
+}));
 
 class MockGatewayClient {
   private callbacks: GatewayClientCallbacks;
@@ -63,13 +63,11 @@ vi.mock("../config/config.js", () => ({
       mode: "local",
     },
   }),
-}));
-
-vi.mock("../gateway/auth.js", () => ({
-  resolveGatewayAuth: () => ({}),
+  resolveGatewayPort: vi.fn(() => 18_789),
 }));
 
 vi.mock("../gateway/call.js", () => ({
+  callGateway: vi.fn(),
   buildGatewayConnectionDetails: ({ url }: { url?: string }) => {
     if (typeof url === "string" && url.trim().length > 0) {
       return {
@@ -90,6 +88,10 @@ vi.mock("../gateway/connection-auth.js", () => ({
 
 vi.mock("../gateway/client.js", () => ({
   GatewayClient: MockGatewayClient,
+}));
+
+vi.mock("../infra/is-main.js", () => ({
+  isMainModule: () => false,
 }));
 
 vi.mock("./translator.js", () => ({
@@ -149,7 +151,7 @@ describe("serveAcpGateway startup", () => {
     ({ serveAcpGateway } = await import("./server.js"));
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     mockState.gateways.length = 0;
     mockState.gatewayAuth.length = 0;
     mockState.agentSideConnectionCtor.mockReset();
