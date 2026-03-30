@@ -80,6 +80,7 @@ describe("tasks commands", () => {
     await tasksListCommand({ runtime: "acp", status: "running" }, runtime);
 
     expect(runtimeLogs[0]).toContain("Background tasks: 1");
+    expect(runtimeLogs[1]).toContain("Task pressure: 0 queued · 1 running · 0 issues");
     expect(runtimeLogs.join("\n")).toContain("No output for 60s. It may be waiting for input.");
   });
 

@@ -6,6 +6,7 @@ import {
   reconcileInspectableTasks,
   reconcileTaskLookupToken,
 } from "../tasks/task-registry.reconcile.js";
+import { summarizeTaskRecords } from "../tasks/task-registry.summary.js";
 import type { TaskNotifyPolicy, TaskRecord } from "../tasks/task-registry.types.js";
 import { isRich, theme } from "../terminal/theme.js";
 
@@ -83,6 +84,11 @@ function formatTaskRows(tasks: TaskRecord[], rich: boolean) {
   return lines;
 }
 
+function formatTaskListSummary(tasks: TaskRecord[]) {
+  const summary = summarizeTaskRecords(tasks);
+  return `${summary.byStatus.queued} queued · ${summary.byStatus.running} running · ${summary.failures} issues`;
+}
+
 export async function tasksListCommand(
   opts: { json?: boolean; runtime?: string; status?: string },
   runtime: RuntimeEnv,
@@ -116,6 +122,7 @@ export async function tasksListCommand(
   }
 
   runtime.log(info(`Background tasks: ${tasks.length}`));
+  runtime.log(info(`Task pressure: ${formatTaskListSummary(tasks)}`));
   if (runtimeFilter) {
     runtime.log(info(`Runtime filter: ${runtimeFilter}`));
   }
