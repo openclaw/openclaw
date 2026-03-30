@@ -314,7 +314,8 @@ export async function tasksAuditCommand(
 ) {
   const severityFilter = opts.severity?.trim() as TaskAuditSeverity | undefined;
   const codeFilter = opts.code?.trim() as TaskAuditCode | undefined;
-  const findings = listTaskAuditFindings().filter((finding) => {
+  const allFindings = listTaskAuditFindings();
+  const findings = allFindings.filter((finding) => {
     if (severityFilter && finding.severity !== severityFilter) {
       return false;
     }
@@ -325,13 +326,14 @@ export async function tasksAuditCommand(
   });
   const limit = typeof opts.limit === "number" && opts.limit > 0 ? opts.limit : undefined;
   const displayed = limit ? findings.slice(0, limit) : findings;
-  const summary = summarizeTaskAuditFindings(findings);
+  const summary = summarizeTaskAuditFindings(allFindings);
 
   if (opts.json) {
     runtime.log(
       JSON.stringify(
         {
-          count: findings.length,
+          count: allFindings.length,
+          filteredCount: findings.length,
           displayed: displayed.length,
           filters: {
             severity: severityFilter ?? null,
@@ -353,6 +355,9 @@ export async function tasksAuditCommand(
       `Task audit: ${summary.total} findings · ${summary.errors} errors · ${summary.warnings} warnings`,
     ),
   );
+  if (severityFilter || codeFilter) {
+    runtime.log(info(`Showing ${findings.length} matching findings.`));
+  }
   if (severityFilter) {
     runtime.log(info(`Severity filter: ${severityFilter}`));
   }

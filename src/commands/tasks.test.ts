@@ -166,7 +166,7 @@ describe("tasks commands", () => {
   });
 
   it("shows task audit findings with filters", async () => {
-    listTaskAuditFindingsMock.mockReturnValue([
+    const findings = [
       {
         severity: "error",
         code: "stale_running",
@@ -174,16 +174,28 @@ describe("tasks commands", () => {
         ageMs: 45 * 60_000,
         detail: "running task appears stuck",
       },
-    ]);
+      {
+        severity: "warn",
+        code: "delivery_failed",
+        task: {
+          ...taskFixture,
+          taskId: "task-87654321",
+          status: "failed",
+        },
+        ageMs: 10 * 60_000,
+        detail: "terminal update delivery failed",
+      },
+    ];
+    listTaskAuditFindingsMock.mockReturnValue(findings);
     summarizeTaskAuditFindingsMock.mockReturnValue({
-      total: 1,
-      warnings: 0,
+      total: 2,
+      warnings: 1,
       errors: 1,
       byCode: {
         stale_queued: 0,
         stale_running: 1,
         lost: 0,
-        delivery_failed: 0,
+        delivery_failed: 1,
         missing_cleanup: 0,
         inconsistent_timestamps: 0,
       },
@@ -191,8 +203,11 @@ describe("tasks commands", () => {
 
     await tasksAuditCommand({ severity: "error", code: "stale_running", limit: 1 }, runtime);
 
-    expect(runtimeLogs[0]).toContain("Task audit: 1 findings · 1 errors · 0 warnings");
+    expect(summarizeTaskAuditFindingsMock).toHaveBeenCalledWith(findings);
+    expect(runtimeLogs[0]).toContain("Task audit: 2 findings · 1 errors · 1 warnings");
+    expect(runtimeLogs[1]).toContain("Showing 1 matching findings.");
     expect(runtimeLogs.join("\n")).toContain("stale_running");
     expect(runtimeLogs.join("\n")).toContain("running task appears stuck");
+    expect(runtimeLogs.join("\n")).not.toContain("delivery_failed");
   });
 });

@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, statSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createTaskRecord,
@@ -5,6 +8,7 @@ import {
   findTaskByRunId,
   resetTaskRegistryForTests,
 } from "./task-registry.js";
+import { resolveTaskRegistryDir, resolveTaskRegistrySqlitePath } from "./task-registry.paths.js";
 import { configureTaskRegistryRuntime, type TaskRegistryHookEvent } from "./task-registry.store.js";
 import type { TaskRecord } from "./task-registry.types.js";
 
@@ -27,6 +31,7 @@ function createStoredTask(): TaskRecord {
 
 describe("task-registry store runtime", () => {
   afterEach(() => {
+    delete process.env.OPENCLAW_STATE_DIR;
     resetTaskRegistryForTests();
   });
 
@@ -123,5 +128,32 @@ describe("task-registry store runtime", () => {
       sourceId: "job-123",
       task: "Run nightly cron",
     });
+  });
+
+  it("hardens the sqlite task store directory and file modes", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const stateDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-task-store-"));
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+
+    createTaskRecord({
+      runtime: "cron",
+      requesterSessionKey: "agent:main:main",
+      sourceId: "job-456",
+      runId: "run-perms",
+      task: "Run secured cron",
+      status: "running",
+      deliveryStatus: "not_applicable",
+      notifyPolicy: "silent",
+    });
+
+    const registryDir = resolveTaskRegistryDir(process.env);
+    const sqlitePath = resolveTaskRegistrySqlitePath(process.env);
+    expect(statSync(registryDir).mode & 0o777).toBe(0o700);
+    expect(statSync(sqlitePath).mode & 0o777).toBe(0o600);
+
+    resetTaskRegistryForTests();
+    rmSync(stateDir, { recursive: true, force: true });
   });
 });

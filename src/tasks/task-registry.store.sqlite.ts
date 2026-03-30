@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import type { DeliveryContext } from "../utils/delivery-context.js";
@@ -47,6 +47,9 @@ type TaskRegistryDatabase = {
 };
 
 let cachedDatabase: TaskRegistryDatabase | null = null;
+const TASK_REGISTRY_DIR_MODE = 0o700;
+const TASK_REGISTRY_FILE_MODE = 0o600;
+const TASK_REGISTRY_SIDEcar_SUFFIXES = ["", "-shm", "-wal"] as const;
 
 function normalizeNumber(value: number | bigint | null): number | undefined {
   if (typeof value === "bigint") {
@@ -269,6 +272,19 @@ function ensureSchema(db: DatabaseSync) {
   );
 }
 
+function ensureTaskRegistryPermissions(pathname: string) {
+  const dir = resolveTaskRegistryDir(process.env);
+  mkdirSync(dir, { recursive: true, mode: TASK_REGISTRY_DIR_MODE });
+  chmodSync(dir, TASK_REGISTRY_DIR_MODE);
+  for (const suffix of TASK_REGISTRY_SIDEcar_SUFFIXES) {
+    const candidate = `${pathname}${suffix}`;
+    if (!existsSync(candidate)) {
+      continue;
+    }
+    chmodSync(candidate, TASK_REGISTRY_FILE_MODE);
+  }
+}
+
 function openTaskRegistryDatabase(): TaskRegistryDatabase {
   const pathname = resolveTaskRegistrySqlitePath(process.env);
   if (cachedDatabase && cachedDatabase.path === pathname) {
@@ -278,13 +294,14 @@ function openTaskRegistryDatabase(): TaskRegistryDatabase {
     cachedDatabase.db.close();
     cachedDatabase = null;
   }
-  mkdirSync(resolveTaskRegistryDir(process.env), { recursive: true });
+  ensureTaskRegistryPermissions(pathname);
   const { DatabaseSync } = requireNodeSqlite();
   const db = new DatabaseSync(pathname);
   db.exec(`PRAGMA journal_mode = WAL;`);
   db.exec(`PRAGMA synchronous = NORMAL;`);
   db.exec(`PRAGMA busy_timeout = 5000;`);
   ensureSchema(db);
+  ensureTaskRegistryPermissions(pathname);
   cachedDatabase = {
     db,
     path: pathname,
@@ -294,11 +311,12 @@ function openTaskRegistryDatabase(): TaskRegistryDatabase {
 }
 
 function withWriteTransaction(write: (statements: TaskRegistryStatements) => void) {
-  const { db, statements } = openTaskRegistryDatabase();
+  const { db, path, statements } = openTaskRegistryDatabase();
   db.exec("BEGIN IMMEDIATE");
   try {
     write(statements);
     db.exec("COMMIT");
+    ensureTaskRegistryPermissions(path);
   } catch (error) {
     db.exec("ROLLBACK");
     throw error;
@@ -321,11 +339,15 @@ export function saveTaskRegistrySnapshotToSqlite(tasks: ReadonlyMap<string, Task
 }
 
 export function upsertTaskRegistryRecordToSqlite(task: TaskRecord) {
-  openTaskRegistryDatabase().statements.replaceRow.run(bindTaskRecord(task));
+  const store = openTaskRegistryDatabase();
+  store.statements.replaceRow.run(bindTaskRecord(task));
+  ensureTaskRegistryPermissions(store.path);
 }
 
 export function deleteTaskRegistryRecordFromSqlite(taskId: string) {
-  openTaskRegistryDatabase().statements.deleteRow.run(taskId);
+  const store = openTaskRegistryDatabase();
+  store.statements.deleteRow.run(taskId);
+  ensureTaskRegistryPermissions(store.path);
 }
 
 export function closeTaskRegistrySqliteStore() {
