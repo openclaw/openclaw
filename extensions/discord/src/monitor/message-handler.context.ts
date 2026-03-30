@@ -422,6 +422,7 @@ export async function buildDiscordMessageProcessContext(params: {
     },
     extra: {
       ...(preflightAudioTranscript !== undefined ? { Transcript: preflightAudioTranscript } : {}),
+      TrustedSenderPrincipal: sender.trustedPrincipal,
       GroupSubject: groupSubject,
       GroupChannel: groupChannel,
       UntrustedStructuredContext: untrustedContext,

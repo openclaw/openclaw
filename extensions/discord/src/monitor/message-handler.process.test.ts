@@ -570,6 +570,7 @@ function getLastDispatchCtx():
       ThreadStarterBody?: string;
       To?: string;
       Transcript?: string;
+      TrustedSenderPrincipal?: string;
     }
   | undefined {
   const callArgs = dispatchInboundMessage.mock.calls[
@@ -593,6 +594,7 @@ function getLastDispatchCtx():
           ThreadStarterBody?: string;
           To?: string;
           Transcript?: string;
+          TrustedSenderPrincipal?: string;
         };
       }
     | undefined;
@@ -1963,6 +1965,23 @@ describe("processDiscordMessage session routing", () => {
       ThreadLabel: "Discord thread #parent",
     });
     expect(getLastDispatchCtx()?.ThreadStarterBody).toBeUndefined();
+  });
+
+  it("carries trusted sender principal into dispatch context", async () => {
+    const ctx = await createBaseContext({
+      sender: {
+        id: "pk-member-1",
+        label: "Display Name",
+        trustedPrincipal: "alice",
+      },
+    });
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    await processDiscordMessage(ctx as any);
+
+    expect(getLastDispatchCtx()).toMatchObject({
+      TrustedSenderPrincipal: "alice",
+    });
   });
 });
 

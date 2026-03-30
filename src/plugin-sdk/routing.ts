@@ -25,6 +25,7 @@ export {
   parseAgentSessionKey,
   parseThreadSessionSuffix,
   resolveAgentIdFromSessionKey,
+  resolveCanonicalIdentityFromLinks,
   resolveThreadSessionKeys,
   sanitizeAgentId,
 } from "../routing/session-key.js";

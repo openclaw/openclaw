@@ -1,6 +1,7 @@
 // Discord plugin module implements sender identity behavior.
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { User } from "../internal/discord.js";
+import { resolveCanonicalIdentityFromLinks } from "openclaw/plugin-sdk/routing";
 import type { PluralKitMessageInfo } from "../pluralkit.js";
 import { formatDiscordUserTag } from "./format.js";
 
@@ -9,6 +10,7 @@ export type DiscordSenderIdentity = {
   name?: string;
   tag?: string;
   label: string;
+  trustedPrincipal?: string;
   isPluralKit: boolean;
   pluralkit?: {
     memberId: string;
@@ -33,11 +35,35 @@ export function resolveDiscordWebhookId(message: DiscordWebhookMessageLike): str
   return typeof candidate === "string" && candidate.trim() ? candidate.trim() : null;
 }
 
+export function resolveDiscordTrustedPrincipalFromUserId(params: {
+  userId: string | undefined | null;
+  identityLinks?: Record<string, string[]>;
+}): string | undefined {
+  if (typeof params.userId !== "string") {
+    return undefined;
+  }
+  const trimmed = params.userId.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    return undefined;
+  }
+  const canonical = resolveCanonicalIdentityFromLinks({
+    identityLinks: params.identityLinks,
+    channel: "discord",
+    peerId: trimmed,
+  });
+  return canonical ?? undefined;
+}
+
 export function resolveDiscordSenderIdentity(params: {
   author: User;
   member?: DiscordMemberLike | null;
   pluralkitInfo?: PluralKitMessageInfo | null;
+  identityLinks?: Record<string, string[]>;
 }): DiscordSenderIdentity {
+  const trustedPrincipal = resolveDiscordTrustedPrincipalFromUserId({
+    userId: params.author.id,
+    identityLinks: params.identityLinks,
+  });
   const pkInfo = params.pluralkitInfo ?? null;
   const pkMember = pkInfo?.member ?? undefined;
   const pkSystem = pkInfo?.system ?? undefined;
@@ -52,6 +78,7 @@ export function resolveDiscordSenderIdentity(params: {
       name: memberName,
       tag: normalizeOptionalString(pkMember?.name),
       label,
+      trustedPrincipal,
       isPluralKit: true,
       pluralkit: {
         memberId,
@@ -77,6 +104,7 @@ export function resolveDiscordSenderIdentity(params: {
     name: params.author.username ?? undefined,
     tag: senderTag,
     label: senderLabel,
+    trustedPrincipal,
     isPluralKit: false,
   };
 }
