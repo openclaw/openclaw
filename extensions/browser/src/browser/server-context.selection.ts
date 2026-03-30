@@ -6,6 +6,10 @@ import { BrowserTabNotFoundError, BrowserTargetAmbiguousError } from "./errors.j
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 import type { PwAiModule } from "./pw-ai-module.js";
 import { getPwAiModule } from "./pw-ai-module.js";
+import {
+  formatChromeRelayAttachRequiredError,
+  formatChromeRelayStaleTargetError,
+} from "./relay-attach-ux.js";
 import type { BrowserTab, ProfileRuntimeState } from "./server-context.types.js";
 import { resolveTargetIdFromTabs } from "./target-id.js";
 
@@ -38,6 +42,9 @@ export function createProfileSelectionOps({
     const profileState = getProfileState();
     const tabs1 = await listTabs();
     if (tabs1.length === 0) {
+      if (profile.name === "chrome-relay") {
+        throw new Error(formatChromeRelayAttachRequiredError(profile.name));
+      }
       await openTab("about:blank");
     }
 
@@ -72,6 +79,9 @@ export function createProfileSelectionOps({
       throw new BrowserTargetAmbiguousError();
     }
     if (!chosen) {
+      if (profile.name === "chrome-relay" && targetId?.trim() && candidates.length > 1) {
+        throw new Error(formatChromeRelayStaleTargetError());
+      }
       throw new BrowserTabNotFoundError();
     }
     profileState.lastTargetId = chosen.targetId;
