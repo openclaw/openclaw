@@ -13,6 +13,10 @@ title: "Heartbeat"
 Heartbeat runs **periodic agent turns** in the main session so the model can
 surface anything that needs attention without spamming you.
 
+Heartbeat is not the background task executor. It is a scheduled main-session turn.
+Background task records are for detached work such as ACP runs, subagents, background CLI work,
+and isolated cron jobs.
+
 Troubleshooting: [/automation/troubleshooting](/automation/troubleshooting)
 
 ## Quick start (beginner)
@@ -64,6 +68,8 @@ The default prompt is intentionally broad:
 - **Human check-in**: “Checkup sometimes on your human during day time” nudges an
   occasional lightweight “anything you need?” message, but avoids night-time spam
   by using your configured local timezone (see [/concepts/timezone](/concepts/timezone)).
+
+Heartbeat can react to detached tasks, but a heartbeat run itself does not create a task record.
 
 If you want a heartbeat to do something very specific (e.g. “check Gmail PubSub
 stats” or “verify gateway health”), set `agents.defaults.heartbeat.prompt` (or
@@ -253,6 +259,7 @@ Use `accountId` to target a specific account on multi-account channels like Tele
   outbound message is sent.
 - Heartbeat-only replies do **not** keep the session alive; the last `updatedAt`
   is restored so idle expiry behaves normally.
+- Detached work can enqueue a system event and wake heartbeat when the main session should notice something quickly. That wake still does not make the heartbeat run a background task.
 
 ## Visibility controls
 
