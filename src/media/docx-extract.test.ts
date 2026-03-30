@@ -28,4 +28,12 @@ describe("extractDocxText", () => {
 
     await expect(extractDocxText({ buffer })).resolves.toBe("Revenue & Margin\t42");
   });
+
+  it("decodes numeric XML character references", async () => {
+    const buffer = await makeDocx(
+      '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Price&#160;is&#x2019;good</w:t></w:r></w:p></w:body></w:document>',
+    );
+
+    await expect(extractDocxText({ buffer })).resolves.toBe("Price is’good");
+  });
 });

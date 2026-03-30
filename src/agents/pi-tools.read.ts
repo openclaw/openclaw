@@ -359,11 +359,19 @@ async function normalizeReadDocumentResult(params: {
   readBufferForToolPath?: OpenClawReadToolOptions["readBufferForToolPath"];
   signal?: AbortSignal;
 }): Promise<AgentToolResult<unknown>> {
-  if (!params.readBufferForToolPath) {
+  if (!params.readBufferForToolPath || path.extname(params.filePath).toLowerCase() !== ".docx") {
     return params.result;
   }
 
-  const buffer = await params.readBufferForToolPath(params.filePath, params.signal);
+  let buffer: Buffer;
+  try {
+    buffer = await params.readBufferForToolPath(params.filePath, params.signal);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+      return params.result;
+    }
+    throw error;
+  }
   const mimeType = await detectMime({ buffer, filePath: params.filePath });
   if (mimeType !== "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
     return params.result;

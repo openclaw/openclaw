@@ -23,10 +23,15 @@ async function waitForMicrotaskTurn(): Promise<void> {
 let fetchWithGuard: typeof import("./input-files.js").fetchWithGuard;
 let extractImageContentFromSource: typeof import("./input-files.js").extractImageContentFromSource;
 let extractFileContentFromSource: typeof import("./input-files.js").extractFileContentFromSource;
+let DEFAULT_INPUT_FILE_MIMES: typeof import("./input-files.js").DEFAULT_INPUT_FILE_MIMES;
 
 beforeAll(async () => {
-  ({ fetchWithGuard, extractImageContentFromSource, extractFileContentFromSource } =
-    await import("./input-files.js"));
+  ({
+    fetchWithGuard,
+    extractImageContentFromSource,
+    extractFileContentFromSource,
+    DEFAULT_INPUT_FILE_MIMES,
+  } = await import("./input-files.js"));
 });
 
 beforeEach(() => {
@@ -358,6 +363,12 @@ describe("input image base64 validation", () => {
 });
 
 describe("input file docx extraction", () => {
+  it("includes docx in the default input_file MIME allowlist", () => {
+    expect(DEFAULT_INPUT_FILE_MIMES).toContain(
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    );
+  });
+
   it("extracts text from docx base64 input_file sources", async () => {
     const { default: JSZip } = await import("jszip");
     const zip = new JSZip();

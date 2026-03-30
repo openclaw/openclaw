@@ -2,6 +2,12 @@ import JSZip from "jszip";
 
 function decodeXmlEntities(value: string): string {
   return value
+    .replace(/&#x([0-9a-f]+);/gi, (_match, hex: string) =>
+      String.fromCodePoint(Number.parseInt(hex, 16)),
+    )
+    .replace(/&#([0-9]+);/g, (_match, decimal: string) =>
+      String.fromCodePoint(Number.parseInt(decimal, 10)),
+    )
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
@@ -12,6 +18,7 @@ function decodeXmlEntities(value: string): string {
 function normalizeDocxWhitespace(value: string): string {
   return value
     .replace(/\r/g, "")
+    .replace(/\u00a0/g, " ")
     .replace(/[ ]+\t/g, "\t")
     .replace(/\t[ ]+/g, "\t")
     .replace(/[ ]+\n/g, "\n")
