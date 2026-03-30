@@ -370,10 +370,11 @@ describe("ws connect policy", () => {
     ).toBe(true);
   });
 
-  test("documents operatorWithDirectTokenAuth guard necessity for token+allow scope preservation", () => {
-    // The operatorWithDirectTokenAuth guard in message-handler.ts short-circuits
-    // clearUnboundScopes() when role=operator, authOk=true, and authMethod is
-    // token/password. This test documents that shouldClearUnboundScopesForMissingDeviceIdentity
+  test("documents operatorTransportMismatch guard for Tailscale operator scope preservation", () => {
+    // The operatorTransportMismatch guard in message-handler.ts short-circuits
+    // clearUnboundScopes() when role=operator, authOk=true, authMethod is
+    // tailscale/trusted-proxy, and sharedAuthOk=false (transport divergence).
+    // This test documents that shouldClearUnboundScopesForMissingDeviceIdentity
     // alone returns true for this case — confirming the guard is necessary.
     const nonControlUi = resolveControlUiAuthPolicy({
       isControlUi: false,
@@ -381,20 +382,19 @@ describe("ws connect policy", () => {
       deviceRaw: null,
     });
 
-    // Without the operatorWithDirectTokenAuth guard, this combination would clear scopes:
-    // decision=allow, no device, token auth, non-control-ui, no insecure auth
+    // Without the guard, this combination would clear scopes:
+    // operator + Tailscale auth + no device + sharedAuthOk=false
     expect(
       shouldClearUnboundScopesForMissingDeviceIdentity({
-        decision: { kind: "allow" },
+        decision: { kind: "reject-device-required" },
         controlUiAuthPolicy: nonControlUi,
         preserveInsecureLocalControlUiScopes: false,
-        authMethod: "token",
+        authMethod: "tailscale",
         trustedProxyAuthOk: false,
       }),
     ).toBe(true);
 
-    // With operatorWithDirectTokenAuth=true (role=operator, authOk, token) in the
-    // caller, scopes are preserved. Regression path: non-device operator, token
-    // auth, sharedAuthOk=false → scopes stay for operator role only.
+    // With operatorTransportMismatch=true in the caller, scopes are preserved
+    // for Tailscale/trusted-proxy operators where sharedAuthOk diverges.
   });
 });
