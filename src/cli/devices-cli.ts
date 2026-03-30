@@ -32,12 +32,17 @@ type DeviceTokenSummary = {
   role: string;
   scopes?: string[];
   revokedAtMs?: number;
+  lastUsedAtMs?: number;
 };
 
 type PendingDevice = {
   requestId: string;
   deviceId: string;
   displayName?: string;
+  platform?: string;
+  deviceFamily?: string;
+  clientId?: string;
+  clientMode?: string;
   role?: string;
   roles?: string[];
   scopes?: string[];
@@ -49,6 +54,10 @@ type PendingDevice = {
 type PairedDevice = {
   deviceId: string;
   displayName?: string;
+  platform?: string;
+  deviceFamily?: string;
+  clientId?: string;
+  clientMode?: string;
   roles?: string[];
   scopes?: string[];
   remoteIp?: string;
@@ -206,6 +215,51 @@ function formatTokenSummary(tokens: DeviceTokenSummary[] | undefined) {
   return parts.join(", ");
 }
 
+function formatClientLabel(clientId?: string, clientMode?: string): string {
+  const id = typeof clientId === "string" ? clientId.trim() : "";
+  const mode = typeof clientMode === "string" ? clientMode.trim() : "";
+  if (id && mode) {
+    return `${id} (${mode})`;
+  }
+  return id || mode;
+}
+
+function formatOsLabel(platform?: string, deviceFamily?: string): string {
+  const p = typeof platform === "string" ? platform.trim() : "";
+  const f = typeof deviceFamily === "string" ? deviceFamily.trim() : "";
+  if (p && f) {
+    return `${p} / ${f}`;
+  }
+  return p || f;
+}
+
+function maxActiveTokenLastUsedAtMs(tokens: DeviceTokenSummary[] | undefined): number | undefined {
+  if (!tokens?.length) {
+    return undefined;
+  }
+  let max: number | undefined;
+  for (const t of tokens) {
+    if (t.revokedAtMs) {
+      continue;
+    }
+    if (typeof t.lastUsedAtMs !== "number" || !Number.isFinite(t.lastUsedAtMs)) {
+      continue;
+    }
+    if (max === undefined || t.lastUsedAtMs > max) {
+      max = t.lastUsedAtMs;
+    }
+  }
+  return max;
+}
+
+function formatLastActiveFromTokens(tokens: DeviceTokenSummary[] | undefined): string {
+  const lastUsedAtMs = maxActiveTokenLastUsedAtMs(tokens);
+  if (lastUsedAtMs === undefined) {
+    return "";
+  }
+  return formatTimeAgo(Date.now() - lastUsedAtMs);
+}
+
 function formatPendingRoles(request: PendingDevice): string {
   const role = typeof request.role === "string" ? request.role.trim() : "";
   if (role) {
@@ -266,7 +320,10 @@ export function registerDevicesCli(program: Command) {
               width: tableWidth,
               columns: [
                 { key: "Request", header: "Request", minWidth: 10 },
-                { key: "Device", header: "Device", minWidth: 16, flex: true },
+                { key: "Device ID", header: "Device ID", minWidth: 14, flex: true },
+                { key: "Name", header: "Name", minWidth: 12, flex: true },
+                { key: "Client", header: "Client", minWidth: 14, flex: true },
+                { key: "OS", header: "OS", minWidth: 16, flex: true },
                 { key: "Role", header: "Role", minWidth: 8 },
                 { key: "Scopes", header: "Scopes", minWidth: 14, flex: true },
                 { key: "IP", header: "IP", minWidth: 12 },
@@ -275,7 +332,10 @@ export function registerDevicesCli(program: Command) {
               ],
               rows: list.pending.map((req) => ({
                 Request: req.requestId,
-                Device: req.displayName || req.deviceId,
+                "Device ID": req.deviceId,
+                Name: req.displayName?.trim() ? req.displayName.trim() : "",
+                Client: formatClientLabel(req.clientId, req.clientMode),
+                OS: formatOsLabel(req.platform, req.deviceFamily),
                 Role: formatPendingRoles(req),
                 Scopes: formatPendingScopes(req),
                 IP: req.remoteIp ?? "",
@@ -294,18 +354,26 @@ export function registerDevicesCli(program: Command) {
             renderTable({
               width: tableWidth,
               columns: [
-                { key: "Device", header: "Device", minWidth: 16, flex: true },
+                { key: "Device ID", header: "Device ID", minWidth: 14, flex: true },
+                { key: "Name", header: "Name", minWidth: 12, flex: true },
+                { key: "Client", header: "Client", minWidth: 14, flex: true },
+                { key: "OS", header: "OS", minWidth: 16, flex: true },
+                { key: "IP", header: "IP", minWidth: 12 },
+                { key: "Last active", header: "Last active", minWidth: 11 },
                 { key: "Roles", header: "Roles", minWidth: 12, flex: true },
                 { key: "Scopes", header: "Scopes", minWidth: 12, flex: true },
                 { key: "Tokens", header: "Tokens", minWidth: 12, flex: true },
-                { key: "IP", header: "IP", minWidth: 12 },
               ],
               rows: list.paired.map((device) => ({
-                Device: device.displayName || device.deviceId,
+                "Device ID": device.deviceId,
+                Name: device.displayName?.trim() ? device.displayName.trim() : "",
+                Client: formatClientLabel(device.clientId, device.clientMode),
+                OS: formatOsLabel(device.platform, device.deviceFamily),
+                IP: device.remoteIp ?? "",
+                "Last active": formatLastActiveFromTokens(device.tokens),
                 Roles: device.roles?.length ? device.roles.join(", ") : "",
                 Scopes: device.scopes?.length ? device.scopes.join(", ") : "",
                 Tokens: formatTokenSummary(device.tokens),
-                IP: device.remoteIp ?? "",
               })),
             }).trimEnd(),
           );
@@ -319,7 +387,7 @@ export function registerDevicesCli(program: Command) {
   devicesCallOpts(
     devices
       .command("remove")
-      .description("Remove a paired device entry")
+      .description("Remove a paired device entry (use devices list for Device ID values)")
       .argument("<deviceId>", "Paired device id")
       .action(async (deviceId: string, opts: DevicesRpcOpts) => {
         const trimmed = deviceId.trim();

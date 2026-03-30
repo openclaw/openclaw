@@ -46,7 +46,16 @@ vi.mock("../infra/device-pairing.js", () => ({
   summarizeDeviceTokens: mocks.summarizeDeviceTokens,
 }));
 
-vi.mock("../runtime.js", () => ({
+vi.mock("../terminal/table.js", async (importOriginal) => {
+  const mod = await importOriginal<typeof import("../terminal/table.js")>();
+  return {
+    ...mod,
+    getTerminalTableWidth: () => 400,
+  };
+});
+
+vi.mock("../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../runtime.js")>()),
   defaultRuntime: mocks.runtime,
   writeRuntimeJson: (
     targetRuntime: { log: (...args: unknown[]) => void },
@@ -328,6 +337,69 @@ describe("devices cli list", () => {
     const output = runtime.log.mock.calls.map((entry) => readRuntimeCallText(entry)).join("\n");
     expect(output).toContain("Scopes");
     expect(output).toContain("operator.admin, operator.read");
+  });
+
+  it("renders pending client, OS, and device id columns when present", async () => {
+    callGateway.mockResolvedValueOnce({
+      pending: [
+        {
+          requestId: "req-2",
+          deviceId: "dev-pending-99",
+          displayName: "iPhone",
+          clientId: "openclaw-ios",
+          clientMode: "gateway-ui",
+          platform: "iOS",
+          deviceFamily: "18.3",
+          role: "operator",
+          ts: 1,
+        },
+      ],
+      paired: [],
+    });
+
+    await runDevicesCommand(["list"]);
+
+    const output = runtime.log.mock.calls.map((entry) => readRuntimeCallText(entry)).join("\n");
+    expect(output).toContain("dev-pending-99");
+    expect(output).toContain("openclaw-ios");
+    expect(output).toContain("iOS / 18.3");
+  });
+
+  it("renders paired last active from token lastUsedAtMs", async () => {
+    const now = Date.now();
+    callGateway.mockResolvedValueOnce({
+      pending: [],
+      paired: [
+        {
+          deviceId: "paired-1",
+          displayName: "Work laptop",
+          clientId: "openclaw-cli",
+          clientMode: "cli",
+          platform: "win32",
+          deviceFamily: "10",
+          remoteIp: "10.0.0.2",
+          roles: ["operator"],
+          tokens: [
+            {
+              role: "operator",
+              scopes: ["operator.admin"],
+              createdAtMs: now - 86_400_000,
+              lastUsedAtMs: now - 120_000,
+            },
+          ],
+        },
+      ],
+    });
+
+    await runDevicesCommand(["list"]);
+
+    const output = runtime.log.mock.calls.map((entry) => readRuntimeCallText(entry)).join("\n");
+    expect(output).toContain("paired-1");
+    expect(output).toContain("Work laptop");
+    expect(output).toContain("openclaw-cli (cli)");
+    expect(output).toContain("win32 / 10");
+    expect(output).toContain("10.0.0.2");
+    expect(output).toMatch(/Last active/);
   });
 });
 
