@@ -534,22 +534,22 @@ export class VoiceCallWebhookServer {
         return { statusCode: 401, body: "Unauthorized" };
       }
 
-      // Realtime mode: return TwiML <Connect><Stream> for calls that need bridging.
-      // Status callbacks (CallStatus=completed etc.) must fall through to the normal
-      // webhook pipeline so call state is updated correctly.
-      // Replayed requests are intentionally excluded — a replayed ringing/in-progress
-      // callback must not mint a new stream token or start a second realtime session.
+      // Realtime mode: return TwiML <Connect><Stream> only for inbound calls that are
+      // ringing (i.e. Twilio asking what to do with the call). All other requests —
+      // including outbound call status callbacks (Direction=outbound-api) and any
+      // terminal-state callbacks — must fall through to provider.parseWebhookEvent()
+      // so call state is updated correctly through the normal pipeline.
+      // Replayed requests are intentionally excluded — a replayed ringing callback
+      // must not mint a new stream token or start a second realtime session.
       if (this.realtimeHandler && this.provider.name === "twilio" && !verification.isReplay) {
         const params = new URLSearchParams(ctx.rawBody);
         const callStatus = params.get("CallStatus");
         const direction = params.get("Direction");
+        // Only intercept inbound calls asking for TwiML instructions (ringing with no
+        // direction or explicit "inbound"). Outbound calls always use the normal pipeline.
         const isInboundRinging =
           callStatus === "ringing" && (!direction || direction === "inbound");
-        // outbound-api calls fire the webhook during ringing; TwiML executes on answer
-        const isOutboundActive =
-          direction === "outbound-api" &&
-          (callStatus === "ringing" || callStatus === "in-progress");
-        if (isInboundRinging || isOutboundActive) {
+        if (isInboundRinging) {
           return this.realtimeHandler.buildTwiMLPayload(req, params);
         }
       }

@@ -396,6 +396,12 @@ export class OpenAIRealtimeVoiceBridge {
       });
 
       this.ws.on("error", (err) => {
+        // Suppress socket errors that race with an intentional close — e.g. the TCP
+        // handshake fails because bridge.close() was called before OpenAI connected
+        // (caller hung up immediately). Without this guard the rejection flows into
+        // handleCall's connect().catch() and emits call.ended with reason "error"
+        // for what is actually a normal pre-connect hangup.
+        if (this.intentionallyClosed) return;
         console.error("[RealtimeVoice] WebSocket error:", err);
         if (!this.connected) {
           clearTimeout(connectTimeout);
@@ -637,7 +643,8 @@ export class OpenAIRealtimeVoiceBridge {
           let args: unknown;
           // Prefer buffered deltas; fall back to the done-event's final
           // arguments payload in case deltas were missing or incomplete.
-          const rawArgs = buf.args || (event as unknown as Record<string, unknown>).arguments as string || "{}";
+          const rawArgs =
+            buf.args || ((event as unknown as Record<string, unknown>).arguments as string) || "{}";
           try {
             args = JSON.parse(rawArgs);
           } catch {
