@@ -1,11 +1,14 @@
 import fs from "node:fs";
+import { formatCliCommand } from "../../cli/command-format.js";
 import type { SandboxBackendCommandResult } from "./backend.js";
+import { DEFAULT_SANDBOX_IMAGE } from "./constants.js";
 import { runDockerSandboxShellCommand } from "./docker-backend.js";
 import {
   buildPinnedMkdirpPlan,
   buildPinnedRemovePlan,
   buildPinnedRenamePlan,
   buildPinnedWritePlan,
+  SANDBOX_PINNED_MUTATION_OPERATION_MARKER,
 } from "./fs-bridge-mutation-helper.js";
 import { SandboxFsPathGuard } from "./fs-bridge-path-safety.js";
 import { buildStatPlan, type SandboxFsCommandPlan } from "./fs-bridge-shell-command-plans.js";
@@ -21,6 +24,12 @@ type RunCommandOptions = {
   stdin?: Buffer | string;
   allowFailure?: boolean;
   signal?: AbortSignal;
+};
+
+type SandboxCommandFailure = Error & {
+  code?: number;
+  stdout?: Buffer;
+  stderr?: Buffer;
 };
 
 export type SandboxResolvedPath = {
@@ -64,6 +73,41 @@ export type SandboxFsBridge = {
 
 export function createSandboxFsBridge(params: { sandbox: SandboxContext }): SandboxFsBridge {
   return new SandboxFsBridgeImpl(params.sandbox);
+}
+
+function isDockerSandbox(sandbox: SandboxContext): boolean {
+  return !sandbox.backend || sandbox.backend.id === "docker";
+}
+
+function formatIncompatibleSandboxImageMessage(params: {
+  containerName: string;
+  image: string;
+}): string {
+  const message = [
+    `Sandbox image is incompatible with OpenClaw file tools: no Python runtime was found inside container ${params.containerName}.`,
+    `Rebuild the configured sandbox image (${params.image}) so it includes python3 or python, then run ${formatCliCommand("openclaw sandbox recreate --all")}.`,
+  ];
+  if (params.image === DEFAULT_SANDBOX_IMAGE) {
+    message.push(
+      `For the default image, rebuild it with ${formatCliCommand("scripts/sandbox-setup.sh")} from a source checkout.`,
+    );
+  }
+  return message.join(" ");
+}
+
+function isMissingSandboxPythonError(error: unknown): error is SandboxCommandFailure {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const stderr =
+    typeof (error as SandboxCommandFailure).stderr?.toString === "function"
+      ? ((error as SandboxCommandFailure).stderr?.toString("utf8") ?? "")
+      : "";
+  const message = `${error.message}\n${stderr}`.toLowerCase();
+  return (
+    /\b(?:python3|python)\b.*\b(?:command )?not found\b/.test(message) ||
+    message.includes("sandbox pinned mutation helper requires python3 or python")
+  );
 }
 
 class SandboxFsBridgeImpl implements SandboxFsBridge {
@@ -250,24 +294,47 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     script: string,
     options: RunCommandOptions = {},
   ): Promise<SandboxBackendCommandResult> {
-    const backend = this.sandbox.backend;
-    if (backend) {
-      return await backend.runShellCommand({
+    try {
+      const backend = this.sandbox.backend;
+      if (backend) {
+        return await backend.runShellCommand({
+          script,
+          args: options.args,
+          stdin: options.stdin,
+          allowFailure: options.allowFailure,
+          signal: options.signal,
+        });
+      }
+      return await runDockerSandboxShellCommand({
+        containerName: this.sandbox.containerName,
         script,
         args: options.args,
         stdin: options.stdin,
         allowFailure: options.allowFailure,
         signal: options.signal,
       });
+    } catch (error) {
+      if (
+        !options.allowFailure &&
+        isDockerSandbox(this.sandbox) &&
+        script.includes(SANDBOX_PINNED_MUTATION_OPERATION_MARKER) &&
+        isMissingSandboxPythonError(error)
+      ) {
+        throw Object.assign(
+          new Error(
+            formatIncompatibleSandboxImageMessage({
+              containerName: this.sandbox.containerName,
+              image: this.sandbox.docker.image,
+            }),
+          ),
+          {
+            code: "INVALID_CONFIG",
+            cause: error,
+          },
+        );
+      }
+      throw error;
     }
-    return await runDockerSandboxShellCommand({
-      containerName: this.sandbox.containerName,
-      script,
-      args: options.args,
-      stdin: options.stdin,
-      allowFailure: options.allowFailure,
-      signal: options.signal,
-    });
   }
 
   private async readPinnedFile(target: SandboxResolvedFsPath): Promise<Buffer> {

@@ -355,6 +355,15 @@ scripts/sandbox-setup.sh
     Containers are auto-created per session on demand.
   </Accordion>
 
+  <Accordion title="Edit or write fails with python3: not found">
+    Your sandbox container was created from an incompatible image. Rebuild the
+    image with
+    [`scripts/sandbox-setup.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/sandbox-setup.sh)
+    or rebuild your custom image so it includes `python3`, then run
+    `docker compose run --rm openclaw-cli sandbox recreate --all` to replace old
+    runtimes.
+  </Accordion>
+
   <Accordion title="Permission errors in sandbox">
     Set `docker.user` to a UID:GID that matches your mounted workspace ownership,
     or chown the workspace folder.

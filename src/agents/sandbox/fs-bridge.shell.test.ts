@@ -1,10 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { SANDBOX_PINNED_MUTATION_OPERATION_MARKER } from "./fs-bridge-mutation-helper.js";
 import {
   createSandbox,
   createSandboxFsBridge,
   createSeededSandboxFsBridge,
+  dockerExecResult,
   getScriptsFromCalls,
   installFsBridgeTestHarness,
   mockedExecDockerRaw,
@@ -14,6 +16,30 @@ import {
 
 describe("sandbox fs bridge shell compatibility", () => {
   installFsBridgeTestHarness();
+
+  function installMissingPythonMutationFailure(
+    message = "sandbox pinned mutation helper requires python3 or python",
+  ) {
+    mockedExecDockerRaw.mockImplementation(async (args) => {
+      const script = String(args[5] ?? "");
+      if (script.includes('readlink -f -- "$cursor"')) {
+        return dockerExecResult("/workspace/b.txt\n");
+      }
+      if (script.includes(SANDBOX_PINNED_MUTATION_OPERATION_MARKER)) {
+        const error = Object.assign(new Error(message), {
+          code: 127,
+          stdout: Buffer.alloc(0),
+          stderr: Buffer.from(message),
+        });
+        throw error;
+      }
+      return {
+        stdout: Buffer.alloc(0),
+        stderr: Buffer.alloc(0),
+        code: 0,
+      };
+    });
+  }
 
   it("uses POSIX-safe shell prologue in all bridge commands", async () => {
     await withTempDir("openclaw-fs-bridge-shell-", async (stateDir) => {
@@ -151,7 +177,10 @@ describe("sandbox fs bridge shell compatibility", () => {
       await bridge.rename({ from: "a.txt", to: "nested/b.txt" });
 
       const scripts = getScriptsFromCalls();
-      expect(scripts.filter((script) => script.includes("operation = sys.argv[1]")).length).toBe(3);
+      expect(
+        scripts.filter((script) => script.includes(SANDBOX_PINNED_MUTATION_OPERATION_MARKER))
+          .length,
+      ).toBe(3);
       expect(scripts.some((script) => script.includes('mkdir -p -- "$2"'))).toBe(false);
       expect(scripts.some((script) => script.includes('rm -f -- "$2"'))).toBe(false);
       expect(scripts.some((script) => script.includes('mv -- "$3" "$2/$4"'))).toBe(false);
@@ -174,5 +203,128 @@ describe("sandbox fs bridge shell compatibility", () => {
 
     const scripts = getScriptsFromCalls();
     expect(scripts.some((script) => script.includes("os.replace("))).toBe(false);
+  });
+
+  it.each([
+    {
+      label: "writeFile",
+      run: (bridge: ReturnType<typeof createSandboxFsBridge>) =>
+        bridge.writeFile({ filePath: "b.txt", data: "hello" }),
+    },
+    {
+      label: "mkdirp",
+      run: (bridge: ReturnType<typeof createSandboxFsBridge>) =>
+        bridge.mkdirp({ filePath: "nested" }),
+    },
+    {
+      label: "remove",
+      run: (bridge: ReturnType<typeof createSandboxFsBridge>) =>
+        bridge.remove({ filePath: "b.txt" }),
+    },
+    {
+      label: "rename",
+      run: (bridge: ReturnType<typeof createSandboxFsBridge>) =>
+        bridge.rename({ from: "a.txt", to: "b.txt" }),
+    },
+  ])(
+    "surfaces a repair message for $label when the mutation helper cannot find a Python runtime",
+    async ({ run }) => {
+      installMissingPythonMutationFailure();
+
+      const bridge = createSandboxFsBridge({
+        sandbox: createSandbox({
+          containerName: "openclaw-sbx-bad",
+        }),
+      });
+
+      let err: unknown;
+      try {
+        await run(bridge);
+      } catch (caught) {
+        err = caught;
+      }
+
+      expect(err).toBeInstanceOf(Error);
+      expect((err as Error).message).toMatch(/sandbox image is incompatible/i);
+      expect((err as Error).message).toMatch(/openclaw sandbox recreate --all/i);
+    },
+  );
+
+  it("keeps rewriting the legacy python3 not found shell error for Docker sandboxes", async () => {
+    installMissingPythonMutationFailure("sh: 1: python3: not found");
+
+    const bridge = createSandboxFsBridge({
+      sandbox: createSandbox({
+        containerName: "openclaw-sbx-legacy",
+      }),
+    });
+
+    let err: unknown;
+    try {
+      await bridge.writeFile({ filePath: "b.txt", data: "hello" });
+    } catch (caught) {
+      err = caught;
+    }
+
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toMatch(/sandbox image is incompatible/i);
+    expect((err as Error).message).toMatch(/openclaw sandbox recreate --all/i);
+  });
+
+  it("does not rewrite python3 failures for non-docker backends", async () => {
+    const sshError = Object.assign(new Error("python3: not found"), {
+      code: 127,
+      stdout: Buffer.alloc(0),
+      stderr: Buffer.from("python3: not found"),
+    });
+    const bridge = createSandboxFsBridge({
+      sandbox: createSandbox({
+        backendId: "ssh",
+        backend: {
+          id: "ssh",
+          runtimeId: "ssh-runtime",
+          runtimeLabel: "ssh-runtime",
+          workdir: "/workspace",
+          buildExecSpec: async () => ({
+            argv: [],
+            env: process.env,
+            stdinMode: "pipe-closed",
+          }),
+          runShellCommand: async ({ script }) => {
+            if (script.includes('readlink -f -- "$cursor"')) {
+              return {
+                stdout: Buffer.from("/workspace/b.txt\n"),
+                stderr: Buffer.alloc(0),
+                code: 0,
+              };
+            }
+            throw sshError;
+          },
+        },
+      }),
+    });
+
+    await expect(bridge.writeFile({ filePath: "b.txt", data: "hello" })).rejects.toBe(sshError);
+  });
+
+  it("keeps custom-image repair guidance focused on rebuilding that image", async () => {
+    installMissingPythonMutationFailure();
+
+    const sandbox = createSandbox({
+      containerName: "openclaw-sbx-custom",
+    });
+    sandbox.docker.image = "ghcr.io/example/custom-sandbox:latest";
+    const bridge = createSandboxFsBridge({ sandbox });
+
+    let err: unknown;
+    try {
+      await bridge.writeFile({ filePath: "b.txt", data: "hello" });
+    } catch (caught) {
+      err = caught;
+    }
+
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toMatch(/ghcr\.io\/example\/custom-sandbox:latest/);
+    expect((err as Error).message).not.toMatch(/scripts\/sandbox-setup\.sh/i);
   });
 });

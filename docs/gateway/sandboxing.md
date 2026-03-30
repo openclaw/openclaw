@@ -332,13 +332,15 @@ Build it once:
 scripts/sandbox-setup.sh
 ```
 
-Note: the default image does **not** include Node. If a skill needs Node (or
+The default image already includes the baseline tooling required for sandboxed
+file mutation (`bash`, `git`, `jq`, `python3`, `ripgrep`), but it does **not**
+include Node. If a skill needs Node (or
 other runtimes), either bake a custom image or install via
 `sandbox.docker.setupCommand` (requires network egress + writable root +
 root user).
 
 If you want a more functional sandbox image with common tooling (for example
-`curl`, `jq`, `nodejs`, `python3`, `git`), build:
+`curl`, `jq`, `nodejs`, `go`, `rustc`), build:
 
 ```bash
 scripts/sandbox-common-setup.sh

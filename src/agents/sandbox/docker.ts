@@ -255,17 +255,23 @@ async function dockerImageExists(image: string) {
   throw new Error(`Failed to inspect sandbox image: ${stderr}`);
 }
 
+function formatMissingSandboxImageMessage(image: string) {
+  if (image === DEFAULT_SANDBOX_IMAGE) {
+    return [
+      `Default sandbox image not found: ${image}.`,
+      `Build it with ${formatCliCommand("scripts/sandbox-setup.sh")} from a source checkout, or set agents.defaults.sandbox.docker.image to an existing compatible image.`,
+      "OpenClaw no longer aliases debian:bookworm-slim because the default sandbox requires tools such as python3.",
+    ].join(" ");
+  }
+  return `Sandbox image not found: ${image}. Build or pull it first.`;
+}
+
 export async function ensureDockerImage(image: string) {
   const exists = await dockerImageExists(image);
   if (exists) {
     return;
   }
-  if (image === DEFAULT_SANDBOX_IMAGE) {
-    await execDocker(["pull", "debian:bookworm-slim"]);
-    await execDocker(["tag", "debian:bookworm-slim", DEFAULT_SANDBOX_IMAGE]);
-    return;
-  }
-  throw new Error(`Sandbox image not found: ${image}. Build or pull it first.`);
+  throw new Error(formatMissingSandboxImageMessage(image));
 }
 
 export async function dockerContainerState(name: string) {
