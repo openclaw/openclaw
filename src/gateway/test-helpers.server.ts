@@ -11,7 +11,7 @@ import {
   resolveMainSessionKeyFromConfig,
   type SessionEntry,
 } from "../config/sessions.js";
-import { resetAgentRunContextForTest } from "../infra/agent-events.js";
+import { resetAgentEventsForTest } from "../infra/agent-events.js";
 import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
@@ -29,6 +29,7 @@ import {
 } from "../routing/session-key.js";
 import { captureEnv } from "../test-utils/env.js";
 import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
+import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
@@ -241,6 +242,7 @@ function applyGatewaySkipEnv() {
 async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   // Some tests intentionally use fake timers; ensure they don't leak into gateway suites.
   vi.useRealTimers();
+  await cleanupSessionStateForTest().catch(() => undefined);
   setLoggerOverride({ level: "silent", consoleLevel: "silent" });
   if (!tempHome) {
     throw new Error("resetGatewayTestState called before temp home was initialized");
@@ -346,7 +348,7 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   for (const sessionKey of resolveGatewayTestMainSessionKeys()) {
     drainSystemEvents(sessionKey);
   }
-  resetAgentRunContextForTest();
+  resetAgentEventsForTest();
   const mod = await getServerModule();
   mod.__resetModelCatalogCacheForTest();
   piSdkMock.enabled = false;
@@ -356,6 +358,7 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
 
 async function cleanupGatewayTestHome(options: { restoreEnv: boolean }) {
   vi.useRealTimers();
+  await cleanupSessionStateForTest().catch(() => undefined);
   clearGatewaySubagentRuntime();
   resetLogger();
   if (options.restoreEnv) {

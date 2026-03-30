@@ -30,6 +30,11 @@ export async function withStateDirEnv<T>(
   } finally {
     await cleanupSessionStateForTest().catch(() => undefined);
     restoreStateDirEnv(snapshot);
-    await fs.rm(tempRoot, { recursive: true, force: true });
+    await fs.rm(tempRoot, {
+      recursive: true,
+      force: true,
+      maxRetries: 20,
+      retryDelay: 25,
+    });
   }
 }
