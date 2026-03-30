@@ -144,7 +144,9 @@ export async function getStatusSummary(
     : [];
   const mainSessionKey = resolveMainSessionKey(cfg);
   const queuedSystemEvents = peekSystemEvents(mainSessionKey);
-  const tasks = (await loadTaskRegistryMaintenanceModule()).getInspectableTaskRegistrySummary();
+  const taskMaintenanceModule = await loadTaskRegistryMaintenanceModule();
+  const tasks = taskMaintenanceModule.getInspectableTaskRegistrySummary();
+  const taskAudit = taskMaintenanceModule.getInspectableTaskAuditSummary();
 
   const resolved = resolveConfiguredStatusModelRef({
     cfg,
@@ -273,6 +275,7 @@ export async function getStatusSummary(
     channelSummary,
     queuedSystemEvents,
     tasks,
+    taskAudit,
     sessions: {
       paths: Array.from(paths),
       count: totalSessions,
