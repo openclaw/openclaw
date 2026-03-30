@@ -45,6 +45,17 @@ with OpenClaw), others are **external** (published on npm by the community).
   </Step>
 </Steps>
 
+If you prefer chat-native control, enable `commands.plugins: true` and use:
+
+```text
+/plugin install clawhub:@openclaw/voice-call
+/plugin show voice-call
+/plugin enable voice-call
+```
+
+The install path uses the same resolver as the CLI: local path/archive, explicit
+`clawhub:<pkg>`, or bare package spec (ClawHub first, then npm fallback).
+
 ## Plugin types
 
 OpenClaw recognizes two plugin formats:
@@ -79,7 +90,7 @@ and the [Plugin SDK Overview](/plugins/sdk-overview).
     `anthropic`, `byteplus`, `cloudflare-ai-gateway`, `github-copilot`, `google`,
     `huggingface`, `kilocode`, `kimi-coding`, `minimax`, `mistral`, `modelstudio`,
     `moonshot`, `nvidia`, `openai`, `opencode`, `opencode-go`, `openrouter`,
-    `qianfan`, `qwen-portal-auth`, `synthetic`, `together`, `venice`,
+    `qianfan`, `synthetic`, `together`, `venice`,
     `vercel-ai-gateway`, `volcengine`, `xiaomi`, `zai`
   </Accordion>
 
@@ -93,6 +104,7 @@ and the [Plugin SDK Overview](/plugins/sdk-overview).
   </Accordion>
 
   <Accordion title="Other">
+    - `browser` — bundled browser plugin for the browser tool, `openclaw browser` CLI, `browser.request` gateway method, browser runtime, and default browser control service (enabled by default; disable before replacing it)
     - `copilot-proxy` — VS Code Copilot Proxy bridge (disabled by default)
   </Accordion>
 </AccordionGroup>
@@ -124,7 +136,9 @@ Looking for third-party plugins? See [Community Plugins](/plugins/community).
 | `slots`          | Exclusive slot selectors (e.g. `memory`, `contextEngine`) |
 | `entries.\<id\>` | Per-plugin toggles + config                               |
 
-Config changes **require a gateway restart**.
+Config changes **require a gateway restart**. If the Gateway is running with config
+watch + in-process restart enabled (the default `openclaw gateway` path), that
+restart is usually performed automatically a moment after the config write lands.
 
 <Accordion title="Plugin states: disabled vs missing vs invalid">
   - **Disabled**: plugin exists but enablement rules turned it off. Config is preserved.
@@ -142,11 +156,11 @@ OpenClaw scans for plugins in this order (first match wins):
   </Step>
 
   <Step title="Workspace extensions">
-    `\<workspace\>/.openclaw/extensions/*.ts` and `\<workspace\>/.openclaw/extensions/*/index.ts`.
+    `\<workspace\>/.openclaw/<plugin-root>/*.ts` and `\<workspace\>/.openclaw/<plugin-root>/*/index.ts`.
   </Step>
 
   <Step title="Global extensions">
-    `~/.openclaw/extensions/*.ts` and `~/.openclaw/extensions/*/index.ts`.
+    `~/.openclaw/<plugin-root>/*.ts` and `~/.openclaw/<plugin-root>/*/index.ts`.
   </Step>
 
   <Step title="Bundled plugins">
@@ -244,6 +258,17 @@ Common registration methods:
 | `registerCommand` / `registerCli`    | CLI commands         |
 | `registerContextEngine`              | Context engine       |
 | `registerService`                    | Background service   |
+
+Hook guard behavior for typed lifecycle hooks:
+
+- `before_tool_call`: `{ block: true }` is terminal; lower-priority handlers are skipped.
+- `before_tool_call`: `{ block: false }` is a no-op and does not clear an earlier block.
+- `before_install`: `{ block: true }` is terminal; lower-priority handlers are skipped.
+- `before_install`: `{ block: false }` is a no-op and does not clear an earlier block.
+- `message_sending`: `{ cancel: true }` is terminal; lower-priority handlers are skipped.
+- `message_sending`: `{ cancel: false }` is a no-op and does not clear an earlier cancel.
+
+For full typed hook behavior, see [SDK Overview](/plugins/sdk-overview#hook-decision-semantics).
 
 ## Related
 

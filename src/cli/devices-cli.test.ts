@@ -32,6 +32,11 @@ vi.mock("../infra/device-pairing.js", () => ({
 vi.mock("../runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../runtime.js")>()),
   defaultRuntime: runtime,
+  writeRuntimeJson: (
+    targetRuntime: { log: (...args: unknown[]) => void },
+    value: unknown,
+    space = 2,
+  ) => targetRuntime.log(JSON.stringify(value, null, space > 0 ? space : undefined)),
 }));
 
 let registerDevicesCli: typeof import("./devices-cli.js").registerDevicesCli;
@@ -275,7 +280,9 @@ describe("devices cli local fallback", () => {
 
     await runDevicesApprove(["--latest"]);
 
-    expect(approveDevicePairing).toHaveBeenCalledWith("req-latest");
+    expect(approveDevicePairing).toHaveBeenCalledWith("req-latest", {
+      callerScopes: ["operator.admin"],
+    });
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining(fallbackNotice));
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Approved"));
   });

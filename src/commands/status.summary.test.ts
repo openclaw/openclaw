@@ -7,6 +7,10 @@ vi.mock("../channels/config-presence.js", () => ({
 vi.mock("./status.summary.runtime.js", () => ({
   statusSummaryRuntime: {
     classifySessionKey: vi.fn(() => "direct"),
+    resolveConfiguredStatusModelRef: vi.fn(() => ({
+      provider: "openai",
+      model: "gpt-5.2",
+    })),
     resolveSessionModelRef: vi.fn(() => ({
       provider: "openai",
       model: "gpt-5.2",
@@ -21,7 +25,7 @@ vi.mock("../agents/defaults.js", () => ({
   DEFAULT_PROVIDER: "openai",
 }));
 
-vi.mock("../config/config.js", () => ({
+vi.mock("../config/io.js", () => ({
   loadConfig: vi.fn(() => ({})),
 }));
 
@@ -55,6 +59,30 @@ vi.mock("../infra/system-events.js", () => ({
   peekSystemEvents: vi.fn(() => []),
 }));
 
+vi.mock("../tasks/task-registry.maintenance.js", () => ({
+  getInspectableTaskRegistrySummary: vi.fn(() => ({
+    total: 0,
+    active: 0,
+    terminal: 0,
+    failures: 0,
+    byStatus: {
+      queued: 0,
+      running: 0,
+      succeeded: 0,
+      failed: 0,
+      timed_out: 0,
+      cancelled: 0,
+      lost: 0,
+    },
+    byRuntime: {
+      subagent: 0,
+      acp: 0,
+      cli: 0,
+      cron: 0,
+    },
+  })),
+}));
+
 vi.mock("../routing/session-key.js", () => ({
   normalizeAgentId: vi.fn((value: string) => value),
   normalizeMainKey: vi.fn((value?: string) => value ?? "main"),
@@ -72,8 +100,13 @@ vi.mock("./status.link-channel.js", () => ({
 const { hasPotentialConfiguredChannels } = await import("../channels/config-presence.js");
 const { buildChannelSummary } = await import("../infra/channel-summary.js");
 const { resolveLinkChannelContext } = await import("./status.link-channel.js");
-const { statusSummaryRuntime } = await import("./status.summary.runtime.js");
-const { getStatusSummary } = await import("./status.summary.js");
+
+async function loadStatusSummaryForTest() {
+  vi.resetModules();
+  const { getStatusSummary } = await import("./status.summary.js");
+  const { statusSummaryRuntime } = await import("./status.summary.runtime.js");
+  return { getStatusSummary, statusSummaryRuntime };
+}
 
 describe("getStatusSummary", () => {
   beforeEach(() => {
@@ -81,14 +114,17 @@ describe("getStatusSummary", () => {
   });
 
   it("includes runtimeVersion in the status payload", async () => {
+    const { getStatusSummary } = await loadStatusSummaryForTest();
     const summary = await getStatusSummary();
 
     expect(summary.runtimeVersion).toBe("2026.3.8");
     expect(summary.heartbeat.defaultAgentId).toBe("main");
     expect(summary.channelSummary).toEqual(["ok"]);
+    expect(summary.tasks.active).toBe(0);
   });
 
   it("skips channel summary imports when no channels are configured", async () => {
+    const { getStatusSummary } = await loadStatusSummaryForTest();
     vi.mocked(hasPotentialConfiguredChannels).mockReturnValue(false);
 
     const summary = await getStatusSummary();
@@ -100,6 +136,7 @@ describe("getStatusSummary", () => {
   });
 
   it("does not trigger async context warmup while building status summaries", async () => {
+    const { getStatusSummary, statusSummaryRuntime } = await loadStatusSummaryForTest();
     await getStatusSummary();
 
     expect(vi.mocked(statusSummaryRuntime.resolveContextTokensForModel)).toHaveBeenCalledWith(

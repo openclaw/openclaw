@@ -1,4 +1,3 @@
-// Curated webhook helpers for plugin-owned HTTP ingress and webhook targets.
 export {
   createBoundedCounter,
   createFixedWindowRateLimiter,
@@ -41,3 +40,5 @@ export {
   type WebhookTargetMatchResult,
 } from "./webhook-targets.js";
 export { normalizeWebhookPath, resolveWebhookPath } from "./webhook-path.js";
+export { resolveRequestClientIp } from "../gateway/net.js";
+export { normalizePluginHttpPath } from "../plugins/http-path.js";

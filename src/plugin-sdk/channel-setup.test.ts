@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { runSetupWizardFinalize } from "../../test/helpers/extensions/setup-wizard.js";
+import { runSetupWizardFinalize } from "../../test/helpers/plugins/setup-wizard.js";
 import { createOptionalChannelSetupSurface } from "./channel-setup.js";
 
 describe("createOptionalChannelSetupSurface", () => {

@@ -164,9 +164,7 @@ describe("registerQrCli", () => {
     vi.clearAllMocks();
     runtimeCapture.resetRuntimeCapture();
     vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "");
-    vi.stubEnv("CLAWDBOT_GATEWAY_TOKEN", "");
     vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "");
-    vi.stubEnv("CLAWDBOT_GATEWAY_PASSWORD", "");
     runtime.exit.mockImplementation(() => {
       throw new Error("exit");
     });

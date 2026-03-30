@@ -14,7 +14,7 @@ const mocks = vi.hoisted(() => ({
   listGroupsLive: vi.fn(),
   resolveTarget: vi.fn(),
   getChannelPlugin: vi.fn(),
-  getActivePluginRegistryVersion: vi.fn(() => 1),
+  getActivePluginChannelRegistryVersion: vi.fn(() => 1),
 }));
 
 beforeEach(async () => {
@@ -25,18 +25,29 @@ beforeEach(async () => {
   mocks.listGroupsLive.mockReset();
   mocks.resolveTarget.mockReset();
   mocks.getChannelPlugin.mockReset();
-  mocks.getActivePluginRegistryVersion.mockReset();
-  mocks.getActivePluginRegistryVersion.mockReturnValue(1);
+  mocks.getActivePluginChannelRegistryVersion.mockReset();
+  mocks.getActivePluginChannelRegistryVersion.mockReturnValue(1);
   vi.doMock("../../channels/plugins/index.js", () => ({
     getChannelPlugin: (...args: unknown[]) => mocks.getChannelPlugin(...args),
     normalizeChannelId: (value: string) => value,
   }));
   vi.doMock("../../plugins/runtime.js", () => ({
-    getActivePluginRegistryVersion: () => mocks.getActivePluginRegistryVersion(),
+    getActivePluginChannelRegistryVersion: () => mocks.getActivePluginChannelRegistryVersion(),
   }));
   ({ resetDirectoryCache, resolveMessagingTarget, formatTargetDisplay } =
     await import("./target-resolver.js"));
 });
+
+async function expectOkResolution(
+  params: Parameters<typeof resolveMessagingTarget>[0],
+): Promise<Extract<Awaited<ReturnType<typeof resolveMessagingTarget>>, { ok: true }>> {
+  const result = await resolveMessagingTarget(params);
+  expect(result.ok).toBe(true);
+  if (!result.ok) {
+    throw new Error("expected successful target resolution");
+  }
+  return result;
+}
 
 describe("resolveMessagingTarget (directory fallback)", () => {
   const cfg = {} as OpenClawConfig;
@@ -63,43 +74,34 @@ describe("resolveMessagingTarget (directory fallback)", () => {
     mocks.listGroups.mockResolvedValue([]);
     mocks.listGroupsLive.mockResolvedValue([entry]);
 
-    const first = await resolveMessagingTarget({
+    const first = await expectOkResolution({
       cfg,
       channel: "discord",
       input: "support",
     });
-
-    expect(first.ok).toBe(true);
-    if (first.ok) {
-      expect(first.target.source).toBe("directory");
-      expect(first.target.to).toBe("123456789");
-    }
+    expect(first.target.source).toBe("directory");
+    expect(first.target.to).toBe("123456789");
     expect(mocks.listGroups).toHaveBeenCalledTimes(1);
     expect(mocks.listGroupsLive).toHaveBeenCalledTimes(1);
 
-    const second = await resolveMessagingTarget({
+    const second = await expectOkResolution({
       cfg,
       channel: "discord",
       input: "support",
     });
-
-    expect(second.ok).toBe(true);
+    expect(second.target.to).toBe("123456789");
     expect(mocks.listGroups).toHaveBeenCalledTimes(1);
     expect(mocks.listGroupsLive).toHaveBeenCalledTimes(1);
   });
 
   it("skips directory lookup for direct ids", async () => {
-    const result = await resolveMessagingTarget({
+    const result = await expectOkResolution({
       cfg,
       channel: "discord",
       input: "123456789",
     });
-
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.target.source).toBe("normalized");
-      expect(result.target.to).toBe("123456789");
-    }
+    expect(result.target.source).toBe("normalized");
+    expect(result.target.to).toBe("123456789");
     expect(mocks.listGroups).not.toHaveBeenCalled();
     expect(mocks.listGroupsLive).not.toHaveBeenCalled();
   });
@@ -119,21 +121,17 @@ describe("resolveMessagingTarget (directory fallback)", () => {
       source: "directory",
     });
 
-    const result = await resolveMessagingTarget({
+    const result = await expectOkResolution({
       cfg,
       channel: "mattermost",
       input: "dthcxgoxhifn3pwh65cut3ud3w",
     });
-
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.target).toEqual({
-        to: "user:dm-user-id",
-        kind: "user",
-        source: "directory",
-        display: undefined,
-      });
-    }
+    expect(result.target).toEqual({
+      to: "user:dm-user-id",
+      kind: "user",
+      source: "directory",
+      display: undefined,
+    });
     expect(mocks.resolveTarget).toHaveBeenCalledWith(
       expect.objectContaining({
         input: "dthcxgoxhifn3pwh65cut3ud3w",
@@ -165,21 +163,17 @@ describe("resolveMessagingTarget (directory fallback)", () => {
       source: "normalized",
     });
 
-    const result = await resolveMessagingTarget({
+    const result = await expectOkResolution({
       cfg,
       channel: "imessage",
       input: "+15551234567",
     });
-
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.target).toEqual({
-        to: "+15551234567",
-        kind: "user",
-        source: "normalized",
-        display: undefined,
-      });
-    }
+    expect(result.target).toEqual({
+      to: "+15551234567",
+      kind: "user",
+      source: "normalized",
+      display: undefined,
+    });
     expect(mocks.listPeers).toHaveBeenCalledTimes(1);
     expect(mocks.listPeersLive).toHaveBeenCalledTimes(1);
     expect(mocks.listGroups).not.toHaveBeenCalled();
@@ -205,17 +199,13 @@ describe("resolveMessagingTarget (directory fallback)", () => {
       source: "normalized",
     });
 
-    const result = await resolveMessagingTarget({
+    const result = await expectOkResolution({
       cfg,
       channel: "slack",
       input: "#C123ABC",
     });
-
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.target.to).toBe("channel:C123ABC");
-      expect(result.target.display).toBeUndefined();
-    }
+    expect(result.target.to).toBe("channel:C123ABC");
+    expect(result.target.display).toBeUndefined();
   });
 
   it("defers target display formatting to the plugin when available", () => {

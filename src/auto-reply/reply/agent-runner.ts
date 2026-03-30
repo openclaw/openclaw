@@ -1,23 +1,26 @@
 import fs from "node:fs";
-import { lookupCachedContextTokens } from "../../agents/context-cache.js";
+import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
+import { queueEmbeddedPiMessage } from "../../agents/pi-embedded.js";
 import { hasNonzeroUsage } from "../../agents/usage.js";
 import {
+  resolveAgentIdFromSessionKey,
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   resolveSessionTranscriptPath,
-} from "../../config/sessions/paths.js";
-import { updateSessionStore, updateSessionStoreEntry } from "../../config/sessions/store.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+  type SessionEntry,
+  updateSessionStore,
+  updateSessionStoreEntry,
+} from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
+import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 import {
   buildFallbackClearedNotice,
   buildFallbackNotice,
@@ -26,6 +29,7 @@ import {
 import type { OriginatingChannelType, TemplateContext } from "../templating.js";
 import { resolveResponseUsageMode, type VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { runAgentTurnWithFallback } from "./agent-runner-execution.js";
 import {
   createShouldEmitToolOutput,
   createShouldEmitToolResult,
@@ -33,6 +37,7 @@ import {
   isAudioPayload,
   signalTypingIfNeeded,
 } from "./agent-runner-helpers.js";
+import { runMemoryFlushIfNeeded, runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
 import { buildReplyPayloads } from "./agent-runner-payloads.js";
 import {
   appendUnscheduledReminderNote,
@@ -46,8 +51,12 @@ import { createFollowupRunner } from "./followup-runner.js";
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
-import { enqueueFollowupRun } from "./queue/enqueue.js";
-import type { FollowupRun, QueueSettings } from "./queue/types.js";
+import {
+  enqueueFollowupRun,
+  refreshQueuedFollowupSession,
+  type FollowupRun,
+  type QueueSettings,
+} from "./queue.js";
 import { createReplyMediaPathNormalizer } from "./reply-media-paths.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
@@ -55,44 +64,6 @@ import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
-let piEmbeddedQueueRuntimePromise: Promise<
-  typeof import("../../agents/pi-embedded-queue.runtime.js")
-> | null = null;
-let agentRunnerExecutionRuntimePromise: Promise<
-  typeof import("./agent-runner-execution.runtime.js")
-> | null = null;
-let agentRunnerMemoryRuntimePromise: Promise<
-  typeof import("./agent-runner-memory.runtime.js")
-> | null = null;
-let usageCostRuntimePromise: Promise<typeof import("./usage-cost.runtime.js")> | null = null;
-let contextTokensRuntimePromise: Promise<
-  typeof import("../../agents/context-tokens.runtime.js")
-> | null = null;
-
-function loadPiEmbeddedQueueRuntime() {
-  piEmbeddedQueueRuntimePromise ??= import("../../agents/pi-embedded-queue.runtime.js");
-  return piEmbeddedQueueRuntimePromise;
-}
-
-function loadAgentRunnerExecutionRuntime() {
-  agentRunnerExecutionRuntimePromise ??= import("./agent-runner-execution.runtime.js");
-  return agentRunnerExecutionRuntimePromise;
-}
-
-function loadAgentRunnerMemoryRuntime() {
-  agentRunnerMemoryRuntimePromise ??= import("./agent-runner-memory.runtime.js");
-  return agentRunnerMemoryRuntimePromise;
-}
-
-function loadUsageCostRuntime() {
-  usageCostRuntimePromise ??= import("./usage-cost.runtime.js");
-  return usageCostRuntimePromise;
-}
-
-function loadContextTokensRuntime() {
-  contextTokensRuntimePromise ??= import("../../agents/context-tokens.runtime.js");
-  return contextTokensRuntimePromise;
-}
 
 export async function runReplyAgent(params: {
   commandBody: string;
@@ -102,6 +73,7 @@ export async function runReplyAgent(params: {
   shouldSteer: boolean;
   shouldFollowup: boolean;
   isActive: boolean;
+  isRunActive?: () => boolean;
   isStreaming: boolean;
   opts?: GetReplyOptions;
   typing: TypingController;
@@ -133,6 +105,7 @@ export async function runReplyAgent(params: {
     shouldSteer,
     shouldFollowup,
     isActive,
+    isRunActive,
     isStreaming,
     opts,
     typing,
@@ -229,7 +202,6 @@ export async function runReplyAgent(params: {
   };
 
   if (shouldSteer && isStreaming) {
-    const { queueEmbeddedPiMessage } = await loadPiEmbeddedQueueRuntime();
     const steered = queueEmbeddedPiMessage(followupRun.run.sessionId, followupRun.prompt);
     if (steered && !shouldFollowup) {
       await touchActiveSessionEntry();
@@ -245,13 +217,37 @@ export async function runReplyAgent(params: {
     queueMode: resolvedQueue.mode,
   });
 
+  const queuedRunFollowupTurn = createFollowupRunner({
+    opts,
+    typing,
+    typingMode,
+    sessionEntry: activeSessionEntry,
+    sessionStore: activeSessionStore,
+    sessionKey,
+    storePath,
+    defaultModel,
+    agentCfgContextTokens,
+  });
+
   if (activeRunQueueAction === "drop") {
     typing.cleanup();
     return undefined;
   }
 
   if (activeRunQueueAction === "enqueue-followup") {
-    enqueueFollowupRun(queueKey, followupRun, resolvedQueue);
+    enqueueFollowupRun(
+      queueKey,
+      followupRun,
+      resolvedQueue,
+      "message-id",
+      queuedRunFollowupTurn,
+      false,
+    );
+    // Re-check liveness after enqueue so a stale active snapshot cannot leave
+    // the followup queue idle if the original run already finished.
+    if (!isRunActive?.()) {
+      finalizeWithFollowup(undefined, queueKey, queuedRunFollowupTurn);
+    }
     await touchActiveSessionEntry();
     typing.cleanup();
     return undefined;
@@ -259,7 +255,19 @@ export async function runReplyAgent(params: {
 
   await typingSignals.signalRunStart();
 
-  const { runMemoryFlushIfNeeded } = await loadAgentRunnerMemoryRuntime();
+  activeSessionEntry = await runPreflightCompactionIfNeeded({
+    cfg,
+    followupRun,
+    promptForEstimate: followupRun.prompt,
+    defaultModel,
+    agentCfgContextTokens,
+    sessionEntry: activeSessionEntry,
+    sessionStore: activeSessionStore,
+    sessionKey,
+    storePath,
+    isHeartbeat,
+  });
+
   activeSessionEntry = await runMemoryFlushIfNeeded({
     cfg,
     followupRun,
@@ -328,7 +336,6 @@ export async function runReplyAgent(params: {
       fallbackNoticeSelectedModel: undefined,
       fallbackNoticeActiveModel: undefined,
       fallbackNoticeReason: undefined,
-      memoryFlushContextHash: undefined,
     };
     const agentId = resolveAgentIdFromSessionKey(sessionKey);
     const nextSessionFile = resolveSessionTranscriptPath(
@@ -349,6 +356,12 @@ export async function runReplyAgent(params: {
     }
     followupRun.run.sessionId = nextSessionId;
     followupRun.run.sessionFile = nextSessionFile;
+    refreshQueuedFollowupSession({
+      key: queueKey,
+      previousSessionId: prevEntry.sessionId,
+      nextSessionId,
+      nextSessionFile,
+    });
     activeSessionEntry = nextEntry;
     activeIsNewSession = true;
     defaultRuntime.error(buildLogMessage(nextSessionId));
@@ -388,7 +401,6 @@ export async function runReplyAgent(params: {
     });
   try {
     const runStartedAt = Date.now();
-    const { runAgentTurnWithFallback } = await loadAgentRunnerExecutionRuntime();
     const runOutcome = await runAgentTurnWithFallback({
       commandBody,
       followupRun,
@@ -456,11 +468,6 @@ export async function runReplyAgent(params: {
       await blockReplyPipeline.flush({ force: true });
       blockReplyPipeline.stop();
     }
-
-    // NOTE: The compaction completion notice for block-streaming mode is sent
-    // further below — after incrementRunCompactionCount — so it can include
-    // the `(count N)` suffix.  Sending it here (before the count is known)
-    // would omit that information.
     if (pendingToolTasks.size > 0) {
       await Promise.allSettled(pendingToolTasks);
     }
@@ -509,11 +516,12 @@ export async function runReplyAgent(params: {
     const cliSessionId = isCliProvider(providerUsed, cfg)
       ? runResult.meta?.agentMeta?.sessionId?.trim()
       : undefined;
-    const cachedContextTokens = lookupCachedContextTokens(modelUsed);
+    const cliSessionBinding = isCliProvider(providerUsed, cfg)
+      ? runResult.meta?.agentMeta?.cliSessionBinding
+      : undefined;
     const contextTokensUsed =
       agentCfgContextTokens ??
-      cachedContextTokens ??
-      (await loadContextTokensRuntime()).lookupContextTokens(modelUsed) ??
+      lookupContextTokens(modelUsed) ??
       activeSessionEntry?.contextTokens ??
       DEFAULT_CONTEXT_TOKENS;
 
@@ -529,6 +537,8 @@ export async function runReplyAgent(params: {
       contextTokensUsed,
       systemPromptReport: runResult.meta?.systemPromptReport,
       cliSessionId,
+      cliSessionBinding,
+      usageIsContextSnapshot: isCliProvider(providerUsed, cfg),
     });
 
     // Drain any late tool/block deliveries before deciding there's "nothing to send".
@@ -542,6 +552,7 @@ export async function runReplyAgent(params: {
       payloads: payloadArray,
       isHeartbeat,
       didLogHeartbeatStrip,
+      silentExpected: followupRun.run.silentExpected,
       blockStreamingEnabled,
       blockReplyPipeline,
       directlySentBlockKeys,
@@ -591,7 +602,6 @@ export async function runReplyAgent(params: {
     await signalTypingIfNeeded(guardedReplyPayloads, typingSignals);
 
     if (isDiagnosticsEnabled(cfg) && hasNonzeroUsage(usage)) {
-      const { estimateUsageCost, resolveModelCostConfig } = await loadUsageCostRuntime();
       const input = usage.input ?? 0;
       const output = usage.output ?? 0;
       const cacheRead = usage.cacheRead ?? 0;
@@ -634,7 +644,6 @@ export async function runReplyAgent(params: {
       (sessionKey ? activeSessionStore?.[sessionKey]?.responseUsage : undefined);
     const responseUsageMode = resolveResponseUsageMode(responseUsageRaw);
     if (responseUsageMode !== "off" && hasNonzeroUsage(usage)) {
-      const { resolveModelCostConfig } = await loadUsageCostRuntime();
       const authMode = resolveModelAuthMode(providerUsed, cfg);
       const showCost = authMode === "api-key";
       const costConfig = showCost
@@ -720,6 +729,7 @@ export async function runReplyAgent(params: {
     }
 
     if (autoCompactionCount > 0) {
+      const previousSessionId = activeSessionEntry?.sessionId ?? followupRun.run.sessionId;
       const count = await incrementRunCompactionCount({
         sessionEntry: activeSessionEntry,
         sessionStore: activeSessionStore,
@@ -728,7 +738,19 @@ export async function runReplyAgent(params: {
         amount: autoCompactionCount,
         lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
         contextTokensUsed,
+        newSessionId: runResult.meta?.agentMeta?.sessionId,
       });
+      const refreshedSessionEntry =
+        sessionKey && activeSessionStore ? activeSessionStore[sessionKey] : undefined;
+      if (refreshedSessionEntry) {
+        activeSessionEntry = refreshedSessionEntry;
+        refreshQueuedFollowupSession({
+          key: queueKey,
+          previousSessionId,
+          nextSessionId: refreshedSessionEntry.sessionId,
+          nextSessionFile: refreshedSessionEntry.sessionFile,
+        });
+      }
 
       // Inject post-compaction workspace context for the next agent turn
       if (sessionKey) {
@@ -744,48 +766,9 @@ export async function runReplyAgent(params: {
           });
       }
 
-      // Always notify the user when compaction completes — not just in verbose
-      // mode. The "🧹 Compacting context..." notice was already sent at start,
-      // so the completion message closes the loop for every user regardless of
-      // their verbose setting.
-      const suffix = typeof count === "number" ? ` (count ${count})` : "";
-      const completionText = verboseEnabled
-        ? `🧹 Auto-compaction complete${suffix}.`
-        : `✅ Context compacted${suffix}.`;
-
-      if (blockReplyPipeline && opts?.onBlockReply) {
-        // In block-streaming mode, send the completion notice via
-        // fire-and-forget *after* the pipeline has flushed (so it does not set
-        // didStream()=true and cause buildReplyPayloads to discard the real
-        // assistant reply).  Now that the count is known we can include it.
-        const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
-        const noticePayload = applyReplyToMode({
-          text: completionText,
-          replyToId: currentMessageId,
-          replyToCurrent: true,
-          isCompactionNotice: true,
-        });
-        void Promise.race([
-          opts.onBlockReply(noticePayload),
-          new Promise<void>((_, reject) =>
-            setTimeout(() => reject(new Error("compaction notice timeout")), blockReplyTimeoutMs),
-          ),
-        ]).catch(() => {
-          // Intentionally swallowed — the notice is informational only.
-        });
-      } else {
-        // Non-streaming: push into verboseNotices with full compaction metadata
-        // so threading exemptions apply and replyToMode=first does not thread
-        // the notice instead of the real assistant reply.
-        const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
-        verboseNotices.push(
-          applyReplyToMode({
-            text: completionText,
-            replyToId: currentMessageId,
-            replyToCurrent: true,
-            isCompactionNotice: true,
-          }),
-        );
+      if (verboseEnabled) {
+        const suffix = typeof count === "number" ? ` (count ${count})` : "";
+        verboseNotices.push({ text: `🧹 Auto-compaction complete${suffix}.` });
       }
     }
     if (verboseNotices.length > 0) {

@@ -27,14 +27,15 @@ This page covers the internal architecture of the OpenClaw plugin system.
 Capabilities are the public **native plugin** model inside OpenClaw. Every
 native OpenClaw plugin registers against one or more capability types:
 
-| Capability          | Registration method                           | Example plugins           |
-| ------------------- | --------------------------------------------- | ------------------------- |
-| Text inference      | `api.registerProvider(...)`                   | `openai`, `anthropic`     |
-| Speech              | `api.registerSpeechProvider(...)`             | `elevenlabs`, `microsoft` |
-| Media understanding | `api.registerMediaUnderstandingProvider(...)` | `openai`, `google`        |
-| Image generation    | `api.registerImageGenerationProvider(...)`    | `openai`, `google`        |
-| Web search          | `api.registerWebSearchProvider(...)`          | `google`                  |
-| Channel / messaging | `api.registerChannel(...)`                    | `msteams`, `matrix`       |
+| Capability            | Registration method                           | Example plugins           |
+| --------------------- | --------------------------------------------- | ------------------------- |
+| Text inference        | `api.registerProvider(...)`                   | `openai`, `anthropic`     |
+| CLI inference backend | `api.registerCliBackend(...)`                 | `openai`, `anthropic`     |
+| Speech                | `api.registerSpeechProvider(...)`             | `elevenlabs`, `microsoft` |
+| Media understanding   | `api.registerMediaUnderstandingProvider(...)` | `openai`, `google`        |
+| Image generation      | `api.registerImageGenerationProvider(...)`    | `openai`, `google`        |
+| Web search            | `api.registerWebSearchProvider(...)`          | `google`                  |
+| Channel / messaging   | `api.registerChannel(...)`                    | `msteams`, `matrix`       |
 
 A plugin that registers zero capabilities but provides hooks, tools, or
 services is a **legacy hook-only** plugin. That pattern is still fully supported.
@@ -128,6 +129,14 @@ OpenClaw's plugin system has four layers:
 4. **Surface consumption**
    The rest of OpenClaw reads the registry to expose tools, channels, provider
    setup, hooks, HTTP routes, CLI commands, and services.
+
+For plugin CLI specifically, root command discovery is split in two phases:
+
+- parse-time metadata comes from `registerCli(..., { descriptors: [...] })`
+- the real plugin CLI module can stay lazy and register on first invocation
+
+That keeps plugin-owned CLI code inside the plugin while still letting OpenClaw
+reserve root command names before parsing.
 
 The important design boundary:
 
@@ -968,16 +977,17 @@ authoring plugins:
   New code should import the narrower primitives instead.
 - Bundled extension internals remain private. External plugins should use only
   `openclaw/plugin-sdk/*` subpaths. OpenClaw core/test code may use the repo
-  public entry points under `extensions/<id>/index.js`, `api.js`, `runtime-api.js`,
-  `setup-entry.js`, and narrowly scoped files such as `login-qr-api.js`. Never
-  import `extensions/<id>/src/*` from core or from another extension.
+  public entry points under a plugin package root such as `index.js`, `api.js`,
+  `runtime-api.js`, `setup-entry.js`, and narrowly scoped files such as
+  `login-qr-api.js`. Never import a plugin package's `src/*` from core or from
+  another extension.
 - Repo entry point split:
-  `extensions/<id>/api.js` is the helper/types barrel,
-  `extensions/<id>/runtime-api.js` is the runtime-only barrel,
-  `extensions/<id>/index.js` is the bundled plugin entry,
-  and `extensions/<id>/setup-entry.js` is the setup plugin entry.
+  `<plugin-package-root>/api.js` is the helper/types barrel,
+  `<plugin-package-root>/runtime-api.js` is the runtime-only barrel,
+  `<plugin-package-root>/index.js` is the bundled plugin entry,
+  and `<plugin-package-root>/setup-entry.js` is the setup plugin entry.
 - No bundled channel-branded public subpaths remain. Channel-specific helper and
-  runtime seams live under `extensions/<id>/api.js` and `extensions/<id>/runtime-api.js`;
+  runtime seams live under `<plugin-package-root>/api.js` and `<plugin-package-root>/runtime-api.js`;
   the public SDK contract is the generic shared primitives instead.
 
 Compatibility note:
@@ -994,8 +1004,10 @@ Compatibility note:
   helper is only needed by a bundled extension, keep it behind the extension's
   local `api.js` or `runtime-api.js` seam instead of promoting it into
   `openclaw/plugin-sdk/<extension>`.
-- Channel-branded bundled bars stay private unless they are explicitly added
-  back to the public contract.
+- New shared helper seams should be generic, not channel-branded. Shared target
+  parsing belongs on `openclaw/plugin-sdk/channel-targets`; channel-specific
+  internals stay behind the owning plugin's local `api.js` or `runtime-api.js`
+  seam.
 - Capability-specific subpaths such as `image-generation`,
   `media-understanding`, and `speech` exist because bundled/native plugins use
   them today. Their presence does not by itself mean every exported helper is a
@@ -1215,7 +1227,7 @@ Example:
     },
     "install": {
       "npmSpec": "@openclaw/nextcloud-talk",
-      "localPath": "extensions/nextcloud-talk",
+      "localPath": "<bundled-plugin-local-path>",
       "defaultChoice": "npm"
     }
   }

@@ -41,16 +41,20 @@ type InteractiveState = {
 
 const PLUGIN_INTERACTIVE_STATE_KEY = Symbol.for("openclaw.pluginInteractiveState");
 
-const state = resolveGlobalSingleton<InteractiveState>(PLUGIN_INTERACTIVE_STATE_KEY, () => ({
-  interactiveHandlers: new Map<string, RegisteredInteractiveHandler>(),
-  callbackDedupe: resolveGlobalDedupeCache(Symbol.for("openclaw.pluginInteractiveCallbackDedupe"), {
-    ttlMs: 5 * 60_000,
-    maxSize: 4096,
-  }),
-}));
+const getState = () =>
+  resolveGlobalSingleton<InteractiveState>(PLUGIN_INTERACTIVE_STATE_KEY, () => ({
+    interactiveHandlers: new Map<string, RegisteredInteractiveHandler>(),
+    callbackDedupe: resolveGlobalDedupeCache(
+      Symbol.for("openclaw.pluginInteractiveCallbackDedupe"),
+      {
+        ttlMs: 5 * 60_000,
+        maxSize: 4096,
+      },
+    ),
+  }));
 
-const interactiveHandlers = state.interactiveHandlers;
-const callbackDedupe = state.callbackDedupe;
+const getInteractiveHandlers = () => getState().interactiveHandlers;
+const getCallbackDedupe = () => getState().callbackDedupe;
 
 function toRegistryKey(channel: string, namespace: string): string {
   return `${channel.trim().toLowerCase()}:${namespace.trim()}`;
@@ -74,6 +78,7 @@ function resolveNamespaceMatch(
   channel: string,
   data: string,
 ): { registration: RegisteredInteractiveHandler; namespace: string; payload: string } | null {
+  const interactiveHandlers = getInteractiveHandlers();
   const trimmedData = data.trim();
   if (!trimmedData) {
     return null;
@@ -99,6 +104,7 @@ export function registerPluginInteractiveHandler(
   registration: PluginInteractiveHandlerRegistration,
   opts?: { pluginName?: string; pluginRoot?: string },
 ): InteractiveRegistrationResult {
+  const interactiveHandlers = getInteractiveHandlers();
   const namespace = normalizeNamespace(registration.namespace);
   const validationError = validateNamespace(namespace);
   if (validationError) {
@@ -144,11 +150,14 @@ export function registerPluginInteractiveHandler(
 }
 
 export function clearPluginInteractiveHandlers(): void {
+  const interactiveHandlers = getInteractiveHandlers();
+  const callbackDedupe = getCallbackDedupe();
   interactiveHandlers.clear();
   callbackDedupe.clear();
 }
 
 export function clearPluginInteractiveHandlersForPlugin(pluginId: string): void {
+  const interactiveHandlers = getInteractiveHandlers();
   for (const [key, value] of interactiveHandlers.entries()) {
     if (value.pluginId === pluginId) {
       interactiveHandlers.delete(key);
@@ -210,6 +219,7 @@ export async function dispatchPluginInteractiveHandler(params: {
     | PluginInteractiveSlackHandlerContext["respond"];
   onMatched?: () => Promise<void> | void;
 }): Promise<InteractiveDispatchResult> {
+  const callbackDedupe = getCallbackDedupe();
   const match = resolveNamespaceMatch(params.channel, params.data);
   if (!match) {
     return { matched: false, handled: false, duplicate: false };

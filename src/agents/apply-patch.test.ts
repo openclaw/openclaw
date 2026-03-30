@@ -254,7 +254,7 @@ describe("applyPatch", () => {
     });
   });
 
-  it("allows symlinks that resolve within cwd by default", async () => {
+  it("rejects symlinks within cwd by default", async () => {
     // File symlinks require SeCreateSymbolicLinkPrivilege on Windows.
     if (process.platform === "win32") {
       return;
@@ -272,9 +272,11 @@ describe("applyPatch", () => {
 +updated
 *** End Patch`;
 
-      await applyPatch(patch, { cwd: dir });
+      await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(
+        /path is not a regular file under root|symlink open blocked/i,
+      );
       const contents = await fs.readFile(target, "utf8");
-      expect(contents).toBe("updated\n");
+      expect(contents).toBe("initial\n");
     });
   });
 

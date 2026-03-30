@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createConfigIO,
   DEFAULT_GATEWAY_PORT,
@@ -10,6 +10,8 @@ import {
   resolveStateDir,
 } from "./config.js";
 import { withTempHome, withTempHomeConfig } from "./test-helpers.js";
+
+vi.unmock("../version.js");
 
 function envWith(overrides: Record<string, string | undefined>): NodeJS.ProcessEnv {
   // Hermetic env: don't inherit process.env because other tests may mutate it.
@@ -34,6 +36,10 @@ async function withLoadedConfigForHome(
 }
 
 describe("Nix integration (U3, U5, U9)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   describe("U3: isNixMode env var detection", () => {
     it("isNixMode is false when OPENCLAW_NIX_MODE is not set", () => {
       expect(resolveIsNixMode(envWith({ OPENCLAW_NIX_MODE: undefined }))).toBe(false);

@@ -1,12 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
-import { logVerbose } from "../../../../src/globals.js";
-import { sleep } from "../../../../src/utils.js";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadWebMedia } from "../media.js";
-import { deliverWebReply } from "./deliver-reply.js";
 import type { WebInboundMsg } from "./types.js";
 
-vi.mock("../../../../src/globals.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../../src/globals.js")>();
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
   return {
     ...actual,
     shouldLogVerbose: vi.fn(() => true),
@@ -18,13 +17,15 @@ vi.mock("../media.js", () => ({
   loadWebMedia: vi.fn(),
 }));
 
-vi.mock("../../../../src/utils.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../../src/utils.js")>();
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
   return {
     ...actual,
     sleep: vi.fn(async () => {}),
   };
 });
+
+let deliverWebReply: typeof import("./deliver-reply.js").deliverWebReply;
 
 function makeMsg(): WebInboundMsg {
   return {
@@ -84,6 +85,11 @@ async function expectReplySuppressed(replyResult: { text: string; isReasoning?: 
 }
 
 describe("deliverWebReply", () => {
+  beforeAll(async () => {
+    vi.resetModules();
+    ({ deliverWebReply } = await import("./deliver-reply.js"));
+  });
+
   it("suppresses payloads flagged as reasoning", async () => {
     await expectReplySuppressed({ text: "Reasoning:\n_hidden_", isReasoning: true });
   });

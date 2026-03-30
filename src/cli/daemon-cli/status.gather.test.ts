@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import { captureEnv } from "../../test-utils/env.js";
 import type { GatewayRestartSnapshot } from "./restart-health.js";
 
@@ -82,6 +83,7 @@ vi.mock("../../config/config.js", () => ({
       loadConfig: () => (isDaemon ? daemonLoadedConfig : cliLoadedConfig),
     };
   },
+  loadConfig: () => cliLoadedConfig,
   resolveConfigPath: (env: NodeJS.ProcessEnv, stateDir: string) => resolveConfigPath(env, stateDir),
   resolveGatewayPort: (cfg?: unknown, env?: unknown) => resolveGatewayPort(cfg, env),
   resolveStateDir: (env: NodeJS.ProcessEnv) => resolveStateDir(env),
@@ -100,14 +102,12 @@ vi.mock("../../daemon/service-audit.js", () => ({
 }));
 
 vi.mock("../../daemon/service.js", () => ({
-  resolveGatewayService: () => ({
-    label: "LaunchAgent",
-    loadedText: "loaded",
-    notLoadedText: "not loaded",
-    isLoaded: serviceIsLoaded,
-    readCommand: serviceReadCommand,
-    readRuntime: serviceReadRuntime,
-  }),
+  resolveGatewayService: () =>
+    createMockGatewayService({
+      isLoaded: serviceIsLoaded,
+      readCommand: serviceReadCommand,
+      readRuntime: serviceReadRuntime,
+    }),
 }));
 
 vi.mock("../../gateway/net.js", () => ({
@@ -195,6 +195,22 @@ describe("gatherDaemonStatus", () => {
     expect(status.gateway?.probeUrl).toBe("wss://127.0.0.1:19001");
     expect(status.rpc?.url).toBe("wss://127.0.0.1:19001");
     expect(status.rpc?.ok).toBe(true);
+  });
+
+  it("forwards requireRpc and configPath to the daemon probe", async () => {
+    await gatherDaemonStatus({
+      rpc: {},
+      probe: true,
+      requireRpc: true,
+      deep: false,
+    });
+
+    expect(callGatewayStatusProbe).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requireRpc: true,
+        configPath: "/tmp/openclaw-daemon/openclaw.json",
+      }),
+    );
   });
 
   it("does not force local TLS fingerprint when probe URL is explicitly overridden", async () => {

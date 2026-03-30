@@ -750,9 +750,13 @@ Default slash command settings:
 
     Notes:
 
+    - `/acp spawn codex --bind here` binds the current Discord channel or thread in place and keeps future messages routed to the same ACP session.
+    - That can still mean "start a fresh Codex ACP session", but it does not create a new Discord thread by itself. The existing channel stays the chat surface.
+    - Codex may still run in its own `cwd` or backend workspace on disk. That workspace is runtime state, not a Discord thread.
     - Thread messages can inherit the parent channel ACP binding.
     - In a bound channel or thread, `/new` and `/reset` reset the same ACP session in place.
     - Temporary thread bindings still work and can override target resolution while active.
+    - `spawnAcpSessions` is only required when OpenClaw needs to create/bind a child thread via `--thread auto|here`. It is not required for `/acp spawn ... --bind here` in the current channel.
 
     See [ACP Agents](/tools/acp-agents) for binding behavior details.
 
@@ -944,11 +948,15 @@ Default slash command settings:
     Config path:
 
     - `channels.discord.execApprovals.enabled`
-    - `channels.discord.execApprovals.approvers`
+    - `channels.discord.execApprovals.approvers` (optional; falls back to owner IDs inferred from `allowFrom` and explicit DM `defaultTo` when possible)
     - `channels.discord.execApprovals.target` (`dm` | `channel` | `both`, default: `dm`)
     - `agentFilter`, `sessionFilter`, `cleanupAfterResolve`
 
-    When `target` is `channel` or `both`, the approval prompt is visible in the channel. Only configured approvers can use the buttons; other users receive an ephemeral denial. Approval prompts include the command text, so only enable channel delivery in trusted channels. If the channel ID cannot be derived from the session key, OpenClaw falls back to DM delivery.
+    Discord becomes an approval client when `enabled: true` and at least one approver can be resolved, either from `execApprovals.approvers` or from the account's existing owner config (`allowFrom`, legacy `dm.allowFrom`, or explicit DM `defaultTo`).
+
+    When `target` is `channel` or `both`, the approval prompt is visible in the channel. Only resolved approvers can use the buttons; other users receive an ephemeral denial. Approval prompts include the command text, so only enable channel delivery in trusted channels. If the channel ID cannot be derived from the session key, OpenClaw falls back to DM delivery.
+
+    Discord also renders the shared approval buttons used by other chat channels. The native Discord adapter mainly adds approver DM routing and channel fanout.
 
     Gateway auth for this handler uses the same shared credential resolution contract as other Gateway clients:
 
@@ -957,7 +965,7 @@ Default slash command settings:
     - remote-mode support via `gateway.remote.*` when applicable
     - URL overrides are override-safe: CLI overrides do not reuse implicit credentials, and env overrides use env credentials only
 
-    If approvals fail with unknown approval IDs, verify approver list and feature enablement.
+    Exec approvals expire after 30 minutes by default. If approvals fail with unknown approval IDs, verify approver resolution and feature enablement.
 
     Related docs: [Exec approvals](/tools/exec-approvals)
 

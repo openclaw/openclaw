@@ -1,21 +1,16 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import { clearPluginCommands, registerPluginCommand } from "../../../src/plugins/commands.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 const deliveryMocks = vi.hoisted(() => ({
   deliverReplies: vi.fn(async () => ({ delivered: true })),
 }));
 
-vi.mock("./bot/delivery.js", () => ({
-  deliverReplies: deliveryMocks.deliverReplies,
-}));
-
-import { registerTelegramNativeCommands } from "./bot-native-commands.js";
-import {
-  createCommandBot,
-  createNativeCommandTestParams,
-  createPrivateCommandContext,
-  waitForRegisteredCommands,
-} from "./bot-native-commands.menu-test-support.js";
+let registerTelegramNativeCommands: typeof import("./bot-native-commands.js").registerTelegramNativeCommands;
+let clearPluginCommands: typeof import("../../../src/plugins/commands.js").clearPluginCommands;
+let registerPluginCommand: typeof import("../../../src/plugins/commands.js").registerPluginCommand;
+let createCommandBot: typeof import("./bot-native-commands.menu-test-support.js").createCommandBot;
+let createNativeCommandTestParams: typeof import("./bot-native-commands.menu-test-support.js").createNativeCommandTestParams;
+let createPrivateCommandContext: typeof import("./bot-native-commands.menu-test-support.js").createPrivateCommandContext;
+let waitForRegisteredCommands: typeof import("./bot-native-commands.menu-test-support.js").waitForRegisteredCommands;
 
 function registerPairPluginCommand(params?: {
   nativeNames?: { telegram?: string; discord?: string };
@@ -50,6 +45,25 @@ async function registerPairMenu(params: {
 }
 
 describe("registerTelegramNativeCommands real plugin registry", () => {
+  beforeAll(async () => {
+    vi.resetModules();
+    vi.doMock("./bot/delivery.js", () => ({
+      deliverReplies: deliveryMocks.deliverReplies,
+    }));
+    vi.doMock("./bot/delivery.replies.js", () => ({
+      deliverReplies: deliveryMocks.deliverReplies,
+    }));
+    ({ clearPluginCommands, registerPluginCommand } =
+      await import("../../../src/plugins/commands.js"));
+    ({ registerTelegramNativeCommands } = await import("./bot-native-commands.js"));
+    ({
+      createCommandBot,
+      createNativeCommandTestParams,
+      createPrivateCommandContext,
+      waitForRegisteredCommands,
+    } = await import("./bot-native-commands.menu-test-support.js"));
+  });
+
   beforeEach(() => {
     clearPluginCommands();
     deliveryMocks.deliverReplies.mockClear();

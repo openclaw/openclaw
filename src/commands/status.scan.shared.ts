@@ -1,13 +1,17 @@
 import { existsSync } from "node:fs";
 import type { OpenClawConfig } from "../config/types.js";
-import { buildGatewayConnectionDetails } from "../gateway/call.js";
+import { buildGatewayConnectionDetailsWithResolvers } from "../gateway/connection-details.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
 import { probeGateway } from "../gateway/probe.js";
-import type { MemoryProviderStatus } from "../memory/types.js";
-import {
-  pickGatewaySelfPresence,
-  resolveGatewayProbeAuthResolution,
-} from "./status.gateway-probe.js";
+import type { MemoryProviderStatus } from "../plugin-sdk/memory-core-host-engine-storage.js";
+export { pickGatewaySelfPresence } from "./gateway-presence.js";
+
+let gatewayProbeModulePromise: Promise<typeof import("./status.gateway-probe.js")> | undefined;
+
+function loadGatewayProbeModule() {
+  gatewayProbeModulePromise ??= import("./status.gateway-probe.js");
+  return gatewayProbeModulePromise;
+}
 
 export type MemoryStatusSnapshot = MemoryProviderStatus & {
   agentId: string;
@@ -20,7 +24,7 @@ export type MemoryPluginStatus = {
 };
 
 export type GatewayProbeSnapshot = {
-  gatewayConnection: ReturnType<typeof buildGatewayConnectionDetails>;
+  gatewayConnection: ReturnType<typeof buildGatewayConnectionDetailsWithResolvers>;
   remoteUrlMissing: boolean;
   gatewayMode: "local" | "remote";
   gatewayProbeAuth: {
@@ -60,24 +64,31 @@ export async function resolveGatewayProbeSnapshot(params: {
   cfg: OpenClawConfig;
   opts: { timeoutMs?: number; all?: boolean; skipProbe?: boolean };
 }): Promise<GatewayProbeSnapshot> {
-  const gatewayConnection = buildGatewayConnectionDetails({ config: params.cfg });
+  const gatewayConnection = buildGatewayConnectionDetailsWithResolvers({ config: params.cfg });
   const isRemoteMode = params.cfg.gateway?.mode === "remote";
   const remoteUrlRaw =
     typeof params.cfg.gateway?.remote?.url === "string" ? params.cfg.gateway.remote.url : "";
   const remoteUrlMissing = isRemoteMode && !remoteUrlRaw.trim();
   const gatewayMode = isRemoteMode ? "remote" : "local";
-  const gatewayProbeAuthResolution = resolveGatewayProbeAuthResolution(params.cfg);
+  if (remoteUrlMissing || params.opts.skipProbe) {
+    return {
+      gatewayConnection,
+      remoteUrlMissing,
+      gatewayMode,
+      gatewayProbeAuth: {},
+      gatewayProbeAuthWarning: undefined,
+      gatewayProbe: null,
+    };
+  }
+  const { resolveGatewayProbeAuthResolution } = await loadGatewayProbeModule();
+  const gatewayProbeAuthResolution = await resolveGatewayProbeAuthResolution(params.cfg);
   let gatewayProbeAuthWarning = gatewayProbeAuthResolution.warning;
-  const gatewayProbe = remoteUrlMissing
-    ? null
-    : params.opts.skipProbe
-      ? null
-      : await probeGateway({
-          url: gatewayConnection.url,
-          auth: gatewayProbeAuthResolution.auth,
-          timeoutMs: Math.min(params.opts.all ? 5000 : 2500, params.opts.timeoutMs ?? 10_000),
-          detailLevel: "presence",
-        }).catch(() => null);
+  const gatewayProbe = await probeGateway({
+    url: gatewayConnection.url,
+    auth: gatewayProbeAuthResolution.auth,
+    timeoutMs: Math.min(params.opts.all ? 5000 : 2500, params.opts.timeoutMs ?? 10_000),
+    detailLevel: "presence",
+  }).catch(() => null);
   if (gatewayProbeAuthWarning && gatewayProbe?.ok === false) {
     gatewayProbe.error = gatewayProbe.error
       ? `${gatewayProbe.error}; ${gatewayProbeAuthWarning}`
@@ -123,7 +134,7 @@ export async function resolveSharedMemoryStatusSnapshot(params: {
   requireDefaultStore?: (agentId: string) => string | null;
 }): Promise<MemoryStatusSnapshot | null> {
   const { cfg, agentStatus, memoryPlugin } = params;
-  if (!memoryPlugin.enabled || memoryPlugin.slot !== "memory-core") {
+  if (!memoryPlugin.enabled || !memoryPlugin.slot) {
     return null;
   }
   const agentId = agentStatus.defaultId ?? "main";
@@ -155,5 +166,3 @@ export async function resolveSharedMemoryStatusSnapshot(params: {
   await manager.close?.().catch(() => {});
   return { agentId, ...status };
 }
-
-export { pickGatewaySelfPresence };

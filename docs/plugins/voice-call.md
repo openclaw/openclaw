@@ -44,8 +44,9 @@ Restart the Gateway afterwards.
 ### Option B: install from a local folder (dev, no copying)
 
 ```bash
-openclaw plugins install ./extensions/voice-call
-cd ./extensions/voice-call && pnpm install
+PLUGIN_SRC=./path/to/local/voice-call-plugin
+openclaw plugins install "$PLUGIN_SRC"
+cd "$PLUGIN_SRC" && pnpm install
 ```
 
 Restart the Gateway afterwards.
@@ -182,6 +183,12 @@ requests are acknowledged but skipped for side effects.
 
 Twilio conversation turns include a per-turn token in `<Gather>` callbacks, so
 stale/replayed speech callbacks cannot satisfy a newer pending transcript turn.
+
+Unauthenticated webhook requests are rejected before body reads when the
+provider's required signature headers are missing.
+
+The voice-call webhook uses the shared pre-auth body profile (64 KB / 5 seconds)
+plus a per-IP in-flight cap before signature verification.
 
 Example with a stable public host:
 

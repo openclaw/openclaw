@@ -1,8 +1,8 @@
 {
-  "name": "@openclaw/deepgram-media-understanding",
-  "version": "2026.3.14",
+  "name": "@openclaw/deepgram-provider",
+  "version": "2026.3.30",
   "private": true,
-  "description": "OpenClaw Deepgram media-understanding plugin",
+  "description": "OpenClaw Deepgram media-understanding provider",
   "type": "module",
   "openclaw": {
     "extensions": [

@@ -1,5 +1,4 @@
 import { resolveRunModelFallbacksOverride } from "../../agents/agent-scope.js";
-import type { NormalizedUsage } from "../../agents/usage.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelId, ChannelThreadingToolContext } from "../../channels/plugins/types.js";
 import { normalizeAnyChannelId, normalizeChannelId } from "../../channels/registry.js";
@@ -128,6 +127,7 @@ export function buildEmbeddedRunBaseParams(params: {
     inputProvenance: params.run.inputProvenance,
     senderIsOwner: params.run.senderIsOwner,
     enforceFinalTag: resolveEnforceFinalTag(params.run, params.provider),
+    silentExpected: params.run.silentExpected,
     provider: params.provider,
     model: params.model,
     ...params.authProfile,

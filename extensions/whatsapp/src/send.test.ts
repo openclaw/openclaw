@@ -2,24 +2,34 @@ import crypto from "node:crypto";
 import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import { resetLogger, setLoggerOverride } from "../../../src/logging.js";
-import { redactIdentifier } from "../../../src/logging/redact-identifier.js";
-import { setActiveWebListener } from "./active-listener.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { redactIdentifier } from "openclaw/plugin-sdk/logging-core";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadWebMediaMock = vi.fn();
+let sendMessageWhatsApp: typeof import("./send.js").sendMessageWhatsApp;
+let sendPollWhatsApp: typeof import("./send.js").sendPollWhatsApp;
+let sendReactionWhatsApp: typeof import("./send.js").sendReactionWhatsApp;
+let setActiveWebListener: typeof import("./active-listener.js").setActiveWebListener;
+let resetLogger: typeof import("openclaw/plugin-sdk/runtime-env").resetLogger;
+let setLoggerOverride: typeof import("openclaw/plugin-sdk/runtime-env").setLoggerOverride;
+
 vi.mock("./media.js", () => ({
   loadWebMedia: (...args: unknown[]) => loadWebMediaMock(...args),
 }));
-
-import { sendMessageWhatsApp, sendPollWhatsApp, sendReactionWhatsApp } from "./send.js";
 
 describe("web outbound", () => {
   const sendComposingTo = vi.fn(async () => {});
   const sendMessage = vi.fn(async () => ({ messageId: "msg123" }));
   const sendPoll = vi.fn(async () => ({ messageId: "poll123" }));
   const sendReaction = vi.fn(async () => {});
+
+  beforeAll(async () => {
+    vi.resetModules();
+    ({ sendMessageWhatsApp, sendPollWhatsApp, sendReactionWhatsApp } = await import("./send.js"));
+    ({ setActiveWebListener } = await import("./active-listener.js"));
+    ({ resetLogger, setLoggerOverride } = await import("openclaw/plugin-sdk/runtime-env"));
+  });
 
   beforeEach(() => {
     vi.clearAllMocks();

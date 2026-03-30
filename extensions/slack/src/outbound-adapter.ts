@@ -19,6 +19,7 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import { parseSlackBlocksInput } from "./blocks-input.js";
 import { buildSlackInteractiveBlocks, type SlackBlock } from "./blocks-render.js";
+import { SLACK_TEXT_LIMIT } from "./limits.js";
 import { sendMessageSlack, type SlackSendIdentity } from "./send.js";
 
 const SLACK_MAX_BLOCKS = 50;
@@ -149,7 +150,7 @@ function resolveSlackBlocks(payload: {
 export const slackOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   chunker: null,
-  textChunkLimit: 4000,
+  textChunkLimit: SLACK_TEXT_LIMIT,
   sendPayload: async (ctx) => {
     const payload = {
       ...ctx.payload,

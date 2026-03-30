@@ -1,6 +1,6 @@
 import type { Bot } from "grammy";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { RuntimeEnv } from "../../../../src/runtime.js";
 
 const { loadWebMedia } = vi.hoisted(() => ({
   loadWebMedia: vi.fn(),
@@ -50,6 +50,10 @@ vi.resetModules();
 const { deliverReplies } = await import("./delivery.js");
 
 vi.mock("grammy", () => ({
+  API_CONSTANTS: {
+    DEFAULT_UPDATE_TYPES: ["message"],
+    ALL_UPDATE_TYPES: ["message"],
+  },
   InputFile: class {
     constructor(
       public buffer: Buffer,
@@ -166,7 +170,7 @@ describe("deliverReplies", () => {
     messageHookRunner.hasHooks.mockImplementation(
       (name: string) => name === "message_sending" || name === "message_sent",
     );
-    messageHookRunner.runMessageSending.mockResolvedValue({ content: "" });
+    messageHookRunner.runMessageSending.mockResolvedValue({ content: "   " });
 
     const runtime = createRuntime(false);
     const sendMessage = vi.fn();
@@ -180,7 +184,7 @@ describe("deliverReplies", () => {
 
     expect(sendMessage).not.toHaveBeenCalled();
     expect(messageHookRunner.runMessageSent).toHaveBeenCalledWith(
-      expect.objectContaining({ success: false, content: "" }),
+      expect.objectContaining({ success: false, content: "   " }),
       expect.objectContaining({ channelId: "telegram", conversationId: "123" }),
     );
   });
@@ -596,7 +600,7 @@ describe("deliverReplies", () => {
     );
   });
 
-  it("throws when formatted and plain fallback text are both empty", async () => {
+  it("skips whitespace-only text replies without calling Telegram", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn();
     const bot = { api: { sendMessage } } as unknown as Bot;
@@ -611,7 +615,7 @@ describe("deliverReplies", () => {
         replyToMode: "off",
         textLimit: 4000,
       }),
-    ).rejects.toThrow("empty formatted text and empty plain fallback");
+    ).resolves.toEqual({ delivered: false });
     expect(sendMessage).not.toHaveBeenCalled();
   });
 

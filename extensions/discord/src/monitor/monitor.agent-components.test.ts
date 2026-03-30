@@ -1,46 +1,18 @@
 import type { ButtonInteraction, ComponentData, StringSelectMenuInteraction } from "@buape/carbon";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";
+import * as conversationRuntime from "openclaw/plugin-sdk/conversation-runtime";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
+import * as securityRuntime from "openclaw/plugin-sdk/security-runtime";
+import { peekSystemEvents, resetSystemEventsForTest } from "openclaw/plugin-sdk/testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { peekSystemEvents, resetSystemEventsForTest } from "../../../../src/infra/system-events.ts";
+import { expectPairingReplyText } from "../../../../test/helpers/pairing-reply.js";
+import {
+  readAllowFromStoreMock,
+  resetDiscordComponentRuntimeMocks,
+  upsertPairingRequestMock,
+} from "../test-support/component-runtime.js";
 import { createAgentComponentButton, createAgentSelectMenu } from "./agent-components.js";
-
-const readAllowFromStoreMock = vi.hoisted(() => vi.fn());
-const upsertPairingRequestMock = vi.hoisted(() => vi.fn());
-
-vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/security-runtime")>();
-  return {
-    ...actual,
-    readStoreAllowFromForDmPolicy: async (params: {
-      provider: string;
-      accountId: string;
-      dmPolicy?: string | null;
-      shouldRead?: boolean | null;
-    }) => {
-      if (params.shouldRead === false || params.dmPolicy === "allowlist") {
-        return [];
-      }
-      return await readAllowFromStoreMock(params.provider, params.accountId);
-    },
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
-  return {
-    ...actual,
-    upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
-  };
-});
-vi.mock("openclaw/plugin-sdk/conversation-runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
-  return {
-    ...actual,
-    upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
-  };
-});
 
 describe("agent components", () => {
   const defaultDmSessionKey = buildAgentSessionKey({
@@ -89,9 +61,19 @@ describe("agent components", () => {
   };
 
   beforeEach(() => {
-    readAllowFromStoreMock.mockClear().mockResolvedValue([]);
-    upsertPairingRequestMock.mockClear().mockResolvedValue({ code: "PAIRCODE", created: true });
+    resetDiscordComponentRuntimeMocks();
     resetSystemEventsForTest();
+    vi.spyOn(securityRuntime, "readStoreAllowFromForDmPolicy").mockImplementation(
+      async (params) => {
+        if (params.shouldRead === false || params.dmPolicy === "allowlist") {
+          return [];
+        }
+        return await readAllowFromStoreMock(params.provider, params.accountId);
+      },
+    );
+    vi.spyOn(conversationRuntime, "upsertChannelPairingRequest").mockImplementation(
+      upsertPairingRequestMock,
+    );
   });
 
   it("sends pairing reply when DM sender is not allowlisted", async () => {
@@ -107,9 +89,10 @@ describe("agent components", () => {
     expect(defer).not.toHaveBeenCalled();
     expect(reply).toHaveBeenCalledTimes(1);
     const pairingText = String(reply.mock.calls[0]?.[0]?.content ?? "");
-    expect(pairingText).toContain("Pairing code:");
-    const code = pairingText.match(/Pairing code:\s*([A-Z2-9]{8})/)?.[1];
-    expect(code).toBeDefined();
+    const code = expectPairingReplyText(pairingText, {
+      channel: "discord",
+      idLine: "Your Discord user id: 123456789",
+    });
     expect(pairingText).toContain(`openclaw pairing approve discord ${code}`);
     expect(peekSystemEvents(defaultDmSessionKey)).toEqual([]);
     expect(readAllowFromStoreMock).toHaveBeenCalledWith("discord", "default");

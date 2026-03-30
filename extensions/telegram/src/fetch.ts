@@ -5,7 +5,7 @@ import {
   hasEnvHttpProxyConfigured,
   resolveFetch,
   type PinnedDispatcherPolicy,
-} from "openclaw/plugin-sdk/infra-runtime";
+} from "openclaw/plugin-sdk/fetch-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { Agent, EnvHttpProxyAgent, ProxyAgent, fetch as undiciFetch } from "undici";
 import {
@@ -254,11 +254,11 @@ function createTelegramDispatcher(policy: PinnedDispatcherPolicy): {
   effectivePolicy: PinnedDispatcherPolicy;
 } {
   if (policy.mode === "explicit-proxy") {
-    const proxyTlsOptions = withPinnedLookup(policy.proxyTls, policy.pinnedHostname);
-    const proxyOptions = proxyTlsOptions
+    const requestTlsOptions = withPinnedLookup(policy.proxyTls, policy.pinnedHostname);
+    const proxyOptions = requestTlsOptions
       ? ({
           uri: policy.proxyUrl,
-          proxyTls: proxyTlsOptions,
+          requestTls: requestTlsOptions,
         } satisfies ConstructorParameters<typeof ProxyAgent>[0])
       : policy.proxyUrl;
     try {
@@ -348,11 +348,11 @@ function logResolverNetworkDecisions(params: {
     const sourceLabel = params.autoSelectDecision.source
       ? ` (${params.autoSelectDecision.source})`
       : "";
-    log.info(`autoSelectFamily=${params.autoSelectDecision.value}${sourceLabel}`);
+    log.debug(`autoSelectFamily=${params.autoSelectDecision.value}${sourceLabel}`);
   }
   if (params.dnsDecision.value !== null) {
     const sourceLabel = params.dnsDecision.source ? ` (${params.dnsDecision.source})` : "";
-    log.info(`dnsResultOrder=${params.dnsDecision.value}${sourceLabel}`);
+    log.debug(`dnsResultOrder=${params.dnsDecision.value}${sourceLabel}`);
   }
 }
 

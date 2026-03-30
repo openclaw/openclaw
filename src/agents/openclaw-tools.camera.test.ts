@@ -14,11 +14,9 @@ vi.mock("../media/image-ops.js", () => ({
   resizeToJpeg: vi.fn(async () => Buffer.from("jpeg")),
 }));
 
-import "./test-helpers/fast-core-tools.js";
-import { createOpenClawTools } from "./openclaw-tools.js";
+let createOpenClawTools: typeof import("./openclaw-tools.js").createOpenClawTools;
 
 const NODE_ID = "mac-1";
-const BASE_RUN_INPUT = { action: "run", node: NODE_ID, command: ["echo", "hi"] } as const;
 const JPG_PAYLOAD = {
   format: "jpg",
   base64: "aGVsbG8=",
@@ -102,6 +100,13 @@ function expectNoImages(result: NodesToolResult) {
   expect(images).toHaveLength(0);
 }
 
+function expectFirstMediaUrl(result: NodesToolResult): string {
+  const details = result.details as { media?: { mediaUrls?: string[] } } | undefined;
+  const mediaUrl = details?.media?.mediaUrls?.[0];
+  expect(typeof mediaUrl).toBe("string");
+  return mediaUrl ?? "";
+}
+
 function expectFirstTextContains(result: NodesToolResult, expectedText: string) {
   expect(result.content?.[0]).toMatchObject({
     type: "text",
@@ -132,43 +137,6 @@ function setupNodeInvokeMock(params: {
   });
 }
 
-function createSystemRunPreparePayload(cwd: string | null) {
-  return {
-    payload: {
-      plan: {
-        argv: ["echo", "hi"],
-        cwd,
-        commandText: "echo hi",
-        agentId: null,
-        sessionKey: null,
-      },
-    },
-  };
-}
-
-function setupSystemRunGateway(params: {
-  onRunInvoke: (invokeParams: unknown) => GatewayMockResult | Promise<GatewayMockResult>;
-  onApprovalRequest?: (approvalParams: unknown) => GatewayMockResult | Promise<GatewayMockResult>;
-  prepareCwd?: string | null;
-}) {
-  callGateway.mockImplementation(async ({ method, params: gatewayParams }: GatewayCall) => {
-    if (method === "node.list") {
-      return mockNodeList({ commands: ["system.run"] });
-    }
-    if (method === "node.invoke") {
-      const command = (gatewayParams as { command?: string } | undefined)?.command;
-      if (command === "system.run.prepare") {
-        return createSystemRunPreparePayload(params.prepareCwd ?? null);
-      }
-      return await params.onRunInvoke(gatewayParams);
-    }
-    if (method === "exec.approval.request" && params.onApprovalRequest) {
-      return await params.onApprovalRequest(gatewayParams);
-    }
-    return unexpectedGatewayMethod(method);
-  });
-}
-
 function setupPhotosLatestMock(params?: { remoteIp?: string }) {
   setupNodeInvokeMock({
     ...(params?.remoteIp ? { remoteIp: params.remoteIp } : {}),
@@ -188,9 +156,10 @@ async function executePhotosLatest(params: { modelHasVision: boolean }) {
   });
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   callGateway.mockClear();
   vi.unstubAllGlobals();
+  await loadOpenClawToolsForTest();
 });
 
 describe("nodes camera_snap", () => {
@@ -252,10 +221,8 @@ describe("nodes camera_snap", () => {
     );
 
     expectNoImages(result);
-    expect(result.content?.[0]).toMatchObject({
-      type: "text",
-      text: expect.stringMatching(/^MEDIA:/),
-    });
+    expect(result.content ?? []).toEqual([]);
+    expect(expectFirstMediaUrl(result)).toMatch(/openclaw-camera-snap-front-.*\.jpg$/);
   });
 
   it("passes deviceId when provided", async () => {
@@ -306,11 +273,8 @@ describe("nodes camera_snap", () => {
       facing: "front",
     });
 
-    expect(result.content?.[0]).toMatchObject({ type: "text" });
-    const mediaPath = String((result.content?.[0] as { text?: string } | undefined)?.text ?? "")
-      .replace(/^MEDIA:/, "")
-      .trim();
-    await expect(readFileUtf8AndCleanup(mediaPath)).resolves.toBe("url-image");
+    expect(result.content ?? []).toEqual([]);
+    await expect(readFileUtf8AndCleanup(expectFirstMediaUrl(result))).resolves.toBe("url-image");
   });
 
   it("rejects camera_snap url payloads when node remoteIp is missing", async () => {
@@ -417,16 +381,15 @@ describe("nodes photos_latest", () => {
     const result = await executePhotosLatest({ modelHasVision: false });
 
     expectNoImages(result);
-    expect(result.content?.[0]).toMatchObject({
-      type: "text",
-      text: expect.stringMatching(/^MEDIA:/),
-    });
-    const details = Array.isArray(result.details) ? result.details : [];
+    expect(result.content ?? []).toEqual([]);
+    const details =
+      (result.details as { photos?: Array<Record<string, unknown>> } | undefined)?.photos ?? [];
     expect(details[0]).toMatchObject({
       width: 1,
       height: 1,
       createdAt: "2026-03-04T00:00:00Z",
     });
+    expect(expectFirstMediaUrl(result)).toMatch(/openclaw-camera-snap-.*\.jpg$/);
   });
 
   it("includes inline image blocks when model has vision", async () => {
@@ -434,11 +397,8 @@ describe("nodes photos_latest", () => {
 
     const result = await executePhotosLatest({ modelHasVision: true });
 
-    expect(result.content?.[0]).toMatchObject({
-      type: "text",
-      text: expect.stringMatching(/^MEDIA:/),
-    });
     expectSingleImage(result, { mimeType: "image/jpeg" });
+    expect(expectFirstMediaUrl(result)).toMatch(/openclaw-camera-snap-.*\.jpg$/);
   });
 });
 
@@ -606,119 +566,6 @@ describe("nodes device_status and device_info", () => {
   });
 });
 
-describe("nodes run", () => {
-  it("passes invoke and command timeouts", async () => {
-    setupSystemRunGateway({
-      prepareCwd: "/tmp",
-      onRunInvoke: (invokeParams) => {
-        expect(invokeParams).toMatchObject({
-          nodeId: NODE_ID,
-          command: "system.run",
-          timeoutMs: 45_000,
-          params: {
-            command: ["echo", "hi"],
-            cwd: "/tmp",
-            env: { FOO: "bar" },
-            timeoutMs: 12_000,
-          },
-        });
-        return {
-          payload: { stdout: "", stderr: "", exitCode: 0, success: true },
-        };
-      },
-    });
-
-    await executeNodes({
-      ...BASE_RUN_INPUT,
-      cwd: "/tmp",
-      env: ["FOO=bar"],
-      commandTimeoutMs: 12_000,
-      invokeTimeoutMs: 45_000,
-    });
-  });
-
-  it("requests approval and retries with allow-once decision", async () => {
-    let invokeCalls = 0;
-    let approvalId: string | null = null;
-    setupSystemRunGateway({
-      onRunInvoke: (invokeParams) => {
-        invokeCalls += 1;
-        if (invokeCalls === 1) {
-          throw new Error("SYSTEM_RUN_DENIED: approval required");
-        }
-        expect(invokeParams).toMatchObject({
-          nodeId: NODE_ID,
-          command: "system.run",
-          params: {
-            command: ["echo", "hi"],
-            runId: approvalId,
-            approved: true,
-            approvalDecision: "allow-once",
-          },
-        });
-        return { payload: { stdout: "", stderr: "", exitCode: 0, success: true } };
-      },
-      onApprovalRequest: (approvalParams) => {
-        expect(approvalParams).toMatchObject({
-          id: expect.any(String),
-          systemRunPlan: expect.objectContaining({
-            argv: ["echo", "hi"],
-            commandText: "echo hi",
-          }),
-          nodeId: NODE_ID,
-          host: "node",
-          timeoutMs: 120_000,
-        });
-        approvalId =
-          typeof (approvalParams as { id?: unknown } | undefined)?.id === "string"
-            ? ((approvalParams as { id: string }).id ?? null)
-            : null;
-        return { decision: "allow-once" };
-      },
-    });
-
-    await executeNodes(BASE_RUN_INPUT);
-    expect(invokeCalls).toBe(2);
-  });
-
-  it("fails with user denied when approval decision is deny", async () => {
-    setupSystemRunGateway({
-      onRunInvoke: () => {
-        throw new Error("SYSTEM_RUN_DENIED: approval required");
-      },
-      onApprovalRequest: () => {
-        return { decision: "deny" };
-      },
-    });
-
-    await expect(executeNodes(BASE_RUN_INPUT)).rejects.toThrow("exec denied: user denied");
-  });
-
-  it("fails closed for timeout and invalid approval decisions", async () => {
-    setupSystemRunGateway({
-      onRunInvoke: () => {
-        throw new Error("SYSTEM_RUN_DENIED: approval required");
-      },
-      onApprovalRequest: () => {
-        return {};
-      },
-    });
-    await expect(executeNodes(BASE_RUN_INPUT)).rejects.toThrow("exec denied: approval timed out");
-
-    setupSystemRunGateway({
-      onRunInvoke: () => {
-        throw new Error("SYSTEM_RUN_DENIED: approval required");
-      },
-      onApprovalRequest: () => {
-        return { decision: "allow-never" };
-      },
-    });
-    await expect(executeNodes(BASE_RUN_INPUT)).rejects.toThrow(
-      "exec denied: invalid approval decision",
-    );
-  });
-});
-
 describe("nodes invoke", () => {
   it("allows metadata-only camera.list via generic invoke", async () => {
     setupNodeInvokeMock({
@@ -791,3 +638,8 @@ describe("nodes invoke", () => {
     });
   });
 });
+async function loadOpenClawToolsForTest(): Promise<void> {
+  vi.resetModules();
+  await import("./test-helpers/fast-core-tools.js");
+  ({ createOpenClawTools } = await import("./openclaw-tools.js"));
+}

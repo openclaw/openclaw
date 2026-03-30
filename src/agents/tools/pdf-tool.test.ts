@@ -16,8 +16,12 @@ const completeMock = vi.hoisted(() => vi.fn());
 type PdfToolModule = typeof import("./pdf-tool.js");
 let createPdfTool: PdfToolModule["createPdfTool"];
 let resolvePdfModelConfigForTool: PdfToolModule["resolvePdfModelConfigForTool"];
+let pdfToolModulePromise: Promise<PdfToolModule> | null = null;
 
 async function importPdfToolModule(): Promise<PdfToolModule> {
+  if (pdfToolModulePromise) {
+    return await pdfToolModulePromise;
+  }
   vi.resetModules();
   vi.doMock("@mariozechner/pi-ai", async (importOriginal) => {
     const actual = await importOriginal<typeof import("@mariozechner/pi-ai")>();
@@ -26,7 +30,8 @@ async function importPdfToolModule(): Promise<PdfToolModule> {
       complete: completeMock,
     };
   });
-  return import("./pdf-tool.js");
+  pdfToolModulePromise = import("./pdf-tool.js");
+  return await pdfToolModulePromise;
 }
 
 async function withTempAgentDir<T>(run: (agentDir: string) => Promise<T>): Promise<T> {
@@ -265,7 +270,7 @@ describe("resolvePdfModelConfigForTool", () => {
   it("returns null without any auth", async () => {
     await withTempAgentDir(async (agentDir) => {
       const cfg: OpenClawConfig = {
-        agents: { defaults: { model: { primary: "openai/gpt-5.2" } } },
+        agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
       };
       expect(resolvePdfModelConfigForTool({ cfg, agentDir })).toBeNull();
     });
@@ -276,7 +281,7 @@ describe("resolvePdfModelConfigForTool", () => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
-            model: { primary: "openai/gpt-5.2" },
+            model: { primary: "openai/gpt-5.4" },
             pdfModel: { primary: "anthropic/claude-opus-4-6" },
           },
         },
@@ -292,7 +297,7 @@ describe("resolvePdfModelConfigForTool", () => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
-            model: { primary: "openai/gpt-5.2" },
+            model: { primary: "openai/gpt-5.4" },
             imageModel: { primary: "openai/gpt-5-mini" },
           },
         },
@@ -307,7 +312,7 @@ describe("resolvePdfModelConfigForTool", () => {
     await withTempAgentDir(async (agentDir) => {
       vi.stubEnv("ANTHROPIC_API_KEY", "anthropic-test");
       vi.stubEnv("OPENAI_API_KEY", "openai-test");
-      const cfg = withDefaultModel("openai/gpt-5.2");
+      const cfg = withDefaultModel("openai/gpt-5.4");
       const config = resolvePdfModelConfigForTool({ cfg, agentDir });
       expect(config).not.toBeNull();
       // Should prefer anthropic for native PDF
@@ -351,7 +356,7 @@ describe("createPdfTool", () => {
   it("returns null without any auth configured", async () => {
     await withTempAgentDir(async (agentDir) => {
       const cfg: OpenClawConfig = {
-        agents: { defaults: { model: { primary: "openai/gpt-5.2" } } },
+        agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
       };
       expect(createPdfTool({ config: cfg, agentDir })).toBeNull();
     });
@@ -741,6 +746,26 @@ describe("native PDF provider API calls", () => {
 
     const [url] = fetchMock.mock.calls[0];
     expect(url).toContain("/v1beta/models/");
+    expect(url).not.toContain("/v1beta/v1beta");
+  });
+
+  it("geminiAnalyzePdf normalizes bare Google API hosts to a single /v1beta root", async () => {
+    const { geminiAnalyzePdf } = await import("./pdf-native-providers.js");
+    const fetchMock = mockFetchResponse({
+      ok: true,
+      json: async () => ({
+        candidates: [{ content: { parts: [{ text: "ok" }] } }],
+      }),
+    });
+
+    await geminiAnalyzePdf(
+      makeGeminiAnalyzeParams({
+        baseUrl: "https://generativelanguage.googleapis.com",
+      }),
+    );
+
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toContain("https://generativelanguage.googleapis.com/v1beta/models/");
     expect(url).not.toContain("/v1beta/v1beta");
   });
 });

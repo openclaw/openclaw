@@ -1,6 +1,11 @@
 import { html, nothing } from "lit";
 import { normalizeToolName } from "../../../../src/agents/tool-policy-shared.js";
-import type { SkillStatusEntry, SkillStatusReport, ToolsCatalogResult } from "../types.ts";
+import type {
+  SkillStatusEntry,
+  SkillStatusReport,
+  ToolsCatalogResult,
+  ToolsEffectiveResult,
+} from "../types.ts";
 import {
   type AgentToolEntry,
   type AgentToolSection,
@@ -41,6 +46,20 @@ function renderToolBadges(section: AgentToolSection, tool: AgentToolEntry) {
   `;
 }
 
+function renderEffectiveToolBadge(tool: {
+  source: "core" | "plugin" | "channel";
+  pluginId?: string;
+  channelId?: string;
+}) {
+  if (tool.source === "plugin") {
+    return tool.pluginId ? `Connected: ${tool.pluginId}` : "Connected";
+  }
+  if (tool.source === "channel") {
+    return tool.channelId ? `Channel: ${tool.channelId}` : "Channel";
+  }
+  return "Built-in";
+}
+
 export function renderAgentTools(params: {
   agentId: string;
   configForm: Record<string, unknown> | null;
@@ -50,6 +69,11 @@ export function renderAgentTools(params: {
   toolsCatalogLoading: boolean;
   toolsCatalogError: string | null;
   toolsCatalogResult: ToolsCatalogResult | null;
+  toolsEffectiveLoading: boolean;
+  toolsEffectiveError: string | null;
+  toolsEffectiveResult: ToolsEffectiveResult | null;
+  runtimeSessionKey: string;
+  runtimeSessionMatchesSelectedAgent: boolean;
   onProfileChange: (agentId: string, profile: string | null, clearAllow: boolean) => void;
   onOverridesChange: (agentId: string, alsoAllow: string[], deny: string[]) => void;
   onConfigReload: () => void;
@@ -144,22 +168,26 @@ export function renderAgentTools(params: {
 
   return html`
     <section class="card">
-      <div class="row" style="justify-content: space-between;">
-        <div>
+      <div class="row" style="justify-content: space-between; flex-wrap: wrap;">
+        <div style="min-width: 0;">
           <div class="card-title">Tool Access</div>
           <div class="card-sub">
             Profile + per-tool overrides for this agent.
             <span class="mono">${enabledCount}/${toolIds.length}</span> enabled.
           </div>
         </div>
-        <div class="row" style="gap: 8px;">
+        <div class="row" style="gap: 8px; flex-wrap: wrap;">
           <button class="btn btn--sm" ?disabled=${!editable} @click=${() => updateAll(true)}>
             Enable All
           </button>
           <button class="btn btn--sm" ?disabled=${!editable} @click=${() => updateAll(false)}>
             Disable All
           </button>
-          <button class="btn btn--sm" ?disabled=${params.configLoading} @click=${params.onConfigReload}>
+          <button
+            class="btn btn--sm"
+            ?disabled=${params.configLoading}
+            @click=${params.onConfigReload}
+          >
             Reload Config
           </button>
           <button
@@ -237,6 +265,70 @@ export function renderAgentTools(params: {
         }
       </div>
 
+      <div style="margin-top: 18px;">
+        <div class="label">Available Right Now</div>
+        <div class="card-sub">
+          What this agent can use in the current chat session.
+          <span class="mono">${params.runtimeSessionKey || "no session"}</span>
+        </div>
+        ${
+          !params.runtimeSessionMatchesSelectedAgent
+            ? html`
+                <div class="callout info" style="margin-top: 12px">
+                  Switch chat to this agent to view its live runtime tools.
+                </div>
+              `
+            : params.toolsEffectiveLoading &&
+                !params.toolsEffectiveResult &&
+                !params.toolsEffectiveError
+              ? html`
+                  <div class="callout info" style="margin-top: 12px">Loading available tools…</div>
+                `
+              : params.toolsEffectiveError
+                ? html`
+                    <div class="callout info" style="margin-top: 12px">
+                      Could not load available tools for this session.
+                    </div>
+                  `
+                : (params.toolsEffectiveResult?.groups?.length ?? 0) === 0
+                  ? html`
+                      <div class="callout info" style="margin-top: 12px">
+                        No tools are available for this session right now.
+                      </div>
+                    `
+                  : html`
+                    <div class="agent-tools-grid" style="margin-top: 16px;">
+                      ${params.toolsEffectiveResult?.groups.map(
+                        (group) => html`
+                          <div class="agent-tools-section">
+                            <div class="agent-tools-header">${group.label}</div>
+                            <div class="agent-tools-list">
+                              ${group.tools.map((tool) => {
+                                return html`
+                                  <div class="agent-tool-row">
+                                    <div>
+                                      <div class="agent-tool-title">${tool.label}</div>
+                                      <div class="agent-tool-sub">${tool.description}</div>
+                                      <div
+                                        style="display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px;"
+                                      >
+                                        <span class="agent-pill"
+                                          >${renderEffectiveToolBadge(tool)}</span
+                                        >
+                                      </div>
+                                    </div>
+                                  </div>
+                                `;
+                              })}
+                            </div>
+                          </div>
+                        `,
+                      )}
+                    </div>
+                  `
+        }
+      </div>
+
       <div class="agent-tools-presets" style="margin-top: 16px;">
         <div class="label">Quick Presets</div>
         <div class="agent-tools-buttons">
@@ -263,43 +355,44 @@ export function renderAgentTools(params: {
 
       <div class="agent-tools-grid" style="margin-top: 20px;">
         ${toolSections.map(
-          (section) =>
-            html`
-              <div class="agent-tools-section">
-                <div class="agent-tools-header">
-                  ${section.label}
-                  ${
-                    section.source === "plugin" && section.pluginId
-                      ? html`<span class="agent-pill" style="margin-left: 8px;">plugin:${section.pluginId}</span>`
-                      : nothing
-                  }
-                </div>
-                <div class="agent-tools-list">
-                  ${section.tools.map((tool) => {
-                    const { allowed } = resolveAllowed(tool.id);
-                    return html`
-                      <div class="agent-tool-row">
-                        <div>
-                          <div class="agent-tool-title mono">${tool.label}</div>
-                          <div class="agent-tool-sub">${tool.description}</div>
-                          ${renderToolBadges(section, tool)}
-                        </div>
-                        <label class="cfg-toggle">
-                          <input
-                            type="checkbox"
-                            .checked=${allowed}
-                            ?disabled=${!editable}
-                            @change=${(e: Event) =>
-                              updateTool(tool.id, (e.target as HTMLInputElement).checked)}
-                          />
-                          <span class="cfg-toggle__track"></span>
-                        </label>
-                      </div>
-                    `;
-                  })}
-                </div>
+          (section) => html`
+            <div class="agent-tools-section">
+              <div class="agent-tools-header">
+                ${section.label}
+                ${
+                  section.source === "plugin" && section.pluginId
+                    ? html`<span class="agent-pill" style="margin-left: 8px;"
+                      >plugin:${section.pluginId}</span
+                    >`
+                    : nothing
+                }
               </div>
-            `,
+              <div class="agent-tools-list">
+                ${section.tools.map((tool) => {
+                  const { allowed } = resolveAllowed(tool.id);
+                  return html`
+                    <div class="agent-tool-row">
+                      <div>
+                        <div class="agent-tool-title mono">${tool.label}</div>
+                        <div class="agent-tool-sub">${tool.description}</div>
+                        ${renderToolBadges(section, tool)}
+                      </div>
+                      <label class="cfg-toggle">
+                        <input
+                          type="checkbox"
+                          .checked=${allowed}
+                          ?disabled=${!editable}
+                          @change=${(e: Event) =>
+                            updateTool(tool.id, (e.target as HTMLInputElement).checked)}
+                        />
+                        <span class="cfg-toggle__track"></span>
+                      </label>
+                    </div>
+                  `;
+                })}
+              </div>
+            </div>
+          `,
         )}
       </div>
     </section>
@@ -346,8 +439,8 @@ export function renderAgentSkills(params: {
 
   return html`
     <section class="card">
-      <div class="row" style="justify-content: space-between;">
-        <div>
+      <div class="row" style="justify-content: space-between; flex-wrap: wrap;">
+        <div style="min-width: 0;">
           <div class="card-title">Skills</div>
           <div class="card-sub">
             Per-agent skill allowlist and workspace skills.
@@ -359,8 +452,15 @@ export function renderAgentSkills(params: {
           </div>
         </div>
         <div class="row" style="gap: 8px; flex-wrap: wrap;">
-          <div class="row" style="gap: 4px; border: 1px solid var(--border); border-radius: var(--radius-md); padding: 2px;">
-            <button class="btn btn--sm" ?disabled=${!editable} @click=${() => params.onClear(params.agentId)}>
+          <div
+            class="row"
+            style="gap: 4px; border: 1px solid var(--border); border-radius: var(--radius-md); padding: 2px;"
+          >
+            <button
+              class="btn btn--sm"
+              ?disabled=${!editable}
+              @click=${() => params.onClear(params.agentId)}
+            >
               Enable All
             </button>
             <button
@@ -379,7 +479,11 @@ export function renderAgentSkills(params: {
               Reset
             </button>
           </div>
-          <button class="btn btn--sm" ?disabled=${params.configLoading} @click=${params.onConfigReload}>
+          <button
+            class="btn btn--sm"
+            ?disabled=${params.configLoading}
+            @click=${params.onConfigReload}
+          >
             Reload Config
           </button>
           <button class="btn btn--sm" ?disabled=${params.loading} @click=${params.onRefresh}>
@@ -450,18 +554,18 @@ export function renderAgentSkills(params: {
               <div class="muted" style="margin-top: 16px">No skills found.</div>
             `
           : html`
-              <div class="agent-skills-groups" style="margin-top: 16px;">
-                ${groups.map((group) =>
-                  renderAgentSkillGroup(group, {
-                    agentId: params.agentId,
-                    allowSet,
-                    usingAllowlist,
-                    editable,
-                    onToggle: params.onToggle,
-                  }),
-                )}
-              </div>
-            `
+            <div class="agent-skills-groups" style="margin-top: 16px;">
+              ${groups.map((group) =>
+                renderAgentSkillGroup(group, {
+                  agentId: params.agentId,
+                  allowSet,
+                  usingAllowlist,
+                  editable,
+                  onToggle: params.onToggle,
+                }),
+              )}
+            </div>
+          `
       }
     </section>
   `;

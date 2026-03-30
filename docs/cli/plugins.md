@@ -120,6 +120,11 @@ Marketplace sources can be:
 - a GitHub repo shorthand such as `owner/repo`
 - a git URL
 
+For remote marketplaces loaded from GitHub or git, plugin entries must stay
+inside the cloned marketplace repo. OpenClaw accepts relative path sources from
+that repo and rejects external git, GitHub, URL/archive, and absolute-path
+plugin sources from remote manifests.
+
 For local paths and archives, OpenClaw auto-detects:
 
 - native OpenClaw plugins (`openclaw.plugin.json`)
@@ -156,7 +161,7 @@ the plugin allowlist, and linked `plugins.load.paths` entries when applicable.
 For active memory plugins, the memory slot resets to `memory-core`.
 
 By default, uninstall also removes the plugin install directory under the active
-state dir extensions root (`$OPENCLAW_STATE_DIR/extensions/<id>`). Use
+state-dir plugin root. Use
 `--keep-files` to keep files on disk.
 
 `--keep-config` is supported as a deprecated alias for `--keep-files`.

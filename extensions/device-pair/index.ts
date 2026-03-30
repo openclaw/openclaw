@@ -7,12 +7,14 @@ import {
   definePluginEntry,
   issueDeviceBootstrapToken,
   listDevicePairing,
+  PAIRING_SETUP_BOOTSTRAP_PROFILE,
   renderQrPngBase64,
   revokeDeviceBootstrapToken,
   resolveGatewayBindUrl,
+  resolveGatewayPort,
   resolvePreferredOpenClawTmpDir,
-  resolveTailnetHostWithRunner,
   runPluginCommandWithTimeout,
+  resolveTailnetHostWithRunner,
   type OpenClawPluginApi,
 } from "./api.js";
 import {
@@ -41,8 +43,6 @@ function formatDurationMinutes(expiresAtMs: number): string {
   const minutes = Math.max(1, Math.ceil(msRemaining / 60_000));
   return `${minutes} minute${minutes === 1 ? "" : "s"}`;
 }
-
-const DEFAULT_GATEWAY_PORT = 18789;
 
 type DevicePairPluginConfig = {
   publicUrl?: string;
@@ -75,7 +75,6 @@ type QrCommandContext = {
 };
 
 type QrChannelSender = {
-  resolveSend: (api: OpenClawPluginApi) => QrSendFn | undefined;
   createOpts: (params: {
     ctx: QrCommandContext;
     qrFilePath: string;
@@ -84,24 +83,16 @@ type QrChannelSender = {
   }) => Record<string, unknown>;
 };
 
-type QrSendFn = (to: string, text: string, opts: Record<string, unknown>) => Promise<unknown>;
-
-function coerceQrSend(send: unknown): QrSendFn | undefined {
-  return typeof send === "function" ? (send as QrSendFn) : undefined;
-}
-
 const QR_CHANNEL_SENDERS: Record<string, QrChannelSender> = {
   telegram: {
-    resolveSend: (api) => coerceQrSend(api.runtime?.channel?.telegram?.sendMessageTelegram),
     createOpts: ({ ctx, qrFilePath, mediaLocalRoots, accountId }) => ({
       mediaUrl: qrFilePath,
       mediaLocalRoots,
-      ...(typeof ctx.messageThreadId === "number" ? { messageThreadId: ctx.messageThreadId } : {}),
+      ...(ctx.messageThreadId != null ? { threadId: ctx.messageThreadId } : {}),
       ...(accountId ? { accountId } : {}),
     }),
   },
   discord: {
-    resolveSend: (api) => coerceQrSend(api.runtime?.channel?.discord?.sendMessageDiscord),
     createOpts: ({ qrFilePath, mediaLocalRoots, accountId }) => ({
       mediaUrl: qrFilePath,
       mediaLocalRoots,
@@ -109,16 +100,14 @@ const QR_CHANNEL_SENDERS: Record<string, QrChannelSender> = {
     }),
   },
   slack: {
-    resolveSend: (api) => coerceQrSend(api.runtime?.channel?.slack?.sendMessageSlack),
     createOpts: ({ ctx, qrFilePath, mediaLocalRoots, accountId }) => ({
       mediaUrl: qrFilePath,
       mediaLocalRoots,
-      ...(ctx.messageThreadId != null ? { threadTs: String(ctx.messageThreadId) } : {}),
+      ...(ctx.messageThreadId != null ? { threadId: String(ctx.messageThreadId) } : {}),
       ...(accountId ? { accountId } : {}),
     }),
   },
   signal: {
-    resolveSend: (api) => coerceQrSend(api.runtime?.channel?.signal?.sendMessageSignal),
     createOpts: ({ qrFilePath, mediaLocalRoots, accountId }) => ({
       mediaUrl: qrFilePath,
       mediaLocalRoots,
@@ -126,7 +115,6 @@ const QR_CHANNEL_SENDERS: Record<string, QrChannelSender> = {
     }),
   },
   imessage: {
-    resolveSend: (api) => coerceQrSend(api.runtime?.channel?.imessage?.sendMessageIMessage),
     createOpts: ({ qrFilePath, mediaLocalRoots, accountId }) => ({
       mediaUrl: qrFilePath,
       mediaLocalRoots,
@@ -134,7 +122,6 @@ const QR_CHANNEL_SENDERS: Record<string, QrChannelSender> = {
     }),
   },
   whatsapp: {
-    resolveSend: (api) => coerceQrSend(api.runtime?.channel?.whatsapp?.sendMessageWhatsApp),
     createOpts: ({ qrFilePath, mediaLocalRoots, accountId }) => ({
       verbose: false,
       mediaUrl: qrFilePath,
@@ -172,28 +159,6 @@ function parseNormalizedGatewayUrl(raw: string): string | null {
   } catch {
     return null;
   }
-}
-
-function parsePositiveInteger(raw: string | undefined): number | null {
-  if (!raw) {
-    return null;
-  }
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
-}
-
-function resolveGatewayPort(cfg: OpenClawPluginApi["config"]): number {
-  const envPort =
-    parsePositiveInteger(process.env.OPENCLAW_GATEWAY_PORT?.trim()) ??
-    parsePositiveInteger(process.env.CLAWDBOT_GATEWAY_PORT?.trim());
-  if (envPort) {
-    return envPort;
-  }
-  const configPort = cfg.gateway?.port;
-  if (typeof configPort === "number" && Number.isFinite(configPort) && configPort > 0) {
-    return configPort;
-  }
-  return DEFAULT_GATEWAY_PORT;
 }
 
 function resolveScheme(
@@ -290,17 +255,10 @@ async function resolveTailnetHost(): Promise<string | null> {
 function resolveAuthLabel(cfg: OpenClawPluginApi["config"]): ResolveAuthLabelResult {
   const mode = cfg.gateway?.auth?.mode;
   const token =
-    pickFirstDefined([
-      process.env.OPENCLAW_GATEWAY_TOKEN,
-      process.env.CLAWDBOT_GATEWAY_TOKEN,
-      cfg.gateway?.auth?.token,
-    ]) ?? undefined;
+    pickFirstDefined([process.env.OPENCLAW_GATEWAY_TOKEN, cfg.gateway?.auth?.token]) ?? undefined;
   const password =
-    pickFirstDefined([
-      process.env.OPENCLAW_GATEWAY_PASSWORD,
-      process.env.CLAWDBOT_GATEWAY_PASSWORD,
-      cfg.gateway?.auth?.password,
-    ]) ?? undefined;
+    pickFirstDefined([process.env.OPENCLAW_GATEWAY_PASSWORD, cfg.gateway?.auth?.password]) ??
+    undefined;
 
   if (mode === "token" || mode === "password") {
     return resolveRequiredAuthLabel(mode, { token, password });
@@ -524,7 +482,9 @@ function resolveQrReplyTarget(ctx: QrCommandContext): string {
 }
 
 async function issueSetupPayload(url: string): Promise<SetupPayload> {
-  const issuedBootstrap = await issueDeviceBootstrapToken();
+  const issuedBootstrap = await issueDeviceBootstrapToken({
+    profile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
+  });
   return {
     url,
     bootstrapToken: issuedBootstrap.token,
@@ -545,20 +505,22 @@ async function sendQrPngToSupportedChannel(params: {
   if (!sender) {
     return false;
   }
-  const send = sender.resolveSend(params.api);
+  const adapter = await params.api.runtime.channel.outbound.loadAdapter(params.ctx.channel);
+  const send = adapter?.sendMedia;
   if (!send) {
     return false;
   }
-  await send(
-    params.target,
-    params.caption,
-    sender.createOpts({
+  await send({
+    cfg: params.api.config,
+    to: params.target,
+    text: params.caption,
+    ...sender.createOpts({
       ctx: params.ctx,
       qrFilePath: params.qrFilePath,
       mediaLocalRoots,
       accountId,
     }),
-  );
+  });
   return true;
 }
 
@@ -638,9 +600,16 @@ export default definePluginEntry({
           if (!pending) {
             return { text: "Pairing request not found." };
           }
-          const approved = await approveDevicePairing(pending.requestId);
+          const approved = gatewayClientScopes
+            ? await approveDevicePairing(pending.requestId, {
+                callerScopes: gatewayClientScopes,
+              })
+            : await approveDevicePairing(pending.requestId);
           if (!approved) {
             return { text: "Pairing request not found." };
+          }
+          if (approved.status === "forbidden") {
+            return { text: `⚠️ Cannot approve a request requiring ${approved.missingScope}.` };
           }
           const label = approved.device.displayName?.trim() || approved.device.deviceId;
           const platform = approved.device.platform?.trim();
@@ -789,7 +758,8 @@ export default definePluginEntry({
                 channelKeys.join(",") || "none"
               }`,
             );
-            const send = api.runtime?.channel?.telegram?.sendMessageTelegram;
+            const adapter = await api.runtime.channel.outbound.loadAdapter("telegram");
+            const send = adapter?.sendText;
             if (!send) {
               throw new Error(
                 `telegram runtime unavailable (runtime keys: ${runtimeKeys.join(",")}; channel keys: ${channelKeys.join(
@@ -797,10 +767,11 @@ export default definePluginEntry({
                 )})`,
               );
             }
-            await send(target, formatSetupInstructions(payload.expiresAtMs), {
-              ...(typeof ctx.messageThreadId === "number"
-                ? { messageThreadId: ctx.messageThreadId }
-                : {}),
+            await send({
+              cfg: api.config,
+              to: target,
+              text: formatSetupInstructions(payload.expiresAtMs),
+              ...(ctx.messageThreadId != null ? { threadId: ctx.messageThreadId } : {}),
               ...(ctx.accountId ? { accountId: ctx.accountId } : {}),
             });
             api.logger.info?.(

@@ -1,26 +1,22 @@
-import fs from "node:fs";
-import path from "node:path";
 import { createJiti } from "jiti";
 import { resolveWhatsAppHeartbeatRecipients } from "../../channels/plugins/whatsapp-heartbeat.js";
-import { loadConfig } from "../../config/config.js";
 import {
   getDefaultLocalRoots as getDefaultLocalRootsImpl,
   loadWebMedia as loadWebMediaImpl,
   loadWebMediaRaw as loadWebMediaRawImpl,
   optimizeImageToJpeg as optimizeImageToJpegImpl,
 } from "../../media/web-media.js";
-import { loadPluginManifestRegistry } from "../manifest-registry.js";
 import {
-  buildPluginLoaderJitiOptions,
-  resolvePluginSdkAliasFile,
-  resolvePluginSdkScopedAliasMap,
-  shouldPreferNativeJiti,
-} from "../sdk-alias.js";
+  loadPluginBoundaryModuleWithJiti,
+  resolvePluginRuntimeModulePath,
+  resolvePluginRuntimeRecord,
+} from "./runtime-plugin-boundary.js";
+import type {
+  WhatsAppHeavyRuntimeModule,
+  WhatsAppLightRuntimeModule,
+} from "./runtime-whatsapp-surface.js";
 
 const WHATSAPP_PLUGIN_ID = "whatsapp";
-
-type WhatsAppLightModule = typeof import("../../../extensions/whatsapp/light-runtime-api.js");
-type WhatsAppHeavyModule = typeof import("../../../extensions/whatsapp/runtime-api.js");
 
 type WhatsAppPluginRecord = {
   origin: string;
@@ -29,95 +25,43 @@ type WhatsAppPluginRecord = {
 };
 
 let cachedHeavyModulePath: string | null = null;
-let cachedHeavyModule: WhatsAppHeavyModule | null = null;
+let cachedHeavyModule: WhatsAppHeavyRuntimeModule | null = null;
 let cachedLightModulePath: string | null = null;
-let cachedLightModule: WhatsAppLightModule | null = null;
+let cachedLightModule: WhatsAppLightRuntimeModule | null = null;
 
 const jitiLoaders = new Map<boolean, ReturnType<typeof createJiti>>();
 
-function readConfigSafely() {
-  try {
-    return loadConfig();
-  } catch {
-    return {};
-  }
-}
-
 function resolveWhatsAppPluginRecord(): WhatsAppPluginRecord {
-  const manifestRegistry = loadPluginManifestRegistry({
-    config: readConfigSafely(),
-    cache: true,
-  });
-  const record = manifestRegistry.plugins.find((plugin) => plugin.id === WHATSAPP_PLUGIN_ID);
-  if (!record?.source) {
+  return resolvePluginRuntimeRecord(WHATSAPP_PLUGIN_ID, () => {
     throw new Error(
       `WhatsApp plugin runtime is unavailable: missing plugin '${WHATSAPP_PLUGIN_ID}'`,
     );
-  }
-  return {
-    origin: record.origin,
-    rootDir: record.rootDir,
-    source: record.source,
-  };
+  }) as WhatsAppPluginRecord;
 }
 
 function resolveWhatsAppRuntimeModulePath(
   record: WhatsAppPluginRecord,
   entryBaseName: "light-runtime-api" | "runtime-api",
 ): string {
-  const candidates = [
-    path.join(path.dirname(record.source), `${entryBaseName}.js`),
-    path.join(path.dirname(record.source), `${entryBaseName}.ts`),
-    ...(record.rootDir
-      ? [
-          path.join(record.rootDir, `${entryBaseName}.js`),
-          path.join(record.rootDir, `${entryBaseName}.ts`),
-        ]
-      : []),
-  ];
-  for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) {
-      return candidate;
-    }
-  }
-  throw new Error(
-    `WhatsApp plugin runtime is unavailable: missing ${entryBaseName} for plugin '${WHATSAPP_PLUGIN_ID}'`,
-  );
-}
-
-function getJiti(modulePath: string) {
-  const tryNative = shouldPreferNativeJiti(modulePath);
-  const cached = jitiLoaders.get(tryNative);
-  if (cached) {
-    return cached;
-  }
-  const pluginSdkAlias = resolvePluginSdkAliasFile({
-    srcFile: "root-alias.cjs",
-    distFile: "root-alias.cjs",
-    modulePath: modulePath,
+  const modulePath = resolvePluginRuntimeModulePath(record, entryBaseName, () => {
+    throw new Error(
+      `WhatsApp plugin runtime is unavailable: missing ${entryBaseName} for plugin '${WHATSAPP_PLUGIN_ID}'`,
+    );
   });
-  const aliasMap = {
-    ...(pluginSdkAlias ? { "openclaw/plugin-sdk": pluginSdkAlias } : {}),
-    ...resolvePluginSdkScopedAliasMap({ modulePath }),
-  };
-  const loader = createJiti(import.meta.url, {
-    ...buildPluginLoaderJitiOptions(aliasMap),
-    tryNative,
-  });
-  jitiLoaders.set(tryNative, loader);
-  return loader;
+  if (!modulePath) {
+    throw new Error(
+      `WhatsApp plugin runtime is unavailable: missing ${entryBaseName} for plugin '${WHATSAPP_PLUGIN_ID}'`,
+    );
+  }
+  return modulePath;
 }
 
-function loadWithJiti<TModule>(modulePath: string): TModule {
-  return getJiti(modulePath)(modulePath) as TModule;
-}
-
-function loadCurrentHeavyModuleSync(): WhatsAppHeavyModule {
+function loadCurrentHeavyModuleSync(): WhatsAppHeavyRuntimeModule {
   const modulePath = resolveWhatsAppRuntimeModulePath(resolveWhatsAppPluginRecord(), "runtime-api");
-  return loadWithJiti<WhatsAppHeavyModule>(modulePath);
+  return loadPluginBoundaryModuleWithJiti<WhatsAppHeavyRuntimeModule>(modulePath, jitiLoaders);
 }
 
-function loadWhatsAppLightModule(): WhatsAppLightModule {
+function loadWhatsAppLightModule(): WhatsAppLightRuntimeModule {
   const modulePath = resolveWhatsAppRuntimeModulePath(
     resolveWhatsAppPluginRecord(),
     "light-runtime-api",
@@ -125,143 +69,149 @@ function loadWhatsAppLightModule(): WhatsAppLightModule {
   if (cachedLightModule && cachedLightModulePath === modulePath) {
     return cachedLightModule;
   }
-  const loaded = loadWithJiti<WhatsAppLightModule>(modulePath);
+  const loaded = loadPluginBoundaryModuleWithJiti<WhatsAppLightRuntimeModule>(
+    modulePath,
+    jitiLoaders,
+  );
   cachedLightModulePath = modulePath;
   cachedLightModule = loaded;
   return loaded;
 }
 
-async function loadWhatsAppHeavyModule(): Promise<WhatsAppHeavyModule> {
+async function loadWhatsAppHeavyModule(): Promise<WhatsAppHeavyRuntimeModule> {
   const record = resolveWhatsAppPluginRecord();
   const modulePath = resolveWhatsAppRuntimeModulePath(record, "runtime-api");
   if (cachedHeavyModule && cachedHeavyModulePath === modulePath) {
     return cachedHeavyModule;
   }
-  const loaded = loadWithJiti<WhatsAppHeavyModule>(modulePath);
+  const loaded = loadPluginBoundaryModuleWithJiti<WhatsAppHeavyRuntimeModule>(
+    modulePath,
+    jitiLoaders,
+  );
   cachedHeavyModulePath = modulePath;
   cachedHeavyModule = loaded;
   return loaded;
 }
 
-function getLightExport<K extends keyof WhatsAppLightModule>(
+function getLightExport<K extends keyof WhatsAppLightRuntimeModule>(
   exportName: K,
-): NonNullable<WhatsAppLightModule[K]> {
+): NonNullable<WhatsAppLightRuntimeModule[K]> {
   const loaded = loadWhatsAppLightModule();
   const value = loaded[exportName];
   if (value == null) {
     throw new Error(`WhatsApp plugin runtime is missing export '${String(exportName)}'`);
   }
-  return value as NonNullable<WhatsAppLightModule[K]>;
+  return value as NonNullable<WhatsAppLightRuntimeModule[K]>;
 }
 
-async function getHeavyExport<K extends keyof WhatsAppHeavyModule>(
+async function getHeavyExport<K extends keyof WhatsAppHeavyRuntimeModule>(
   exportName: K,
-): Promise<NonNullable<WhatsAppHeavyModule[K]>> {
+): Promise<NonNullable<WhatsAppHeavyRuntimeModule[K]>> {
   const loaded = await loadWhatsAppHeavyModule();
   const value = loaded[exportName];
   if (value == null) {
     throw new Error(`WhatsApp plugin runtime is missing export '${String(exportName)}'`);
   }
-  return value as NonNullable<WhatsAppHeavyModule[K]>;
+  return value as NonNullable<WhatsAppHeavyRuntimeModule[K]>;
 }
 
 export function getActiveWebListener(
-  ...args: Parameters<WhatsAppLightModule["getActiveWebListener"]>
-): ReturnType<WhatsAppLightModule["getActiveWebListener"]> {
+  ...args: Parameters<WhatsAppLightRuntimeModule["getActiveWebListener"]>
+): ReturnType<WhatsAppLightRuntimeModule["getActiveWebListener"]> {
   return getLightExport("getActiveWebListener")(...args);
 }
 
 export function getWebAuthAgeMs(
-  ...args: Parameters<WhatsAppLightModule["getWebAuthAgeMs"]>
-): ReturnType<WhatsAppLightModule["getWebAuthAgeMs"]> {
+  ...args: Parameters<WhatsAppLightRuntimeModule["getWebAuthAgeMs"]>
+): ReturnType<WhatsAppLightRuntimeModule["getWebAuthAgeMs"]> {
   return getLightExport("getWebAuthAgeMs")(...args);
 }
 
 export function logWebSelfId(
-  ...args: Parameters<WhatsAppLightModule["logWebSelfId"]>
-): ReturnType<WhatsAppLightModule["logWebSelfId"]> {
+  ...args: Parameters<WhatsAppLightRuntimeModule["logWebSelfId"]>
+): ReturnType<WhatsAppLightRuntimeModule["logWebSelfId"]> {
   return getLightExport("logWebSelfId")(...args);
 }
 
 export function loginWeb(
-  ...args: Parameters<WhatsAppHeavyModule["loginWeb"]>
-): ReturnType<WhatsAppHeavyModule["loginWeb"]> {
+  ...args: Parameters<WhatsAppHeavyRuntimeModule["loginWeb"]>
+): ReturnType<WhatsAppHeavyRuntimeModule["loginWeb"]> {
   return loadWhatsAppHeavyModule().then((loaded) => loaded.loginWeb(...args));
 }
 
 export function logoutWeb(
-  ...args: Parameters<WhatsAppLightModule["logoutWeb"]>
-): ReturnType<WhatsAppLightModule["logoutWeb"]> {
+  ...args: Parameters<WhatsAppLightRuntimeModule["logoutWeb"]>
+): ReturnType<WhatsAppLightRuntimeModule["logoutWeb"]> {
   return getLightExport("logoutWeb")(...args);
 }
 
 export function readWebSelfId(
-  ...args: Parameters<WhatsAppLightModule["readWebSelfId"]>
-): ReturnType<WhatsAppLightModule["readWebSelfId"]> {
+  ...args: Parameters<WhatsAppLightRuntimeModule["readWebSelfId"]>
+): ReturnType<WhatsAppLightRuntimeModule["readWebSelfId"]> {
   return getLightExport("readWebSelfId")(...args);
 }
 
 export function webAuthExists(
-  ...args: Parameters<WhatsAppLightModule["webAuthExists"]>
-): ReturnType<WhatsAppLightModule["webAuthExists"]> {
+  ...args: Parameters<WhatsAppLightRuntimeModule["webAuthExists"]>
+): ReturnType<WhatsAppLightRuntimeModule["webAuthExists"]> {
   return getLightExport("webAuthExists")(...args);
 }
 
 export function sendMessageWhatsApp(
-  ...args: Parameters<WhatsAppHeavyModule["sendMessageWhatsApp"]>
-): ReturnType<WhatsAppHeavyModule["sendMessageWhatsApp"]> {
+  ...args: Parameters<WhatsAppHeavyRuntimeModule["sendMessageWhatsApp"]>
+): ReturnType<WhatsAppHeavyRuntimeModule["sendMessageWhatsApp"]> {
   return loadWhatsAppHeavyModule().then((loaded) => loaded.sendMessageWhatsApp(...args));
 }
 
 export function sendPollWhatsApp(
-  ...args: Parameters<WhatsAppHeavyModule["sendPollWhatsApp"]>
-): ReturnType<WhatsAppHeavyModule["sendPollWhatsApp"]> {
+  ...args: Parameters<WhatsAppHeavyRuntimeModule["sendPollWhatsApp"]>
+): ReturnType<WhatsAppHeavyRuntimeModule["sendPollWhatsApp"]> {
   return loadWhatsAppHeavyModule().then((loaded) => loaded.sendPollWhatsApp(...args));
 }
 
 export function sendReactionWhatsApp(
-  ...args: Parameters<WhatsAppHeavyModule["sendReactionWhatsApp"]>
-): ReturnType<WhatsAppHeavyModule["sendReactionWhatsApp"]> {
+  ...args: Parameters<WhatsAppHeavyRuntimeModule["sendReactionWhatsApp"]>
+): ReturnType<WhatsAppHeavyRuntimeModule["sendReactionWhatsApp"]> {
   return loadWhatsAppHeavyModule().then((loaded) => loaded.sendReactionWhatsApp(...args));
 }
 
 export function createRuntimeWhatsAppLoginTool(
-  ...args: Parameters<WhatsAppLightModule["createWhatsAppLoginTool"]>
-): ReturnType<WhatsAppLightModule["createWhatsAppLoginTool"]> {
+  ...args: Parameters<WhatsAppLightRuntimeModule["createWhatsAppLoginTool"]>
+): ReturnType<WhatsAppLightRuntimeModule["createWhatsAppLoginTool"]> {
   return getLightExport("createWhatsAppLoginTool")(...args);
 }
 
 export function createWaSocket(
-  ...args: Parameters<WhatsAppHeavyModule["createWaSocket"]>
-): ReturnType<WhatsAppHeavyModule["createWaSocket"]> {
+  ...args: Parameters<WhatsAppHeavyRuntimeModule["createWaSocket"]>
+): ReturnType<WhatsAppHeavyRuntimeModule["createWaSocket"]> {
   return loadWhatsAppHeavyModule().then((loaded) => loaded.createWaSocket(...args));
 }
 
 export function formatError(
-  ...args: Parameters<WhatsAppLightModule["formatError"]>
-): ReturnType<WhatsAppLightModule["formatError"]> {
+  ...args: Parameters<WhatsAppLightRuntimeModule["formatError"]>
+): ReturnType<WhatsAppLightRuntimeModule["formatError"]> {
   return getLightExport("formatError")(...args);
 }
 
 export function getStatusCode(
-  ...args: Parameters<WhatsAppLightModule["getStatusCode"]>
-): ReturnType<WhatsAppLightModule["getStatusCode"]> {
+  ...args: Parameters<WhatsAppLightRuntimeModule["getStatusCode"]>
+): ReturnType<WhatsAppLightRuntimeModule["getStatusCode"]> {
   return getLightExport("getStatusCode")(...args);
 }
 
 export function pickWebChannel(
-  ...args: Parameters<WhatsAppLightModule["pickWebChannel"]>
-): ReturnType<WhatsAppLightModule["pickWebChannel"]> {
+  ...args: Parameters<WhatsAppLightRuntimeModule["pickWebChannel"]>
+): ReturnType<WhatsAppLightRuntimeModule["pickWebChannel"]> {
   return getLightExport("pickWebChannel")(...args);
 }
 
-export function resolveWaWebAuthDir(): WhatsAppLightModule["WA_WEB_AUTH_DIR"] {
+export function resolveWaWebAuthDir(): WhatsAppLightRuntimeModule["WA_WEB_AUTH_DIR"] {
   return getLightExport("WA_WEB_AUTH_DIR");
 }
 
 export async function handleWhatsAppAction(
-  ...args: Parameters<WhatsAppHeavyModule["handleWhatsAppAction"]>
-): ReturnType<WhatsAppHeavyModule["handleWhatsAppAction"]> {
+  ...args: Parameters<WhatsAppHeavyRuntimeModule["handleWhatsAppAction"]>
+): ReturnType<WhatsAppHeavyRuntimeModule["handleWhatsAppAction"]> {
   return (await getHeavyExport("handleWhatsAppAction"))(...args);
 }
 
@@ -278,14 +228,14 @@ export async function loadWebMediaRaw(
 }
 
 export function monitorWebChannel(
-  ...args: Parameters<WhatsAppHeavyModule["monitorWebChannel"]>
-): ReturnType<WhatsAppHeavyModule["monitorWebChannel"]> {
+  ...args: Parameters<WhatsAppHeavyRuntimeModule["monitorWebChannel"]>
+): ReturnType<WhatsAppHeavyRuntimeModule["monitorWebChannel"]> {
   return loadWhatsAppHeavyModule().then((loaded) => loaded.monitorWebChannel(...args));
 }
 
 export async function monitorWebInbox(
-  ...args: Parameters<WhatsAppHeavyModule["monitorWebInbox"]>
-): ReturnType<WhatsAppHeavyModule["monitorWebInbox"]> {
+  ...args: Parameters<WhatsAppHeavyRuntimeModule["monitorWebInbox"]>
+): ReturnType<WhatsAppHeavyRuntimeModule["monitorWebInbox"]> {
   return (await getHeavyExport("monitorWebInbox"))(...args);
 }
 
@@ -296,34 +246,34 @@ export async function optimizeImageToJpeg(
 }
 
 export async function runWebHeartbeatOnce(
-  ...args: Parameters<WhatsAppHeavyModule["runWebHeartbeatOnce"]>
-): ReturnType<WhatsAppHeavyModule["runWebHeartbeatOnce"]> {
+  ...args: Parameters<WhatsAppHeavyRuntimeModule["runWebHeartbeatOnce"]>
+): ReturnType<WhatsAppHeavyRuntimeModule["runWebHeartbeatOnce"]> {
   return (await getHeavyExport("runWebHeartbeatOnce"))(...args);
 }
 
 export async function startWebLoginWithQr(
-  ...args: Parameters<WhatsAppHeavyModule["startWebLoginWithQr"]>
-): ReturnType<WhatsAppHeavyModule["startWebLoginWithQr"]> {
+  ...args: Parameters<WhatsAppHeavyRuntimeModule["startWebLoginWithQr"]>
+): ReturnType<WhatsAppHeavyRuntimeModule["startWebLoginWithQr"]> {
   return (await getHeavyExport("startWebLoginWithQr"))(...args);
 }
 
 export async function waitForWaConnection(
-  ...args: Parameters<WhatsAppHeavyModule["waitForWaConnection"]>
-): ReturnType<WhatsAppHeavyModule["waitForWaConnection"]> {
+  ...args: Parameters<WhatsAppHeavyRuntimeModule["waitForWaConnection"]>
+): ReturnType<WhatsAppHeavyRuntimeModule["waitForWaConnection"]> {
   return (await getHeavyExport("waitForWaConnection"))(...args);
 }
 
 export async function waitForWebLogin(
-  ...args: Parameters<WhatsAppHeavyModule["waitForWebLogin"]>
-): ReturnType<WhatsAppHeavyModule["waitForWebLogin"]> {
+  ...args: Parameters<WhatsAppHeavyRuntimeModule["waitForWebLogin"]>
+): ReturnType<WhatsAppHeavyRuntimeModule["waitForWebLogin"]> {
   return (await getHeavyExport("waitForWebLogin"))(...args);
 }
 
 export const extractMediaPlaceholder = (
-  ...args: Parameters<WhatsAppHeavyModule["extractMediaPlaceholder"]>
+  ...args: Parameters<WhatsAppHeavyRuntimeModule["extractMediaPlaceholder"]>
 ) => loadCurrentHeavyModuleSync().extractMediaPlaceholder(...args);
 
-export const extractText = (...args: Parameters<WhatsAppHeavyModule["extractText"]>) =>
+export const extractText = (...args: Parameters<WhatsAppHeavyRuntimeModule["extractText"]>) =>
   loadCurrentHeavyModuleSync().extractText(...args);
 
 export function getDefaultLocalRoots(

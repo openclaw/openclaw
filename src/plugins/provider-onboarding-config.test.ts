@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import {
   createDefaultModelPresetAppliers,
@@ -23,71 +24,135 @@ function createModel(id: string, name: string): ModelDefinitionConfig {
   };
 }
 
+function expectPrimaryModel(cfg: OpenClawConfig, primary: string) {
+  expect(cfg.agents?.defaults?.model).toEqual({
+    primary,
+  });
+}
+
+function expectPrimaryModelAlias(cfg: OpenClawConfig, modelRef: string, alias: string) {
+  expect(cfg.agents?.defaults?.models).toMatchObject({
+    [modelRef]: {
+      alias,
+    },
+  });
+}
+
+function expectProviderModels(
+  cfg: OpenClawConfig,
+  providerId: string,
+  expected: Record<string, unknown>,
+) {
+  const providers = cfg.models?.providers as Record<string, unknown> | undefined;
+  expect(providers?.[providerId]).toMatchObject(expected);
+}
+
+function resolveAliasObjects(aliases: Array<string | { modelRef: string; alias: string }>) {
+  return aliases.filter(
+    (alias): alias is { modelRef: string; alias: string } => typeof alias !== "string",
+  );
+}
+
+function createDemoProviderParams(params?: {
+  providerId?: string;
+  baseUrl?: string;
+  aliases?: Array<string | { modelRef: string; alias: string }>;
+  models?: ModelDefinitionConfig[];
+}) {
+  const providerId = params?.providerId ?? "demo";
+  const baseUrl = params?.baseUrl ?? "https://demo.test/v1";
+  const models = params?.models ?? [createModel("demo-default", "Demo Default")];
+  return {
+    providerId,
+    api: "openai-completions" as const,
+    baseUrl,
+    aliases: params?.aliases ?? [
+      { modelRef: `${providerId}/${models[0]?.id ?? "demo-default"}`, alias: "Demo" },
+    ],
+    models,
+  };
+}
+
 describe("provider onboarding preset appliers", () => {
-  it("creates provider and primary-model appliers for a default model preset", () => {
-    const appliers = createDefaultModelPresetAppliers({
-      primaryModelRef: "demo/demo-default",
-      resolveParams: () => ({
-        providerId: "demo",
-        api: "openai-completions" as const,
-        baseUrl: "https://demo.test/v1",
-        defaultModel: createModel("demo-default", "Demo Default"),
-        defaultModelId: "demo-default",
-        aliases: [{ modelRef: "demo/demo-default", alias: "Demo" }],
-      }),
-    });
+  it.each([
+    {
+      name: "creates provider and primary-model appliers for a default model preset",
+      kind: "default-model",
+    },
+    {
+      name: "passes variant args through default-models resolvers",
+      kind: "default-models",
+    },
+    {
+      name: "creates model-catalog appliers that preserve existing aliases",
+      kind: "catalog-models",
+    },
+  ] as const)("$name", ({ kind }) => {
+    if (kind === "default-model") {
+      const params = createDemoProviderParams();
+      const appliers = createDefaultModelPresetAppliers({
+        primaryModelRef: "demo/demo-default",
+        resolveParams: () => ({
+          providerId: params.providerId,
+          api: params.api,
+          baseUrl: params.baseUrl,
+          defaultModel: params.models[0],
+          defaultModelId: params.models[0]?.id ?? "demo-default",
+          aliases: resolveAliasObjects(params.aliases),
+        }),
+      });
 
-    const providerOnly = appliers.applyProviderConfig({});
-    expect(providerOnly.agents?.defaults?.models).toMatchObject({
-      "demo/demo-default": {
-        alias: "Demo",
-      },
-    });
-    expect(providerOnly.agents?.defaults?.model).toBeUndefined();
+      const providerOnly = appliers.applyProviderConfig({});
+      expectPrimaryModelAlias(providerOnly, "demo/demo-default", "Demo");
+      expect(providerOnly.agents?.defaults?.model).toBeUndefined();
 
-    const withPrimary = appliers.applyConfig({});
-    expect(withPrimary.agents?.defaults?.model).toEqual({
-      primary: "demo/demo-default",
-    });
-  });
+      const withPrimary = appliers.applyConfig({});
+      expectPrimaryModel(withPrimary, "demo/demo-default");
+      return;
+    }
 
-  it("passes variant args through default-models resolvers", () => {
-    const appliers = createDefaultModelsPresetAppliers<[string]>({
-      primaryModelRef: "demo/a",
-      resolveParams: (_cfg, baseUrl) => ({
-        providerId: "demo",
-        api: "openai-completions" as const,
-        baseUrl,
-        defaultModels: [createModel("a", "Model A"), createModel("b", "Model B")],
+    if (kind === "default-models") {
+      const params = createDemoProviderParams({
+        models: [createModel("a", "Model A"), createModel("b", "Model B")],
         aliases: [{ modelRef: "demo/a", alias: "Demo A" }],
-      }),
-    });
+      });
+      const appliers = createDefaultModelsPresetAppliers<[string]>({
+        primaryModelRef: "demo/a",
+        resolveParams: (_cfg, baseUrl) => ({
+          providerId: params.providerId,
+          api: params.api,
+          baseUrl,
+          defaultModels: params.models,
+          aliases: resolveAliasObjects(params.aliases),
+        }),
+      });
 
-    const cfg = appliers.applyConfig({}, "https://alt.test/v1");
-    expect(cfg.models?.providers?.demo).toMatchObject({
-      baseUrl: "https://alt.test/v1",
-      models: [
-        { id: "a", name: "Model A" },
-        { id: "b", name: "Model B" },
-      ],
-    });
-    expect(cfg.agents?.defaults?.model).toEqual({
-      primary: "demo/a",
-    });
-  });
+      const cfg = appliers.applyConfig({}, "https://alt.test/v1");
+      expectProviderModels(cfg, "demo", {
+        baseUrl: "https://alt.test/v1",
+        models: [
+          { id: "a", name: "Model A" },
+          { id: "b", name: "Model B" },
+        ],
+      });
+      expectPrimaryModel(cfg, "demo/a");
+      return;
+    }
 
-  it("creates model-catalog appliers that preserve existing aliases", () => {
+    const params = createDemoProviderParams({
+      providerId: "catalog",
+      baseUrl: "https://catalog.test/v1",
+      models: [createModel("default", "Catalog Default"), createModel("backup", "Catalog Backup")],
+      aliases: ["catalog/default", { modelRef: "catalog/default", alias: "Catalog Default" }],
+    });
     const appliers = createModelCatalogPresetAppliers({
       primaryModelRef: "catalog/default",
       resolveParams: () => ({
-        providerId: "catalog",
-        api: "openai-completions" as const,
-        baseUrl: "https://catalog.test/v1",
-        catalogModels: [
-          createModel("default", "Catalog Default"),
-          createModel("backup", "Catalog Backup"),
-        ],
-        aliases: ["catalog/default", { modelRef: "catalog/default", alias: "Catalog Default" }],
+        providerId: params.providerId,
+        api: params.api,
+        baseUrl: params.baseUrl,
+        catalogModels: params.models,
+        aliases: params.aliases,
       }),
     });
 
@@ -103,13 +168,7 @@ describe("provider onboarding preset appliers", () => {
       },
     });
 
-    expect(cfg.agents?.defaults?.models).toMatchObject({
-      "catalog/default": {
-        alias: "Existing Alias",
-      },
-    });
-    expect(cfg.agents?.defaults?.model).toEqual({
-      primary: "catalog/default",
-    });
+    expectPrimaryModelAlias(cfg, "catalog/default", "Existing Alias");
+    expectPrimaryModel(cfg, "catalog/default");
   });
 });

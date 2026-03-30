@@ -9,8 +9,8 @@ vi.mock("../plugins/provider-runtime.js", () => ({
   resolveProviderModernModelRef: providerRuntimeMocks.resolveProviderModernModelRef,
 }));
 
-import { isModernModelRef } from "./live-model-filter.js";
-import { normalizeModelCompat } from "./model-compat.js";
+import { normalizeModelCompat } from "../plugins/provider-model-compat.js";
+import { isHighSignalLiveModelRef, isModernModelRef } from "./live-model-filter.js";
 
 const baseModel = (): Model<Api> =>
   ({
@@ -371,11 +371,44 @@ describe("isModernModelRef", () => {
     expect(isModernModelRef({ provider: "opencode-go", id: "minimax-m2.7" })).toBe(true);
   });
 
+  it("matches plugin-advertised modern models across canonical provider aliases", () => {
+    providerRuntimeMocks.resolveProviderModernModelRef.mockImplementation(({ provider, context }) =>
+      provider === "zai" && context.modelId === "glm-5" ? true : undefined,
+    );
+
+    expect(isModernModelRef({ provider: "z.ai", id: "glm-5" })).toBe(true);
+    expect(isModernModelRef({ provider: "z-ai", id: "glm-5" })).toBe(true);
+  });
+
   it("excludes provider-declined modern models", () => {
     providerRuntimeMocks.resolveProviderModernModelRef.mockImplementation(({ provider, context }) =>
       provider === "opencode" && context.modelId === "minimax-m2.7" ? false : undefined,
     );
 
     expect(isModernModelRef({ provider: "opencode", id: "minimax-m2.7" })).toBe(false);
+  });
+});
+
+describe("isHighSignalLiveModelRef", () => {
+  it("keeps modern higher-signal Claude families", () => {
+    providerRuntimeMocks.resolveProviderModernModelRef.mockImplementation(({ provider, context }) =>
+      provider === "anthropic" && ["claude-sonnet-4-5", "claude-opus-4-5"].includes(context.modelId)
+        ? true
+        : undefined,
+    );
+
+    expect(isHighSignalLiveModelRef({ provider: "anthropic", id: "claude-sonnet-4-5" })).toBe(true);
+    expect(isHighSignalLiveModelRef({ provider: "anthropic", id: "claude-opus-4-5" })).toBe(true);
+  });
+
+  it("drops low-signal or old Claude variants even when provider marks them modern", () => {
+    providerRuntimeMocks.resolveProviderModernModelRef.mockReturnValue(true);
+
+    expect(
+      isHighSignalLiveModelRef({ provider: "anthropic", id: "claude-haiku-4-5-20251001" }),
+    ).toBe(false);
+    expect(
+      isHighSignalLiveModelRef({ provider: "opencode", id: "claude-3-5-haiku-20241022" }),
+    ).toBe(false);
   });
 });

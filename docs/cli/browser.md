@@ -32,6 +32,27 @@ openclaw browser --browser-profile openclaw open https://example.com
 openclaw browser --browser-profile openclaw snapshot
 ```
 
+## If the command is missing
+
+If `openclaw browser` is an unknown command, check `plugins.allow` in
+`~/.openclaw/openclaw.json`.
+
+When `plugins.allow` is present, the bundled browser plugin must be listed
+explicitly:
+
+```json5
+{
+  plugins: {
+    allow: ["telegram", "browser"],
+  },
+}
+```
+
+`browser.enabled=true` does not restore the CLI subcommand when the plugin
+allowlist excludes `browser`.
+
+Related: [Browser tool](/tools/browser#missing-browser-command-or-tool)
+
 ## Profiles
 
 Profiles are named browser routing configs. In practice:

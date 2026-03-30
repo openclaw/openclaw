@@ -86,7 +86,9 @@ export {
   registerSessionBindingAdapter,
   unregisterSessionBindingAdapter,
 } from "../infra/outbound/session-binding-service.js";
+export { __testing } from "../infra/outbound/session-binding-service.js";
 export * from "../pairing/pairing-challenge.js";
+export { resolvePairingIdLabel } from "../pairing/pairing-labels.js";
 export * from "../pairing/pairing-messages.js";
 export * from "../pairing/pairing-store.js";
 export {
@@ -106,3 +108,4 @@ export {
   resolvePluginConversationBindingApproval,
   toPluginConversationBinding,
 } from "../plugins/conversation-binding.js";
+export { resolvePinnedMainDmOwnerFromAllowlist } from "../security/dm-policy-shared.js";

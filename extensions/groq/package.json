@@ -1,8 +1,8 @@
 {
-  "name": "@openclaw/groq-media-understanding",
-  "version": "2026.3.14",
+  "name": "@openclaw/groq-provider",
+  "version": "2026.3.30",
   "private": true,
-  "description": "OpenClaw Groq media-understanding plugin",
+  "description": "OpenClaw Groq media-understanding provider",
   "type": "module",
   "openclaw": {
     "extensions": [

@@ -12,6 +12,7 @@
     "ENV",
     "GIT_EXTERNAL_DIFF",
     "GIT_EXEC_PATH",
+    "GIT_TEMPLATE_DIR",
     "SHELL",
     "SHELLOPTS",
     "PS4",
@@ -72,7 +73,8 @@
     "GEM_PATH",
     "BUNDLE_GEMFILE",
     "COMPOSER_HOME",
-    "XDG_CONFIG_HOME"
+    "XDG_CONFIG_HOME",
+    "AWS_CONFIG_FILE"
   ],
   "blockedOverridePrefixes": ["GIT_CONFIG_", "NPM_CONFIG_"],
   "blockedPrefixes": ["DYLD_", "LD_", "BASH_FUNC_"]

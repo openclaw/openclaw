@@ -36,7 +36,6 @@ const PATH_RESOLUTION_ENV_KEYS = [
   "HOMEPATH",
   "OPENCLAW_HOME",
   "OPENCLAW_STATE_DIR",
-  "CLAWDBOT_STATE_DIR",
   "OPENCLAW_BUNDLED_PLUGINS_DIR",
 ] as const;
 
@@ -65,7 +64,6 @@ export function createPathResolutionEnv(
     USERPROFILE: resolvedHome,
     OPENCLAW_HOME: undefined,
     OPENCLAW_STATE_DIR: undefined,
-    CLAWDBOT_STATE_DIR: undefined,
     OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
   };
 

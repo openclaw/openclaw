@@ -2,33 +2,31 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expect, vi } from "vitest";
-import {
-  __testing as discordThreadBindingTesting,
-  createThreadBindingManager as createDiscordThreadBindingManager,
-} from "../../../../extensions/discord/runtime-api.js";
-import { createFeishuThreadBindingManager } from "../../../../extensions/feishu/api.js";
-import {
-  createMatrixThreadBindingManager,
-  resetMatrixThreadBindingsForTests,
-} from "../../../../extensions/matrix/api.js";
-import { setMatrixRuntime } from "../../../../extensions/matrix/index.js";
-import { createTelegramThreadBindingManager } from "../../../../extensions/telegram/runtime-api.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
   getSessionBindingService,
   type SessionBindingCapabilities,
   type SessionBindingRecord,
 } from "../../../infra/outbound/session-binding-service.js";
+import { createDiscordThreadBindingManager } from "../../../plugin-sdk/discord.js";
+import { createFeishuThreadBindingManager } from "../../../plugin-sdk/feishu.js";
 import {
+  listLineAccountIds,
   resolveDefaultLineAccountId,
   resolveLineAccount,
-  listLineAccountIds,
-} from "../../../line/accounts.js";
+} from "../../../plugin-sdk/line.js";
 import {
-  bundledChannelPlugins,
-  bundledChannelRuntimeSetters,
+  createMatrixThreadBindingManager,
+  resetMatrixThreadBindingsForTests,
+  setMatrixRuntime,
+} from "../../../plugin-sdk/matrix.js";
+import { loadBundledPluginTestApiSync } from "../../../test-utils/bundled-plugin-public-surface.js";
+import {
+  listBundledChannelPlugins,
   requireBundledChannelPlugin,
+  setBundledChannelRuntime,
 } from "../bundled.js";
+import { createChannelConversationBindingManager } from "../conversation-bindings.js";
 import type { ChannelPlugin } from "../types.js";
 import {
   channelPluginSurfaceKeys,
@@ -36,6 +34,16 @@ import {
   sessionBindingContractChannelIds,
   type SessionBindingContractChannelId,
 } from "./manifest.js";
+
+const { discordThreadBindingTesting } = loadBundledPluginTestApiSync<{
+  discordThreadBindingTesting: {
+    resetThreadBindingsForTests: () => void;
+  };
+}>("discord");
+
+function buildBundledPluginModuleId(pluginId: string, artifactBasename: string): string {
+  return ["..", "..", "..", "..", "extensions", pluginId, artifactBasename].join("/");
+}
 
 type PluginContractEntry = {
   id: string;
@@ -177,7 +185,7 @@ const sendMessageMatrixMock = vi.hoisted(() =>
   })),
 );
 
-bundledChannelRuntimeSetters.setTelegramRuntime({
+setBundledChannelRuntime("telegram", {
   channel: {
     telegram: {
       messageActions: {
@@ -187,7 +195,7 @@ bundledChannelRuntimeSetters.setTelegramRuntime({
   },
 } as never);
 
-bundledChannelRuntimeSetters.setDiscordRuntime({
+setBundledChannelRuntime("discord", {
   channel: {
     discord: {
       messageActions: {
@@ -197,7 +205,7 @@ bundledChannelRuntimeSetters.setDiscordRuntime({
   },
 } as never);
 
-bundledChannelRuntimeSetters.setLineRuntime({
+setBundledChannelRuntime("line", {
   channel: {
     line: {
       listLineAccountIds,
@@ -208,10 +216,9 @@ bundledChannelRuntimeSetters.setLineRuntime({
   },
 } as never);
 
-vi.mock("../../../../extensions/matrix/runtime-api.js", async () => {
-  const actual = await vi.importActual<
-    typeof import("../../../../extensions/matrix/runtime-api.js")
-  >("../../../../extensions/matrix/runtime-api.js");
+vi.mock(buildBundledPluginModuleId("matrix", "runtime-api.js"), async () => {
+  const matrixRuntimeApiModuleId = buildBundledPluginModuleId("matrix", "runtime-api.js");
+  const actual = await vi.importActual(matrixRuntimeApiModuleId);
   return {
     ...actual,
     sendMessageMatrix: sendMessageMatrixMock,
@@ -250,7 +257,7 @@ async function createContractMatrixThreadBindingManager() {
   });
 }
 
-export const pluginContractRegistry: PluginContractEntry[] = bundledChannelPlugins.map(
+export const pluginContractRegistry: PluginContractEntry[] = listBundledChannelPlugins().map(
   (plugin) => ({
     id: plugin.id,
     plugin,
@@ -281,6 +288,7 @@ export const actionContractRegistry: ActionsContractEntry[] = [
           "edit",
           "delete",
           "download-file",
+          "upload-file",
           "pin",
           "unpin",
           "list-pins",
@@ -310,6 +318,7 @@ export const actionContractRegistry: ActionsContractEntry[] = [
           "edit",
           "delete",
           "download-file",
+          "upload-file",
           "pin",
           "unpin",
           "list-pins",
@@ -603,7 +612,7 @@ export const statusContractRegistry: StatusContractEntry[] = [
   },
 ];
 
-export const surfaceContractRegistry: SurfaceContractEntry[] = bundledChannelPlugins.map(
+export const surfaceContractRegistry: SurfaceContractEntry[] = listBundledChannelPlugins().map(
   (plugin) => ({
     id: plugin.id,
     plugin,
@@ -636,6 +645,68 @@ const sessionBindingContractEntries: Record<
   SessionBindingContractChannelId,
   Omit<SessionBindingContractEntry, "id">
 > = {
+  bluebubbles: {
+    expectedCapabilities: {
+      adapterAvailable: true,
+      bindSupported: true,
+      unbindSupported: true,
+      placements: ["current"],
+    },
+    getCapabilities: () => {
+      void createChannelConversationBindingManager({
+        channelId: "bluebubbles",
+        cfg: baseSessionBindingCfg,
+        accountId: "default",
+      });
+      return getSessionBindingService().getCapabilities({
+        channel: "bluebubbles",
+        accountId: "default",
+      });
+    },
+    bindAndResolve: async () => {
+      await createChannelConversationBindingManager({
+        channelId: "bluebubbles",
+        cfg: baseSessionBindingCfg,
+        accountId: "default",
+      });
+      const service = getSessionBindingService();
+      const binding = await service.bind({
+        targetSessionKey: "agent:codex:acp:binding:bluebubbles:default:abc123",
+        targetKind: "session",
+        conversation: {
+          channel: "bluebubbles",
+          accountId: "default",
+          conversationId: "+15555550123",
+        },
+        placement: "current",
+        metadata: {
+          agentId: "codex",
+          label: "codex-main",
+        },
+      });
+      expectResolvedSessionBinding({
+        channel: "bluebubbles",
+        accountId: "default",
+        conversationId: "+15555550123",
+        targetSessionKey: "agent:codex:acp:binding:bluebubbles:default:abc123",
+      });
+      return binding;
+    },
+    unbindAndVerify: unbindAndExpectClearedSessionBinding,
+    cleanup: async () => {
+      const manager = await createChannelConversationBindingManager({
+        channelId: "bluebubbles",
+        cfg: baseSessionBindingCfg,
+        accountId: "default",
+      });
+      await manager?.stop();
+      expectClearedSessionBinding({
+        channel: "bluebubbles",
+        accountId: "default",
+        conversationId: "+15555550123",
+      });
+    },
+  },
   discord: {
     expectedCapabilities: {
       adapterAvailable: true,
@@ -752,6 +823,68 @@ const sessionBindingContractEntries: Record<
       });
     },
   },
+  imessage: {
+    expectedCapabilities: {
+      adapterAvailable: true,
+      bindSupported: true,
+      unbindSupported: true,
+      placements: ["current"],
+    },
+    getCapabilities: () => {
+      void createChannelConversationBindingManager({
+        channelId: "imessage",
+        cfg: baseSessionBindingCfg,
+        accountId: "default",
+      });
+      return getSessionBindingService().getCapabilities({
+        channel: "imessage",
+        accountId: "default",
+      });
+    },
+    bindAndResolve: async () => {
+      await createChannelConversationBindingManager({
+        channelId: "imessage",
+        cfg: baseSessionBindingCfg,
+        accountId: "default",
+      });
+      const service = getSessionBindingService();
+      const binding = await service.bind({
+        targetSessionKey: "agent:codex:acp:binding:imessage:default:abc123",
+        targetKind: "session",
+        conversation: {
+          channel: "imessage",
+          accountId: "default",
+          conversationId: "+15555550123",
+        },
+        placement: "current",
+        metadata: {
+          agentId: "codex",
+          label: "codex-main",
+        },
+      });
+      expectResolvedSessionBinding({
+        channel: "imessage",
+        accountId: "default",
+        conversationId: "+15555550123",
+        targetSessionKey: "agent:codex:acp:binding:imessage:default:abc123",
+      });
+      return binding;
+    },
+    unbindAndVerify: unbindAndExpectClearedSessionBinding,
+    cleanup: async () => {
+      const manager = await createChannelConversationBindingManager({
+        channelId: "imessage",
+        cfg: baseSessionBindingCfg,
+        accountId: "default",
+      });
+      await manager?.stop();
+      expectClearedSessionBinding({
+        channel: "imessage",
+        accountId: "default",
+        conversationId: "+15555550123",
+      });
+    },
+  },
   matrix: {
     expectedCapabilities: {
       adapterAvailable: true,
@@ -810,10 +943,10 @@ const sessionBindingContractEntries: Record<
       placements: ["current"],
     },
     getCapabilities: () => {
-      createTelegramThreadBindingManager({
+      void createChannelConversationBindingManager({
+        channelId: "telegram",
+        cfg: baseSessionBindingCfg,
         accountId: "default",
-        persist: false,
-        enableSweeper: false,
       });
       return getSessionBindingService().getCapabilities({
         channel: "telegram",
@@ -821,10 +954,10 @@ const sessionBindingContractEntries: Record<
       });
     },
     bindAndResolve: async () => {
-      createTelegramThreadBindingManager({
+      await createChannelConversationBindingManager({
+        channelId: "telegram",
+        cfg: baseSessionBindingCfg,
         accountId: "default",
-        persist: false,
-        enableSweeper: false,
       });
       const service = getSessionBindingService();
       const binding = await service.bind({
@@ -850,12 +983,12 @@ const sessionBindingContractEntries: Record<
     },
     unbindAndVerify: unbindAndExpectClearedSessionBinding,
     cleanup: async () => {
-      const manager = createTelegramThreadBindingManager({
+      const manager = await createChannelConversationBindingManager({
+        channelId: "telegram",
+        cfg: baseSessionBindingCfg,
         accountId: "default",
-        persist: false,
-        enableSweeper: false,
       });
-      manager.stop();
+      await manager?.stop();
       expectClearedSessionBinding({
         channel: "telegram",
         accountId: "default",

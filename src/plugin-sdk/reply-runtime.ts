@@ -2,6 +2,7 @@
 // off direct src/auto-reply imports by routing common reply primitives here.
 
 export {
+  chunkMarkdownText,
   chunkMarkdownTextWithMode,
   chunkText,
   chunkTextWithMode,
@@ -31,6 +32,10 @@ export { isAbortRequestText } from "../auto-reply/reply/abort.js";
 export { isBtwRequestText } from "../auto-reply/reply/btw-command.js";
 export { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
 export { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
+export {
+  createInboundDebouncer,
+  resolveInboundDebounceMs,
+} from "../auto-reply/inbound-debounce.js";
 export {
   dispatchReplyWithBufferedBlockDispatcher,
   dispatchReplyWithDispatcher,

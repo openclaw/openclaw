@@ -43,8 +43,9 @@ import { normalizeAgentId } from "../../routing/session-key.js";
 import {
   buildSafeExternalPrompt,
   detectSuspiciousPatterns,
-  getHookType,
+  mapHookExternalContentSource,
   isExternalHookSession,
+  resolveHookExternalContentSource,
 } from "../../security/external-content.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 import { resolveCronDeliveryPlan } from "../delivery.js";
@@ -221,7 +222,16 @@ export async function runCronIsolatedAgentTurn(params: {
   };
 
   const baseSessionKey = (params.sessionKey?.trim() || `cron:${params.job.id}`).trim();
-  const agentSessionKey = resolveCronAgentSessionKey({ sessionKey: baseSessionKey, agentId });
+  const agentSessionKey = resolveCronAgentSessionKey({
+    sessionKey: baseSessionKey,
+    agentId,
+    mainKey: params.cfg.session?.mainKey,
+    cfg: params.cfg,
+  });
+  const payloadHookExternalContentSource =
+    params.job.payload.kind === "agentTurn" ? params.job.payload.externalContentSource : undefined;
+  const hookExternalContentSource =
+    payloadHookExternalContentSource ?? resolveHookExternalContentSource(baseSessionKey);
 
   const workspaceDirRaw = resolveAgentWorkspaceDir(params.cfg, agentId);
   const agentDir = resolveAgentDir(params.cfg, agentId);
@@ -232,7 +242,7 @@ export async function runCronIsolatedAgentTurn(params: {
   const workspaceDir = workspace.dir;
 
   // Resolve model - prefer hooks.gmail.model for Gmail hooks.
-  const isGmailHook = baseSessionKey.startsWith("hook:gmail:");
+  const isGmailHook = hookExternalContentSource === "gmail";
   const now = Date.now();
   const cronSession = resolveCronSession({
     cfg: params.cfg,
@@ -336,7 +346,8 @@ export async function runCronIsolatedAgentTurn(params: {
 
   // SECURITY: Wrap external hook content with security boundaries to prevent prompt injection
   // unless explicitly allowed via a dangerous config override.
-  const isExternalHook = isExternalHookSession(baseSessionKey);
+  const isExternalHook =
+    hookExternalContentSource !== undefined || isExternalHookSession(baseSessionKey);
   const allowUnsafeExternalContent =
     agentPayload?.allowUnsafeExternalContent === true ||
     (isGmailHook && params.cfg.hooks?.gmail?.allowUnsafeExternalContent === true);
@@ -356,7 +367,7 @@ export async function runCronIsolatedAgentTurn(params: {
 
   if (shouldWrapExternal) {
     // Wrap external content with security boundaries
-    const hookType = getHookType(baseSessionKey);
+    const hookType = mapHookExternalContentSource(hookExternalContentSource ?? "webhook");
     const safeContent = buildSafeExternalPrompt({
       content: params.message,
       source: hookType,

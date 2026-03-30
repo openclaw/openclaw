@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { listTelegramAccountIds } from "../../extensions/telegram/api.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { listTelegramAccountIds } from "../channels/read-only-account-inspect.telegram.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveLegacyStateDirs,
