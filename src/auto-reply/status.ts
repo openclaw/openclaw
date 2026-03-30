@@ -782,10 +782,12 @@ export function buildStatusMessage(args: StatusArgs): string {
     return "channel override";
   })();
   const modelNote = channelModelNote ? ` · ${channelModelNote}` : "";
-  const modelLine = `🧠 Model: ${selectedModelLabel}${selectedAuthLabel}${modelNote}`;
+  const modelLine = fallbackState.active
+    ? `🧠 Model: ${selectedModelLabel}${selectedAuthLabel}${modelNote} (configured)`
+    : `🧠 Model: ${selectedModelLabel}${selectedAuthLabel}${modelNote}`;
   const showFallbackAuth = activeAuthLabelValue && activeAuthLabelValue !== selectedAuthLabelValue;
   const fallbackLine = fallbackState.active
-    ? `↪️ Fallback: ${activeModelLabel}${
+    ? `↪️ Active via fallback: ${activeModelLabel}${
         showFallbackAuth ? ` · 🔑 ${activeAuthLabelValue}` : ""
       } (${fallbackState.reason ?? "selected model unavailable"})`
     : null;
