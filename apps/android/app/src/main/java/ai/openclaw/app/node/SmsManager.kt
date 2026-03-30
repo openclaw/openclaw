@@ -3,21 +3,21 @@ package ai.openclaw.app.node
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
-import android.database.Cursor
 import android.net.Uri
 import android.provider.ContactsContract
 import android.provider.Telephony
 import android.telephony.SmsManager as AndroidSmsManager
 import androidx.core.content.ContextCompat
+import ai.openclaw.app.PermissionRequester
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.Serializable
-import ai.openclaw.app.PermissionRequester
 
 /**
  * Sends SMS messages via the Android SMS API.
@@ -39,7 +39,7 @@ class SmsManager(private val context: Context) {
     )
 
     /**
-     * Represents a single SMS message
+     * Represents a single SMS message.
      */
     @Serializable
     data class SmsMessage(
@@ -53,6 +53,7 @@ class SmsManager(private val context: Context) {
         val type: Int,
         val body: String?,
         val status: Int,
+        val transportType: String? = null,
     )
 
     data class SearchResult(
@@ -60,6 +61,13 @@ class SmsManager(private val context: Context) {
         val messages: List<SmsMessage>,
         val error: String? = null,
         val payloadJson: String,
+    )
+
+    internal data class QueryMetadata(
+        val mmsRequested: Boolean,
+        val mmsEligible: Boolean,
+        val mmsAttempted: Boolean,
+        val mmsIncluded: Boolean,
     )
 
     internal data class ParsedParams(
@@ -84,6 +92,8 @@ class SmsManager(private val context: Context) {
         val keyword: String? = null,
         val type: Int? = null,
         val isRead: Boolean? = null,
+        val includeMms: Boolean = false,
+        val conversationReview: Boolean = false,
         val limit: Int = DEFAULT_SMS_LIMIT,
         val offset: Int = 0,
     )
@@ -100,6 +110,11 @@ class SmsManager(private val context: Context) {
 
     companion object {
         private const val DEFAULT_SMS_LIMIT = 25
+        internal const val MAX_MIXED_BY_PHONE_CANDIDATE_WINDOW = 500
+        private const val MMS_SMS_BY_PHONE_BASE = "content://mms-sms/messages/byphone"
+        private const val MMS_CONTENT_BASE = "content://mms"
+        private const val MMS_PART_URI = "content://mms/part"
+        private val PHONE_FORMATTING_REGEX = Regex("""[\s\-()]""")
         internal val JsonConfig = Json { ignoreUnknownKeys = true }
 
         internal fun parseParams(paramsJson: String?, json: Json = JsonConfig): ParseResult {
@@ -157,31 +172,333 @@ class SmsManager(private val context: Context) {
             val keyword = (obj["keyword"] as? JsonPrimitive)?.content?.trim()
             val type = (obj["type"] as? JsonPrimitive)?.content?.toIntOrNull()
             val isRead = (obj["isRead"] as? JsonPrimitive)?.content?.toBooleanStrictOrNull()
+            val includeMms = (obj["includeMms"] as? JsonPrimitive)?.content?.toBooleanStrictOrNull() ?: false
+            val conversationReview = (obj["conversationReview"] as? JsonPrimitive)?.content?.toBooleanStrictOrNull() ?: false
             val limit = ((obj["limit"] as? JsonPrimitive)?.content?.toIntOrNull() ?: DEFAULT_SMS_LIMIT)
                 .coerceIn(1, 200)
             val offset = ((obj["offset"] as? JsonPrimitive)?.content?.toIntOrNull() ?: 0)
                 .coerceAtLeast(0)
 
-            // Validate time range
             if (startTime != null && endTime != null && startTime > endTime) {
                 return QueryParseResult.Error("INVALID_REQUEST: startTime must be less than or equal to endTime")
             }
 
-            return QueryParseResult.Ok(QueryParams(
-                startTime = startTime,
-                endTime = endTime,
-                contactName = contactName,
-                phoneNumber = phoneNumber,
-                keyword = keyword,
-                type = type,
-                isRead = isRead,
-                limit = limit,
-                offset = offset,
-            ))
+            return QueryParseResult.Ok(
+                QueryParams(
+                    startTime = startTime,
+                    endTime = endTime,
+                    contactName = contactName,
+                    phoneNumber = phoneNumber,
+                    keyword = keyword,
+                    type = type,
+                    isRead = isRead,
+                    includeMms = includeMms,
+                    conversationReview = conversationReview,
+                    limit = limit,
+                    offset = offset,
+                )
+            )
         }
 
         private fun normalizePhoneNumber(phone: String): String {
-            return phone.replace(Regex("""[\s\-()]"""), "")
+            return phone.replace(PHONE_FORMATTING_REGEX, "")
+        }
+
+        internal fun normalizePhoneNumberOrNull(phone: String?): String? {
+            val normalized = phone?.let(::normalizePhoneNumber)?.trim().orEmpty()
+            if (normalized.isEmpty()) {
+                return null
+            }
+            val digits = toByPhoneLookupNumber(normalized)
+            return normalized.takeIf { digits.isNotEmpty() }
+        }
+
+        internal fun sanitizeContactPhoneNumberOrNull(phone: String?): String? {
+            val normalized = normalizePhoneNumberOrNull(phone) ?: return null
+            return normalized.takeUnless(::hasSqlLikeWildcard)
+        }
+
+        internal fun shouldPromptForContactNameSearchPermission(
+            contactName: String?,
+            phoneNumber: String?,
+            hasReadContactsPermission: Boolean,
+        ): Boolean {
+            return !contactName.isNullOrEmpty() && phoneNumber.isNullOrEmpty() && !hasReadContactsPermission
+        }
+
+        internal fun mapMmsMsgBoxToSearchType(msgBox: Int?): Int? {
+            return when (msgBox) {
+                1 -> 1 // inbox
+                2 -> 2 // sent
+                3 -> 3 // draft
+                4 -> 4 // outbox
+                5 -> 5 // failed
+                6 -> 6 // queued
+                else -> null
+            }
+        }
+
+        internal fun escapeSqlLikeLiteral(value: String): String {
+            return buildString(value.length) {
+                for (ch in value) {
+                    when (ch) {
+                        '\\', '%', '_' -> {
+                            append('\\')
+                            append(ch)
+                        }
+                        else -> append(ch)
+                    }
+                }
+            }
+        }
+
+        internal fun buildContactNameLikeSelection(): String {
+            return "${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} LIKE ? ESCAPE '\\'"
+        }
+
+        internal fun buildContactNameLikeArg(contactName: String): String {
+            return "%${escapeSqlLikeLiteral(contactName)}%"
+        }
+
+        internal fun buildKeywordLikeSelection(): String {
+            return "${Telephony.Sms.BODY} LIKE ? ESCAPE '\\'"
+        }
+
+        internal fun buildKeywordLikeArg(keyword: String): String {
+            return "%${escapeSqlLikeLiteral(keyword)}%"
+        }
+
+        internal fun buildMixedByPhoneProjection(): Array<String> {
+            return arrayOf(
+                "_id",
+                "thread_id",
+                "transport_type",
+                "address",
+                "date",
+                "date_sent",
+                "read",
+                "type",
+                "body",
+                "status",
+            )
+        }
+
+        internal fun hasSqlLikeWildcard(value: String): Boolean {
+            return value.contains('%') || value.contains('_')
+        }
+
+        internal fun isExplicitPhoneInputInvalid(rawPhone: String?, normalizedPhone: String?): Boolean {
+            if (rawPhone.isNullOrBlank()) {
+                return false
+            }
+            if (normalizedPhone == null) {
+                return true
+            }
+            return hasSqlLikeWildcard(normalizedPhone)
+        }
+
+        internal fun resolveMixedByPhoneRowStatus(transportType: String?, smsStatus: Int?): Int {
+            return if (transportType.equals("mms", ignoreCase = true)) -1 else (smsStatus ?: 0)
+        }
+
+        internal fun resolveMixedByPhoneRowAddress(
+            providerAddress: String?,
+            phoneNumber: String,
+            mmsAddress: String? = null,
+        ): String? {
+            val resolvedMmsAddress = normalizePhoneNumberOrNull(mmsAddress)
+            if (resolvedMmsAddress != null) {
+                return resolvedMmsAddress
+            }
+
+            val resolvedProviderAddress = normalizePhoneNumberOrNull(providerAddress)
+            return resolvedProviderAddress ?: phoneNumber
+        }
+
+        internal fun selectPreferredMmsAddress(
+            addressRows: List<Pair<String?, Int?>>,
+            lookupNumber: String,
+        ): String? {
+            val lookupDigits = toByPhoneLookupNumber(lookupNumber)
+            val normalizedRows = addressRows.mapNotNull { (address, type) ->
+                val normalized = normalizePhoneNumberOrNull(address) ?: return@mapNotNull null
+                val digits = toByPhoneLookupNumber(normalized)
+                if (digits.isBlank()) return@mapNotNull null
+                Triple(normalized, digits, type)
+            }
+
+            fun firstPreferred(vararg types: Int): String? {
+                return normalizedRows.firstOrNull { row ->
+                    (types.isEmpty() || types.contains(row.third ?: -1)) && row.second != lookupDigits
+                }?.first
+            }
+
+            return firstPreferred(137)
+                ?: firstPreferred(151, 130, 129)
+                ?: firstPreferred()
+                ?: normalizedRows.firstOrNull()?.first
+        }
+
+        internal fun shouldUseConversationReviewByPhoneMode(
+            params: QueryParams,
+            resolvedPhoneNumbers: List<String> = emptyList(),
+        ): Boolean {
+            val hasExplicitPhoneNumber = !params.phoneNumber.isNullOrEmpty()
+            val hasSingleResolvedPhoneNumber = resolvedPhoneNumbers.size == 1
+            return params.conversationReview && params.includeMms && (hasExplicitPhoneNumber || hasSingleResolvedPhoneNumber)
+        }
+
+        internal fun effectiveSearchParams(
+            params: QueryParams,
+            resolvedPhoneNumbers: List<String> = emptyList(),
+        ): QueryParams {
+            if (!shouldUseConversationReviewByPhoneMode(params, resolvedPhoneNumbers)) return params
+            val reviewLimit = maxOf(params.limit, 25)
+            return params.copy(limit = reviewLimit)
+        }
+
+        internal fun resolveSearchParams(
+            params: QueryParams,
+            normalizedPhoneNumber: String?,
+            resolvedPhoneNumbers: List<String> = emptyList(),
+        ): QueryParams {
+            val effectivePhoneNumber = normalizedPhoneNumber ?: resolvedPhoneNumbers.singleOrNull()
+            val normalizedParams = params.copy(phoneNumber = effectivePhoneNumber)
+            return effectiveSearchParams(normalizedParams, resolvedPhoneNumbers)
+        }
+
+        internal fun toByPhoneLookupNumber(phone: String): String {
+            return phone.filter { it.isDigit() }
+        }
+
+        internal fun normalizeProviderDateMillis(rawDate: Long): Long {
+            return if (rawDate in 1..99_999_999_999L) rawDate * 1000L else rawDate
+        }
+
+        internal fun canonicalizeMixedPathPhoneFilters(phoneNumbers: List<String>): List<String> {
+            return phoneNumbers
+                .map(::toByPhoneLookupNumber)
+                .filter { it.isNotBlank() }
+                .distinct()
+        }
+
+        internal fun requestedMixedByPhoneCandidateWindow(params: QueryParams): Long {
+            return params.offset.toLong() + params.limit.toLong()
+        }
+
+        internal fun exceedsMixedByPhoneCandidateWindow(
+            params: QueryParams,
+            allPhoneNumbers: List<String>,
+        ): Boolean {
+            return params.includeMms &&
+                allPhoneNumbers.size == 1 &&
+                requestedMixedByPhoneCandidateWindow(params) > MAX_MIXED_BY_PHONE_CANDIDATE_WINDOW
+        }
+
+        internal fun mixedByPhoneWindowError(): String {
+            return "INVALID_REQUEST: includeMms offset+limit exceeds supported window ($MAX_MIXED_BY_PHONE_CANDIDATE_WINDOW)"
+        }
+
+        internal fun isMmsTransportRow(message: SmsMessage): Boolean {
+            return message.transportType.equals("mms", ignoreCase = true)
+        }
+
+        internal fun shouldHydrateMmsByPhoneRow(transportType: String?, body: String?, type: Int): Boolean {
+            return transportType.equals("mms", ignoreCase = true) && (body.isNullOrBlank() || type == 0)
+        }
+
+        internal fun buildQueryMetadata(
+            params: QueryParams,
+            allPhoneNumbers: List<String>,
+            messages: List<SmsMessage>,
+        ): QueryMetadata {
+            val mmsRequested = params.includeMms
+            val mmsEligible = mmsRequested && allPhoneNumbers.size == 1
+            val mmsAttempted = mmsEligible
+            val mmsIncluded = mmsAttempted && messages.any(::isMmsTransportRow)
+            return QueryMetadata(
+                mmsRequested = mmsRequested,
+                mmsEligible = mmsEligible,
+                mmsAttempted = mmsAttempted,
+                mmsIncluded = mmsIncluded,
+            )
+        }
+
+        internal fun compareByPhoneCandidateOrder(left: SmsMessage, right: SmsMessage): Int {
+            return when {
+                left.date != right.date -> right.date.compareTo(left.date)
+                left.id != right.id -> right.id.compareTo(left.id)
+                else -> 0
+            }
+        }
+
+        internal fun buildMixedRowIdentity(rowId: Long, transportType: String?): String {
+            return "${transportType?.ifBlank { "unknown" } ?: "unknown"}:$rowId"
+        }
+
+        internal fun upsertTopDateCandidates(
+            candidates: MutableList<Pair<String, SmsMessage>>,
+            identityKey: String,
+            message: SmsMessage,
+            maxCandidates: Int,
+        ) {
+            if (maxCandidates <= 0) {
+                return
+            }
+
+            candidates.removeAll { existing -> existing.first == identityKey }
+            candidates.add(identityKey to message)
+            candidates.sortWith { left, right -> compareByPhoneCandidateOrder(left.second, right.second) }
+
+            while (candidates.size > maxCandidates) {
+                candidates.removeAt(candidates.lastIndex)
+            }
+        }
+
+        internal fun materializeByPhoneCandidate(
+            candidates: MutableMap<String, SmsMessage>,
+            identityKey: String,
+            message: SmsMessage,
+        ) {
+            candidates[identityKey] = message
+        }
+
+        internal fun collectMixedByPhoneCandidate(
+            topCandidates: MutableList<Pair<String, SmsMessage>>,
+            materializedCandidates: MutableMap<String, SmsMessage>,
+            identityKey: String,
+            message: SmsMessage,
+            maxCandidates: Int,
+            reviewMode: Boolean,
+        ) {
+            if (reviewMode) {
+                materializeByPhoneCandidate(materializedCandidates, identityKey, message)
+            } else {
+                upsertTopDateCandidates(topCandidates, identityKey, message, maxCandidates)
+            }
+        }
+
+        internal fun pageMixedByPhoneCandidates(
+            topCandidates: Collection<Pair<String, SmsMessage>>,
+            materializedCandidates: Map<String, SmsMessage>,
+            params: QueryParams,
+            reviewMode: Boolean,
+        ): List<SmsMessage> {
+            return if (reviewMode) {
+                pageByPhoneCandidates(materializedCandidates.values, params)
+            } else {
+                pageByPhoneCandidates(topCandidates.map { it.second }, params)
+            }
+        }
+
+        internal fun pageByPhoneCandidates(
+            candidates: Collection<SmsMessage>,
+            params: QueryParams,
+        ): List<SmsMessage> {
+            return candidates
+                .sortedWith(::compareByPhoneCandidateOrder)
+                .drop(params.offset)
+                .take(params.limit)
         }
 
         internal fun buildSendPlan(
@@ -214,14 +531,21 @@ class SmsManager(private val context: Context) {
             ok: Boolean,
             messages: List<SmsMessage>,
             error: String? = null,
+            queryMetadata: QueryMetadata? = null,
         ): String {
             val messagesArray = json.encodeToString(messages)
             val messagesElement = json.parseToJsonElement(messagesArray)
             val payload = mutableMapOf<String, JsonElement>(
                 "ok" to JsonPrimitive(ok),
                 "count" to JsonPrimitive(messages.size),
-                "messages" to messagesElement
+                "messages" to messagesElement,
             )
+            queryMetadata?.let {
+                payload["mmsRequested"] = JsonPrimitive(it.mmsRequested)
+                payload["mmsEligible"] = JsonPrimitive(it.mmsEligible)
+                payload["mmsAttempted"] = JsonPrimitive(it.mmsAttempted)
+                payload["mmsIncluded"] = JsonPrimitive(it.mmsIncluded)
+            }
             if (!ok && error != null) {
                 payload["error"] = JsonPrimitive(error)
             }
@@ -254,8 +578,12 @@ class SmsManager(private val context: Context) {
         return hasSmsPermission() && hasTelephonyFeature()
     }
 
-    fun canReadSms(): Boolean {
+    fun canSearchSms(): Boolean {
         return hasReadSmsPermission() && hasTelephonyFeature()
+    }
+
+    fun canReadSms(): Boolean {
+        return canSearchSms()
     }
 
     fun hasTelephonyFeature(): Boolean {
@@ -302,19 +630,19 @@ class SmsManager(private val context: Context) {
             val plan = buildSendPlan(params.message) { smsManager.divideMessage(it) }
             if (plan.useMultipart) {
                 smsManager.sendMultipartTextMessage(
-                    params.to,     // destination
-                    null,          // service center (null = default)
-                    ArrayList(plan.parts),    // message parts
-                    null,          // sent intents
-                    null,          // delivery intents
+                    params.to,
+                    null,
+                    ArrayList(plan.parts),
+                    null,
+                    null,
                 )
             } else {
                 smsManager.sendTextMessage(
-                    params.to,     // destination
-                    null,          // service center (null = default)
-                    params.message,// message
-                    null,          // sent intent
-                    null,          // delivery intent
+                    params.to,
+                    null,
+                    params.message,
+                    null,
+                    null,
                 )
             }
 
@@ -331,6 +659,82 @@ class SmsManager(private val context: Context) {
                 to = params.to,
                 message = params.message,
             )
+        }
+    }
+
+    /**
+     * Search SMS messages with the specified parameters.
+     */
+    suspend fun search(paramsJson: String?): SearchResult = withContext(Dispatchers.IO) {
+        if (!hasTelephonyFeature()) {
+            return@withContext queryError("SMS_UNAVAILABLE: telephony not available")
+        }
+
+        if (!ensureReadSmsPermission()) {
+            return@withContext queryError("SMS_PERMISSION_REQUIRED: grant READ_SMS permission")
+        }
+
+        val parseResult = parseQueryParams(paramsJson, json)
+        if (parseResult is QueryParseResult.Error) {
+            return@withContext queryError(parseResult.error)
+        }
+        val parsedParams = (parseResult as QueryParseResult.Ok).params
+        val normalizedPhoneNumber = normalizePhoneNumberOrNull(parsedParams.phoneNumber)
+        if (isExplicitPhoneInputInvalid(parsedParams.phoneNumber, normalizedPhoneNumber)) {
+            val error =
+                if (!parsedParams.phoneNumber.isNullOrBlank() && normalizedPhoneNumber != null && hasSqlLikeWildcard(normalizedPhoneNumber)) {
+                    "INVALID_REQUEST: phoneNumber must not contain SQL LIKE wildcard characters"
+                } else {
+                    "INVALID_REQUEST: phoneNumber must contain at least one digit"
+                }
+            return@withContext queryError(error)
+        }
+        val normalizedParams = resolveSearchParams(parsedParams, normalizedPhoneNumber)
+
+        return@withContext try {
+            val contactsPermissionGranted = hasReadContactsPermission()
+            val shouldPromptForContactsPermission =
+                shouldPromptForContactNameSearchPermission(
+                    contactName = normalizedParams.contactName,
+                    phoneNumber = normalizedParams.phoneNumber,
+                    hasReadContactsPermission = contactsPermissionGranted,
+                )
+            val phoneNumbers = if (!normalizedParams.contactName.isNullOrEmpty()) {
+                if (contactsPermissionGranted || (shouldPromptForContactsPermission && ensureReadContactsPermission())) {
+                    getPhoneNumbersFromContactName(normalizedParams.contactName)
+                } else if (shouldPromptForContactsPermission) {
+                    return@withContext queryError("CONTACTS_PERMISSION_REQUIRED: grant READ_CONTACTS permission")
+                } else {
+                    emptyList()
+                }
+            } else {
+                emptyList()
+            }
+            val params = resolveSearchParams(parsedParams, normalizedPhoneNumber, phoneNumbers)
+
+            val mixedPathPhoneFilters = if (!params.phoneNumber.isNullOrEmpty()) {
+                canonicalizeMixedPathPhoneFilters(phoneNumbers + params.phoneNumber)
+            } else {
+                canonicalizeMixedPathPhoneFilters(phoneNumbers)
+            }
+
+            if (exceedsMixedByPhoneCandidateWindow(params, mixedPathPhoneFilters)) {
+                val error = mixedByPhoneWindowError()
+                return@withContext queryError(error)
+            }
+
+            if (!params.contactName.isNullOrEmpty() && phoneNumbers.isEmpty() && params.phoneNumber.isNullOrEmpty()) {
+                val queryMetadata = buildQueryMetadata(params, mixedPathPhoneFilters, emptyList())
+                return@withContext queryOk(emptyList(), queryMetadata)
+            }
+
+            val messages = querySmsMessages(params, phoneNumbers)
+            val queryMetadata = buildQueryMetadata(params, mixedPathPhoneFilters, messages)
+            queryOk(messages, queryMetadata)
+        } catch (e: SecurityException) {
+            queryError("SMS_PERMISSION_REQUIRED: ${e.message}")
+        } catch (e: Throwable) {
+            queryError("SMS_QUERY_FAILED: ${e.message ?: "unknown error"}")
         }
     }
 
@@ -375,98 +779,31 @@ class SmsManager(private val context: Context) {
         )
     }
 
-    /**
-     * search SMS messages with the specified parameters.
-     *
-     * @param paramsJson JSON with optional fields:
-     *   - startTime (Long): Start time in milliseconds
-     *   - endTime (Long): End time in milliseconds
-     *   - contactName (String): Contact name to search
-     *   - phoneNumber (String): Phone number to search (supports partial matching)
-     *   - keyword (String): Keyword to search in message body
-     *   - type (Int): SMS type (1=Inbox, 2=Sent, 3=Draft, etc.)
-     *   - isRead (Boolean): Read status
-     *   - limit (Int): Number of records to return (default: 25, range: 1-200)
-     *   - offset (Int): Number of records to skip (default: 0)
-     * @return SearchResult containing the list of SMS messages or an error
-     */
-    suspend fun search(paramsJson: String?): SearchResult = withContext(Dispatchers.IO) {
-        if (!hasTelephonyFeature()) {
-            return@withContext SearchResult(
-                ok = false,
-                messages = emptyList(),
-                error = "SMS_UNAVAILABLE: telephony not available",
-                payloadJson = buildQueryPayloadJson(json, ok = false, messages = emptyList(), error = "SMS_UNAVAILABLE: telephony not available")
-            )
-        }
-
-        if (!ensureReadSmsPermission()) {
-            return@withContext SearchResult(
-                ok = false,
-                messages = emptyList(),
-                error = "SMS_PERMISSION_REQUIRED: grant READ_SMS permission",
-                payloadJson = buildQueryPayloadJson(json, ok = false, messages = emptyList(), error = "SMS_PERMISSION_REQUIRED: grant READ_SMS permission")
-            )
-        }
-
-        val parseResult = parseQueryParams(paramsJson, json)
-        if (parseResult is QueryParseResult.Error) {
-            return@withContext SearchResult(
-                ok = false,
-                messages = emptyList(),
-                error = parseResult.error,
-                payloadJson = buildQueryPayloadJson(json, ok = false, messages = emptyList(), error = parseResult.error)
-            )
-        }
-        val params = (parseResult as QueryParseResult.Ok).params
-
-        return@withContext try {
-            // Get phone numbers from contact name if provided
-            val phoneNumbers = if (!params.contactName.isNullOrEmpty()) {
-                if (!ensureReadContactsPermission()) {
-                    return@withContext SearchResult(
-                        ok = false,
-                        messages = emptyList(),
-                        error = "CONTACTS_PERMISSION_REQUIRED: grant READ_CONTACTS permission",
-                        payloadJson = buildQueryPayloadJson(json, ok = false, messages = emptyList(), error = "CONTACTS_PERMISSION_REQUIRED: grant READ_CONTACTS permission")
-                    )
-                }
-                getPhoneNumbersFromContactName(params.contactName)
-            } else {
-                emptyList()
-            }
-
-            val messages = querySmsMessages(params, phoneNumbers)
-            SearchResult(
-                ok = true,
-                messages = messages,
-                error = null,
-                payloadJson = buildQueryPayloadJson(json, ok = true, messages = messages)
-            )
-        } catch (e: SecurityException) {
-            SearchResult(
-                ok = false,
-                messages = emptyList(),
-                error = "SMS_PERMISSION_REQUIRED: ${e.message}",
-                payloadJson = buildQueryPayloadJson(json, ok = false, messages = emptyList(), error = "SMS_PERMISSION_REQUIRED: ${e.message}")
-            )
-        } catch (e: Throwable) {
-            SearchResult(
-                ok = false,
-                messages = emptyList(),
-                error = "SMS_QUERY_FAILED: ${e.message ?: "unknown error"}",
-                payloadJson = buildQueryPayloadJson(json, ok = false, messages = emptyList(), error = "SMS_QUERY_FAILED: ${e.message ?: "unknown error"}")
-            )
-        }
+    private fun queryOk(
+        messages: List<SmsMessage>,
+        queryMetadata: QueryMetadata? = null,
+    ): SearchResult {
+        return SearchResult(
+            ok = true,
+            messages = messages,
+            error = null,
+            payloadJson = buildQueryPayloadJson(json, ok = true, messages = messages, queryMetadata = queryMetadata),
+        )
     }
 
-    /**
-     * Get all phone numbers associated with a contact name
-     */
+    private fun queryError(error: String): SearchResult {
+        return SearchResult(
+            ok = false,
+            messages = emptyList(),
+            error = error,
+            payloadJson = buildQueryPayloadJson(json, ok = false, messages = emptyList(), error = error),
+        )
+    }
+
     private fun getPhoneNumbersFromContactName(contactName: String): List<String> {
         val phoneNumbers = mutableListOf<String>()
-        val selection = "${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} LIKE ?"
-        val selectionArgs = arrayOf("%$contactName%")
+        val selection = buildContactNameLikeSelection()
+        val selectionArgs = arrayOf(buildContactNameLikeArg(contactName))
 
         val cursor = context.contentResolver.query(
             ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
@@ -480,26 +817,19 @@ class SmsManager(private val context: Context) {
             val numberIndex = it.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER)
             while (it.moveToNext()) {
                 val number = it.getString(numberIndex)
-                if (!number.isNullOrBlank()) {
-                    phoneNumbers.add(normalizePhoneNumber(number))
-                }
+                sanitizeContactPhoneNumberOrNull(number)?.let(phoneNumbers::add)
             }
         }
 
         return phoneNumbers
     }
 
-    /**
-     * Query SMS messages based on the provided parameters
-     */
     private fun querySmsMessages(params: QueryParams, phoneNumbers: List<String>): List<SmsMessage> {
         val messages = mutableListOf<SmsMessage>()
 
-        // Build selection and selectionArgs
         val selections = mutableListOf<String>()
         val selectionArgs = mutableListOf<String>()
 
-        // Time range
         if (params.startTime != null) {
             selections.add("${Telephony.Sms.DATE} >= ?")
             selectionArgs.add(params.startTime.toString())
@@ -509,11 +839,17 @@ class SmsManager(private val context: Context) {
             selectionArgs.add(params.endTime.toString())
         }
 
-        // Phone numbers (from contact name or direct phone number)
         val allPhoneNumbers = if (!params.phoneNumber.isNullOrEmpty()) {
-            phoneNumbers + normalizePhoneNumber(params.phoneNumber)
+            (phoneNumbers + normalizePhoneNumber(params.phoneNumber)).distinct()
         } else {
-            phoneNumbers
+            phoneNumbers.distinct()
+        }
+        val mixedPathPhoneFilters = canonicalizeMixedPathPhoneFilters(allPhoneNumbers)
+
+        // Unified SMS+MMS query path is opt-in to keep sms.search semantics
+        // stable by default. Use includeMms=true for by-phone provider behavior.
+        if (params.includeMms && mixedPathPhoneFilters.size == 1) {
+            return querySmsMmsMessagesByPhone(mixedPathPhoneFilters.first(), params)
         }
 
         if (allPhoneNumbers.isNotEmpty()) {
@@ -526,19 +862,16 @@ class SmsManager(private val context: Context) {
             }
         }
 
-        // Keyword in body
         if (!params.keyword.isNullOrEmpty()) {
-            selections.add("${Telephony.Sms.BODY} LIKE ?")
-            selectionArgs.add("%${params.keyword}%")
+            selections.add(buildKeywordLikeSelection())
+            selectionArgs.add(buildKeywordLikeArg(params.keyword))
         }
 
-        // Type
         if (params.type != null) {
             selections.add("${Telephony.Sms.TYPE} = ?")
             selectionArgs.add(params.type.toString())
         }
 
-        // Read status
         if (params.isRead != null) {
             selections.add("${Telephony.Sms.READ} = ?")
             selectionArgs.add(if (params.isRead) "1" else "0")
@@ -556,7 +889,8 @@ class SmsManager(private val context: Context) {
             null
         }
 
-        // Query SMS with SQL-level LIMIT and OFFSET to avoid loading all matching rows
+        // Android SMS providers still honor LIMIT/OFFSET through sortOrder on this path.
+        // Keep the bounded interpolation here because parseQueryParams already clamps both values.
         val sortOrder = "${Telephony.Sms.DATE} DESC LIMIT ${params.limit} OFFSET ${params.offset}"
         val cursor = context.contentResolver.query(
             Telephony.Sms.CONTENT_URI,
@@ -570,7 +904,7 @@ class SmsManager(private val context: Context) {
                 Telephony.Sms.READ,
                 Telephony.Sms.TYPE,
                 Telephony.Sms.BODY,
-                Telephony.Sms.STATUS
+                Telephony.Sms.STATUS,
             ),
             selection,
             selectionArgsArray,
@@ -601,7 +935,7 @@ class SmsManager(private val context: Context) {
                     read = it.getInt(readIndex) == 1,
                     type = it.getInt(typeIndex),
                     body = it.getString(bodyIndex),
-                    status = it.getInt(statusIndex)
+                    status = it.getInt(statusIndex),
                 )
                 messages.add(message)
                 count++
@@ -609,5 +943,185 @@ class SmsManager(private val context: Context) {
         }
 
         return messages
+    }
+
+    private fun querySmsMmsMessagesByPhone(phoneNumber: String, params: QueryParams): List<SmsMessage> {
+        val lookupNumber = toByPhoneLookupNumber(phoneNumber)
+        if (lookupNumber.isBlank()) {
+            return emptyList()
+        }
+
+        val uri = Uri.parse("$MMS_SMS_BY_PHONE_BASE/${Uri.encode(lookupNumber)}")
+        val projection = buildMixedByPhoneProjection()
+
+        val maxCandidates = params.offset + params.limit
+        if (maxCandidates <= 0) {
+            return emptyList()
+        }
+
+        val reviewMode = shouldUseConversationReviewByPhoneMode(params)
+        val topCandidates = mutableListOf<Pair<String, SmsMessage>>()
+        val materializedCandidates = linkedMapOf<String, SmsMessage>()
+        val cursor = context.contentResolver.query(uri, projection, null, null, "date DESC")
+        cursor?.use {
+            val idIndex = it.getColumnIndex("_id")
+            val threadIdIndex = it.getColumnIndex("thread_id")
+            val transportTypeIndex = it.getColumnIndex("transport_type")
+            val addressIndex = it.getColumnIndex("address")
+            val dateIndex = it.getColumnIndex("date")
+            val dateSentIndex = it.getColumnIndex("date_sent")
+            val readIndex = it.getColumnIndex("read")
+            val typeIndex = it.getColumnIndex("type")
+            val bodyIndex = it.getColumnIndex("body")
+            val statusIndex = it.getColumnIndex("status")
+
+            while (it.moveToNext()) {
+                val id = if (idIndex >= 0 && !it.isNull(idIndex)) it.getLong(idIndex) else continue
+                val rawDate = if (dateIndex >= 0 && !it.isNull(dateIndex)) it.getLong(dateIndex) else 0L
+                val dateMs = normalizeProviderDateMillis(rawDate)
+
+                if (params.startTime != null && dateMs < params.startTime) continue
+                if (params.endTime != null && dateMs > params.endTime) continue
+
+                val threadId = if (threadIdIndex >= 0 && !it.isNull(threadIdIndex)) it.getLong(threadIdIndex) else 0L
+                val transportType = if (transportTypeIndex >= 0 && !it.isNull(transportTypeIndex)) it.getString(transportTypeIndex) else null
+                val providerAddress = if (addressIndex >= 0 && !it.isNull(addressIndex)) it.getString(addressIndex) else null
+                val mmsAddress = if (transportType.equals("mms", ignoreCase = true)) getMmsAddress(id, phoneNumber) else null
+                val address = resolveMixedByPhoneRowAddress(providerAddress, phoneNumber, mmsAddress)
+                var read = if (readIndex >= 0 && !it.isNull(readIndex)) it.getInt(readIndex) == 1 else true
+                var type = if (typeIndex >= 0 && !it.isNull(typeIndex)) it.getInt(typeIndex) else 0
+                var body = if (bodyIndex >= 0 && !it.isNull(bodyIndex)) it.getString(bodyIndex) else null
+                val smsStatus = if (statusIndex >= 0 && !it.isNull(statusIndex)) it.getInt(statusIndex) else null
+
+                // Only MMS transport rows are allowed to hydrate from MMS storage.
+                if (shouldHydrateMmsByPhoneRow(transportType, body, type)) {
+                    body = body?.takeIf { msg -> msg.isNotBlank() } ?: getMmsTextBody(id)
+                    val mmsMeta = getMmsMeta(id)
+                    if (type == 0) {
+                        type = mmsMeta.first ?: type
+                    }
+                    if (readIndex < 0 || it.isNull(readIndex)) {
+                        read = mmsMeta.second ?: read
+                    }
+                }
+
+                val dateSentRaw = if (dateSentIndex >= 0 && !it.isNull(dateSentIndex)) it.getLong(dateSentIndex) else 0L
+                val dateSentMs = normalizeProviderDateMillis(dateSentRaw)
+
+                if (!params.keyword.isNullOrEmpty()) {
+                    val keyword = params.keyword
+                    if (body.isNullOrEmpty() || !body.contains(keyword, ignoreCase = true)) {
+                        continue
+                    }
+                }
+                if (params.type != null && type != params.type) continue
+                if (params.isRead != null && read != params.isRead) continue
+
+                val message = SmsMessage(
+                    id = id,
+                    threadId = threadId,
+                    address = address,
+                    person = null,
+                    date = dateMs,
+                    dateSent = dateSentMs,
+                    read = read,
+                    type = type,
+                    body = body,
+                    status = resolveMixedByPhoneRowStatus(transportType, smsStatus),
+                    transportType = transportType,
+                )
+                val identityKey = buildMixedRowIdentity(id, transportType)
+                collectMixedByPhoneCandidate(
+                    topCandidates = topCandidates,
+                    materializedCandidates = materializedCandidates,
+                    identityKey = identityKey,
+                    message = message,
+                    maxCandidates = maxCandidates,
+                    reviewMode = reviewMode,
+                )
+            }
+        }
+
+        return pageMixedByPhoneCandidates(
+            topCandidates = topCandidates,
+            materializedCandidates = materializedCandidates,
+            params = params,
+            reviewMode = reviewMode,
+        )
+    }
+
+    private fun getMmsTextBody(messageId: Long): String? {
+        val cursor = context.contentResolver.query(
+            Uri.parse(MMS_PART_URI),
+            arrayOf("text", "ct"),
+            "mid=?",
+            arrayOf(messageId.toString()),
+            null,
+        )
+
+        cursor?.use {
+            val textIndex = it.getColumnIndex("text")
+            val ctIndex = it.getColumnIndex("ct")
+            while (it.moveToNext()) {
+                val contentType = if (ctIndex >= 0 && !it.isNull(ctIndex)) it.getString(ctIndex) else null
+                if (contentType != null && contentType != "text/plain") continue
+                val text = if (textIndex >= 0 && !it.isNull(textIndex)) it.getString(textIndex) else null
+                if (!text.isNullOrBlank()) return text
+            }
+        }
+
+        return null
+    }
+
+    private fun getMmsMeta(messageId: Long): Pair<Int?, Boolean?> {
+        val cursor = context.contentResolver.query(
+            Uri.parse("$MMS_CONTENT_BASE/$messageId"),
+            arrayOf("msg_box", "read"),
+            null,
+            null,
+            null,
+        )
+
+        cursor?.use {
+            if (it.moveToFirst()) {
+                val msgBoxIndex = it.getColumnIndex("msg_box")
+                val readIndex = it.getColumnIndex("read")
+                val msgBox = if (msgBoxIndex >= 0 && !it.isNull(msgBoxIndex)) it.getInt(msgBoxIndex) else null
+                val mappedType = mapMmsMsgBoxToSearchType(msgBox)
+                val read = if (readIndex >= 0 && !it.isNull(readIndex)) it.getInt(readIndex) == 1 else null
+                return mappedType to read
+            }
+        }
+
+        return null to null
+    }
+
+    private fun getMmsAddress(messageId: Long, phoneNumber: String): String? {
+        val lookupNumber = toByPhoneLookupNumber(phoneNumber)
+        if (lookupNumber.isBlank()) {
+            return null
+        }
+
+        val cursor = context.contentResolver.query(
+            Uri.parse("$MMS_CONTENT_BASE/$messageId/addr"),
+            arrayOf("address", "type"),
+            null,
+            null,
+            null,
+        )
+
+        cursor?.use {
+            val addressIndex = it.getColumnIndex("address")
+            val typeIndex = it.getColumnIndex("type")
+            val addressRows = mutableListOf<Pair<String?, Int?>>()
+            while (it.moveToNext()) {
+                val address = if (addressIndex >= 0 && !it.isNull(addressIndex)) it.getString(addressIndex) else null
+                val type = if (typeIndex >= 0 && !it.isNull(typeIndex)) it.getInt(typeIndex) else null
+                addressRows.add(address to type)
+            }
+            return selectPreferredMmsAddress(addressRows, lookupNumber)
+        }
+
+        return null
     }
 }
