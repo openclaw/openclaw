@@ -188,8 +188,8 @@ export async function tasksListCommand(
     return;
   }
 
-  runtime.log(info(`Detached task runs: ${tasks.length}`));
-  runtime.log(info(`Detached run pressure: ${formatTaskListSummary(tasks)}`));
+  runtime.log(info(`Background tasks: ${tasks.length}`));
+  runtime.log(info(`Task pressure: ${formatTaskListSummary(tasks)}`));
   if (runtimeFilter) {
     runtime.log(info(`Runtime filter: ${runtimeFilter}`));
   }
@@ -197,7 +197,7 @@ export async function tasksListCommand(
     runtime.log(info(`Status filter: ${statusFilter}`));
   }
   if (tasks.length === 0) {
-    runtime.log("No detached task runs found.");
+    runtime.log("No background tasks found.");
     return;
   }
   const rich = isRich();
@@ -223,7 +223,7 @@ export async function tasksShowCommand(
   }
 
   const lines = [
-    "Detached task run:",
+    "Background task:",
     `taskId: ${task.taskId}`,
     `kind: ${task.runtime}`,
     `sourceId: ${task.sourceId ?? "n/a"}`,
@@ -350,7 +350,7 @@ export async function tasksAuditCommand(
 
   runtime.log(
     info(
-      `Detached run audit: ${summary.total} findings · ${summary.errors} errors · ${summary.warnings} warnings`,
+      `Task audit: ${summary.total} findings · ${summary.errors} errors · ${summary.warnings} warnings`,
     ),
   );
   if (severityFilter || codeFilter) {
@@ -366,7 +366,7 @@ export async function tasksAuditCommand(
     runtime.log(info(`Limit: ${limit}`));
   }
   if (displayed.length === 0) {
-    runtime.log("No detached run audit findings.");
+    runtime.log("No task audit findings.");
     return;
   }
   const rich = isRich();
@@ -403,18 +403,18 @@ export async function tasksMaintenanceCommand(
 
   runtime.log(
     info(
-      `Detached run maintenance (${opts.apply ? "applied" : "preview"}): ${maintenance.reconciled} reconcile · ${maintenance.cleanupStamped} cleanup stamp · ${maintenance.pruned} prune`,
+      `Task maintenance (${opts.apply ? "applied" : "preview"}): ${maintenance.reconciled} reconcile · ${maintenance.cleanupStamped} cleanup stamp · ${maintenance.pruned} prune`,
     ),
   );
   runtime.log(
     info(
-      `${opts.apply ? "Detached run health after apply" : "Detached run health"}: ${summary.byStatus.queued} queued · ${summary.byStatus.running} running · ${auditAfter.errors} audit errors · ${auditAfter.warnings} audit warnings`,
+      `${opts.apply ? "Task health after apply" : "Task health"}: ${summary.byStatus.queued} queued · ${summary.byStatus.running} running · ${auditAfter.errors} audit errors · ${auditAfter.warnings} audit warnings`,
     ),
   );
   if (opts.apply) {
     runtime.log(
       info(
-        `Detached run health before apply: ${auditBefore.errors} audit errors · ${auditBefore.warnings} audit warnings`,
+        `Task health before apply: ${auditBefore.errors} audit errors · ${auditBefore.warnings} audit warnings`,
       ),
     );
   }
