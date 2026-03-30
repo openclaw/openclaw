@@ -142,6 +142,14 @@ export async function handleAcpStatusAction(
               `taskId: ${linkedTask.taskId}`,
               `taskStatus: ${linkedTask.status}`,
               `delivery: ${linkedTask.deliveryStatus}`,
+              ...(linkedTask.progressSummary
+                ? [`taskProgress: ${linkedTask.progressSummary}`]
+                : []),
+              ...(linkedTask.terminalSummary ? [`taskSummary: ${linkedTask.terminalSummary}`] : []),
+              ...(linkedTask.error ? [`taskError: ${linkedTask.error}`] : []),
+              ...(typeof linkedTask.lastEventAt === "number"
+                ? [`taskUpdatedAt: ${new Date(linkedTask.lastEventAt).toISOString()}`]
+                : []),
             ]
           : []),
         `runtimeOptions: ${formatRuntimeOptionsText(status.runtimeOptions)}`,

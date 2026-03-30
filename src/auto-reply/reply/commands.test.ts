@@ -130,6 +130,8 @@ const { parseConfigCommand } = await import("./config-commands.js");
 const { parseDebugCommand } = await import("./debug-commands.js");
 const { parseInlineDirectives } = await import("./directive-handling.js");
 const { buildCommandContext, handleCommands } = await import("./commands.js");
+const { createTaskRecord, resetTaskRegistryForTests } =
+  await import("../../tasks/task-registry.js");
 
 let testWorkspaceDir = os.tmpdir();
 
@@ -150,6 +152,7 @@ afterAll(async () => {
 beforeEach(() => {
   vi.useRealTimers();
   vi.clearAllTimers();
+  resetTaskRegistryForTests();
   setDefaultChannelPluginRegistryForTests();
   readConfigFileSnapshotMock.mockImplementation(async () => {
     const configPath = process.env.OPENCLAW_CONFIG_PATH;
@@ -2743,6 +2746,16 @@ describe("handleCommands subagents", () => {
       endedAt: now - 1_000,
       outcome: { status: "ok" },
     });
+    createTaskRecord({
+      runtime: "subagent",
+      requesterSessionKey: "agent:main:main",
+      childSessionKey: "agent:main:subagent:abc",
+      runId: "run-1",
+      task: "do thing",
+      status: "succeeded",
+      terminalSummary: "Completed the requested task",
+      deliveryStatus: "delivered",
+    });
     const cfg = {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
@@ -2754,6 +2767,8 @@ describe("handleCommands subagents", () => {
     expect(result.reply?.text).toContain("Subagent info");
     expect(result.reply?.text).toContain("Run: run-1");
     expect(result.reply?.text).toContain("Status: done");
+    expect(result.reply?.text).toContain("TaskStatus: succeeded");
+    expect(result.reply?.text).toContain("Task summary: Completed the requested task");
   });
 
   it("does not resolve moved child rows from a stale older parent", async () => {
