@@ -5,7 +5,12 @@
   "description": "OpenClaw save/load conversation context plugin",
   "type": "module",
   "peerDependencies": {
-    "openclaw": "*"
+    "openclaw": ">=2026.3.30"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
   },
   "openclaw": {
     "extensions": [
