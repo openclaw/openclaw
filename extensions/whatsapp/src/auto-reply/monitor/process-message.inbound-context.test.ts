@@ -445,8 +445,6 @@ describe("web processMessage inbound context", () => {
   });
 
   it("blocks outbound replies to non-allowlisted groups (defense in depth)", async () => {
-    deliverWebReplyMock.mockClear();
-
     await processMessage(
       makeProcessMessageArgs({
         routeSessionKey: "agent:main:whatsapp:group:123@g.us",
@@ -483,7 +481,7 @@ describe("web processMessage inbound context", () => {
       | undefined;
     expect(deliver).toBeTypeOf("function");
 
-    await deliver?.({ text: "should be blocked" }, { kind: "final" });
+    await deliver!({ text: "should be blocked" }, { kind: "final" });
     expect(deliverWebReplyMock).not.toHaveBeenCalled();
   });
 });
