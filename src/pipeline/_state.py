@@ -101,6 +101,7 @@ def init_smart_router(config: Dict[str, Any], force_cloud: bool) -> Optional[Sma
 
     profiles: Dict[str, ModelProfile] = {}
     for task_type, model_name in router_cfg.items():
+        # Skip local quantized models — cloud-only mode (no local vLLM)
         if any(tag in model_name.upper() for tag in ("AWQ", "GPTQ", "GGUF")):
             continue
         if model_name not in profiles:
