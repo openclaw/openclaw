@@ -44,6 +44,9 @@ function resolveMarkdownModeFromSection(
   return isMarkdownTableMode(sectionMode) ? sectionMode : undefined;
 }
 
+/** Channels whose send path can consume extracted Block Kit table metadata. */
+const BLOCK_TABLE_CHANNELS = new Set(["slack"]);
+
 export function resolveMarkdownTableMode(params: {
   cfg?: Partial<OpenClawConfig>;
   channel?: string | null;
@@ -59,5 +62,12 @@ export function resolveMarkdownTableMode(params: {
     (params.cfg as Record<string, unknown> | undefined)?.[channel]) as
     | MarkdownConfigSection
     | undefined;
-  return resolveMarkdownModeFromSection(section, params.accountId) ?? defaultMode;
+  const resolved = resolveMarkdownModeFromSection(section, params.accountId) ?? defaultMode;
+  // Coerce "block" to "code" for channels that don't support Block Kit tables.
+  // Without this, table content is silently removed because the channel's
+  // send path doesn't consume the extracted table metadata.
+  if (resolved === "block" && !BLOCK_TABLE_CHANNELS.has(channel)) {
+    return "code";
+  }
+  return resolved;
 }

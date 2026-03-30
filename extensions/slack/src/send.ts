@@ -378,17 +378,20 @@ export async function sendMessageSlack(
       chunks.push(...result.chunks);
       allTables.push(...result.tables);
     }
-    if (allTables.length > 0) {
-      // buildSlackTableAttachments returns attachments for single tables,
-      // undefined for multiple (Slack only allows one table per message).
+    if (allTables.length === 1) {
+      // Single table: render as a Block Kit table attachment.
       tableAttachments = buildSlackTableAttachments(allTables);
-      if (!tableAttachments) {
-        // Multiple tables: render as aligned code blocks for consistency.
-        const allTablesText = allTables
-          .map((t) => "```\n" + renderSlackTablesFallbackText([t]) + "\n```")
-          .join("\n\n");
-        chunks.push(allTablesText);
-      }
+    } else if (allTables.length > 1) {
+      // Multiple tables: Slack only allows one table block per message,
+      // so re-render with tableMode "code" to keep tables inline at their
+      // original positions (preserving reading order) and let normal
+      // chunking handle message-size limits.
+      chunks.length = 0;
+      chunks.push(
+        ...markdownChunks.flatMap((markdown) =>
+          markdownToSlackMrkdwnChunks(markdown, chunkLimit, { tableMode: "code" }),
+        ),
+      );
     }
   } else {
     chunks.push(
