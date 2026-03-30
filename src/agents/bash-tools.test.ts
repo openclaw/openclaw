@@ -506,6 +506,24 @@ describe("exec /approve guard", () => {
     const result = await executeExecCommand(execTool, shellEcho("/approve test"));
     expect(readTextContent(result.content)).toBeDefined();
   });
+
+  it("rejects /approve on a non-first line of a multiline command", async () => {
+    await expect(
+      executeExecCommand(execTool, "ls\n/approve abc123 allow-always"),
+    ).rejects.toThrow("/approve is a chat slash command, not a shell command");
+  });
+
+  it("rejects case-insensitive variants like /APPROVE", async () => {
+    await expect(
+      executeExecCommand(execTool, "/APPROVE abc123 allow-once"),
+    ).rejects.toThrow("/approve is a chat slash command, not a shell command");
+  });
+
+  it("rejects /approve@botname foreign-mention syntax", async () => {
+    await expect(
+      executeExecCommand(execTool, "/approve@mybot abc123 allow-always"),
+    ).rejects.toThrow("/approve is a chat slash command, not a shell command");
+  });
 });
 
 describe("exec exit codes", () => {

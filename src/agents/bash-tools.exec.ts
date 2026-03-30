@@ -254,7 +254,11 @@ export function createExecTool(
       // Guard: /approve is a slash command for the chat input, not a shell command.
       // Executing it via exec triggers a new approval-pending, causing an infinite loop.
       // See: https://github.com/openclaw/openclaw/issues/57432
-      if (/^\s*\/approve\b/.test(params.command)) {
+      // Flags: m (multiline) anchors ^ per-line so multi-statement commands are caught;
+      //        i (case-insensitive) matches /APPROVE, /Approve, etc. as the slash-command
+      //        parser (commands-approve.ts) is case-insensitive.
+      // The optional @mention group covers `/approve@botname ...` foreign-mention syntax.
+      if (/^\s*\/approve(?:@[^\s]*)?(\s|$)/mi.test(params.command)) {
         throw new Error(
           "/approve is a chat slash command, not a shell command. " +
             "Show the /approve command to the user as a chat message instead of executing it via exec.",
