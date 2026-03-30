@@ -32,6 +32,7 @@ import { parseWorkspaceLink, isWorkspaceLink, parseUrlState, buildUrl, buildWork
 import { isCodeFile } from "@/lib/report-utils";
 import { CronDashboard } from "../components/cron/cron-dashboard";
 import { SkillStorePanel } from "../components/skill-store/skill-store-panel";
+import { IntegrationsPanel } from "../components/integrations/integrations-panel";
 import { CronJobDetail } from "../components/cron/cron-job-detail";
 import { CronSessionView } from "../components/cron/cron-session-view";
 import type { CronJob, CronJobsResponse } from "../types/cron";
@@ -173,6 +174,7 @@ type ContentState =
   | { kind: "directory"; node: TreeNode }
   | { kind: "cron-dashboard" }
   | { kind: "skill-store" }
+  | { kind: "integrations" }
   | { kind: "cron-job"; jobId: string; job: CronJob }
   | { kind: "cron-session"; jobId: string; job: CronJob; sessionId: string; run: import("../types/cron").CronRunLogEntry }
   | { kind: "duckdb-missing" }
@@ -3456,6 +3458,9 @@ function ContentRenderer({
 
     case "skill-store":
       return <SkillStorePanel />;
+
+    case "integrations":
+      return <IntegrationsPanel />;
 
     case "cron-job":
       return (
