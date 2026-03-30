@@ -2050,15 +2050,15 @@ Talk 模式的默认值（macOS/iOS/Android）。
 - 文件权限为目录 `0700`、文件 `0600`。
 - 清理遵循 `cleanup` 策略：`delete` 总会删除附件；`keep` 仅在 `retainOnSessionKeep: true` 时保留。
 
-### `tools.subagents`
+### `agents.defaults.subagents`
 
 ```json5
 {
   agents: {
     defaults: {
       subagents: {
-        model: "minimax/MiniMax-M2.5",
-        maxConcurrent: 1,
+        model: "minimax/MiniMax-M2.7",
+        maxConcurrent: 8,
         runTimeoutSeconds: 900,
         archiveAfterMinutes: 60,
       },
@@ -2068,7 +2068,7 @@ Talk 模式的默认值（macOS/iOS/Android）。
 ```
 
 - `model`：派生子智能体的默认模型。如果省略，子智能体会继承调用方的模型。
-- `runTimeoutSeconds`：当工具调用省略 `runTimeoutSeconds` 时，`sessions_spawn` 使用的默认超时（秒）。`0` 表示无超时。
+- `runTimeoutSeconds`：当 `sessions_spawn` 工具调用省略 `runTimeoutSeconds` 时的默认超时（秒）。`0` 表示无超时。
 - 每个子智能体的工具策略：`tools.subagents.tools.allow` / `tools.subagents.tools.deny`。
 
 ---
@@ -2904,6 +2904,26 @@ Secret refs 是增量能力：明文值仍然可用。
 - 见 [OAuth](/concepts/oauth)。
 - Secrets 运行时行为以及 `audit/configure/apply` 工具：见 [Secrets Management](/gateway/secrets)。
 
+### `auth.cooldowns`
+
+```json5
+{
+  auth: {
+    cooldowns: {
+      billingBackoffHours: 5,
+      billingBackoffHoursByProvider: { anthropic: 3, openai: 8 },
+      billingMaxHours: 24,
+      failureWindowHours: 24,
+    },
+  },
+}
+```
+
+- `billingBackoffHours`：计费/配额错误后的默认退避时间（小时，默认：`5`）。
+- `billingBackoffHoursByProvider`：按提供商覆盖的退避时间（可选）。
+- `billingMaxHours`：退避指数增长的上限（小时，默认：`24`）。
+- `failureWindowHours`：退避计数器的滚动窗口（小时，默认：`24`）。
+
 ---
 
 ## 日志
@@ -2924,6 +2944,132 @@ Secret refs 是增量能力：明文值仍然可用。
 - 默认日志文件：`/tmp/openclaw/openclaw-YYYY-MM-DD.log`。
 - 设置 `logging.file` 以获得稳定路径。
 - 使用 `--verbose` 时，`consoleLevel` 会提升为 `debug`。
+- `maxFileBytes`：写入被抑制前的最大日志文件大小（字节，正整数；默认：`524288000` = 500 MB）。生产部署请使用外部日志轮转。
+
+---
+
+## 诊断
+
+```json5
+{
+  diagnostics: {
+    enabled: true,
+    flags: ["telegram.*"],
+    stuckSessionWarnMs: 30000,
+
+    otel: {
+      enabled: false,
+      endpoint: "https://otel-collector.example.com:4318",
+      protocol: "http/protobuf", // http/protobuf | grpc
+      headers: { "x-tenant-id": "my-org" },
+      serviceName: "openclaw-gateway",
+      traces: true,
+      metrics: true,
+      logs: false,
+      sampleRate: 1.0,
+      flushIntervalMs: 5000,
+    },
+
+    cacheTrace: {
+      enabled: false,
+      filePath: "~/.openclaw/logs/cache-trace.jsonl",
+      includeMessages: true,
+      includePrompt: true,
+      includeSystem: true,
+    },
+  },
+}
+```
+
+- `enabled`：检测输出的主开关（默认：`true`）。
+- `flags`：启用定向日志输出的标志字符串数组（支持通配符如 `"telegram.*"` 或 `"*"`）。
+- `stuckSessionWarnMs`：会话处于处理状态时发出卡住会话警告的年龄阈值（毫秒）。
+- `otel.enabled`：启用 OpenTelemetry 导出管道（默认：`false`）。
+- `otel.endpoint`：OTel 导出的采集器 URL。
+- `otel.protocol`：`"http/protobuf"`（默认）或 `"grpc"`。
+- `otel.headers`：与 OTel 导出请求一起发送的额外 HTTP/gRPC 元数据头。
+- `otel.serviceName`：资源属性的服务名称。
+- `otel.traces` / `otel.metrics` / `otel.logs`：启用 trace、metrics 或日志导出。
+- `otel.sampleRate`：trace 采样率 `0`–`1`。
+- `otel.flushIntervalMs`：周期性遥测刷新间隔（毫秒）。
+- `cacheTrace.enabled`：记录嵌入运行的缓存 trace 快照（默认：`false`）。
+- `cacheTrace.filePath`：缓存 trace JSONL 的输出路径（默认：`$OPENCLAW_STATE_DIR/logs/cache-trace.jsonl`）。
+- `cacheTrace.includeMessages` / `includePrompt` / `includeSystem`：控制缓存 trace 输出中包含的内容（均默认：`true`）。
+
+---
+
+## 更新
+
+```json5
+{
+  update: {
+    channel: "stable", // stable | beta | dev
+    checkOnStart: true,
+
+    auto: {
+      enabled: false,
+      stableDelayHours: 6,
+      stableJitterHours: 12,
+      betaCheckIntervalHours: 1,
+    },
+  },
+}
+```
+
+- `channel`：npm/git 安装的发布渠道 — `"stable"`、`"beta"` 或 `"dev"`。
+- `checkOnStart`：网关启动时检查 npm 更新（默认：`true`）。
+- `auto.enabled`：为包安装启用后台自动更新（默认：`false`）。
+- `auto.stableDelayHours`：稳定渠道自动应用前的最短延迟小时数（默认：`6`；最大：`168`）。
+- `auto.stableJitterHours`：额外的稳定渠道推出分散窗口小时数（默认：`12`；最大：`168`）。
+- `auto.betaCheckIntervalHours`：beta 渠道检查运行频率（小时）（默认：`1`；最大：`24`）。
+
+---
+
+## ACP
+
+```json5
+{
+  acp: {
+    enabled: false,
+    dispatch: { enabled: true },
+    backend: "acpx",
+    defaultAgent: "main",
+    allowedAgents: ["main", "ops"],
+    maxConcurrentSessions: 10,
+
+    stream: {
+      coalesceIdleMs: 50,
+      maxChunkChars: 1000,
+      repeatSuppression: true,
+      deliveryMode: "live", // live | final_only
+      hiddenBoundarySeparator: "paragraph", // none | space | newline | paragraph
+      maxOutputChars: 50000,
+      maxSessionUpdateChars: 500,
+    },
+
+    runtime: {
+      ttlMinutes: 30,
+    },
+  },
+}
+```
+
+- `enabled`：全局 ACP 功能开关（默认：`false`）。
+- `dispatch.enabled`：ACP 会话轮次调度的独立开关（默认：`true`）。设为 `false` 可保留 ACP 命令但阻止执行。
+- `backend`：默认 ACP 运行时后端 ID（必须匹配已注册的 ACP 运行时插件）。
+- `defaultAgent`：当 spawn 未指定显式目标时的回退 ACP 目标智能体 ID。
+- `allowedAgents`：允许用于 ACP 运行时会话的智能体 ID 白名单；为空则无额外限制。
+- `maxConcurrentSessions`：最大并发活动 ACP 会话数。
+- `stream.coalesceIdleMs`：流式文本的空闲刷新窗口（毫秒）。
+- `stream.maxChunkChars`：分割流式块投影前的最大块大小。
+- `stream.repeatSuppression`：每轮抑制重复的状态/工具行（默认：`true`）。
+- `stream.deliveryMode`：`"live"` 增量流式传输；`"final_only"` 缓冲直到轮次终止事件。
+- `stream.hiddenBoundarySeparator`：隐藏工具事件后可见文本前的分隔符（默认：`"paragraph"`）。
+- `stream.maxOutputChars`：每个 ACP 轮次投影的最大助手输出字符数。
+- `stream.maxSessionUpdateChars`：投影的 ACP 状态/更新行的最大字符数。
+- `stream.tagVisibility`：标签名到布尔可见性覆盖的记录，用于流式事件。
+- `runtime.ttlMinutes`：ACP 会话工作器在符合清理条件前的空闲 TTL（分钟）。
+- `runtime.installCommand`：引导 ACP 运行时环境时运行的可选安装命令。
 
 ---
 
@@ -3041,7 +3187,71 @@ Secret refs 是增量能力：明文值仍然可用。
 - `webhookToken`：用于 Cron webhook POST 投递（`delivery.mode = "webhook"`）的 bearer token；若省略则不发送认证头。
 - `webhook`：已弃用的旧版回退 webhook URL（http/https），仅用于仍然具有 `notify: true` 的已存储作业。
 
-见 [Cron Jobs](/automation/cron-jobs)。
+见 [Cron Jobs](/automation/cron-jobs)。隔离的 Cron 执行作为[后台任务](/automation/tasks)被跟踪。
+
+### `cron.retry`
+
+```json5
+{
+  cron: {
+    retry: {
+      maxAttempts: 3,
+      backoffMs: [30000, 60000, 300000],
+      retryOn: ["rate_limit", "overloaded", "network", "timeout", "server_error"],
+    },
+  },
+}
+```
+
+- `maxAttempts`：一次性作业在瞬态错误上的最大重试次数（默认：`3`；范围：`0`–`10`）。
+- `backoffMs`：每次重试尝试的退避延迟数组（毫秒）（默认：`[30000, 60000, 300000]`；1–10 个条目）。
+- `retryOn`：触发重试的错误类型 — `"rate_limit"`、`"overloaded"`、`"network"`、`"timeout"`、`"server_error"`。省略则重试所有瞬态类型。
+
+仅适用于一次性 Cron 作业。循环作业使用单独的失败处理。
+
+### `cron.failureAlert`
+
+```json5
+{
+  cron: {
+    failureAlert: {
+      enabled: false,
+      after: 3,
+      cooldownMs: 3600000,
+      mode: "announce",
+      accountId: "main",
+    },
+  },
+}
+```
+
+- `enabled`：为 Cron 作业启用失败告警（默认：`false`）。
+- `after`：触发告警前的连续失败次数（正整数，最小：`1`）。
+- `cooldownMs`：同一作业重复告警之间的最短毫秒数（非负整数）。
+- `mode`：投递模式 — `"announce"` 通过渠道消息发送；`"webhook"` 发送到已配置的 webhook。
+- `accountId`：可选的账户或渠道 ID，用于限定告警投递范围。
+
+### `cron.failureDestination`
+
+```json5
+{
+  cron: {
+    failureDestination: {
+      channel: "telegram",
+      to: "-1001234567890",
+      accountId: "main",
+      mode: "announce", // announce | webhook
+    },
+  },
+}
+```
+
+- `channel`：失败告警投递的目标渠道提供商。
+- `to`：渠道内的目标 peer/chat ID。
+- `accountId`：可选的账户 ID，用于限定投递范围。
+- `mode`：投递模式 — `"announce"` 通过渠道消息发送；`"webhook"` 发送到已配置的 webhook。
+
+使用 `cron.failureDestination` 将失败告警路由到特定渠道和聊天，覆盖默认投递目标。
 
 ---
 
