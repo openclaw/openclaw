@@ -168,7 +168,7 @@ export function createLazyFacadeArrayValue<T extends readonly unknown[]>(load: (
   return createLazyFacadeProxyValue({ load, target: [] });
 }
 
-export function loadBundledPluginPublicSurfaceModuleSync<T>(params: {
+export function loadBundledPluginPublicSurfaceModuleSync<T extends object>(params: {
   dirName: string;
   artifactBasename: string;
 }): T {
@@ -200,16 +200,23 @@ export function loadBundledPluginPublicSurfaceModuleSync<T>(params: {
   }
   fs.closeSync(opened.fd);
 
-  // For built dist .js files, use native require() to preserve ESM binding
-  // semantics. Jiti's CJS wrapper breaks lazy ESM getters, causing
-  // "Cannot read properties of undefined" on chunk cross-references.
+  // Place a sentinel object in the cache *before* the Jiti load begins.
+  // If a transitive dependency of the loaded module re-enters this function
+  // for the same modulePath (circular facade reference), it will receive the
+  // sentinel instead of recursing infinitely.  Once the real module finishes
+  // loading, Object.assign() back-fills the sentinel so any references
+  // captured during the circular load phase see the final exports.
+  const sentinel = {} as T;
+  loadedFacadeModules.set(location.modulePath, sentinel);
+
   let loaded: T;
-  if (location.modulePath.endsWith(".js") && location.modulePath.includes(`${path.sep}dist${path.sep}`)) {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    loaded = require(location.modulePath) as T;
-  } else {
+  try {
     loaded = getJiti(location.modulePath)(location.modulePath) as T;
+    Object.assign(sentinel, loaded);
+  } catch (err) {
+    loadedFacadeModules.delete(location.modulePath);
+    throw err;
   }
-  loadedFacadeModules.set(location.modulePath, loaded);
-  return loaded;
+
+  return sentinel;
 }

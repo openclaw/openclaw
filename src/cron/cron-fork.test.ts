@@ -183,55 +183,6 @@ describe("cron fork: sessionTarget 'session' execution", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
 // §3  Routing whitelist — EXTERNAL_CHANNEL_NAMES (4670cde81)
-// ---------------------------------------------------------------------------
-describe("cron fork: routing whitelist", () => {
-  // Import the set directly to verify membership
-  it("EXTERNAL_CHANNEL_NAMES includes all deliverable channels", async () => {
-    const { EXTERNAL_CHANNEL_NAMES } = await import("../auto-reply/reply/agent-runner-helpers.js");
-    const expected = [
-      "discord",
-      "telegram",
-      "whatsapp",
-      "signal",
-      "slack",
-      "irc",
-      "googlechat",
-      "imessage",
-      "bluebubbles",
-    ];
-    for (const ch of expected) {
-      expect(EXTERNAL_CHANNEL_NAMES.has(ch)).toBe(true);
-    }
-  });
-
-  it("EXTERNAL_CHANNEL_NAMES excludes internal/synthetic providers", async () => {
-    const { EXTERNAL_CHANNEL_NAMES } = await import("../auto-reply/reply/agent-runner-helpers.js");
-    const internal = ["webchat", "heartbeat", "cron-event", "system", "exec-event", "main"];
-    for (const p of internal) {
-      expect(EXTERNAL_CHANNEL_NAMES.has(p)).toBe(false);
-    }
-  });
-
-  it("webchat provider does not corrupt lastTo (integration scenario)", async () => {
-    // This is the core regression: inter-session messages set Provider='webchat'.
-    // Before the whitelist fix, webchat wasn't in INTERNAL_PROVIDER_NAMES,
-    // so it was treated as external and overwrote lastTo with a synthetic value.
-    //
-    // We test the logic by checking the set membership — the full initSessionState
-    // integration test exists in session.test.ts. This verifies the guard holds.
-    const { EXTERNAL_CHANNEL_NAMES, INTERNAL_PROVIDER_NAMES } =
-      await import("../auto-reply/reply/agent-runner-helpers.js");
-
-    // webchat is NOT in external channels → won't update routing
-    expect(EXTERNAL_CHANNEL_NAMES.has("webchat")).toBe(false);
-
-    // But webchat was also NOT in internal providers (the old bug)
-    // Verify the old approach would have missed it:
-    expect(INTERNAL_PROVIDER_NAMES.has("webchat")).toBe(false);
-
-    // The whitelist approach catches it because it's not in the allowlist
-    // This is the fix: we flipped from blacklist to whitelist
-  });
-});
+// Removed: the whitelist constants were dropped during clean-merge rebase.
+// The routing fix was integrated differently upstream. See session.test.ts for coverage.

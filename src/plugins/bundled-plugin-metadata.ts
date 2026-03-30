@@ -360,6 +360,7 @@ function collectBundledChannelConfigs(params: {
 function collectBundledPluginMetadataForPackageRoot(
   packageRoot: string,
   includeChannelConfigs: boolean,
+  includeSyntheticChannelConfigs: boolean,
 ): readonly BundledPluginMetadata[] {
   const scanDir = resolveBundledPluginScanDir(packageRoot);
   if (!scanDir || !fs.existsSync(scanDir)) {
@@ -404,13 +405,14 @@ function collectBundledPluginMetadataForPackageRoot(
       ...(setupSourcePath ? { setupEntry: setupSourcePath } : {}),
     });
     const runtimeSidecarArtifacts = collectRuntimeSidecarArtifacts(publicSurfaceArtifacts);
-    const channelConfigs = includeChannelConfigs
-      ? collectBundledChannelConfigs({
-          pluginDir,
-          manifest: manifestResult.manifest,
-          packageManifest,
-        })
-      : manifestResult.manifest.channelConfigs;
+    const channelConfigs =
+      includeChannelConfigs && includeSyntheticChannelConfigs
+        ? collectBundledChannelConfigs({
+            pluginDir,
+            manifest: manifestResult.manifest,
+            packageManifest,
+          })
+        : manifestResult.manifest.channelConfigs;
 
     entries.push({
       dirName,
@@ -448,16 +450,27 @@ function collectBundledPluginMetadataForPackageRoot(
 export function listBundledPluginMetadata(params?: {
   rootDir?: string;
   includeChannelConfigs?: boolean;
+  includeSyntheticChannelConfigs?: boolean;
 }): readonly BundledPluginMetadata[] {
   const rootDir = path.resolve(params?.rootDir ?? OPENCLAW_PACKAGE_ROOT);
   const includeChannelConfigs = params?.includeChannelConfigs ?? !RUNNING_FROM_BUILT_ARTIFACT;
-  const cacheKey = JSON.stringify({ rootDir, includeChannelConfigs });
+  const includeSyntheticChannelConfigs =
+    params?.includeSyntheticChannelConfigs ?? includeChannelConfigs;
+  const cacheKey = JSON.stringify({
+    rootDir,
+    includeChannelConfigs,
+    includeSyntheticChannelConfigs,
+  });
   const cached = bundledPluginMetadataCache.get(cacheKey);
   if (cached) {
     return cached;
   }
   const entries = Object.freeze(
-    collectBundledPluginMetadataForPackageRoot(rootDir, includeChannelConfigs),
+    collectBundledPluginMetadataForPackageRoot(
+      rootDir,
+      includeChannelConfigs,
+      includeSyntheticChannelConfigs,
+    ),
   );
   bundledPluginMetadataCache.set(cacheKey, entries);
   return entries;

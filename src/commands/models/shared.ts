@@ -11,7 +11,7 @@ import { formatCliCommand } from "../../cli/command-format.js";
 import {
   type OpenClawConfig,
   readConfigFileSnapshot,
-  writeConfigFile,
+  replaceConfigFile,
 } from "../../config/config.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { toAgentModelListLike } from "../../config/model-input.js";
@@ -70,15 +70,22 @@ export async function loadValidConfigOrThrow(): Promise<OpenClawConfig> {
     const issues = formatConfigIssueLines(snapshot.issues, "-").join("\n");
     throw new Error(`Invalid config at ${snapshot.path}\n${issues}`);
   }
-  return snapshot.config;
+  return snapshot.runtimeConfig ?? snapshot.config;
 }
 
 export async function updateConfig(
   mutator: (cfg: OpenClawConfig) => OpenClawConfig,
 ): Promise<OpenClawConfig> {
-  const config = await loadValidConfigOrThrow();
-  const next = mutator(config);
-  await writeConfigFile(next);
+  const snapshot = await readConfigFileSnapshot();
+  if (!snapshot.valid) {
+    const issues = formatConfigIssueLines(snapshot.issues, "-").join("\n");
+    throw new Error(`Invalid config at ${snapshot.path}\n${issues}`);
+  }
+  const next = mutator(structuredClone(snapshot.sourceConfig ?? snapshot.config));
+  await replaceConfigFile({
+    nextConfig: next,
+    baseHash: snapshot.hash,
+  });
   return next;
 }
 

@@ -5,12 +5,20 @@ function buildBundledPluginModuleId(pluginId: string, artifactBasename: string):
   return ["..", "..", "extensions", pluginId, artifactBasename].join("/");
 }
 
+const readConfigFileSnapshotMock = vi.fn() as unknown as MockFn;
+const writeConfigFileMock = vi.fn().mockResolvedValue(undefined) as unknown as MockFn;
+const replaceConfigFileMock = vi.fn(async (params: { nextConfig: unknown }) => {
+  await writeConfigFileMock(params.nextConfig);
+}) as unknown as MockFn;
+
 export const configMocks: {
   readConfigFileSnapshot: MockFn;
   writeConfigFile: MockFn;
+  replaceConfigFile: MockFn;
 } = {
-  readConfigFileSnapshot: vi.fn() as unknown as MockFn,
-  writeConfigFile: vi.fn().mockResolvedValue(undefined) as unknown as MockFn,
+  readConfigFileSnapshot: readConfigFileSnapshotMock,
+  writeConfigFile: writeConfigFileMock,
+  replaceConfigFile: replaceConfigFileMock,
 };
 
 export const offsetMocks: {
@@ -25,13 +33,14 @@ vi.mock("../config/config.js", async (importOriginal) => {
     ...actual,
     readConfigFileSnapshot: configMocks.readConfigFileSnapshot,
     writeConfigFile: configMocks.writeConfigFile,
+    replaceConfigFile: configMocks.replaceConfigFile,
   };
 });
 
 vi.mock(
   buildBundledPluginModuleId("telegram", "update-offset-runtime-api.js"),
   async (importOriginal) => {
-    const actual = (await importOriginal()) as Record<string, unknown>;
+    const actual: Record<string, unknown> = await importOriginal();
     return {
       ...actual,
       deleteTelegramUpdateOffset: offsetMocks.deleteTelegramUpdateOffset,

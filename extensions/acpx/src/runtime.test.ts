@@ -1,7 +1,10 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { runAcpRuntimeAdapterContract } from "openclaw/plugin-sdk/testing";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { runAcpRuntimeAdapterContract } from "../../../src/acp/runtime/adapter-contract.testkit.js";
+import { resolveAcpxPluginConfig } from "./config.js";
 import { AcpxRuntime, decodeAcpxRuntimeHandleState } from "./runtime.js";
 import {
   cleanupMockRuntimeFixtures,
@@ -24,6 +27,7 @@ beforeAll(async () => {
       cwd: process.cwd(),
       permissionMode: "approve-reads",
       nonInteractivePermissions: "fail",
+      pluginToolsMcpBridge: false,
       strictWindowsCmdWrapper: true,
       queueOwnerTtlSeconds: 0.1,
       mcpServers: {},
@@ -609,6 +613,72 @@ describe("AcpxRuntime", () => {
       }
     } finally {
       delete process.env.MOCK_ACPX_CONFIG_SHOW_AGENTS;
+    }
+  });
+
+  it("routes ACPX commands through the built-in plugin-tools bridge only when explicitly enabled", async () => {
+    process.env.MOCK_ACPX_CONFIG_SHOW_AGENTS = JSON.stringify({
+      codex: {
+        command: "npx custom-codex-acp",
+      },
+    });
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-acpx-plugin-tools-"));
+    const pluginRoot = path.join(repoRoot, "extensions", "acpx");
+    const distEntry = path.join(repoRoot, "dist", "mcp", "plugin-tools-serve.js");
+    try {
+      fs.mkdirSync(path.join(pluginRoot, "src"), { recursive: true });
+      fs.mkdirSync(path.dirname(distEntry), { recursive: true });
+      fs.writeFileSync(path.join(pluginRoot, "package.json"), "{}\n", "utf8");
+      fs.writeFileSync(path.join(pluginRoot, "openclaw.plugin.json"), "{}\n", "utf8");
+      fs.writeFileSync(path.join(pluginRoot, "src", "config.ts"), "// test\n", "utf8");
+      fs.writeFileSync(distEntry, "// built entry\n", "utf8");
+
+      const fixture = await createMockRuntimeFixture();
+      const runtime = new AcpxRuntime(
+        resolveAcpxPluginConfig({
+          rawConfig: {
+            command: fixture.config.command,
+            pluginToolsMcpBridge: true,
+          },
+          workspaceDir: repoRoot,
+          moduleUrl: pathToFileURL(path.join(pluginRoot, "src", "config.ts")).href,
+        }),
+        { logger: NOOP_LOGGER },
+      );
+
+      await runtime.ensureSession({
+        sessionKey: "agent:codex:acp:plugin-tools-bridge",
+        agent: "codex",
+        mode: "persistent",
+      });
+
+      const logs = await readMockRuntimeLogEntries(fixture.logPath);
+      const ensureArgs = (logs.find((entry) => entry.kind === "ensure")?.args as string[]) ?? [];
+      const agentFlagIndex = ensureArgs.indexOf("--agent");
+      expect(agentFlagIndex).toBeGreaterThanOrEqual(0);
+      const rawAgentCommand = ensureArgs[agentFlagIndex + 1];
+      expect(rawAgentCommand).toContain("mcp-proxy.mjs");
+      const payloadMatch = rawAgentCommand.match(/--payload\s+([A-Za-z0-9_-]+)/);
+      expect(payloadMatch?.[1]).toBeDefined();
+      const payload = JSON.parse(
+        Buffer.from(String(payloadMatch?.[1]), "base64url").toString("utf8"),
+      ) as {
+        targetCommand: string;
+        mcpServers: Array<{ name: string; command: string; args: string[] }>;
+      };
+      expect(payload.targetCommand).toContain("custom-codex-acp");
+      expect(payload.mcpServers).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            name: "openclaw-plugin-tools",
+            command: process.execPath,
+            args: [distEntry],
+          }),
+        ]),
+      );
+    } finally {
+      delete process.env.MOCK_ACPX_CONFIG_SHOW_AGENTS;
+      fs.rmSync(repoRoot, { recursive: true, force: true });
     }
   });
 

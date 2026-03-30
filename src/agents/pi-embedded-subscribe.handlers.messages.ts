@@ -334,18 +334,11 @@ export function handleMessageUpdate(
     }
   }
 
-  if (
-    ctx.params.onBlockReply &&
-    ctx.blockChunking &&
-    ctx.state.blockReplyBreak === "text_end"
-  ) {
+  if (ctx.params.onBlockReply && ctx.blockChunking && ctx.state.blockReplyBreak === "text_end") {
     ctx.blockChunker?.drain({ force: false, emit: ctx.emitBlockChunk });
   }
 
-  if (
-    evtType === "text_end" &&
-    ctx.state.blockReplyBreak === "text_end"
-  ) {
+  if (evtType === "text_end" && ctx.state.blockReplyBreak === "text_end") {
     ctx.flushBlockReplyBuffer();
   }
 }
@@ -402,7 +395,11 @@ export function handleMessageEnd(
     }
   }
 
-  if (!ctx.state.emittedAssistantUpdate && (cleanedText || hasMedia)) {
+  if (
+    !ctx.params.silentExpected &&
+    !ctx.state.emittedAssistantUpdate &&
+    (cleanedText || hasMedia)
+  ) {
     const data = buildAssistantStreamData({
       text: cleanedText,
       delta: cleanedText,
