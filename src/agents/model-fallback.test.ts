@@ -8,8 +8,13 @@ import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
 import { saveAuthProfileStore } from "./auth-profiles.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
+import { FailoverError } from "./failover-error.js";
 import { isAnthropicBillingError } from "./live-auth-keys.js";
-import { runWithImageModelFallback, runWithModelFallback } from "./model-fallback.js";
+import {
+  type ModelFallbackRunOptions,
+  runWithImageModelFallback,
+  runWithModelFallback,
+} from "./model-fallback.js";
 import { makeModelFallbackCfg } from "./test-helpers/model-fallback-config-fixture.js";
 
 const makeCfg = makeModelFallbackCfg;
@@ -303,7 +308,7 @@ describe("runWithModelFallback", () => {
     expect(result.model).toBe("gpt-4.1-mini");
     expect(run.mock.calls).toEqual([
       ["anthropic", "claude-opus-4-5"],
-      ["openai", "gpt-4.1-mini"],
+      ["openai", "gpt-4.1-mini", { previousFailureReason: "auth" }],
     ]);
   });
 
@@ -341,7 +346,7 @@ describe("runWithModelFallback", () => {
     expect(result.model).toBe("openrouter/deepseek-chat");
     expect(run.mock.calls).toEqual([
       ["anthropic", "claude-haiku-3-5"],
-      ["openrouter", "openrouter/deepseek-chat"],
+      ["openrouter", "openrouter/deepseek-chat", { previousFailureReason: "rate_limit" }],
     ]);
   });
 
@@ -372,7 +377,7 @@ describe("runWithModelFallback", () => {
     expect(result.result).toBe("ok");
     expect(run.mock.calls).toEqual([
       ["openai", "gpt-4.1-mini"],
-      ["anthropic", "claude-haiku-3-5"],
+      ["anthropic", "claude-haiku-3-5", { previousFailureReason: "auth" }],
     ]);
   });
 
@@ -443,7 +448,7 @@ describe("runWithModelFallback", () => {
     expect(result.result).toBe("ok");
     expect(run.mock.calls).toEqual([
       ["anthropic", "claude-opus-4"],
-      ["openai", "gpt-4.1-mini"],
+      ["openai", "gpt-4.1-mini", { previousFailureReason: "auth" }],
     ]);
   });
 
@@ -675,7 +680,7 @@ describe("runWithModelFallback", () => {
 
     expect(run.mock.calls).toEqual([
       ["anthropic", "claude-opus-4-5"],
-      ["anthropic", "claude-haiku-3-5"],
+      ["anthropic", "claude-haiku-3-5", { previousFailureReason: "auth" }],
     ]);
   });
 
@@ -871,7 +876,7 @@ describe("runWithModelFallback", () => {
     expect(result.result).toBe("ok");
     expect(run.mock.calls).toEqual([
       ["anthropic", "claude-sonnet-4"],
-      ["openai", "gpt-4o"],
+      ["openai", "gpt-4o", { previousFailureReason: "rate_limit" }],
     ]);
   });
 
@@ -1138,7 +1143,9 @@ describe("runWithModelFallback", () => {
       expect(result.result).toBe("fallback success");
       expect(run).toHaveBeenCalledTimes(2);
       expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-sonnet-4-20250514");
-      expect(run).toHaveBeenNthCalledWith(2, "anthropic", "claude-sonnet-4-5"); // Fallback tried
+      expect(run).toHaveBeenNthCalledWith(2, "anthropic", "claude-sonnet-4-5", {
+        previousFailureReason: "rate_limit",
+      }); // Fallback tried
     });
 
     it("allows fallbacks with model version differences within same provider", async () => {
@@ -1167,7 +1174,9 @@ describe("runWithModelFallback", () => {
 
       expect(result.result).toBe("groq success");
       expect(run).toHaveBeenCalledTimes(2);
-      expect(run).toHaveBeenNthCalledWith(2, "groq", "llama-3.3-70b-versatile");
+      expect(run).toHaveBeenNthCalledWith(2, "groq", "llama-3.3-70b-versatile", {
+        previousFailureReason: "rate_limit",
+      });
     });
 
     it("still skips fallbacks when using different provider than config", async () => {
@@ -1198,7 +1207,9 @@ describe("runWithModelFallback", () => {
       expect(result.result).toBe("config primary worked");
       expect(run).toHaveBeenCalledTimes(2);
       expect(run).toHaveBeenNthCalledWith(1, "openai", "gpt-4.1-mini"); // Original request
-      expect(run).toHaveBeenNthCalledWith(2, "anthropic", "claude-opus-4-6"); // Config primary as final fallback
+      expect(run).toHaveBeenNthCalledWith(2, "anthropic", "claude-opus-4-6", {
+        previousFailureReason: "auth",
+      }); // Config primary as final fallback
     });
 
     it("uses fallbacks when session model exactly matches config primary", async () => {
@@ -1227,7 +1238,9 @@ describe("runWithModelFallback", () => {
 
       expect(result.result).toBe("fallback worked");
       expect(run).toHaveBeenCalledTimes(2);
-      expect(run).toHaveBeenNthCalledWith(2, "groq", "llama-3.3-70b-versatile");
+      expect(run).toHaveBeenNthCalledWith(2, "groq", "llama-3.3-70b-versatile", {
+        previousFailureReason: "rate_limit",
+      });
     });
   });
 
@@ -1429,7 +1442,9 @@ describe("runWithModelFallback", () => {
       expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-sonnet-4-5", {
         allowTransientCooldownProbe: true,
       }); // Rate limit allows attempt
-      expect(run).toHaveBeenNthCalledWith(2, "groq", "llama-3.3-70b-versatile"); // Cross-provider works
+      expect(run).toHaveBeenNthCalledWith(2, "groq", "llama-3.3-70b-versatile", {
+        previousFailureReason: "rate_limit",
+      }); // Cross-provider works
     });
 
     it("limits cooldown probes to one per provider before moving to cross-provider fallback", async () => {
@@ -1469,7 +1484,9 @@ describe("runWithModelFallback", () => {
       expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-sonnet-4-5", {
         allowTransientCooldownProbe: true,
       });
-      expect(run).toHaveBeenNthCalledWith(2, "groq", "llama-3.3-70b-versatile");
+      expect(run).toHaveBeenNthCalledWith(2, "groq", "llama-3.3-70b-versatile", {
+        previousFailureReason: "rate_limit",
+      });
     });
 
     it("does not consume transient probe slot when first same-provider probe fails with model_not_found", async () => {
@@ -1509,8 +1526,151 @@ describe("runWithModelFallback", () => {
       });
       expect(run).toHaveBeenNthCalledWith(2, "anthropic", "claude-haiku-3-5", {
         allowTransientCooldownProbe: true,
+        previousFailureReason: "model_not_found",
       });
     });
+  });
+
+  it("passes previousFailureReason from failed attempt to next run call", async () => {
+    const captured: (ModelFallbackRunOptions | undefined)[] = [];
+    let callIndex = 0;
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/sonnet-4.6",
+            fallbacks: ["openai/gpt-5.4"],
+          },
+        },
+      },
+    });
+    await runWithModelFallback({
+      cfg,
+      provider: "anthropic",
+      model: "sonnet-4.6",
+      run: async (_p, _m, options) => {
+        captured.push(options ? { ...options } : undefined);
+        if (callIndex++ === 0) {
+          throw new FailoverError("rate limit", { reason: "rate_limit" });
+        }
+        return "ok";
+      },
+    });
+    expect(captured[0]?.previousFailureReason).toBeUndefined();
+    expect(captured[1]?.previousFailureReason).toBe("rate_limit");
+  });
+
+  it("passes previousPartialExecution from failed attempt to next run call", async () => {
+    const captured: (ModelFallbackRunOptions | undefined)[] = [];
+    let callIndex = 0;
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/sonnet-4.6",
+            fallbacks: ["openai/gpt-5.4"],
+          },
+        },
+      },
+    });
+    await runWithModelFallback({
+      cfg,
+      provider: "anthropic",
+      model: "sonnet-4.6",
+      run: async (_p, _m, options) => {
+        captured.push(options ? { ...options } : undefined);
+        if (callIndex++ === 0) {
+          throw new FailoverError("timeout", {
+            reason: "timeout",
+            partialExecution: {
+              toolNames: ["bash"],
+              didSendViaMessagingTool: true,
+            },
+          });
+        }
+        return "ok";
+      },
+    });
+    expect(captured[0]?.previousPartialExecution).toBeUndefined();
+    expect(captured[1]?.previousPartialExecution).toEqual({
+      toolNames: ["bash"],
+      didSendViaMessagingTool: true,
+    });
+  });
+
+  it("merges previousPartialExecution across multiple failed attempts", async () => {
+    const captured: (ModelFallbackRunOptions | undefined)[] = [];
+    let callIndex = 0;
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/sonnet-4.6",
+            fallbacks: ["openai/gpt-5.4", "google/gemini-2.5-pro"],
+          },
+        },
+      },
+    });
+    await runWithModelFallback({
+      cfg,
+      provider: "anthropic",
+      model: "sonnet-4.6",
+      run: async (_p, _m, options) => {
+        captured.push(options ? { ...options } : undefined);
+        callIndex++;
+        if (callIndex === 1) {
+          throw new FailoverError("timeout", {
+            reason: "timeout",
+            partialExecution: {
+              toolNames: ["bash"],
+              didSendViaMessagingTool: false,
+            },
+          });
+        }
+        if (callIndex === 2) {
+          throw new FailoverError("rate_limit", {
+            reason: "rate_limit",
+            partialExecution: {
+              toolNames: ["web_search"],
+              didSendViaMessagingTool: true,
+            },
+          });
+        }
+        return "ok";
+      },
+    });
+    expect(captured[2]?.previousPartialExecution).toEqual({
+      toolNames: ["bash", "web_search"],
+      didSendViaMessagingTool: true,
+    });
+  });
+
+  it("omits previousPartialExecution when no attempt had partial execution", async () => {
+    const captured: (ModelFallbackRunOptions | undefined)[] = [];
+    let callIndex = 0;
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/sonnet-4.6",
+            fallbacks: ["openai/gpt-5.4"],
+          },
+        },
+      },
+    });
+    await runWithModelFallback({
+      cfg,
+      provider: "anthropic",
+      model: "sonnet-4.6",
+      run: async (_p, _m, options) => {
+        captured.push(options ? { ...options } : undefined);
+        if (callIndex++ === 0) {
+          throw new FailoverError("rate limit", { reason: "rate_limit" });
+        }
+        return "ok";
+      },
+    });
+    expect(captured[1]?.previousPartialExecution).toBeUndefined();
   });
 });
 

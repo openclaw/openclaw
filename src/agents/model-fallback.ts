@@ -15,6 +15,7 @@ import {
 } from "./auth-profiles.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import {
+  type PartialExecution,
   coerceToFailoverError,
   describeFailoverError,
   isFailoverError,
@@ -68,6 +69,8 @@ export function isFallbackSummaryError(err: unknown): err is FallbackSummaryErro
 
 export type ModelFallbackRunOptions = {
   allowTransientCooldownProbe?: boolean;
+  previousFailureReason?: FailoverReason;
+  previousPartialExecution?: PartialExecution;
 };
 
 type ModelFallbackRunFn<T> = (
@@ -606,6 +609,8 @@ export async function runWithModelFallback<T>(params: {
     : null;
   const attempts: FallbackAttempt[] = [];
   let lastError: unknown;
+  let lastFailureReason: FailoverReason | undefined;
+  let mergedPartialExecution: PartialExecution | undefined;
   const cooldownProbeUsedProviders = new Set<string>();
 
   const hasFallbackCandidates = candidates.length > 1;
@@ -728,6 +733,15 @@ export async function runWithModelFallback<T>(params: {
       }
     }
 
+    // Thread accumulated failure context into runOptions for the next attempt.
+    if (lastFailureReason) {
+      runOptions = {
+        ...runOptions,
+        previousFailureReason: lastFailureReason,
+        ...(mergedPartialExecution ? { previousPartialExecution: mergedPartialExecution } : {}),
+      };
+    }
+
     const attemptRun = await runFallbackAttempt({
       run: params.run,
       ...candidate,
@@ -799,6 +813,21 @@ export async function runWithModelFallback<T>(params: {
         status: described.status,
         code: described.code,
       });
+      // Accumulate failure context for the next candidate's run callback.
+      lastFailureReason = described.reason ?? "unknown";
+      if (described.partialExecution) {
+        mergedPartialExecution = mergedPartialExecution
+          ? {
+              toolNames: [
+                ...mergedPartialExecution.toolNames,
+                ...described.partialExecution.toolNames,
+              ],
+              didSendViaMessagingTool:
+                mergedPartialExecution.didSendViaMessagingTool ||
+                described.partialExecution.didSendViaMessagingTool,
+            }
+          : described.partialExecution;
+      }
       logModelFallbackDecision({
         decision: "candidate_failed",
         runId: params.runId,
