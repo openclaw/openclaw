@@ -241,6 +241,7 @@ function dispatchAgentRunFromGateway(params: {
   idempotencyKey: string;
   respond: GatewayRequestHandlerOptions["respond"];
   context: GatewayRequestHandlerOptions["context"];
+  acceptedPayload?: unknown;
   controller?: AbortController;
   sessionKey?: string;
   ownerConnId?: string;
@@ -251,15 +252,21 @@ function dispatchAgentRunFromGateway(params: {
   const controller = params.controller ?? new AbortController();
   const trackedSessionKey = resolveTrackedAgentSessionKey(params.runId, params.sessionKey);
   const respondDispatchClaimFailure = (error: ReturnType<typeof errorShape>) => {
-    setGatewayDedupeEntry({
-      dedupe: params.context.dedupe,
-      key: `agent:${params.idempotencyKey}`,
-      entry: {
-        ts: Date.now(),
-        ok: false,
-        error,
-      },
-    });
+    const dedupeKey = `agent:${params.idempotencyKey}`;
+    if (
+      params.acceptedPayload === undefined ||
+      params.context.dedupe.get(dedupeKey)?.payload === params.acceptedPayload
+    ) {
+      setGatewayDedupeEntry({
+        dedupe: params.context.dedupe,
+        key: dedupeKey,
+        entry: {
+          ts: Date.now(),
+          ok: false,
+          error,
+        },
+      });
+    }
     params.respond(false, undefined, error, { runId: params.runId });
   };
   const clearAbortControllerIfOwned = () => {
@@ -987,6 +994,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         idempotencyKey: idem,
         respond,
         context,
+        acceptedPayload: accepted,
         controller: claimedAbortController,
         sessionKey: trackedSessionKey,
         ownerConnId,

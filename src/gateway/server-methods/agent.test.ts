@@ -1025,13 +1025,24 @@ describe("gateway agent handler", () => {
       sessionId: "replacement-session",
       sessionKey: "agent:other:main",
     });
+    const replacementAccepted = {
+      runId,
+      status: "accepted" as const,
+      acceptedAt: Date.now() + 1,
+    };
     context.chatAbortControllers.set(runId, replacement);
+    context.dedupe.set(`agent:${runId}`, {
+      ts: Date.now(),
+      ok: true,
+      payload: replacementAccepted,
+    });
     releaseUpdate.resolve();
 
     await invokePromise;
 
     expect(mocks.agentCommand).not.toHaveBeenCalled();
     expect(context.chatAbortControllers.get(runId)).toBe(replacement);
+    expect(context.dedupe.get(`agent:${runId}`)?.payload).toBe(replacementAccepted);
     expect(context.broadcastToConnIds).not.toHaveBeenCalled();
     expect(respond).toHaveBeenNthCalledWith(
       1,
