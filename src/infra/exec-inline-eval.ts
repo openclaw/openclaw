@@ -16,6 +16,7 @@ type InterpreterFlagSpec = {
   names: readonly string[];
   exactFlags: ReadonlySet<string>;
   rawExactFlags?: ReadonlyMap<string, string>;
+  rawPrefixFlags?: readonly PrefixFlagSpec[];
   prefixFlags?: readonly PrefixFlagSpec[];
   scanPastDoubleDash?: boolean;
 };
@@ -55,6 +56,7 @@ const FLAG_INTERPRETER_INLINE_EVAL_SPECS: readonly InterpreterFlagSpec[] = [
     names: ["make", "gmake"],
     exactFlags: new Set(["-f", "--file", "--makefile", "--eval"]),
     rawExactFlags: new Map([["-E", "-E"]]),
+    rawPrefixFlags: [{ label: "-E", prefix: "-E" }],
     prefixFlags: [
       { label: "-f", prefix: "-f" },
       { label: "--file", prefix: "--file=" },
@@ -62,7 +64,11 @@ const FLAG_INTERPRETER_INLINE_EVAL_SPECS: readonly InterpreterFlagSpec[] = [
       { label: "--eval", prefix: "--eval=" },
     ],
   },
-  { names: ["sed", "gsed"], exactFlags: new Set(["-e"]) },
+  {
+    names: ["sed", "gsed"],
+    exactFlags: new Set(["-e"]),
+    prefixFlags: [{ label: "-e", prefix: "-e" }],
+  },
 ];
 
 const POSITIONAL_INTERPRETER_INLINE_EVAL_SPECS: readonly PositionalInterpreterSpec[] = [
@@ -202,6 +208,12 @@ export function detectInterpreterInlineEvalArgv(
       const rawExactFlag = spec.rawExactFlags?.get(token);
       if (rawExactFlag) {
         return createInlineEvalHit(executable, argv, rawExactFlag);
+      }
+      const rawPrefixFlag = spec.rawPrefixFlags?.find(
+        ({ prefix }) => token.startsWith(prefix) && token.length > prefix.length,
+      );
+      if (rawPrefixFlag) {
+        return createInlineEvalHit(executable, argv, rawPrefixFlag.label);
       }
       const lower = token.toLowerCase();
       if (spec.exactFlags.has(lower)) {

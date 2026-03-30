@@ -39,9 +39,11 @@ describe("exec inline eval detection", () => {
     { argv: ["xargs", "--replace", "id"], expected: "xargs inline command" },
     { argv: ["make", "-f", "evil.mk"], expected: "make -f" },
     { argv: ["make", "-E", "$(shell id)"], expected: "make -E" },
+    { argv: ["make", "-E$(shell id)"], expected: "make -E" },
     { argv: ["make", "--eval=$(shell id)"], expected: "make --eval" },
     { argv: ["sed", "s/.*/id/e", "/dev/null"], expected: "sed inline program" },
     { argv: ["gsed", "-e", "s/.*/id/e", "/dev/null"], expected: "gsed -e" },
+    { argv: ["sed", "-es/.*/id/e", "/dev/null"], expected: "sed -e" },
   ] as const)("detects command carriers for %j", ({ argv, expected }) => {
     const hit = detectInterpreterInlineEvalArgv([...argv]);
     expect(hit).not.toBeNull();
