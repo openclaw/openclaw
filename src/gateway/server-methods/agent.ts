@@ -23,6 +23,7 @@ import {
 } from "../../infra/outbound/agent-delivery.js";
 import { shouldDowngradeDeliveryToSessionOnly } from "../../infra/outbound/best-effort-delivery.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
+import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { classifySessionKeyShape, normalizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
@@ -39,7 +40,7 @@ import {
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
 import { resolveAssistantIdentity } from "../assistant-identity.js";
-import { parseMessageWithAttachments } from "../chat-attachments.js";
+import { MediaOffloadError, parseMessageWithAttachments } from "../chat-attachments.js";
 import { resolveAssistantAvatarUrl } from "../control-ui-shared.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import { GATEWAY_CLIENT_CAPS, hasGatewayClientCap } from "../protocol/client-info.js";
@@ -58,6 +59,8 @@ import {
   loadGatewaySessionRow,
   loadSessionEntry,
   migrateAndPruneGatewaySessionStoreKey,
+  resolveGatewayModelSupportsImages,
+  resolveSessionModelRef,
 } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import { waitForAgentJob } from "./agent-job.js";
@@ -346,16 +349,53 @@ export const agentHandlers: GatewayRequestHandlers = {
 
     let message = (request.message ?? "").trim();
     let images: Array<{ type: "image"; data: string; mimeType: string }> = [];
+    let imageOrder: PromptImageOrderEntry[] = [];
     if (normalizedAttachments.length > 0) {
+      const requestedSessionKeyRaw =
+        typeof request.sessionKey === "string" && request.sessionKey.trim()
+          ? request.sessionKey.trim()
+          : undefined;
+
+      let baseProvider: string | undefined;
+      let baseModel: string | undefined;
+      if (requestedSessionKeyRaw) {
+        const { cfg: sessCfg, entry: sessEntry } = loadSessionEntry(requestedSessionKeyRaw);
+        const modelRef = resolveSessionModelRef(sessCfg, sessEntry, undefined);
+        baseProvider = modelRef.provider;
+        baseModel = modelRef.model;
+      }
+      const effectiveProvider = providerOverride || baseProvider;
+      const effectiveModel = modelOverride || baseModel;
+      const supportsImages = await resolveGatewayModelSupportsImages({
+        loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+        provider: effectiveProvider,
+        model: effectiveModel,
+      });
+
       try {
         const parsed = await parseMessageWithAttachments(message, normalizedAttachments, {
           maxBytes: 5_000_000,
           log: context.logGateway,
+          supportsImages,
         });
         message = parsed.message.trim();
         images = parsed.images;
+        imageOrder = parsed.imageOrder;
+        // offloadedRefs are appended as text markers to `message`; the agent
+        // runner will resolve them via detectAndLoadPromptImages.
       } catch (err) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(err)));
+        // MediaOffloadError indicates a server-side storage fault (ENOSPC, EPERM,
+        // etc.). Map it to UNAVAILABLE so clients can retry without treating it as
+        // a bad request. All other errors are input-validation failures → 4xx.
+        const isServerFault = err instanceof MediaOffloadError;
+        respond(
+          false,
+          undefined,
+          errorShape(
+            isServerFault ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
+            String(err),
+          ),
+        );
         return;
       }
     }
@@ -765,6 +805,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       ingressOpts: {
         message,
         images,
+        imageOrder,
         provider: providerOverride,
         model: modelOverride,
         to: resolvedTo,

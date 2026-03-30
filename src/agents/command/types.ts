@@ -2,6 +2,7 @@ import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import type { ClientToolDefinition } from "../../agents/pi-embedded-runner/run/params.js";
 import type { SpawnedRunMetadata } from "../../agents/spawned-context.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.js";
+import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 
 /** Image content block for Claude API multimodal messages. */
@@ -35,6 +36,8 @@ export type AgentCommandOpts = {
   message: string;
   /** Optional image attachments for multimodal messages. */
   images?: ImageContent[];
+  /** Original inline/offloaded attachment order for inbound images. */
+  imageOrder?: PromptImageOrderEntry[];
   /** Optional client-provided tools (OpenResponses hosted tools). */
   clientTools?: ClientToolDefinition[];
   /** Agent id override (must exist in config). */

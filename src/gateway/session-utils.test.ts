@@ -22,6 +22,7 @@ import {
   migrateAndPruneGatewaySessionStoreKey,
   parseGroupKey,
   pruneLegacyStoreKeys,
+  resolveGatewayModelSupportsImages,
   resolveGatewaySessionStoreTarget,
   resolveSessionModelIdentityRef,
   resolveSessionModelRef,
@@ -2355,6 +2356,30 @@ describe("listSessionsFromStore subagent metadata", () => {
     );
     expect(timeout?.status).toBe("timeout");
     expect(timeout?.runtimeMs).toBe(0);
+  });
+
+  test("fails closed when model lookup misses", async () => {
+    await expect(
+      resolveGatewayModelSupportsImages({
+        model: "gpt-5.4",
+        provider: "openai",
+        loadGatewayModelCatalog: async () => [
+          { id: "gpt-5.4", name: "GPT-5.4", provider: "other", input: ["text", "image"] },
+        ],
+      }),
+    ).resolves.toBe(false);
+  });
+
+  test("fails closed when model catalog load throws", async () => {
+    await expect(
+      resolveGatewayModelSupportsImages({
+        model: "gpt-5.4",
+        provider: "openai",
+        loadGatewayModelCatalog: async () => {
+          throw new Error("catalog unavailable");
+        },
+      }),
+    ).resolves.toBe(false);
   });
 });
 
