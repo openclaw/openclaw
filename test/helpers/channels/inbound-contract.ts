@@ -4,10 +4,7 @@ import { inboundCtxCapture } from "../../../src/channels/plugins/contracts/inbou
 import { expectChannelInboundContextContract } from "../../../src/channels/plugins/contracts/suites.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import type { ResolvedSlackAccount } from "../../../src/plugin-sdk/slack.js";
-import {
-  loadBundledPluginTestApiSync,
-  resolveRelativeBundledPluginPublicModuleId,
-} from "../../../src/test-utils/bundled-plugin-public-surface.js";
+import { loadBundledPluginTestApiSync } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 import { withTempHome } from "../temp-home.js";
 
 type SlackMessageEvent = {
@@ -20,43 +17,15 @@ type SlackMessageEvent = {
 
 type SlackPrepareResult = { ctxPayload: MsgContext } | null | undefined;
 
-const { buildFinalizedDiscordDirectInboundContext } = loadBundledPluginTestApiSync<{
-  buildFinalizedDiscordDirectInboundContext: () => MsgContext;
-}>("discord");
-const { createInboundSlackTestContext, prepareSlackMessage } = loadBundledPluginTestApiSync<{
-  createInboundSlackTestContext: (params: { cfg: OpenClawConfig }) => {
-    resolveUserName?: () => Promise<unknown>;
-  };
-  prepareSlackMessage: (params: {
-    ctx: {
-      resolveUserName?: () => Promise<unknown>;
-    };
-    account: ResolvedSlackAccount;
-    message: SlackMessageEvent;
-    opts: { source: string };
-  }) => Promise<SlackPrepareResult>;
-}>("slack");
-const telegramHarnessModuleId = resolveRelativeBundledPluginPublicModuleId({
-  fromModuleUrl: import.meta.url,
-  pluginId: "telegram",
-  artifactBasename: "src/bot-message-context.test-harness.js",
-});
-const signalApiModuleId = resolveRelativeBundledPluginPublicModuleId({
-  fromModuleUrl: import.meta.url,
-  pluginId: "signal",
-  artifactBasename: "api.js",
-});
-const whatsAppTestApiModuleId = resolveRelativeBundledPluginPublicModuleId({
-  fromModuleUrl: import.meta.url,
-  pluginId: "whatsapp",
-  artifactBasename: "test-api.js",
-});
+/** From `test/helpers/channels/` — must match `resolveRelativeBundledPluginPublicModuleId` for this file. */
+const TELEGRAM_BOT_MESSAGE_CONTEXT_TEST_HARNESS =
+  "../../../extensions/telegram/src/bot-message-context.test-harness.js";
 
 async function buildTelegramMessageContextForTest(params: {
   cfg: OpenClawConfig;
   message: Record<string, unknown>;
 }): Promise<{ ctxPayload: MsgContext } | null | undefined> {
-  const telegramHarnessModule = (await import(telegramHarnessModuleId)) as {
+  const telegramHarnessModule = (await import(TELEGRAM_BOT_MESSAGE_CONTEXT_TEST_HARNESS)) as {
     buildTelegramMessageContextForTest: (params: {
       cfg: OpenClawConfig;
       message: Record<string, unknown>;
@@ -106,7 +75,7 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
   };
 });
 
-vi.doMock(signalApiModuleId, () => ({
+vi.mock("../../../extensions/signal/api.js", () => ({
   sendMessageSignal: vi.fn(),
   sendTypingSignal: vi.fn(async () => true),
   sendReadReceiptSignal: vi.fn(async () => true),
@@ -117,7 +86,7 @@ vi.mock("../../../src/pairing/pairing-store.js", () => ({
   upsertChannelPairingRequest: vi.fn(),
 }));
 
-vi.doMock(whatsAppTestApiModuleId, async (importOriginal) => {
+vi.mock("../../../extensions/whatsapp/test-api.js", async (importOriginal) => {
   const actual = await importOriginal<object>();
   return {
     ...actual,
@@ -131,8 +100,6 @@ vi.doMock(whatsAppTestApiModuleId, async (importOriginal) => {
     deliverWebReply: vi.fn(async () => {}),
   };
 });
-
-const { finalizeInboundContext } = await import("../../../src/auto-reply/reply/inbound-context.js");
 
 function createSlackAccount(config: ResolvedSlackAccount["config"] = {}): ResolvedSlackAccount {
   return {
@@ -161,6 +128,9 @@ function createSlackMessage(overrides: Partial<SlackMessageEvent>): SlackMessage
 
 export function installDiscordInboundContractSuite() {
   it("keeps inbound context finalized", () => {
+    const { buildFinalizedDiscordDirectInboundContext } = loadBundledPluginTestApiSync<{
+      buildFinalizedDiscordDirectInboundContext: () => MsgContext;
+    }>("discord");
     const ctx = buildFinalizedDiscordDirectInboundContext();
 
     expectChannelInboundContextContract(ctx);
@@ -168,7 +138,9 @@ export function installDiscordInboundContractSuite() {
 }
 
 export function installSignalInboundContractSuite() {
-  it("keeps inbound context finalized", () => {
+  it("keeps inbound context finalized", async () => {
+    const { finalizeInboundContext } =
+      await import("../../../src/auto-reply/reply/inbound-context.js");
     const ctx = finalizeInboundContext({
       Body: "Alice: hi",
       BodyForAgent: "hi",
@@ -198,6 +170,19 @@ export function installSignalInboundContractSuite() {
 
 export function installSlackInboundContractSuite() {
   it("keeps inbound context finalized", async () => {
+    const { createInboundSlackTestContext, prepareSlackMessage } = loadBundledPluginTestApiSync<{
+      createInboundSlackTestContext: (params: { cfg: OpenClawConfig }) => {
+        resolveUserName?: () => Promise<unknown>;
+      };
+      prepareSlackMessage: (params: {
+        ctx: {
+          resolveUserName?: () => Promise<unknown>;
+        };
+        account: ResolvedSlackAccount;
+        message: SlackMessageEvent;
+        opts: { source: string };
+      }) => Promise<SlackPrepareResult>;
+    }>("slack");
     await withTempHome(async () => {
       const ctx = createInboundSlackTestContext({
         cfg: {
@@ -259,7 +244,9 @@ export function installTelegramInboundContractSuite() {
 }
 
 export function installWhatsAppInboundContractSuite() {
-  it("keeps inbound context finalized", () => {
+  it("keeps inbound context finalized", async () => {
+    const { finalizeInboundContext } =
+      await import("../../../src/auto-reply/reply/inbound-context.js");
     const ctx = finalizeInboundContext({
       Body: "Alice: hi",
       BodyForAgent: "hi",
