@@ -16,19 +16,17 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/text-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/text-runtime")>(
-    "openclaw/plugin-sdk/text-runtime",
-  );
+vi.mock("../media.js", () => ({
+  loadWebMedia: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/text-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/text-runtime")>();
   return {
     ...actual,
     sleep: vi.fn(async () => {}),
   };
 });
-
-vi.mock("../media.js", () => ({
-  loadWebMedia: vi.fn(),
-}));
 
 let deliverWebReply: typeof import("./deliver-reply.js").deliverWebReply;
 
@@ -96,6 +94,7 @@ async function expectReplySuppressed(replyResult: { text: string; isReasoning?: 
 
 describe("deliverWebReply", () => {
   beforeAll(async () => {
+    vi.resetModules();
     ({ deliverWebReply } = await import("./deliver-reply.js"));
   });
 

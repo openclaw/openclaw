@@ -40,8 +40,6 @@ export function createCanonicalFixtureSkill(params: {
     sourceInfo: createSyntheticSourceInfo(params.filePath, {
       source: params.source,
       baseDir: params.baseDir,
-      scope: "project",
-      origin: "top-level",
     }),
     disableModelInvocation: params.disableModelInvocation ?? false,
   };
