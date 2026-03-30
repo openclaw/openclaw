@@ -507,8 +507,7 @@ export async function runEmbeddedAttempt(
     const providerChannel = normalizeMessageChannel(
       params.messageChannel ?? params.messageProvider,
     );
-    const mergedForBeforeToolsResolve = [...toolsRaw, ...clientToolDefsPre];
-    const mergedAfterHook = await applyBeforeToolsResolveHook(mergedForBeforeToolsResolve, {
+    const beforeToolsResolveCtx = {
       agentId: sessionAgentId,
       sessionKey: sandboxSessionKey,
       sessionId: params.sessionId,
@@ -516,7 +515,12 @@ export async function runEmbeddedAttempt(
       messageProvider: params.messageChannel ?? params.messageProvider,
       requesterSenderId: params.senderId ?? undefined,
       senderIsOwner: params.senderIsOwner,
-    });
+    };
+    const mergedForBeforeToolsResolve = [...toolsRaw, ...clientToolDefsPre];
+    const mergedAfterHook = await applyBeforeToolsResolveHook(
+      mergedForBeforeToolsResolve,
+      beforeToolsResolveCtx,
+    );
     type ClientToolDef = ReturnType<typeof toClientToolDefinitions>[number];
     const toolsRawRefSet = new Set<AnyAgentTool | ClientToolDef>(toolsRaw);
     const toolsAfterHook = mergedAfterHook.filter((t) => toolsRawRefSet.has(t)) as AnyAgentTool[];
@@ -555,11 +559,17 @@ export async function runEmbeddedAttempt(
           ],
         })
       : undefined;
-    const effectiveTools = [
-      ...tools,
-      ...(bundleMcpRuntime?.tools ?? []),
-      ...(bundleLspRuntime?.tools ?? []),
-    ];
+    const bundleMcpTools = bundleMcpRuntime?.tools ?? [];
+    const bundleLspTools = bundleLspRuntime?.tools ?? [];
+    const bundledCombined = [...bundleMcpTools, ...bundleLspTools];
+    const bundledAfterHook =
+      bundledCombined.length > 0
+        ? await applyBeforeToolsResolveHook(bundledCombined, beforeToolsResolveCtx)
+        : [];
+    const bundleMcpRefSet = new Set(bundleMcpTools);
+    const filteredBundledMcp = bundledAfterHook.filter((t) => bundleMcpRefSet.has(t));
+    const filteredBundledLsp = bundledAfterHook.filter((t) => !bundleMcpRefSet.has(t));
+    const effectiveTools = [...tools, ...filteredBundledMcp, ...filteredBundledLsp];
     const allowedToolNames = collectAllowedToolNames({
       tools: effectiveTools,
       clientTools,

@@ -485,16 +485,17 @@ export async function compactEmbeddedPiSessionDirect(
       modelAuthMode: resolveModelAuthMode(model.provider, params.config),
     });
     const toolsEnabled = supportsModelTools(runtimeModel);
-    // requesterSenderId is omitted: compact path has no per-message sender id.
-    const toolsAfterHook = await applyBeforeToolsResolveHook(toolsRaw, {
+    const beforeToolsResolveCtx = {
       agentId: resolveSessionAgentIds({ sessionKey: params.sessionKey, config: params.config })
         .sessionAgentId,
       sessionKey: sandboxSessionKey,
       sessionId: params.sessionId,
       channelId: runtimeChannel ?? undefined,
       messageProvider: params.messageChannel ?? params.messageProvider,
+      requesterSenderId: params.senderId ?? undefined,
       senderIsOwner: params.senderIsOwner,
-    });
+    };
+    const toolsAfterHook = await applyBeforeToolsResolveHook(toolsRaw, beforeToolsResolveCtx);
     const tools = sanitizeToolsForGoogle({
       tools: toolsEnabled ? toolsAfterHook : [],
       provider,
@@ -516,11 +517,17 @@ export async function compactEmbeddedPiSessionDirect(
           ],
         })
       : undefined;
-    const effectiveTools = [
-      ...tools,
-      ...(bundleMcpRuntime?.tools ?? []),
-      ...(bundleLspRuntime?.tools ?? []),
-    ];
+    const bundleMcpTools = bundleMcpRuntime?.tools ?? [];
+    const bundleLspTools = bundleLspRuntime?.tools ?? [];
+    const bundledCombined = [...bundleMcpTools, ...bundleLspTools];
+    const bundledAfterHook =
+      bundledCombined.length > 0
+        ? await applyBeforeToolsResolveHook(bundledCombined, beforeToolsResolveCtx)
+        : [];
+    const bundleMcpRefSet = new Set(bundleMcpTools);
+    const filteredBundledMcp = bundledAfterHook.filter((t) => bundleMcpRefSet.has(t));
+    const filteredBundledLsp = bundledAfterHook.filter((t) => !bundleMcpRefSet.has(t));
+    const effectiveTools = [...tools, ...filteredBundledMcp, ...filteredBundledLsp];
     const allowedToolNames = collectAllowedToolNames({ tools: effectiveTools });
     logToolSchemasForGoogle({ tools: effectiveTools, provider });
     const machineName = await getMachineDisplayName();
