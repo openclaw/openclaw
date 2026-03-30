@@ -16,8 +16,8 @@ Docs: https://docs.openclaw.ai
 - Agents/MCP: materialize bundle MCP tools with provider-safe names (`serverName__toolName`), support optional `streamable-http` transport selection plus per-server connection timeouts, and preserve real tool results from aborted/error turns unless truncation explicitly drops them. (#49505) Thanks @ziomancer.
 - Plugins/hooks: add a `before_install` hook with structured request provenance, built-in scan status, and install-target metadata so external security scanners and policy engines can review and block skill, plugin package, plugin bundle, and single-file plugin installs. (#56050) thanks @odysseus0.
 - ACP/plugins: add an explicit default-off ACPX plugin-tools MCP bridge config, document the trust boundary, and harden the built-in bridge packaging/logging path so global installs and stdio MCP sessions work reliably. (#56867) Thanks @joe2643.
-- Docs/zh-CN: add a Chinese Diffs tool page so Chinese readers can access the full Diffs viewer, file-rendering, security, and troubleshooting docs. (#40773) Thanks @elliotllliu.
-- Docs/zh-CN: align the Chinese Diffs tool page with the current English source and generated translation metadata. Thanks @gumadeiras.
+- Agents/LLM: add a configurable idle-stream timeout for embedded runner requests so stalled model streams abort cleanly instead of hanging until the broader run timeout fires. (#55072) Thanks @liuy.
+- OpenAI/Responses: forward configured `text.verbosity` across Responses HTTP and WebSocket transports, surface it in `/status`, and keep per-agent verbosity precedence aligned with runtime behavior. (#47106) Thanks @merc1305 and @vincentkoc.
 
 ### Fixes
 
@@ -48,6 +48,8 @@ Docs: https://docs.openclaw.ai
 - Gateway/health: carry webhook-vs-polling account mode from channel descriptors into runtime snapshots so passive channels like LINE and BlueBubbles skip false stale-socket health failures. (#47488) Thanks @karesansui-u.
 - Agents/MCP: reuse bundled MCP runtimes across turns in the same session, while recreating them when MCP config changes and disposing stale runtimes cleanly on session rollover. (#55090) Thanks @allan0509.
 - Memory/QMD: honor `memory.qmd.update.embedInterval` even when regular QMD update cadence is disabled or slower by arming a dedicated embed-cadence maintenance timer, while avoiding redundant timers when regular updates are already frequent enough. (#37326) Thanks @barronlroth.
+- Memory/QMD: add `memory.qmd.searchTool` as an exact mcporter tool override, so custom QMD MCP tools such as `hybrid_search` can be used without weakening the validated `searchMode` config surface. (#27801) Thanks @keramblock.
+- Memory/QMD: rebind collections when QMD reports a changed pattern but omits path metadata, so config pattern changes stop being silently ignored on restart. (#49897) Thanks @Madruru.
 - Agents/memory flush: keep daily memory flush files append-only during embedded attempts so compaction writes do not overwrite earlier notes. (#53725) Thanks @HPluseven.
 - Web UI/markdown: stop bare auto-links from swallowing adjacent CJK text while preserving valid mixed-script path and query characters in rendered links. (#48410) Thanks @jnuyao.
 - BlueBubbles/iMessage: coalesce URL-only inbound messages with their link-preview balloon again so sharing a bare link no longer drops the URL from agent context. Thanks @vincentkoc.
@@ -82,6 +84,9 @@ Docs: https://docs.openclaw.ai
 - Telegram/native commands: prefix native command menu callback payloads and preserve `CommandSource: "native"` when Telegram replays them through callback queries, so `/fast` and other native command menus keep working even when text-command routing is disabled. Thanks @vincentkoc.
 - Docs/anchors: fix broken English docs links and make Mint anchor audits run against the English-source docs tree. (#57039) thanks @velvet-shark.
 - Cron/announce: preserve all deliverable text payloads for announce mode instead of collapsing to the last chunk, so multi-line cron reports deliver in full to Telegram forum topics.
+- Harden async approval followup delivery in webchat-only sessions (#57359) Thanks @joshavant.
+- Status: fix cache hit rate exceeding 100% by deriving denominator from prompt-side token fields instead of potentially undersized totalTokens. Fixes #26643.
+- Config/update: stop `openclaw doctor` write-backs from persisting plugin-injected channel defaults, so `openclaw update` no longer seeds config keys that later break service refresh validation. (#56834) Thanks @openperf.
 
 ## 2026.3.28
 
@@ -227,6 +232,8 @@ Docs: https://docs.openclaw.ai
 - Gateway/SQLite transient handling: keep unhandled `SQLITE_CANTOPEN`, `SQLITE_BUSY`, `SQLITE_LOCKED`, and `SQLITE_IOERR` failures non-fatal in the global rejection handler so macOS LaunchAgent restarts do not enter a crash-throttle loop. (#57018)
 - Control UI/gateway: reconnect the browser client when gateway event sequence gaps are detected, so stale non-chat state recovers automatically instead of only telling the user to refresh. (#23912) thanks @Olshansk.
 - ClawDock/docs: move the helper scripts to `scripts/clawdock`, publish ClawDock as a first-class docs page on the docs site, and document reinstalling local helper copies from the new raw GitHub path. (#23912) thanks @Olshansk.
+- Control UI/gateway: clear queued browser connect timeouts on client stop so aborted or replaced gateway clients do not send delayed connect requests after shutdown. (#57338) thanks @gumadeiras.
+- Mattermost: detect stale websocket sessions after bot disable/enable cycles by polling the bot account `update_at` and forcing a reconnect when it changes. (#53604) Thanks @Qinsam.
 
 ## 2026.3.24
 

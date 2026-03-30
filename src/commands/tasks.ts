@@ -1,7 +1,20 @@
 import { loadConfig } from "../config/config.js";
 import { info } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
+import {
+  listTaskAuditFindings,
+  summarizeTaskAuditFindings,
+  type TaskAuditCode,
+  type TaskAuditFinding,
+  type TaskAuditSeverity,
+} from "../tasks/task-registry.audit.js";
 import { cancelTaskById, getTaskById, updateTaskNotifyPolicyById } from "../tasks/task-registry.js";
+import {
+  getInspectableTaskAuditSummary,
+  getInspectableTaskRegistrySummary,
+  previewTaskRegistryMaintenance,
+  runTaskRegistryMaintenance,
+} from "../tasks/task-registry.maintenance.js";
 import {
   reconcileInspectableTasks,
   reconcileTaskLookupToken,
@@ -87,6 +100,60 @@ function formatTaskRows(tasks: TaskRecord[], rich: boolean) {
 function formatTaskListSummary(tasks: TaskRecord[]) {
   const summary = summarizeTaskRecords(tasks);
   return `${summary.byStatus.queued} queued · ${summary.byStatus.running} running · ${summary.failures} issues`;
+}
+
+function formatAgeMs(ageMs: number | undefined): string {
+  if (typeof ageMs !== "number" || ageMs < 1000) {
+    return "fresh";
+  }
+  const totalSeconds = Math.floor(ageMs / 1000);
+  const days = Math.floor(totalSeconds / 86_400);
+  const hours = Math.floor((totalSeconds % 86_400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  if (days > 0) {
+    return `${days}d${hours}h`;
+  }
+  if (hours > 0) {
+    return `${hours}h${minutes}m`;
+  }
+  if (minutes > 0) {
+    return `${minutes}m`;
+  }
+  return `${totalSeconds}s`;
+}
+
+function formatAuditRows(findings: TaskAuditFinding[], rich: boolean) {
+  const header = [
+    "Severity".padEnd(8),
+    "Code".padEnd(22),
+    "Task".padEnd(ID_PAD),
+    "Status".padEnd(STATUS_PAD),
+    "Age".padEnd(8),
+    "Detail",
+  ].join(" ");
+  const lines = [rich ? theme.heading(header) : header];
+  for (const finding of findings) {
+    const severity = finding.severity.padEnd(8);
+    const status = formatTaskStatusCell(finding.task.status, rich);
+    const severityCell = !rich
+      ? severity
+      : finding.severity === "error"
+        ? theme.error(severity)
+        : theme.warn(severity);
+    lines.push(
+      [
+        severityCell,
+        finding.code.padEnd(22),
+        shortToken(finding.task.taskId).padEnd(ID_PAD),
+        status,
+        formatAgeMs(finding.ageMs).padEnd(8),
+        truncate(finding.detail, 88),
+      ]
+        .join(" ")
+        .trimEnd(),
+    );
+  }
+  return lines;
 }
 
 export async function tasksListCommand(
@@ -240,4 +307,126 @@ export async function tasksCancelCommand(opts: { lookup: string }, runtime: Runt
   runtime.log(
     `Cancelled ${updated?.taskId ?? task.taskId} (${updated?.runtime ?? task.runtime})${updated?.runId ? ` run ${updated.runId}` : ""}.`,
   );
+}
+
+export async function tasksAuditCommand(
+  opts: {
+    json?: boolean;
+    severity?: TaskAuditSeverity;
+    code?: TaskAuditCode;
+    limit?: number;
+  },
+  runtime: RuntimeEnv,
+) {
+  const severityFilter = opts.severity?.trim() as TaskAuditSeverity | undefined;
+  const codeFilter = opts.code?.trim() as TaskAuditCode | undefined;
+  const allFindings = listTaskAuditFindings();
+  const findings = allFindings.filter((finding) => {
+    if (severityFilter && finding.severity !== severityFilter) {
+      return false;
+    }
+    if (codeFilter && finding.code !== codeFilter) {
+      return false;
+    }
+    return true;
+  });
+  const limit = typeof opts.limit === "number" && opts.limit > 0 ? opts.limit : undefined;
+  const displayed = limit ? findings.slice(0, limit) : findings;
+  const summary = summarizeTaskAuditFindings(allFindings);
+
+  if (opts.json) {
+    runtime.log(
+      JSON.stringify(
+        {
+          count: allFindings.length,
+          filteredCount: findings.length,
+          displayed: displayed.length,
+          filters: {
+            severity: severityFilter ?? null,
+            code: codeFilter ?? null,
+            limit: limit ?? null,
+          },
+          summary,
+          findings: displayed,
+        },
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+
+  runtime.log(
+    info(
+      `Task audit: ${summary.total} findings · ${summary.errors} errors · ${summary.warnings} warnings`,
+    ),
+  );
+  if (severityFilter || codeFilter) {
+    runtime.log(info(`Showing ${findings.length} matching findings.`));
+  }
+  if (severityFilter) {
+    runtime.log(info(`Severity filter: ${severityFilter}`));
+  }
+  if (codeFilter) {
+    runtime.log(info(`Code filter: ${codeFilter}`));
+  }
+  if (limit) {
+    runtime.log(info(`Limit: ${limit}`));
+  }
+  if (displayed.length === 0) {
+    runtime.log("No task audit findings.");
+    return;
+  }
+  const rich = isRich();
+  for (const line of formatAuditRows(displayed, rich)) {
+    runtime.log(line);
+  }
+}
+
+export async function tasksMaintenanceCommand(
+  opts: { json?: boolean; apply?: boolean },
+  runtime: RuntimeEnv,
+) {
+  const auditBefore = getInspectableTaskAuditSummary();
+  const maintenance = opts.apply ? runTaskRegistryMaintenance() : previewTaskRegistryMaintenance();
+  const summary = getInspectableTaskRegistrySummary();
+  const auditAfter = opts.apply ? getInspectableTaskAuditSummary() : auditBefore;
+
+  if (opts.json) {
+    runtime.log(
+      JSON.stringify(
+        {
+          mode: opts.apply ? "apply" : "preview",
+          maintenance,
+          tasks: summary,
+          auditBefore,
+          auditAfter,
+        },
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+
+  runtime.log(
+    info(
+      `Task maintenance (${opts.apply ? "applied" : "preview"}): ${maintenance.reconciled} reconcile · ${maintenance.cleanupStamped} cleanup stamp · ${maintenance.pruned} prune`,
+    ),
+  );
+  runtime.log(
+    info(
+      `${opts.apply ? "Task health after apply" : "Task health"}: ${summary.byStatus.queued} queued · ${summary.byStatus.running} running · ${auditAfter.errors} audit errors · ${auditAfter.warnings} audit warnings`,
+    ),
+  );
+  if (opts.apply) {
+    runtime.log(
+      info(
+        `Task health before apply: ${auditBefore.errors} audit errors · ${auditBefore.warnings} audit warnings`,
+      ),
+    );
+  }
+  if (!opts.apply) {
+    runtime.log("Dry run only. Re-run with `openclaw tasks maintenance --apply` to write changes.");
+  }
 }

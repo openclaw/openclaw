@@ -74,6 +74,24 @@ function persistTaskRegistry() {
   getTaskRegistryStore().saveSnapshot(tasks);
 }
 
+function persistTaskUpsert(task: TaskRecord) {
+  const store = getTaskRegistryStore();
+  if (store.upsertTask) {
+    store.upsertTask(task);
+    return;
+  }
+  store.saveSnapshot(tasks);
+}
+
+function persistTaskDelete(taskId: string) {
+  const store = getTaskRegistryStore();
+  if (store.deleteTask) {
+    store.deleteTask(taskId);
+    return;
+  }
+  store.saveSnapshot(tasks);
+}
+
 function ensureDeliveryStatus(requesterSessionKey: string): TaskDeliveryStatus {
   return requesterSessionKey.trim() ? "pending" : "parent_missing";
 }
@@ -354,7 +372,7 @@ function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskRecord | nu
   if (patch.runId && patch.runId !== current.runId) {
     rebuildRunIdIndex();
   }
-  persistTaskRegistry();
+  persistTaskUpsert(next);
   emitTaskRegistryHookEvent(() => ({
     kind: "upserted",
     task: cloneTaskRecord(next),
@@ -838,7 +856,7 @@ export function createTaskRecord(params: {
   }
   tasks.set(taskId, record);
   addRunIdIndex(taskId, record.runId);
-  persistTaskRegistry();
+  persistTaskUpsert(record);
   emitTaskRegistryHookEvent(() => ({
     kind: "upserted",
     task: cloneTaskRecord(record),
@@ -1100,7 +1118,7 @@ export function deleteTaskRecordById(taskId: string): boolean {
   }
   tasks.delete(taskId);
   rebuildRunIdIndex();
-  persistTaskRegistry();
+  persistTaskDelete(taskId);
   emitTaskRegistryHookEvent(() => ({
     kind: "deleted",
     taskId: current.taskId,

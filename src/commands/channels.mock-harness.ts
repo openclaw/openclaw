@@ -40,7 +40,7 @@ vi.mock("../config/config.js", async (importOriginal) => {
 vi.mock(
   buildBundledPluginModuleId("telegram", "update-offset-runtime-api.js"),
   async (importOriginal) => {
-    const actual = await importOriginal<Record<string, unknown>>();
+    const actual: Record<string, unknown> = await importOriginal();
     return {
       ...actual,
       deleteTelegramUpdateOffset: offsetMocks.deleteTelegramUpdateOffset,

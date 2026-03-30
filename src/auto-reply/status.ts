@@ -7,6 +7,8 @@ import {
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "../agents/model-selection.js";
+import { resolveExtraParams } from "../agents/pi-embedded-runner/extra-params.js";
+import { resolveOpenAITextVerbosity } from "../agents/pi-embedded-runner/openai-stream-wrappers.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox.js";
 import type { SkillCommandSpec } from "../agents/skills.js";
 import { describeToolForVerbose } from "../agents/tool-description-summary.js";
@@ -116,6 +118,27 @@ function normalizeAuthMode(value?: string): NormalizedAuthMode | undefined {
     return "unknown";
   }
   return undefined;
+}
+
+function resolveConfiguredTextVerbosity(params: {
+  config?: OpenClawConfig;
+  agentId?: string;
+  provider?: string | null;
+  model?: string | null;
+}): "low" | "medium" | "high" | undefined {
+  const provider = params.provider?.trim();
+  const model = params.model?.trim();
+  if (!provider || !model || (provider !== "openai" && provider !== "openai-codex")) {
+    return undefined;
+  }
+  return resolveOpenAITextVerbosity(
+    resolveExtraParams({
+      cfg: params.config,
+      provider,
+      modelId: model,
+      agentId: params.agentId,
+    }),
+  );
 }
 
 function resolveRuntimeLabel(
@@ -664,10 +687,17 @@ export function buildStatusMessage(args: StatusArgs): string {
         ? "elevated"
         : `elevated:${elevatedLevel}`
       : null;
+  const textVerbosity = resolveConfiguredTextVerbosity({
+    config: args.config,
+    agentId: args.agentId,
+    provider: activeProvider,
+    model: activeModel,
+  });
   const optionParts = [
     `Runtime: ${runtime.label}`,
     `Think: ${thinkLevel}`,
     fastMode ? "Fast: on" : null,
+    textVerbosity ? `Text: ${textVerbosity}` : null,
     verboseLabel,
     reasoningLevel !== "off" ? `Reasoning: ${reasoningLevel}` : null,
     elevatedLabel,

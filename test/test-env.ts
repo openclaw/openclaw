@@ -227,7 +227,12 @@ function copyFileIfExists(sourcePath: string, targetPath: string): void {
 
 function sanitizeLiveConfig(raw: string): string {
   try {
-    const parsed = JSON5.parse(raw);
+    const parsed: {
+      agents?: {
+        defaults?: Record<string, unknown>;
+        list?: Array<Record<string, unknown>>;
+      };
+    } = JSON5.parse(raw);
     if (!parsed || typeof parsed !== "object") {
       return raw;
     }
