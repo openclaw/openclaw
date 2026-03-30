@@ -459,7 +459,22 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           fetchThreadReplies(graphToken, groupId, conversationId, activity.replyToId),
         ]);
         const allMessages = parentMsg ? [parentMsg, ...replies] : replies;
-        const formatted = formatThreadContext(allMessages, activity.id);
+        const threadMessages =
+          groupPolicy === "allowlist"
+            ? allMessages.filter((msg) => {
+                const threadSenderId = msg.from?.user?.id;
+                if (!threadSenderId) {
+                  return false;
+                }
+                return resolveMSTeamsAllowlistMatch({
+                  allowFrom: effectiveGroupAllowFrom,
+                  senderId: threadSenderId,
+                  senderName: msg.from?.user?.displayName,
+                  allowNameMatching,
+                }).allowed;
+              })
+            : allMessages;
+        const formatted = formatThreadContext(threadMessages, activity.id);
         if (formatted) {
           threadContext = formatted;
         }
