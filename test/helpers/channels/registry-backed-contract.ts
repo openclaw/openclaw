@@ -19,9 +19,11 @@ import {
   installChannelThreadingContractSuite,
   installSessionBindingContractSuite,
 } from "../../../src/channels/plugins/contracts/suites.js";
+import { setDefaultChannelPluginRegistryForTests } from "../../../src/commands/channel-test-helpers.js";
 import { __testing as sessionBindingTesting } from "../../../src/infra/outbound/session-binding-service.js";
 import { feishuThreadBindingTesting } from "../../../src/plugin-sdk/feishu-conversation.js";
 import { resetMatrixThreadBindingsForTests } from "../../../src/plugin-sdk/matrix.js";
+import { resetPluginRuntimeStateForTest } from "../../../src/plugins/runtime.js";
 import { loadBundledPluginTestApiSync } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 
 const { discordThreadBindingTesting } = loadBundledPluginTestApiSync<{
@@ -122,6 +124,8 @@ export function describeSessionBindingRegistryBackedContract(id: string) {
 
   describe(`${entry.id} session binding contract`, () => {
     beforeEach(async () => {
+      resetPluginRuntimeStateForTest();
+      setDefaultChannelPluginRegistryForTests();
       sessionBindingTesting.resetSessionBindingAdaptersForTests();
       discordThreadBindingTesting.resetThreadBindingsForTests();
       feishuThreadBindingTesting.resetFeishuThreadBindingsForTests();
