@@ -166,9 +166,7 @@ function crossVisibilityMessage(action: SessionAccessAction): string {
   if (action === "history") {
     return "Session history visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access.";
   }
-  if (action === "send") {
-    return "Session send visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access.";
-  }
+  // "send" is gated by a2a policy, not visibility — see createSessionVisibilityGuard.
   if (action === "status") {
     return "Session status visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access.";
   }
