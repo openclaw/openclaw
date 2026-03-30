@@ -924,6 +924,7 @@
                 "pages": [
                   "install/ansible",
                   "install/bun",
+                  "install/clawdock",
                   "install/docker",
                   "install/nix",
                   "install/podman"
@@ -989,7 +990,6 @@
                   "channels/telegram",
                   "channels/tlon",
                   "channels/twitch",
-                  "plugins/voice-call",
                   "channels/whatsapp",
                   "channels/zalo",
                   "channels/zalouser"
@@ -1077,6 +1077,7 @@
                   "tools/plugin",
                   "plugins/community",
                   "plugins/bundles",
+                  "plugins/voice-call",
                   {
                     "group": "Building Plugins",
                     "pages": [
@@ -1114,6 +1115,7 @@
               {
                 "group": "Automation",
                 "pages": [
+                  "automation/index",
                   "automation/hooks",
                   "automation/standing-orders",
                   "automation/cron-jobs",
@@ -1161,6 +1163,7 @@
                   "tools/elevated",
                   "tools/exec",
                   "tools/exec-approvals",
+                  "tools/image-generation",
                   "tools/llm-task",
                   "tools/lobster",
                   "tools/loop-detection",
@@ -1347,18 +1350,28 @@
                 ]
               },
               {
-                "group": "Nodes and devices",
+                "group": "Nodes and media",
                 "pages": [
                   "nodes/index",
                   "nodes/troubleshooting",
-                  "nodes/media-understanding",
-                  "nodes/images",
-                  "nodes/audio",
-                  "nodes/camera",
-                  "nodes/talk",
-                  "nodes/voicewake",
-                  "nodes/location-command",
-                  "tools/tts"
+                  {
+                    "group": "Media capabilities",
+                    "pages": [
+                      "nodes/media-understanding",
+                      "nodes/images",
+                      "nodes/audio",
+                      "nodes/camera",
+                      "tools/tts"
+                    ]
+                  },
+                  {
+                    "group": "Node features",
+                    "pages": [
+                      "nodes/talk",
+                      "nodes/voicewake",
+                      "nodes/location-command"
+                    ]
+                  }
                 ]
               },
               {
