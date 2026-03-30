@@ -63,7 +63,8 @@ export type RoomHistoryTracker = {
   ) => PreparedTriggerResult;
 
   /**
-   * Advance the agent's watermark to the snapshot index returned by recordTrigger.
+   * Advance the agent's watermark to the snapshot index returned by prepareTrigger
+   * (or the lower-level recordTrigger helper used in tests).
    * Only messages appended after that snapshot remain visible on the next trigger.
    */
   consumeHistory: (

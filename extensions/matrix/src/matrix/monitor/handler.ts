@@ -50,7 +50,11 @@ import type { HistoryEntry } from "./room-history.js";
 import { resolveMatrixRoomConfig } from "./rooms.js";
 import { resolveMatrixInboundRoute } from "./route.js";
 import { createMatrixThreadContextResolver } from "./thread-context.js";
-import { resolveMatrixThreadRootId, resolveMatrixThreadTarget } from "./threads.js";
+import {
+  resolveMatrixReplyToEventId,
+  resolveMatrixThreadRootId,
+  resolveMatrixThreadTarget,
+} from "./threads.js";
 import type { MatrixRawEvent, RoomMessageEventContent } from "./types.js";
 import { EventType, RelationType } from "./types.js";
 import { isMatrixVerificationRoomMessage } from "./verification-utils.js";
@@ -806,8 +810,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
 
         return {
           route: _route,
-          configuredBinding: _configuredBinding,
-          runtimeBindingId: _runtimeBindingId,
           roomConfig,
           isDirectMessage,
           isRoom,
@@ -832,8 +834,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
 
       const {
         route: _route,
-        configuredBinding: _configuredBinding,
-        runtimeBindingId: _runtimeBindingId,
         roomConfig,
         isDirectMessage,
         isRoom,
@@ -854,9 +854,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
 
       // Keep the per-room ingress gate focused on ordering-sensitive state updates.
       // Prompt/session enrichment below can run concurrently after the history snapshot is fixed.
-      const replyToEventId = (event.content as RoomMessageEventContent)["m.relates_to"]?.[
-        "m.in_reply_to"
-      ]?.event_id;
+      const replyToEventId = resolveMatrixReplyToEventId(event.content as RoomMessageEventContent);
       const threadTarget = resolveMatrixThreadTarget({
         threadReplies,
         messageId: _messageId,
