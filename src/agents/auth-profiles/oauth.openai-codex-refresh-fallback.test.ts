@@ -494,7 +494,7 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
     );
     refreshProviderOAuthCredentialWithPluginMock.mockImplementationOnce(
       async () =>
-        await new Promise<{
+        (await new Promise<{
           type: "oauth";
           provider: string;
           access: string;
@@ -502,7 +502,7 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
           expires: number;
         }>((resolve) => {
           releaseRefresh = resolve;
-        }),
+        })) as never,
     );
 
     clearRuntimeAuthProfileStoreSnapshots();
@@ -591,7 +591,7 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
     );
     refreshProviderOAuthCredentialWithPluginMock.mockImplementationOnce(
       async () =>
-        await new Promise<{
+        (await new Promise<{
           type: "oauth";
           provider: string;
           access: string;
@@ -600,7 +600,7 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
           accountId?: string;
         }>((resolve) => {
           releaseRefresh = resolve;
-        }),
+        })) as never,
     );
 
     clearRuntimeAuthProfileStoreSnapshots();
@@ -672,7 +672,7 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
     );
     refreshProviderOAuthCredentialWithPluginMock.mockImplementationOnce(
       async () =>
-        await new Promise<{
+        (await new Promise<{
           type: "oauth";
           provider: string;
           access: string;
@@ -680,7 +680,7 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
           expires: number;
         }>((resolve) => {
           releaseRefresh = resolve;
-        }),
+        })) as never,
     );
 
     clearRuntimeAuthProfileStoreSnapshots();
