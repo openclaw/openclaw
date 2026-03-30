@@ -1,5 +1,6 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import {
   readNumberParam,
   readStringArrayParam,
@@ -357,6 +358,7 @@ type ResolvedActionContext = {
   params: Record<string, unknown>;
   channel: ChannelId;
   mediaAccess: OutboundMediaAccess;
+  ignoreConfiguredRootsForMedia?: boolean;
   accountId?: string | null;
   dryRun: boolean;
   gateway?: MessageActionRunnerGateway;
@@ -469,6 +471,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     gateway,
     input,
     agentId,
+    ignoreConfiguredRootsForMedia,
     resolvedTarget,
     abortSignal,
   } = ctx;
@@ -603,6 +606,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       requesterSenderUsername: input.requesterSenderUsername ?? undefined,
       requesterSenderE164: input.requesterSenderE164 ?? undefined,
       mediaAccess: ctx.mediaAccess,
+      ignoreConfiguredRootsForMedia,
       accountId: accountId ?? undefined,
       senderIsOwner: input.senderIsOwner,
       sessionId: input.sessionId,
@@ -858,6 +862,14 @@ export async function runMessageAction(
     params.accountId = accountId;
   }
   const dryRun = Boolean(input.dryRun ?? readBooleanParam(params, "dryRun"));
+  const ignoreConfiguredRootsForMedia =
+    Boolean(input.sandboxRoot) ||
+    (input.sessionKey
+      ? resolveSandboxRuntimeStatus({
+          cfg,
+          sessionKey: input.sessionKey,
+        }).sandboxed
+      : false);
   const normalizationPolicy = resolveAttachmentMediaPolicy({
     sandboxRoot: input.sandboxRoot,
     mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, resolvedAgentId),
@@ -892,6 +904,7 @@ export async function runMessageAction(
     requesterSenderName: input.requesterSenderName,
     requesterSenderUsername: input.requesterSenderUsername,
     requesterSenderE164: input.requesterSenderE164,
+    ignoreConfiguredRoots: ignoreConfiguredRootsForMedia,
   });
   const mediaPolicy = resolveAttachmentMediaPolicy({
     sandboxRoot: input.sandboxRoot,
@@ -936,6 +949,7 @@ export async function runMessageAction(
       params,
       channel,
       mediaAccess,
+      ignoreConfiguredRootsForMedia,
       accountId,
       dryRun,
       gateway,

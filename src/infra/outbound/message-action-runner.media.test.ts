@@ -865,5 +865,33 @@ describe("runMessageAction media behavior", () => {
         await fs.rm(sandboxDir, { recursive: true, force: true });
       }
     });
+
+    it("ignores configured fs roots for sandboxed media sends", async () => {
+      await withSandbox(async (sandboxDir) => {
+        const result = await runDrySend({
+          cfg: {
+            ...slackConfig,
+            tools: {
+              fs: {
+                roots: [{ path: "/packs/shared", kind: "dir", access: "ro" }],
+              },
+            },
+          },
+          actionParams: {
+            channel: "slack",
+            target: "#C12345678",
+            media: "./data/file.txt",
+            message: "",
+          },
+          sandboxRoot: sandboxDir,
+        });
+
+        expect(result.kind).toBe("send");
+        if (result.kind !== "send") {
+          throw new Error("expected send result");
+        }
+        expect(result.sendResult?.mediaUrl).toBe(path.join(sandboxDir, "data", "file.txt"));
+      });
+    });
   });
 });

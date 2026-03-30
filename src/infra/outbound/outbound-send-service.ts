@@ -39,6 +39,7 @@ export type OutboundSendContext = {
   requesterSenderE164?: string;
   mediaAccess?: OutboundMediaAccess;
   mediaReadFile?: OutboundMediaReadFile;
+  ignoreConfiguredRootsForMedia?: boolean;
   accountId?: string | null;
   senderIsOwner?: boolean;
   sessionId?: string;
@@ -92,6 +93,7 @@ async function tryHandleWithPluginAction(params: {
     requesterSenderE164: params.ctx.requesterSenderE164,
     mediaAccess: params.ctx.mediaAccess,
     mediaReadFile: params.ctx.mediaReadFile,
+    ignoreConfiguredRoots: params.ctx.ignoreConfiguredRootsForMedia,
   });
   const handled = await dispatchChannelMessageAction({
     channel: params.ctx.channel,
