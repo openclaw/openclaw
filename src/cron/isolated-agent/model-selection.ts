@@ -1,11 +1,13 @@
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
 import {
+  buildModelAliasIndex,
   getModelRefStatus,
   normalizeModelSelection,
   resolveAllowedModelRef,
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
+  resolveModelRefFromString,
 } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { CronJob } from "../types.js";
@@ -112,17 +114,34 @@ export async function resolveCronModelSelection(
     });
     if ("error" in resolvedOverride) {
       if (resolvedOverride.error.startsWith("model not allowed:")) {
-        return {
-          ok: true,
-          provider,
-          model,
-          warning: `cron: payload.model '${modelOverride}' not allowed, falling back to agent defaults`,
-        };
+        // payload.model is an explicit user override — honour it even when
+        // the model is not in agents.defaults.models.  The user chose this
+        // model for this specific cron job and per documented priority
+        // (payload > hooks > agent defaults) it should take precedence.
+        // (#57367)
+        const aliasIndex = buildModelAliasIndex({
+          cfg: params.cfgWithAgentDefaults,
+          defaultProvider: resolvedDefault.provider,
+        });
+        const parsed = resolveModelRefFromString({
+          raw: modelOverride,
+          defaultProvider: resolvedDefault.provider,
+          aliasIndex,
+        });
+        if (parsed) {
+          provider = parsed.ref.provider;
+          model = parsed.ref.model;
+        }
+        // If parsing unexpectedly fails (should not happen since
+        // resolveAllowedModelRef already parsed it successfully),
+        // provider/model stay at current defaults.
+      } else {
+        return { ok: false, error: resolvedOverride.error };
       }
-      return { ok: false, error: resolvedOverride.error };
+    } else {
+      provider = resolvedOverride.ref.provider;
+      model = resolvedOverride.ref.model;
     }
-    provider = resolvedOverride.ref.provider;
-    model = resolvedOverride.ref.model;
   }
 
   if (!modelOverride && !hooksGmailModelApplied) {
