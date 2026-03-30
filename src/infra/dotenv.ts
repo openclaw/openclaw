@@ -99,10 +99,16 @@ export function loadWorkspaceDotEnvFile(filePath: string, opts?: { quiet?: boole
 export function loadDotEnv(opts?: { quiet?: boolean }) {
   const quiet = opts?.quiet ?? true;
   const cwdEnvPath = path.join(process.cwd(), ".env");
+
+  // Resolve the global env path BEFORE loading workspace .env so that
+  // workspace .env cannot redirect which global config is loaded.
+  // This preserves the security invariant that untrusted workspace .env
+  // cannot hijack the user's global ~/.openclaw/.env config.
+  const globalEnvPath = path.join(resolveConfigDir(process.env), ".env");
+
   loadWorkspaceDotEnvFile(cwdEnvPath, { quiet });
 
   // Then load global fallback: ~/.openclaw/.env (or OPENCLAW_STATE_DIR/.env),
   // without overriding any env vars already present.
-  const globalEnvPath = path.join(resolveConfigDir(process.env), ".env");
   loadRuntimeDotEnvFile(globalEnvPath, { quiet });
 }
