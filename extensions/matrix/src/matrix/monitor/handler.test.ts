@@ -1,8 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   __testing as sessionBindingTesting,
   registerSessionBindingAdapter,
-} from "../../../../../src/infra/outbound/session-binding-service.js";
+} from "openclaw/plugin-sdk/conversation-runtime";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
 import { createMatrixRoomMessageHandler } from "./handler.js";
 import {
@@ -818,6 +818,9 @@ describe("matrix monitor handler pairing account scope", () => {
               matchedBy: "binding.account",
             }),
           },
+          mentions: {
+            buildMentionRegexes: () => [],
+          },
           session: {
             resolveStorePath: () => "/tmp/session-store",
             readSessionUpdatedAt: () => undefined,
@@ -881,7 +884,6 @@ describe("matrix monitor handler pairing account scope", () => {
       } as never,
       logVerboseMessage: () => {},
       allowFrom: [],
-      mentionRegexes: [],
       groupPolicy: "open",
       replyToMode: "off",
       threadReplies: "inbound",

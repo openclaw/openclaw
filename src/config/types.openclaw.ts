@@ -128,6 +128,16 @@ export type OpenClawConfig = {
   mcp?: McpConfig;
 };
 
+declare const openClawConfigStateBrand: unique symbol;
+
+type BrandedConfigState<TState extends string> = OpenClawConfig & {
+  readonly [openClawConfigStateBrand]?: TState;
+};
+
+export type SourceConfig = BrandedConfigState<"source">;
+export type ResolvedSourceConfig = BrandedConfigState<"resolved-source">;
+export type RuntimeConfig = BrandedConfigState<"runtime">;
+
 export type ConfigValidationIssue = {
   path: string;
   message: string;
@@ -146,13 +156,21 @@ export type ConfigFileSnapshot = {
   raw: string | null;
   parsed: unknown;
   /**
+   * Config authored on disk after $include resolution and ${ENV} substitution,
+   * but BEFORE runtime defaults are applied.
+   */
+  sourceConfig: ResolvedSourceConfig;
+  /**
    * Config after $include resolution and ${ENV} substitution, but BEFORE runtime
    * defaults are applied. Use this for config set/unset operations to avoid
    * leaking runtime defaults into the written config file.
    */
-  resolved: OpenClawConfig;
+  resolved: ResolvedSourceConfig;
   valid: boolean;
-  config: OpenClawConfig;
+  /** Runtime-shaped config used by in-process readers. */
+  runtimeConfig: RuntimeConfig;
+  /** @deprecated Prefer runtimeConfig. */
+  config: RuntimeConfig;
   hash?: string;
   issues: ConfigValidationIssue[];
   warnings: ConfigValidationIssue[];

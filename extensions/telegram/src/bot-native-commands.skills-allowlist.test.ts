@@ -1,13 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import { writeSkill } from "openclaw/plugin-sdk/testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { writeSkill } from "../../../src/agents/skills.e2e-test-helpers.js";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import {
-  pluginCommandMocks,
-  resetPluginCommandMocks,
-} from "../../../test/helpers/plugins/telegram-plugin-command.js";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
 import {
   createNativeCommandTestParams,
@@ -15,6 +11,7 @@ import {
   resetNativeCommandMenuMocks,
   waitForRegisteredCommands,
 } from "./bot-native-commands.menu-test-support.js";
+import { pluginCommandMocks, resetPluginCommandMocks } from "./test-support/plugin-command.js";
 
 const tempDirs: string[] = [];
 

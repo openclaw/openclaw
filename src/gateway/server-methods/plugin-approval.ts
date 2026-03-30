@@ -124,6 +124,7 @@ export function createPluginApprovalHandlers(
       const hasApprovalClients = context.hasExecApprovalClients?.(client?.connId) ?? false;
       const hasTurnSourceRoute = hasApprovalTurnSourceRoute({
         turnSourceChannel: record.request.turnSourceChannel,
+        turnSourceAccountId: record.request.turnSourceAccountId,
       });
       if (!hasApprovalClients && !forwarded && !hasTurnSourceRoute) {
         manager.expire(record.id, "no-approval-route");
@@ -216,7 +217,18 @@ export function createPluginApprovalHandlers(
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "invalid decision"));
         return;
       }
-      const approvalId = p.id.trim();
+      const resolvedId = manager.lookupPendingId(p.id);
+      if (resolvedId.kind === "none" || resolvedId.kind === "ambiguous") {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "unknown or expired approval id", {
+            details: APPROVAL_NOT_FOUND_DETAILS,
+          }),
+        );
+        return;
+      }
+      const approvalId = resolvedId.id;
       const snapshot = manager.getSnapshot(approvalId);
       if (!snapshot || snapshot.resolvedAtMs !== undefined) {
         respond(

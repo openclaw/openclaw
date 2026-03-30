@@ -315,6 +315,15 @@ When approvals are required, the exec tool returns immediately with an approval 
 correlate later system events (`Exec finished` / `Exec denied`). If no decision arrives before the
 timeout, the request is treated as an approval timeout and surfaced as a denial reason.
 
+### Followup delivery behavior
+
+After an approved async exec finishes, OpenClaw sends a followup `agent` turn to the same session.
+
+- If a valid external delivery target exists (deliverable channel plus target `to`), followup delivery uses that channel.
+- In webchat-only or internal-session flows with no external target, followup delivery stays session-only (`deliver: false`).
+- If a caller explicitly requests strict external delivery with no resolvable external channel, the request fails with `INVALID_REQUEST`.
+- If `bestEffortDeliver` is enabled and no external channel can be resolved, delivery is downgraded to session-only instead of failing.
+
 The confirmation dialog includes:
 
 - command + args
@@ -387,8 +396,9 @@ independent config under `approvals.plugin`. Enabling or disabling one does not 
 The config shape is identical to `approvals.exec`: `enabled`, `mode`, `agentFilter`,
 `sessionFilter`, and `targets` work the same way.
 
-Channels that support interactive exec approval buttons (such as Telegram) also render buttons for
-plugin approvals. Channels without adapter support fall back to plain text with `/approve` instructions.
+Channels that support shared interactive replies render the same approval buttons for both exec and
+plugin approvals. Channels without shared interactive UI fall back to plain text with `/approve`
+instructions.
 
 ### Same-chat approvals on any channel
 
@@ -398,21 +408,26 @@ Microsoft Teams in addition to the existing Web UI and terminal UI flows.
 
 This shared text-command path uses the normal channel auth model for that conversation. If the
 originating chat can already send commands and receive replies, approval requests no longer need a
-separate channel-specific approval client just to stay pending.
+separate native delivery adapter just to stay pending.
 
-### Rich approval clients
+Discord and Telegram also support same-chat `/approve`, but those channels still use their
+resolved approver list for authorization even when native approval delivery is disabled.
 
-Discord and Telegram can also act as richer exec approval clients with channel-specific config.
+### Native approval delivery
+
+Discord and Telegram can also act as native approval-delivery adapters with channel-specific config.
 
 - Discord: `channels.discord.execApprovals.*`
 - Telegram: `channels.telegram.execApprovals.*`
 
-These richer clients are opt-in. They add native DM routing, channel fanout, and interactive UI on
-top of the shared same-chat `/approve` flow.
+These native delivery adapters are opt-in. They add DM routing and channel fanout on top of the
+shared same-chat `/approve` flow and the shared approval buttons.
 
 Shared behavior:
 
-- only resolved approvers can approve or deny
+- Slack, Matrix, Microsoft Teams, and similar deliverable chats use the normal channel auth model
+  for same-chat `/approve`
+- for Discord and Telegram, only resolved approvers can approve or deny
 - Discord and Telegram approvers can be explicit (`execApprovals.approvers`) or inferred from existing owner config (`allowFrom`, plus direct-message `defaultTo` where supported)
 - the requester does not need to be an approver
 - the originating chat can approve directly with `/approve` when that chat already supports commands and replies
@@ -455,6 +470,14 @@ Exec lifecycle is surfaced as system messages:
 These are posted to the agent’s session after the node reports the event.
 Gateway-host exec approvals emit the same lifecycle events when the command finishes (and optionally when running longer than the threshold).
 Approval-gated execs reuse the approval id as the `runId` in these messages for easy correlation.
+
+## Denied approval behavior
+
+When an async exec approval is denied, OpenClaw prevents the agent from reusing
+output from any earlier run of the same command in the session. The denial reason
+is passed with explicit guidance that no command output is available, which stops
+the agent from claiming there is new output or repeating the denied command with
+stale results from a prior successful run.
 
 ## Implications
 

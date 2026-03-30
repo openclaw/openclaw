@@ -44,7 +44,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
-import { createTaskRecord } from "../tasks/task-registry.js";
+import { createRunningTaskRun } from "../tasks/task-executor.js";
 import {
   deliveryContextFromSession,
   formatConversationTarget,
@@ -953,20 +953,18 @@ export async function spawnAcpDirect(
     }
     parentRelay?.notifyStarted();
     try {
-      createTaskRecord({
-        source: "sessions_spawn",
+      createRunningTaskRun({
         runtime: "acp",
+        sourceId: childRunId,
         requesterSessionKey: requesterInternalKey,
         requesterOrigin: requesterState.origin,
         childSessionKey: sessionKey,
         runId: childRunId,
-        bindingTargetKind: "session",
         label: params.label,
         task: params.task,
-        status: "running",
+        preferMetadata: true,
         deliveryStatus: requesterInternalKey.trim() ? "pending" : "parent_missing",
         startedAt: Date.now(),
-        streamLogPath,
       });
     } catch (error) {
       log.warn("Failed to create background task for ACP spawn", {
@@ -986,17 +984,16 @@ export async function spawnAcpDirect(
   }
 
   try {
-    createTaskRecord({
-      source: "sessions_spawn",
+    createRunningTaskRun({
       runtime: "acp",
+      sourceId: childRunId,
       requesterSessionKey: requesterInternalKey,
       requesterOrigin: requesterState.origin,
       childSessionKey: sessionKey,
       runId: childRunId,
-      bindingTargetKind: "session",
       label: params.label,
       task: params.task,
-      status: "running",
+      preferMetadata: true,
       deliveryStatus: requesterInternalKey.trim() ? "pending" : "parent_missing",
       startedAt: Date.now(),
     });

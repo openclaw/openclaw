@@ -115,6 +115,28 @@ vi.mock("../agents/openclaw-tools.js", () => {
       },
     },
     {
+      name: "exec",
+      parameters: { type: "object", properties: {} },
+      execute: async () => ({ ok: true, result: "exec" }),
+    },
+    {
+      name: "apply_patch",
+      parameters: { type: "object", properties: {} },
+      execute: async () => ({ ok: true, result: "apply_patch" }),
+    },
+    {
+      name: "nodes",
+      ownerOnly: true,
+      parameters: { type: "object", properties: {} },
+      execute: async () => ({ ok: true, result: "nodes" }),
+    },
+    {
+      name: "owner_only_test",
+      ownerOnly: true,
+      parameters: { type: "object", properties: {} },
+      execute: async () => ({ ok: true, result: "owner-only" }),
+    },
+    {
       name: "tools_invoke_test",
       parameters: {
         type: "object",
@@ -241,7 +263,14 @@ beforeEach(() => {
 });
 
 const resolveGatewayToken = (): string => TEST_GATEWAY_TOKEN;
-const gatewayAuthHeaders = () => ({ authorization: `Bearer ${resolveGatewayToken()}` });
+const gatewayAuthHeaders = () => ({
+  authorization: `Bearer ${resolveGatewayToken()}`,
+  "x-openclaw-scopes": "operator.write",
+});
+const gatewayAdminHeaders = () => ({
+  authorization: `Bearer ${resolveGatewayToken()}`,
+  "x-openclaw-scopes": "operator.admin",
+});
 
 const allowAgentsListForMain = () => {
   cfg = {
@@ -573,16 +602,14 @@ describe("POST /tools/invoke", () => {
   it("allows gateway tool via HTTP when explicitly enabled in gateway.tools.allow", async () => {
     setMainAllowedTools({ allow: ["gateway"], gatewayAllow: ["gateway"] });
 
-    const res = await invokeToolAuthed({
+    const res = await invokeTool({
+      port: sharedPort,
+      headers: gatewayAdminHeaders(),
       tool: "gateway",
       sessionKey: "main",
     });
 
-    // Ensure we didn't hit the HTTP deny list (404). Invalid args should map to 400.
-    expect(res.status).toBe(400);
-    const body = await res.json();
-    expect(body.ok).toBe(false);
-    expect(body.error?.type).toBe("tool_error");
+    expect(res.status).toBe(404);
   });
 
   it("treats gateway.tools.deny as higher priority than gateway.tools.allow", async () => {
@@ -684,5 +711,73 @@ describe("POST /tools/invoke", () => {
     const body = await expectOkInvokeResponse(res);
     expect(body.result?.observedFormat).toBe("pdf");
     expect(body.result?.observedFileFormat).toBeUndefined();
+  });
+
+  it("requires operator.write scope for HTTP tool invocation", async () => {
+    allowAgentsListForMain();
+
+    const res = await invokeTool({
+      port: sharedPort,
+      headers: {
+        authorization: `Bearer ${resolveGatewayToken()}`,
+      },
+      tool: "agents_list",
+      sessionKey: "main",
+    });
+
+    expect(res.status).toBe(403);
+    await expect(res.json()).resolves.toMatchObject({
+      ok: false,
+      error: {
+        type: "forbidden",
+        message: "missing scope: operator.write",
+      },
+    });
+  });
+
+  it("applies owner-only tool policy on the HTTP path", async () => {
+    setMainAllowedTools({ allow: ["owner_only_test"] });
+
+    const deniedRes = await invokeToolAuthed({
+      tool: "owner_only_test",
+      sessionKey: "main",
+    });
+    expect(deniedRes.status).toBe(404);
+
+    const allowedRes = await invokeTool({
+      port: sharedPort,
+      headers: gatewayAdminHeaders(),
+      tool: "owner_only_test",
+      sessionKey: "main",
+    });
+    expect(allowedRes.status).toBe(404);
+  });
+
+  it("extends the HTTP deny list to high-risk execution and file tools", async () => {
+    setMainAllowedTools({ allow: ["exec", "apply_patch", "nodes"] });
+
+    const execRes = await invokeToolAuthed({
+      tool: "exec",
+      sessionKey: "main",
+    });
+    const patchRes = await invokeToolAuthed({
+      tool: "apply_patch",
+      sessionKey: "main",
+    });
+    const nodesRes = await invokeToolAuthed({
+      tool: "nodes",
+      sessionKey: "main",
+    });
+    const nodesAdminRes = await invokeTool({
+      port: sharedPort,
+      headers: gatewayAdminHeaders(),
+      tool: "nodes",
+      sessionKey: "main",
+    });
+
+    expect(execRes.status).toBe(404);
+    expect(patchRes.status).toBe(404);
+    expect(nodesRes.status).toBe(404);
+    expect(nodesAdminRes.status).toBe(404);
   });
 });

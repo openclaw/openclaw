@@ -1,6 +1,6 @@
+import type { SkillCommandSpec } from "openclaw/plugin-sdk/command-auth";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { expect, vi } from "vitest";
-import type { SkillCommandSpec } from "../../../src/agents/skills.js";
 import type { OpenClawConfig } from "../runtime-api.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import {

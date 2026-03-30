@@ -23,6 +23,7 @@ API key auth, and dynamic model resolution.
 ## Walkthrough
 
 <Steps>
+  <a id="step-1-package-and-manifest"></a>
   <Step title="Package and manifest">
     <CodeGroup>
     ```json package.json
@@ -319,6 +320,7 @@ API key auth, and dynamic model resolution.
   </Step>
 
   <Step title="Add extra capabilities (optional)">
+    <a id="step-5-add-extra-capabilities"></a>
     A provider plugin can register speech, media understanding, image
     generation, and web search alongside text inference:
 
@@ -360,6 +362,7 @@ API key auth, and dynamic model resolution.
   </Step>
 
   <Step title="Test">
+    <a id="step-6-test"></a>
     ```typescript src/provider.test.ts
     import { describe, it, expect } from "vitest";
     // Export your provider config object from index.ts or a dedicated file

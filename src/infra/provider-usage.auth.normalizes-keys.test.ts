@@ -190,6 +190,7 @@ vi.mock("../agents/auth-profiles/external-cli-sync.js", () => ({
 let resolveProviderAuths: typeof import("./provider-usage.auth.js").resolveProviderAuths;
 let clearRuntimeAuthProfileStoreSnapshots: typeof import("../agents/auth-profiles.js").clearRuntimeAuthProfileStoreSnapshots;
 let clearConfigCache: typeof import("../config/config.js").clearConfigCache;
+let clearRuntimeConfigSnapshot: typeof import("../config/config.js").clearRuntimeConfigSnapshot;
 
 describe("resolveProviderAuths key normalization", () => {
   let suiteRoot = "";
@@ -216,7 +217,8 @@ describe("resolveProviderAuths key normalization", () => {
     vi.resetModules();
     ({ resolveProviderAuths } = await import("./provider-usage.auth.js"));
     ({ clearRuntimeAuthProfileStoreSnapshots } = await import("../agents/auth-profiles.js"));
-    ({ clearConfigCache } = await import("../config/config.js"));
+    ({ clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/config.js"));
+    clearRuntimeConfigSnapshot();
     clearConfigCache();
     clearRuntimeAuthProfileStoreSnapshots();
     providerRuntimeMocks.resolveProviderUsageAuthWithPluginMock.mockReset();
@@ -224,6 +226,7 @@ describe("resolveProviderAuths key normalization", () => {
   });
 
   afterEach(() => {
+    clearRuntimeConfigSnapshot();
     clearConfigCache();
     clearRuntimeAuthProfileStoreSnapshots();
     vi.restoreAllMocks();
