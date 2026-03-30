@@ -1449,10 +1449,11 @@ export const chatHandlers: GatewayRequestHandlers = {
             ? (catalog as { models: unknown[] }).models
             : [];
         const modelEntry = catalogModels.find(
-          (m): m is { id?: unknown; input?: unknown[] } =>
+          (m): m is { id?: unknown; provider?: unknown; input?: unknown[] } =>
             m !== null &&
             typeof m === "object" &&
-            (m as Record<string, unknown>).id === modelRef.model,
+            (m as Record<string, unknown>).id === modelRef.model &&
+            (m as Record<string, unknown>).provider === modelRef.provider,
         );
         if (modelEntry != null) {
           supportsImages =

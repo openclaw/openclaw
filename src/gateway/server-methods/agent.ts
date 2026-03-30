@@ -359,21 +359,30 @@ export const agentHandlers: GatewayRequestHandlers = {
           typeof request.sessionKey === "string" && request.sessionKey.trim()
             ? request.sessionKey.trim()
             : undefined;
+
+        let baseProvider: string | undefined;
+        let baseModel: string | undefined;
         if (requestedSessionKeyRaw) {
           const { cfg: sessCfg, entry: sessEntry } = loadSessionEntry(requestedSessionKeyRaw);
-          const catalog = await context.loadGatewayModelCatalog();
           const modelRef = resolveSessionModelRef(sessCfg, sessEntry, undefined);
-          const effectiveModel = modelOverride || modelRef.model; 
+          baseProvider = modelRef.provider;
+          baseModel = modelRef.model;
+        }
+        const effectiveProvider = providerOverride || baseProvider;
+        const effectiveModel = modelOverride || baseModel;
+        if (effectiveModel) {
+          const catalog = await context.loadGatewayModelCatalog();
           const catalogModels: unknown[] = Array.isArray(catalog)
             ? catalog
             : Array.isArray((catalog as { models?: unknown[] } | null)?.models)
               ? (catalog as { models: unknown[] }).models
               : [];
           const modelEntry = catalogModels.find(
-            (m): m is { id?: unknown; input?: unknown[] } =>
+            (m): m is { id?: unknown; provider?: unknown; input?: unknown[] } =>
               m !== null &&
               typeof m === "object" &&
-              (m as Record<string, unknown>).id === effectiveModel,
+              (m as Record<string, unknown>).id === effectiveModel &&
+              (!effectiveProvider || (m as Record<string, unknown>).provider === effectiveProvider),
           );
           if (modelEntry != null) {
             supportsImages =
