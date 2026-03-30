@@ -1747,6 +1747,46 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("uses explicit external custom collection names verbatim at query time", async () => {
+    const sharedMirrorDir = path.join(tmpRoot, "shared-notion-mirror");
+    await fs.mkdir(sharedMirrorDir);
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: sharedMirrorDir, pattern: "**/*.md", name: "notion-mirror" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "search") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(child, "stdout", "[]");
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager, resolved } = await createManager();
+
+    await manager.search("test", { sessionKey: "agent:main:slack:dm:u123" });
+    const maxResults = resolved.qmd?.limits.maxResults;
+    if (!maxResults) {
+      throw new Error("qmd maxResults missing");
+    }
+    const searchCalls = spawnMock.mock.calls
+      .map((call: unknown[]) => call[1] as string[])
+      .filter((args: string[]) => args[0] === "search");
+    expect(searchCalls).toEqual([
+      ["search", "test", "--json", "-n", String(maxResults), "-c", "notion-mirror"],
+    ]);
+    await manager.close();
+  });
+
   it("runs qmd query per collection when query mode has multiple collection filters", async () => {
     cfg = {
       ...cfg,
