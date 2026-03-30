@@ -276,14 +276,10 @@ resolve_config_gateway_bind() {
 }
 
 # For published container ports, the gateway must listen on the container
-# interface. Precedence is OPENCLAW_GATEWAY_BIND, then gateway.bind in local
-# config, then the Podman launcher default of lan. Host access still stays
-# local-only by default via 127.0.0.1 publish.
+# interface, so the Podman launcher defaults to lan. Respect an explicit
+# OPENCLAW_GATEWAY_BIND first, then gateway.bind in local config.
 CONFIG_GATEWAY_BIND="$(resolve_config_gateway_bind "$CONFIG_DIR")"
 GATEWAY_BIND="${OPENCLAW_GATEWAY_BIND:-${CONFIG_GATEWAY_BIND:-lan}}"
-if [[ -z "$GATEWAY_BIND" ]]; then
-  GATEWAY_BIND="lan"
-fi
 
 upsert_env_var() {
   local file="$1"
@@ -568,7 +564,7 @@ podman run --pull="$PODMAN_PULL" -d --replace \
   -p "${PUBLISH_HOST}:${HOST_GATEWAY_PORT}:18789" \
   -p "${PUBLISH_HOST}:${HOST_BRIDGE_PORT}:18790" \
   "$OPENCLAW_IMAGE" \
-   node dist/index.js gateway ${GATEWAY_BIND:+--bind "$GATEWAY_BIND"} --port 18789
+  node dist/index.js gateway --bind "$GATEWAY_BIND" --port 18789
 
 echo "Container $CONTAINER_NAME started. Dashboard: http://127.0.0.1:${HOST_GATEWAY_PORT}/"
 echo "Host CLI: openclaw --container $CONTAINER_NAME dashboard --no-open"
