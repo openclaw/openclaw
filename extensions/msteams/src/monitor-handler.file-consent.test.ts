@@ -66,13 +66,16 @@ function createInvokeContext(params: {
   conversationId: string;
   uploadId: string;
   action: "accept" | "decline";
+  replyToId?: string;
 }): {
   context: MSTeamsTurnContext;
   sendActivity: ReturnType<typeof vi.fn>;
   updateActivity: ReturnType<typeof vi.fn>;
+  deleteActivity: ReturnType<typeof vi.fn>;
 } {
   const sendActivity = vi.fn(async () => ({ id: "activity-id" }));
   const updateActivity = vi.fn(async () => ({ id: "activity-id" }));
+  const deleteActivity = vi.fn(async () => {});
   const uploadInfo =
     params.action === "accept"
       ? {
@@ -89,6 +92,7 @@ function createInvokeContext(params: {
         type: "invoke",
         name: "fileConsent/invoke",
         conversation: { id: params.conversationId },
+        replyToId: params.replyToId,
         value: {
           type: "fileUpload",
           action: params.action,
@@ -99,9 +103,11 @@ function createInvokeContext(params: {
       sendActivity,
       sendActivities: async () => [],
       updateActivity,
+      deleteActivity,
     } as unknown as MSTeamsTurnContext,
     sendActivity,
     updateActivity,
+    deleteActivity,
   };
 }
 
@@ -110,6 +116,7 @@ function createConsentInvokeHarness(params: {
   invokeConversationId: string;
   action: "accept" | "decline";
   consentCardActivityId?: string;
+  replyToId?: string;
 }) {
   const uploadId = storePendingUpload({
     buffer: Buffer.from("TOP_SECRET_VICTIM_FILE\n"),
@@ -118,12 +125,13 @@ function createConsentInvokeHarness(params: {
     conversationId: params.pendingConversationId ?? "19:victim@thread.v2",
     consentCardActivityId: params.consentCardActivityId,
   });
-  const { context, sendActivity, updateActivity } = createInvokeContext({
+  const { context, sendActivity, updateActivity, deleteActivity } = createInvokeContext({
     conversationId: params.invokeConversationId,
     uploadId,
     action: params.action,
+    replyToId: params.replyToId,
   });
-  return { uploadId, context, sendActivity, updateActivity };
+  return { uploadId, context, sendActivity, updateActivity, deleteActivity };
 }
 
 function requirePendingUpload(uploadId: string) {
@@ -236,8 +244,21 @@ describe("msteams file consent invoke authz", () => {
     expect(updateActivity).not.toHaveBeenCalled();
   });
 
+  it("deletes the replied-to consent card after successful upload when no stored card id exists", async () => {
+    const { context, deleteActivity } = createConsentInvokeHarness({
+      invokeConversationId: "19:victim@thread.v2;messageid=abc123",
+      action: "accept",
+      replyToId: "reply-to-consent-card",
+    });
+
+    await respondToMSTeamsFileConsentInvoke(context, log);
+
+    expect(fileConsentMockState.uploadToConsentUrl).toHaveBeenCalledTimes(1);
+    expect(deleteActivity).toHaveBeenCalledWith("reply-to-consent-card");
+  });
+
   it("still completes upload if updateActivity throws", async () => {
-    const { uploadId, context, updateActivity } = createConsentInvokeHarness({
+    const { uploadId, context, updateActivity, deleteActivity } = createConsentInvokeHarness({
       invokeConversationId: "19:victim@thread.v2;messageid=abc123",
       action: "accept",
       consentCardActivityId: "consent-card-activity-id-fail",
@@ -250,12 +271,28 @@ describe("msteams file consent invoke authz", () => {
     expect(fileConsentMockState.uploadToConsentUrl).toHaveBeenCalledTimes(1);
     expect(getPendingUpload(uploadId)).toBeUndefined();
     expect(updateActivity).toHaveBeenCalledTimes(1);
+    expect(deleteActivity).toHaveBeenCalledWith("consent-card-activity-id-fail");
+  });
+
+  it("deletes the consent card when upload fails", async () => {
+    fileConsentMockState.uploadToConsentUrl.mockRejectedValueOnce(new Error("upload failed"));
+    const { context, sendActivity, deleteActivity } = createConsentInvokeHarness({
+      invokeConversationId: "19:victim@thread.v2;messageid=abc123",
+      action: "accept",
+      consentCardActivityId: "consent-card-upload-failed",
+    });
+
+    await respondToMSTeamsFileConsentInvoke(context, log);
+
+    expect(deleteActivity).toHaveBeenCalledWith("consent-card-upload-failed");
+    expect(sendActivity).toHaveBeenCalledWith("File upload failed. Please try again.");
   });
 
   it("rejects cross-conversation accept invoke and keeps pending upload", async () => {
-    const { uploadId, context, sendActivity } = createConsentInvokeHarness({
+    const { uploadId, context, sendActivity, deleteActivity } = createConsentInvokeHarness({
       invokeConversationId: "19:attacker@thread.v2",
       action: "accept",
+      replyToId: "mismatched-consent-card",
     });
 
     await respondToMSTeamsFileConsentInvoke(context, log);
@@ -272,6 +309,7 @@ describe("msteams file consent invoke authz", () => {
     );
 
     expect(fileConsentMockState.uploadToConsentUrl).not.toHaveBeenCalled();
+    expect(deleteActivity).toHaveBeenCalledWith("mismatched-consent-card");
     expect(requirePendingUpload(uploadId)).toMatchObject({
       conversationId: "19:victim@thread.v2",
       filename: "secret.txt",
@@ -280,9 +318,10 @@ describe("msteams file consent invoke authz", () => {
   });
 
   it("ignores cross-conversation decline invoke and keeps pending upload", async () => {
-    const { uploadId, context, sendActivity } = createConsentInvokeHarness({
+    const { uploadId, context, sendActivity, deleteActivity } = createConsentInvokeHarness({
       invokeConversationId: "19:attacker@thread.v2",
       action: "decline",
+      replyToId: "mismatched-decline-consent-card",
     });
 
     await respondToMSTeamsFileConsentInvoke(context, log);
@@ -295,12 +334,56 @@ describe("msteams file consent invoke authz", () => {
     );
 
     expect(fileConsentMockState.uploadToConsentUrl).not.toHaveBeenCalled();
+    expect(deleteActivity).toHaveBeenCalledWith("mismatched-decline-consent-card");
     expect(requirePendingUpload(uploadId)).toMatchObject({
       conversationId: "19:victim@thread.v2",
       filename: "secret.txt",
       contentType: "text/plain",
     });
     expect(sendActivity).toHaveBeenCalledTimes(1);
+  });
+
+  it("deletes the consent card when the pending upload has expired", async () => {
+    const { context, sendActivity, deleteActivity } = createInvokeContext({
+      conversationId: "19:victim@thread.v2;messageid=abc123",
+      uploadId: "missing-upload-id",
+      action: "accept",
+      replyToId: "expired-consent-card",
+    });
+
+    await respondToMSTeamsFileConsentInvoke(context, log);
+
+    expect(deleteActivity).toHaveBeenCalledWith("expired-consent-card");
+    expect(sendActivity).toHaveBeenCalledWith(
+      "The file upload request has expired. Please try sending the file again.",
+    );
+  });
+
+  it("deletes the consent card when the user declines", async () => {
+    const { context, deleteActivity } = createConsentInvokeHarness({
+      invokeConversationId: "19:victim@thread.v2;messageid=abc123",
+      action: "decline",
+      consentCardActivityId: "declined-consent-card",
+    });
+
+    await respondToMSTeamsFileConsentInvoke(context, log);
+
+    expect(fileConsentMockState.uploadToConsentUrl).not.toHaveBeenCalled();
+    expect(deleteActivity).toHaveBeenCalledWith("declined-consent-card");
+  });
+
+  it("continues when consent card deletion fails", async () => {
+    const { uploadId, context, deleteActivity } = createConsentInvokeHarness({
+      invokeConversationId: "19:victim@thread.v2;messageid=abc123",
+      action: "decline",
+      consentCardActivityId: "delete-fails-consent-card",
+    });
+    deleteActivity.mockRejectedValueOnce(new Error("delete failed"));
+
+    await respondToMSTeamsFileConsentInvoke(context, log);
+
+    expect(deleteActivity).toHaveBeenCalledWith("delete-fails-consent-card");
+    expect(getPendingUpload(uploadId)).toBeUndefined();
   });
 });
 
@@ -349,6 +432,7 @@ describe("msteams file consent invoke FS fallback", () => {
 
     const sendActivity = vi.fn(async () => ({ id: "activity-id" }));
     const updateActivity = vi.fn(async () => ({ id: "activity-id" }));
+    const deleteActivity = vi.fn(async () => {});
     const context = {
       activity: {
         type: "invoke",
@@ -370,6 +454,7 @@ describe("msteams file consent invoke FS fallback", () => {
       sendActivity,
       sendActivities: async () => [],
       updateActivity,
+      deleteActivity,
     } as unknown as MSTeamsTurnContext;
 
     await respondToMSTeamsFileConsentInvoke(context, log);
@@ -399,6 +484,7 @@ describe("msteams file consent invoke FS fallback", () => {
 
     const sendActivity = vi.fn(async () => ({ id: "activity-id" }));
     const updateActivity = vi.fn(async () => ({ id: "activity-id" }));
+    const deleteActivity = vi.fn(async () => {});
     const context = {
       activity: {
         type: "invoke",
@@ -413,6 +499,7 @@ describe("msteams file consent invoke FS fallback", () => {
       sendActivity,
       sendActivities: async () => [],
       updateActivity,
+      deleteActivity,
     } as unknown as MSTeamsTurnContext;
 
     await respondToMSTeamsFileConsentInvoke(context, log);
