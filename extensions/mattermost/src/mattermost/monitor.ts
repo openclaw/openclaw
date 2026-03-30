@@ -407,17 +407,6 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       resolveSessionKey: async ({ channelId, userId, post }) => {
         const channelInfo = await resolveChannelInfo(channelId);
         const kind = mapMattermostChannelTypeToChatType(channelInfo?.type);
-        const teamId = channelInfo?.team_id ?? undefined;
-        const route = core.channel.routing.resolveAgentRoute({
-          cfg,
-          channel: "mattermost",
-          accountId: account.accountId,
-          teamId,
-          peer: {
-            kind: kind === "unknown" ? "channel" : kind,
-            id: kind === "direct" ? userId : channelId,
-          },
-        });
         if (kind === "unknown") {
           // Throw so the caller's try/catch skips enqueueSystemEvent entirely.
           // Returning any session key here would enqueue the event into the
@@ -426,6 +415,17 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             `mattermost: cannot resolve session key — unknown channel type for ${channelId}`,
           );
         }
+        const teamId = channelInfo?.team_id ?? undefined;
+        const route = core.channel.routing.resolveAgentRoute({
+          cfg,
+          channel: "mattermost",
+          accountId: account.accountId,
+          teamId,
+          peer: {
+            kind,
+            id: kind === "direct" ? userId : channelId,
+          },
+        });
         const replyToMode = resolveMattermostReplyToMode(account, kind);
         return resolveMattermostThreadSessionContext({
           baseSessionKey: route.sessionKey,
