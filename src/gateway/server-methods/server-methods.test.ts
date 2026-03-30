@@ -422,9 +422,14 @@ describe("exec approval handlers", () => {
     id: string;
     respond: ReturnType<typeof vi.fn>;
     context: { broadcast: (event: string, payload: unknown) => void };
+    resolvedBy?: string;
   }) {
     return params.handlers["exec.approval.resolve"]({
-      params: { id: params.id, decision: "allow-once" } as ExecApprovalResolveArgs["params"],
+      params: {
+        id: params.id,
+        decision: "allow-once",
+        ...(params.resolvedBy ? { resolvedBy: params.resolvedBy } : {}),
+      } as ExecApprovalResolveArgs["params"],
       respond: params.respond as unknown as ExecApprovalResolveArgs["respond"],
       context: toExecApprovalResolveContext(params.context),
       client: null,
@@ -564,6 +569,43 @@ describe("exec approval handlers", () => {
       undefined,
     );
     expect(broadcasts.some((entry) => entry.event === "exec.approval.resolved")).toBe(true);
+  });
+
+  it("preserves explicit resolvedBy identities from direct callback resolvers", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: { twoPhase: true },
+    });
+
+    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
+    expect(requested).toBeTruthy();
+    const id = (requested?.payload as { id?: string })?.id ?? "";
+    expect(id).not.toBe("");
+
+    const resolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id,
+      respond: resolveRespond,
+      context,
+      resolvedBy: "telegram:8460800771",
+    });
+
+    await requestPromise;
+
+    expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expect(broadcasts).toContainEqual({
+      event: "exec.approval.resolved",
+      payload: expect.objectContaining({
+        id,
+        decision: "allow-once",
+        resolvedBy: "telegram:8460800771",
+      }),
+    });
   });
 
   it("does not reuse a resolved exact id as a prefix for another pending approval", () => {

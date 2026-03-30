@@ -13,3 +13,4 @@ Maintainer follow-up:
 - add Telegram approval-handler tests for `plugin.approval.requested` and `plugin.approval.resolved`
 - keep the existing exec approval coverage in place
 - widen the shared session-target helper to the minimal request shape so the Telegram handler no longer needs a cast for plugin approvals
+- preserve explicit `resolvedBy` identities through the direct gateway approval resolve path so Telegram callback approvals keep the real approver in audit/result flows

@@ -211,7 +211,7 @@ export function createPluginApprovalHandlers(
         );
         return;
       }
-      const p = params as { id: string; decision: string };
+      const p = params as { id: string; decision: string; resolvedBy?: string };
       const decision = p.decision as ExecApprovalDecision;
       if (decision !== "allow-once" && decision !== "allow-always" && decision !== "deny") {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "invalid decision"));
@@ -240,7 +240,12 @@ export function createPluginApprovalHandlers(
         );
         return;
       }
-      const resolvedBy = client?.connect?.client?.displayName ?? client?.connect?.client?.id;
+      const resolvedBy =
+        (typeof p.resolvedBy === "string" && p.resolvedBy.trim().length > 0
+          ? p.resolvedBy.trim()
+          : undefined) ??
+        client?.connect?.client?.displayName ??
+        client?.connect?.client?.id;
       const ok = manager.resolve(approvalId, decision, resolvedBy ?? null);
       if (!ok) {
         respond(

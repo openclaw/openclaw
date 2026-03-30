@@ -413,6 +413,31 @@ describe("createPluginApprovalHandlers", () => {
       );
     });
 
+    it("preserves explicit resolvedBy identities from direct callback resolvers", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const record = manager.create({ title: "T", description: "D" }, 60_000);
+      void manager.register(record, 60_000);
+
+      const opts = createMockOptions("plugin.approval.resolve", {
+        id: record.id,
+        decision: "allow-always",
+        resolvedBy: "telegram:8460800771",
+      });
+      await handlers["plugin.approval.resolve"](opts);
+
+      expect(opts.respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+      expect(manager.getSnapshot(record.id)?.resolvedBy).toBe("telegram:8460800771");
+      expect(opts.context.broadcast).toHaveBeenCalledWith(
+        "plugin.approval.resolved",
+        expect.objectContaining({
+          id: record.id,
+          decision: "allow-always",
+          resolvedBy: "telegram:8460800771",
+        }),
+        { dropIfSlow: true },
+      );
+    });
+
     it("rejects unknown approval id", async () => {
       const handlers = createPluginApprovalHandlers(manager);
       const opts = createMockOptions("plugin.approval.resolve", {
