@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 let sendExecApprovalFollowupResult: typeof import("./bash-tools.exec-host-shared.js").sendExecApprovalFollowupResult;
+let maxExecApprovalFollowupFailureLogKeys: typeof import("./bash-tools.exec-host-shared.js").MAX_EXEC_APPROVAL_FOLLOWUP_FAILURE_LOG_KEYS;
 let sendExecApprovalFollowup: typeof import("./bash-tools.exec-approval-followup.js").sendExecApprovalFollowup;
 let logWarn: typeof import("../logger.js").logWarn;
 
@@ -13,7 +14,10 @@ describe("sendExecApprovalFollowupResult", () => {
     vi.doMock("../logger.js", () => ({
       logWarn: vi.fn(),
     }));
-    ({ sendExecApprovalFollowupResult } = await import("./bash-tools.exec-host-shared.js"));
+    ({
+      sendExecApprovalFollowupResult,
+      MAX_EXEC_APPROVAL_FOLLOWUP_FAILURE_LOG_KEYS: maxExecApprovalFollowupFailureLogKeys,
+    } = await import("./bash-tools.exec-host-shared.js"));
     ({ sendExecApprovalFollowup } = await import("./bash-tools.exec-approval-followup.js"));
     ({ logWarn } = await import("../logger.js"));
     vi.mocked(sendExecApprovalFollowup).mockReset();
@@ -33,6 +37,32 @@ describe("sendExecApprovalFollowupResult", () => {
     expect(logWarn).toHaveBeenCalledTimes(1);
     expect(logWarn).toHaveBeenCalledWith(
       "exec approval followup dispatch failed (id=approval-log-once): Channel is required",
+    );
+  });
+
+  it("evicts oldest followup failure dedupe keys after reaching the cap", async () => {
+    vi.mocked(sendExecApprovalFollowup).mockRejectedValue(new Error("Channel is required"));
+
+    for (let i = 0; i <= maxExecApprovalFollowupFailureLogKeys; i += 1) {
+      await sendExecApprovalFollowupResult(
+        {
+          approvalId: `approval-${i}`,
+          sessionKey: "agent:main:main",
+        },
+        "Exec finished",
+      );
+    }
+    await sendExecApprovalFollowupResult(
+      {
+        approvalId: "approval-0",
+        sessionKey: "agent:main:main",
+      },
+      "Exec finished",
+    );
+
+    expect(logWarn).toHaveBeenCalledTimes(maxExecApprovalFollowupFailureLogKeys + 2);
+    expect(logWarn).toHaveBeenLastCalledWith(
+      "exec approval followup dispatch failed (id=approval-0): Channel is required",
     );
   });
 });

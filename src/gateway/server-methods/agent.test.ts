@@ -730,6 +730,7 @@ describe("gateway agent handler", () => {
     mocks.agentCommand.mockClear();
     primeMainAgentRun();
     const respond = vi.fn();
+    const logInfo = vi.fn();
 
     await invokeAgent(
       {
@@ -740,7 +741,17 @@ describe("gateway agent handler", () => {
         bestEffortDeliver: true,
         idempotencyKey: "test-best-effort-delivery-fallback",
       },
-      { reqId: "best-effort-delivery-fallback", respond },
+      {
+        reqId: "best-effort-delivery-fallback",
+        respond,
+        context: {
+          dedupe: new Map(),
+          addChatRun: vi.fn(),
+          logGateway: { info: logInfo, error: vi.fn() },
+          broadcastToConnIds: vi.fn(),
+          getSessionEventSubscriberConnIds: () => new Set(),
+        } as unknown as GatewayRequestContext,
+      },
     );
 
     await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
@@ -751,6 +762,10 @@ describe("gateway agent handler", () => {
     expect(accepted).toBeDefined();
     const rejected = respond.mock.calls.find((call: unknown[]) => call[0] === false);
     expect(rejected).toBeUndefined();
+    expect(logInfo).toHaveBeenCalledTimes(1);
+    expect(logInfo).toHaveBeenCalledWith(
+      expect.stringContaining("agent delivery downgraded to session-only (bestEffortDeliver)"),
+    );
   });
 
   it("rejects public spawned-run metadata fields", async () => {

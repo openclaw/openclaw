@@ -645,6 +645,7 @@ export const agentHandlers: GatewayRequestHandlers = {
     let resolvedAccountId = deliveryPlan.resolvedAccountId;
     let resolvedTo = deliveryPlan.resolvedTo;
     let effectivePlan = deliveryPlan;
+    let deliveryDowngradeReason: string | null = null;
 
     if (wantsDelivery && resolvedChannel === INTERNAL_MESSAGE_CHANNEL) {
       const cfgResolved = cfgForAgent ?? cfg;
@@ -668,9 +669,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(err)));
           return;
         }
-        context.logGateway.info(
-          `agent delivery downgraded to session-only (bestEffortDeliver): ${String(err)}`,
-        );
+        deliveryDowngradeReason = String(err);
       }
     }
 
@@ -705,7 +704,9 @@ export const agentHandlers: GatewayRequestHandlers = {
         return;
       }
       context.logGateway.info(
-        "agent delivery downgraded to session-only (bestEffortDeliver): no deliverable channel",
+        deliveryDowngradeReason
+          ? `agent delivery downgraded to session-only (bestEffortDeliver): ${deliveryDowngradeReason}`
+          : "agent delivery downgraded to session-only (bestEffortDeliver): no deliverable channel",
       );
     }
 

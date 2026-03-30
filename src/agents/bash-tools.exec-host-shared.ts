@@ -25,7 +25,23 @@ import { DEFAULT_APPROVAL_TIMEOUT_MS } from "./bash-tools.exec-runtime.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 
 type ResolvedExecApprovals = ReturnType<typeof resolveExecApprovals>;
+export const MAX_EXEC_APPROVAL_FOLLOWUP_FAILURE_LOG_KEYS = 256;
 const loggedExecApprovalFollowupFailures = new Set<string>();
+
+function rememberExecApprovalFollowupFailureKey(key: string): boolean {
+  if (loggedExecApprovalFollowupFailures.has(key)) {
+    return false;
+  }
+  loggedExecApprovalFollowupFailures.add(key);
+  // Bound memory growth for long-lived processes that see many unique approval failures.
+  if (loggedExecApprovalFollowupFailures.size > MAX_EXEC_APPROVAL_FOLLOWUP_FAILURE_LOG_KEYS) {
+    const oldestKey = loggedExecApprovalFollowupFailures.values().next().value;
+    if (typeof oldestKey === "string") {
+      loggedExecApprovalFollowupFailures.delete(oldestKey);
+    }
+  }
+  return true;
+}
 
 export type ExecHostApprovalContext = {
   approvals: ResolvedExecApprovals;
@@ -339,10 +355,9 @@ export async function sendExecApprovalFollowupResult(
   }).catch((error) => {
     const message = error instanceof Error ? error.message : String(error);
     const key = `${target.approvalId}:${message}`;
-    if (loggedExecApprovalFollowupFailures.has(key)) {
+    if (!rememberExecApprovalFollowupFailureKey(key)) {
       return;
     }
-    loggedExecApprovalFollowupFailures.add(key);
     logWarn(`exec approval followup dispatch failed (id=${target.approvalId}): ${message}`);
   });
 }
