@@ -328,17 +328,20 @@ export function resolveConfiguredModelRef(params: {
       defaultProvider: params.defaultProvider,
     });
     if (!trimmed.includes("/")) {
-      // Check OpenRouter compatibility aliases (e.g. "openrouter:free") before
-      // any user-defined alias or provider-fallback logic. (#57066)
-      const compatAlias = OPENROUTER_COMPAT_ALIASES[trimmed.toLowerCase()];
-      if (compatAlias) {
-        return { ...compatAlias };
-      }
-
+      // User-defined aliases take priority over built-in compat aliases,
+      // consistent with resolveModelRefFromString where user aliases are
+      // checked before parseModelRef (which holds the compat table).
       const aliasKey = normalizeAliasKey(trimmed);
       const aliasMatch = aliasIndex.byAlias.get(aliasKey);
       if (aliasMatch) {
         return aliasMatch.ref;
+      }
+
+      // OpenRouter compatibility aliases (e.g. "openrouter:free") — checked
+      // after user aliases so users can override them. (#57066)
+      const compatAlias = OPENROUTER_COMPAT_ALIASES[trimmed.toLowerCase()];
+      if (compatAlias) {
+        return { ...compatAlias };
       }
 
       // Default to anthropic if no provider is specified, but warn as this is deprecated.
