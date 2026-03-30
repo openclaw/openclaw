@@ -8,25 +8,25 @@
         "provider": "elevenlabs",
         "normalizedPayload": true,
         "voiceId": "voice-resolved",
-        "apiKey": "resolved-key"
+        "apiKey": "xxxxx"
       },
       "talk": {
         "resolved": {
           "provider": "elevenlabs",
           "config": {
             "voiceId": "voice-resolved",
-            "apiKey": "resolved-key"
+            "apiKey": "xxxxx"
           }
         },
         "provider": "elevenlabs",
         "providers": {
           "elevenlabs": {
             "voiceId": "voice-normalized",
-            "apiKey": "normalized-key"
+            "apiKey": "xxxxx"
           }
         },
         "voiceId": "voice-legacy",
-        "apiKey": "legacy-key"
+        "apiKey": "xxxxx"
       }
     },
     {

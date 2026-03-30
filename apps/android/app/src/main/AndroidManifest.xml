@@ -31,6 +31,13 @@
         android:name="android.hardware.telephony"
         android:required="false" />
 
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
+
     <application
         android:name=".NodeApp"
         android:allowBackup="true"
