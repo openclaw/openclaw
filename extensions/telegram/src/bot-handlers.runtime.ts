@@ -100,6 +100,10 @@ import {
   resolveModelSelection,
   type ProviderInfo,
 } from "./model-buttons.js";
+import {
+  createOperatorApprovalsGatewayClient,
+  GatewayClient,
+} from "openclaw/plugin-sdk/gateway-runtime";
 import { buildInlineKeyboard } from "./send.js";
 
 function parseApprovalCallbackId(data: string): string | null {
@@ -112,6 +116,66 @@ function parseApprovalCallbackId(data: string): string | null {
     return null;
   }
   return tokens[1] ?? null;
+}
+
+function parseApprovalCallbackDecision(
+  data: string,
+): { id: string; decision: "allow-once" | "allow-always" | "deny" } | null {
+  const trimmed = data.trim();
+  const tokens = trimmed.split(/\s+/).filter(Boolean);
+  if (tokens.length < 3) {
+    return null;
+  }
+  const id = tokens[1];
+  const rawDecision = tokens[2]?.toLowerCase();
+  const decision =
+    rawDecision === "allow-once" || rawDecision === "always"
+      ? "allow-once"
+      : rawDecision === "allow-always"
+        ? "allow-always"
+        : rawDecision === "deny"
+          ? "deny"
+          : null;
+  if (!id || !decision) {
+    return null;
+  }
+  return { id, decision };
+}
+
+let approvalGatewayClient: GatewayClient | null = null;
+
+async function resolveApprovalDirect(
+  config: Parameters<typeof createOperatorApprovalsGatewayClient>[0]["config"],
+  approvalId: string,
+  decision: string,
+  senderId?: string,
+): Promise<boolean> {
+  if (!approvalGatewayClient) {
+    approvalGatewayClient = await createOperatorApprovalsGatewayClient({
+      config,
+      clientDisplayName: "Telegram Approval Callback Resolver",
+      onConnectError: (err) => {
+        logVerbose(`telegram approval resolver: connect error: ${err.message}`);
+      },
+    });
+    approvalGatewayClient.start();
+    // Wait briefly for connection to establish
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  const method = approvalId.startsWith("plugin:")
+    ? "plugin.approval.resolve"
+    : "exec.approval.resolve";
+  try {
+    await approvalGatewayClient.request(method, {
+      id: approvalId,
+      decision,
+      ...(senderId ? { resolvedBy: `telegram:${senderId}` } : {}),
+    });
+    return true;
+  } catch (err) {
+    logVerbose(`telegram approval resolver: failed to resolve ${approvalId}: ${String(err)}`);
+    return false;
+  }
 }
 
 export const registerTelegramHandlers = ({
@@ -1331,6 +1395,21 @@ export const registerTelegramHandlers = ({
           ) {
             logVerbose(`telegram: failed to clear approval callback buttons: ${errStr}`);
           }
+        }
+        // Resolve approval directly via gateway client to avoid session pipeline deadlock.
+        // Plugin approvals block the session pipeline while waiting for a decision, so routing
+        // through processMessage would deadlock. Instead, call the gateway resolve method directly.
+        const parsed = parseApprovalCallbackDecision(data);
+        if (parsed) {
+          const ok = await resolveApprovalDirect(runtimeCfg, parsed.id, parsed.decision, senderId);
+          const label =
+            parsed.decision === "deny" ? "denied" : `allowed (${parsed.decision})`;
+          await replyToCallbackChat(
+            ok
+              ? `✅ Approval ${label}. ID: ${parsed.id}`
+              : `❌ Failed to resolve approval (expired or unknown). ID: ${parsed.id}`,
+          );
+          return;
         }
       }
 
