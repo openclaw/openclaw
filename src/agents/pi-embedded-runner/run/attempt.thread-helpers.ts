@@ -31,6 +31,16 @@ export function resolveAttemptSpawnWorkspaceDir(params: {
     : undefined;
 }
 
+export function shouldUseOpenAIWebSocketTransport(params: {
+  provider: string;
+  modelApi?: string | null;
+}): boolean {
+  // openai-codex normalizes to the ChatGPT backend HTTP path, not the public
+  // OpenAI Responses websocket endpoint. Keep it on HTTP until a provider-
+  // specific websocket target exists and is verified end-to-end.
+  return params.modelApi === "openai-responses" && params.provider === "openai";
+}
+
 export function shouldAppendAttemptCacheTtl(params: {
   timedOutDuringCompaction: boolean;
   compactionOccurredThisAttempt: boolean;

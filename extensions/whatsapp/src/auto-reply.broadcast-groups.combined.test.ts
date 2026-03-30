@@ -1,6 +1,6 @@
 import "./test-helpers.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
 import {
   monitorWebChannelWithCapture,
   sendWebDirectInboundAndCollectSessionKeys,

@@ -27,7 +27,10 @@ import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { sendJson, setSseHeaders, writeDone } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
-import { resolveGatewayRequestContext, resolveOpenAiCompatModelOverride } from "./http-utils.js";
+import {
+  resolveGatewayRequestContext,
+  resolveOpenAiCompatModelOverride,
+} from "./http-utils.js";
 import { normalizeInputHostnameAllowlist } from "./input-allowlist.js";
 
 type OpenAiHttpOptions = {
@@ -117,8 +120,8 @@ function buildAgentCommandInput(params: {
     deliver: false as const,
     messageChannel: params.messageChannel,
     bestEffortDeliver: false as const,
-    // HTTP API callers are authenticated operator clients for this gateway context.
-    senderIsOwner: true as const,
+    // OpenAI-compatible HTTP ingress is external input and must not inherit owner-only tools.
+    senderIsOwner: false as const,
     allowModelOverride: true as const,
   };
 }
@@ -416,6 +419,7 @@ export async function handleOpenAiHttpRequest(
   const limits = resolveOpenAiChatCompletionsLimits(opts.config);
   const handled = await handleGatewayPostJsonEndpoint(req, res, {
     pathname: "/v1/chat/completions",
+    requiredOperatorMethod: "chat.send",
     auth: opts.auth,
     trustedProxies: opts.trustedProxies,
     allowRealIpFallback: opts.allowRealIpFallback,

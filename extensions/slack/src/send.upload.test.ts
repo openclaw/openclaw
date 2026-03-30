@@ -228,4 +228,47 @@ describe("sendMessageSlack file upload with user IDs", () => {
       }),
     );
   });
+
+  it("uses explicit upload filename and title overrides when provided", async () => {
+    const client = createUploadTestClient();
+
+    await sendMessageSlack("channel:C123CHAN", "caption", {
+      token: "xoxb-test",
+      client,
+      mediaUrl: "/tmp/threaded.png",
+      uploadFileName: "custom-name.bin",
+      uploadTitle: "Custom Title",
+    });
+
+    expect(client.files.getUploadURLExternal).toHaveBeenCalledWith({
+      filename: "custom-name.bin",
+      length: Buffer.from("fake-image").length,
+    });
+    expect(client.files.completeUploadExternal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        files: [expect.objectContaining({ id: "F001", title: "Custom Title" })],
+      }),
+    );
+  });
+
+  it("uses uploadFileName as the title fallback when uploadTitle is omitted", async () => {
+    const client = createUploadTestClient();
+
+    await sendMessageSlack("channel:C123CHAN", "caption", {
+      token: "xoxb-test",
+      client,
+      mediaUrl: "/tmp/threaded.png",
+      uploadFileName: "custom-name.bin",
+    });
+
+    expect(client.files.getUploadURLExternal).toHaveBeenCalledWith({
+      filename: "custom-name.bin",
+      length: Buffer.from("fake-image").length,
+    });
+    expect(client.files.completeUploadExternal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        files: [expect.objectContaining({ id: "F001", title: "custom-name.bin" })],
+      }),
+    );
+  });
 });

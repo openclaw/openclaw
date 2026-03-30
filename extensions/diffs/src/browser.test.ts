@@ -2,8 +2,8 @@ import fs from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createMockServerResponse } from "../../../test/helpers/extensions/mock-http-response.js";
-import { createTestPluginApi } from "../../../test/helpers/extensions/plugin-api.js";
+import { createMockServerResponse } from "../../../test/helpers/plugins/mock-http-response.js";
+import { createTestPluginApi } from "../../../test/helpers/plugins/plugin-api.js";
 import type { OpenClawConfig } from "../api.js";
 import type { OpenClawPluginApi, OpenClawPluginToolContext } from "../api.js";
 import plugin from "../index.js";
@@ -261,6 +261,9 @@ describe("diffs plugin registration", () => {
           diffIndicators: "classic",
           lineSpacing: 2,
         },
+        security: {
+          allowRemoteViewer: true,
+        },
       },
       runtime: {} as never,
       registerTool(tool: Parameters<OpenClawPluginApi["registerTool"]>[0]) {
@@ -311,6 +314,21 @@ describe("diffs plugin registration", () => {
         agentAccountId: "default",
       },
     );
+
+    const proxiedRes = createMockServerResponse();
+    const proxiedHandled = await registeredHttpRouteHandler?.(
+      localReq({
+        method: "GET",
+        url: viewerPath,
+        headers: {
+          "x-forwarded-for": "203.0.113.10",
+        },
+      }),
+      proxiedRes,
+    );
+
+    expect(proxiedHandled).toBe(true);
+    expect(proxiedRes.statusCode).toBe(200);
   });
 });
 

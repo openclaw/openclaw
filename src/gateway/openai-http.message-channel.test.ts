@@ -5,7 +5,7 @@ installGatewayTestHooks({ scope: "test" });
 
 const OPENAI_SERVER_OPTIONS = {
   host: "127.0.0.1",
-  auth: { mode: "token" as const, token: "secret" },
+  auth: { mode: "none" as const },
   controlUiEnabled: false,
   openAiChatCompletionsEnabled: true,
 };
@@ -19,7 +19,7 @@ async function runOpenAiMessageChannelRequest(params?: { messageChannelHeader?: 
     async ({ port }) => {
       const headers: Record<string, string> = {
         "content-type": "application/json",
-        authorization: "Bearer secret",
+        "x-openclaw-scopes": "operator.write",
       };
       if (params?.messageChannelHeader) {
         headers["x-openclaw-message-channel"] = params.messageChannelHeader;

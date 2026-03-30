@@ -3,12 +3,14 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  downloadClawHubPackageArchive,
+  downloadClawHubSkillArchive,
   parseClawHubPluginSpec,
   resolveClawHubAuthToken,
-  searchClawHubSkills,
   resolveLatestVersionFromPackage,
   satisfiesGatewayMinimum,
   satisfiesPluginApiRange,
+  searchClawHubSkills,
 } from "./clawhub.js";
 
 describe("clawhub helpers", () => {
@@ -163,5 +165,47 @@ describe("clawhub helpers", () => {
     };
 
     await expect(searchClawHubSkills({ query: "calendar", fetchImpl })).resolves.toEqual([]);
+  });
+  it("downloads package archives to sanitized temp paths and cleans them up", async () => {
+    const archive = await downloadClawHubPackageArchive({
+      name: "@hyf/zai-external-alpha",
+      version: "0.0.1",
+      fetchImpl: async () =>
+        new Response(new Uint8Array([1, 2, 3]), {
+          status: 200,
+          headers: { "content-type": "application/zip" },
+        }),
+    });
+
+    try {
+      expect(path.basename(archive.archivePath)).toBe("zai-external-alpha.zip");
+      expect(archive.archivePath.includes("@hyf")).toBe(false);
+      await expect(fs.readFile(archive.archivePath)).resolves.toEqual(Buffer.from([1, 2, 3]));
+    } finally {
+      const archiveDir = path.dirname(archive.archivePath);
+      await archive.cleanup();
+      await expect(fs.stat(archiveDir)).rejects.toThrow();
+    }
+  });
+
+  it("downloads skill archives to sanitized temp paths and cleans them up", async () => {
+    const archive = await downloadClawHubSkillArchive({
+      slug: "agentreceipt",
+      version: "1.0.0",
+      fetchImpl: async () =>
+        new Response(new Uint8Array([4, 5, 6]), {
+          status: 200,
+          headers: { "content-type": "application/zip" },
+        }),
+    });
+
+    try {
+      expect(path.basename(archive.archivePath)).toBe("agentreceipt.zip");
+      await expect(fs.readFile(archive.archivePath)).resolves.toEqual(Buffer.from([4, 5, 6]));
+    } finally {
+      const archiveDir = path.dirname(archive.archivePath);
+      await archive.cleanup();
+      await expect(fs.stat(archiveDir)).rejects.toThrow();
+    }
   });
 });

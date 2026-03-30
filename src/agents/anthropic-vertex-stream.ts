@@ -4,7 +4,7 @@ import { streamAnthropic, type AnthropicOptions, type Model } from "@mariozechne
 import {
   resolveAnthropicVertexClientRegion,
   resolveAnthropicVertexProjectId,
-} from "./anthropic-vertex-provider.js";
+} from "../plugin-sdk/anthropic-vertex.js";
 
 type AnthropicVertexEffort = NonNullable<AnthropicOptions["effort"]>;
 

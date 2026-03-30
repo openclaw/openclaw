@@ -1,7 +1,10 @@
 import { Command } from "commander";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { repoInstallSpec } from "../../../test/helpers/bundled-plugin-paths.js";
 import { loggingState } from "../../logging/state.js";
 import { setCommandJsonMode } from "./json-mode.js";
+
+const MATRIX_REPO_INSTALL_SPEC = repoInstallSpec("matrix");
 
 const setVerboseMock = vi.fn();
 const emitCliBannerMock = vi.fn();
@@ -83,6 +86,8 @@ beforeEach(() => {
   originalNodeNoWarnings = process.env.NODE_NO_WARNINGS;
   originalHideBanner = process.env.OPENCLAW_HIDE_BANNER;
   originalForceStderr = loggingState.forceConsoleToStderr;
+  // Worker-thread Vitest runs do not reliably mutate the real process title,
+  // so capture writes at the property boundary instead.
   Object.defineProperty(process, "title", {
     configurable: true,
     enumerable: originalProcessTitleDescriptor?.enumerable ?? true,
@@ -176,6 +181,7 @@ describe("registerPreActionHooks", () => {
       .command("validate")
       .option("--json")
       .action(() => {});
+    config.command("schema").action(() => {});
     registerPreActionHooks(program, "9.9.9-test");
     return program;
   }
@@ -283,8 +289,8 @@ describe("registerPreActionHooks", () => {
 
     vi.clearAllMocks();
     await runPreAction({
-      parseArgv: ["plugins", "install", "./extensions/matrix"],
-      processArgv: ["node", "openclaw", "plugins", "install", "./extensions/matrix"],
+      parseArgv: ["plugins", "install", MATRIX_REPO_INSTALL_SPEC],
+      processArgv: ["node", "openclaw", "plugins", "install", MATRIX_REPO_INSTALL_SPEC],
     });
 
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
@@ -415,6 +421,15 @@ describe("registerPreActionHooks", () => {
     await runPreAction({
       parseArgv: ["config", "validate"],
       processArgv: ["node", "openclaw", "--profile", "work", "config", "validate"],
+    });
+
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+  });
+
+  it("bypasses config guard for config schema", async () => {
+    await runPreAction({
+      parseArgv: ["config", "schema"],
+      processArgv: ["node", "openclaw", "config", "schema"],
     });
 
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();

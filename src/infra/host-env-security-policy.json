@@ -10,8 +10,17 @@
     "RUBYOPT",
     "BASH_ENV",
     "ENV",
+    "BROWSER",
+    "GIT_EDITOR",
     "GIT_EXTERNAL_DIFF",
     "GIT_EXEC_PATH",
+    "GIT_SEQUENCE_EDITOR",
+    "GIT_TEMPLATE_DIR",
+    "CC",
+    "CXX",
+    "CARGO_BUILD_RUSTC",
+    "CMAKE_C_COMPILER",
+    "CMAKE_CXX_COMPILER",
     "SHELL",
     "SHELLOPTS",
     "PS4",
@@ -72,7 +81,8 @@
     "GEM_PATH",
     "BUNDLE_GEMFILE",
     "COMPOSER_HOME",
-    "XDG_CONFIG_HOME"
+    "XDG_CONFIG_HOME",
+    "AWS_CONFIG_FILE"
   ],
   "blockedOverridePrefixes": ["GIT_CONFIG_", "NPM_CONFIG_"],
   "blockedPrefixes": ["DYLD_", "LD_", "BASH_FUNC_"]

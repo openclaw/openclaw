@@ -7,6 +7,16 @@ const resolveProviderCapabilitiesWithPluginMock = vi.fn((params: { provider: str
         providerFamily: "anthropic",
         dropThinkingBlockModelHints: ["claude"],
       };
+    case "anthropic-vertex":
+      return {
+        providerFamily: "anthropic",
+        dropThinkingBlockModelHints: ["claude"],
+      };
+    case "amazon-bedrock":
+      return {
+        providerFamily: "anthropic",
+        dropThinkingBlockModelHints: ["claude"],
+      };
     case "openai":
       return {
         providerFamily: "openai",
@@ -104,6 +114,26 @@ describe("resolveProviderCapabilities", () => {
       dropThinkingBlockModelHints: ["claude"],
     });
     expect(resolveProviderCapabilities("amazon-bedrock")).toEqual({
+      anthropicToolSchemaMode: "native",
+      anthropicToolChoiceMode: "native",
+      openAiPayloadNormalizationMode: "default",
+      providerFamily: "anthropic",
+      preserveAnthropicThinkingSignatures: true,
+      openAiCompatTurnValidation: true,
+      geminiThoughtSignatureSanitization: false,
+      transcriptToolCallIdMode: "default",
+      transcriptToolCallIdModelHints: [],
+      geminiThoughtSignatureModelHints: [],
+      dropThinkingBlockModelHints: ["claude"],
+    });
+  });
+
+  it("preserves built-in fallback capability hints when plugin overrides are partial", () => {
+    resolveProviderCapabilitiesWithPluginMock.mockImplementationOnce(() => ({
+      providerFamily: "anthropic",
+    }));
+
+    expect(resolveProviderCapabilities("anthropic")).toEqual({
       anthropicToolSchemaMode: "native",
       anthropicToolChoiceMode: "native",
       openAiPayloadNormalizationMode: "default",

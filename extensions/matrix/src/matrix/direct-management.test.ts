@@ -9,6 +9,7 @@ function createClient(overrides: Partial<MatrixClient> = {}): MatrixClient {
     getAccountData: vi.fn(async () => undefined),
     getJoinedRooms: vi.fn(async () => [] as string[]),
     getJoinedRoomMembers: vi.fn(async () => [] as string[]),
+    getRoomStateEvent: vi.fn(async () => ({})),
     setAccountData: vi.fn(async () => undefined),
     createDirectRoom: vi.fn(async () => "!created:example.org"),
     ...overrides,
@@ -61,6 +62,66 @@ describe("inspectMatrixDirectRooms", () => {
 
     expect(result.activeRoomId).toBe("!fresh:example.org");
     expect(result.discoveredStrictRoomIds).toEqual(["!fresh:example.org"]);
+  });
+
+  it("prefers discovered rooms marked direct in local member state over plain strict rooms", async () => {
+    const client = createClient({
+      getJoinedRooms: vi.fn(async () => ["!fallback:example.org", "!explicit:example.org"]),
+      getJoinedRoomMembers: vi.fn(async () => ["@bot:example.org", "@alice:example.org"]),
+      getRoomStateEvent: vi.fn(async (roomId: string, _eventType: string, userId: string) =>
+        roomId === "!explicit:example.org" && userId === "@bot:example.org"
+          ? { is_direct: true }
+          : {},
+      ),
+    });
+
+    const result = await inspectMatrixDirectRooms({
+      client,
+      remoteUserId: "@alice:example.org",
+    });
+
+    expect(result.activeRoomId).toBe("!explicit:example.org");
+    expect(result.discoveredStrictRoomIds).toEqual([
+      "!fallback:example.org",
+      "!explicit:example.org",
+    ]);
+  });
+
+  it("ignores remote member-state direct flags when ranking discovered rooms", async () => {
+    const client = createClient({
+      getJoinedRooms: vi.fn(async () => ["!fallback:example.org", "!remote-marked:example.org"]),
+      getJoinedRoomMembers: vi.fn(async () => ["@bot:example.org", "@alice:example.org"]),
+      getRoomStateEvent: vi.fn(async (roomId: string, _eventType: string, userId: string) =>
+        roomId === "!remote-marked:example.org" && userId === "@alice:example.org"
+          ? { is_direct: true }
+          : {},
+      ),
+    });
+
+    const result = await inspectMatrixDirectRooms({
+      client,
+      remoteUserId: "@alice:example.org",
+    });
+
+    expect(result.activeRoomId).toBe("!fallback:example.org");
+  });
+
+  it("does not treat discovered rooms with local is_direct false as active DMs", async () => {
+    const client = createClient({
+      getJoinedRooms: vi.fn(async () => ["!blocked:example.org"]),
+      getJoinedRoomMembers: vi.fn(async () => ["@bot:example.org", "@alice:example.org"]),
+      getRoomStateEvent: vi.fn(async (_roomId: string, _eventType: string, userId: string) => ({
+        is_direct: userId === "@bot:example.org" ? false : undefined,
+      })),
+    });
+
+    const result = await inspectMatrixDirectRooms({
+      client,
+      remoteUserId: "@alice:example.org",
+    });
+
+    expect(result.activeRoomId).toBeNull();
+    expect(result.discoveredStrictRoomIds).toEqual([]);
   });
 });
 

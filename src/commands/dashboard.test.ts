@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBindMode } from "../config/types.gateway.js";
-import { dashboardCommand } from "./dashboard.js";
 
 const mocks = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(),
@@ -30,6 +29,7 @@ const runtime = {
   error: vi.fn(),
   exit: vi.fn(),
 };
+let dashboardCommand: typeof import("./dashboard.js").dashboardCommand;
 
 function mockSnapshot(params?: {
   token?: string;
@@ -62,7 +62,9 @@ function mockSnapshot(params?: {
 }
 
 describe("dashboardCommand bind selection", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ dashboardCommand } = await import("./dashboard.js"));
     mocks.readConfigFileSnapshot.mockClear();
     mocks.resolveGatewayPort.mockClear();
     mocks.resolveControlUiLinks.mockClear();

@@ -1,16 +1,18 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import {
-  __testing as feishuThreadBindingTesting,
-  createFeishuThreadBindingManager,
-} from "../../../../extensions/feishu/src/thread-bindings.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
   __testing as sessionBindingTesting,
   getSessionBindingService,
+  registerSessionBindingAdapter,
+  type SessionBindingRecord,
 } from "../../../infra/outbound/session-binding-service.js";
+import { setActivePluginRegistry } from "../../../plugins/runtime.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../../test-utils/channel-plugins.js";
 import { buildCommandTestParams } from "../commands-spawn.test-harness.js";
 import {
-  isAcpCommandDiscordChannel,
   resolveAcpCommandBindingContext,
   resolveAcpCommandConversationId,
   resolveAcpCommandParentConversationId,
@@ -20,9 +22,406 @@ const baseCfg = {
   session: { mainKey: "main", scope: "per-sender" },
 } satisfies OpenClawConfig;
 
+function parseTelegramChatIdForTest(raw?: string | null): string | undefined {
+  const trimmed = raw?.trim().replace(/^telegram:/i, "");
+  if (!trimmed) {
+    return undefined;
+  }
+  const topicMatch = /^(.*):topic:\d+$/i.exec(trimmed);
+  return (topicMatch?.[1] ?? trimmed).trim() || undefined;
+}
+
+function parseDiscordConversationIdForTest(
+  targets: Array<string | undefined | null>,
+): string | undefined {
+  for (const rawTarget of targets) {
+    const target = rawTarget?.trim();
+    if (!target) {
+      continue;
+    }
+    const mentionMatch = /^<#(\d+)>$/.exec(target);
+    if (mentionMatch?.[1]) {
+      return mentionMatch[1];
+    }
+    if (/^channel:/i.test(target)) {
+      return target;
+    }
+  }
+  return undefined;
+}
+
+function parseDiscordParentChannelFromSessionKeyForTest(raw?: string | null): string | undefined {
+  const sessionKey = raw?.trim().toLowerCase() ?? "";
+  const match = sessionKey.match(/(?:^|:)channel:([^:]+)$/);
+  return match?.[1] ? `channel:${match[1]}` : undefined;
+}
+
+function parseFeishuTargetIdForTest(raw?: string | null): string | undefined {
+  const trimmed = raw?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (/^(chat|group|channel):/i.test(trimmed)) {
+    return trimmed.replace(/^(chat|group|channel):/i, "").trim() || undefined;
+  }
+  return undefined;
+}
+
+function parseFeishuDirectConversationIdForTest(raw?: string | null): string | undefined {
+  const trimmed = raw?.trim();
+  if (!trimmed || !/^(user|dm):/i.test(trimmed)) {
+    return undefined;
+  }
+  return trimmed.replace(/^(user|dm):/i, "").trim() || undefined;
+}
+
+function parseBlueBubblesConversationIdFromTargetForTest(raw?: string | null): string | undefined {
+  const trimmed = raw?.trim().replace(/^bluebubbles:/i, "");
+  if (!trimmed) {
+    return undefined;
+  }
+  const prefixed = /^(chat_guid|chat_identifier|chat_id):(.+)$/i.exec(trimmed);
+  return (prefixed?.[2] ?? trimmed).trim() || undefined;
+}
+
+function parseIMessageConversationIdFromTargetForTest(raw?: string | null): string | undefined {
+  const trimmed = raw?.trim().replace(/^imessage:/i, "");
+  if (!trimmed) {
+    return undefined;
+  }
+  const prefixed = /^(chat_guid|chat_identifier|chat_id):(.+)$/i.exec(trimmed);
+  return (prefixed?.[2] ?? trimmed).trim() || undefined;
+}
+
+function parseLineConversationIdFromTargetForTest(raw?: string | null): string | undefined {
+  const trimmed = raw?.trim().replace(/^line:/i, "");
+  if (!trimmed) {
+    return undefined;
+  }
+  return trimmed.replace(/^user:/i, "").trim() || undefined;
+}
+
+function buildFeishuSenderScopedConversationIdForTest(params: {
+  accountId: string;
+  parentConversationId: string;
+  threadId: string;
+  senderId?: string;
+  sessionKey?: string;
+  parentSessionKey?: string;
+}): string | undefined {
+  const senderId = params.senderId?.trim();
+  if (!senderId) {
+    return undefined;
+  }
+  const expectedPrefix = `${params.parentConversationId}:topic:${params.threadId}:sender:${senderId}`;
+  for (const candidate of [params.parentSessionKey, params.sessionKey]) {
+    const trimmed = candidate?.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const match = /feishu:group:(.+)$/.exec(trimmed);
+    if (match?.[1]?.endsWith(expectedPrefix)) {
+      return match[1];
+    }
+  }
+  if (params.sessionKey) {
+    const existing = getSessionBindingService()
+      .listBySession(params.sessionKey)
+      .find(
+        (binding) =>
+          binding.conversation.channel === "feishu" &&
+          binding.conversation.accountId === params.accountId &&
+          binding.conversation.conversationId.endsWith(expectedPrefix),
+      );
+    if (existing) {
+      return existing.conversation.conversationId;
+    }
+  }
+  return undefined;
+}
+
+function setMinimalAcpContextRegistryForTests(): void {
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "telegram",
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
+          bindings: {
+            resolveCommandConversation: ({
+              threadId,
+              originatingTo,
+              commandTo,
+              fallbackTo,
+            }: {
+              threadId?: string;
+              originatingTo?: string;
+              commandTo?: string;
+              fallbackTo?: string;
+            }) => {
+              const chatId = [originatingTo, commandTo, fallbackTo]
+                .map((candidate) => parseTelegramChatIdForTest(candidate))
+                .find(Boolean);
+              if (!chatId) {
+                return null;
+              }
+              if (threadId) {
+                return {
+                  conversationId: `${chatId}:topic:${threadId}`,
+                  parentConversationId: chatId,
+                };
+              }
+              if (chatId.startsWith("-")) {
+                return null;
+              }
+              return { conversationId: chatId, parentConversationId: chatId };
+            },
+          },
+        },
+      },
+      {
+        pluginId: "discord",
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({ id: "discord", label: "Discord" }),
+          bindings: {
+            resolveCommandConversation: ({
+              threadId,
+              threadParentId,
+              parentSessionKey,
+              originatingTo,
+              commandTo,
+              fallbackTo,
+            }: {
+              threadId?: string;
+              threadParentId?: string;
+              parentSessionKey?: string;
+              originatingTo?: string;
+              commandTo?: string;
+              fallbackTo?: string;
+            }) => {
+              if (threadId) {
+                const parentConversationId =
+                  (threadParentId?.trim()
+                    ? `channel:${threadParentId.trim().replace(/^channel:/i, "")}`
+                    : undefined) ??
+                  parseDiscordParentChannelFromSessionKeyForTest(parentSessionKey) ??
+                  parseDiscordConversationIdForTest([originatingTo, commandTo, fallbackTo]);
+                return {
+                  conversationId: threadId,
+                  ...(parentConversationId && parentConversationId !== threadId
+                    ? { parentConversationId }
+                    : {}),
+                };
+              }
+              const conversationId = parseDiscordConversationIdForTest([
+                originatingTo,
+                commandTo,
+                fallbackTo,
+              ]);
+              return conversationId ? { conversationId } : null;
+            },
+          },
+        },
+      },
+      {
+        pluginId: "feishu",
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({ id: "feishu", label: "Feishu" }),
+          bindings: {
+            resolveCommandConversation: ({
+              accountId,
+              threadId,
+              senderId,
+              sessionKey,
+              parentSessionKey,
+              originatingTo,
+              commandTo,
+              fallbackTo,
+            }: {
+              accountId: string;
+              threadId?: string;
+              senderId?: string;
+              sessionKey?: string;
+              parentSessionKey?: string;
+              originatingTo?: string;
+              commandTo?: string;
+              fallbackTo?: string;
+            }) => {
+              if (threadId) {
+                const parentConversationId =
+                  parseFeishuTargetIdForTest(originatingTo) ??
+                  parseFeishuTargetIdForTest(commandTo) ??
+                  parseFeishuTargetIdForTest(fallbackTo);
+                if (!parentConversationId) {
+                  return null;
+                }
+                const senderScopedConversationId = buildFeishuSenderScopedConversationIdForTest({
+                  accountId,
+                  parentConversationId,
+                  threadId,
+                  senderId,
+                  sessionKey,
+                  parentSessionKey,
+                });
+                return {
+                  conversationId:
+                    senderScopedConversationId ?? `${parentConversationId}:topic:${threadId}`,
+                  parentConversationId,
+                };
+              }
+              const conversationId =
+                parseFeishuDirectConversationIdForTest(originatingTo) ??
+                parseFeishuDirectConversationIdForTest(commandTo) ??
+                parseFeishuDirectConversationIdForTest(fallbackTo);
+              return conversationId ? { conversationId } : null;
+            },
+          },
+        },
+      },
+      {
+        pluginId: "bluebubbles",
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({ id: "bluebubbles", label: "BlueBubbles" }),
+          bindings: {
+            resolveCommandConversation: ({
+              originatingTo,
+              commandTo,
+              fallbackTo,
+            }: {
+              originatingTo?: string;
+              commandTo?: string;
+              fallbackTo?: string;
+            }) => {
+              const conversationId =
+                parseBlueBubblesConversationIdFromTargetForTest(originatingTo) ??
+                parseBlueBubblesConversationIdFromTargetForTest(commandTo) ??
+                parseBlueBubblesConversationIdFromTargetForTest(fallbackTo);
+              return conversationId ? { conversationId } : null;
+            },
+          },
+        },
+      },
+      {
+        pluginId: "imessage",
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({ id: "imessage", label: "iMessage" }),
+          bindings: {
+            resolveCommandConversation: ({
+              originatingTo,
+              commandTo,
+              fallbackTo,
+            }: {
+              originatingTo?: string;
+              commandTo?: string;
+              fallbackTo?: string;
+            }) => {
+              const conversationId =
+                parseIMessageConversationIdFromTargetForTest(originatingTo) ??
+                parseIMessageConversationIdFromTargetForTest(commandTo) ??
+                parseIMessageConversationIdFromTargetForTest(fallbackTo);
+              return conversationId ? { conversationId } : null;
+            },
+          },
+        },
+      },
+      {
+        pluginId: "line",
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({ id: "line", label: "LINE" }),
+          bindings: {
+            resolveCommandConversation: ({
+              originatingTo,
+              commandTo,
+              fallbackTo,
+            }: {
+              originatingTo?: string;
+              commandTo?: string;
+              fallbackTo?: string;
+            }) => {
+              const conversationId =
+                parseLineConversationIdFromTargetForTest(originatingTo) ??
+                parseLineConversationIdFromTargetForTest(commandTo) ??
+                parseLineConversationIdFromTargetForTest(fallbackTo);
+              return conversationId ? { conversationId } : null;
+            },
+          },
+        },
+      },
+      {
+        pluginId: "matrix",
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({ id: "matrix", label: "Matrix" }),
+          bindings: {
+            resolveCommandConversation: ({
+              threadId,
+              originatingTo,
+              commandTo,
+              fallbackTo,
+            }: {
+              threadId?: string;
+              originatingTo?: string;
+              commandTo?: string;
+              fallbackTo?: string;
+            }) => {
+              const roomId = [originatingTo, commandTo, fallbackTo]
+                .map((candidate) => candidate?.trim().replace(/^room:/i, ""))
+                .find((candidate) => candidate && candidate.length > 0);
+              if (!threadId || !roomId) {
+                return null;
+              }
+              return {
+                conversationId: threadId,
+                parentConversationId: roomId,
+              };
+            },
+          },
+        },
+      },
+    ]),
+  );
+}
+
+function registerFeishuBindingAdapterForTest(accountId: string) {
+  const bindings: SessionBindingRecord[] = [];
+  registerSessionBindingAdapter({
+    channel: "feishu",
+    accountId,
+    capabilities: { placements: ["current"] },
+    bind: async (input) => {
+      const record: SessionBindingRecord = {
+        bindingId: `${input.conversation.channel}:${input.conversation.accountId}:${input.conversation.conversationId}`,
+        targetSessionKey: input.targetSessionKey,
+        targetKind: input.targetKind,
+        conversation: input.conversation,
+        status: "active",
+        boundAt: Date.now(),
+        ...(input.metadata ? { metadata: input.metadata } : {}),
+      };
+      bindings.push(record);
+      return record;
+    },
+    listBySession: (targetSessionKey) =>
+      bindings.filter((binding) => binding.targetSessionKey === targetSessionKey),
+    resolveByConversation: (ref) =>
+      bindings.find(
+        (binding) =>
+          binding.conversation.channel === ref.channel &&
+          binding.conversation.accountId === ref.accountId &&
+          binding.conversation.conversationId === ref.conversationId,
+      ) ?? null,
+  });
+}
+
 describe("commands-acp context", () => {
   beforeEach(() => {
-    feishuThreadBindingTesting.resetFeishuThreadBindingsForTests();
+    setMinimalAcpContextRegistryForTests();
     sessionBindingTesting.resetSessionBindingAdaptersForTests();
   });
 
@@ -41,9 +440,8 @@ describe("commands-acp context", () => {
       accountId: "work",
       threadId: "thread-42",
       conversationId: "thread-42",
-      parentConversationId: "parent-1",
+      parentConversationId: "channel:parent-1",
     });
-    expect(isAcpCommandDiscordChannel(params)).toBe(true);
   });
 
   it("resolves discord thread parent from ParentSessionKey when targets point at the thread", () => {
@@ -62,7 +460,7 @@ describe("commands-acp context", () => {
       accountId: "work",
       threadId: "thread-42",
       conversationId: "thread-42",
-      parentConversationId: "parent-9",
+      parentConversationId: "channel:parent-9",
     });
   });
 
@@ -82,7 +480,7 @@ describe("commands-acp context", () => {
       accountId: "work",
       threadId: "thread-42",
       conversationId: "thread-42",
-      parentConversationId: "parent-11",
+      parentConversationId: "channel:parent-11",
     });
   });
 
@@ -101,7 +499,6 @@ describe("commands-acp context", () => {
       conversationId: "123456789",
     });
     expect(resolveAcpCommandConversationId(params)).toBe("123456789");
-    expect(isAcpCommandDiscordChannel(params)).toBe(false);
   });
 
   it("builds canonical telegram topic conversation ids from originating chat + thread", () => {
@@ -136,9 +533,60 @@ describe("commands-acp context", () => {
       accountId: "default",
       threadId: undefined,
       conversationId: "123456789",
-      parentConversationId: "123456789",
     });
     expect(resolveAcpCommandConversationId(params)).toBe("123456789");
+  });
+
+  it("resolves LINE DM conversation ids from raw LINE targets", () => {
+    const params = buildCommandTestParams("/acp status", baseCfg, {
+      Provider: "line",
+      Surface: "line",
+      OriginatingChannel: "line",
+      OriginatingTo: "U1234567890abcdef1234567890abcdef",
+    });
+
+    expect(resolveAcpCommandBindingContext(params)).toEqual({
+      channel: "line",
+      accountId: "default",
+      threadId: undefined,
+      conversationId: "U1234567890abcdef1234567890abcdef",
+    });
+    expect(resolveAcpCommandConversationId(params)).toBe("U1234567890abcdef1234567890abcdef");
+  });
+
+  it("resolves LINE conversation ids from prefixed LINE targets", () => {
+    const params = buildCommandTestParams("/acp status", baseCfg, {
+      Provider: "line",
+      Surface: "line",
+      OriginatingChannel: "line",
+      OriginatingTo: "line:user:U1234567890abcdef1234567890abcdef",
+      AccountId: "work",
+    });
+
+    expect(resolveAcpCommandBindingContext(params)).toEqual({
+      channel: "line",
+      accountId: "work",
+      threadId: undefined,
+      conversationId: "U1234567890abcdef1234567890abcdef",
+    });
+  });
+
+  it("resolves LINE conversation ids from canonical line targets", () => {
+    const params = buildCommandTestParams("/acp status", baseCfg, {
+      Provider: "line",
+      Surface: "line",
+      OriginatingChannel: "line",
+      OriginatingTo: "line:U1234567890abcdef1234567890abcdef",
+      AccountId: "work",
+    });
+
+    expect(resolveAcpCommandBindingContext(params)).toEqual({
+      channel: "line",
+      accountId: "work",
+      threadId: undefined,
+      conversationId: "U1234567890abcdef1234567890abcdef",
+    });
+    expect(resolveAcpCommandConversationId(params)).toBe("U1234567890abcdef1234567890abcdef");
   });
 
   it("resolves Matrix thread context from the current room and thread root", () => {
@@ -160,6 +608,80 @@ describe("commands-acp context", () => {
     });
     expect(resolveAcpCommandConversationId(params)).toBe("$thread-root");
     expect(resolveAcpCommandParentConversationId(params)).toBe("!room:example.org");
+  });
+
+  it("resolves BlueBubbles DM conversation ids from current targets", () => {
+    const params = buildCommandTestParams("/acp status", baseCfg, {
+      Provider: "bluebubbles",
+      Surface: "bluebubbles",
+      OriginatingChannel: "bluebubbles",
+      OriginatingTo: "bluebubbles:+15555550123",
+    });
+
+    expect(resolveAcpCommandBindingContext(params)).toEqual({
+      channel: "bluebubbles",
+      accountId: "default",
+      threadId: undefined,
+      conversationId: "+15555550123",
+      parentConversationId: undefined,
+    });
+    expect(resolveAcpCommandConversationId(params)).toBe("+15555550123");
+  });
+
+  it("resolves BlueBubbles group conversation ids from explicit chat targets", () => {
+    const params = buildCommandTestParams("/acp status", baseCfg, {
+      Provider: "bluebubbles",
+      Surface: "bluebubbles",
+      OriginatingChannel: "bluebubbles",
+      OriginatingTo: "bluebubbles:chat_guid:iMessage;+;chat123",
+      AccountId: "work",
+    });
+
+    expect(resolveAcpCommandBindingContext(params)).toEqual({
+      channel: "bluebubbles",
+      accountId: "work",
+      threadId: undefined,
+      conversationId: "iMessage;+;chat123",
+      parentConversationId: undefined,
+    });
+    expect(resolveAcpCommandConversationId(params)).toBe("iMessage;+;chat123");
+  });
+
+  it("resolves iMessage DM conversation ids from current targets", () => {
+    const params = buildCommandTestParams("/acp status", baseCfg, {
+      Provider: "imessage",
+      Surface: "imessage",
+      OriginatingChannel: "imessage",
+      OriginatingTo: "imessage:+15555550123",
+    });
+
+    expect(resolveAcpCommandBindingContext(params)).toEqual({
+      channel: "imessage",
+      accountId: "default",
+      threadId: undefined,
+      conversationId: "+15555550123",
+      parentConversationId: undefined,
+    });
+    expect(resolveAcpCommandConversationId(params)).toBe("+15555550123");
+  });
+
+  it("resolves iMessage group conversation ids from chat_id targets", () => {
+    const params = buildCommandTestParams("/acp status", baseCfg, {
+      Provider: "imessage",
+      Surface: "imessage",
+      OriginatingChannel: "imessage",
+      OriginatingTo: "chat_id:12345",
+      AccountId: "work",
+    });
+
+    expect(resolveAcpCommandBindingContext(params)).toEqual({
+      channel: "imessage",
+      accountId: "work",
+      threadId: undefined,
+      conversationId: "12345",
+      parentConversationId: undefined,
+    });
+    expect(resolveAcpCommandConversationId(params)).toBe("12345");
   });
 
   it("builds Feishu topic conversation ids from chat target + root message id", () => {
@@ -233,7 +755,7 @@ describe("commands-acp context", () => {
   });
 
   it("preserves sender-scoped Feishu topic ids after ACP takeover from the live binding record", async () => {
-    createFeishuThreadBindingManager({ cfg: baseCfg, accountId: "work" });
+    registerFeishuBindingAdapterForTest("work");
     await getSessionBindingService().bind({
       targetSessionKey: "agent:codex:acp:binding:feishu:work:abc123",
       targetKind: "session",

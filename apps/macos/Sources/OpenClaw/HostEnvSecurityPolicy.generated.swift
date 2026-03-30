@@ -16,8 +16,17 @@ enum HostEnvSecurityPolicy {
         "RUBYOPT",
         "BASH_ENV",
         "ENV",
+        "BROWSER",
+        "GIT_EDITOR",
         "GIT_EXTERNAL_DIFF",
         "GIT_EXEC_PATH",
+        "GIT_SEQUENCE_EDITOR",
+        "GIT_TEMPLATE_DIR",
+        "CC",
+        "CXX",
+        "CARGO_BUILD_RUSTC",
+        "CMAKE_C_COMPILER",
+        "CMAKE_CXX_COMPILER",
         "SHELL",
         "SHELLOPTS",
         "PS4",
@@ -79,7 +88,8 @@ enum HostEnvSecurityPolicy {
         "GEM_PATH",
         "BUNDLE_GEMFILE",
         "COMPOSER_HOME",
-        "XDG_CONFIG_HOME"
+        "XDG_CONFIG_HOME",
+        "AWS_CONFIG_FILE"
     ]
 
     static let blockedOverridePrefixes: [String] = [
