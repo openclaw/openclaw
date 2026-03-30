@@ -11,6 +11,14 @@ title: "Cron vs Heartbeat"
 
 Both heartbeats and cron jobs let you run tasks on a schedule. This guide helps you choose the right mechanism for your use case.
 
+One important distinction:
+
+- **Heartbeat** is a scheduled **main-session turn**.
+- **Cron (main)** is a scheduled **system event into the main session**.
+- **Cron (isolated)** is a scheduled **background run**.
+
+Only detached background runs show up in `openclaw tasks`. Normal heartbeat runs and main-session cron reminders do not.
+
 ## Quick Decision Guide
 
 | Use Case                             | Recommended         | Why                                      |
@@ -40,6 +48,7 @@ Heartbeats run in the **main session** at a regular interval (default: 30 min). 
 - **Context-aware**: The agent knows what you've been working on and can prioritize accordingly.
 - **Smart suppression**: If nothing needs attention, the agent replies `HEARTBEAT_OK` and no message is delivered.
 - **Natural timing**: Drifts slightly based on queue load, which is fine for most monitoring.
+- **No background task ledger**: heartbeat turns stay in main-session history instead of creating a separate task run.
 
 ### Heartbeat example: HEARTBEAT.md checklist
 
@@ -98,6 +107,7 @@ per-job offset in a 0-5 minute window.
 - **Immediate delivery**: Announce mode posts directly without waiting for heartbeat.
 - **No agent context needed**: Runs even if main session is idle or compacted.
 - **One-shot support**: `--at` for precise future timestamps.
+- **Task visibility for detached runs**: isolated jobs show up in `openclaw tasks`, `openclaw tasks audit`, and maintenance surfaces.
 
 ### Cron example: Daily morning briefing
 
@@ -219,13 +229,14 @@ See [Lobster](/tools/lobster) for full usage and examples.
 
 Both heartbeat and cron can interact with the main session, but differently:
 
-|         | Heartbeat                       | Cron (main)              | Cron (isolated)                                 |
-| ------- | ------------------------------- | ------------------------ | ----------------------------------------------- |
-| Session | Main                            | Main (via system event)  | `cron:<jobId>` or custom session                |
-| History | Shared                          | Shared                   | Fresh each run (isolated) / Persistent (custom) |
-| Context | Full                            | Full                     | None (isolated) / Cumulative (custom)           |
-| Model   | Main session model              | Main session model       | Can override                                    |
-| Output  | Delivered if not `HEARTBEAT_OK` | Heartbeat prompt + event | Announce summary (default)                      |
+|          | Heartbeat                       | Cron (main)              | Cron (isolated)                                 |
+| -------- | ------------------------------- | ------------------------ | ----------------------------------------------- |
+| Session  | Main                            | Main (via system event)  | `cron:<jobId>` or custom session                |
+| History  | Shared                          | Shared                   | Fresh each run (isolated) / Persistent (custom) |
+| Context  | Full                            | Full                     | None (isolated) / Cumulative (custom)           |
+| Model    | Main session model              | Main session model       | Can override                                    |
+| Output   | Delivered if not `HEARTBEAT_OK` | Heartbeat prompt + event | Announce summary (default)                      |
+| Tasks UI | No task run                     | No task run              | Visible in `openclaw tasks`                     |
 
 ### When to use main session cron
 
