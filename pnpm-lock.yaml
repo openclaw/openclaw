@@ -560,6 +560,8 @@ importers:
 
   extensions/qianfan: {}
 
+  extensions/qnaigc-api: {}
+
   extensions/sglang: {}
 
   extensions/signal: {}

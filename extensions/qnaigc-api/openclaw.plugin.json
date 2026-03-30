@@ -1,0 +1,25 @@
+{
+  "id": "qnaigc-api",
+  "enabledByDefault": true,
+  "providers": ["qnaigc-api"],
+  "providerAuthEnvVars": {
+    "qnaigc-api": ["QNAIGC_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "qnaigc-api",
+      "method": "api-key",
+      "choiceId": "qnaigc-api-key",
+      "choiceLabel": "QNAIGC API key",
+      "groupId": "qnaigc-api",
+      "groupLabel": "QNAIGC",
+      "cliFlag": "--qnaigc-api-key",
+      "cliOption": "--qnaigc-api-key <key>",
+      "cliDescription": "QNAIGC API key (or set QNAIGC_API_KEY)"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false
+  }
+}
