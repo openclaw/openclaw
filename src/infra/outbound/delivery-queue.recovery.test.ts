@@ -116,6 +116,28 @@ describe("delivery-queue recovery", () => {
     expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("permanent error"));
   });
 
+  it("treats Matrix 'User not in room' as a permanent error", async () => {
+    const id = await enqueueDelivery(
+      { channel: "matrix", to: "!lowercased:matrix.example.com", payloads: [{ text: "hi" }] },
+      tmpDir(),
+    );
+    const deliver = vi
+      .fn()
+      .mockRejectedValue(
+        new Error(
+          "MatrixError: [403] User @bot:matrix.example.com not in room !lowercased:matrix.example.com",
+        ),
+      );
+    const log = createRecoveryLog();
+    const { result } = await runRecovery({ deliver, log });
+
+    expect(result.failed).toBe(1);
+    expect(result.recovered).toBe(0);
+    expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
+    expect(fs.existsSync(path.join(tmpDir(), "delivery-queue", "failed", `${id}.json`))).toBe(true);
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("permanent error"));
+  });
+
   it("passes skipQueue: true to prevent re-enqueueing during recovery", async () => {
     await enqueueDelivery(
       { channel: "demo-channel-a", to: "+1", payloads: [{ text: "a" }] },
