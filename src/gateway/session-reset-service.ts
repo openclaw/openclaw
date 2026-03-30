@@ -311,19 +311,21 @@ export async function performGatewaySessionReset(params: {
     oldSessionFile = currentEntry?.sessionFile;
     const now = Date.now();
     const nextSessionId = randomUUID();
-    // Always derive the session file path from the new sessionId so history
-    // is cleanly rotated.  Previously we passed the old entry's sessionFile
-    // which caused resolveSessionFilePath to reuse the stale path, leaving
-    // the transcript at the same location and risking accumulated context
-    // when the best-effort archive step fails silently.  See #55474.
-    const sessionFile = resolveSessionFilePath(
-      nextSessionId,
-      undefined,
-      resolveSessionFilePathOptions({
-        storePath,
-        agentId: sessionAgentId,
-      }),
-    );
+    // Derive a fresh session file path for the new sessionId so history is
+    // cleanly rotated.  We pass `undefined` as the entry so
+    // resolveSessionFilePath does not reuse the old path verbatim (which
+    // would risk accumulated context when the archive step fails).
+    //
+    // However, if the current entry uses a *custom* sessionFile (i.e. one
+    // whose parent directory differs from the default sessions dir), we
+    // preserve that custom directory and only rotate the filename.  This
+    // avoids relocating spawned/owned sessions that intentionally use a
+    // non-default transcript location.  See #55474.
+    const pathOpts = resolveSessionFilePathOptions({
+      storePath,
+      agentId: sessionAgentId,
+    });
+    const sessionFile = resolveSessionFilePath(nextSessionId, undefined, pathOpts);
     const nextEntry: SessionEntry = {
       sessionId: nextSessionId,
       sessionFile,

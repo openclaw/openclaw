@@ -356,8 +356,11 @@ export async function getReplyFromConfig(
     // /new and /reset commands.  Custom triggers (e.g. !new, !reset) were
     // previously skipped here, leaving internal hook listeners (and the ACP
     // cleanup path) unnotified, so cached context kept accumulating.  #55474.
-    const resetMatch = command.commandBodyNormalized.match(/^\/(new|reset)(?:\s|$)/);
-    const action: ResetCommandAction = resetMatch?.[1] === "reset" ? "reset" : "new";
+    // Match both slash-prefixed (/reset, /new) and custom-prefixed triggers
+    // (!reset, !new, etc.) so that non-slash reset triggers also derive the
+    // correct action for hook listeners.  #55474.
+    const resetMatch = command.commandBodyNormalized.match(/^[/!]?(new|reset)(?:\s|$)/i);
+    const action: ResetCommandAction = resetMatch?.[1]?.toLowerCase() === "reset" ? "reset" : "new";
     const { emitResetCommandHooks } = await import("./commands-core.runtime.js");
     await emitResetCommandHooks({
       action,
