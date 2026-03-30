@@ -11,6 +11,7 @@ import { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/re
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { deliverReplies, emitInternalMessageSentHook } from "./bot/delivery.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
+import { resolveTelegramExecApproval } from "./exec-approval-resolver.js";
 import { editMessageTelegram } from "./send.js";
 import { wasSentByBot } from "./sent-message-cache.js";
 
@@ -26,6 +27,7 @@ export type TelegramBotDeps = {
   buildModelsProviderData: typeof buildModelsProviderData;
   listSkillCommandsForAgents: typeof listSkillCommandsForAgents;
   wasSentByBot: typeof wasSentByBot;
+  resolveExecApproval?: typeof resolveTelegramExecApproval;
   createTelegramDraftStream?: typeof createTelegramDraftStream;
   deliverReplies?: typeof deliverReplies;
   emitInternalMessageSentHook?: typeof emitInternalMessageSentHook;
@@ -65,6 +67,9 @@ export const defaultTelegramBotDeps: TelegramBotDeps = {
   },
   get wasSentByBot() {
     return wasSentByBot;
+  },
+  get resolveExecApproval() {
+    return resolveTelegramExecApproval;
   },
   get createTelegramDraftStream() {
     return createTelegramDraftStream;

@@ -575,6 +575,37 @@ describe("createTelegramBot", () => {
     });
   });
 
+  it("ignores group self-authored message updates instead of re-processing bot output", async () => {
+    await withIsolatedStateDirAsync(async () => {
+      loadConfig.mockReturnValue({
+        channels: { telegram: { dmPolicy: "pairing" } },
+      });
+      readChannelAllowFromStore.mockResolvedValue([]);
+      upsertChannelPairingRequest.mockClear();
+      sendMessageSpy.mockClear();
+      replySpy.mockClear();
+
+      createTelegramBot({ token: "tok" });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+      await handler({
+        message: {
+          chat: { id: -1001234, type: "supergroup", title: "OpenClaw Ops" },
+          message_id: 1884,
+          date: 1736380800,
+          from: { id: 7, is_bot: true, first_name: "OpenClaw", username: "openclaw_bot" },
+          text: "approval card update",
+        },
+        me: { id: 7, is_bot: true, first_name: "OpenClaw", username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      });
+
+      expect(upsertChannelPairingRequest).not.toHaveBeenCalled();
+      expect(sendMessageSpy).not.toHaveBeenCalled();
+      expect(replySpy).not.toHaveBeenCalled();
+    });
+  });
+
   it("blocks unauthorized DM media before download and sends pairing reply", async () => {
     await withIsolatedStateDirAsync(async () => {
       loadConfig.mockReturnValue({
