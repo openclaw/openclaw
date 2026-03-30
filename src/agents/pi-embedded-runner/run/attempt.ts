@@ -713,7 +713,7 @@ export async function runEmbeddedAttempt(
         provider: params.provider,
         modelId: params.modelId,
         config: params.config,
-        workspaceDir: params.workspaceDir,
+        workspaceDir: effectiveWorkspace,
       });
 
       await prewarmSessionFile(params.sessionFile);

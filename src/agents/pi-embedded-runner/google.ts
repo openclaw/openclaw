@@ -581,6 +581,8 @@ export async function sanitizeSessionHistory(params: {
   provider?: string;
   allowedToolNames?: Iterable<string>;
   config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
   sessionManager: SessionManager;
   sessionId: string;
   policy?: TranscriptPolicy;
@@ -593,6 +595,8 @@ export async function sanitizeSessionHistory(params: {
       provider: params.provider,
       modelId: params.modelId,
       config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
     });
   const withInterSessionMarkers = annotateInterSessionUserMessages(params.messages);
   const canonicalizedAssistantHistory = canonicalizeAssistantHistoryMessages({
