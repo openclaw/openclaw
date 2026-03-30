@@ -106,4 +106,14 @@ class DeviceNotificationListenerServiceTest {
     assertTrue(limiter.allow(nowEpochMs = System.currentTimeMillis(), maxEventsPerMinute = 1))
     assertFalse(limiter.allow(nowEpochMs = System.currentTimeMillis(), maxEventsPerMinute = 1))
   }
+
+  @Test
+  fun burstLimiter_capsAnyForwardedNotificationEvent() {
+    val limiter = NotificationBurstLimiter()
+    val nowEpochMs = System.currentTimeMillis()
+
+    assertTrue(limiter.allow(nowEpochMs = nowEpochMs, maxEventsPerMinute = 2))
+    assertTrue(limiter.allow(nowEpochMs = nowEpochMs, maxEventsPerMinute = 2))
+    assertFalse(limiter.allow(nowEpochMs = nowEpochMs, maxEventsPerMinute = 2))
+  }
 }

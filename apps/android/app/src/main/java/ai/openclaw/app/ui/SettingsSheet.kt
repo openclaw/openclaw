@@ -886,7 +886,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
             )
           },
           placeholder = {
-            Text("Blank uses the app's current main session route; set a key only to pin forwarding into a different session.", style = mobileCaption1, color = mobileTextSecondary)
+            Text("Blank keeps notification events on this device's default notification route. Set a key only to pin forwarding into a different session.", style = mobileCaption1, color = mobileTextSecondary)
           },
           modifier = Modifier.fillMaxWidth(),
           textStyle = mobileBody.copy(color = mobileText),

@@ -229,7 +229,7 @@ class DeviceNotificationListenerService : NotificationListenerService() {
     if (policy.isWithinQuietHours(nowEpochMs = nowEpochMs)) {
       return null
     }
-    if (change == "posted" && !forwardingLimiter.allow(nowEpochMs, policy.maxEventsPerMinute)) {
+    if (!forwardingLimiter.allow(nowEpochMs, policy.maxEventsPerMinute)) {
       return null
     }
     return buildJsonObject {
