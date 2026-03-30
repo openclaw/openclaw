@@ -49,10 +49,7 @@ export async function noteMemorySearchHealth(
 
   // QMD backend handles embeddings internally (e.g. embeddinggemma) — no
   // separate embedding provider is needed. Skip the provider check entirely.
-  const backendConfig = resolveActiveMemoryBackendConfig({ cfg, agentId }) as {
-    backend?: string;
-    qmd?: { command?: string };
-  } | null;
+  const backendConfig = resolveActiveMemoryBackendConfig({ cfg, agentId });
   if (!backendConfig) {
     note("No active memory plugin is registered for the current config.", "Memory search");
     return;
