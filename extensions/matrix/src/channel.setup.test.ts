@@ -240,13 +240,14 @@ describe("matrix setup post-write bootstrap", () => {
     );
   });
 
-  it("clears allowPrivateNetwork when deleting the default Matrix account config", () => {
+  it("clears allowPrivateNetwork and proxy when deleting the default Matrix account config", () => {
     const updated = matrixPlugin.config.deleteAccount?.({
       cfg: {
         channels: {
           matrix: {
             homeserver: "http://localhost.localdomain:8008",
             allowPrivateNetwork: true,
+            proxy: "http://127.0.0.1:7890",
             accounts: {
               ops: {
                 enabled: true,

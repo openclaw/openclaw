@@ -43,12 +43,17 @@ export type TaskEventRecord = {
   summary?: string;
 };
 
+export type TaskDeliveryState = {
+  taskId: string;
+  requesterOrigin?: DeliveryContext;
+  lastNotifiedEventAt?: number;
+};
+
 export type TaskRecord = {
   taskId: string;
   runtime: TaskRuntime;
   sourceId?: string;
   requesterSessionKey: string;
-  requesterOrigin?: DeliveryContext;
   childSessionKey?: string;
   parentTaskId?: string;
   agentId?: string;
@@ -67,10 +72,9 @@ export type TaskRecord = {
   progressSummary?: string;
   terminalSummary?: string;
   terminalOutcome?: TaskTerminalOutcome;
-  recentEvents?: TaskEventRecord[];
-  lastNotifiedEventAt?: number;
 };
 
 export type TaskRegistrySnapshot = {
   tasks: TaskRecord[];
+  deliveryStates: TaskDeliveryState[];
 };
