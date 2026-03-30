@@ -8,7 +8,9 @@ describe("markdownTableToSlackTableBlock", () => {
   it("caps rows and columns to Slack's limits", () => {
     const table = {
       headers: Array.from({ length: 25 }, (_, index) => `H${index}`),
-      rows: Array.from({ length: 120 }, () => Array.from({ length: 25 }, (_, index) => `V${index}`)),
+      rows: Array.from({ length: 120 }, () =>
+        Array.from({ length: 25 }, (_, index) => `V${index}`),
+      ),
     };
 
     const block = markdownTableToSlackTableBlock(table);
@@ -33,7 +35,9 @@ describe("renderSlackTableFallbackText", () => {
   it("applies the same row and column caps as the block helper", () => {
     const rendered = renderSlackTableFallbackText({
       headers: Array.from({ length: 25 }, (_, index) => `H${index}`),
-      rows: Array.from({ length: 120 }, () => Array.from({ length: 25 }, (_, index) => `V${index}`)),
+      rows: Array.from({ length: 120 }, () =>
+        Array.from({ length: 25 }, (_, index) => `V${index}`),
+      ),
     });
 
     const lines = rendered.split("\n");

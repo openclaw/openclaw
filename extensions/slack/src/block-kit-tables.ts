@@ -84,10 +84,9 @@ export function buildSlackTableAttachment(table: MarkdownTableData): { blocks: S
 export function renderSlackTableFallbackText(table: MarkdownTableData): string {
   const hasHeaders = hasVisibleHeaders(table.headers);
   const cappedRows = table.rows.slice(0, SLACK_MAX_TABLE_ROWS);
-  const rows = [
-    ...(hasHeaders ? [table.headers] : []),
-    ...cappedRows,
-  ].filter((row) => row.length > 0);
+  const rows = [...(hasHeaders ? [table.headers] : []), ...cappedRows].filter(
+    (row) => row.length > 0,
+  );
   if (rows.length === 0) {
     return "Table";
   }
