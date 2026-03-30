@@ -1230,6 +1230,44 @@ describe("spawnAcpDirect", () => {
     );
   });
 
+  it("resolves defaultAgent alias to harness ID when agentId is omitted", async () => {
+    replaceSpawnConfig({
+      ...hoisted.state.cfg,
+      acp: {
+        enabled: true,
+        backend: "acpx",
+        defaultAgent: "analyst",
+        allowedAgents: ["claude"],
+      },
+      agents: {
+        list: [
+          {
+            id: "analyst",
+            runtime: {
+              type: "acp" as const,
+              acp: { agent: "claude", cwd: "/workspace/analysis" },
+            },
+          },
+        ],
+      },
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "hello",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(result.childSessionKey).toMatch(/^agent:claude:acp:/);
+    expect(hoisted.initializeSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({ agent: "claude", cwd: "/workspace/analysis" }),
+    );
+  });
+
   it("passes raw harness ID through when no matching agent profile exists", async () => {
     const result = await spawnAcpDirect(
       {
