@@ -521,7 +521,7 @@ export async function statusCommand(
     { Item: "Plugin compatibility", Value: pluginCompatibilityValue },
     { Item: "Probes", Value: probesValue },
     { Item: "Events", Value: eventsValue },
-    { Item: "Detached runs", Value: tasksValue },
+    { Item: "Tasks", Value: tasksValue },
     { Item: "Heartbeat", Value: heartbeatValue },
     ...(lastHeartbeatValue ? [{ Item: "Last heartbeat", Value: lastHeartbeatValue }] : []),
     {
@@ -546,9 +546,7 @@ export async function statusCommand(
   if (summary.taskAudit.errors > 0) {
     runtime.log("");
     runtime.log(
-      theme.muted(
-        `Detached run maintenance: ${formatCliCommand("openclaw tasks maintenance --apply")}`,
-      ),
+      theme.muted(`Task maintenance: ${formatCliCommand("openclaw tasks maintenance --apply")}`),
     );
   }
 

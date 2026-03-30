@@ -682,7 +682,7 @@ describe("statusCommand", () => {
       "Channels",
       "WhatsApp",
       "bootstrap files",
-      "Detached runs",
+      "Tasks",
       "Sessions",
       "+1000",
       "50%",
