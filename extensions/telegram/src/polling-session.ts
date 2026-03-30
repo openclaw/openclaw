@@ -22,7 +22,9 @@ const TELEGRAM_POLL_RESTART_POLICY = {
   jitter: 0.25,
 };
 
-const POLL_STALL_THRESHOLD_MS = 90_000;
+const DEFAULT_POLL_STALL_THRESHOLD_MS = 120_000;
+const MIN_POLL_STALL_THRESHOLD_MS = 30_000;
+const MAX_POLL_STALL_THRESHOLD_MS = 600_000;
 const POLL_WATCHDOG_INTERVAL_MS = 30_000;
 const POLL_STOP_GRACE_MS = 15_000;
 const CONFIRM_PERSISTED_OFFSET_TIMEOUT_MS = 10_000;
@@ -50,6 +52,16 @@ const waitForGracefulStop = async (stop: () => Promise<void>) => {
 const telegramApiTimeoutSignal = (timeoutMs: number): TelegramApiAbortSignal =>
   AbortSignal.timeout(timeoutMs) as unknown as TelegramApiAbortSignal;
 
+const resolvePollingStallThresholdMs = (value: number | undefined): number => {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return DEFAULT_POLL_STALL_THRESHOLD_MS;
+  }
+  return Math.min(
+    MAX_POLL_STALL_THRESHOLD_MS,
+    Math.max(MIN_POLL_STALL_THRESHOLD_MS, Math.floor(value)),
+  );
+};
+
 type TelegramPollingSessionOpts = {
   token: string;
   config: Parameters<typeof createTelegramBot>[0]["config"];
@@ -65,6 +77,8 @@ type TelegramPollingSessionOpts = {
   telegramTransport?: TelegramTransport;
   /** Rebuild Telegram transport after stall/network recovery when marked dirty. */
   createTelegramTransport?: () => TelegramTransport;
+  /** Stall detection threshold in ms. Defaults to 120_000 (2 min). */
+  stallThresholdMs?: number;
   setStatus?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
 };
 
@@ -76,6 +90,7 @@ export class TelegramPollingSession {
   #activeFetchAbort: AbortController | undefined;
   #transportState: TelegramPollingTransportState;
   #status: ReturnType<typeof createTelegramPollingStatusPublisher>;
+  #stallThresholdMs: number;
 
   constructor(private readonly opts: TelegramPollingSessionOpts) {
     this.#transportState = new TelegramPollingTransportState({
@@ -84,6 +99,7 @@ export class TelegramPollingSession {
       createTelegramTransport: opts.createTelegramTransport,
     });
     this.#status = createTelegramPollingStatusPublisher(opts.setStatus);
+    this.#stallThresholdMs = resolvePollingStallThresholdMs(opts.stallThresholdMs);
   }
 
   get activeRunner() {
@@ -300,7 +316,7 @@ export class TelegramPollingSession {
       }
 
       const stall = liveness.detectStall({
-        thresholdMs: POLL_STALL_THRESHOLD_MS,
+        thresholdMs: this.#stallThresholdMs,
         runnerIsRunning: runner.isRunning(),
       });
       if (stall) {
