@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { expect, vi } from "vitest";
 import { createPluginRuntimeMock } from "../../../../test/helpers/plugins/plugin-runtime-mock.js";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../../runtime-api.js";
@@ -10,7 +11,7 @@ type InboundDebouncerParams<T> = {
 };
 
 export function setFeishuLifecycleStateDir(prefix: string) {
-  process.env.OPENCLAW_STATE_DIR = `/tmp/${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  process.env.OPENCLAW_STATE_DIR = `/tmp/${prefix}-${randomUUID()}`;
 }
 
 export function restoreFeishuLifecycleStateDir(originalStateDir: string | undefined) {
