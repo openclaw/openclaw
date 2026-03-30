@@ -726,6 +726,33 @@ describe("gateway agent handler", () => {
     expect(callArgs.bestEffortDeliver).toBe(false);
   });
 
+  it("downgrades to session-only when bestEffortDeliver=true and no external channel is configured", async () => {
+    mocks.agentCommand.mockClear();
+    primeMainAgentRun();
+    const respond = vi.fn();
+
+    await invokeAgent(
+      {
+        message: "best effort delivery fallback",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        deliver: true,
+        bestEffortDeliver: true,
+        idempotencyKey: "test-best-effort-delivery-fallback",
+      },
+      { reqId: "best-effort-delivery-fallback", respond },
+    );
+
+    await waitForAssertion(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    const accepted = respond.mock.calls.find(
+      (call: unknown[]) =>
+        call[0] === true && (call[1] as Record<string, unknown>)?.status === "accepted",
+    );
+    expect(accepted).toBeDefined();
+    const rejected = respond.mock.calls.find((call: unknown[]) => call[0] === false);
+    expect(rejected).toBeUndefined();
+  });
+
   it("rejects public spawned-run metadata fields", async () => {
     primeMainAgentRun();
     mocks.agentCommand.mockClear();

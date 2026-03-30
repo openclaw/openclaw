@@ -1,3 +1,4 @@
+import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 type ExecApprovalFollowupParams = {
@@ -53,8 +54,13 @@ export async function sendExecApprovalFollowup(
     return false;
   }
 
-  const channel = params.turnSourceChannel?.trim();
+  const normalizedChannel = normalizeMessageChannel(params.turnSourceChannel);
+  const channel =
+    normalizedChannel && isDeliverableMessageChannel(normalizedChannel)
+      ? normalizedChannel
+      : undefined;
   const to = params.turnSourceTo?.trim();
+  const hasDeliveryTarget = Boolean(channel && to);
   const threadId =
     params.turnSourceThreadId != null && params.turnSourceThreadId !== ""
       ? String(params.turnSourceThreadId)
@@ -66,12 +72,12 @@ export async function sendExecApprovalFollowup(
     {
       sessionKey,
       message: buildExecApprovalFollowupPrompt(resultText),
-      deliver: true,
-      bestEffortDeliver: true,
-      channel: channel && to ? channel : undefined,
-      to: channel && to ? to : undefined,
-      accountId: channel && to ? params.turnSourceAccountId?.trim() || undefined : undefined,
-      threadId: channel && to ? threadId : undefined,
+      deliver: hasDeliveryTarget,
+      ...(hasDeliveryTarget ? { bestEffortDeliver: true as const } : {}),
+      channel: hasDeliveryTarget ? channel : undefined,
+      to: hasDeliveryTarget ? to : undefined,
+      accountId: hasDeliveryTarget ? params.turnSourceAccountId?.trim() || undefined : undefined,
+      threadId: hasDeliveryTarget ? threadId : undefined,
       idempotencyKey: `exec-approval-followup:${params.approvalId}`,
     },
     { expectFinal: true },

@@ -658,8 +658,13 @@ export const agentHandlers: GatewayRequestHandlers = {
           resolvedAccountId,
         };
       } catch (err) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(err)));
-        return;
+        if (!bestEffortDeliver) {
+          respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(err)));
+          return;
+        }
+        context.logGateway.info(
+          `agent delivery downgraded to session-only (bestEffortDeliver): ${String(err)}`,
+        );
       }
     }
 
@@ -677,15 +682,20 @@ export const agentHandlers: GatewayRequestHandlers = {
     }
 
     if (wantsDelivery && resolvedChannel === INTERNAL_MESSAGE_CHANNEL) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "delivery channel is required: pass --channel/--reply-channel or use a main session with a previous channel",
-        ),
+      if (!bestEffortDeliver) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "delivery channel is required: pass --channel/--reply-channel or use a main session with a previous channel",
+          ),
+        );
+        return;
+      }
+      context.logGateway.info(
+        "agent delivery downgraded to session-only (bestEffortDeliver): no deliverable channel",
       );
-      return;
     }
 
     const normalizedTurnSource = normalizeMessageChannel(turnSourceChannel);

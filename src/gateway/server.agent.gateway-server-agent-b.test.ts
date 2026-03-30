@@ -279,12 +279,32 @@ describe("gateway server agent", () => {
       sessionKey: "main",
       channel: "last",
       deliver: true,
+      bestEffortDeliver: false,
       idempotencyKey: "idem-agent-webchat",
     });
     expect(res.ok).toBe(false);
     expect(res.error?.code).toBe("INVALID_REQUEST");
     expect(res.error?.message).toMatch(/Channel is required|runtime not initialized/);
     expect(vi.mocked(agentCommand)).not.toHaveBeenCalled();
+  });
+
+  test("agent downgrades to session-only delivery when best-effort is enabled and last channel is webchat", async () => {
+    testState.allowFrom = ["+1555"];
+    await writeMainSessionEntry({
+      sessionId: "sess-main-webchat-best-effort",
+      lastChannel: "webchat",
+      lastTo: "+1555",
+    });
+    const res = await rpcReq(ws, "agent", {
+      message: "hi",
+      sessionKey: "main",
+      channel: "last",
+      deliver: true,
+      bestEffortDeliver: true,
+      idempotencyKey: "idem-agent-webchat-best-effort",
+    });
+    expect(res.ok).toBe(true);
+    expectAgentRoutingCall({ channel: "webchat", deliver: false });
   });
 
   test("agent uses webchat for internal runs when last provider is webchat", async () => {

@@ -462,7 +462,7 @@ describe("exec approvals", () => {
     expect(agentCalls[0]).toEqual(
       expect.objectContaining({
         sessionKey: "agent:main:main",
-        deliver: true,
+        deliver: false,
         idempotencyKey: expect.stringContaining("exec-approval-followup:"),
       }),
     );

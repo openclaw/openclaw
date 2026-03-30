@@ -14,6 +14,7 @@ import {
   type ExecAsk,
   type ExecSecurity,
 } from "../infra/exec-approvals.js";
+import { logWarn } from "../logger.js";
 import { sendExecApprovalFollowup } from "./bash-tools.exec-approval-followup.js";
 import {
   type ExecApprovalRegistration,
@@ -24,6 +25,7 @@ import { DEFAULT_APPROVAL_TIMEOUT_MS } from "./bash-tools.exec-runtime.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 
 type ResolvedExecApprovals = ReturnType<typeof resolveExecApprovals>;
+const loggedExecApprovalFollowupFailures = new Set<string>();
 
 export type ExecHostApprovalContext = {
   approvals: ResolvedExecApprovals;
@@ -334,7 +336,15 @@ export async function sendExecApprovalFollowupResult(
     turnSourceAccountId: target.turnSourceAccountId,
     turnSourceThreadId: target.turnSourceThreadId,
     resultText,
-  }).catch(() => {});
+  }).catch((error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    const key = `${target.approvalId}:${message}`;
+    if (loggedExecApprovalFollowupFailures.has(key)) {
+      return;
+    }
+    loggedExecApprovalFollowupFailures.add(key);
+    logWarn(`exec approval followup dispatch failed (id=${target.approvalId}): ${message}`);
+  });
 }
 
 export function buildExecApprovalPendingToolResult(params: {
