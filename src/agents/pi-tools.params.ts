@@ -13,6 +13,39 @@ function parameterValidationError(message: string): Error {
   return new Error(`${message}.${RETRY_GUIDANCE_SUFFIX}`);
 }
 
+function describeReceivedParamValue(value: unknown, allowEmpty = false): string | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (typeof value === "string") {
+    if (allowEmpty || value.trim().length > 0) {
+      return undefined;
+    }
+    return "<empty-string>";
+  }
+  if (Array.isArray(value)) {
+    return "<array>";
+  }
+  return `<${typeof value}>`;
+}
+
+function formatReceivedParamHint(
+  record: Record<string, unknown>,
+  groups: readonly RequiredParamGroup[],
+): string {
+  const allowEmptyKeys = new Set(
+    groups.filter((group) => group.allowEmpty).flatMap((group) => group.keys),
+  );
+  const received = Object.keys(record).flatMap((key) => {
+    const detail = describeReceivedParamValue(record[key], allowEmptyKeys.has(key));
+    if (record[key] === undefined || record[key] === null) {
+      return [];
+    }
+    return [detail ? `${key}=${detail}` : key];
+  });
+  return received.length > 0 ? ` (received: ${received.join(", ")})` : "";
+}
+
 export const CLAUDE_PARAM_GROUPS = {
   read: [{ keys: ["path", "file_path", "filePath", "file"], label: "path alias" }],
   write: [
@@ -275,10 +308,7 @@ export function assertRequiredParams(
   if (missingLabels.length > 0) {
     const joined = missingLabels.join(", ");
     const noun = missingLabels.length === 1 ? "parameter" : "parameters";
-    const receivedKeys = Object.keys(record).filter(
-      (k) => record[k] !== undefined && record[k] !== null,
-    );
-    const receivedHint = receivedKeys.length > 0 ? ` (received: ${receivedKeys.join(", ")})` : "";
+    const receivedHint = formatReceivedParamHint(record, groups);
     throw parameterValidationError(`Missing required ${noun}: ${joined}${receivedHint}`);
   }
 }

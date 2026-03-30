@@ -47,6 +47,40 @@ describe("assertRequiredParams", () => {
     ).toThrow(/\(received: file_path\)[^,]/);
   });
 
+  it("shows empty-string values for present params that still fail validation", () => {
+    expect(() =>
+      assertRequiredParams(
+        { path: "/tmp/a.txt", content: "   " },
+        [
+          { keys: ["path", "file_path"], label: "path alias" },
+          { keys: ["content"], label: "content" },
+        ],
+        "write",
+      ),
+    ).toThrow(/\(received: path, content=<empty-string>\)/);
+  });
+
+  it("shows wrong-type values for present params that still fail validation", async () => {
+    const tool = wrapToolParamNormalization(
+      {
+        name: "write",
+        label: "write",
+        description: "write a file",
+        parameters: {},
+        execute: vi.fn(),
+      },
+      CLAUDE_PARAM_GROUPS.write,
+    );
+    await expect(
+      tool.execute(
+        "id",
+        { file_path: "test.txt", content: { unexpected: true } },
+        new AbortController().signal,
+        vi.fn(),
+      ),
+    ).rejects.toThrow(/\(received: (?:path, content=<object>|content=<object>, path)\)/);
+  });
+
   it("includes multiple received keys when several params are present", () => {
     expect(() =>
       assertRequiredParams(
