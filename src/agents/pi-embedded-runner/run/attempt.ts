@@ -516,21 +516,10 @@ export async function runEmbeddedAttempt(
       requesterSenderId: params.senderId ?? undefined,
       senderIsOwner: params.senderIsOwner,
     };
-    const mergedForBeforeToolsResolve = [...toolsRaw, ...clientToolDefsPre];
-    const mergedAfterHook = await applyBeforeToolsResolveHook(
-      mergedForBeforeToolsResolve,
-      beforeToolsResolveCtx,
-    );
-    type ClientToolDef = ReturnType<typeof toClientToolDefinitions>[number];
-    const toolsRawRefSet = new Set<AnyAgentTool | ClientToolDef>(toolsRaw);
-    const toolsAfterHook = mergedAfterHook.filter((t) => toolsRawRefSet.has(t)) as AnyAgentTool[];
-    clientToolDefsForSession = mergedAfterHook.filter((t) => !toolsRawRefSet.has(t)) as ReturnType<
-      typeof toClientToolDefinitions
-    >;
-    const tools = sanitizeToolsForGoogle({
-      tools: toolsEnabled ? toolsAfterHook : [],
-      provider: params.provider,
-    });
+    const reservedCoreAndClientNames = [
+      ...toolsRaw.map((tool) => tool.name),
+      ...clientToolDefsPre.map((tool) => tool.name),
+    ];
     const bundleMcpSessionRuntime = toolsEnabled
       ? await getOrCreateSessionMcpRuntime({
           sessionId: params.sessionId,
@@ -542,10 +531,7 @@ export async function runEmbeddedAttempt(
     const bundleMcpRuntime = bundleMcpSessionRuntime
       ? await materializeBundleMcpToolsForRun({
           runtime: bundleMcpSessionRuntime,
-          reservedToolNames: [
-            ...tools.map((tool) => tool.name),
-            ...(clientTools?.map((tool) => tool.function.name) ?? []),
-          ],
+          reservedToolNames: reservedCoreAndClientNames,
         })
       : undefined;
     const bundleLspRuntime = toolsEnabled
@@ -553,26 +539,47 @@ export async function runEmbeddedAttempt(
           workspaceDir: effectiveWorkspace,
           cfg: params.config,
           reservedToolNames: [
-            ...tools.map((tool) => tool.name),
-            ...(clientTools?.map((tool) => tool.function.name) ?? []),
+            ...reservedCoreAndClientNames,
             ...(bundleMcpRuntime?.tools.map((tool) => tool.name) ?? []),
           ],
         })
       : undefined;
     const bundleMcpTools = bundleMcpRuntime?.tools ?? [];
     const bundleLspTools = bundleLspRuntime?.tools ?? [];
-    const bundledCombined = [...bundleMcpTools, ...bundleLspTools];
-    const bundledAfterHook =
-      bundledCombined.length > 0
-        ? await applyBeforeToolsResolveHook(bundledCombined, beforeToolsResolveCtx)
-        : [];
-    const bundleMcpRefSet = new Set(bundleMcpTools);
-    const filteredBundledMcp = bundledAfterHook.filter((t) => bundleMcpRefSet.has(t));
-    const filteredBundledLsp = bundledAfterHook.filter((t) => !bundleMcpRefSet.has(t));
+    const combinedForBeforeToolsResolve = [
+      ...toolsRaw,
+      ...clientToolDefsPre,
+      ...bundleMcpTools,
+      ...bundleLspTools,
+    ];
+    const mergedAfterHook = await applyBeforeToolsResolveHook(
+      combinedForBeforeToolsResolve,
+      beforeToolsResolveCtx,
+    );
+    const toolsAfterHook = mergedAfterHook.filter((t) =>
+      toolsRaw.some((r) => r === t),
+    ) as AnyAgentTool[];
+    clientToolDefsForSession = mergedAfterHook.filter((t) =>
+      clientToolDefsPre.some((r) => r === t),
+    ) as ReturnType<typeof toClientToolDefinitions>;
+    const filteredBundledMcp = mergedAfterHook.filter((t) =>
+      bundleMcpTools.some((r) => r === t),
+    ) as AnyAgentTool[];
+    const filteredBundledLsp = mergedAfterHook.filter((t) =>
+      bundleLspTools.some((r) => r === t),
+    ) as AnyAgentTool[];
+    const tools = sanitizeToolsForGoogle({
+      tools: toolsEnabled ? toolsAfterHook : [],
+      provider: params.provider,
+    });
     const effectiveTools = [...tools, ...filteredBundledMcp, ...filteredBundledLsp];
+    const allowedClientToolNames = new Set(clientToolDefsForSession.map((t) => t.name));
+    const clientToolsForAllowlist = clientTools?.filter((ct) =>
+      allowedClientToolNames.has(ct.function.name),
+    );
     const allowedToolNames = collectAllowedToolNames({
       tools: effectiveTools,
-      clientTools,
+      clientTools: clientToolsForAllowlist,
     });
     logToolSchemasForGoogle({ tools: effectiveTools, provider: params.provider });
 

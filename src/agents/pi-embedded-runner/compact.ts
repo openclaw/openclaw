@@ -495,16 +495,12 @@ export async function compactEmbeddedPiSessionDirect(
       requesterSenderId: params.senderId ?? undefined,
       senderIsOwner: params.senderIsOwner,
     };
-    const toolsAfterHook = await applyBeforeToolsResolveHook(toolsRaw, beforeToolsResolveCtx);
-    const tools = sanitizeToolsForGoogle({
-      tools: toolsEnabled ? toolsAfterHook : [],
-      provider,
-    });
+    const reservedCoreNames = toolsRaw.map((tool) => tool.name);
     const bundleMcpRuntime = toolsEnabled
       ? await createBundleMcpToolRuntime({
           workspaceDir: effectiveWorkspace,
           cfg: params.config,
-          reservedToolNames: tools.map((tool) => tool.name),
+          reservedToolNames: reservedCoreNames,
         })
       : undefined;
     const bundleLspRuntime = toolsEnabled
@@ -512,21 +508,25 @@ export async function compactEmbeddedPiSessionDirect(
           workspaceDir: effectiveWorkspace,
           cfg: params.config,
           reservedToolNames: [
-            ...tools.map((tool) => tool.name),
+            ...reservedCoreNames,
             ...(bundleMcpRuntime?.tools.map((tool) => tool.name) ?? []),
           ],
         })
       : undefined;
     const bundleMcpTools = bundleMcpRuntime?.tools ?? [];
     const bundleLspTools = bundleLspRuntime?.tools ?? [];
-    const bundledCombined = [...bundleMcpTools, ...bundleLspTools];
-    const bundledAfterHook =
-      bundledCombined.length > 0
-        ? await applyBeforeToolsResolveHook(bundledCombined, beforeToolsResolveCtx)
-        : [];
-    const bundleMcpRefSet = new Set(bundleMcpTools);
-    const filteredBundledMcp = bundledAfterHook.filter((t) => bundleMcpRefSet.has(t));
-    const filteredBundledLsp = bundledAfterHook.filter((t) => !bundleMcpRefSet.has(t));
+    const combinedForBeforeToolsResolve = [...toolsRaw, ...bundleMcpTools, ...bundleLspTools];
+    const mergedAfterHook = await applyBeforeToolsResolveHook(
+      combinedForBeforeToolsResolve,
+      beforeToolsResolveCtx,
+    );
+    const toolsAfterHook = mergedAfterHook.filter((t) => toolsRaw.some((r) => r === t));
+    const filteredBundledMcp = mergedAfterHook.filter((t) => bundleMcpTools.some((r) => r === t));
+    const filteredBundledLsp = mergedAfterHook.filter((t) => bundleLspTools.some((r) => r === t));
+    const tools = sanitizeToolsForGoogle({
+      tools: toolsEnabled ? toolsAfterHook : [],
+      provider,
+    });
     const effectiveTools = [...tools, ...filteredBundledMcp, ...filteredBundledLsp];
     const allowedToolNames = collectAllowedToolNames({ tools: effectiveTools });
     logToolSchemasForGoogle({ tools: effectiveTools, provider });
