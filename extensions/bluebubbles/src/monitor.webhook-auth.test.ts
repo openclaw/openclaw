@@ -26,7 +26,7 @@ import {
   EMPTY_DISPATCH_RESULT,
   resetBlueBubblesMonitorTestState,
   type DispatchReplyParams,
-} from "./test-support/monitor.js";
+} from "./test-support/monitor-test-support.js";
 
 // Mock dependencies
 vi.mock("./send.js", () => ({
