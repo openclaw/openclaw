@@ -4,7 +4,6 @@ import {
   prepareScopedSetupConfig,
   type ChannelSetupAdapter,
 } from "openclaw/plugin-sdk/setup";
-import { updateMatrixAccountConfig } from "./matrix/config-update.js";
 import { applyMatrixSetupAccountConfig, validateMatrixSetupInput } from "./setup-config.js";
 import type { CoreConfig } from "./types.js";
 
@@ -12,32 +11,6 @@ const channel = "matrix" as const;
 
 function resolveMatrixSetupAccountId(params: { accountId?: string; name?: string }): string {
   return normalizeAccountId(params.accountId?.trim() || params.name?.trim() || DEFAULT_ACCOUNT_ID);
-}
-
-export function buildMatrixConfigUpdate(
-  cfg: CoreConfig,
-  input: {
-    homeserver?: string;
-    allowPrivateNetwork?: boolean;
-    proxy?: string;
-    userId?: string;
-    accessToken?: string;
-    password?: string;
-    deviceName?: string;
-    initialSyncLimit?: number;
-  },
-): CoreConfig {
-  return updateMatrixAccountConfig(cfg, DEFAULT_ACCOUNT_ID, {
-    enabled: true,
-    homeserver: input.homeserver,
-    allowPrivateNetwork: input.allowPrivateNetwork,
-    proxy: input.proxy,
-    userId: input.userId,
-    accessToken: input.accessToken,
-    password: input.password,
-    deviceName: input.deviceName,
-    initialSyncLimit: input.initialSyncLimit,
-  });
 }
 
 export const matrixSetupAdapter: ChannelSetupAdapter = {
