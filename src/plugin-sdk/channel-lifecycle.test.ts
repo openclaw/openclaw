@@ -23,11 +23,13 @@ function createFakeServer(): FakeServer {
 }
 
 async function expectTaskPending(task: Promise<unknown>) {
-  const early = await Promise.race([
-    task.then(() => "resolved"),
-    new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 25)),
-  ]);
-  expect(early).toBe("pending");
+  let settled = false;
+  void task.finally(() => {
+    settled = true;
+  });
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(settled).toBe(false);
 }
 
 describe("plugin-sdk channel lifecycle helpers", () => {
