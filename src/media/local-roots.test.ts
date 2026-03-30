@@ -302,4 +302,27 @@ describe("local media roots", () => {
 
     expect(roots).toEqual([]);
   });
+
+  it("ignores configured fs roots for sandbox outbound media when requested", () => {
+    const stateDir = path.join("/tmp", "openclaw-sandbox-media-roots-state");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+
+    const roots = getAgentScopedMediaLocalRootsForSources({
+      cfg: {
+        tools: {
+          fs: {
+            roots: [{ path: "/packs/shared/file.txt", kind: "file", access: "ro" }],
+          },
+        },
+      },
+      agentId: "ops",
+      mediaSources: [path.join(stateDir, "sandboxes", "agent-ops", "photo.png")],
+      ignoreConfiguredRoots: true,
+    });
+
+    expectNormalizedRootsContain(roots, [path.join(stateDir, "sandboxes")]);
+    expect(asMediaRoots(roots).map(normalizeMediaRootPath)).not.toContain(
+      normalizeHostPath("/packs/shared/file.txt"),
+    );
+  });
 });

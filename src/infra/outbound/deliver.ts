@@ -1,4 +1,8 @@
-import { sendMediaWithLeadingCaption } from "openclaw/plugin-sdk/reply-payload";
+import {
+  resolveSendableOutboundReplyParts,
+  sendMediaWithLeadingCaption,
+} from "openclaw/plugin-sdk/reply-payload";
+import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import {
   chunkByParagraph,
   chunkMarkdownTextWithMode,
@@ -31,6 +35,7 @@ import {
 } from "../../interactive/payload.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
+import { getAgentScopedMediaLocalRootsForSources } from "../../media/local-roots.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { formatErrorMessage } from "../errors.js";
@@ -735,6 +740,13 @@ async function deliverOutboundPayloadsCore(
   const deps = params.deps;
   const abortSignal = params.abortSignal;
   const mediaSources = collectPayloadMediaSources(outboundPayloadPlan);
+  const sandboxSessionKey = params.session?.key ?? params.mirror?.sessionKey;
+  const ignoreConfiguredRoots = sandboxSessionKey
+    ? resolveSandboxRuntimeStatus({
+        cfg,
+        sessionKey: sandboxSessionKey,
+      }).sandboxed
+    : false;
   const mediaAccess =
     mediaSources.length > 0
       ? resolveAgentScopedOutboundMediaAccess({
@@ -748,6 +760,18 @@ async function deliverOutboundPayloadsCore(
           requesterSenderName: params.session?.requesterSenderName,
           requesterSenderUsername: params.session?.requesterSenderUsername,
           requesterSenderE164: params.session?.requesterSenderE164,
+          ...(ignoreConfiguredRoots
+            ? {
+                mediaAccess: {
+                  localRoots: getAgentScopedMediaLocalRootsForSources({
+                    cfg,
+                    agentId: params.session?.agentId ?? params.mirror?.agentId,
+                    mediaSources,
+                    ignoreConfiguredRoots: true,
+                  }),
+                } satisfies OutboundMediaAccess,
+              }
+            : {}),
         })
       : {};
   const results: OutboundDeliveryResult[] = [];

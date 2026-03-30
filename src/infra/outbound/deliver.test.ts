@@ -650,6 +650,67 @@ describe("deliverOutboundPayloads", () => {
     expect(results.map((r) => r.messageId)).toEqual(["m1", "m2"]);
   });
 
+  it("ignores configured fs roots for sandboxed outbound media delivery", async () => {
+    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
+    const sandboxStateDir = path.join("/tmp", "openclaw-sandbox-deliver-media-roots");
+
+    await withEnvAsync({ OPENCLAW_STATE_DIR: sandboxStateDir }, async () => {
+      await deliverTelegramPayload({
+        sendTelegram,
+        cfg: {
+          channels: { telegram: {} },
+          tools: {
+            fs: {
+              roots: [{ path: "/packs/shared", kind: "dir", access: "ro" }],
+            },
+          },
+          agents: {
+            defaults: {
+              sandbox: {
+                mode: "all",
+              },
+            },
+          },
+        },
+        session: { key: "agent:main:main", agentId: "main" },
+        payload: {
+          text: "hi",
+          mediaUrl: path.join(sandboxStateDir, "sandboxes", "main", "image.png"),
+        },
+      });
+    });
+
+    expect(sendTelegram).toHaveBeenCalledWith(
+      "123",
+      "hi",
+      expect.objectContaining({
+        mediaLocalRoots: expect.arrayContaining([path.join(sandboxStateDir, "sandboxes")]),
+      }),
+    );
+    const sendOpts = sendTelegram.mock.calls[0]?.[2] as { mediaLocalRoots?: string[] } | undefined;
+    expect(sendOpts?.mediaLocalRoots).not.toContain(path.resolve("/packs/shared"));
+  });
+
+  it("includes OpenClaw tmp root in imessage mediaLocalRoots", async () => {
+    const sendIMessage = vi.fn().mockResolvedValue({ messageId: "i1", chatId: "chat-1" });
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "imessage",
+      to: "imessage:+15551234567",
+      payloads: [{ text: "hi", mediaUrl: "https://example.com/x.png" }],
+      deps: { imessage: sendIMessage },
+    });
+
+    expect(sendIMessage).toHaveBeenCalledWith(
+      "imessage:+15551234567",
+      "hi",
+      expect.objectContaining({
+        mediaLocalRoots: expect.arrayContaining([expectedPreferredTmpRoot]),
+      }),
+    );
+  });
+
   it("respects newline chunk mode for plugin text", async () => {
     const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });
     const cfg: OpenClawConfig = {
