@@ -273,8 +273,8 @@ importers:
   extensions/browser:
     dependencies:
       local-browser-bridge:
-        specifier: file:/Users/minseo/Library/Mobile Documents/com~apple~CloudDocs/openclaw-workspace/projects/local-browser-bridge
-        version: file:../../../Users/minseo/Library/Mobile Documents/com~apple~CloudDocs/openclaw-workspace/projects/local-browser-bridge
+        specifier: git+https://github.com/mindsurf0176-ui/local-browser-bridge.git#2d172d131f15b166d8403c68807a35fe9d8d8471
+        version: https://codeload.github.com/mindsurf0176-ui/local-browser-bridge/tar.gz/2d172d131f15b166d8403c68807a35fe9d8d8471
 
   extensions/byteplus: {}
 
@@ -5011,8 +5011,9 @@ packages:
   lit@3.3.2:
     resolution: {integrity: sha512-NF9zbsP79l4ao2SNrH3NkfmFgN/hBYSQo90saIVI1o5GpjAdCPVstVzO1MrLOakHoEhYkrtRjPK6Ob521aoYWQ==}
 
-  local-browser-bridge@file:../../../Users/minseo/Library/Mobile Documents/com~apple~CloudDocs/openclaw-workspace/projects/local-browser-bridge:
-    resolution: {directory: ../../../Users/minseo/Library/Mobile Documents/com~apple~CloudDocs/openclaw-workspace/projects/local-browser-bridge, type: directory}
+  local-browser-bridge@https://codeload.github.com/mindsurf0176-ui/local-browser-bridge/tar.gz/2d172d131f15b166d8403c68807a35fe9d8d8471:
+    resolution: {tarball: https://codeload.github.com/mindsurf0176-ui/local-browser-bridge/tar.gz/2d172d131f15b166d8403c68807a35fe9d8d8471}
+    version: 0.1.0
     hasBin: true
 
   lodash.camelcase@4.3.0:
@@ -11669,7 +11670,7 @@ snapshots:
       lit-element: 4.2.2
       lit-html: 3.3.2
 
-  local-browser-bridge@file:../../../Users/minseo/Library/Mobile Documents/com~apple~CloudDocs/openclaw-workspace/projects/local-browser-bridge: {}
+  local-browser-bridge@https://codeload.github.com/mindsurf0176-ui/local-browser-bridge/tar.gz/2d172d131f15b166d8403c68807a35fe9d8d8471: {}
 
   lodash.camelcase@4.3.0: {}
 

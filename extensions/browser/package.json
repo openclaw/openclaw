@@ -5,7 +5,7 @@
   "description": "OpenClaw browser tool plugin",
   "type": "module",
   "dependencies": {
-    "local-browser-bridge": "file:/Users/minseo/Library/Mobile Documents/com~apple~CloudDocs/openclaw-workspace/projects/local-browser-bridge"
+    "local-browser-bridge": "git+https://github.com/mindsurf0176-ui/local-browser-bridge.git#2d172d131f15b166d8403c68807a35fe9d8d8471"
   },
   "openclaw": {
     "extensions": [
