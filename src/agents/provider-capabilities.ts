@@ -31,7 +31,19 @@ const DEFAULT_PROVIDER_CAPABILITIES: ProviderCapabilities = {
   openAiCompatTurnValidation: true,
   geminiThoughtSignatureSanitization: false,
   transcriptToolCallIdMode: "default",
-  transcriptToolCallIdModelHints: [],
+  // Mistral models require strict 9-char alphanumeric tool call IDs regardless
+  // of the routing provider (e.g. OpenRouter, custom proxies).  Include these
+  // hints in the defaults so the strict9 sanitization triggers even when the
+  // provider entry itself does not specify them.
+  transcriptToolCallIdModelHints: [
+    "mistral",
+    "mixtral",
+    "codestral",
+    "pixtral",
+    "devstral",
+    "ministral",
+    "mistralai",
+  ],
   geminiThoughtSignatureModelHints: [],
   dropThinkingBlockModelHints: [],
 };
