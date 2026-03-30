@@ -1,12 +1,12 @@
 # PaddleOCR Document Parsing Output Schema
 
-This document defines the output envelope returned by `vl_caller.py`.
+This document defines the output envelope returned by `layout_caller.py`.
 
-By default, `vl_caller.py` saves the JSON envelope to a unique file under the system temp directory and prints the absolute saved path to `stderr`. Use `--output` when you need a custom destination, or `--stdout` when you want to skip file saving and print JSON directly.
+By default, `layout_caller.py` saves the JSON envelope to a unique file under the system temp directory and prints the absolute saved path to `stderr`. Use `--output` when you need a custom destination, or `--stdout` when you want to skip file saving and print JSON directly.
 
 ## Output Envelope
 
-`vl_caller.py` wraps provider response in a stable structure:
+`layout_caller.py` wraps provider response in a stable structure:
 
 ```json
 {
@@ -83,23 +83,23 @@ Paths are relative to the output envelope root.
 
 ## Text Extraction
 
-`vl_caller.py` extracts top-level `text` from `result.result.layoutParsingResults[n].markdown.text` and joins pages with `\n\n`.
+`layout_caller.py` extracts top-level `text` from `result.result.layoutParsingResults[n].markdown.text` and joins pages with `\n\n`.
 
 ## Command Examples
 
 ```bash
 # Parse document from URL (result auto-saves to the system temp directory)
-python scripts/vl_caller.py --file-url "URL" --pretty
+python scripts/layout_caller.py --file-url "URL" --pretty
 
 # Parse local file (result auto-saves to the system temp directory)
-python scripts/vl_caller.py --file-path "doc.pdf" --pretty
+python scripts/layout_caller.py --file-path "doc.pdf" --pretty
 
 # Parse with explicit file type
-python scripts/vl_caller.py --file-url "URL" --file-type 1 --pretty
+python scripts/layout_caller.py --file-url "URL" --file-type 1 --pretty
 
 # Save result to a custom file path
-python scripts/vl_caller.py --file-url "URL" --output "./result.json" --pretty
+python scripts/layout_caller.py --file-url "URL" --output "./result.json" --pretty
 
 # Print JSON to stdout without saving a file
-python scripts/vl_caller.py --file-url "URL" --stdout --pretty
+python scripts/layout_caller.py --file-url "URL" --stdout --pretty
 ```

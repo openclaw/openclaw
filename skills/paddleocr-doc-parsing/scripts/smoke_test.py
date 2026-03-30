@@ -131,8 +131,8 @@ def main() -> int:
     print("Smoke Test PASSED")
     print("=" * 60)
     print("\nNext steps:")
-    print('  python scripts/vl_caller.py --file-url "URL"')
-    print('  python scripts/vl_caller.py --file-path "doc.pdf"')
+    print('  python scripts/layout_caller.py --file-url "URL"')
+    print('  python scripts/layout_caller.py --file-path "doc.pdf"')
     print(
         "  Results are auto-saved to the system temp directory; the caller prints the saved path."
     )

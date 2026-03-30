@@ -55,11 +55,6 @@ pip install -r requirements.txt
 1. **Identify the input source**:
    - User provides URL: Use the `--file-url` parameter
    - User provides local file path: Use the `--file-path` parameter
-   - User uploads image: Save it first, then use `--file-path`
-
-   **Input type note**:
-   - Supported file types depend on the model and endpoint configuration.
-   - Follow the official endpoint/API documentation for the exact supported formats.
 
 2. **Execute OCR**:
 
@@ -188,7 +183,7 @@ python scripts/ocr_caller.py --file-url "https://example.com/input" --stdout --p
 
 1. **Show the exact error message** to the user.
 
-2. **Guide the user to obtain credentials**: Visit the [PaddleOCR website](https://www.paddleocr.com), click **API**, select the `PP-OCRv5` model, then copy the `API_URL` and `Token`. They map to these environment variables:
+2. **Guide the user to obtain credentials**: Visit the [PaddleOCR website](https://www.paddleocr.com), click **API**, select the `PP-OCRv5` model, select the language, then copy the `API_URL` and `Token`. They map to these environment variables:
    - `PADDLEOCR_OCR_API_URL` — full endpoint URL ending with `/ocr`
    - `PADDLEOCR_ACCESS_TOKEN` — 40-character alphanumeric string
 

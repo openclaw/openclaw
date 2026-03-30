@@ -65,26 +65,22 @@ pip install -r requirements-optimize.txt
    - User provides URL: Use the `--file-url` parameter
    - User provides local file path: Use the `--file-path` parameter
 
-   **Input type note**:
-   - Supported file types depend on the model and endpoint configuration.
-   - Always follow the file type constraints documented by your endpoint API.
-
 2. **Execute document parsing**:
 
    ```bash
-   python scripts/vl_caller.py --file-url "URL provided by user" --pretty
+   python scripts/layout_caller.py --file-url "URL provided by user" --pretty
    ```
 
    Or for local files:
 
    ```bash
-   python scripts/vl_caller.py --file-path "file path" --pretty
+   python scripts/layout_caller.py --file-path "file path" --pretty
    ```
 
    **Optional: explicitly set file type**:
 
    ```bash
-   python scripts/vl_caller.py --file-url "URL provided by user" --file-type 0 --pretty
+   python scripts/layout_caller.py --file-url "URL provided by user" --file-type 0 --pretty
    ```
 
    - `--file-type 0`: PDF
@@ -172,7 +168,7 @@ For the complete schema and field-level details, see `references/output_schema.m
 **Example 1: Extract Full Document Text**
 
 ```bash
-python scripts/vl_caller.py \
+python scripts/layout_caller.py \
   --file-url "https://example.com/paper.pdf" \
   --pretty
 ```
@@ -185,7 +181,7 @@ Then use:
 **Example 2: Extract Structured Page Data**
 
 ```bash
-python scripts/vl_caller.py \
+python scripts/layout_caller.py \
   --file-path "./financial_report.pdf" \
   --pretty
 ```
@@ -197,7 +193,7 @@ Then use:
 **Example 3: Print JSON to stdout (without saving to file)**
 
 ```bash
-python scripts/vl_caller.py \
+python scripts/layout_caller.py \
   --file-url "URL" \
   --stdout \
   --pretty
@@ -245,7 +241,7 @@ For large image files, compress before uploading — this reduces upload time an
 
 ```bash
 python scripts/optimize_file.py input.png output.jpg --quality 85
-python scripts/vl_caller.py --file-path "output.jpg" --pretty
+python scripts/layout_caller.py --file-path "output.jpg" --pretty
 ```
 
 `--quality` controls JPEG/WebP lossy compression (1-100, default 85); it has no effect on PNG output. Use `--target-size` (in MB, default 20) to set the max file size — the script iteratively downscales until the target is met.
@@ -257,7 +253,7 @@ Requires optional dependencies: `pip install -r requirements-optimize.txt`
 For very large local files, prefer `--file-url` over `--file-path` to avoid base64 encoding overhead:
 
 ```bash
-python scripts/vl_caller.py --file-url "https://your-server.com/large_file.pdf"
+python scripts/layout_caller.py --file-url "https://your-server.com/large_file.pdf"
 ```
 
 #### Process Specific Pages (PDF Only)
@@ -272,7 +268,7 @@ python scripts/split_pdf.py large.pdf pages_1_5.pdf --pages "1-5"
 python scripts/split_pdf.py large.pdf selected_pages.pdf --pages "1-5,8,10-12"
 
 # Then process the smaller file
-python scripts/vl_caller.py --file-path "pages_1_5.pdf"
+python scripts/layout_caller.py --file-path "pages_1_5.pdf"
 ```
 
 ### Error Handling

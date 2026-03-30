@@ -170,7 +170,7 @@ Supported formats:
 
     print(f"\nOptimized file saved to: {output_path}")
     print("\nYou can now process with:")
-    print(f'  python scripts/vl_caller.py --file-path "{output_path}" --pretty')
+    print(f'  python scripts/layout_caller.py --file-path "{output_path}" --pretty')
 
 
 if __name__ == "__main__":
