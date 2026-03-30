@@ -338,3 +338,18 @@ describe("chat empty state logic (#45707)", () => {
     });
   });
 });
+
+/**
+ * Test Coverage Note:
+ *
+ * This test file verifies the hasSessionActivity and shouldShowWelcomeState logic
+ * that determines when to show the welcome overlay (#45707 fix).
+ *
+ * Full chat.ts integration testing is covered by:
+ * - ui/src/ui/views/chat.test.ts - Unit tests for chat rendering
+ * - ui/src/ui/views/chat.browser.test.ts - Browser-based integration tests
+ *
+ * The logic tested here is extracted from chat.ts (lines 893-905) to ensure
+ * the empty state fix has dedicated regression tests without requiring
+ * full UI rendering infrastructure.
+ */
