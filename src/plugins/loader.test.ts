@@ -2045,12 +2045,12 @@ module.exports = { id: "skipped-scoped-only", register() { throw new Error("skip
   });
 } };`,
         assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+          // Same plugin re-registering the same channel is now idempotent (silent update).
           expect(registry.channels.filter((entry) => entry.plugin.id === "demo")).toHaveLength(1);
-          expectRegistryErrorDiagnostic({
-            registry,
-            pluginId: "channel-dup",
-            message: "channel already registered: demo (channel-dup)",
-          });
+          // The second registration should update the channel in place with the latest metadata.
+          expect(
+            registry.channels.find((entry) => entry.plugin.id === "demo")?.plugin.meta?.label,
+          ).toBe("Demo Duplicate");
         },
       },
       {
