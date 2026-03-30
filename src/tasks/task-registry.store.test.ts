@@ -27,7 +27,7 @@ function createStoredTask(): TaskRecord {
 
 describe("task-registry store runtime", () => {
   afterEach(() => {
-    resetTaskRegistryForTests({ persist: false });
+    resetTaskRegistryForTests();
   });
 
   it("uses the configured task store for restore and save", () => {
@@ -101,6 +101,27 @@ describe("task-registry store runtime", () => {
     expect(events[2]).toMatchObject({
       kind: "deleted",
       taskId: created.taskId,
+    });
+  });
+
+  it("restores persisted tasks from the default sqlite store", () => {
+    const created = createTaskRecord({
+      runtime: "cron",
+      requesterSessionKey: "agent:main:main",
+      sourceId: "job-123",
+      runId: "run-sqlite",
+      task: "Run nightly cron",
+      status: "running",
+      deliveryStatus: "not_applicable",
+      notifyPolicy: "silent",
+    });
+
+    resetTaskRegistryForTests({ persist: false });
+
+    expect(findTaskByRunId("run-sqlite")).toMatchObject({
+      taskId: created.taskId,
+      sourceId: "job-123",
+      task: "Run nightly cron",
     });
   });
 });
