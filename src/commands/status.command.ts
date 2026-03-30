@@ -544,6 +544,7 @@ export async function statusCommand(
     }).trimEnd(),
   );
   if (summary.taskAudit.errors > 0) {
+    runtime.log("");
     runtime.log(
       theme.muted(`Task maintenance: ${formatCliCommand("openclaw tasks maintenance --apply")}`),
     );

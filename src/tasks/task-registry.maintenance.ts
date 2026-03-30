@@ -108,7 +108,7 @@ function resolveCleanupAfter(task: TaskRecord): number {
 }
 
 function markTaskLost(task: TaskRecord, now: number): TaskRecord {
-  const cleanupAfter = task.cleanupAfter ?? resolveCleanupAfter(projectTaskLost(task, now));
+  const cleanupAfter = task.cleanupAfter ?? projectTaskLost(task, now).cleanupAfter;
   const updated =
     updateTaskRecordById(task.taskId, {
       status: "lost",
