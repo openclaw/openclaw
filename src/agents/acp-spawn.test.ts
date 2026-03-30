@@ -1069,6 +1069,182 @@ describe("spawnAcpDirect", () => {
     expect(expectFailedSpawn(result, "error").error).toContain("set `acp.defaultAgent`");
   });
 
+  it("resolves agent profile alias to underlying ACP harness ID", async () => {
+    replaceSpawnConfig({
+      ...hoisted.state.cfg,
+      acp: {
+        enabled: true,
+        backend: "acpx",
+        allowedAgents: ["claude"],
+      },
+      agents: {
+        list: [
+          {
+            id: "analyst",
+            runtime: {
+              type: "acp" as const,
+              acp: { agent: "claude" },
+            },
+          },
+        ],
+      },
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Analyze data",
+        agentId: "analyst",
+      },
+      {
+        agentSessionKey: "agent:main:telegram:direct:123",
+        agentChannel: "telegram",
+        agentAccountId: "default",
+        agentTo: "telegram:123",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    // The session key should contain the resolved harness ID "claude", not the alias "analyst"
+    expect(result.childSessionKey).toMatch(/^agent:claude:acp:/);
+    expect(hoisted.initializeSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({ agent: "claude", cwd: undefined }),
+    );
+  });
+
+  it("inherits profile workspace cwd when caller does not specify cwd", async () => {
+    replaceSpawnConfig({
+      ...hoisted.state.cfg,
+      acp: {
+        enabled: true,
+        backend: "acpx",
+        allowedAgents: ["claude"],
+      },
+      agents: {
+        list: [
+          {
+            id: "analyst",
+            workspace: "/workspace/analysis",
+            runtime: {
+              type: "acp" as const,
+              acp: { agent: "claude", cwd: "/workspace/analysis" },
+            },
+          },
+        ],
+      },
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Analyze data",
+        agentId: "analyst",
+      },
+      {
+        agentSessionKey: "agent:main:telegram:direct:123",
+        agentChannel: "telegram",
+        agentAccountId: "default",
+        agentTo: "telegram:123",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(hoisted.initializeSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({ cwd: "/workspace/analysis" }),
+    );
+  });
+
+  it("prefers explicit cwd over profile workspace when both are provided", async () => {
+    replaceSpawnConfig({
+      ...hoisted.state.cfg,
+      acp: {
+        enabled: true,
+        backend: "acpx",
+        allowedAgents: ["claude"],
+      },
+      agents: {
+        list: [
+          {
+            id: "analyst",
+            runtime: {
+              type: "acp" as const,
+              acp: { agent: "claude", cwd: "/workspace/analysis" },
+            },
+          },
+        ],
+      },
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "Analyze data",
+        agentId: "analyst",
+        cwd: "/override/workspace",
+      },
+      {
+        agentSessionKey: "agent:main:telegram:direct:123",
+        agentChannel: "telegram",
+        agentAccountId: "default",
+        agentTo: "telegram:123",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(hoisted.initializeSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({ cwd: "/override/workspace" }),
+    );
+  });
+
+  it("inherits profile cwd from defaultAgent when agentId is omitted", async () => {
+    replaceSpawnConfig({
+      ...hoisted.state.cfg,
+      acp: {
+        enabled: true,
+        backend: "acpx",
+        defaultAgent: "codex",
+        allowedAgents: ["codex"],
+      },
+      agents: {
+        list: [
+          {
+            id: "codex",
+            runtime: {
+              type: "acp" as const,
+              acp: { agent: "codex", cwd: "/workspace/default-agent" },
+            },
+          },
+        ],
+      },
+    });
+
+    const result = await spawnAcpDirect(
+      {
+        task: "hello",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(hoisted.initializeSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({ cwd: "/workspace/default-agent" }),
+    );
+  });
+
+  it("passes raw harness ID through when no matching agent profile exists", async () => {
+    const result = await spawnAcpDirect(
+      {
+        task: "hello",
+        agentId: "codex",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(result.childSessionKey).toMatch(/^agent:codex:acp:/);
+  });
+
   it("fails fast when Discord ACP thread spawn is disabled", async () => {
     replaceSpawnConfig({
       ...hoisted.state.cfg,
