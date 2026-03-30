@@ -17,8 +17,9 @@ import { defaultRuntime } from "../runtime.js";
 import { parseMessageWithAttachments } from "./chat-attachments.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./server-methods/attachment-normalize.js";
 import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
-import { loadSessionEntry, migrateAndPruneGatewaySessionStoreKey, resolveSessionModelRef } from "./session-utils.js";
+import { loadSessionEntry, migrateAndPruneGatewaySessionStoreKey} from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
+import { deleteMediaBuffer } from "../media/store.ts";
 
 const MAX_EXEC_EVENT_OUTPUT_CHARS = 180;
 const MAX_NOTIFICATION_EVENT_TEXT_CHARS = 120;
@@ -380,16 +381,25 @@ export const handleNodeEvent = async (ctx: NodeEventContext, nodeId: string, evt
           message = parsed.message.trim();
           images = parsed.images;
           if (message.length > 20_000) {
-            ctx.logGateway.warn(`agent.request message exceeds limit after attachment parsing (length=${message.length})`);
-            return;
+          ctx.logGateway.warn(`agent.request message exceeds limit after attachment parsing (length=${message.length})`);
+          if (parsed.offloadedRefs && parsed.offloadedRefs.length > 0) {
+            for (const ref of parsed.offloadedRefs) {
+              try {
+                await deleteMediaBuffer(ref.id); 
+              } catch (cleanupErr) {
+                ctx.logGateway.warn(`Failed to cleanup orphaned media ${ref.id}: ${cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr)}`);
+              }
+            }
           }
+          return;
+        }
         } catch (err) {
           ctx.logGateway.warn(`agent.request attachment parse failed: ${err instanceof Error ? err.message : String(err)}`);
           return;
         }
       }
 
-      if (!message) {
+      if (!message && images.length === 0) {
         return;
       }
 
