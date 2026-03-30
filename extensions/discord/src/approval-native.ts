@@ -24,6 +24,17 @@ export function extractDiscordChannelId(sessionKey?: string | null): string | nu
   return match ? match[1] : null;
 }
 
+function extractDiscordSessionKind(sessionKey?: string | null): "channel" | "group" | "dm" | null {
+  if (!sessionKey) {
+    return null;
+  }
+  const match = sessionKey.match(/discord:(channel|group|dm):/);
+  if (!match) {
+    return null;
+  }
+  return match[1] as "channel" | "group" | "dm";
+}
+
 function isExecApprovalRequest(request: ApprovalRequest): request is ExecApprovalRequest {
   return "command" in request.request;
 }
@@ -82,11 +93,17 @@ function resolveDiscordOriginTarget(params: {
   accountId?: string | null;
   request: ApprovalRequest;
 }) {
+  const sessionKind = extractDiscordSessionKind(params.request.request.sessionKey?.trim() || null);
   const turnSourceChannel = params.request.request.turnSourceChannel?.trim().toLowerCase() || "";
-  const turnSourceTo = normalizeDiscordOriginChannelId(params.request.request.turnSourceTo);
+  const rawTurnSourceTo = params.request.request.turnSourceTo?.trim() || "";
+  const turnSourceTo = normalizeDiscordOriginChannelId(rawTurnSourceTo);
   const turnSourceAccountId = params.request.request.turnSourceAccountId?.trim() || "";
+  const hasExplicitOriginTarget = /^(?:channel|group):/i.test(rawTurnSourceTo);
   const turnSourceTarget =
-    turnSourceChannel === "discord" && turnSourceTo
+    turnSourceChannel === "discord" &&
+    turnSourceTo &&
+    sessionKind !== "dm" &&
+    (hasExplicitOriginTarget || sessionKind === "channel" || sessionKind === "group")
       ? {
           to: turnSourceTo,
           accountId: turnSourceAccountId || undefined,
