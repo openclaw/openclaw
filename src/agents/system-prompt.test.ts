@@ -240,6 +240,18 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
+  it("instructs agent to show /approve to user and never execute via exec", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+    });
+
+    expect(prompt).toContain("NEVER execute /approve via the exec tool");
+    expect(prompt).toContain(
+      "/approve is a slash command handled by the chat input, not a shell command",
+    );
+    expect(prompt).toContain("show the concrete /approve command from tool output");
+  });
+
   it("lists available tools when provided", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

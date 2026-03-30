@@ -488,6 +488,26 @@ describe("exec tool backgrounding", () => {
   });
 });
 
+describe("exec /approve guard", () => {
+  it("rejects /approve commands to prevent infinite approval loop", async () => {
+    await expect(executeExecCommand(execTool, "/approve abc123 allow-always")).rejects.toThrow(
+      "/approve is a chat slash command, not a shell command",
+    );
+  });
+
+  it("rejects /approve with leading whitespace", async () => {
+    await expect(executeExecCommand(execTool, "  /approve xyz allow-once")).rejects.toThrow(
+      "/approve is a chat slash command, not a shell command",
+    );
+  });
+
+  it("does not reject commands that merely contain /approve in the middle", async () => {
+    // A legitimate command like `echo /approve` should not be blocked
+    const result = await executeExecCommand(execTool, shellEcho("/approve test"));
+    expect(readTextContent(result.content)).toBeDefined();
+  });
+});
+
 describe("exec exit codes", () => {
   useCapturedEnv([...SHELL_ENV_KEYS], applyDefaultShellEnv);
 

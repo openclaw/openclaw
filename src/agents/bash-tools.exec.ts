@@ -1,12 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
-import {
-  type ExecHost,
-  loadExecApprovals,
-  maxAsk,
-  minSecurity,
-} from "../infra/exec-approvals.js";
+import { type ExecHost, loadExecApprovals, maxAsk, minSecurity } from "../infra/exec-approvals.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import { sanitizeHostExecEnvWithDiagnostics } from "../infra/host-env-security.js";
 import {
@@ -254,6 +249,16 @@ export function createExecTool(
 
       if (!params.command) {
         throw new Error("Provide a command to start.");
+      }
+
+      // Guard: /approve is a slash command for the chat input, not a shell command.
+      // Executing it via exec triggers a new approval-pending, causing an infinite loop.
+      // See: https://github.com/openclaw/openclaw/issues/57432
+      if (/^\s*\/approve\b/.test(params.command)) {
+        throw new Error(
+          "/approve is a chat slash command, not a shell command. " +
+            "Show the /approve command to the user as a chat message instead of executing it via exec.",
+        );
       }
 
       const maxOutput = DEFAULT_MAX_OUTPUT;

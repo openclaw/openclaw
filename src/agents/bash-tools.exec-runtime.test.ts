@@ -127,6 +127,44 @@ describe("emitExecSystemEvent", () => {
   });
 });
 
+describe("buildApprovalPendingMessage", () => {
+  let buildApprovalPendingMessage: typeof import("./bash-tools.exec-runtime.js").buildApprovalPendingMessage;
+
+  beforeEach(async () => {
+    ({ buildApprovalPendingMessage } = await import("./bash-tools.exec-runtime.js"));
+  });
+
+  it("includes explicit instruction not to execute /approve via exec", () => {
+    const message = buildApprovalPendingMessage({
+      approvalSlug: "abc123",
+      approvalId: "full-id-abc123",
+      command: "rm -rf /tmp/test",
+      cwd: "/home/user",
+      host: "gateway",
+    });
+
+    expect(message).toContain("/approve abc123 allow-once|allow-always|deny");
+    expect(message).toContain("Do NOT execute /approve via the exec tool");
+    expect(message).toContain("Show this /approve command to the user as a chat message");
+  });
+
+  it("includes the command block and host info", () => {
+    const message = buildApprovalPendingMessage({
+      approvalSlug: "xyz",
+      approvalId: "full-xyz",
+      command: "echo hello",
+      cwd: "/tmp",
+      host: "node",
+      nodeId: "node-1",
+    });
+
+    expect(message).toContain("echo hello");
+    expect(message).toContain("Host: node");
+    expect(message).toContain("Node: node-1");
+    expect(message).toContain("Approval required (id xyz, full full-xyz)");
+  });
+});
+
 describe("formatExecFailureReason", () => {
   it("formats timeout guidance with the configured timeout", () => {
     expect(

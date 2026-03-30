@@ -363,6 +363,9 @@ export function buildApprovalPendingMessage(params: {
   lines.push("Background mode requires pre-approved policy (allow-always or ask=off).");
   lines.push(`Reply with: /approve ${params.approvalSlug} allow-once|allow-always|deny`);
   lines.push("If the short code is ambiguous, use the full id in /approve.");
+  lines.push(
+    "IMPORTANT: Show this /approve command to the user as a chat message. Do NOT execute /approve via the exec tool.",
+  );
   return lines.join("\n");
 }
 
