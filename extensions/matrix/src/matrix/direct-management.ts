@@ -92,8 +92,12 @@ async function classifyDirectRoomCandidate(params: {
   return {
     roomId: params.roomId,
     joinedMembers: evidence.joinedMembers,
-    strict: evidence.strict,
-    explicit: evidence.strict && (params.source === "account-data" || evidence.viaMemberState),
+    strict:
+      evidence.strict && (params.source === "account-data" || evidence.memberStateFlag !== false),
+    explicit:
+      evidence.strict &&
+      (params.source === "account-data" || evidence.memberStateFlag !== false) &&
+      (params.source === "account-data" || evidence.viaMemberState),
     source: params.source,
   };
 }
