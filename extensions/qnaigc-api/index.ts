@@ -169,7 +169,7 @@ export default definePluginEntry({
           flagName: "--qnaigc-api-key",
           envVar: "QNAIGC_API_KEY",
           promptMessage: "Enter your QNAIGC API key",
-          defaultModel: "deepseek/deepseek-v3.2-251201",
+          defaultModel: "qnaigc-api/deepseek/deepseek-v3.2-251201",
         }),
       ],
       catalog: {

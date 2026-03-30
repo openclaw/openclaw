@@ -13,6 +13,7 @@
       "choiceLabel": "QNAIGC API key",
       "groupId": "qnaigc-api",
       "groupLabel": "QNAIGC",
+      "optionKey": "qnaigcApiKey",
       "cliFlag": "--qnaigc-api-key",
       "cliOption": "--qnaigc-api-key <key>",
       "cliDescription": "QNAIGC API key (or set QNAIGC_API_KEY)"
