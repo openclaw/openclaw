@@ -107,7 +107,7 @@ All fields are optional unless noted:
 - `after` (`string`): updated text. Required with `before` when `patch` is omitted.
 - `patch` (`string`): unified diff text. Mutually exclusive with `before` and `after`.
 - `path` (`string`): display filename for before and after mode.
-- `lang` (`string`): language override hint for before and after mode.
+- `lang` (`string`): language override hint for before and after mode. Unknown values fall back to plain text.
 - `title` (`string`): viewer title override.
 - `mode` (`"view" | "file" | "both"`): output mode. Defaults to plugin default `defaults.mode`.
   Deprecated alias: `"image"` behaves like `"file"` and is still accepted for backward compatibility.
