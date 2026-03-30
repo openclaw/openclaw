@@ -47,6 +47,7 @@ const log = createSubsystemLogger("memory");
 
 const SNIPPET_HEADER_RE = /@@\s*-([0-9]+),([0-9]+)/;
 const SEARCH_PENDING_UPDATE_WAIT_MS = 500;
+const QMD_WATCH_STABILITY_MS = 200;
 const MAX_QMD_OUTPUT_CHARS = 200_000;
 const NUL_MARKER_RE = /(?:\^@|\\0|\\x00|\\u0000|null\s*byte|nul\s*byte)/i;
 const QMD_EMBED_BACKOFF_BASE_MS = 60_000;
@@ -1109,7 +1110,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       ignoreInitial: true,
       ignored: (watchPath) => shouldIgnoreMemoryWatchPath(String(watchPath)),
       awaitWriteFinish: {
-        stabilityThreshold: this.syncSettings.sync.watchDebounceMs,
+        stabilityThreshold: QMD_WATCH_STABILITY_MS,
         pollInterval: 100,
       },
     });
@@ -1123,11 +1124,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private resolveCollectionWatchPath(collection: ManagedCollection): string {
-    const normalizedPath = path.normalize(collection.path);
-    if (!collection.pattern.includes("*")) {
-      return path.join(normalizedPath, collection.pattern);
-    }
-    return path.join(normalizedPath, collection.pattern);
+    return path.join(path.normalize(collection.path), collection.pattern);
   }
 
   private scheduleWatchSync(): void {
@@ -1153,8 +1150,10 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (!key || this.sessionWarm.has(key)) {
       return;
     }
-    await this.sync({ reason: "session-start" });
     this.sessionWarm.add(key);
+    void this.sync({ reason: "session-start" }).catch((err) => {
+      log.warn(`qmd session-start sync failed: ${String(err)}`);
+    });
   }
 
   private async maybeSyncDirtySearchState(): Promise<void> {

@@ -286,6 +286,56 @@ describe("QmdMemoryManager", () => {
     expect(updateCalls).toHaveLength(1);
   });
 
+  it("does not block first search on session-start sync completion", async () => {
+    vi.useFakeTimers();
+    cfg = {
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          memorySearch: {
+            provider: "openai",
+            model: "mock-embed",
+            store: { path: path.join(workspaceDir, "index.sqlite"), vector: { enabled: false } },
+            sync: { watch: false, onSessionStart: true, onSearch: false },
+          },
+        },
+        list: [{ id: agentId, default: true, workspace: workspaceDir }],
+      },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 0, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    let releaseUpdate: (() => void) | null = null;
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "update") {
+        const child = createMockChild({ autoClose: false });
+        releaseUpdate = () => child.closeWith(0);
+        return child;
+      }
+      if (args[0] === "search" || args[0] === "query" || args[0] === "vsearch") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(child, "stdout", "[]");
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager({ mode: "full" });
+    const searchPromise = manager.search("hello", { sessionKey: "session-b" });
+
+    await vi.advanceTimersByTimeAsync(500);
+    await expect(searchPromise).resolves.toEqual([]);
+
+    releaseUpdate?.();
+    await manager.close();
+  });
+
   it("runs qmd sync when watched collection files change", async () => {
     vi.useFakeTimers();
     cfg = {
