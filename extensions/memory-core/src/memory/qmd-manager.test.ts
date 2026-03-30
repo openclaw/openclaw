@@ -610,6 +610,55 @@ describe("QmdMemoryManager", () => {
     expect(addCalls).toHaveLength(0);
   });
 
+  it("rebinds collection when qmd text output exposes a changed pattern without a path", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "collection" && args[1] === "list") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(
+          child,
+          "stdout",
+          ["workspace-main (qmd://workspace-main/)", "  Pattern:  *.txt", "  Files:    17"].join(
+            "\n",
+          ),
+        );
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager({ mode: "full" });
+    await manager.close();
+
+    const commands = spawnMock.mock.calls.map((call: unknown[]) => call[1] as string[]);
+    const removeCalls = commands.filter(
+      (args) => args[0] === "collection" && args[1] === "remove" && args[2] === "workspace-main",
+    );
+    expect(removeCalls).toHaveLength(1);
+
+    const addCall = commands.find((args) => {
+      if (args[0] !== "collection" || args[1] !== "add") {
+        return false;
+      }
+      const nameIdx = args.indexOf("--name");
+      return nameIdx >= 0 && args[nameIdx + 1] === "workspace-main";
+    });
+    expect(addCall).toBeDefined();
+    expect(addCall?.[2]).toBe(workspaceDir);
+    expect(addCall).toContain("**/*.md");
+  });
+
   it("migrates unscoped legacy collections before adding scoped names", async () => {
     cfg = {
       ...cfg,

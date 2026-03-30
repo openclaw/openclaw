@@ -734,16 +734,17 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private shouldRebindCollection(collection: ManagedCollection, listed: ListedCollection): boolean {
+    if (typeof listed.pattern === "string" && listed.pattern !== collection.pattern) {
+      return true;
+    }
     if (!listed.path) {
       // Older qmd versions may only return names from `collection list --json`.
-      // Do not perform destructive rebinds when metadata is incomplete: remove+add
-      // can permanently drop collections if add fails (for example on timeout).
+      // If the pattern is also missing, do not perform destructive rebinds when
+      // metadata is incomplete: remove+add can permanently drop collections if
+      // add fails (for example on timeout).
       return false;
     }
     if (!this.pathsMatch(listed.path, collection.path)) {
-      return true;
-    }
-    if (typeof listed.pattern === "string" && listed.pattern !== collection.pattern) {
       return true;
     }
     return false;
