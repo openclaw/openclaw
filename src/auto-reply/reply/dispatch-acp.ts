@@ -74,7 +74,9 @@ async function resolveAcpAttachments(
   ctx: FinalizedMsgContext,
   cfg: OpenClawConfig,
 ): Promise<AcpTurnAttachment[]> {
-  const mediaAttachments = normalizeAttachments(ctx);
+  const mediaAttachments = normalizeAttachments(ctx).map((attachment) =>
+    attachment.path?.trim() ? { ...attachment, url: undefined } : attachment,
+  );
   const cache = new MediaAttachmentCache(mediaAttachments, {
     localPathRoots: resolveMediaAttachmentLocalRoots({ cfg, ctx }),
   });
