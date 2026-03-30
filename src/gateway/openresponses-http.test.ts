@@ -114,7 +114,8 @@ async function ensureResponseConsumed(res: Response) {
 const WEATHER_TOOL = [
   {
     type: "function",
-    function: { name: "get_weather", description: "Get weather" },
+    name: "get_weather",
+    description: "Get weather",
   },
 ] as const;
 
@@ -511,11 +512,14 @@ describe("OpenResponses HTTP API (e2e)", () => {
         tools: [
           {
             type: "function",
-            function: { name: "get_weather", description: "Get weather" },
+            name: "get_weather",
+            description: "Get weather",
           },
           {
             type: "function",
-            function: { name: "get_time", description: "Get time" },
+            name: "get_time",
+            description: "Get time",
+            strict: true,
           },
         ],
         tool_choice: { type: "function", function: { name: "get_time" } },
@@ -523,10 +527,16 @@ describe("OpenResponses HTTP API (e2e)", () => {
       expect(resToolChoice.status).toBe(200);
       const optsToolChoice = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
       const clientTools =
-        (optsToolChoice as { clientTools?: Array<{ function?: { name?: string } }> } | undefined)
-          ?.clientTools ?? [];
+        (
+          optsToolChoice as
+            | {
+                clientTools?: Array<{ function?: { name?: string; strict?: boolean } }>;
+              }
+            | undefined
+        )?.clientTools ?? [];
       expect(clientTools).toHaveLength(1);
       expect(clientTools[0]?.function?.name).toBe("get_time");
+      expect(clientTools[0]?.function?.strict).toBe(true);
       await ensureResponseConsumed(resToolChoice);
 
       const resUnknownTool = await postResponses(port, {
