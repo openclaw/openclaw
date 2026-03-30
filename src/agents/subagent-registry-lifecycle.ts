@@ -377,27 +377,26 @@ export function createSubagentRegistryLifecycleController(params: {
       });
     };
 
-    void params
-      .runSubagentAnnounceFlow({
-        childSessionKey: entry.childSessionKey,
-        childRunId: entry.runId,
-        requesterSessionKey: entry.requesterSessionKey,
-        requesterOrigin,
-        requesterDisplayKey: entry.requesterDisplayKey,
-        task: entry.task,
-        timeoutMs: params.subagentAnnounceTimeoutMs,
-        cleanup: entry.cleanup,
-        roundOneReply: entry.frozenResultText ?? undefined,
-        fallbackReply: entry.fallbackFrozenResultText ?? undefined,
-        waitForCompletion: false,
-        startedAt: entry.startedAt,
-        endedAt: entry.endedAt,
-        label: entry.label,
-        outcome: entry.outcome,
-        spawnMode: entry.spawnMode,
-        expectsCompletionMessage: entry.expectsCompletionMessage,
-        wakeOnDescendantSettle: entry.wakeOnDescendantSettle === true,
-      })
+    void params.runSubagentAnnounceFlow({
+      childSessionKey: entry.childSessionKey,
+      childRunId: entry.runId,
+      requesterSessionKey: entry.requesterSessionKey,
+      requesterOrigin,
+      requesterDisplayKey: entry.requesterDisplayKey,
+      task: entry.task,
+      timeoutMs: params.subagentAnnounceTimeoutMs,
+      cleanup: entry.cleanup,
+      roundOneReply: entry.frozenResultText ?? undefined,
+      fallbackReply: entry.fallbackFrozenResultText ?? undefined,
+      waitForCompletion: false,
+      startedAt: entry.startedAt,
+      endedAt: entry.endedAt,
+      label: entry.label,
+      outcome: entry.outcome,
+      spawnMode: entry.spawnMode,
+      expectsCompletionMessage: entry.expectsCompletionMessage,
+      wakeOnDescendantSettle: entry.wakeOnDescendantSettle === true,
+    })
       .then((didAnnounce) => {
         finalizeAnnounceCleanup(didAnnounce);
       })

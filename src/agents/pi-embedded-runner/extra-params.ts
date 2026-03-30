@@ -439,10 +439,7 @@ function applyPostPluginStreamWrappers(
         log.debug(
           `applying OpenAI text verbosity=${openAITextVerbosity} for ${ctx.provider}/${ctx.modelId}`,
         );
-        ctx.agent.streamFn = createOpenAITextVerbosityWrapper(
-          ctx.agent.streamFn,
-          openAITextVerbosity,
-        );
+        ctx.agent.streamFn = createOpenAITextVerbosityWrapper(ctx.agent.streamFn, openAITextVerbosity);
       }
     }
   }
