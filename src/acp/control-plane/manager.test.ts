@@ -63,6 +63,21 @@ async function withAcpManagerTaskStateDir(run: (root: string) => Promise<void>):
   });
 }
 
+async function waitForAssertion(assertion: () => void, timeoutMs = 2_000, stepMs = 5) {
+  const startedAt = Date.now();
+  for (;;) {
+    try {
+      assertion();
+      return;
+    } catch (error) {
+      if (Date.now() - startedAt >= timeoutMs) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, stepMs));
+    }
+  }
+}
+
 function createRuntime(): {
   runtime: AcpRuntime;
   ensureSession: ReturnType<typeof vi.fn>;
@@ -316,17 +331,20 @@ describe("AcpSessionManager", () => {
         requestId: "direct-parented-run",
       });
 
-      expect(findTaskByRunId("direct-parented-run")).toMatchObject({
-        runtime: "acp",
-        requesterSessionKey: "agent:quant:telegram:quant:direct:822430204",
-        childSessionKey: "agent:codex:acp:child-1",
-        label: "Quant patch",
-        task: "Implement the feature and report back",
-        status: "succeeded",
-        progressSummary: "Write failed: permission denied for /root/oc-acp-write-should-fail.txt.",
-        terminalOutcome: "blocked",
-        terminalSummary: "Permission denied for /root/oc-acp-write-should-fail.txt.",
-      });
+      await waitForAssertion(() =>
+        expect(findTaskByRunId("direct-parented-run")).toMatchObject({
+          runtime: "acp",
+          requesterSessionKey: "agent:quant:telegram:quant:direct:822430204",
+          childSessionKey: "agent:codex:acp:child-1",
+          label: "Quant patch",
+          task: "Implement the feature and report back",
+          status: "succeeded",
+          progressSummary:
+            "Write failed: permission denied for /root/oc-acp-write-should-fail.txt.",
+          terminalOutcome: "blocked",
+          terminalSummary: "Permission denied for /root/oc-acp-write-should-fail.txt.",
+        }),
+      );
     });
   });
 

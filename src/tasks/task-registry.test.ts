@@ -697,7 +697,7 @@ describe("task-registry", () => {
   });
 
   it("adopts parent flow linkage when collapsing onto an earlier ACP record", async () => {
-    await withTempDir({ prefix: "openclaw-task-registry-" }, async (root) => {
+    await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
       resetTaskRegistryForTests();
 
