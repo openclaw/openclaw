@@ -18,6 +18,9 @@ describe("resolveRlFeedRoot", () => {
     const stateDir = path.join(home, ".openclaw");
     await fs.mkdir(stateDir, { recursive: true });
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    // Global test setup sets HOME to a different temp dir; `~` expansion prefers HOME over os.homedir().
+    vi.stubEnv("HOME", home);
+    vi.stubEnv("USERPROFILE", home);
 
     const expectedOut = path.join(stateDir, "rl-feed");
     await fs.mkdir(expectedOut, { recursive: true });

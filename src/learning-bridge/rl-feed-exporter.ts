@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { writeTextAtomic } from "../infra/json-files.js";
-import { isPathInside } from "../infra/path-guards.js";
+import { isPathInside, isNotFoundPathError } from "../infra/path-guards.js";
 import { writeJsonFileAtomically } from "../plugin-sdk/json-store.js";
 import { resolveConfigDir, resolveUserPath } from "../utils.js";
 import type { TrajectorTurn, TrajectoryPackage } from "./types.js";
@@ -11,20 +11,56 @@ export async function resolveRlFeedRoot(cfg?: OpenClawConfig): Promise<string> {
   const configured = cfg?.research?.learningBridge?.outputDir?.trim();
   const stateDir = resolveConfigDir();
   const root = configured ? resolveUserPath(configured) : path.join(stateDir, "rl-feed");
-  let realRoot = root;
-  try {
-    await fs.mkdir(root, { recursive: true, mode: 0o700 });
-    realRoot = await fs.realpath(root);
-  } catch {
-    realRoot = path.resolve(root);
-  }
+  const absRoot = path.resolve(root);
   const realState = await fs.realpath(stateDir).catch(() => path.resolve(stateDir));
-  if (!isPathInside(realState, realRoot)) {
-    throw new Error(
-      `learning bridge outputDir must resolve inside OpenClaw state directory (${realState}); got ${realRoot}`,
+
+  const containErr = (got: string) =>
+    new Error(
+      `learning bridge outputDir must resolve inside OpenClaw state directory (${realState}); got ${got}`,
     );
+
+  let verifiedTarget: string;
+  try {
+    verifiedTarget = await fs.realpath(absRoot);
+  } catch (err) {
+    if (!isNotFoundPathError(err)) {
+      throw err;
+    }
+    // Path does not exist yet: resolve nearest existing prefix so symlink escapes are caught
+    // before mkdir can create directories outside the state tree.
+    let anchor = absRoot;
+    let deepestReal: string | null = null;
+    while (true) {
+      try {
+        deepestReal = await fs.realpath(anchor);
+        break;
+      } catch (e) {
+        if (!isNotFoundPathError(e)) {
+          throw e;
+        }
+        const parent = path.dirname(anchor);
+        if (parent === anchor) {
+          deepestReal = null;
+          break;
+        }
+        anchor = parent;
+      }
+    }
+    if (deepestReal !== null && !isPathInside(realState, deepestReal)) {
+      throw containErr(deepestReal);
+    }
+    if (!isPathInside(realState, absRoot)) {
+      throw containErr(absRoot);
+    }
+    verifiedTarget = absRoot;
   }
-  return realRoot;
+
+  if (!isPathInside(realState, verifiedTarget)) {
+    throw containErr(verifiedTarget);
+  }
+
+  await fs.mkdir(absRoot, { recursive: true, mode: 0o700 });
+  return fs.realpath(absRoot);
 }
 
 function serializeTurnLine(turn: TrajectorTurn): string {
