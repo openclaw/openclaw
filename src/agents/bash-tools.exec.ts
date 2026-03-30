@@ -1,12 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
-import {
-  type ExecHost,
-  loadExecApprovals,
-  maxAsk,
-  minSecurity,
-} from "../infra/exec-approvals.js";
+import { parseExecApprovalCommandText } from "../infra/exec-approval-reply.js";
+import { splitCommandChain } from "../infra/exec-approvals-analysis.js";
+import { type ExecHost, loadExecApprovals, maxAsk, minSecurity } from "../infra/exec-approvals.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import { sanitizeHostExecEnvWithDiagnostics } from "../infra/host-env-security.js";
 import {
@@ -175,6 +172,22 @@ async function validateScriptFileForShellBleed(params: {
           `This looks like a shell command, not JavaScript.`,
       );
     }
+  }
+}
+
+function rejectExecApprovalShellCommand(command: string): void {
+  const rawCommand = command.trim();
+  const chainParts = splitCommandChain(rawCommand) ?? [rawCommand];
+  for (const part of chainParts) {
+    if (!parseExecApprovalCommandText(part)) {
+      continue;
+    }
+    throw new Error(
+      [
+        "exec cannot run /approve commands.",
+        "Show the /approve command to the user as chat text, or route it through the approval command handler instead of shell execution.",
+      ].join(" "),
+    );
   }
 }
 
@@ -383,6 +396,7 @@ export function createExecTool(
         // fall back to the gateway's cwd. The node is responsible for validating its own cwd.
         workdir = resolveWorkdir(rawWorkdir, warnings);
       }
+      rejectExecApprovalShellCommand(params.command);
 
       const inheritedBaseEnv = coerceEnv(process.env);
       const hostEnvResult =

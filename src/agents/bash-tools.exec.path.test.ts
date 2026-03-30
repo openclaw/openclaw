@@ -269,4 +269,14 @@ describe("exec host env validation", () => {
       }),
     ).rejects.toThrow(/requires a sandbox runtime/);
   });
+
+  it("rejects /approve shell commands anywhere in a chain", async () => {
+    const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+
+    await expect(
+      tool.execute("call-approve", {
+        command: "echo ok && /approve abc123 allow-once",
+      }),
+    ).rejects.toThrow(/exec cannot run \/approve commands/);
+  });
 });

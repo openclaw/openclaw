@@ -5,6 +5,7 @@ import {
   buildExecApprovalUnavailableReplyPayload,
   getExecApprovalApproverDmNoticeText,
   getExecApprovalReplyMetadata,
+  parseExecApprovalCommandText,
 } from "./exec-approval-reply.js";
 
 describe("exec approval reply helpers", () => {
@@ -189,4 +190,20 @@ describe("exec approval reply helpers", () => {
       ).toContain(expected);
     },
   );
+
+  it("parses /approve command text", () => {
+    expect(parseExecApprovalCommandText("/approve req-1 deny")).toEqual({
+      approvalId: "req-1",
+      decision: "deny",
+    });
+    expect(parseExecApprovalCommandText("  /approve@clover req-1 allow-once")).toEqual({
+      approvalId: "req-1",
+      decision: "allow-once",
+    });
+    expect(parseExecApprovalCommandText("/approve req-1 always")).toEqual({
+      approvalId: "req-1",
+      decision: "allow-always",
+    });
+    expect(parseExecApprovalCommandText("/approve req-1 maybe")).toBeNull();
+  });
 });
