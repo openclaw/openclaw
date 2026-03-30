@@ -51,12 +51,17 @@ export function buildSlackTableAttachment(table: MarkdownTableData): { blocks: S
 }
 
 export function renderSlackTableFallbackText(table: MarkdownTableData): string {
-  const rows = [table.headers, ...table.rows].filter((row) => row.length > 0);
+  const rows = [
+    ...(table.headers.some((header) => header.length > 0) ? [table.headers] : []),
+    ...table.rows,
+  ]
+    .filter((row) => row.length > 0)
+    .slice(0, SLACK_MAX_TABLE_ROWS);
   if (rows.length === 0) {
     return "Table";
   }
 
-  const columnCount = Math.max(...rows.map((row) => row.length));
+  const columnCount = Math.min(Math.max(...rows.map((row) => row.length)), SLACK_MAX_TABLE_COLUMNS);
   const widths = Array.from({ length: columnCount }, (_, columnIndex) =>
     Math.max(...rows.map((row) => (row[columnIndex] ?? "").length), 1),
   );
