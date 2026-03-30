@@ -31,6 +31,36 @@ function createThrowingPluginDir(prefix: string): string {
   return rootDir;
 }
 
+function createCircularPluginDir(prefix: string): string {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  tempDirs.push(rootDir);
+  fs.mkdirSync(path.join(rootDir, "demo"), { recursive: true });
+  fs.writeFileSync(
+    path.join(rootDir, "facade.mjs"),
+    [
+      `import { loadBundledPluginPublicSurfaceModuleSync } from ${JSON.stringify(
+        new URL("./facade-runtime.js", import.meta.url).href,
+      )};`,
+      `export const marker = loadBundledPluginPublicSurfaceModuleSync({ dirName: "demo", artifactBasename: "api.js" }).marker;`,
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(rootDir, "demo", "helper.js"),
+    ['import { marker } from "../facade.mjs";', "export const circularMarker = marker;", ""].join(
+      "\n",
+    ),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(rootDir, "demo", "api.js"),
+    ['import "./helper.js";', 'export const marker = "circular-ok";', ""].join("\n"),
+    "utf8",
+  );
+  return rootDir;
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
   if (originalBundledPluginsDir === undefined) {
@@ -77,6 +107,18 @@ describe("plugin-sdk facade runtime", () => {
     });
     expect(first).toBe(second);
     expect(first.marker).toBe("identity-check");
+  });
+
+  it("breaks circular facade re-entry during module evaluation", () => {
+    const dir = createCircularPluginDir("openclaw-facade-circular-");
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = dir;
+
+    const loaded = loadBundledPluginPublicSurfaceModuleSync<{ marker: string }>({
+      dirName: "demo",
+      artifactBasename: "api.js",
+    });
+
+    expect(loaded.marker).toBe("circular-ok");
   });
 
   it("clears the cache on load failure so retries re-execute", () => {
