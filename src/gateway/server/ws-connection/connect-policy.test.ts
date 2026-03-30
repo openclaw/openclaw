@@ -370,31 +370,36 @@ describe("ws connect policy", () => {
     ).toBe(true);
   });
 
-  test("documents operatorTransportMismatch guard for Tailscale operator scope preservation", () => {
-    // The operatorTransportMismatch guard in message-handler.ts short-circuits
-    // clearUnboundScopes() when role=operator, authOk=true, authMethod is
-    // tailscale/trusted-proxy, and sharedAuthOk=false (transport divergence).
-    // This test documents that shouldClearUnboundScopesForMissingDeviceIdentity
-    // alone returns true for this case — confirming the guard is necessary.
+  test("documents operatorTransportMismatch bypass for Tailscale operator connections", () => {
+    // The operatorTransportMismatch guard in message-handler.ts returns early
+    // (before scope clearing and decision checks) when role=operator, authOk=true,
+    // authMethod is tailscale/trusted-proxy, sharedAuthOk=false, and no device.
+    // This allows Tailscale operators to connect with preserved scopes despite
+    // evaluateMissingDeviceIdentity returning reject-device-required.
     const nonControlUi = resolveControlUiAuthPolicy({
       isControlUi: false,
       controlUiConfig: undefined,
       deviceRaw: null,
     });
 
-    // Without the guard, this combination would clear scopes:
-    // operator + Tailscale auth + no device + sharedAuthOk=false
+    // evaluateMissingDeviceIdentity returns reject-device-required for this case
+    // (operator + no device + sharedAuthOk=false + tailscale auth).
+    // The operatorTransportMismatch guard overrides this to allow.
     expect(
-      shouldClearUnboundScopesForMissingDeviceIdentity({
-        decision: { kind: "reject-device-required" },
+      evaluateMissingDeviceIdentity({
+        hasDeviceIdentity: false,
+        role: "operator",
+        isControlUi: false,
         controlUiAuthPolicy: nonControlUi,
-        preserveInsecureLocalControlUiScopes: false,
-        authMethod: "tailscale",
         trustedProxyAuthOk: false,
-      }),
-    ).toBe(true);
+        sharedAuthOk: false,
+        authOk: true,
+        hasSharedAuth: true,
+        isLocalClient: false,
+      }).kind,
+    ).toBe("reject-device-required");
 
-    // With operatorTransportMismatch=true in the caller, scopes are preserved
-    // for Tailscale/trusted-proxy operators where sharedAuthOk diverges.
+    // With operatorTransportMismatch=true, the caller returns early before
+    // reaching this decision check, preserving scopes and allowing the connection.
   });
 });
