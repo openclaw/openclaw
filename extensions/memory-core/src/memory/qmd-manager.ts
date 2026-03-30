@@ -798,18 +798,20 @@ export class QmdMemoryManager implements MemorySearchManager {
       return [];
     }
     const qmdSearchCommand = this.qmd.searchMode;
+    const explicitSearchTool = this.qmd.searchTool;
     const mcporterEnabled = this.qmd.mcporter.enabled;
     const runSearchAttempt = async (
       allowMissingCollectionRepair: boolean,
     ): Promise<QmdQueryResult[]> => {
       try {
         if (mcporterEnabled) {
-          const tool = this.resolveQmdMcpTool(qmdSearchCommand);
+          const tool = explicitSearchTool ?? this.resolveQmdMcpTool(qmdSearchCommand);
           const minScore = opts?.minScore ?? 0;
           if (collectionNames.length > 1) {
             return await this.runMcporterAcrossCollections({
               tool,
               searchCommand: qmdSearchCommand,
+              explicitToolOverride: Boolean(explicitSearchTool),
               query: trimmed,
               limit,
               minScore,
@@ -820,6 +822,7 @@ export class QmdMemoryManager implements MemorySearchManager {
             mcporter: this.qmd.mcporter,
             tool,
             searchCommand: qmdSearchCommand,
+            explicitToolOverride: Boolean(explicitSearchTool),
             query: trimmed,
             limit,
             minScore,
@@ -1482,8 +1485,9 @@ export class QmdMemoryManager implements MemorySearchManager {
 
   private async runQmdSearchViaMcporter(params: {
     mcporter: ResolvedQmdMcporterConfig;
-    tool: "query" | "search" | "vector_search" | "deep_search";
+    tool: string;
     searchCommand?: string;
+    explicitToolOverride: boolean;
     query: string;
     limit: number;
     minScore: number;
@@ -1496,29 +1500,29 @@ export class QmdMemoryManager implements MemorySearchManager {
     // (e.g. from runMcporterAcrossCollections iterating after the first collection
     // triggered the fallback), resolve the correct v1 tool name immediately.
     const effectiveTool =
-      params.tool === "query" && this.qmdMcpToolVersion === "v1"
+      !params.explicitToolOverride && params.tool === "query" && this.qmdMcpToolVersion === "v1"
         ? this.resolveQmdMcpTool(params.searchCommand ?? "query")
         : params.tool;
 
     const selector = `${params.mcporter.serverName}.${effectiveTool}`;
-    const callArgs: Record<string, unknown> =
-      effectiveTool === "query"
-        ? {
-            // QMD 1.1+ "query" tool accepts typed sub-queries via `searches` array.
-            // Derive sub-query types from searchCommand to respect searchMode config.
-            // Note: minScore is intentionally omitted — QMD 1.1+'s query tool uses
-            // its own reranking pipeline and does not accept a minScore parameter.
-            searches: this.buildV2Searches(params.query, params.searchCommand),
-            limit: params.limit,
-          }
-        : {
-            // QMD 1.x tools accept a flat query string.
-            query: params.query,
-            limit: params.limit,
-            minScore: params.minScore,
-          };
+    const useUnifiedQueryTool = !params.explicitToolOverride && effectiveTool === "query";
+    const callArgs: Record<string, unknown> = useUnifiedQueryTool
+      ? {
+          // QMD 1.1+ "query" tool accepts typed sub-queries via `searches` array.
+          // Derive sub-query types from searchCommand to respect searchMode config.
+          // Note: minScore is intentionally omitted — QMD 1.1+'s query tool uses
+          // its own reranking pipeline and does not accept a minScore parameter.
+          searches: this.buildV2Searches(params.query, params.searchCommand),
+          limit: params.limit,
+        }
+      : {
+          // QMD 1.x tools accept a flat query string.
+          query: params.query,
+          limit: params.limit,
+          minScore: params.minScore,
+        };
     if (params.collection) {
-      if (effectiveTool === "query") {
+      if (useUnifiedQueryTool) {
         callArgs.collections = [params.collection];
       } else {
         callArgs.collection = params.collection;
@@ -1541,7 +1545,7 @@ export class QmdMemoryManager implements MemorySearchManager {
         { timeoutMs: Math.max(params.timeoutMs + 2_000, 5_000) },
       );
       // If we got here with the v2 "query" tool, confirm v2 for future calls.
-      if (effectiveTool === "query" && this.qmdMcpToolVersion === null) {
+      if (useUnifiedQueryTool && this.qmdMcpToolVersion === null) {
         this.markQmdV2();
       }
     } catch (err) {
@@ -1554,7 +1558,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       // race condition where concurrent searches both probe with "query" while
       // the version is null — the second call would otherwise fail after the
       // first sets the version to "v1".
-      if (effectiveTool === "query" && this.isQueryToolNotFoundError(err)) {
+      if (useUnifiedQueryTool && this.isQueryToolNotFoundError(err)) {
         this.markQmdV1Fallback();
         const v1Tool = this.resolveQmdMcpTool(params.searchCommand ?? "query");
         return this.runQmdSearchViaMcporter({
@@ -2362,8 +2366,9 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private async runMcporterAcrossCollections(params: {
-    tool: "query" | "search" | "vector_search" | "deep_search";
+    tool: string;
     searchCommand?: string;
+    explicitToolOverride: boolean;
     query: string;
     limit: number;
     minScore: number;
@@ -2375,6 +2380,7 @@ export class QmdMemoryManager implements MemorySearchManager {
         mcporter: this.qmd.mcporter,
         tool: params.tool,
         searchCommand: params.searchCommand,
+        explicitToolOverride: params.explicitToolOverride,
         query: params.query,
         limit: params.limit,
         minScore: params.minScore,

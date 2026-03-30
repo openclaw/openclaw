@@ -1893,6 +1893,47 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("uses an explicit mcporter search tool override with flat query args", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "query",
+          searchTool: "hybrid_search",
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+          mcporter: { enabled: true, serverName: "qmd", startDaemon: false },
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((cmd: string, args: string[]) => {
+      const child = createMockChild({ autoClose: false });
+      if (isMcporterCommand(cmd) && args[0] === "call") {
+        expect(args[1]).toBe("qmd.hybrid_search");
+        const callArgs = JSON.parse(args[args.indexOf("--args") + 1]);
+        expect(callArgs).toMatchObject({
+          query: "hello",
+          limit: 6,
+          minScore: 0,
+          collection: "workspace-main",
+        });
+        expect(callArgs).not.toHaveProperty("searches");
+        expect(callArgs).not.toHaveProperty("collections");
+        emitAndClose(child, "stdout", JSON.stringify({ results: [] }));
+        return child;
+      }
+      emitAndClose(child, "stdout", "[]");
+      return child;
+    });
+
+    const { manager } = await createManager();
+    await manager.search("hello", { sessionKey: "agent:main:slack:dm:u123" });
+    await manager.close();
+  });
+
   it("does not pin v1 fallback when only the serialized query text contains tool-not-found words", async () => {
     cfg = {
       ...cfg,
