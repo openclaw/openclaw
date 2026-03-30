@@ -855,6 +855,45 @@ describe("runDiscordGatewayLifecycle", () => {
     expect(runtimeError).toHaveBeenCalledWith(expect.stringContaining("Max reconnect attempts"));
   });
 
+  it("suppresses reconnect-exhausted when maxAttempts=0 (health-monitor intentional abort)", async () => {
+    const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
+    const pendingGatewayEvents: DiscordGatewayEvent[] = [];
+
+    const emitter = new EventEmitter();
+    const gateway: MockGateway = {
+      isConnected: true,
+      // maxAttempts=0 signals an intentional abort (health-monitor restart path)
+      options: { intents: 0, reconnect: { maxAttempts: 0 } } as GatewayPlugin["options"],
+      disconnect: vi.fn(),
+      connect: vi.fn(),
+      emitter,
+    };
+    getDiscordGatewayEmitterMock.mockReturnValueOnce(emitter);
+
+    const { lifecycleParams, runtimeLog, runtimeError } = createLifecycleHarness({
+      gateway,
+      pendingGatewayEvents,
+    });
+
+    // Simulate the gateway firing reconnect-exhausted after the abort was set.
+    pendingGatewayEvents.push(
+      createGatewayEvent(
+        "reconnect-exhausted",
+        "Max reconnect attempts (0) reached after code 1005",
+      ),
+    );
+
+    await expect(runDiscordGatewayLifecycle(lifecycleParams)).resolves.toBeUndefined();
+    // Should log as info (intentional abort), not error
+    expect(runtimeLog).toHaveBeenCalledWith(
+      expect.stringContaining("maxAttempts=0, intentional abort"),
+    );
+    // Should NOT call runtimeError for this case
+    expect(runtimeError).not.toHaveBeenCalledWith(
+      expect.stringContaining("Max reconnect attempts"),
+    );
+  });
+
   it("rejects reconnect-exhausted queued before startup when shutdown has not begun", async () => {
     const { runDiscordGatewayLifecycle } = await import("./provider.lifecycle.js");
     const pendingGatewayEvents: DiscordGatewayEvent[] = [];
