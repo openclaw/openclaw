@@ -27,6 +27,7 @@ public struct SwabbleConfig: Codable, Sendable {
     public struct Logging: Codable, Sendable {
         public var level: String = "info"
         public var format: String = "text" // text|json placeholder
+        public var redactPii: Bool = true
     }
 
     public struct Transcripts: Codable, Sendable {

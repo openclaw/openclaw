@@ -19,7 +19,12 @@ public actor TranscriptsStore {
     }
 
     public func append(text: String) {
-        entries.append(text)
+        append(text: text, redactPii: false)
+    }
+
+    public func append(text: String, redactPii: Bool) {
+        let outputText = redactTranscriptIfNeeded(text, enabled: redactPii)
+        entries.append(outputText)
         if entries.count > limit {
             entries.removeFirst(entries.count - limit)
         }

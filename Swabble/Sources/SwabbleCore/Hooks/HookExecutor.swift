@@ -11,13 +11,17 @@ public struct HookJob: Sendable {
 }
 
 public actor HookExecutor {
-    private let config: SwabbleConfig
+    private var config: SwabbleConfig
     private var lastRun: Date?
     private let hostname: String
 
     public init(config: SwabbleConfig) {
         self.config = config
         hostname = Host.current().localizedName ?? "host"
+    }
+
+    public func updateConfig(_ config: SwabbleConfig) {
+        self.config = config
     }
 
     public func shouldRun() -> Bool {
