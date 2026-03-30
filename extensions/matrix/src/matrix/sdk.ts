@@ -225,12 +225,12 @@ export class MatrixClient {
       dispatcherPolicy?: PinnedDispatcherPolicy;
     } = {},
   ) {
-    this.httpClient = new MatrixAuthedHttpClient(
+    this.httpClient = new MatrixAuthedHttpClient({
       homeserver,
       accessToken,
-      opts.ssrfPolicy,
-      opts.dispatcherPolicy,
-    );
+      ssrfPolicy: opts.ssrfPolicy,
+      dispatcherPolicy: opts.dispatcherPolicy,
+    });
     this.localTimeoutMs = Math.max(1, opts.localTimeoutMs ?? 60_000);
     this.initialSyncLimit = opts.initialSyncLimit;
     this.encryptionEnabled = opts.encryption === true;
